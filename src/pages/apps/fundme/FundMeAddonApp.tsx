@@ -9,6 +9,7 @@ import FundMeDetailModal from './components/FundMeDetailModal';
 import { useFundMeCampaigns } from './useFundMeCampaigns';
 import type { CampaignType, ViewMode } from './types';
 import { isChainCampaign } from './fundmeHelpers';
+import { useAddonI18n } from '../../../i18n/useAddonI18n';
 import {
   cancelCampaign,
   claimCampaign,
@@ -26,6 +27,7 @@ const FundMeAddonApp: React.FC<FundMeAddonAppProps> = ({ sdk, app }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const backTarget = getReturnPath(location, '/apps');
+  const { t: addonT } = useAddonI18n();
   const [viewMode, setViewMode] = useState<ViewMode>('discover');
   const [campaignType, setCampaignType] = useState<CampaignType>('active');
   const [donationDraft, setDonationDraft] = useState<string>('');
@@ -67,14 +69,18 @@ const FundMeAddonApp: React.FC<FundMeAddonAppProps> = ({ sdk, app }) => {
 
   const latestKnownBlockLabel = latestBlock
     ? latestBlock.toLocaleString()
-    : 'Unavailable';
+    : addonT('common.unavailable', 'Unavailable');
 
-  const runCampaignAction = async (action: () => Promise<{ txid: string | null }>) => {
+  const runCampaignAction = async (
+    action: () => Promise<{ txid: string | null }>
+  ) => {
     setActionBusy(true);
     setActionStatus(null);
     try {
       const result = await action();
-      setActionStatus(result.txid ? `Broadcast ${result.txid}` : 'Broadcast requested.');
+      setActionStatus(
+        result.txid ? `Broadcast ${result.txid}` : 'Broadcast requested.'
+      );
     } catch (error) {
       setActionStatus(error instanceof Error ? error.message : String(error));
     } finally {
@@ -95,14 +101,14 @@ const FundMeAddonApp: React.FC<FundMeAddonAppProps> = ({ sdk, app }) => {
 
         <div className="mt-2 grid grid-cols-[1fr_auto] items-center gap-3">
           <h1 className="text-2xl font-bold wallet-text-strong tracking-[-0.02em]">
-            {app.name} (Demo)
+            {app.name} ({addonT('module.demo', 'Demo')})
           </h1>
           <button
             type="button"
             onClick={() => navigate(backTarget)}
             className="wallet-btn-danger justify-self-end px-4 py-2"
           >
-            Back
+            {addonT('common.back', 'Back')}
           </button>
         </div>
 
@@ -116,7 +122,7 @@ const FundMeAddonApp: React.FC<FundMeAddonAppProps> = ({ sdk, app }) => {
                 : 'wallet-surface-strong border border-[var(--wallet-border)] wallet-text-strong'
             }`}
           >
-            Discover Campaigns
+            {addonT('module.discoverCampaigns', 'Discover campaigns')}
           </button>
           <button
             type="button"
@@ -127,7 +133,7 @@ const FundMeAddonApp: React.FC<FundMeAddonAppProps> = ({ sdk, app }) => {
                 : 'wallet-surface-strong border border-[var(--wallet-border)] wallet-text-strong'
             }`}
           >
-            Create Campaign
+            {addonT('module.createCampaign', 'Create campaign')}
           </button>
         </div>
       </div>
@@ -143,7 +149,9 @@ const FundMeAddonApp: React.FC<FundMeAddonAppProps> = ({ sdk, app }) => {
             totalRaisedBch={totalRaisedBch}
             activeCampaignsCount={activeCampaigns.length}
             onCampaignTypeChange={setCampaignType}
-            onOpenCampaignDetail={(campaign) => void openCampaignDetail(campaign)}
+            onOpenCampaignDetail={(campaign) =>
+              void openCampaignDetail(campaign)
+            }
           />
         ) : (
           <FundMeCreateView

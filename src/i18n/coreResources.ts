@@ -1,4 +1,4 @@
-import type { SupportedLocale } from './types';
+import type { BaseLocale } from './types';
 
 /**
  * Messages for the wallet surfaces shared by web/mobile and desktop builds.
@@ -37,6 +37,280 @@ export const coreTranslations = {
     'assets.noNfts': 'No NFTs found.',
     'assets.quantumroot': 'Quantumroot',
     'assets.units': 'units',
+    'assets.cashTokens': 'CashTokens',
+    'assets.openVaults': 'Open vaults',
+    'assets.advancedVaultWorkspace': 'Advanced vault workspace',
+    'assets.vaultWorkspace': 'Vault workspace',
+    'assets.advancedVaultDescription':
+      'Receive and recovery tools for advanced vaults',
+    'quantumroot.subtitle': 'Two spending lanes in one vault',
+    'quantumroot.betaProduction': 'Beta production',
+    'quantumroot.betaTitle': 'Quantumroot Beta Production',
+    'quantumroot.livePreview': 'Live preview',
+    'quantumroot.mainnetPreview':
+      'Mainnet preview stays visible before activation.',
+    'quantumroot.activeWorkspace':
+      'Active workspace for the beta-production Quantumroot flow.',
+    'quantumroot.mainnetAhead':
+      'Quantumroot is visible on mainnet ahead of activation. The layout stays available, but key actions remain disabled until {date}.',
+    'quantumroot.activeNetwork':
+      'Quantumroot is active on this network. Use the vault workspace below to manage a normal spend lane and a quantum-safe recovery lane.',
+    'quantumroot.trackedBalance': 'Tracked Balance',
+    'quantumroot.vaults': 'Vaults',
+    'quantumroot.funded': '{count} funded',
+    'quantumroot.syncingVaults': 'Syncing Vaults…',
+    'quantumroot.syncVaults': 'Sync Vaults',
+    'quantumroot.openVaults': 'Open Vaults',
+    'quantumroot.liveNow':
+      'Live now: normal spending, balance tracking, and Quantum Lock BCH recovery.',
+    'quantumroot.guidedNow':
+      'Guided now: choose one approval key, lock it in Quantum Lock, then spend the matching coin.',
+    'quantumroot.back': 'Back',
+    'quantumroot.close': 'Close',
+    'quantumroot.workspaceRefreshFailed': 'Workspace Refresh Failed',
+    'quantumroot.noVaults':
+      'No Quantumroot vaults derived yet. Sync vaults to provision them for existing wallet address indexes.',
+    'quantumroot.refreshing':
+      'Refreshing balances and UTXO status. Vaults remain available while sync completes.',
+    'quantumroot.vaultNumber': 'Vault #{id}',
+    'quantumroot.checkingBalances': 'Checking balances…',
+    'quantumroot.readyToRecover': '{count} ready to recover',
+    'quantumroot.fundedStatus': 'Funded',
+    'quantumroot.noFundsYet': 'No funds yet',
+    'quantumroot.popup.nextStep': 'Next step',
+    'quantumroot.popup.normalLane': 'Normal vault lane',
+    'quantumroot.popup.normalLaneReady': 'Your normal lane is ready.',
+    'quantumroot.popup.normalLanePending':
+      'Add the matching receive coin after the approval key is in Quantum Lock.',
+    'quantumroot.popup.approvalKey': 'Approval key',
+    'quantumroot.popup.approvalKeyPicked': 'Approval key picked.',
+    'quantumroot.popup.pickApprovalKey': 'Pick one approval key.',
+    'quantumroot.popup.quantumLock': 'Quantum Lock',
+    'quantumroot.popup.approvalKeyInLock': 'Approval key is in Quantum Lock.',
+    'quantumroot.popup.sendApprovalKeyToLock':
+      'Send the approval key to Quantum Lock.',
+    'quantumroot.popup.protectedSpend': 'Protected spend',
+    'quantumroot.popup.readyCoinAvailable': 'Ready coin available.',
+    'quantumroot.popup.addDestinationReview':
+      'Add a destination, then review spend.',
+    'quantumroot.popup.addMatchingCoin':
+      'Add the matching coin to unlock spend.',
+    'quantumroot.popup.done': 'Done',
+    'quantumroot.popup.needed': 'Needed',
+    'quantumroot.popup.neededLater': 'Needed later',
+    'quantumroot.popup.waiting': 'Waiting',
+    'quantumroot.popup.ready': 'Ready',
+    'quantumroot.popup.confirmed': 'Confirmed',
+    'quantumroot.popup.pending': 'Pending',
+    'quantumroot.popup.reviewSpend': 'Review spend',
+    'quantumroot.popup.reviewDestination':
+      'Review the destination before broadcasting.',
+    'quantumroot.popup.destination': 'Destination',
+    'quantumroot.popup.spendDestination': 'Spend destination',
+    'quantumroot.popup.noDestination': 'No destination set',
+    'quantumroot.popup.missing': 'Missing',
+    'quantumroot.popup.useRecoveryAddress': 'Use wallet recovery address',
+    'quantumroot.popup.copyDestination': 'Copy destination',
+    'quantumroot.popup.readyCoin': 'Ready coin',
+    'quantumroot.popup.pendingCoin': 'Pending coin',
+    'quantumroot.popup.noReadyCoin':
+      'No ready coin is available yet. After the approval key and the matching receive coin are present, spendable coins appear here.',
+    'quantumroot.popup.normalLaneDescription':
+      'Your BCH and matching receive coin go here.',
+    'quantumroot.popup.plainBchCoins': '{count} plain BCH coin(s)',
+    'quantumroot.popup.readyCoins': '{count} ready coin(s)',
+    'quantumroot.popup.approvalLane': 'Approval lane',
+    'quantumroot.popup.approvalLaneDescription':
+      'Your approval key goes to Quantum Lock.',
+    'quantumroot.popup.approvalKeyInQuantumLock':
+      'Your approval key is in Quantum Lock.',
+    'quantumroot.popup.sendSelectedApprovalKey':
+      'Send the selected approval key to Quantum Lock.',
+    'quantumroot.popup.inWallet': '{count} in wallet',
+    'quantumroot.popup.inQuantumLock': '{count} in Quantum Lock',
+    'quantumroot.popup.otherNfts': '{count} other NFT(s)',
+    'quantumroot.popup.otherNftInQuantumLock': 'Other NFT in Quantum Lock',
+    'quantumroot.popup.otherNftDescription':
+      'It sits in Quantum Lock, but it is not the selected approval key. No direct withdrawal path exists yet.',
+    'quantumroot.popup.otherNft': 'Other NFT',
+    'quantumroot.popup.locked': '{count} locked',
+    'quantumroot.popup.vaultSetup': 'Vault setup',
+    'quantumroot.popup.vaultSetupDescription':
+      'Copy addresses and choose the approval key.',
+    'quantumroot.popup.tapToOpen': 'Tap to open',
+    'quantumroot.popup.receiveAddress': 'Receive address',
+    'quantumroot.popup.copyReceiveAddress': 'Copy receive address',
+    'quantumroot.popup.previewOnly':
+      'Preview only on mainnet until activation.',
+    'quantumroot.popup.copyOrScanFund': 'Copy or scan to fund this vault.',
+    'quantumroot.popup.copyQuantumLock': 'Copy Quantum Lock',
+    'quantumroot.popup.sendApprovalHere': 'Send the approval key here.',
+    'quantumroot.popup.receiveBch': 'Receive BCH',
+    'quantumroot.popup.quantumLockBch': 'Quantum Lock BCH',
+    'quantumroot.popup.approvalKeySelected': 'Approval key selected',
+    'quantumroot.popup.noApprovalKey': 'No approval key',
+    'quantumroot.popup.availableApprovalKeys': 'Available approval keys',
+    'quantumroot.popup.quantumrootOpens':
+      'Quantumroot opens once the approval key sits in Quantum Lock and the matching receive coin sits in the normal lane.',
+    'quantumroot.popup.chooseApprovalKey': 'Choose approval key',
+    'quantumroot.popup.chooseApprovalKeyDescription':
+      'Quantumroot uses one plain NFT as the approval key. Advanced token tools live in CashTokens.',
+    'quantumroot.popup.available': '{count} available',
+    'quantumroot.popup.approvalKeyChanged': 'Approval key changed on chain',
+    'quantumroot.popup.refreshChooseAnother':
+      'Refresh the vault or choose another approval key.',
+    'quantumroot.popup.refresh': 'Refresh',
+    'quantumroot.popup.selectedApprovalKey': 'Selected approval key',
+    'quantumroot.popup.category': 'Category:',
+    'quantumroot.popup.chooseOneApproval':
+      'Choose one approval key to continue.',
+    'quantumroot.popup.saving': 'Saving…',
+    'quantumroot.popup.saveApprovalKey': 'Save approval key',
+    'quantumroot.popup.refreshVault': 'Refresh vault',
+    'quantumroot.popup.openCashTokens': 'Open CashTokens',
+    'quantumroot.popup.selectedAsApproval': 'Selected as approval key',
+    'quantumroot.popup.createOrReceive':
+      'Create or receive a plain NFT first, then it will appear here as an approval key you can choose.',
+    'quantumroot.popup.protectedSpendDescription':
+      'When the approval key and matching receive coin are present, spending opens here.',
+    'quantumroot.popup.completeSteps':
+      'Complete the approval key and matching receive coin steps before spending.',
+    'quantumroot.popup.sendApprovalKey': 'Send approval key',
+    'quantumroot.popup.sendApprovalKeyDescription':
+      'Open the send screen prefilled to Quantum Lock with the selected approval key.',
+    'quantumroot.popup.fundMatchingReceive': 'Fund matching receive coin',
+    'quantumroot.popup.fundMatchingReceiveDescription':
+      'Open the send screen prefilled to the vault receive address with the same approval key.',
+    'quantumroot.popup.found': '{count} found',
+    'quantumroot.popup.advancedRecovery': 'Advanced recovery',
+    'quantumroot.popup.advancedRecoveryDescription':
+      'Recover regular BCH, recover Quantum Lock funds, or refresh vault status.',
+    'quantumroot.popup.advanced': 'Advanced',
+    'quantumroot.popup.walletRecoveryAddress': 'Wallet recovery address',
+    'quantumroot.popup.noStandardAddress':
+      'No standard wallet address available',
+    'quantumroot.popup.copyRecoveryAddress': 'Copy recovery address',
+    'quantumroot.popup.bchRecoveryDescription':
+      'BCH recovery sends back to the matching standard wallet address for this vault index when available.',
+    'quantumroot.popup.recoverRegularBch': 'Recover regular BCH',
+    'quantumroot.popup.destinationAddress': 'Destination address',
+    'quantumroot.popup.sweepBch': 'Sweep BCH coins ({count})',
+    'quantumroot.popup.sweeping': 'Sweeping…',
+    'quantumroot.popup.plainBchDescription':
+      'Use this for plain BCH coins. Protected coins stay in the lanes above.',
+    'quantumroot.popup.bchRecoveryDisabled':
+      'BCH recovery is temporarily disabled until the on-chain receive-script validation issue is resolved.',
+    'quantumroot.popup.quantumLockRecovery': 'Quantum Lock recovery',
+    'quantumroot.popup.recoverableBchCoins': 'Recoverable BCH coins',
+    'quantumroot.popup.recovering': 'Recovering…',
+    'quantumroot.popup.recover': 'Recover',
+    'quantumroot.popup.spending': 'Spending…',
+    'quantumroot.popup.spend': 'Spend',
+    'quantumroot.popup.helpShortcuts': 'Help and shortcuts',
+    'quantumroot.popup.refreshVaultStatus': 'Refresh vault status',
+    'quantumroot.popup.openReceiveScreen': 'Open receive screen',
+    'quantumroot.popup.unsupportedReceive':
+      'Coins with an approval key stay in Protected spend; this recovery list only includes plain BCH coins.',
+    'quantumroot.popup.unsupportedQuantumLock':
+      'Coins in Quantum Lock that belong to Protected spend are handled above; this recovery list only includes plain BCH coins.',
+    'quantumroot.popup.mainnetDisabled':
+      'Mainnet Quantumroot uses the same UI as Chipnet, but the spend, recovery, and token-configuration actions remain disabled until activation on {date}.',
+    'quantumroot.popup.recoverableBchCount': 'Recoverable BCH coins: {count}',
+    'quantumroot.popup.protectedReceiveCount':
+      'Coins already handled by Protected spend: {count}',
+    'quantumroot.popup.quantumLockRecoveryCount':
+      'Quantum Lock recovery coins: {count}',
+    'quantumroot.popup.reviewSpendTitle': 'Review spend',
+    'quantumroot.popup.reviewSpendSubtitle':
+      'Check the destination, approval key, and ready coin before you broadcast.',
+    'quantumroot.popup.broadcastWarning':
+      'This will broadcast after confirmation.',
+    'quantumroot.popup.commitment': 'Commitment:',
+    'quantumroot.popup.empty': 'empty',
+    'quantumroot.popup.outpoint': 'Outpoint',
+    'quantumroot.popup.action.createTitle': 'Create an approval key',
+    'quantumroot.popup.action.createDescription':
+      'Create or receive a plain NFT first, then use it as the approval key.',
+    'quantumroot.popup.action.chooseTitle': 'Choose an approval key',
+    'quantumroot.popup.action.chooseLabel': 'Choose approval key',
+    'quantumroot.popup.action.chooseDescription':
+      'Choose one approval key for this vault.',
+    'quantumroot.popup.action.refreshTitle': 'Refresh the vault',
+    'quantumroot.popup.action.refreshLabel': 'Refresh vault',
+    'quantumroot.popup.action.refreshDescription':
+      'Refresh the wallet scan or choose another approval key.',
+    'quantumroot.popup.action.sendTitle': 'Send the approval key',
+    'quantumroot.popup.action.sendLabel': 'Send approval key',
+    'quantumroot.popup.action.sendDescription':
+      'Send the approval key to Quantum Lock.',
+    'quantumroot.popup.action.receiveTitle': 'Add the matching receive coin',
+    'quantumroot.popup.action.receiveLabel': 'Add receive coin',
+    'quantumroot.popup.action.receiveDescription':
+      'Send the matching receive coin to the normal lane.',
+    'quantumroot.popup.action.destinationTitle': 'Choose a destination',
+    'quantumroot.popup.action.destinationLabel': 'Set destination',
+    'quantumroot.popup.action.destinationDescription':
+      'Choose where the coin should go, then open the spend list.',
+    'quantumroot.popup.action.readyTitle': 'Ready to spend',
+    'quantumroot.popup.action.chooseCoinLabel': 'Choose coin to spend',
+    'quantumroot.popup.action.reviewLabel': 'Review spend',
+    'quantumroot.popup.action.disabledDescription':
+      'The spend list is ready, but spending is disabled on this network.',
+    'quantumroot.popup.action.readyDescription':
+      'Tap a ready coin to spend it.',
+    'quantumroot.popup.block.noFamily':
+      'Create or receive a plain NFT first. It becomes your approval key.',
+    'quantumroot.popup.block.pickFamily':
+      'Choose one plain NFT to use as the approval key.',
+    'quantumroot.popup.block.staleInventory':
+      'Your selected approval key is not visible right now. Refresh the vault or choose another key.',
+    'quantumroot.popup.block.approvalPending':
+      'Send one approval key to Quantum Lock.',
+    'quantumroot.popup.block.receivePending':
+      'Send the matching receive coin to the normal lane.',
+    'quantumroot.popup.block.noDestination':
+      'Choose a destination address before spending.',
+    'quantumroot.popup.block.inactiveNetwork':
+      'Quantumroot spending is disabled on this network.',
+    'quantumroot.popup.mutableNft': 'Mutable NFT',
+    'quantumroot.popup.mintingNft': 'Minting NFT',
+    'quantumroot.popup.approvalKeyCapability': 'Approval key',
+    'quantumroot.toast.previewActive':
+      'Quantumroot mainnet preview is active until activation.',
+    'quantumroot.toast.approvalKeyMissing':
+      'This approval key is no longer visible. Refresh the vault or choose another key.',
+    'quantumroot.toast.invalidTokenCategory':
+      'Token category must be 64 hexadecimal characters.',
+    'quantumroot.toast.reconfigured': 'Quantumroot vault reconfigured.',
+    'quantumroot.toast.configureFailed': 'Failed to configure vault: {message}',
+    'quantumroot.toast.unavailable': 'Quantumroot vault unavailable.',
+    'quantumroot.toast.destinationRequired': 'Destination address is required.',
+    'quantumroot.toast.noBchUtxos':
+      'No BCH-only receive UTXOs available to sweep.',
+    'quantumroot.toast.noControlToken':
+      'No matching Quantum Lock control token is available yet.',
+    'quantumroot.toast.ineligibleReceiveUtxo':
+      'That receive UTXO is not eligible for authorized spend.',
+    'quantumroot.toast.broadcastSpendFailed':
+      'Failed to broadcast Quantumroot spend.',
+    'quantumroot.toast.broadcastSweepFailed':
+      'Failed to broadcast Quantumroot sweep.',
+    'quantumroot.toast.broadcastAuthorizedFailed':
+      'Failed to broadcast Quantumroot authorized spend.',
+    'quantumroot.toast.broadcastLockRecoveryFailed':
+      'Failed to broadcast Quantum Lock recovery.',
+    'quantumroot.toast.spendBroadcast': 'Quantumroot spend broadcast: {txid}',
+    'quantumroot.toast.sweepBroadcast': 'Quantumroot sweep broadcast: {txid}',
+    'quantumroot.toast.authorizedBroadcast':
+      'Quantumroot authorized spend broadcast: {txid}',
+    'quantumroot.toast.lockRecoveryBroadcast':
+      'Quantum Lock recovery broadcast: {txid}',
+    'quantumroot.toast.spendFailed': 'Quantumroot spend failed: {message}',
+    'quantumroot.toast.sweepFailed': 'Quantumroot sweep failed: {message}',
+    'quantumroot.toast.authorizedFailed':
+      'Quantumroot authorized spend failed: {message}',
+    'quantumroot.toast.lockRecoveryFailed':
+      'Quantum Lock recovery failed: {message}',
 
     'paper.title': 'Paper Wallet',
     'paper.description':
@@ -177,6 +451,26 @@ export const coreTranslations = {
     'receive.copyFailed': 'Failed to copy.',
 
     'send.title': 'Simple Send',
+    'send.send': 'Send',
+    'send.guidedDescription':
+      'Send BCH, fungible tokens, or NFTs with one guided flow.',
+    'send.debug': 'Debug',
+    'send.selectedInputs': 'Selected inputs',
+    'send.outpoint': 'Outpoint',
+    'send.address': 'Address',
+    'send.sats': 'Sats',
+    'send.height': 'Height',
+    'send.tokenLabel': 'Token',
+    'send.contract': 'Contract',
+    'send.noInputs': 'No inputs selected yet (run Review).',
+    'send.finalOutputs': 'Final outputs',
+    'send.type': 'Type',
+    'send.details': 'Details',
+    'send.noOutputs': 'No outputs yet (run Review).',
+    'send.rawTransaction': 'Raw transaction',
+    'send.noTxBuilt': '(no tx built yet)',
+    'send.advanced': 'Advanced',
+    'send.advancedBuilder': 'Open Advanced Builder',
     'send.quantumrootShortcut': 'Quantumroot shortcut',
     'send.quantumrootApproval': 'approval key to Quantum Lock',
     'send.quantumrootReceive':
@@ -637,6 +931,294 @@ export const coreTranslations = {
     'assets.noNfts': 'No se encontraron NFT.',
     'assets.quantumroot': 'Quantumroot',
     'assets.units': 'unidades',
+    'assets.cashTokens': 'CashTokens',
+    'assets.openVaults': 'Abrir bóvedas',
+    'assets.advancedVaultWorkspace': 'Espacio de bóvedas avanzado',
+    'assets.vaultWorkspace': 'Espacio de bóvedas',
+    'assets.advancedVaultDescription':
+      'Herramientas de recepción y recuperación para bóvedas avanzadas',
+    'quantumroot.subtitle': 'Dos vías de gasto en una bóveda',
+    'quantumroot.betaProduction': 'Beta de producción',
+    'quantumroot.betaTitle': 'Beta de producción de Quantumroot',
+    'quantumroot.livePreview': 'Vista previa activa',
+    'quantumroot.mainnetPreview':
+      'La vista previa de Mainnet permanece visible antes de la activación.',
+    'quantumroot.activeWorkspace':
+      'Espacio activo para el flujo de Quantumroot en beta de producción.',
+    'quantumroot.mainnetAhead':
+      'Quantumroot está visible en Mainnet antes de la activación. El diseño permanece disponible, pero las acciones clave estarán desactivadas hasta {date}.',
+    'quantumroot.activeNetwork':
+      'Quantumroot está activo en esta red. Usa el espacio de bóvedas para gestionar una vía de gasto normal y una vía de recuperación resistente a la computación cuántica.',
+    'quantumroot.trackedBalance': 'Saldo seguido',
+    'quantumroot.vaults': 'Bóvedas',
+    'quantumroot.funded': '{count} financiadas',
+    'quantumroot.syncingVaults': 'Sincronizando bóvedas…',
+    'quantumroot.syncVaults': 'Sincronizar bóvedas',
+    'quantumroot.openVaults': 'Abrir bóvedas',
+    'quantumroot.liveNow':
+      'Disponible ahora: gasto normal, seguimiento de saldo y recuperación BCH de Quantum Lock.',
+    'quantumroot.guidedNow':
+      'Guiado ahora: elige una clave de aprobación, bloquéala en Quantum Lock y gasta la moneda correspondiente.',
+    'quantumroot.back': 'Atrás',
+    'quantumroot.close': 'Cerrar',
+    'quantumroot.workspaceRefreshFailed': 'Falló la actualización del espacio',
+    'quantumroot.noVaults':
+      'Aún no se han derivado bóvedas Quantumroot. Sincroniza las bóvedas para aprovisionarlas para los índices de direcciones existentes.',
+    'quantumroot.refreshing':
+      'Actualizando saldos y estado de UTXO. Las bóvedas seguirán disponibles mientras termina la sincronización.',
+    'quantumroot.vaultNumber': 'Bóveda #{id}',
+    'quantumroot.checkingBalances': 'Comprobando saldos…',
+    'quantumroot.readyToRecover': '{count} listas para recuperar',
+    'quantumroot.fundedStatus': 'Financiada',
+    'quantumroot.noFundsYet': 'Aún no hay fondos',
+    'quantumroot.popup.nextStep': 'Siguiente paso',
+    'quantumroot.popup.normalLane': 'Vía de bóveda normal',
+    'quantumroot.popup.normalLaneReady': 'La vía normal está lista.',
+    'quantumroot.popup.normalLanePending':
+      'Añade la moneda de recepción correspondiente después de enviar la clave de aprobación a Quantum Lock.',
+    'quantumroot.popup.approvalKey': 'Clave de aprobación',
+    'quantumroot.popup.approvalKeyPicked': 'Clave de aprobación elegida.',
+    'quantumroot.popup.pickApprovalKey': 'Elige una clave de aprobación.',
+    'quantumroot.popup.quantumLock': 'Quantum Lock',
+    'quantumroot.popup.approvalKeyInLock': 'La clave está en Quantum Lock.',
+    'quantumroot.popup.sendApprovalKeyToLock': 'Envía la clave a Quantum Lock.',
+    'quantumroot.popup.protectedSpend': 'Gasto protegido',
+    'quantumroot.popup.readyCoinAvailable': 'Hay una moneda lista.',
+    'quantumroot.popup.addDestinationReview':
+      'Añade un destino y revisa el gasto.',
+    'quantumroot.popup.addMatchingCoin':
+      'Añade la moneda correspondiente para desbloquear el gasto.',
+    'quantumroot.popup.done': 'Listo',
+    'quantumroot.popup.needed': 'Necesario',
+    'quantumroot.popup.neededLater': 'Necesario después',
+    'quantumroot.popup.waiting': 'Esperando',
+    'quantumroot.popup.ready': 'Listo',
+    'quantumroot.popup.confirmed': 'Confirmado',
+    'quantumroot.popup.pending': 'Pendiente',
+    'quantumroot.popup.reviewSpend': 'Revisar gasto',
+    'quantumroot.popup.reviewDestination':
+      'Revisa el destino antes de transmitir.',
+    'quantumroot.popup.destination': 'Destino',
+    'quantumroot.popup.spendDestination': 'Destino del gasto',
+    'quantumroot.popup.noDestination': 'No se ha establecido ningún destino',
+    'quantumroot.popup.missing': 'Falta',
+    'quantumroot.popup.useRecoveryAddress':
+      'Usar la dirección de recuperación de la billetera',
+    'quantumroot.popup.copyDestination': 'Copiar destino',
+    'quantumroot.popup.readyCoin': 'Moneda lista',
+    'quantumroot.popup.pendingCoin': 'Moneda pendiente',
+    'quantumroot.popup.noReadyCoin':
+      'Aún no hay una moneda lista. Cuando estén presentes la clave de aprobación y la moneda de recepción correspondiente, aquí aparecerán las monedas gastables.',
+    'quantumroot.popup.normalLaneDescription':
+      'Aquí van tu BCH y la moneda de recepción correspondiente.',
+    'quantumroot.popup.plainBchCoins': '{count} moneda(s) BCH simple(s)',
+    'quantumroot.popup.readyCoins': '{count} moneda(s) lista(s)',
+    'quantumroot.popup.approvalLane': 'Vía de aprobación',
+    'quantumroot.popup.approvalLaneDescription':
+      'La clave de aprobación va a Quantum Lock.',
+    'quantumroot.popup.approvalKeyInQuantumLock':
+      'Tu clave de aprobación está en Quantum Lock.',
+    'quantumroot.popup.sendSelectedApprovalKey':
+      'Envía la clave seleccionada a Quantum Lock.',
+    'quantumroot.popup.inWallet': '{count} en la billetera',
+    'quantumroot.popup.inQuantumLock': '{count} en Quantum Lock',
+    'quantumroot.popup.otherNfts': '{count} NFT adicional(es)',
+    'quantumroot.popup.otherNftInQuantumLock': 'Otro NFT en Quantum Lock',
+    'quantumroot.popup.otherNftDescription':
+      'Está en Quantum Lock, pero no es la clave de aprobación seleccionada. Aún no existe una ruta de retiro directa.',
+    'quantumroot.popup.otherNft': 'Otro NFT',
+    'quantumroot.popup.locked': '{count} bloqueado(s)',
+    'quantumroot.popup.vaultSetup': 'Configuración de la bóveda',
+    'quantumroot.popup.vaultSetupDescription':
+      'Copia las direcciones y elige la clave de aprobación.',
+    'quantumroot.popup.tapToOpen': 'Toca para abrir',
+    'quantumroot.popup.receiveAddress': 'Dirección de recepción',
+    'quantumroot.popup.copyReceiveAddress': 'Copiar dirección de recepción',
+    'quantumroot.popup.previewOnly':
+      'Solo vista previa en Mainnet hasta la activación.',
+    'quantumroot.popup.copyOrScanFund':
+      'Copia o escanea para financiar esta bóveda.',
+    'quantumroot.popup.copyQuantumLock': 'Copiar Quantum Lock',
+    'quantumroot.popup.sendApprovalHere': 'Envía aquí la clave de aprobación.',
+    'quantumroot.popup.receiveBch': 'Recibir BCH',
+    'quantumroot.popup.quantumLockBch': 'BCH de Quantum Lock',
+    'quantumroot.popup.approvalKeySelected': 'Clave de aprobación seleccionada',
+    'quantumroot.popup.noApprovalKey': 'No hay clave de aprobación',
+    'quantumroot.popup.availableApprovalKeys':
+      'Claves de aprobación disponibles',
+    'quantumroot.popup.quantumrootOpens':
+      'Quantumroot se abre cuando la clave de aprobación esté en Quantum Lock y la moneda de recepción correspondiente esté en la vía normal.',
+    'quantumroot.popup.chooseApprovalKey': 'Elegir clave de aprobación',
+    'quantumroot.popup.chooseApprovalKeyDescription':
+      'Quantumroot usa un NFT simple como clave de aprobación. Las herramientas avanzadas de tokens están en CashTokens.',
+    'quantumroot.popup.available': '{count} disponible(s)',
+    'quantumroot.popup.approvalKeyChanged':
+      'La clave de aprobación cambió en la cadena',
+    'quantumroot.popup.refreshChooseAnother':
+      'Actualiza la bóveda o elige otra clave de aprobación.',
+    'quantumroot.popup.refresh': 'Actualizar',
+    'quantumroot.popup.selectedApprovalKey': 'Clave de aprobación seleccionada',
+    'quantumroot.popup.category': 'Categoría:',
+    'quantumroot.popup.chooseOneApproval':
+      'Elige una clave de aprobación para continuar.',
+    'quantumroot.popup.saving': 'Guardando…',
+    'quantumroot.popup.saveApprovalKey': 'Guardar clave de aprobación',
+    'quantumroot.popup.refreshVault': 'Actualizar bóveda',
+    'quantumroot.popup.openCashTokens': 'Abrir CashTokens',
+    'quantumroot.popup.selectedAsApproval':
+      'Seleccionada como clave de aprobación',
+    'quantumroot.popup.createOrReceive':
+      'Crea o recibe primero un NFT simple; aparecerá aquí para que puedas elegirlo como clave de aprobación.',
+    'quantumroot.popup.protectedSpendDescription':
+      'Cuando estén presentes la clave de aprobación y la moneda de recepción correspondiente, el gasto se abrirá aquí.',
+    'quantumroot.popup.completeSteps':
+      'Completa los pasos de la clave de aprobación y la moneda de recepción antes de gastar.',
+    'quantumroot.popup.sendApprovalKey': 'Enviar clave de aprobación',
+    'quantumroot.popup.sendApprovalKeyDescription':
+      'Abre el envío preparado a Quantum Lock con la clave de aprobación seleccionada.',
+    'quantumroot.popup.fundMatchingReceive':
+      'Financiar moneda de recepción correspondiente',
+    'quantumroot.popup.fundMatchingReceiveDescription':
+      'Abre el envío preparado a la dirección de recepción de la bóveda con la misma clave de aprobación.',
+    'quantumroot.popup.found': '{count} encontrada(s)',
+    'quantumroot.popup.advancedRecovery': 'Recuperación avanzada',
+    'quantumroot.popup.advancedRecoveryDescription':
+      'Recupera BCH normal, recupera fondos de Quantum Lock o actualiza el estado de la bóveda.',
+    'quantumroot.popup.advanced': 'Avanzado',
+    'quantumroot.popup.walletRecoveryAddress':
+      'Dirección de recuperación de la billetera',
+    'quantumroot.popup.noStandardAddress':
+      'No hay una dirección estándar de la billetera disponible',
+    'quantumroot.popup.copyRecoveryAddress': 'Copiar dirección de recuperación',
+    'quantumroot.popup.bchRecoveryDescription':
+      'La recuperación de BCH devuelve los fondos a la dirección estándar correspondiente al índice de esta bóveda cuando está disponible.',
+    'quantumroot.popup.recoverRegularBch': 'Recuperar BCH normal',
+    'quantumroot.popup.destinationAddress': 'Dirección de destino',
+    'quantumroot.popup.sweepBch': 'Barrer monedas BCH ({count})',
+    'quantumroot.popup.sweeping': 'Barriendo…',
+    'quantumroot.popup.plainBchDescription':
+      'Usa esto para monedas BCH simples. Las monedas protegidas permanecen en las vías superiores.',
+    'quantumroot.popup.bchRecoveryDisabled':
+      'La recuperación de BCH está desactivada temporalmente hasta resolver el problema de validación del script de recepción en la cadena.',
+    'quantumroot.popup.quantumLockRecovery': 'Recuperación de Quantum Lock',
+    'quantumroot.popup.recoverableBchCoins': 'Monedas BCH recuperables',
+    'quantumroot.popup.recovering': 'Recuperando…',
+    'quantumroot.popup.recover': 'Recuperar',
+    'quantumroot.popup.spending': 'Gastando…',
+    'quantumroot.popup.spend': 'Gastar',
+    'quantumroot.popup.helpShortcuts': 'Ayuda y accesos directos',
+    'quantumroot.popup.refreshVaultStatus': 'Actualizar estado de la bóveda',
+    'quantumroot.popup.openReceiveScreen': 'Abrir pantalla de recepción',
+    'quantumroot.popup.unsupportedReceive':
+      'Las monedas con una clave de aprobación permanecen en Gasto protegido; esta lista de recuperación solo incluye monedas BCH simples.',
+    'quantumroot.popup.unsupportedQuantumLock':
+      'Las monedas de Quantum Lock que pertenecen a Gasto protegido se gestionan arriba; esta lista de recuperación solo incluye monedas BCH simples.',
+    'quantumroot.popup.mainnetDisabled':
+      'Quantumroot en Mainnet usa la misma interfaz que Chipnet, pero las acciones de gasto, recuperación y configuración de tokens permanecen desactivadas hasta la activación el {date}.',
+    'quantumroot.popup.recoverableBchCount':
+      'Monedas BCH recuperables: {count}',
+    'quantumroot.popup.protectedReceiveCount':
+      'Monedas ya gestionadas por Gasto protegido: {count}',
+    'quantumroot.popup.quantumLockRecoveryCount':
+      'Monedas de recuperación de Quantum Lock: {count}',
+    'quantumroot.popup.reviewSpendTitle': 'Revisar gasto',
+    'quantumroot.popup.reviewSpendSubtitle':
+      'Comprueba el destino, la clave de aprobación y la moneda lista antes de transmitir.',
+    'quantumroot.popup.broadcastWarning':
+      'Esto se transmitirá después de la confirmación.',
+    'quantumroot.popup.commitment': 'Compromiso:',
+    'quantumroot.popup.empty': 'vacío',
+    'quantumroot.popup.outpoint': 'Outpoint',
+    'quantumroot.popup.action.createTitle': 'Crear una clave de aprobación',
+    'quantumroot.popup.action.createDescription':
+      'Crea o recibe primero un NFT simple y úsalo como clave de aprobación.',
+    'quantumroot.popup.action.chooseTitle': 'Elegir una clave de aprobación',
+    'quantumroot.popup.action.chooseLabel': 'Elegir clave de aprobación',
+    'quantumroot.popup.action.chooseDescription':
+      'Elige una clave de aprobación para esta bóveda.',
+    'quantumroot.popup.action.refreshTitle': 'Actualizar la bóveda',
+    'quantumroot.popup.action.refreshLabel': 'Actualizar bóveda',
+    'quantumroot.popup.action.refreshDescription':
+      'Actualiza el escaneo de la billetera o elige otra clave de aprobación.',
+    'quantumroot.popup.action.sendTitle': 'Enviar la clave de aprobación',
+    'quantumroot.popup.action.sendLabel': 'Enviar clave de aprobación',
+    'quantumroot.popup.action.sendDescription':
+      'Envía la clave de aprobación a Quantum Lock.',
+    'quantumroot.popup.action.receiveTitle':
+      'Añadir la moneda de recepción correspondiente',
+    'quantumroot.popup.action.receiveLabel': 'Añadir moneda de recepción',
+    'quantumroot.popup.action.receiveDescription':
+      'Envía la moneda de recepción correspondiente a la vía normal.',
+    'quantumroot.popup.action.destinationTitle': 'Elegir un destino',
+    'quantumroot.popup.action.destinationLabel': 'Establecer destino',
+    'quantumroot.popup.action.destinationDescription':
+      'Elige adónde debe ir la moneda y abre la lista de gastos.',
+    'quantumroot.popup.action.readyTitle': 'Listo para gastar',
+    'quantumroot.popup.action.chooseCoinLabel': 'Elegir moneda para gastar',
+    'quantumroot.popup.action.reviewLabel': 'Revisar gasto',
+    'quantumroot.popup.action.disabledDescription':
+      'La lista de gastos está lista, pero gastar está desactivado en esta red.',
+    'quantumroot.popup.action.readyDescription':
+      'Toca una moneda lista para gastarla.',
+    'quantumroot.popup.block.noFamily':
+      'Crea o recibe primero un NFT simple. Será tu clave de aprobación.',
+    'quantumroot.popup.block.pickFamily':
+      'Elige un NFT simple para usarlo como clave de aprobación.',
+    'quantumroot.popup.block.staleInventory':
+      'La clave de aprobación seleccionada no está visible ahora. Actualiza la bóveda o elige otra clave.',
+    'quantumroot.popup.block.approvalPending':
+      'Envía una clave de aprobación a Quantum Lock.',
+    'quantumroot.popup.block.receivePending':
+      'Envía la moneda de recepción correspondiente a la vía normal.',
+    'quantumroot.popup.block.noDestination':
+      'Elige una dirección de destino antes de gastar.',
+    'quantumroot.popup.block.inactiveNetwork':
+      'El gasto de Quantumroot está desactivado en esta red.',
+    'quantumroot.popup.mutableNft': 'NFT mutable',
+    'quantumroot.popup.mintingNft': 'NFT de acuñación',
+    'quantumroot.popup.approvalKeyCapability': 'Clave de aprobación',
+    'quantumroot.toast.previewActive':
+      'La vista previa de Quantumroot en Mainnet está activa hasta la activación.',
+    'quantumroot.toast.approvalKeyMissing':
+      'Esta clave de aprobación ya no está visible. Actualiza la bóveda o elige otra clave.',
+    'quantumroot.toast.invalidTokenCategory':
+      'La categoría del token debe tener 64 caracteres hexadecimales.',
+    'quantumroot.toast.reconfigured': 'Bóveda Quantumroot reconfigurada.',
+    'quantumroot.toast.configureFailed':
+      'No se pudo configurar la bóveda: {message}',
+    'quantumroot.toast.unavailable':
+      'La bóveda Quantumroot no está disponible.',
+    'quantumroot.toast.destinationRequired':
+      'La dirección de destino es obligatoria.',
+    'quantumroot.toast.noBchUtxos':
+      'No hay UTXO de recepción solo BCH para barrer.',
+    'quantumroot.toast.noControlToken':
+      'Aún no hay un token de control coincidente en Quantum Lock.',
+    'quantumroot.toast.ineligibleReceiveUtxo':
+      'Ese UTXO de recepción no puede usarse para un gasto autorizado.',
+    'quantumroot.toast.broadcastSpendFailed':
+      'No se pudo transmitir el gasto de Quantumroot.',
+    'quantumroot.toast.broadcastSweepFailed':
+      'No se pudo transmitir el barrido de Quantumroot.',
+    'quantumroot.toast.broadcastAuthorizedFailed':
+      'No se pudo transmitir el gasto autorizado de Quantumroot.',
+    'quantumroot.toast.broadcastLockRecoveryFailed':
+      'No se pudo transmitir la recuperación de Quantum Lock.',
+    'quantumroot.toast.spendBroadcast':
+      'Gasto de Quantumroot transmitido: {txid}',
+    'quantumroot.toast.sweepBroadcast':
+      'Barrido de Quantumroot transmitido: {txid}',
+    'quantumroot.toast.authorizedBroadcast':
+      'Gasto autorizado de Quantumroot transmitido: {txid}',
+    'quantumroot.toast.lockRecoveryBroadcast':
+      'Recuperación de Quantum Lock transmitida: {txid}',
+    'quantumroot.toast.spendFailed': 'Falló el gasto de Quantumroot: {message}',
+    'quantumroot.toast.sweepFailed':
+      'Falló el barrido de Quantumroot: {message}',
+    'quantumroot.toast.authorizedFailed':
+      'Falló el gasto autorizado de Quantumroot: {message}',
+    'quantumroot.toast.lockRecoveryFailed':
+      'Falló la recuperación de Quantum Lock: {message}',
 
     'paper.title': 'Billetera de papel',
     'paper.description':
@@ -784,6 +1366,26 @@ export const coreTranslations = {
     'receive.copyFailed': 'No se pudo copiar.',
 
     'send.title': 'Envío sencillo',
+    'send.send': 'Enviar',
+    'send.guidedDescription':
+      'Envía BCH, tokens fungibles o NFT con un único flujo guiado.',
+    'send.debug': 'Depuración',
+    'send.selectedInputs': 'Entradas seleccionadas',
+    'send.outpoint': 'Outpoint',
+    'send.address': 'Dirección',
+    'send.sats': 'Sats',
+    'send.height': 'Altura',
+    'send.tokenLabel': 'Token',
+    'send.contract': 'Contrato',
+    'send.noInputs': 'Aún no hay entradas seleccionadas (ejecuta Revisar).',
+    'send.finalOutputs': 'Salidas finales',
+    'send.type': 'Tipo',
+    'send.details': 'Detalles',
+    'send.noOutputs': 'Aún no hay salidas (ejecuta Revisar).',
+    'send.rawTransaction': 'Transacción sin procesar',
+    'send.noTxBuilt': '(aún no se ha construido ninguna transacción)',
+    'send.advanced': 'Avanzado',
+    'send.advancedBuilder': 'Abrir constructor avanzado',
     'send.quantumrootShortcut': 'Acceso directo de Quantumroot',
     'send.quantumrootApproval': 'clave de aprobación al Bloqueo cuántico',
     'send.quantumrootReceive':
@@ -1260,6 +1862,256 @@ export const coreTranslations = {
     'assets.noNfts': '未找到 NFT。',
     'assets.quantumroot': 'Quantumroot',
     'assets.units': '单位',
+    'assets.cashTokens': 'CashTokens',
+    'assets.openVaults': '打开保险库',
+    'assets.advancedVaultWorkspace': '高级保险库工作区',
+    'assets.vaultWorkspace': '保险库工作区',
+    'assets.advancedVaultDescription': '高级保险库的接收和恢复工具',
+    'quantumroot.subtitle': '一个保险库中的两条支出通道',
+    'quantumroot.betaProduction': '生产测试版',
+    'quantumroot.betaTitle': 'Quantumroot 生产测试版',
+    'quantumroot.livePreview': '实时预览',
+    'quantumroot.mainnetPreview': '激活前仍显示 Mainnet 预览。',
+    'quantumroot.activeWorkspace': 'Quantumroot 生产测试版流程的活动工作区。',
+    'quantumroot.mainnetAhead':
+      'Quantumroot 在激活前已显示于 Mainnet。布局仍可用，但关键操作将在 {date} 前保持禁用。',
+    'quantumroot.activeNetwork':
+      'Quantumroot 已在此网络启用。使用下方保险库工作区管理普通支出通道和抗量子恢复通道。',
+    'quantumroot.trackedBalance': '跟踪余额',
+    'quantumroot.vaults': '保险库',
+    'quantumroot.funded': '{count} 个已注资',
+    'quantumroot.syncingVaults': '正在同步保险库…',
+    'quantumroot.syncVaults': '同步保险库',
+    'quantumroot.openVaults': '打开保险库',
+    'quantumroot.liveNow':
+      '当前可用：普通支出、余额跟踪和 Quantum Lock BCH 恢复。',
+    'quantumroot.guidedNow':
+      '引导流程：选择一个批准密钥，将其锁定到 Quantum Lock，然后支出匹配的币。',
+    'quantumroot.back': '返回',
+    'quantumroot.close': '关闭',
+    'quantumroot.workspaceRefreshFailed': '工作区刷新失败',
+    'quantumroot.noVaults':
+      '尚未派生 Quantumroot 保险库。同步保险库即可为现有钱包地址索引配置保险库。',
+    'quantumroot.refreshing':
+      '正在刷新余额和 UTXO 状态。同步完成前保险库仍可用。',
+    'quantumroot.vaultNumber': '保险库 #{id}',
+    'quantumroot.checkingBalances': '正在检查余额…',
+    'quantumroot.readyToRecover': '{count} 个可恢复',
+    'quantumroot.fundedStatus': '已注资',
+    'quantumroot.noFundsYet': '暂无资金',
+    'quantumroot.popup.nextStep': '下一步',
+    'quantumroot.popup.normalLane': '普通保险库通道',
+    'quantumroot.popup.normalLaneReady': '普通通道已就绪。',
+    'quantumroot.popup.normalLanePending':
+      '批准密钥进入 Quantum Lock 后，添加匹配的接收币。',
+    'quantumroot.popup.approvalKey': '批准密钥',
+    'quantumroot.popup.approvalKeyPicked': '已选择批准密钥。',
+    'quantumroot.popup.pickApprovalKey': '选择一个批准密钥。',
+    'quantumroot.popup.quantumLock': 'Quantum Lock',
+    'quantumroot.popup.approvalKeyInLock': '批准密钥已在 Quantum Lock 中。',
+    'quantumroot.popup.sendApprovalKeyToLock':
+      '将批准密钥发送到 Quantum Lock。',
+    'quantumroot.popup.protectedSpend': '受保护支出',
+    'quantumroot.popup.readyCoinAvailable': '已有就绪币。',
+    'quantumroot.popup.addDestinationReview': '添加目的地，然后检查支出。',
+    'quantumroot.popup.addMatchingCoin': '添加匹配的币以解锁支出。',
+    'quantumroot.popup.done': '完成',
+    'quantumroot.popup.needed': '需要',
+    'quantumroot.popup.neededLater': '稍后需要',
+    'quantumroot.popup.waiting': '等待中',
+    'quantumroot.popup.ready': '就绪',
+    'quantumroot.popup.confirmed': '已确认',
+    'quantumroot.popup.pending': '待处理',
+    'quantumroot.popup.reviewSpend': '检查支出',
+    'quantumroot.popup.reviewDestination': '广播前检查目的地。',
+    'quantumroot.popup.destination': '目的地',
+    'quantumroot.popup.spendDestination': '支出目的地',
+    'quantumroot.popup.noDestination': '尚未设置目的地',
+    'quantumroot.popup.missing': '缺少',
+    'quantumroot.popup.useRecoveryAddress': '使用钱包恢复地址',
+    'quantumroot.popup.copyDestination': '复制目的地',
+    'quantumroot.popup.readyCoin': '就绪币',
+    'quantumroot.popup.pendingCoin': '待处理币',
+    'quantumroot.popup.noReadyCoin':
+      '目前还没有就绪币。批准密钥和匹配的接收币到位后，可支出的币会显示在这里。',
+    'quantumroot.popup.normalLaneDescription': 'BCH 和匹配的接收币会进入这里。',
+    'quantumroot.popup.plainBchCoins': '{count} 个普通 BCH 币',
+    'quantumroot.popup.readyCoins': '{count} 个就绪币',
+    'quantumroot.popup.approvalLane': '批准通道',
+    'quantumroot.popup.approvalLaneDescription':
+      '批准密钥会发送到 Quantum Lock。',
+    'quantumroot.popup.approvalKeyInQuantumLock':
+      '你的批准密钥已在 Quantum Lock 中。',
+    'quantumroot.popup.sendSelectedApprovalKey':
+      '将选中的批准密钥发送到 Quantum Lock。',
+    'quantumroot.popup.inWallet': '钱包中有 {count} 个',
+    'quantumroot.popup.inQuantumLock': 'Quantum Lock 中有 {count} 个',
+    'quantumroot.popup.otherNfts': '{count} 个其他 NFT',
+    'quantumroot.popup.otherNftInQuantumLock': 'Quantum Lock 中的其他 NFT',
+    'quantumroot.popup.otherNftDescription':
+      '它位于 Quantum Lock，但不是选中的批准密钥。目前还没有直接提取路径。',
+    'quantumroot.popup.otherNft': '其他 NFT',
+    'quantumroot.popup.locked': '{count} 个已锁定',
+    'quantumroot.popup.vaultSetup': '保险库设置',
+    'quantumroot.popup.vaultSetupDescription': '复制地址并选择批准密钥。',
+    'quantumroot.popup.tapToOpen': '点击打开',
+    'quantumroot.popup.receiveAddress': '接收地址',
+    'quantumroot.popup.copyReceiveAddress': '复制接收地址',
+    'quantumroot.popup.previewOnly': '激活前仅在 Mainnet 上提供预览。',
+    'quantumroot.popup.copyOrScanFund': '复制或扫描以为此保险库注资。',
+    'quantumroot.popup.copyQuantumLock': '复制 Quantum Lock',
+    'quantumroot.popup.sendApprovalHere': '将批准密钥发送到这里。',
+    'quantumroot.popup.receiveBch': '接收 BCH',
+    'quantumroot.popup.quantumLockBch': 'Quantum Lock BCH',
+    'quantumroot.popup.approvalKeySelected': '已选择批准密钥',
+    'quantumroot.popup.noApprovalKey': '没有批准密钥',
+    'quantumroot.popup.availableApprovalKeys': '可用的批准密钥',
+    'quantumroot.popup.quantumrootOpens':
+      '批准密钥位于 Quantum Lock 且匹配的接收币位于普通通道后，Quantumroot 才会打开。',
+    'quantumroot.popup.chooseApprovalKey': '选择批准密钥',
+    'quantumroot.popup.chooseApprovalKeyDescription':
+      'Quantumroot 使用一个普通 NFT 作为批准密钥。高级代币工具位于 CashTokens 中。',
+    'quantumroot.popup.available': '可用 {count} 个',
+    'quantumroot.popup.approvalKeyChanged': '链上的批准密钥已更改',
+    'quantumroot.popup.refreshChooseAnother': '刷新保险库或选择其他批准密钥。',
+    'quantumroot.popup.refresh': '刷新',
+    'quantumroot.popup.selectedApprovalKey': '选中的批准密钥',
+    'quantumroot.popup.category': '类别：',
+    'quantumroot.popup.chooseOneApproval': '选择一个批准密钥以继续。',
+    'quantumroot.popup.saving': '保存中…',
+    'quantumroot.popup.saveApprovalKey': '保存批准密钥',
+    'quantumroot.popup.refreshVault': '刷新保险库',
+    'quantumroot.popup.openCashTokens': '打开 CashTokens',
+    'quantumroot.popup.selectedAsApproval': '已选为批准密钥',
+    'quantumroot.popup.createOrReceive':
+      '先创建或接收一个普通 NFT，它会显示在这里供你选择为批准密钥。',
+    'quantumroot.popup.protectedSpendDescription':
+      '批准密钥和匹配的接收币到位后，支出功能会在这里打开。',
+    'quantumroot.popup.completeSteps':
+      '完成批准密钥和匹配接收币步骤后才能支出。',
+    'quantumroot.popup.sendApprovalKey': '发送批准密钥',
+    'quantumroot.popup.sendApprovalKeyDescription':
+      '打开预填充的发送界面，将选中的批准密钥发送到 Quantum Lock。',
+    'quantumroot.popup.fundMatchingReceive': '为匹配的接收币注资',
+    'quantumroot.popup.fundMatchingReceiveDescription':
+      '打开预填充的发送界面，将相同批准密钥发送到保险库接收地址。',
+    'quantumroot.popup.found': '找到 {count} 个',
+    'quantumroot.popup.advancedRecovery': '高级恢复',
+    'quantumroot.popup.advancedRecoveryDescription':
+      '恢复普通 BCH、恢复 Quantum Lock 资金或刷新保险库状态。',
+    'quantumroot.popup.advanced': '高级',
+    'quantumroot.popup.walletRecoveryAddress': '钱包恢复地址',
+    'quantumroot.popup.noStandardAddress': '没有可用的标准钱包地址',
+    'quantumroot.popup.copyRecoveryAddress': '复制恢复地址',
+    'quantumroot.popup.bchRecoveryDescription':
+      'BCH 恢复会在有可用地址时，将资金发回此保险库索引对应的标准钱包地址。',
+    'quantumroot.popup.recoverRegularBch': '恢复普通 BCH',
+    'quantumroot.popup.destinationAddress': '目的地地址',
+    'quantumroot.popup.sweepBch': '转移 BCH 币（{count}）',
+    'quantumroot.popup.sweeping': '转移中…',
+    'quantumroot.popup.plainBchDescription':
+      '普通 BCH 币使用此功能。受保护的币仍留在上方通道中。',
+    'quantumroot.popup.bchRecoveryDisabled':
+      '在链上接收脚本验证问题解决前，BCH 恢复暂时被禁用。',
+    'quantumroot.popup.quantumLockRecovery': 'Quantum Lock 恢复',
+    'quantumroot.popup.recoverableBchCoins': '可恢复的 BCH 币',
+    'quantumroot.popup.recovering': '恢复中…',
+    'quantumroot.popup.recover': '恢复',
+    'quantumroot.popup.spending': '支出中…',
+    'quantumroot.popup.spend': '支出',
+    'quantumroot.popup.helpShortcuts': '帮助和快捷方式',
+    'quantumroot.popup.refreshVaultStatus': '刷新保险库状态',
+    'quantumroot.popup.openReceiveScreen': '打开接收界面',
+    'quantumroot.popup.unsupportedReceive':
+      '带有批准密钥的币会留在受保护支出中；此恢复列表仅包含普通 BCH 币。',
+    'quantumroot.popup.unsupportedQuantumLock':
+      '属于受保护支出的 Quantum Lock 币已在上方处理；此恢复列表仅包含普通 BCH 币。',
+    'quantumroot.popup.mainnetDisabled':
+      'Mainnet Quantumroot 使用与 Chipnet 相同的界面，但支出、恢复和代币配置操作在 {date} 激活前仍被禁用。',
+    'quantumroot.popup.recoverableBchCount': '可恢复的 BCH 币：{count}',
+    'quantumroot.popup.protectedReceiveCount': '受保护支出已处理的币：{count}',
+    'quantumroot.popup.quantumLockRecoveryCount':
+      'Quantum Lock 恢复币：{count}',
+    'quantumroot.popup.reviewSpendTitle': '检查支出',
+    'quantumroot.popup.reviewSpendSubtitle':
+      '广播前检查目的地、批准密钥和就绪币。',
+    'quantumroot.popup.broadcastWarning': '确认后将广播此交易。',
+    'quantumroot.popup.commitment': '承诺值：',
+    'quantumroot.popup.empty': '空',
+    'quantumroot.popup.outpoint': 'Outpoint',
+    'quantumroot.popup.action.createTitle': '创建批准密钥',
+    'quantumroot.popup.action.createDescription':
+      '先创建或接收一个普通 NFT，然后将其用作批准密钥。',
+    'quantumroot.popup.action.chooseTitle': '选择批准密钥',
+    'quantumroot.popup.action.chooseLabel': '选择批准密钥',
+    'quantumroot.popup.action.chooseDescription':
+      '为此保险库选择一个批准密钥。',
+    'quantumroot.popup.action.refreshTitle': '刷新保险库',
+    'quantumroot.popup.action.refreshLabel': '刷新保险库',
+    'quantumroot.popup.action.refreshDescription':
+      '刷新钱包扫描或选择其他批准密钥。',
+    'quantumroot.popup.action.sendTitle': '发送批准密钥',
+    'quantumroot.popup.action.sendLabel': '发送批准密钥',
+    'quantumroot.popup.action.sendDescription':
+      '将批准密钥发送到 Quantum Lock。',
+    'quantumroot.popup.action.receiveTitle': '添加匹配的接收币',
+    'quantumroot.popup.action.receiveLabel': '添加接收币',
+    'quantumroot.popup.action.receiveDescription':
+      '将匹配的接收币发送到普通通道。',
+    'quantumroot.popup.action.destinationTitle': '选择目的地',
+    'quantumroot.popup.action.destinationLabel': '设置目的地',
+    'quantumroot.popup.action.destinationDescription':
+      '选择币的去向，然后打开支出列表。',
+    'quantumroot.popup.action.readyTitle': '可以支出',
+    'quantumroot.popup.action.chooseCoinLabel': '选择要支出的币',
+    'quantumroot.popup.action.reviewLabel': '检查支出',
+    'quantumroot.popup.action.disabledDescription':
+      '支出列表已准备好，但此网络禁用了支出。',
+    'quantumroot.popup.action.readyDescription': '点击就绪币即可支出。',
+    'quantumroot.popup.block.noFamily':
+      '先创建或接收一个普通 NFT。它会成为你的批准密钥。',
+    'quantumroot.popup.block.pickFamily': '选择一个普通 NFT 作为批准密钥。',
+    'quantumroot.popup.block.staleInventory':
+      '当前看不到选中的批准密钥。刷新保险库或选择其他密钥。',
+    'quantumroot.popup.block.approvalPending':
+      '将一个批准密钥发送到 Quantum Lock。',
+    'quantumroot.popup.block.receivePending': '将匹配的接收币发送到普通通道。',
+    'quantumroot.popup.block.noDestination': '支出前选择目的地地址。',
+    'quantumroot.popup.block.inactiveNetwork':
+      '此网络已禁用 Quantumroot 支出。',
+    'quantumroot.popup.mutableNft': '可变 NFT',
+    'quantumroot.popup.mintingNft': '铸造型 NFT',
+    'quantumroot.popup.approvalKeyCapability': '批准密钥',
+    'quantumroot.toast.previewActive':
+      'Quantumroot Mainnet 预览在激活前保持可用。',
+    'quantumroot.toast.approvalKeyMissing':
+      '当前看不到此批准密钥。刷新保险库或选择其他密钥。',
+    'quantumroot.toast.invalidTokenCategory':
+      '代币类别必须是 64 个十六进制字符。',
+    'quantumroot.toast.reconfigured': 'Quantumroot 保险库已重新配置。',
+    'quantumroot.toast.configureFailed': '保险库配置失败：{message}',
+    'quantumroot.toast.unavailable': 'Quantumroot 保险库不可用。',
+    'quantumroot.toast.destinationRequired': '必须填写目的地地址。',
+    'quantumroot.toast.noBchUtxos': '没有可转移的纯 BCH 接收 UTXO。',
+    'quantumroot.toast.noControlToken': '尚无匹配的 Quantum Lock 控制代币。',
+    'quantumroot.toast.ineligibleReceiveUtxo':
+      '该接收 UTXO 不符合授权支出条件。',
+    'quantumroot.toast.broadcastSpendFailed': 'Quantumroot 支出广播失败。',
+    'quantumroot.toast.broadcastSweepFailed': 'Quantumroot 转移广播失败。',
+    'quantumroot.toast.broadcastAuthorizedFailed':
+      'Quantumroot 授权支出广播失败。',
+    'quantumroot.toast.broadcastLockRecoveryFailed':
+      'Quantum Lock 恢复广播失败。',
+    'quantumroot.toast.spendBroadcast': 'Quantumroot 支出已广播：{txid}',
+    'quantumroot.toast.sweepBroadcast': 'Quantumroot 转移已广播：{txid}',
+    'quantumroot.toast.authorizedBroadcast':
+      'Quantumroot 授权支出已广播：{txid}',
+    'quantumroot.toast.lockRecoveryBroadcast':
+      'Quantum Lock 恢复已广播：{txid}',
+    'quantumroot.toast.spendFailed': 'Quantumroot 支出失败：{message}',
+    'quantumroot.toast.sweepFailed': 'Quantumroot 转移失败：{message}',
+    'quantumroot.toast.authorizedFailed': 'Quantumroot 授权支出失败：{message}',
+    'quantumroot.toast.lockRecoveryFailed': 'Quantum Lock 恢复失败：{message}',
 
     'paper.title': '纸钱包',
     'paper.description':
@@ -1390,6 +2242,25 @@ export const coreTranslations = {
     'receive.copyFailed': '复制失败。',
 
     'send.title': '简单发送',
+    'send.send': '发送',
+    'send.guidedDescription': '通过一个引导流程发送 BCH、同质化代币或 NFT。',
+    'send.debug': '调试',
+    'send.selectedInputs': '已选择的输入',
+    'send.outpoint': 'Outpoint',
+    'send.address': '地址',
+    'send.sats': 'Sats',
+    'send.height': '高度',
+    'send.tokenLabel': '代币',
+    'send.contract': '合约',
+    'send.noInputs': '尚未选择输入（请执行检查）。',
+    'send.finalOutputs': '最终输出',
+    'send.type': '类型',
+    'send.details': '详情',
+    'send.noOutputs': '尚无输出（请执行检查）。',
+    'send.rawTransaction': '原始交易',
+    'send.noTxBuilt': '（尚未构建交易）',
+    'send.advanced': '高级',
+    'send.advancedBuilder': '打开高级构建器',
     'send.quantumrootShortcut': 'Quantumroot 快捷方式',
     'send.quantumrootApproval': '发送到量子锁的批准密钥',
     'send.quantumrootReceive': '发送到保险库接收地址的匹配接收币',
@@ -1795,4 +2666,4 @@ export const coreTranslations = {
     'desktopMenu.exported': '钱包已导出。',
     'desktopMenu.exportFailed': '钱包导出失败。',
   },
-} satisfies Record<SupportedLocale, Record<string, string>>;
+} satisfies Record<BaseLocale, Record<string, string>>;

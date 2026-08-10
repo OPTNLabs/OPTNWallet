@@ -419,7 +419,7 @@ const Assets: React.FC = () => {
             <div className="flex h-full min-h-0 flex-col gap-2.5">
               <SectionCard className="min-h-0 flex-1 overflow-hidden p-3">
                 <SectionHeader
-                  title="CashTokens"
+                  title={t('assets.cashTokens')}
                   subtitle={t('assets.fungibleHoldings')}
                   compact
                 />
@@ -577,7 +577,7 @@ const Assets: React.FC = () => {
                   onClick={() => navigate('/quantumroot')}
                   className="wallet-btn-secondary px-3 py-1.5 text-sm"
                 >
-                  Open vaults
+                  {t('assets.openVaults')}
                 </button>
               }
             />
@@ -585,11 +585,11 @@ const Assets: React.FC = () => {
               <div>
                 <div className="text-sm font-semibold wallet-text-strong">
                   {currentNetwork === Network.CHIPNET
-                    ? 'Advanced vault workspace'
-                    : 'Vault workspace'}
+                    ? t('assets.advancedVaultWorkspace')
+                    : t('assets.vaultWorkspace')}
                 </div>
                 <div className="text-xs wallet-muted">
-                  Receive and recovery tools for advanced vaults
+                  {t('assets.advancedVaultDescription')}
                 </div>
               </div>
             </div>

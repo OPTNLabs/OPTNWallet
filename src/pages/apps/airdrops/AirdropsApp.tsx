@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import type { AddonSDK } from '../../../services/AddonsSDK';
 import type { AddonAppDefinition, AddonManifest } from '../../../types/addons';
+import { useAddonI18n } from '../../../i18n/useAddonI18n';
 import SectionCard from '../../../components/ui/SectionCard';
 import AirdropDistributionScreen from './screens/AirdropDistributionScreen';
 import { useAirdropWalletInventory } from './hooks/useAirdropWalletInventory';
@@ -18,6 +19,7 @@ const AirdropsApp: React.FC<AirdropsAppProps> = ({ sdk, app }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const backTarget = getReturnPath(location, '/apps');
+  const { t: addonT } = useAddonI18n();
   const inventory = useAirdropWalletInventory(sdk);
   const [workspace] = useState<AirdropWorkspace>({
     id: 'local-distributor',
@@ -45,7 +47,7 @@ const AirdropsApp: React.FC<AirdropsAppProps> = ({ sdk, app }) => {
             onClick={() => navigate(backTarget)}
             className="wallet-btn-danger px-4 py-2"
           >
-            Back
+            {addonT('common.back', 'Back')}
           </button>
         </div>
       </div>
@@ -54,14 +56,17 @@ const AirdropsApp: React.FC<AirdropsAppProps> = ({ sdk, app }) => {
         <div className="space-y-4">
           {inventory.error ? (
             <div className="wallet-warning-panel rounded-2xl px-4 py-3 text-sm">
-              Wallet error: {inventory.error}
+              {addonT('common.walletError', 'Wallet error')}: {inventory.error}
             </div>
           ) : null}
 
           {!inventory.addresses[0]?.address ? (
-            <SectionCard title="Unavailable">
+            <SectionCard title={addonT('common.unavailable', 'Unavailable')}>
               <p className="text-sm wallet-muted">
-                No wallet address is available yet.
+                {addonT(
+                  'common.noWalletAddress',
+                  'No wallet address is available yet.'
+                )}
               </p>
             </SectionCard>
           ) : null}

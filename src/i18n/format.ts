@@ -14,7 +14,16 @@ export function interpolateMessage(
 
 export function intlLocale(locale: SupportedLocale): string {
   if (locale === 'es') return 'es-ES';
+  if (locale === 'pt-BR') return 'pt-BR';
+  if (locale === 'vi') return 'vi-VN';
   if (locale === 'zh-CN') return 'zh-CN';
+  if (locale === 'zh-TW') return 'zh-TW';
+  if (locale === 'ar') return 'ar';
+  if (locale === 'fr') return 'fr-FR';
+  if (locale === 'ko') return 'ko-KR';
+  if (locale === 'ja') return 'ja-JP';
+  if (locale === 'ru') return 'ru-RU';
+  if (locale === 'ha-NG') return 'ha-NG';
   return 'en-US';
 }
 

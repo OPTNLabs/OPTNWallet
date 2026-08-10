@@ -1,8 +1,25 @@
 import type { SupportedLocale } from './types';
 import { coreTranslations } from './coreResources';
+import { localeOverrides } from './localeOverrides';
+import { localeExtendedOverrides } from './localeExtendedOverrides';
+import { localePlatformOverrides } from './localePlatformOverrides';
+import { localeHardwareOverrides } from './localeHardwareOverrides';
+import { localeCriticalOverrides } from './localeCriticalOverrides';
+import { localeConnectionOverrides } from './localeConnectionOverrides';
+import { localeOperationalOverrides } from './localeOperationalOverrides';
+import { localeFeatureOverrides } from './localeFeatureOverrides';
+import { localeAddonHostOverrides } from './localeAddonHostOverrides';
+import { localeSigningOverrides } from './localeSigningOverrides';
+import { localeSystemOverrides } from './localeSystemOverrides';
+import { localeFinishingOverrides } from './localeFinishingOverrides';
+import { localeContractOverrides } from './localeContractOverrides';
+import { localeFusionOverrides } from './localeFusionOverrides';
+import { localeBuilderShellOverrides } from './localeBuilderShellOverrides';
+import { localeResidualOverrides } from './localeResidualOverrides';
+import { localeQuantumrootShellOverrides } from './localeQuantumrootShellOverrides';
 import { remainingTranslations } from './remainingResources';
 
-export const translations = {
+const baseTranslations = {
   en: {
     ...coreTranslations.en,
     ...remainingTranslations.en,
@@ -81,6 +98,19 @@ export const translations = {
     'onboarding.helpTitle': 'Getting started',
     'onboarding.helpDescription':
       'Create a wallet for the first time or restore one you already have.',
+    'onboarding.toggleTheme': 'Toggle theme',
+    'onboarding.welcomeAlt': 'Smart BCH Wallet',
+    'onboarding.closeHelp': 'Close help',
+    'onboarding.poweredBy': 'Powered with Bitcoin Covenants for Bitcoin Cash',
+    'onboarding.helpCreateTitle': 'Create Wallet',
+    'onboarding.helpCreateDescription':
+      'Use this if you want a new wallet with a fresh seed phrase on this device.',
+    'onboarding.helpImportTitle': 'Import Wallet',
+    'onboarding.helpImportDescription':
+      'Use this if you already have a 12-word recovery phrase and want access to an existing wallet.',
+    'onboarding.helpNetworkTitle': 'Choose a network',
+    'onboarding.helpNetworkDescription':
+      'Select Mainnet for real funds or CHIPNET for test funds before you proceed.',
     'onboarding.createWallet': 'Create Wallet',
     'onboarding.importWallet': 'Import Wallet',
     'onboarding.createNewWallet': 'Create New Wallet',
@@ -136,7 +166,7 @@ export const translations = {
     'onboarding.mnemonicWarning':
       'Your recovery phrase is the master key to your wallet. Store it securely and never share it.',
     'onboarding.invalidMnemonic':
-      'Enter a valid 12-, 15-, 18-, 21-, or 24-word BIP39 recovery phrase.',
+      'Enter a valid English BIP39 recovery phrase with 12, 15, 18, 21, or 24 words.',
     'settings.walletSecurity': 'Wallet & security',
     'settings.walletSecurityDescription':
       'Recovery, derivation path, app lock, and wallet controls',
@@ -153,6 +183,8 @@ export const translations = {
     'settings.about': 'About OPTN',
     'settings.terms': 'Terms of Use',
     'settings.contact': 'Contact Us',
+    'history.output': 'Output',
+    'priceFeed.loading': 'Loading…',
   },
   es: {
     ...coreTranslations.es,
@@ -233,6 +265,20 @@ export const translations = {
     'onboarding.helpTitle': 'Primeros pasos',
     'onboarding.helpDescription':
       'Crea una billetera por primera vez o restaura una que ya tienes.',
+    'onboarding.toggleTheme': 'Cambiar tema',
+    'onboarding.welcomeAlt': 'Billetera Smart BCH',
+    'onboarding.closeHelp': 'Cerrar ayuda',
+    'onboarding.poweredBy':
+      'Impulsada por covenants de Bitcoin para Bitcoin Cash',
+    'onboarding.helpCreateTitle': 'Crear billetera',
+    'onboarding.helpCreateDescription':
+      'Usa esta opción si quieres una billetera nueva con una frase de recuperación nueva en este dispositivo.',
+    'onboarding.helpImportTitle': 'Importar billetera',
+    'onboarding.helpImportDescription':
+      'Usa esta opción si ya tienes una frase de recuperación de 12 palabras y quieres acceder a una billetera existente.',
+    'onboarding.helpNetworkTitle': 'Elegir una red',
+    'onboarding.helpNetworkDescription':
+      'Selecciona Mainnet para fondos reales o CHIPNET para fondos de prueba antes de continuar.',
     'onboarding.createWallet': 'Crear billetera',
     'onboarding.importWallet': 'Importar billetera',
     'onboarding.createNewWallet': 'Crear billetera nueva',
@@ -307,6 +353,8 @@ export const translations = {
     'settings.about': 'Acerca de OPTN',
     'settings.terms': 'Términos de uso',
     'settings.contact': 'Contacto',
+    'history.output': 'Salida',
+    'priceFeed.loading': 'Cargando…',
   },
   'zh-CN': {
     ...coreTranslations['zh-CN'],
@@ -382,6 +430,19 @@ export const translations = {
     'actions.contractsDescription': '管理合约实例',
     'onboarding.helpTitle': '开始使用',
     'onboarding.helpDescription': '创建新钱包，或恢复已有钱包。',
+    'onboarding.toggleTheme': '切换主题',
+    'onboarding.welcomeAlt': 'Smart BCH 钱包',
+    'onboarding.closeHelp': '关闭帮助',
+    'onboarding.poweredBy': '由 Bitcoin Cash 的 Bitcoin Covenant 提供支持',
+    'onboarding.helpCreateTitle': '创建钱包',
+    'onboarding.helpCreateDescription':
+      '如果你想在此设备上使用全新的助记词创建钱包，请选择此项。',
+    'onboarding.helpImportTitle': '导入钱包',
+    'onboarding.helpImportDescription':
+      '如果你已有 12 个单词的恢复短语并想访问现有钱包，请选择此项。',
+    'onboarding.helpNetworkTitle': '选择网络',
+    'onboarding.helpNetworkDescription':
+      '继续前选择 Mainnet 使用真实资金，或选择 CHIPNET 使用测试资金。',
     'onboarding.createWallet': '创建钱包',
     'onboarding.importWallet': '导入钱包',
     'onboarding.createNewWallet': '创建新钱包',
@@ -445,6 +506,183 @@ export const translations = {
     'settings.about': '关于 OPTN',
     'settings.terms': '使用条款',
     'settings.contact': '联系我们',
+    'history.output': '输出',
+    'priceFeed.loading': '正在加载…',
+  },
+};
+
+/**
+ * New locales start with the complete English runtime catalog and apply the
+ * translations that have been reviewed so far. This keeps every wallet
+ * surface renderable while the generated review export makes untranslated
+ * English fallback entries visible to reviewers.
+ */
+export const translations = {
+  ...baseTranslations,
+  'pt-BR': {
+    ...baseTranslations.en,
+    ...localeOverrides['pt-BR'],
+    ...localeExtendedOverrides['pt-BR'],
+    ...localePlatformOverrides['pt-BR'],
+    ...localeHardwareOverrides['pt-BR'],
+    ...localeCriticalOverrides['pt-BR'],
+    ...localeConnectionOverrides['pt-BR'],
+    ...localeOperationalOverrides['pt-BR'],
+    ...localeFeatureOverrides['pt-BR'],
+    ...localeAddonHostOverrides['pt-BR'],
+    ...localeSigningOverrides['pt-BR'],
+    ...localeSystemOverrides['pt-BR'],
+    ...localeFinishingOverrides['pt-BR'],
+    ...localeContractOverrides['pt-BR'],
+    ...localeFusionOverrides['pt-BR'],
+    ...localeBuilderShellOverrides['pt-BR'],
+    ...localeResidualOverrides['pt-BR'],
+    ...localeQuantumrootShellOverrides['pt-BR'],
+  },
+  vi: {
+    ...baseTranslations.en,
+    ...localeOverrides.vi,
+    ...localeExtendedOverrides.vi,
+    ...localePlatformOverrides.vi,
+    ...localeHardwareOverrides.vi,
+    ...localeCriticalOverrides.vi,
+    ...localeConnectionOverrides.vi,
+    ...localeOperationalOverrides.vi,
+    ...localeFeatureOverrides.vi,
+    ...localeAddonHostOverrides.vi,
+    ...localeSigningOverrides.vi,
+    ...localeSystemOverrides.vi,
+    ...localeFinishingOverrides.vi,
+    ...localeContractOverrides.vi,
+    ...localeFusionOverrides.vi,
+    ...localeBuilderShellOverrides.vi,
+    ...localeResidualOverrides.vi,
+    ...localeQuantumrootShellOverrides.vi,
+  },
+  'zh-TW': {
+    ...baseTranslations.en,
+    ...localeOverrides['zh-TW'],
+    ...localeExtendedOverrides['zh-TW'],
+    ...localePlatformOverrides['zh-TW'],
+    ...localeHardwareOverrides['zh-TW'],
+    ...localeCriticalOverrides['zh-TW'],
+    ...localeConnectionOverrides['zh-TW'],
+    ...localeOperationalOverrides['zh-TW'],
+    ...localeFeatureOverrides['zh-TW'],
+    ...localeAddonHostOverrides['zh-TW'],
+    ...localeSigningOverrides['zh-TW'],
+    ...localeSystemOverrides['zh-TW'],
+    ...localeFinishingOverrides['zh-TW'],
+    ...localeContractOverrides['zh-TW'],
+    ...localeFusionOverrides['zh-TW'],
+    ...localeBuilderShellOverrides['zh-TW'],
+    ...localeResidualOverrides['zh-TW'],
+    ...localeQuantumrootShellOverrides['zh-TW'],
+  },
+  ar: {
+    ...baseTranslations.en,
+    ...localeOverrides.ar,
+    ...localeHardwareOverrides.ar,
+  },
+  fr: {
+    ...baseTranslations.en,
+    ...localeOverrides.fr,
+    ...localeExtendedOverrides.fr,
+    ...localePlatformOverrides.fr,
+    ...localeHardwareOverrides.fr,
+    ...localeCriticalOverrides.fr,
+    ...localeConnectionOverrides.fr,
+    ...localeOperationalOverrides.fr,
+    ...localeFeatureOverrides.fr,
+    ...localeAddonHostOverrides.fr,
+    ...localeSigningOverrides.fr,
+    ...localeSystemOverrides.fr,
+    ...localeFinishingOverrides.fr,
+    ...localeContractOverrides.fr,
+    ...localeFusionOverrides.fr,
+    ...localeBuilderShellOverrides.fr,
+    ...localeResidualOverrides.fr,
+    ...localeQuantumrootShellOverrides.fr,
+  },
+  ko: {
+    ...baseTranslations.en,
+    ...localeOverrides.ko,
+    ...localeExtendedOverrides.ko,
+    ...localePlatformOverrides.ko,
+    ...localeHardwareOverrides.ko,
+    ...localeCriticalOverrides.ko,
+    ...localeConnectionOverrides.ko,
+    ...localeOperationalOverrides.ko,
+    ...localeFeatureOverrides.ko,
+    ...localeAddonHostOverrides.ko,
+    ...localeSigningOverrides.ko,
+    ...localeSystemOverrides.ko,
+    ...localeFinishingOverrides.ko,
+    ...localeContractOverrides.ko,
+    ...localeFusionOverrides.ko,
+    ...localeBuilderShellOverrides.ko,
+    ...localeResidualOverrides.ko,
+    ...localeQuantumrootShellOverrides.ko,
+  },
+  ja: {
+    ...baseTranslations.en,
+    ...localeOverrides.ja,
+    ...localeExtendedOverrides.ja,
+    ...localePlatformOverrides.ja,
+    ...localeHardwareOverrides.ja,
+    ...localeCriticalOverrides.ja,
+    ...localeConnectionOverrides.ja,
+    ...localeOperationalOverrides.ja,
+    ...localeFeatureOverrides.ja,
+    ...localeAddonHostOverrides.ja,
+    ...localeSigningOverrides.ja,
+    ...localeSystemOverrides.ja,
+    ...localeFinishingOverrides.ja,
+    ...localeContractOverrides.ja,
+    ...localeFusionOverrides.ja,
+    ...localeBuilderShellOverrides.ja,
+    ...localeResidualOverrides.ja,
+    ...localeQuantumrootShellOverrides.ja,
+  },
+  ru: {
+    ...baseTranslations.en,
+    ...localeOverrides.ru,
+    ...localeExtendedOverrides.ru,
+    ...localePlatformOverrides.ru,
+    ...localeHardwareOverrides.ru,
+    ...localeCriticalOverrides.ru,
+    ...localeConnectionOverrides.ru,
+    ...localeOperationalOverrides.ru,
+    ...localeFeatureOverrides.ru,
+    ...localeAddonHostOverrides.ru,
+    ...localeSigningOverrides.ru,
+    ...localeSystemOverrides.ru,
+    ...localeFinishingOverrides.ru,
+    ...localeContractOverrides.ru,
+    ...localeFusionOverrides.ru,
+    ...localeBuilderShellOverrides.ru,
+    ...localeResidualOverrides.ru,
+    ...localeQuantumrootShellOverrides.ru,
+  },
+  'ha-NG': {
+    ...baseTranslations.en,
+    ...localeOverrides['ha-NG'],
+    ...localeExtendedOverrides['ha-NG'],
+    ...localePlatformOverrides['ha-NG'],
+    ...localeHardwareOverrides['ha-NG'],
+    ...localeCriticalOverrides['ha-NG'],
+    ...localeConnectionOverrides['ha-NG'],
+    ...localeOperationalOverrides['ha-NG'],
+    ...localeFeatureOverrides['ha-NG'],
+    ...localeAddonHostOverrides['ha-NG'],
+    ...localeSigningOverrides['ha-NG'],
+    ...localeSystemOverrides['ha-NG'],
+    ...localeFinishingOverrides['ha-NG'],
+    ...localeContractOverrides['ha-NG'],
+    ...localeFusionOverrides['ha-NG'],
+    ...localeBuilderShellOverrides['ha-NG'],
+    ...localeResidualOverrides['ha-NG'],
+    ...localeQuantumrootShellOverrides['ha-NG'],
   },
 } satisfies Record<SupportedLocale, Record<string, string>>;
 

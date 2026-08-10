@@ -3,6 +3,7 @@ import type {
   AddonPermission,
   AddonCapability,
 } from '../../types/addons';
+import { SUPPORTED_LOCALES, type SupportedLocale } from '../../i18n/types';
 
 export const ADDON_MANIFEST_SCHEMA_VERSION = 1 as const;
 
@@ -29,8 +30,16 @@ export const ADDON_MANIFEST_SCHEMA = {
     apps: {
       type: 'array',
     },
+    localeBundles: {
+      type: 'array',
+      maxItems: SUPPORTED_LOCALES.length,
+    },
   },
 } as const;
+
+const MAX_ADDON_LOCALE_MESSAGES = 2048;
+const MAX_ADDON_LOCALE_KEY_LENGTH = 256;
+const MAX_ADDON_LOCALE_VALUE_LENGTH = 8192;
 
 function validatePermissionShape(
   addonId: string,
@@ -64,6 +73,75 @@ function validatePermissionShape(
   );
 }
 
+function validateLocaleBundles(
+  addonId: string,
+  bundles: unknown,
+  errors: string[]
+): void {
+  if (bundles === undefined) return;
+  if (!Array.isArray(bundles)) {
+    errors.push(`Addon "${addonId}" localeBundles must be an array`);
+    return;
+  }
+
+  const seenLocales = new Set<string>();
+  for (const rawBundle of bundles) {
+    if (!rawBundle || typeof rawBundle !== 'object') {
+      errors.push(`Addon "${addonId}" has an invalid locale bundle`);
+      continue;
+    }
+
+    const bundle = rawBundle as {
+      locale?: unknown;
+      messages?: unknown;
+    };
+    const locale = bundle.locale;
+    if (
+      typeof locale !== 'string' ||
+      !SUPPORTED_LOCALES.includes(locale as SupportedLocale)
+    ) {
+      errors.push(`Addon "${addonId}" has an unsupported locale bundle`);
+    } else if (seenLocales.has(locale)) {
+      errors.push(`Addon "${addonId}" has duplicate locale bundle: ${locale}`);
+    } else {
+      seenLocales.add(locale);
+    }
+
+    if (
+      !bundle.messages ||
+      typeof bundle.messages !== 'object' ||
+      Array.isArray(bundle.messages)
+    ) {
+      errors.push(`Addon "${addonId}" locale bundle must contain messages`);
+      continue;
+    }
+
+    const entries = Object.entries(bundle.messages as Record<string, unknown>);
+    if (entries.length === 0) {
+      errors.push(`Addon "${addonId}" locale bundle must not be empty`);
+    }
+    if (entries.length > MAX_ADDON_LOCALE_MESSAGES) {
+      errors.push(
+        `Addon "${addonId}" locale bundle exceeds ${MAX_ADDON_LOCALE_MESSAGES} messages`
+      );
+    }
+    for (const [key, value] of entries) {
+      if (!key.trim() || key.length > MAX_ADDON_LOCALE_KEY_LENGTH) {
+        errors.push(`Addon "${addonId}" has an invalid locale message key`);
+        continue;
+      }
+      if (
+        typeof value !== 'string' ||
+        value.length > MAX_ADDON_LOCALE_VALUE_LENGTH
+      ) {
+        errors.push(
+          `Addon "${addonId}" has an invalid locale message value for "${key}"`
+        );
+      }
+    }
+  }
+}
+
 export function validateAddonManifestAgainstSchema(
   manifest: AddonManifest
 ): string[] {
@@ -83,14 +161,18 @@ export function validateAddonManifestAgainstSchema(
     errors.push(`Addon "${manifest.id || '(unknown)'}" missing version`);
   }
   if (!Array.isArray(manifest.permissions)) {
-    errors.push(`Addon "${manifest.id || '(unknown)'}" permissions must be an array`);
+    errors.push(
+      `Addon "${manifest.id || '(unknown)'}" permissions must be an array`
+    );
   } else {
     for (const permission of manifest.permissions) {
       validatePermissionShape(manifest.id || '(unknown)', permission, errors);
     }
   }
   if (!Array.isArray(manifest.contracts)) {
-    errors.push(`Addon "${manifest.id || '(unknown)'}" contracts must be an array`);
+    errors.push(
+      `Addon "${manifest.id || '(unknown)'}" contracts must be an array`
+    );
   }
 
   if (
@@ -101,6 +183,12 @@ export function validateAddonManifestAgainstSchema(
   ) {
     errors.push(`Addon "${manifest.id}" has invalid trustTier`);
   }
+
+  validateLocaleBundles(
+    manifest.id || '(unknown)',
+    manifest.localeBundles,
+    errors
+  );
 
   return errors;
 }

@@ -11,6 +11,15 @@ describe('locale formatting', () => {
     expect(intlLocale('en')).toBe('en-US');
     expect(intlLocale('es')).toBe('es-ES');
     expect(intlLocale('zh-CN')).toBe('zh-CN');
+    expect(intlLocale('pt-BR')).toBe('pt-BR');
+    expect(intlLocale('vi')).toBe('vi-VN');
+    expect(intlLocale('zh-TW')).toBe('zh-TW');
+    expect(intlLocale('ar')).toBe('ar');
+    expect(intlLocale('fr')).toBe('fr-FR');
+    expect(intlLocale('ko')).toBe('ko-KR');
+    expect(intlLocale('ja')).toBe('ja-JP');
+    expect(intlLocale('ru')).toBe('ru-RU');
+    expect(intlLocale('ha-NG')).toBe('ha-NG');
   });
 
   it('formats numbers using the selected app locale', () => {

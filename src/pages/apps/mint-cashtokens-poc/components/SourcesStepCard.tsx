@@ -6,6 +6,7 @@ import {
   getMintSourceCategory,
   getMintSourceKind,
 } from '../utils/sourceHelpers';
+import { useAddonI18n } from '../../../../i18n/useAddonI18n';
 
 type SourcesStepCardProps = {
   displaySourceUtxos: MintDisplayUtxo[];
@@ -34,6 +35,7 @@ function SourcesStepCardImpl({
   onCopyCategory,
   onJumpToAmounts,
 }: SourcesStepCardProps) {
+  const { t: addonT } = useAddonI18n();
   const sourcesEmpty = displaySourceUtxos.length === 0;
 
   const describeSource = (u: MintDisplayUtxo): string => {
@@ -50,8 +52,11 @@ function SourcesStepCardImpl({
 
   return (
     <CardShell
-      title="Source UTXOs"
-      subtitle="Pick a genesis UTXO to create a category, or a minting NFT authority to mint additional CashTokens."
+      title={addonT('module.sourceUtxos', 'Source UTXOs')}
+      subtitle={addonT(
+        'module.sourceHelp',
+        'Pick a genesis UTXO to create a category, or a minting NFT authority to mint additional CashTokens.'
+      )}
       right={
         <div className="flex items-center gap-2">
           <Badge>{`Sources: ${displaySourceUtxos.length}`}</Badge>
@@ -71,7 +76,7 @@ function SourcesStepCardImpl({
         {sourcesEmpty ? (
           <div className="rounded-2xl wallet-surface-strong border border-[var(--wallet-border)] p-5 space-y-3">
             <div className="text-base font-semibold wallet-text-strong">
-              No mint sources yet
+              {addonT('common.noMintSources', 'No mint sources yet')}
             </div>
             <div className="text-sm wallet-muted">
               Create a genesis source to start a category, then mint additional
@@ -83,7 +88,9 @@ function SourcesStepCardImpl({
               disabled={loading || !canCreateSource}
               className="w-full px-4 py-3 rounded-xl bg-emerald-600 text-white font-semibold text-base"
             >
-              {loading ? 'Preparing…' : 'Create category source'}
+              {loading
+                ? addonT('common.loading', 'Preparing…')
+                : addonT('common.add', 'Create category source')}
             </button>
           </div>
         ) : (
@@ -94,7 +101,9 @@ function SourcesStepCardImpl({
                 disabled={loading || !canCreateSource}
                 className="w-full px-4 py-3 rounded-xl bg-emerald-600 text-white font-semibold text-base"
               >
-                {loading ? 'Preparing…' : 'Create category source'}
+                {loading
+                  ? addonT('common.loading', 'Preparing…')
+                  : addonT('common.add', 'Create category source')}
               </button>
             ) : null}
 
@@ -134,7 +143,9 @@ function SourcesStepCardImpl({
                         <Badge tone={kind === 'genesis' ? 'green' : 'blue'}>
                           {describeSource(u)}
                         </Badge>
-                        {isBootstrap ? <Badge tone="amber">bootstrap</Badge> : null}
+                        {isBootstrap ? (
+                          <Badge tone="amber">bootstrap</Badge>
+                        ) : null}
                       </div>
                       <div className="text-[12px] wallet-muted mt-1">
                         {value.toString()} sats • vout {u.tx_pos}
@@ -150,7 +161,7 @@ function SourcesStepCardImpl({
                         }}
                         className="text-[13px] font-semibold wallet-text-strong"
                       >
-                        Edit
+                        {addonT('common.edit', 'Edit')}
                       </button>
                     ) : null}
                   </div>

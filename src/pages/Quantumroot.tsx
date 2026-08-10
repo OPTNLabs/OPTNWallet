@@ -17,14 +17,17 @@ import { getQuantumrootNetworkSupport } from '../services/QuantumrootNetworkSupp
 import QuantumrootVaultPopup from './quantumroot/QuantumrootVaultPopup';
 import { useQuantumrootWorkspace } from './quantumroot/useQuantumrootWorkspace';
 import WalletScreen from '../components/ui/WalletScreen';
+import { useI18n } from '../i18n/useI18n';
+import { formatDate } from '../i18n/format';
+import type { SupportedLocale } from '../i18n/types';
 
 function formatBch(sats: number) {
   return `${(sats / SATSINBITCOIN).toFixed(8).replace(/\.?0+$/, '') || '0'} BCH`;
 }
 
-function formatActivationDate(date: Date | null) {
+function formatActivationDate(date: Date | null, locale: SupportedLocale) {
   if (!date) return null;
-  return date.toLocaleString(undefined, {
+  return formatDate(date, locale, {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
@@ -39,6 +42,7 @@ const QUANTUMROOT_BCH_SPEND_ENABLED = true;
 const Quantumroot: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
+  const { locale, t } = useI18n();
   const [showVaultsPopup, setShowVaultsPopup] = React.useState(false);
   const currentWalletId = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
@@ -52,15 +56,18 @@ const Quantumroot: React.FC = () => {
     [currentNetwork]
   );
 
-  const handleCopy = useCallback(async (text: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      await Toast.show({ text: 'Copied to clipboard!' });
-    } catch (error) {
-      console.error('Failed to copy Quantumroot value:', error);
-      await Toast.show({ text: 'Failed to copy.' });
-    }
-  }, []);
+  const handleCopy = useCallback(
+    async (text: string) => {
+      try {
+        await navigator.clipboard.writeText(text);
+        await Toast.show({ text: t('receive.copied') });
+      } catch (error) {
+        console.error('Failed to copy Quantumroot value:', error);
+        await Toast.show({ text: t('receive.copyFailed') });
+      }
+    },
+    [t]
+  );
 
   const {
     vaults,
@@ -103,33 +110,45 @@ const Quantumroot: React.FC = () => {
       <div className="flex h-full min-h-0 flex-col">
         <div className="flex-1 min-h-0">
           <PageHeader
-            title="Quantumroot"
-            subtitle="Two spending lanes in one vault"
+            title={t('assets.quantumroot')}
+            subtitle={t('quantumroot.subtitle')}
             compact
-            titleAction={<StatusChip tone="neutral">Beta production</StatusChip>}
+            titleAction={
+              <StatusChip tone="neutral">
+                {t('quantumroot.betaProduction')}
+              </StatusChip>
+            }
           />
 
           <SectionCard className="mt-3">
             <div className="wallet-surface-strong rounded-[14px] p-3 mb-3">
               <div className="flex flex-wrap items-center gap-2 text-sm font-bold">
-                <span>Quantumroot Beta Production</span>
-                <StatusChip tone="neutral">Live preview</StatusChip>
+                <span>{t('quantumroot.betaTitle')}</span>
+                <StatusChip tone="neutral">
+                  {t('quantumroot.livePreview')}
+                </StatusChip>
               </div>
               <div className="mt-1 text-xs wallet-muted">
                 {networkSupport.isPreviewOnly
-                  ? 'Mainnet preview stays visible before activation.'
-                  : 'Active workspace for the beta-production Quantumroot flow.'}
+                  ? t('quantumroot.mainnetPreview')
+                  : t('quantumroot.activeWorkspace')}
               </div>
               <div className="mt-1 text-xs wallet-muted">
                 {networkSupport.isPreviewOnly
-                  ? `Quantumroot is visible on mainnet ahead of activation. The layout stays available, but key actions remain disabled until ${formatActivationDate(networkSupport.activationAt)}.`
-                  : 'Quantumroot is active on this network. Use the vault workspace below to manage a normal spend lane and a quantum-safe recovery lane.'}
+                  ? t('quantumroot.mainnetAhead', {
+                      date:
+                        formatActivationDate(
+                          networkSupport.activationAt,
+                          locale
+                        ) ?? '',
+                    })
+                  : t('quantumroot.activeNetwork')}
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="wallet-surface-strong rounded-[14px] p-3">
                 <div className="text-[11px] font-semibold wallet-muted mb-1">
-                  Tracked Balance
+                  {t('quantumroot.trackedBalance')}
                 </div>
                 <div className="font-bold text-lg">
                   {formatBch(portfolio.totalBalanceSats)}
@@ -137,11 +156,11 @@ const Quantumroot: React.FC = () => {
               </div>
               <div className="wallet-surface-strong rounded-[14px] p-3">
                 <div className="text-[11px] font-semibold wallet-muted mb-1">
-                  Vaults
+                  {t('quantumroot.vaults')}
                 </div>
                 <div className="font-bold text-lg">{vaults.length}</div>
                 <div className="text-[11px] wallet-muted mt-1">
-                  {portfolio.fundedVaults} funded
+                  {t('quantumroot.funded', { count: portfolio.fundedVaults })}
                 </div>
               </div>
             </div>
@@ -151,22 +170,20 @@ const Quantumroot: React.FC = () => {
                 onClick={() => void handleSyncVaults()}
                 disabled={syncing || loading}
               >
-                {syncing ? 'Syncing Vaults…' : 'Sync Vaults'}
+                {syncing
+                  ? t('quantumroot.syncingVaults')
+                  : t('quantumroot.syncVaults')}
               </button>
               <button
                 className="wallet-btn-secondary w-full"
                 onClick={() => setShowVaultsPopup(true)}
               >
-                Open Vaults
+                {t('quantumroot.openVaults')}
               </button>
             </div>
             <div className="mt-3 text-xs wallet-muted space-y-1">
-              <p>
-                Live now: normal spending, balance tracking, and Quantum Lock BCH recovery.
-              </p>
-              <p>
-                Guided now: choose one approval key, lock it in Quantum Lock, then spend the matching coin.
-              </p>
+              <p>{t('quantumroot.liveNow')}</p>
+              <p>{t('quantumroot.guidedNow')}</p>
             </div>
           </SectionCard>
         </div>
@@ -176,22 +193,27 @@ const Quantumroot: React.FC = () => {
             className="wallet-btn-danger w-full"
             onClick={() => navigate(returnTarget)}
           >
-            Back
+            {t('quantumroot.back')}
           </button>
         </div>
       </div>
 
       {showVaultsPopup && (
-        <Popup closePopups={() => setShowVaultsPopup(false)} closeButtonText="Close">
+        <Popup
+          closePopups={() => setShowVaultsPopup(false)}
+          closeButtonText={t('quantumroot.close')}
+        >
           <SectionCard
-            title="Vaults"
+            title={t('quantumroot.vaults')}
             titleClassName="text-center"
             className="p-0 wallet-card border-none bg-transparent shadow-none"
           >
             <div className="space-y-3">
               {loadError ? (
                 <div className="wallet-surface-strong rounded-[14px] p-3 mb-3">
-                  <div className="text-sm font-bold">Workspace Refresh Failed</div>
+                  <div className="text-sm font-bold">
+                    {t('quantumroot.workspaceRefreshFailed')}
+                  </div>
                   <div className="text-xs wallet-muted mt-1">{loadError}</div>
                 </div>
               ) : null}
@@ -200,20 +222,21 @@ const Quantumroot: React.FC = () => {
                   <span className="wallet-spinner" aria-hidden="true" />
                 </div>
               ) : vaults.length === 0 ? (
-                <EmptyState message="No Quantumroot vaults derived yet. Sync vaults to provision them for existing wallet address indexes." />
+                <EmptyState message={t('quantumroot.noVaults')} />
               ) : (
                 <div className="space-y-3 max-h-[55dvh] overflow-y-auto pr-1">
                   {refreshing ? (
                     <div className="wallet-surface-strong rounded-[14px] px-3 py-2 flex items-center gap-2">
                       <span className="wallet-spinner" aria-hidden="true" />
                       <span className="text-xs wallet-muted">
-                        Refreshing balances and UTXO status. Vaults remain available while sync completes.
+                        {t('quantumroot.refreshing')}
                       </span>
                     </div>
                   ) : null}
                   {vaults.map((vault) => {
                     const status = statusesByIndex[vault.address_index];
-                    const tokenAwareness = tokenAwarenessByIndex[vault.address_index];
+                    const tokenAwareness =
+                      tokenAwarenessByIndex[vault.address_index];
                     return (
                       <button
                         key={`${vault.account_index}-${vault.address_index}`}
@@ -223,7 +246,9 @@ const Quantumroot: React.FC = () => {
                         <div className="flex items-start justify-between gap-3">
                           <div>
                             <div className="text-sm font-bold">
-                              Vault #{vault.address_index}
+                              {t('quantumroot.vaultNumber', {
+                                id: vault.address_index,
+                              })}
                             </div>
                             <div className="text-[11px] wallet-muted mt-1">
                               {shortenTxHash(vault.receive_address)}
@@ -235,13 +260,18 @@ const Quantumroot: React.FC = () => {
                             </div>
                             <div className="text-[11px] wallet-muted mt-1">
                               {!status && refreshing
-                                ? 'Checking balances…'
+                                ? t('quantumroot.checkingBalances')
                                 : tokenAwareness?.readinessLabel ??
-                                  ((status?.recoverableReceiveUtxos.length ?? 0) > 0
-                                    ? `${status?.recoverableReceiveUtxos.length ?? 0} ready to recover`
+                                  ((status?.recoverableReceiveUtxos.length ??
+                                    0) > 0
+                                    ? t('quantumroot.readyToRecover', {
+                                        count:
+                                          status?.recoverableReceiveUtxos
+                                            .length ?? 0,
+                                      })
                                     : status?.isFunded
-                                      ? 'Funded'
-                                      : 'No funds yet')}
+                                      ? t('quantumroot.fundedStatus')
+                                      : t('quantumroot.noFundsYet'))}
                             </div>
                           </div>
                         </div>
@@ -270,7 +300,10 @@ const Quantumroot: React.FC = () => {
         isPreviewOnly={networkSupport.isPreviewOnly}
         isActiveNetwork={networkSupport.isActive}
         bchSpendEnabled={QUANTUMROOT_BCH_SPEND_ENABLED}
-        activationLabel={formatActivationDate(networkSupport.activationAt)}
+        activationLabel={formatActivationDate(
+          networkSupport.activationAt,
+          locale
+        )}
         onClose={() => {
           setSelectedVault(null);
           setShowVaultsPopup(false);
@@ -279,7 +312,9 @@ const Quantumroot: React.FC = () => {
         onCopy={(value) => void handleCopy(value)}
         onSpendAddressChange={setPendingSpendAddress}
         onTokenCategoryChange={setPendingTokenCategory}
-        onUseRecoveryDestination={() => setPendingSpendAddress(recoveryDestinationAddress ?? '')}
+        onUseRecoveryDestination={() =>
+          setPendingSpendAddress(recoveryDestinationAddress ?? '')
+        }
         onSweepAll={() => void handleSweepAllReceiveUtxos()}
         onSaveConfiguration={() => void handleSaveVaultConfiguration()}
         onRefreshVault={() => void loadQuantumrootWorkspace()}

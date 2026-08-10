@@ -5,6 +5,8 @@ import Carousel from 'react-multi-carousel';
 import 'react-multi-carousel/lib/styles.css';
 import { RootState } from '../state/store';
 import { FaBitcoin, FaEthereum } from 'react-icons/fa';
+import { formatNumber } from '../i18n/format';
+import { useI18n } from '../i18n/useI18n';
 
 // Desktop renders the wallet as a fixed ~480px centered column at any window size, so the
 // price ticker should always show a single card (the look that fits the column). The
@@ -32,8 +34,10 @@ const getLogo = (symbol: string) => {
   }
 };
 
-const fmtUSD = (n: number) =>
-  n.toLocaleString(undefined, {
+const fmtUSD = (n: number, locale: Parameters<typeof formatNumber>[1]) =>
+  formatNumber(n, locale, {
+    style: 'currency',
+    currency: 'USD',
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
@@ -44,6 +48,7 @@ type PriceFeedProps = {
 
 const PriceFeed: React.FC<PriceFeedProps> = ({ compact = false }) => {
   const prices = useSelector((s: RootState) => s.priceFeed);
+  const { locale, t } = useI18n();
 
   return (
     <div className="price-feed-carousel">
@@ -62,7 +67,9 @@ const PriceFeed: React.FC<PriceFeedProps> = ({ compact = false }) => {
         {ASSETS.map((symbol) => {
           const key = `${symbol}-USD`;
           const datum = prices[key];
-          const display = datum ? `$${fmtUSD(datum.price)}` : 'Loading…';
+          const display = datum
+            ? fmtUSD(datum.price, locale)
+            : t('priceFeed.loading');
           // const meta = datum
           //   ? `${datum.source}${
           //       datum.ts
@@ -72,21 +79,31 @@ const PriceFeed: React.FC<PriceFeedProps> = ({ compact = false }) => {
           //   : '—';
 
           return (
-          <div
-            key={symbol}
-            className={`scrolling-price-item wallet-card rounded-lg shadow-lg grid grid-cols-[auto,1fr,auto] items-center gap-x-4 mx-4 ${
-              compact ? 'px-3 py-2.5' : 'px-6 py-12'
-            }`}
-          >
+            <div
+              key={symbol}
+              className={`scrolling-price-item wallet-card rounded-lg shadow-lg grid grid-cols-[auto,1fr,auto] items-center gap-x-4 mx-4 ${
+                compact ? 'px-3 py-2.5' : 'px-6 py-12'
+              }`}
+            >
               {getLogo(symbol)}
               <div className="flex flex-col">
-                <span className={`${compact ? 'text-xs' : 'text-lg'} font-semibold wallet-text-strong`}>
+                <span
+                  className={`${compact ? 'text-xs' : 'text-lg'} font-semibold wallet-text-strong`}
+                >
                   {symbol}
                 </span>
-                <span className={`${compact ? 'text-[10px]' : 'text-xs'} wallet-muted`}>USD</span>
+                <span
+                  className={`${compact ? 'text-[10px]' : 'text-xs'} wallet-muted`}
+                >
+                  USD
+                </span>
               </div>
               <div className="flex flex-col items-end font-bold">
-                <div className={`${compact ? 'text-sm' : 'text-xl'} wallet-text-strong`}>{display}</div>
+                <div
+                  className={`${compact ? 'text-sm' : 'text-xl'} wallet-text-strong`}
+                >
+                  {display}
+                </div>
                 {/* <span className="wallet-muted text-xs">{meta}</span> */}
               </div>
             </div>

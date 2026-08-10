@@ -46,7 +46,7 @@ const RecoveryPhrase = () => {
             <div className="flex justify-center items-base line mt-4">
               <img
                 src="/assets/images/OPTNWelcome3.png"
-                alt="Welcome"
+                alt={t('onboarding.welcomeAlt')}
                 className="max-w-full h-auto"
                 width={'68%'}
                 height={'68%'}

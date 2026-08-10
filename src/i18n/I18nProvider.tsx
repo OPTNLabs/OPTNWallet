@@ -2,7 +2,7 @@ import { useEffect, useMemo, type PropsWithChildren } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { selectLocale, setLocale } from '../state/slices/preferencesSlice';
 import type { AppDispatch, RootState } from '../state/store';
-import { detectSupportedLocale } from './types';
+import { detectSupportedLocale, localeDirection } from './types';
 import { I18nContext, type I18nContextValue } from './I18nContext';
 import type { TranslationKey } from './resources';
 import type { SupportedLocale } from './types';
@@ -17,6 +17,7 @@ export function I18nProvider({ children }: PropsWithChildren) {
 
   useEffect(() => {
     document.documentElement.lang = locale;
+    document.documentElement.dir = localeDirection(locale);
   }, [locale]);
 
   const value = useMemo(

@@ -25,6 +25,8 @@ import {
   ContainedSwipeConfirmModal,
 } from '../mint-cashtokens-poc/components/uiPrimitives';
 import { getReturnPath } from '../../../utils/navigation';
+import { AddonModuleI18nProvider } from '../../../i18n/AddonModuleI18nProvider';
+import { useAddonI18n } from '../../../i18n/useAddonI18n';
 
 const BASE58_WIF_PATTERN =
   /^[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]+$/;
@@ -73,7 +75,8 @@ function decodeScannedWif(wif: string) {
 
   return direct;
 }
-export default function PaperWalletSweepApp() {
+function PaperWalletSweepAppScreen() {
+  const { t: addonT } = useAddonI18n();
   const navigate = useNavigate();
   const location = useLocation();
   const backTarget = getReturnPath(location, '/apps');
@@ -199,9 +202,8 @@ export default function PaperWalletSweepApp() {
         throw new Error('No active wallet is available.');
       }
 
-      const addressesResult = await TransactionService.fetchAddressesAndUTXOs(
-        walletId
-      );
+      const addressesResult =
+        await TransactionService.fetchAddressesAndUTXOs(walletId);
       const destinationAddress = addressesResult.addresses[0]?.address;
       if (!destinationAddress) {
         throw new Error('No destination wallet address is available.');
@@ -309,11 +311,14 @@ export default function PaperWalletSweepApp() {
         </div>
         <div className="mt-4 flex items-center justify-between gap-4">
           <h1 className="text-2xl font-bold wallet-text-strong tracking-[-0.02em]">
-            Paper Wallet
+            {addonT('module.title', 'Paper Wallet')}
           </h1>
         </div>
         <p className="mt-2 text-sm wallet-muted">
-          Scan a WIF paper wallet and sweep BCH + CashTokens in one transaction.
+          {addonT(
+            'module.description',
+            'Scan a WIF paper wallet and sweep BCH + CashTokens in one transaction.'
+          )}
         </p>
       </div>
 
@@ -322,7 +327,9 @@ export default function PaperWalletSweepApp() {
           <div className="wallet-card p-4 rounded-2xl">
             <div className="flex items-center justify-between gap-3">
               <div className="flex-1">
-                <div className="text-sm wallet-muted">Paper wallet</div>
+                <div className="text-sm wallet-muted">
+                  {addonT('module.title', 'Paper wallet')}
+                </div>
                 <div className="mt-1 break-all text-sm wallet-text-strong">
                   {scannedAddress || 'No paper wallet scanned yet.'}
                 </div>
@@ -332,7 +339,7 @@ export default function PaperWalletSweepApp() {
                 onClick={handleScan}
                 disabled={loading}
               >
-                <FaCamera /> Scan
+                <FaCamera /> {addonT('module.scan', 'Scan')}
               </button>
             </div>
 
@@ -342,7 +349,7 @@ export default function PaperWalletSweepApp() {
                 onClick={handleSweep}
                 disabled={loading || paperWalletUtxos.length === 0}
               >
-                Sweep <FaChevronRight />
+                {addonT('module.sweep', 'Sweep')} <FaChevronRight />
               </button>
               {broadcastTxid && (
                 <div className="text-xs wallet-muted break-all">
@@ -356,7 +363,7 @@ export default function PaperWalletSweepApp() {
 
           <div className="wallet-card p-4 rounded-2xl">
             <div className="font-semibold mb-2 wallet-text-strong">
-              Paper wallet UTXOs
+              {addonT('module.utxosTitle', 'Paper wallet UTXOs')}
             </div>
             <div className="text-sm wallet-muted">
               {paperWalletUtxos.length} spendable output
@@ -375,11 +382,11 @@ export default function PaperWalletSweepApp() {
 
           <div className="wallet-card p-4 rounded-2xl">
             <div className="font-semibold mb-2 wallet-text-strong">
-              Token groups
+              {addonT('module.tokenGroups', 'Token groups')}
             </div>
             {tokenGroups.length === 0 ? (
               <div className="text-sm wallet-muted">
-                No CashTokens detected.
+                {addonT('module.noCashTokens', 'No CashTokens detected.')}
               </div>
             ) : (
               <ul className="mt-2 space-y-2 text-sm">
@@ -400,13 +407,16 @@ export default function PaperWalletSweepApp() {
           onClick={() => navigate(backTarget)}
           className="wallet-btn-danger w-full py-3 font-semibold"
         >
-          Back
+          {addonT('common.back', 'Back')}
         </button>
       </div>
       <ContainedSwipeConfirmModal
         open={confirmOpen && !!pendingSweep}
-        title="Confirm sweep"
-        subtitle="Slide to confirm the one-transaction paper wallet sweep."
+        title={addonT('module.confirmSweep', 'Confirm sweep')}
+        subtitle={addonT(
+          'module.sweepSubtitle',
+          'Slide to confirm the one-transaction paper wallet sweep.'
+        )}
         loading={confirmLoading}
         onCancel={() => {
           if (confirmLoading) return;
@@ -421,23 +431,27 @@ export default function PaperWalletSweepApp() {
         {pendingSweep ? (
           <div className="space-y-2 text-sm wallet-text-strong">
             <div className="flex items-center justify-between gap-3">
-              <span>Paper wallet inputs</span>
+              <span>
+                {addonT('module.paperWalletInputs', 'Paper wallet inputs')}
+              </span>
               <Badge tone="blue">
                 {pendingSweep.plan.paperWalletUtxos.length}
               </Badge>
             </div>
             <div className="flex items-center justify-between gap-3">
-              <span>Wallet fee inputs</span>
+              <span>
+                {addonT('module.walletFeeInputs', 'Wallet fee inputs')}
+              </span>
               <Badge tone="amber">{pendingSweep.plan.feeInputs.length}</Badge>
             </div>
             <div className="flex items-center justify-between gap-3">
-              <span>Token outputs</span>
+              <span>{addonT('module.tokenOutputs', 'Token outputs')}</span>
               <Badge tone="green">
                 {pendingSweep.plan.outputs.filter((o) => !!o.token).length}
               </Badge>
             </div>
             <div className="flex items-center justify-between gap-3">
-              <span>BCH outputs</span>
+              <span>{addonT('module.bchOutputs', 'BCH outputs')}</span>
               <Badge>
                 {pendingSweep.plan.outputs.filter((o) => !o.token).length}
               </Badge>
@@ -449,5 +463,13 @@ export default function PaperWalletSweepApp() {
         ) : null}
       </ContainedSwipeConfirmModal>
     </div>
+  );
+}
+
+export default function PaperWalletSweepApp() {
+  return (
+    <AddonModuleI18nProvider moduleId="paper-wallet">
+      <PaperWalletSweepAppScreen />
+    </AddonModuleI18nProvider>
   );
 }

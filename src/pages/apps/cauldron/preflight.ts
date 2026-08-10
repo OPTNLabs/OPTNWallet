@@ -40,7 +40,12 @@ export function getPoolOutpointKey(
 export function assertWalletInputsStillAvailable(
   currentWalletUtxos: UTXO[],
   selectedInputs: UTXO[],
-  operationLabel: string
+  operationLabel: string,
+  translate?: (
+    key: string,
+    fallback: string,
+    values?: Record<string, string | number>
+  ) => string
 ) {
   const currentOutpoints = new Set(currentWalletUtxos.map(getUtxoOutpointKey));
   const missingInputs = selectedInputs.filter(
@@ -48,7 +53,13 @@ export function assertWalletInputsStillAvailable(
   );
   if (missingInputs.length > 0) {
     throw new Error(
-      `${operationLabel} needs refreshed wallet inputs. One or more selected UTXOs are no longer spendable.`
+      translate
+        ? translate(
+            'module.staleWalletInputs',
+            '{operation} needs refreshed wallet inputs. One or more selected UTXOs are no longer spendable.',
+            { operation: operationLabel }
+          )
+        : `${operationLabel} needs refreshed wallet inputs. One or more selected UTXOs are no longer spendable.`
     );
   }
 }

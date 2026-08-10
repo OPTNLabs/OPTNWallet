@@ -74,6 +74,42 @@
     },
     "apps": {
       "type": "array"
+    },
+    "localeBundles": {
+      "type": "array",
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "required": ["locale", "messages"],
+        "properties": {
+          "locale": {
+            "enum": [
+              "en",
+              "es",
+              "pt-BR",
+              "zh-CN",
+              "zh-TW",
+              "vi",
+              "ar",
+              "fr",
+              "ko",
+              "ja",
+              "ru",
+              "ha-NG"
+            ]
+          },
+          "messages": {
+            "type": "object",
+            "minProperties": 1,
+            "maxProperties": 2048,
+            "propertyNames": { "minLength": 1, "maxLength": 256 },
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 8192
+            }
+          }
+        }
+      }
     }
   }
 }

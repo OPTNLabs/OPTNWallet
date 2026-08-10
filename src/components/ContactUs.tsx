@@ -2,8 +2,10 @@
 
 import { FaTelegramPlane, FaGlobe, FaGithub } from 'react-icons/fa';
 import { FiExternalLink } from 'react-icons/fi'; // External link icon
+import { useI18n } from '../i18n/useI18n';
 
 const ContactUs = () => {
+  const { t } = useI18n();
   const contactMethods = [
     {
       name: 'Telegram',
@@ -30,7 +32,7 @@ const ContactUs = () => {
       <div className="flex justify-center my-3 shrink-0">
         <img
           src="/assets/images/OPTNWelcome3.png"
-          alt="Welcome"
+          alt={t('onboarding.welcomeAlt')}
           className="max-w-full h-auto"
           width={'68%'}
           height={'68%'}
@@ -51,9 +53,7 @@ const ContactUs = () => {
             <div className="mr-4">{method.icon}</div>
 
             {/* Text */}
-            <div className="flex-1 font-semibold text-lg">
-              {method.name}
-            </div>
+            <div className="flex-1 font-semibold text-lg">{method.name}</div>
 
             {/* External Link Indicator */}
             <div>

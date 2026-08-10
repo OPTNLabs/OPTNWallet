@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom';
 import { formatBchFromSatoshis, isChainCampaign } from '../fundmeHelpers';
 import type { DetailModalState } from '../types';
 import { DEFAULT_BANNER } from '../types';
+import { useAddonI18n } from '../../../../i18n/useAddonI18n';
 
 type FundMeDetailModalProps = {
   detailModal: DetailModalState | null;
@@ -34,6 +35,7 @@ const FundMeDetailModal: React.FC<FundMeDetailModalProps> = ({
   actionBusy,
   actionStatus,
 }) => {
+  const { t: addonT } = useAddonI18n();
   if (!detailModal) return null;
 
   return createPortal(
@@ -53,7 +55,7 @@ const FundMeDetailModal: React.FC<FundMeDetailModalProps> = ({
             onClick={onClose}
             className="wallet-btn-danger shrink-0 px-3 py-2 text-sm"
           >
-            Close
+            {addonT('common.close', 'Close')}
           </button>
         </div>
 
@@ -94,7 +96,10 @@ const FundMeDetailModal: React.FC<FundMeDetailModalProps> = ({
                         width: `${Math.max(
                           Math.min(
                             (detailModal.campaign.raisedSatoshis /
-                              Math.max(detailModal.campaign.targetSatoshis, 1)) *
+                              Math.max(
+                                detailModal.campaign.targetSatoshis,
+                                1
+                              )) *
                               100,
                             100
                           ),
@@ -104,12 +109,16 @@ const FundMeDetailModal: React.FC<FundMeDetailModalProps> = ({
                     />
                   </div>
                   <div className="mt-2 text-xs wallet-muted">
-                    {formatBchFromSatoshis(detailModal.campaign.raisedSatoshis)} /{' '}
-                    {formatBchFromSatoshis(detailModal.campaign.targetSatoshis)} BCH
+                    {formatBchFromSatoshis(detailModal.campaign.raisedSatoshis)}{' '}
+                    /{' '}
+                    {formatBchFromSatoshis(detailModal.campaign.targetSatoshis)}{' '}
+                    BCH
                   </div>
                   <div className="mt-1 text-xs wallet-muted">
-                    End block: {detailModal.campaign.endBlock.toLocaleString()} · Latest
-                    block: {latestKnownBlockLabel}
+                    {addonT('module.endBlock', 'End block')}:{' '}
+                    {detailModal.campaign.endBlock.toLocaleString()} ·{' '}
+                    {addonT('module.latestBlock', 'Latest block')}:{' '}
+                    {latestKnownBlockLabel}
                   </div>
                 </div>
               ) : null}
@@ -117,7 +126,7 @@ const FundMeDetailModal: React.FC<FundMeDetailModalProps> = ({
 
             {detailModal.loading ? (
               <div className="rounded-2xl wallet-surface-strong border border-[var(--wallet-border)] px-4 py-6 text-center wallet-muted">
-                Loading campaign details...
+                {addonT('module.loadingDetails', 'Loading campaign details…')}
               </div>
             ) : null}
 
@@ -131,7 +140,7 @@ const FundMeDetailModal: React.FC<FundMeDetailModalProps> = ({
               <>
                 <div className="rounded-2xl wallet-surface-strong border border-[var(--wallet-border)] p-3">
                   <div className="text-xs font-semibold uppercase tracking-[0.12em] wallet-muted">
-                    Overview
+                    {addonT('module.overview', 'Overview')}
                   </div>
                   <p className="mt-2 text-sm leading-6 wallet-muted">
                     {detailModal.detail?.shortDescription ||
@@ -149,31 +158,34 @@ const FundMeDetailModal: React.FC<FundMeDetailModalProps> = ({
 
                 <div className="rounded-2xl wallet-surface-strong border border-[var(--wallet-border)] p-3">
                   <div className="text-xs font-semibold uppercase tracking-[0.12em] wallet-muted">
-                    Pledges
+                    {addonT('module.pledges', 'Pledges')}
                   </div>
                   <div className="mt-3 text-sm wallet-text-strong">
                     {detailModal.detail?.pledges?.length ?? 0} pledge entries
                   </div>
                   <p className="mt-2 text-sm wallet-muted">
-                    Transaction actions are still being reattached after the native
-                    screen loss, so this restore focuses on campaign browsing and
-                    creation UI first.
+                    Transaction actions are still being reattached after the
+                    native screen loss, so this restore focuses on campaign
+                    browsing and creation UI first.
                   </p>
                 </div>
 
                 {isChainCampaign(detailModal.campaign) ? (
                   <div className="rounded-2xl wallet-surface-strong border border-[var(--wallet-border)] p-3">
                     <div className="text-xs font-semibold uppercase tracking-[0.12em] wallet-muted">
-                      Donate
+                      {addonT('module.donate', 'Donate')}
                     </div>
                     <p className="mt-2 text-xs wallet-muted">
-                      Use the native transaction path to pledge BCH into this campaign.
+                      Use the native transaction path to pledge BCH into this
+                      campaign.
                     </p>
                     <div className="mt-3 flex items-center gap-2">
                       <input
                         value={donationDraft}
                         onChange={(event) =>
-                          onDonationDraftChange(event.target.value.replace(/[^0-9.]+/g, ''))
+                          onDonationDraftChange(
+                            event.target.value.replace(/[^0-9.]+/g, '')
+                          )
                         }
                         placeholder="0.01000000"
                         className="wallet-input min-w-0 flex-1"
@@ -184,7 +196,9 @@ const FundMeDetailModal: React.FC<FundMeDetailModalProps> = ({
                         onClick={onDonate}
                         className="rounded-2xl bg-[#31d89a]/40 px-4 py-3 text-sm font-semibold text-[#08261a]/70 cursor-not-allowed"
                       >
-                        {actionBusy ? 'Working...' : 'Donate'}
+                        {actionBusy
+                          ? addonT('common.loading', 'Working…')
+                          : addonT('module.donate', 'Donate')}
                       </button>
                     </div>
                   </div>
@@ -192,10 +206,11 @@ const FundMeDetailModal: React.FC<FundMeDetailModalProps> = ({
 
                 <div className="rounded-2xl wallet-surface-strong border border-[var(--wallet-border)] p-3">
                   <div className="text-xs font-semibold uppercase tracking-[0.12em] wallet-muted">
-                    Campaign Actions
+                    {addonT('module.actions', 'Campaign actions')}
                   </div>
                   <p className="mt-2 text-xs wallet-muted">
-                    {actionStatus || 'Refund, claim, stop, and cancel are available when your wallet and the campaign state allow them.'}
+                    {actionStatus ||
+                      'Refund, claim, stop, and cancel are available when your wallet and the campaign state allow them.'}
                   </p>
                   <div className="mt-3 grid grid-cols-2 gap-2">
                     <button
@@ -204,31 +219,37 @@ const FundMeDetailModal: React.FC<FundMeDetailModalProps> = ({
                       onClick={onRefund}
                       className="rounded-2xl border border-[var(--wallet-border)] px-4 py-3 text-sm font-semibold wallet-text-strong"
                     >
-                      Refund
+                      {addonT('module.refund', 'Refund')}
                     </button>
                     <button
                       type="button"
-                      disabled={actionBusy || !isChainCampaign(detailModal.campaign)}
+                      disabled={
+                        actionBusy || !isChainCampaign(detailModal.campaign)
+                      }
                       onClick={onClaim}
                       className="rounded-2xl border border-[var(--wallet-border)] px-4 py-3 text-sm font-semibold wallet-text-strong"
                     >
-                      Claim
+                      {addonT('module.claim', 'Claim')}
                     </button>
                     <button
                       type="button"
-                      disabled={actionBusy || !isChainCampaign(detailModal.campaign)}
+                      disabled={
+                        actionBusy || !isChainCampaign(detailModal.campaign)
+                      }
                       onClick={onStop}
                       className="rounded-2xl border border-[var(--wallet-border)] px-4 py-3 text-sm font-semibold wallet-text-strong"
                     >
-                      Stop
+                      {addonT('module.stop', 'Stop')}
                     </button>
                     <button
                       type="button"
-                      disabled={actionBusy || !isChainCampaign(detailModal.campaign)}
+                      disabled={
+                        actionBusy || !isChainCampaign(detailModal.campaign)
+                      }
                       onClick={onCancel}
                       className="rounded-2xl border border-[var(--wallet-border)] px-4 py-3 text-sm font-semibold wallet-text-strong"
                     >
-                      Cancel
+                      {addonT('common.cancel', 'Cancel')}
                     </button>
                   </div>
                 </div>

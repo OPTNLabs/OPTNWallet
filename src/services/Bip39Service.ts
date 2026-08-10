@@ -1,7 +1,7 @@
 import * as bip39 from 'bip39';
 import type { SupportedLocale } from '../i18n/types';
 
-export type Bip39Language = 'english' | 'spanish' | 'chinese_simplified';
+export type Bip39Language = 'english';
 
 export const BIP39_WORD_COUNTS = [12, 15, 18, 21, 24] as const;
 export type Bip39WordCount = (typeof BIP39_WORD_COUNTS)[number];
@@ -10,19 +10,18 @@ export const DEFAULT_BIP39_WORD_COUNT: Bip39WordCount = 12;
 export function getBip39LanguageForLocale(
   locale: SupportedLocale
 ): Bip39Language {
-  if (locale === 'es') return 'spanish';
-  if (locale === 'zh-CN') return 'chinese_simplified';
+  // OPTN deliberately uses the English BIP39 list for every UI locale.
+  // Non-English mnemonic lists are discouraged by the BIP39 specification.
+  void locale;
   return 'english';
 }
 
 const WORDLISTS: Record<Bip39Language, typeof bip39.wordlists.english> = {
   english: bip39.wordlists.english,
-  spanish: bip39.wordlists.spanish,
-  chinese_simplified: bip39.wordlists.chinese_simplified,
 };
 
 export const BIP39_IMPORT_ERROR =
-  'Enter a valid 12-, 15-, 18-, 21-, or 24-word BIP39 recovery phrase in a supported language.';
+  'Enter a valid English BIP39 recovery phrase with 12, 15, 18, 21, or 24 words.';
 
 export function normalizeBip39Mnemonic(mnemonic: string): string {
   return mnemonic.normalize('NFKD').trim().toLowerCase().split(/\s+/).join(' ');

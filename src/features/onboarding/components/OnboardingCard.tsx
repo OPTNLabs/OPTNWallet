@@ -1,5 +1,6 @@
 import type { PropsWithChildren } from 'react';
 import { ONBOARDING_WELCOME_IMAGE } from '../constants';
+import { useI18n } from '../../../i18n/useI18n';
 
 type OnboardingCardProps = PropsWithChildren<{
   title: string;
@@ -11,13 +12,14 @@ const OnboardingCard = ({
   children,
   maxWidthClassName = 'max-w-md',
 }: OnboardingCardProps) => {
+  const { t } = useI18n();
   return (
     <div className="min-h-screen wallet-surface flex flex-col items-center justify-center p-4 w-full">
       <div className={`wallet-card p-6 w-full ${maxWidthClassName}`}>
         <div className="flex justify-center mt-4">
           <img
             src={ONBOARDING_WELCOME_IMAGE}
-            alt="Welcome"
+            alt={t('onboarding.welcomeAlt')}
             className="max-w-full h-auto"
           />
         </div>

@@ -2,6 +2,7 @@ import { memo } from 'react';
 import { Badge, CardShell } from './uiPrimitives';
 import type { WalletAddressRecord } from '../types';
 import { shortHash } from '../utils';
+import { useAddonI18n } from '../../../../i18n/useAddonI18n';
 
 type RecipientsStepCardProps = {
   addresses: WalletAddressRecord[];
@@ -20,13 +21,14 @@ function RecipientsStepCardImpl({
   onToggleRecipient,
   onCopyAddress,
 }: RecipientsStepCardProps) {
+  const { t: addonT } = useAddonI18n();
   return (
     <CardShell
-      title="Recipients"
+      title={addonT('module.recipients', 'Recipients')}
       subtitle=""
       right={
         <Badge tone={selectedRecipientCount > 0 ? 'green' : 'gray'}>
-          {selectedRecipientCount} selected
+          {selectedRecipientCount} {addonT('common.selected', 'selected')}
         </Badge>
       }
       open={true}
@@ -42,7 +44,9 @@ function RecipientsStepCardImpl({
               <div
                 key={a.address}
                 className={`px-4 py-4 border-b border-[var(--wallet-border)] last:border-b-0 ${
-                  checked ? 'wallet-selectable-active' : 'wallet-selectable-inactive'
+                  checked
+                    ? 'wallet-selectable-active'
+                    : 'wallet-selectable-inactive'
                 }`}
               >
                 <div className="flex items-start gap-3">
@@ -60,9 +64,11 @@ function RecipientsStepCardImpl({
                           {shortHash(a.address, 14, 10)}
                         </span>
                         {checked ? (
-                          <Badge tone="green">included</Badge>
+                          <Badge tone="green">
+                            {addonT('common.included', 'included')}
+                          </Badge>
                         ) : (
-                          <Badge>excluded</Badge>
+                          <Badge>{addonT('common.excluded', 'excluded')}</Badge>
                         )}
                       </div>
                       <div className="mt-1 text-[12px] wallet-muted font-mono truncate">
@@ -76,7 +82,7 @@ function RecipientsStepCardImpl({
                     className="text-sm font-semibold text-blue-700 shrink-0"
                     onClick={() => onCopyAddress(a.address)}
                   >
-                    Copy
+                    {addonT('common.copy', 'Copy')}
                   </button>
                 </div>
               </div>

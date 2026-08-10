@@ -1,7 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import {
-  CapacitorBarcodeScannerTypeHint,
-} from '@capacitor/barcode-scanner';
+import { CapacitorBarcodeScannerTypeHint } from '@capacitor/barcode-scanner';
 import { Toast } from '@capacitor/toast';
 import {
   getBarcodeScannerErrorMessage,
@@ -40,6 +38,7 @@ import {
   formatAtomicTokenAmount,
   resolveTokenPresentation,
 } from '../../../../utils/tokenPresentation';
+import { useAddonI18n } from '../../../../i18n/useAddonI18n';
 
 type FlowStep = 'recipients' | 'asset' | 'send';
 
@@ -57,12 +56,14 @@ const AIRDROP_DRAFT_STORAGE_KEY = 'optn.airdrops.localDraft.v1';
 const LEGACY_DISTRIBUTOR_DRAFT_STORAGE_KEY = 'optn.distributor.localDraft.v1';
 
 function makeLocalId(prefix: string) {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+  if (
+    typeof crypto !== 'undefined' &&
+    typeof crypto.randomUUID === 'function'
+  ) {
     return `${prefix}_${crypto.randomUUID()}`;
   }
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
-
 
 const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
   sdk,
@@ -71,19 +72,27 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
   feeFundingSats,
   feeFundingUtxoCount,
 }) => {
+  const { t: addonT } = useAddonI18n();
   const { contentClassName, runSmoothReset } = useSmoothResetTransition();
   const currentNetwork =
-    sdk.wallet.getContext().network === 'chipnet' ? Network.CHIPNET : Network.MAINNET;
+    sdk.wallet.getContext().network === 'chipnet'
+      ? Network.CHIPNET
+      : Network.MAINNET;
   const [recipients, setRecipients] = useState<DistributionRecipient[]>([]);
   const [jobs, setJobs] = useState<DistributionJobRecord[]>([]);
-  const [recipientSelection, setRecipientSelection] = useState<Record<string, boolean>>({});
+  const [recipientSelection, setRecipientSelection] = useState<
+    Record<string, boolean>
+  >({});
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
   const [importText, setImportText] = useState('');
-  const [recipientSourceMode, setRecipientSourceMode] = useState<RecipientSourceMode>('manual');
+  const [recipientSourceMode, setRecipientSourceMode] =
+    useState<RecipientSourceMode>('manual');
   const [scanBusy, setScanBusy] = useState(false);
   const [step, setStep] = useState<FlowStep>('recipients');
-  const [txPreview, setTxPreview] = useState<DistributionTxPreview | null>(null);
+  const [txPreview, setTxPreview] = useState<DistributionTxPreview | null>(
+    null
+  );
   const [txPreviewBusy, setTxPreviewBusy] = useState(false);
   const [txPreviewError, setTxPreviewError] = useState('');
   const [showRecipientsPopup, setShowRecipientsPopup] = useState(false);
@@ -92,7 +101,8 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
   const [showPayoutRulePopup, setShowPayoutRulePopup] = useState(false);
   const [showTxPreviewPopup, setShowTxPreviewPopup] = useState(false);
   const [showSendConfirm, setShowSendConfirm] = useState(false);
-  const [showManualReferenceInput, setShowManualReferenceInput] = useState(false);
+  const [showManualReferenceInput, setShowManualReferenceInput] =
+    useState(false);
   const [sendBusy, setSendBusy] = useState(false);
   const [tokenImportBusy, setTokenImportBusy] = useState(false);
   const [payoutPreviewBusy, setPayoutPreviewBusy] = useState(false);
@@ -105,7 +115,10 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
     }>
   >([]);
   const [distributionDraft, setDistributionDraft] = useState({
-    assetType: workspace.default_asset_type === 'bch' ? ('bch' as const) : ('token' as const),
+    assetType:
+      workspace.default_asset_type === 'bch'
+        ? ('bch' as const)
+        : ('token' as const),
     tokenCategory: workspace.default_token_category || '',
     amount: workspace.default_amount || '1',
   });
@@ -157,25 +170,23 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
 
   const tokenOptions = useMemo(
     () =>
-      availableTokens
-        .filter(hasAirdropTokenHoldings)
-        .map((token) => ({
-          category: token.category,
-          label: (() => {
-            const presentation = getTokenPresentation(token.category);
-            const balance = formatAtomicTokenAmount(
-              token.tokenBalance,
-              presentation.decimals
-            );
-            const nftSuffix =
-              token.nftCommitments.length > 0
-                ? ` • NFTs: ${token.nftCommitments.length}`
-                : '';
-            return presentation.statusLabel
-              ? `${formatTokenIdentityLabel(token.category)} · ${balance}${nftSuffix} • ${presentation.statusLabel}`
-              : `${formatTokenIdentityLabel(token.category)} · ${balance}${nftSuffix}`;
-          })(),
-        })),
+      availableTokens.filter(hasAirdropTokenHoldings).map((token) => ({
+        category: token.category,
+        label: (() => {
+          const presentation = getTokenPresentation(token.category);
+          const balance = formatAtomicTokenAmount(
+            token.tokenBalance,
+            presentation.decimals
+          );
+          const nftSuffix =
+            token.nftCommitments.length > 0
+              ? ` • NFTs: ${token.nftCommitments.length}`
+              : '';
+          return presentation.statusLabel
+            ? `${formatTokenIdentityLabel(token.category)} · ${balance}${nftSuffix} • ${presentation.statusLabel}`
+            : `${formatTokenIdentityLabel(token.category)} · ${balance}${nftSuffix}`;
+        })(),
+      })),
     [availableTokens, formatTokenIdentityLabel, getTokenPresentation]
   );
   const includePickerValue = tokenOptions.some(
@@ -267,10 +278,14 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
   const amountRuleNeedsReference = amountRuleDraft.mode !== 'fixed';
   const amountRuleReferenceInvalid =
     amountRuleNeedsReference &&
-    !/^[0-9a-f]{64}$/.test(amountRuleDraft.referenceCategory.trim().toLowerCase());
+    !/^[0-9a-f]{64}$/.test(
+      amountRuleDraft.referenceCategory.trim().toLowerCase()
+    );
   const tierRuleInvalid =
     amountRuleDraft.mode === 'tiered_balance' &&
-    amountRuleDraft.tiers.filter((tier) => tier.minBalance.trim() && tier.amount.trim()).length === 0;
+    amountRuleDraft.tiers.filter(
+      (tier) => tier.minBalance.trim() && tier.amount.trim()
+    ).length === 0;
   const activeTierCount = amountRuleDraft.tiers.filter(
     (tier) => tier.minBalance.trim() && tier.amount.trim()
   ).length;
@@ -315,19 +330,23 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
         ? 'Enter an amount to continue.'
         : !requestedAmountIsWholeNumber
           ? 'Use a whole-number amount.'
-          : distributionDraft.assetType === 'token' && !distributionDraft.tokenCategory
+          : distributionDraft.assetType === 'token' &&
+              !distributionDraft.tokenCategory
             ? 'Choose a token from this wallet.'
             : amountRuleReferenceInvalid
               ? 'Choose a valid reference token.'
               : tierRuleInvalid
                 ? 'Add at least one valid tier.'
-            : tokenBalanceInsufficient
-              ? 'Not enough CashTokens for this batch.'
-              : plainBchFundingInsufficient
-                ? 'Not enough plain BCH UTXOs to fund outputs and fees.'
-                : '';
+                : tokenBalanceInsufficient
+                  ? 'Not enough CashTokens for this batch.'
+                  : plainBchFundingInsufficient
+                    ? 'Not enough plain BCH UTXOs to fund outputs and fees.'
+                    : '';
 
-  const importRows = useMemo(() => parseRecipientText(importText), [importText]);
+  const importRows = useMemo(
+    () => parseRecipientText(importText),
+    [importText]
+  );
 
   const pasteFromClipboard = async () => {
     if (typeof navigator === 'undefined' || !navigator.clipboard?.readText) {
@@ -340,7 +359,9 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
   const appendRecipientText = (value: string) => {
     const next = value.trim();
     if (!next) return;
-    setImportText((prev) => (prev.trim() ? `${prev.trimEnd()}\n${next}` : next));
+    setImportText((prev) =>
+      prev.trim() ? `${prev.trimEnd()}\n${next}` : next
+    );
   };
 
   const setRecipientSelectionForIds = (ids: string[], checked: boolean) => {
@@ -354,14 +375,18 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
   const clearRecipientSelection = () => {
     setRecipientSelection((prev) => {
       if (Object.keys(prev).length === 0) return prev;
-      return Object.fromEntries(recipients.map((recipient) => [recipient.id, false]));
+      return Object.fromEntries(
+        recipients.map((recipient) => [recipient.id, false])
+      );
     });
   };
 
   const removeRecipientsByIds = (ids: string[]) => {
     if (ids.length === 0) return 0;
     const idSet = new Set(ids);
-    setRecipients((prev) => prev.filter((recipient) => !idSet.has(recipient.id)));
+    setRecipients((prev) =>
+      prev.filter((recipient) => !idSet.has(recipient.id))
+    );
     setRecipientSelection((prev) =>
       Object.fromEntries(
         Object.entries(prev).filter(([recipientId]) => !idSet.has(recipientId))
@@ -427,7 +452,10 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
       try {
         setTxPreviewBusy(true);
         setTxPreviewError('');
-        const preview = await buildApprovedDistributionTransaction(sdk, preparedJobs);
+        const preview = await buildApprovedDistributionTransaction(
+          sdk,
+          preparedJobs
+        );
         if (!cancelled) {
           setTxPreview(preview);
         }
@@ -542,10 +570,7 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
         const address = holder.locking_address?.trim();
         if (!address || !looksLikeAddress(address)) continue;
         const key = normalizeAddressKey(address);
-        if (
-          options?.targetAddressKeys &&
-          !options.targetAddressKeys.has(key)
-        ) {
+        if (options?.targetAddressKeys && !options.targetAddressKeys.has(key)) {
           continue;
         }
         try {
@@ -576,8 +601,12 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
   };
 
   const importTokenHolders = async () => {
-    const includeCategory = tokenImportDraft.includeCategory.trim().toLowerCase();
-    const excludeCategory = tokenImportDraft.excludeCategory.trim().toLowerCase();
+    const includeCategory = tokenImportDraft.includeCategory
+      .trim()
+      .toLowerCase();
+    const excludeCategory = tokenImportDraft.excludeCategory
+      .trim()
+      .toLowerCase();
 
     if (!/^[0-9a-f]{64}$/.test(includeCategory)) {
       throw new Error('Enter a valid include token category.');
@@ -588,7 +617,9 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
 
     const includeAddresses = await loadTokenHolderBalances(includeCategory);
     if (includeAddresses.size === 0) {
-      throw new Error('No token-holder addresses were returned for that category.');
+      throw new Error(
+        'No token-holder addresses were returned for that category.'
+      );
     }
 
     let excludeAddresses = new Set<string>();
@@ -601,12 +632,18 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
       (recipient) => recipient.source !== 'tokenindex'
     );
     const existingAddressKeys = new Set(
-      manualRecipients.map((recipient) => normalizeAddressKey(recipient.address))
+      manualRecipients.map((recipient) =>
+        normalizeAddressKey(recipient.address)
+      )
     );
     const newRecipients: DistributionRecipient[] = [];
 
     for (const [addressKey, holder] of includeAddresses.entries()) {
-      if (excludeAddresses.has(addressKey) || existingAddressKeys.has(addressKey)) continue;
+      if (
+        excludeAddresses.has(addressKey) ||
+        existingAddressKeys.has(addressKey)
+      )
+        continue;
       newRecipients.push({
         id: makeLocalId('rcp'),
         workspace_id: workspace.id,
@@ -626,9 +663,14 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
     setRecipients(nextRecipients);
     setRecipientSelection((prev) => ({
       ...Object.fromEntries(
-        manualRecipients.map((recipient) => [recipient.id, Boolean(prev[recipient.id])])
+        manualRecipients.map((recipient) => [
+          recipient.id,
+          Boolean(prev[recipient.id]),
+        ])
       ),
-      ...Object.fromEntries(newRecipients.map((recipient) => [recipient.id, true])),
+      ...Object.fromEntries(
+        newRecipients.map((recipient) => [recipient.id, true])
+      ),
     }));
     setStatus(
       `Imported ${newRecipients.length} token holder${newRecipients.length === 1 ? '' : 's'}.`
@@ -673,13 +715,17 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
       return nextJobs;
     }
 
-    const referenceCategory = amountRuleDraft.referenceCategory.trim().toLowerCase();
+    const referenceCategory = amountRuleDraft.referenceCategory
+      .trim()
+      .toLowerCase();
     if (!/^[0-9a-f]{64}$/.test(referenceCategory)) {
       throw new Error('Choose a valid reference token category.');
     }
 
     const selectedAddressKeys = new Set(
-      selectedRecipients.map((recipient) => normalizeAddressKey(recipient.address))
+      selectedRecipients.map((recipient) =>
+        normalizeAddressKey(recipient.address)
+      )
     );
     const balanceMap = await loadTokenHolderBalances(referenceCategory, {
       targetAddressKeys: selectedAddressKeys,
@@ -705,7 +751,9 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
         });
       }
       if (nextJobs.length === 0) {
-        throw new Error('No selected recipients hold the required reference token.');
+        throw new Error(
+          'No selected recipients hold the required reference token.'
+        );
       }
       return nextJobs;
     }
@@ -725,7 +773,9 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
           amount: BigInt(tier.amount),
         };
       })
-      .sort((a, b) => (a.minBalance > b.minBalance ? -1 : a.minBalance < b.minBalance ? 1 : 0));
+      .sort((a, b) =>
+        a.minBalance > b.minBalance ? -1 : a.minBalance < b.minBalance ? 1 : 0
+      );
 
     if (tiers.length === 0) {
       throw new Error('Add at least one valid tier.');
@@ -761,7 +811,9 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
 
   const previewResolvedPayouts = async () => {
     const nextJobs = await resolvePreparedJobs();
-    const recipientById = new Map(recipients.map((recipient) => [recipient.id, recipient]));
+    const recipientById = new Map(
+      recipients.map((recipient) => [recipient.id, recipient])
+    );
     setPayoutPreviewRows(
       nextJobs.map((job) => {
         const recipient = recipientById.get(job.recipient_id);
@@ -798,14 +850,17 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
       <div className="px-1 text-xs font-medium wallet-text-strong">
         Step {step === 'recipients' ? '1' : step === 'asset' ? '2' : '3'} ·{' '}
         {step === 'recipients'
-          ? 'Recipients'
+          ? addonT('module.stepRecipients', 'Recipients')
           : step === 'asset'
-            ? 'Asset'
-            : 'Send'}
+            ? addonT('module.stepAsset', 'Asset')
+            : addonT('module.stepSend', 'Send')}
       </div>
 
       {step === 'recipients' ? (
-        <SectionCard title="Recipients" className="p-4">
+        <SectionCard
+          title={addonT('module.stepRecipients', 'Recipients')}
+          className="p-4"
+        >
           <div className="space-y-2.5">
             <div className="grid grid-cols-2 gap-2">
               <button
@@ -818,10 +873,10 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
                 onClick={() => setRecipientSourceMode('manual')}
               >
                 <div className="text-sm font-semibold wallet-text-strong">
-                  Manual
+                  {addonT('module.manual', 'Manual')}
                 </div>
                 <div className="text-xs wallet-muted mt-1">
-                  Paste or scan addresses
+                  {addonT('module.manualHint', 'Paste or scan addresses')}
                 </div>
               </button>
               <button
@@ -834,10 +889,10 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
                 onClick={() => setRecipientSourceMode('token')}
               >
                 <div className="text-sm font-semibold wallet-text-strong">
-                  By Token
+                  {addonT('module.byToken', 'By token')}
                 </div>
                 <div className="text-xs wallet-muted mt-1">
-                  Import holders by category
+                  {addonT('module.byTokenHint', 'Import holders by category')}
                 </div>
               </button>
             </div>
@@ -868,14 +923,16 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
                       })()
                     }
                   >
-                    Paste
+                    {addonT('common.paste', 'Paste')}
                   </button>
                   <button
                     className="wallet-btn-secondary w-full"
                     disabled={scanBusy}
                     onClick={() => void scanRecipientQr()}
                   >
-                    {scanBusy ? 'Scanning…' : 'Scan QR'}
+                    {scanBusy
+                      ? addonT('common.scanning', 'Scanning…')
+                      : addonT('common.scanQr', 'Scan QR')}
                   </button>
                   <button
                     className="wallet-btn-primary w-full"
@@ -918,7 +975,7 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
                       })()
                     }
                   >
-                    Add
+                    {addonT('common.add', 'Add')}
                   </button>
                 </div>
               </>
@@ -932,7 +989,10 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
                   </span>
                   {tokenImportDraft.excludeCategory ? (
                     <span className="wallet-surface rounded-full px-3 py-1 wallet-muted">
-                      Exclude {formatTokenIdentityLabel(tokenImportDraft.excludeCategory)}
+                      Exclude{' '}
+                      {formatTokenIdentityLabel(
+                        tokenImportDraft.excludeCategory
+                      )}
                     </span>
                   ) : null}
                 </div>
@@ -940,7 +1000,7 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
                   className="wallet-btn-secondary w-full"
                   onClick={() => setShowTokenImportPopup(true)}
                 >
-                  Configure Token Import
+                  {addonT('module.importByToken', 'Import by token')}
                 </button>
               </div>
             )}
@@ -949,7 +1009,8 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
                 className="wallet-btn-secondary w-full"
                 onClick={() => setShowRecipientsPopup(true)}
               >
-                {selectedRecipientCount} Selected · Edit
+                {selectedRecipientCount} {addonT('common.selected', 'Selected')}{' '}
+                · {addonT('common.edit', 'Edit')}
               </button>
             ) : null}
             <button
@@ -957,18 +1018,21 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
               disabled={selectedRecipientIds.length === 0}
               onClick={() => setStep('asset')}
             >
-              Continue to Asset
+              {addonT('common.continue', 'Continue to Asset')}
             </button>
           </div>
         </SectionCard>
       ) : null}
 
       {step === 'asset' ? (
-        <SectionCard title="Asset" className="p-4">
+        <SectionCard
+          title={addonT('module.stepAsset', 'Asset')}
+          className="p-4"
+        >
           <div className="space-y-2.5">
             <div className="wallet-surface-strong rounded-2xl px-4 py-3 space-y-3">
               <div className="text-sm font-medium wallet-text-strong">
-                What are you sending?
+                {addonT('module.whatSending', 'What are you sending?')}
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <select
@@ -989,7 +1053,7 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
                   placeholder={
                     distributionDraft.assetType === 'bch'
                       ? 'Sats each'
-                      : 'Amount each'
+                      : addonT('module.amountEach', 'Amount each')
                   }
                   value={distributionDraft.amount}
                   onChange={(event) =>
@@ -1011,7 +1075,9 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
                     }))
                   }
                 >
-                  <option value="">Choose token from wallet</option>
+                  <option value="">
+                    {addonT('module.chooseToken', 'Choose token from wallet')}
+                  </option>
                   {tokenOptions.map((token) => (
                     <option key={token.category} value={token.category}>
                       {token.label}
@@ -1085,7 +1151,10 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
                 {amountRuleNeedsReference &&
                 amountRuleDraft.referenceCategory ? (
                   <span className="wallet-surface rounded-full px-3 py-1 wallet-muted">
-                    Ref {formatTokenIdentityLabel(amountRuleDraft.referenceCategory)}
+                    Ref{' '}
+                    {formatTokenIdentityLabel(
+                      amountRuleDraft.referenceCategory
+                    )}
                   </span>
                 ) : null}
               </div>
@@ -1195,7 +1264,7 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
       ) : null}
 
       {step === 'send' ? (
-        <SectionCard title="Send" className="p-4">
+        <SectionCard title={addonT('module.stepSend', 'Send')} className="p-4">
           <div className="space-y-2">
             {txPreviewBusy ? (
               <div className="wallet-surface-strong rounded-2xl px-4 py-3 text-sm wallet-muted">
@@ -1216,7 +1285,9 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
               {txPreview ? ` · fee ${txPreview.feeSats} sats` : ''}
             </div>
             {jobs.length === 0 ? (
-              <p className="text-sm wallet-muted">No prepared jobs yet.</p>
+              <p className="text-sm wallet-muted">
+                {addonT('module.noPreparedJobs', 'No prepared jobs yet.')}
+              </p>
             ) : (
               <>
                 {txPreview ? (
@@ -1224,7 +1295,7 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
                     className="wallet-btn-secondary w-full mb-2"
                     onClick={() => setShowTxPreviewPopup(true)}
                   >
-                    Review Transaction
+                    {addonT('module.reviewTransaction', 'Review transaction')}
                   </button>
                 ) : null}
                 {preparedJobs.length > 0 ? (
@@ -1233,7 +1304,7 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
                     disabled={txPreviewBusy || !!txPreviewError || !txPreview}
                     onClick={() => setShowSendConfirm(true)}
                   >
-                    Send Airdrop
+                    {addonT('module.sendAirdrop', 'Send airdrop')}
                   </button>
                 ) : null}
               </>
@@ -1256,7 +1327,7 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
           <div className="space-y-4">
             <div>
               <div className="text-lg font-semibold wallet-text-strong">
-                Transaction Review
+                {addonT('module.transactionReview', 'Transaction review')}
               </div>
               <div className="text-sm wallet-muted">
                 {txPreview.inputs.length} inputs ·{' '}
@@ -1265,7 +1336,9 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
               </div>
             </div>
             <div className="wallet-surface-strong rounded-2xl px-4 py-3 text-sm space-y-2">
-              <div className="font-medium wallet-text-strong">Inputs</div>
+              <div className="font-medium wallet-text-strong">
+                {addonT('module.inputs', 'Inputs')}
+              </div>
               <div className="max-h-44 overflow-y-auto pr-1 space-y-2">
                 {txPreview.inputs.map((input, index) => (
                   <div
@@ -1283,7 +1356,9 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
               </div>
             </div>
             <div className="wallet-surface-strong rounded-2xl px-4 py-3 text-sm space-y-2">
-              <div className="font-medium wallet-text-strong">Outputs</div>
+              <div className="font-medium wallet-text-strong">
+                {addonT('module.outputs', 'Outputs')}
+              </div>
               <div className="max-h-52 overflow-y-auto pr-1 space-y-2">
                 {txPreview.finalOutputs.map((output, index) =>
                   'recipientAddress' in output ? (
@@ -1336,7 +1411,7 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
           <div className="space-y-4">
             <div>
               <div className="text-lg font-semibold wallet-text-strong">
-                Payout Rule
+                {addonT('module.payoutRule', 'Payout rule')}
               </div>
               <div className="text-sm wallet-muted">
                 Configure how recipient amounts are decided.
@@ -1361,7 +1436,9 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
                       }))
                     }
                   >
-                    <option value="">Choose token</option>
+                    <option value="">
+                      {addonT('common.selectToken', 'Select token')}
+                    </option>
                     {tokenOptions.map((token) => (
                       <option
                         key={`rule:${token.category}`}
@@ -1375,7 +1452,7 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
                 {showManualReferenceInput || tokenOptions.length === 0 ? (
                   <input
                     className="wallet-input w-full"
-                    placeholder="Paste token category"
+                    placeholder={addonT('common.paste', 'Paste token category')}
                     value={amountRuleDraft.referenceCategory}
                     onChange={(event) =>
                       setAmountRuleDraft((prev) => ({
@@ -1392,8 +1469,8 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
                     onClick={() => setShowManualReferenceInput((prev) => !prev)}
                   >
                     {showManualReferenceInput
-                      ? 'Use wallet token picker'
-                      : 'Paste category instead'}
+                      ? addonT('common.selectToken', 'Use wallet token picker')
+                      : addonT('common.paste', 'Paste category instead')}
                   </button>
                 ) : null}
               </div>
@@ -1415,7 +1492,10 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
                     <div className="grid grid-cols-2 gap-2">
                       <input
                         className="wallet-input"
-                        placeholder="Holds at least"
+                        placeholder={addonT(
+                          'module.balanceTiers',
+                          'Holds at least'
+                        )}
                         value={tier.minBalance}
                         onChange={(event) =>
                           setAmountRuleDraft((prev) => ({
@@ -1430,7 +1510,7 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
                       />
                       <input
                         className="wallet-input"
-                        placeholder="Send"
+                        placeholder={addonT('common.send', 'Send')}
                         value={tier.amount}
                         onChange={(event) =>
                           setAmountRuleDraft((prev) => ({
@@ -1519,13 +1599,16 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
 
       <ContainedSwipeConfirmModal
         open={showSendConfirm && Boolean(txPreview)}
-        title="Send Airdrop"
+        title={addonT('module.sendAirdrop', 'Send airdrop')}
         subtitle={
           txPreview
             ? `${preparedJobs.length} recipients · fee ${txPreview.feeSats} sats`
             : undefined
         }
-        warning="Broadcasts immediately after confirmation."
+        warning={addonT(
+          'module.broadcastWarning',
+          'Broadcasts immediately after confirmation.'
+        )}
         loading={sendBusy}
         onCancel={() => {
           if (sendBusy) return;
@@ -1619,7 +1702,12 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
               <div className="grid grid-cols-3 gap-2">
                 <button
                   className="wallet-btn-secondary w-full"
-                  onClick={() => setRecipientSelectionForIds(recipients.map((recipient) => recipient.id), true)}
+                  onClick={() =>
+                    setRecipientSelectionForIds(
+                      recipients.map((recipient) => recipient.id),
+                      true
+                    )
+                  }
                 >
                   Select All
                 </button>
@@ -1694,7 +1782,8 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
                 Import by Token
               </div>
               <div className="text-sm wallet-muted">
-                Add holders of one token or NFT category, with an optional exclude token.
+                Add holders of one token or NFT category, with an optional
+                exclude token.
               </div>
             </div>
             {tokenOptions.length > 0 ? (
@@ -1710,7 +1799,12 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
                     }));
                   }}
                 >
-                  <option value="">Use wallet token for include</option>
+                  <option value="">
+                    {addonT(
+                      'module.useTokenInclude',
+                      'Use wallet token for include'
+                    )}
+                  </option>
                   {tokenOptions.map((token) => (
                     <option
                       key={`include:${token.category}`}
@@ -1731,7 +1825,12 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
                     }));
                   }}
                 >
-                  <option value="">Use wallet token for exclude</option>
+                  <option value="">
+                    {addonT(
+                      'module.useTokenExclude',
+                      'Use wallet token for exclude'
+                    )}
+                  </option>
                   {tokenOptions.map((token) => (
                     <option
                       key={`exclude:${token.category}`}
@@ -1745,7 +1844,10 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
             ) : null}
             <input
               className="wallet-input w-full"
-              placeholder="Include token category"
+              placeholder={addonT(
+                'module.includeCategory',
+                'Include token category'
+              )}
               value={tokenImportDraft.includeCategory}
               onChange={(event) =>
                 setTokenImportDraft((prev) => ({
@@ -1756,7 +1858,10 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
             />
             <input
               className="wallet-input w-full"
-              placeholder="Exclude token category (optional)"
+              placeholder={addonT(
+                'module.excludeOptional',
+                'Exclude token category (optional)'
+              )}
               value={tokenImportDraft.excludeCategory}
               onChange={(event) =>
                 setTokenImportDraft((prev) => ({
@@ -1807,10 +1912,10 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
                     className="h-4 w-4 rounded-full border-2 border-current border-t-transparent animate-spin"
                     aria-hidden="true"
                   />
-                  <span>Importing holders…</span>
+                  <span>{addonT('common.loading', 'Importing holders…')}</span>
                 </span>
               ) : (
-                'Import Holders'
+                addonT('module.importHolders', 'Import holders')
               )}
             </button>
           </div>

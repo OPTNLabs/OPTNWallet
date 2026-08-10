@@ -49,6 +49,7 @@ import {
 } from '../../platform/desktop/FusionMode';
 import type { RootState } from '../../state/store';
 import { useI18n } from '../../i18n/useI18n';
+import { formatNumber } from '../../i18n/format';
 import type { TranslationKey } from '../../i18n/resources';
 
 // Ports per Electron Cash's own conf.py default (fusion.servo.cash:8789, SSL).
@@ -98,8 +99,8 @@ function isLocalHost(host: string): boolean {
   return host === 'localhost' || host === '127.0.0.1' || host === '::1';
 }
 
-const satsToBch = (sats: number) =>
-  (sats / 1e8).toLocaleString(undefined, { maximumFractionDigits: 8 });
+const satsToBch = (sats: number, locale: Parameters<typeof formatNumber>[1]) =>
+  formatNumber(sats / 1e8, locale, { maximumFractionDigits: 8 });
 const fusionExecutionReadiness = CURRENT_FUSION_EXECUTION_READINESS;
 
 // variant 'card' = the CashFusion toggles + fuse actions (CashFusion app entry);
@@ -108,7 +109,7 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
   variant = 'card',
 }) => {
   const dispatch = useDispatch();
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const enabled = useSelector(selectCashFusionEnabled);
   const p2pFusionEnabled = useSelector(selectP2pFusionEnabled);
   const savedServer = useSelector(selectFusionServer);
@@ -772,7 +773,11 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
                 {status.tiers.length > 0 && (
                   <p className="wallet-muted pt-0.5">
                     {t('fusion.tiers')}:{' '}
-                    {status.tiers.slice(0, 4).map(satsToBch).join(', ')} BCH
+                    {status.tiers
+                      .slice(0, 4)
+                      .map((sats) => satsToBch(sats, locale))
+                      .join(', ')}{' '}
+                    BCH
                     {status.tiers.length > 4 &&
                       ` … +${status.tiers.length - 4} ${t('fusion.more')}`}
                   </p>

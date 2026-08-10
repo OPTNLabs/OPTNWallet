@@ -21,6 +21,7 @@ import {
   BACKEND_CHANGED_EVENT,
 } from '../../platform/desktop/backendSelection';
 import { useI18n } from '../../i18n/useI18n';
+import { formatNumber } from '../../i18n/format';
 
 interface NodeProbe {
   user_agent: string;
@@ -42,15 +43,15 @@ type SyncState =
   | { status: 'ok'; result: NodeSyncResult }
   | { status: 'fail'; error: string };
 
-const satsToBch = (sats: number) =>
-  (sats / 1e8).toLocaleString(undefined, { maximumFractionDigits: 8 });
+const satsToBch = (sats: number, locale: Parameters<typeof formatNumber>[1]) =>
+  formatNumber(sats / 1e8, locale, { maximumFractionDigits: 8 });
 
 export const Bip37NodeRow: React.FC<{
   target: string;
   network: Network;
   onRemove: (target: string) => void;
 }> = ({ target, network, onRemove }) => {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const [state, setState] = useState<ProbeState>({ status: 'idle' });
   const [sync, setSync] = useState<SyncState>({ status: 'idle' });
   const walletId = useSelector(selectWalletId);
@@ -166,8 +167,8 @@ export const Bip37NodeRow: React.FC<{
             {state.probe.user_agent}
           </p>
           <p>
-            {t('bip37.height')} {state.probe.start_height.toLocaleString()} ·{' '}
-            {t('bip37.protocol')} {state.probe.protocol_version}
+            {t('bip37.height')} {formatNumber(state.probe.start_height, locale)}{' '}
+            · {t('bip37.protocol')} {state.probe.protocol_version}
           </p>
           <p
             className={
@@ -196,7 +197,7 @@ export const Bip37NodeRow: React.FC<{
       {sync.status === 'ok' && (
         <div className="mt-1.5 space-y-0.5 text-[10px] wallet-muted">
           <p className="text-green-400 font-semibold">
-            {satsToBch(sync.result.totalSats)} {t('bip37.fromNode')}
+            {satsToBch(sync.result.totalSats, locale)} {t('bip37.fromNode')}
           </p>
           <p>
             {t('bip37.scanned')} {sync.result.scannedBlocks} {t('bip37.blocks')}{' '}

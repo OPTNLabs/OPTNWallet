@@ -1,5 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
+import { useI18n } from '../../i18n/useI18n';
 
 type SendHeaderProps = {
   showDebug: boolean;
@@ -7,6 +8,8 @@ type SendHeaderProps = {
 };
 
 export function SendHeader({ showDebug, setShowDebug }: SendHeaderProps) {
+  const { t } = useI18n();
+
   return (
     <div className="mb-3 flex items-start justify-between gap-3">
       <div className="min-w-0">
@@ -14,11 +17,9 @@ export function SendHeader({ showDebug, setShowDebug }: SendHeaderProps) {
           OPTN Wallet
         </div>
         <h1 className="text-2xl font-extrabold wallet-text-strong leading-tight">
-          Simple Send
+          {t('send.title')}
         </h1>
-        <p className="text-sm wallet-muted">
-          Send BCH, fungible tokens, or NFTs with one guided flow.
-        </p>
+        <p className="text-sm wallet-muted">{t('send.guidedDescription')}</p>
       </div>
       <div className="flex shrink-0 items-center gap-3">
         <label className="flex items-center gap-2 text-xs font-semibold wallet-muted select-none">
@@ -29,15 +30,15 @@ export function SendHeader({ showDebug, setShowDebug }: SendHeaderProps) {
             checked={showDebug}
             onChange={(e) => setShowDebug(e.target.checked)}
           />
-          Debug
+          {t('send.debug')}
         </label>
 
         <Link
           to="/transaction"
           className="text-sm font-semibold wallet-text-strong underline underline-offset-4"
-          title="Open Advanced Builder"
+          title={t('send.advancedBuilder')}
         >
-          Advanced
+          {t('send.advanced')}
         </Link>
       </div>
     </div>

@@ -6,6 +6,9 @@ import type { AddonSDK } from '../../../services/AddonsSDK';
 import type { AddonAppDefinition, AddonManifest } from '../../../types/addons';
 import { renderDeclarativeScreen } from '../marketplaceScreenResolver';
 import ParyonWorkspaceApp from '../paryon/ParyonWorkspaceApp';
+import { I18nContext } from '../../../i18n/I18nContext';
+import { translate } from '../../../i18n/translate';
+import { AddonModuleI18nProvider } from '../../../i18n/AddonModuleI18nProvider';
 
 describe('Paryon workspace resolver', () => {
   afterEach(() => {
@@ -52,8 +55,20 @@ describe('Paryon workspace resolver', () => {
 
   it('renders the mobile-first tabbed surface in section order', () => {
     const rendered = renderToStaticMarkup(
-      <MemoryRouter initialEntries={['/apps/optn.builtin.demo:paryonWorkspaceApp']}>
-        <ParyonWorkspaceApp sdk={sdk} app={app} />
+      <MemoryRouter
+        initialEntries={['/apps/optn.builtin.demo:paryonWorkspaceApp']}
+      >
+        <I18nContext.Provider
+          value={{
+            locale: 'en',
+            setLocale: vi.fn(),
+            t: (key, values) => translate('en', key, values),
+          }}
+        >
+          <AddonModuleI18nProvider moduleId="paryon">
+            <ParyonWorkspaceApp sdk={sdk} app={app} />
+          </AddonModuleI18nProvider>
+        </I18nContext.Provider>
       </MemoryRouter>
     );
 
@@ -98,8 +113,20 @@ describe('Paryon workspace resolver', () => {
     } as unknown as AddonSDK;
 
     const rendered = renderToStaticMarkup(
-      <MemoryRouter initialEntries={['/apps/optn.builtin.demo:paryonWorkspaceApp']}>
-        <ParyonWorkspaceApp sdk={chipnetSdk} app={app} />
+      <MemoryRouter
+        initialEntries={['/apps/optn.builtin.demo:paryonWorkspaceApp']}
+      >
+        <I18nContext.Provider
+          value={{
+            locale: 'en',
+            setLocale: vi.fn(),
+            t: (key, values) => translate('en', key, values),
+          }}
+        >
+          <AddonModuleI18nProvider moduleId="paryon">
+            <ParyonWorkspaceApp sdk={chipnetSdk} app={app} />
+          </AddonModuleI18nProvider>
+        </I18nContext.Provider>
       </MemoryRouter>
     );
 
