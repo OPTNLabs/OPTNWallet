@@ -34,6 +34,9 @@ tsconfig.node.tsbuildinfo
 # Android signing material (never commit)
 *.keystore
 *.jks
+*.p12
+*.pfx
+*.code-workspace
 android/key.properties
 
 # Assistant-internal tooling (not part of the app)
