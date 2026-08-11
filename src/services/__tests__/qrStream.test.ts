@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   QrStreamDecoder,
   QrStreamEncoder,
@@ -8,15 +8,36 @@ import {
 } from '../qrStream';
 
 function bytes(length: number): Uint8Array {
-  return Uint8Array.from({ length }, (_, index) => (index * 37 + (index >> 8) * 11) & 0xff);
+  return Uint8Array.from(
+    { length },
+    (_, index) => (index * 37 + (index >> 8) * 11) & 0xff
+  );
 }
 
 describe('qrStream', () => {
+  it('uses secure randomness when no session ID is provided', () => {
+    const getRandomValues = vi
+      .spyOn(globalThis.crypto, 'getRandomValues')
+      .mockImplementation((array) => {
+        (array as Uint16Array)[0] = 0xbeef;
+        return array;
+      });
+
+    try {
+      expect(new QrStreamEncoder(bytes(1)).sessionId).toBe(0xbeef);
+      expect(getRandomValues).toHaveBeenCalledOnce();
+    } finally {
+      getRandomValues.mockRestore();
+    }
+  });
+
   it('round-trips arbitrary payloads through a dropped and reordered stream', () => {
     const source = bytes(8_000);
     const encoder = new QrStreamEncoder(source, 180, 4242);
     const decoder = new QrStreamDecoder();
-    const frames = Array.from({ length: 220 }, (_, sequence) => encoder.frame(sequence));
+    const frames = Array.from({ length: 220 }, (_, sequence) =>
+      encoder.frame(sequence)
+    );
 
     const order = frames.filter((_, index) => index % 7 !== 0).reverse();
     let recovered: Uint8Array | null = null;
@@ -45,7 +66,11 @@ describe('qrStream', () => {
 
   it('resets when a new stream identity appears', () => {
     const first = new QrStreamEncoder(bytes(300), 100, 1);
-    const second = new QrStreamEncoder(bytes(300).map((value) => value ^ 0xff), 100, 2);
+    const second = new QrStreamEncoder(
+      bytes(300).map((value) => value ^ 0xff),
+      100,
+      2
+    );
     const decoder = new QrStreamDecoder();
     decoder.addFrameBytes(encodeFrame(first.frame(0)));
     decoder.addFrameBytes(encodeFrame(second.frame(0)));
