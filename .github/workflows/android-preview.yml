@@ -71,7 +71,9 @@ jobs:
       - name: Android emulator smoke tests
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
         with:
-          api-level: 35
+          # API 30 keeps this lightweight package/activity smoke test reliable
+          # on GitHub's software-rendered Linux runners. The app's minSdk is 26.
+          api-level: 30
           target: google_apis
           arch: x86_64
           profile: pixel_2
