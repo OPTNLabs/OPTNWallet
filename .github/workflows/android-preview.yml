@@ -69,33 +69,97 @@ jobs:
         run: npm run android:test
 
       - name: Android emulator smoke tests
-        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
-        with:
-          # Keep the emulator runtime aligned with the app's API 36
-          # compile/target SDK policy.
-          api-level: 36
-          target: google_apis
-          arch: x86_64
-          profile: pixel_2
-          # API 36 images can take over 15 minutes to boot on shared runners.
-          emulator-boot-timeout: 1200
-          # API 36 may drop the ADB settings service immediately after boot;
-          # the smoke tests do not depend on animations being disabled.
-          disable-animations: false
-          script: >-
-            adb wait-for-device && api_level= && for attempt in 1 2 3 4 5 6 7
-            8 9 10 11 12; do api_level="$(adb shell getprop
-            ro.build.version.sdk 2>/dev/null | tr -d '\r')" || true; if [ "$api_level"
-            = "36" ]; then break; fi; sleep 5; done && echo "Emulator API level:
-            ${api_level:-unavailable}" && test "$api_level" = "36" &&
-            settings_ready= && for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13
-            14 15 16 17 18 19 20 21 22 23 24; do settings_state="$(adb
-            shell settings get system screen_off_timeout 2>/dev/null | tr -d
-            '\r')" || true; if [ -n "$settings_state" ] && ! printf '%s'
-            "$settings_state" | grep -Eq "Can.t find service|Failure calling
-            service"; then settings_ready=1; break; fi; sleep 5; done && echo
-            "Android settings service: ${settings_ready:-unavailable}" && test
-            "$settings_ready" = "1" && npm run android:test:instrumented
+        run: |
+          set -eu
+
+          emulator_serial=emulator-5554
+          emulator_log="$RUNNER_TEMP/android-emulator.log"
+
+          yes | sdkmanager --licenses >/dev/null
+          sdkmanager --install \
+            'build-tools;37.0.0' \
+            'platform-tools' \
+            'platforms;android-36' \
+            'emulator' \
+            'system-images;android-36;google_apis;x86_64' >/dev/null
+          echo no | avdmanager create avd --force \
+            --name test \
+            --package 'system-images;android-36;google_apis;x86_64' \
+            --device pixel_2
+
+          "$ANDROID_HOME/emulator/emulator" \
+            -port 5554 \
+            -avd test \
+            -no-window \
+            -gpu swiftshader_indirect \
+            -no-snapshot \
+            -noaudio \
+            -no-boot-anim \
+            -accel off >"$emulator_log" 2>&1 &
+          emulator_pid=$!
+
+          cleanup() {
+            exit_code=$?
+            if [ "$exit_code" -ne 0 ]; then
+              echo 'Android emulator log:'
+              tail -n 120 "$emulator_log" || true
+            fi
+            adb -s "$emulator_serial" emu kill >/dev/null 2>&1 || true
+            wait "$emulator_pid" 2>/dev/null || true
+            trap - EXIT
+            exit "$exit_code"
+          }
+          trap cleanup EXIT
+
+          adb -s "$emulator_serial" wait-for-device
+
+          boot_completed=
+          attempt=1
+          while [ "$attempt" -le 600 ]; do
+            boot_completed="$(adb -s "$emulator_serial" shell getprop \
+              sys.boot_completed 2>/dev/null | tr -d '\r')" || true
+            if [ "$boot_completed" = '1' ]; then
+              break
+            fi
+            sleep 2
+            attempt=$((attempt + 1))
+          done
+          echo "Emulator boot completed: ${boot_completed:-unavailable}"
+          test "$boot_completed" = '1'
+
+          api_level=
+          attempt=1
+          while [ "$attempt" -le 60 ]; do
+            api_level="$(adb -s "$emulator_serial" shell getprop \
+              ro.build.version.sdk 2>/dev/null | tr -d '\r')" || true
+            if [ "$api_level" = '36' ]; then
+              break
+            fi
+            sleep 5
+            attempt=$((attempt + 1))
+          done
+          echo "Emulator API level: ${api_level:-unavailable}"
+          test "$api_level" = '36'
+
+          settings_state=
+          settings_ready=
+          attempt=1
+          while [ "$attempt" -le 24 ]; do
+            settings_state="$(adb -s "$emulator_serial" shell settings get \
+              system screen_off_timeout 2>/dev/null | tr -d '\r')" || true
+            if [ -n "$settings_state" ] && ! printf '%s' "$settings_state" |
+              grep -Eq 'Can.t find service|Failure calling service' && adb -s
+              "$emulator_serial" shell input keyevent 82 >/dev/null 2>&1; then
+              settings_ready=1
+              break
+            fi
+            sleep 5
+            attempt=$((attempt + 1))
+          done
+          echo "Android services ready: ${settings_ready:-unavailable}"
+          test "$settings_ready" = '1'
+
+          npm run android:test:instrumented
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
