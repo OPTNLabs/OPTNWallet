@@ -20,6 +20,7 @@ import { assembleFusionTx, type PeerContribution } from '../fusionRound';
 import type { BlameReport } from '../fusionBlame';
 import { electCoordinator } from '../fusion';
 import { signMyInputs, toLibauthTx } from '../fusionSign';
+import { pedersenCommit, sumNoncesHex } from '../fusionPedersen';
 
 /** Ask the real election who coordinates. Never restate the rule here: it is
  *  bound to the candidate set (fusion.ts), so a test that assumes "lowest
@@ -1035,6 +1036,78 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
     expect(settled.every((result) => result.status === 'rejected')).toBe(true);
     expect(blames).toHaveLength(1);
     expect(blames[0].code).toBe('invalid_input_credential');
+    expect(blames[0].accused).toBe(liar);
+    expect(hub.activeHandlerCount()).toBe(0);
+  });
+
+  it('blames a peer whose balanced Pedersen commitments open to different components', async () => {
+    const peers = makePeers();
+    const participants = peers.map((peer) => peer.round.pubHex);
+    const coordinator = coordinatorOf(participants);
+    const liar = participants.find((peer) => peer !== coordinator);
+    if (!liar) throw new Error('no non-coordinator peer');
+
+    const hub = new Hub((from, _to, message) => {
+      if (from === liar && message.type === 'credential_request') {
+        // Keep the aggregate Pedersen equation valid while committing to
+        // different per-component amounts than the blinded EC Components.
+        // A separate balance-only list accepts this; an EC InitialCommitment
+        // must make the mismatch provable when the peer opens on abort.
+        const first = pedersenCommit(0);
+        const second = pedersenCommit(message.excessFee);
+        const falsifiedAmounts = [first.commitmentHex, second.commitmentHex];
+        const componentCommitments = (
+          message as RoundMessage & {
+            componentCommitments?: Array<{
+              index: number;
+              saltedComponentHash: string;
+              amountCommitment: string;
+            }>;
+          }
+        ).componentCommitments?.map((commitment, index) => ({
+          ...commitment,
+          amountCommitment: falsifiedAmounts[index],
+        }));
+        return {
+          ...message,
+          amountCommitments: falsifiedAmounts,
+          ...(componentCommitments ? { componentCommitments } : {}),
+          pedersenTotalNonce: sumNoncesHex([first.nonceHex, second.nonceHex]),
+        };
+      }
+      // Force the abort/blame phase after the coordinator has accepted and
+      // signed the mismatched credential request.
+      if (from === liar && message.type === 'signature') return null;
+      return message;
+    });
+    const blames: BlameReport[] = [];
+
+    const settled = await Promise.allSettled(
+      peers.map((peer) =>
+        runFusionRound(
+          {
+            myPubkey: peer.round.pubHex,
+            participants,
+            network: 'chipnet',
+            tier: 100_000,
+            feerate: 1_000,
+            myContribution: peer.contribution,
+            keysByPubkey: peer.keys,
+            broadcast: async (txHex) => txidOf(txHex),
+            timeoutMs: 800,
+            jitterMs: [0, 0],
+            onBlame: (report) => {
+              if (peer.round.pubHex === coordinator) blames.push(report);
+            },
+          },
+          hub.transportFor(peer.round.pubHex)
+        )
+      )
+    );
+
+    expect(settled.every((result) => result.status === 'rejected')).toBe(true);
+    expect(blames).toHaveLength(1);
+    expect(blames[0].code).toBe('invalid_component_commitment');
     expect(blames[0].accused).toBe(liar);
     expect(hub.activeHandlerCount()).toBe(0);
   });

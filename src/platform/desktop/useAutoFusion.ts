@@ -150,275 +150,296 @@ export function useAutoFusion(policyReady = true): void {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionKey]);
 
-  const tick = useCallback(async (freshSnapshot?: WalletUtxoSnapshot) => {
-    if (!policyReady) return;
-    if (activeControllerRef.current) return;
-    // The recovery poll must be almost free during the durable cooldown: do
-    // not probe or start Tor until another automatic attempt is actually due.
-    // startFusionRound repeats this advisory check and atomically claims later.
-    if (!isAutoCooldownReady(walletId, AUTO_FUSION_COOLDOWN_MS)) return;
-    // Depth already satisfied — stay silent until UTXO activity / depth change.
-    if (isAutoDepthMetIdle(walletId)) return;
-    const controller = new AbortController();
-    activeControllerRef.current = controller;
-    /** When set, schedule another Auto attempt after this tick (unattended). */
-    let requeueMs: number | null = null;
+  const tick = useCallback(
+    async (freshSnapshot?: WalletUtxoSnapshot) => {
+      if (!policyReady) return;
+      if (activeControllerRef.current) return;
+      // The recovery poll must be almost free during the durable cooldown: do
+      // not probe or start Tor until another automatic attempt is actually due.
+      // startFusionRound repeats this advisory check and atomically claims later.
+      if (!isAutoCooldownReady(walletId, AUTO_FUSION_COOLDOWN_MS)) return;
+      // Depth already satisfied — stay silent until UTXO activity / depth change.
+      if (isAutoDepthMetIdle(walletId)) return;
+      const controller = new AbortController();
+      activeControllerRef.current = controller;
+      /** When set, schedule another Auto attempt after this tick (unattended). */
+      let requeueMs: number | null = null;
 
-    /** Record a setup/route failure so Auto keeps retrying and the UI explains why. */
-    const noteServerSetupFailure = async (message: string) => {
-      await stampAutoFailure(walletId, AUTO_FUSION_RETRY_MS).catch(() => undefined);
-      setFusionLastResult(walletId, {
-        mode: 'server',
-        trigger: 'auto',
-        ok: false,
-        message,
-      });
-      void import('./logger')
-        .then(({ log }) =>
-          log.info('p2p-live', `w${walletId} OUTCOME failed: ${message}`)
-        )
-        .catch(() => undefined);
-      logError('AutoFusion.serverSetup', new Error(message), { walletId });
-      requeueMs = AUTO_FUSION_RETRY_MS + 400;
-    };
+      /** Record a setup/route failure so Auto keeps retrying and the UI explains why. */
+      const noteServerSetupFailure = async (message: string) => {
+        await stampAutoFailure(walletId, AUTO_FUSION_RETRY_MS).catch(
+          () => undefined
+        );
+        setFusionLastResult(walletId, {
+          mode: 'server',
+          trigger: 'auto',
+          ok: false,
+          message,
+        });
+        void import('./logger')
+          .then(({ log }) =>
+            log.info('p2p-live', `w${walletId} OUTCOME failed: ${message}`)
+          )
+          .catch(() => undefined);
+        logError('AutoFusion.serverSetup', new Error(message), { walletId });
+        requeueMs = AUTO_FUSION_RETRY_MS + 400;
+      };
 
-    try {
-      const session = sessionRef.current;
+      try {
+        const session = sessionRef.current;
 
-      // Resolve the route live: integrated Tor can start after mount, and users
-      // may instead run Tor Browser/daemon or select a verified manual proxy.
-      let torReady = false;
-      let p2pTor: { host: string; port: number } | null = null;
-      let serverRunner: ReturnType<typeof buildServerRunner> | null = null;
-      if (p2pFusionEnabled) {
-        try {
-          const route = await resolveFusionTransport('nostr-relay', {
-            enabled: torEnabled,
-            auto: torAuto,
-            host: torHost,
-            manualPort: torPortManual,
-            autoStartIntegrated: true,
-          });
-          if (route.type === 'tor') {
-            torReady = true;
-            p2pTor = route.tor;
-          }
-        } catch {
-          torReady = false;
-        }
-      } else {
-        const selectedServer =
-          savedFusionServer && fusionServers.includes(savedFusionServer)
-            ? savedFusionServer
-            : fusionServers[0];
-        if (!selectedServer) {
-          await noteServerSetupFailure(
-            'Auto-fuse (server): no fusion server selected — retrying…'
-          );
-          return;
-        }
-        try {
-          const inputLookupEndpoint = defaultInputLookupEndpoint(network);
-          const selected = await selectPreparedFusionServer({
-            selected: selectedServer,
-            configured: fusionServers,
-            prepare: async (server) => {
-              const target = parseFusionServerTarget(server);
-              const privacyDestination = serverFusionPrivacyDestination(
-                target.host,
-                inputLookupEndpoint.host
-              );
-              const route = await resolveFusionTransport(privacyDestination, {
-                enabled: torEnabled,
-                auto: torAuto,
-                host: torHost,
-                manualPort: torPortManual,
-                autoStartIntegrated: true,
-              });
-              if (route.type === 'unavailable') {
-                throw new Error(route.reason);
-              }
-              const tor = route.type === 'tor' ? route.tor : null;
-              const hello = await fetchFusionServerStatus(
-                target.host,
-                target.port,
-                target.useSsl,
-                tor ?? undefined
-              );
-              validateServerHello(hello);
-              return buildServerRunner({
-                walletId,
-                network,
-                ...target,
-                tor,
-                inputLookupEndpoint,
-                expectedHello: hello,
-                joinInactiveTimeoutMs: SERVER_AUTOFUSE_INACTIVE_MS,
-              });
-            },
-          });
-          torReady = true;
-          serverRunner = selected.prepared;
-        } catch (error) {
-          torReady = false;
-          const msg =
-            error instanceof Error ? error.message : String(error);
-          await noteServerSetupFailure(
-            `Auto-fuse (server): ${msg} — retrying…`
-          );
-          return;
-        }
-      }
-
-      const decision = decideAutoFusion({
-        cashFusionEnabled,
-        autoFuseEnabled,
-        p2pFusionEnabled,
-        walletId,
-        torReady,
-      });
-      if (!decision.run || controller.signal.aborted) return;
-
-      // The wallet may have been switched or locked while Tor was queried.
-      if (session !== sessionRef.current) return;
-
-      // UTXO activity (send/receive/tx) must not wait on the rendezvous slot —
-      // that delayed wallet6 (id 4) after depth-met idle was cleared. Poll-only
-      // ticks still align to the open window so independent clients cluster.
-      // Server Auto uses the same idea: shared JoinPools entry window so 4
-      // wallets meet (P2P-style), not staggered 2–3 player partial rounds.
-      if (!freshSnapshot) {
-        const waitMs =
-          decision.mode === 'p2p'
-            ? msUntilAutoRendezvousOpen()
-            : msUntilServerAutoStart();
-        if (waitMs > 0) {
+        // Resolve the route live: integrated Tor can start after mount, and users
+        // may instead run Tor Browser/daemon or select a verified manual proxy.
+        let torReady = false;
+        let p2pTor: { host: string; port: number } | null = null;
+        let serverRunner: ReturnType<typeof buildServerRunner> | null = null;
+        if (p2pFusionEnabled) {
           try {
-            await sleepMs(waitMs, controller.signal);
-          } catch {
-            return;
-          }
-          if (session !== sessionRef.current || controller.signal.aborted) {
-            return;
-          }
-        }
-      }
-
-      const outcome = await startFusionRound({
-        walletId,
-        network,
-        mode: decision.mode,
-        trigger: 'auto',
-        fuseDepth,
-        freshSnapshot,
-        signal: controller.signal,
-        runners: {
-          runP2p: async (coins, signal, progress) => {
-            if (!p2pTor) {
-              throw new Error(
-                'No verified Tor route is available for P2P Fusion.'
-              );
+            const route = await resolveFusionTransport('nostr-relay', {
+              enabled: torEnabled,
+              auto: torAuto,
+              host: torHost,
+              manualPort: torPortManual,
+              autoStartIntegrated: true,
+            });
+            if (route.type === 'tor') {
+              torReady = true;
+              p2pTor = route.tor;
             }
-            progress?.onStatus?.('Checking Tor…');
-            return runP2pFusion({
-              walletId,
-              network,
-              utxos: coins,
-              relays: nostrRelays,
-              tor: p2pTor,
-              trigger: 'auto',
-              signal,
-              onStatus: (m) => {
-                reportFusionProgress(walletId, { status: m });
-                progress?.onStatus?.(m);
-              },
-              onPhase: (p) => {
-                reportFusionProgress(walletId, { phase: p });
-                progress?.onPhase?.(p);
+          } catch {
+            torReady = false;
+          }
+        } else {
+          const selectedServer =
+            savedFusionServer && fusionServers.includes(savedFusionServer)
+              ? savedFusionServer
+              : fusionServers[0];
+          if (!selectedServer) {
+            await noteServerSetupFailure(
+              'Auto-fuse (server): no fusion server selected — retrying…'
+            );
+            return;
+          }
+          try {
+            const inputLookupEndpoint = defaultInputLookupEndpoint(network);
+            const selected = await selectPreparedFusionServer({
+              selected: selectedServer,
+              configured: fusionServers,
+              prepare: async (server) => {
+                const target = parseFusionServerTarget(server);
+                const privacyDestination = serverFusionPrivacyDestination(
+                  target.host,
+                  inputLookupEndpoint.host
+                );
+                const route = await resolveFusionTransport(privacyDestination, {
+                  enabled: torEnabled,
+                  auto: torAuto,
+                  host: torHost,
+                  manualPort: torPortManual,
+                  autoStartIntegrated: true,
+                });
+                if (route.type === 'unavailable') {
+                  throw new Error(route.reason);
+                }
+                const tor = route.type === 'tor' ? route.tor : null;
+                const hello = await fetchFusionServerStatus(
+                  target.host,
+                  target.port,
+                  target.useSsl,
+                  tor ?? undefined
+                );
+                validateServerHello(hello);
+                return buildServerRunner({
+                  walletId,
+                  network,
+                  ...target,
+                  tor,
+                  inputLookupEndpoint,
+                  expectedHello: hello,
+                  joinInactiveTimeoutMs: SERVER_AUTOFUSE_INACTIVE_MS,
+                });
               },
             });
-          },
-          runServer: async (coins, signal, progress) => {
-            if (!serverRunner) {
-              throw new Error(
-                'No verified server Fusion route is available.'
-              );
-            }
-            progress?.onStatus?.(
-              'Auto-fuse (server): contacting fusion server…'
+            torReady = true;
+            serverRunner = selected.prepared;
+          } catch (error) {
+            torReady = false;
+            const msg = error instanceof Error ? error.message : String(error);
+            await noteServerSetupFailure(
+              `Auto-fuse (server): ${msg} — retrying…`
             );
-            return serverRunner(coins, signal, progress);
-          },
-        },
-      });
+            return;
+          }
+        }
 
-      // A round that finished after the wallet changed must not report into the
-      // new session.
-      if (session !== sessionRef.current) return;
-
-      if (outcome.status === 'failed') {
-        logError('AutoFusion.round', new Error(outcome.message), {
+        const decision = decideAutoFusion({
+          cashFusionEnabled,
+          autoFuseEnabled,
+          p2pFusionEnabled,
           walletId,
-          mode: outcome.mode,
+          torReady,
         });
-        // EC plugin re-starts autofusion on the next timer; re-queue promptly.
-        requeueMs = AUTO_FUSION_RETRY_MS + 400;
-      } else if (outcome.status === 'fused') {
-        if (outcome.warning) {
-          logError('AutoFusion.completionWarning', new Error(outcome.warning), {
+        if (!decision.run || controller.signal.aborted) return;
+
+        // The wallet may have been switched or locked while Tor was queried.
+        if (session !== sessionRef.current) return;
+
+        // UTXO activity (send/receive/tx) must not wait on the rendezvous slot —
+        // that delayed wallet6 (id 4) after depth-met idle was cleared. Poll-only
+        // ticks still align to the open window so independent clients cluster.
+        // Server Auto uses the same idea: shared JoinPools entry window so 4
+        // wallets meet (P2P-style), not staggered 2–3 player partial rounds.
+        if (!freshSnapshot) {
+          const waitMs =
+            decision.mode === 'p2p'
+              ? msUntilAutoRendezvousOpen()
+              : msUntilServerAutoStart();
+          if (waitMs > 0) {
+            try {
+              await sleepMs(waitMs, controller.signal);
+            } catch {
+              return;
+            }
+            if (session !== sessionRef.current || controller.signal.aborted) {
+              return;
+            }
+          }
+        }
+
+        const outcome = await startFusionRound({
+          walletId,
+          network,
+          mode: decision.mode,
+          trigger: 'auto',
+          fuseDepth,
+          freshSnapshot,
+          signal: controller.signal,
+          runners: {
+            runP2p: async (coins, signal, progress) => {
+              if (!p2pTor) {
+                throw new Error(
+                  'No verified Tor route is available for P2P Fusion.'
+                );
+              }
+              progress?.onStatus?.('Checking Tor…');
+              return runP2pFusion({
+                walletId,
+                network,
+                utxos: coins,
+                relays: nostrRelays,
+                tor: p2pTor,
+                trigger: 'auto',
+                signal,
+                onStatus: (m) => {
+                  reportFusionProgress(walletId, { status: m });
+                  progress?.onStatus?.(m);
+                },
+                onPhase: (p) => {
+                  reportFusionProgress(walletId, { phase: p });
+                  progress?.onPhase?.(p);
+                },
+              });
+            },
+            runServer: async (coins, signal, progress) => {
+              if (!serverRunner) {
+                throw new Error(
+                  'No verified server Fusion route is available.'
+                );
+              }
+              progress?.onStatus?.(
+                'Auto-fuse (server): contacting fusion server…'
+              );
+              return serverRunner(coins, signal, progress);
+            },
+          },
+        });
+
+        // A round that finished after the wallet changed must not report into the
+        // new session.
+        if (session !== sessionRef.current) return;
+
+        if (outcome.status === 'failed') {
+          logError('AutoFusion.round', new Error(outcome.message), {
             walletId,
             mode: outcome.mode,
-            txid: outcome.txid,
           });
+          // EC plugin re-starts autofusion on the next timer; re-queue promptly.
+          requeueMs = AUTO_FUSION_RETRY_MS + 400;
+        } else if (outcome.status === 'verification-pending') {
+          logError(
+            'AutoFusion.verificationPending',
+            new Error(outcome.message),
+            {
+              walletId,
+              mode: outcome.mode,
+              txid: outcome.txid,
+            }
+          );
+          // Wallet sync/activity performs reconciliation. Do not chain another
+          // fee-spending round while this signed transaction is still unknown.
+          requeueMs = null;
+        } else if (outcome.status === 'fused') {
+          if (outcome.warning) {
+            logError(
+              'AutoFusion.completionWarning',
+              new Error(outcome.warning),
+              {
+                walletId,
+                mode: outcome.mode,
+                txid: outcome.txid,
+              }
+            );
+          }
+          // Climb rounds-per-coin unattended: success → short rest → JoinPools again.
+          requeueMs = AUTO_FUSION_COOLDOWN_MS + 500;
+        } else if (outcome.status === 'cancelled') {
+          requeueMs = AUTO_FUSION_RETRY_MS + 400;
+        } else if (outcome.status === 'waiting-for-wallet') {
+          requeueMs = 4_000;
+        } else if (outcome.status === 'cooldown' || outcome.status === 'busy') {
+          requeueMs = AUTO_FUSION_RETRY_MS;
         }
-        // Climb rounds-per-coin unattended: success → short rest → JoinPools again.
-        requeueMs = AUTO_FUSION_COOLDOWN_MS + 500;
-      } else if (outcome.status === 'cancelled') {
-        requeueMs = AUTO_FUSION_RETRY_MS + 400;
-      } else if (outcome.status === 'waiting-for-wallet') {
-        requeueMs = 4_000;
-      } else if (outcome.status === 'cooldown' || outcome.status === 'busy') {
-        requeueMs = AUTO_FUSION_RETRY_MS;
+        // no-eligible-coins / depth-met: do not requeue — long idle stamp handles it.
+      } finally {
+        if (activeControllerRef.current === controller) {
+          activeControllerRef.current = null;
+        }
+        // Unattended loop: chain the next attempt without waiting only on the
+        // recovery poll. Matches Electron Cash keeping _fusions_auto filled.
+        if (
+          requeueMs !== null &&
+          cashFusionEnabled &&
+          autoFuseEnabled &&
+          walletId > 0
+        ) {
+          if (followUpTimerRef.current) clearTimeout(followUpTimerRef.current);
+          const delay = requeueMs;
+          followUpTimerRef.current = setTimeout(() => {
+            followUpTimerRef.current = null;
+            void tickRef.current().catch((error) => {
+              logError('AutoFusion.requeue', error, { walletId });
+            });
+          }, delay);
+        }
       }
-      // no-eligible-coins / depth-met: do not requeue — long idle stamp handles it.
-    } finally {
-      if (activeControllerRef.current === controller) {
-        activeControllerRef.current = null;
-      }
-      // Unattended loop: chain the next attempt without waiting only on the
-      // recovery poll. Matches Electron Cash keeping _fusions_auto filled.
-      if (
-        requeueMs !== null &&
-        cashFusionEnabled &&
-        autoFuseEnabled &&
-        walletId > 0
-      ) {
-        if (followUpTimerRef.current) clearTimeout(followUpTimerRef.current);
-        const delay = requeueMs;
-        followUpTimerRef.current = setTimeout(() => {
-          followUpTimerRef.current = null;
-          void tickRef.current().catch((error) => {
-            logError('AutoFusion.requeue', error, { walletId });
-          });
-        }, delay);
-      }
-    }
-  }, [
-    cashFusionEnabled,
-    autoFuseEnabled,
-    p2pFusionEnabled,
-    fuseDepth,
-    torEnabled,
-    torAuto,
-    torHost,
-    torPortManual,
-    nostrRelays,
-    savedFusionServer,
-    fusionServers,
-    walletId,
-    network,
-    policyReady,
-  ]);
+    },
+    [
+      cashFusionEnabled,
+      autoFuseEnabled,
+      p2pFusionEnabled,
+      fuseDepth,
+      torEnabled,
+      torAuto,
+      torHost,
+      torPortManual,
+      nostrRelays,
+      savedFusionServer,
+      fusionServers,
+      walletId,
+      network,
+      policyReady,
+    ]
+  );
   tickRef.current = tick;
 
   /**
@@ -428,7 +449,12 @@ export function useAutoFusion(policyReady = true): void {
    */
   const lastFuseDepthRef = useRef<number | null>(null);
   useEffect(() => {
-    if (!policyReady || !cashFusionEnabled || !autoFuseEnabled || walletId <= 0) {
+    if (
+      !policyReady ||
+      !cashFusionEnabled ||
+      !autoFuseEnabled ||
+      walletId <= 0
+    ) {
       lastFuseDepthRef.current = fuseDepth;
       return;
     }
@@ -448,10 +474,18 @@ export function useAutoFusion(policyReady = true): void {
         })
       )
       .catch(() => undefined);
-  }, [fuseDepth, walletId, cashFusionEnabled, autoFuseEnabled, policyReady, tick]);
+  }, [
+    fuseDepth,
+    walletId,
+    cashFusionEnabled,
+    autoFuseEnabled,
+    policyReady,
+    tick,
+  ]);
 
   useEffect(() => {
-    if (!policyReady || !cashFusionEnabled || !autoFuseEnabled || walletId <= 0) return;
+    if (!policyReady || !cashFusionEnabled || !autoFuseEnabled || walletId <= 0)
+      return;
     let disposed = false;
 
     const run = (freshSnapshot?: WalletUtxoSnapshot) => {
