@@ -77,7 +77,19 @@ jobs:
           target: google_apis
           arch: x86_64
           profile: pixel_2
-          script: npm run android:test:instrumented
+          script: |
+            adb wait-for-device
+            api_level=
+            for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+              api_level="$(adb shell getprop ro.build.version.sdk 2>/dev/null | tr -d '\r')" || true
+              if [ "$api_level" = "36" ]; then
+                break
+              fi
+              sleep 5
+            done
+            echo "Emulator API level: ${api_level:-unavailable}"
+            test "$api_level" = "36"
+            npm run android:test:instrumented
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
