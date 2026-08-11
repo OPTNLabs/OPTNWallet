@@ -66,6 +66,28 @@ const detailsCacheByTxid = new Map<
   { ts: number; data: TransactionDetails | null }
 >();
 const DETAILS_TTL_MS = 60000;
+const MAX_CACHE_ENTRIES = 500;
+
+function evictStale<K, V extends { ts: number }>(
+  map: Map<K, V>,
+  ttlMs: number,
+  maxEntries: number = MAX_CACHE_ENTRIES
+) {
+  const now = Date.now();
+  if (map.size <= maxEntries) {
+    for (const [k, v] of map) {
+      if (now - v.ts > ttlMs) map.delete(k);
+    }
+    return;
+  }
+  const sorted = [...map.entries()].sort((a, b) => a[1].ts - b[1].ts);
+  const toDelete = sorted.length - maxEntries;
+  for (let i = 0; i < sorted.length; i++) {
+    if (i < toDelete || now - sorted[i][1].ts > ttlMs) {
+      map.delete(sorted[i][0]);
+    }
+  }
+}
 // 250 × 12s hard timeout produced live failures:
 //   `requestMany(250) timed out after 12000ms`
 // Smaller chunks + ElectrumServer.requestManyTimeoutMs(N) keep large wallets
@@ -84,6 +106,7 @@ type ElectrumBatchCall = {
 };
 
 export function primeUTXOCache(address: string, utxos: UTXO[]) {
+  evictStale(cacheByAddr, UTXO_TTL_MS);
   cacheByAddr.set(address, { ts: Date.now(), data: utxos });
 }
 
@@ -257,6 +280,7 @@ const ElectrumService = {
         );
         if (Array.isArray(res)) {
           const arr = mapUtxoRows(address, res as Array<Record<string, unknown>>);
+          evictStale(cacheByAddr, UTXO_TTL_MS);
           cacheByAddr.set(address, { ts: Date.now(), data: arr });
           return arr;
         }
@@ -375,6 +399,7 @@ const ElectrumService = {
               address,
               response as Array<Record<string, unknown>>
             );
+            evictStale(cacheByAddr, UTXO_TTL_MS);
             cacheByAddr.set(address, { ts: Date.now(), data: utxos });
             results[address] = utxos;
             return;
@@ -537,6 +562,7 @@ const ElectrumService = {
           address
         );
         if (isTransactionHistoryArray(history)) {
+          evictStale(historyCacheByAddr, HISTORY_TTL_MS);
           historyCacheByAddr.set(address, { ts: Date.now(), data: history });
           return history;
         }
@@ -622,6 +648,7 @@ const ElectrumService = {
           }
 
           if (isTransactionHistoryArray(response)) {
+            evictStale(historyCacheByAddr, HISTORY_TTL_MS);
             historyCacheByAddr.set(address, {
               ts: Date.now(),
               data: response,
@@ -669,6 +696,7 @@ const ElectrumService = {
         );
         const visibility = toVisibilityFromResponse(response);
 
+        evictStale(visibilityCacheByTxid, VISIBILITY_TTL_MS);
         visibilityCacheByTxid.set(txHash, {
           ts: Date.now(),
           data: visibility,
@@ -747,13 +775,15 @@ const ElectrumService = {
               message.includes('not found') ||
               message.includes('missing')
             ) {
-              const visibility = { seen: false, confirmed: false };
-              visibilityCacheByTxid.set(txHash, {
-                ts: Date.now(),
-                data: visibility,
-              });
-              results[txHash] = visibility;
-              return;
+          const visibility = { seen: false, confirmed: false };
+          evictStale(visibilityCacheByTxid, VISIBILITY_TTL_MS);
+          visibilityCacheByTxid.set(txHash, {
+            ts: Date.now(),
+            data: visibility,
+          });
+          results[txHash] = visibility;
+          return;
+
             }
 
             logError('ElectrumService.getTransactionVisibilityMany', response, {
@@ -768,6 +798,7 @@ const ElectrumService = {
 
           try {
             const visibility = toVisibilityFromResponse(response);
+            evictStale(visibilityCacheByTxid, VISIBILITY_TTL_MS);
             visibilityCacheByTxid.set(txHash, {
               ts: Date.now(),
               data: visibility,
@@ -825,6 +856,7 @@ const ElectrumService = {
           ? null
           : await readTransactionDetailsFromDb(txHash);
         if (persisted) {
+          evictStale(detailsCacheByTxid, DETAILS_TTL_MS);
           detailsCacheByTxid.set(txHash, { ts: Date.now(), data: persisted });
           return persisted;
         }
@@ -859,6 +891,7 @@ const ElectrumService = {
         };
 
         await persistTransactionDetails(details);
+        evictStale(detailsCacheByTxid, DETAILS_TTL_MS);
         detailsCacheByTxid.set(txHash, { ts: Date.now(), data: details });
         return details;
       } catch (error) {
