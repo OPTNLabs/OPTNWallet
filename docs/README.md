@@ -4,8 +4,15 @@ Technical documentation for contributors and third-party integrators.
 
 ## Start Here
 
+- [Contributing Guide](../CONTRIBUTING.md)
+  - Setup, quality checks, Docker paths, and pull-request expectations.
 - [Build and Release Scripts](./build-and-release.md)
   - Commands for Android APK/AAB builds and iOS Capacitor preparation.
+- [Docker contributor lab](./docker-dev.md)
+  - Optional Docker env for contributors (`packages/docker-dev/`) — not the
+    end-user install path.
+- [Docker vs releases](./docker-release-model.md)
+  - Images update **from** git tags; installers stay the primary ship.
 - [Wallet Architecture](./wallet-architecture.md)
   - Runtime shape, major modules, and where responsibilities live.
 - [Wallet Ledger & Sync Design](./wallet-ledger-sync-design.md)

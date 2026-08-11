@@ -1,0 +1,87 @@
+# Pull the production-published *lab* image from GHCR (same git tag as a release).
+# Docker updates FROM our tags — see docs/docker-release-model.md
+#
+# Usage (repo root, after v1.2.3 is published):
+#   export OPTN_DOCKER_TAG=v1.2.3   # explicit tags are recommended; latest remains supported
+#   docker compose -f packages/docker-dev/docker-compose.release.yml pull
+#   docker compose -f packages/docker-dev/docker-compose.release.yml up -d
+#   docker compose -f packages/docker-dev/docker-compose.release.yml exec dev bash
+#
+# Override registry for forks:
+#   export OPTN_DOCKER_IMAGE=ghcr.io/myorg/optn-docker-dev
+
+name: optn-docker-dev-release
+
+services:
+  dev:
+    image: ${OPTN_DOCKER_IMAGE:-ghcr.io/optnlabs/optn-docker-dev}:${OPTN_DOCKER_TAG:-latest}
+    working_dir: /optn
+    user: "1000:1000"
+    volumes:
+      - ../..:/optn
+    ports:
+      - "${OPTN_VITE_PORT:-5173}:5173"
+    environment:
+      CI: "true"
+      OPTN_DOCKER_DEV: "1"
+    stdin_open: true
+    tty: true
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    command: ["sleep", "infinity"]
+
+  # VPS / fusion lab against published GHCR image (Tor mandatory).
+  # Requires a bind-mounted monorepo for entrypoint/supervisor scripts until
+  # those are baked into the image layers in a later cut.
+  #   docker compose -f packages/docker-dev/docker-compose.release.yml --profile fusion-lab up -d
+  tor:
+    profiles: ["fusion-lab"]
+    # Multi-arch manifest digest; update deliberately when changing Tor.
+    image: docker.io/dperson/torproxy@sha256:d8b5f1cf24f1b7a0aa334929a264b2606a107223dd0d51eb1cda8aae6fbeec53
+    restart: unless-stopped
+    ports:
+      - "${OPTN_TOR_HOST_PORT:-127.0.0.1:9050}:9050"
+    security_opt:
+      - no-new-privileges:true
+
+  fusion-lab:
+    profiles: ["fusion-lab"]
+    image: ${OPTN_DOCKER_IMAGE:-ghcr.io/optnlabs/optn-docker-dev}:${OPTN_DOCKER_TAG:-latest}
+    working_dir: /optn
+    user: "1000:1000"
+    depends_on:
+      - tor
+    volumes:
+      - ../..:/optn
+      - optn-fusion-data:/optn-data
+    environment:
+      OPTN_DOCKER_DEV: "1"
+      OPTN_ROOT: "/optn"
+      OPTN_TOR_REQUIRED: "1"
+      OPTN_TOR_SOCKS: "tor:9050"
+      OPTN_FUSION_MODE: "${OPTN_FUSION_MODE:-p2p}"
+      OPTN_NETWORK: "${OPTN_NETWORK:-chipnet}"
+      OPTN_DATA_DIR: "/optn-data"
+      OPTN_HEADLESS_CMD: "${OPTN_HEADLESS_CMD:-}"
+      OPTN_FUSION_HEALTH_FILE: "${OPTN_FUSION_HEALTH_FILE:-/optn-data/fusion-lab.health.json}"
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    entrypoint: ["bash", "/optn/packages/docker-dev/scripts/fusion-lab-entrypoint.sh"]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "const fs=require('fs');const p=process.env.OPTN_FUSION_HEALTH_FILE||'/optn-data/fusion-lab.health.json';try{const j=JSON.parse(fs.readFileSync(p,'utf8'));process.exit(j.status==='tor_down'?1:0)}catch{process.exit(1)}",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+
+volumes:
+  optn-fusion-data:
