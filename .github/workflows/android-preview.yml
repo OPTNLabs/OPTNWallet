@@ -79,6 +79,9 @@ jobs:
           profile: pixel_2
           # API 36 images can take over 15 minutes to boot on shared runners.
           emulator-boot-timeout: 1200
+          # API 36 may drop the ADB settings service immediately after boot;
+          # the smoke tests do not depend on animations being disabled.
+          disable-animations: false
           script: >-
             adb wait-for-device && api_level= && for attempt in 1 2 3 4 5 6 7
             8 9 10 11 12; do api_level="$(adb shell getprop
