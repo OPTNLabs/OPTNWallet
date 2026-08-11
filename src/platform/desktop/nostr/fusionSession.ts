@@ -63,8 +63,15 @@ import {
   verifyBchSchnorrHex,
   verifyCredentialOpening,
 } from './fusionBlindSchnorr';
-import { freshSaltCommitment } from './fusionComponentV4';
 import {
+  encodeInputComponent,
+  encodeOutputComponent,
+  freshSaltCommitment,
+  saltedComponentHashHex,
+} from './fusionComponentV4';
+import {
+  componentCommitmentOpeningMatches,
+  componentCredentialOpeningMatches,
   createBlameReport,
   findFaultInDisclosures,
   formatBlameAbortReason,
@@ -76,6 +83,7 @@ import {
   type BlameReport,
   type ComponentDisclosure,
   type ComponentDisclosureOpening,
+  type ComponentCommitmentOpening,
   type DisclosureFinding,
 } from './fusionBlame';
 import {
@@ -137,6 +145,16 @@ export type RoundMessage =
       requests: Array<{ index: number; e: string }>;
       /** Uncompressed Pedersen amount commitments (65-byte hex each). */
       amountCommitments: string[];
+      /**
+       * EC InitialCommitment fields, parallel to `requests`. The salted hash
+       * binds each anonymous Component to the attributed Pedersen point while
+       * revealing neither component until the abort-only opening phase.
+       */
+      componentCommitments: Array<{
+        index: number;
+        saltedComponentHash: string;
+        amountCommitment: string;
+      }>;
       /** Σ component nonces mod n (32-byte hex). */
       pedersenTotalNonce: string;
       /** Player excess fee the commitments must sum to. */
@@ -233,6 +251,8 @@ export type RoundMessage =
        * their outpoints are ignored for blame.
        */
       openings?: ComponentDisclosureOpening[];
+      /** EC salt + Pedersen nonce openings for every contributed component. */
+      componentOpenings?: ComponentCommitmentOpening[];
     } & MessageBinding);
 
 export interface RoundTransport {
@@ -399,6 +419,38 @@ function validCredentialResponseSlot(value: unknown): boolean {
   );
 }
 
+function validInitialComponentCommitment(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isSafeIntegerIn(value.index, 0, 1023) &&
+    typeof value.saltedComponentHash === 'string' &&
+    HEX_64_STRICT.test(value.saltedComponentHash) &&
+    typeof value.amountCommitment === 'string' &&
+    HEX_130.test(value.amountCommitment)
+  );
+}
+
+function validComponentCommitmentOpening(value: unknown): boolean {
+  if (
+    !isRecord(value) ||
+    (value.kind !== 'input' && value.kind !== 'output') ||
+    !isSafeIntegerIn(value.slotIndex, 0, 4095) ||
+    typeof value.openingHex !== 'string' ||
+    !HEX_128.test(value.openingHex) ||
+    typeof value.saltHex !== 'string' ||
+    !HEX_64_STRICT.test(value.saltHex) ||
+    typeof value.pedersenNonceHex !== 'string' ||
+    !HEX_64_STRICT.test(value.pedersenNonceHex)
+  ) {
+    return false;
+  }
+  return value.kind === 'input'
+    ? typeof value.outpoint === 'string' &&
+        /^[0-9a-f]{64}:\d+$/i.test(value.outpoint)
+    : typeof value.credentialSerial === 'string' &&
+        HEX_64_STRICT.test(value.credentialSerial);
+}
+
 /** Component fees matching Electron Cash / fusionRound sizing (sats/kB). */
 function componentFeeSats(sizeBytes: number, feerate: number): number {
   return Math.ceil((sizeBytes * feerate) / 1000);
@@ -409,45 +461,6 @@ function componentFeeSats(sizeBytes: number, feerate: number): number {
  * and the excess fee the coordinator will check. Amounts are signed EC-style:
  * input → +value−fee, output → −value−fee.
  */
-function buildPlayerPedersen(
-  contribution: PeerContribution,
-  feerate: number
-): {
-  amountCommitments: string[];
-  pedersenTotalNonce: string;
-  excessFee: number;
-} {
-  const commitments: string[] = [];
-  const nonces: string[] = [];
-  let excess = 0;
-  for (const input of contribution.inputs) {
-    const fee = componentFeeSats(108 + input.pubkey.length / 2, feerate);
-    const amount = input.value - fee;
-    excess += amount;
-    const c = pedersenCommit(amount);
-    commitments.push(c.commitmentHex);
-    nonces.push(c.nonceHex);
-  }
-  for (const output of contribution.outputs) {
-    const fee = componentFeeSats(9 + output.script.length / 2, feerate);
-    const amount = -(output.value + fee);
-    excess += amount;
-    const c = pedersenCommit(amount);
-    commitments.push(c.commitmentHex);
-    nonces.push(c.nonceHex);
-  }
-  if (excess < 0) {
-    throw new Error(
-      'pedersen excess fee is negative — outputs+fees exceed inputs'
-    );
-  }
-  return {
-    amountCommitments: commitments,
-    pedersenTotalNonce: sumNoncesHex(nonces),
-    excessFee: excess,
-  };
-}
-
 /** Create blind requests for every input and anonymous output component. */
 function buildComponentCredentialRequests(
   contribution: PeerContribution,
@@ -455,14 +468,24 @@ function buildComponentCredentialRequests(
   myPubkey: string,
   roundPubkey: string,
   blindNoncePoints: string[],
-  context: { session: string; network: 'mainnet' | 'chipnet'; tier: number }
+  context: { session: string; network: 'mainnet' | 'chipnet'; tier: number },
+  feerate: number
 ): {
   requests: Array<{ index: number; e: string }>;
+  componentCommitments: Array<{
+    index: number;
+    saltedComponentHash: string;
+    amountCommitment: string;
+  }>;
+  amountCommitments: string[];
+  pedersenTotalNonce: string;
+  excessFee: number;
   pending: BlindSignatureRequest[];
   indices: number[];
   outputSerials: string[];
   inputSaltCommitments: string[];
   outputSaltCommitments: string[];
+  componentOpenings: ComponentCommitmentOpening[];
 } {
   const base = peerCredentialSlotBase(participants, myPubkey);
   const componentCount =
@@ -478,11 +501,31 @@ function buildComponentCredentialRequests(
   const outputSerials: string[] = [];
   const inputSaltCommitments: string[] = [];
   const outputSaltCommitments: string[] = [];
+  const componentCommitments: Array<{
+    index: number;
+    saltedComponentHash: string;
+    amountCommitment: string;
+  }> = [];
+  const amountCommitments: string[] = [];
+  const pedersenNonces: string[] = [];
+  const componentOpenings: ComponentCommitmentOpening[] = [];
+  let excessFee = 0;
   contribution.inputs.forEach((input, i) => {
     const index = base + i;
     const r = blindNoncePoints[index];
     if (!r) throw new Error(`missing blind nonce point at slot ${index}`);
-    const { saltCommitmentHex } = freshSaltCommitment();
+    const { saltHex, saltCommitmentHex } = freshSaltCommitment();
+    const component = encodeInputComponent({
+      prevTxidDisplayHex: input.prevTxid,
+      prevIndex: input.prevIndex,
+      pubkeyHex: input.pubkey,
+      amount: input.value,
+      saltCommitmentHex,
+    });
+    const contributionAmount =
+      input.value - componentFeeSats(108 + input.pubkey.length / 2, feerate);
+    const commitment = pedersenCommit(contributionAmount);
+    excessFee += contributionAmount;
     inputSaltCommitments.push(saltCommitmentHex);
     const req = BlindSignatureRequest.create(
       roundPubkey,
@@ -492,6 +535,21 @@ function buildComponentCredentialRequests(
     requests.push({ index, e: req.requestHex() });
     pending.push(req);
     indices.push(index);
+    amountCommitments.push(commitment.commitmentHex);
+    pedersenNonces.push(commitment.nonceHex);
+    componentCommitments.push({
+      index,
+      saltedComponentHash: saltedComponentHashHex(saltHex, component),
+      amountCommitment: commitment.commitmentHex,
+    });
+    componentOpenings.push({
+      kind: 'input',
+      outpoint: inputKey(input),
+      slotIndex: index,
+      openingHex: req.openingHex(),
+      saltHex,
+      pedersenNonceHex: commitment.nonceHex,
+    });
   });
   contribution.outputs.forEach((output, i) => {
     const index = base + contribution.inputs.length + i;
@@ -502,7 +560,17 @@ function buildComponentCredentialRequests(
     const serial = Array.from(serialBytes, (b) =>
       b.toString(16).padStart(2, '0')
     ).join('');
-    const { saltCommitmentHex } = freshSaltCommitment();
+    const { saltHex, saltCommitmentHex } = freshSaltCommitment();
+    const component = encodeOutputComponent({
+      scriptHex: output.script,
+      amount: output.value,
+      saltCommitmentHex,
+    });
+    const contributionAmount = -(
+      output.value + componentFeeSats(9 + output.script.length / 2, feerate)
+    );
+    const commitment = pedersenCommit(contributionAmount);
+    excessFee += contributionAmount;
     outputSaltCommitments.push(saltCommitmentHex);
     const req = BlindSignatureRequest.create(
       roundPubkey,
@@ -513,14 +581,39 @@ function buildComponentCredentialRequests(
     pending.push(req);
     indices.push(index);
     outputSerials.push(serial);
+    amountCommitments.push(commitment.commitmentHex);
+    pedersenNonces.push(commitment.nonceHex);
+    componentCommitments.push({
+      index,
+      saltedComponentHash: saltedComponentHashHex(saltHex, component),
+      amountCommitment: commitment.commitmentHex,
+    });
+    componentOpenings.push({
+      kind: 'output',
+      credentialSerial: serial,
+      slotIndex: index,
+      openingHex: req.openingHex(),
+      saltHex,
+      pedersenNonceHex: commitment.nonceHex,
+    });
   });
+  if (excessFee < 0) {
+    throw new Error(
+      'pedersen excess fee is negative — outputs+fees exceed inputs'
+    );
+  }
   return {
     requests,
+    componentCommitments,
+    amountCommitments,
+    pedersenTotalNonce: sumNoncesHex(pedersenNonces),
+    excessFee,
     pending,
     indices,
     outputSerials,
     inputSaltCommitments,
     outputSaltCommitments,
+    componentOpenings,
   };
 }
 
@@ -719,6 +812,15 @@ export function parseRoundMessage(content: string): RoundMessage | null {
             return null;
           }
         }
+        if (message.componentOpenings !== undefined) {
+          if (
+            !Array.isArray(message.componentOpenings) ||
+            message.componentOpenings.length > MAX_COMPONENTS ||
+            !message.componentOpenings.every(validComponentCommitmentOpening)
+          ) {
+            return null;
+          }
+        }
         break;
       }
       case 'components_ready':
@@ -750,6 +852,11 @@ export function parseRoundMessage(content: string): RoundMessage | null {
           !message.amountCommitments.every(
             (c) => typeof c === 'string' && HEX_130.test(c)
           ) ||
+          !Array.isArray(message.componentCommitments) ||
+          message.componentCommitments.length !== message.requests.length ||
+          !message.componentCommitments.every(
+            validInitialComponentCommitment
+          ) ||
           typeof message.pedersenTotalNonce !== 'string' ||
           !HEX_64_STRICT.test(message.pedersenTotalNonce) ||
           !isSafeIntegerIn(message.excessFee, 0, MAX_MONEY) ||
@@ -768,7 +875,13 @@ export function parseRoundMessage(content: string): RoundMessage | null {
           message.amountCommitments.length !== message.requests.length ||
           message.requests.length > CREDENTIAL_SLOTS_PER_PEER ||
           new Set(message.requests.map((request) => request.index)).size !==
-            message.requests.length
+            message.requests.length ||
+          message.componentCommitments.some(
+            (commitment, index) =>
+              commitment.index !== message.requests[index].index ||
+              commitment.amountCommitment.toLowerCase() !==
+                message.amountCommitments[index].toLowerCase()
+          )
         ) {
           return null;
         }
@@ -1085,6 +1198,7 @@ function runParticipant(
     let myOutputSerials: string[] = [];
     /** Input openings for abort disclosure only — never sent on success. */
     let myInputOpenings: ComponentDisclosureOpening[] = [];
+    let myComponentOpenings: ComponentCommitmentOpening[] = [];
 
     const expectedOnionCount = (): number | null => {
       if (declaredOnionCounts.size < params.participants.length) return null;
@@ -1384,6 +1498,7 @@ function runParticipant(
         const check = verifyBlameReport(report, {
           session,
           participants: params.participants,
+          feerate: params.feerate,
         });
         if (!check.ok) return;
         params.onBlame?.(report);
@@ -1408,6 +1523,7 @@ function runParticipant(
             outpoints: params.myContribution.inputs.map(inputKey),
             serials: myOutputSerials,
             openings: myInputOpenings,
+            componentOpenings: myComponentOpenings,
           })
           .catch(() => undefined)
           .finally(() => void fail(abortError(message.reason), false));
@@ -1530,10 +1646,6 @@ function runParticipant(
         'Coordinator credential_params may have been dropped on Tor — ' +
           'keep Auto on; coordinator now re-sends params until all peers request.'
       );
-      const pedersen = buildPlayerPedersen(
-        params.myContribution,
-        params.feerate
-      );
       const credentialContext = {
         session,
         network: params.network ?? 'chipnet',
@@ -1545,16 +1657,23 @@ function runParticipant(
         outputSerials,
         inputSaltCommitments,
         outputSaltCommitments,
+        componentCommitments,
+        amountCommitments,
+        pedersenTotalNonce,
+        excessFee,
+        componentOpenings,
       } = buildComponentCredentialRequests(
         params.myContribution,
         params.participants,
         params.myPubkey,
         roundPubkey,
         blindNoncePoints,
-        credentialContext
+        credentialContext,
+        params.feerate
       );
       // Kept for the blame phase only. Never sent unless the round aborts.
       myOutputSerials = outputSerials;
+      myComponentOpenings = componentOpenings;
       myInputOpenings = params.myContribution.inputs.map((input, i) => ({
         outpoint: inputKey(input),
         slotIndex: requests[i].index,
@@ -1570,9 +1689,10 @@ function runParticipant(
         type: 'credential_request',
         session,
         requests,
-        amountCommitments: pedersen.amountCommitments,
-        pedersenTotalNonce: pedersen.pedersenTotalNonce,
-        excessFee: pedersen.excessFee,
+        amountCommitments,
+        componentCommitments,
+        pedersenTotalNonce,
+        excessFee,
         inputCount: params.myContribution.inputs.length,
         outputCount: params.myContribution.outputs.length,
       });
@@ -1754,7 +1874,8 @@ function runCoordinator(
       params.myPubkey,
       issuer.pubkeyHex,
       issuer.rPointsHex,
-      { session, network: params.network ?? 'chipnet', tier: params.tier }
+      { session, network: params.network ?? 'chipnet', tier: params.tier },
+      params.feerate
     );
     const selfSigs: string[] = [];
     for (let i = 0; i < selfBuilt.pending.length; i++) {
@@ -1768,15 +1889,11 @@ function runCoordinator(
       credentialSig: selfSigs[params.myContribution.inputs.length + i],
       saltCommitment: selfBuilt.outputSaltCommitments[i],
     }));
-    const selfPedersen = buildPlayerPedersen(
-      params.myContribution,
-      params.feerate
-    );
     if (
       !pedersenBalanceHolds(
-        selfPedersen.amountCommitments,
-        selfPedersen.excessFee,
-        selfPedersen.pedersenTotalNonce
+        selfBuilt.amountCommitments,
+        selfBuilt.excessFee,
+        selfBuilt.pedersenTotalNonce
       )
     ) {
       throw new Error('coordinator pedersen self-check failed');
@@ -1819,6 +1936,10 @@ function runCoordinator(
      * `verifyCredentialOpening` has nothing honest to compare against.
      */
     const signedChallengeBySlot = new Map<number, string>();
+    const componentCommitmentsByPeer = new Map<
+      string,
+      Map<number, { saltedComponentHash: string; amountCommitment: string }>
+    >();
     /** Outpoint → salt_commitment used when the input credential was verified. */
     const saltCommitmentByOutpoint = new Map<string, string>();
     const inputPool = (): FusionInputRef[] => [
@@ -1958,12 +2079,21 @@ function runCoordinator(
     const verifiedDisclosures = (): {
       verified: Map<string, ComponentDisclosure>;
       credentialFault: DisclosureFinding | null;
+      componentFault: DisclosureFinding | null;
     } => {
       const verified = new Map<string, ComponentDisclosure>();
       const poolByKey = new Map(
         anonymousInputs.map((input) => [inputKey(input), input] as const)
       );
+      const outputBySerial = new Map(
+        anonymousOutputBatches
+          .flat()
+          .map(
+            (output) => [output.credentialSerial.toLowerCase(), output] as const
+          )
+      );
       let credentialFault: DisclosureFinding | null = null;
+      let componentFault: DisclosureFinding | null = null;
       for (const peer of [...params.participants].sort()) {
         if (peer === params.myPubkey) continue;
         const raw = disclosuresByPeer.get(peer);
@@ -2045,13 +2175,85 @@ function runCoordinator(
             },
           };
         }
+        for (const opening of raw.componentOpenings ?? []) {
+          if (componentFault) break;
+          const requestHex = signedChallengeBySlot.get(opening.slotIndex);
+          const rPointHex = issuer.rPointsHex[opening.slotIndex];
+          const initial = componentCommitmentsByPeer
+            .get(peer)
+            ?.get(opening.slotIndex);
+          const slotOk =
+            opening.slotIndex >= base &&
+            opening.slotIndex < base + CREDENTIAL_SLOTS_PER_PEER;
+          if (!requestHex || !rPointHex || !initial || !slotOk) continue;
+
+          let evidence: Extract<
+            BlameEvidence,
+            { kind: 'invalid_component_commitment' }
+          > | null = null;
+          if (opening.kind === 'input') {
+            const input = poolByKey.get(opening.outpoint);
+            const saltCommitmentHex = saltCommitmentByOutpoint.get(
+              opening.outpoint
+            );
+            if (input && saltCommitmentHex) {
+              evidence = {
+                kind: 'invalid_component_commitment',
+                feerate: params.feerate,
+                component: { kind: 'input', input, saltCommitmentHex },
+                saltHex: opening.saltHex,
+                pedersenNonceHex: opening.pedersenNonceHex,
+                initialCommitment: initial,
+                roundPubkey: issuer.pubkeyHex,
+                rPointHex,
+                requestHex,
+                openingHex: opening.openingHex,
+              };
+            }
+          } else {
+            const output = outputBySerial.get(
+              opening.credentialSerial.toLowerCase()
+            );
+            if (output) {
+              evidence = {
+                kind: 'invalid_component_commitment',
+                feerate: params.feerate,
+                component: {
+                  kind: 'output',
+                  output: { script: output.script, value: output.value },
+                  saltCommitmentHex: output.saltCommitment,
+                  credentialSerial: output.credentialSerial,
+                },
+                saltHex: opening.saltHex,
+                pedersenNonceHex: opening.pedersenNonceHex,
+                initialCommitment: initial,
+                roundPubkey: issuer.pubkeyHex,
+                rPointHex,
+                requestHex,
+                openingHex: opening.openingHex,
+              };
+            }
+          }
+          if (
+            evidence &&
+            componentCredentialOpeningMatches(evidence) &&
+            !componentCommitmentOpeningMatches(evidence)
+          ) {
+            componentFault = {
+              accused: peer,
+              code: 'invalid_component_commitment',
+              evidence,
+            };
+          }
+        }
         verified.set(peer, {
           outpoints: proven,
           serials: [...raw.serials],
           openings: raw.openings,
+          componentOpenings: raw.componentOpenings,
         });
       }
-      return { verified, credentialFault };
+      return { verified, credentialFault, componentFault };
     };
     const runBlamePhase = async () => {
       // Nothing anonymous ever arrived, so there is nothing a disclosure could
@@ -2061,9 +2263,11 @@ function runCoordinator(
       if (anonymousInputs.length === 0 && signaturesByOutpoint.size === 0)
         return;
       await awaitDisclosures();
-      const { verified, credentialFault } = verifiedDisclosures();
+      const { verified, credentialFault, componentFault } =
+        verifiedDisclosures();
       // Bad openings first (C4): a forged proof is itself the fault.
       const finding =
+        componentFault ??
         credentialFault ??
         findFaultInDisclosures({
           participants: [...params.participants],
@@ -2082,6 +2286,7 @@ function runCoordinator(
       const check = verifyBlameReport(report, {
         session,
         participants: params.participants,
+        feerate: params.feerate,
       });
       // Our own report must survive the same verification every peer applies,
       // or it is worse than sending nothing.
@@ -2141,6 +2346,7 @@ function runCoordinator(
       const check = verifyBlameReport(report, {
         session,
         participants: params.participants,
+        feerate: params.feerate,
       });
       if (check.ok === false) {
         void fail(
@@ -2202,7 +2408,8 @@ function runCoordinator(
       }
       if (
         message.requests.length !== message.inputCount + message.outputCount ||
-        message.amountCommitments.length !== message.requests.length
+        message.amountCommitments.length !== message.requests.length ||
+        message.componentCommitments.length !== message.requests.length
       ) {
         throw new Error('credential component counts do not match commitments');
       }
@@ -2235,6 +2442,17 @@ function runCoordinator(
         }
       }
       const responses: Array<{ index: number; s: string }> = [];
+      const peerCommitments = new Map<
+        number,
+        { saltedComponentHash: string; amountCommitment: string }
+      >();
+      for (const commitment of message.componentCommitments) {
+        peerCommitments.set(commitment.index, {
+          saltedComponentHash: commitment.saltedComponentHash.toLowerCase(),
+          amountCommitment: commitment.amountCommitment.toLowerCase(),
+        });
+      }
+      componentCommitmentsByPeer.set(from, peerCommitments);
       for (const req of message.requests) {
         // Retain `e` for opening verification on abort (C3).
         signedChallengeBySlot.set(req.index, req.e);
@@ -2575,6 +2793,9 @@ function runCoordinator(
                   openingHex: entry.openingHex,
                 }))
               : [],
+            componentOpenings: message.componentOpenings
+              ? message.componentOpenings.map((entry) => ({ ...entry }))
+              : [],
           });
         }
         return;
@@ -2612,6 +2833,7 @@ function runCoordinator(
         const check = verifyBlameReport(report, {
           session,
           participants: params.participants,
+          feerate: params.feerate,
         });
         if (!check.ok) return; // ignore unverifiable frame attempts
         params.onBlame?.(report);

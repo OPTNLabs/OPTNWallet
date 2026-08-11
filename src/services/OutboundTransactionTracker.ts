@@ -47,7 +47,22 @@ export type OutboundTransactionRecord = {
   lastCheckedAt?: string | null;
   spentOutpoints: TrackedOutpoint[];
   lastError?: string | null;
+  /** Signed Tor-only transaction whose network visibility is still unknown. */
+  verificationPending?: boolean;
+  verificationMessage?: string | null;
 };
+
+export function isFusionVerificationPending(
+  record: OutboundTransactionRecord
+): boolean {
+  if (record.verificationPending === true) return true;
+  return (
+    record.privacyRoute === 'tor-only' &&
+    /fusion/i.test(record.source) &&
+    record.state !== 'seen' &&
+    !isDeterministicBroadcastError(record.lastError)
+  );
+}
 
 type TrackAttemptArgs = {
   rawTx: string;
@@ -317,6 +332,8 @@ const OutboundTransactionTracker = {
         ? existing.spentOutpoints
         : toTrackedOutpoints(args.spentInputs),
       lastError: existing?.lastError ?? null,
+      verificationPending: existing?.verificationPending ?? false,
+      verificationMessage: existing?.verificationMessage ?? null,
     };
     await saveRecord(record);
     return record;
@@ -363,6 +380,35 @@ const OutboundTransactionTracker = {
       updatedAt: new Date().toISOString(),
       lastCheckedAt: new Date().toISOString(),
       lastError,
+      verificationPending:
+        state === 'seen' || state === 'broadcasted'
+          ? false
+          : existing.verificationPending,
+      verificationMessage:
+        state === 'seen' || state === 'broadcasted'
+          ? null
+          : existing.verificationMessage,
+    };
+    await saveRecord(next);
+    return next;
+  },
+
+  async markVerificationPending(
+    txid: string,
+    message: string,
+    walletId?: number | null
+  ): Promise<OutboundTransactionRecord | null> {
+    const existing = await this.getByTxid(txid, walletId);
+    if (!existing) return null;
+    const now = new Date().toISOString();
+    const next: OutboundTransactionRecord = {
+      ...existing,
+      state: 'submitted',
+      updatedAt: now,
+      lastCheckedAt: now,
+      lastError: null,
+      verificationPending: true,
+      verificationMessage: message,
     };
     await saveRecord(next);
     return next;
@@ -387,17 +433,20 @@ const OutboundTransactionTracker = {
   },
 
   canRelease(record: OutboundTransactionRecord): boolean {
+    if (isFusionVerificationPending(record)) return false;
     if (record.state === 'seen' || record.state === 'broadcasted') return false;
     const ageMs = Date.now() - Date.parse(record.updatedAt);
     return !Number.isNaN(ageMs) && ageMs >= OUTBOUND_RELEASE_DELAY_MS;
   },
 
   canClear(record: OutboundTransactionRecord): boolean {
+    if (isFusionVerificationPending(record)) return false;
     if (isDeterministicBroadcastError(record.lastError)) return true;
     // submitted = we lost the broadcast race; broadcasted = already on wire.
     // User must be able to unblock Simple Send without waiting 20 minutes when
     // history sync has not written the tx row yet (common on hardware wallets).
-    if (record.state === 'submitted' || record.state === 'broadcasted') return true;
+    if (record.state === 'submitted' || record.state === 'broadcasted')
+      return true;
     return this.canRelease(record);
   },
 
@@ -493,6 +542,13 @@ const OutboundTransactionTracker = {
   ): Promise<OutboundTransactionRecord[]> {
     const records = await this.listAll(walletId);
     return records.filter((record) => record.state !== 'seen');
+  },
+
+  async findFusionVerificationPending(
+    walletId?: number | null
+  ): Promise<OutboundTransactionRecord | null> {
+    const records = await this.listActive(walletId);
+    return records.find(isFusionVerificationPending) ?? null;
   },
 
   async listReservedOutpoints(
