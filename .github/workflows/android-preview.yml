@@ -98,7 +98,8 @@ jobs:
             -gpu swiftshader_indirect \
             -no-snapshot \
             -noaudio \
-            -no-boot-anim >"$emulator_log" 2>&1 &
+            -no-boot-anim \
+            -accel off >"$emulator_log" 2>&1 &
           emulator_pid=$!
 
           cleanup() {
