@@ -451,6 +451,91 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
     expect(decoded.outputs).toHaveLength(6);
   });
 
+  it('forwards a full four-peer onion batch without serially exhausting the round deadline', async () => {
+    const peers = [1, 2, 3, 4].map((n) => {
+      const inKey = keypair(n * 10 + 1);
+      const outputKeys = Array.from({ length: 4 }, (_, i) =>
+        keypair(n * 100 + i + 2)
+      );
+      const round = keypair(n * 10 + 6);
+      const outputs = outputKeys.map((outputKey) => ({
+        script: p2pkhHex(outputKey.pubHex),
+        value: 24_875,
+      }));
+      const contribution: PeerContribution = {
+        inputs: [
+          {
+            prevTxid: `${n}${'c'.repeat(63)}`,
+            prevIndex: n,
+            value: 100_000,
+            pubkey: inKey.pubHex,
+          },
+        ],
+        outputs,
+      };
+      return {
+        round,
+        keys: new Map([
+          [inKey.pubHex, inKey.priv],
+          [round.pubHex, round.priv],
+        ]),
+        contribution,
+      };
+    });
+    const participants = peers.map((peer) => peer.round.pubHex);
+    const coordinator = coordinatorOf(participants);
+    const mixOrder = participants.filter((peer) => peer !== coordinator).sort();
+    const hub = new Hub();
+    let activeForwardSends = 0;
+    let maxConcurrentForwardSends = 0;
+
+    const results = await Promise.all(
+      peers.map((peer) => {
+        const base = hub.transportFor(peer.round.pubHex);
+        const transport: RoundTransport =
+          peer.round.pubHex === mixOrder[0]
+            ? {
+                ...base,
+                send: async (to, message) => {
+                  if (to === mixOrder[1] && message.type === 'onion_output') {
+                    activeForwardSends += 1;
+                    maxConcurrentForwardSends = Math.max(
+                      maxConcurrentForwardSends,
+                      activeForwardSends
+                    );
+                    try {
+                      await new Promise((resolve) => setTimeout(resolve, 100));
+                    } finally {
+                      activeForwardSends -= 1;
+                    }
+                  }
+                  return base.send(to, message);
+                },
+              }
+            : base;
+        return runFusionRound(
+          {
+            myPubkey: peer.round.pubHex,
+            participants,
+            network: 'chipnet',
+            tier: 100_000,
+            feerate: 1_000,
+            myContribution: peer.contribution,
+            keysByPubkey: peer.keys,
+            broadcast: async (txHex) => txidOf(txHex),
+            timeoutMs: 1_200,
+            jitterMs: [0, 0],
+          },
+          transport
+        );
+      })
+    );
+
+    expect(maxConcurrentForwardSends).toBeGreaterThan(1);
+    expect(new Set(results.map((result) => result.txid)).size).toBe(1);
+    expect(hub.activeHandlerCount()).toBe(0);
+  }, 10_000);
+
   it('re-sends a shuffled hop batch when one forward blob is lost', async () => {
     const peers = makePeers();
     const participants = peers.map((peer) => peer.round.pubHex);
