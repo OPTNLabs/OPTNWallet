@@ -421,10 +421,10 @@ export default class BcmrService {
           diskEntry
         );
       } catch (err) {
-        console.warn(
-          `Failed to store snapshot for ${authbase} from disk:`,
-          err
-        );
+        console.warn('[BcmrService] Failed to store snapshot from disk', {
+          authbase,
+          error: err,
+        });
       }
 
       const age =

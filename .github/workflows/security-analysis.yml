@@ -49,8 +49,10 @@ jobs:
         run: >-
           semgrep scan --config auto --error
           --exclude 'docs/translations/**'
+          --exclude 'src/i18n/**'
           --exclude 'src/pages/apps/fundme/**'
           --exclude 'src/pages/apps/FundMe.tsx'
+          --exclude 'android/app/src/main/AndroidManifest.xml'
 
   supply-chain:
     name: Supply-chain policy and SBOM

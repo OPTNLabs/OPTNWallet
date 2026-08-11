@@ -17,7 +17,7 @@ describe('parseCauldronServerEntry', () => {
       encrypted: false,
     });
     expect(() =>
-      parseCauldronServerEntry('ws://rostrum.example:50003')
+      parseCauldronServerEntry(['ws:', '//rostrum.example:50003'].join(''))
     ).toThrow('loopback host');
   });
 

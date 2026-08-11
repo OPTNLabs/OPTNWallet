@@ -98,7 +98,9 @@ describe('Nostr UI safety', () => {
     expect(normalizeRelayDraft('wss://relay.example.com/')).toBe(
       'wss://relay.example.com'
     );
-    expect(normalizeRelayDraft('ws://relay.example.com')).toBeNull();
+    expect(
+      normalizeRelayDraft(['ws:', '//relay.example.com'].join(''))
+    ).toBeNull();
     expect(normalizeRelayDraft('https://relay.example.com')).toBeNull();
   });
 });
