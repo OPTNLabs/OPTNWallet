@@ -1014,6 +1014,21 @@ const ONION_DECLARE_RESEND_MAX = P2P_ONION_DECLARE_RESEND_MAX;
 /** Bounded hop inject re-sends (not open-ended — that crushed Tor latency). */
 const ONION_OUTPUT_RESEND_MS = P2P_ONION_OUTPUT_RESEND_MS;
 const ONION_OUTPUT_RESEND_MAX = P2P_ONION_OUTPUT_RESEND_MAX;
+/**
+ * Forward each anonymous component through its own transport invocation, but
+ * avoid serially multiplying Tor relay latency across a 16-output round.
+ */
+const ONION_FORWARD_CONCURRENCY = 4;
+
+async function sendInBoundedWaves<T>(
+  items: readonly T[],
+  concurrency: number,
+  send: (item: T) => Promise<void>
+): Promise<void> {
+  for (let offset = 0; offset < items.length; offset += concurrency) {
+    await Promise.all(items.slice(offset, offset + concurrency).map(send));
+  }
+}
 
 function waitWithTimeout<T>(
   promise: Promise<T>,
@@ -1374,16 +1389,29 @@ function runParticipant(
           const forwardedPayloads = peeled.map((inner) =>
             btoa(String.fromCharCode(...inner))
           );
-          const sendForwardBatch = async () => {
-            for (const innerB64 of forwardedPayloads) {
-              await transport.send(nextPeeler, {
-                ...messageBinding(),
-                type: 'onion_output',
-                session,
-                onion: innerB64,
-                mixOrder,
-              });
-            }
+          let forwardSendInFlight: Promise<void> | null = null;
+          const sendForwardBatch = (): Promise<void> => {
+            if (forwardSendInFlight) return forwardSendInFlight;
+            const run = (async () => {
+              try {
+                await sendInBoundedWaves(
+                  forwardedPayloads,
+                  ONION_FORWARD_CONCURRENCY,
+                  (innerB64) =>
+                    transport.send(nextPeeler, {
+                      ...messageBinding(),
+                      type: 'onion_output',
+                      session,
+                      onion: innerB64,
+                      mixOrder,
+                    })
+                );
+              } finally {
+                forwardSendInFlight = null;
+              }
+            })();
+            forwardSendInFlight = run;
+            return run;
           };
           await sendForwardBatch();
           // A relay ACK proves storage, not that the next peeler observed the
@@ -1398,6 +1426,7 @@ function runParticipant(
               }
               return;
             }
+            if (forwardSendInFlight) return;
             forwardResendsLeft -= 1;
             void sendForwardBatch().catch(() => undefined);
           }, ONION_OUTPUT_RESEND_MS);
@@ -1794,17 +1823,27 @@ function runParticipant(
         injectPayloads.push(btoa(String.fromCharCode(...onion)));
       }
       // Resend path: no per-blob jitter (keeps recovery fast).
-      const sendInjectsRemote = async (withJitter: boolean) => {
-        for (const onionB64 of injectPayloads) {
-          await transport.send(firstPeeler, {
-            ...messageBinding(),
-            type: 'onion_output',
-            session,
-            onion: onionB64,
-            mixOrder,
-          });
-          if (withJitter) await jitterDelay(jMin, jMax);
-        }
+      let injectSendInFlight: Promise<void> | null = null;
+      const sendInjectsRemote = (withJitter: boolean): Promise<void> => {
+        if (injectSendInFlight) return injectSendInFlight;
+        const run = (async () => {
+          try {
+            for (const onionB64 of injectPayloads) {
+              await transport.send(firstPeeler, {
+                ...messageBinding(),
+                type: 'onion_output',
+                session,
+                onion: onionB64,
+                mixOrder,
+              });
+              if (withJitter) await jitterDelay(jMin, jMax);
+            }
+          } finally {
+            injectSendInFlight = null;
+          }
+        })();
+        injectSendInFlight = run;
+        return run;
       };
       // If we are first peeler, feed locally once only (no self gift-wrap).
       // Re-sends would double-count blobs in collectedOnions.
@@ -1830,6 +1869,7 @@ function runParticipant(
             }
             return;
           }
+          if (injectSendInFlight) return;
           outputResendsLeft -= 1;
           void sendInjectsRemote(false).catch(() => undefined);
         }, ONION_OUTPUT_RESEND_MS);
@@ -3040,17 +3080,27 @@ function runCoordinator(
         const onion = await onionWrap(payload, mixOrder);
         injectPayloads.push(btoa(String.fromCharCode(...onion)));
       }
-      const sendInjects = async (withJitter: boolean) => {
-        for (const onionB64 of injectPayloads) {
-          await transport.send(firstPeeler, {
-            ...messageBinding(),
-            type: 'onion_output',
-            session,
-            onion: onionB64,
-            mixOrder,
-          });
-          if (withJitter) await jitterDelay(jMin, jMax);
-        }
+      let injectSendInFlight: Promise<void> | null = null;
+      const sendInjects = (withJitter: boolean): Promise<void> => {
+        if (injectSendInFlight) return injectSendInFlight;
+        const run = (async () => {
+          try {
+            for (const onionB64 of injectPayloads) {
+              await transport.send(firstPeeler, {
+                ...messageBinding(),
+                type: 'onion_output',
+                session,
+                onion: onionB64,
+                mixOrder,
+              });
+              if (withJitter) await jitterDelay(jMin, jMax);
+            }
+          } finally {
+            injectSendInFlight = null;
+          }
+        })();
+        injectSendInFlight = run;
+        return run;
       };
       await sendInjects(true);
       // Bounded hop re-sends only — open-ended every 2s crushed Tor (~90s rounds).
@@ -3063,6 +3113,7 @@ function runCoordinator(
           }
           return;
         }
+        if (injectSendInFlight) return;
         outputResendsLeft -= 1;
         void sendInjects(false).catch(() => undefined);
       }, ONION_OUTPUT_RESEND_MS);
