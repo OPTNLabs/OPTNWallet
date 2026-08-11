@@ -34,7 +34,8 @@ concurrency:
 jobs:
   build-desktop-preview:
     name: Preview (${{ matrix.platform }})
-    timeout-minutes: 40
+    # Uncached Linux AppImage packaging can take slightly over 40 minutes.
+    timeout-minutes: 60
     env:
       # macOS runners have less memory; the Vite frontend build (Tauri beforeBuildCommand)
       # OOMs at Node's default heap. Raise it for all platforms (harmless on Windows/Linux).

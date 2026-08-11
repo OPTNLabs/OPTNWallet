@@ -125,6 +125,14 @@ describe('release workflow', () => {
     );
   });
 
+  it('allows Linux AppImage packaging to finish on uncached preview runners', () => {
+    const previewTimeout = Number(
+      desktopPreviewWorkflow.match(/timeout-minutes:\s*(\d+)/)?.[1] ?? 0
+    );
+
+    expect(previewTimeout).toBeGreaterThanOrEqual(60);
+  });
+
   it('ships Linux x64 and ARM64 AppImages as the portable all-distro Linux path', () => {
     expect(workflow).toContain('target: x86_64-pc-windows-msvc');
     expect(workflow).toContain('target: x86_64-unknown-linux-gnu');
