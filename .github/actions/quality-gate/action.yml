@@ -57,9 +57,26 @@ runs:
       shell: bash
       run: npm run test:core
 
+    - name: App tests
+      shell: bash
+      run: npm run test:apps
+
     - name: UI tests
       shell: bash
       run: npm run test:ui
+
+    - name: Coverage gate
+      shell: bash
+      run: npm run test:coverage
+
+    - name: Upload coverage summary
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: vitest-coverage
+        path: coverage/**
+        retention-days: 7
+        if-no-files-found: warn
 
     - name: Addon validation
       shell: bash

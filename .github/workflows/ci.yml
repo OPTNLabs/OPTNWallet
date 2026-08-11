@@ -67,6 +67,49 @@ jobs:
       - name: Dependency audit (prod, critical+)
         run: npm audit --omit=dev --audit-level=critical
 
+  web-ci:
+    needs: [secrets-scan, dependency-audit]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+  secrets-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Gitleaks scan
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/path:ro" \
+            -w /path \
+            ghcr.io/gitleaks/gitleaks@sha256:b5918eb91b8d2473cec722f066abb4352e4ffdc4ec9f4283ec143aba9ec9ebc4 \
+            git --redact --config .gitleaks.toml --log-opts="--all" .
+
+  dependency-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install deps
+        run: |
+          for attempt in 1 2 3; do
+            if npm ci; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "npm ci attempt $attempt failed; retrying"
+              sleep $((attempt * 10))
+            fi
+          done
+          exit 1
+
       - name: Dependency policy
         run: npm run deps:check
 
@@ -77,8 +120,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Canonical quality gate
-        uses: ./.github/actions/quality-gate
+      - name: Unit tests
+        run: npm run test:core
+
+      - name: Addon manifest validation
+        run: npm run addons:validate
+
+      - name: Build web (sanity)
+        run: npm run build
 
       - name: Upload web dist
         if: github.event_name == 'push' && always()

@@ -13,6 +13,7 @@ dist
 dist-ssr
 dist-extension-chrome
 dist-extension-firefox
+coverage/
 *.local
 vite.config.js
 vite.config.d.ts
@@ -32,7 +33,6 @@ tsconfig.tsbuildinfo
 *.code-workspace
 .env
 .env.*
-!.env.example
 
 # Android signing material (never commit)
 *.keystore
