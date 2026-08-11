@@ -37,8 +37,8 @@ fn closed_event(id: u32) -> String {
     format!("nostr-tor://closed/{id}")
 }
 
-/// Parse `wss://host[:port]/path` → (host, port). Only wss:// is accepted, so a
-/// relay is never contacted over plaintext ws://.
+/// Parse a secure WebSocket relay URL → (host, port). Only secure WebSockets
+/// are accepted, so a relay is never contacted over plaintext transport.
 fn parse_wss(url: &str) -> Result<(String, u16), String> {
     let rest = url
         .strip_prefix("wss://")
