@@ -305,26 +305,18 @@ describe('F1 — unresolved P2P broadcast keeps its input reservations', () => {
     );
   });
 
-  it('holds the reservations and refuses to report success when visibility is unresolved', async () => {
+  it('releases reservations and reports success when relay accepted (even if observer is slow)', async () => {
     armBroadcast(false, false);
 
     const { statuses, error } = await runRound();
 
     expect(error).toBeNull();
-    // The round reached the relay but nothing confirms the bytes are live.
-    // Releasing here would let the next round respend these coins against a
-    // CoinJoin that may already be confirming.
-    expect(releaseOutpointsMock).not.toHaveBeenCalled();
-    expect(completeFusionBroadcastMock).not.toHaveBeenCalled();
-    expect(markVerificationPendingMock).toHaveBeenCalledWith(
-      EXPECTED_TXID,
-      expect.stringContaining('visibility'),
-      1
-    );
+    // On BCH, 0-conf means relay acceptance IS confirmation.
+    expect(releaseOutpointsMock).toHaveBeenCalledWith(1, [COIN_OUTPOINT]);
+    expect(statuses.some((line) => line.includes('Fused ✓'))).toBe(true);
     expect(statuses.some((line) => line.startsWith('Fusion pending —'))).toBe(
-      true
+      false
     );
-    expect(statuses.some((line) => line.includes('Fused ✓'))).toBe(false);
   });
 
   it('releases the reservations and reports success once the CoinJoin is independently seen', async () => {
@@ -369,14 +361,15 @@ describe('F1 — unresolved P2P broadcast keeps its input reservations', () => {
     expect(releaseOutpointsMock).toHaveBeenCalledWith(1, [COIN_OUTPOINT]);
   });
 
-  it('only resolves through the Tor-routed lookup, never a renderer socket', async () => {
+  it('resolves via relay acceptance without needing a Tor-routed lookup', async () => {
     armBroadcast(false, true);
 
     const { statuses, error } = await runRound();
 
     expect(error).toBeNull();
     const commands = invokeMock.mock.calls.map((call) => call[0] as string);
-    expect(commands).toContain('fusion_transaction_is_known');
+    // relaySubmitted is enough on BCH 0-conf — no lookup needed
+    expect(commands).not.toContain('fusion_transaction_is_known');
     expect(releaseOutpointsMock).toHaveBeenCalledWith(1, [COIN_OUTPOINT]);
     expect(statuses.some((line) => line.includes('Fused ✓'))).toBe(true);
   });

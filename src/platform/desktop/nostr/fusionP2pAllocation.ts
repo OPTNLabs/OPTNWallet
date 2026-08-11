@@ -1,9 +1,9 @@
 import type { FusionInputRef } from './fusionRound';
 
 const DEFAULT_MIN_OUTPUT = 10_000;
-const MAX_OUTPUTS_PER_PEER = 4;
+const MAX_OUTPUTS_PER_PEER = 6;
 const MAX_PARTICIPANTS = 20;
-const MAX_INPUTS_PER_PEER = 100;
+const MAX_INPUTS_PER_PEER = 20;
 const TX_OVERHEAD_BYTES = 10;
 const P2PKH_OUTPUT_BYTES = 34;
 

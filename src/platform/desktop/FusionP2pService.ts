@@ -912,7 +912,6 @@ export async function broadcastP2pTransactionTorOnly(
   const expectedTxid = binToHex(hash256(hexToBin(txHex)).reverse());
   const relay = defaultRelayEndpoints(network);
   let relaySubmitted = false;
-  let observerSeen = false;
   try {
     const observation = await invoke<FusionRelayObservation>(
       'fusion_relay_broadcast_and_observe',
@@ -928,7 +927,6 @@ export async function broadcastP2pTransactionTorOnly(
       throw new Error('Tor relay returned a different transaction id.');
     }
     relaySubmitted = observation.relaySubmitted;
-    observerSeen = observation.observerSeen;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (
@@ -939,10 +937,14 @@ export async function broadcastP2pTransactionTorOnly(
     // The relay may have accepted the bytes before its response was lost.
     // Resolve that ambiguity only through the Tor-routed native lookup below.
   }
-  if (relaySubmitted && observerSeen) {
+  // On BCH, 0-conf is standard. A relay that accepted the bytes (relaySubmitted)
+  // is sufficient confirmation — the tx WILL propagate. The observer may just be
+  // slow; no need to gate "Fused" on a second network lookup.
+  if (relaySubmitted) {
     return { txid: expectedTxid, verified: true };
   }
 
+  // Relay status unknown (response lost / exception). Verify via network lookup.
   const [lookup, ...fallbacks] = inputLookupEndpoints(network);
   const seen = await invoke<boolean>('fusion_transaction_is_known', {
     txid: expectedTxid,

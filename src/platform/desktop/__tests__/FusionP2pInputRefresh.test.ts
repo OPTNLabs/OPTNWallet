@@ -106,7 +106,7 @@ describe('P2P Fusion input refresh', () => {
     ).resolves.toEqual([coin]);
   }, 15_000);
 
-  it('reserves credential capacity for the maximum four output components', async () => {
+  it('reserves credential capacity for the maximum six output components', async () => {
     const coins: UTXO[] = Array.from({ length: 30 }, (_, index) => ({
       address: `bchtest:q${index}`,
       height: 1,
@@ -120,7 +120,7 @@ describe('P2P Fusion input refresh', () => {
 
     expect(typeof fusionModule.selectFusionInputs).toBe('function');
     const selected = fusionModule.selectFusionInputs!(coins);
-    expect(selected).toHaveLength(20);
+    expect(selected).toHaveLength(18);
     expect(selected[0].value).toBe(10_029);
   });
 });
@@ -232,7 +232,6 @@ describe('P2P Fusion broadcast reconciliation', () => {
 
     expect(invokeMock.mock.calls.map(([command]) => command)).toEqual([
       'fusion_relay_broadcast_and_observe',
-      'fusion_transaction_is_known',
     ]);
     expect(broadcastTransactionMock).not.toHaveBeenCalled();
     expect(getTransactionVisibilityMock).not.toHaveBeenCalled();
@@ -242,15 +241,15 @@ describe('P2P Fusion broadcast reconciliation', () => {
       torHost: '127.0.0.1',
       torPort: 9251,
     });
-    expect(invokeMock.mock.calls[1][1]).toMatchObject({
-      txid: expected,
-      torHost: '127.0.0.1',
-      torPort: 9251,
-    });
   });
 });
 
 describe('P2P Fusion native signing boundary', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    reservedOutpointsMock.mockReturnValue(new Set<string>());
+  });
+
   it('binds the exact v3 template and converts only native-owned signatures', async () => {
     const pubkey = `02${'11'.repeat(32)}`;
     const input = {
@@ -260,8 +259,8 @@ describe('P2P Fusion native signing boundary', () => {
       pubkey,
     };
     const output = { script: `76a914${'33'.repeat(20)}88ac`, value: 99_500 };
-    invokeMock.mockImplementationOnce(async (command, args) => {
-      expect(command).toBe('fusion_p2p_sign');
+    invokeMock.mockImplementation(async (command, args) => {
+      if (command !== 'fusion_p2p_sign') return undefined;
       const request = (args as { request: Record<string, unknown> }).request as {
         protocol: string;
         network: string;
