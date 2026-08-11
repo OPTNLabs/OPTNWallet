@@ -1,19 +1,21 @@
 # Desktop E2E testing (WebdriverIO + tauri-driver)
 
-## Status: real harness, launch smoke verified; onboarding spec added
+## Status: real harness, launch smoke verified; Linux CI job enabled
 
 `npm run test:e2e` runs a genuine WebdriverIO E2E test against the actual
-built Tauri binary — confirmed passing (not simulated, not assumed) by
+built Tauri binary. The command sanitizes inherited Snap GTK/WebKit variables,
+which prevents a developer-tool runtime from overriding the system libraries.
+The harness was confirmed passing (not simulated, not assumed) by
 launching the real app and asserting the landing screen's `<h1>OPTN
 Wallet</h1>` is visible via a live WebDriver session. The suite now also
 includes coverage for the watch-only onboarding preview, its empty xPub
-validation, and return navigation to the wallet picker.
+validation, return navigation to the wallet picker, create-wallet seed
+confirmation rejection/back-out, and import-wallet phrase/setup validation.
 
 This is the officially-recommended Tauri E2E path per
 [v2.tauri.app/develop/tests/webdriver](https://v2.tauri.app/develop/tests/webdriver/)
 and [webdriver.io/docs/desktop-testing/tauri](https://webdriver.io/docs/desktop-testing/tauri).
 Two setups exist:
-
 - **`@wdio/tauri-service`** (embedded driver) — needs a new Rust dependency
   (`tauri-plugin-wdio-webdriver`) added to `src-tauri/Cargo.toml` and
   registered in `src-tauri/src/lib.rs`. Not used here — adding a new Rust
@@ -53,14 +55,6 @@ export TAURI_E2E_NATIVE_DRIVER_PATH="/path/to/msedgedriver.exe"  # Windows only
 npm run test:e2e
 ```
 
-The create → lock → reopen lifecycle is intentionally mutation-gated. Its
-runner creates a temporary desktop data profile, removes Snap GTK environment
-variables when needed, and deletes the profile after the run:
-
-```sh
-npm run test:e2e:lifecycle
-```
-
 On Linux, `TAURI_E2E_NATIVE_DRIVER_PATH` isn't needed — `tauri-driver`
 launches `WebKitWebDriver` itself if it's on `PATH`.
 
@@ -69,16 +63,22 @@ launches `WebKitWebDriver` itself if it's on `PATH`.
 - **Verified**: app launch, WebDriver session, and DOM queries against the
   real rendered app.
 - **Added**: watch-only preview navigation, client-side validation, return
-  navigation to the wallet picker, and the opt-in create → lock → reopen
-  lifecycle with wrong-password coverage.
+  navigation to the wallet picker; create-wallet seed confirmation rejection
+  and back-out; import-wallet word-count, missing-word, invalid-mnemonic,
+  wallet-name, and password-mismatch validation; and the opt-in create → lock
+  → reopen lifecycle with wrong-password coverage.
+- **CI**: the Linux desktop-preview workflow builds the unbundled Tauri binary,
+  runs `tauri-driver` under `xvfb`, and executes the non-mutating E2E suite on
+  every desktop-preview push or pull request.
 - Biometric unlock is out of scope for WebDriver automation — it's a native OS
   dialog outside the webview and generally can't be driven by WebDriver; that
   one stays a manual test.
 
 ## CI
 
-Not wired into GitHub Actions in this pass — running a Tauri app inside a
-WebDriver session in CI needs a display server (`Xvfb` on Linux runners) and
-the exact matching `msedgedriver`/`WebKitWebDriver` version pinned to
-whatever WebView2/WebKitGTK version the CI image ships, which is worth
-setting up deliberately rather than bolting on here. Tracked as a follow-up.
+The non-mutating suite runs in `.github/workflows/desktop-preview.yml` on
+Ubuntu 22.04. The job installs the matching WebKitGTK WebDriver package,
+builds the debug binary with `--no-bundle`, installs `tauri-driver`, and runs
+the suite under `xvfb`. The create → lock → reopen scenario remains opt-in via
+`TAURI_E2E_ALLOW_MUTATION=1` and is intentionally not enabled in CI because it
+creates and deletes wallet data inside the desktop profile.

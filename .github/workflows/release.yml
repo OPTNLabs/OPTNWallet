@@ -10,21 +10,6 @@ on:
         description: Release tag to publish (for example, v1.7.0)
         required: true
         default: v1.7.0
-      publish_to_google_play:
-        description: Upload the signed AAB to Google Play using the selected track
-        required: true
-        type: boolean
-        default: false
-      play_track:
-        description: Google Play track for the manual upload
-        required: true
-        type: choice
-        options:
-          - internal
-          - alpha
-          - beta
-          - production
-        default: internal
 
 env:
   RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
@@ -55,8 +40,17 @@ jobs:
             exit 1
           }
 
-      - name: Canonical quality gate
-        uses: ./.github/actions/quality-gate
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Quality gate
+        run: npm run lint:core && npm run typecheck:core && npm run test:core && npm run build
 
   android:
     name: Build Android release
@@ -179,14 +173,10 @@ jobs:
             target: aarch64-apple-darwin
             artifact-name: desktop-macos-arm
             bundle-args: ''
-          - platform: macos-latest
-            target: x86_64-apple-darwin
-            artifact-name: desktop-macos-intel
-            bundle-args: ''
           - platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             artifact-name: desktop-linux
-            bundle-args: '--bundles appimage,deb,rpm'
+            bundle-args: '--bundles deb,rpm'
     runs-on: ${{ matrix.platform }}
     permissions:
       contents: read
@@ -339,8 +329,8 @@ jobs:
 
             ### Downloads
             - Windows x64: `.exe` and `.msi` installers
-            - macOS Apple Silicon and Intel: `.dmg`
-            - Linux x64: `.AppImage`, native `.deb`, and `.rpm` packages
+            - macOS Apple Silicon: `.dmg`
+            - Linux x64: native `.deb` and `.rpm` packages
             ${{ needs.android.outputs.signed == 'true' && '- Android: signed `.apk` for direct installation and `.aab` for Play distribution' || '- Android: not included yet; configure the permanent production keystore and rerun the release workflow' }}
 
             iOS is not included in this release. Build-from-source instructions are in [docs/build-and-release.md](https://github.com/${{ github.repository }}/blob/${{ env.RELEASE_TAG }}/docs/build-and-release.md).
@@ -351,34 +341,3 @@ jobs:
             release-sha256.txt
           fail_on_unmatched_files: true
           prerelease: false
-
-  google-play:
-    name: Upload Android AAB to Google Play
-    needs: [android, publish]
-    if: github.event_name == 'workflow_dispatch' && inputs.publish_to_google_play == true && needs.android.outputs.signed == 'true'
-    runs-on: ubuntu-latest
-    environment: production
-    permissions:
-      contents: read
-    steps:
-      - name: Download signed Android release
-        uses: actions/download-artifact@v8
-        with:
-          name: android-release
-          path: android-release
-
-      - name: Locate signed AAB
-        id: aab
-        run: |
-          AAB_PATH="$(find android-release -type f -name '*.aab' -print -quit)"
-          test -n "$AAB_PATH"
-          echo "path=$AAB_PATH" >> "$GITHUB_OUTPUT"
-
-      - name: Upload AAB to Google Play
-        uses: r0adkll/upload-google-play@v1
-        with:
-          serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
-          packageName: optn.wallet.app
-          releaseFiles: ${{ steps.aab.outputs.path }}
-          track: ${{ inputs.play_track }}
-          status: completed

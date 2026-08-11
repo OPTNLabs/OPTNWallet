@@ -19,10 +19,7 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <meta
-      http-equiv="Content-Security-Policy"
-      content="default-src 'none'; script-src 'unsafe-inline'; connect-src 'none'; img-src data:; style-src 'unsafe-inline';"
-    />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; connect-src 'none'; img-src data:; style-src 'unsafe-inline';" />
   </head>
   <body>
     <script>
@@ -31,39 +28,9 @@
 
         var pendingRequests = Object.create(null);
         var nextRequestId = 1;
-        var addonLocale = 'en';
-        var addonMessages = Object.create(null);
-        var localeListeners = [];
 
         function post(message) {
           parent.postMessage(message, '*');
-        }
-
-        function applyLocale(data) {
-          if (!data || typeof data.locale !== 'string') return;
-
-          var nextMessages = Object.create(null);
-          if (
-            data.messages &&
-            typeof data.messages === 'object' &&
-            !Array.isArray(data.messages)
-          ) {
-            Object.keys(data.messages).forEach(function (key) {
-              if (typeof data.messages[key] === 'string') {
-                nextMessages[key] = data.messages[key];
-              }
-            });
-          }
-
-          addonLocale = data.locale;
-          addonMessages = nextMessages;
-          localeListeners.slice().forEach(function (listener) {
-            try {
-              listener(addonLocale);
-            } catch (_err) {
-              // A listener must not prevent the bridge from updating.
-            }
-          });
         }
 
         // The API surface the addon's own code calls. Every call is a
@@ -85,32 +52,6 @@
               });
             });
           },
-          getLocale: function () {
-            return addonLocale;
-          },
-          t: function (key, fallback, values) {
-            var message = Object.prototype.hasOwnProperty.call(
-              addonMessages,
-              key
-            )
-              ? addonMessages[key]
-              : fallback;
-            if (!values || typeof message !== 'string') return message;
-            return message.replace(/\{(\w+)\}/g, function (_match, name) {
-              return Object.prototype.hasOwnProperty.call(values, name)
-                ? String(values[name])
-                : _match;
-            });
-          },
-          onLocaleChange: function (listener) {
-            if (typeof listener !== 'function') return function () {};
-            localeListeners.push(listener);
-            return function () {
-              localeListeners = localeListeners.filter(function (item) {
-                return item !== listener;
-              });
-            };
-          },
         };
 
         window.addEventListener('message', function (event) {
@@ -119,7 +60,6 @@
 
           if (data.type === 'optn-addon-init') {
             try {
-              applyLocale(data);
               // Execute the addon's bundle in THIS realm (opaque origin, no
               // allow-same-origin) by inserting it as a real <script>
               // element (not the global string-to-code function) so it gets
@@ -139,20 +79,12 @@
             return;
           }
 
-          if (data.type === 'optn-addon-locale') {
-            applyLocale(data);
-            return;
-          }
-
           if (data.type === 'optn-addon-sdk-result') {
             var pending = pendingRequests[data.requestId];
             if (!pending) return;
             delete pendingRequests[data.requestId];
             if (data.ok) pending.resolve(data.result);
-            else
-              pending.reject(
-                new Error(String(data.error || 'Addon SDK call failed'))
-              );
+            else pending.reject(new Error(String(data.error || 'Addon SDK call failed')));
             return;
           }
         });
