@@ -18,8 +18,19 @@ import {
   verifyBchSchnorrHex,
   verifyCredentialOpening,
 } from './fusionBlindSchnorr';
-import { pedersenBalanceHolds } from './fusionPedersen';
-import type { FusionInputRef } from './fusionRound';
+import {
+  componentBlindMessageHash,
+  encodeInputComponent,
+  encodeOutputComponent,
+  saltCommitmentFromSalt,
+  saltedComponentHashHex,
+} from './fusionComponentV4';
+import {
+  pedersenBalanceHolds,
+  pedersenCommitWithNonce,
+} from './fusionPedersen';
+import type { FusionInputRef, FusionOutputRef } from './fusionRound';
+import { binToHex, hexToBin } from '@bitauth/libauth';
 
 const HEX_64 = /^[0-9a-f]{64}$/i;
 const HEX_66 = /^(02|03)[0-9a-f]{64}$/i;
@@ -32,6 +43,7 @@ const SESSION_PUBKEY = /^(?:[0-9a-f]{64}|(?:02|03)[0-9a-f]{64})$/i;
 /** Codes that carry cryptographic (or structural) evidence. No network codes. */
 export type BlameCode =
   | 'pedersen_unbalanced'
+  | 'invalid_component_commitment'
   | 'credential_slot_oob'
   | 'invalid_input_credential'
   | 'duplicate_outpoint'
@@ -43,6 +55,32 @@ export type BlameEvidence =
       amountCommitments: string[];
       pedersenTotalNonce: string;
       excessFee: number;
+    }
+  | {
+      kind: 'invalid_component_commitment';
+      feerate: number;
+      component:
+        | {
+            kind: 'input';
+            input: FusionInputRef;
+            saltCommitmentHex: string;
+          }
+        | {
+            kind: 'output';
+            output: FusionOutputRef;
+            saltCommitmentHex: string;
+            credentialSerial: string;
+          };
+      saltHex: string;
+      pedersenNonceHex: string;
+      initialCommitment: {
+        saltedComponentHash: string;
+        amountCommitment: string;
+      };
+      roundPubkey: string;
+      rPointHex: string;
+      requestHex: string;
+      openingHex: string;
     }
   | {
       kind: 'credential_slot_oob';
@@ -96,6 +134,25 @@ export interface ComponentDisclosureOpening {
   openingHex: string;
 }
 
+/** EC abort opening that binds an anonymous component to an attributed commit. */
+export type ComponentCommitmentOpening =
+  | {
+      kind: 'input';
+      outpoint: string;
+      slotIndex: number;
+      openingHex: string;
+      saltHex: string;
+      pedersenNonceHex: string;
+    }
+  | {
+      kind: 'output';
+      credentialSerial: string;
+      slotIndex: number;
+      openingHex: string;
+      saltHex: string;
+      pedersenNonceHex: string;
+    };
+
 /** What one peer disclosed about its own components after a round aborted. */
 export interface ComponentDisclosure {
   outpoints: string[];
@@ -106,6 +163,7 @@ export interface ComponentDisclosure {
    * coordinator must drop those outpoints before `findFaultInDisclosures`.
    */
   openings?: ComponentDisclosureOpening[];
+  componentOpenings?: ComponentCommitmentOpening[];
 }
 
 export interface DisclosureFinding {
@@ -148,8 +206,8 @@ export function findFaultInDisclosures(args: {
       claimantsByOutpoint.set(outpoint, claimants);
     }
   }
-  for (const [outpoint, claimants] of [...claimantsByOutpoint].sort(([a], [b]) =>
-    a < b ? -1 : a > b ? 1 : 0
+  for (const [outpoint, claimants] of [...claimantsByOutpoint].sort(
+    ([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)
   )) {
     if (claimants.length < 2) continue;
     const separator = outpoint.lastIndexOf(':');
@@ -201,10 +259,12 @@ export interface BlameReport {
 export interface BlameVerifyContext {
   session: string;
   participants: string[];
+  feerate?: number;
 }
 
 const BLAME_CODES: ReadonlySet<string> = new Set([
   'pedersen_unbalanced',
+  'invalid_component_commitment',
   'credential_slot_oob',
   'invalid_input_credential',
   'duplicate_outpoint',
@@ -220,6 +280,7 @@ export function formatBlameAbortReason(report: BlameReport): string {
   // No accused hex in UI/logs — blame still binds the full key internally.
   const labels: Record<BlameCode, string> = {
     pedersen_unbalanced: 'Pedersen balance failed',
+    invalid_component_commitment: 'component commitment opening failed',
     credential_slot_oob: 'credential slot out of range',
     invalid_input_credential: 'invalid input credential',
     duplicate_outpoint: 'duplicate outpoint',
@@ -244,6 +305,129 @@ function validInputRef(input: FusionInputRef): boolean {
     input.value >= 1 &&
     COMPRESSED_PUBKEY.test(input.pubkey)
   );
+}
+
+function validOutputRef(output: FusionOutputRef): boolean {
+  return (
+    typeof output?.script === 'string' &&
+    output.script.length >= 2 &&
+    output.script.length <= 20_000 &&
+    output.script.length % 2 === 0 &&
+    /^[0-9a-f]+$/i.test(output.script) &&
+    Number.isSafeInteger(output.value) &&
+    output.value >= 1
+  );
+}
+
+function componentEvidenceBytes(
+  evidence: Extract<BlameEvidence, { kind: 'invalid_component_commitment' }>
+): { bytes: Uint8Array; contribution: number } | null {
+  const component = evidence.component;
+  if (component.kind === 'input') {
+    if (!validInputRef(component.input)) return null;
+    const fee = Math.ceil(
+      ((108 + component.input.pubkey.length / 2) * evidence.feerate) / 1000
+    );
+    return {
+      bytes: encodeInputComponent({
+        prevTxidDisplayHex: component.input.prevTxid,
+        prevIndex: component.input.prevIndex,
+        pubkeyHex: component.input.pubkey,
+        amount: component.input.value,
+        saltCommitmentHex: component.saltCommitmentHex,
+      }),
+      contribution: component.input.value - fee,
+    };
+  }
+  if (
+    !validOutputRef(component.output) ||
+    !HEX_64.test(component.credentialSerial)
+  ) {
+    return null;
+  }
+  const fee = Math.ceil(
+    ((9 + component.output.script.length / 2) * evidence.feerate) / 1000
+  );
+  return {
+    bytes: encodeOutputComponent({
+      scriptHex: component.output.script,
+      amount: component.output.value,
+      saltCommitmentHex: component.saltCommitmentHex,
+    }),
+    contribution: -(component.output.value + fee),
+  };
+}
+
+/** Proves the disclosed anonymous component used the accused peer's blind slot. */
+export function componentCredentialOpeningMatches(
+  evidence: Extract<BlameEvidence, { kind: 'invalid_component_commitment' }>
+): boolean {
+  try {
+    if (
+      !Number.isSafeInteger(evidence.feerate) ||
+      evidence.feerate < 1 ||
+      !HEX_64.test(evidence.saltHex) ||
+      !HEX_64.test(evidence.pedersenNonceHex) ||
+      !HEX_64.test(evidence.initialCommitment.saltedComponentHash) ||
+      !HEX_130.test(evidence.initialCommitment.amountCommitment) ||
+      !HEX_66.test(evidence.roundPubkey) ||
+      !HEX_66.test(evidence.rPointHex) ||
+      !HEX_64.test(evidence.requestHex) ||
+      !HEX_128.test(evidence.openingHex) ||
+      !HEX_64.test(evidence.component.saltCommitmentHex)
+    ) {
+      return false;
+    }
+    const material = componentEvidenceBytes(evidence);
+    if (!material) return false;
+    return verifyCredentialOpening({
+      roundPubkeyHex: evidence.roundPubkey,
+      rPointHex: evidence.rPointHex,
+      messageHash: componentBlindMessageHash(material.bytes),
+      openingHex: evidence.openingHex,
+      requestHex: evidence.requestHex,
+    });
+  } catch {
+    return false;
+  }
+}
+
+/** True only when an EC component opens both its hash and amount commitments. */
+export function componentCommitmentOpeningMatches(
+  evidence: Extract<BlameEvidence, { kind: 'invalid_component_commitment' }>
+): boolean {
+  try {
+    if (!componentCredentialOpeningMatches(evidence)) return false;
+    const material = componentEvidenceBytes(evidence);
+    if (!material) return false;
+    const saltCommitment = binToHex(
+      saltCommitmentFromSalt(hexToBin(evidence.saltHex))
+    );
+    if (
+      saltCommitment.toLowerCase() !==
+      evidence.component.saltCommitmentHex.toLowerCase()
+    ) {
+      return false;
+    }
+    if (
+      saltedComponentHashHex(evidence.saltHex, material.bytes).toLowerCase() !==
+      evidence.initialCommitment.saltedComponentHash.toLowerCase()
+    ) {
+      return false;
+    }
+    if (
+      pedersenCommitWithNonce(
+        material.contribution,
+        evidence.pedersenNonceHex
+      ).commitmentHex.toLowerCase() !==
+      evidence.initialCommitment.amountCommitment.toLowerCase()
+    ) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -281,7 +465,9 @@ export function verifyBlameReport(
         !Array.isArray(e.amountCommitments) ||
         e.amountCommitments.length < 1 ||
         e.amountCommitments.length > 64 ||
-        !e.amountCommitments.every((c) => typeof c === 'string' && HEX_130.test(c)) ||
+        !e.amountCommitments.every(
+          (c) => typeof c === 'string' && HEX_130.test(c)
+        ) ||
         typeof e.pedersenTotalNonce !== 'string' ||
         !HEX_64.test(e.pedersenTotalNonce) ||
         !Number.isSafeInteger(e.excessFee) ||
@@ -298,6 +484,38 @@ export function verifyBlameReport(
         )
       ) {
         return { ok: false, reason: 'pedersen actually balanced' };
+      }
+      return { ok: true };
+    }
+    case 'invalid_component_commitment': {
+      const e = report.evidence;
+      if (
+        !Number.isSafeInteger(e.feerate) ||
+        e.feerate < 1 ||
+        (ctx.feerate !== undefined && e.feerate !== ctx.feerate) ||
+        !e.initialCommitment ||
+        !HEX_64.test(e.initialCommitment.saltedComponentHash) ||
+        !HEX_130.test(e.initialCommitment.amountCommitment) ||
+        !HEX_64.test(e.saltHex) ||
+        !HEX_64.test(e.pedersenNonceHex) ||
+        !HEX_66.test(e.roundPubkey) ||
+        !HEX_66.test(e.rPointHex) ||
+        !HEX_64.test(e.requestHex) ||
+        !HEX_128.test(e.openingHex) ||
+        !e.component ||
+        !HEX_64.test(e.component.saltCommitmentHex)
+      ) {
+        return { ok: false, reason: 'malformed component commitment evidence' };
+      }
+      // The blind opening is the unlinkable proof that this anonymous
+      // component came from a slot issued to the accused. Without it, a
+      // coordinator could frame a peer by pairing arbitrary component data
+      // with that peer's attributed InitialCommitment.
+      if (!componentCredentialOpeningMatches(e)) {
+        return { ok: false, reason: 'component is not bound to accused slot' };
+      }
+      if (componentCommitmentOpeningMatches(e)) {
+        return { ok: false, reason: 'component commitment actually matches' };
       }
       return { ok: true };
     }
@@ -414,7 +632,9 @@ export function verifyBlameReport(
         e.prevIndex < 0 ||
         !Array.isArray(e.claimants) ||
         e.claimants.length < 2 ||
-        !e.claimants.every((c) => validPubkey(c) && ctx.participants.includes(c))
+        !e.claimants.every(
+          (c) => validPubkey(c) && ctx.participants.includes(c)
+        )
       ) {
         return { ok: false, reason: 'malformed outpoint evidence' };
       }
@@ -430,8 +650,12 @@ export function verifyBlameReport(
         !Array.isArray(e.receivedOutpoints) ||
         e.expectedOutpoints.length > 64 ||
         e.receivedOutpoints.length > 64 ||
-        !e.expectedOutpoints.every((o) => typeof o === 'string' && o.length <= 80) ||
-        !e.receivedOutpoints.every((o) => typeof o === 'string' && o.length <= 80)
+        !e.expectedOutpoints.every(
+          (o) => typeof o === 'string' && o.length <= 80
+        ) ||
+        !e.receivedOutpoints.every(
+          (o) => typeof o === 'string' && o.length <= 80
+        )
       ) {
         return { ok: false, reason: 'malformed signature-set evidence' };
       }
@@ -469,7 +693,10 @@ export function createBlameReport(
  * Parse/normalize evidence from a wire object. Returns null if shape is wrong.
  * Size caps keep gift-wrap payloads bounded.
  */
-export function parseBlameEvidence(code: BlameCode, raw: unknown): BlameEvidence | null {
+export function parseBlameEvidence(
+  code: BlameCode,
+  raw: unknown
+): BlameEvidence | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const o = raw as Record<string, unknown>;
   if (o.kind !== code) return null;
@@ -490,8 +717,46 @@ export function parseBlameEvidence(code: BlameCode, raw: unknown): BlameEvidence
         excessFee: o.excessFee,
       };
     }
+    case 'invalid_component_commitment': {
+      if (
+        typeof o.feerate !== 'number' ||
+        !o.component ||
+        typeof o.component !== 'object' ||
+        Array.isArray(o.component) ||
+        typeof o.saltHex !== 'string' ||
+        typeof o.pedersenNonceHex !== 'string' ||
+        !o.initialCommitment ||
+        typeof o.initialCommitment !== 'object' ||
+        Array.isArray(o.initialCommitment) ||
+        typeof o.roundPubkey !== 'string' ||
+        typeof o.rPointHex !== 'string' ||
+        typeof o.requestHex !== 'string' ||
+        typeof o.openingHex !== 'string'
+      ) {
+        return null;
+      }
+      return {
+        kind: 'invalid_component_commitment',
+        feerate: o.feerate,
+        component: o.component as Extract<
+          BlameEvidence,
+          { kind: 'invalid_component_commitment' }
+        >['component'],
+        saltHex: o.saltHex,
+        pedersenNonceHex: o.pedersenNonceHex,
+        initialCommitment: o.initialCommitment as {
+          saltedComponentHash: string;
+          amountCommitment: string;
+        },
+        roundPubkey: o.roundPubkey,
+        rPointHex: o.rPointHex,
+        requestHex: o.requestHex,
+        openingHex: o.openingHex,
+      };
+    }
     case 'credential_slot_oob': {
-      if (!Array.isArray(o.slots) || !Array.isArray(o.participants)) return null;
+      if (!Array.isArray(o.slots) || !Array.isArray(o.participants))
+        return null;
       return {
         kind: 'credential_slot_oob',
         slots: o.slots as number[],

@@ -929,7 +929,13 @@ export async function broadcastP2pTransactionTorOnly(
     }
     relaySubmitted = observation.relaySubmitted;
     observerSeen = observation.observerSeen;
-  } catch {
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (
+      DEFINITIVE_BROADCAST_REJECTIONS.some((pattern) => pattern.test(message))
+    ) {
+      throw new Error(`Fusion broadcast rejected: ${message}`);
+    }
     // The relay may have accepted the bytes before its response was lost.
     // Resolve that ambiguity only through the Tor-routed native lookup below.
   }
@@ -960,7 +966,7 @@ export async function broadcastP2pTransactionTorOnly(
 /** Run one P2P round on the active BCH network. */
 export async function runP2pFusion(
   opts: P2pFusionOptions
-): Promise<RoundResult & { warning?: string }> {
+): Promise<RoundResult & { warning?: string; verificationPending?: boolean }> {
   if (!isFusionExecutionAllowed())
     throw new Error('P2P fusion execution is paused.');
   if (!opts.tor) {
@@ -1005,6 +1011,7 @@ export async function runP2pFusion(
   // possibly-confirming CoinJoin.
   let broadcastAttempted = false;
   let broadcastVerified = false;
+  let broadcastRejected = false;
   let withdrawFromPool: (() => Promise<void>) | null = null;
 
   try {
@@ -1315,8 +1322,8 @@ export async function runP2pFusion(
           );
         },
         broadcast: async (txHex) => {
+          const expectedTxid = binToHex(hash256(hexToBin(txHex)).reverse());
           try {
-            const expectedTxid = binToHex(hash256(hexToBin(txHex)).reverse());
             const tracked = await OutboundTransactionTracker.trackAttempt({
               walletId: opts.walletId,
               rawTx: txHex,
@@ -1342,8 +1349,25 @@ export async function runP2pFusion(
             // `finally` below cannot hand these coins to the next round while a
             // possibly-live transaction still spends them.
             broadcastVerified = receipt.verified;
+            if (!receipt.verified) {
+              await OutboundTransactionTracker.markVerificationPending(
+                expectedTxid,
+                receipt.warning ??
+                  'Fusion broadcast visibility is still being verified.',
+                opts.walletId
+              );
+            }
             return receipt.txid;
           } catch (error) {
+            const message =
+              error instanceof Error ? error.message : String(error);
+            if (message.startsWith('Fusion broadcast rejected:')) {
+              broadcastRejected = true;
+              await OutboundTransactionTracker.remove(
+                expectedTxid,
+                opts.walletId
+              ).catch(() => undefined);
+            }
             // A rejected CoinJoin does not identify which input became stale.
             // Re-check our own inputs so the user gets a useful, bounded verdict
             // without writing the raw transaction or wallet outpoints to logs.
@@ -1365,24 +1389,29 @@ export async function runP2pFusion(
       },
       transport
     );
-    const completion = await completeFusionBroadcast({
-      walletId: opts.walletId,
-      txid: result.txid,
-      txHex: result.txHex,
-      spentInputs: spendable,
-      source: 'p2p-fusion',
-      sourceLabel: 'P2P Fusion',
-      // Same as server fusion: round already ran over Tor; do not re-announce the
-      // CoinJoin via ordinary Electrum observe. Depth / history / UTXO refresh
-      // still run in completeFusionBroadcast for labels and Auto stop.
-      privacyRoute: 'tor-only',
-      // The scripts we allocated for ourselves this round. The completion layer
-      // resolves them to txid:index — a round shuffles its outputs so position
-      // carries no information, and guessing an index here would eventually
-      // credit a peer's coin to us.
-      ownedOutputScripts: outputScripts,
-    });
-    const warning = [broadcastWarning, fusionCompletionWarning(completion)]
+    const completion = broadcastVerified
+      ? await completeFusionBroadcast({
+          walletId: opts.walletId,
+          txid: result.txid,
+          txHex: result.txHex,
+          spentInputs: spendable,
+          source: 'p2p-fusion',
+          sourceLabel: 'P2P Fusion',
+          // Same as server fusion: round already ran over Tor; do not re-announce the
+          // CoinJoin via ordinary Electrum observe. Depth / history / UTXO refresh
+          // still run in completeFusionBroadcast for labels and Auto stop.
+          privacyRoute: 'tor-only',
+          // The scripts we allocated for ourselves this round. The completion layer
+          // resolves them to txid:index — a round shuffles its outputs so position
+          // carries no information, and guessing an index here would eventually
+          // credit a peer's coin to us.
+          ownedOutputScripts: outputScripts,
+        })
+      : null;
+    const warning = [
+      broadcastWarning,
+      completion ? fusionCompletionWarning(completion) : undefined,
+    ]
       .filter((message): message is string => Boolean(message))
       .join(' ');
     // Only claim a completed fusion when the CoinJoin was independently seen.
@@ -1395,6 +1424,13 @@ export async function runP2pFusion(
           ? `Fused ✓ — txid ${result.txid}. ${warning}`
           : `Fused ✓ — txid ${result.txid}`
     );
+    if (!broadcastVerified) {
+      return {
+        ...result,
+        verificationPending: true,
+        ...(warning.length > 0 ? { warning } : {}),
+      };
+    }
     return warning.length > 0 ? { ...result, warning } : result;
   } finally {
     // Free the coins only when their fate is known. A round that never reached
@@ -1405,7 +1441,7 @@ export async function runP2pFusion(
     // let the next round build a conflicting spend against a CoinJoin that may
     // already be confirming. Leave the lock for the stored TTL to expire, or for
     // wallet sync to resolve the transaction first.
-    if (!broadcastAttempted || broadcastVerified) {
+    if (!broadcastAttempted || broadcastVerified || broadcastRejected) {
       releaseOutpoints(opts.walletId, reservedForRound);
     } else {
       console.warn(

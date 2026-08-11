@@ -1,6 +1,6 @@
 # P2P CashFusion — EC component plane (protocol v4)
 
-**Status:** Design approved for implementation (2026-08-09).  
+**Status:** Implemented with adversarial component-opening tests (2026-08-11).
 **Branch / worktree:** `fusion-release-reliability` (PR #12).  
 **Audience:** Implementers (Claude / Grok / human).  
 **Beta note:** No production users on P2P wire — **no migration compatibility required**. Breaking v3 is allowed and expected.
@@ -40,12 +40,12 @@ msg = sha256(serialized Component)   // full protobuf component
 
 Implement **option (1)** — EC structure on P2P:
 
-| Piece | Source of truth |
-| ----- | --------------- |
-| What is blind-signed | `sha256(canonical EC Component bytes)` |
-| Unlinkability | Per-component **anonymous transport only** (throwaway + Tor) — same role as EC covert circuits |
-| Shared crypto | Prefer native FusionCore (`components`, `pedersen`, `schnorr`) over parallel TS-only hashes |
-| ZK multiset proofs | **Out of scope** |
+| Piece                | Source of truth                                                                                |
+| -------------------- | ---------------------------------------------------------------------------------------------- |
+| What is blind-signed | `sha256(canonical EC Component bytes)`                                                         |
+| Unlinkability        | Per-component **anonymous transport only** (throwaway + Tor) — same role as EC covert circuits |
+| Shared crypto        | Prefer native FusionCore (`components`, `pedersen`, `schnorr`) over parallel TS-only hashes    |
+| ZK multiset proofs   | **Out of scope**                                                                               |
 
 ZK (option 2) is deferred indefinitely for PR12.
 
@@ -72,11 +72,11 @@ ZK (option 2) is deferred indefinitely for PR12.
 
 ## 3. Identities (unchanged model, clarified)
 
-| Layer | Key | Used for |
-| ----- | --- | -------- |
-| A. Chat (optional product) | Seed-derived Nostr / npub | DMs only — **never fusion** |
-| B. Round (control) | `generateRoundIdentity()` per attempt | Pool announce, ACK, PlayerCommit-equivalent, credential issuance control, abort, blame control messages |
-| C. Component (anonymous) | Fresh `generateSecretKey()` per publish (+ one-shot Tor) | Submitting each component and each tx signature |
+| Layer                      | Key                                                      | Used for                                                                                                |
+| -------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| A. Chat (optional product) | Seed-derived Nostr / npub                                | DMs only — **never fusion**                                                                             |
+| B. Round (control)         | `generateRoundIdentity()` per attempt                    | Pool announce, ACK, PlayerCommit-equivalent, credential issuance control, abort, blame control messages |
+| C. Component (anonymous)   | Fresh `generateSecretKey()` per publish (+ one-shot Tor) | Submitting each component and each tx signature                                                         |
 
 Blame reports name **layer B** only. They are diagnosis, not DoS mitigation (`THREAT_MODEL.md`).
 
@@ -84,11 +84,11 @@ Blame reports name **layer B** only. They are diagnosis, not DoS mitigation (`TH
 
 ## 4. Protocol version
 
-| Constant | Today | v4 |
-| -------- | ----- | -- |
-| Round message `version` | `ROUND_MSG_VERSION = 3` (`fusionRound.ts`) | **`4`** |
-| Pool announce `FUSION_POOL_PROTOCOL` | `1` | Keep `1` unless gather must filter v4-only peers; prefer capability in round start, not pool tag churn |
-| Reject | v2 already rejected | **Reject v3 round messages** when local code is v4-only |
+| Constant                             | Today                                      | v4                                                                                                     |
+| ------------------------------------ | ------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| Round message `version`              | `ROUND_MSG_VERSION = 3` (`fusionRound.ts`) | **`4`**                                                                                                |
+| Pool announce `FUSION_POOL_PROTOCOL` | `1`                                        | Keep `1` unless gather must filter v4-only peers; prefer capability in round start, not pool tag churn |
+| Reject                               | v2 already rejected                        | **Reject v3 round messages** when local code is v4-only                                                |
 
 Wire rule: any `version !== 4` → drop / fail closed for round messages.
 
@@ -113,7 +113,7 @@ Use the same logical fields as Electron Cash / `pb::Component` in this repo:
 
 ### Blank component (parity target)
 
-- zero amount component to pad to fixed `num_components` when tier requires it  
+- zero amount component to pad to fixed `num_components` when tier requires it
 - Required for full EC metadata parity; **phase 2** if phase 1 ships inputs+outputs only with explicit residual
 
 ### InitialCommitment (attributed, control plane)
@@ -174,12 +174,12 @@ Reject entire round (or refuse assembly) on missing/extra/duplicate/over-quota c
 
 ## 7. Transport mapping (P2P-specific)
 
-| EC server | P2P v4 |
-| --------- | ------ |
-| TLS/Tor to fusion server | Nostr gift-wrap (NIP-44/59) + Tor SOCKS |
-| Covert TCP per component | One-shot pool + throwaway signer per component message |
-| Server sees IP (concurrency cap only) | No IP — no `ip_max_simul_fuse` |
-| Covert domain/port from FusionBegin | Relay URLs + local Tor |
+| EC server                             | P2P v4                                                 |
+| ------------------------------------- | ------------------------------------------------------ |
+| TLS/Tor to fusion server              | Nostr gift-wrap (NIP-44/59) + Tor SOCKS                |
+| Covert TCP per component              | One-shot pool + throwaway signer per component message |
+| Server sees IP (concurrency cap only) | No IP — no `ip_max_simul_fuse`                         |
+| Covert domain/port from FusionBegin   | Relay URLs + local Tor                                 |
 
 **Do not** “fix authorization” by requiring the final onion peeler’s round identity.
 
@@ -187,12 +187,12 @@ Reject entire round (or refuse assembly) on missing/extra/duplicate/over-quota c
 
 ## 8. What v3 code is retired
 
-| v3 artifact | v4 fate |
-| ----------- | ------- |
-| `outputCredentialMessageHash` / `optn-p2p-component-v3|…` | Delete or dead-code after cutover; no dual support |
-| `inputCredentialMessageHash` string domain | Replace with `sha256(input component_ser)` |
+| v3 artifact                                             | v4 fate                                                                 |
+| ------------------------------------------------------- | ----------------------------------------------------------------------- | -------------------------------------------------- |
+| `outputCredentialMessageHash` / `optn-p2p-component-v3  | …`                                                                      | Delete or dead-code after cutover; no dual support |
+| `inputCredentialMessageHash` string domain              | Replace with `sha256(input component_ser)`                              |
 | Thin `{output, serial, credential}` as sole auth object | Replace with component + blind sig (+ serial if kept for P2P replay DB) |
-| Accepting components via attributed path | Already removed for inputs/sigs in `d9accdbd` — keep |
+| Accepting components via attributed path                | Already removed for inputs/sigs in `d9accdbd` — keep                    |
 
 Keep for now if still useful as non-auth metadata: session id, tier, feerate on control messages.
 
@@ -202,7 +202,7 @@ Keep for now if still useful as non-auth metadata: session id, tier, feerate on 
 
 ### Phase A — Spec lock (this document)
 
-- [x] Design written  
+- [x] Design written
 - [x] Reviewed in session
 
 ### Phase B — Shared encode / hash API
@@ -218,7 +218,13 @@ Keep for now if still useful as non-auth metadata: session id, tier, feerate on 
 - [x] Inputs redeem with `saltCommitments` + credential verify
 - [x] Outputs redeem with `saltCommitment` in onion payload
 - [x] `ROUND_MSG_VERSION = 4`; reject other versions
-- [x] Nostr suite green (128 tests)
+- [x] Every credential request carries an EC-style InitialCommitment:
+      `sha256(salt || Component)` plus the Pedersen amount commitment
+- [x] Abort disclosures open the exact blind request, component salt, and
+      Pedersen nonce; a balanced commitment vector for different components is
+      rejected as `invalid_component_commitment`
+- [x] Focused three-peer adversarial suite proves the binding and honest round
+      completion
 
 ### Phase C — Issuance (control plane)
 
@@ -264,13 +270,13 @@ Option-3 abort disclosure remains:
 
 ## 11. Risks (honest — not zero downside)
 
-| Risk | Mitigation |
-| ---- | ---------- |
-| Larger implementation surface | Phased landings; sabotage tests each phase |
-| Privacy regression if components sent under round key | Transport allowlist + isolation test + grouping regression test |
-| Fee/size mismatch vs EC | Reuse native fee formulas (`component_fee`, sizes) |
-| Tor/relay load from full components | Already one socket per component; monitor soak |
-| Schedule | Beta allows hard cut; still needs soak before “production” language |
+| Risk                                                  | Mitigation                                                          |
+| ----------------------------------------------------- | ------------------------------------------------------------------- |
+| Larger implementation surface                         | Phased landings; sabotage tests each phase                          |
+| Privacy regression if components sent under round key | Transport allowlist + isolation test + grouping regression test     |
+| Fee/size mismatch vs EC                               | Reuse native fee formulas (`component_fee`, sizes)                  |
+| Tor/relay load from full components                   | Already one socket per component; monitor soak                      |
+| Schedule                                              | Beta allows hard cut; still needs soak before “production” language |
 
 **Benefits without free lunch:** F2/EC binding + shared core **yes**; zero engineering cost **no**; migration pain **no** (beta).
 
@@ -290,25 +296,25 @@ Option-3 abort disclosure remains:
 
 ## 13. Immediate next code steps
 
-1. Keep `fusionIdentityIsolation.test.ts` in suite (already added).  
-2. Inventory Tauri surface for component build/sign verify; add commands if missing.  
-3. Add `ROUND_MSG_VERSION` bump **only** when Phase D redeem path can run end-to-end — or feature-flag internal `4` behind tests first.  
+1. Keep `fusionIdentityIsolation.test.ts` in suite (already added).
+2. Inventory Tauri surface for component build/sign verify; add commands if missing.
+3. Add `ROUND_MSG_VERSION` bump **only** when Phase D redeem path can run end-to-end — or feature-flag internal `4` behind tests first.
 4. Implement Phase B golden encode tests before deleting v3 hashes.
 
 ---
 
 ## 14. References in this repo
 
-| Path | Role |
-| ---- | ---- |
-| `src-tauri/src/fusion/components.rs` | EC PlayerCommit / component build |
-| `src-tauri/src/fusion/schnorr.rs` | Blind issuer + modified RFC6979 tx sign |
-| `src-tauri/src/fusion/covert.rs` | Server covert isolation model |
-| `src/platform/desktop/nostr/fusionTransport.ts` | Anonymous component transport |
+| Path                                               | Role                                          |
+| -------------------------------------------------- | --------------------------------------------- |
+| `src-tauri/src/fusion/components.rs`               | EC PlayerCommit / component build             |
+| `src-tauri/src/fusion/schnorr.rs`                  | Blind issuer + modified RFC6979 tx sign       |
+| `src-tauri/src/fusion/covert.rs`                   | Server covert isolation model                 |
+| `src/platform/desktop/nostr/fusionTransport.ts`    | Anonymous component transport                 |
 | `src/platform/desktop/nostr/fusionBlindSchnorr.ts` | Current v3 TS issuer (to be replaced/bridged) |
-| `src/platform/desktop/nostr/fusionSession.ts` | Round choreography |
-| `docs/THREAT_MODEL.md` | Blame ≠ DoS; throwaway keys |
-| `docs/p2p-cashfusion-protocol.md` | Current v3 reference (update at cutover) |
+| `src/platform/desktop/nostr/fusionSession.ts`      | Round choreography                            |
+| `docs/THREAT_MODEL.md`                             | Blame ≠ DoS; throwaway keys                   |
+| `docs/p2p-cashfusion-protocol.md`                  | Current v3 reference (update at cutover)      |
 
 ---
 

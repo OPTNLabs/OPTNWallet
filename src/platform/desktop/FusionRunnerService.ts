@@ -16,6 +16,7 @@ import {
   reconcileActiveWalletUtxosForSpend,
   type WalletUtxoSnapshot,
 } from '../../services/WalletUtxoRefreshService';
+import OutboundTransactionTracker from '../../services/OutboundTransactionTracker';
 import { Network } from '../../state/slices/networkSlice';
 import type { UTXO } from '../../types/types';
 import {
@@ -48,7 +49,10 @@ import {
   isAutoTransientFailure,
   type FusionMode,
 } from './fusionAutoEngine';
-import { ACCEPT_UNCONFIRMED_FUSION_INPUTS, EC_DEFAULT_MAX_COINS } from './fusionTiming';
+import {
+  ACCEPT_UNCONFIRMED_FUSION_INPUTS,
+  EC_DEFAULT_MAX_COINS,
+} from './fusionTiming';
 import {
   classifyServerFusionCoins,
   isServerFusionDepthSatisfied,
@@ -62,6 +66,12 @@ export type FusionRunOutcome =
       mode: FusionMode;
       txid: string;
       warning?: string;
+    }
+  | {
+      status: 'verification-pending';
+      mode: FusionMode;
+      txid: string;
+      message: string;
     }
   | { status: 'busy' }
   /** Wallet state is mid-refresh; not an error, and not a reason to use stale coins. */
@@ -90,13 +100,27 @@ export interface StartFusionRoundOptions {
     runP2p: (
       coins: UTXO[],
       signal?: AbortSignal,
-      progress?: { onStatus?: (m: string) => void; onPhase?: (p: number) => void }
-    ) => Promise<{ txid: string; warning?: string }>;
+      progress?: {
+        onStatus?: (m: string) => void;
+        onPhase?: (p: number) => void;
+      }
+    ) => Promise<{
+      txid: string;
+      warning?: string;
+      verificationPending?: boolean;
+    }>;
     runServer: (
       coins: UTXO[],
       signal?: AbortSignal,
-      progress?: { onStatus?: (m: string) => void; onPhase?: (p: number) => void }
-    ) => Promise<{ txid: string; warning?: string }>;
+      progress?: {
+        onStatus?: (m: string) => void;
+        onPhase?: (p: number) => void;
+      }
+    ) => Promise<{
+      txid: string;
+      warning?: string;
+      verificationPending?: boolean;
+    }>;
   };
 }
 
@@ -169,10 +193,7 @@ const fusionActivities = new Map<
   number,
   { lease: string; activity: FusionActivity }
 >();
-const fusionActivityListeners = new Map<
-  number,
-  Set<FusionActivityListener>
->();
+const fusionActivityListeners = new Map<number, Set<FusionActivityListener>>();
 
 function emitFusionActivity(walletId: number): void {
   const activity = getFusionActivity(walletId);
@@ -301,7 +322,9 @@ export function isFusionRunning(walletId: number): boolean {
  * window is not running a round. Called automatically on CashFusion mount and
  * before acquire — users should never need a "clear stuck" button.
  */
-export async function reconcileIdleFusionState(walletId: number): Promise<void> {
+export async function reconcileIdleFusionState(
+  walletId: number
+): Promise<void> {
   if (!Number.isInteger(walletId) || walletId <= 0) return;
   if (heldLeases.has(walletId)) return; // real round in this window
   if (fusionActivities.has(walletId)) {
@@ -364,7 +387,9 @@ function limitFusionCoins(coins: UTXO[]): UTXO[] {
 function secureRandomUnit(): number {
   const cryptoApi = globalThis.crypto;
   if (!cryptoApi?.getRandomValues) {
-    throw new Error('secure randomness is unavailable for server Fusion coin selection');
+    throw new Error(
+      'secure randomness is unavailable for server Fusion coin selection'
+    );
   }
   const sample = new Uint32Array(1);
   cryptoApi.getRandomValues(sample);
@@ -438,25 +463,23 @@ async function freshCoinSelection(
     };
   }
 
-  const coins = allCoins
-    .flat()
-    .filter(
-      // Both token fields: `token` is our normalised shape, `token_data` is what
-      // comes straight off Electrum. A coin carrying either must never be fused
-      // — that would burn the CashToken.
-      // Unconfirmed (height ≤ 0) kept when ACCEPT_UNCONFIRMED_FUSION_INPUTS.
-      (coin): coin is UTXO => {
-        if (!coin || coin.token || coin.token_data) return false;
-        if (
-          !ACCEPT_UNCONFIRMED_FUSION_INPUTS &&
-          typeof coin.height === 'number' &&
-          coin.height <= 0
-        ) {
-          return false;
-        }
-        return true;
+  const coins = allCoins.flat().filter(
+    // Both token fields: `token` is our normalised shape, `token_data` is what
+    // comes straight off Electrum. A coin carrying either must never be fused
+    // — that would burn the CashToken.
+    // Unconfirmed (height ≤ 0) kept when ACCEPT_UNCONFIRMED_FUSION_INPUTS.
+    (coin): coin is UTXO => {
+      if (!coin || coin.token || coin.token_data) return false;
+      if (
+        !ACCEPT_UNCONFIRMED_FUSION_INPUTS &&
+        typeof coin.height === 'number' &&
+        coin.height <= 0
+      ) {
+        return false;
       }
-    );
+      return true;
+    }
+  );
 
   // Depth bounds automatic spending only. A user who clicks Fuse Now is making an
   // explicit choice and may re-fuse a coin that has already reached the limit.
@@ -500,6 +523,23 @@ export async function startFusionRound(
     return { status: 'cooldown' };
   }
 
+  // A Tor-only broadcast can finish signing while its network receipt remains
+  // ambiguous. Starting another fee-spending round with different coins would
+  // accumulate unknown transactions and make the wallet's state harder to
+  // reconcile. Pause both transports until ordinary wallet evidence resolves
+  // the prior transaction as seen (or a deterministic rejection removes it).
+  const pendingFusion =
+    await OutboundTransactionTracker.findFusionVerificationPending(walletId);
+  if (pendingFusion) {
+    return {
+      status: 'verification-pending',
+      mode: /server/i.test(pendingFusion.source) ? 'server' : 'p2p',
+      txid: pendingFusion.txid,
+      message:
+        'A previous Fusion transaction is still awaiting independent network visibility.',
+    };
+  }
+
   // Drop orphan UI/durable state before acquire so grey-idle ghosts never block.
   // Only clears the lease when it is STALE (no heartbeat) — a live other window
   // keeps the lock and we return busy below.
@@ -538,10 +578,7 @@ export async function startFusionRound(
       trigger,
       startedAt: Date.now(),
       phase: 1,
-      status:
-        trigger === 'auto'
-          ? 'Auto-fuse: preparing…'
-          : 'Starting fusion…',
+      status: trigger === 'auto' ? 'Auto-fuse: preparing…' : 'Starting fusion…',
     },
   });
   emitFusionActivity(walletId);
@@ -589,6 +626,13 @@ export async function startFusionRound(
           log.info('p2p-live', `w${walletId} OUTCOME fused: ${fusedMsg}`)
         )
         .catch(() => undefined);
+    } else if (outcome.status === 'verification-pending') {
+      setFusionLastResult(walletId, {
+        mode,
+        trigger,
+        ok: false,
+        message: `Fusion verification pending — ${outcome.txid}. ${outcome.message}`,
+      });
     } else if (outcome.status === 'failed') {
       setFusionLastResult(walletId, {
         mode,
@@ -608,8 +652,8 @@ export async function startFusionRound(
       // Not a hard failure for auto: every coin already meets the box target.
       const depthMsg =
         trigger === 'auto'
-          ? (outcome.detail ??
-            'Auto: nothing to fuse — all BCH coins already at rounds-per-coin depth (or no BCH coins). Manual Start can still re-fuse.')
+          ? outcome.detail ??
+            'Auto: nothing to fuse — all BCH coins already at rounds-per-coin depth (or no BCH coins). Manual Start can still re-fuse.'
           : 'No eligible coins to fuse.';
       setFusionLastResult(walletId, {
         mode,
@@ -724,6 +768,19 @@ export async function startFusionRound(
                 progressHooks
               );
         // Inside trigger==='auto' block — always stamp Auto cooldown.
+        if (result.verificationPending) {
+          await stampAutoFailure(walletId, AUTO_FUSION_RETRY_MS).catch(
+            () => undefined
+          );
+          return finish({
+            status: 'verification-pending',
+            mode,
+            txid: result.txid,
+            message:
+              result.warning ??
+              'The signed Fusion transaction is awaiting independent network visibility.',
+          });
+        }
         await stampAutoSuccess(walletId, AUTO_FUSION_COOLDOWN_MS).catch(
           () => undefined
         );
@@ -797,6 +854,16 @@ export async function startFusionRound(
               options.signal,
               progressHooks
             );
+      if (result.verificationPending) {
+        return finish({
+          status: 'verification-pending',
+          mode,
+          txid: result.txid,
+          message:
+            result.warning ??
+            'The signed Fusion transaction is awaiting independent network visibility.',
+        });
+      }
       return finish({
         status: 'fused',
         mode,

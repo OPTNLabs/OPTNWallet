@@ -88,6 +88,8 @@ function describeFusionOutcome(outcome: FusionRunOutcome): string {
       return outcome.warning
         ? `Fused ✓ — txid ${outcome.txid}. ${outcome.warning}`
         : `Fused ✓ — txid ${outcome.txid}`;
+    case 'verification-pending':
+      return `Fusion verification pending — txid ${outcome.txid}. ${outcome.message}`;
     case 'busy':
       return (
         'A fusion round is already active for this wallet in another window. ' +
@@ -179,9 +181,7 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
   const serverFusing =
     activeFusion?.mode === 'server' || fuseState === 'fusing';
   const p2pFusing =
-    activeFusion?.mode === 'p2p' ||
-    p2pState === 'fusing' ||
-    leaseElsewhere;
+    activeFusion?.mode === 'p2p' || p2pState === 'fusing' || leaseElsewhere;
   const anyFusing = serverFusing || p2pFusing || startInFlightRef.current;
   // Heal ghost leases when THIS window is idle (other window dead, no heartbeat).
   useEffect(() => {
@@ -435,9 +435,7 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
     // Sync gate: button can still be enabled for one frame; double-click must not
     // mint two throwaway identities (user: 7 live keys / same wallet two rounds).
     if (startInFlightRef.current || isFusionRunning(walletId)) {
-      setP2pMsg(
-        'A fusion round is already in progress in this window.'
-      );
+      setP2pMsg('A fusion round is already in progress in this window.');
       return;
     }
     if (hasLiveRoundLease(walletId) && !isFusionRunning(walletId)) {
@@ -509,7 +507,9 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
       setP2pState('fail');
       setP2pMsg(err);
       void import('../../platform/desktop/logger')
-        .then(({ log }) => log.error('p2p-live', `w${walletId} OUTCOME error: ${err}`))
+        .then(({ log }) =>
+          log.error('p2p-live', `w${walletId} OUTCOME error: ${err}`)
+        )
         .catch(() => undefined);
     } finally {
       startInFlightRef.current = false;
@@ -635,10 +635,10 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
                   Steps 1–4 run end-to-end (server path): the wallet joins a
                   pool, exchanges blind signatures, submits over Tor, and
                   broadcasts the assembled CoinJoin. P2P Fusion runs the same
-                  round without a server — peers meet on Nostr over Tor.
-                  Before signing, the wallet verifies value conservation, fees,
-                  and its fresh outputs. Remote Fusion, lookup, and broadcast
-                  traffic use native, verified Tor routes.
+                  round without a server — peers meet on Nostr over Tor. Before
+                  signing, the wallet verifies value conservation, fees, and its
+                  fresh outputs. Remote Fusion, lookup, and broadcast traffic
+                  use native, verified Tor routes.
                 </p>
               </div>
             )}
