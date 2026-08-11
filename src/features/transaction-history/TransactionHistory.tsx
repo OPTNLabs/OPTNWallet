@@ -195,16 +195,16 @@ const TransactionHistory: React.FC = () => {
                           )}
                         </div>
                       </div>
-                      {tx.height > 0 ? (
+                      {tx.height > 0 || tx.timestamp ? (
                         <StatusChip tone="success">Confirmed</StatusChip>
                       ) : (
                         <StatusChip tone="warning">Pending</StatusChip>
                       )}
                     </div>
                     <div className="mt-2 text-sm">
-                      {tx.height > 0 ? (
+                      {tx.height > 0 || tx.timestamp ? (
                         <span className="wallet-text-strong">
-                          Block: {tx.height}
+                          Block: {tx.height || '—'}
                         </span>
                       ) : (
                         <span className="wallet-muted">
