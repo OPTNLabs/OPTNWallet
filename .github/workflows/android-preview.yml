@@ -77,6 +77,8 @@ jobs:
           target: google_apis
           arch: x86_64
           profile: pixel_2
+          # API 36 images can take over 15 minutes to boot on shared runners.
+          emulator-boot-timeout: 1200
           script: >-
             adb wait-for-device && api_level= && for attempt in 1 2 3 4 5 6 7
             8 9 10 11 12; do api_level="$(adb shell getprop
