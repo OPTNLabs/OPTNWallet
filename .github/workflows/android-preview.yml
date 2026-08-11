@@ -102,77 +102,78 @@ jobs:
             -accel off >"$emulator_log" 2>&1 &
           emulator_pid=$!
 
+          adb_timeout_seconds=15
+          adb_with_timeout() {
+            timeout "${adb_timeout_seconds}s" adb "$@"
+          }
+
           cleanup() {
             exit_code=$?
             if [ "$exit_code" -ne 0 ]; then
               echo 'Android emulator log:'
               tail -n 120 "$emulator_log" || true
             fi
-            adb -s "$emulator_serial" emu kill >/dev/null 2>&1 || true
+            adb_with_timeout -s "$emulator_serial" emu kill >/dev/null 2>&1 || true
             wait "$emulator_pid" 2>/dev/null || true
             trap - EXIT
             exit "$exit_code"
           }
           trap cleanup EXIT
 
-          adb start-server
+          adb_with_timeout start-server
 
           device_state=
-          attempt=1
-          while [ "$attempt" -le 180 ]; do
-            device_state="$(adb devices |
+          device_deadline=$((SECONDS + 360))
+          while [ "$SECONDS" -lt "$device_deadline" ]; do
+            device_state="$(adb_with_timeout devices |
               awk -v serial="$emulator_serial" '$1 == serial { print $2 }')"
             if [ "$device_state" = 'device' ]; then
               break
             fi
             sleep 2
-            attempt=$((attempt + 1))
           done
           echo "Emulator device state: ${device_state:-unavailable}"
           test "$device_state" = 'device'
 
           boot_completed=
-          attempt=1
-          while [ "$attempt" -le 600 ]; do
-            boot_completed="$(adb -s "$emulator_serial" shell getprop \
+          boot_deadline=$((SECONDS + 1200))
+          while [ "$SECONDS" -lt "$boot_deadline" ]; do
+            boot_completed="$(adb_with_timeout -s "$emulator_serial" shell getprop \
               sys.boot_completed 2>/dev/null | tr -d '\r')" || true
             if [ "$boot_completed" = '1' ]; then
               break
             fi
             sleep 2
-            attempt=$((attempt + 1))
           done
           echo "Emulator boot completed: ${boot_completed:-unavailable}"
           test "$boot_completed" = '1'
 
           api_level=
-          attempt=1
-          while [ "$attempt" -le 60 ]; do
-            api_level="$(adb -s "$emulator_serial" shell getprop \
+          api_deadline=$((SECONDS + 300))
+          while [ "$SECONDS" -lt "$api_deadline" ]; do
+            api_level="$(adb_with_timeout -s "$emulator_serial" shell getprop \
               ro.build.version.sdk 2>/dev/null | tr -d '\r')" || true
             if [ "$api_level" = '36' ]; then
               break
             fi
             sleep 5
-            attempt=$((attempt + 1))
           done
           echo "Emulator API level: ${api_level:-unavailable}"
           test "$api_level" = '36'
 
           settings_state=
           settings_ready=
-          attempt=1
-          while [ "$attempt" -le 24 ]; do
-            settings_state="$(adb -s "$emulator_serial" shell settings get \
+          services_deadline=$((SECONDS + 120))
+          while [ "$SECONDS" -lt "$services_deadline" ]; do
+            settings_state="$(adb_with_timeout -s "$emulator_serial" shell settings get \
               system screen_off_timeout 2>/dev/null | tr -d '\r')" || true
             if [ -n "$settings_state" ] && ! printf '%s' "$settings_state" |
-              grep -Eq 'Can.t find service|Failure calling service' && adb -s
+              grep -Eq 'Can.t find service|Failure calling service' && adb_with_timeout -s
               "$emulator_serial" shell input keyevent 82 >/dev/null 2>&1; then
               settings_ready=1
               break
             fi
             sleep 5
-            attempt=$((attempt + 1))
           done
           echo "Android services ready: ${settings_ready:-unavailable}"
           test "$settings_ready" = '1'
