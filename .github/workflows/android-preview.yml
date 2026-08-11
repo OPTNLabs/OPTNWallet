@@ -74,6 +74,9 @@ jobs:
 
           emulator_serial=emulator-5554
           emulator_log="$RUNNER_TEMP/android-emulator.log"
+          avd_home="$RUNNER_TEMP/android-avd"
+          mkdir -p "$avd_home"
+          export ANDROID_AVD_HOME="$avd_home"
 
           yes | sdkmanager --licenses >/dev/null
           sdkmanager --install \
@@ -86,6 +89,7 @@ jobs:
             --name test \
             --package 'system-images;android-36;google_apis;x86_64' \
             --device pixel_2
+          test -f "$ANDROID_AVD_HOME/test.ini"
 
           "$ANDROID_HOME/emulator/emulator" \
             -port 5554 \
