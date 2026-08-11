@@ -26,7 +26,7 @@ import {
   type Event,
 } from 'nostr-tools';
 import { wrapEvent, unwrapEvent } from 'nostr-tools/nip17';
-import { publishEventAtLeastOnce } from './fusion';
+import { PUBLISH_RELAY_TIMEOUT_MS, publishEventAtLeastOnce } from './fusion';
 import { parseRoundMessage, type RoundTransport } from './fusionSession';
 
 /** NIP-59 gift-wrap. Same kind as chat; disambiguated by the #p recipient. */
@@ -37,7 +37,7 @@ export const GIFT_WRAP_KIND = 1059;
  * the first ACK still receive the event. Long enough for slow Tor circuits,
  * short enough that the socket is not reusable for a later component.
  */
-export const ONE_SHOT_POOL_LINGER_MS = 8_000;
+export const ONE_SHOT_POOL_LINGER_MS = PUBLISH_RELAY_TIMEOUT_MS + 2_000;
 
 /**
  * Same-origin bridge for round messages (multi-wallet on one machine).
@@ -136,7 +136,7 @@ export function createNostrRoundTransport(
       // One socket per anonymous component. Built before the publish so the
       // `finally` can always close it, even if wrapping throws.
       const oneShotPool = isAnonymousOutput
-        ? (createComponentPool?.() ?? null)
+        ? createComponentPool?.() ?? null
         : null;
       try {
         const wrapped = wrapEvent(

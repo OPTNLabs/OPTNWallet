@@ -427,7 +427,7 @@ export function selectFusionGroup(
  * already said OK, and under Tor multi-window load often timed everyone out.
  * 12s is enough for slow Tor; min-ACK race (see publishRaceMinOk).
  */
-const PUBLISH_RELAY_TIMEOUT_MS = 12_000;
+export const PUBLISH_RELAY_TIMEOUT_MS = 12_000;
 /** Whole-event retries when every relay fails/times out (live: intermittent ACK). */
 const PUBLISH_MAX_ROUNDS = 3;
 const PUBLISH_RETRY_BASE_MS = 400;
@@ -699,7 +699,10 @@ export function joinPool(
         try {
           const content = JSON.parse(evt.content) as { expiresAt?: unknown };
           const expiresAt = Number(content.expiresAt);
-          if (Number.isSafeInteger(expiresAt) && expiresAt < Math.floor(Date.now() / 1000)) {
+          if (
+            Number.isSafeInteger(expiresAt) &&
+            expiresAt < Math.floor(Date.now() / 1000)
+          ) {
             peers.delete(evt.pubkey);
             emitPeers();
           }
@@ -788,16 +791,13 @@ export function joinPool(
   // Head-start Tor WSS before first shout (0–800ms was often too early).
   const firstAnnounceDelay =
     1_200 + Math.floor(Math.random() * MAX_ANNOUNCE_DELAY_MS);
-  announceTimer = setTimeout(
-    () => {
-      void announce().catch((error: unknown) =>
-        options.onError?.(
-          error instanceof Error ? error : new Error(String(error))
-        )
-      );
-    },
-    firstAnnounceDelay
-  );
+  announceTimer = setTimeout(() => {
+    void announce().catch((error: unknown) =>
+      options.onError?.(
+        error instanceof Error ? error : new Error(String(error))
+      )
+    );
+  }, firstAnnounceDelay);
   repeatTimer = setInterval(() => {
     if (!stillMine()) {
       teardownTimers();
