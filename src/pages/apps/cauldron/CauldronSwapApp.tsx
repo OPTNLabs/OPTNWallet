@@ -308,7 +308,7 @@ function logCauldronTxPlan(
   payload: Record<string, unknown>
 ): void {
   if (!import.meta.env.DEV) return;
-  console.debug(`[Cauldron:TX] ${stage}`, payload);
+  console.debug('[Cauldron:TX]', { stage, payload });
 }
 
 function getErrorMessage(error: unknown): string {

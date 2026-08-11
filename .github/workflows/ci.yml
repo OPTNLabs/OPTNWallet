@@ -30,10 +30,10 @@ jobs:
         run: |
           status="$(gh api repos/${{ github.repository }} --jq '.security_and_analysis.dependency_graph.status // "disabled"')"
           echo "status=$status" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Dependency review
         if: steps.dependency-graph.outputs.status == 'enabled'
-        uses: actions/dependency-review-action@v4
+        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48
       - name: Skip dependency review
         if: steps.dependency-graph.outputs.status != 'enabled'
         run: echo "Dependency graph is disabled; skipping dependency review."
@@ -41,7 +41,7 @@ jobs:
   secrets-scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
       - name: Gitleaks scan
@@ -56,44 +56,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Setup Node
-        uses: actions/setup-node@v7
-        with:
-          node-version: 20
-          cache: npm
-      - name: Install deps
-        run: npm ci --ignore-scripts --omit=dev
-      - name: Dependency audit (prod, critical+)
-        run: npm audit --omit=dev --audit-level=critical
-
-  web-ci:
-    needs: [secrets-scan, dependency-audit]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-  secrets-scan:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - name: Gitleaks scan
-        run: |
-          docker run --rm \
-            -v "$GITHUB_WORKSPACE:/path:ro" \
-            -w /path \
-            ghcr.io/gitleaks/gitleaks@sha256:b5918eb91b8d2473cec722f066abb4352e4ffdc4ec9f4283ec143aba9ec9ebc4 \
-            git --redact --config .gitleaks.toml --log-opts="--all" .
-
-  dependency-audit:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v7
-      - name: Setup Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 20
           cache: npm
@@ -112,13 +77,15 @@ jobs:
 
       - name: Dependency policy
         run: npm run deps:check
+      - name: Dependency audit (prod, critical+)
+        run: npm audit --omit=dev --audit-level=critical
 
   web-ci:
     needs: [secrets-scan, dependency-audit]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Unit tests
         run: npm run test:core
@@ -131,7 +98,7 @@ jobs:
 
       - name: Upload web dist
         if: github.event_name == 'push' && always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: web-dist
           path: dist/

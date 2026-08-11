@@ -51,6 +51,14 @@ type SandboxMessage =
       args: unknown[];
     };
 
+function postSandboxMessage(iframe: HTMLIFrameElement, message: unknown): void {
+  // The sandbox intentionally omits allow-same-origin, so its origin is opaque.
+  // event.source is checked against this exact iframe before any message is
+  // handled; '*' is required for delivery but does not authorize a caller.
+  // nosemgrep: javascript.browser.security.wildcard-postmessage-configuration.wildcard-postmessage-configuration
+  iframe.contentWindow?.postMessage(message, '*');
+}
+
 export type MountAddonIframeOptions = {
   container: HTMLElement;
   bundleSource: string;
@@ -107,14 +115,11 @@ export function mountAddonIframe(
   ) => {
     currentLocale = nextLocale;
     currentLocaleMessages = nextMessages;
-    iframe.contentWindow?.postMessage(
-      {
-        type: 'optn-addon-locale',
-        locale: nextLocale,
-        messages: nextMessages,
-      },
-      '*'
-    );
+    postSandboxMessage(iframe, {
+      type: 'optn-addon-locale',
+      locale: nextLocale,
+      messages: nextMessages,
+    });
   };
 
   const handleMessage = (event: MessageEvent<SandboxMessage>) => {
@@ -124,15 +129,12 @@ export function mountAddonIframe(
     if (!data || typeof data !== 'object') return;
 
     if (data.type === 'optn-addon-ready') {
-      iframe.contentWindow?.postMessage(
-        {
-          type: 'optn-addon-init',
-          bundleSource,
-          locale: currentLocale,
-          localeMessages: currentLocaleMessages,
-        },
-        '*'
-      );
+      postSandboxMessage(iframe, {
+        type: 'optn-addon-init',
+        bundleSource,
+        locale: currentLocale,
+        localeMessages: currentLocaleMessages,
+      });
       return;
     }
 
@@ -145,21 +147,20 @@ export function mountAddonIframe(
       const { requestId, module: moduleName, method: methodName, args } = data;
       void dispatchAddonSdkCall(sdk, moduleName, methodName, args ?? [])
         .then((result) => {
-          iframe.contentWindow?.postMessage(
-            { type: 'optn-addon-sdk-result', requestId, ok: true, result },
-            '*'
-          );
+          postSandboxMessage(iframe, {
+            type: 'optn-addon-sdk-result',
+            requestId,
+            ok: true,
+            result,
+          });
         })
         .catch((err: unknown) => {
-          iframe.contentWindow?.postMessage(
-            {
-              type: 'optn-addon-sdk-result',
-              requestId,
-              ok: false,
-              error: err instanceof Error ? err.message : String(err),
-            },
-            '*'
-          );
+          postSandboxMessage(iframe, {
+            type: 'optn-addon-sdk-result',
+            requestId,
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
         });
     }
   };

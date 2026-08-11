@@ -11,6 +11,8 @@
       android:usesCleartextTraffic="false"
       android:theme="@style/AppTheme">   <!-- <- NoActionBar theme is the normal app theme -->
 
+    <!-- nosemgrep: java.android.security.exported_activity.exported_activity -->
+    <!-- Required launcher entry point; no privileged control-plane intent filters. -->
     <activity
         android:name=".MainActivity"
         android:exported="true"
