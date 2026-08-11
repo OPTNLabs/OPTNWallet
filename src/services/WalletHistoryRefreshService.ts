@@ -58,7 +58,9 @@ export function loadStoredTransactions(
   const query = db.prepare(`
     SELECT tx_hash, height, timestamp, amount
     FROM transactions
-    WHERE wallet_id = ?;
+    WHERE wallet_id = ?
+    ORDER BY height DESC, timestamp DESC
+    LIMIT 2000;
   `);
   query.bind([walletId]);
   const rows: TransactionHistoryItem[] = [];

@@ -19,6 +19,9 @@ import { logError } from '../utils/errorHandling';
 import { isWebPlatform } from '../utils/platform';
 import { binToHex, hexToBin } from '../utils/hex';
 
+const bcmrCache = new Map<string, { ts: number; data: Awaited<ReturnType<BcmrService['getSnapshot']>> | null }>();
+const BCMR_CACHE_TTL_MS = 300_000;
+
 function getPrefix(): string {
   try {
     const state = store.getState();
@@ -169,7 +172,12 @@ async function enrichCachedTokenMetadata(
   const metadataResults = await Promise.all(
     categoryList.map(async (category) => {
       try {
+        const cached = bcmrCache.get(category);
+        if (cached && Date.now() - cached.ts < BCMR_CACHE_TTL_MS) {
+          return { category, metadata: cached.data };
+        }
         const metadata = await bcmrService.getSnapshot(category);
+        bcmrCache.set(category, { ts: Date.now(), data: metadata });
         return { category, metadata };
       } catch {
         return { category, metadata: null };
