@@ -871,19 +871,38 @@ const ElectrumService = {
           ? response.vout.map(mapOutputParticipant)
           : [];
         const inputs = await resolveInputParticipants(server, response);
+        const confs =
+          typeof response.confirmations === 'number' && Number.isFinite(response.confirmations)
+            ? response.confirmations
+            : 0;
+        let txHeight =
+          typeof response.height === 'number' && Number.isFinite(response.height)
+            ? response.height
+            : undefined;
+        // Some Electrum servers omit `height` in verbose tx response.  Derive
+        // it from confirmations + current chain tip so the UI can display it.
+        if (txHeight == null && confs > 0) {
+          try {
+            const tipResp = await server.request('blockchain.headers.get_tip');
+            const tipObj = typeof tipResp === 'object' && tipResp !== null ? tipResp as Record<string, unknown> : null;
+            const tipHeight =
+              tipObj && typeof tipObj.height === 'number' && Number.isFinite(tipObj.height)
+                ? tipObj.height
+                : typeof tipResp === 'number'
+                  ? tipResp
+                  : undefined;
+            if (tipHeight != null) txHeight = tipHeight - confs + 1;
+          } catch {
+            // non-fatal — height stays undefined
+          }
+        }
         const details: TransactionDetails = {
           txid:
             typeof response.txid === 'string' && response.txid.trim()
               ? response.txid
               : txHash,
-          confirmations:
-            typeof response.confirmations === 'number' && Number.isFinite(response.confirmations)
-              ? response.confirmations
-              : 0,
-          height:
-            typeof response.height === 'number' && Number.isFinite(response.height)
-              ? response.height
-              : undefined,
+          confirmations: confs,
+          height: txHeight,
           feeSats: deriveFeeSats(response.fee, inputs, outputs),
           timestamp: extractTimestamp(response),
           inputs,

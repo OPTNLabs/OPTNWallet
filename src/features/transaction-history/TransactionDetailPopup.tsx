@@ -114,7 +114,7 @@ export default function TransactionDetailPopup({
       setLoading(true);
       setError('');
       try {
-        const next = await ElectrumService.getTransactionDetails(txid);
+        const next = await ElectrumService.getTransactionDetails(txid, { forceRefresh: true });
         if (!cancelled) {
           setDetails(next);
           if (!next)
