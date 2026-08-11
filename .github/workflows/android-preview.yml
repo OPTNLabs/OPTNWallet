@@ -94,8 +94,7 @@ jobs:
             -gpu swiftshader_indirect \
             -no-snapshot \
             -noaudio \
-            -no-boot-anim \
-            -accel off >"$emulator_log" 2>&1 &
+            -no-boot-anim >"$emulator_log" 2>&1 &
           emulator_pid=$!
 
           cleanup() {
@@ -111,7 +110,21 @@ jobs:
           }
           trap cleanup EXIT
 
-          adb -s "$emulator_serial" wait-for-device
+          adb start-server
+
+          device_state=
+          attempt=1
+          while [ "$attempt" -le 180 ]; do
+            device_state="$(adb devices |
+              awk -v serial="$emulator_serial" '$1 == serial { print $2 }')"
+            if [ "$device_state" = 'device' ]; then
+              break
+            fi
+            sleep 2
+            attempt=$((attempt + 1))
+          done
+          echo "Emulator device state: ${device_state:-unavailable}"
+          test "$device_state" = 'device'
 
           boot_completed=
           attempt=1
