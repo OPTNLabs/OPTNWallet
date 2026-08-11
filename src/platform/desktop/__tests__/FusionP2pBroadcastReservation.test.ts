@@ -27,6 +27,9 @@ const reserveOutpointsMock = vi.fn();
 const reservedOutpointsMock = vi.fn();
 const runFusionRoundMock = vi.fn();
 const trackAttemptMock = vi.fn();
+const markVerificationPendingMock = vi.fn(async () => ({}));
+const removeTrackedMock = vi.fn(async () => undefined);
+const completeFusionBroadcastMock = vi.fn(async () => ({}));
 
 /** Signed CoinJoin bytes the mocked round hands to `broadcast`. */
 const TX_HEX = '02000000000101' + '00'.repeat(32) + '00000000';
@@ -74,7 +77,11 @@ vi.mock('../../../services/WalletUtxoRefreshService', () => ({
 }));
 
 vi.mock('../../../services/OutboundTransactionTracker', () => ({
-  default: { trackAttempt: trackAttemptMock },
+  default: {
+    trackAttempt: trackAttemptMock,
+    markVerificationPending: markVerificationPendingMock,
+    remove: removeTrackedMock,
+  },
 }));
 
 vi.mock('../fusionRoundState', () => ({
@@ -93,7 +100,7 @@ vi.mock('../fusionRoundState', () => ({
 }));
 
 vi.mock('../FusionCompletionService', () => ({
-  completeFusionBroadcast: vi.fn(async () => ({})),
+  completeFusionBroadcast: completeFusionBroadcastMock,
   fusionCompletionWarning: vi.fn(() => undefined),
 }));
 
@@ -118,7 +125,10 @@ vi.mock('../FusionExecutionSafety', () => ({
 }));
 
 vi.mock('../ServerFusionRunner', () => ({
-  defaultRelayEndpoints: vi.fn(() => ({ relayHost: 'relay', relayPort: 50002 })),
+  defaultRelayEndpoints: vi.fn(() => ({
+    relayHost: 'relay',
+    relayPort: 50002,
+  })),
   inputLookupEndpoints: vi.fn(() => [
     { host: 'lookup', port: 50002, useSsl: true },
   ]),
@@ -305,6 +315,12 @@ describe('F1 — unresolved P2P broadcast keeps its input reservations', () => {
     // Releasing here would let the next round respend these coins against a
     // CoinJoin that may already be confirming.
     expect(releaseOutpointsMock).not.toHaveBeenCalled();
+    expect(completeFusionBroadcastMock).not.toHaveBeenCalled();
+    expect(markVerificationPendingMock).toHaveBeenCalledWith(
+      EXPECTED_TXID,
+      expect.stringContaining('visibility'),
+      1
+    );
     expect(statuses.some((line) => line.startsWith('Fusion pending —'))).toBe(
       true
     );
@@ -332,6 +348,24 @@ describe('F1 — unresolved P2P broadcast keeps its input reservations', () => {
 
     // A round that died before broadcast must not strand the coins until TTL.
     expect(error?.message).toBe('round aborted');
+    expect(releaseOutpointsMock).toHaveBeenCalledWith(1, [COIN_OUTPOINT]);
+  });
+
+  it('removes tracking and releases inputs after a definite node rejection', async () => {
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'fusion_tor_check') return true;
+      if (command === 'fusion_relay_broadcast_and_observe') {
+        throw new Error('mempool min fee not met, 219 < 233 (code 66)');
+      }
+      if (command === 'fusion_transaction_is_known') return false;
+      return undefined;
+    });
+
+    const { error } = await runRound();
+
+    expect(error?.message).toContain('Fusion broadcast rejected');
+    expect(completeFusionBroadcastMock).not.toHaveBeenCalled();
+    expect(removeTrackedMock).toHaveBeenCalledWith(EXPECTED_TXID, 1);
     expect(releaseOutpointsMock).toHaveBeenCalledWith(1, [COIN_OUTPOINT]);
   });
 

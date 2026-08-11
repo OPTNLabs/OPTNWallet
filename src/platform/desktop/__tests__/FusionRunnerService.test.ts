@@ -1,10 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const reconcile = vi.fn();
+const findPendingFusion = vi.fn();
 vi.mock('../../../services/WalletUtxoRefreshService', () => ({
   // Fusion uses the exclusive spend path so background joins cannot soft-fail.
   reconcileActiveWalletUtxosForSpend: (...a: unknown[]) => reconcile(...a),
   reconcileActiveWalletUtxos: (...a: unknown[]) => reconcile(...a),
+}));
+vi.mock('../../../services/OutboundTransactionTracker', () => ({
+  default: {
+    findFusionVerificationPending: (...a: unknown[]) => findPendingFusion(...a),
+  },
 }));
 
 import {
@@ -23,10 +29,7 @@ import {
   isAutoDepthMetIdle,
   lastAutoAttemptAt,
 } from '../fusionWalletLease';
-import {
-  reserveOutpoints,
-  reservedOutpoints,
-} from '../fusionRoundState';
+import { reserveOutpoints, reservedOutpoints } from '../fusionRoundState';
 
 class MemoryStorage {
   private map = new Map<string, string>();
@@ -100,6 +103,7 @@ describe('FusionRunnerService — one path for manual and automatic rounds', () 
       new MemoryStorage();
     installLocks();
     clearFusionDepth(3);
+    findPendingFusion.mockReset().mockResolvedValue(null);
     reconcile.mockReset();
     runP2p.mockReset().mockResolvedValue({ txid: 'a'.repeat(64) });
     runServer.mockReset().mockResolvedValue({ txid: 'b'.repeat(64) });
@@ -116,6 +120,44 @@ describe('FusionRunnerService — one path for manual and automatic rounds', () 
       mode: 'p2p',
       txid: 'a'.repeat(64),
     });
+  });
+
+  it('does not report an unresolved P2P relay as fused', async () => {
+    reconcile.mockResolvedValue({ addr: [coin('aa')] });
+    runP2p.mockResolvedValue({
+      txid: 'a'.repeat(64),
+      verificationPending: true,
+      warning: 'Awaiting independent network visibility.',
+    });
+
+    const result = await startFusionRound({ ...base(), trigger: 'manual' });
+
+    expect(result).toEqual({
+      status: 'verification-pending',
+      mode: 'p2p',
+      txid: 'a'.repeat(64),
+      message: 'Awaiting independent network visibility.',
+    });
+  });
+
+  it('does not start another fee-spending round while Fusion verification is pending', async () => {
+    findPendingFusion.mockResolvedValue({
+      walletId: 3,
+      txid: 'f'.repeat(64),
+      source: 'p2p-fusion',
+      verificationPending: true,
+    });
+    reconcile.mockResolvedValue({ addr: [coin('aa')] });
+
+    await expect(startFusionRound(base())).resolves.toEqual({
+      status: 'verification-pending',
+      mode: 'p2p',
+      txid: 'f'.repeat(64),
+      message:
+        'A previous Fusion transaction is still awaiting independent network visibility.',
+    });
+    expect(reconcile).not.toHaveBeenCalled();
+    expect(runP2p).not.toHaveBeenCalled();
   });
 
   it('reuses the fresh snapshot that woke the automatic engine', async () => {

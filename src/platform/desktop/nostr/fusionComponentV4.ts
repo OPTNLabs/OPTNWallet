@@ -81,6 +81,22 @@ export function randomSalt32(): Uint8Array {
   return salt;
 }
 
+/** EC InitialCommitment hash: sha256(salt || canonical Component bytes). */
+export function saltedComponentHashHex(
+  saltHex: string,
+  componentBytes: Uint8Array
+): string {
+  const salt = hexToBin(saltHex.toLowerCase());
+  if (salt.length !== 32) throw new Error('salt must be 32 bytes');
+  if (componentBytes.length === 0 || componentBytes.length > 200 * 1024) {
+    throw new Error('component bytes length is invalid');
+  }
+  const payload = new Uint8Array(salt.length + componentBytes.length);
+  payload.set(salt);
+  payload.set(componentBytes, salt.length);
+  return binToHex(sha256.hash(payload));
+}
+
 /**
  * Encode a finalized Input Component (protobuf2, fusion.proto field layout).
  * `prevTxidDisplayHex` is explorer/big-endian; stored wire-order little-endian.

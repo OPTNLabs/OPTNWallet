@@ -68,6 +68,22 @@ export function pedersenCommit(amount: number): {
   nonceHex: string;
 } {
   const nonce = randomScalar();
+  return pedersenCommitWithNonce(amount, binToHex(nonce));
+}
+
+/** Recompute an EC Pedersen commitment from an abort-phase nonce opening. */
+export function pedersenCommitWithNonce(
+  amount: number,
+  nonceHex: string
+): {
+  commitmentHex: string;
+  nonceHex: string;
+} {
+  const nonce = hexToBin(nonceHex.toLowerCase());
+  const nonceValue = bytesToBigInt(nonce);
+  if (nonce.length !== 32 || nonceValue <= 0n || nonceValue >= N) {
+    throw new Error('pedersen nonce must be a non-zero canonical scalar');
+  }
   const noncePoint = ecc.pointFromScalar(nonce, true);
   if (!noncePoint) throw new Error('pedersen: nonce·G failed');
 
