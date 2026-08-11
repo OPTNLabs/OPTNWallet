@@ -146,6 +146,9 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      - name: Fetch bundled Tor (integrated CashFusion privacy)
+        run: node scripts/fetch-tor.mjs
+
       - name: Install tauri-driver
         run: cargo install tauri-driver --locked
 

@@ -57,6 +57,12 @@ function assertIntegerInRange(
   }
 }
 
+function secureRandomSessionId(): number {
+  const random = new Uint16Array(1);
+  globalThis.crypto.getRandomValues(random);
+  return random[0]!;
+}
+
 /** Deterministic natural log used by the reference wire format. */
 function deterministicLog(value: number): number {
   let exponent = 0;
@@ -255,7 +261,7 @@ export class QrStreamEncoder {
   constructor(
     payload: Uint8Array,
     readonly blockLength = QR_STREAM_DEFAULT_BLOCK_LENGTH,
-    sessionId = Math.floor(Math.random() * 0x10000)
+    sessionId = secureRandomSessionId()
   ) {
     if (payload.length === 0)
       throw new Error('QR stream payload cannot be empty');
