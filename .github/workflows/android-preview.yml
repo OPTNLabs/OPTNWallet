@@ -168,7 +168,7 @@ jobs:
             settings_state="$(adb_with_timeout -s "$emulator_serial" shell settings get \
               system screen_off_timeout 2>/dev/null | tr -d '\r')" || true
             if [ -n "$settings_state" ] && ! printf '%s' "$settings_state" |
-              grep -Eq 'Can.t find service|Failure calling service' && adb_with_timeout -s
+              grep -Eq 'Can.t find service|Failure calling service' && adb_with_timeout -s \
               "$emulator_serial" shell input keyevent 82 >/dev/null 2>&1; then
               settings_ready=1
               break
