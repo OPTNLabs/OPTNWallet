@@ -184,7 +184,7 @@ function ensureUint8Array(value: unknown): Uint8Array {
 
 export function logCauldronTxPlan(stage: string, payload: Record<string, unknown>): void {
   if (!import.meta.env.DEV) return;
-  console.debug(`[Cauldron:TX] ${stage}`, payload);
+  console.debug('[Cauldron:TX]', { stage, payload });
 }
 export function getErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;

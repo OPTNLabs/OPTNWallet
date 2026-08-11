@@ -143,8 +143,11 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
     const decimals = tokenMetadata[selectedTokenCategory]?.decimals || 0;
     const maxTokenAmount = tokenTotals[selectedTokenCategory] || BigInt(0);
 
-    const regex = new RegExp(`^\\d*\\.?\\d{0,${decimals}}$`);
-    if (regex.test(value) || value === '') {
+    const [, fractional = ''] = value.split('.');
+    const hasValidDecimalShape = /^\d*(?:\.\d*)?$/.test(value);
+    const hasValidPrecision =
+      !value.includes('.') || fractional.length <= decimals;
+    if ((hasValidDecimalShape && hasValidPrecision) || value === '') {
       setInputTokenAmount(value);
 
       if (

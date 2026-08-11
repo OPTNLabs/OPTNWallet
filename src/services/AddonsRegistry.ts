@@ -71,7 +71,10 @@ export default function AddonsRegistry() {
           validateAddonPermissions(m);
           installedManifests.push(m);
         } catch (err) {
-          console.warn(`[AddonsRegistry] Skipping invalid installed addon "${m?.id}":`, err);
+          console.warn('[AddonsRegistry] Skipping invalid installed addon', {
+            addonId: m?.id,
+            error: err,
+          });
         }
       }
     } catch (err) {

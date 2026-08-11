@@ -70,7 +70,9 @@ export function logError(
     context,
   });
 
-  console.error(`[${scope}] ${appError.message}`, {
+  console.error('[app-error]', {
+    scope,
+    message: appError.message,
     code: appError.code,
     ts: appError.ts,
     context: sanitizeValue(appError.context),
@@ -85,7 +87,9 @@ export function logWarn(
   message: string,
   context?: ErrorContext
 ) {
-  console.warn(`[${scope}] ${message}`, {
+  console.warn('[app-warning]', {
+    scope,
+    message,
     ts: Date.now(),
     context: sanitizeValue(context),
   });

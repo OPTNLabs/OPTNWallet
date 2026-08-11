@@ -40,7 +40,10 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
 }
 
 child.on('error', (error) => {
-  console.error(`[run-tauri] failed to start ${tauriBin}:`, error.message);
+  console.error('[run-tauri] failed to start Tauri', {
+    tauriBin,
+    error: error.message,
+  });
   process.exit(1);
 });
 

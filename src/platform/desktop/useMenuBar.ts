@@ -422,7 +422,7 @@ export function useMenuBar(): void {
 
     const dispatchMenuAction = (id: string) => {
       void dispatchDesktopMenuAction(id, handlers).catch((err) => {
-        console.error(`[menu] ${id} failed:`, err);
+        console.error('[menu] action failed', { id, error: err });
       });
     };
 
@@ -495,7 +495,7 @@ export function useMenuBar(): void {
     };
     const menuAction = (id: string) => () => {
       void routeAction(id).catch((err) => {
-        console.error(`[menu] could not route ${id}:`, err);
+        console.error('[menu] could not route action', { id, error: err });
       });
     };
 
