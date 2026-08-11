@@ -3,28 +3,34 @@
 apply plugin: 'com.android.application'
 apply plugin: 'kotlin-android' 
 
-def readEnvValue = { String primaryName, String legacyName ->
-    def primaryValue = System.getenv(primaryName)
-    if (primaryValue && primaryValue.trim()) {
-        return primaryValue
+def readSigningValue = { String primaryName, String legacyName ->
+    for (String name : [primaryName, legacyName]) {
+        def envValue = System.getenv(name)
+        if (envValue && envValue.trim()) {
+            return envValue
+        }
+
+        def propertyValue = project.findProperty(name)
+        if (propertyValue != null && propertyValue.toString().trim()) {
+            return propertyValue.toString()
+        }
     }
 
-    def legacyValue = System.getenv(legacyName)
-    return legacyValue && legacyValue.trim() ? legacyValue : null
+    return null
 }
 
-def releaseStoreFile = readEnvValue("KEYSTORE_PATH", "RELEASE_STORE_FILE")
-def releaseStorePassword = readEnvValue("KEYSTORE_PASS", "RELEASE_STORE_PASSWORD")
-def releaseKeyAlias = readEnvValue("KEYSTORE_ALIAS", "RELEASE_KEY_ALIAS")
-def releaseKeyPassword = readEnvValue("KEYSTORE_ALIAS_PASS", "RELEASE_KEY_PASSWORD")
+def releaseStoreFile = readSigningValue("KEYSTORE_PATH", "RELEASE_STORE_FILE")
+def releaseStorePassword = readSigningValue("KEYSTORE_PASS", "RELEASE_STORE_PASSWORD")
+def releaseKeyAlias = readSigningValue("KEYSTORE_ALIAS", "RELEASE_KEY_ALIAS")
+def releaseKeyPassword = readSigningValue("KEYSTORE_ALIAS_PASS", "RELEASE_KEY_PASSWORD")
 
-def hasReleaseSigningEnv = releaseStoreFile && releaseStorePassword && releaseKeyAlias && releaseKeyPassword
+def hasReleaseSigning = releaseStoreFile && releaseStorePassword && releaseKeyAlias && releaseKeyPassword
 def isReleaseTaskRequested = gradle.startParameter.taskNames.any { taskName ->
     taskName.toLowerCase().contains("release")
 }
 
-if (isReleaseTaskRequested && !hasReleaseSigningEnv) {
-    logger.warn("Release signing env vars are missing; building unsigned release artifacts.")
+if (isReleaseTaskRequested && !hasReleaseSigning) {
+    logger.warn("Release signing values are missing; building unsigned release artifacts.")
 }
 
 android {
@@ -35,8 +41,8 @@ android {
         applicationId "optn.wallet.app"
         minSdk = rootProject.ext.minSdkVersion
         targetSdk = rootProject.ext.targetSdkVersion
-        versionCode 16
-        versionName "1.7.0"
+        versionCode 17
+        versionName "1.7.1"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
@@ -45,7 +51,7 @@ android {
 
     signingConfigs {
         release {
-            if (hasReleaseSigningEnv) {
+            if (hasReleaseSigning) {
                 storeFile file(releaseStoreFile)
                 storePassword releaseStorePassword
                 keyAlias releaseKeyAlias
@@ -56,7 +62,7 @@ android {
 
     buildTypes {
         release {
-            if (hasReleaseSigningEnv) {
+            if (hasReleaseSigning) {
                 signingConfig signingConfigs.release
             }
             minifyEnabled = true

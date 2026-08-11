@@ -1,0 +1,20 @@
+{
+  "name": "@optn/docker-dev",
+  "private": true,
+  "version": "0.1.0",
+  "description": "OPTN Wallet production-grade contributor/lab Docker image (not consumer wallet)",
+  "scripts": {
+    "up": "docker compose -f docker-compose.yml up -d --build",
+    "up:fusion-lab": "docker compose -f docker-compose.yml --profile fusion-lab up -d --build",
+    "down:fusion-lab": "docker compose -f docker-compose.yml --profile fusion-lab down",
+    "up:release": "docker compose -f docker-compose.release.yml up -d",
+    "up:release:fusion-lab": "docker compose -f docker-compose.release.yml --profile fusion-lab up -d",
+    "pull:release": "docker compose -f docker-compose.release.yml pull",
+    "down": "docker compose -f docker-compose.yml --profile fusion-lab down",
+    "shell": "docker compose -f docker-compose.yml exec --user 1000:1000 dev bash",
+    "test:core": "docker compose -f docker-compose.yml run --rm --no-deps --user 1000:1000 --workdir /optn dev bash -lc \"npm ci && npm run test:core\"",
+    "logs": "docker compose -f docker-compose.yml logs -f dev",
+    "logs:tor": "docker compose -f docker-compose.yml --profile fusion-lab logs -f tor",
+    "logs:fusion-lab": "docker compose -f docker-compose.yml --profile fusion-lab logs -f fusion-lab"
+  }
+}
