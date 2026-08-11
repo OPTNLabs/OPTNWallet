@@ -57,7 +57,9 @@ type LockManagerLike = {
 function lockManager(): LockManagerLike | null {
   const candidate = (globalThis as { navigator?: { locks?: LockManagerLike } })
     .navigator?.locks;
-  return candidate && typeof candidate.request === 'function' ? candidate : null;
+  return candidate && typeof candidate.request === 'function'
+    ? candidate
+    : null;
 }
 
 /**
@@ -88,11 +90,17 @@ function readJson<T>(key: string): T | null {
   }
 }
 
-function writeJson(key: string, value: unknown): void {
+function writeJson(key: string, value: unknown): boolean {
+  const storage = getLocalStorage();
+  if (!storage) return false;
+  const serialized = JSON.stringify(value);
   try {
-    getLocalStorage()?.setItem(key, JSON.stringify(value));
+    storage.setItem(key, serialized);
+    // Web storage can be wrapped or fail silently. A fee-spending lease is not
+    // real until the exact record is readable while we still hold the Web Lock.
+    return storage.getItem(key) === serialized;
   } catch {
-    /* storage unavailable */
+    return false;
   }
 }
 
@@ -126,8 +134,9 @@ function takeLeaseIfFree(walletId: number, nowMs: number): string | null {
   // Live holder still heartbeating → refuse. Dead/stale → reclaim.
   if (leaseIsLive(held, nowMs)) return null;
   const owner = newOwnerToken();
-  writeJson(key, { owner, at: nowMs } satisfies LeaseRecord);
-  return owner;
+  return writeJson(key, { owner, at: nowMs } satisfies LeaseRecord)
+    ? owner
+    : null;
 }
 
 export async function acquireRoundLease(
@@ -155,16 +164,11 @@ export async function touchRoundLease(
   const result = await withWalletLock(walletId, () => {
     const held = readJson<LeaseRecord>(key);
     if (!held || held.owner !== owner) return false;
-    writeJson(key, { owner, at: nowMs } satisfies LeaseRecord);
-    return true;
+    return writeJson(key, { owner, at: nowMs } satisfies LeaseRecord);
   });
-  if (result.ran) return result.value;
-  // Manual single-window fallback: refresh only the token we still own. Auto
-  // never reaches this path because acquiring an Auto lease requires Web Locks.
-  const held = readJson<LeaseRecord>(key);
-  if (!held || held.owner !== owner) return false;
-  writeJson(key, { owner, at: nowMs } satisfies LeaseRecord);
-  return true;
+  // Losing the process-wide lock primitive mid-round is uncertainty, not a
+  // single-window mode. Abort before spending rather than refresh non-atomically.
+  return result.ran ? result.value : false;
 }
 
 /** Release only if we still hold it: a lease we already lost to TTL now belongs
@@ -227,7 +231,10 @@ export function hasLiveRoundLease(
   walletId: number,
   nowMs = Date.now()
 ): boolean {
-  return leaseIsLive(readJson<LeaseRecord>(`${LEASE_PREFIX}${walletId}`), nowMs);
+  return leaseIsLive(
+    readJson<LeaseRecord>(`${LEASE_PREFIX}${walletId}`),
+    nowMs
+  );
 }
 
 /**
@@ -255,7 +262,10 @@ function readCooldownRecord(walletId: number): CooldownRecord | null {
 function readNextAllowedAt(walletId: number): number | null {
   const record = readCooldownRecord(walletId);
   if (!record) return null;
-  if (typeof record.nextAllowedAt === 'number' && Number.isFinite(record.nextAllowedAt)) {
+  if (
+    typeof record.nextAllowedAt === 'number' &&
+    Number.isFinite(record.nextAllowedAt)
+  ) {
     return record.nextAllowedAt;
   }
   // Legacy records only stamped `attempt` (old code used ~5 min). Cap residual
@@ -281,12 +291,11 @@ export async function tryClaimAutoCooldown(
     const next = readNextAllowedAt(walletId);
     if (next !== null && nowMs < next) return false;
     // Soft hold until outcome stamps success or fail.
-    writeJson(key, {
+    return writeJson(key, {
       nextAllowedAt: nowMs + AUTO_FUSION_COOLDOWN_MS,
       attempt: nowMs,
       reason: 'claim',
     });
-    return true;
   });
   return result.ran ? result.value : false;
 }

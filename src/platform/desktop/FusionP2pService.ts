@@ -209,7 +209,7 @@ const SMALL_SET_HOLD_MS = P2P_SMALL_SET_HOLD_MS;
 // Live filter = re-announce proof-of-life (see isLivePoolAnnouncement). A plain
 // "created_at within 14–24s" window still counted abandoned Start keys right
 // after a restart (user: 4 wallets, "7 live peers").
-async function collectRolling(
+export async function collectRolling(
   walletId: number,
   selfPubkey: string,
   getPeers: () => PoolAnnouncement[],
@@ -388,6 +388,16 @@ async function collectRolling(
             `Need ≥${MIN_PARTICIPANTS} online with Auto+P2P+Tor; check Nostr relays.`
           : `No other wallets found in ${Math.round(aloneBudgetMs / 1000)}s. ` +
             `Need ≥${MIN_PARTICIPANTS} peers on the same network (Tor + Nostr green). Retry when others are online.`
+      );
+    }
+    // Once this attempt observed a larger strict set, never propose a smaller
+    // one. Different wallets otherwise freeze incompatible 4-vs-3 snapshots
+    // and rendezvous cannot repair them. Let Auto start a fresh attempt after
+    // the membership change instead.
+    if (lostFromPeak && (peakGraceExpired || now >= maxWait)) {
+      throw new Error(
+        `Peer set changed during gather (peak ${peakStrict}, now ${n}). ` +
+          `Retrying with a fresh shared set.`
       );
     }
     if (canLock || now >= maxWait) {
@@ -693,7 +703,9 @@ function p2pSigningHashes(options: NativeP2pSignOptions): {
     })),
   });
   const transcriptBytes = sha256.hash(new TextEncoder().encode(transcript));
-  const unsignedTemplate = encodeTransaction(toLibauthTx(options.tx).transaction);
+  const unsignedTemplate = encodeTransaction(
+    toLibauthTx(options.tx).transaction
+  );
   const unsignedTemplateHash = hash256(unsignedTemplate);
   const templateBytes = concatBytes([
     new TextEncoder().encode('OPTN-P2P-FUSION-V3\0'),

@@ -450,6 +450,106 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
     expect(decoded.outputs).toHaveLength(6);
   });
 
+  it('re-sends a shuffled hop batch when one forward blob is lost', async () => {
+    const peers = makePeers();
+    const participants = peers.map((peer) => peer.round.pubHex);
+    const coordinator = coordinatorOf(participants);
+    const mixOrder = participants.filter((peer) => peer !== coordinator).sort();
+    let dropped = false;
+    const hub = new Hub((from, to, message) => {
+      if (
+        !dropped &&
+        from === mixOrder[0] &&
+        to === mixOrder[1] &&
+        message.type === 'onion_output'
+      ) {
+        dropped = true;
+        return null;
+      }
+      return message;
+    });
+
+    const results = await Promise.all(
+      peers.map((peer) =>
+        runFusionRound(
+          {
+            myPubkey: peer.round.pubHex,
+            participants,
+            network: 'chipnet',
+            tier: 100_000,
+            feerate: 1_000,
+            myContribution: peer.contribution,
+            keysByPubkey: peer.keys,
+            broadcast: async (txHex) => txidOf(txHex),
+            timeoutMs: 8_000,
+            jitterMs: [0, 0],
+          },
+          hub.transportFor(peer.round.pubHex)
+        )
+      )
+    );
+
+    expect(dropped).toBe(true);
+    expect(new Set(results.map((result) => result.txid)).size).toBe(1);
+  }, 12_000);
+
+  it('does not announce ready after an initial onion injection publish fails', async () => {
+    const peers = makePeers();
+    const participants = peers.map((peer) => peer.round.pubHex);
+    const coordinator = coordinatorOf(participants);
+    const firstPeeler = participants
+      .filter((peer) => peer !== coordinator)
+      .sort()[0];
+    const failingPeer = peers.find(
+      (peer) =>
+        peer.round.pubHex !== coordinator && peer.round.pubHex !== firstPeeler
+    );
+    if (!failingPeer)
+      throw new Error('test requires a remote-injecting participant');
+    const hub = new Hub();
+    const settled = await Promise.allSettled(
+      peers.map((peer) => {
+        const base = hub.transportFor(peer.round.pubHex);
+        const transport: RoundTransport =
+          peer === failingPeer
+            ? {
+                ...base,
+                send: async (to, message) => {
+                  if (message.type === 'onion_output') {
+                    throw new Error('all relays rejected component');
+                  }
+                  return base.send(to, message);
+                },
+              }
+            : base;
+        return runFusionRound(
+          {
+            myPubkey: peer.round.pubHex,
+            participants,
+            network: 'chipnet',
+            tier: 100_000,
+            feerate: 1_000,
+            myContribution: peer.contribution,
+            keysByPubkey: peer.keys,
+            broadcast: async (txHex) => txidOf(txHex),
+            timeoutMs: 1_000,
+            jitterMs: [0, 0],
+          },
+          transport
+        );
+      })
+    );
+
+    expect(settled.some((result) => result.status === 'rejected')).toBe(true);
+    expect(
+      hub.sent.some(
+        (sent) =>
+          sent.from === failingPeer.round.pubHex &&
+          sent.message.type === 'components_ready'
+      )
+    ).toBe(false);
+  });
+
   it('rejects a malicious final peeler that alters an authorized output', async () => {
     const peers = makePeers();
     const participants = peers.map((peer) => peer.round.pubHex);

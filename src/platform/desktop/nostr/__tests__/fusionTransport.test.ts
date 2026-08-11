@@ -29,6 +29,7 @@ import {
 } from '../fusionSession';
 import { assembleFusionTx, type PeerContribution } from '../fusionRound';
 import { toLibauthTx } from '../fusionSign';
+import { PUBLISH_RELAY_TIMEOUT_MS } from '../fusion';
 
 /** Minimal relay stand-in: stores events and delivers to subscriptions whose
  *  {kinds, #p} filter matches — including subscriptions opened later. */
@@ -93,6 +94,10 @@ function roundId() {
 }
 
 describe('Nostr round transport', () => {
+  it('keeps a one-shot component socket alive beyond the relay ACK deadline', () => {
+    expect(ONE_SHOT_POOL_LINGER_MS).toBeGreaterThan(PUBLISH_RELAY_TIMEOUT_MS);
+  });
+
   it('rejects protocol-v2 messages without downgrade fallback', () => {
     expect(
       parseRoundMessage(

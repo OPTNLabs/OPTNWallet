@@ -580,9 +580,7 @@ export function verifyAuthorizedOutputBatch(
     ) {
       return { ok: false, reason: 'duplicate output credential or output' };
     }
-    if (
-      !verifyBchSchnorrHex(issuerPubkey, output.credentialSig, msgHex)
-    ) {
+    if (!verifyBchSchnorrHex(issuerPubkey, output.credentialSig, msgHex)) {
       return { ok: false, reason: 'invalid output credential' };
     }
     serials.add(serial);
@@ -691,7 +689,8 @@ export function parseRoundMessage(content: string): RoundMessage | null {
           outpoints.length + serials.length === 0 ||
           !outpoints.every(
             (outpoint) =>
-              typeof outpoint === 'string' && /^[0-9a-f]{64}:\d+$/i.test(outpoint)
+              typeof outpoint === 'string' &&
+              /^[0-9a-f]{64}:\d+$/i.test(outpoint)
           ) ||
           !serials.every(
             (serial) => typeof serial === 'string' && HEX_64_STRICT.test(serial)
@@ -1061,6 +1060,7 @@ function runParticipant(
     let unsubscribeProtocolError: () => void = () => undefined;
     let declareResendTimer: ReturnType<typeof setInterval> | null = null;
     let onionOutputResendTimer: ReturnType<typeof setInterval> | null = null;
+    let onionForwardResendTimer: ReturnType<typeof setInterval> | null = null;
     let onionStatusTimer: ReturnType<typeof setInterval> | null = null;
     let sigResendTimer: ReturnType<typeof setInterval> | null = null;
     const seenNonces = new Set<string>();
@@ -1149,6 +1149,10 @@ function runParticipant(
       if (onionOutputResendTimer) {
         clearInterval(onionOutputResendTimer);
         onionOutputResendTimer = null;
+      }
+      if (onionForwardResendTimer) {
+        clearInterval(onionForwardResendTimer);
+        onionForwardResendTimer = null;
       }
       if (onionStatusTimer) {
         clearInterval(onionStatusTimer);
@@ -1253,16 +1257,36 @@ function runParticipant(
           });
         } else {
           const nextPeeler = mixOrder[nextIdx];
-          for (const inner of peeled) {
-            const innerB64 = btoa(String.fromCharCode(...inner));
-            await transport.send(nextPeeler, {
-              ...messageBinding(),
-              type: 'onion_output',
-              session,
-              onion: innerB64,
-              mixOrder,
-            });
-          }
+          const forwardedPayloads = peeled.map((inner) =>
+            btoa(String.fromCharCode(...inner))
+          );
+          const sendForwardBatch = async () => {
+            for (const innerB64 of forwardedPayloads) {
+              await transport.send(nextPeeler, {
+                ...messageBinding(),
+                type: 'onion_output',
+                session,
+                onion: innerB64,
+                mixOrder,
+              });
+            }
+          };
+          await sendForwardBatch();
+          // A relay ACK proves storage, not that the next peeler observed the
+          // gift-wrap. Keep a bounded copy of the shuffled batch and retry it;
+          // the next hop deduplicates identical onion payloads before peeling.
+          let forwardResendsLeft = ONION_OUTPUT_RESEND_MAX;
+          onionForwardResendTimer = setInterval(() => {
+            if (settled || signed || forwardResendsLeft <= 0) {
+              if (onionForwardResendTimer) {
+                clearInterval(onionForwardResendTimer);
+                onionForwardResendTimer = null;
+              }
+              return;
+            }
+            forwardResendsLeft -= 1;
+            void sendForwardBatch().catch(() => undefined);
+          }, ONION_OUTPUT_RESEND_MS);
         }
         onionBatchDone = true;
         if (declareResendTimer) {
@@ -1652,15 +1676,13 @@ function runParticipant(
       // Resend path: no per-blob jitter (keeps recovery fast).
       const sendInjectsRemote = async (withJitter: boolean) => {
         for (const onionB64 of injectPayloads) {
-          await transport
-            .send(firstPeeler, {
-              ...messageBinding(),
-              type: 'onion_output',
-              session,
-              onion: onionB64,
-              mixOrder,
-            })
-            .catch(() => undefined);
+          await transport.send(firstPeeler, {
+            ...messageBinding(),
+            type: 'onion_output',
+            session,
+            onion: onionB64,
+            mixOrder,
+          });
           if (withJitter) await jitterDelay(jMin, jMax);
         }
       };
@@ -1838,7 +1860,9 @@ function runCoordinator(
     };
     /** Expected slots once the mix-net is on: one reveal batch (plus any attributed). */
     const expectedOutputSlots = (): number =>
-      mixOrder.length >= 2 ? Math.max(1, outputSlotsFilled() || 1) : params.participants.length;
+      mixOrder.length >= 2
+        ? Math.max(1, outputSlotsFilled() || 1)
+        : params.participants.length;
     const signaturesByOutpoint = new Map<string, InputSig>();
     const signedPeers = new Set<string>();
     const seenNonces = new Set<string>();
@@ -1976,7 +2000,8 @@ function runCoordinator(
               requestHex,
             });
           if (ok) {
-            if (!proven.includes(opening.outpoint)) proven.push(opening.outpoint);
+            if (!proven.includes(opening.outpoint))
+              proven.push(opening.outpoint);
             continue;
           }
           // Peer claimed this outpoint with a non-proof — accuse, don't only drop.
@@ -2001,7 +2026,9 @@ function runCoordinator(
               rPointHex:
                 rPointHex ?? issuer.rPointsHex[0] ?? '02' + '00'.repeat(32),
               saltCommitmentHex:
-                saltCommitment ?? saltCommitmentByOutpoint.values().next().value ?? '00'.repeat(32),
+                saltCommitment ??
+                saltCommitmentByOutpoint.values().next().value ??
+                '00'.repeat(32),
             });
           }
         }
@@ -2243,7 +2270,10 @@ function runCoordinator(
       sigs: string[],
       saltCommitments: string[]
     ) => {
-      if (inputs.length !== sigs.length || inputs.length !== saltCommitments.length) {
+      if (
+        inputs.length !== sigs.length ||
+        inputs.length !== saltCommitments.length
+      ) {
         throw new Error('input/credential/salt count mismatch');
       }
       // Global quota. Per-peer quotas still bound how many credentials each
@@ -2790,15 +2820,13 @@ function runCoordinator(
       }
       const sendInjects = async (withJitter: boolean) => {
         for (const onionB64 of injectPayloads) {
-          await transport
-            .send(firstPeeler, {
-              ...messageBinding(),
-              type: 'onion_output',
-              session,
-              onion: onionB64,
-              mixOrder,
-            })
-            .catch(() => undefined);
+          await transport.send(firstPeeler, {
+            ...messageBinding(),
+            type: 'onion_output',
+            session,
+            onion: onionB64,
+            mixOrder,
+          });
           if (withJitter) await jitterDelay(jMin, jMax);
         }
       };

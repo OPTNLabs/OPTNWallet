@@ -18,12 +18,27 @@ import { useTransportConfig } from './useTransportConfig';
 import { useWindowTitle } from './useWindowTitle';
 import { migrateWalletFileNames } from './walletFile';
 import { selectWalletId, resetWallet } from '../../state/slices/walletSlice';
-import { hasCachedCredentialsForWallet, hasWatchOnlySession } from './WalletKeyCache';
+import {
+  hasCachedCredentialsForWallet,
+  hasWatchOnlySession,
+} from './WalletKeyCache';
 import { persistor } from '../../state/store';
 import { invoke } from '@tauri-apps/api/core';
+import { pruneDesktopCache } from './filesystem';
 
 const DesktopAppShell: React.FC = () => {
   useMenuBar();
+  // Upgrade cleanup: old desktop builds stored unbounded base64 token icons in
+  // localStorage. Trim only that disposable cache before Auto Fusion registers
+  // its first effect, leaving quota for durable cross-window safety records.
+  useEffect(() => {
+    const removed = pruneDesktopCache();
+    if (removed > 0) {
+      console.info(
+        `[desktop-cache] pruned ${removed} oversized cache entr${removed === 1 ? 'y' : 'ies'}`
+      );
+    }
+  }, []);
   // App-wide, so automatic rounds do not require the CashFusion screen to be
   // open. It gates itself on wallet/session state and refuses unless the durable
   // cooldown and the cross-window lease both allow a round.
@@ -58,8 +73,12 @@ const DesktopAppShell: React.FC = () => {
     // Deferred off the critical path: the wallet list and unlock do not depend
     // on backup filenames, so this can happen after the window is interactive.
     const idle =
-      (window as unknown as { requestIdleCallback?: (cb: () => void) => number })
-        .requestIdleCallback ?? ((cb: () => void) => window.setTimeout(cb, 3000));
+      (
+        window as unknown as {
+          requestIdleCallback?: (cb: () => void) => number;
+        }
+      ).requestIdleCallback ??
+      ((cb: () => void) => window.setTimeout(cb, 3000));
 
     idle(() => {
       void migrateWalletFileNames()
@@ -70,7 +89,9 @@ const DesktopAppShell: React.FC = () => {
             /* best effort */
           }
           if (renamed > 0) {
-            console.info(`[walletFile] renamed ${renamed} legacy wallet backup(s)`);
+            console.info(
+              `[walletFile] renamed ${renamed} legacy wallet backup(s)`
+            );
           }
         })
         .catch(() => undefined);
@@ -85,10 +106,8 @@ const DesktopAppShell: React.FC = () => {
     let cancelled = false;
     void (async () => {
       try {
-        const {
-          hydrateFusionLabels,
-          restoreFusionLabelsFromRecoveryFile,
-        } = await import('./fusionCoinDepth');
+        const { hydrateFusionLabels, restoreFusionLabelsFromRecoveryFile } =
+          await import('./fusionCoinDepth');
         const r = await restoreFusionLabelsFromRecoveryFile();
         if (!cancelled && r.wallets > 0) {
           console.info(
@@ -108,7 +127,9 @@ const DesktopAppShell: React.FC = () => {
     };
   }, [walletId]);
 
-  const [rehydrated, setRehydrated] = useState(() => persistor.getState().bootstrapped);
+  const [rehydrated, setRehydrated] = useState(
+    () => persistor.getState().bootstrapped
+  );
   const [invariantChecked, setInvariantChecked] = useState(false);
   // After the ciphertext-model migration, credentials are password+salt in RAM
   // — not a cached CryptoKey. The old getCachedWalletKeyForWallet() always
