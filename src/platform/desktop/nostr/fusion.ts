@@ -60,13 +60,13 @@ export const POOL_SUBSCRIBE_LOOKBACK_SECONDS = 180;
 const MAX_FUTURE_SKEW_SECONDS = 5;
 const MAX_ANNOUNCEMENT_BYTES = 2_048;
 const MAX_TIERS = 16;
-const MAX_INPUTS = 100;
-const MAX_TOTAL_COMPONENTS = 100;
-const MAX_OUTPUTS_PER_PEER = 4;
+const MAX_INPUTS = 20;
+const MAX_TOTAL_COMPONENTS = 120;
+const MAX_OUTPUTS_PER_PEER = 6;
 
-// ─── Gathering model: 3–6 peers (CashFusion-style anonymity floor) ─────
+// ─── Gathering model: 3–8 peers (CashFusion-style anonymity floor) ─────
 /** Maximum participants per round (onion mix-net cap). */
-export const MAX_PARTICIPANTS = 6;
+export const MAX_PARTICIPANTS = 8;
 /**
  * Minimum participants to start a P2P round.
  * CashFusion server pools start well above 2 (reference min_clients is often 8);

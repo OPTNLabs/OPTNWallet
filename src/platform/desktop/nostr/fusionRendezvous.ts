@@ -13,7 +13,7 @@ import {
 } from './fusion';
 import { messageBinding, type RoundMessage, type RoundTransport } from './fusionSession';
 
-const MAX_PARTICIPANTS = 6;
+const MAX_PARTICIPANTS = 8;
 const DEFAULT_RENDEZVOUS_TIMEOUT_MS = P2P_RENDEZVOUS_MS;
 const DEFAULT_PROPOSAL_TIMEOUT_MS = P2P_PROPOSAL_TIMEOUT_MS;
 const PUBKEY = /^[0-9a-f]{64}$/;

@@ -483,8 +483,8 @@ export function outputCredentialMessageHashHex(
 
 /** One-shot blind-Schnorr nonce capacity reserved for each round participant. */
 export const CREDENTIAL_SLOTS_PER_PEER = 24;
-/** Output planning may use four slots, so input selection must leave them free. */
-export const MAX_OUTPUT_CREDENTIALS_PER_PEER = 4;
+/** Output planning may use up to six slots, so input selection must leave them free. */
+export const MAX_OUTPUT_CREDENTIALS_PER_PEER = 6;
 export const MAX_INPUT_CREDENTIALS_PER_PEER =
   CREDENTIAL_SLOTS_PER_PEER - MAX_OUTPUT_CREDENTIALS_PER_PEER;
 

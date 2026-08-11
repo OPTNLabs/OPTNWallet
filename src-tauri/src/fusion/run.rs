@@ -19,7 +19,7 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use futures_util::future::join_all;
+
 use k256::elliptic_curve::PrimeField;
 use k256::Scalar;
 use prost::Message;
@@ -522,40 +522,74 @@ async fn verify_input_anywhere(
 }
 
 /// Revalidate every wallet-owned input against the wallet-configured Electrum
-/// chain. Inputs run concurrently so a wallet with many coins pays at most one
-/// endpoint timeout per fallback tier, not one timeout per coin. Each input
-/// still tries endpoints in configured order, and ambiguity is fatal without
-/// assigning blame.
+/// chain.  Uses a **single** Electrum connection per endpoint (batched
+/// `listunspent` queries) instead of opening a fresh Tor circuit per input.
+/// Falls back to per-input lookups if the batch fails.
 async fn revalidate_own_inputs(
     inputs: &[FusionInputKey],
     endpoints: &[ElectrumEndpoint],
     transport: Transport<'_>,
     boundary: &str,
 ) -> Result<(), String> {
-    let checks = inputs.iter().map(|input| {
-        let txid = display_txid_to_wire(&input.prev_txid);
-        let component = txid.map(|prev_txid| pb::InputComponent {
-            prev_txid: prev_txid.to_vec(),
-            prev_index: input.prev_index,
-            pubkey: input.pubkey.clone(),
-            amount: input.value,
-        });
-        async move {
-            let component =
-                component.map_err(|_| "wallet input has an invalid transaction id".to_string())?;
-            match verify_input_anywhere(endpoints, transport, &component).await {
-                Ok(InputLookup::Match) => Ok(()),
-                Ok(InputLookup::Mismatch(reason)) => Err(format!(
-                    "wallet input is stale or spent before {boundary}: {reason}"
-                )),
-                Err(error) => Err(format!(
-                    "could not safely revalidate wallet inputs before {boundary}: {error}"
-                )),
+    // Build the protobuf components once.
+    let components: Result<Vec<pb::InputComponent>, String> = inputs
+        .iter()
+        .map(|input| {
+            let prev_txid = display_txid_to_wire(&input.prev_txid)?;
+            Ok(pb::InputComponent {
+                prev_txid: prev_txid.to_vec(),
+                prev_index: input.prev_index,
+                pubkey: input.pubkey.clone(),
+                amount: input.value,
+            })
+        })
+        .collect();
+    let components = components?;
+
+    // Try batched lookups first — one TCP/Tor connection per endpoint.
+    for endpoint in endpoints {
+        let refs: Vec<&pb::InputComponent> = components.iter().collect();
+        match electrum_input::batch_verify_inputs(endpoint, transport, &refs).await {
+            Ok(results) => {
+                for (_idx, lookup) in results {
+                    match lookup {
+                        Ok(InputLookup::Match) => {}
+                        Ok(InputLookup::Mismatch(reason)) => {
+                            return Err(format!(
+                                "wallet input is stale or spent before {boundary}: {reason}"
+                            ));
+                        }
+                        Err(error) => {
+                            return Err(format!(
+                                "could not safely revalidate wallet inputs before {boundary}: {error}"
+                            ));
+                        }
+                    }
+                }
+                return Ok(());
+            }
+            Err(_batch_error) => {
+                // Batch failed (connection issue). Fall through to per-input.
             }
         }
-    });
-    for result in join_all(checks).await {
-        result?;
+    }
+
+    // Fallback: per-input lookups over individual connections.
+    for (idx, component) in components.iter().enumerate() {
+        let _ = inputs[idx]; // keep the index meaningful for error messages.
+        match verify_input_anywhere(endpoints, transport, component).await {
+            Ok(InputLookup::Match) => {}
+            Ok(InputLookup::Mismatch(reason)) => {
+                return Err(format!(
+                    "wallet input is stale or spent before {boundary}: {reason}"
+                ));
+            }
+            Err(error) => {
+                return Err(format!(
+                    "could not safely revalidate wallet inputs before {boundary}: {error}"
+                ));
+            }
+        }
     }
     Ok(())
 }

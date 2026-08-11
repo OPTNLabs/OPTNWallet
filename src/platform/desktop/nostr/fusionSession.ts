@@ -316,7 +316,7 @@ function secureShuffle<T>(items: T[]): void {
 
 const MAX_ROUND_MESSAGE_CHARS = 64 * 1024;
 const MAX_PARTICIPANTS = 20;
-const MAX_COMPONENTS = 100;
+const MAX_COMPONENTS = 120;
 const MAX_SCRIPT_HEX_CHARS = 20_000;
 const MAX_TX_HEX_CHARS = 200_000;
 const MAX_MONEY = 21_000_000 * 100_000_000;
