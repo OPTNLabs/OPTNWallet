@@ -1,0 +1,183 @@
+type DatabaseRunner = {
+  run: (query: string) => void;
+};
+
+export const createTransactionDetailsTable = (db: DatabaseRunner) => {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS transaction_details (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      wallet_id INT,
+      tx_hash TEXT NOT NULL,
+      confirmations INT NOT NULL,
+      height INT,
+      fee_sats INT,
+      timestamp TEXT NOT NULL,
+      inputs_json TEXT NOT NULL,
+      outputs_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(wallet_id) REFERENCES wallets(id),
+      UNIQUE(wallet_id, tx_hash)
+    );
+  `);
+};
+
+export const createTables = (db: DatabaseRunner) => {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS wallets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      wallet_name VARCHAR(255),
+      mnemonic TEXT,
+      passphrase TEXT,
+      networkType TEXT,
+      walletType TEXT DEFAULT 'standard',
+      balance INT
+    );
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS keys (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      wallet_id INTEGER,
+      public_key BLOB,
+      private_key BLOB,
+      address VARCHAR(255) UNIQUE,
+      token_address VARCHAR(255) UNIQUE,
+      pubkey_hash BLOB,
+      account_index INT,
+      change_index INT,
+      address_index INT,
+      FOREIGN KEY(wallet_id) REFERENCES wallets(id)
+    );
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS addresses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      wallet_id INT,
+      address VARCHAR(255) NOT NULL UNIQUE,
+      token_address VARCHAR(255),
+      balance INT,
+      hd_index INT,
+      change_index BOOLEAN,
+      prefix VARCHAR(255),
+      FOREIGN KEY(wallet_id) REFERENCES wallets(id),
+      FOREIGN KEY(address) REFERENCES keys(address)
+    );
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS UTXOs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      wallet_id INT,
+      address VARCHAR(255) NOT NULL,
+      token_address VARCHAR(255),
+      height INT NOT NULL,
+      tx_hash TEXT NOT NULL,
+      tx_pos INT NOT NULL,
+      amount INT NOT NULL,
+      prefix VARCHAR(255) NOT NULL,
+      token TEXT,
+      contractFunction TEXT, -- New Field
+      contractFunctionInputs TEXT, -- New Field
+      FOREIGN KEY(wallet_id) REFERENCES wallets(id),
+      FOREIGN KEY(address) REFERENCES addresses(address),
+      UNIQUE(wallet_id, address, tx_hash, tx_pos)
+    );
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS transactions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      wallet_id INT,
+      tx_hash TEXT NOT NULL,
+      height INT NOT NULL,
+      timestamp TEXT NOT NULL,
+      amount INT NOT NULL,
+      FOREIGN KEY(wallet_id) REFERENCES wallets(id)
+      UNIQUE(wallet_id, tx_hash)
+    );
+  `);
+
+  createTransactionDetailsTable(db);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS cashscript_artifacts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      contract_name VARCHAR(255) UNIQUE,
+      constructor_inputs TEXT,
+      abi TEXT,
+      bytecode TEXT,
+      source TEXT,
+      compiler_name VARCHAR(255),
+      compiler_version VARCHAR(255),
+      updated_at TEXT
+    );
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS cashscript_addresses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      wallet_id INT,
+      address VARCHAR(255) NOT NULL UNIQUE,
+      artifact_id INT,
+      constructor_args TEXT,
+      balance INT,
+      prefix VARCHAR(255),
+      FOREIGN KEY(wallet_id) REFERENCES wallets(id),
+      FOREIGN KEY(artifact_id) REFERENCES cashscript_artifacts(id)
+    );
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS instantiated_contracts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      contract_name VARCHAR(255),
+      address VARCHAR(255) UNIQUE,
+      token_address VARCHAR(255),
+      opcount INT,
+      bytesize INT,
+      bytecode TEXT,
+      balance INT,
+      utxos TEXT,
+      created_at TEXT,
+      updated_at TEXT,
+      artifact TEXT,
+      abi TEXT,
+      redeemScript TEXT,
+      unlock TEXT
+    );
+  `);
+
+  db.run(`
+      CREATE TABLE IF NOT EXISTS bcmr (
+        authbase        TEXT PRIMARY KEY,        -- 32‑byte hex TXID
+        registryUri     TEXT NOT NULL,           -- the URI we fetched from OP_RETURN or DNS
+        lastFetch       TEXT NOT NULL,           -- ISO timestamp of when we last refreshed
+        registryHash    TEXT NOT NULL,            -- sha256 of the JSON we imported
+        registryData    TEXT NOT NULL            -- the raw JSON we fetched
+      );
+    `);
+
+  db.run(`
+      CREATE TABLE IF NOT EXISTS bcmr_tokens (
+        category        TEXT PRIMARY KEY,        -- cashtoken category hex
+        authbase        TEXT NOT NULL,           -- points into bcmr.authbase
+        FOREIGN KEY(authbase) REFERENCES bcmr(authbase)
+      );
+    `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS bcmr_metadata (
+      category TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL,
+      decimals INTEGER NOT NULL,
+      symbol TEXT NOT NULL,
+      is_nft BOOLEAN NOT NULL,
+      nfts TEXT,
+      uris TEXT,
+      extensions TEXT,
+      FOREIGN KEY(category) REFERENCES bcmr_tokens(category)
+    );
+  `);
+};
