@@ -28,8 +28,14 @@ import type { ExtendedWalletType } from '../../types/wallet';
 
 type WalletInfoSnapshot = {
   name: string;
+  /** Local SQLite id for this machine only (not portable across PCs). */
+  internalId: number;
   walletType: string;
   network: string;
+  /** Absolute .optn path when known; else relative AppData path; else null. */
+  walletFilePath: string | null;
+  /** True when path is only a predicted name, not an existing file. */
+  walletFileMissing: boolean;
   derivationPath: string;
   accountXpub: string | null;
   masterFingerprint: string | null;
@@ -156,10 +162,35 @@ async function loadSnapshot(
     accountXpub = await deriveAccountXpubFromSeed(walletId, network, path);
   }
   const firstReceive = await loadFirstReceive(walletId);
+
+  let walletFilePath: string | null = null;
+  let walletFileMissing = true;
+  if (isDesktopPlatform()) {
+    try {
+      const {
+        findWalletFileRelForSourceId,
+        resolveWalletFileDisplayPath,
+      } = await import('../../platform/desktop/walletFile');
+      const existingRel = await findWalletFileRelForSourceId(walletId);
+      walletFileMissing = !existingRel;
+      const resolved = await resolveWalletFileDisplayPath(walletId, name);
+      walletFilePath =
+        resolved.absolute ??
+        existingRel ??
+        resolved.relative ??
+        null;
+    } catch {
+      /* non-tauri / no fs */
+    }
+  }
+
   return {
     name,
+    internalId: walletId,
     walletType: typeLabel(meta?.walletType ?? walletType),
     network: meta?.networkType ?? network,
+    walletFilePath,
+    walletFileMissing,
     derivationPath: path,
     accountXpub,
     masterFingerprint: cols.masterFingerprint,
@@ -437,7 +468,10 @@ export const WalletInfoSettings: React.FC = () => {
             ) : (
               <div className="flex items-center justify-between gap-2">
                 <p className="text-sm font-semibold wallet-text-strong">
-                  {info.name}
+                  {info.name}{' '}
+                  <span className="font-normal wallet-muted">
+                    (internal id: {info.internalId})
+                  </span>
                 </p>
                 <button
                   type="button"
@@ -453,9 +487,38 @@ export const WalletInfoSettings: React.FC = () => {
             )}
           </div>
 
-          <CopyRow label="Wallet id" value={String(walletId)} />
           <CopyRow label="Type" value={info.walletType} />
           <CopyRow label="Network" value={info.network} />
+          <div className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-3 space-y-1">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs font-semibold wallet-muted uppercase tracking-wide">
+                Wallet file path
+              </p>
+              {info.walletFilePath && (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 text-xs wallet-link"
+                  title="Copy path"
+                  onClick={() => {
+                    void navigator.clipboard.writeText(
+                      info.walletFilePath ?? ''
+                    );
+                  }}
+                >
+                  <MdContentCopy className="text-sm" />
+                  Copy
+                </button>
+              )}
+            </div>
+            <p className="text-xs font-mono wallet-text-strong break-all leading-relaxed">
+              {info.walletFilePath ?? '—'}
+            </p>
+            <p className="text-xs wallet-muted">
+              {info.walletFileMissing
+                ? 'No .optn mirror on disk yet (common for watch-only). Export / create pack if you want a file backup. Path above is the usual location when a pack exists.'
+                : 'Electron Cash–style backup under app data. Internal id is only for this PC’s database — importing on another machine gets a new id.'}
+            </p>
+          </div>
 
           {/* Eye only covers xPub / path / fingerprint / hash */}
           <div className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-3 space-y-3">
