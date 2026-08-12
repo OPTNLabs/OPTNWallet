@@ -1,0 +1,38 @@
+{
+  "contractName": "Escrow",
+  "constructorInputs": [
+    {
+      "name": "arbiter",
+      "type": "bytes20"
+    },
+    {
+      "name": "buyer",
+      "type": "bytes20"
+    },
+    {
+      "name": "seller",
+      "type": "bytes20"
+    }
+  ],
+  "abi": [
+    {
+      "name": "spend",
+      "inputs": [
+        {
+          "name": "pk",
+          "type": "pubkey"
+        },
+        {
+          "name": "s",
+          "type": "sig"
+        }
+      ]
+    }
+  ],
+  "bytecode": "OP_3 OP_PICK OP_HASH160 OP_EQUALVERIFY OP_2SWAP OP_CHECKSIGVERIFY OP_INPUTINDEX OP_UTXOVALUE OP_0 OP_OUTPUTVALUE OP_NUMEQUALVERIFY 76a914 OP_SWAP OP_CAT 88ac OP_CAT 76a914 OP_ROT OP_CAT 88ac OP_CAT OP_0 OP_OUTPUTBYTECODE OP_ROT OP_EQUAL OP_0 OP_OUTPUTBYTECODE OP_ROT OP_EQUAL OP_BOOLOR",
+  "compiler": {
+    "name": "cashc",
+    "version": "0.9.3"
+  },
+  "updatedAt": "2024-12-23T16:53:06.355Z"
+}
