@@ -168,11 +168,15 @@ export const AppLockSettings: React.FC = () => {
       <div className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-4 space-y-3">
         <p className="text-sm font-semibold wallet-text-strong">Change Password</p>
         <form onSubmit={(e) => void handleChangePassword(e)} className="flex flex-col gap-2">
+          <p className="text-xs wallet-muted">
+            If this wallet has no password, leave Current empty. New password:
+            empty = still none, or at least 8 characters.
+          </p>
           <input
             type="password"
             value={oldPass}
             onChange={(e) => { setOldPass(e.target.value); setError(''); }}
-            placeholder="Current password"
+            placeholder="Current password (empty if none)"
             className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-sm wallet-text-strong placeholder:wallet-muted outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
           />
           <input
@@ -193,7 +197,7 @@ export const AppLockSettings: React.FC = () => {
           {status && <p className="text-xs text-green-400">{status}</p>}
           <button
             type="submit"
-            disabled={changing || !oldPass}
+            disabled={changing}
             className="w-full rounded-xl py-2 text-sm font-semibold text-white disabled:opacity-50"
             style={{ background: 'var(--wallet-accent, #6366f1)' }}
           >
