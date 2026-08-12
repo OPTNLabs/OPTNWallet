@@ -1,0 +1,49 @@
+// android/build.gradle
+
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.7.2'
+        classpath 'com.google.gms:google-services:4.4.2'
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:2.0.0"
+    }
+}
+
+apply from: "variables.gradle"
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+        maven {
+            url = uri('https://pkgs.dev.azure.com/OutSystemsRD/9e79bc5b-69b2-4476-9ca5-d67594972a52/_packaging/PublicArtifactRepository/maven/v1')
+            name = 'Azure'
+            credentials {
+                username = "optional"
+                password = ""
+            }
+            content {
+                includeGroup "com.github.outsystems"
+            }
+        }
+    }
+}
+
+// subprojects {
+//     afterEvaluate { project ->
+//         if (project.plugins.hasPlugin("kotlin-android") || project.plugins.hasPlugin("kotlin")) {
+//             project.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+//                 kotlinOptions {
+//                     jvmTarget = "21"
+//                 }
+//             }
+//         }
+//     }
+// }
+
+task clean(type: Delete) {
+    delete rootProject.buildDir
+}
