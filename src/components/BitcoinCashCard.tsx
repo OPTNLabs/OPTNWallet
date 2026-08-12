@@ -1,0 +1,89 @@
+// src/components/BitcoinCashCard.tsx
+import React, { useState } from 'react';
+import { useSelector } from 'react-redux';
+import { RootState } from '../state/store';
+import { FaBitcoin } from 'react-icons/fa';
+import { SATSINBITCOIN } from '../utils/constants';
+
+interface Props {
+  totalAmount: number; // in satoshis
+  quantumrootAmount?: number;
+  quantumrootVaultCount?: number;
+}
+
+enum DisplayMode {
+  BCH = 'BCH',
+  USD = 'USD',
+}
+
+const BitcoinCashCard: React.FC<Props> = ({
+  totalAmount,
+  quantumrootAmount = 0,
+  quantumrootVaultCount = 0,
+}) => {
+  // New state shape: key is 'BCH-USD' → { price, ts, source }
+  const bchQuote = useSelector(
+    (state: RootState) => state.priceFeed['BCH-USD']
+  );
+
+  const [mode, setMode] = useState<DisplayMode>(DisplayMode.USD);
+
+  // conversions
+  const totalBch = totalAmount / SATSINBITCOIN;
+  const quantumrootBch = quantumrootAmount / SATSINBITCOIN;
+
+  // use numeric price, fall back to 0 if undefined
+  const safeRate = bchQuote?.price ?? 0;
+  const totalUsd = (totalBch * safeRate).toFixed(2);
+
+  return (
+    <div className="wallet-card p-4 mb-4 flex flex-col w-full max-w-md">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center space-x-3">
+          <FaBitcoin className="wallet-accent-icon text-3xl" />
+          {mode === DisplayMode.BCH ? (
+            <div>
+              <div className="text-lg font-bold">${totalUsd} USD</div>
+              <div className="text-sm wallet-muted">
+                {totalBch.toFixed(8)} BCH
+              </div>
+            </div>
+          ) : (
+            <div>
+              <div className="text-lg font-bold">{totalBch.toFixed(8)} BCH</div>
+              <div className="text-sm wallet-muted">${totalUsd} USD</div>
+            </div>
+          )}
+        </div>
+
+        <div className="flex flex-col justify-center mx-4 space-y-2">
+          {mode !== DisplayMode.BCH && (
+            <button
+              onClick={() => setMode(DisplayMode.BCH)}
+              className="wallet-btn-primary p-1 px-3"
+            >
+              BCH
+            </button>
+          )}
+          {mode !== DisplayMode.USD && (
+            <button
+              onClick={() => setMode(DisplayMode.USD)}
+              className="wallet-btn-secondary p-1 px-3"
+            >
+              USD
+            </button>
+          )}
+        </div>
+      </div>
+
+      {quantumrootAmount > 0 && (
+        <div className="mt-3 text-xs wallet-muted">
+          Includes {quantumrootBch.toFixed(8)} BCH across {quantumrootVaultCount}{' '}
+          Quantumroot vault{quantumrootVaultCount === 1 ? '' : 's'}.
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default BitcoinCashCard;

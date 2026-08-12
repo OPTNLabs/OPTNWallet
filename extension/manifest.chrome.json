@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "OPTN Wallet",
+  "version": "1.6.2",
+  "description": "Bitcoin Cash wallet — view balance and receive address.",
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "32": "extension-icons/32.png",
+      "64": "extension-icons/64.png",
+      "128": "extension-icons/128.png"
+    }
+  },
+  "icons": {
+    "32": "extension-icons/32.png",
+    "64": "extension-icons/64.png",
+    "128": "extension-icons/128.png"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  }
+}
