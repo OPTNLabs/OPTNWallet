@@ -15,6 +15,7 @@ behaviour, and safety gates.
 | [THREAT_MODEL.md](./THREAT_MODEL.md)                                       | Adversaries and what each can/cannot do                                    |
 | [cashfusion-implementation-scope.md](./cashfusion-implementation-scope.md) | Ship status — **both** P2P and classic server paths **done**               |
 | [p2p-cashfusion-knobs.md](./p2p-cashfusion-knobs.md)                       | Internal protocol floors/caps/timings — **not** wallet settings            |
+| [p2p-cashfusion-faq.md](./p2p-cashfusion-faq.md)                           | Short answers (missing signature, onion, shrink, 0-conf)                   |
 | Source under `src/platform/desktop/nostr/` + `FusionP2pService.ts`         | Normative behaviour                                                        |
 
 **Design goal (non-negotiable, and met in code):** P2P is a **different
@@ -389,6 +390,11 @@ accused *ephemeral* key for `fusionBlame.ts` diagnosis only.
    then `signMyInputs` (SIGHASH_ALL|FORKID = `0x41`) **only for own keys**.
 4. Peers return `signature` sets; coordinator checks the outpoint set, merges
    sigs, runs full BCH VM verification before broadcast.
+
+If any assembled input is never signed, the coordinator keeps re-sending
+`assembled` and then the round **times out and aborts**. No tx is broadcast.
+The set cannot shrink here — a missing signer does not produce a smaller
+CoinJoin. See [FAQ](./p2p-cashfusion-faq.md).
 
 ### Phase F — Final and broadcast liveness
 
