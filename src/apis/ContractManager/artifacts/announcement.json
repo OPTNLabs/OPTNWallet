@@ -1,0 +1,21 @@
+{
+  "contractName": "Announcement",
+  "constructorInputs": [],
+  "abi": [
+    {
+      "name": "announce",
+      "inputs": [
+        {
+          "name": "str",
+          "type": "string"
+        }
+      ]
+    }
+  ],
+  "bytecode": "6a 6d02 OP_SIZE OP_SWAP OP_CAT OP_CAT OP_SWAP OP_SIZE OP_DUP 4b OP_GREATERTHAN OP_IF 4c OP_SWAP OP_CAT OP_ENDIF OP_SWAP OP_CAT OP_CAT OP_0 OP_OUTPUTVALUE OP_0 OP_NUMEQUALVERIFY OP_0 OP_OUTPUTBYTECODE OP_EQUAL",
+  "compiler": {
+    "name": "cashc",
+    "version": "0.9.3"
+  },
+  "updatedAt": "2024-07-15T19:23:57.914Z"
+}

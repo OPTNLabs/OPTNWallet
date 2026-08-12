@@ -1,0 +1,104 @@
+name: CI
+on:
+  pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+  push:
+    branches: [dev]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check dependency-graph availability
+        id: dependency-graph
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          status="$(gh api repos/${{ github.repository }} --jq '.security_and_analysis.dependency_graph.status // "disabled"')"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+      - name: Dependency review
+        if: steps.dependency-graph.outputs.status == 'enabled'
+        uses: actions/dependency-review-action@v4
+      - name: Skip dependency review
+        if: steps.dependency-graph.outputs.status != 'enabled'
+        run: echo "Dependency graph is disabled; skipping dependency review."
+
+  secrets-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Gitleaks scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  dependency-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install deps
+        run: npm ci --ignore-scripts --omit=dev
+      - name: Dependency audit (prod, critical+)
+        run: npm audit --omit=dev --audit-level=critical
+
+  web-ci:
+    needs: [secrets-scan, dependency-audit]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Lint (Core)
+        run: npm run lint:core
+
+      - name: Typecheck (Core)
+        run: npm run typecheck:core
+
+      - name: Unit tests
+        run: npm run test:core
+
+      - name: Addon manifest validation
+        run: npm run addons:validate
+
+      - name: Build web (sanity)
+        run: npm run build
+
+      - name: Upload web dist
+        if: github.event_name == 'push' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: dist/
+          retention-days: 7

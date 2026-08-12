@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "OPTN Wallet desktop permissions",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "notification:default",
+    "fs:default",
+    "fs:allow-appdata-read-recursive",
+    "fs:allow-appdata-write-recursive",
+    "fs:allow-appcache-read-recursive",
+    "fs:allow-appcache-write-recursive"
+  ]
+}
