@@ -229,7 +229,7 @@ export async function refreshWalletTransactionHistory(
     // Local-first (EC / Selene / Monero GUI): paint last saved SQL history
     // immediately. No per-row streaming. Background backfill publishes ONCE
     // when all stuck heights resolve, then address history scan may replace.
-    let initialPaint = mergeRecordedFusionTxsIntoHistory(
+    const initialPaint = mergeRecordedFusionTxsIntoHistory(
       walletId,
       previousStoredTransactions
     );
