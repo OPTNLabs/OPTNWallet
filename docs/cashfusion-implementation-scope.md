@@ -56,7 +56,9 @@ P2P is a **different transport**, not a weaker crypto story.
 | Gather / lock | **6** to lock, **10** cap, **4** ACK-shrink floor (`fusionKnobs.ts`) |
 | ACK | First proposal waits for the set; missing ACKs may shrink to the ACKed remainder if still ≥4. Mid-onion / mid-sign cannot shrink. |
 | Credentials | Protocol **v4** — `sha256(serialized EC Component)` (`fusionComponentV4.ts`) |
-| Output onion | Mandatory; mix needs ≥3 wallets (≥2 peelers) |
+| Anonymous components | `inputs`, `outputs`, `onion_output`, `signature` — throwaway key + one-shot Tor. Coordinator does not take `from` as identity. |
+| Control plane | ACK, `credential_request` (quota + Pedersen), ready, abort stay named — counts, not which UTXO |
+| Output onion | Mandatory; mix needs ≥3 wallets (≥2 peelers). Hides who created which output from other peers. |
 | Auto + fuse depth | `fusionAutoEngine.ts`, `fusionCoinDepth.ts` |
 | Too many coins | Server path take-largest-3 + Auto pre-consolidate (`fusionPreConsolidate.ts`) |
 | UI | CashFusion card + Servers. **No player-count knobs** in the wallet. |
@@ -115,4 +117,4 @@ Never fuse mainnet funds in automated tests.
 
 ---
 
-*Last updated: 6 / 4 / 10 knobs, ACK-shrink, v4 credentials, CashFusion off Experimental.*
+*Last updated: 6 / 4 / 10 knobs, ACK-shrink, v4 credentials, anonymous inputs/sigs, CashFusion off Experimental.*
