@@ -13,8 +13,8 @@ import TransactionManager from '../apis/TransactionManager/TransactionManager';
 import type { AppDispatch } from '../state/store';
 import { addTransactions } from '../state/slices/transactionSlice';
 
-/** Cap parallel verbose fetches so a 50-row fusion history does not stampede Fulcrum. */
-const BACKFILL_CONCURRENCY = 6;
+/** Parallel verbose fetches — fusion histories can have many height-0 rows. */
+const BACKFILL_CONCURRENCY = 12;
 
 function parseTipHeight(tip: unknown): number | null {
   if (typeof tip === 'number' && Number.isFinite(tip) && tip > 0) return tip;
@@ -26,10 +26,13 @@ function parseTipHeight(tip: unknown): number | null {
 }
 
 /** Resolve a positive block height from verbose details + optional tip. */
-export async function resolveConfirmedBlockHeight(details: {
-  height?: number | null;
-  confirmations?: number | null;
-}): Promise<number | null> {
+export async function resolveConfirmedBlockHeight(
+  details: {
+    height?: number | null;
+    confirmations?: number | null;
+  },
+  tipHeight?: number | null
+): Promise<number | null> {
   if (typeof details.height === 'number' && details.height > 0) {
     return details.height;
   }
@@ -39,14 +42,18 @@ export async function resolveConfirmedBlockHeight(details: {
       ? details.confirmations
       : 0;
   if (confs <= 0) return null;
-  try {
-    const tip = parseTipHeight(await ElectrumService.getLatestBlock());
-    if (tip == null) return null;
-    const height = tip - confs + 1;
-    return height > 0 ? height : null;
-  } catch {
-    return null;
+
+  let tip = tipHeight ?? null;
+  if (tip == null || tip <= 0) {
+    try {
+      tip = parseTipHeight(await ElectrumService.getLatestBlock());
+    } catch {
+      tip = null;
+    }
   }
+  if (tip == null || tip <= 0) return null;
+  const height = tip - confs + 1;
+  return height > 0 ? height : null;
 }
 
 async function mapPool<T, R>(
@@ -101,17 +108,22 @@ export async function backfillConfirmedHistoryHeights(args: {
   );
   if (stuck.length === 0) return [...byHash.values()];
 
+  // One tip for the whole batch — per-tx tip RPCs made open-time backfill crawl.
+  let tip: number | null = null;
+  try {
+    tip = parseTipHeight(await ElectrumService.getLatestBlock());
+  } catch {
+    tip = null;
+  }
+
   const manager = TransactionManager();
   await mapPool(stuck, BACKFILL_CONCURRENCY, async (tx) => {
-    // Always force-refresh stuck rows: a prior persist with confs but no height
-    // would otherwise be returned from the details cache/SQL forever.
     const details = await ElectrumService.getTransactionDetails(tx.tx_hash, {
-      // Stuck rows must not reuse a details row that stored confs without height.
       forceRefresh,
     });
     if (!details) return;
 
-    const height = await resolveConfirmedBlockHeight(details);
+    const height = await resolveConfirmedBlockHeight(details, tip);
     if (height == null) return;
 
     const updated: TransactionHistoryItem = {

@@ -39,6 +39,13 @@ describe('historyHeightBackfill', () => {
     ).resolves.toBe(991);
   });
 
+  it('resolveConfirmedBlockHeight uses provided tip without another RPC', async () => {
+    await expect(
+      resolveConfirmedBlockHeight({ confirmations: 5, height: undefined }, 500)
+    ).resolves.toBe(496);
+    expect(getLatestBlockMock).not.toHaveBeenCalled();
+  });
+
   it('backfill writes height when Electrum only returns confirmations', async () => {
     const hash = 'a'.repeat(64);
     getTransactionDetailsMock.mockResolvedValue({

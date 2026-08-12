@@ -136,25 +136,36 @@ export async function refreshWalletTransactionHistory(
 
     const previousStoredTransactions = loadStoredTransactions(db, walletId);
 
-    // Show what we already know BEFORE going to the network.
-    //
-    // The history is never lost — it lives in the `transactions` table — but
-    // nothing loaded it into redux when a wallet opened, so Recent Activity
-    // rendered empty until a network round trip finished. Electron Cash does not
-    // behave that way: the wallet file already holds the history, so it appears
-    // immediately and the network only updates it. Publishing the stored rows
-    // first gives the same feel, and a wallet opened offline still shows its
-    // history instead of looking wiped.
-    if (previousStoredTransactions.length > 0) {
+    // Publish SQL history quickly, but FIX fusion height-0 rows FIRST.
+    // Previously we painted height 0 immediately then waited for a full address
+    // history scan (often ~1 min) before backfill — so every open showed
+    // "Fused · Unconfirmed" until the long scan finished. Warm Electrum, then
+    // backfill stuck heights before the first paint.
+    let initialPaint = mergeRecordedFusionTxsIntoHistory(
+      walletId,
+      previousStoredTransactions
+    );
+    const hasStuckHeights = initialPaint.some(
+      (tx) => !(typeof tx.height === 'number' && tx.height > 0)
+    );
+    if (hasStuckHeights) {
+      try {
+        await ElectrumService.ensureFreshConnection();
+      } catch {
+        /* offline — paint SQL heights as-is */
+      }
+      initialPaint = await backfillConfirmedHistoryHeights({
+        walletId,
+        transactions: initialPaint,
+        sessionGeneration,
+        forceRefresh: true,
+      });
+    }
+    if (initialPaint.length > 0) {
       dispatch(
         setTransactions({
           wallet_id: walletId,
-          // Re-attach known fusion CoinJoins (P2P + server) so a stale DB
-          // snapshot never looks like fused history was deleted.
-          transactions: mergeRecordedFusionTxsIntoHistory(
-            walletId,
-            previousStoredTransactions
-          ),
+          transactions: initialPaint,
           sessionGeneration,
         })
       );
