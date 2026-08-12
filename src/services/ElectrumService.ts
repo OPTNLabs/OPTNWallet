@@ -841,10 +841,62 @@ const ElectrumService = {
     txHash: string,
     options?: { forceRefresh?: boolean }
   ): Promise<TransactionDetails | null> {
+    const deriveHeightFromConfs = async (
+      confs: number,
+      existingHeight?: number
+    ): Promise<number | undefined> => {
+      if (
+        typeof existingHeight === 'number' &&
+        Number.isFinite(existingHeight) &&
+        existingHeight > 0
+      ) {
+        return existingHeight;
+      }
+      if (!(confs > 0)) return existingHeight;
+      try {
+        const tipResp = await ElectrumService.getLatestBlock();
+        const tipObj =
+          typeof tipResp === 'object' && tipResp !== null
+            ? (tipResp as Record<string, unknown>)
+            : null;
+        const tipHeight =
+          tipObj &&
+          typeof tipObj.height === 'number' &&
+          Number.isFinite(tipObj.height)
+            ? tipObj.height
+            : typeof tipResp === 'number'
+              ? tipResp
+              : undefined;
+        if (tipHeight != null && tipHeight > 0) {
+          return tipHeight - confs + 1;
+        }
+      } catch {
+        /* non-fatal */
+      }
+      return existingHeight;
+    };
+
     const now = Date.now();
     const cached = detailsCacheByTxid.get(txHash);
     if (!options?.forceRefresh && cached && now - cached.ts < DETAILS_TTL_MS) {
-      return cached.data;
+      const data = cached.data;
+      if (
+        data &&
+        data.confirmations > 0 &&
+        !(typeof data.height === 'number' && data.height > 0)
+      ) {
+        const height = await deriveHeightFromConfs(
+          data.confirmations,
+          data.height
+        );
+        if (typeof height === 'number' && height > 0) {
+          const fixed = { ...data, height };
+          detailsCacheByTxid.set(txHash, { ts: Date.now(), data: fixed });
+          void persistTransactionDetails(fixed);
+          return fixed;
+        }
+      }
+      return data;
     }
 
     const inflight = inflightDetailsByTxid.get(txHash);
@@ -856,9 +908,25 @@ const ElectrumService = {
           ? null
           : await readTransactionDetailsFromDb(txHash);
         if (persisted) {
+          // Prior persists often stored confs without height (servers omit it).
+          // Do not poison the list path — fill height from tip when missing.
+          let resolved = persisted;
+          if (
+            persisted.confirmations > 0 &&
+            !(typeof persisted.height === 'number' && persisted.height > 0)
+          ) {
+            const height = await deriveHeightFromConfs(
+              persisted.confirmations,
+              persisted.height
+            );
+            if (typeof height === 'number' && height > 0) {
+              resolved = { ...persisted, height };
+              void persistTransactionDetails(resolved);
+            }
+          }
           evictStale(detailsCacheByTxid, DETAILS_TTL_MS);
-          detailsCacheByTxid.set(txHash, { ts: Date.now(), data: persisted });
-          return persisted;
+          detailsCacheByTxid.set(txHash, { ts: Date.now(), data: resolved });
+          return resolved;
         }
 
         const server = ElectrumServer();
@@ -875,27 +943,14 @@ const ElectrumService = {
           typeof response.confirmations === 'number' && Number.isFinite(response.confirmations)
             ? response.confirmations
             : 0;
-        let txHeight =
-          typeof response.height === 'number' && Number.isFinite(response.height)
+        const rawHeight =
+          typeof response.height === 'number' && Number.isFinite(response.height) && response.height > 0
             ? response.height
             : undefined;
         // Some Electrum servers omit `height` in verbose tx response.  Derive
-        // it from confirmations + current chain tip so the UI can display it.
-        if (txHeight == null && confs > 0) {
-          try {
-            const tipResp = await server.request('blockchain.headers.get_tip');
-            const tipObj = typeof tipResp === 'object' && tipResp !== null ? tipResp as Record<string, unknown> : null;
-            const tipHeight =
-              tipObj && typeof tipObj.height === 'number' && Number.isFinite(tipObj.height)
-                ? tipObj.height
-                : typeof tipResp === 'number'
-                  ? tipResp
-                  : undefined;
-            if (tipHeight != null) txHeight = tipHeight - confs + 1;
-          } catch {
-            // non-fatal — height stays undefined
-          }
-        }
+        // it from confirmations + current chain tip so History/Home can leave
+        // "Unconfirmed" (they key off height > 0, not confirmations alone).
+        const txHeight = await deriveHeightFromConfs(confs, rawHeight);
         const details: TransactionDetails = {
           txid:
             typeof response.txid === 'string' && response.txid.trim()

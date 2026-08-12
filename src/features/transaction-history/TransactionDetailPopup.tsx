@@ -129,33 +129,29 @@ export default function TransactionDetailPopup({
             );
           // Write confirmed height back so Home/list stop showing Unconfirmed
           // for fusion rows that were inserted with height 0 at broadcast.
-          if (
-            next &&
-            walletId > 0 &&
-            isTxConfirmed(next) &&
-            typeof next.height === 'number' &&
-            next.height > 0
-          ) {
-            dispatch(
-              addTransactions({
-                wallet_id: walletId,
-                transactions: [
-                  {
-                    tx_hash: txid,
-                    height: next.height,
-                    timestamp: next.timestamp,
-                  },
-                ],
-              })
+          // Verbose Electrum often has confs without height — derive via tip.
+          if (next && walletId > 0 && isTxConfirmed(next)) {
+            const { resolveConfirmedBlockHeight } = await import(
+              '../../services/historyHeightBackfill'
             );
-            void TransactionManager()
-              .applyConfirmedHeight(
-                walletId,
-                txid,
-                next.height,
-                next.timestamp
-              )
-              .catch(() => undefined);
+            const height = await resolveConfirmedBlockHeight(next);
+            if (height != null && height > 0) {
+              dispatch(
+                addTransactions({
+                  wallet_id: walletId,
+                  transactions: [
+                    {
+                      tx_hash: txid,
+                      height,
+                      timestamp: next.timestamp,
+                    },
+                  ],
+                })
+              );
+              void TransactionManager()
+                .applyConfirmedHeight(walletId, txid, height, next.timestamp)
+                .catch(() => undefined);
+            }
           }
         }
       } catch (err) {

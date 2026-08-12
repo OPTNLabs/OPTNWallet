@@ -26,6 +26,7 @@ import {
 } from './RefreshCoordinator';
 import QuantumrootTrackingService from './QuantumrootTrackingService';
 import { mergeRecordedFusionTxsIntoHistory } from '../platform/desktop/fusionCoinDepth';
+import { backfillConfirmedHistoryHeights } from './historyHeightBackfill';
 
 type SqlLikeDb = {
   prepare: (sql: string) => {
@@ -263,10 +264,21 @@ export async function refreshWalletTransactionHistory(
     if (!liveDb) {
       console.error('Database not started after history fetch.');
     } else {
-      const storedTransactions = mergeRecordedFusionTxsIntoHistory(
+      let storedTransactions = mergeRecordedFusionTxsIntoHistory(
         walletId,
         loadStoredTransactions(liveDb, walletId)
       );
+      // Critical: fusion injects height 0; address history often never rewrites
+      // those rows. Verbose Electrum get knows confirmations — write height back
+      // before publishing to Redux so Home/list are not permanently "Unconfirmed".
+      storedTransactions = await backfillConfirmedHistoryHeights({
+        walletId,
+        transactions: storedTransactions,
+        sessionGeneration,
+        dispatch,
+        forceRefresh: true,
+      });
+
       const refreshPlan = planTransactionDetailRefresh({
         previous: previousStoredTransactions,
         next: storedTransactions,
@@ -286,6 +298,7 @@ export async function refreshWalletTransactionHistory(
         );
       }
 
+      // Publish AFTER backfill so Sync cannot repaint height-0 fusion stubs.
       dispatch(
         setTransactions({
           wallet_id: walletId,

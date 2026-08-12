@@ -235,6 +235,24 @@ const DesktopLandingPage = () => {
       );
     }
     dispatch(setNetwork(info.networkType ?? Network.MAINNET));
+    // After Redux wallet id is set, force a UTXO pass. Watch-only previously
+    // bootstrapped before setWalletId (no-op); lifecycle can still race keys.
+    void (async () => {
+      try {
+        const { store } = await import('../../../state/store');
+        const sessionGeneration =
+          store.getState().wallet_id.sessionGeneration ?? 0;
+        const { bootstrapAllUTXOs } = await import(
+          '../../../workers/UTXOWorkerService'
+        );
+        await bootstrapAllUTXOs(undefined, {
+          walletId: id,
+          sessionGeneration,
+        });
+      } catch (err) {
+        console.warn('[DesktopLandingPage] post-open UTXO bootstrap failed:', err);
+      }
+    })();
     navigate(homeRoute(id));
   };
 
