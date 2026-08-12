@@ -281,9 +281,9 @@ const DesktopCreateWalletPage = () => {
     <OnboardingScreen>
       <OnboardingCard title="Name This Wallet">
         <p className="text-sm wallet-muted text-center mb-3">
-          Give this wallet a name and a password (at least 8 characters). Each wallet on this
-          device has its own independent password. The password protects the seed at rest —
-          do not leave it blank or use a short guessable value.
+          Give this wallet a name. Password is optional: leave both fields empty for no
+          password, or use at least 8 characters. Each wallet on this device has its own
+          password.
         </p>
         <div className="space-y-3 mb-2">
           <input
@@ -298,7 +298,7 @@ const DesktopCreateWalletPage = () => {
             type="password"
             value={password}
             onChange={(e) => { setPassword(e.target.value); setNameError(''); }}
-            placeholder="Password (min 8 characters)"
+            placeholder="Password (empty = none, or min 8)"
             autoComplete="new-password"
             className="wallet-input w-full px-3 py-2 rounded-md wallet-text-strong"
           />

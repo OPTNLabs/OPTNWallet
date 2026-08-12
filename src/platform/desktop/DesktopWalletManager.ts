@@ -57,7 +57,7 @@ import {
   removeData as bioRemoveData,
 } from '@choochmeque/tauri-plugin-biometry-api';
 import {
-  isWalletPasswordLongEnough,
+  isWalletPasswordAcceptable,
   validateNewWalletPassword,
   walletPasswordTooShortMessage,
 } from './passwordPolicy';
@@ -149,8 +149,8 @@ export async function createWalletWithPassword(
     derivationPath,
     derivationPathSource,
   } = args;
-  // Enforce min length at the API so every caller (create/import/file open) is covered.
-  if (!isWalletPasswordLongEnough(password)) {
+  // Empty = no password (EC-style); non-empty must be ≥ 8 characters.
+  if (!isWalletPasswordAcceptable(password)) {
     throw new Error(walletPasswordTooShortMessage());
   }
   const walletType = args.walletType ?? WalletType.STANDARD;
@@ -668,7 +668,7 @@ async function protectPublicKeyWalletWithPassword(
   walletType: typeof WATCH_ONLY_WALLET_TYPE | typeof HARDWARE_WALLET_TYPE,
   gatePrefix: string
 ): Promise<void> {
-  if (!isWalletPasswordLongEnough(password)) {
+  if (!isWalletPasswordAcceptable(password)) {
     throw new Error(walletPasswordTooShortMessage());
   }
   const manager = WalletManager();

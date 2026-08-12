@@ -93,8 +93,9 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
   const [keystoneScanning, setKeystoneScanning] = useState(false);
 
   const requirePassword = (): boolean => {
-    if (password.length < 8) {
-      setError('Choose a password of at least 8 characters.');
+    // Empty = no password; 1–7 chars rejected; ≥8 OK.
+    if (password.length > 0 && password.length < 8) {
+      setError('Leave empty for no password, or use at least 8 characters.');
       return false;
     }
     if (password !== passwordConfirm) {

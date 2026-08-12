@@ -179,7 +179,7 @@ export const AppLockSettings: React.FC = () => {
             type="password"
             value={newPass}
             onChange={(e) => { setNewPass(e.target.value); setError(''); }}
-            placeholder="New password (min 8 characters)"
+            placeholder="New password (empty = none, or min 8)"
             className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-sm wallet-text-strong placeholder:wallet-muted outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
           />
           <input
