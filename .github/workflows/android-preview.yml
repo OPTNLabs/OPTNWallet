@@ -208,8 +208,9 @@ jobs:
           instrumentation_log="$RUNNER_TEMP/android-instrumentation.log"
           test -f "$app_apk"
           test -f "$test_apk"
-          adb_with_timeout -s "$emulator_serial" install -r "$app_apk"
-          adb_with_timeout -s "$emulator_serial" install -r -t "$test_apk"
+          install_timeout_seconds=300
+          timeout "${install_timeout_seconds}s" adb -s "$emulator_serial" install -r "$app_apk"
+          timeout "${install_timeout_seconds}s" adb -s "$emulator_serial" install -r -t "$test_apk"
 
           set +e
           timeout 300s adb -s "$emulator_serial" shell am instrument -w -r \
