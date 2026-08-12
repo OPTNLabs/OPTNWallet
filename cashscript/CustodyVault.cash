@@ -1,0 +1,75 @@
+pragma cashscript ^0.13.0;
+
+contract CustodyVault(
+  bytes20 ownerPkh,
+  bytes20 custodianPkh,
+  bytes20 recoveryPkh,
+  int recoveryTimeout,
+  int releaseAt,
+  bytes releaseLockingBytecode
+) {
+  function refresh(pubkey custodianPk, sig custodianSig) {
+    require(releaseAt == 0);
+    require(this.activeInputIndex == 0);
+    require(tx.inputs.length == 2);
+    require(tx.inputs[0].tokenCategory == 0x);
+    require(tx.inputs[1].tokenCategory == 0x);
+    require(hash160(custodianPk) == custodianPkh);
+    require(checkSig(custodianSig, custodianPk));
+    require(tx.outputs.length == 1);
+    require(tx.outputs[0].tokenCategory == 0x);
+    require(tx.outputs[0].lockingBytecode == tx.inputs[this.activeInputIndex].lockingBytecode);
+    require(tx.outputs[0].value == tx.inputs[this.activeInputIndex].value);
+  }
+
+  function beginRelease(
+    pubkey ownerPk,
+    sig ownerSig,
+    pubkey custodianPk,
+    sig custodianSig
+  ) {
+    require(releaseAt == 0);
+    require(this.activeInputIndex == 0);
+    require(tx.inputs.length == 2);
+    require(tx.inputs[0].tokenCategory == 0x);
+    require(tx.inputs[1].tokenCategory == 0x);
+    require(hash160(ownerPk) == ownerPkh);
+    require(hash160(custodianPk) == custodianPkh);
+    require(checkSig(ownerSig, ownerPk));
+    require(checkSig(custodianSig, custodianPk));
+    require(tx.outputs.length == 1);
+    require(tx.outputs[0].tokenCategory == 0x);
+    require(tx.outputs[0].lockingBytecode == releaseLockingBytecode);
+    require(tx.outputs[0].value == tx.inputs[this.activeInputIndex].value);
+  }
+
+  function finalize(pubkey ownerPk, sig ownerSig) {
+    require(releaseAt > 0);
+    require(this.activeInputIndex == 0);
+    require(tx.inputs.length == 2);
+    require(tx.inputs[0].tokenCategory == 0x);
+    require(tx.inputs[1].tokenCategory == 0x);
+    require(tx.time >= releaseAt);
+    require(hash160(ownerPk) == ownerPkh);
+    require(checkSig(ownerSig, ownerPk));
+    require(tx.outputs.length == 1);
+    require(tx.outputs[0].tokenCategory == 0x);
+    require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(ownerPkh));
+    require(tx.outputs[0].value == tx.inputs[this.activeInputIndex].value);
+  }
+
+  function recover(pubkey recoveryPk, sig recoverySig) {
+    require(releaseAt == 0);
+    require(this.activeInputIndex == 0);
+    require(tx.inputs.length == 2);
+    require(tx.inputs[0].tokenCategory == 0x);
+    require(tx.inputs[1].tokenCategory == 0x);
+    require(tx.time >= recoveryTimeout);
+    require(hash160(recoveryPk) == recoveryPkh);
+    require(checkSig(recoverySig, recoveryPk));
+    require(tx.outputs.length == 1);
+    require(tx.outputs[0].tokenCategory == 0x);
+    require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(recoveryPkh));
+    require(tx.outputs[0].value == tx.inputs[this.activeInputIndex].value);
+  }
+}
