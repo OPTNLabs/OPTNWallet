@@ -36,7 +36,7 @@ import {
 } from './simple-send/helpers';
 import { createSimpleSendPlanner } from './simple-send/planner';
 import { AssetType, ReviewState, SimpleSendMode } from './simple-send/types';
-import { parseBip21Uri } from '../utils/bip21';
+import { parseBip21Uri, recipientNetworkError } from '../utils/bip21';
 import {
   getLegacyDefaultChangeAddress,
   getPreferredBchChangeAddress,
@@ -445,8 +445,16 @@ export default function useSimpleSend() {
         return;
       }
 
-      if (!validateRecipient(normalizedRecipient)) {
-        setError('Please enter a valid destination address.');
+      {
+        const netErr = recipientNetworkError(recipient, currentNetwork);
+        if (netErr) {
+          setError(netErr);
+          setMode('error');
+          return;
+        }
+      }
+      if (!parsedRecipient.isValidAddress || !validateRecipient(normalizedRecipient)) {
+        setError('Please enter a valid destination address for this network.');
         setMode('error');
         return;
       }
@@ -700,8 +708,16 @@ export default function useSimpleSend() {
       setMode('error');
       return;
     }
-    if (!validateRecipient(normalizedRecipient)) {
-      setError('Enter a valid destination address first.');
+    {
+      const netErr = recipientNetworkError(recipient, currentNetwork);
+      if (netErr) {
+        setError(netErr);
+        setMode('error');
+        return;
+      }
+    }
+    if (!parsedRecipient.isValidAddress || !validateRecipient(normalizedRecipient)) {
+      setError('Enter a valid destination address for this network first.');
       setMode('error');
       return;
     }
