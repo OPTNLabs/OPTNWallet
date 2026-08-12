@@ -1,0 +1,14 @@
+{
+  "$schema": "https://cashtokens.org/bcmr-v2.schema.json",
+  "version": {
+    "major": 0,
+    "minor": 0,
+    "patch": 1
+  },
+  "latestRevision": "2025-04-23T00:00:00.000Z",
+  "registryIdentity": {
+    "name": "Optn Wallet Local Registry",
+    "description": "All registry data that your OPTN Wallet is aware of."
+  },
+  "identities": {}
+}
