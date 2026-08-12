@@ -1,0 +1,22 @@
+{
+  "contractName": "Announcement",
+  "constructorInputs": [],
+  "abi": [
+    {
+      "name": "announce",
+      "inputs": [
+        {
+          "name": "str",
+          "type": "string"
+        }
+      ]
+    }
+  ],
+  "bytecode": "6a 6d02 OP_SIZE OP_SWAP OP_CAT OP_CAT OP_SWAP OP_SIZE OP_DUP 4b OP_GREATERTHAN OP_IF 4c OP_SWAP OP_CAT OP_ENDIF OP_SWAP OP_CAT OP_CAT OP_0 OP_OUTPUTVALUE OP_0 OP_NUMEQUALVERIFY OP_0 OP_OUTPUTBYTECODE OP_EQUAL",
+  "source": "pragma cashscript ^0.9.0;\n\n/* This is a contract showcasing covenants outside of regular transactional use.\n * It enforces the contract to make an \"announcement\" on Memo.cash, and send the\n * remainder of contract funds back to the contract.\n */\ncontract Announcement() {\n    function announce(string str) {\n        // Create the memo.cash announcement output\n        bytes announcement = new LockingBytecodeNullData([\n            0x6d02,\n            bytes(str)\n        ]);\n\n        // Check that the first tx output matches the announcement\n        require(tx.outputs[0].value == 0);\n        require(tx.outputs[0].lockingBytecode == announcement);\n    }\n}",
+  "compiler": {
+    "name": "cashc",
+    "version": "0.9.3"
+  },
+  "updatedAt": "2024-07-15T19:23:57.914Z"
+}
