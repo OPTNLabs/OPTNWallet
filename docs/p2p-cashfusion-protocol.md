@@ -15,7 +15,7 @@ behaviour, and safety gates.
 | [THREAT_MODEL.md](./THREAT_MODEL.md)                                       | Adversaries and what each can/cannot do                                    |
 | [cashfusion-implementation-scope.md](./cashfusion-implementation-scope.md) | Ship status — **both** P2P and classic server paths **done**               |
 | [p2p-cashfusion-knobs.md](./p2p-cashfusion-knobs.md)                       | Internal protocol floors/caps/timings — **not** wallet settings            |
-| [p2p-cashfusion-faq.md](./p2p-cashfusion-faq.md)                           | Short answers (missing signature, onion, shrink, 0-conf)                   |
+| [p2p-cashfusion-faq.md](./p2p-cashfusion-faq.md)                           | Short answers (missing signature, blame, onion, shrink, 0-conf)            |
 | Source under `src/platform/desktop/nostr/` + `FusionP2pService.ts`         | Normative behaviour                                                        |
 
 **Design goal (non-negotiable, and met in code):** P2P is a **different
@@ -560,9 +560,16 @@ Never multi-minute fee cooldowns for ordinary fail/success.
 
 ### 8.6 Blame
 
-`fusionBlame.ts`: **prove-or-don't-blame**. Only verifiable protocol faults
-mark an ephemeral session key. **Never** blame for Tor lag, relay timeout, or
-late join.
+`fusionBlame.ts` is P2P-specific (not a port of EC `blame.rs`). Happy-path
+components are anonymous, so abort first, then optional **control-plane
+disclosures** restore an accused *ephemeral* key for diagnosis. That key
+is not a wallet id and is not a ban.
+
+**Prove-or-don't-blame:** only re-verifiable crypto/structural faults
+(`pedersen_unbalanced`, `invalid_component_commitment`, `credential_slot_oob`,
+`invalid_input_credential`, `duplicate_outpoint`, `invalid_signature_set`).
+**Never** blame Tor lag, relay timeout, late join, or a missing signature.
+A silent no-sign is a timeout abort — see [FAQ](./p2p-cashfusion-faq.md).
 
 ---
 
