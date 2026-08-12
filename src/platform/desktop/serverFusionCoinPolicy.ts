@@ -112,6 +112,31 @@ export function classifyServerFusionCoins(
   return { eligibleBuckets, ineligibleBuckets, totalValue, hasUnconfirmed };
 }
 
+/** Why server Fusion has zero eligible address buckets (EC rules). */
+export function formatServerFusionEmptyReason(
+  classified: ServerFusionClassification,
+  options?: { auto?: boolean }
+): string {
+  const prefix = options?.auto ? 'Auto: ' : '';
+  const skipped = classified.ineligibleBuckets.length;
+  const parts: string[] = [];
+  if (classified.hasUnconfirmed) {
+    parts.push('some coins still look unconfirmed (height 0)');
+  }
+  if (skipped > 0) {
+    parts.push(
+      `${skipped} address bucket(s) skipped (token, frozen, >3 coins, or unconfirmed)`
+    );
+  }
+  const why = parts.length > 0 ? ` ${parts.join('; ')}.` : '';
+  return (
+    `${prefix}no confirmed, unfrozen, non-token BCH address buckets are eligible ` +
+    `for server CashFusion.${why} ` +
+    `Server Fusion only uses addresses with 1–3 confirmed plain BCH coins ` +
+    `(Electron Cash rule). Sync first if coins just fused; or use P2P Fusion.`
+  );
+}
+
 export type ServerFusionRandomSelectionOptions = Readonly<{
   fraction: number;
   random: () => number;

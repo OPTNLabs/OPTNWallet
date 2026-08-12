@@ -55,8 +55,10 @@ import {
 } from './fusionTiming';
 import {
   classifyServerFusionCoins,
+  formatServerFusionEmptyReason,
   isServerFusionDepthSatisfied,
   selectServerFusionBuckets,
+  type ServerFusionClassification,
 } from './serverFusionCoinPolicy';
 
 /** Structured, so callers never parse a human string to learn what happened. */
@@ -402,6 +404,7 @@ interface FreshCoinSelection {
   /** Exact coins offered to the selected transport. */
   selectedCoins: UTXO[];
   serverDepthSatisfied: boolean;
+  serverClassification?: ServerFusionClassification;
 }
 
 /**
@@ -443,6 +446,7 @@ async function freshCoinSelection(
         depthCoins,
         selectedCoins: [],
         serverDepthSatisfied: true,
+        serverClassification: classified,
       };
     }
 
@@ -460,6 +464,7 @@ async function freshCoinSelection(
       depthCoins,
       selectedCoins: selectedBuckets.flatMap((bucket) => bucket.coins),
       serverDepthSatisfied: false,
+      serverClassification: classified,
     };
   }
 
@@ -707,7 +712,11 @@ export async function startFusionRound(
           mode === 'server' &&
           selection.depthCoins.length === 0 &&
           !selection.serverDepthSatisfied
-            ? 'Auto: no confirmed, unfrozen, non-token BCH address buckets are eligible for server CashFusion.'
+            ? formatServerFusionEmptyReason(
+                selection.serverClassification ??
+                  classifyServerFusionCoins([]),
+                { auto: true }
+              )
             : formatAutoDepthMetMessage(elig);
         // Long depth-met idle so Auto does not thrash every engine tick.
         await stampAutoDepthMetIdle(
@@ -830,9 +839,13 @@ export async function startFusionRound(
     if (selection === null) return finish({ status: 'waiting-for-wallet' });
     const coins = selection.selectedCoins;
     if (coins.length === 0) {
+      const detail =
+        mode === 'server' && selection.serverClassification
+          ? formatServerFusionEmptyReason(selection.serverClassification)
+          : 'No eligible coins to fuse.';
       return finish({
         status: 'no-eligible-coins',
-        detail: 'No eligible coins to fuse.',
+        detail,
       });
     }
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { UTXO } from '../../../types/types';
 import {
   classifyServerFusionCoins,
+  formatServerFusionEmptyReason,
   isServerFusionDepthSatisfied,
   selectServerFusionBuckets,
 } from '../serverFusionCoinPolicy';
@@ -137,5 +138,17 @@ describe('Electron Cash server Fusion coin policy', () => {
       eligibleValue: 1_000,
       depthSatisfiedValue: 1_000,
     });
+  });
+
+  it('explains empty server eligibility without blaming Manual for Auto', () => {
+    const classified = classifyServerFusionCoins([
+      coin('unconfirmed-address', 6, { height: 0 }),
+    ]);
+    const auto = formatServerFusionEmptyReason(classified, { auto: true });
+    const manual = formatServerFusionEmptyReason(classified);
+    expect(auto.startsWith('Auto:')).toBe(true);
+    expect(manual.startsWith('Auto:')).toBe(false);
+    expect(manual).toMatch(/unconfirmed/i);
+    expect(manual).toMatch(/1–3 confirmed/i);
   });
 });
