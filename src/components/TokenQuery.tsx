@@ -1,0 +1,181 @@
+import React, { useEffect, useState } from 'react';
+import {
+  queryTotalSupplyFT,
+  queryActiveMinting,
+  querySupplyNFTs,
+  queryAuthHead,
+  stripChaingraphHexBytes,
+} from '../apis/ChaingraphManager/ChaingraphManager';
+import { shortenTxHash } from '../utils/shortenHash';
+import { IdentitySnapshot } from '@bitauth/libauth';
+import useSharedTokenMetadata from '../hooks/useSharedTokenMetadata';
+import { normalizeExternalUrl } from '../utils/externalUrl';
+
+interface TokenQueryProps {
+  tokenId: string;
+  prefetchedSnapshot?: IdentitySnapshot | null;
+  prefetchedIconDataUri?: string | null;
+}
+
+const TokenQuery: React.FC<TokenQueryProps> = ({
+  tokenId,
+  prefetchedSnapshot = null,
+  prefetchedIconDataUri = null,
+}) => {
+  const [totalSupply, setTotalSupply] = useState<number | null>(null);
+  const [activeMinting, setActiveMinting] = useState<boolean | null>(null);
+  const [nftSupply, setNftSupply] = useState<number | null>(null);
+  const [authHead, setAuthHead] = useState<string | null>(null);
+  const [snapshot, setSnapshot] = useState<IdentitySnapshot | null>(
+    prefetchedSnapshot
+  );
+  const [iconDataUri, setIconDataUri] = useState<string | null>(
+    prefetchedIconDataUri
+  );
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+  const [bcmrError, setBcmrError] = useState<string | null>(null);
+  const sharedTokenMetadata = useSharedTokenMetadata([tokenId])[tokenId];
+  const officialSiteUrl = snapshot?.uris?.web
+    ? normalizeExternalUrl(snapshot.uris.web)
+    : null;
+
+  useEffect(() => {
+    const fetchData = async () => {
+      setLoading(true);
+      setError(null);
+      setBcmrError(null);
+      setSnapshot(prefetchedSnapshot ?? sharedTokenMetadata?.snapshot ?? null);
+      setIconDataUri(prefetchedIconDataUri ?? sharedTokenMetadata?.iconUri ?? null);
+
+      let failedCoreQueries = 0;
+
+      try {
+        // 1) Total supply (non-fatal if this specific query fails)
+        const totalData = await queryTotalSupplyFT(tokenId);
+        const total =
+          totalData?.data?.transaction?.[0]?.outputs?.reduce(
+            (sum: number, o: { fungible_token_amount?: string | number }) =>
+              sum + parseInt(String(o.fungible_token_amount ?? 0), 10),
+            0
+          ) ?? 0;
+        setTotalSupply(total);
+      } catch {
+        failedCoreQueries += 1;
+      }
+
+      try {
+        // 2) Active minting (non-fatal if this specific query fails)
+        const mintData = await queryActiveMinting(tokenId);
+        const mintOutputs = mintData?.data?.output;
+        setActiveMinting(Array.isArray(mintOutputs) && mintOutputs.length > 0);
+      } catch {
+        failedCoreQueries += 1;
+      }
+
+      try {
+        // 3) NFT supply (non-fatal if this specific query fails)
+        const nftData = await querySupplyNFTs(tokenId);
+        const nftOutputs = nftData?.data?.output;
+        setNftSupply(Array.isArray(nftOutputs) ? nftOutputs.length : 0);
+      } catch {
+        failedCoreQueries += 1;
+      }
+
+      try {
+        // 4) Auth head (non-fatal if this specific query fails)
+        const ahData = await queryAuthHead(tokenId);
+        const ahRaw =
+          ahData?.data?.transaction?.[0]?.authchains?.[0]?.authhead
+            ?.identity_output?.[0]?.transaction_hash;
+        const ahTx = stripChaingraphHexBytes(ahRaw) || null;
+        setAuthHead(ahTx);
+      } catch {
+        failedCoreQueries += 1;
+      }
+
+      try {
+        if (sharedTokenMetadata?.status === 'ready' && sharedTokenMetadata.snapshot) {
+          setSnapshot(sharedTokenMetadata.snapshot);
+          setIconDataUri(sharedTokenMetadata.iconUri);
+        } else if (
+          !prefetchedSnapshot &&
+          !prefetchedIconDataUri &&
+          (!sharedTokenMetadata || sharedTokenMetadata.status === 'loading')
+        ) {
+          // Shared metadata is still loading; avoid flashing an error state.
+        } else if (sharedTokenMetadata?.status === 'error') {
+          throw new Error(sharedTokenMetadata.error || 'Failed to fetch BCMR metadata.');
+        } else if (!prefetchedSnapshot) {
+          throw new Error('Failed to fetch token data.');
+        }
+      } catch (err: unknown) {
+        setBcmrError(
+          err instanceof Error ? err.message : 'Failed to fetch token data.'
+        );
+      }
+
+      if (failedCoreQueries >= 4) {
+        setError('Unable to load token chain statistics right now.');
+      }
+
+      setLoading(false);
+    };
+
+    fetchData();
+  }, [tokenId, prefetchedSnapshot, prefetchedIconDataUri, sharedTokenMetadata]);
+
+  if (loading && !snapshot) return <p className="wallet-muted">Loading token data…</p>;
+
+  return (
+    <div className="token-query space-y-4">
+      <h3 className="font-semibold wallet-text-strong">Token ID: {shortenTxHash(tokenId)}</h3>
+      {error && <p className="wallet-danger-text">{error}</p>}
+      <p>Total Supply: {totalSupply ?? 'Unavailable'}</p>
+      <p>Active Minting: {activeMinting === null ? 'Unavailable' : activeMinting ? 'Yes' : 'No'}</p>
+      <p>Total NFTs: {nftSupply ?? 'Unavailable'}</p>
+      <p>Auth Head: {authHead ? shortenTxHash(authHead) : 'Unavailable'}</p>
+      {loading && <p className="wallet-muted">Loading token data…</p>}
+      {bcmrError && (
+        <p className="wallet-danger-text">
+          BCMR metadata unavailable: {bcmrError}
+        </p>
+      )}
+
+      {snapshot && (
+        <div className="bcmr-meta p-4 border rounded-lg wallet-card max-h-64 overflow-y-auto">
+          {(iconDataUri || snapshot.uris?.icon) && (
+            <img
+              src={iconDataUri || snapshot.uris!.icon!}
+              alt={`${snapshot.name} icon`}
+              className="w-16 h-16 rounded mb-2"
+            />
+          )}
+          <h4 className="text-lg font-semibold">{snapshot.name}</h4>
+          {snapshot.description && <p>{snapshot.description}</p>}
+          <div className="mt-2 space-y-1 text-sm wallet-muted break-all">
+            <p>Category: {snapshot.token?.category || tokenId}</p>
+            {snapshot.token?.symbol && <p>Symbol: {snapshot.token.symbol}</p>}
+            {typeof snapshot.token?.decimals === 'number' && (
+              <p>Decimals: {snapshot.token.decimals}</p>
+            )}
+          </div>
+          {officialSiteUrl && (
+            <p className="mt-2">
+              <a
+                href={officialSiteUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="wallet-link underline"
+              >
+                Official Site
+              </a>
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default TokenQuery;
