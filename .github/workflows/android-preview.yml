@@ -281,6 +281,10 @@ jobs:
           if grep -q '^INSTRUMENTATION_FAILED:' "$instrumentation_log" ||
             ! grep -q '^INSTRUMENTATION_CODE: -1$' "$instrumentation_log"; then
             echo 'Android instrumentation tests failed.'
+            echo 'Android instrumentation output:'
+            cat "$instrumentation_log" || true
+            echo 'Android logcat:'
+            adb_with_timeout -s "$emulator_serial" logcat -d -t 400 || true
             exit 1
           fi
           test "$instrumentation_exit" -eq 0
