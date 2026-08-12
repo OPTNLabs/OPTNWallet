@@ -59,16 +59,58 @@ async function fetchAndStoreTransactionHistory() {
       next: nextTransactions,
     });
 
-    const txidsToWarm = refreshPlan.reorgDetected
-      ? nextTransactions.map((tx) => tx.tx_hash)
-      : refreshPlan.txidsToRefresh;
+    // Always re-check height for unconfirmed rows (fusion injects height 0 and
+    // can stay stuck as "Unconfirmed" until a verbose Electrum fetch write-back).
+    const unconfirmedStuck = nextTransactions
+      .filter((tx) => !(typeof tx.height === 'number' && tx.height > 0))
+      .map((tx) => tx.tx_hash);
+
+    const txidsToWarm = Array.from(
+      new Set([
+        ...(refreshPlan.reorgDetected
+          ? nextTransactions.map((tx) => tx.tx_hash)
+          : refreshPlan.txidsToRefresh),
+        ...unconfirmedStuck,
+      ])
+    );
     if (txidsToWarm.length > 0) {
       void Promise.allSettled(
-        txidsToWarm.map((txid) =>
-          ElectrumService.getTransactionDetails(txid, {
+        txidsToWarm.map(async (txid) => {
+          const details = await ElectrumService.getTransactionDetails(txid, {
             forceRefresh: refreshPlan.reorgDetected,
-          })
-        )
+          });
+          // Backfill confirmed height into Redux + SQL (fusion injects height 0).
+          if (
+            details &&
+            typeof details.height === 'number' &&
+            details.height > 0 &&
+            details.confirmations > 0
+          ) {
+            store.dispatch(
+              addTransactions({
+                wallet_id: currentWalletId,
+                transactions: [
+                  {
+                    tx_hash: txid,
+                    height: details.height,
+                    timestamp: details.timestamp,
+                  },
+                ],
+                sessionGeneration,
+              })
+            );
+            try {
+              await transactionManager.applyConfirmedHeight(
+                currentWalletId,
+                txid,
+                details.height,
+                details.timestamp
+              );
+            } catch {
+              /* best-effort */
+            }
+          }
+        })
       );
     }
 

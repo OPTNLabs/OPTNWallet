@@ -518,7 +518,9 @@ const Home: React.FC = () => {
                       description={
                         tx.height > 0
                           ? `Block ${tx.height}`
-                          : 'Pending confirmation'
+                          : fused
+                            ? 'Broadcast — waiting for block'
+                            : 'Unconfirmed'
                       }
                       right={
                         <span
@@ -531,10 +533,10 @@ const Home: React.FC = () => {
                           {fused
                             ? tx.height > 0
                               ? 'Fused · Confirmed'
-                              : 'Fused · Pending'
+                              : 'Fused · Unconfirmed'
                             : tx.height > 0
                               ? 'Confirmed'
-                              : 'Pending'}
+                              : 'Unconfirmed'}
                         </span>
                       }
                       compact

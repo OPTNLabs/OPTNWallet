@@ -1,5 +1,6 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 import { TransactionHistoryItem } from '../../types/types';
+import { preferHistoryHeight } from '../../utils/txConfirmation';
 import { resetWallet, setWalletId } from './walletSlice';
 
 interface TransactionState {
@@ -47,7 +48,7 @@ function normalizeTxHash(hash: string): string {
     .toLowerCase();
 }
 
-/** Keep fusion inject timestamps when Electrum rewrites history without them. */
+/** Keep fusion inject timestamps; never let height 0 erase a confirmed height. */
 function mergeHistoryItem(
   incoming: TransactionHistoryItem,
   existing?: TransactionHistoryItem
@@ -64,6 +65,7 @@ function mergeHistoryItem(
   return {
     ...incoming,
     tx_hash,
+    height: preferHistoryHeight(incoming.height, existing?.height),
     timestamp: incomingTs ?? existingTs,
   };
 }
@@ -110,7 +112,7 @@ const transactionSlice = createSlice({
         if (
           existingTx.height === -1 ||
           existingTx.height === 0 ||
-          existingTx.height !== tx.height ||
+          tx.height > existingTx.height ||
           (!!tx.timestamp && tx.timestamp !== existingTx.timestamp)
         ) {
           updatedTransactions.push(tx);
