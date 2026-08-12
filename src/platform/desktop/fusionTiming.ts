@@ -5,6 +5,8 @@
 //   electroncash_plugins/fusion/plugin.py    (DEFAULT_MAX_COINS, AUTOFUSE_INACTIVE_TIMEOUT)
 //   electroncash_plugins/fusion/conf.py      (defaults)
 //
+import { FUSION_KNOB_DEFAULTS, getFusionKnobs } from './fusionKnobs';
+
 // Native round engine: `src-tauri/src/fusion/run.rs` (FusionTiming / T_*).
 // P2P must not invent longer overall budgets than a full server session body.
 //
@@ -114,81 +116,109 @@ export const ACCEPT_UNCONFIRMED_FUSION_INPUTS = true;
  */
 export const AUTO_WAIT_FOR_BLOCK_BEFORE_NEXT_ROUND = false;
 
-// ─── P2P budgets (independent of Auto 600s pool wait) ────────────────────
+// ─── P2P budgets — defaults from fusionKnobs.ts (protocol, not wallet UI) ──
 
 /**
  * P2P pool discover max when peers already seen.
  * Kept at 120s (historical live multi-window budget) — not the Auto 600s
  * inactive timeout, which would make P2P gathers unreasonably long.
  */
-export const P2P_GATHER_MAX_MS = 120_000;
+export const P2P_GATHER_MAX_MS = FUSION_KNOB_DEFAULTS.gatherMaxMs;
 
 /**
  * Manual Start alone budget. User is watching; fail fast so they can retry.
  * Live multi-wallet discovery is normally &lt;15s when relays overlap.
  */
-export const P2P_GATHER_ALONE_MS = 35_000;
+export const P2P_GATHER_ALONE_MS = FUSION_KNOB_DEFAULTS.gatherAloneMs;
 
 /**
  * Auto-fuse alone budget for P2P — full P2P gather max so staggered windows meet.
  */
-export const P2P_GATHER_ALONE_AUTO_MS = P2P_GATHER_MAX_MS;
+export const P2P_GATHER_ALONE_AUTO_MS = FUSION_KNOB_DEFAULTS.gatherAloneAutoMs;
 
 /**
  * Min gather before locking a *partial* set (MIN ≤ n < MAX).
  * Full MAX set uses {@link P2P_GATHER_FAST_WARMUP_MS} instead.
  */
-export const P2P_GATHER_MIN_MS = 10_000;
+export const P2P_GATHER_MIN_MS = FUSION_KNOB_DEFAULTS.gatherMinMs;
 
 /**
  * Brief warm-up before locking a *full* MAX set (Tor skew + one re-announce).
  */
-export const P2P_GATHER_FAST_WARMUP_MS = 5_000;
+export const P2P_GATHER_FAST_WARMUP_MS = FUSION_KNOB_DEFAULTS.gatherFastWarmupMs;
 
 /**
- * Extra hold when we have MIN..MAX-1 so more peers can join.
+ * Extra hold after the last new peer when we have MIN..MAX-1.
+ * Measured from last membership change, not gather start — a 6-set that
+ * skipped this locked while a 7th wallet was still publishing (chipnet).
  */
-export const P2P_SMALL_SET_HOLD_MS = 20_000;
+export const P2P_SMALL_SET_HOLD_MS = FUSION_KNOB_DEFAULTS.smallSetHoldMs;
 
 /**
  * Unchanged membership before lock (normal path).
  */
-export const P2P_PEER_SET_STABLE_MS = 4_000;
+export const P2P_PEER_SET_STABLE_MS = FUSION_KNOB_DEFAULTS.peerSetStableMs;
 
 /** Stability required when already at MAX_PARTICIPANTS (fast lock). */
-export const P2P_PEER_SET_STABLE_FAST_MS = 2_500;
+export const P2P_PEER_SET_STABLE_FAST_MS = FUSION_KNOB_DEFAULTS.peerSetStableFastMs;
 
 /**
  * After live set drops below peak, wait this long then accept reduced set.
  * Matches T_END_COMPS.
  */
-export const P2P_PEAK_GRACE_MS = SERVER_COMPS_END_MS;
+export const P2P_PEAK_GRACE_MS = FUSION_KNOB_DEFAULTS.peakGraceMs;
 
 /**
  * Rendezvous (propose/ACK/start) — full proposed set only.
  */
-export const P2P_RENDEZVOUS_MS = 60_000;
+export const P2P_RENDEZVOUS_MS = FUSION_KNOB_DEFAULTS.rendezvousMs;
 /**
  * Wait for elected coordinator's first proposal before ghost failover.
  */
-export const P2P_PROPOSAL_TIMEOUT_MS = 20_000;
+export const P2P_PROPOSAL_TIMEOUT_MS = FUSION_KNOB_DEFAULTS.proposalTimeoutMs;
 /** Re-send proposal / ACK while waiting. */
-export const P2P_RENDEZVOUS_RESEND_MS = 1_200;
+export const P2P_RENDEZVOUS_RESEND_MS = FUSION_KNOB_DEFAULTS.rendezvousResendMs;
 
 /**
- * Active round body after agreement — hard cap = server blame close.
+ * Active round body after agreement — floor is server blame close.
+ * Multi-hop onion over Tor uses {@link p2pRoundTimeoutMs}.
  */
 export const P2P_ROUND_TIMEOUT_MS = SERVER_ROUND_BLAME_MS;
 
 /**
  * Wait for coordinator credential_params over Tor gift-wrap.
  */
-export const P2P_CREDENTIAL_WAIT_MS = 35_000;
+export const P2P_CREDENTIAL_WAIT_MS = FUSION_KNOB_DEFAULTS.credentialWaitMs;
 export const P2P_CREDENTIAL_PARAMS_RESEND_MS = 1_500;
 export const P2P_CREDENTIAL_PARAMS_RESEND_MAX = 12;
 
-/** Slightly longer than declare+output resend budget so Tor can recover (E1). */
-export const P2P_MISSING_OUTPUTS_ONION_MS = 36_000;
+/**
+ * One onion hop of declare+blob resend budget (E1). A 2-peeler round fits
+ * here. Extra peelers are extra Tor hops of the full batch — do not reuse
+ * this raw as the coordinator abort timer.
+ */
+export const P2P_MISSING_OUTPUTS_ONION_MS = FUSION_KNOB_DEFAULTS.missingOutputsOnionMs;
+
+/**
+ * How long the coordinator waits after every peer is `ready` before aborting
+ * a missing peel. Chipnet 2026-08-12: 5 peers / 4 peelers / 24 blobs — hop 4
+ * was at 20/24 when the flat 36s timer fired; reveal landed 3s later.
+ */
+export function p2pMissingOutputsWaitMs(peelerCount: number): number {
+  const hops = Number.isFinite(peelerCount)
+    ? Math.max(1, Math.floor(peelerCount))
+    : 1;
+  return getFusionKnobs().missingOutputsOnionMs * hops;
+}
+
+/** Whole-round budget: credentials + inject + scaled peel. */
+export function p2pRoundTimeoutMs(peelerCount: number): number {
+  const knobs = getFusionKnobs();
+  return Math.max(
+    P2P_ROUND_TIMEOUT_MS,
+    knobs.credentialWaitMs + p2pMissingOutputsWaitMs(peelerCount)
+  );
+}
 
 export const P2P_COMPONENT_JITTER_MS: [number, number] = [30, 250];
 

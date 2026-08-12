@@ -241,6 +241,8 @@ vi.mock('../fusionTiming', () => ({
   P2P_RENDEZVOUS_MS: 1_000,
   P2P_ROUND_TIMEOUT_MS: 2_000,
   P2P_SMALL_SET_HOLD_MS: 0,
+  p2pRoundTimeoutMs: () => 2_000,
+  p2pMissingOutputsWaitMs: () => 2_000,
 }));
 
 vi.mock('../logger', () => ({
@@ -358,6 +360,28 @@ describe('F1 — unresolved P2P broadcast keeps its input reservations', () => {
     expect(error?.message).toContain('Fusion broadcast rejected');
     expect(completeFusionBroadcastMock).not.toHaveBeenCalled();
     expect(removeTrackedMock).toHaveBeenCalledWith(EXPECTED_TXID, 1);
+    expect(releaseOutpointsMock).toHaveBeenCalledWith(1, [COIN_OUTPOINT]);
+  });
+
+  it('completes as fused when a peer receives final before its own rebroadcast', async () => {
+    armBroadcast(false, false);
+    // Peer path: runFusionRound succeeds from a verified `final` without
+    // calling broadcast (that fire-and-forget starts 2–8s later).
+    runFusionRoundMock.mockResolvedValue({
+      txid: EXPECTED_TXID,
+      txHex: TX_HEX,
+    });
+
+    const { statuses, error } = await runRound();
+
+    expect(error).toBeNull();
+    expect(completeFusionBroadcastMock).toHaveBeenCalledWith(
+      expect.objectContaining({ txid: EXPECTED_TXID, walletId: 1 })
+    );
+    expect(statuses.some((line) => line.includes('Fused ✓'))).toBe(true);
+    expect(statuses.some((line) => line.startsWith('Fusion pending —'))).toBe(
+      false
+    );
     expect(releaseOutpointsMock).toHaveBeenCalledWith(1, [COIN_OUTPOINT]);
   });
 

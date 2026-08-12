@@ -4,9 +4,12 @@
  * `select_random_coins`, and `FUSE_DEPTH_THRESHOLD`).
  *
  * Adopted behavior:
- * - address is the indivisible linkage bucket;
- * - one bad coin rejects the entire address;
- * - only 1–3 confirmed, non-token, non-frozen coins per address are eligible;
+ * - address is the linkage bucket;
+ * - token / frozen / bad-value coins are left behind; remaining plain BCH
+ *   on that address can still fuse;
+ * - more than 3 UTXOs on one address no longer kills the bucket — we keep
+ *   the 3 largest usable coins (EC skips the address; that trapped reuse of
+ *   a single receive address: 8 coins, 0 eligible);
  * - random selection is per bucket, capped at 20 coins, with EC's first-bucket
  *   fallback when sampling selects nothing;
  * - depth completion is by eligible value and stops at 99.9%; EC considers an
@@ -89,39 +92,37 @@ function coinLooksConfirmed(coin: ServerFusionCoin): boolean {
   return Number.isFinite(confs) && confs > 0;
 }
 
-function skipReasonForBucket(
-  address: string,
-  addressCoins: ServerFusionCoin[],
+function coinSkipReason(
+  coin: ServerFusionCoin,
   requireConfirmed: boolean
 ): ServerFusionSkipReason | undefined {
-  if (!address) return 'empty-address';
-  if (addressCoins.length > EC_SERVER_FUSION_MAX_COINS_PER_ADDRESS) {
-    return 'too-many-coins';
-  }
-  if (addressCoins.some((c) => c.token != null || c.token_data != null)) {
-    return 'token';
-  }
-  if (addressCoins.some(hasFrozenFlag)) return 'frozen';
-  if (
-    addressCoins.some((c) => {
-      const value = coinValue(c);
-      return !Number.isSafeInteger(value) || value < 0;
-    })
-  ) {
-    return 'bad-value';
-  }
-  if (requireConfirmed && addressCoins.some((c) => !coinLooksConfirmed(c))) {
-    return 'unconfirmed';
-  }
+  if (coin.token != null || coin.token_data != null) return 'token';
+  if (hasFrozenFlag(coin)) return 'frozen';
+  const value = coinValue(coin);
+  if (!Number.isSafeInteger(value) || value < 0) return 'bad-value';
+  if (requireConfirmed && !coinLooksConfirmed(coin)) return 'unconfirmed';
   return undefined;
 }
 
-export function classifyServerFusionCoins(
+function takeLargestUsable(
+  coins: readonly ServerFusionCoin[]
+): ServerFusionCoin[] {
+  return [...coins]
+    .sort((a, b) => coinValue(b) - coinValue(a))
+    .slice(0, EC_SERVER_FUSION_MAX_COINS_PER_ADDRESS);
+}
+
+function groupUsableByAddress(
   coins: readonly ServerFusionCoin[],
-  options?: { requireConfirmed?: boolean }
-): ServerFusionClassification {
-  const requireConfirmed = options?.requireConfirmed === true;
+  requireConfirmed: boolean
+): {
+  byAddress: Map<string, ServerFusionCoin[]>;
+  usableByAddress: Map<string, ServerFusionCoin[]>;
+  totalValue: number;
+  hasUnconfirmed: boolean;
+} {
   const byAddress = new Map<string, ServerFusionCoin[]>();
+  const usableByAddress = new Map<string, ServerFusionCoin[]>();
   let totalValue = 0;
   let hasUnconfirmed = false;
 
@@ -132,23 +133,37 @@ export function classifyServerFusionCoins(
     const bucket = byAddress.get(address) ?? [];
     bucket.push(coin);
     byAddress.set(address, bucket);
+    if (!address || coinSkipReason(coin, requireConfirmed)) continue;
+    const usable = usableByAddress.get(address) ?? [];
+    usable.push(coin);
+    usableByAddress.set(address, usable);
   }
+
+  return { byAddress, usableByAddress, totalValue, hasUnconfirmed };
+}
+
+export function classifyServerFusionCoins(
+  coins: readonly ServerFusionCoin[],
+  options?: { requireConfirmed?: boolean }
+): ServerFusionClassification {
+  const requireConfirmed = options?.requireConfirmed === true;
+  const { byAddress, usableByAddress, totalValue, hasUnconfirmed } =
+    groupUsableByAddress(coins, requireConfirmed);
 
   const eligibleBuckets: ServerFusionAddressBucket[] = [];
   const ineligibleBuckets: ServerFusionAddressBucket[] = [];
   const skipCounts: Partial<Record<ServerFusionSkipReason, number>> = {};
   for (const [address, addressCoins] of byAddress) {
-    const skipReason = skipReasonForBucket(
-      address,
-      addressCoins,
-      requireConfirmed
-    );
-    if (skipReason) {
+    const usable = usableByAddress.get(address) ?? [];
+    if (usable.length === 0) {
+      const skipReason = !address
+        ? 'empty-address'
+        : coinSkipReason(addressCoins[0], requireConfirmed) ?? 'empty-address';
       skipCounts[skipReason] = (skipCounts[skipReason] ?? 0) + 1;
       ineligibleBuckets.push(bucketOf(address, addressCoins, skipReason));
-    } else {
-      eligibleBuckets.push(bucketOf(address, addressCoins));
+      continue;
     }
+    eligibleBuckets.push(bucketOf(address, takeLargestUsable(usable)));
   }
 
   return {
@@ -158,6 +173,26 @@ export function classifyServerFusionCoins(
     hasUnconfirmed,
     skipCounts,
   };
+}
+
+/**
+ * Addresses with more usable plain coins than CashFusion will take in one
+ * round. Caller can consolidate these to one fresh address before fusing.
+ */
+export function findCrowdedPlainAddressBuckets(
+  coins: readonly ServerFusionCoin[],
+  options?: { requireConfirmed?: boolean }
+): ServerFusionAddressBucket[] {
+  const requireConfirmed = options?.requireConfirmed === true;
+  const { usableByAddress } = groupUsableByAddress(coins, requireConfirmed);
+  const crowded: ServerFusionAddressBucket[] = [];
+  for (const [address, usable] of usableByAddress) {
+    if (usable.length > EC_SERVER_FUSION_MAX_COINS_PER_ADDRESS) {
+      crowded.push(bucketOf(address, usable));
+    }
+  }
+  crowded.sort((a, b) => b.coins.length - a.coins.length);
+  return crowded;
 }
 
 /** Why server Fusion has zero eligible address buckets. */
@@ -177,9 +212,10 @@ export function formatServerFusionEmptyReason(
         : '';
   return (
     `${prefix}no eligible server CashFusion address buckets.${why} ` +
-    `Need 1–3 plain BCH coins per address (no tokens, not frozen` +
+    `Need 1–3 plain BCH coins on an address (no tokens, not frozen` +
     `${classified.hasUnconfirmed && (classified.skipCounts.unconfirmed ?? 0) > 0 ? ', confirmed height' : ''}). ` +
-    `Auto still stops at the rounds-per-coin box; Manual Start may re-fuse.`
+    `A crowded address now uses its 3 largest plain coins. ` +
+    `Auto still stops at the rounds-per-coin box.`
   );
 }
 

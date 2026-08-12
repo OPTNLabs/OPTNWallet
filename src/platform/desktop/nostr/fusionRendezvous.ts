@@ -6,14 +6,9 @@ import {
   P2P_RENDEZVOUS_MS,
   P2P_RENDEZVOUS_RESEND_MS,
 } from '../fusionTiming';
-import {
-  electCoordinator,
-  MIN_PARTICIPANTS,
-  type FusionPoolNetwork,
-} from './fusion';
+import { getFusionKnobs } from '../fusionKnobs';
+import { electCoordinator, type FusionPoolNetwork } from './fusion';
 import { messageBinding, type RoundMessage, type RoundTransport } from './fusionSession';
-
-const MAX_PARTICIPANTS = 8;
 const DEFAULT_RENDEZVOUS_TIMEOUT_MS = P2P_RENDEZVOUS_MS;
 const DEFAULT_PROPOSAL_TIMEOUT_MS = P2P_PROPOSAL_TIMEOUT_MS;
 const PUBKEY = /^[0-9a-f]{64}$/;
@@ -57,7 +52,7 @@ export interface NegotiatedFusionRound {
 function canonicalParticipants(candidates: string[]): string[] {
   return [...new Set(candidates.filter((pubkey) => PUBKEY.test(pubkey)))]
     .sort()
-    .slice(0, MAX_PARTICIPANTS);
+    .slice(0, getFusionKnobs().maxPlayers);
 }
 
 function sameParticipants(a: string[], b: string[]): boolean {
@@ -111,8 +106,8 @@ function validProposal(
     // Epoch is informational on the rolling pool. Gather spans 30–90s and the
     // 30s epoch bucket often flips mid-gather; requiring equality rejected every
     // honest proposal when wallets started a few seconds apart.
-    // ≥ MIN_PARTICIPANTS (3): onion mix needs ≥2 peelers; no 2-party proposals.
-    participants.length >= MIN_PARTICIPANTS &&
+    // Gather locks at minPlayers (6). After a shrink, proposals may be minSafe (4).
+    participants.length >= getFusionKnobs().minSafePlayers &&
     participants.length === message.participants.length &&
     sameParticipants(participants, message.participants) &&
     participants.includes(params.myPubkey) &&
@@ -142,6 +137,18 @@ function asError(value: unknown): Error {
   return value instanceof Error ? value : new Error(String(value));
 }
 
+/** Coordinator of a larger set naming the ACKed remainder. Re-elect on this set. */
+export class ShrinkRoundError extends Error {
+  readonly remaining: string[];
+  constructor(remaining: string[]) {
+    super(
+      `Shrinking to ${remaining.length} ACKed wallet(s) (min safe ${getFusionKnobs().minSafePlayers}).`
+    );
+    this.name = 'ShrinkRoundError';
+    this.remaining = remaining;
+  }
+}
+
 /** How many silent coordinators we drop before giving up on the round. */
 const MAX_COORDINATOR_FAILOVERS = 8;
 
@@ -165,9 +172,12 @@ export async function negotiateFusionRound(
     Date.now() + (params.timeoutMs ?? DEFAULT_RENDEZVOUS_TIMEOUT_MS);
 
   for (let attempt = 0; ; attempt += 1) {
-    if (candidates.length < 3) {
+    const knobs = getFusionKnobs();
+    // Gather already required minPlayers (6). Here the floor is minSafe (4)
+    // so ACK-shrink and a dead coordinator can continue.
+    if (candidates.length < knobs.minSafePlayers) {
       throw new Error(
-        'P2P Fusion needs at least three fresh peers (CashFusion-style anonymity floor).'
+        `P2P Fusion needs at least ${knobs.minSafePlayers} fresh peers (CashFusion-style anonymity floor).`
       );
     }
     const coordinator = electCoordinator(candidates);
@@ -192,6 +202,11 @@ export async function negotiateFusionRound(
         ? await negotiateAsCoordinator(attemptParams, transport, candidates)
         : await negotiateAsParticipant(attemptParams, transport, coordinator);
     } catch (error) {
+      if (error instanceof ShrinkRoundError) {
+        candidates = error.remaining;
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        continue;
+      }
       const msg = String(error);
       const silentCoordinator =
         !iAmCoordinator && /round start timed out/.test(msg);
@@ -414,18 +429,67 @@ function negotiateAsCoordinator(
     });
 
     params.signal?.addEventListener('abort', onAbort, { once: true });
+    // Leave budget to re-elect and propose the ACKed remainder. Tiny test
+    // timeouts (≤200ms) stay one-shot so existing abort tests still fire.
+    const ackWaitMs =
+      timeoutMs <= 200
+        ? timeoutMs
+        : Math.max(
+            1_000,
+            timeoutMs -
+              Math.min(12_000, Math.max(2_000, Math.floor(timeoutMs * 0.25)))
+          );
     const timer = setTimeout(() => {
-      const acked = acknowledgments.size;
+      if (settled || starting || yielded) return;
+      if (acknowledgments.size === participants.length) return;
+      const remaining = [...acknowledgments].sort();
+      const minSafe = getFusionKnobs().minSafePlayers;
       const proposed = participants.length;
-      // Never degrade to a partial set — abort so everyone retries cleanly.
+      // One shrink: the exact ACKed set, if still ≥ min safe. Missing peers
+      // are aborted so they retry Auto; remaining re-elect and propose again.
+      if (
+        remaining.length >= minSafe &&
+        remaining.length < proposed &&
+        remaining.includes(params.myPubkey)
+      ) {
+        void (async () => {
+          if (settled) return;
+          const missing = participants.filter((peer) => !acknowledgments.has(peer));
+          const shrink: RoundMessage = {
+            ...messageBinding(),
+            type: 'round_shrink',
+            session,
+            network: params.network,
+            tier: params.tier,
+            epoch: params.epoch,
+            remaining,
+          };
+          const abort: RoundMessage = {
+            ...messageBinding(),
+            type: 'abort',
+            session,
+            reason: `Not in the ACKed set (${remaining.length}/${proposed}) — Auto will retry.`,
+          };
+          await Promise.allSettled([
+            ...remaining
+              .filter((peer) => peer !== params.myPubkey)
+              .map((peer) => transport.send(peer, shrink)),
+            ...missing.map((peer) => transport.send(peer, abort)),
+          ]);
+          if (settled) return;
+          settled = true;
+          cleanup();
+          reject(new ShrinkRoundError(remaining));
+        })();
+        return;
+      }
       void finishError(
         new Error(
-          `round acknowledgments timed out (only ${acked}/${proposed} answered). ` +
-            `Refusing a partial round — full set must ACK. Auto will retry; ` +
-            `keep Tor + Auto on.`
+          `round acknowledgments timed out (only ${acknowledgments.size}/${proposed} answered). ` +
+            `Need ≥${minSafe} to shrink; Auto will retry.`
         )
       );
-    }, timeoutMs);
+    }, ackWaitMs);
     // After settle: start only when EVERY proposed peer has ACKed.
     ownStartTimer = setTimeout(() => {
       settlePassed = true;
@@ -449,13 +513,15 @@ function negotiateAsCoordinator(
 function negotiateAsParticipant(
   params: FusionRendezvousParams,
   transport: RoundTransport,
-  expectedCoordinator: string
+  expectedCoordinatorParam: string
 ): Promise<NegotiatedFusionRound> {
   return new Promise((resolve, reject) => {
     let settled = false;
     let accepted: Extract<RoundMessage, { type: 'round_proposal' }> | null =
       null;
     let acceptedCoordinator: string | null = null;
+    let shrinkRemaining: string[] | null = null;
+    let expectedCoordinator = expectedCoordinatorParam;
     let unsubscribe: () => void = () => undefined;
     let ackResendTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -503,10 +569,49 @@ function negotiateAsParticipant(
         fail(abortError(message.reason));
         return;
       }
+      if (
+        message.type === 'round_shrink' &&
+        from === (acceptedCoordinator ?? expectedCoordinator) &&
+        sameRoundBinding(message, params)
+      ) {
+        const remaining = canonicalParticipants(message.remaining);
+        const previous = accepted?.participants ?? params.candidates;
+        const minSafe = getFusionKnobs().minSafePlayers;
+        if (
+          remaining.length >= minSafe &&
+          remaining.length < previous.length &&
+          remaining.includes(params.myPubkey) &&
+          remaining.every((peer) => previous.includes(peer))
+        ) {
+          const next = electCoordinator(remaining);
+          // If the reduced set elects US, leave this participant wait and
+          // re-enter the loop as coordinator. Staying here waits for a
+          // proposal we will never send.
+          if (next === params.myPubkey) {
+            fail(new ShrinkRoundError(remaining));
+            return;
+          }
+          shrinkRemaining = remaining;
+          expectedCoordinator = next ?? expectedCoordinator;
+          accepted = null;
+          acceptedCoordinator = null;
+          if (ackResendTimer) {
+            clearInterval(ackResendTimer);
+            ackResendTimer = undefined;
+          }
+        }
+        return;
+      }
       if (validProposal(message, from, params)) {
         // Same ranking the coordinator side applies, from the other direction:
         // take a proposal only if it beats the round we are already waiting on.
         if (from === acceptedCoordinator) return;
+        if (
+          shrinkRemaining &&
+          !sameParticipants(message.participants, shrinkRemaining)
+        ) {
+          return;
+        }
         if (
           !acceptedCoordinator &&
           from !== expectedCoordinator &&
@@ -560,7 +665,7 @@ function negotiateAsParticipant(
     // coordinator still has to finish its settle window before round_start.
     const proposalTimer = setTimeout(
       () => {
-        if (!accepted) fail(new Error('round start timed out'));
+        if (!accepted && !shrinkRemaining) fail(new Error('round start timed out'));
       },
       Math.min(params.proposalTimeoutMs ?? DEFAULT_PROPOSAL_TIMEOUT_MS, timeoutMs)
     );

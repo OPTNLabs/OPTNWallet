@@ -17,6 +17,7 @@ import {
   type WalletUtxoSnapshot,
 } from '../../services/WalletUtxoRefreshService';
 import OutboundTransactionTracker from '../../services/OutboundTransactionTracker';
+import { reconcileOutboundTransactions } from '../../services/OutboundTransactionReconciler';
 import { Network } from '../../state/slices/networkSlice';
 import type { UTXO } from '../../types/types';
 import {
@@ -55,11 +56,17 @@ import {
 } from './fusionTiming';
 import {
   classifyServerFusionCoins,
+  findCrowdedPlainAddressBuckets,
   formatServerFusionEmptyReason,
   isServerFusionDepthSatisfied,
   selectServerFusionBuckets,
+  type ServerFusionAddressBucket,
   type ServerFusionClassification,
 } from './serverFusionCoinPolicy';
+import {
+  consolidateCrowdedFusionAddress,
+  walletCanPreConsolidate,
+} from './fusionPreConsolidate';
 
 /** Structured, so callers never parse a human string to learn what happened. */
 export type FusionRunOutcome =
@@ -405,6 +412,8 @@ interface FreshCoinSelection {
   selectedCoins: UTXO[];
   serverDepthSatisfied: boolean;
   serverClassification?: ServerFusionClassification;
+  crowdedBuckets: ServerFusionAddressBucket[];
+  allCoins: UTXO[];
 }
 
 /**
@@ -436,6 +445,7 @@ async function freshCoinSelection(
     // 0-conf / height-0 fusion outputs are allowed (ACCEPT_UNCONFIRMED).
     // Auto still stops via isServerFusionDepthSatisfied below; Manual does not.
     const classified = classifyServerFusionCoins(allCoins);
+    const crowdedBuckets = findCrowdedPlainAddressBuckets(allCoins);
     const depthCoins = classified.eligibleBuckets.flatMap(
       (bucket) => bucket.coins
     );
@@ -449,17 +459,21 @@ async function freshCoinSelection(
           'fusion-diag',
           `w${walletId} server ${trigger}: coins=${allCoins.length} ` +
             `eligibleBuckets=${classified.eligibleBuckets.length} ` +
+            `eligibleCoins=${classified.eligibleBuckets.reduce((n, b) => n + b.coins.length, 0)} ` +
+            `crowded=${crowdedBuckets.length} ` +
             `skipped=${JSON.stringify(classified.skipCounts)} ` +
             `depthSatisfied=${depth.satisfied} fuseDepth=${fuseDepth}`
         )
       )
       .catch(() => undefined);
-    if (trigger === 'auto' && depth.satisfied) {
+    if (trigger === 'auto' && depth.satisfied && crowdedBuckets.length === 0) {
       return {
         depthCoins,
         selectedCoins: [],
         serverDepthSatisfied: true,
         serverClassification: classified,
+        crowdedBuckets,
+        allCoins,
       };
     }
 
@@ -478,6 +492,8 @@ async function freshCoinSelection(
       selectedCoins: selectedBuckets.flatMap((bucket) => bucket.coins),
       serverDepthSatisfied: false,
       serverClassification: classified,
+      crowdedBuckets,
+      allCoins,
     };
   }
 
@@ -507,7 +523,67 @@ async function freshCoinSelection(
     depthCoins: coins,
     selectedCoins: limitFusionCoins(eligible),
     serverDepthSatisfied: false,
+    crowdedBuckets: findCrowdedPlainAddressBuckets(coins),
+    allCoins,
   };
+}
+
+async function maybePreConsolidateCrowdedCoins(
+  selection: FreshCoinSelection,
+  options: {
+    walletId: number;
+    network: Network;
+    mode: FusionMode;
+    trigger: 'auto' | 'manual';
+    fuseDepth: number;
+    signal?: AbortSignal;
+    onStatus: (status: string) => void;
+  }
+): Promise<FreshCoinSelection> {
+  // Only when one address has more than 3 usable plain coins. Auto stays
+  // quiet on every other tick — no extra click, no status flash.
+  if (selection.crowdedBuckets.length === 0 || !walletCanPreConsolidate()) {
+    return selection;
+  }
+  const bucket = selection.crowdedBuckets[0];
+  options.onStatus(
+    `Consolidating ${bucket.coins.length} coins on one address before fusion…`
+  );
+  void import('./logger')
+    .then(({ log }) =>
+      log.info(
+        'fusion-diag',
+        `w${options.walletId} pre-consolidate ${bucket.coins.length} coins on one address`
+      )
+    )
+    .catch(() => undefined);
+  const result = await consolidateCrowdedFusionAddress({
+    walletId: options.walletId,
+    network: options.network,
+    coins: selection.allCoins,
+    signal: options.signal,
+  });
+  if (!result.ok) {
+    void import('./logger')
+      .then(({ log }) =>
+        log.info(
+          'fusion-diag',
+          `w${options.walletId} pre-consolidate skipped: ${result.reason}`
+        )
+      )
+      .catch(() => undefined);
+    return selection;
+  }
+  options.onStatus('Consolidate sent — refreshing coins…');
+  const next = await freshCoinSelection(
+    options.walletId,
+    options.mode,
+    options.trigger,
+    options.fuseDepth,
+    undefined,
+    options.signal
+  );
+  return next ?? selection;
 }
 
 export async function startFusionRound(
@@ -549,13 +625,25 @@ export async function startFusionRound(
   const pendingFusion =
     await OutboundTransactionTracker.findFusionVerificationPending(walletId);
   if (pendingFusion) {
-    return {
-      status: 'verification-pending',
-      mode: /server/i.test(pendingFusion.source) ? 'server' : 'p2p',
-      txid: pendingFusion.txid,
-      message:
-        'A previous Fusion transaction is still awaiting independent network visibility.',
-    };
+    // Local history or spent-coin drop is enough to clear a tor-only Fusion.
+    // Cheap check so Auto does not sit on a tx another wallet already fused.
+    await reconcileOutboundTransactions(walletId).catch(() => undefined);
+    const stillPending =
+      await OutboundTransactionTracker.findFusionVerificationPending(walletId);
+    if (stillPending) {
+      if (trigger === 'auto') {
+        await stampAutoFailure(walletId, AUTO_FUSION_RETRY_MS).catch(
+          () => undefined
+        );
+      }
+      return {
+        status: 'verification-pending',
+        mode: /server/i.test(stillPending.source) ? 'server' : 'p2p',
+        txid: stillPending.txid,
+        message:
+          'A previous Fusion transaction is still awaiting independent network visibility.',
+      };
+    }
   }
 
   // Drop orphan UI/durable state before acquire so grey-idle ghosts never block.
@@ -704,7 +792,7 @@ export async function startFusionRound(
     // Auto: resolve coins first WITHOUT activity spam. If depth is already met,
     // return quietly — no "refreshing coins" lease thrash every engine tick.
     if (trigger === 'auto') {
-      const selection = await freshCoinSelection(
+      let selection = await freshCoinSelection(
         walletId,
         mode,
         trigger,
@@ -714,6 +802,25 @@ export async function startFusionRound(
       );
       if (options.signal?.aborted) return finish({ status: 'cancelled' });
       if (selection === null) return finish({ status: 'waiting-for-wallet' });
+      // Auto stays automatic: if an address is crowded, consolidate inside
+      // this same tick, then continue into the fusion round. No extra Start.
+      let autoCooldownClaimed = false;
+      if (selection.crowdedBuckets.length > 0) {
+        autoCooldownClaimed = await tryClaimAutoCooldown(
+          walletId,
+          AUTO_FUSION_COOLDOWN_MS
+        );
+        if (!autoCooldownClaimed) return finish({ status: 'cooldown' });
+        selection = await maybePreConsolidateCrowdedCoins(selection, {
+          walletId,
+          network: options.network,
+          mode,
+          trigger,
+          fuseDepth: options.fuseDepth,
+          signal: options.signal,
+          onStatus: (status) => pushProgress({ status }),
+        });
+      }
       const coinsQuiet = selection.selectedCoins;
       if (coinsQuiet.length === 0) {
         const elig = fuseDepthEligibility(
@@ -743,10 +850,9 @@ export async function startFusionRound(
         phase: 1,
         status: 'Auto-fuse: refreshing coins…',
       });
-      const claimed = await tryClaimAutoCooldown(
-        walletId,
-        AUTO_FUSION_COOLDOWN_MS
-      );
+      const claimed =
+        autoCooldownClaimed ||
+        (await tryClaimAutoCooldown(walletId, AUTO_FUSION_COOLDOWN_MS));
       if (!claimed) return finish({ status: 'cooldown' });
 
       try {
@@ -840,7 +946,7 @@ export async function startFusionRound(
       phase: 1,
       status: 'Refreshing coins…',
     });
-    const selection = await freshCoinSelection(
+    let selection = await freshCoinSelection(
       walletId,
       mode,
       'manual',
@@ -850,6 +956,17 @@ export async function startFusionRound(
     );
     if (options.signal?.aborted) return finish({ status: 'cancelled' });
     if (selection === null) return finish({ status: 'waiting-for-wallet' });
+    if (selection.crowdedBuckets.length > 0) {
+      selection = await maybePreConsolidateCrowdedCoins(selection, {
+        walletId,
+        network: options.network,
+        mode,
+        trigger: 'manual',
+        fuseDepth: options.fuseDepth,
+        signal: options.signal,
+        onStatus: (status) => pushProgress({ status }),
+      });
+    }
     const coins = selection.selectedCoins;
     if (coins.length === 0) {
       const detail =

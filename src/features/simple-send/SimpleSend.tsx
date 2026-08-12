@@ -1,6 +1,6 @@
 // src/pages/SimpleSend.tsx
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 import useSimpleSend from '../../hooks/useSimpleSend';
@@ -19,6 +19,7 @@ import { selectWalletId } from '../../state/slices/walletSlice';
 import WalletScreen from '../../components/ui/WalletScreen';
 import { CoinControlSection } from '../../components/CoinControlSection';
 import { getReturnPath } from '../../utils/navigation';
+import { SATSINBITCOIN } from '../../utils/constants';
 
 type SimpleSendLocationState = {
   amountBch?: string;
@@ -118,6 +119,17 @@ export default function SimpleSend() {
   } = useOutboundTransactions(walletId, deferOutboundWork);
 
   const isSending = mode === 'sending';
+  const spendableSummary = useMemo(() => {
+    const spendableSats = dbUtxos.reduce((sum, utxo) => {
+      const raw = utxo.amount ?? utxo.value ?? 0;
+      return sum + (typeof raw === 'bigint' ? Number(raw) : Number(raw) || 0);
+    }, 0);
+    const spendableBch = (spendableSats / SATSINBITCOIN)
+      .toFixed(8)
+      .replace(/\.?0+$/, '');
+    const coinLabel = dbUtxos.length === 1 ? 'coin' : 'coins';
+    return `Spendable ${spendableBch} BCH from ${dbUtxos.length} ${coinLabel} (same set as Home, minus token coins).`;
+  }, [dbUtxos]);
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
   const [pendingReviewFlow, setPendingReviewFlow] = useState(false);
   const isReviewBusy = reviewBusy || pendingReviewFlow;
@@ -445,6 +457,9 @@ export default function SimpleSend() {
                     </button>
                   </div>
                   <div className="mt-2 text-xs wallet-muted">
+                    {spendableSummary}
+                  </div>
+                  <div className="mt-1 text-xs wallet-muted">
                     {bchUsdPrice > 0
                       ? amountDisplayMode === 'bch'
                         ? amountBch

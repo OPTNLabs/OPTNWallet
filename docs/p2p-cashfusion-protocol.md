@@ -15,6 +15,7 @@ behaviour, and safety gates.
 | [p2p-cashfusion-privacy-layers.md](./p2p-cashfusion-privacy-layers.md)     | Naming map: Tor vs NIP-59 vs Pedersen vs blind Schnorr vs **output onion** |
 | [THREAT_MODEL.md](./THREAT_MODEL.md)                                       | Adversaries and what each can/cannot do                                    |
 | [cashfusion-implementation-scope.md](./cashfusion-implementation-scope.md) | Ship status — **both** P2P and classic server paths **done**               |
+| [p2p-cashfusion-knobs.md](./p2p-cashfusion-knobs.md)                       | Internal protocol floors/caps/timings — **not** wallet settings            |
 | Source under `src/platform/desktop/nostr/` + `FusionP2pService.ts`         | Normative behaviour                                                        |
 
 **Design goal (non-negotiable, and met in code):** P2P is a **different
@@ -43,6 +44,7 @@ Bitcoin Cash network (Chipnet for development dogfood).
 | Output onion (peer peel + shuffle)                                 | `onionCrypto.ts`                                                                    |
 | Blind Schnorr issuer + requester (TS)                              | `fusionBlindSchnorr.ts`                                                             |
 | Pedersen commits (TS)                                              | `fusionPedersen.ts`                                                                 |
+| Protocol knobs (min/safe/max, tiers, gather/onion budgets)         | `fusionKnobs.ts` — [knobs.md](./p2p-cashfusion-knobs.md), **not** wallet UI          |
 | Phase budgets / server parity timing                               | `fusionTiming.ts`                                                                   |
 | Auto policy (cooldown, rendezvous tick)                            | `fusionAutoEngine.ts`                                                               |
 | Per-coin fuse depth (rounds-per-coin)                              | `fusionCoinDepth.ts`, `FusionCompletionService.ts`                                  |
@@ -180,37 +182,43 @@ peer to resist replay within a session.
 
 ### 4.1 Group size
 
-| Constant                    | Value  | Meaning                                  |
-| --------------------------- | ------ | ---------------------------------------- |
-| `MIN_PARTICIPANTS`          | **3**  | Anonymity floor + onion needs ≥2 peelers |
-| `MAX_PARTICIPANTS`          | **6**  | Cap per round                            |
-| `CREDENTIAL_SLOTS_PER_PEER` | **16** | Max inputs per peer per round            |
+Live values: `getFusionKnobs()` in `fusionKnobs.ts`. Contributor table:
+[p2p-cashfusion-knobs.md](./p2p-cashfusion-knobs.md). These are **protocol**
+constants, not CashFusion wallet settings.
 
-There is **no rule that excludes a fourth wallet**. Gather may **lock at 3**
-once the set is stable so rounds do not wait forever for a late peer. If four
-(or more, up to 6) are present **before** lock, the round includes them. Live
-multi-window stress often produces 3-ways because Auto cooldowns stagger entry
-(~40s after success); 4-ways happen when all four overlap in gather.
+| Constant                    | Value  | Meaning                                                          |
+| --------------------------- | ------ | ---------------------------------------------------------------- |
+| `minPlayers`                | **6**  | Lock gather / first proposal                                     |
+| `minSafePlayers`            | **4**  | ACK-shrink / coordinator failover floor (onion still needs ≥3)   |
+| `maxPlayers`                | **10** | Cap per round                                                    |
+| Onion floor                 | **3**  | Mix-net needs ≥2 peelers                                         |
+| `CREDENTIAL_SLOTS_PER_PEER` | **16** | Max inputs per peer per round                                    |
 
-### 4.2 Gather budgets (`fusionTiming.ts`)
+Gather **locks at 6**. If two peers miss ACK (or the coordinator vanishes
+before start), the remainder may **re-propose** the exact ACKed set if it is
+still ≥4. Mid-onion / mid-sign cannot rewrite the tx. Mixed windows with
+different caps (e.g. 8 vs 10) cannot agree — restart every window after a
+knob change.
+
+### 4.2 Gather budgets (`fusionKnobs.ts` / `fusionTiming.ts`)
 
 | Constant                    | Value                  | Role                                           |
 | --------------------------- | ---------------------- | ---------------------------------------------- |
 | `P2P_GATHER_MAX_MS`         | **120s** (`JOIN_WAIT`) | Max discover when peers seen                   |
 | `P2P_GATHER_ALONE_MS`       | **35s**                | Manual alone abort                             |
 | `P2P_GATHER_ALONE_AUTO_MS`  | **120s**               | Auto alone wait for peers                      |
-| `P2P_GATHER_MIN_MS`         | **10s**                | Min gather before locking a partial set (3…5)  |
+| `P2P_GATHER_MIN_MS`         | **10s**                | Min gather before locking a legal set (6…9)    |
 | `P2P_GATHER_FAST_WARMUP_MS` | **5s**                 | Warm-up when already at MAX                    |
-| `P2P_SMALL_SET_HOLD_MS`     | **20s**                | Extra hold after MIN to allow more peers       |
+| `P2P_SMALL_SET_HOLD_MS`     | **20s**                | Extra hold after last new peer below max       |
 | `P2P_PEER_SET_STABLE_MS`    | **4s**                 | Membership must be stable before lock          |
 | `P2P_PEAK_GRACE_MS`         | **15s**                | Grace after peak drops before accepting shrink |
 
 **Lock policy (summary):**
 
-- `n < 3`: never lock; wait or fail alone budget.
-- `3 ≤ n < 6`: after min gather + stable + short hold (unless soft/strict still
-  disagree or peak not met), **lock partial set**.
-- `n ≥ 6`: fast lock after short warm-up + short stable.
+- `n < 6`: never lock; wait or fail alone budget.
+- `6 ≤ n < 10`: after min gather + stable + hold after last new peer.
+- `n ≥ 10`: fast lock after short warm-up + short stable.
+- After propose only: shrink to the exact ACKed remainder if `n ≥ 4`.
 
 ### 4.3 Compatible tier selection
 
@@ -634,7 +642,8 @@ Privacy layer roles (Tor / gift-wrap / Pedersen / blind Schnorr / output onion):
 When you change the wire format, crypto, gather policy, or Auto depth/cooldown:
 
 1. Bump `ROUND_MSG_VERSION` if old clients must not parse new messages.
-2. Update **this document** and, if naming/layers change,
+2. Update **this document**, [p2p-cashfusion-knobs.md](./p2p-cashfusion-knobs.md)
+   if floors/caps/timings changed, and, if naming/layers change,
    [privacy-layers](./p2p-cashfusion-privacy-layers.md) in the same PR.
 3. Add or extend sabotage-style tests (break the invariant → that test fails).
 4. Keep Electron Cash / 00-Wallet references honest: cite files, do not invent
@@ -642,6 +651,6 @@ When you change the wire format, crypto, gather policy, or Auto depth/cooldown:
 
 ---
 
-_Last updated for PR #12 **ship**: protocol v3 (blind input/output credentials + Pedersen +
-mandatory output onion), MIN=3 / MAX=6, full-set ACK, Auto 40s/25s cooldowns,
+_Last updated: protocol v4, min 6 / min-safe 4 / max 10 (see
+[knobs.md](./p2p-cashfusion-knobs.md)), ACK-shrink, Auto 40s/25s cooldowns,
 fuse-depth stop, Tor fail-closed — **implemented**, not planned._

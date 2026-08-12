@@ -80,7 +80,7 @@ describe('P2P Fusion coordinator-agreed round start', () => {
     // Rolling pool freezes epoch at Start; a 45s gather often crosses a 30s
     // bucket. Requiring epoch equality rejected every proposal → "Could not
     // agree on a round (4 in your view)".
-    const all = [peer(1), peer(2), peer(3)].sort();
+    const all = [peer(1), peer(2), peer(3), peer(4)].sort();
     const lead = coordinatorOf(all);
     const hub = new Hub();
     const results = await Promise.all(
@@ -106,16 +106,17 @@ describe('P2P Fusion coordinator-agreed round start', () => {
   });
 
   it('converges on the coordinator participant set despite a partial relay view', async () => {
-    // MIN_PARTICIPANTS = 3: partial view must still include ≥3 keys (missing
-    // one of four), not a 2-set which can no longer negotiate alone.
-    const all = [peer(1), peer(2), peer(3), peer(4)].sort();
+    // MIN_PARTICIPANTS = 4: partial view must still include ≥4 keys (missing
+    // one of five), not a 3-set which can no longer negotiate alone.
+    const all = [peer(1), peer(2), peer(3), peer(4), peer(5)].sort();
     const lead = coordinatorOf(all);
     const others = all.filter((pubkey) => pubkey !== lead);
     const partial = others[0];
     const fullA = others[1];
     const fullB = others[2];
-    // Partial misses fullB entirely (asymmetric Tor view).
-    const partialView = [lead, partial, fullA].sort();
+    const fullC = others[3];
+    // Partial misses fullC entirely (asymmetric Tor view).
+    const partialView = [lead, partial, fullA, fullB].sort();
     const hub = new Hub();
     const common = {
       network: 'chipnet' as const,
@@ -125,7 +126,7 @@ describe('P2P Fusion coordinator-agreed round start', () => {
       coordinatorSettleMs: 20,
     };
 
-    const [rLead, rPartial, rFullA, rFullB] = await Promise.all([
+    const [rLead, rPartial, rFullA, rFullB, rFullC] = await Promise.all([
       negotiateFusionRound(
         {
           ...common,
@@ -147,12 +148,16 @@ describe('P2P Fusion coordinator-agreed round start', () => {
         { ...common, myPubkey: fullB, candidates: all },
         hub.transportFor(fullB)
       ),
+      negotiateFusionRound(
+        { ...common, myPubkey: fullC, candidates: all },
+        hub.transportFor(fullC)
+      ),
     ]);
 
     // Partial still lands in the coordinator's full-set round via outrank.
     expect(
       new Set(
-        [rLead, rPartial, rFullA, rFullB].map((r) => r.session)
+        [rLead, rPartial, rFullA, rFullB, rFullC].map((r) => r.session)
       )
     ).toEqual(new Set(['f'.repeat(64)]));
     expect(rLead.participants).toEqual(all);
@@ -161,10 +166,10 @@ describe('P2P Fusion coordinator-agreed round start', () => {
   });
 
   it('yields to a better coordinator that was absent from the local relay view', async () => {
-    const all = [peer(1), peer(2), peer(3)].sort();
-    // Late lead wins; x and y still know about all three (min set size).
+    const all = [peer(1), peer(2), peer(3), peer(4)].sort();
+    // Late lead wins; others still know about the full min-4 set.
     const lead = coordinatorOf(all);
-    const [x, y] = all.filter((pubkey) => pubkey !== lead);
+    const [x, y, z] = all.filter((pubkey) => pubkey !== lead);
     const hub = new Hub((from, _to, message) =>
       from === lead && message.type === 'round_proposal' ? 900 : 0
     );
@@ -176,7 +181,7 @@ describe('P2P Fusion coordinator-agreed round start', () => {
       coordinatorSettleMs: 1_200,
     };
 
-    const [rLead, rx, ry] = await Promise.all([
+    const [rLead, rx, ry, rz] = await Promise.all([
       negotiateFusionRound(
         {
           ...common,
@@ -199,14 +204,20 @@ describe('P2P Fusion coordinator-agreed round start', () => {
         { ...common, myPubkey: y, candidates: all },
         hub.transportFor(y)
       ),
+      negotiateFusionRound(
+        { ...common, myPubkey: z, candidates: all },
+        hub.transportFor(z)
+      ),
     ]);
 
-    expect([rLead, rx, ry].map((round) => round.coordinator)).toEqual([
+    expect([rLead, rx, ry, rz].map((round) => round.coordinator)).toEqual([
+      lead,
       lead,
       lead,
       lead,
     ]);
-    expect([rLead, rx, ry].map((round) => round.session)).toEqual([
+    expect([rLead, rx, ry, rz].map((round) => round.session)).toEqual([
+      'a'.repeat(64),
       'a'.repeat(64),
       'a'.repeat(64),
       'a'.repeat(64),
@@ -217,8 +228,8 @@ describe('P2P Fusion coordinator-agreed round start', () => {
   it(
     're-elects when the elected coordinator is a ghost that never proposes',
     async () => {
-      // Ghost + 3 live so after drop we still have ≥3 for the anonymity floor.
-      const all = [peer(1), peer(2), peer(3), peer(4)].sort();
+      // Ghost + 4 live so after drop we still have ≥4 for the anonymity floor.
+      const all = [peer(1), peer(2), peer(3), peer(4), peer(5)].sort();
       const ghost = coordinatorOf(all);
       const live = all.filter((pubkey) => pubkey !== ghost);
       const survivor = coordinatorOf(live);
@@ -258,16 +269,16 @@ describe('P2P Fusion coordinator-agreed round start', () => {
   );
 
   it('aborts instead of entering registration when a proposed peer never acknowledges', async () => {
-    // Three candidates so we clear the anonymity floor; only the coord runs.
-    const trio = [peer(1), peer(2), peer(3)].sort();
-    const lead = coordinatorOf(trio);
+    // Four candidates so we clear the anonymity floor; only the coord runs.
+    const quartet = [peer(1), peer(2), peer(3), peer(4)].sort();
+    const lead = coordinatorOf(quartet);
     const hub = new Hub();
 
     await expect(
       negotiateFusionRound(
         {
           myPubkey: lead,
-          candidates: trio,
+          candidates: quartet,
           network: 'chipnet',
           tier: 10_000,
           epoch: 123,
@@ -317,10 +328,10 @@ describe('P2P Fusion coordinator-agreed round start', () => {
         proposalTimeoutMs: 400,
       },
       hub.transportFor(acker)
-    );
+    ).catch(() => undefined);
 
-    await expect(coordPromise).rejects.toThrow(/1\/4|2\/4|Refusing a partial|timed out/i);
-    await oneAck.catch(() => undefined);
+    await expect(coordPromise).rejects.toThrow(/1\/4|2\/4|Refusing a partial|timed out|Need ≥4/i);
+    await oneAck;
 
     const partialStart = hub.sent.some(
       ({ message }) =>
@@ -329,5 +340,70 @@ describe('P2P Fusion coordinator-agreed round start', () => {
         (message as { participants: string[] }).participants.length < 4
     );
     expect(partialStart).toBe(false);
+  });
+
+  it(
+    'shrinks to the ACKed remainder when some peers never answer (≥ min safe)',
+    async () => {
+    const all = [peer(1), peer(2), peer(3), peer(4), peer(5), peer(6)].sort();
+    const lead = coordinatorOf(all);
+    const silent = all.filter((pubkey) => pubkey !== lead).slice(0, 2);
+    const live = all.filter((pubkey) => !silent.includes(pubkey));
+    const hub = new Hub();
+    const common = {
+      network: 'chipnet' as const,
+      tier: 10_000,
+      epoch: 9,
+      timeoutMs: 2_500,
+      coordinatorSettleMs: 40,
+    };
+
+    const results = await Promise.all(
+      live.map((pubkey) =>
+        negotiateFusionRound(
+          {
+            ...common,
+            myPubkey: pubkey,
+            candidates: all,
+          },
+          hub.transportFor(pubkey)
+        )
+      )
+    );
+
+    expect(results.every((round) => sameSorted(round.participants, live))).toBe(
+      true
+    );
+    expect(results.every((round) => round.participants.length === 4)).toBe(true);
+    expect(
+      hub.sent.some(({ message }) => message.type === 'round_shrink')
+    ).toBe(true);
+    const start = hub.sent.find(({ message }) => message.type === 'round_start');
+    expect(
+      (start?.message as { participants?: string[] }).participants
+    ).toEqual([...live].sort());
+    },
+    10_000
+  );
+
+  it('does not shrink below min safe — still aborts', async () => {
+    const all = [peer(1), peer(2), peer(3), peer(4), peer(5), peer(6)].sort();
+    const lead = coordinatorOf(all);
+    const hub = new Hub();
+
+    await expect(
+      negotiateFusionRound(
+        {
+          myPubkey: lead,
+          candidates: all,
+          network: 'chipnet',
+          tier: 10_000,
+          epoch: 10,
+          timeoutMs: 80,
+          sessionFactory: () => 'e'.repeat(64),
+        },
+        hub.transportFor(lead)
+      )
+    ).rejects.toThrow(/Need ≥4 to shrink|timed out/i);
   });
 });

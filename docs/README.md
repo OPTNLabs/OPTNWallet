@@ -28,6 +28,9 @@ Technical documentation for contributors and third-party integrators.
   - Exact mechanism of the peer-to-peer CashFusion path (discovery, election,
     blind credentials, output onion, assembly, signing). Audit-oriented
     reference — not the root README.
+- [P2P CashFusion protocol knobs](./p2p-cashfusion-knobs.md)
+  - Internal min/safe/max, tiers, and timing. Edit `fusionKnobs.ts` — not
+    the wallet UI.
 - [P2P CashFusion Threat Model](./THREAT_MODEL.md)
   - Adversary classes for the shipped P2P fusion design.
 - [Integration Guide](./integration-guide.md)

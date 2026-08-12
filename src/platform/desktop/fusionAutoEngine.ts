@@ -134,7 +134,7 @@ export function nextAutoEngineTickForMode(
  * retry (not a multi-minute sleep). Shared by P2P and server paths.
  */
 export function isAutoTransientFailure(message: string): boolean {
-  return /no other (wallets|players)|no peers|only \d+ wallet|need ≥?\s*3|at least three|could not agree|could not connect|connection refused|actively refused|connection was aborted|os error 10061|os error 10053|timed? ?out waiting|never reported pool|no fusion server|not ready for|route is unavailable|tor is (disabled|not ready)|fusion server address|too few remaining|receive failed/i.test(
+  return /no other (wallets|players)|no peers|only \d+ wallet|need ≥?\s*\d+|at least (three|four)|\d+ fresh peers|could not agree|could not connect|connection refused|actively refused|connection was aborted|os error 10061|os error 10053|timed? ?out waiting|never reported pool|no fusion server|not ready for|route is unavailable|tor is (disabled|not ready)|fusion server address|too few remaining|receive failed/i.test(
     message
   );
 }

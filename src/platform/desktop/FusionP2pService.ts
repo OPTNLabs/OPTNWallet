@@ -52,8 +52,6 @@ import {
   poolEpoch,
   selectFusionGroup,
   POOL_PEER_TTL_SECONDS,
-  MIN_PARTICIPANTS,
-  MAX_PARTICIPANTS,
   type FusionPoolNetwork,
   type PoolAnnouncement,
   type RoundIdentity,
@@ -71,33 +69,11 @@ import {
 } from './nostr/fusionRound';
 import { toLibauthTx, type InputSig } from './nostr/fusionSign';
 import { planP2pOutputValues } from './nostr/fusionP2pAllocation';
-import {
-  P2P_COMPONENT_JITTER_MS,
-  P2P_GATHER_ALONE_AUTO_MS,
-  P2P_GATHER_ALONE_MS,
-  P2P_GATHER_FAST_WARMUP_MS,
-  P2P_GATHER_MAX_MS,
-  P2P_GATHER_MIN_MS,
-  P2P_PEAK_GRACE_MS,
-  P2P_PEER_SET_STABLE_FAST_MS,
-  P2P_PEER_SET_STABLE_MS,
-  P2P_PROPOSAL_TIMEOUT_MS,
-  P2P_RENDEZVOUS_MS,
-  P2P_ROUND_TIMEOUT_MS,
-  P2P_SMALL_SET_HOLD_MS,
-} from './fusionTiming';
+import { P2P_COMPONENT_JITTER_MS, p2pRoundTimeoutMs } from './fusionTiming';
+import { getFusionKnobs } from './fusionKnobs';
 import { log } from './logger';
 
 const P2P_FEERATE = 1_000; // sats per 1000 bytes
-// Sat tiers (privacy size bands). Cap is MAX_TIERS=16 in nostr/fusion.ts.
-// 1 BCH = 100_000_000 so large wallets can meet without dumping full balance.
-const P2P_TIERS = [
-  10_000, // 0.0001 BCH
-  100_000, // 0.001 BCH
-  1_000_000, // 0.01 BCH
-  10_000_000, // 0.1 BCH
-  100_000_000, // 1 BCH
-];
 // Participant bounds live in nostr/fusion.ts so the pool, the rendezvous and
 // this service cannot disagree. They did: this file capped a round at 10 while
 // the rendezvous truncated the candidate list to 6, so four peers could be
@@ -196,10 +172,8 @@ function waitUntil(timestampMs: number, signal?: AbortSignal): Promise<void> {
 //   4) Stability checked on COUNT only — membership can churn at same size
 // Gather budgets mirror server JOIN_WAIT (fusionTiming) — never invent a longer
 // pool wait than Electron Cash / protocol.py.
-const POOL_WAIT_MIN_MS = P2P_GATHER_MIN_MS;
-const POOL_WAIT_MAX_MS = P2P_GATHER_MAX_MS;
-const PEER_SET_STABLE_MS = P2P_PEER_SET_STABLE_MS;
-const SMALL_SET_HOLD_MS = P2P_SMALL_SET_HOLD_MS;
+// Live gather/player bounds come from getFusionKnobs() (fusionKnobs.ts).
+// Protocol, not wallet settings — see docs/p2p-cashfusion-knobs.md.
 // Every Start click mints a fresh throwaway identity, and the announcement is a
 // STORED event the relay keeps replaying until it ages out. Without this, a retry
 // discovers its OWN abandoned key as a peer: the same wallet joins its own round
@@ -222,10 +196,11 @@ export async function collectRolling(
 ): Promise<PoolAnnouncement[]> {
   const start = Date.now();
   const gatherStartSeconds = Math.floor(start / 1_000);
-  const minReady = start + POOL_WAIT_MIN_MS;
-  const maxWait = start + POOL_WAIT_MAX_MS;
+  const startKnobs = getFusionKnobs();
+  const minReady = start + startKnobs.gatherMinMs;
+  const maxWait = start + startKnobs.gatherMaxMs;
   const aloneBudgetMs =
-    trigger === 'auto' ? P2P_GATHER_ALONE_AUTO_MS : P2P_GATHER_ALONE_MS;
+    trigger === 'auto' ? startKnobs.gatherAloneAutoMs : startKnobs.gatherAloneMs;
   let lastFingerprint = '';
   let stableSince = start;
   let lastLoggedFp = '';
@@ -310,11 +285,13 @@ export async function collectRolling(
       );
     }
     // Alone or under-count: re-shout often so a lagging Tor peer still finds us.
-    // Use MIN/MAX policy constants — not a bare "3".
-    // Alone: re-shout every 1.5s so Tor/BC lag does not strand a 120s wait.
-    const boostMs = peers.length < MIN_PARTICIPANTS ? 1_500 : 3_000;
+    // Live knobs from fusionKnobs.ts, not a bare "3".
+    const knobs = getFusionKnobs();
+    const minPlayers = knobs.minPlayers;
+    const maxPlayers = knobs.maxPlayers;
+    const boostMs = peers.length < minPlayers ? 1_500 : 3_000;
     if (
-      peers.length < Math.max(MIN_PARTICIPANTS, peakSoft, peakStrict) &&
+      peers.length < Math.max(minPlayers, peakSoft, peakStrict) &&
       announceNow &&
       now - lastAnnounceBoost > boostMs
     ) {
@@ -322,55 +299,52 @@ export async function collectRolling(
       void announceNow().catch(() => undefined);
     }
     const n = peers.length;
-    const atCap = n >= MAX_PARTICIPANTS;
-    const enough = n >= MIN_PARTICIPANTS;
+    const atCap = n >= maxPlayers;
+    const enough = n >= minPlayers;
     const elapsed = now - start;
     const stableFor = now - stableSince;
-    const peakGraceLeft = Math.max(0, P2P_PEAK_GRACE_MS - (now - lastAtPeakMs));
+    const peakGraceLeft = Math.max(0, knobs.peakGraceMs - (now - lastAtPeakMs));
     const peakGraceExpired = peakGraceLeft === 0;
     // Soft lag / peak drop only block EARLY lock for a short grace.
     const expectMoreFromSoft =
       soft.length > peers.length &&
-      now - lastSoftCaughtUpMs < P2P_PEAK_GRACE_MS;
+      now - lastSoftCaughtUpMs < knobs.peakGraceMs;
     const lostFromPeak =
-      peakStrict > peers.length && peakStrict >= MIN_PARTICIPANTS;
+      peakStrict > peers.length && peakStrict >= minPlayers;
     const expectMoreFromPeak = lostFromPeak && !peakGraceExpired;
     // Soft and strict disagree: wait until match or soft-grace expires
     // so one wallet does not propose N while another sees N-1.
     const viewsAligned =
       soft.length === peers.length ||
-      now - lastSoftCaughtUpMs >= P2P_PEAK_GRACE_MS;
+      now - lastSoftCaughtUpMs >= knobs.peakGraceMs;
     const expectMore =
       expectMoreFromSoft || expectMoreFromPeak || !viewsAligned;
-    // ── Lock policy (MIN/MAX driven — raise MAX_PARTICIPANTS later without
-    // rewriting "4" / "3" branches):
+    // ── Lock policy (MIN/MAX knobs):
     //   • n >= MAX: fast lock (short warm-up + short stable), no "wait for more"
-    //   • MIN <= n < MAX: normal min gather + stable + short hold for more
-    //     toward MAX (unless expectMore / peak already equal n)
+    //   • MIN <= n < MAX: min gather + hold AFTER THE LAST NEW PEER so a
+    //     late wallet can still join.
     //   • n < MIN: never lock early — wait maxWait or alone-after-peak abort
-    const pastFastWarmup = elapsed >= P2P_GATHER_FAST_WARMUP_MS;
-    const pastMin = elapsed >= POOL_WAIT_MIN_MS;
-    const stableNormal = stableFor >= PEER_SET_STABLE_MS;
-    const stableFast = stableFor >= P2P_PEER_SET_STABLE_FAST_MS;
-    const pastSmallHold = elapsed >= SMALL_SET_HOLD_MS;
+    const pastFastWarmup = elapsed >= knobs.gatherFastWarmupMs;
+    const pastMin = elapsed >= knobs.gatherMinMs;
+    const stableFast = stableFor >= knobs.peerSetStableFastMs;
     // At cap: we are done growing the set — lock ASAP (still need alignment).
     const fullSetReady = atCap && pastFastWarmup && stableFast && !expectMore;
-    // Partial legal set: allow more toward MAX for a short window, then lock.
+    // Partial legal set: this exact count must stay stable for the hold.
+    // `n >= peak` used to skip the hold and freeze an incomplete snapshot.
     const partialSetReady =
       enough &&
       !atCap &&
       pastMin &&
-      stableNormal &&
       !expectMore &&
-      (n >= peakStrict || pastSmallHold || peakGraceExpired);
+      stableFor >= knobs.smallSetHoldMs;
     const canLock = fullSetReady || partialSetReady;
     // Live: kept shouting after others fused (peak → alone). Once peak-grace
     // expired with only self left, stop — full JOIN_WAIT is wasted budget.
     if (
-      n < MIN_PARTICIPANTS &&
+      n < 2 &&
       peakStrict >= 2 &&
       peakGraceExpired &&
-      elapsed >= P2P_PEAK_GRACE_MS
+      elapsed >= knobs.peakGraceMs
     ) {
       throw new Error(
         `No peers left (peak was ${peakStrict}, now only you). ` +
@@ -385,34 +359,38 @@ export async function collectRolling(
       throw new Error(
         trigger === 'auto'
           ? `Auto: no peers for ${Math.round(aloneBudgetMs / 1000)}s — will retry shortly. ` +
-            `Need ≥${MIN_PARTICIPANTS} online with Auto+P2P+Tor; check Nostr relays.`
+            `Need ≥${minPlayers} online with Auto+P2P+Tor; check Nostr relays.`
           : `No other wallets found in ${Math.round(aloneBudgetMs / 1000)}s. ` +
-            `Need ≥${MIN_PARTICIPANTS} peers on the same network (Tor + Nostr green). Retry when others are online.`
+            `Need ≥${minPlayers} peers on the same network (Tor + Nostr green). Retry when others are online.`
       );
     }
     // Once this attempt observed a larger strict set, never propose a smaller
     // one. Different wallets otherwise freeze incompatible 4-vs-3 snapshots
     // and rendezvous cannot repair them. Let Auto start a fresh attempt after
     // the membership change instead.
-    if (lostFromPeak && (peakGraceExpired || now >= maxWait)) {
+    if (
+      lostFromPeak &&
+      n < minPlayers &&
+      (peakGraceExpired || now >= maxWait)
+    ) {
       throw new Error(
         `Peer set changed during gather (peak ${peakStrict}, now ${n}). ` +
           `Retrying with a fresh shared set.`
       );
     }
     if (canLock || now >= maxWait) {
-      // Never lock a sub-MIN set — anonymity floor and onion mix need ≥3.
-      if (n < MIN_PARTICIPANTS) {
+      // Never lock a sub-MIN set — product floor is MIN_PARTICIPANTS.
+      if (n < minPlayers) {
         throw new Error(
           trigger === 'auto'
-            ? `Auto: only ${n} peer(s) (need ≥${MIN_PARTICIPANTS}). Will retry shortly.`
-            : `P2P Fusion needs at least ${MIN_PARTICIPANTS} peers (CashFusion-style anonymity floor).`
+            ? `Auto: only ${n} peer(s) (need ≥${minPlayers}). Will retry shortly.`
+            : `P2P Fusion needs at least ${minPlayers} peers (CashFusion-style anonymity floor).`
         );
       }
       onStatus?.(
         `Gather done: ${n} active wallet(s) ` +
           `(soft ${soft.length}, peak strict/soft ${peakStrict}/${peakSoft}; ` +
-          `cap=${MAX_PARTICIPANTS}, stable=${canLock}, ${Math.round(elapsed / 1000)}s).`
+          `cap=${maxPlayers}, stable=${canLock}, ${Math.round(elapsed / 1000)}s).`
       );
       return peers;
     }
@@ -432,22 +410,22 @@ export async function collectRolling(
               ? ' Dropping ghosts; waiting for re-announces…'
               : ' Waiting for other peers (Tor)…';
       onStatus?.(`Only you so far.${aloneAfterOthers}`);
-    } else if (n < MIN_PARTICIPANTS) {
+    } else if (n < minPlayers) {
       onStatus?.(
-        `${n} active — need ≥${MIN_PARTICIPANTS} for P2P (onion privacy); ` +
+        `${n} active — need ≥${minPlayers} for P2P (onion privacy); ` +
           `waiting for more peers (${secsLeft}s left)…`
       );
     } else if (atCap) {
       const needStable = Math.max(
         0,
-        Math.ceil((P2P_PEER_SET_STABLE_FAST_MS - stableFor) / 1_000)
+        Math.ceil((knobs.peerSetStableFastMs - stableFor) / 1_000)
       );
       const needWarm = Math.max(
         0,
-        Math.ceil((P2P_GATHER_FAST_WARMUP_MS - elapsed) / 1_000)
+        Math.ceil((knobs.gatherFastWarmupMs - elapsed) / 1_000)
       );
       onStatus?.(
-        `${n}/${MAX_PARTICIPANTS} full set — fast lock` +
+        `${n}/${maxPlayers} full set — fast lock` +
           (needWarm > 0 ? ` warm ${needWarm}s` : '') +
           (needStable > 0 ? ` stable ${needStable}s` : '') +
           (expectMore ? ' (aligning views…)' : '') +
@@ -456,18 +434,18 @@ export async function collectRolling(
     } else if (enough && pastMin) {
       const needStable = Math.max(
         0,
-        Math.ceil((PEER_SET_STABLE_MS - stableFor) / 1_000)
+        Math.ceil((knobs.peerSetStableMs - stableFor) / 1_000)
       );
       const holdLeft = Math.max(
         0,
-        Math.ceil((SMALL_SET_HOLD_MS - elapsed) / 1_000)
+        Math.ceil((knobs.smallSetHoldMs - stableFor) / 1_000)
       );
       const holdNote = expectMore
         ? ` waiting up to ${Math.ceil(peakGraceLeft / 1000)}s for peak ${peakStrict}`
-        : n < MAX_PARTICIPANTS && holdLeft > 0 && n < peakStrict
-          ? ` hold ${holdLeft}s toward ${MAX_PARTICIPANTS}`
-          : n < MAX_PARTICIPANTS && holdLeft > 0
-            ? ` hold ${holdLeft}s for more (max ${MAX_PARTICIPANTS})`
+        : n < maxPlayers && holdLeft > 0 && n < peakStrict
+          ? ` hold ${holdLeft}s toward ${maxPlayers}`
+          : n < maxPlayers && holdLeft > 0
+            ? ` hold ${holdLeft}s for more (max ${maxPlayers})`
             : '';
       onStatus?.(`${n} active — ${needStable}s stable${holdNote}…`);
     } else if (enough) {
@@ -1064,11 +1042,11 @@ export async function runP2pFusion(
         value: utxo.value ?? Number(utxo.amount ?? 0),
         pubkey: provisionalPubkey,
       })),
-      participantCount: MIN_PARTICIPANTS,
+      participantCount: getFusionKnobs().minPlayers,
       feerate: P2P_FEERATE,
       randomUnit: () => 0.5,
     });
-    const tiers = P2P_TIERS.filter((tier) => sumIn > tier + 1_000);
+    const tiers = getFusionKnobs().tiersSats.filter((tier) => sumIn > tier + 1_000);
     if (tiers.length === 0)
       throw new Error('Inputs too small for any P2P fusion tier.');
     const numInputs = spendable.length;
@@ -1183,15 +1161,16 @@ export async function runP2pFusion(
     }
     // Keep re-announcing through negotiate so late wallets still see us.
     // (Stopping here was one cause of "only 1 announcement" on other windows.)
-    const group = selectFusionGroup(fresh, MIN_PARTICIPANTS, MAX_PARTICIPANTS);
+    const groupKnobs = getFusionKnobs();
+    const group = selectFusionGroup(fresh, groupKnobs.minPlayers, groupKnobs.maxPlayers);
     if (!group || !group.participants.includes(round.pubkey)) {
       retireRoundKey(round.pubkey);
       joined.stop();
       stopPool = null;
       throw new Error(
-        `No P2P peers found (only ${fresh.length} live wallet(s); need ≥${MIN_PARTICIPANTS} wallets ` +
+        `No P2P peers found (only ${fresh.length} live wallet(s); need ≥${groupKnobs.minPlayers} wallets ` +
           `on ${network} with Tor + P2P on, starting around the same time). ` +
-          `CashFusion-style privacy needs at least 3 peers (onion mix).`
+          `CashFusion-style privacy needs at least ${groupKnobs.minPlayers} peers.`
       );
     }
     status?.(
@@ -1227,8 +1206,8 @@ export async function runP2pFusion(
           tier: group.tier,
           epoch,
           // Caps from fusionTiming (≤ server T_START_CLOSE / T_END_COMPS).
-          timeoutMs: P2P_RENDEZVOUS_MS,
-          proposalTimeoutMs: P2P_PROPOSAL_TIMEOUT_MS,
+          timeoutMs: getFusionKnobs().rendezvousMs,
+          proposalTimeoutMs: getFusionKnobs().proposalTimeoutMs,
           signal: opts.signal,
         },
         transport
@@ -1247,16 +1226,19 @@ export async function runP2pFusion(
       joined.stop();
       stopPool = null;
     }
-    // Belt-and-suspenders: rendezvous must never return a shrunk set (2-of-4
-    // "Continuing…" left late peers alone — not acceptable).
-    if (negotiated.participants.length < group.participants.length) {
+    // Legal ACK-shrink: 6–10 proposed, some silent, remaining ≥ minSafe (4).
+    // Illegal: a pair or trio (below onion/privacy floor).
+    if (negotiated.participants.length < getFusionKnobs().minSafePlayers) {
       throw new Error(
         `Round shrank to ${negotiated.participants.length}/${group.participants.length} ` +
-          `wallets — refusing partial fuse. Auto will retry; full set must stay.`
+          `wallets — refusing partial fuse. Auto will retry; need ≥${getFusionKnobs().minSafePlayers}.`
       );
     }
     status?.(
-      `Round agreed with all ${negotiated.participants.length} wallets at ${negotiated.tier} sats.`
+      negotiated.participants.length < group.participants.length
+        ? `Round agreed with ${negotiated.participants.length}/${group.participants.length} wallets ` +
+            `(${group.participants.length - negotiated.participants.length} dropped) at ${negotiated.tier} sats.`
+        : `Round agreed with all ${negotiated.participants.length} wallets at ${negotiated.tier} sats.`
     );
 
     const myInputs: FusionInputRef[] = runInputs.map((input) => ({
@@ -1311,8 +1293,9 @@ export async function runP2pFusion(
             feerate: P2P_FEERATE,
           }),
         // Onion is always on (rounds are ≥3 peers; no 2-party / direct path).
-        // ≤ server T_START_CLOSE_BLAME; tight jitter so inject fits comps window.
-        timeoutMs: P2P_ROUND_TIMEOUT_MS,
+        // Extra peelers are extra Tor hops — a flat 80s blame body is too short
+        // (chipnet 5-peer / 4-hop / 24 blobs died at 36s after ready).
+        timeoutMs: p2pRoundTimeoutMs(negotiated.participants.length - 1),
         jitterMs: P2P_COMPONENT_JITTER_MS,
         signal: opts.signal,
         onStatus: status,
@@ -1391,6 +1374,16 @@ export async function runP2pFusion(
       },
       transport
     );
+    // Coordinator: honour the relay receipt (`broadcastVerified`).
+    // Peer: `final` is already VM-checked, then `succeed()` runs BEFORE the
+    // 2–8s delayed rebroadcast, so `broadcastAttempted` is still false here.
+    // Treating that as "unverified" left Auto parked on
+    // "previous Fusion … awaiting visibility" while another wallet already
+    // showed Fused ✓ for the same txid (chipnet 2026-08-12).
+    const peerAcceptedFinal = !broadcastAttempted && Boolean(result.txid);
+    if (peerAcceptedFinal) {
+      broadcastVerified = true;
+    }
     const completion = broadcastVerified
       ? await completeFusionBroadcast({
           walletId: opts.walletId,

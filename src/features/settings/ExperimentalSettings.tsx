@@ -2,10 +2,8 @@ import React from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import {
   selectRpaEnabled,
-  selectCashFusionEnabled,
   selectQuantumrootEnabled,
   setRpaEnabled,
-  setCashFusionEnabled,
   setQuantumrootEnabled,
 } from '../../state/slices/experimentalSlice';
 
@@ -57,7 +55,6 @@ function FeatureToggle({ title, badge, description, warning, enabled, onToggle }
 export const ExperimentalSettings: React.FC = () => {
   const dispatch = useDispatch();
   const rpaEnabled = useSelector(selectRpaEnabled);
-  const cashFusionEnabled = useSelector(selectCashFusionEnabled);
   const quantumrootEnabled = useSelector(selectQuantumrootEnabled);
 
   return (
@@ -86,15 +83,6 @@ export const ExperimentalSettings: React.FC = () => {
         warning="Sending to paycodes requires signature grinding (not yet implemented). Receiving and scanning are available."
         enabled={rpaEnabled}
         onToggle={(v) => dispatch(setRpaEnabled(v))}
-      />
-
-      <FeatureToggle
-        title="CashFusion"
-        badge="Privacy"
-        description="CashFusion is a non-custodial privacy protocol that combines your UTXOs with those of other users in a way that breaks transaction history linkage. Connect to a CashFusion server to participate. Your funds are never at risk — the protocol is trustless."
-        warning="Requires an active CashFusion server connection. Coming soon — toggle currently reserved."
-        enabled={cashFusionEnabled}
-        onToggle={(v) => dispatch(setCashFusionEnabled(v))}
       />
 
     </div>

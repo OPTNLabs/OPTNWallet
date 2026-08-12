@@ -62,6 +62,16 @@ describe('experimentalSlice CashFusion preferences', () => {
       p2pFusionEnabled: false,
     });
   });
+
+  it('strips leftover protocol knobs from persisted experimental state', () => {
+    const restored = normalizeExperimentalPersistedState({
+      cashFusionEnabled: true,
+      p2pKnobs: { minPlayers: 4, maxPlayers: 8 },
+    });
+
+    expect(restored).toMatchObject({ cashFusionEnabled: true });
+    expect(restored).not.toHaveProperty('p2pKnobs');
+  });
 });
 
 describe('experimentalSlice Nostr chat preferences', () => {

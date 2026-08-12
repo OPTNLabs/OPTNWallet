@@ -125,7 +125,7 @@ export const WALLET_ROWS: SettingsRowConfig[] = [
   {
     key: 'experimental',
     title: 'Experimental Features',
-    description: 'RPA · CashFusion',
+    description: 'RPA · Quantumroot',
     action: 'panel',
     target: 'experimental',
   },

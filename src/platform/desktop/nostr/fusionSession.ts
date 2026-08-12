@@ -23,14 +23,15 @@ import {
   verifyFinalFusionTx,
   type InputSig,
 } from './fusionSign';
-import { electCoordinator, MIN_PARTICIPANTS } from './fusion';
+import { getFusionKnobs } from '../fusionKnobs';
+import { electCoordinator } from './fusion';
 import { ROUND_MSG_VERSION } from './fusionRound';
 import {
   P2P_ASSEMBLED_RESEND_MS,
   P2P_CREDENTIAL_PARAMS_RESEND_MAX,
   P2P_CREDENTIAL_PARAMS_RESEND_MS,
   P2P_CREDENTIAL_WAIT_MS,
-  P2P_MISSING_OUTPUTS_ONION_MS,
+  p2pMissingOutputsWaitMs,
   P2P_ONION_DECLARE_RESEND_MAX,
   P2P_ONION_DECLARE_RESEND_MS,
   P2P_ONION_OUTPUT_RESEND_MAX,
@@ -122,6 +123,15 @@ export type RoundMessage =
       epoch: number;
     } & MessageBinding)
   | ({
+      /** Coordinator of a larger set naming who ACKed — remaining re-elect. */
+      type: 'round_shrink';
+      session: string;
+      network: 'mainnet' | 'chipnet';
+      tier: number;
+      epoch: number;
+      remaining: string[];
+    } & MessageBinding)
+  | ({
       type: 'round_start';
       session: string;
       network: 'mainnet' | 'chipnet';
@@ -194,7 +204,7 @@ export type RoundMessage =
   /**
    * How many onion blobs this peer will inject (one per output). Signed under
    * the round key so peels know the hop total = sum of declares. Without this,
-   * peels waited for `participants.length` while peers sent a random 2–4
+   * peels waited for `participants.length` while peers sent a random 2–6
    * onions each → hang / outputSlots=0 (Claude diagnosis, 2026-08-06).
    */
   | ({
@@ -738,6 +748,16 @@ export function parseRoundMessage(content: string): RoundMessage | null {
           return null;
         }
         break;
+      case 'round_shrink':
+        if (
+          (message.network !== 'mainnet' && message.network !== 'chipnet') ||
+          !isSafeIntegerIn(message.tier, 10_000, MAX_MONEY) ||
+          !isSafeIntegerIn(message.epoch, 0, Number.MAX_SAFE_INTEGER) ||
+          !validParticipants(message.remaining)
+        ) {
+          return null;
+        }
+        break;
       case 'abort':
         if (
           typeof message.reason !== 'string' ||
@@ -1007,7 +1027,6 @@ export interface RoundParams {
 const CREDENTIAL_WAIT_MS = P2P_CREDENTIAL_WAIT_MS;
 const CREDENTIAL_PARAMS_RESEND_MS = P2P_CREDENTIAL_PARAMS_RESEND_MS;
 const CREDENTIAL_PARAMS_RESEND_MAX = P2P_CREDENTIAL_PARAMS_RESEND_MAX;
-const MISSING_OUTPUTS_ONION_MS = P2P_MISSING_OUTPUTS_ONION_MS;
 /** Re-send onion_declare so Tor-dropped declares cannot freeze the peel forever. */
 const ONION_DECLARE_RESEND_MS = P2P_ONION_DECLARE_RESEND_MS;
 const ONION_DECLARE_RESEND_MAX = P2P_ONION_DECLARE_RESEND_MAX;
@@ -1124,14 +1143,15 @@ export function runFusionRound(
   transport: RoundTransport
 ): Promise<RoundResult> {
   const participants = [...new Set(params.participants)];
-  // CashFusion-style floor: ≥ MIN_PARTICIPANTS, onion always (no 2-party path).
+  // After ACK shrink, a legal set can be minSafe (4), not the gather min (6).
+  const minSafe = getFusionKnobs().minSafePlayers;
   if (
-    participants.length < MIN_PARTICIPANTS ||
+    participants.length < minSafe ||
     !participants.includes(params.myPubkey)
   ) {
     return Promise.reject(
       new Error(
-        `invalid Fusion participant set (need ≥${MIN_PARTICIPANTS} peers for onion P2P fusion)`
+        `invalid Fusion participant set (need ≥${minSafe} peers for onion P2P fusion)`
       )
     );
   }
@@ -1220,11 +1240,14 @@ function runParticipant(
       let sum = 0;
       for (const peer of params.participants) {
         const count = declaredOnionCounts.get(peer);
+        // Must match onion_declare / credential caps (1–6). A stale `> 4`
+        // here left expected=null after 3/3 declares, so hop 1 sat on every
+        // blob and never forwarded (chipnet 2026-08-12: w1 injected 5).
         if (
           count === undefined ||
           !Number.isSafeInteger(count) ||
           count < 1 ||
-          count > 4
+          count > MAX_OUTPUT_CREDENTIALS_PER_PEER
         ) {
           return null;
         }
@@ -1333,7 +1356,7 @@ function runParticipant(
     };
 
     // Peel only when every peer has declared and the matching onion count has
-    // arrived — never `participants.length` alone (outputs are 2–4 per peer).
+    // arrived — never `participants.length` alone (outputs are 1–6 per peer).
     const processOnionBatchIfReady = async () => {
       if (settled || onionBatchProcessing || onionBatchDone) return;
       const expected = expectedOnionCount();
@@ -2683,7 +2706,7 @@ function runCoordinator(
             true
           );
         }
-      }, MISSING_OUTPUTS_ONION_MS);
+      }, p2pMissingOutputsWaitMs(mixOrder.length));
     };
 
     const tryAssemble = async () => {

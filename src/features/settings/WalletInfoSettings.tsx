@@ -22,6 +22,7 @@ import {
   deriveHdPublicKeyAtPath,
 } from '../../services/HdWalletService';
 import { isDesktopPlatform } from '../../utils/platform';
+import DeviceIntegrityService from '../../services/DeviceIntegrityService';
 import { WATCH_ONLY_WALLET_TYPE } from '../../platform/desktop/onboarding/watchOnlyWallet';
 import { HARDWARE_WALLET_TYPE } from '../../platform/desktop/onboarding/hardwareWallet';
 import type { ExtendedWalletType } from '../../types/wallet';
@@ -214,59 +215,32 @@ async function renameWallet(walletId: number, name: string): Promise<void> {
   }
 }
 
-async function authorizeReveal(walletId: number): Promise<boolean> {
-  if (!isDesktopPlatform()) {
-    return window.confirm(
-      'Show derivation path, account xPub, and wallet hash for this wallet?'
-    );
-  }
+/** OS biometric only. Password uses the in-wallet dialog, never window.prompt. */
+async function tryBiometricReveal(walletId: number): Promise<boolean> {
+  if (!isDesktopPlatform()) return false;
   try {
     const {
       verifyWalletPassword,
       hasWalletBiometric,
       isBiometricAvailable,
-      getBiometricLabel,
     } = await import('../../platform/desktop/DesktopWalletManager');
 
-    // Prefer enrolled biometric: OS prompt returns the stored wallet password,
-    // which we only verify — we do not re-open / switch the active session.
-    if ((await isBiometricAvailable()) && (await hasWalletBiometric(walletId))) {
-      try {
-        const { getData: bioGetData } = await import(
-          '@choochmeque/tauri-plugin-biometry-api'
-        );
-        const result = await bioGetData({
-          domain: 'com.optilabs.wallet',
-          name: `optn-wallet-bio-${walletId}`,
-          reason: 'Show wallet xPub and identity details',
-        });
-        if (result.data && (await verifyWalletPassword(walletId, result.data))) {
-          return true;
-        }
-      } catch {
-        // Cancelled or failed — fall through to typed password.
-      }
-    }
-
-    const label = (await isBiometricAvailable())
-      ? getBiometricLabel()
-      : 'password';
-    const typed = window.prompt(
-      `Enter this wallet's password to show xPub and identity details.\n` +
-        `(You can also enroll ${label} under App Lock for a quicker unlock.)`
-    );
-    if (typed === null) return false;
-    const ok = await verifyWalletPassword(walletId, typed);
-    if (!ok) {
-      window.alert('Wrong wallet password.');
+    if (!(await isBiometricAvailable()) || !(await hasWalletBiometric(walletId))) {
       return false;
     }
-    return true;
-  } catch (err) {
-    console.warn('[WalletInfoSettings] authorizeReveal failed:', err);
-    return window.confirm(
-      'Could not verify password. Show sensitive wallet details anyway?'
+    const { getData: bioGetData } = await import(
+      '@choochmeque/tauri-plugin-biometry-api'
     );
+    const result = await bioGetData({
+      domain: 'com.optilabs.wallet',
+      name: `optn-wallet-bio-${walletId}`,
+      reason: 'Show wallet xPub and identity details',
+    });
+    return Boolean(
+      result.data && (await verifyWalletPassword(walletId, result.data))
+    );
+  } catch {
+    return false;
   }
 }
 
@@ -381,13 +355,19 @@ export const WalletInfoSettings: React.FC = () => {
     setBusy(true);
     setError('');
     try {
-      const ok = await authorizeReveal(walletId);
-      if (!ok) return;
-      // Reload after auth so seed-backed xpubs decrypt under a fresh key session.
+      if (await tryBiometricReveal(walletId)) {
+        await reload();
+        setRevealed(true);
+        return;
+      }
+      // Same Confirm-password card as Send (AppLockGate / integrity modal).
+      await DeviceIntegrityService.assertDeviceIntegrity('xpub_reveal');
       await reload();
       setRevealed(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not reveal details.');
+      const msg = err instanceof Error ? err.message : 'Could not reveal details.';
+      if (/cancelled|canceled|timed out/i.test(msg)) return;
+      setError(msg);
     } finally {
       setBusy(false);
     }

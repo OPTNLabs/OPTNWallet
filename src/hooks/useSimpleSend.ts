@@ -51,6 +51,9 @@ export default function useSimpleSend() {
   const isHardwareWallet = walletType === 'hardware';
   const currentNetwork = useSelector((s: RootState) => selectCurrentNetwork(s));
   const spendOnlyFusedCoins = useSelector(selectSpendOnlyFusedCoins);
+  const reduxUtxosByAddress = useSelector(
+    (s: RootState) => s.utxos.utxos
+  );
   const preferInternalChangeForBch = false;
 
   // Wallet addresses + default change (also gives tokenAddress mapping)
@@ -96,6 +99,30 @@ export default function useSimpleSend() {
     () => new Set()
   );
 
+  const homeBchUtxos = useMemo(
+    () =>
+      Object.values(reduxUtxosByAddress || {})
+        .flat()
+        .filter((utxo) => Boolean(utxo) && !utxo.token),
+    [reduxUtxosByAddress]
+  );
+
+  const mergeSpendableBchUtxos = useCallback(
+    (primary: UTXO[], extra: UTXO[]): UTXO[] => {
+      const merged: UTXO[] = [];
+      const seen = new Set<string>();
+      for (const utxo of [...primary, ...extra]) {
+        if (!utxo || utxo.token) continue;
+        const key = outpointKey(utxo.tx_hash, utxo.tx_pos);
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        merged.push(utxo);
+      }
+      return merged;
+    },
+    []
+  );
+
   const applyCoinControl = useCallback(
     (pool: UTXO[]): UTXO[] | { error: string } => {
       let next = pool;
@@ -125,17 +152,29 @@ export default function useSimpleSend() {
     let cancelled = false;
     (async () => {
       if (!walletId) return;
+      // Paint the same coins Home already shows, then overlay SQL so Send
+      // cannot briefly look like "only the receive UTXOs".
+      if (!cancelled && homeBchUtxos.length > 0) {
+        setDbUtxos((prev) =>
+          prev.length > 0 ? prev : homeBchUtxos
+        );
+      }
       const { allUtxos, tokenUtxos } =
         await UTXOService.fetchAllWalletUtxos(walletId);
       if (!cancelled) {
-        setDbUtxos((allUtxos || []).filter((u) => !u.token)); // non-token BCH UTXOs for fee funding
+        setDbUtxos(
+          mergeSpendableBchUtxos(allUtxos || [], homeBchUtxos)
+        );
         setTokenUtxos(tokenUtxos || []);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [walletId, addresses.length, hydrated]);
+    // homeBchUtxos is read for the initial paint / merge only. Re-running
+    // this on every Redux UTXO tick would refetch SQL on each subscription.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [walletId, addresses.length, hydrated, mergeSpendableBchUtxos]);
 
   // The worker normally keeps the SQL.js snapshot current, but each Tauri
   // process has its own in-memory database. A full listunspent over every
@@ -160,10 +199,10 @@ export default function useSimpleSend() {
     }
 
     const { allUtxos } = await UTXOService.fetchAllWalletUtxos(walletId);
-    const refreshed = (allUtxos ?? []).filter((utxo) => !utxo.token);
+    const refreshed = mergeSpendableBchUtxos(allUtxos ?? [], homeBchUtxos);
     setDbUtxos(refreshed);
     return refreshed;
-  }, [walletId, addresses]);
+  }, [walletId, addresses, homeBchUtxos, mergeSpendableBchUtxos]);
 
   /**
    * Spendable BCH pool for Review/Max-style builds.

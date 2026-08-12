@@ -27,6 +27,7 @@ export const INTEGRITY_EVENT = 'optn:integrity-check';
 const REVEAL_SCOPES = new Set<string>([
   'recovery_phrase_reveal',
   'private_key_reveal',
+  'xpub_reveal',
 ]);
 const SPEND_SCOPES = new Set<string>(['fetchAddressPrivateKey_spend']);
 
@@ -98,7 +99,7 @@ function spendAuthStillValid(): boolean {
 
 async function assertDeviceIntegrity(scope: string): Promise<void> {
   if (REVEAL_SCOPES.has(scope)) {
-    return promptPassphrase();
+    return promptPassphrase(scope);
   }
 
   if (SPEND_SCOPES.has(scope)) {
