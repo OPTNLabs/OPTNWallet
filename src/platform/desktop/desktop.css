@@ -1,0 +1,39 @@
+/* Desktop overrides — neutralizes mobile safe-area and touch-only styles */
+
+:root {
+  /* Remove iPhone notch safe areas */
+  --safe-top: 0px;
+  --safe-bottom: 0px;
+  --safe-left: 0px;
+  --safe-right: 0px;
+}
+
+/* Neutralize env() safe-area calls */
+.safe-area-top { height: 0 !important; }
+.safe-area-bottom { height: 0 !important; }
+
+/* Remove bottom nav notch padding on desktop */
+.pb-safe-bottom { padding-bottom: 0 !important; }
+
+/* Restore standard cursor for all interactive elements */
+button, a, [role="button"] {
+  cursor: pointer;
+}
+
+/* Disable overscroll bounce (feels wrong on desktop) */
+html, body {
+  overscroll-behavior: none;
+}
+
+/* Remove tap-highlight (desktop doesn't need it) */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Scrollbars — thin and themed */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--wallet-border, rgba(0,0,0,0.15));
+  border-radius: 99px;
+}

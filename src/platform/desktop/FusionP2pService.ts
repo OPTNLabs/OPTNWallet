@@ -1,0 +1,489 @@
+// P2P CashFusion orchestration over Nostr + Tor.
+//
+// A fresh 00-Wallet-style identity announces compatible tiers in a short,
+// network-scoped epoch. The elected coordinator then proposes one exact peer
+// set; every peer acknowledges before a random-session round_start is issued.
+// No input/output registration starts from an independently frozen local view.
+
+import { SimplePool } from 'nostr-tools';
+import { useWebSocketImplementation as setNostrWebSocketImpl } from 'nostr-tools/pool';
+import { invoke } from '@tauri-apps/api/core';
+
+import { hexToBin } from '../../utils/hex';
+import {
+  TorWebSocket,
+  armTorRouting,
+  disarmTorRouting,
+} from './nostr/torWebSocket';
+import ElectrumService, {
+  invalidateUTXOCache,
+} from '../../services/ElectrumService';
+import {
+  isOwnRoundKey,
+  outpointKey,
+  recordRoundKey,
+  releaseOutpoints,
+  reserveOutpoints,
+  reservedOutpoints,
+} from './fusionRoundState';
+import { Network } from '../../state/slices/networkSlice';
+import type { UTXO } from '../../types/types';
+import { reconcileActiveWalletUtxos } from '../../services/WalletUtxoRefreshService';
+import { completeFusionBroadcast } from './FusionCompletionService';
+import { createFreshFusionOutputScripts, gatherInputs } from './FusionService';
+import { isFusionExecutionAllowed } from './FusionExecutionSafety';
+import {
+  generateRoundIdentity,
+  joinPool,
+  poolEpoch,
+  selectFusionGroup,
+  POOL_PEER_TTL_SECONDS,
+  type FusionPoolNetwork,
+  type PoolAnnouncement,
+  type RoundIdentity,
+} from './nostr/fusion';
+import { createNostrRoundTransport } from './nostr/fusionTransport';
+import { negotiateFusionRound } from './nostr/fusionRendezvous';
+import { runFusionRound, type RoundResult } from './nostr/fusionSession';
+import type { FusionInputRef, FusionOutputRef } from './nostr/fusionRound';
+import { planP2pOutputValues } from './nostr/fusionP2pAllocation';
+import { DEFAULT_RELAYS } from './nostr/chat';
+
+const P2P_FEERATE = 1_000; // sats per 1000 bytes
+const P2P_TIERS = [10_000, 100_000, 1_000_000, 10_000_000];
+const MIN_PARTICIPANTS = 2;
+const MAX_PARTICIPANTS = 10;
+const MAX_RELAYS = 8;
+let wsInstalled = false;
+
+export const P2P_PHASE_LABELS = [
+  'Idle',
+  'Announcing & finding peers',
+  'Registering inputs & outputs',
+  'Assembling & verifying',
+  'Signing',
+  'Broadcasting',
+] as const;
+
+export interface P2pFusionOptions {
+  walletId: number;
+  network: Network;
+  utxos: UTXO[];
+  relays?: string[];
+  tor: { host: string; port: number } | null;
+  onStatus?: (message: string) => void;
+  onPhase?: (phase: number) => void;
+  signal?: AbortSignal;
+}
+
+function toPoolNetwork(network: Network): FusionPoolNetwork {
+  return network === Network.MAINNET ? 'mainnet' : 'chipnet';
+}
+
+function validatedRelays(configured?: string[]): string[] {
+  const relays = Array.from(
+    new Set(configured?.length ? configured : DEFAULT_RELAYS)
+  )
+    .filter((relay) => relay.startsWith('wss://'))
+    .slice(0, MAX_RELAYS);
+  if (relays.length === 0)
+    throw new Error('No secure Nostr relays configured.');
+  return relays;
+}
+
+function waitUntil(timestampMs: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted)
+    return Promise.reject(new Error('fusion round cancelled'));
+  return new Promise((resolve, reject) => {
+    const finish = () => {
+      signal?.removeEventListener('abort', cancel);
+      resolve();
+    };
+    const timer = setTimeout(finish, Math.max(0, timestampMs - Date.now()));
+    const cancel = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', cancel);
+      reject(new Error('fusion round cancelled'));
+    };
+    signal?.addEventListener('abort', cancel, { once: true });
+  });
+}
+
+const POOL_WAIT_MIN_MS = 12_000; // short minimum gather so stragglers can still join
+const POOL_WAIT_MAX_MS = 75_000; // give up gathering after this
+
+// Rolling discovery: keep a running countdown and start the round as soon as enough
+// FRESH peers (by TTL) are present after the minimum gather, or when the max wait
+// elapses. No epoch bucket — peers who announced any time in the freshness window
+// count, so users across the globe don't need to click together.
+// A peer is ACTIVE only if it re-announced within this window. Peers re-announce
+// every ~8s while running a round; an abandoned attempt (a stale throwaway key from
+// an earlier click/retry) stops re-announcing and ages out — so the group is formed
+// from currently-live wallets, not accumulated dead announcements.
+// Tight enough that an abandoned round's STORED announcement stops counting as a
+// live peer quickly (a ghost peer can otherwise win coordinator election and
+// stall everyone), but comfortably above REANNOUNCE_MS (12s) so a live peer that
+// misses one refresh is not dropped.
+const RECENT_ACTIVE_SECONDS = 28;
+
+// Every Start click mints a fresh throwaway identity, and the announcement is a
+// STORED event the relay keeps replaying until it ages out. Without this, a retry
+// discovers its OWN abandoned key as a peer: the same wallet joins its own round
+// twice, contributes the same coins, and the round dies on "duplicate input".
+// A wallet must never fuse with itself.
+async function collectRolling(
+  walletId: number,
+  selfPubkey: string,
+  getPeers: () => PoolAnnouncement[],
+  onStatus?: (message: string) => void,
+  signal?: AbortSignal
+): Promise<PoolAnnouncement[]> {
+  const start = Date.now();
+  const minReady = start + POOL_WAIT_MIN_MS;
+  const maxWait = start + POOL_WAIT_MAX_MS;
+  const fresh = () => {
+    const nowSeconds = Math.floor(Date.now() / 1_000);
+    return getPeers().filter((peer) => {
+      if (peer.pubkey === selfPubkey) return true;
+      // An earlier attempt of THIS wallet — from any window, surviving reloads.
+      if (isOwnRoundKey(walletId, peer.pubkey)) return false;
+      return peer.at >= nowSeconds - RECENT_ACTIVE_SECONDS;
+    });
+  };
+  for (;;) {
+    if (signal?.aborted) throw new Error('fusion round cancelled');
+    const peers = fresh();
+    const now = Date.now();
+    if (
+      (peers.length >= MIN_PARTICIPANTS && now >= minReady) ||
+      now >= maxWait
+    ) {
+      return peers;
+    }
+    if (peers.length >= MIN_PARTICIPANTS) {
+      const inSecs = Math.max(0, Math.ceil((minReady - now) / 1_000));
+      onStatus?.(`${peers.length} peers ready — starting in ${inSecs}s…`);
+    } else {
+      const secsLeft = Math.max(0, Math.ceil((maxWait - now) / 1_000));
+      onStatus?.(
+        `Waiting for peers: ${peers.length} present (up to ${secsLeft}s)…`
+      );
+    }
+    await waitUntil(Math.min(maxWait, now + 1_500), signal);
+  }
+}
+
+/**
+ * Re-check every candidate coin against the LIVE UTXO set immediately before the
+ * round. Fusion spends coins the UI cached in redux; if any were already spent
+ * (an earlier attempt, another send, or a cache left stale by an Electrum
+ * "Connection lost"), the assembled CoinJoin references a missing outpoint and
+ * the network rejects the entire broadcast with "Missing inputs" — after every
+ * peer has already signed and burned their fresh output addresses. Dropping dead
+ * coins here is far cheaper than failing a whole multi-party round at the end.
+ */
+const UTXO_RECHECK_TIMEOUT_MS = 15_000;
+
+async function onlyUnspent(utxos: UTXO[]): Promise<UTXO[]> {
+  const addresses = Array.from(
+    new Set(utxos.map((utxo) => utxo.address).filter(Boolean))
+  );
+  if (addresses.length === 0) return [];
+  addresses.forEach((address) => invalidateUTXOCache(address));
+  // Bounded, but NOT best-effort: contributing a coin we could not verify wastes
+  // every participant's round (they all sign, then the network rejects the whole
+  // transaction with "Missing inputs"). Refusing to join costs only us, so an
+  // unreachable Electrum must fail the round rather than fall back to the
+  // wallet's cached list.
+  const live = await Promise.race([
+    ElectrumService.getUTXOsMany(addresses),
+    new Promise<null>((resolve) =>
+      setTimeout(() => resolve(null), UTXO_RECHECK_TIMEOUT_MS)
+    ),
+  ]);
+  if (!live) {
+    throw new Error(
+      'Could not confirm your coins are unspent (Electrum unreachable) — not risking the round.'
+    );
+  }
+  // A resolved result is NOT proof every address was checked. getUTXOsMany logs a
+  // failed per-address request and continues, leaving that address OUT of the map
+  // rather than throwing, so a dropped connection yields a partial (or empty)
+  // result that still looks like success. An address holding nothing is present
+  // with an empty array, so a MISSING key means "never verified" — treating it as
+  // "no coins here" would silently drop live coins on a network blip, and in a
+  // partial failure would fuse a smaller set while reporting everything verified.
+  const unverified = addresses.filter((address) => !(address in live));
+  if (unverified.length > 0) {
+    throw new Error(
+      `Could not confirm ${unverified.length} of ${addresses.length} address(es) are unspent (Electrum error) — not risking the round.`
+    );
+  }
+  const unspent = new Set(
+    Object.values(live)
+      .flat()
+      .map((utxo) => `${utxo.tx_hash}:${utxo.tx_pos}`)
+  );
+  return utxos.filter((utxo) => unspent.has(`${utxo.tx_hash}:${utxo.tx_pos}`));
+}
+
+export async function refreshAndVerifyP2pInputs(
+  walletId: number,
+  fallbackUtxos: UTXO[]
+): Promise<UTXO[]> {
+  const refreshed = await reconcileActiveWalletUtxos(walletId);
+  const candidates = refreshed
+    ? Object.values(refreshed)
+        .flat()
+        .filter((utxo) => !utxo.token)
+    : fallbackUtxos;
+  const claimed = reservedOutpoints(walletId);
+  const free = candidates.filter(
+    (utxo) => !claimed.has(outpointKey(utxo.tx_hash, utxo.tx_pos))
+  );
+  if (free.length === 0) {
+    throw new Error(
+      candidates.length === 0
+        ? 'No spendable (non-token) UTXOs to fuse.'
+        : 'All coins are already committed to another fusion round.'
+    );
+  }
+
+  const spendable = await onlyUnspent(free);
+  if (spendable.length === 0) {
+    throw new Error(
+      'No live unspent coins to fuse after refreshing the wallet.'
+    );
+  }
+  return spendable;
+}
+
+function assertBroadcastTxid(value: string): string {
+  if (!/^[0-9a-f]{64}$/i.test(value)) {
+    throw new Error(`Fusion broadcast failed: ${value}`);
+  }
+  return value.toLowerCase();
+}
+
+/** Run one P2P round on the active BCH network. */
+export async function runP2pFusion(
+  opts: P2pFusionOptions
+): Promise<RoundResult> {
+  if (!isFusionExecutionAllowed())
+    throw new Error('P2P fusion execution is paused.');
+  if (!opts.tor) {
+    throw new Error(
+      'Tor is required for P2P fusion — enable Tor and wait for bootstrap.'
+    );
+  }
+  if (opts.signal?.aborted) throw new Error('fusion round cancelled');
+
+  const torOk = await invoke<boolean>('fusion_tor_check', {
+    host: opts.tor.host,
+    port: opts.tor.port,
+  });
+  if (!torOk) throw new Error('Tor is not reachable — P2P fusion stopped.');
+
+  const relays = validatedRelays(opts.relays);
+  if (!wsInstalled) {
+    setNostrWebSocketImpl(TorWebSocket);
+    wsInstalled = true;
+  }
+  armTorRouting({ host: opts.tor.host, port: opts.tor.port });
+
+  const pool = new SimplePool();
+  // Output registrations get different relay sockets and Tor isolation streams.
+  const outputPool = new SimplePool();
+  let stopPool: (() => void) | null = null;
+  let round: RoundIdentity | null = null;
+  let reservedForRound: string[] = [];
+  let withdrawFromPool: (() => Promise<void>) | null = null;
+  const status = opts.onStatus;
+
+  try {
+    status?.('Refreshing and verifying live wallet coins.');
+    // Drop coins another round of this wallet is already spending. Without this,
+    // two rounds (two windows, or a retry overlapping its predecessor) pick the
+    // same UTXOs; the first to broadcast spends them and the second is rejected
+    // with "Missing inputs" only after every peer has signed.
+    const spendable = await refreshAndVerifyP2pInputs(
+      opts.walletId,
+      opts.utxos
+    );
+    status?.('Tor verified; preparing fresh pool identity.');
+    reservedForRound = spendable.map((utxo) =>
+      outpointKey(utxo.tx_hash, utxo.tx_pos)
+    );
+    reserveOutpoints(opts.walletId, reservedForRound);
+    const runInputs = await gatherInputs(opts.walletId, spendable);
+    const sumIn = runInputs.reduce((sum, input) => sum + input.value, 0);
+    const tiers = P2P_TIERS.filter((tier) => sumIn > tier + 1_000);
+    if (tiers.length === 0)
+      throw new Error('Inputs too small for any P2P fusion tier.');
+
+    const network = toPoolNetwork(opts.network);
+    const now = Math.floor(Date.now() / 1_000);
+    // Rolling network-wide pool (00-Wallet model): announce immediately and gather
+    // whoever is fresh; no epoch bucket to synchronize on. epoch is an info stamp.
+    const epoch = poolEpoch(now);
+
+    round = generateRoundIdentity();
+    recordRoundKey(opts.walletId, round.pubkey);
+    let peers: PoolAnnouncement[] = [
+      {
+        pubkey: round.pubkey,
+        network,
+        epoch,
+        tiers,
+        numInputs: runInputs.length,
+        at: now,
+        expiresAt: now + POOL_PEER_TTL_SECONDS,
+      },
+    ];
+    const joined = joinPool(pool, relays, {
+      round,
+      network,
+      epoch,
+      tiers,
+      numInputs: runInputs.length,
+      onPeer: (received) => {
+        const merged = new Map(peers.map((peer) => [peer.pubkey, peer]));
+        received.forEach((peer) => merged.set(peer.pubkey, peer));
+        peers = [...merged.values()];
+      },
+      onError: (error) => status?.(error.message),
+    });
+    stopPool = joined.stop;
+    withdrawFromPool = joined.withdraw;
+    await joined.announceNow();
+    opts.onPhase?.(1);
+    status?.('Pool announcement published; collecting peers…');
+
+    const fresh = await collectRolling(
+      opts.walletId,
+      round.pubkey,
+      () => peers,
+      status,
+      opts.signal
+    );
+    joined.stop();
+    stopPool = null;
+    const group = selectFusionGroup(fresh, MIN_PARTICIPANTS, MAX_PARTICIPANTS);
+    if (!group || !group.participants.includes(round.pubkey)) {
+      throw new Error('No compatible P2P Fusion group formed in this epoch.');
+    }
+
+    const transport = createNostrRoundTransport(
+      pool,
+      relays,
+      round,
+      outputPool
+    );
+    const negotiated = await negotiateFusionRound(
+      {
+        myPubkey: round.pubkey,
+        candidates: group.participants,
+        network,
+        tier: group.tier,
+        epoch,
+        signal: opts.signal,
+      },
+      transport
+    );
+    status?.(
+      `Round agreed with ${negotiated.participants.length} peers at ${negotiated.tier} sats.`
+    );
+
+    const myInputs: FusionInputRef[] = runInputs.map((input) => ({
+      prevTxid: input.prev_txid,
+      prevIndex: input.prev_index,
+      value: input.value,
+      pubkey: input.pubkey,
+    }));
+    const outputPlan = planP2pOutputValues({
+      inputs: myInputs,
+      participantCount: negotiated.participants.length,
+      feerate: P2P_FEERATE,
+    });
+    const outputScripts = await createFreshFusionOutputScripts(
+      opts.walletId,
+      opts.network,
+      outputPlan.values.length
+    );
+    const keysByPubkey = new Map(
+      runInputs.map((input) => [input.pubkey, hexToBin(input.privkey)])
+    );
+    const myOutputs: FusionOutputRef[] = outputScripts.map((script, index) => ({
+      script,
+      value: outputPlan.values[index],
+    }));
+
+    const result = await runFusionRound(
+      {
+        myPubkey: round.pubkey,
+        participants: negotiated.participants,
+        session: negotiated.session,
+        tier: negotiated.tier,
+        feerate: P2P_FEERATE,
+        myContribution: { inputs: myInputs, outputs: myOutputs },
+        keysByPubkey,
+        broadcast: async (txHex) => {
+          try {
+            return assertBroadcastTxid(
+              await ElectrumService.broadcastTransaction(txHex)
+            );
+          } catch (error) {
+            // A rejected CoinJoin does not identify which input became stale.
+            // Re-check our own inputs so the user gets a useful, bounded verdict
+            // without writing the raw transaction or wallet outpoints to logs.
+            const survivors = await onlyUnspent(spendable).catch(() => null);
+            const verdict =
+              survivors === null
+                ? 'could not re-check (Electrum unreachable)'
+                : survivors.length === spendable.length
+                  ? `all ${spendable.length} of OUR inputs still unspent — the dead input came from a PEER`
+                  : `${spendable.length - survivors.length} of OUR ${spendable.length} inputs vanished DURING the round`;
+            console.error('[p2p-fusion] broadcast rejected:', verdict);
+            status?.(`Broadcast rejected — ${verdict}`);
+            throw error;
+          }
+        },
+        onPhase: opts.onPhase,
+      },
+      transport
+    );
+    const completion = await completeFusionBroadcast({
+      walletId: opts.walletId,
+      txid: result.txid,
+      txHex: result.txHex,
+      spentInputs: spendable,
+      source: 'p2p-fusion',
+      sourceLabel: 'P2P Fusion',
+      // The scripts we allocated for ourselves this round. The completion layer
+      // resolves them to txid:index — a round shuffles its outputs so position
+      // carries no information, and guessing an index here would eventually
+      // credit a peer's coin to us.
+      ownedOutputScripts: outputScripts,
+    });
+    status?.(`Fused ✓ — txid ${result.txid}`);
+    if (!completion.refreshed) {
+      status?.(
+        `Fused ✓ — txid ${result.txid}; wallet sync will retry automatically.`
+      );
+    }
+    return result;
+  } finally {
+    // Free the coins whatever happened. A successful round has already spent
+    // them (the live re-check keeps them out next time); a failed one must not
+    // strand them. The stored TTL is only a backstop for a hard crash.
+    releaseOutpoints(opts.walletId, reservedForRound);
+    // Retire this round key from the pool before tearing the sockets down, so the
+    // next attempt (ours or a peer's) does not see it as a live candidate.
+    await withdrawFromPool?.().catch(() => undefined);
+    stopPool?.();
+    pool.close(relays);
+    outputPool.close(relays);
+    round?.secretKey.fill(0);
+    disarmTorRouting();
+  }
+}
