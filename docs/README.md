@@ -46,6 +46,8 @@ Technical documentation for contributors and third-party integrators.
   - End-to-end process for adding or extending in-wallet addon apps.
 - [Addon SDK Reference](./addons-sdk.md)
   - Capabilities, modules, and policy/security behavior.
+- [Airdrops local dev](./AIRDROPS_ADDON_LOCAL_DEV.md)
+  - Built-in Airdrops addon (`optn.builtin.events`) — how to run it locally.
 
 ## Suggested Reading Paths
 
@@ -56,11 +58,6 @@ Technical documentation for contributors and third-party integrators.
 
 ## Still open (not shipped)
 
-These files are remaining work, not history of finished plans:
-
 - [Keystone hardware wallet](./keystone-hardware-wallet-scope.md) — UI disabled (“Coming soon”).
-- [UX improvement plan](./UX_IMPROVEMENT_PLAN.md) — product hierarchy, not done.
-- [Airdrops addon plan](./OPTN_WALLET_AIRDROPS_ADDON_PLAN.md) — backend + wallet MVP.
+- [UX improvement plan](./UX_IMPROVEMENT_PLAN.md) — home/send/receive hierarchy, not done.
 - [Paytaca Nostr chat parity](./paytaca-nostr-chat-parity-plan.md) — groups, receipts, attachments still missing.
-
-Deleted because they described work that already shipped: the Nostr/fusion UI skeleton, the PR #12 CI reliability plan, and the Issue #8 watch-only checkpoint list (replaced by [watch-only-seedcash.md](./watch-only-seedcash.md)).
