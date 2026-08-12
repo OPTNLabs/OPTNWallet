@@ -697,12 +697,17 @@ export default function TransactionManager() {
    * Write confirmed height/timestamp back after a verbose Electrum fetch so
    * Home/list stop showing "Pending" for long-confirmed fusion txs that were
    * first inserted with height 0.
+   *
+   * Pass `persist: false` when applying many rows, then call
+   * `persistConfirmedHeights(walletId)` once — avoids N disk saves (and the
+   * open-time “one fusion flips at a time” feel when each save raced the UI).
    */
   async function applyConfirmedHeight(
     walletId: number,
     txHash: string,
     height: number,
-    timestamp?: string
+    timestamp?: string,
+    options?: { persist?: boolean }
   ): Promise<void> {
     if (!Number.isInteger(walletId) || walletId <= 0) return;
     if (!(typeof height === 'number' && height > 0)) return;
@@ -731,10 +736,20 @@ export default function TransactionManager() {
        WHERE wallet_id = ? AND lower(tx_hash) = ?`,
       [height, height, ts, ts, ts, ts, walletId, hash]
     );
+    if (options?.persist === false) return;
     try {
       await dbService.saveDatabaseToFile(walletId);
     } catch {
       /* best-effort; Redux still updates */
+    }
+  }
+
+  async function persistConfirmedHeights(walletId: number): Promise<void> {
+    if (!Number.isInteger(walletId) || walletId <= 0) return;
+    try {
+      await dbService.saveDatabaseToFile(walletId);
+    } catch {
+      /* best-effort */
     }
   }
 
@@ -746,5 +761,6 @@ export default function TransactionManager() {
     buildTransaction,
     fetchPrivateKey,
     applyConfirmedHeight,
+    persistConfirmedHeights,
   };
 }

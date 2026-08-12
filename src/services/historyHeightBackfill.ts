@@ -3,17 +3,16 @@
  * Fusion completion injects CoinJoins at height 0; Electrum verbose get knows
  * the real height long before (or instead of) address history rewriting SQL.
  *
- * Fulcrum/bitcoind-style verbose `transaction.get` often returns `confirmations`
- * but omits `height`. We always derive height from tip when confs > 0 so the
- * History list (which only checks `height > 0`) can leave "Fused · Unconfirmed".
+ * Design: batch SQL writes + one disk persist + one Redux publish (caller).
+ * Progressive per-tx dispatch made every open look like a live “catch-up”
+ * (EC/Selene/Monero show last saved state and quiet-refresh in the background).
  */
 import type { TransactionHistoryItem } from '../types/types';
 import ElectrumService from './ElectrumService';
 import TransactionManager from '../apis/TransactionManager/TransactionManager';
 import type { AppDispatch } from '../state/store';
-import { addTransactions } from '../state/slices/transactionSlice';
+import { setTransactions } from '../state/slices/transactionSlice';
 
-/** Parallel verbose fetches — fusion histories can have many height-0 rows. */
 const BACKFILL_CONCURRENCY = 12;
 
 function parseTipHeight(tip: unknown): number | null {
@@ -25,7 +24,6 @@ function parseTipHeight(tip: unknown): number | null {
   return null;
 }
 
-/** Resolve a positive block height from verbose details + optional tip. */
 export async function resolveConfirmedBlockHeight(
   details: {
     height?: number | null;
@@ -82,6 +80,10 @@ export async function backfillConfirmedHistoryHeights(args: {
   walletId: number;
   transactions: readonly TransactionHistoryItem[];
   sessionGeneration?: number;
+  /**
+   * If set, publish the *full* list once after all heights resolve — never
+   * one row at a time (that is the “unconfirmed fusion comes in one by one” UX).
+   */
   dispatch?: AppDispatch;
   forceRefresh?: boolean;
 }): Promise<TransactionHistoryItem[]> {
@@ -108,7 +110,6 @@ export async function backfillConfirmedHistoryHeights(args: {
   );
   if (stuck.length === 0) return [...byHash.values()];
 
-  // One tip for the whole batch — per-tx tip RPCs made open-time backfill crawl.
   let tip: number | null = null;
   try {
     tip = parseTipHeight(await ElectrumService.getLatestBlock());
@@ -117,6 +118,8 @@ export async function backfillConfirmedHistoryHeights(args: {
   }
 
   const manager = TransactionManager();
+  let wroteAny = false;
+
   await mapPool(stuck, BACKFILL_CONCURRENCY, async (tx) => {
     const details = await ElectrumService.getTransactionDetails(tx.tx_hash, {
       forceRefresh,
@@ -138,22 +141,36 @@ export async function backfillConfirmedHistoryHeights(args: {
         walletId,
         tx.tx_hash,
         height,
-        details.timestamp
+        details.timestamp,
+        { persist: false }
       );
+      wroteAny = true;
     } catch {
       /* best-effort SQL */
     }
-
-    if (dispatch) {
-      dispatch(
-        addTransactions({
-          wallet_id: walletId,
-          transactions: [updated],
-          sessionGeneration,
-        })
-      );
-    }
   });
 
-  return [...byHash.values()];
+  // One durable write so the next open paints Confirmed without re-catch-up.
+  if (wroteAny) {
+    try {
+      await manager.persistConfirmedHeights(walletId);
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  const result = [...byHash.values()];
+
+  // Single Redux replace — quiet background refresh, not a streaming UI.
+  if (dispatch && wroteAny) {
+    dispatch(
+      setTransactions({
+        wallet_id: walletId,
+        transactions: result,
+        sessionGeneration,
+      })
+    );
+  }
+
+  return result;
 }

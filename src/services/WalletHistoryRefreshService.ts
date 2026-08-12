@@ -136,12 +136,9 @@ export async function refreshWalletTransactionHistory(
 
     const previousStoredTransactions = loadStoredTransactions(db, walletId);
 
-    // 1) Paint SQL history immediately so Home "Recent Activity" is not empty
-    //    for tens of seconds on open.
-    // 2) Height backfill runs in parallel (dispatch progressive updates) — do
-    //    NOT await it before first paint (that hid the whole list while Electrum
-    //    resolved fusion height-0 rows).
-    // 3) Full address history scan still runs below; final publish re-merges.
+    // Local-first (EC / Selene / Monero GUI): paint last saved SQL history
+    // immediately. No per-row streaming. Background backfill publishes ONCE
+    // when all stuck heights resolve, then address history scan may replace.
     let initialPaint = mergeRecordedFusionTxsIntoHistory(
       walletId,
       previousStoredTransactions
@@ -163,6 +160,7 @@ export async function refreshWalletTransactionHistory(
       initialPaint
     );
     if (hasStuckHeights) {
+      // Single batched Redux update inside backfill when dispatch is set.
       earlyBackfill = (async () => {
         try {
           await ElectrumService.ensureFreshConnection();
@@ -177,17 +175,6 @@ export async function refreshWalletTransactionHistory(
           forceRefresh: true,
         });
       })();
-      // When backfill finishes before the long history scan, repaint with heights.
-      void earlyBackfill.then((filled) => {
-        if (filled.length === 0) return;
-        dispatch(
-          setTransactions({
-            wallet_id: walletId,
-            transactions: filled,
-            sessionGeneration,
-          })
-        );
-      });
     }
 
     // Prefer the addresses table (software wallets register there via createKeys).

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const getTransactionDetailsMock = vi.fn();
 const getLatestBlockMock = vi.fn();
 const applyConfirmedHeightMock = vi.fn();
+const persistConfirmedHeightsMock = vi.fn();
 
 vi.mock('../../services/ElectrumService', () => ({
   default: {
@@ -16,6 +17,8 @@ vi.mock('../../apis/TransactionManager/TransactionManager', () => ({
   default: () => ({
     applyConfirmedHeight: (...args: unknown[]) =>
       applyConfirmedHeightMock(...args),
+    persistConfirmedHeights: (...args: unknown[]) =>
+      persistConfirmedHeightsMock(...args),
   }),
 }));
 
@@ -29,7 +32,9 @@ describe('historyHeightBackfill', () => {
     getTransactionDetailsMock.mockReset();
     getLatestBlockMock.mockReset();
     applyConfirmedHeightMock.mockReset();
+    persistConfirmedHeightsMock.mockReset();
     applyConfirmedHeightMock.mockResolvedValue(undefined);
+    persistConfirmedHeightsMock.mockResolvedValue(undefined);
   });
 
   it('resolveConfirmedBlockHeight derives tip - confs + 1', async () => {
@@ -69,8 +74,10 @@ describe('historyHeightBackfill', () => {
       6,
       hash,
       899_951,
-      '2026-01-01T00:00:00.000Z'
+      '2026-01-01T00:00:00.000Z',
+      { persist: false }
     );
+    expect(persistConfirmedHeightsMock).toHaveBeenCalledWith(6);
   });
 
   it('skips rows that already have a positive height', async () => {
