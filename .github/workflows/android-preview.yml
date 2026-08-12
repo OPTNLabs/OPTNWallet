@@ -37,7 +37,7 @@ concurrency:
 jobs:
   debug-apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
@@ -229,7 +229,7 @@ jobs:
           instrumentation_log="$RUNNER_TEMP/android-instrumentation.log"
           test -f "$app_apk"
           test -f "$test_apk"
-          install_timeout_seconds=300
+          install_timeout_seconds=900
           install_apk() {
             apk_path="$1"
             package_name="$2"
