@@ -513,11 +513,12 @@ export const WalletInfoSettings: React.FC = () => {
             <p className="text-xs font-mono wallet-text-strong break-all leading-relaxed">
               {info.walletFilePath ?? '—'}
             </p>
-            <p className="text-xs wallet-muted">
-              {info.walletFileMissing
-                ? 'No .optn mirror on disk yet (common for watch-only). Export / create pack if you want a file backup. Path above is the usual location when a pack exists.'
-                : 'Electron Cash–style backup under app data. Internal id is only for this PC’s database — importing on another machine gets a new id.'}
-            </p>
+            {info.walletFileMissing && (
+              <p className="text-xs wallet-muted">
+                No wallet file on disk yet. Path shown is where one would
+                normally be saved.
+              </p>
+            )}
           </div>
 
           {/* Eye only covers xPub / path / fingerprint / hash */}
