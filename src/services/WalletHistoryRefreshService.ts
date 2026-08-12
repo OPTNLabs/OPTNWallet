@@ -38,9 +38,17 @@ type SqlLikeDb = {
 };
 
 function toHistoryItem(row: Record<string, unknown>): TransactionHistoryItem {
+  const sqlHeight = Number(row.height ?? 0);
+  const detailHeight = Number(row.detail_height ?? 0);
+  const confirmations = Number(row.confirmations ?? 0);
+  const height =
+    detailHeight > 0 && detailHeight >= sqlHeight
+      ? detailHeight
+      : sqlHeight;
   return {
     tx_hash: String(row.tx_hash ?? ''),
-    height: Number(row.height ?? 0),
+    height,
+    confirmations: confirmations > 0 ? confirmations : undefined,
     timestamp:
       row.timestamp === null || row.timestamp === undefined
         ? undefined
@@ -56,13 +64,37 @@ export function loadStoredTransactions(
   db: SqlLikeDb,
   walletId: number
 ): TransactionHistoryItem[] {
-  const query = db.prepare(`
-    SELECT tx_hash, height, timestamp, amount
-    FROM transactions
-    WHERE wallet_id = ?
-    ORDER BY height DESC, timestamp DESC
-    LIMIT 2000;
-  `);
+  // Prefer verbose Electrum details (confirmations / height) so a fusion
+  // CoinJoin stored at height 0 still paints Confirmed on the next open.
+  let query;
+  try {
+    query = db.prepare(`
+      SELECT t.tx_hash AS tx_hash,
+             t.height AS height,
+             t.timestamp AS timestamp,
+             t.amount AS amount,
+             d.height AS detail_height,
+             d.confirmations AS confirmations
+      FROM transactions t
+      LEFT JOIN transaction_details d
+        ON d.wallet_id = t.wallet_id
+       AND lower(d.tx_hash) = lower(t.tx_hash)
+      WHERE t.wallet_id = ?
+      ORDER BY
+        CASE WHEN COALESCE(d.height, t.height, 0) > 0
+          THEN COALESCE(d.height, t.height) ELSE 0 END DESC,
+        t.timestamp DESC
+      LIMIT 2000;
+    `);
+  } catch {
+    query = db.prepare(`
+      SELECT tx_hash, height, timestamp, amount
+      FROM transactions
+      WHERE wallet_id = ?
+      ORDER BY height DESC, timestamp DESC
+      LIMIT 2000;
+    `);
+  }
   query.bind([walletId]);
   const rows: TransactionHistoryItem[] = [];
   while (query.step()) {

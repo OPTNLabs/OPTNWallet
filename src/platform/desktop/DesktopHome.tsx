@@ -41,6 +41,7 @@ import SettingsRow from '../../components/ui/SettingsRow';
 import EmptyState from '../../components/ui/EmptyState';
 import { shortenTxHash } from '../../utils/shortenHash';
 import { takeRecentTransactions } from '../../utils/transactionHistoryOrder';
+import { isTxConfirmed } from '../../utils/txConfirmation';
 import { isFusionTransaction } from './fusionCoinDepth';
 import { useFusionDepthRevision } from './useFusionDepthRevision';
 import { FusionBadge } from '../../components/FusionBadge';
@@ -549,9 +550,11 @@ const Home: React.FC = () => {
                       description={
                         tx.height > 0
                           ? `Block ${tx.height}`
-                          : fused
-                            ? 'Broadcast — waiting for block'
-                            : 'Unconfirmed'
+                          : isTxConfirmed(tx)
+                            ? 'Confirmed'
+                            : fused
+                              ? 'Broadcast — waiting for block'
+                              : 'Unconfirmed'
                       }
                       right={
                         <span
@@ -562,10 +565,10 @@ const Home: React.FC = () => {
                           }
                         >
                           {fused
-                            ? tx.height > 0
+                            ? isTxConfirmed(tx)
                               ? 'Fused · Confirmed'
                               : 'Fused · Unconfirmed'
-                            : tx.height > 0
+                            : isTxConfirmed(tx)
                               ? 'Confirmed'
                               : 'Unconfirmed'}
                         </span>

@@ -723,18 +723,21 @@ export default function TransactionManager() {
         ? String(timestamp)
         : '';
     db.run(
-      `UPDATE transactions
-       SET height = CASE
-             WHEN ? > COALESCE(height, 0) THEN ?
-             ELSE height
-           END,
-           timestamp = CASE
-             WHEN ? != '' AND (timestamp IS NULL OR timestamp = '') THEN ?
-             WHEN ? != '' THEN ?
-             ELSE timestamp
-           END
-       WHERE wallet_id = ? AND lower(tx_hash) = ?`,
-      [height, height, ts, ts, ts, ts, walletId, hash]
+      `INSERT INTO transactions (wallet_id, tx_hash, height, timestamp, amount)
+       VALUES (?, ?, ?, ?, 0)
+       ON CONFLICT(wallet_id, tx_hash) DO UPDATE SET
+         height = CASE
+           WHEN excluded.height > COALESCE(transactions.height, 0)
+             THEN excluded.height
+           ELSE transactions.height
+         END,
+         timestamp = CASE
+           WHEN excluded.timestamp != '' AND (transactions.timestamp IS NULL OR transactions.timestamp = '')
+             THEN excluded.timestamp
+           WHEN excluded.timestamp != '' THEN excluded.timestamp
+           ELSE transactions.timestamp
+         END`,
+      [walletId, hash, height, ts]
     );
     if (options?.persist === false) return;
     try {

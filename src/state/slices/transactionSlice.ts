@@ -62,10 +62,19 @@ function mergeHistoryItem(
     existing?.timestamp != null && String(existing.timestamp).trim() !== ''
       ? String(existing.timestamp)
       : undefined;
+  const incomingConfs =
+    typeof incoming.confirmations === 'number' && incoming.confirmations > 0
+      ? incoming.confirmations
+      : 0;
+  const existingConfs =
+    typeof existing?.confirmations === 'number' && existing.confirmations > 0
+      ? existing.confirmations
+      : 0;
   return {
     ...incoming,
     tx_hash,
     height: preferHistoryHeight(incoming.height, existing?.height),
+    confirmations: Math.max(incomingConfs, existingConfs) || incoming.confirmations,
     timestamp: incomingTs ?? existingTs,
   };
 }

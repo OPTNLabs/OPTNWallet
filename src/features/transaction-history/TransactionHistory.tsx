@@ -20,6 +20,7 @@ import type { TransactionHistoryItem } from '../../types/types';
 import { isFusionTransaction } from '../../platform/desktop/fusionCoinDepth';
 import { useFusionDepthRevision } from '../../platform/desktop/useFusionDepthRevision';
 import { FusionBadge } from '../../components/FusionBadge';
+import { isTxConfirmed } from '../../utils/txConfirmation';
 
 const EMPTY_TRANSACTIONS: TransactionHistoryItem[] = [];
 
@@ -195,7 +196,7 @@ const TransactionHistory: React.FC = () => {
                           )}
                         </div>
                       </div>
-                      {tx.height > 0 ? (
+                      {isTxConfirmed(tx) ? (
                         <StatusChip tone="success">
                           {fused ? 'Fused · Confirmed' : 'Confirmed'}
                         </StatusChip>
@@ -210,6 +211,8 @@ const TransactionHistory: React.FC = () => {
                         <span className="wallet-text-strong">
                           Block: {tx.height}
                         </span>
+                      ) : isTxConfirmed(tx) ? (
+                        <span className="wallet-text-strong">Confirmed</span>
                       ) : (
                         <span className="wallet-muted">
                           {fused
