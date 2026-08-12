@@ -136,31 +136,16 @@ export async function refreshWalletTransactionHistory(
 
     const previousStoredTransactions = loadStoredTransactions(db, walletId);
 
-    // Publish SQL history quickly, but FIX fusion height-0 rows FIRST.
-    // Previously we painted height 0 immediately then waited for a full address
-    // history scan (often ~1 min) before backfill — so every open showed
-    // "Fused · Unconfirmed" until the long scan finished. Warm Electrum, then
-    // backfill stuck heights before the first paint.
+    // 1) Paint SQL history immediately so Home "Recent Activity" is not empty
+    //    for tens of seconds on open.
+    // 2) Height backfill runs in parallel (dispatch progressive updates) — do
+    //    NOT await it before first paint (that hid the whole list while Electrum
+    //    resolved fusion height-0 rows).
+    // 3) Full address history scan still runs below; final publish re-merges.
     let initialPaint = mergeRecordedFusionTxsIntoHistory(
       walletId,
       previousStoredTransactions
     );
-    const hasStuckHeights = initialPaint.some(
-      (tx) => !(typeof tx.height === 'number' && tx.height > 0)
-    );
-    if (hasStuckHeights) {
-      try {
-        await ElectrumService.ensureFreshConnection();
-      } catch {
-        /* offline — paint SQL heights as-is */
-      }
-      initialPaint = await backfillConfirmedHistoryHeights({
-        walletId,
-        transactions: initialPaint,
-        sessionGeneration,
-        forceRefresh: true,
-      });
-    }
     if (initialPaint.length > 0) {
       dispatch(
         setTransactions({
@@ -169,6 +154,40 @@ export async function refreshWalletTransactionHistory(
           sessionGeneration,
         })
       );
+    }
+
+    const hasStuckHeights = initialPaint.some(
+      (tx) => !(typeof tx.height === 'number' && tx.height > 0)
+    );
+    let earlyBackfill: Promise<TransactionHistoryItem[]> = Promise.resolve(
+      initialPaint
+    );
+    if (hasStuckHeights) {
+      earlyBackfill = (async () => {
+        try {
+          await ElectrumService.ensureFreshConnection();
+        } catch {
+          /* offline */
+        }
+        return backfillConfirmedHistoryHeights({
+          walletId,
+          transactions: initialPaint,
+          sessionGeneration,
+          dispatch,
+          forceRefresh: true,
+        });
+      })();
+      // When backfill finishes before the long history scan, repaint with heights.
+      void earlyBackfill.then((filled) => {
+        if (filled.length === 0) return;
+        dispatch(
+          setTransactions({
+            wallet_id: walletId,
+            transactions: filled,
+            sessionGeneration,
+          })
+        );
+      });
     }
 
     // Prefer the addresses table (software wallets register there via createKeys).
@@ -279,9 +298,36 @@ export async function refreshWalletTransactionHistory(
         walletId,
         loadStoredTransactions(liveDb, walletId)
       );
-      // Critical: fusion injects height 0; address history often never rewrites
-      // those rows. Verbose Electrum get knows confirmations — write height back
-      // before publishing to Redux so Home/list are not permanently "Unconfirmed".
+      // Keep heights the early open-time backfill already resolved (prefer > 0).
+      try {
+        const earlyFilled = await earlyBackfill;
+        const earlyByHash = new Map(
+          earlyFilled.map((tx) => [
+            String(tx.tx_hash).trim().toLowerCase(),
+            tx,
+          ] as const)
+        );
+        storedTransactions = storedTransactions.map((tx) => {
+          const key = String(tx.tx_hash).trim().toLowerCase();
+          const early = earlyByHash.get(key);
+          if (
+            early &&
+            typeof early.height === 'number' &&
+            early.height > 0 &&
+            !(typeof tx.height === 'number' && tx.height > 0)
+          ) {
+            return {
+              ...tx,
+              height: early.height,
+              timestamp: early.timestamp ?? tx.timestamp,
+            };
+          }
+          return tx;
+        });
+      } catch {
+        /* early backfill best-effort */
+      }
+      // Any rows still at height 0 (new from network history) get a second pass.
       storedTransactions = await backfillConfirmedHistoryHeights({
         walletId,
         transactions: storedTransactions,
