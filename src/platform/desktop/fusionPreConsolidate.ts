@@ -18,8 +18,7 @@ import {
 
 export type FusionPreConsolidateResult =
   | { ok: true; txid: string; fromAddress: string; toAddress: string; coinCount: number }
-  | { ok: false; skipped: true; reason: string }
-  | { ok: false; skipped?: false; reason: string };
+  | { ok: false; reason: string; skipped?: boolean };
 
 function cashPrefix(network: Network): 'bitcoincash:' | 'bchtest:' {
   return network === Network.MAINNET ? 'bitcoincash:' : 'bchtest:';

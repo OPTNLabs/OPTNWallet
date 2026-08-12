@@ -456,7 +456,7 @@ export function useMenuBar(): void {
         // Drop Electrum so the next wallet cannot reuse this network's socket
         // (chipnet open after mainnet lock → permanent 0 balance otherwise).
         try {
-          const { getElectrumAdapter } = await import(
+          const { default: getElectrumAdapter } = await import(
             '../../services/ElectrumAdapter'
           );
           await getElectrumAdapter().disconnect();

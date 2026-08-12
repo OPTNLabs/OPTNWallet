@@ -476,7 +476,7 @@ export const WatchOnlySend: FC = () => {
     }
     {
       const { recipientNetworkError } = await import('../../utils/bip21');
-      const netErr = recipientNetworkError(recipient.trim(), network);
+      const netErr = recipientNetworkError(recipient.trim(), currentNetwork);
       if (netErr) {
         setError(netErr);
         return;

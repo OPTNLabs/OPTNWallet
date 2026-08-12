@@ -563,12 +563,13 @@ async function maybePreConsolidateCrowdedCoins(
     coins: selection.allCoins,
     signal: options.signal,
   });
-  if (!result.ok) {
+  if (result.ok === false) {
+    const skipReason = result.reason;
     void import('./logger')
       .then(({ log }) =>
         log.info(
           'fusion-diag',
-          `w${options.walletId} pre-consolidate skipped: ${result.reason}`
+          `w${options.walletId} pre-consolidate skipped: ${skipReason}`
         )
       )
       .catch(() => undefined);
