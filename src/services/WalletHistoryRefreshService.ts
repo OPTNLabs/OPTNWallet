@@ -95,13 +95,35 @@ export function loadStoredTransactions(
       LIMIT 2000;
     `);
   }
-  query.bind([walletId]);
-  const rows: TransactionHistoryItem[] = [];
-  while (query.step()) {
-    rows.push(toHistoryItem(query.getAsObject()));
+  try {
+    query.bind([walletId]);
+    const rows: TransactionHistoryItem[] = [];
+    while (query.step()) {
+      rows.push(toHistoryItem(query.getAsObject()));
+    }
+    query.free();
+    return rows;
+  } catch {
+    try {
+      query.free();
+    } catch {
+      /* already freed */
+    }
+    const fallback = db.prepare(`
+      SELECT tx_hash, height, timestamp, amount
+      FROM transactions
+      WHERE wallet_id = ?
+      ORDER BY height DESC, timestamp DESC
+      LIMIT 2000;
+    `);
+    fallback.bind([walletId]);
+    const rows: TransactionHistoryItem[] = [];
+    while (fallback.step()) {
+      rows.push(toHistoryItem(fallback.getAsObject()));
+    }
+    fallback.free();
+    return rows;
   }
-  query.free();
-  return rows;
 }
 
 export interface RefreshWalletHistoryOptions {

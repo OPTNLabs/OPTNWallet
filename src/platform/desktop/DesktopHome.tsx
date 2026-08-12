@@ -37,6 +37,7 @@ import {
 } from '../../services/WalletHistoryRefreshService';
 import { Network } from '../../state/slices/networkSlice';
 import { SATSINBITCOIN } from '../../utils/constants';
+import type { TransactionHistoryItem } from '../../types/types';
 import SettingsRow from '../../components/ui/SettingsRow';
 import EmptyState from '../../components/ui/EmptyState';
 import { shortenTxHash } from '../../utils/shortenHash';
@@ -64,6 +65,8 @@ function getQuickActionTextClass(title: string) {
     title.length > 5 ? 'tracking-[-0.01em]' : ''
   }`;
 }
+
+const EMPTY_TRANSACTIONS: TransactionHistoryItem[] = [];
 
 function QuickActionButton({ title, icon, onClick }: QuickActionButtonProps) {
   return (
@@ -110,7 +113,7 @@ const Home: React.FC = () => {
     return (
       byWallet[currentWalletId] ??
       byWallet[String(currentWalletId)] ??
-      []
+      EMPTY_TRANSACTIONS
     );
   });
   const currentNetwork = useSelector(
