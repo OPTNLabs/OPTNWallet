@@ -331,8 +331,10 @@ Peer unblinds to a 64-byte BCH Schnorr signature and verifies it under
 
 **Inputs** (with credential sigs, jittered):
 
-Coordinator **refuses** any input whose credential does not verify under the
-round pubkey. Assembly cannot proceed until every accepted input is credentialed.
+Each `inputs` message is published under a **throwaway key** on a one-shot
+Tor circuit — same isolation as outputs. The coordinator does not take
+`from` as identity. Admission is the blind credential (`acceptInputs`).
+Assembly cannot proceed until every accepted input is credentialed.
 
 **Outputs (onion only — no direct/2-party path)**
 
@@ -360,24 +362,23 @@ atomically records the serial nullifiers. Replays remain rejected across an
 active-round retry or reload; nullifiers clear only when that round succeeds or
 conclusively aborts. Failure is **loud** — no silent fallback to plaintext.
 
-**Transport isolation per anonymous component.** Sealing each output under a
-fresh throwaway key defeats the *coordinator*, not the *relay*: if every output
-of a round leaves over one shared socket, the relay groups them by connection
-and the fresh keys buy nothing against that observer. Each anonymous component
-(`outputs`, `onion_output`) therefore publishes on its own short-lived pool,
-closed immediately after (`createComponentPool`, `nostr/fusionTransport.ts`).
-The Tor WebSocket implementation is installed globally, so one pool means one
-connection and one circuit with its own SOCKS isolation token — the same
-property Electron Cash obtains from a separate covert connection per component.
-Subscriptions keep the persistent pools; only publishing is one-shot.
+**Transport isolation per anonymous component.** Sealing a component under a
+fresh throwaway key defeats the *coordinator*, not the *relay*: if every
+component of a round leaves over one shared socket, the relay groups them by
+connection and the fresh keys buy nothing against that observer. Each
+anonymous component (`inputs`, `outputs`, `onion_output`, `signature`)
+therefore publishes on its own short-lived pool, closed immediately after
+(`createComponentPool`, `nostr/fusionTransport.ts`). The Tor WebSocket
+implementation is installed globally, so one pool means one connection and
+one circuit with its own SOCKS isolation token — the same property Electron
+Cash obtains from a separate covert connection per component. Subscriptions
+keep the persistent pools; only publishing is one-shot.
 
-Scope, stated plainly: this covers **outputs**. Input registration and the later
-signature messages still travel under the peer's round identity, so a
-coordinator learns which inputs share a participant. That is deliberate, not an
-oversight — every code in `nostr/fusionBlame.ts` binds to an `accused`
-participant pubkey and `verifyBlameReport` rejects an accused outside the
-participant set, so anonymising those channels removes the input blame is built
-on and requires the EC covert-component blame model. Tracked as a residual.
+Control plane stays named: ACK, `credential_request` (quota + Pedersen),
+ready, abort. That is **how many**, not **which UTXO**. Signatures use a
+throwaway key so a round-key signature batch cannot re-group anonymous
+inputs. After an abort, optional control-plane disclosures restore an
+accused *ephemeral* key for `fusionBlame.ts` diagnosis only.
 
 ### Phase E — Assemble, verify, sign
 
@@ -477,10 +478,13 @@ the peer’s declared excess fee.
 
 ### 7.4 What credentials do _not_ do
 
-- They do **not** hide the input→output map from the **coordinator** (same trust
-  model as a classic fusion server that sees the final template).
+- They do **not** hide the assembled template from the **coordinator** (same
+  class as a fusion server: every input outpoint and every output, not a
+  labeled who→coin map).
 - **Output onion** (not Tor) is what prevents _peers and intermediate peel hops_
   from linking which participant contributed which **output**.
+- **Anonymous transport** (`inputs` / `signature` under throwaway + one-shot
+  Tor) is what prevents the coordinator from taking `from` as input identity.
 - Input ownership for spending is still ordinary BCH signatures at sign time;
   credentials authorize inclusion in **this round’s** CoinJoin under the round
   issuer key.
@@ -651,6 +655,6 @@ When you change the wire format, crypto, gather policy, or Auto depth/cooldown:
 
 ---
 
-_Last updated: protocol v4, min 6 / min-safe 4 / max 10 (see
-[knobs.md](./p2p-cashfusion-knobs.md)), ACK-shrink, Auto 40s/25s cooldowns,
-fuse-depth stop, Tor fail-closed — **implemented**, not planned._
+_Last updated: protocol v4, 6/4/10 knobs, ACK-shrink, anonymous
+`inputs`/`signature`/`outputs` (throwaway + one-shot Tor), control plane
+still named — **implemented**, not planned._

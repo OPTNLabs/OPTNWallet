@@ -25,9 +25,14 @@ given round. The coordinator:
 - Broadcasts the final transaction
 
 **What the coordinator learns:**
-- The full input→output mapping (which inputs fund which outputs)
-- The participant list (pubkeys)
-- The tier, epoch, and network
+- The assembled template (every input outpoint and every output) — same class
+  as a fusion server, not a labeled who→coin map
+- Per-peer **quota** from attributed `credential_request` (counts + Pedersen)
+- The participant list (ephemeral round pubkeys), tier, epoch, and network
+
+Happy-path `inputs` / `signature` / onion outputs arrive under throwaway keys.
+The coordinator does not take `from` as identity; admission is the blind
+credential.
 
 **What the coordinator cannot do:**
 - Sign other participants' inputs (private keys never leave the wallet)
@@ -56,6 +61,8 @@ A peer participating in the same round but acting dishonestly.
 - Extract private keys from the signing process
 - Reliably map which peer *contributed* which **output** when **output onion**
   is on and at least one hop is honest (each hop shuffles before forward)
+- Map happy-path inputs to an origin peer from `from` (inputs arrive under a
+  throwaway key; credential is the admission proof)
 - Map inputs to origin peer from assembly order alone (inputs sorted by
   `txid:index`, not by submitter)
 
@@ -221,7 +228,9 @@ in `fusionSession.ts`.
 **Property:** Each hop peels one ECDH+AES-GCM layer, shuffles the batch with
 CSPRNG Fisher–Yates, and forwards. One honest hop breaks order-based linking.
 The last peeler *does* see all outputs in plaintext; the coordinator sees them
-for assembly (classic fusion-server class of visibility).
+for assembly (classic fusion-server class of visibility). That is the output
+*list*, not a who-created-which-output tag. Inputs and signatures use the
+same throwaway + one-shot Tor isolation (`fusionTransport.ts`).
 
 **Not used for:** IP privacy (that is Tor), relay content privacy (that is
 NIP-59), or credential issuance (that is Pedersen + blind Schnorr).
@@ -449,7 +458,8 @@ analyzing output value patterns.
 
 | Trade-off | Decision | Rationale |
 |---|---|---|
-| Coordinator learns input→output mapping | Accepted | Fundamental to P2P design; no trusted third party |
+| Coordinator sees the assembled template | Accepted | Same class as a fusion server; not a labeled who→UTXO map |
+| Coordinator sees per-peer credential quotas | Accepted | Control plane stays attributed; components do not |
 | No Sybil resistance | Accepted | Would require PoW or stake, adding complexity and centralizing |
 | No SIGHASH_UTXOS | Accepted | Each peer sees all outpoints/outputs during assembly; SIGHASH_UTXOS would require protocol changes |
 | Blinding unlinkability is informal | Acknowledged | Test verifies `R'.x ≠ R.x`; formal proof is future work |
