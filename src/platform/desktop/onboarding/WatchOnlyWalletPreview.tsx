@@ -285,11 +285,13 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
 
   // —— Keystone airgap (from Airgap section) ——
   if (panel === 'keystone') {
+    const passwordOk =
+      password === passwordConfirm &&
+      (password.length === 0 || password.length >= 8);
     const canSave =
       Boolean(walletName.trim()) &&
       keystoneAccount != null &&
-      password.length >= 8 &&
-      password === passwordConfirm &&
+      passwordOk &&
       !busy;
 
     return (
@@ -392,8 +394,8 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
             <div className="border-t border-[var(--wallet-border)] pt-3 space-y-3">
               <p className="text-sm font-semibold wallet-text-strong">Password</p>
               <p className="text-[11px] leading-relaxed wallet-muted">
-                Required every time you Open this wallet from the list. Private
-                keys are never stored here.
+                Optional. Leave empty for no password, or use at least 8
+                characters. Private keys are never stored here.
               </p>
               <label className="block space-y-1 text-sm wallet-text-strong">
                 Password
@@ -405,7 +407,7 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
                     setPassword(e.target.value);
                     setError('');
                   }}
-                  placeholder="At least 4 characters"
+                  placeholder="Empty = none, or min 8"
                   className="wallet-input w-full rounded-md px-3 py-2"
                 />
               </label>
@@ -458,18 +460,20 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
   }
 
   // —— Main PSBT watch-only (single-sig / multisig) ——
+  const passwordOk =
+    password === passwordConfirm &&
+    (password.length === 0 || password.length >= 8);
+
   const canSaveStandard =
     Boolean(walletName.trim()) &&
     Boolean(accountXpub.trim()) &&
-    password.length >= 8 &&
-    password === passwordConfirm &&
+    passwordOk &&
     !busy;
 
   const canSaveMultisig =
     Boolean(walletName.trim()) &&
     cosigners.every((c) => c.xpub.trim()) &&
-    password.length >= 8 &&
-    password === passwordConfirm &&
+    passwordOk &&
     !busy;
 
   return (
@@ -793,8 +797,8 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
           <div className="border-t border-[var(--wallet-border)] pt-3 space-y-3">
             <p className="text-sm font-semibold wallet-text-strong">Password</p>
             <p className="text-[11px] leading-relaxed wallet-muted">
-              Required every time you Open this wallet from the list. Private
-              keys are never stored here.
+              Optional. Leave empty for no password, or use at least 8
+              characters. Private keys are never stored here.
             </p>
             <label className="block space-y-1 text-sm wallet-text-strong">
               Password
@@ -806,7 +810,7 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
                   setPassword(e.target.value);
                   setError('');
                 }}
-                placeholder="At least 4 characters"
+                placeholder="Empty = none, or min 8"
                 className="wallet-input w-full rounded-md px-3 py-2"
               />
             </label>
