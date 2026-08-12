@@ -1,0 +1,97 @@
+{
+  "contractName": "CustodyVault",
+  "constructorInputs": [
+    {
+      "name": "ownerPkh",
+      "type": "bytes20"
+    },
+    {
+      "name": "custodianPkh",
+      "type": "bytes20"
+    },
+    {
+      "name": "recoveryPkh",
+      "type": "bytes20"
+    },
+    {
+      "name": "recoveryTimeout",
+      "type": "int"
+    },
+    {
+      "name": "releaseAt",
+      "type": "int"
+    },
+    {
+      "name": "releaseLockingBytecode",
+      "type": "bytes"
+    }
+  ],
+  "abi": [
+    {
+      "name": "refresh",
+      "inputs": [
+        {
+          "name": "custodianPk",
+          "type": "pubkey"
+        },
+        {
+          "name": "custodianSig",
+          "type": "sig"
+        }
+      ]
+    },
+    {
+      "name": "beginRelease",
+      "inputs": [
+        {
+          "name": "ownerPk",
+          "type": "pubkey"
+        },
+        {
+          "name": "ownerSig",
+          "type": "sig"
+        },
+        {
+          "name": "custodianPk",
+          "type": "pubkey"
+        },
+        {
+          "name": "custodianSig",
+          "type": "sig"
+        }
+      ]
+    },
+    {
+      "name": "finalize",
+      "inputs": [
+        {
+          "name": "ownerPk",
+          "type": "pubkey"
+        },
+        {
+          "name": "ownerSig",
+          "type": "sig"
+        }
+      ]
+    },
+    {
+      "name": "recover",
+      "inputs": [
+        {
+          "name": "recoveryPk",
+          "type": "pubkey"
+        },
+        {
+          "name": "recoverySig",
+          "type": "sig"
+        }
+      ]
+    }
+  ],
+  "bytecode": "OP_6 OP_PICK OP_0 OP_NUMEQUAL OP_IF OP_4 OP_ROLL OP_0 OP_NUMEQUALVERIFY OP_INPUTINDEX OP_0 OP_NUMEQUALVERIFY OP_TXINPUTCOUNT OP_2 OP_NUMEQUALVERIFY OP_0 OP_UTXOTOKENCATEGORY OP_0 OP_EQUALVERIFY OP_1 OP_UTXOTOKENCATEGORY OP_0 OP_EQUALVERIFY OP_6 OP_PICK OP_HASH160 OP_ROT OP_EQUALVERIFY OP_6 OP_ROLL OP_6 OP_ROLL OP_CHECKSIGVERIFY OP_TXOUTPUTCOUNT OP_1 OP_NUMEQUALVERIFY OP_0 OP_OUTPUTTOKENCATEGORY OP_0 OP_EQUALVERIFY OP_0 OP_OUTPUTBYTECODE OP_INPUTINDEX OP_UTXOBYTECODE OP_EQUALVERIFY OP_0 OP_OUTPUTVALUE OP_INPUTINDEX OP_UTXOVALUE OP_NUMEQUALVERIFY OP_2DROP OP_2DROP OP_DROP OP_1 OP_ELSE OP_6 OP_PICK OP_1 OP_NUMEQUAL OP_IF OP_4 OP_ROLL OP_0 OP_NUMEQUALVERIFY OP_INPUTINDEX OP_0 OP_NUMEQUALVERIFY OP_TXINPUTCOUNT OP_2 OP_NUMEQUALVERIFY OP_0 OP_UTXOTOKENCATEGORY OP_0 OP_EQUALVERIFY OP_1 OP_UTXOTOKENCATEGORY OP_0 OP_EQUALVERIFY OP_6 OP_PICK OP_HASH160 OP_EQUALVERIFY OP_7 OP_PICK OP_HASH160 OP_EQUALVERIFY OP_2ROT OP_CHECKSIGVERIFY OP_2ROT OP_CHECKSIGVERIFY OP_TXOUTPUTCOUNT OP_1 OP_NUMEQUALVERIFY OP_0 OP_OUTPUTTOKENCATEGORY OP_0 OP_EQUALVERIFY OP_0 OP_OUTPUTBYTECODE OP_3 OP_ROLL OP_EQUALVERIFY OP_0 OP_OUTPUTVALUE OP_INPUTINDEX OP_UTXOVALUE OP_NUMEQUAL OP_NIP OP_NIP OP_NIP OP_ELSE OP_6 OP_PICK OP_2 OP_NUMEQUAL OP_IF OP_4 OP_PICK OP_0 OP_GREATERTHAN OP_VERIFY OP_INPUTINDEX OP_0 OP_NUMEQUALVERIFY OP_TXINPUTCOUNT OP_2 OP_NUMEQUALVERIFY OP_0 OP_UTXOTOKENCATEGORY OP_0 OP_EQUALVERIFY OP_1 OP_UTXOTOKENCATEGORY OP_0 OP_EQUALVERIFY OP_4 OP_ROLL OP_CHECKLOCKTIMEVERIFY OP_DROP OP_6 OP_PICK OP_HASH160 OP_OVER OP_EQUALVERIFY OP_7 OP_ROLL OP_7 OP_ROLL OP_CHECKSIGVERIFY OP_TXOUTPUTCOUNT OP_1 OP_NUMEQUALVERIFY OP_0 OP_OUTPUTTOKENCATEGORY OP_0 OP_EQUALVERIFY OP_0 OP_OUTPUTBYTECODE 76a914 OP_ROT OP_CAT 88ac OP_CAT OP_EQUALVERIFY OP_0 OP_OUTPUTVALUE OP_INPUTINDEX OP_UTXOVALUE OP_NUMEQUALVERIFY OP_2DROP OP_2DROP OP_DROP OP_1 OP_ELSE OP_6 OP_ROLL OP_3 OP_NUMEQUALVERIFY OP_4 OP_ROLL OP_0 OP_NUMEQUALVERIFY OP_INPUTINDEX OP_0 OP_NUMEQUALVERIFY OP_TXINPUTCOUNT OP_2 OP_NUMEQUALVERIFY OP_0 OP_UTXOTOKENCATEGORY OP_0 OP_EQUALVERIFY OP_1 OP_UTXOTOKENCATEGORY OP_0 OP_EQUALVERIFY OP_3 OP_ROLL OP_CHECKLOCKTIMEVERIFY OP_DROP OP_4 OP_PICK OP_HASH160 OP_3 OP_PICK OP_EQUALVERIFY OP_2ROT OP_CHECKSIGVERIFY OP_TXOUTPUTCOUNT OP_1 OP_NUMEQUALVERIFY OP_0 OP_OUTPUTTOKENCATEGORY OP_0 OP_EQUALVERIFY OP_0 OP_OUTPUTBYTECODE 76a914 OP_4 OP_ROLL OP_CAT 88ac OP_CAT OP_EQUALVERIFY OP_0 OP_OUTPUTVALUE OP_INPUTINDEX OP_UTXOVALUE OP_NUMEQUAL OP_NIP OP_NIP OP_NIP OP_ENDIF OP_ENDIF OP_ENDIF",
+  "compiler": {
+    "name": "cashc",
+    "version": "0.13.0-next.3"
+  },
+  "updatedAt": "2026-05-05T21:00:44.290Z"
+}

@@ -1,0 +1,224 @@
+import TransactionManager from '../../../../apis/TransactionManager/TransactionManager';
+import TransactionService from '../../../../services/TransactionService';
+import type { TransactionOutput } from '../../../../types/types';
+import type {
+  MintAppUtxo,
+  MintBcmrPublication,
+  MintOutputDraft,
+  WalletAddressRecord,
+} from '../types';
+import { selectFeeCandidates } from './selectFeeCandidates';
+import { buildBcmrPublicationOpReturn } from './bcmrOpReturn';
+import {
+  shortHash,
+  sumOutputs,
+  toBigIntSafe,
+  utxoKey,
+  utxoValue,
+} from '../utils';
+
+type BuildResult = Awaited<
+  ReturnType<typeof TransactionService.buildTransaction>
+> & {
+  bytes: number;
+  hex: string;
+};
+
+type BuildBootstrapPreviewParams = {
+  sdk?: unknown;
+  fundingUtxos: MintAppUtxo[];
+  toAddress: string;
+  changeAddress: string;
+};
+
+export async function buildBootstrapPreview({
+  fundingUtxos,
+  toAddress,
+  changeAddress,
+}: BuildBootstrapPreviewParams): Promise<{
+  built: BuildResult;
+  feePaid: bigint;
+}> {
+  const outputs: TransactionOutput[] = [
+    { recipientAddress: toAddress, amount: 1000n },
+  ];
+
+  const built = await TransactionService.buildTransaction(
+    outputs,
+    null,
+    changeAddress,
+    fundingUtxos
+  );
+  if (built.errorMsg) throw new Error(built.errorMsg);
+  if (!built.finalOutputs || !built.finalTransaction) {
+    throw new Error('Failed to build bootstrap transaction.');
+  }
+
+  const totalInput = fundingUtxos.reduce((sum, u) => sum + utxoValue(u), 0n);
+  const totalOutput = sumOutputs(built.finalOutputs);
+  const feePaid = totalInput - totalOutput;
+
+  return {
+    built: {
+      ...built,
+      bytes: built.bytecodeSize,
+      hex: built.finalTransaction,
+    },
+    feePaid,
+  };
+}
+
+type BuildMintPreviewParams = {
+  sdk?: {
+    tx?: {
+      addOutput?: (
+        recipientAddress: string,
+        tokenOutputSats: number,
+        tokenAmount: bigint,
+        category: string,
+        inputsForBuild: MintAppUtxo[],
+        sdkAddressBook: WalletAddressRecord[],
+        nftCapability?: undefined | 'none' | 'mutable' | 'minting',
+        nftCommitment?: string
+      ) => TransactionOutput | undefined;
+    };
+  } | null;
+  selectedUtxos: MintAppUtxo[];
+  flatUtxos: MintAppUtxo[];
+  activeOutputDrafts: MintOutputDraft[];
+  changeAddress: string;
+  sdkAddressBook: WalletAddressRecord[];
+  tokenOutputSats: number;
+  bcmrPublication?: MintBcmrPublication;
+};
+
+const BCMR_IDENTITY_OUTPUT_SATS = 1000n;
+
+export async function buildMintPreview({
+  sdk,
+  selectedUtxos,
+  flatUtxos,
+  activeOutputDrafts,
+  changeAddress,
+  sdkAddressBook,
+  tokenOutputSats,
+  bcmrPublication,
+}: BuildMintPreviewParams): Promise<{
+  built: BuildResult;
+  inputsForBuild: MintAppUtxo[];
+  feePaid: bigint;
+}> {
+  const genesisInputs = selectedUtxos.filter((u) => u.tx_pos === 0 && !u.token);
+  if (genesisInputs.length === 0) {
+    throw new Error(
+      'No valid Candidate UTXO selected (requires vout=0, non-token).'
+    );
+  }
+
+  const genesisKeySet = new Set(genesisInputs.map((u) => utxoKey(u)));
+  const feeCandidates = selectFeeCandidates(flatUtxos, genesisKeySet);
+  const sourceByKey = new Map(genesisInputs.map((u) => [utxoKey(u), u]));
+
+  if (feeCandidates.length === 0) {
+    throw new Error('No non-genesis UTXOs available to fund transaction fees.');
+  }
+
+  const feeInputs: MintAppUtxo[] = [];
+  let inputsForBuild: MintAppUtxo[] = [];
+  let built: BuildResult | null = null;
+  const addOutputFromSdk = sdk?.tx?.addOutput;
+  const addOutputFromManager = TransactionManager().addOutput;
+
+  for (let i = 0; i < feeCandidates.length; i++) {
+    feeInputs.push(feeCandidates[i]);
+    inputsForBuild = genesisInputs.concat(feeInputs);
+
+    const outputs: TransactionOutput[] = [];
+    if (bcmrPublication?.enabled) {
+      outputs.push({
+        recipientAddress: changeAddress,
+        amount: BCMR_IDENTITY_OUTPUT_SATS,
+      });
+
+      const publication = buildBcmrPublicationOpReturn({
+        registryJson: bcmrPublication.registryJson,
+        uris: bcmrPublication.uris,
+      });
+      outputs.push({ opReturn: publication.opReturn });
+    }
+
+    for (const d of activeOutputDrafts) {
+      const src = sourceByKey.get(d.sourceKey);
+      if (!src) continue;
+      const category = src.tx_hash;
+      const isNFT = d.config.mintType === 'NFT';
+      const tokenAmount = isNFT ? 0n : toBigIntSafe(d.config.ftAmount);
+
+      const out = addOutputFromSdk
+        ? addOutputFromSdk(
+            d.recipientCashAddr,
+            tokenOutputSats,
+            tokenAmount,
+            category,
+            inputsForBuild,
+            sdkAddressBook,
+            isNFT ? d.config.nftCapability : undefined,
+            isNFT ? d.config.nftCommitment : undefined
+          )
+        : addOutputFromManager(
+            d.recipientCashAddr,
+            tokenOutputSats,
+            tokenAmount,
+            category,
+            inputsForBuild,
+            sdkAddressBook,
+            isNFT ? d.config.nftCapability : undefined,
+            isNFT ? d.config.nftCommitment : undefined
+          );
+
+      if (!out) {
+        throw new Error(
+          `Failed creating output for ${shortHash(
+            category,
+            12,
+            0
+          )} → ${shortHash(d.recipientCashAddr, 12, 8)}`
+        );
+      }
+      outputs.push(out);
+    }
+
+    const attempt = await TransactionService.buildTransaction(
+      outputs,
+      null,
+      changeAddress,
+      inputsForBuild
+    );
+    if (!attempt.errorMsg) {
+      built = {
+        ...attempt,
+        bytes: attempt.bytecodeSize,
+        hex: attempt.finalTransaction,
+      };
+      break;
+    }
+  }
+
+  if (!built || built.errorMsg || !built.finalOutputs || !built.finalTransaction) {
+    throw new Error(built?.errorMsg || 'Failed to build mint transaction.');
+  }
+
+  const totalInput = inputsForBuild.reduce((sum, u) => sum + utxoValue(u), 0n);
+  const totalOutput = sumOutputs(built.finalOutputs);
+  const feePaid = totalInput - totalOutput;
+
+  return {
+    built: {
+      ...built,
+      bytes: built.bytecodeSize,
+      hex: built.finalTransaction,
+    },
+    inputsForBuild,
+    feePaid,
+  };
+}

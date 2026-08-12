@@ -1,0 +1,30 @@
+{
+  "contractName": "P2PKH",
+  "constructorInputs": [
+    {
+      "name": "pkh",
+      "type": "bytes20"
+    }
+  ],
+  "abi": [
+    {
+      "name": "spend",
+      "inputs": [
+        {
+          "name": "pk",
+          "type": "pubkey"
+        },
+        {
+          "name": "s",
+          "type": "sig"
+        }
+      ]
+    }
+  ],
+  "bytecode": "OP_OVER OP_HASH160 OP_EQUALVERIFY OP_CHECKSIG",
+  "compiler": {
+    "name": "cashc",
+    "version": "0.9.3"
+  },
+  "updatedAt": "2024-07-12T01:58:31.706Z"
+}

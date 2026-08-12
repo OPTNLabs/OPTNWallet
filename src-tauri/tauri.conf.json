@@ -1,0 +1,50 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "OPTNWallet",
+  "version": "1.6.2",
+  "identifier": "com.optilabs.wallet",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5174",
+    "beforeDevCommand": "npx vite --config vite.desktop.config.ts --host --port 5174",
+    "beforeBuildCommand": "npx vite build --config vite.desktop.config.ts"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "OPTN Wallet",
+        "width": 460,
+        "height": 860,
+        "minWidth": 380,
+        "minHeight": 640,
+        "resizable": true,
+        "maximizable": true,
+        "fullscreen": false,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost https://ipc.localhost https://*.optnlabs.com https://app.cauldron.quest https://indexer.riften.net https://indexer-chipnet.riften.net https://cashtokens.org wss: ws:; img-src 'self' data: blob: https:; font-src 'self' data:; frame-src 'none'; object-src 'none'; base-uri 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": [
+      "resources/tor/*"
+    ]
+  },
+  "plugins": {
+    "fs": {
+      "requireLiteralLeadingDot": false
+    }
+  }
+}

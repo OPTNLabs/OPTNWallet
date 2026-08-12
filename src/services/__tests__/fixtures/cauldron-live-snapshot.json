@@ -1,0 +1,791 @@
+{
+  "generatedAt": "2026-05-05T19:39:36.288Z",
+  "source": "https://indexer.riften.net/cauldron",
+  "networks": [
+    {
+      "network": "mainnet",
+      "apiBase": "https://indexer.riften.net/cauldron",
+      "topTokens": [
+        {
+          "apy_30d_bp": 6604,
+          "bcmr": {
+            "description": "A dollar pegged stablecoin on Bitcoin Cash.",
+            "filemeta": {
+              "actual_hash": "5789ba7e99be995160d24b8f58b69b8a2733a33cb60e381e38f4e5bd4a585870",
+              "expected_hash": "5789ba7e99be995160d24b8f58b69b8a2733a33cb60e381e38f4e5bd4a585870",
+              "source": "onchain"
+            },
+            "name": "ParyonUSD",
+            "token": {
+              "category": "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544",
+              "decimals": 2,
+              "symbol": "PUSD"
+            },
+            "uris": {
+              "icon": "https://paryonusd.com/logo.svg",
+              "web": "https://paryonusd.com"
+            }
+          },
+          "bcmr_well_known": [],
+          "change_24h_bp": -201,
+          "change_24h_usd_bp": 36,
+          "change_7d_bp": null,
+          "change_7d_usd_bp": null,
+          "display_name": "ParyonUSD",
+          "display_symbol": "PUSD",
+          "price_24h": 224502.8519435659,
+          "price_24h_usd": 0.992594459298,
+          "price_7d": null,
+          "price_7d_usd": null,
+          "price_now": 219981.05170396683,
+          "price_now_usd": 0.996162194536,
+          "score": 12129333569040238,
+          "score_rank": 1,
+          "token_id": "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544",
+          "trade_count": 0,
+          "trade_volume": 100699318138,
+          "tvl_sats": 14508445500,
+          "tvl_tokens": 6595316
+        },
+        {
+          "apy_30d_bp": 560,
+          "bcmr": {
+            "description": "Moria Protocol MUSD v1.",
+            "filemeta": {
+              "actual_hash": "0e9fd254f8ed69c524acffb692adcbe0500cb84a331e0a772788439788c742cb",
+              "expected_hash": "0e9fd254f8ed69c524acffb692adcbe0500cb84a331e0a772788439788c742cb",
+              "source": "onchain"
+            },
+            "name": "Moria USD",
+            "token": {
+              "category": "b38a33f750f84c5c169a6f23cb873e6e79605021585d4f3408789689ed87f366",
+              "decimals": 2,
+              "symbol": "MUSD"
+            },
+            "uris": {
+              "icon": "https://meta.moria.money/m1.png",
+              "web": "https://moria.money"
+            }
+          },
+          "bcmr_well_known": [],
+          "change_24h_bp": -363,
+          "change_24h_usd_bp": -130,
+          "change_7d_bp": -93,
+          "change_7d_usd_bp": 39,
+          "display_name": "Moria USD",
+          "display_symbol": "MUSD",
+          "price_24h": 228377.3586694024,
+          "price_24h_usd": 1.009724815885,
+          "price_7d": 222156.4174711701,
+          "price_7d_usd": 0.99270595147,
+          "price_now": 220079.6218141652,
+          "price_now_usd": 0.996608559423,
+          "score": 11688487311988410,
+          "score_rank": 2,
+          "token_id": "b38a33f750f84c5c169a6f23cb873e6e79605021585d4f3408789689ed87f366",
+          "trade_count": 0,
+          "trade_volume": 79932758290,
+          "tvl_sats": 21382973469,
+          "tvl_tokens": 9716017
+        },
+        {
+          "apy_30d_bp": 332,
+          "bcmr": {
+            "description": "Niggas With BCH",
+            "filemeta": {
+              "actual_hash": "0bdc47b7168b1550d28b7298beabeea327686ff8921d051c8606c48c17f1ec50",
+              "expected_hash": "0bdc47b7168b1550d28b7298beabeea327686ff8921d051c8606c48c17f1ec50",
+              "source": "onchain"
+            },
+            "name": "NIGGA",
+            "token": {
+              "category": "41b596d732634f7acac6f63c3064b82e1356e09f5b0a83759fb989dc93a2b35f",
+              "decimals": 2,
+              "symbol": "NWB"
+            },
+            "uris": {
+              "icon": "https://ipfs.tapswap.cash/ipfs/QmXVcVZUdeiMgTfMvY3RM4N4dmBEWuRiV8wcF9GYkuzBeM",
+              "web": null
+            }
+          },
+          "bcmr_well_known": [],
+          "change_24h_bp": -1,
+          "change_24h_usd_bp": 242,
+          "change_7d_bp": 72,
+          "change_7d_usd_bp": 207,
+          "display_name": "NIGGA",
+          "display_symbol": "NWB",
+          "price_24h": 61.671910570698,
+          "price_24h_usd": 0.000272670018,
+          "price_7d": 61.226233190782,
+          "price_7d_usd": 0.000273589423,
+          "price_now": 61.667803224785,
+          "price_now_usd": 0.00027925648,
+          "score": 6304397297395464,
+          "score_rank": 3,
+          "token_id": "41b596d732634f7acac6f63c3064b82e1356e09f5b0a83759fb989dc93a2b35f",
+          "trade_count": 0,
+          "trade_volume": 40213283436,
+          "tvl_sats": 24578370100,
+          "tvl_tokens": 39856081804
+        },
+        {
+          "apy_30d_bp": 1165,
+          "bcmr": {
+            "description": "FURU tokens are the official free-play tokens for the BCH Guru predictions platform.",
+            "filemeta": {
+              "actual_hash": "8fe3da59dce790948095082adc3a1f0ca4808821c9118cf53e68cbc6604ae55f",
+              "expected_hash": "8fe3da59dce790948095082adc3a1f0ca4808821c9118cf53e68cbc6604ae55f",
+              "source": "onchain"
+            },
+            "name": "Furu Tokens",
+            "token": {
+              "category": "d9ab24ed15a7846cc3d9e004aa5cb976860f13dac1ead05784ee4f4622af96ea",
+              "decimals": 0,
+              "symbol": "FURU"
+            },
+            "uris": {
+              "icon": "ipfs://bafkreicqqq3tkq5tkbtg3vhbhw6urybothpoedsszuejs5baq2k25mhgvu",
+              "web": "https://bch.guru/"
+            }
+          },
+          "bcmr_well_known": [
+            {
+              "description": "FURU tokens are the official free-play tokens for the BCH Guru predictions platform.",
+              "filemeta": {
+                "actual_hash": null,
+                "expected_hash": null,
+                "source": "otr"
+              },
+              "name": "Furu Tokens",
+              "token": {
+                "category": "d9ab24ed15a7846cc3d9e004aa5cb976860f13dac1ead05784ee4f4622af96ea",
+                "decimals": 0,
+                "symbol": "FURU"
+              },
+              "uris": {
+                "icon": "ipfs://bafkreicqqq3tkq5tkbtg3vhbhw6urybothpoedsszuejs5baq2k25mhgvu",
+                "web": "https://bch.guru/"
+              }
+            }
+          ],
+          "change_24h_bp": -1901,
+          "change_24h_usd_bp": -1705,
+          "change_7d_bp": 1349,
+          "change_7d_usd_bp": 1501,
+          "display_name": "Furu Tokens",
+          "display_symbol": "FURU",
+          "price_24h": 802.777686126765,
+          "price_24h_usd": 0.003549320984,
+          "price_7d": 572.854304713604,
+          "price_7d_usd": 0.002559799461,
+          "price_now": 650.148642636339,
+          "price_now_usd": 0.002944133113,
+          "score": 2735842291708188,
+          "score_rank": 4,
+          "token_id": "d9ab24ed15a7846cc3d9e004aa5cb976860f13dac1ead05784ee4f4622af96ea",
+          "trade_count": 0,
+          "trade_volume": 34169411764,
+          "tvl_sats": 6410726326,
+          "tvl_tokens": 9860401
+        },
+        {
+          "apy_30d_bp": 19,
+          "bcmr": {
+            "description": "Club Currency for Freedom",
+            "filemeta": {
+              "actual_hash": "daa99b7313bd18840f5c98502f20dad5f5f4e81c41d45c3b3e580f8b2a057e50",
+              "expected_hash": "daa99b7313bd18840f5c98502f20dad5f5f4e81c41d45c3b3e580f8b2a057e50",
+              "source": "onchain"
+            },
+            "name": "olando",
+            "token": {
+              "category": "7fa887fd4eac015478b95392c4984721fbe3060223c30b342d43cc06817f07f6",
+              "decimals": 2,
+              "symbol": "OLA"
+            },
+            "uris": {
+              "icon": "ipfs://bafybeidlal7oyr7pf3nshvqqydnrl3nlugv4jwy25fjglouh7yxuwqfype/7fa887fd4eac015478b95392c4984721fbe3060223c30b342d43cc06817f07f6.png",
+              "web": "https://olando.club"
+            }
+          },
+          "bcmr_well_known": [],
+          "change_24h_bp": 19,
+          "change_24h_usd_bp": 262,
+          "change_7d_bp": -46,
+          "change_7d_usd_bp": 88,
+          "display_name": "olando",
+          "display_symbol": "OLA",
+          "price_24h": 175.762428225246,
+          "price_24h_usd": 0.000777098424,
+          "price_7d": 176.903955051223,
+          "price_7d_usd": 0.000790495323,
+          "price_now": 176.098275125623,
+          "price_now_usd": 0.000797443429,
+          "score": 394244464457256,
+          "score_rank": 5,
+          "token_id": "7fa887fd4eac015478b95392c4984721fbe3060223c30b342d43cc06817f07f6",
+          "trade_count": 0,
+          "trade_volume": 2560594316,
+          "tvl_sats": 23705790062,
+          "tvl_tokens": 13461682146
+        }
+      ],
+      "market": {
+        "tokenId": "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544",
+        "tokenRow": {
+          "apy_30d_bp": 6604,
+          "bcmr": {
+            "description": "A dollar pegged stablecoin on Bitcoin Cash.",
+            "filemeta": {
+              "actual_hash": "5789ba7e99be995160d24b8f58b69b8a2733a33cb60e381e38f4e5bd4a585870",
+              "expected_hash": "5789ba7e99be995160d24b8f58b69b8a2733a33cb60e381e38f4e5bd4a585870",
+              "source": "onchain"
+            },
+            "name": "ParyonUSD",
+            "token": {
+              "category": "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544",
+              "decimals": 2,
+              "symbol": "PUSD"
+            },
+            "uris": {
+              "icon": "https://paryonusd.com/logo.svg",
+              "web": "https://paryonusd.com"
+            }
+          },
+          "bcmr_well_known": [],
+          "change_24h_bp": -201,
+          "change_24h_usd_bp": 36,
+          "change_7d_bp": null,
+          "change_7d_usd_bp": null,
+          "display_name": "ParyonUSD",
+          "display_symbol": "PUSD",
+          "price_24h": 224502.8519435659,
+          "price_24h_usd": 0.992594459298,
+          "price_7d": null,
+          "price_7d_usd": null,
+          "price_now": 219981.05170396683,
+          "price_now_usd": 0.996162194536,
+          "score": 12129333569040238,
+          "score_rank": 1,
+          "token_id": "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544",
+          "trade_count": 0,
+          "trade_volume": 100699318138,
+          "tvl_sats": 14508445500,
+          "tvl_tokens": 6595316
+        },
+        "activePoolRows": [
+          {
+            "owner_p2pkh_addr": "bitcoincash:zq6pplnukpuw4r2kuplzzdcenatnv9yvw5wcxekjvc",
+            "owner_pkh": "3410fe7cb078ea8d56e07e2137199f5736148c75",
+            "pool_id": "dc7c57bb7963b7ed2039150b1eef0d6f21f71f8d33a6aecfce5a23b2f5f2c302",
+            "sats": 4496605,
+            "token_id": "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544",
+            "tokens": 2044,
+            "tx_pos": 25,
+            "txid": "64d331f5ade96c7ee987408e78667b525cb4b2202fa3f13873306407d13c5afc"
+          },
+          {
+            "owner_p2pkh_addr": "bitcoincash:zpc6w9y7uz6wzjxh02kmfs88rgf0puuz4y88s7yfqe",
+            "owner_pkh": "71a7149ee0b4e148d77aadb4c0e71a12f0f382a9",
+            "pool_id": "652c980a91f1ff50f3ded9e2d4c305f0d6fbc9623c7e04d20592b3dfd221f003",
+            "sats": 237945146,
+            "token_id": "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544",
+            "tokens": 108137,
+            "tx_pos": 0,
+            "txid": "1605916b4726517da6a60ba7f437e7fd9b93622bea28d82e5bbff5ffb311b9d9"
+          },
+          {
+            "owner_p2pkh_addr": "bitcoincash:zz5wuv9p35yltd98ka4sz7n6kcf3v2h0fc796gaxr2",
+            "owner_pkh": "a8ee30a18d09f5b4a7b76b017a7ab613162aef4e",
+            "pool_id": "b3f335c01a8491d7b855d3fbfc30924285941aff3e5f146ec8429052e760fc09",
+            "sats": 33739791,
+            "token_id": "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544",
+            "tokens": 15339,
+            "tx_pos": 17,
+            "txid": "64d331f5ade96c7ee987408e78667b525cb4b2202fa3f13873306407d13c5afc"
+          },
+          {
+            "owner_p2pkh_addr": "bitcoincash:zq6pplnukpuw4r2kuplzzdcenatnv9yvw5wcxekjvc",
+            "owner_pkh": "3410fe7cb078ea8d56e07e2137199f5736148c75",
+            "pool_id": "f4ccba69445e0e12e2a16abb1826415b24a8db45bee3be08d63d5b30ff42b020",
+            "sats": 8969689,
+            "token_id": "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544",
+            "tokens": 4077,
+            "tx_pos": 24,
+            "txid": "64d331f5ade96c7ee987408e78667b525cb4b2202fa3f13873306407d13c5afc"
+          },
+          {
+            "owner_p2pkh_addr": "bitcoincash:zq00xmdnsdhtj4dr54s565h75et8svqz5gngkus4g6",
+            "owner_pkh": "1ef36db3836eb955a3a5614d52fea656783002a2",
+            "pool_id": "84dc1cb2c98bca880ab9677f78e7b83eb1fa0b6814dc9d86dc086b9241f04f30",
+            "sats": 54798447,
+            "token_id": "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544",
+            "tokens": 24912,
+            "tx_pos": 13,
+            "txid": "64d331f5ade96c7ee987408e78667b525cb4b2202fa3f13873306407d13c5afc"
+          },
+          {
+            "owner_p2pkh_addr": "bitcoincash:zzkvf5wqzt7ac59r4zjm0gg5l5les732ny9xtm7yc3",
+            "owner_pkh": "acc4d1c012fddc50a3a8a5b7a114fd3f987a2a99",
+            "pool_id": "f62d97a59eca64351727d08132013aa2d1135b79ad88d01ed716f99b47094733",
+            "sats": 221850853,
+            "token_id": "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544",
+            "tokens": 100862,
+            "tx_pos": 6,
+            "txid": "61f0b3f8ff2f39e56c92f3c09fc91831ae1991559c2abfb3b694a957c4453a0b"
+          },
+          {
+            "owner_p2pkh_addr": "bitcoincash:zp69wmrh4melkkrl334jltugud7ca2hchqachv0844",
+            "owner_pkh": "74576c77aef3fb587f8c6b2faf88e37d8eaaf8b8",
+            "pool_id": "c9921c1a940da8952fa71d445d29d920b99660c198f019af1c2b535521732f4d",
+            "sats": 133283535,
+            "token_id": "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544",
+            "tokens": 60595,
+            "tx_pos": 8,
+            "txid": "61f0b3f8ff2f39e56c92f3c09fc91831ae1991559c2abfb3b694a957c4453a0b"
+          },
+          {
+            "owner_p2pkh_addr": "bitcoincash:zzqz5wt7p0vcmptynhqnt0g5dpv34sjq4yjglumkj4",
+            "owner_pkh": "802a397e0bd98d85649dc135bd1468591ac240a9",
+            "pool_id": "65be15331fa7fb65903ef41bed2ca0eb55f7e37197ba27cd7410c8a6353e5160",
+            "sats": 671665,
+            "token_id": "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544",
+            "tokens": 299,
+            "tx_pos": 32,
+            "txid": "762b2c862f00f9eee839b269ff91e7b3efab2d7be083608bd38abd3dff3a61a1"
+          },
+          {
+            "owner_p2pkh_addr": "bitcoincash:zq6pplnukpuw4r2kuplzzdcenatnv9yvw5wcxekjvc",
+            "owner_pkh": "3410fe7cb078ea8d56e07e2137199f5736148c75",
+            "pool_id": "0bb950d56c241c8e10fe547b4dbb6dfa7163292f72904b9f2f3a1b143cd9b361",
+            "sats": 8991819,
+            "token_id": "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544",
+            "tokens": 4087,
+            "tx_pos": 23,
+            "txid": "64d331f5ade96c7ee987408e78667b525cb4b2202fa3f13873306407d13c5afc"
+          },
+          {
+            "owner_p2pkh_addr": "bitcoincash:zzksvgekf5v7vdz8hr2grwpgvgpa8lhg7yahdn95rv",
+            "owner_pkh": "ad0623364d19e63447b8d481b8286203d3fee8f1",
+            "pool_id": "b6ca33c0e81f202c83ba3b37aaa8eb69882611768409b43494b562e4e33c4a64",
+            "sats": 21880954,
+            "token_id": "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544",
+            "tokens": 9947,
+            "tx_pos": 20,
+            "txid": "64d331f5ade96c7ee987408e78667b525cb4b2202fa3f13873306407d13c5afc"
+          },
+          {
+            "owner_p2pkh_addr": "bitcoincash:zz6s8t6at58x8nl9uy5thr0alk2097e5muljaw8xmv",
+            "owner_pkh": "b503af5d5d0e63cfe5e128bb8dfdfd94f2fb34df",
+            "pool_id": "066d44260c6e0d9ea661761230a27e950b3f67d9d1ee7e9ec342868f004efe6a",
+            "sats": 924606660,
+            "token_id": "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544",
+            "tokens": 420362,
+            "tx_pos": 3,
+            "txid": "61f0b3f8ff2f39e56c92f3c09fc91831ae1991559c2abfb3b694a957c4453a0b"
+          },
+          {
+            "owner_p2pkh_addr": "bitcoincash:zzkvf5wqzt7ac59r4zjm0gg5l5les732ny9xtm7yc3",
+            "owner_pkh": "acc4d1c012fddc50a3a8a5b7a114fd3f987a2a99",
+            "pool_id": "d9abcc2cbf50f7b26ea4a5c2264e58c3a64aebd149ed4beefb23e3312f6a0b71",
+            "sats": 101572917,
+            "token_id": "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544",
+            "tokens": 46178,
+            "tx_pos": 10,
+            "txid": "64d331f5ade96c7ee987408e78667b525cb4b2202fa3f13873306407d13c5afc"
+          },
+          {
+            "owner_p2pkh_addr": "bitcoincash:zzkvf5wqzt7ac59r4zjm0gg5l5les732ny9xtm7yc3",
+            "owner_pkh": "acc4d1c012fddc50a3a8a5b7a114fd3f987a2a99",
+            "pool_id": "260365cfb55e0cccbb8979ffae9b8bc5c51a1b45690fa762cee6baa909b21c7d",
+            "sats": 101563058,
+            "token_id": "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544",
+            "tokens": 46175,
+            "tx_pos": 9,
+            "txid": "64d331f5ade96c7ee987408e78667b525cb4b2202fa3f13873306407d13c5afc"
+          },
+          {
+            "owner_p2pkh_addr": "bitcoincash:zrwp4v9l3arsx5je2qawrgvvgcj8h7c3r5fzz75umt",
+            "owner_pkh": "dc1ab0bf8f47035259503ae1a18c46247bfb111d",
+            "pool_id": "488e2e36103521ce40193a8caebdb63e7d646d74332879c27f59fe7c669c427d",
+            "sats": 44700460,
+            "token_id": "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544",
+            "tokens": 20321,
+            "tx_pos": 16,
+            "txid": "64d331f5ade96c7ee987408e78667b525cb4b2202fa3f13873306407d13c5afc"
+          },
+          {
+            "owner_p2pkh_addr": "bitcoincash:zqu0qtsfzndka7zvyl0hhw988x0kfm9vhy99q77zf4",
+            "owner_pkh": "38f02e0914db6ef84c27df7bb8a7399f64ecacb9",
+            "pool_id": "e0807c71898ef6a4a524f0537138ad5ed363854daf79fa4588d2b35d8e16ce8c",
+            "sats": 22323002,
+            "token_id": "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544",
+            "tokens": 10148,
+            "tx_pos": 19,
+            "txid": "64d331f5ade96c7ee987408e78667b525cb4b2202fa3f13873306407d13c5afc"
+          },
+          {
+            "owner_p2pkh_addr": "bitcoincash:zqck4gsjnpru66rr3phud4lke007498wxsn3v36848",
+            "owner_pkh": "316aa2129847cd6863886fc6d7f6cbdfea94ee34",
+            "pool_id": "6f4a46d05709bccc1b25dbb46574d5b56b75ca07d1be31a509eb990793576991",
+            "sats": 66314326,
+            "token_id": "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544",
+            "tokens": 30149,
+            "tx_pos": 12,
+            "txid": "64d331f5ade96c7ee987408e78667b525cb4b2202fa3f13873306407d13c5afc"
+          },
+          {
+            "owner_p2pkh_addr": "bitcoincash:zzkvf5wqzt7ac59r4zjm0gg5l5les732ny9xtm7yc3",
+            "owner_pkh": "acc4d1c012fddc50a3a8a5b7a114fd3f987a2a99",
+            "pool_id": "e6531e6ee6a29375aa23e793fc7e813925cd0cf0c6556f10cacfb6e79215b191",
+            "sats": 18362887,
+            "token_id": "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544",
+            "tokens": 8348,
+            "tx_pos": 21,
+            "txid": "64d331f5ade96c7ee987408e78667b525cb4b2202fa3f13873306407d13c5afc"
+          },
+          {
+            "owner_p2pkh_addr": "bitcoincash:zpghgr9tcdt6puchjm80t5pgh6x5gc3n4cxkgaj8cy",
+            "owner_pkh": "51740cabc357a0f31796cef5d028be8d446233ae",
+            "pool_id": "53e82afbe76e1c3de360465bddd41ee1771350789e1561c53f8ff9db7dbe2495",
+            "sats": 99431302,
+            "token_id": "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544",
+            "tokens": 45205,
+            "tx_pos": 11,
+            "txid": "64d331f5ade96c7ee987408e78667b525cb4b2202fa3f13873306407d13c5afc"
+          },
+          {
+            "owner_p2pkh_addr": "bitcoincash:zrqqfy507sw5njrynuyclh0qfrvy4ljl3uc8ak0gfk",
+            "owner_pkh": "c004928ff41d49c8649f098fdde048d84afe5f8f",
+            "pool_id": "388289567efd946a22a7cff279bc57cd2a1e481a94e517b534f28a18af55ff95",
+            "sats": 1129770532,
+            "token_id": "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544",
+            "tokens": 513637,
+            "tx_pos": 2,
+            "txid": "61f0b3f8ff2f39e56c92f3c09fc91831ae1991559c2abfb3b694a957c4453a0b"
+          },
+          {
+            "owner_p2pkh_addr": "bitcoincash:zqzpdz0500nwgx8jujfslvwvevv43yuxugaz8p6rm0",
+            "owner_pkh": "041689f47be6e418f2e4930fb1cccb19589386e2",
+            "pool_id": "cff8b43d6363c8d6259a0a027b0478484aaeeeb0a365b97ea872d8c2499bf0a3",
+            "sats": 196411869,
+            "token_id": "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544",
+            "tokens": 89295,
+            "tx_pos": 7,
+            "txid": "61f0b3f8ff2f39e56c92f3c09fc91831ae1991559c2abfb3b694a957c4453a0b"
+          },
+          {
+            "owner_p2pkh_addr": "bitcoincash:zrm46w6pls0jctzgl4kdw0r42e5rlm355g9x0vg5ts",
+            "owner_pkh": "f75d3b41fc1f2c2c48fd6cd73c7556683fee34a2",
+            "pool_id": "3a96ab001828aea72428760368d2b5913c2a34df63d01c7ba00e8d28d547c8aa",
+            "sats": 45104706,
+            "token_id": "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544",
+            "tokens": 20506,
+            "tx_pos": 15,
+            "txid": "64d331f5ade96c7ee987408e78667b525cb4b2202fa3f13873306407d13c5afc"
+          },
+          {
+            "owner_p2pkh_addr": "bitcoincash:zz4smcfq84p8fqdjgla2pdp5470afx37aq6a8n4mdk",
+            "owner_pkh": "ab0de1203d427481b247faa0b434af9fd49a3ee8",
+            "pool_id": "aa28a939af1ae1d458ed0a7ec5e050d83e097ddb3d509832d9eca6f0eb25f4aa",
+            "sats": 8977055176,
+            "token_id": "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544",
+            "tokens": 4080640,
+            "tx_pos": 0,
+            "txid": "3ecfdd77120a9b78103cdfb6ff649187bf373f1c29c2ba6a97d259f5590d1a62"
+          },
+          {
+            "owner_p2pkh_addr": "bitcoincash:zpmlpfdqhhfu4n6ld3v7uur77zy8jvw6256uwcnkcr",
+            "owner_pkh": "77f0a5a0bdd3cacf5f6c59ee707ef0887931da55",
+            "pool_id": "df3512f1b31fb25835a67da6673a8974e2d1583e189480b65a0a8724e7895fb1",
+            "sats": 49014286,
+            "token_id": "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544",
+            "tokens": 22284,
+            "tx_pos": 14,
+            "txid": "64d331f5ade96c7ee987408e78667b525cb4b2202fa3f13873306407d13c5afc"
+          },
+          {
+            "owner_p2pkh_addr": "bitcoincash:zr2zgqewpqa9rrfvk4ntf20ntwsm0gmwgse8vuccfk",
+            "owner_pkh": "d424032e083a518d2cb566b4a9f35ba1b7a36e44",
+            "pool_id": "1da7fc610c875a633e9b87641ce8a73158db17cf629e297c4ef3230c0e73dab9",
+            "sats": 1997989,
+            "token_id": "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544",
+            "tokens": 892,
+            "tx_pos": 27,
+            "txid": "8f2b9176911cb779c189edfa9a1a3a0870b86d1968f4f452e7369345889d305e"
+          },
+          {
+            "owner_p2pkh_addr": "bitcoincash:zrgsm9le5663kc6vthz5jswllk6rcc06lgg0jxruj3",
+            "owner_pkh": "d10d97f9a6b51b634c5dc54941dffdb43c61fafa",
+            "pool_id": "f9fea9be6dbbda95e2474e64f07a40ac04916e97ee74f23452b274d31663a9c9",
+            "sats": 1381293511,
+            "token_id": "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544",
+            "tokens": 627990,
+            "tx_pos": 1,
+            "txid": "61f0b3f8ff2f39e56c92f3c09fc91831ae1991559c2abfb3b694a957c4453a0b"
+          },
+          {
+            "owner_p2pkh_addr": "bitcoincash:zq2k5n46sktkf6nul89gzxnf5830l3uaqc2k786udv",
+            "owner_pkh": "156a4eba859764ea7cf9ca811a69a1e2ffc79d06",
+            "pool_id": "b21a185b9fb69e461dda0219bda3e7fa0125d9650860f58b0927827db6ed60cf",
+            "sats": 578660435,
+            "token_id": "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544",
+            "tokens": 263080,
+            "tx_pos": 4,
+            "txid": "61f0b3f8ff2f39e56c92f3c09fc91831ae1991559c2abfb3b694a957c4453a0b"
+          },
+          {
+            "owner_p2pkh_addr": "bitcoincash:zryc9fs68fqcm339hwvxm54mmfjshuc72qrkthmh0d",
+            "owner_pkh": "c982a61a3a418dc625bb986dd2bbda650bf31e50",
+            "pool_id": "f2849f2818ec2829cb3ed743d64d5ebd2450b2e4d853b7b4c584561a270ebfe1",
+            "sats": 672483,
+            "token_id": "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544",
+            "tokens": 299,
+            "tx_pos": 31,
+            "txid": "762b2c862f00f9eee839b269ff91e7b3efab2d7be083608bd38abd3dff3a61a1"
+          },
+          {
+            "owner_p2pkh_addr": "bitcoincash:zqjslv26cc7237qtskm6lc62zps04k796g7xtjk8xn",
+            "owner_pkh": "250fb15ac63ca8f80b85b7afe34a1060fadbc5d2",
+            "pool_id": "dd4ec4c8be0b8e4dfce792d9f255b823fc8a062ef0fe5fdbb77a6e0dd69b68e9",
+            "sats": 17796987,
+            "token_id": "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544",
+            "tokens": 8091,
+            "tx_pos": 22,
+            "txid": "64d331f5ade96c7ee987408e78667b525cb4b2202fa3f13873306407d13c5afc"
+          },
+          {
+            "owner_p2pkh_addr": "bitcoincash:zp9qs5cx2r5xr562emjrz5h9fh386x70sguphhf75f",
+            "owner_pkh": "4a08530650e861d34acee43152e54de27d1bcf82",
+            "pool_id": "fa57cb498a3f4e4ac4bfdf9ce13a74205baddc6702865d1181508c673392cdef",
+            "sats": 22470294,
+            "token_id": "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544",
+            "tokens": 10214,
+            "tx_pos": 18,
+            "txid": "64d331f5ade96c7ee987408e78667b525cb4b2202fa3f13873306407d13c5afc"
+          },
+          {
+            "owner_p2pkh_addr": "bitcoincash:zqu0qtsfzndka7zvyl0hhw988x0kfm9vhy99q77zf4",
+            "owner_pkh": "38f02e0914db6ef84c27df7bb8a7399f64ecacb9",
+            "pool_id": "e892e5bc62781b449b19b25a1b2073cc81531a3a9cc768b72a4a6c265efabdf2",
+            "sats": 2247851,
+            "token_id": "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544",
+            "tokens": 1003,
+            "tx_pos": 26,
+            "txid": "8f2b9176911cb779c189edfa9a1a3a0870b86d1968f4f452e7369345889d305e"
+          },
+          {
+            "owner_p2pkh_addr": "bitcoincash:zzqz5wt7p0vcmptynhqnt0g5dpv34sjq4yjglumkj4",
+            "owner_pkh": "802a397e0bd98d85649dc135bd1468591ac240a9",
+            "pool_id": "a677468d3d6ad7b59d26f9353386682102190aac3298cf453fd1b3675d2ec4fa",
+            "sats": 446265,
+            "token_id": "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544",
+            "tokens": 200,
+            "tx_pos": 33,
+            "txid": "762b2c862f00f9eee839b269ff91e7b3efab2d7be083608bd38abd3dff3a61a1"
+          }
+        ]
+      }
+    },
+    {
+      "network": "chipnet",
+      "apiBase": "https://indexer-chipnet.riften.net/cauldron",
+      "topTokens": [
+        {
+          "apy_30d_bp": 29,
+          "bcmr": null,
+          "bcmr_well_known": [],
+          "change_24h_bp": 0,
+          "change_24h_usd_bp": 242,
+          "change_7d_bp": 0,
+          "change_7d_usd_bp": 131,
+          "display_name": "439d3dc2644891e4a3420aeaadcc37c8df2fbb8bbad7f16545b9889802af1f45",
+          "display_symbol": "",
+          "price_24h": 2223.104451241128,
+          "price_24h_usd": 0.009828567089,
+          "price_7d": 2223.104451241128,
+          "price_7d_usd": 0.009936165345,
+          "price_now": 2223.104451241128,
+          "price_now_usd": 0.010066216955,
+          "score": 14317588221852,
+          "score_rank": 1,
+          "token_id": "439d3dc2644891e4a3420aeaadcc37c8df2fbb8bbad7f16545b9889802af1f45",
+          "trade_count": 0,
+          "trade_volume": 294855394,
+          "tvl_sats": 2357931290,
+          "tvl_tokens": 1060648
+        },
+        {
+          "apy_30d_bp": 61,
+          "bcmr": {
+            "description": "A dollar pegged stablecoin on Bitcoin Cash.",
+            "filemeta": {
+              "actual_hash": "25b47a1099fb2ea2af8eedd1bb21e44cec0759d052d39833993984b9793ebdb9",
+              "expected_hash": "25b47a1099fb2ea2af8eedd1bb21e44cec0759d052d39833993984b9793ebdb9",
+              "source": "onchain"
+            },
+            "name": "ParyonUSD (chipnet-16)",
+            "token": {
+              "category": "dfe50223c8d5cba8dcef8dff6d92b61deb88a8ba44947367f2b746487b56039b",
+              "decimals": 2,
+              "symbol": "PUSDTEST"
+            },
+            "uris": {
+              "icon": "https://paryonusd.com/logo.svg",
+              "web": "https://paryonusd.com"
+            }
+          },
+          "bcmr_well_known": [],
+          "change_24h_bp": -300,
+          "change_24h_usd_bp": -65,
+          "change_7d_bp": -34,
+          "change_7d_usd_bp": 97,
+          "display_name": "ParyonUSD (chipnet-16)",
+          "display_symbol": "PUSDTEST",
+          "price_24h": 226009.4814479225,
+          "price_24h_usd": 0.999210518429,
+          "price_7d": 219965.8693780855,
+          "price_7d_usd": 0.983137453185,
+          "price_now": 219228.74958915781,
+          "price_now_usd": 0.99266777814,
+          "score": 14272857608692,
+          "score_rank": 2,
+          "token_id": "dfe50223c8d5cba8dcef8dff6d92b61deb88a8ba44947367f2b746487b56039b",
+          "trade_count": 0,
+          "trade_volume": 292081562,
+          "tvl_sats": 2387896540,
+          "tvl_tokens": 1089226
+        },
+        {
+          "apy_30d_bp": 6,
+          "bcmr": {
+            "description": "A dollar pegged stablecoin on Bitcoin Cash.",
+            "filemeta": {
+              "actual_hash": "a37fc89c15e9a54f81bb664f190dda81b1a0d9f22c875aa3cb7ff589c17387b4",
+              "expected_hash": "a37fc89c15e9a54f81bb664f190dda81b1a0d9f22c875aa3cb7ff589c17387b4",
+              "source": "onchain"
+            },
+            "name": "ParityUSD (chipnet-10)",
+            "token": {
+              "category": "3eecc5b229164ab65aee6c02f05eca50ae604d97c691593f52922bdaa5e8d195",
+              "decimals": 2,
+              "symbol": "PUSDTEST"
+            },
+            "uris": {
+              "icon": "https://parityusd.com/logo.svg",
+              "web": "https://parityusd.com"
+            }
+          },
+          "bcmr_well_known": [],
+          "change_24h_bp": 0,
+          "change_24h_usd_bp": 242,
+          "change_7d_bp": 0,
+          "change_7d_usd_bp": 131,
+          "display_name": "3eecc5b229164ab65aee6c02f05eca50ae604d97c691593f52922bdaa5e8d195",
+          "display_symbol": "",
+          "price_24h": 2322.120695970696,
+          "price_24h_usd": 0.010266327809,
+          "price_7d": 2322.120695970696,
+          "price_7d_usd": 0.010378718451,
+          "price_now": 2322.120695970696,
+          "price_now_usd": 0.010514562511,
+          "score": 102348004260,
+          "score_rank": 3,
+          "token_id": "3eecc5b229164ab65aee6c02f05eca50ae604d97c691593f52922bdaa5e8d195",
+          "trade_count": 0,
+          "trade_volume": 6971460,
+          "tvl_sats": 215539243,
+          "tvl_tokens": 92820
+        },
+        {
+          "apy_30d_bp": 0,
+          "bcmr": null,
+          "bcmr_well_known": [],
+          "change_24h_bp": 0,
+          "change_24h_usd_bp": 242,
+          "change_7d_bp": 0,
+          "change_7d_usd_bp": 131,
+          "display_name": "7fab3da44f2138e51aa056ee2b29835f70f10d3d96b06ef959937763e82c3137",
+          "display_symbol": "",
+          "price_24h": 0.121771041354,
+          "price_24h_usd": 5.38362e-7,
+          "price_7d": 0.121771041354,
+          "price_7d_usd": 5.44256e-7,
+          "price_now": 0.121771041354,
+          "price_now_usd": 5.51379e-7,
+          "score": 39349947156,
+          "score_rank": 4,
+          "token_id": "7fab3da44f2138e51aa056ee2b29835f70f10d3d96b06ef959937763e82c3137",
+          "trade_count": 0,
+          "trade_volume": 797397,
+          "tvl_sats": 2435247665,
+          "tvl_tokens": 19998577970
+        },
+        {
+          "apy_30d_bp": 22,
+          "bcmr": null,
+          "bcmr_well_known": [],
+          "change_24h_bp": 0,
+          "change_24h_usd_bp": 242,
+          "change_7d_bp": null,
+          "change_7d_usd_bp": null,
+          "display_name": "b1634aa6df298505153b55e75d700014b33248d29a564414a6ae059fe77bf192",
+          "display_symbol": "",
+          "price_24h": 0.199988768049,
+          "price_24h_usd": 8.8417e-7,
+          "price_7d": null,
+          "price_7d_usd": null,
+          "price_now": 0.199988768049,
+          "price_now_usd": 9.05549e-7,
+          "score": 16991320698,
+          "score_rank": 5,
+          "token_id": "b1634aa6df298505153b55e75d700014b33248d29a564414a6ae059fe77bf192",
+          "trade_count": 0,
+          "trade_volume": 1699302,
+          "tvl_sats": 99998383,
+          "tvl_tokens": 500019996
+        }
+      ],
+      "market": {
+        "tokenId": "439d3dc2644891e4a3420aeaadcc37c8df2fbb8bbad7f16545b9889802af1f45",
+        "tokenRow": {
+          "apy_30d_bp": 29,
+          "bcmr": null,
+          "bcmr_well_known": [],
+          "change_24h_bp": 0,
+          "change_24h_usd_bp": 242,
+          "change_7d_bp": 0,
+          "change_7d_usd_bp": 131,
+          "display_name": "439d3dc2644891e4a3420aeaadcc37c8df2fbb8bbad7f16545b9889802af1f45",
+          "display_symbol": "",
+          "price_24h": 2223.104451241128,
+          "price_24h_usd": 0.009828567089,
+          "price_7d": 2223.104451241128,
+          "price_7d_usd": 0.009936165345,
+          "price_now": 2223.104451241128,
+          "price_now_usd": 0.010066216955,
+          "score": 14317588221852,
+          "score_rank": 1,
+          "token_id": "439d3dc2644891e4a3420aeaadcc37c8df2fbb8bbad7f16545b9889802af1f45",
+          "trade_count": 0,
+          "trade_volume": 294855394,
+          "tvl_sats": 2357931290,
+          "tvl_tokens": 1060648
+        },
+        "activePoolRows": [
+          {
+            "owner_p2pkh_addr": "bitcoincash:zz8wymtvnavrd8u5sexuxccvm6chlt3095sj3as8ex",
+            "owner_pkh": "8ee26d6c9f58369f94864dc3630cdeb17fae2f2d",
+            "pool_id": "8a38beb28569f7058242ffe890ef363c4b48be3b45bf6327bebae8db72bc9062",
+            "sats": 2357931290,
+            "token_id": "439d3dc2644891e4a3420aeaadcc37c8df2fbb8bbad7f16545b9889802af1f45",
+            "tokens": 1060648,
+            "tx_pos": 0,
+            "txid": "9beda033df00a3eaa117b9da61944b6e249f98aad6cb32d66b3127260fefa5e7"
+          }
+        ]
+      }
+    }
+  ]
+}

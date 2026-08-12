@@ -1,0 +1,59 @@
+{
+  "contractName": "MSVault",
+  "constructorInputs": [
+    {
+      "name": "ownerPWSig",
+      "type": "datasig"
+    },
+    {
+      "name": "lockTime",
+      "type": "int"
+    },
+    {
+      "name": "pkh1",
+      "type": "bytes20"
+    },
+    {
+      "name": "pkh2",
+      "type": "bytes20"
+    }
+  ],
+  "abi": [
+    {
+      "name": "spend",
+      "inputs": [
+        {
+          "name": "ownerPk",
+          "type": "pubkey"
+        },
+        {
+          "name": "ownerSig",
+          "type": "sig"
+        },
+        {
+          "name": "password",
+          "type": "bytes"
+        }
+      ]
+    },
+    {
+      "name": "unlockVault",
+      "inputs": [
+        {
+          "name": "pk",
+          "type": "pubkey"
+        },
+        {
+          "name": "s",
+          "type": "sig"
+        }
+      ]
+    }
+  ],
+  "bytecode": "OP_4 OP_PICK OP_0 OP_NUMEQUAL OP_IF OP_7 OP_ROLL OP_6 OP_PICK OP_CHECKDATASIGVERIFY OP_2ROT OP_CHECKSIGVERIFY a00f OP_0 OP_OUTPUTBYTECODE OP_INPUTINDEX OP_UTXOBYTECODE OP_EQUALVERIFY OP_0 OP_OUTPUTVALUE OP_NUMEQUALVERIFY OP_2DROP OP_2DROP OP_1 OP_ELSE OP_4 OP_ROLL OP_1 OP_NUMEQUALVERIFY OP_SWAP OP_CHECKLOCKTIMEVERIFY OP_DROP OP_3 OP_PICK OP_HASH160 OP_ROT OP_EQUAL OP_3 OP_PICK OP_HASH160 OP_3 OP_ROLL OP_EQUAL OP_BOOLOR OP_VERIFY OP_ROT OP_ROT OP_CHECKSIG OP_NIP OP_ENDIF",
+  "compiler": {
+    "name": "cashc",
+    "version": "0.11.0"
+  },
+  "updatedAt": "2025-07-17T21:36:34.585Z"
+}
