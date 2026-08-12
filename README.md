@@ -1,0 +1,460 @@
+# OPTN Wallet Developer Onboarding
+
+Welcome to the OPTN Wallet project! This guide helps you set up the development environment, understand the project structure, and build the application for web and mobile platforms. For more details, visit our [website](https://www.optnwallet.com/).
+
+## Project Structure
+
+The project is organized to separate frontend components, API interactions, and backend services. Below is a breakdown of key directories and files:
+
+- **Root Configuration & Build Files**:
+
+  - `.editorconfig`, `.eslintrc.cjs`, `.eslintrc.json`, `.prettierrc`: Code style and formatting configurations.
+  - `package.json`, `package-lock.json`: Project metadata and dependency management.
+  - `tsconfig.json`, `tsconfig.node.json`: TypeScript configuration files.
+  - `vite.config.ts`: Vite configuration for building the app.
+  - `tailwind.config.js`: Tailwind CSS configuration.
+  - `capacitor.config.ts`: Configuration for mobile builds using Capacitor.
+- **Source Code (`src`)**:
+
+  - **Entry Points & Global Assets**:
+    - `App.tsx`: Main React entry point.
+    - `index.html`, `index.css`, `main.tsx`: Base HTML and styling files.
+  - **API Modules (`src/apis`)**: Handles interactions with external APIs and blockchain operations:
+    - `AddressManager`: Manages wallet addresses.
+    - `ChaingraphManager`: Interacts with blockchain data graphs.
+    - `ContractManager`: Manages smart contract interactions and holds contract artifacts.
+    - `DatabaseManager`: Interfaces with the internal database.
+    - `ElectrumServer`: Manages communication with the Electrum server.
+    - `TransactionManager`: Constructs and processes transactions.
+    - `UTXOManager`: Handles UTXO (Unspent Transaction Output) management.
+    - `WalletManager`: Manages wallet creation, key generation, and related functions.
+  - **Frontend Components (`src/components`)**: Contains reusable React components for the user interface:
+    - General UI elements (e.g., `AboutView.tsx`, `BitcoinCashCard.tsx`, `WalletCreate.tsx`).
+    - Specialized components in subdirectories like `modules` (e.g., `NetworkSwitch.tsx`) and `transaction` (e.g., `TransactionActions.tsx`).
+  - **Pages (`src/pages`)**: Represents the application's views and routes:
+    - Pages like `Home.tsx`, `CreateWallet.tsx`, `ImportWallet.tsx`, `Settings.tsx`.
+  - **State Management (`src/redux`)**: Houses Redux slices, selectors, and store configuration:
+    - Files like `contractSlice.ts`, `networkSlice.ts`, `priceFeedSlice.ts`, along with selectors and the main store.
+  - **Backend Services (`src/services`)**: Provides business logic and supports API calls:
+    - Services like `ElectrumService.ts`, `KeyService.ts`, `TransactionService.ts`, `UTXOService.ts`.
+  - **Custom Hooks (`src/hooks`)**: Contains React hooks for logic like data fetching and transaction processing:
+    - Files like `useContractFunction.ts`, `useFetchWalletData.ts`, `useHandleTransaction.ts`.
+  - **Utilities & Types**:
+    - `src/utils`: Helper functions, constants, and schema validations.
+    - `src/types`: TypeScript definitions for consistent type usage.
+  - **Web Workers (`src/workers`)**: Offloads heavy computations to separate threads:
+    - Worker services like `TransactionWorkerService.ts`, `UTXOWorkerService.ts`, `priceFeedWorker.ts`.
+- **Additional Folders**:
+
+  - **Patches (`patches`)**: Contains patches for third-party dependencies when needed.
+
+## Getting Started
+
+### Repository
+
+The source code is hosted on GitHub: [OPTN Wallet Repository](https://github.com/OPTNLabs/OPTNWallet)
+
+### Local Development Build
+
+1. **Clone the Repository**:
+   ```bash
+   git clone https://github.com/OPTNLabs/OPTNWallet.git
+   cd OPTNWallet
+
+
+
+   ```
+
+```
+OPTNWallet
+├─ .editorconfig
+├─ .eslintrc.cjs
+├─ .eslintrc.json
+├─ .prettierrc
+├─ LICENSE
+├─ README.md
+├─ build.sh
+├─ capacitor.config.ts
+├─ index.html
+├─ module.d.ts
+├─ package-lock.json
+├─ package.json
+├─ postcss.config.js
+├─ releaseBuild.sh
+├─ resources
+│  └─ splash.png
+├─ scripts
+├─ src
+│  ├─ App.tsx
+│  ├─ addons
+│  │  └─ builtin
+│  │     └─ index.ts
+│  ├─ apis
+│  │  ├─ AddressManager
+│  │  │  └─ AddressManager.ts
+│  │  ├─ ChaingraphManager
+│  │  │  └─ ChaingraphManager.ts
+│  │  ├─ ContractManager
+│  │  │  ├─ ContractManager.tsx
+│  │  │  └─ artifacts
+│  │  │     ├─ AuthGuard.json
+│  │  │     ├─ MSVault.json
+│  │  │     ├─ announcement.json
+│  │  │     ├─ bip38.json
+│  │  │     ├─ escrow.json
+│  │  │     ├─ escrowMS2.json
+│  │  │     ├─ p2pkh.json
+│  │  │     └─ transfer_with_timeout.json
+│  │  ├─ DatabaseManager
+│  │  │  └─ DatabaseService.ts
+│  │  ├─ ElectrumServer
+│  │  │  └─ ElectrumServer.ts
+│  │  ├─ TransactionManager
+│  │  │  ├─ TransactionBuilderHelper.ts
+│  │  │  └─ TransactionManager.ts
+│  │  ├─ UTXOManager
+│  │  │  └─ UTXOManager.ts
+│  │  └─ WalletManager
+│  │     ├─ KeyGeneration.ts
+│  │     ├─ KeyManager.ts
+│  │     ├─ WalletManager.ts
+│  │     └─ __tests__
+│  ├─ assets
+│  │  ├─ OPTNWelcome1.png
+│  │  └─ bcmr-optn-local.json
+│  ├─ components
+│  │  ├─ AboutView.tsx
+│  │  ├─ AddressSelectionPopup.tsx
+│  │  ├─ BitcoinCashCard.tsx
+│  │  ├─ BottomNavBar.tsx
+│  │  ├─ CashTokenCard.tsx
+│  │  ├─ CashTokenUTXOs.tsx
+│  │  ├─ ContactUs.tsx
+│  │  ├─ ContractDetails.tsx
+│  │  ├─ ContractModal.tsx
+│  │  ├─ ErrorBoundary.tsx
+│  │  ├─ FaucetView.tsx
+│  │  ├─ InteractWithContractPopup.tsx
+│  │  ├─ Layout.tsx
+│  │  ├─ Popup.tsx
+│  │  ├─ PriceFeed.tsx
+│  │  ├─ RecoveryPhrase.tsx
+│  │  ├─ RegularUTXOs.tsx
+│  │  ├─ SelectContractFunctionPopup.tsx
+│  │  ├─ SessionProposalModal.tsx
+│  │  ├─ SweepPaperWallet.tsx
+│  │  ├─ TermsOfUse.tsx
+│  │  ├─ TokenQuery.tsx
+│  │  ├─ UTXOCard.tsx
+│  │  ├─ WalletCreate.tsx
+│  │  ├─ WalletImport.tsx
+│  │  ├─ WcConnectionManager.tsx
+│  │  ├─ blockheader.tsx
+│  │  ├─ modules
+│  │  │  └─ NetworkSwitch.tsx
+│  │  ├─ notifications
+│  │  │  └─ UtxoNotificationCenter.tsx
+│  │  ├─ transaction
+│  │  │  ├─ AddressSelection.tsx
+│  │  │  ├─ AvailableUTXOsDisplay.tsx
+│  │  │  ├─ CashTokenView.tsx
+│  │  │  ├─ ErrorAndStatusPopups.tsx
+│  │  │  ├─ NFTConfigPopup.tsx
+│  │  │  ├─ NFTView.tsx
+│  │  │  ├─ OpReturnView.tsx
+│  │  │  ├─ OutputSelection.tsx
+│  │  │  ├─ Popup.tsx
+│  │  │  ├─ RegularTxView.tsx
+│  │  │  ├─ SelectedContractFunction.tsx
+│  │  │  ├─ SelectedUTXOsDisplay.tsx
+│  │  │  ├─ TransactionActions.tsx
+│  │  │  ├─ TransactionBuilder.tsx
+│  │  │  ├─ TransactionOutputsDisplay.tsx
+│  │  │  ├─ TransactionTypeSelector.tsx
+│  │  │  └─ UTXOSelection.tsx
+│  │  └─ walletconnect
+│  │     ├─ SessionList.tsx
+│  │     ├─ SessionProposalModal.tsx
+│  │     ├─ SessionSettingsModal.tsx
+│  │     ├─ SignMessageModal.tsx
+│  │     ├─ SignTransactionModal.tsx
+│  │     └─ WalletConnectPanel.tsx
+│  ├─ hooks
+│  │  ├─ useContractFunction.ts
+│  │  ├─ useFetchWalletData.ts
+│  │  ├─ useHandleTransaction.ts
+│  │  ├─ usePrices.ts
+│  │  ├─ useSimpleSend.ts
+│  │  └─ useTokenMetadata.ts
+│  ├─ index.css
+│  ├─ main.tsx
+│  ├─ pages
+│  │  ├─ AppsView.tsx
+│  │  ├─ ContractView.tsx
+│  │  ├─ CreateWallet.tsx
+│  │  ├─ Home.tsx
+│  │  ├─ ImportWallet.tsx
+│  │  ├─ LandingPage.tsx
+│  │  ├─ Receive.tsx
+│  │  ├─ RootHandler.tsx
+│  │  ├─ Settings.tsx
+│  │  ├─ SimpleSend.tsx
+│  │  ├─ Transaction.tsx
+│  │  ├─ TransactionHistory.tsx
+│  │  └─ apps
+│  │     ├─ FundMe.tsx
+│  │     └─ utils
+│  │        ├─ CampaignDetail.tsx
+│  │        ├─ ConsolidateModal.tsx
+│  │        ├─ PledgeModal.tsx
+│  │        ├─ bch.png
+│  │        ├─ cashstarterCancel.tsx
+│  │        ├─ cashstarterClaim.tsx
+│  │        ├─ cashstarterPledge.tsx
+│  │        ├─ cashstarterRefund.tsx
+│  │        ├─ cashstarterStop.tsx
+│  │        ├─ consolidateUTXOs.tsx
+│  │        ├─ findUtxo.tsx
+│  │        ├─ managerInitialize.tsx
+│  │        ├─ toTokenAddress.tsx
+│  │        └─ values.ts
+│  ├─ polyfills
+│  │  └─ node-globals.ts
+│  ├─ redux
+│  │  ├─ contractSlice.ts
+│  │  ├─ networkSlice.ts
+│  │  ├─ notificationsSlice.ts
+│  │  ├─ priceFeedSlice.ts
+│  │  ├─ selectors
+│  │  │  └─ networkSelectors.ts
+│  │  ├─ store.ts
+│  │  ├─ transactionBuilderSlice.ts
+│  │  ├─ transactionSlice.ts
+│  │  ├─ utxoSlice.ts
+│  │  ├─ walletSlice.ts
+│  │  └─ walletconnectSlice.ts
+│  ├─ services
+│  │  ├─ AddonsAllowlist.ts
+│  │  ├─ AddonsRegistry.ts
+│  │  ├─ BcmrService.ts
+│  │  ├─ CoinSelectionService.ts
+│  │  ├─ ElectrumService.ts
+│  │  ├─ ElectrumSubscriptionManager.ts
+│  │  ├─ KeyService.ts
+│  │  ├─ Notify.ts
+│  │  ├─ PaperWalletSecretStore.ts
+│  │  ├─ TransactionService.ts
+│  │  ├─ UTXOService.ts
+│  │  └─ priceService.ts
+│  ├─ shim
+│  │  ├─ net.ts
+│  │  └─ tls.ts
+│  ├─ types
+│  │  ├─ addons.ts
+│  │  ├─ types.ts
+│  │  └─ wcInterfaces.ts
+│  ├─ utils
+│  │  ├─ bigIntConversion.ts
+│  │  ├─ constants.ts
+│  │  ├─ dataSigner.ts
+│  │  ├─ derivePublicKeyHash.ts
+│  │  ├─ hash.ts
+│  │  ├─ hex.ts
+│  │  ├─ ipfs.ts
+│  │  ├─ parseExtendedJson.ts
+│  │  ├─ parseInputValue.ts
+│  │  ├─ schema
+│  │  │  ├─ schema.ts
+│  │  │  └─ tempSchema.ts
+│  │  ├─ servers
+│  │  │  └─ ElectrumServers.ts
+│  │  ├─ shortenHash.ts
+│  │  ├─ signed.ts
+│  │  ├─ signedMessage.ts
+│  │  └─ utxoHelpers.ts
+│  ├─ vite-env.d.ts
+│  └─ workers
+│     ├─ TransactionWorkerService.ts
+│     ├─ UTXOWorkerService.ts
+│     └─ priceFeedWorker.ts
+├─ tailwind.config.js
+├─ test.js
+├─ tsconfig.json
+├─ tsconfig.node.json
+├─ vite.config.ts
+└─ vitest.config.ts
+
+```
+
+## Addon SDK Guide (Beta)
+
+This section explains how the OPTN addon system works and how third-party apps can integrate contracts and transaction flows with the wallet.
+
+### What You Get Today
+
+The addon system is currently a hosted extension model:
+
+- Addons declare metadata, permissions, contracts, and apps via a manifest.
+- The wallet loads manifests through `AddonsRegistry`.
+- Addon apps run inside wallet-hosted React screens.
+- Addon logic uses a restricted SDK (`createAddonSDK`) to:
+  - read wallet UTXOs,
+  - build and broadcast transactions,
+  - get signing templates for wallet-owned addresses,
+  - call allowlisted HTTPS JSON APIs.
+
+Current v1 constraint: addons are loaded from the built-in list (`src/addons/builtin/index.ts`), not yet from remote install packages.
+
+### Core Architecture
+
+Main files:
+
+- `src/types/addons.ts`: manifest + addon types.
+- `src/services/AddonsRegistry.ts`: loads/validates addons, resolves contracts/apps.
+- `src/services/AddonsSDK.ts`: runtime SDK exposed to addon apps.
+- `src/services/AddonsAllowlist.ts`: permission and URL enforcement.
+- `src/pages/AppsView.tsx`: shows addon apps in UI.
+- `src/pages/apps/MarketplaceAppHost.tsx`: resolves an addon app and injects SDK.
+- `src/apis/ContractManager/ContractManager.tsx`: makes addon contracts available in Contract UI via `addon:<addonId>:<contractId>`.
+
+Runtime flow:
+
+1. App opens `/apps`.
+2. `AppsView` loads addon manifests via `AddonsRegistry`.
+3. User taps app card (`/apps/<addonId>:<appId>`).
+4. `MarketplaceAppHost` resolves app + manifest, creates SDK with wallet context.
+5. Screen component uses SDK for UTXOs, signing templates, tx build, and broadcast.
+
+### Manifest Format (Third-Party Contract/App Declaration)
+
+Use `AddonManifest` shape from `src/types/addons.ts`.
+
+```ts
+const MY_ADDON: AddonManifest = {
+  id: 'com.example.myaddon',
+  name: 'Example Addon',
+  version: '0.1.0',
+  description: 'Production addon',
+  permissions: [{ kind: 'none' }], // or { kind: 'http', domains: [...] }
+  apps: [
+    {
+      id: 'myapp',
+      name: 'My App',
+      kind: 'declarative',
+      config: { screen: 'MyAppScreenId' },
+    },
+  ],
+  contracts: [
+    {
+      id: 'my-contract',
+      name: 'My Contract',
+      cashscriptArtifact: myArtifactJson,
+      functions: [{ id: 'claim', name: 'Claim', intent: 'send' }],
+    },
+  ],
+};
+```
+
+Registry validation:
+
+- unique addon `id`.
+- non-empty `name`, `version`.
+- `permissions` must be valid.
+- at least 1 contract.
+- app kind must be `declarative`.
+- contract artifacts must be inline objects.
+
+### SDK Surface
+
+From `createAddonSDK(...)`:
+
+- `sdk.utxos.listForAddress(address)`: read UTXOs from Electrum for one address (address-restricted if host passes allowlist).
+- `sdk.utxos.listForWallet()`: returns wallet UTXOs.
+- `sdk.utxos.refreshAndStore(address)`: refresh + persist UTXOs for wallet address.
+- `sdk.tx.build({ inputs, outputs, changeAddress })`: build tx hex.
+- `sdk.tx.broadcast(hex)`: broadcast raw tx.
+- `sdk.signing.signatureTemplateForAddress(address)`: returns `SignatureTemplate` (never exports keys).
+- `sdk.http.fetchJson(url)`: HTTPS JSON fetch only if permission + global allowlist checks pass.
+- `sdk.logging.info/warn/error(...)`: namespaced logs.
+
+Notes:
+
+- `bcmr` is intentionally disabled for addons in v1.
+- HTTP domains are hard fail-closed by `AddonsAllowlist`.
+
+### Contract Integration Path
+
+Add your contract artifact in manifest `contracts[]`.
+
+Once loaded, contracts are exposed by `ContractManager.listAvailableArtifacts()` as:
+
+- `fileName: addon:<addonId>:<contractId>`
+- `source: addon`
+
+Artifact resolution supports:
+
+- `addon:<addonId>:<contractId>` (preferred)
+- `addon:<contractId>` (legacy fallback)
+
+This allows addon contracts to use the same contract creation/interaction pipeline as built-in contracts.
+
+### Transaction Flow for Third-Party Apps
+
+Recommended flow inside your app screen:
+
+1. Fetch wallet UTXOs with `sdk.utxos.listForWallet()`.
+2. Select inputs and build outputs (`TransactionOutput[]`).
+3. For plain P2PKH inputs: no extra unlock fields required.
+4. For contract inputs: set on each input UTXO:
+   - `contractName`
+   - `abi`
+   - `contractFunction`
+   - `contractFunctionInputs`
+   - optional `contractConstructorArgs` if constructor args are not in DB
+5. Build tx via `sdk.tx.build(...)`.
+6. Present confirmation UX.
+7. Broadcast with `sdk.tx.broadcast(hex)`.
+8. Refresh wallet UTXOs.
+
+Why step 4 matters:
+
+- `TransactionBuilderHelper` resolves contract unlockers via `ContractManager.getContractUnlockFunction(...)`.
+- Contract ABI `sig` inputs can be passed as:
+  - `sigaddr:<walletAddress>` (recommended), or
+  - `sigkey:<wif|hex>` (explicit).
+
+### Security Model
+
+- No direct private key export via SDK.
+- Signing can be constrained to wallet-owned addresses when host allowlist context is provided.
+- URL access is HTTPS-only and domain-allowlisted.
+- No localhost, `.local`, raw IP hosts, wildcard domains, or credentialed URLs.
+- Unknown permission kinds are rejected (fail-closed).
+
+### Integrating a New Third-Party App (Current v1 Path)
+
+Until marketplace package install is wired, use:
+
+1. Add manifest to `src/addons/builtin/index.ts`.
+2. Add app screen component under `src/pages/apps/...`.
+3. Map `config.screen` (or app id) to component in `MarketplaceAppHost.tsx`.
+4. In the screen, accept `manifest` + `sdk` props and implement UTXO/tx flow with SDK APIs.
+5. Add needed HTTP domains to global allowlist in `AddonsAllowlist.ts` before using `kind: 'http'`.
+
+### Integration Checklist
+
+- Manifest has a unique `id`.
+- Contract artifact is valid CashScript artifact JSON.
+- App kind is `declarative` with `config.screen`.
+- App screen is mapped in `MarketplaceAppHost`.
+- Input selection handles BCH, token, and contract UTXOs correctly.
+- Contract spends set `contractFunction` + `contractFunctionInputs`.
+- Confirmation is shown before broadcast.
+- Broadcast failure path is surfaced to users.
+
+### Known v1 Gaps
+
+- No remote addon install/update yet.
+- Declarative app entries still map to built-in host components.
+- BCMR remains disabled for addons.
+- HTTP global allowlist is empty by default until maintainers populate it.

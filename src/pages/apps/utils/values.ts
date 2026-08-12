@@ -1,0 +1,21 @@
+// @ts-nocheck
+export const AddressCashStarter = 'bitcoincash:p03u4v845j4rhzyc63cgm0arksfx5u3atkvz43xzdy0r8pql4qm37j50tje8p';  //address hash: e3cab0f5a4aa3b8898d4708dbfa3b4126a723d5d982ac4c2691e33841fa8371f
+export const AddressTokensCashStarter = 'bitcoincash:r03u4v845j4rhzyc63cgm0arksfx5u3atkvz43xzdy0r8pql4qm37q8n2tc72';
+
+export const AddressCashStarterManager = 'bitcoincash:p0mhegq4agfajfjda5al2nwcz6v5ztvct7p3tdp4kfzpqmpv8v9xu5j8aunkq';
+export const AddressTokensCashStarterManager = 'bitcoincash:r0mhegq4agfajfjda5al2nwcz6v5ztvct7p3tdp4kfzpqmpv8v9xuxpmu9j0t';
+
+export const AddressCashStarterRefund = 'bitcoincash:pvpf5ppmx2dw60u5qm2jcarm0df6f7ldzqk8kr25q4gzmm4802v7wmfcv4eyz';
+export const AddressTokensCashStarterRefund = 'bitcoincash:rvpf5ppmx2dw60u5qm2jcarm0df6f7ldzqk8kr25q4gzmm4802v7wf6ydvcaf';
+
+export const AddressCashStarterStop = 'bitcoincash:p0z4d9acwvhzyr5qqtqt7ejj3ur4na3j6u2lpeg0rujz5ysjay86qgea803ql';
+export const AddressTokensCashStarterStop = 'bitcoincash:r0z4d9acwvhzyr5qqtqt7ejj3ur4na3j6u2lpeg0rujz5ysjay86q62pxkse5';
+
+export const AddressCashStarterCancel = 'bitcoincash:pdwugz8d34vclx45w5negqp6rx3535z0k9uynlp7ey4p6g6lyantgfqcj7n2n';
+export const AddressTokensCashStarterCancel = 'bitcoincash:rdwugz8d34vclx45w5negqp6rx3535z0k9uynlp7ey4p6g6lyantgmnyn8jnc';
+
+export const AddressCashStarterClaim = 'bitcoincash:pw2gwuvr5s5uz4g8qylu44ut6dkp26s56w9wvpa3dl95r9nj47s7q6evhtleg';
+export const AddressTokensCashStarterClaim = 'bitcoincash:rw2gwuvr5s5uz4g8qylu44ut6dkp26s56w9wvpa3dl95r9nj47s7qg2skj7qr';
+
+export const MasterCategoryID = '483745b8b16870e60acbdb400c7973672835002acbcdc39b09d9074e10eac964'; //BigEndian - frontend use
+export const MasterCategoryIDLE = '64c9ea104e07d9099bc3cdcb2a0035286773790c40dbcb0ae67068b1b8453748'; //LittleEndian - vm script use
