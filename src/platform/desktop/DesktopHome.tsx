@@ -41,7 +41,10 @@ import type { TransactionHistoryItem } from '../../types/types';
 import SettingsRow from '../../components/ui/SettingsRow';
 import EmptyState from '../../components/ui/EmptyState';
 import { shortenTxHash } from '../../utils/shortenHash';
-import { takeRecentTransactions } from '../../utils/transactionHistoryOrder';
+import {
+  isMempoolLike,
+  takeRecentTransactions,
+} from '../../utils/transactionHistoryOrder';
 import { isTxConfirmed } from '../../utils/txConfirmation';
 import { isFusionTransaction } from './fusionCoinDepth';
 import { useFusionDepthRevision } from './useFusionDepthRevision';
@@ -555,9 +558,13 @@ const Home: React.FC = () => {
                           ? `Block ${tx.height}`
                           : isTxConfirmed(tx)
                             ? 'Confirmed'
-                            : fused
-                              ? 'Broadcast — waiting for block'
-                              : 'Unconfirmed'
+                            : isMempoolLike(tx)
+                              ? fused
+                                ? 'Broadcast — waiting for block'
+                                : 'Unconfirmed'
+                              : fused
+                                ? 'On chain'
+                                : 'Confirmed'
                       }
                       right={
                         <span
@@ -568,10 +575,10 @@ const Home: React.FC = () => {
                           }
                         >
                           {fused
-                            ? isTxConfirmed(tx)
+                            ? isTxConfirmed(tx) || !isMempoolLike(tx)
                               ? 'Fused · Confirmed'
                               : 'Fused · Unconfirmed'
-                            : isTxConfirmed(tx)
+                            : isTxConfirmed(tx) || !isMempoolLike(tx)
                               ? 'Confirmed'
                               : 'Unconfirmed'}
                         </span>
