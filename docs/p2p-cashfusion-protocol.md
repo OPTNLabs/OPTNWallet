@@ -558,18 +558,24 @@ Never multi-minute fee cooldowns for ordinary fail/success.
   activity-driven ticks skip that wait.
 - Changing **Rounds per coin** clears cooldown and re-ticks Auto.
 
-### 8.6 Blame
+### 8.6 Blame (P2P-specific)
 
-`fusionBlame.ts` is P2P-specific (not a port of EC `blame.rs`). Happy-path
-components are anonymous, so abort first, then optional **control-plane
-disclosures** restore an accused *ephemeral* key for diagnosis. That key
-is not a wallet id and is not a ban.
+Not EC `blame.rs`. The server can accuse by connection identity. P2P cannot:
+happy-path components have no `from`. Unique mechanic — **abort, then
+disclose**:
 
-**Prove-or-don't-blame:** only re-verifiable crypto/structural faults
-(`pedersen_unbalanced`, `invalid_component_commitment`, `credential_slot_oob`,
-`invalid_input_credential`, `duplicate_outpoint`, `invalid_signature_set`).
-**Never** blame Tor lag, relay timeout, late join, or a missing signature.
-A silent no-sign is a timeout abort — see [FAQ](./p2p-cashfusion-faq.md).
+1. Round fails. Happy path disclosed nothing.
+2. Each peer may send openings on the control plane (round key): blind
+   `a||b`, component salt, Pedersen nonce.
+3. That binds an anonymous component to the attributed InitialCommitment.
+4. `findFaultInDisclosures` + `verifyBlameReport` — every peer re-checks.
+   A fake report is rejected. Consistent timeout → no accused.
+
+**Prove-or-don't-blame** codes only: `pedersen_unbalanced`,
+`invalid_component_commitment`, `credential_slot_oob`,
+`invalid_input_credential`, `duplicate_outpoint`, `invalid_signature_set`.
+Never Tor / missing signature (timeout abort). Accused = ephemeral round
+key, not a ban. See [FAQ](./p2p-cashfusion-faq.md).
 
 ---
 
