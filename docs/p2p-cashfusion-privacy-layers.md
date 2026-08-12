@@ -1,4 +1,4 @@
-# P2P CashFusion — Privacy Layers (PR #12 — **shipped**)
+# P2P CashFusion — Privacy Layers
 
 This is the **canonical naming and role map** for every privacy piece in the
 P2P CashFusion path. The design below is **implemented**, not a future plan.
@@ -7,8 +7,8 @@ Read this before the protocol or threat-model docs if you are confused about
 
 **Status:** Implemented for desktop P2P fusion (gather → **v4 EC credentials** →
 anonymous inputs/sigs + per-component Tor → output onion → assemble → sign →
-broadcast; Auto + fuse depth; Tor fail-closed). Production clearance still needs
-Chipnet soak. See
+broadcast; Auto + fuse depth; Tor fail-closed). Chipnet 10-way has been
+dogfooded. See
 [cashfusion-implementation-scope.md](./cashfusion-implementation-scope.md) for
 the server path map (also shipped).
 
@@ -29,8 +29,8 @@ the server path map (also shipped).
 | NIP-59 gift-wrap for round traffic   | **Yes**                                               | `fusionTransport.ts`                                                    |
 | Pedersen + blind Schnorr credentials | **Yes**                                               | `fusionPedersen.ts`, `fusionBlindSchnorr.ts`                            |
 | Credential slots per peer            | **16** inputs max per peer per round                  | `CREDENTIAL_SLOTS_PER_PEER`; `selectFusionInputs` in `FusionP2pService` |
-| Min / max participants               | **3 / 6**                                             | `MIN_PARTICIPANTS` / `MAX_PARTICIPANTS` in `fusion.ts`                  |
-| Full-set ACK                         | **Yes** — refuse partial rounds                       | `fusionRendezvous.ts`                                                   |
+| Participants                         | **6 lock / 4 ACK-shrink / 10 cap**                    | `fusionKnobs.ts` (`minPlayers` / `minSafePlayers` / `maxPlayers`)       |
+| ACK-shrink                           | After propose, continue if ACKed remainder ≥4         | `fusionRendezvous.ts`                                                   |
 | Credential wait / params resend      | **35s** / **1.5s × 12**                               | `P2P_CREDENTIAL_*` in `fusionTiming.ts`                                 |
 | Rendezvous timeout                   | **60s** + **20s** proposal                            | `P2P_RENDEZVOUS_MS`, `P2P_PROPOSAL_TIMEOUT_MS`                          |
 | Output onion                         | **Always on** (mandatory; no toggle)                  | `runFusionRound` — ≥3 peers so ≥2 peelers                               |
@@ -221,7 +221,7 @@ That is **implementation/protocol risk**, not operational infrastructure.
 | Long-lived fusion daemon              | Required                                 | **Not** required                      |
 
 P2P is a **different transport**, not a weaker crypto story. Layers 3–5 + Tor
-are the **shipped** parity story for PR #12’s P2P design (not aspirational).
+are the **shipped** parity story for this P2P design (not aspirational).
 
 ### Per-component transport isolation
 
@@ -265,6 +265,7 @@ than a bookkeeping change. Tracked as a known residual, not a shipped property.
 
 ## Doc maintenance rule
 
-When you change **defaults** (Tor fail-closed, gift-wrap kinds, `MIN_PARTICIPANTS`)
-or **who peels vs who assembles**, update **this file first**, then
-`p2p-cashfusion-protocol.md` and `THREAT_MODEL.md` so the three stay aligned.
+When you change **defaults** (Tor fail-closed, gift-wrap kinds, player
+floors in `fusionKnobs.ts`) or **who peels vs who assembles**, update
+[p2p-cashfusion-knobs.md](./p2p-cashfusion-knobs.md), **this file**,
+`p2p-cashfusion-protocol.md`, and `THREAT_MODEL.md` so they stay aligned.

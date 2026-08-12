@@ -1,8 +1,7 @@
 # P2P CashFusion Protocol — Comprehensive Reference
 
-**Status:** **Implemented and under production hardening** for PR #12 desktop
-(not a marketing “production shipped” claim until Chipnet soak + remaining
-v4/EC gates in `docs/p2p-ec-component-plane-v4.md` / `CLAUDE-A-TO-Z.md`).
+**Status:** **Implemented.** Protocol v4, 6 / 4 / 10 gather knobs, ACK-shrink,
+Auto, and Tor fail-closed are in this tree. Chipnet 10-way has been dogfooded.
 This document describes **how OPTN Wallet’s peer-to-peer CashFusion works in
 this repository**. It is the authoritative contributor and audit-oriented
 reference for the P2P path: wire format, phases, wallet outer loop, Auto
@@ -37,7 +36,7 @@ Bitcoin Cash network (Chipnet for development dogfood).
 | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
 | Pool discovery, live filter, group selection                       | `src/platform/desktop/nostr/fusion.ts`                                              |
 | Coordinator election                                               | `fusion.ts` → `electCoordinator`                                                    |
-| Rendezvous (proposal / full-set ACK / start)                       | `fusionRendezvous.ts`                                                               |
+| Rendezvous (proposal / ACK / shrink / start)                       | `fusionRendezvous.ts`                                                               |
 | Round choreography (credentials → onion → assemble → sign → final) | `fusionSession.ts`                                                                  |
 | Canonical tx assembly & pre-sign safety                            | `fusionRound.ts`, `fusionSign.ts`                                                   |
 | NIP-59 gift-wrap transport                                         | `fusionTransport.ts`                                                                |
@@ -240,7 +239,7 @@ winner = argmin(ticket), tie-break on pubkey string
 Implemented in `electCoordinator`. Bound to the **full set**, so a peer cannot
 pick a key offline that always wins without knowing who else will join.
 
-### 4.5 Rendezvous messages (full-set ACK)
+### 4.5 Rendezvous messages (ACK + shrink)
 
 | Type             | Who                  | Purpose                                                        |
 | ---------------- | -------------------- | -------------------------------------------------------------- |
@@ -249,9 +248,10 @@ pick a key offline that always wins without knowing who else will join.
 | `round_start`    | Coordinator          | Locks the set; everyone proceeds to `runFusionRound`           |
 | `abort`          | Anyone               | Ends the attempt with a reason                                 |
 
-**Full-set ACK:** the round **must not start** until every proposed participant
-ACKs (or the proposal times out). Partial ACK must **not** fuse a 2-of-4 subset
-and leave others stranded. Timeouts:
+First proposal waits for every listed peer. If some never ACK (or the
+coordinator vanishes) before start, the remainder may **re-propose the exact
+ACKed set** when it is still ≥ `minSafePlayers` (4). A set below 4 is
+refused. Mid-onion / mid-sign cannot rewrite the participant list. Timeouts:
 
 | Constant                   | Value                      |
 | -------------------------- | -------------------------- |
@@ -261,7 +261,7 @@ and leave others stranded. Timeouts:
 
 ---
 
-## 5. Round phases (protocol v3) — exact order
+## 5. Round phases (protocol v4) — exact order
 
 Source of truth: `runFusionRound` → `runCoordinator` / `runParticipant` in
 `fusionSession.ts`.
@@ -274,7 +274,7 @@ Source of truth: `runFusionRound` → `runCoordinator` / `runParticipant` in
 | `P2P_CREDENTIAL_WAIT_MS`           | **35s**       | Wait for `credential_params` / response over Tor  |
 | `P2P_CREDENTIAL_PARAMS_RESEND_MS`  | **1.5s**      | Coordinator re-sends params to lagging peers      |
 | `P2P_CREDENTIAL_PARAMS_RESEND_MAX` | **12**        | Cap resends                                       |
-| `P2P_MISSING_OUTPUTS_ONION_MS`     | **28s**       | Onion / missing outputs                           |
+| `P2P_MISSING_OUTPUTS_ONION_MS`     | **36s**       | Per peel hop (`missingOutputsOnionMs`)            |
 | `P2P_COMPONENT_JITTER_MS`          | **30–250 ms** | Per-component send jitter                         |
 | Onion declare / output resends     | bounded       | Tor drop recovery without open-ended spam         |
 | `P2P_SIG_RESEND_MS`                | **1.5s**      | Signature re-send                                 |
@@ -630,7 +630,7 @@ It does **not** replace a chipnet confirmation of relays + Tor + Electrum.
 | **Session**                      | Round id string bound into every message for that attempt                                            |
 | **Rounds-per-coin / fuse depth** | Auto stop condition: how many completed fuses per coin                                               |
 | **Strict / soft peers**          | Lock set vs approximate live set during gather                                                       |
-| **Full-set ACK**                 | Every proposed peer must acknowledge before round start                                              |
+| **ACK-shrink**                   | After propose, continue with the ACKed remainder if still ≥4; never mid-onion                        |
 
 Privacy layer roles (Tor / gift-wrap / Pedersen / blind Schnorr / output onion):
 [p2p-cashfusion-privacy-layers.md](./p2p-cashfusion-privacy-layers.md).
