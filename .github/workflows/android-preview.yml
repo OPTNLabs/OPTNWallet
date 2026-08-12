@@ -241,7 +241,7 @@ jobs:
             install_output="$RUNNER_TEMP/$(basename "$apk_path").install.log"
             set +e
             timeout "${install_timeout_seconds}s" adb -s "$emulator_serial" shell pm install \
-              -r --skip-verification --skip-integrity-verification $install_flags "$remote_apk" \
+              -r --skip-verification $install_flags "$remote_apk" \
               2>&1 | tee "$install_output"
             install_exit=${PIPESTATUS[0]}
             set -e
