@@ -1,4 +1,4 @@
-# P2P CashFusion — Privacy Layers (PR #12 — **shipped**)
+# P2P CashFusion — Privacy Layers
 
 This is the **canonical naming and role map** for every privacy piece in the
 P2P CashFusion path. The design below is **implemented**, not a future plan.
@@ -7,8 +7,8 @@ Read this before the protocol or threat-model docs if you are confused about
 
 **Status:** Implemented for desktop P2P fusion (gather → **v4 EC credentials** →
 anonymous inputs/sigs + per-component Tor → output onion → assemble → sign →
-broadcast; Auto + fuse depth; Tor fail-closed). Production clearance still needs
-Chipnet soak. See
+broadcast; Auto + fuse depth; Tor fail-closed). Chipnet 10-way has been
+dogfooded. See
 [cashfusion-implementation-scope.md](./cashfusion-implementation-scope.md) for
 the server path map (also shipped).
 
@@ -29,8 +29,8 @@ the server path map (also shipped).
 | NIP-59 gift-wrap for round traffic   | **Yes**                                               | `fusionTransport.ts`                                                    |
 | Pedersen + blind Schnorr credentials | **Yes**                                               | `fusionPedersen.ts`, `fusionBlindSchnorr.ts`                            |
 | Credential slots per peer            | **16** inputs max per peer per round                  | `CREDENTIAL_SLOTS_PER_PEER`; `selectFusionInputs` in `FusionP2pService` |
-| Min / max participants               | **3 / 6**                                             | `MIN_PARTICIPANTS` / `MAX_PARTICIPANTS` in `fusion.ts`                  |
-| Full-set ACK                         | **Yes** — refuse partial rounds                       | `fusionRendezvous.ts`                                                   |
+| Participants                         | **6 lock / 4 ACK-shrink / 10 cap**                    | `fusionKnobs.ts` (`minPlayers` / `minSafePlayers` / `maxPlayers`)       |
+| ACK-shrink                           | After propose, continue if ACKed remainder ≥4         | `fusionRendezvous.ts`                                                   |
 | Credential wait / params resend      | **35s** / **1.5s × 12**                               | `P2P_CREDENTIAL_*` in `fusionTiming.ts`                                 |
 | Rendezvous timeout                   | **60s** + **20s** proposal                            | `P2P_RENDEZVOUS_MS`, `P2P_PROPOSAL_TIMEOUT_MS`                          |
 | Output onion                         | **Always on** (mandatory; no toggle)                  | `runFusionRound` — ≥3 peers so ≥2 peelers                               |
@@ -172,11 +172,12 @@ assembly. A new NIP-59 wrapper therefore cannot make an old credential valid
 again, and the final peeler does **not** need to identify itself — provenance
 is the blind credential, not the peel identity.
 
-Input registration remains attributable to the coordinator in v3. The later
-input-signature exchange is attributable too, so hiding only the registration
-message would not provide coordinator unlinkability; changing that property
-requires a separate signing-channel redesign. Output contributor unlinkability
-through the peel/shuffle path is preserved.
+Inputs and signatures use the same anonymous transport as outputs: a fresh
+throwaway key and a one-shot Tor circuit (`inputs` / `signature` in
+`fusionTransport.ts`). The coordinator does not take `from` as identity —
+admission is the blind credential. Signing was anonymized so a round-key
+signature batch cannot glue those inputs back together. Output contributor
+unlinkability among other peers still comes from the peel/shuffle path.
 
 There is **no direct/plaintext output path** and **no 2-party fuse**. Rounds
 require ≥3 participants (onion needs ≥2 peelers). Revealed `outputs` messages
@@ -205,7 +206,7 @@ That is **implementation/protocol risk**, not operational infrastructure.
 | Nostr relay         | Encrypted gift-wraps; limited public announce metadata                                                                      | **NIP-59** (+ Tor for IP)                                                                               |
 | Intermediate peeler | Batches of still-layered (or later plaintext at last hop) blobs; **not** reliable contributor map if ≥1 honest hop shuffled | **Output onion**                                                                                        |
 | Last peeler         | All outputs plaintext after final peel                                                                                      | Acceptable; still no reliable contributor map if prior hop shuffled                                     |
-| Coordinator         | Full template (inputs + outputs) for assembly                                                                               | Same model as classic fusion **server**; mitigated by per-peer template checks + own-input-only signing |
+| Coordinator         | Full assembled template; per-peer **quota** from `credential_request`. Not a labeled who→UTXO map                          | Same class as a fusion **server**; peers verify before signing only their own inputs                    |
 | Chain analyst       | Confirmed CoinJoin structure                                                                                                | Anonymity set size, tiers, HD outputs, no cross-round Nostr identity reuse                              |
 
 ---
@@ -221,30 +222,30 @@ That is **implementation/protocol risk**, not operational infrastructure.
 | Long-lived fusion daemon              | Required                                 | **Not** required                      |
 
 P2P is a **different transport**, not a weaker crypto story. Layers 3–5 + Tor
-are the **shipped** parity story for PR #12’s P2P design (not aspirational).
+are the **shipped** parity story for this P2P design (not aspirational).
 
 ### Per-component transport isolation
 
-Sealing each anonymous output under a fresh throwaway key stops the *coordinator*
+Sealing each component under a fresh throwaway key stops the *coordinator*
 linking it to the peer's round identity. It does nothing about the *relay*: if
-every output of a round leaves over one shared socket, the relay groups them by
-connection and the fresh keys buy nothing against that observer.
+every component of a round leaves over one shared socket, the relay groups them
+by connection and the fresh keys buy nothing against that observer.
 
-So each anonymous component now publishes on its own short-lived pool, closed
+So each anonymous component publishes on its own short-lived pool, closed
 immediately after (`createComponentPool` in `nostr/fusionTransport.ts`). The Tor
 WebSocket implementation is installed globally, so one pool means one connection
 and one circuit with its own SOCKS isolation token — the same property Electron
 Cash gets from a separate covert connection per component.
 
-**Scope, stated honestly:** this covers *outputs* (`outputs`, `onion_output`).
-Input registration and the later signature messages still travel under the
-peer's round identity, so a coordinator still learns which inputs belong to the
-same participant. That is not an oversight — every blame code in
-`nostr/fusionBlame.ts` binds to an `accused` participant pubkey, and
-`verifyBlameReport` rejects a report whose accused is not in the participant set.
-Anonymising the input and signature channels removes the input those codes are
-built on, so it requires the Electron Cash covert-component blame model rather
-than a bookkeeping change. Tracked as a known residual, not a shipped property.
+**Scope:** `inputs`, `outputs`, `onion_output`, and `signature` are anonymous.
+Control-plane messages (ACK, `credential_request` / quota and Pedersen,
+ready, abort) stay under the round identity. The coordinator therefore knows
+each peer's **counts**, not which later anonymous UTXO is whose.
+
+Happy-path blame cannot key a component by `from`. After an abort, peers may
+disclose openings under the round identity so codes in `fusionBlame.ts` have
+an accused ephemeral key. That is diagnosis only — it does not exclude a
+wallet.
 
 ---
 
@@ -265,6 +266,7 @@ than a bookkeeping change. Tracked as a known residual, not a shipped property.
 
 ## Doc maintenance rule
 
-When you change **defaults** (Tor fail-closed, gift-wrap kinds, `MIN_PARTICIPANTS`)
-or **who peels vs who assembles**, update **this file first**, then
-`p2p-cashfusion-protocol.md` and `THREAT_MODEL.md` so the three stay aligned.
+When you change **defaults** (Tor fail-closed, gift-wrap kinds, player
+floors in `fusionKnobs.ts`) or **who peels vs who assembles**, update
+[p2p-cashfusion-knobs.md](./p2p-cashfusion-knobs.md), **this file**,
+`p2p-cashfusion-protocol.md`, and `THREAT_MODEL.md` so they stay aligned.

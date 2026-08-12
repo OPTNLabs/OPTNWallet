@@ -1,8 +1,7 @@
 # P2P CashFusion Protocol — Comprehensive Reference
 
-**Status:** **Implemented and under production hardening** for PR #12 desktop
-(not a marketing “production shipped” claim until Chipnet soak + remaining
-v4/EC gates in `docs/p2p-ec-component-plane-v4.md` / `CLAUDE-A-TO-Z.md`).
+**Status:** **Implemented.** Protocol v4, 6 / 4 / 10 gather knobs, ACK-shrink,
+Auto, and Tor fail-closed are in this tree. Chipnet 10-way has been dogfooded.
 This document describes **how OPTN Wallet’s peer-to-peer CashFusion works in
 this repository**. It is the authoritative contributor and audit-oriented
 reference for the P2P path: wire format, phases, wallet outer loop, Auto
@@ -15,6 +14,7 @@ behaviour, and safety gates.
 | [p2p-cashfusion-privacy-layers.md](./p2p-cashfusion-privacy-layers.md)     | Naming map: Tor vs NIP-59 vs Pedersen vs blind Schnorr vs **output onion** |
 | [THREAT_MODEL.md](./THREAT_MODEL.md)                                       | Adversaries and what each can/cannot do                                    |
 | [cashfusion-implementation-scope.md](./cashfusion-implementation-scope.md) | Ship status — **both** P2P and classic server paths **done**               |
+| [p2p-cashfusion-knobs.md](./p2p-cashfusion-knobs.md)                       | Internal protocol floors/caps/timings — **not** wallet settings            |
 | Source under `src/platform/desktop/nostr/` + `FusionP2pService.ts`         | Normative behaviour                                                        |
 
 **Design goal (non-negotiable, and met in code):** P2P is a **different
@@ -36,13 +36,14 @@ Bitcoin Cash network (Chipnet for development dogfood).
 | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
 | Pool discovery, live filter, group selection                       | `src/platform/desktop/nostr/fusion.ts`                                              |
 | Coordinator election                                               | `fusion.ts` → `electCoordinator`                                                    |
-| Rendezvous (proposal / full-set ACK / start)                       | `fusionRendezvous.ts`                                                               |
+| Rendezvous (proposal / ACK / shrink / start)                       | `fusionRendezvous.ts`                                                               |
 | Round choreography (credentials → onion → assemble → sign → final) | `fusionSession.ts`                                                                  |
 | Canonical tx assembly & pre-sign safety                            | `fusionRound.ts`, `fusionSign.ts`                                                   |
 | NIP-59 gift-wrap transport                                         | `fusionTransport.ts`                                                                |
 | Output onion (peer peel + shuffle)                                 | `onionCrypto.ts`                                                                    |
 | Blind Schnorr issuer + requester (TS)                              | `fusionBlindSchnorr.ts`                                                             |
 | Pedersen commits (TS)                                              | `fusionPedersen.ts`                                                                 |
+| Protocol knobs (min/safe/max, tiers, gather/onion budgets)         | `fusionKnobs.ts` — [knobs.md](./p2p-cashfusion-knobs.md), **not** wallet UI          |
 | Phase budgets / server parity timing                               | `fusionTiming.ts`                                                                   |
 | Auto policy (cooldown, rendezvous tick)                            | `fusionAutoEngine.ts`                                                               |
 | Per-coin fuse depth (rounds-per-coin)                              | `fusionCoinDepth.ts`, `FusionCompletionService.ts`                                  |
@@ -180,37 +181,43 @@ peer to resist replay within a session.
 
 ### 4.1 Group size
 
-| Constant                    | Value  | Meaning                                  |
-| --------------------------- | ------ | ---------------------------------------- |
-| `MIN_PARTICIPANTS`          | **3**  | Anonymity floor + onion needs ≥2 peelers |
-| `MAX_PARTICIPANTS`          | **6**  | Cap per round                            |
-| `CREDENTIAL_SLOTS_PER_PEER` | **16** | Max inputs per peer per round            |
+Live values: `getFusionKnobs()` in `fusionKnobs.ts`. Contributor table:
+[p2p-cashfusion-knobs.md](./p2p-cashfusion-knobs.md). These are **protocol**
+constants, not CashFusion wallet settings.
 
-There is **no rule that excludes a fourth wallet**. Gather may **lock at 3**
-once the set is stable so rounds do not wait forever for a late peer. If four
-(or more, up to 6) are present **before** lock, the round includes them. Live
-multi-window stress often produces 3-ways because Auto cooldowns stagger entry
-(~40s after success); 4-ways happen when all four overlap in gather.
+| Constant                    | Value  | Meaning                                                          |
+| --------------------------- | ------ | ---------------------------------------------------------------- |
+| `minPlayers`                | **6**  | Lock gather / first proposal                                     |
+| `minSafePlayers`            | **4**  | ACK-shrink / coordinator failover floor (onion still needs ≥3)   |
+| `maxPlayers`                | **10** | Cap per round                                                    |
+| Onion floor                 | **3**  | Mix-net needs ≥2 peelers                                         |
+| `CREDENTIAL_SLOTS_PER_PEER` | **16** | Max inputs per peer per round                                    |
 
-### 4.2 Gather budgets (`fusionTiming.ts`)
+Gather **locks at 6**. If two peers miss ACK (or the coordinator vanishes
+before start), the remainder may **re-propose** the exact ACKed set if it is
+still ≥4. Mid-onion / mid-sign cannot rewrite the tx. Mixed windows with
+different caps (e.g. 8 vs 10) cannot agree — restart every window after a
+knob change.
+
+### 4.2 Gather budgets (`fusionKnobs.ts` / `fusionTiming.ts`)
 
 | Constant                    | Value                  | Role                                           |
 | --------------------------- | ---------------------- | ---------------------------------------------- |
 | `P2P_GATHER_MAX_MS`         | **120s** (`JOIN_WAIT`) | Max discover when peers seen                   |
 | `P2P_GATHER_ALONE_MS`       | **35s**                | Manual alone abort                             |
 | `P2P_GATHER_ALONE_AUTO_MS`  | **120s**               | Auto alone wait for peers                      |
-| `P2P_GATHER_MIN_MS`         | **10s**                | Min gather before locking a partial set (3…5)  |
+| `P2P_GATHER_MIN_MS`         | **10s**                | Min gather before locking a legal set (6…9)    |
 | `P2P_GATHER_FAST_WARMUP_MS` | **5s**                 | Warm-up when already at MAX                    |
-| `P2P_SMALL_SET_HOLD_MS`     | **20s**                | Extra hold after MIN to allow more peers       |
+| `P2P_SMALL_SET_HOLD_MS`     | **20s**                | Extra hold after last new peer below max       |
 | `P2P_PEER_SET_STABLE_MS`    | **4s**                 | Membership must be stable before lock          |
 | `P2P_PEAK_GRACE_MS`         | **15s**                | Grace after peak drops before accepting shrink |
 
 **Lock policy (summary):**
 
-- `n < 3`: never lock; wait or fail alone budget.
-- `3 ≤ n < 6`: after min gather + stable + short hold (unless soft/strict still
-  disagree or peak not met), **lock partial set**.
-- `n ≥ 6`: fast lock after short warm-up + short stable.
+- `n < 6`: never lock; wait or fail alone budget.
+- `6 ≤ n < 10`: after min gather + stable + hold after last new peer.
+- `n ≥ 10`: fast lock after short warm-up + short stable.
+- After propose only: shrink to the exact ACKed remainder if `n ≥ 4`.
 
 ### 4.3 Compatible tier selection
 
@@ -232,7 +239,7 @@ winner = argmin(ticket), tie-break on pubkey string
 Implemented in `electCoordinator`. Bound to the **full set**, so a peer cannot
 pick a key offline that always wins without knowing who else will join.
 
-### 4.5 Rendezvous messages (full-set ACK)
+### 4.5 Rendezvous messages (ACK + shrink)
 
 | Type             | Who                  | Purpose                                                        |
 | ---------------- | -------------------- | -------------------------------------------------------------- |
@@ -241,9 +248,10 @@ pick a key offline that always wins without knowing who else will join.
 | `round_start`    | Coordinator          | Locks the set; everyone proceeds to `runFusionRound`           |
 | `abort`          | Anyone               | Ends the attempt with a reason                                 |
 
-**Full-set ACK:** the round **must not start** until every proposed participant
-ACKs (or the proposal times out). Partial ACK must **not** fuse a 2-of-4 subset
-and leave others stranded. Timeouts:
+First proposal waits for every listed peer. If some never ACK (or the
+coordinator vanishes) before start, the remainder may **re-propose the exact
+ACKed set** when it is still ≥ `minSafePlayers` (4). A set below 4 is
+refused. Mid-onion / mid-sign cannot rewrite the participant list. Timeouts:
 
 | Constant                   | Value                      |
 | -------------------------- | -------------------------- |
@@ -253,7 +261,7 @@ and leave others stranded. Timeouts:
 
 ---
 
-## 5. Round phases (protocol v3) — exact order
+## 5. Round phases (protocol v4) — exact order
 
 Source of truth: `runFusionRound` → `runCoordinator` / `runParticipant` in
 `fusionSession.ts`.
@@ -266,7 +274,7 @@ Source of truth: `runFusionRound` → `runCoordinator` / `runParticipant` in
 | `P2P_CREDENTIAL_WAIT_MS`           | **35s**       | Wait for `credential_params` / response over Tor  |
 | `P2P_CREDENTIAL_PARAMS_RESEND_MS`  | **1.5s**      | Coordinator re-sends params to lagging peers      |
 | `P2P_CREDENTIAL_PARAMS_RESEND_MAX` | **12**        | Cap resends                                       |
-| `P2P_MISSING_OUTPUTS_ONION_MS`     | **28s**       | Onion / missing outputs                           |
+| `P2P_MISSING_OUTPUTS_ONION_MS`     | **36s**       | Per peel hop (`missingOutputsOnionMs`)            |
 | `P2P_COMPONENT_JITTER_MS`          | **30–250 ms** | Per-component send jitter                         |
 | Onion declare / output resends     | bounded       | Tor drop recovery without open-ended spam         |
 | `P2P_SIG_RESEND_MS`                | **1.5s**      | Signature re-send                                 |
@@ -323,8 +331,10 @@ Peer unblinds to a 64-byte BCH Schnorr signature and verifies it under
 
 **Inputs** (with credential sigs, jittered):
 
-Coordinator **refuses** any input whose credential does not verify under the
-round pubkey. Assembly cannot proceed until every accepted input is credentialed.
+Each `inputs` message is published under a **throwaway key** on a one-shot
+Tor circuit — same isolation as outputs. The coordinator does not take
+`from` as identity. Admission is the blind credential (`acceptInputs`).
+Assembly cannot proceed until every accepted input is credentialed.
 
 **Outputs (onion only — no direct/2-party path)**
 
@@ -352,24 +362,23 @@ atomically records the serial nullifiers. Replays remain rejected across an
 active-round retry or reload; nullifiers clear only when that round succeeds or
 conclusively aborts. Failure is **loud** — no silent fallback to plaintext.
 
-**Transport isolation per anonymous component.** Sealing each output under a
-fresh throwaway key defeats the *coordinator*, not the *relay*: if every output
-of a round leaves over one shared socket, the relay groups them by connection
-and the fresh keys buy nothing against that observer. Each anonymous component
-(`outputs`, `onion_output`) therefore publishes on its own short-lived pool,
-closed immediately after (`createComponentPool`, `nostr/fusionTransport.ts`).
-The Tor WebSocket implementation is installed globally, so one pool means one
-connection and one circuit with its own SOCKS isolation token — the same
-property Electron Cash obtains from a separate covert connection per component.
-Subscriptions keep the persistent pools; only publishing is one-shot.
+**Transport isolation per anonymous component.** Sealing a component under a
+fresh throwaway key defeats the *coordinator*, not the *relay*: if every
+component of a round leaves over one shared socket, the relay groups them by
+connection and the fresh keys buy nothing against that observer. Each
+anonymous component (`inputs`, `outputs`, `onion_output`, `signature`)
+therefore publishes on its own short-lived pool, closed immediately after
+(`createComponentPool`, `nostr/fusionTransport.ts`). The Tor WebSocket
+implementation is installed globally, so one pool means one connection and
+one circuit with its own SOCKS isolation token — the same property Electron
+Cash obtains from a separate covert connection per component. Subscriptions
+keep the persistent pools; only publishing is one-shot.
 
-Scope, stated plainly: this covers **outputs**. Input registration and the later
-signature messages still travel under the peer's round identity, so a
-coordinator learns which inputs share a participant. That is deliberate, not an
-oversight — every code in `nostr/fusionBlame.ts` binds to an `accused`
-participant pubkey and `verifyBlameReport` rejects an accused outside the
-participant set, so anonymising those channels removes the input blame is built
-on and requires the EC covert-component blame model. Tracked as a residual.
+Control plane stays named: ACK, `credential_request` (quota + Pedersen),
+ready, abort. That is **how many**, not **which UTXO**. Signatures use a
+throwaway key so a round-key signature batch cannot re-group anonymous
+inputs. After an abort, optional control-plane disclosures restore an
+accused *ephemeral* key for `fusionBlame.ts` diagnosis only.
 
 ### Phase E — Assemble, verify, sign
 
@@ -469,10 +478,13 @@ the peer’s declared excess fee.
 
 ### 7.4 What credentials do _not_ do
 
-- They do **not** hide the input→output map from the **coordinator** (same trust
-  model as a classic fusion server that sees the final template).
+- They do **not** hide the assembled template from the **coordinator** (same
+  class as a fusion server: every input outpoint and every output, not a
+  labeled who→coin map).
 - **Output onion** (not Tor) is what prevents _peers and intermediate peel hops_
   from linking which participant contributed which **output**.
+- **Anonymous transport** (`inputs` / `signature` under throwaway + one-shot
+  Tor) is what prevents the coordinator from taking `from` as input identity.
 - Input ownership for spending is still ordinary BCH signatures at sign time;
   credentials authorize inclusion in **this round’s** CoinJoin under the round
   issuer key.
@@ -622,7 +634,7 @@ It does **not** replace a chipnet confirmation of relays + Tor + Electrum.
 | **Session**                      | Round id string bound into every message for that attempt                                            |
 | **Rounds-per-coin / fuse depth** | Auto stop condition: how many completed fuses per coin                                               |
 | **Strict / soft peers**          | Lock set vs approximate live set during gather                                                       |
-| **Full-set ACK**                 | Every proposed peer must acknowledge before round start                                              |
+| **ACK-shrink**                   | After propose, continue with the ACKed remainder if still ≥4; never mid-onion                        |
 
 Privacy layer roles (Tor / gift-wrap / Pedersen / blind Schnorr / output onion):
 [p2p-cashfusion-privacy-layers.md](./p2p-cashfusion-privacy-layers.md).
@@ -634,7 +646,8 @@ Privacy layer roles (Tor / gift-wrap / Pedersen / blind Schnorr / output onion):
 When you change the wire format, crypto, gather policy, or Auto depth/cooldown:
 
 1. Bump `ROUND_MSG_VERSION` if old clients must not parse new messages.
-2. Update **this document** and, if naming/layers change,
+2. Update **this document**, [p2p-cashfusion-knobs.md](./p2p-cashfusion-knobs.md)
+   if floors/caps/timings changed, and, if naming/layers change,
    [privacy-layers](./p2p-cashfusion-privacy-layers.md) in the same PR.
 3. Add or extend sabotage-style tests (break the invariant → that test fails).
 4. Keep Electron Cash / 00-Wallet references honest: cite files, do not invent
@@ -642,6 +655,6 @@ When you change the wire format, crypto, gather policy, or Auto depth/cooldown:
 
 ---
 
-_Last updated for PR #12 **ship**: protocol v3 (blind input/output credentials + Pedersen +
-mandatory output onion), MIN=3 / MAX=6, full-set ACK, Auto 40s/25s cooldowns,
-fuse-depth stop, Tor fail-closed — **implemented**, not planned._
+_Last updated: protocol v4, 6/4/10 knobs, ACK-shrink, anonymous
+`inputs`/`signature`/`outputs` (throwaway + one-shot Tor), control plane
+still named — **implemented**, not planned._
