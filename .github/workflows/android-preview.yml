@@ -203,7 +203,26 @@ jobs:
           echo "Android services ready: ${settings_ready:-unavailable}"
           test "$settings_ready" = '1'
 
-          npm run android:test:instrumented
+          app_apk="android/app/build/outputs/apk/debug/app-debug.apk"
+          test_apk="android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk"
+          instrumentation_log="$RUNNER_TEMP/android-instrumentation.log"
+          test -f "$app_apk"
+          test -f "$test_apk"
+          adb_with_timeout -s "$emulator_serial" install -r "$app_apk"
+          adb_with_timeout -s "$emulator_serial" install -r -t "$test_apk"
+
+          set +e
+          timeout 300s adb -s "$emulator_serial" shell am instrument -w -r \
+            optn.wallet.app.test/androidx.test.runner.AndroidJUnitRunner \
+            | tee "$instrumentation_log"
+          instrumentation_exit=${PIPESTATUS[0]}
+          set -e
+          if grep -q '^INSTRUMENTATION_FAILED:' "$instrumentation_log" ||
+            ! grep -q '^INSTRUMENTATION_CODE: -1$' "$instrumentation_log"; then
+            echo 'Android instrumentation tests failed.'
+            exit 1
+          fi
+          test "$instrumentation_exit" -eq 0
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
