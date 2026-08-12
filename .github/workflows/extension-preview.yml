@@ -1,0 +1,70 @@
+name: Extension Preview
+
+# Mirrors desktop-preview.yml — builds the Chrome/Firefox extension MVP on
+# every push/PR to dev and uploads the unpacked build output as an artifact,
+# so a reviewer can download it and load it directly without building locally.
+
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - 'src/**'
+      - 'public/**'
+      - 'extension/**'
+      - 'popup.html'
+      - 'vite.extension.config.ts'
+      - 'package.json'
+      - '.github/workflows/extension-preview.yml'
+  push:
+    branches: [dev]
+    paths:
+      - 'src/**'
+      - 'public/**'
+      - 'extension/**'
+      - 'popup.html'
+      - 'vite.extension.config.ts'
+      - 'package.json'
+      - '.github/workflows/extension-preview.yml'
+
+concurrency:
+  group: extension-preview-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-extension-preview:
+    name: Extension Preview
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build Chrome extension
+        run: npm run build:extension:chrome
+
+      - name: Build Firefox extension
+        run: npm run build:extension:firefox
+
+      - name: Upload Chrome extension artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: extension-chrome
+          path: dist-extension-chrome/**
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload Firefox extension artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: extension-firefox
+          path: dist-extension-firefox/**
+          retention-days: 14
+          if-no-files-found: error

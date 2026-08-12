@@ -1,0 +1,96 @@
+<!doctype html>
+<!--
+  Sandboxed execution environment for third-party ("iframe-bundle") addons.
+
+  This file is loaded ONLY inside an <iframe sandbox="allow-scripts">
+  (deliberately WITHOUT allow-same-origin — see AddonIframeHost.tsx). That
+  combination gives this document an opaque, unique origin: it CANNOT read
+  the parent window's DOM, cookies, localStorage, or IndexedDB, and the
+  parent cannot reach into it either. The only channel in or out is
+  postMessage, handled below. This is what makes an installed addon unable
+  to reach wallet keys/mnemonics even if its own code is malicious.
+
+  The addon's bundle is never fetched by this page — the host sends its
+  SOURCE TEXT via postMessage (after reading it from disk on the host side),
+  which is then executed via a <script> element. Same isolation property
+  either way; this avoids needing a Tauri-specific asset:// URL scheme here,
+  keeping this file platform-agnostic.
+-->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; connect-src 'none'; img-src data:; style-src 'unsafe-inline';" />
+  </head>
+  <body>
+    <script>
+      (function () {
+        'use strict';
+
+        var pendingRequests = Object.create(null);
+        var nextRequestId = 1;
+
+        function post(message) {
+          parent.postMessage(message, '*');
+        }
+
+        // The API surface the addon's own code calls. Every call is a
+        // round-trip to the host, which dispatches it through the SAME
+        // capability-gated AddonSDK object used by declarative apps — this
+        // sandbox has no crypto/network/storage access of its own.
+        window.OptnAddonBridge = {
+          call: function (moduleName, methodName) {
+            var args = Array.prototype.slice.call(arguments, 2);
+            var requestId = String(nextRequestId++);
+            return new Promise(function (resolve, reject) {
+              pendingRequests[requestId] = { resolve: resolve, reject: reject };
+              post({
+                type: 'optn-addon-sdk-call',
+                requestId: requestId,
+                module: moduleName,
+                method: methodName,
+                args: args,
+              });
+            });
+          },
+        };
+
+        window.addEventListener('message', function (event) {
+          var data = event.data;
+          if (!data || typeof data !== 'object') return;
+
+          if (data.type === 'optn-addon-init') {
+            try {
+              // Execute the addon's bundle in THIS realm (opaque origin, no
+              // allow-same-origin) by inserting it as a real <script>
+              // element (not the global string-to-code function) so it gets
+              // a proper file/line identity in stack traces and respects
+              // this page's CSP the same as any other script here.
+              var script = document.createElement('script');
+              script.textContent = String(data.bundleSource || '');
+              document.body.appendChild(script);
+              post({ type: 'optn-addon-init-ack', ok: true });
+            } catch (err) {
+              post({
+                type: 'optn-addon-init-ack',
+                ok: false,
+                error: err && err.message ? err.message : String(err),
+              });
+            }
+            return;
+          }
+
+          if (data.type === 'optn-addon-sdk-result') {
+            var pending = pendingRequests[data.requestId];
+            if (!pending) return;
+            delete pendingRequests[data.requestId];
+            if (data.ok) pending.resolve(data.result);
+            else pending.reject(new Error(String(data.error || 'Addon SDK call failed')));
+            return;
+          }
+        });
+
+        post({ type: 'optn-addon-ready' });
+      })();
+    </script>
+  </body>
+</html>
