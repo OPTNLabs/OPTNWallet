@@ -5,21 +5,28 @@ Short answers checked against the desktop code. Wire detail:
 
 ## What about blame?
 
-Built for P2P, not a port of Electron Cash `blame.rs`.
+Yes — it is a **P2P-specific** mechanic, not a port of Electron Cash
+`blame.rs`. The fusion server can accuse mid-round because it already
+knows who sent each component. Here it cannot: happy-path `inputs` /
+`outputs` / `signature` are anonymous, so a dead round has **no name on
+the coin**.
 
-Happy-path components (`inputs`, `outputs`, `signature`) arrive under
-throwaway keys, so a failed round has **no accused** until peers
-**disclose openings** on the control plane after abort. Those disclosures
-are checked (`fusionBlame.ts`). Bad crypto can mark an **ephemeral round
-key**. That is diagnosis only — it is not a wallet ban and it does not
-keep anyone out of the next gather.
+The unique step is **abort, then disclose**. After the round fails, each
+peer may send a control-plane **opening** (blind `a||b`, component salt,
+Pedersen nonce) under its **round key**. That binds an anonymous
+component back to the attributed `InitialCommitment` *without* putting
+identity on the happy path. `findFaultInDisclosures` +
+`verifyBlameReport` re-check the crypto. A fake accusation is rejected
+(for example an opening that actually verifies cannot be used as
+`invalid_input_credential`). A consistent timeout finds nobody.
 
-**Prove-or-don't-blame.** Only a re-verifiable fault counts
-(unbalanced Pedersen, bad component commitment, slot out of range, bad
-input credential, duplicate outpoint, invalid signature set). **Never**
-blame Tor lag, relay timeout, late join, or a missing message. A peer
-that simply does not sign looks the same as a peer whose signature was
-dropped — that is a timeout abort, not blame.
+**Prove-or-don't-blame.** Only those re-verifiable codes count. **Never**
+blame Tor lag, relay timeout, late join, or a missing signature — a
+silent no-sign is just a timeout abort.
+
+The accused is an **ephemeral round key**. That is diagnosis, not a
+wallet ban and not DoS defense. The same person comes back as a new key
+next attempt. A local 10-minute ghost record is not shared with peers.
 
 ## What happens if someone does not sign an input?
 
