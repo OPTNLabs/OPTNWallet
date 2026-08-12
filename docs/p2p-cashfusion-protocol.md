@@ -408,7 +408,7 @@ outbound tx, refreshes UTXOs, and **records fuse depth** for Auto stopping.
 
 ---
 
-## 6. Message catalogue (v3; incompatible with v2)
+## 6. Message catalogue (v4; incompatible with v3/v2)
 
 All messages include binding fields: `version`, `nonce`, `timestamp`, and
 usually `session`.
