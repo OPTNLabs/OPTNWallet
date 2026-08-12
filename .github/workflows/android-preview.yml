@@ -99,6 +99,7 @@ jobs:
             -avd test \
             -no-window \
             -gpu swiftshader_indirect \
+            -memory 4096 \
             -no-snapshot \
             -noaudio \
             -no-boot-anim \
