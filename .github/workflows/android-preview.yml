@@ -99,10 +99,12 @@ jobs:
             -avd test \
             -no-window \
             -gpu swiftshader_indirect \
-            -memory 4096 \
+            -memory 2048 \
+            -cores 2 \
             -no-snapshot \
             -noaudio \
-            -no-boot-anim >"$emulator_log" 2>&1 &
+            -no-boot-anim \
+            -accel off >"$emulator_log" 2>&1 &
           emulator_pid=$!
 
           adb_timeout_seconds=15
