@@ -1,0 +1,95 @@
+{
+  "contractName": "MSVault",
+  "constructorInputs": [
+    {
+      "name": "ownerPWSig",
+      "type": "datasig"
+    },
+    {
+      "name": "lockTime",
+      "type": "int"
+    },
+    {
+      "name": "pkh1",
+      "type": "bytes20"
+    },
+    {
+      "name": "pkh2",
+      "type": "bytes20"
+    }
+  ],
+  "abi": [
+    {
+      "name": "spend",
+      "inputs": [
+        {
+          "name": "ownerPk",
+          "type": "pubkey"
+        },
+        {
+          "name": "ownerSig",
+          "type": "sig"
+        },
+        {
+          "name": "password",
+          "type": "bytes"
+        }
+      ]
+    },
+    {
+      "name": "unlockVault",
+      "inputs": [
+        {
+          "name": "pk",
+          "type": "pubkey"
+        },
+        {
+          "name": "s",
+          "type": "sig"
+        }
+      ]
+    }
+  ],
+  "bytecode": "OP_4 OP_PICK OP_0 OP_NUMEQUAL OP_IF OP_7 OP_ROLL OP_6 OP_PICK OP_CHECKDATASIGVERIFY OP_2ROT OP_CHECKSIGVERIFY a00f OP_0 OP_OUTPUTBYTECODE OP_INPUTINDEX OP_UTXOBYTECODE OP_EQUALVERIFY OP_0 OP_OUTPUTVALUE OP_NUMEQUALVERIFY OP_2DROP OP_2DROP OP_1 OP_ELSE OP_4 OP_ROLL OP_1 OP_NUMEQUALVERIFY OP_SWAP OP_CHECKLOCKTIMEVERIFY OP_DROP OP_3 OP_PICK OP_HASH160 OP_ROT OP_EQUAL OP_3 OP_PICK OP_HASH160 OP_3 OP_ROLL OP_EQUAL OP_BOOLOR OP_VERIFY OP_ROT OP_ROT OP_CHECKSIG OP_NIP OP_ENDIF",
+  "source": "pragma cashscript ^0.11.0;\n\ncontract MSVault(\n    datasig ownerPWSig, \n    int lockTime, \n    bytes20 pkh1, \n    bytes20 pkh2\n) {\n    function spend(pubkey ownerPk, sig ownerSig, bytes password) {\n        require(checkDataSig(ownerPWSig, password, ownerPk));\n        require(checkSig(ownerSig, ownerPk));\n\n        int minBalance = 4000;\n\n        require(tx.outputs[0].lockingBytecode == tx.inputs[this.activeInputIndex].lockingBytecode);\n        require(tx.outputs[0].value == minBalance);\n    }\n\n    function unlockVault(pubkey pk, sig s) {\n        require(tx.time >= lockTime);\n        require(hash160(pk) == pkh1 || hash160(pk) == pkh2);\n        require(checkSig(s, pk));\n    }\n}",
+  "debug": {
+    "bytecode": "5479009c63577a5679bb71ad02a00f00cdc0c78800cc9d6d6d5167547a519d7cb1755379a97b875379a9537a879b697b7bac7768",
+    "sourceMap": "9:4:17:5;;;;;10:41:10:49;;:51::58;;:8::61:1;11:25:11:42:0;:8::45:1;13:25:13:29:0;15:27:15:28;:16::45:1;:59::80:0;:49::97:1;:8::99;16:27:16:28:0;:16::35:1;:8::51;9:4:17:5;;;;19::23::0;;;;20:27:20:35;:8::37:1;;21:24:21:26:0;;:16::27:1;:31::35:0;:16:::1;:47::49:0;;:39::50:1;:54::58:0;;:39:::1;:16;:8::60;22:25:22:26:0;:28::30;:8::33:1;19:4:23:5;3:0:24:1",
+    "logs": [],
+    "requires": [
+      {
+        "ip": 13,
+        "line": 10
+      },
+      {
+        "ip": 15,
+        "line": 11
+      },
+      {
+        "ip": 21,
+        "line": 15
+      },
+      {
+        "ip": 24,
+        "line": 16
+      },
+      {
+        "ip": 34,
+        "line": 20
+      },
+      {
+        "ip": 48,
+        "line": 21
+      },
+      {
+        "ip": 52,
+        "line": 22
+      }
+    ]
+  },
+  "compiler": {
+    "name": "cashc",
+    "version": "0.11.0"
+  },
+  "updatedAt": "2025-07-17T21:36:34.585Z"
+}
