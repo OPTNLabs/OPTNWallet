@@ -790,7 +790,31 @@ export async function openWatchOnlyWallet(
   walletId: number,
   password?: string
 ): Promise<WalletMetadata | null> {
-  return openPublicKeyWallet(walletId, WATCH_ONLY_WALLET_TYPE, password);
+  const info = await openPublicKeyWallet(
+    walletId,
+    WATCH_ONLY_WALLET_TYPE,
+    password
+  );
+  if (!info) return null;
+  // Repair: empty/wrong-prefix keys → permanent 0 balance. Same failure mode
+  // as hardware wallets; rebuild from account_xpub and dual-write addresses.
+  try {
+    const {
+      ensureWatchOnlyWalletAddresses,
+      ensureWatchOnlyWalletKeys,
+    } = await import('./onboarding/watchOnlyWallet');
+    const keys = await ensureWatchOnlyWalletKeys(walletId);
+    const addressesAdded = await ensureWatchOnlyWalletAddresses(walletId);
+    console.info(
+      `[DesktopWalletManager] watch-only wallet ${walletId}: keys=${keys.keyCount}` +
+        (keys.rebuilt ? ' (rebuilt from xpub)' : '') +
+        (keys.firstReceive ? ` firstReceive=${keys.firstReceive}` : '') +
+        (addressesAdded > 0 ? ` addressesBackfilled=${addressesAdded}` : '')
+    );
+  } catch (err) {
+    console.warn('[DesktopWalletManager] watch-only open repair failed:', err);
+  }
+  return info;
 }
 
 /**
@@ -823,15 +847,6 @@ export async function openHardwareWallet(
         (keys.rebuilt ? ' (rebuilt from xpub)' : '') +
         (keys.firstReceive ? ` firstReceive=${keys.firstReceive}` : '')
     );
-    // Kick Electrum listunspent so Home is not stuck at 0 after repair.
-    try {
-      const { bootstrapAllUTXOs } = await import(
-        '../../workers/UTXOWorkerService'
-      );
-      void bootstrapAllUTXOs();
-    } catch {
-      /* worker may start via lifecycle */
-    }
   } catch (err) {
     console.warn('[DesktopWalletManager] hardware open repair failed:', err);
   }

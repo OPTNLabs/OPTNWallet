@@ -25,6 +25,7 @@ import {
 } from '../../../services/psbt/multisigWallet';
 
 import {
+  alignHdPublicKeyNetwork,
   deriveBchAddressFromHdPublicKey,
   getBchAccountPath,
 } from '../../../services/HdWalletService';
@@ -32,7 +33,10 @@ import {
   deriveWatchOnlyAccountPreview,
   watchOnlyBranchXpub,
 } from './watchOnlyAccountPreview';
-import { ensureDesktopWalletColumns } from '../desktopSchema';
+import {
+  ensureDesktopWalletColumns,
+  resetDesktopWalletColumnsCache,
+} from '../desktopSchema';
 
 /**
  * Wallet type string for a watch-only wallet.
@@ -460,4 +464,273 @@ export async function saveWatchOnlyMasterFingerprint(
     update.free();
   }
   await dbService.flushDatabaseToFile(walletId);
+}
+
+/**
+ * If the watch-only wallet has an account_xpub but no (or too few) keys, rebuild
+ * the gap-limit receive/change set. Empty keys → permanent zero balance even
+ * though Electrum is fine (same failure mode as hardware open repair).
+ *
+ * Multisig watch-only stores policy instead of account_xpub; those rows are
+ * left alone here (addresses are rebuilt from the policy at create time).
+ */
+export async function ensureWatchOnlyWalletKeys(
+  walletId: number
+): Promise<{ keyCount: number; rebuilt: boolean; firstReceive: string | null }> {
+  resetDesktopWalletColumnsCache();
+  await ensureDesktopWalletColumns();
+
+  const dbService = DatabaseService();
+  await dbService.ensureDatabaseStarted();
+  const db = dbService.getDatabase();
+  if (!db) {
+    return { keyCount: 0, rebuilt: false, firstReceive: null };
+  }
+
+  const metaQ = db.prepare(
+    `SELECT networkType, account_xpub
+     FROM wallets WHERE id = ? AND walletType = ?`
+  );
+  let network: Network = Network.MAINNET;
+  let accountXpub = '';
+  try {
+    metaQ.bind([walletId, WATCH_ONLY_WALLET_TYPE]);
+    if (!metaQ.step()) {
+      return { keyCount: 0, rebuilt: false, firstReceive: null };
+    }
+    const row = metaQ.getAsObject() as Record<string, unknown>;
+    if (row.networkType === Network.CHIPNET) network = Network.CHIPNET;
+    accountXpub =
+      typeof row.account_xpub === 'string' ? row.account_xpub.trim() : '';
+  } finally {
+    metaQ.free();
+  }
+
+  const countQ = db.prepare(
+    'SELECT COUNT(*) AS c FROM keys WHERE wallet_id = ?'
+  );
+  let keyCount = 0;
+  try {
+    countQ.bind([walletId]);
+    if (countQ.step()) {
+      keyCount = Number((countQ.getAsObject() as { c?: number }).c ?? 0);
+    }
+  } finally {
+    countQ.free();
+  }
+
+  const prefixOk = network === Network.MAINNET ? 'bitcoincash:' : 'bchtest:';
+  const prefixQ = db.prepare(
+    `SELECT COUNT(*) AS c FROM keys
+     WHERE wallet_id = ? AND address LIKE ?`
+  );
+  let matchingPrefix = 0;
+  try {
+    prefixQ.bind([walletId, `${prefixOk}%`]);
+    if (prefixQ.step()) {
+      matchingPrefix = Number(
+        (prefixQ.getAsObject() as { c?: number }).c ?? 0
+      );
+    }
+  } finally {
+    prefixQ.free();
+  }
+
+  const expectedMin = WATCH_ONLY_GAP_LIMIT;
+  const needsRebuild =
+    Boolean(accountXpub) &&
+    (keyCount < expectedMin || matchingPrefix < expectedMin);
+
+  if (!needsRebuild) {
+    const firstQ = db.prepare(
+      `SELECT address FROM keys
+       WHERE wallet_id = ? AND change_index = 0 AND address_index = 0
+       LIMIT 1`
+    );
+    let firstReceive: string | null = null;
+    try {
+      firstQ.bind([walletId]);
+      if (firstQ.step()) {
+        const r = firstQ.getAsObject() as { address?: string };
+        firstReceive = typeof r.address === 'string' ? r.address : null;
+      }
+    } finally {
+      firstQ.free();
+    }
+    return { keyCount, rebuilt: false, firstReceive };
+  }
+
+  if (!accountXpub) {
+    return { keyCount, rebuilt: false, firstReceive: null };
+  }
+
+  let alignedXpub: string;
+  try {
+    alignedXpub = alignHdPublicKeyNetwork(network, accountXpub);
+  } catch (err) {
+    console.error(
+      `[watchOnlyWallet] wallet ${walletId} cannot align account_xpub for ${network}:`,
+      err
+    );
+    return { keyCount, rebuilt: false, firstReceive: null };
+  }
+  if (alignedXpub !== accountXpub) {
+    console.warn(
+      `[watchOnlyWallet] wallet ${walletId} account_xpub version bytes aligned ` +
+        `${accountXpub.slice(0, 4)}… → ${alignedXpub.slice(0, 4)}… for ${network}`
+    );
+    try {
+      db.run('UPDATE wallets SET account_xpub = ? WHERE id = ?', [
+        alignedXpub,
+        walletId,
+      ]);
+    } catch {
+      /* column present after ensureDesktopWalletColumns */
+    }
+    accountXpub = alignedXpub;
+  }
+
+  console.warn(
+    `[watchOnlyWallet] wallet ${walletId} keys=${keyCount} matchingPrefix=${matchingPrefix} network=${network}; rebuilding from account_xpub`
+  );
+  db.run('DELETE FROM UTXOs WHERE wallet_id = ?', [walletId]);
+  db.run('DELETE FROM addresses WHERE wallet_id = ?', [walletId]);
+  db.run('DELETE FROM keys WHERE wallet_id = ?', [walletId]);
+  keyCount = 0;
+
+  let preview;
+  try {
+    preview = deriveWatchOnlyAccountPreview(network, accountXpub);
+  } catch (err) {
+    console.error(
+      `[watchOnlyWallet] wallet ${walletId} rebuild preview failed:`,
+      err
+    );
+    return { keyCount: 0, rebuilt: false, firstReceive: null };
+  }
+
+  const prefix = network === Network.MAINNET ? 'bitcoincash' : 'bchtest';
+  const insertKey = db.prepare(
+    `INSERT OR IGNORE INTO keys
+       (wallet_id, public_key, private_key, address, token_address, pubkey_hash,
+        account_index, change_index, address_index)
+     VALUES (?, ?, NULL, ?, ?, ?, 0, ?, ?)`
+  );
+  const insertAddr = db.prepare(
+    `INSERT OR IGNORE INTO addresses
+       (wallet_id, address, balance, hd_index, change_index, prefix, token_address)
+     VALUES (?, ?, 0, ?, ?, ?, ?)`
+  );
+  let added = 0;
+  try {
+    for (const branch of BRANCHES) {
+      const branchXpub = watchOnlyBranchXpub(accountXpub, network, branch);
+      for (let index = 0; index < WATCH_ONLY_GAP_LIMIT; index += 1) {
+        const derived = deriveBchAddressFromHdPublicKey(
+          network,
+          branchXpub,
+          BigInt(index)
+        );
+        if (!derived) continue;
+        insertKey.run([
+          walletId,
+          derived.publicKey,
+          derived.address,
+          derived.tokenAddress,
+          derived.publicKeyHash,
+          branch,
+          index,
+        ]);
+        insertAddr.run([
+          walletId,
+          derived.address,
+          index,
+          branch,
+          prefix,
+          derived.tokenAddress,
+        ]);
+        added += 1;
+      }
+    }
+  } finally {
+    insertKey.free();
+    insertAddr.free();
+  }
+  if (added > 0) {
+    await dbService.flushDatabaseToFile(walletId);
+  }
+
+  console.info(
+    `[watchOnlyWallet] wallet ${walletId} rebuilt ${added} keys; firstReceive=${preview.receive.address} path=${preview.receive.path}`
+  );
+
+  return {
+    keyCount: keyCount + added,
+    rebuilt: added > 0,
+    firstReceive: preview.receive.address,
+  };
+}
+
+/**
+ * Backfill `addresses` rows from `keys` for watch-only wallets created before
+ * dual-write (or multisig rows that only wrote keys). Safe on every open.
+ */
+export async function ensureWatchOnlyWalletAddresses(
+  walletId: number
+): Promise<number> {
+  const dbService = DatabaseService();
+  await dbService.ensureDatabaseStarted();
+  const db = dbService.getDatabase();
+  if (!db) return 0;
+
+  const meta = db.prepare(
+    'SELECT networkType FROM wallets WHERE id = ? AND walletType = ?'
+  );
+  let network: Network = Network.MAINNET;
+  try {
+    meta.bind([walletId, WATCH_ONLY_WALLET_TYPE]);
+    if (!meta.step()) return 0;
+    const row = meta.getAsObject() as Record<string, unknown>;
+    if (row.networkType === Network.CHIPNET) network = Network.CHIPNET;
+  } finally {
+    meta.free();
+  }
+  const prefix = network === Network.MAINNET ? 'bitcoincash' : 'bchtest';
+
+  const missing = db.prepare(`
+    SELECT k.address, k.token_address, k.address_index, k.change_index
+    FROM keys k
+    LEFT JOIN addresses a ON a.address = k.address
+    WHERE k.wallet_id = ? AND a.id IS NULL AND k.address IS NOT NULL
+  `);
+  const insertAddr = db.prepare(
+    `INSERT OR IGNORE INTO addresses
+       (wallet_id, address, balance, hd_index, change_index, prefix, token_address)
+     VALUES (?, ?, 0, ?, ?, ?, ?)`
+  );
+  let added = 0;
+  try {
+    missing.bind([walletId]);
+    while (missing.step()) {
+      const row = missing.getAsObject() as Record<string, unknown>;
+      const address = typeof row.address === 'string' ? row.address : null;
+      if (!address) continue;
+      insertAddr.run([
+        walletId,
+        address,
+        Number(row.address_index ?? 0),
+        Number(row.change_index ?? 0),
+        prefix,
+        typeof row.token_address === 'string' ? row.token_address : null,
+      ]);
+      added += 1;
+    }
+  } finally {
+    missing.free();
+    insertAddr.free();
+  }
+  if (added > 0) {
+    await dbService.flushDatabaseToFile(walletId);
+  }
+  return added;
 }

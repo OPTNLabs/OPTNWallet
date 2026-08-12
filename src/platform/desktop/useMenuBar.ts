@@ -453,6 +453,16 @@ export function useMenuBar(): void {
         );
         OptnKeyManager.lock();
         dispatch(resetWallet());
+        // Drop Electrum so the next wallet cannot reuse this network's socket
+        // (chipnet open after mainnet lock → permanent 0 balance otherwise).
+        try {
+          const { getElectrumAdapter } = await import(
+            '../../services/ElectrumAdapter'
+          );
+          await getElectrumAdapter().disconnect();
+        } catch {
+          /* best-effort */
+        }
         navigate(ROUTE_PATHS.landing);
         resyncAfterWalletClosed('MenuBar.lockWallet');
       },
