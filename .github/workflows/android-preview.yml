@@ -87,10 +87,10 @@ jobs:
             'platform-tools' \
             'platforms;android-36' \
             'emulator' \
-            'system-images;android-36;google_apis;x86_64' >/dev/null
+            'system-images;android-36;default;x86_64' >/dev/null
           echo no | avdmanager create avd --force \
             --name test \
-            --package 'system-images;android-36;google_apis;x86_64' \
+            --package 'system-images;android-36;default;x86_64' \
             --device pixel_2
           test -f "$ANDROID_AVD_HOME/test.ini"
 
