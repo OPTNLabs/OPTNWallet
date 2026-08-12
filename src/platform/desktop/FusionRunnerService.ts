@@ -433,6 +433,8 @@ async function freshCoinSelection(
   const allCoins = Object.values(snapshot).flat().filter(Boolean) as UTXO[];
 
   if (mode === 'server') {
+    // 0-conf / height-0 fusion outputs are allowed (ACCEPT_UNCONFIRMED).
+    // Auto still stops via isServerFusionDepthSatisfied below; Manual does not.
     const classified = classifyServerFusionCoins(allCoins);
     const depthCoins = classified.eligibleBuckets.flatMap(
       (bucket) => bucket.coins
@@ -441,6 +443,17 @@ async function freshCoinSelection(
       fuseDepth,
       depthOf: (outpoint) => coinDepth(walletId, outpoint),
     });
+    void import('./logger')
+      .then(({ log }) =>
+        log.info(
+          'fusion-diag',
+          `w${walletId} server ${trigger}: coins=${allCoins.length} ` +
+            `eligibleBuckets=${classified.eligibleBuckets.length} ` +
+            `skipped=${JSON.stringify(classified.skipCounts)} ` +
+            `depthSatisfied=${depth.satisfied} fuseDepth=${fuseDepth}`
+        )
+      )
+      .catch(() => undefined);
     if (trigger === 'auto' && depth.satisfied) {
       return {
         depthCoins,

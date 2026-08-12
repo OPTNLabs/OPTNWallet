@@ -42,7 +42,9 @@ describe('Electron Cash server Fusion coin policy', () => {
       coin('too-many', 10),
     ];
 
-    const result = classifyServerFusionCoins(coins);
+    const result = classifyServerFusionCoins(coins, {
+      requireConfirmed: true,
+    });
 
     expect(result.eligibleBuckets.map((bucket) => bucket.address)).toEqual([
       'eligible',
@@ -140,15 +142,24 @@ describe('Electron Cash server Fusion coin policy', () => {
     });
   });
 
-  it('explains empty server eligibility without blaming Manual for Auto', () => {
-    const classified = classifyServerFusionCoins([
-      coin('unconfirmed-address', 6, { height: 0 }),
+  it('by default allows height-0 coins (0-conf / stale height bookkeeping)', () => {
+    const result = classifyServerFusionCoins([
+      coin('fresh-fusion', 1, { height: 0 }),
     ]);
+    expect(result.eligibleBuckets.map((b) => b.address)).toEqual([
+      'fresh-fusion',
+    ]);
+  });
+
+  it('explains empty server eligibility without blaming Manual for Auto', () => {
+    const classified = classifyServerFusionCoins(
+      [coin('unconfirmed-address', 6, { height: 0 })],
+      { requireConfirmed: true }
+    );
     const auto = formatServerFusionEmptyReason(classified, { auto: true });
     const manual = formatServerFusionEmptyReason(classified);
     expect(auto.startsWith('Auto:')).toBe(true);
     expect(manual.startsWith('Auto:')).toBe(false);
     expect(manual).toMatch(/unconfirmed/i);
-    expect(manual).toMatch(/1–3 confirmed/i);
   });
 });
