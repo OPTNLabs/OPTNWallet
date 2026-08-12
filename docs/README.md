@@ -29,6 +29,8 @@ Technical documentation for contributors and third-party integrators.
     the wallet UI.
 - [P2P CashFusion Threat Model](./THREAT_MODEL.md)
   - Adversary classes for the shipped P2P design.
+- [P2P CashFusion FAQ](./p2p-cashfusion-faq.md)
+  - Short answers: missing signature, onion, ACK-shrink, 0-conf.
 - [Watch-only + SeedCash](./watch-only-seedcash.md)
   - xPub import, PSBTv145, UR export/import, optional fingerprint.
 - [Integration Guide](./integration-guide.md)
@@ -52,7 +54,7 @@ Technical documentation for contributors and third-party integrators.
 - If you are integrating a dApp: `Integration Guide` -> `WalletConnect` section.
 - If you are embedding custom wallet app logic: `Integration Guide` -> `Addon Development Guide` -> `Addon SDK Reference`.
 - If you are contributing to core wallet internals: `Wallet Architecture` first.
-- If you are working on CashFusion: status → knobs → protocol → privacy layers.
+- If you are working on CashFusion: status → knobs → protocol → privacy layers → [FAQ](./p2p-cashfusion-faq.md).
 
 ## Still open (not shipped)
 

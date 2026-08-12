@@ -63,7 +63,7 @@ P2P is a **different transport**, not a weaker crypto story.
 | Too many coins | Server path take-largest-3 + Auto pre-consolidate (`fusionPreConsolidate.ts`) |
 | UI | CashFusion card + Servers. **No player-count knobs** in the wallet. |
 
-**Normative docs:** [privacy-layers](./p2p-cashfusion-privacy-layers.md), [protocol](./p2p-cashfusion-protocol.md), [knobs](./p2p-cashfusion-knobs.md), [threat model](./THREAT_MODEL.md).  
+**Normative docs:** [privacy-layers](./p2p-cashfusion-privacy-layers.md), [protocol](./p2p-cashfusion-protocol.md), [knobs](./p2p-cashfusion-knobs.md), [threat model](./THREAT_MODEL.md), [FAQ](./p2p-cashfusion-faq.md).  
 **Code:** `src/platform/desktop/nostr/` and `FusionP2pService.ts`.
 
 Chipnet example (10-way): `7e41141a47ebe18496af131e51402019f41b602723c9ac4274aa0a91f52536f4`.
