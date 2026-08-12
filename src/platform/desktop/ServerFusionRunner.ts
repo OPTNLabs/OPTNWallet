@@ -637,17 +637,27 @@ export function buildServerRunner(
         config.inputLookupEndpoint
       );
       const [lookupEndpoint, ...lookupFallbacks] = lookupChain;
-      // Alone ~2 min then Auto retries; longer only if server shows peers / start.
+      // Auto: 600s inactivity if the server never advertises time_remaining.
+      // Manual: no client cutoff — wait until players show or the user cancels.
+      const aloneCapSec =
+        typeof config.joinInactiveTimeoutMs === 'number' &&
+        config.joinInactiveTimeoutMs > 0
+          ? Math.round(config.joinInactiveTimeoutMs / 1000)
+          : null;
       status(
-        `In server pool (${tierPlans.length} tier(s), ${inputs.length} input(s)) — waiting for players…`,
+        `In server pool (${tierPlans.length} tier(s), ${inputs.length} input(s)) — waiting for other wallets…`,
         3
       );
       const poolStartedAt = Date.now();
       const poolHeartbeat = setInterval(() => {
         if (signal?.aborted) return;
         const waited = Math.floor((Date.now() - poolStartedAt) / 1000);
+        const hint =
+          aloneCapSec != null
+            ? `alone up to ${aloneCapSec}s then Auto retries`
+            : 'no time limit — needs other people in this server pool (Stop to cancel)';
         status(
-          `In server pool — waiting for players… (${waited}s; alone ~2 min then retry, longer if pool fills)`
+          `In server pool — waiting for other wallets… (${waited}s; ${hint})`
         );
       }, 8_000);
       let outcome: FusionOutcome;
