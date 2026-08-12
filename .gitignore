@@ -1,0 +1,44 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+target/
+dist
+dist-ssr
+dist-extension-chrome
+dist-extension-firefox
+*.local
+vite.config.js
+vite.config.d.ts
+tsconfig.node.tsbuildinfo
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.env
+.env.*
+
+# Android signing material (never commit)
+*.keystore
+*.jks
+android/key.properties
+
+# Assistant-internal tooling (not part of the app)
+.serena/
+
+# Tor binary fetched at build time (scripts/fetch-tor.mjs), not committed
+src-tauri/resources/tor/
+.tor-fetch-tmp/
