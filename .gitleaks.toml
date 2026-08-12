@@ -1,0 +1,3 @@
+[allowlist]
+description = "Historical non-secret test fixture false positive"
+commits = ["ac1fc543f2bc82902418eb79c3b4b9740c2b705e"]
