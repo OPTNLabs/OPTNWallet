@@ -1,0 +1,19 @@
+2026-03-29 | a428d10 | cauldron transactions working but highly unstable and inconsistent
+2026-03-23 | 5cca70d | fixed paper wallet sweeping format & added demo versions of cauldron and fundme
+2026-03-22 | 2e9d0bd | cauldron UI set, TODO: test functionality
+2026-03-22 | c20f74b | fixing fundme app and integrating wizardconnect + hd xpub derivation
+2026-03-19 | dd22044 | updating key management to support multiple chains
+2026-03-18 | 681ae73 | fix up android and ios layout + walletconnect initialization error
+2026-03-18 | 74d4f6f | feat: add native screen security hardening
+2026-03-18 | 303627c | Merge branch 'feat/transaction-builder-redesign' into dev
+2026-03-14 | 3fe7936 | feat: finalize transaction builder release prep
+2026-03-14 | ad8e9d3 | chore: checkpoint event addon and transaction builder work
+2026-03-10 | f05505b | merge addons-v2 into dev
+2026-03-10 | 9639adf | finalize addons-v2 worktree
+2026-03-02 | 5732455 | add-on PoC & rework on UI/UX
+2026-02-27 | 00d5e3c | massive rework on addons and other improvements
+2026-02-26 | d4f9e20 | added Addon SDK to readme documentation
+2026-02-26 | 45f5ba8 | working prototype for addon sdk with customized user transaction flow for minting cashtokens
+2026-01-29 | df66a62 | debugging AuthGuard UI flow
+2026-01-25 | 3af47c9 | prepping for marketplace module addon integration
+2026-01-21 | 1ca5cb4 | Fix key storage handling + receive UI + tx output views
