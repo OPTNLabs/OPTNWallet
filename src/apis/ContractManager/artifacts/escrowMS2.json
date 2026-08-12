@@ -1,0 +1,64 @@
+{
+  "contractName": "EscrowMS2",
+  "constructorInputs": [
+    {
+      "name": "arbiter1",
+      "type": "bytes20"
+    },
+    {
+      "name": "arbiter2",
+      "type": "bytes20"
+    },
+    {
+      "name": "buyer",
+      "type": "bytes20"
+    },
+    {
+      "name": "seller",
+      "type": "bytes20"
+    }
+  ],
+  "abi": [
+    {
+      "name": "eitherAuthSpend",
+      "inputs": [
+        {
+          "name": "pk",
+          "type": "pubkey"
+        },
+        {
+          "name": "s",
+          "type": "sig"
+        }
+      ]
+    },
+    {
+      "name": "bothAuthSpend",
+      "inputs": [
+        {
+          "name": "pk1",
+          "type": "pubkey"
+        },
+        {
+          "name": "s1",
+          "type": "sig"
+        },
+        {
+          "name": "pk2",
+          "type": "pubkey"
+        },
+        {
+          "name": "s2",
+          "type": "sig"
+        }
+      ]
+    }
+  ],
+  "bytecode": "OP_4 OP_PICK OP_0 OP_NUMEQUAL OP_IF OP_5 OP_PICK OP_HASH160 OP_EQUAL OP_5 OP_PICK OP_HASH160 OP_ROT OP_EQUAL OP_BOOLOR OP_VERIFY OP_4 OP_ROLL OP_4 OP_ROLL OP_CHECKSIGVERIFY OP_INPUTINDEX OP_UTXOVALUE OP_0 OP_OUTPUTVALUE OP_NUMEQUALVERIFY 76a914 OP_SWAP OP_CAT 88ac OP_CAT 76a914 OP_ROT OP_CAT 88ac OP_CAT OP_0 OP_OUTPUTBYTECODE OP_ROT OP_EQUAL OP_0 OP_OUTPUTBYTECODE OP_ROT OP_EQUAL OP_BOOLOR OP_NIP OP_ELSE OP_4 OP_ROLL OP_1 OP_NUMEQUALVERIFY OP_4 OP_PICK OP_HASH160 OP_EQUALVERIFY OP_4 OP_ROLL OP_4 OP_ROLL OP_CHECKSIGVERIFY OP_3 OP_PICK OP_HASH160 OP_EQUALVERIFY OP_2SWAP OP_CHECKSIGVERIFY OP_INPUTINDEX OP_UTXOVALUE OP_0 OP_OUTPUTVALUE OP_NUMEQUALVERIFY 76a914 OP_SWAP OP_CAT 88ac OP_CAT 76a914 OP_ROT OP_CAT 88ac OP_CAT OP_0 OP_OUTPUTBYTECODE OP_ROT OP_EQUAL OP_0 OP_OUTPUTBYTECODE OP_ROT OP_EQUAL OP_BOOLOR OP_ENDIF",
+  "source": "pragma cashscript ^0.9.0;\n\ncontract EscrowMS2(bytes20 arbiter1, bytes20 arbiter2, bytes20 buyer, bytes20 seller) {\n    function eitherAuthSpend(pubkey pk, sig s) {\n        require(hash160(pk) == arbiter1 || hash160(pk) == arbiter2);\n        require(checkSig(s, pk));\n\n        // Check that the correct amount is sent\n        // int minerFee = 1000; // hardcoded fee\n        int amount = tx.inputs[this.activeInputIndex].value;         // - minerFee\n        require(tx.outputs[0].value == amount);\n\n        // Check that the transaction sends to either the buyer or the seller\n        bytes25 buyerLock = new LockingBytecodeP2PKH(buyer);\n        bytes25 sellerLock = new LockingBytecodeP2PKH(seller);\n        bool sendsToBuyer = tx.outputs[0].lockingBytecode == buyerLock;\n        bool sendsToSeller = tx.outputs[0].lockingBytecode == sellerLock;\n        require(sendsToBuyer || sendsToSeller);\n    }\n\n    function bothAuthSpend(pubkey pk1, sig s1, pubkey pk2, sig s2) {\n        require(hash160(pk1) == arbiter1);\n        require(checkSig(s1, pk1));\n        require(hash160(pk2) == arbiter2);\n        require(checkSig(s2, pk2));\n\n        // Check that the correct amount is sent\n        // int minerFee = 1000; // hardcoded fee\n        int amount = tx.inputs[this.activeInputIndex].value;         // - minerFee\n        require(tx.outputs[0].value == amount);\n\n        // Check that the transaction sends to either the buyer or the seller\n        bytes25 buyerLock = new LockingBytecodeP2PKH(buyer);\n        bytes25 sellerLock = new LockingBytecodeP2PKH(seller);\n        bool sendsToBuyer = tx.outputs[0].lockingBytecode == buyerLock;\n        bool sendsToSeller = tx.outputs[0].lockingBytecode == sellerLock;\n        require(sendsToBuyer || sendsToSeller);\n    }\n}",
+  "compiler": {
+    "name": "cashc",
+    "version": "0.9.3"
+  },
+  "updatedAt": "2024-12-23T17:13:54.086Z"
+}
