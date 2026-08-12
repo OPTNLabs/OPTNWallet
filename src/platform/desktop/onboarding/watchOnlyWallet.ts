@@ -88,6 +88,48 @@ export interface CreateWatchOnlyWalletArgs {
 /** Branch 0 is receive, branch 1 is change — the standard BIP44 split. */
 const BRANCHES = [0, 1] as const;
 
+/**
+ * Which wallet already owns this cash/token address (global UNIQUE on keys).
+ * Closed wallets still hold rows — “closed” is not “deleted”.
+ */
+function findWalletOwningAddress(
+  db: NonNullable<ReturnType<ReturnType<typeof DatabaseService>['getDatabase']>>,
+  address: string,
+  tokenAddress: string
+): { walletId: number; walletName: string } | null {
+  const q = db.prepare(
+    `SELECT k.wallet_id AS wallet_id, w.wallet_name AS wallet_name
+     FROM keys k
+     LEFT JOIN wallets w ON w.id = k.wallet_id
+     WHERE k.address = ? OR k.token_address = ?
+     LIMIT 1`
+  );
+  try {
+    q.bind([address, tokenAddress]);
+    if (!q.step()) return null;
+    const row = q.getAsObject() as Record<string, unknown>;
+    const walletId = Number(row.wallet_id);
+    if (!Number.isFinite(walletId) || walletId <= 0) return null;
+    const walletName =
+      typeof row.wallet_name === 'string' && row.wallet_name.trim()
+        ? row.wallet_name.trim()
+        : `wallet ${walletId}`;
+    return { walletId, walletName };
+  } finally {
+    q.free();
+  }
+}
+
+function duplicateKeyMessage(owner: {
+  walletId: number;
+  walletName: string;
+}): string {
+  return (
+    `These addresses are already in “${owner.walletName}” (internal id: ${owner.walletId}). ` +
+    `Closing a wallet does not remove it — open that wallet from the list instead of creating a second copy.`
+  );
+}
+
 export async function createWatchOnlyWallet(
   args: CreateWatchOnlyWalletArgs
 ): Promise<number> {
@@ -98,7 +140,11 @@ export async function createWatchOnlyWallet(
   // the person holding the device ("use a hardened account xPub at
   // m/44'/145'/account'") rather than leaving a half-created wallet behind.
   const preview = deriveWatchOnlyAccountPreview(args.network, args.accountXpub);
-  const accountXpub = args.accountXpub.trim();
+  // Align version bytes (tpub/xpub) so lookup and storage match future opens.
+  const accountXpub = alignHdPublicKeyNetwork(
+    args.network,
+    args.accountXpub.trim()
+  );
   const gapLimit = args.gapLimit ?? WATCH_ONLY_GAP_LIMIT;
 
   // account_xpub is a desktop-only column, added here rather than in the
@@ -109,6 +155,36 @@ export async function createWatchOnlyWallet(
   await dbService.ensureDatabaseStarted();
   const db = dbService.getDatabase();
   if (!db) throw new Error('Wallet database is unavailable.');
+
+  // Electron Cash: one keystore → one wallet. Same xPub again → reuse, do not
+  // re-insert keys (global UNIQUE on address / token_address would explode).
+  const existingId = await findWatchOnlyWalletByXpub(
+    accountXpub,
+    args.network
+  );
+  if (existingId != null) {
+    return existingId;
+  }
+
+  // Preflight: first receive already owned by any wallet type (seed import that
+  // shares this account, or a failed earlier watch-only with different xpub
+  // string but same keys).
+  {
+    const branch0 = watchOnlyBranchXpub(accountXpub, args.network, 0);
+    const first = deriveBchAddressFromHdPublicKey(
+      args.network,
+      branch0,
+      0n
+    );
+    if (first) {
+      const owner = findWalletOwningAddress(
+        db,
+        first.address,
+        first.tokenAddress
+      );
+      if (owner) throw new Error(duplicateKeyMessage(owner));
+    }
+  }
 
   const insertWallet = db.prepare(
     `INSERT INTO wallets
@@ -172,15 +248,32 @@ export async function createWatchOnlyWallet(
             `Could not derive ${branch === 0 ? 'receive' : 'change'} address ${index}.`
           );
         }
-        insertKey.run([
-          walletId,
-          derived.publicKey,
-          derived.address,
-          derived.tokenAddress,
-          derived.publicKeyHash,
-          branch,
-          index,
-        ]);
+        try {
+          insertKey.run([
+            walletId,
+            derived.publicKey,
+            derived.address,
+            derived.tokenAddress,
+            derived.publicKeyHash,
+            branch,
+            index,
+          ]);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (/UNIQUE constraint failed/i.test(msg)) {
+            const owner = findWalletOwningAddress(
+              db,
+              derived.address,
+              derived.tokenAddress
+            );
+            throw new Error(
+              owner
+                ? duplicateKeyMessage(owner)
+                : 'Address already exists in another wallet. Open that wallet instead of creating a duplicate.'
+            );
+          }
+          throw err;
+        }
         insertAddr.run([
           walletId,
           derived.address,
@@ -356,9 +449,13 @@ export async function watchOnlyAccountXpub(
 /**
  * Reopen the same hardware/watch-only wallet if this xPub was already imported
  * (Electron Cash: one wallet file per keystore, not a new wallet every connect).
+ *
+ * Matches raw or network-aligned xPub text, then falls back to first receive
+ * address so a stored tpub/xpub spelling difference still finds the row.
  */
 export async function findWatchOnlyWalletByXpub(
-  accountXpub: string
+  accountXpub: string,
+  network?: Network
 ): Promise<number | null> {
   const xpub = accountXpub.trim();
   if (!xpub) return null;
@@ -367,20 +464,67 @@ export async function findWatchOnlyWalletByXpub(
   const db = dbService.getDatabase();
   if (!db) return null;
 
-  const query = db.prepare(
-    `SELECT id FROM wallets
-     WHERE walletType = ? AND account_xpub = ?
-     ORDER BY id ASC LIMIT 1`
-  );
-  try {
-    query.bind([WATCH_ONLY_WALLET_TYPE, xpub]);
-    if (!query.step()) return null;
-    const row = query.getAsObject() as Record<string, unknown>;
-    const id = Number(row.id);
-    return Number.isFinite(id) && id > 0 ? id : null;
-  } finally {
-    query.free();
+  const candidates = new Set<string>([xpub]);
+  if (network) {
+    try {
+      candidates.add(alignHdPublicKeyNetwork(network, xpub));
+    } catch {
+      /* invalid for this network — exact match only */
+    }
   }
+
+  for (const candidate of candidates) {
+    const query = db.prepare(
+      `SELECT id FROM wallets
+       WHERE walletType = ? AND account_xpub = ?
+       ORDER BY id ASC LIMIT 1`
+    );
+    try {
+      query.bind([WATCH_ONLY_WALLET_TYPE, candidate]);
+      if (query.step()) {
+        const row = query.getAsObject() as Record<string, unknown>;
+        const id = Number(row.id);
+        if (Number.isFinite(id) && id > 0) return id;
+      }
+    } finally {
+      query.free();
+    }
+  }
+
+  // Same keys, different stored xPub string → match first receive address.
+  if (network) {
+    try {
+      const aligned = alignHdPublicKeyNetwork(network, xpub);
+      const branch0 = watchOnlyBranchXpub(aligned, network, 0);
+      const first = deriveBchAddressFromHdPublicKey(network, branch0, 0n);
+      if (first) {
+        const owner = findWalletOwningAddress(
+          db,
+          first.address,
+          first.tokenAddress
+        );
+        if (owner) {
+          const typeQ = db.prepare(
+            `SELECT walletType FROM wallets WHERE id = ?`
+          );
+          try {
+            typeQ.bind([owner.walletId]);
+            if (typeQ.step()) {
+              const t = (typeQ.getAsObject() as { walletType?: string })
+                .walletType;
+              if (t === WATCH_ONLY_WALLET_TYPE) return owner.walletId;
+            }
+          } finally {
+            typeQ.free();
+          }
+        }
+      }
+    } catch {
+      /* derive failed */
+    }
+  }
+
+  return null;
 }
 
 const MASTER_FINGERPRINT_PATTERN = /^[0-9a-fA-F]{8}$/;

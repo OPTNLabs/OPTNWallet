@@ -147,17 +147,31 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
     setBusy(true);
     setError('');
     let walletId: number | null = null;
+    let createdNew = false;
     try {
-      walletId = await createWatchOnlyWallet({
-        name: walletName,
-        accountXpub,
-        network,
-        accountPath: getBchAccountPath(network),
-      });
-      await protectWatchOnlyWithPassword(walletId, password);
+      const { findWatchOnlyWalletByXpub } = await import('./watchOnlyWallet');
+      const already = await findWatchOnlyWalletByXpub(accountXpub, network);
+      if (already != null) {
+        // Same xPub already in the DB (wallet may only be closed, not deleted).
+        // Open that row instead of inserting duplicate keys.
+        walletId = already;
+      } else {
+        walletId = await createWatchOnlyWallet({
+          name: walletName,
+          accountXpub,
+          network,
+          accountPath: getBchAccountPath(network),
+        });
+        createdNew = true;
+      }
+      // Only set password gate on a brand-new row. Reopening an existing
+      // watch-only keeps its current password.
+      if (createdNew) {
+        await protectWatchOnlyWithPassword(walletId, password);
+      }
       onCreated(walletId);
     } catch (err) {
-      await rollbackCreatedWallet(walletId);
+      if (createdNew) await rollbackCreatedWallet(walletId);
       setError(
         err instanceof Error
           ? err.message
