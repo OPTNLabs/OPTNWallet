@@ -1,0 +1,35 @@
+{
+  "contractName": "Bip38",
+  "constructorInputs": [
+    {
+      "name": "userPWSig",
+      "type": "datasig"
+    }
+  ],
+  "abi": [
+    {
+      "name": "spend",
+      "inputs": [
+        {
+          "name": "ownerPk",
+          "type": "pubkey"
+        },
+        {
+          "name": "ownerSig",
+          "type": "sig"
+        },
+        {
+          "name": "password",
+          "type": "bytes"
+        }
+      ]
+    }
+  ],
+  "bytecode": "OP_3 OP_ROLL OP_2 OP_PICK OP_CHECKDATASIGVERIFY OP_CHECKSIG",
+  "source": "pragma cashscript ^0.9.0;\n\ncontract Bip38(datasig userPWSig) {\n  function spend(pubkey ownerPk, sig ownerSig, bytes password) {\n    require(checkDataSig(userPWSig, password, ownerPk));\n    require(checkSig(ownerSig, ownerPk));\n  }\n}",
+  "compiler": {
+    "name": "cashc",
+    "version": "0.9.3"
+  },
+  "updatedAt": "2024-12-23T16:50:02.983Z"
+}
