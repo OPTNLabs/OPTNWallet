@@ -1,0 +1,335 @@
+name: Publish Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish (for example, v1.7.0)
+        required: true
+        default: v1.7.0
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+concurrency:
+  group: publish-release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  quality:
+    name: Release quality gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+
+      - name: Verify release commit is on main
+        run: |
+          git fetch origin "refs/heads/main:refs/remotes/origin/main"
+          git fetch origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          RELEASE_SHA="$(git rev-parse "${RELEASE_TAG}^{commit}")"
+          git merge-base --is-ancestor "$RELEASE_SHA" origin/main || {
+            echo "Release tag must point to a commit reachable from main."
+            exit 1
+          }
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Quality gate
+        run: npm run lint:core && npm run typecheck:core && npm run test:core && npm run build
+
+  android:
+    name: Build Android release
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    outputs:
+      signed: ${{ steps.signing.outputs.available }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Setup Java (JDK 21)
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Enable Gradle cache
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Detect signing credentials
+        id: signing
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ] && [ -n "$STORE_PASS" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASS" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Prepare keystore file
+        if: steps.signing.outputs.available == 'true'
+        run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/app/keystore.jks
+
+      - name: Build signed APK and AAB
+        if: steps.signing.outputs.available == 'true'
+        env:
+          RELEASE_STORE_FILE: keystore.jks
+          RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          npm run android:prepare
+          cd android
+          ./gradlew assembleRelease bundleRelease
+
+      - name: Explain missing Android signing
+        if: steps.signing.outputs.available != 'true'
+        run: |
+          cat > android-release-status.txt <<'EOF'
+          Android binaries were not published for v1.7.0 because the permanent
+          Android release keystore is not configured in the GitHub production
+          environment. Configure ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD,
+          ANDROID_KEY_ALIAS, and ANDROID_KEY_PASSWORD, then rerun this workflow.
+          EOF
+
+      - name: Upload Android release files
+        uses: actions/upload-artifact@v7
+        if: steps.signing.outputs.available == 'true'
+        with:
+          name: android-release
+          path: |
+            android/**/outputs/apk/release/*.apk
+            android/**/outputs/bundle/release/*.aab
+          retention-days: 30
+
+      - name: Upload Android signing status
+        uses: actions/upload-artifact@v7
+        if: steps.signing.outputs.available != 'true'
+        with:
+          name: android-release-status
+          path: android-release-status.txt
+          retention-days: 30
+
+  desktop:
+    name: Build desktop (${{ matrix.platform }})
+    needs: quality
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact-name: desktop-windows
+            bundle-args: ''
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            artifact-name: desktop-macos-arm
+            bundle-args: ''
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            artifact-name: desktop-linux
+            bundle-args: '--bundles deb,rpm'
+    runs-on: ${{ matrix.platform }}
+    permissions:
+      contents: read
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
+            patchelf libssl-dev libgtk-3-dev libfuse2
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Fetch bundled Tor
+        run: node scripts/fetch-tor.mjs
+
+      - name: Import macOS signing certificate
+        if: startsWith(matrix.platform, 'macos') && env.APPLE_CERTIFICATE != ''
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          CERTIFICATE_PATH=$RUNNER_TEMP/certificate.p12
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          echo -n "$APPLE_CERTIFICATE" | base64 --decode -o "$CERTIFICATE_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+
+      - name: Build desktop bundles
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+          NO_STRIP: 'true'
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npx tauri build --target ${{ matrix.target }} ${{ matrix.bundle-args }}
+
+      - name: Upload desktop release files
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: src-tauri/target/${{ matrix.target }}/release/bundle/**
+          retention-days: 30
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs: [android, desktop]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download release files
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: List release files
+        run: find artifacts -type f -print | sort
+
+      - name: Assemble release files
+        run: |
+          mkdir -p release-files
+          find artifacts -type f \( \
+            -name '*.apk' -o -name '*.aab' -o -name '*.exe' -o -name '*.msi' \
+            -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \
+          \) -exec cp {} release-files/ \;
+          if [ -f artifacts/android-release-status/android-release-status.txt ]; then
+            cp artifacts/android-release-status/android-release-status.txt release-files/
+          fi
+          find release-files -type f -print | sort
+
+      - name: Generate SHA256 checksums
+        run: |
+          (
+            cd release-files
+            find . -maxdepth 1 -type f \( \
+              -name '*.apk' -o -name '*.aab' -o -name '*.exe' -o -name '*.msi' \
+              -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \
+            \) -print0 | sed -z 's#^\./##' | sort -z | xargs -0 sha256sum
+          ) > release-sha256.txt
+          test -s release-sha256.txt
+          cat release-sha256.txt
+
+      - name: Attest release files
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            release-files/*.apk
+            release-files/*.aab
+            release-files/*.exe
+            release-files/*.msi
+            release-files/*.dmg
+            release-files/*.AppImage
+            release-files/*.deb
+            release-files/*.rpm
+
+      - name: Remove stale Android status asset
+        if: needs.android.outputs.signed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if asset_names="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>/dev/null)"; then
+            if printf '%s\n' "$asset_names" | grep -Fxq 'android-release-status.txt'; then
+              gh release delete-asset "$RELEASE_TAG" android-release-status.txt --repo "$GITHUB_REPOSITORY" --yes
+            fi
+          fi
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: OPTN Wallet ${{ env.RELEASE_TAG }}
+          body: |
+            ## OPTN Wallet ${{ env.RELEASE_TAG }}
+
+            ### Downloads
+            - Windows x64: `.exe` and `.msi` installers
+            - macOS Apple Silicon: `.dmg`
+            - Linux x64: native `.deb` and `.rpm` packages
+            ${{ needs.android.outputs.signed == 'true' && '- Android: signed `.apk` for direct installation and `.aab` for Play distribution' || '- Android: not included yet; configure the permanent production keystore and rerun the release workflow' }}
+
+            iOS is not included in this release. Build-from-source instructions are in [docs/build-and-release.md](https://github.com/${{ github.repository }}/blob/${{ env.RELEASE_TAG }}/docs/build-and-release.md).
+
+            SHA256 checksums and build provenance attestations are attached.
+          files: |
+            release-files/*
+            release-sha256.txt
+          fail_on_unmatched_files: true
+          prerelease: false
