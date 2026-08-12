@@ -3,6 +3,24 @@
 Short answers checked against the desktop code. Wire detail:
 [p2p-cashfusion-protocol.md](./p2p-cashfusion-protocol.md).
 
+## What about blame?
+
+Built for P2P, not a port of Electron Cash `blame.rs`.
+
+Happy-path components (`inputs`, `outputs`, `signature`) arrive under
+throwaway keys, so a failed round has **no accused** until peers
+**disclose openings** on the control plane after abort. Those disclosures
+are checked (`fusionBlame.ts`). Bad crypto can mark an **ephemeral round
+key**. That is diagnosis only — it is not a wallet ban and it does not
+keep anyone out of the next gather.
+
+**Prove-or-don't-blame.** Only a re-verifiable fault counts
+(unbalanced Pedersen, bad component commitment, slot out of range, bad
+input credential, duplicate outpoint, invalid signature set). **Never**
+blame Tor lag, relay timeout, late join, or a missing message. A peer
+that simply does not sign looks the same as a peer whose signature was
+dropped — that is a timeout abort, not blame.
+
 ## What happens if someone does not sign an input?
 
 The round dies. No transaction.

@@ -30,7 +30,7 @@ Technical documentation for contributors and third-party integrators.
 - [P2P CashFusion Threat Model](./THREAT_MODEL.md)
   - Adversary classes for the shipped P2P design.
 - [P2P CashFusion FAQ](./p2p-cashfusion-faq.md)
-  - Short answers: missing signature, onion, ACK-shrink, 0-conf.
+  - Short answers: missing signature, blame, onion, ACK-shrink, 0-conf.
 - [Watch-only + SeedCash](./watch-only-seedcash.md)
   - xPub import, PSBTv145, UR export/import, optional fingerprint.
 - [Integration Guide](./integration-guide.md)
