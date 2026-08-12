@@ -102,6 +102,42 @@ export interface RefreshWalletHistoryResult {
 }
 
 /**
+ * Local-first paint: last saved SQL history → Redux. No Electrum, no
+ * coordinator/cooldown (those skipped the paint and made Home look empty).
+ *
+ * Call as soon as the wallet id is set (open / Home mount). Network refresh
+ * can follow; it must not gate this.
+ */
+export async function publishStoredWalletHistory(args: {
+  walletId: number;
+  dispatch: AppDispatch;
+  sessionGeneration?: number;
+}): Promise<number> {
+  const { walletId, dispatch, sessionGeneration } = args;
+  if (!Number.isSafeInteger(walletId) || walletId <= 0) return 0;
+
+  const dbService = DatabaseService();
+  await dbService.ensureDatabaseStarted();
+  const db = dbService.getDatabase() as SqlLikeDb | null;
+  if (!db) return 0;
+
+  const stored = mergeRecordedFusionTxsIntoHistory(
+    walletId,
+    loadStoredTransactions(db, walletId)
+  );
+  if (stored.length === 0) return 0;
+
+  dispatch(
+    setTransactions({
+      wallet_id: walletId,
+      transactions: stored,
+      sessionGeneration,
+    })
+  );
+  return stored.length;
+}
+
+/**
  * Fetch history for a wallet's addresses, persist it, and publish it to redux.
  *
  * Coalesced by `runWalletHistoryRefresh`, so bursts of address subscriptions

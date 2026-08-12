@@ -235,13 +235,21 @@ const DesktopLandingPage = () => {
       );
     }
     dispatch(setNetwork(info.networkType ?? Network.MAINNET));
-    // After Redux wallet id is set, force a UTXO pass. Watch-only previously
-    // bootstrapped before setWalletId (no-op); lifecycle can still race keys.
+    // After Redux wallet id is set, paint last SQL history immediately, then
+    // UTXO bootstrap. Do not wait for Electrum before Recent Activity exists.
     void (async () => {
       try {
         const { store } = await import('../../../state/store');
         const sessionGeneration =
           store.getState().wallet_id.sessionGeneration ?? 0;
+        const { publishStoredWalletHistory } = await import(
+          '../../../services/WalletHistoryRefreshService'
+        );
+        await publishStoredWalletHistory({
+          walletId: id,
+          dispatch,
+          sessionGeneration,
+        });
         const { bootstrapAllUTXOs } = await import(
           '../../../workers/UTXOWorkerService'
         );
@@ -250,7 +258,7 @@ const DesktopLandingPage = () => {
           sessionGeneration,
         });
       } catch (err) {
-        console.warn('[DesktopLandingPage] post-open UTXO bootstrap failed:', err);
+        console.warn('[DesktopLandingPage] post-open bootstrap failed:', err);
       }
     })();
     navigate(homeRoute(id));
