@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "id": "com.example.demo",
+  "name": "Example Demo",
+  "version": "0.1.0",
+  "description": "Template addon for OPTN wallet integration",
+  "trustTier": "reviewed",
+  "permissions": [
+    {
+      "kind": "capabilities",
+      "capabilities": [
+        "wallet:context:read",
+        "wallet:addresses:read",
+        "utxo:wallet:read",
+        "tx:add_output",
+        "tx:build",
+        "tx:broadcast"
+      ]
+    }
+  ],
+  "apps": [
+    {
+      "id": "example-app",
+      "name": "Example App",
+      "description": "Minimal addon app template",
+      "kind": "declarative",
+      "requiredCapabilities": [
+        "wallet:context:read",
+        "wallet:addresses:read",
+        "utxo:wallet:read",
+        "tx:build",
+        "tx:broadcast"
+      ],
+      "config": {
+        "screen": "ExampleAddonApp"
+      }
+    }
+  ],
+  "contracts": [
+    {
+      "id": "example-contract",
+      "name": "Example Contract",
+      "description": "Optional placeholder contract definition",
+      "cashscriptArtifact": {},
+      "functions": []
+    }
+  ],
+  "iconUri": null,
+  "enabledByDefault": false
+}
