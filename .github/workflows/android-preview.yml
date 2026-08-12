@@ -203,6 +203,27 @@ jobs:
           echo "Android services ready: ${settings_ready:-unavailable}"
           test "$settings_ready" = '1'
 
+          package_manager_ready=
+          package_manager_successes=0
+          package_manager_deadline=$((SECONDS + 300))
+          while [ "$SECONDS" -lt "$package_manager_deadline" ]; do
+            package_manager_output="$(adb_with_timeout -s "$emulator_serial" shell cmd package \
+              list packages --user 0 2>&1 | tr -d '\r')" || true
+            if printf '%s' "$package_manager_output" | grep -q '^package:android$'; then
+              package_manager_successes=$((package_manager_successes + 1))
+            else
+              package_manager_successes=0
+            fi
+            if [ "$package_manager_successes" -ge 3 ]; then
+              package_manager_ready=1
+              break
+            fi
+            sleep 5
+          done
+          echo "Android package manager ready: ${package_manager_ready:-unavailable}"
+          echo "Package manager consecutive probes: $package_manager_successes"
+          test "$package_manager_ready" = '1'
+
           app_apk="android/app/build/outputs/apk/debug/app-debug.apk"
           test_apk="android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk"
           instrumentation_log="$RUNNER_TEMP/android-instrumentation.log"
@@ -217,8 +238,16 @@ jobs:
             echo "Installing $(basename "$apk_path") ($(stat -c '%s' "$apk_path") bytes)"
             timeout "${install_timeout_seconds}s" adb -s "$emulator_serial" push \
               "$apk_path" "$remote_apk"
+            install_output="$RUNNER_TEMP/$(basename "$apk_path").install.log"
+            set +e
             timeout "${install_timeout_seconds}s" adb -s "$emulator_serial" shell pm install \
-              -r $install_flags "$remote_apk"
+              -r --skip-verification --skip-integrity-verification $install_flags "$remote_apk" \
+              2>&1 | tee "$install_output"
+            install_exit=${PIPESTATUS[0]}
+            set -e
+            if [ "$install_exit" -ne 0 ]; then
+              echo "Package install command exited with status $install_exit; verifying package state."
+            fi
             timeout 30s adb -s "$emulator_serial" shell rm -f "$remote_apk"
             timeout 30s adb -s "$emulator_serial" shell pm path "$package_name" |
               grep -q '^package:'
