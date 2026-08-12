@@ -1,0 +1,34 @@
+{
+  "folders": [
+	{
+		"path": "."
+	},
+	{
+		"path": "../reference/oracle-contract"
+	},
+	{
+		"path": "../reference/vegabch"
+	},
+	{
+		"path": "../reference/cashlab"
+	},
+	{
+		"path": "../reference/selene-wallet"
+	},
+	{
+		"path": "../reference/riftenlabs"
+	},
+	{
+		"path": "../reference/CashStarter"
+	},
+	{
+		"path": "../reference/quantumroot"
+	},
+	{
+		"path": "../covenant-ai"
+	}
+],
+  "settings": {
+    "vs-code-prettier-eslint.prettierLast": false
+  }
+}
