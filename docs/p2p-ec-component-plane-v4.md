@@ -1,9 +1,13 @@
 # P2P CashFusion — EC component plane (protocol v4)
 
-**Status:** Implemented with adversarial component-opening tests (2026-08-11).
-**Branch / worktree:** `fusion-release-reliability` (PR #12).  
-**Audience:** Implementers (Claude / Grok / human).  
-**Beta note:** No production users on P2P wire — **no migration compatibility required**. Breaking v3 is allowed and expected.
+**Status:** **Shipped.** `ROUND_MSG_VERSION = 4`. Adversarial component-opening
+tests are in-tree. v3 clients are rejected.
+
+**Audience:** Implementers. Wire details also summarized in
+[p2p-cashfusion-protocol.md](./p2p-cashfusion-protocol.md).
+
+There is **no v3 compatibility path**. Mixed old/new windows cannot share a
+round — restart every wallet after a protocol bump.
 
 ---
 
@@ -47,7 +51,7 @@ Implement **option (1)** — EC structure on P2P:
 | Shared crypto        | Prefer native FusionCore (`components`, `pedersen`, `schnorr`) over parallel TS-only hashes    |
 | ZK multiset proofs   | **Out of scope**                                                                               |
 
-ZK (option 2) is deferred indefinitely for PR12.
+ZK (option 2) is deferred indefinitely.
 
 ---
 
@@ -59,7 +63,7 @@ ZK (option 2) is deferred indefinitely for PR12.
 2. **Preserve happy-path unlinkability:** coordinator cannot group components by round identity.
 3. **One component story** for server + P2P (serialize once, two transports).
 4. **Fail closed** on old v3 credential redeem once v4 is on.
-5. **Honest docs:** no “production shipped” until soak + adversarial suite pass.
+5. **Honest docs:** v4 + adversarial tests are in-tree; Chipnet 10-way dogfooded.
 
 ### Non-goals
 
