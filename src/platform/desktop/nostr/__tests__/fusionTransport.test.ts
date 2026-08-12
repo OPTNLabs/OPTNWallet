@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   SimplePool,
   generateSecretKey,
@@ -30,6 +30,7 @@ import {
 import { assembleFusionTx, type PeerContribution } from '../fusionRound';
 import { toLibauthTx } from '../fusionSign';
 import { PUBLISH_RELAY_TIMEOUT_MS } from '../fusion';
+import { applyFusionKnobs, resetFusionKnobs } from '../../fusionKnobs';
 
 /** Minimal relay stand-in: stores events and delivers to subscriptions whose
  *  {kinds, #p} filter matches — including subscriptions opened later. */
@@ -94,6 +95,15 @@ function roundId() {
 }
 
 describe('Nostr round transport', () => {
+  beforeEach(() => {
+    // Onion mix is valid at 3; product gather floor is 6/4. This file proves
+    // the transport, not the product floor.
+    applyFusionKnobs({ minPlayers: 3, minSafePlayers: 3, maxPlayers: 6 });
+  });
+  afterEach(() => {
+    resetFusionKnobs();
+  });
+
   it('keeps a one-shot component socket alive beyond the relay ACK deadline', () => {
     expect(ONE_SHOT_POOL_LINGER_MS).toBeGreaterThan(PUBLISH_RELAY_TIMEOUT_MS);
   });

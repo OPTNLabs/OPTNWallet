@@ -226,6 +226,32 @@ vi.mock('../nostr/fusionP2pAllocation', () => ({
   planP2pOutputValues: vi.fn(() => ({ values: [2_000_000, 2_000_000] })),
 }));
 
+// Gather now reads live knobs, not the fusionTiming constants. Three mocked
+// peers must be a legal set or runP2pFusion waits out gatherMaxMs (120s).
+vi.mock('../fusionKnobs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../fusionKnobs')>();
+  return {
+    ...actual,
+    getFusionKnobs: () => ({
+      ...actual.FUSION_KNOB_DEFAULTS,
+      minPlayers: 3,
+      minSafePlayers: 3,
+      maxPlayers: 3,
+      gatherMaxMs: 500,
+      gatherAloneMs: 500,
+      gatherAloneAutoMs: 500,
+      gatherMinMs: 0,
+      gatherFastWarmupMs: 0,
+      smallSetHoldMs: 0,
+      peerSetStableMs: 0,
+      peerSetStableFastMs: 0,
+      peakGraceMs: 0,
+      rendezvousMs: 1_000,
+      proposalTimeoutMs: 1_000,
+    }),
+  };
+});
+
 // Collapse every gather budget so the peer loop locks on its first pass.
 vi.mock('../fusionTiming', () => ({
   P2P_COMPONENT_JITTER_MS: 0,
