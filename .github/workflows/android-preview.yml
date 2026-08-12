@@ -68,6 +68,9 @@ jobs:
       - name: Android JVM tests
         run: npm run android:test
 
+      - name: Prepare Android instrumentation tests
+        run: cd android && ./gradlew assembleDebugAndroidTest
+
       - name: Android emulator smoke tests
         run: |
           set -eu
@@ -161,6 +164,28 @@ jobs:
           echo "Emulator API level: ${api_level:-unavailable}"
           test "$api_level" = '36'
 
+          activity_manager_config=
+          activity_manager_ready=
+          activity_manager_successes=0
+          activity_manager_deadline=$((SECONDS + 300))
+          while [ "$SECONDS" -lt "$activity_manager_deadline" ]; do
+            activity_manager_config="$(adb_with_timeout -s "$emulator_serial" shell am \
+              get-config 2>&1 | tr -d '\r')" || true
+            if printf '%s' "$activity_manager_config" | grep -q '^config: '; then
+              activity_manager_successes=$((activity_manager_successes + 1))
+            else
+              activity_manager_successes=0
+            fi
+            if [ "$activity_manager_successes" -ge 3 ]; then
+              activity_manager_ready=1
+              break
+            fi
+            sleep 5
+          done
+          echo "Android Activity Manager ready: ${activity_manager_ready:-unavailable}"
+          echo "Activity Manager consecutive probes: $activity_manager_successes"
+          test "$activity_manager_ready" = '1'
+
           settings_state=
           settings_ready=
           services_deadline=$((SECONDS + 120))
@@ -168,7 +193,7 @@ jobs:
             settings_state="$(adb_with_timeout -s "$emulator_serial" shell settings get \
               system screen_off_timeout 2>/dev/null | tr -d '\r')" || true
             if [ -n "$settings_state" ] && ! printf '%s' "$settings_state" |
-              grep -Eq 'Can.t find service|Failure calling service' && adb_with_timeout -s \
+              grep -Eq '(^null$|Can.t find service|Failure calling service)' && adb_with_timeout -s \
               "$emulator_serial" shell input keyevent 82 >/dev/null 2>&1; then
               settings_ready=1
               break
