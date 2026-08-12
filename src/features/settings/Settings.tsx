@@ -28,6 +28,7 @@ import WizardConnectPanel from '../../components/wizardconnect/WizardConnectPane
 import { AppLockSettings } from '../../platform/desktop/AppLockSettings';
 import { RebuildWalletSettings } from '../../platform/desktop/RebuildWalletSettings';
 import { ExportColdArchiveSettings } from '../../platform/desktop/ExportColdArchiveSettings';
+import { WalletInfoSettings } from './WalletInfoSettings';
 
 import { disconnectAllWizardConnections } from '../../state/slices/wizardconnectSlice';
 import getElectrumAdapter from '../../services/ElectrumAdapter';
@@ -161,6 +162,8 @@ const Settings: React.FC = () => {
         return <NetworkSettings />;
       case 'faucet':
         return currentNetwork === Network.CHIPNET ? <FaucetView /> : null;
+      case 'wallet-info':
+        return <WalletInfoSettings />;
       case 'derivation':
         return <DerivationPathSettings />;
       case 'server':
@@ -200,6 +203,8 @@ const Settings: React.FC = () => {
         return 'Rebuild Wallet';
       case 'server':
         return 'Server';
+      case 'wallet-info':
+        return 'Wallet info';
       case 'derivation':
         return 'Derivation Path';
       case 'console':

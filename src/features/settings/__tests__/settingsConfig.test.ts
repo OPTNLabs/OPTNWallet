@@ -67,6 +67,7 @@ describe('settingsConfig', () => {
 
     expect(desktopWallet).toEqual(
       expect.arrayContaining([
+        'wallet-info',
         'recovery',
         'derivation',
         'app-lock',

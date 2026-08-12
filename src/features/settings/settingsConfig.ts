@@ -11,6 +11,7 @@ export type SettingsPanelKey =
   | 'wizardconnect'
   | 'network'
   | 'faucet'
+  | 'wallet-info'
   | 'derivation'
   | 'server'
   | 'console'
@@ -50,6 +51,13 @@ export const WALLET_ROWS: SettingsRowConfig[] = [
     description: 'Get test BCH on Chipnet',
     action: 'panel',
     target: 'faucet',
+  },
+  {
+    key: 'wallet-info',
+    title: 'Wallet info',
+    description: 'Name, type, network · xPub & path behind password/biometric',
+    action: 'panel',
+    target: 'wallet-info',
   },
   {
     key: 'derivation',
@@ -140,7 +148,8 @@ export const SETTINGS_GROUPS: Array<{
   {
     key: 'wallet',
     title: 'Wallet & security',
-    description: 'Recovery, derivation path, app lock, rebuild, and wallet controls',
+    description:
+      'Wallet info, recovery, derivation path, app lock, rebuild, and wallet controls',
   },
   {
     key: 'features',
@@ -173,6 +182,7 @@ export function getSettingsGroupRows(
   const rowsByGroup: Record<SettingsGroupKey, SettingsRowConfig[]> = {
     wallet: WALLET_ROWS.filter((row) =>
       [
+        'wallet-info',
         'recovery',
         'derivation',
         'app-lock',
