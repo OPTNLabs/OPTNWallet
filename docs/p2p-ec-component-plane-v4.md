@@ -216,48 +216,18 @@ Keep for now if still useful as non-auth metadata: session id, tier, feerate on 
 - [x] TS helpers + golden vector: `nostr/fusionComponentV4.ts` (+ tests)
 - [x] Golden tests match `components.rs` Electron Cash protobuf wire vector
 
-### Phase C–F — Cutover (landed)
+### Landed
 
-- [x] Issuance uses EC component blind messages (`buildComponentCredentialRequests`)
-- [x] Inputs redeem with `saltCommitments` + credential verify
-- [x] Outputs redeem with `saltCommitment` in onion payload
-- [x] `ROUND_MSG_VERSION = 4`; reject other versions
-- [x] Every credential request carries an EC-style InitialCommitment:
-      `sha256(salt || Component)` plus the Pedersen amount commitment
-- [x] Abort disclosures open the exact blind request, component salt, and
-      Pedersen nonce; a balanced commitment vector for different components is
-      rejected as `invalid_component_commitment`
-- [x] Focused three-peer adversarial suite proves the binding and honest round
-      completion
+- Issuance uses EC component blind messages (`buildComponentCredentialRequests`)
+- Inputs redeem with `saltCommitments` + credential verify
+- Outputs redeem with `saltCommitment` in onion payload
+- `ROUND_MSG_VERSION = 4`; other versions rejected
+- Credential request carries EC-style InitialCommitment:
+  `sha256(salt || Component)` plus the Pedersen amount commitment
+- Abort disclosures open the blind request, component salt, and Pedersen nonce
+- Adversarial suite covers binding and honest-round completion
 
-### Phase C — Issuance (control plane)
-
-- Replace TS issuer message hash construction with component hashes.
-- PlayerCommit-equivalent message over Nostr control (round key).
-- Pedersen balance still checked before any blind `s` is released.
-
-### Phase D — Anonymous redeem
-
-- New message type(s), e.g. `component_submit` (version 4): payload = component_ser + sig (+ serial).
-- Transport: already anonymous for component-class messages in `fusionTransport.ts` — extend type list; never round-key sign these.
-- Coordinator verifies and accumulates; peers may cross-check on assemble.
-
-### Phase E — Assembly + sign + broadcast
-
-- Build input/output lists from verified components (mirror `FusionTx::from_components` semantics).
-- Keep independent `verifyFusionSafety` / native sign / F1 reservation behavior.
-
-### Phase F — Cutover
-
-- Set `ROUND_MSG_VERSION = 4`.
-- Reject v3.
-- Update docs (`p2p-cashfusion-protocol.md`, privacy layers, threat model residual F2 section).
-- Adversarial tests: inject unauthorized component, replay, wrong round, over-quota, round-key grouping regression, fee theft, missing blanks (if enabled).
-- Chipnet soak.
-
-### Phase G — Blanks + full EC metadata (if not in D)
-
-- Fixed component counts / blanks for count privacy parity with EC.
+Optional later (not blocking): EC-style blank components for count-privacy parity.
 
 ---
 

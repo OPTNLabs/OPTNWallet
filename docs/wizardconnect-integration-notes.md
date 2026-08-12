@@ -1,6 +1,7 @@
 # WizardConnect Integration Notes
 
-Date: 2026-03-20
+**Status:** Shipped as its own connector (`wizardconnectSlice`, `WizardConnectPanel`),
+alongside WalletConnect — not folded into the WC Redux slice.
 
 ## Summary
 
