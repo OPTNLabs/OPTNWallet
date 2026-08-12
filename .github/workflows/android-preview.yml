@@ -209,8 +209,22 @@ jobs:
           test -f "$app_apk"
           test -f "$test_apk"
           install_timeout_seconds=300
-          timeout "${install_timeout_seconds}s" adb -s "$emulator_serial" install -r "$app_apk"
-          timeout "${install_timeout_seconds}s" adb -s "$emulator_serial" install -r -t "$test_apk"
+          install_apk() {
+            apk_path="$1"
+            package_name="$2"
+            install_flags="${3:-}"
+            remote_apk="/data/local/tmp/$(basename "$apk_path")"
+            echo "Installing $(basename "$apk_path") ($(stat -c '%s' "$apk_path") bytes)"
+            timeout "${install_timeout_seconds}s" adb -s "$emulator_serial" push \
+              "$apk_path" "$remote_apk"
+            timeout "${install_timeout_seconds}s" adb -s "$emulator_serial" shell pm install \
+              -r $install_flags "$remote_apk"
+            timeout 30s adb -s "$emulator_serial" shell rm -f "$remote_apk"
+            timeout 30s adb -s "$emulator_serial" shell pm path "$package_name" |
+              grep -q '^package:'
+          }
+          install_apk "$app_apk" optn.wallet.app
+          install_apk "$test_apk" optn.wallet.app.test -t
 
           set +e
           timeout 300s adb -s "$emulator_serial" shell am instrument -w -r \
