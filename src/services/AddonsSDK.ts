@@ -727,7 +727,7 @@ export function createAddonSDK(
         const pk = await withPolicyTimeout(
           'signing.signatureTemplateForAddress',
           10_000,
-          async () => await KeyService.fetchAddressPrivateKey(address, 'spend')
+          async () => await KeyService.fetchAddressPrivateKey(address)
         );
         if (!pk) throw new Error(`Missing private key for address: ${address}`);
         return new SignatureTemplate(pk, HashType.SIGHASH_ALL);

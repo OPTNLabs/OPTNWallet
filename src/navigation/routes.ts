@@ -16,7 +16,6 @@ export const ROUTE_PATHS = {
   campaignDetail: '/campaign/:id',
   receive: '/receive',
   quantumroot: '/quantumroot',
-  cashfusion: '/cashfusion',
   send: '/send',
   outbox: '/outbox',
   transactionBuilder: '/transaction',

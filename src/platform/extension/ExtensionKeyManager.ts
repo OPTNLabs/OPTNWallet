@@ -1,20 +1,16 @@
 // Browser-extension-only passphrase-derived key manager.
 //
-// Same PBKDF2(600k)/AES-GCM primitives as the desktop OptnKeyManager, but the
+// Same PBKDF2(600k)/AES-GCM primitives as the desktop EcKeyManager, but the
 // per-install salt + verify token live in localStorage instead of an OS
 // keychain — there is no Tauri keychain bridge inside a browser extension's
 // popup page. localStorage here is scoped to the extension's own origin
 // (chrome-extension://<id> / moz-extension://<id>), inaccessible to any web
 // page or other extension.
 //
-// Ciphertext model: we cache the passphrase + salt in RAM and re-derive the
-// CryptoKey ephemerally on each encrypt/decrypt call. The derived key never
-// persists in memory between operations.
-//
 // No biometric support (out of scope for the extension MVP — WebAuthn would
 // be a materially bigger addition, not a drop-in swap like the desktop
 // keychain/biometry plugins).
-import { setCachedPassword, clearCachedPassword, isCached } from '../desktop/WalletKeyCache';
+import { setCachedWalletKey, getCachedWalletKey, clearCachedWalletKey } from '../desktop/WalletKeyCache';
 import { deriveKey, aesEncrypt, aesDecrypt, bytesToBase64, base64ToBytes, randomSalt } from '../desktop/WalletCrypto';
 
 const SALT_KEY = 'optn_ext_salt_v1';
@@ -26,22 +22,22 @@ export function hasSetup(): boolean {
   return !!localStorage.getItem(VERIFY_KEY);
 }
 
-/** True if the wallet credentials are currently cached in RAM. */
+/** True if the derived key is currently loaded in RAM (this popup instance). */
 export function isUnlocked(): boolean {
-  return isCached();
+  return getCachedWalletKey() !== null;
 }
 
-/** First-time setup: derive key, store salt + verify token, cache credentials in RAM. */
+/** First-time setup: derive key, store salt + verify token, cache key in RAM. */
 export async function setup(passphrase: string): Promise<void> {
   const salt = randomSalt(32);
   const key = await deriveKey(passphrase, salt);
   const verifyToken = await aesEncrypt(key, VERIFY_PLAINTEXT);
   localStorage.setItem(SALT_KEY, bytesToBase64(salt));
   localStorage.setItem(VERIFY_KEY, verifyToken);
-  setCachedPassword(passphrase, salt);
+  setCachedWalletKey(key);
 }
 
-/** Unlock: derive key, verify against stored token, cache credentials if correct. */
+/** Unlock: derive key, verify against stored token, cache if correct. */
 export async function unlock(passphrase: string): Promise<boolean> {
   const saltB64 = localStorage.getItem(SALT_KEY);
   const verifyToken = localStorage.getItem(VERIFY_KEY);
@@ -51,16 +47,16 @@ export async function unlock(passphrase: string): Promise<boolean> {
     const key = await deriveKey(passphrase, salt);
     const decrypted = await aesDecrypt(key, verifyToken);
     if (decrypted !== VERIFY_PLAINTEXT) return false;
-    setCachedPassword(passphrase, salt);
+    setCachedWalletKey(key);
     return true;
   } catch {
     return false;
   }
 }
 
-/** Clear the in-memory credentials. Every popup boot starts locked regardless. */
+/** Clear the in-memory key. Every popup boot starts locked regardless. */
 export function lock(): void {
-  clearCachedPassword();
+  clearCachedWalletKey();
 }
 
 const ExtensionKeyManager = { hasSetup, isUnlocked, setup, unlock, lock };

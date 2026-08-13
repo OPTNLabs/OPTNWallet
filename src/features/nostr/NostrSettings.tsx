@@ -17,8 +17,6 @@ import {
   myIdentity,
   checkRelayStatus,
 } from '../../platform/desktop/nostr/chat';
-// Import from source of truth (not re-export) so Remove never desyncs from list.
-import { isDefaultNostrRelay } from '../../platform/desktop/nostr/defaultRelays';
 
 export const NostrSettings: React.FC = () => {
   const dispatch = useDispatch();
@@ -32,8 +30,6 @@ export const NostrSettings: React.FC = () => {
   const [draftError, setDraftError] = useState('');
   const [relayStatus, setRelayStatus] = useState<Record<string, boolean>>({});
   const [checking, setChecking] = useState(false);
-  /** How often to re-probe while this screen is open (remote relays flap). */
-  const RELAY_HEALTH_INTERVAL_MS = 45_000;
 
   useEffect(() => {
     if (!enabled || walletId <= 0) return;
@@ -42,40 +38,20 @@ export const NostrSettings: React.FC = () => {
       .catch((e) => setIdErr(e instanceof Error ? e.message : String(e)));
   }, [enabled, walletId]);
 
-  // Auto health probe: on open, on interval, on tab focus — not only Sync click.
-  // We cannot keep third-party relays "up"; we only re-measure reachability.
+  // Show which relays are actually reachable (auto on open + manual refresh).
   const refreshRelays = useCallback(() => {
     if (relays.length === 0) return;
     setChecking(true);
-    checkRelayStatus(relays, 8_000, (url, online) => {
-      setRelayStatus((prev) => ({ ...prev, [url]: online }));
-    })
+    checkRelayStatus(relays)
       .then(setRelayStatus)
       .finally(() => setChecking(false));
   }, [relays]);
 
   useEffect(() => {
-    if (!enabled || relays.length === 0) return;
-    let cancelled = false;
-    const run = () => {
-      if (cancelled) return;
-      refreshRelays();
-    };
-    run();
-    const interval = window.setInterval(run, RELAY_HEALTH_INTERVAL_MS);
-    const onVisible = () => {
-      if (document.visibilityState === 'visible') run();
-    };
-    document.addEventListener('visibilitychange', onVisible);
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-      document.removeEventListener('visibilitychange', onVisible);
-    };
-  }, [enabled, relays, refreshRelays]);
+    if (enabled) refreshRelays();
+  }, [enabled, refreshRelays]);
 
-  const activeCount = relays.filter((r) => relayStatus[r] === true).length;
-  const knownCount = relays.filter((r) => relayStatus[r] !== undefined).length;
+  const activeCount = relays.filter((r) => relayStatus[r]).length;
 
   const addRelay = () => {
     const relay = normalizeRelayDraft(relayDraft);
@@ -148,10 +124,8 @@ export const NostrSettings: React.FC = () => {
                   Relays
                 </p>
                 <p className="mt-1 text-[11px] leading-relaxed wallet-muted">
-                  WSS relays for chat and P2P fusion. Status auto-refreshes
-                  about every 45s (and when you reopen this screen). Green =
-                  reachable right now — we cannot force third-party servers to
-                  stay online. Fusion still works if some are red (multi-relay).
+                  WSS relays used for chat and the P2P-fusion transport. Add
+                  your own or use the defaults.
                 </p>
               </div>
               <button
@@ -159,16 +133,15 @@ export const NostrSettings: React.FC = () => {
                 onClick={refreshRelays}
                 disabled={checking}
                 className="flex shrink-0 items-center gap-1 rounded-lg border border-[var(--wallet-border)] px-2 py-1 text-[10px] font-semibold wallet-text-strong disabled:opacity-50"
-                aria-label="Check relay status now"
-                title="Optional manual re-check; health also runs automatically"
+                aria-label="Check relay status"
               >
                 <MdRefresh
                   className={checking ? 'animate-spin' : ''}
                   aria-hidden="true"
                 />
                 {checking
-                  ? `Checking… ${knownCount}/${relays.length}`
-                  : `${activeCount}/${relays.length} up`}
+                  ? 'Checking…'
+                  : `${activeCount}/${relays.length} active`}
               </button>
             </div>
 
@@ -199,18 +172,13 @@ export const NostrSettings: React.FC = () => {
                     <p className="min-w-0 flex-1 truncate font-mono text-[10px] wallet-text-strong">
                       {url}
                     </p>
-                    {/* Bootstrap relays match Fulcrum seed servers: no Remove.
-                        Only user-added relays can be deleted. */}
-                    {!isDefaultNostrRelay(url) && (
-                      <button
-                        type="button"
-                        onClick={() => dispatch(removeNostrRelay(url))}
-                        className="shrink-0 px-1 text-[10px] text-red-400/70 hover:text-red-400"
-                        aria-label={`Remove ${url}`}
-                      >
-                        Remove
-                      </button>
-                    )}
+                    <button
+                      onClick={() => dispatch(removeNostrRelay(url))}
+                      className="shrink-0 px-1 text-[10px] text-red-400/70 hover:text-red-400"
+                      aria-label={`Remove ${url}`}
+                    >
+                      Remove
+                    </button>
                   </div>
                 );
               })}

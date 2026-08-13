@@ -15,8 +15,7 @@ fn build_fusion_proto() {
     let proto = PathBuf::from("proto/fusion.proto");
     println!("cargo:rerun-if-changed={}", proto.display());
 
-    let descriptors =
-        protox::compile([&proto], ["proto"]).expect("failed to parse proto/fusion.proto");
+    let descriptors = protox::compile([&proto], ["proto"]).expect("failed to parse proto/fusion.proto");
 
     prost_build::Config::new()
         .compile_fds(descriptors)

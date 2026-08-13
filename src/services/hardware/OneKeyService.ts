@@ -1,13 +1,24 @@
 /**
- * OneKey hardware wallet service.
+ * OneKey hardware wallet service using the official OneKey Hardware JS SDK.
  *
- * OneKey Pro / classic devices speak a Trezor-compatible protobuf stack.
- * Desktop: same native USB HID path as Trezor (TypeScript protobuf + hidapi).
- * Browser: @onekeyfe/hd-web-sdk (bridge / web).
+ * OneKey devices are protocol-compatible with Trezor but use their own
+ * bridge and SDK. The @onekeyfe/hd-web-sdk package provides the web/desktop API.
+ *
+ * SDK reference: https://developer.onekey.so/en/
+ * GitHub: https://github.com/OneKeyHQ/hardware-js-sdk
  */
 
-import { isDesktopPlatform } from '../../utils/platform';
-import { TrezorNativeSession } from './TrezorNativeSession';
+// @onekeyfe/hd-web-sdk is a browser bundle — only works in webview context
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let sdk: any = null;
+
+async function getSDK() {
+  if (sdk) return sdk;
+  // Dynamic import ensures this only loads in browser/webview context
+  const mod = await import('@onekeyfe/hd-web-sdk');
+  sdk = mod.default ?? mod;
+  return sdk;
+}
 
 export interface OneKeyPublicKey {
   xpub: string;
@@ -33,46 +44,26 @@ export interface OneKeyOutput {
   script_type: 'PAYTOADDRESS';
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let sdk: any = null;
-let webInitialized = false;
+let initialized = false;
 
-const BCH_COIN = 'BCH';
-const BCH_COIN_NAME = 'Bcash';
-
-async function getSDK() {
-  if (sdk) return sdk;
-  const mod = await import('@onekeyfe/hd-web-sdk');
-  sdk = mod.default ?? mod;
-  return sdk;
-}
-
-async function ensureWebInitialized() {
-  if (webInitialized) return;
+async function ensureInitialized() {
+  if (initialized) return;
   const HW = await getSDK();
-  await HW.init({ debug: false });
-  webInitialized = true;
+  await HW.init({
+    debug: false,
+    // connectSrc is the OneKey Bridge URL — defaults to the official bridge
+    // For desktop use, OneKey Bridge daemon must be installed (similar to Trezor Bridge)
+  });
+  initialized = true;
 }
+
+// OneKey SDK coin identifier for Bitcoin Cash (confirmed from SDK bundle)
+const BCH_COIN = 'BCH';
 
 export async function oneKeyGetPublicKey(
   derivationPath = "m/44'/145'/0'"
 ): Promise<OneKeyPublicKey> {
-  if (isDesktopPlatform()) {
-    const session = new TrezorNativeSession('onekey');
-    try {
-      await session.open();
-      const result = await session.getPublicKey(derivationPath, BCH_COIN_NAME);
-      return {
-        xpub: result.xpub,
-        path: derivationPath,
-        label: result.label || 'OneKey',
-      };
-    } finally {
-      await session.close();
-    }
-  }
-
-  await ensureWebInitialized();
+  await ensureInitialized();
   const HW = await getSDK();
   const result = await HW.btcGetPublicKey({
     path: derivationPath,
@@ -89,29 +80,8 @@ export async function oneKeyGetPublicKey(
   };
 }
 
-export async function oneKeyGetAddress(
-  path: string
-): Promise<{ address: string }> {
-  if (isDesktopPlatform()) {
-    const session = new TrezorNativeSession('onekey');
-    try {
-      await session.open();
-      await session.initialize();
-      const res = await session.call('GetAddress', {
-        address_n: pathToAddressN(path),
-        coin_name: BCH_COIN_NAME,
-        script_type: 'SPENDADDRESS',
-        show_display: true,
-      });
-      const address = String(res.message.address ?? '');
-      if (!address) throw new Error('OneKey: empty address');
-      return { address };
-    } finally {
-      await session.close();
-    }
-  }
-
-  await ensureWebInitialized();
+export async function oneKeyGetAddress(path: string): Promise<{ address: string }> {
+  await ensureInitialized();
   const HW = await getSDK();
   const result = await HW.btcGetAddress({
     path,
@@ -128,14 +98,7 @@ export async function oneKeySignTransaction(
   inputs: OneKeyInput[],
   outputs: OneKeyOutput[]
 ): Promise<OneKeySignResult> {
-  if (isDesktopPlatform()) {
-    throw new Error(
-      'Desktop native OneKey signing (SignTx multi-round) is next. ' +
-        'Connect and xpub already use native USB (Trezor-compatible stack).'
-    );
-  }
-
-  await ensureWebInitialized();
+  await ensureInitialized();
   const HW = await getSDK();
   const result = await HW.btcSignTransaction({
     inputs,
@@ -148,11 +111,11 @@ export async function oneKeySignTransaction(
   return { serializedTx: result.payload.serializedTx };
 }
 
+// Convert BIP44 path string to number array (same as Trezor format)
 export function pathToAddressN(path: string): number[] {
   return path
     .replace(/^m\//, '')
     .split('/')
-    .filter(Boolean)
     .map((segment) => {
       const hardened = segment.endsWith("'");
       const index = parseInt(hardened ? segment.slice(0, -1) : segment, 10);
