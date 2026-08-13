@@ -13,10 +13,17 @@ describe('CashConnect identity path', () => {
     );
   });
 
-  it('accepts only the Nostr invite scheme', () => {
+  it('accepts only parseable CashConnect v1 invites', () => {
     expect(isCashConnectUri('bch-cc-v1:abc')).toBe(true);
     expect(isCashConnectUri('BCH-CC-V1:abc')).toBe(true);
+    expect(
+      isCashConnectUri(
+        'bch-cc-v1:ad6f1bc041b666007c6b6ea0a5151ad09ecef2139123a40e5cfbbebd93e425e0?relay=wss://nostr.infra.cash'
+      )
+    ).toBe(true);
+    expect(isCashConnectUri('bch-cc-v2:abc')).toBe(false);
     expect(isCashConnectUri('wiz://abc')).toBe(false);
     expect(isCashConnectUri('wc:abc')).toBe(false);
+    expect(isCashConnectUri('')).toBe(false);
   });
 });

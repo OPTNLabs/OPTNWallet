@@ -15,8 +15,8 @@ import { Network } from '../../state/slices/networkSlice';
 import { store } from '../../state/store';
 import type { UTXO } from '../../types/types';
 import { reservedOutpoints } from '../../platform/desktop/fusionRoundState';
-import { getBchAddressPath } from '../HdWalletService';
-import { derivePrivateKeyAtPath } from '../HdWalletService';
+import { deriveBchKeyMaterial } from '../HdWalletService';
+import { zeroize } from '../../utils/secureMemory';
 import KeyService from '../KeyService';
 
 type KeyRow = {
@@ -53,32 +53,35 @@ export function tokenFromUtxo(utxo: UTXO): Output['token'] | undefined {
   return out;
 }
 
+export function cashConnectKeyFreeData(): Record<string, never> {
+  return {};
+}
+
+export function cashConnectChangeData(publicKey: Uint8Array) {
+  return {
+    bytecode: {
+      'key.public_key': publicKey,
+    },
+  };
+}
+
 export async function getSpendableUTXOsForCashConnect(
-  walletId: number,
-  seed: WalletSeed
+  walletId: number
 ): Promise<SpendableUTXO[]> {
+  // alpha.31 builds and signs before onExecuteAction. Keep the context
+  // key-free so spend actions fail closed until a post-consent signer exists.
   const compiler = walletTemplateToCompilerBCH(walletTemplateP2pkhNonHd);
   const keys = (await KeyService.retrieveKeys(walletId)) as KeyRow[];
   const byAddress = new Map(keys.map((key) => [key.address, key]));
   const reserved = reservedOutpoints(walletId);
   const spendable: SpendableUTXO[] = [];
+  const data = cashConnectKeyFreeData();
 
   for (const [address, utxos] of Object.entries(asUtxoMap())) {
     const key = byAddress.get(address);
     if (!key || !utxos?.length) continue;
     const locking = cashAddressToLockingBytecode(address);
     if (typeof locking === 'string') continue;
-    const privateKey = await derivePrivateKeyAtPath(
-      seed.mnemonic,
-      seed.passphrase,
-      getBchAddressPath(
-        seed.network,
-        key.accountIndex,
-        key.changeIndex,
-        key.addressIndex,
-        seed.accountPath
-      )
-    );
     for (const utxo of utxos) {
       const outpoint = `${utxo.tx_hash}:${utxo.tx_pos}`;
       if (reserved.has(outpoint)) continue;
@@ -89,7 +92,7 @@ export async function getSpendableUTXOsForCashConnect(
         unlockingBytecode: {
           compiler,
           script: 'unlock',
-          data: { keys: { privateKeys: { key: privateKey } } },
+          data,
         },
         sourceOutput: {
           lockingBytecode: locking.bytecode,
@@ -113,24 +116,29 @@ export async function getChangeTemplateDirectiveForCashConnect(
   if (!change) {
     throw new Error('No change address is available for CashConnect');
   }
-  const privateKey = await derivePrivateKeyAtPath(
+  const material = await deriveBchKeyMaterial(
+    seed.network,
     seed.mnemonic,
     seed.passphrase,
-    getBchAddressPath(
-      seed.network,
-      change.accountIndex,
-      change.changeIndex,
-      change.addressIndex,
-      seed.accountPath
-    )
+    change.accountIndex,
+    change.changeIndex,
+    change.addressIndex,
+    seed.accountPath
   );
-  const compiler = walletTemplateToCompilerBCH(walletTemplateP2pkhNonHd);
-  const data = { keys: { privateKeys: { key: privateKey } } };
-  return {
-    lock: { compiler, data, script: 'lock' },
-    unlock: { compiler, data, script: 'unlock' },
-    fee: 1000n,
-  };
+  if (!material) {
+    throw new Error('No change address is available for CashConnect');
+  }
+  try {
+    const compiler = walletTemplateToCompilerBCH(walletTemplateP2pkhNonHd);
+    const data = cashConnectChangeData(material.publicKey);
+    return {
+      lock: { compiler, data, script: 'lock' },
+      unlock: { compiler, data, script: 'unlock' },
+      fee: 1000n,
+    };
+  } finally {
+    zeroize(material.privateKey);
+  }
 }
 
 export async function getSourceOutputForCashConnect(

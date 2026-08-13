@@ -5,6 +5,10 @@ import {
   rejectCashConnectProposalAction,
 } from '../../state/slices/cashconnectSlice';
 import { normalizeExternalUrl } from '../../utils/externalUrl';
+import {
+  cashConnectProposalHasTransactions,
+  listCashConnectActionNames,
+} from '../../services/cashconnect/cashconnectProposal';
 
 export default function CashConnectSessionProposalModal() {
   const dispatch = useDispatch<AppDispatch>();
@@ -14,6 +18,8 @@ export default function CashConnectSessionProposalModal() {
   if (!proposal) return null;
 
   const dappUrl = normalizeExternalUrl(proposal.dapp.url);
+  const actionNames = listCashConnectActionNames(proposal);
+  const hasTransactionActions = cashConnectProposalHasTransactions(proposal);
 
   return (
     <div className="wallet-popup-backdrop">
@@ -56,10 +62,20 @@ export default function CashConnectSessionProposalModal() {
           <p>
             <span className="font-semibold">Network:</span> {proposal.chain}
           </p>
+          <p>
+            <span className="font-semibold">Actions:</span>{' '}
+            {actionNames.join(', ') || 'none'}
+          </p>
           {proposal.allowedTokens.length > 0 ? (
             <p className="break-all">
               <span className="font-semibold">Tokens:</span>{' '}
               {proposal.allowedTokens.join(', ')}
+            </p>
+          ) : null}
+          {hasTransactionActions ? (
+            <p className="text-amber-600 dark:text-amber-400">
+              Transaction actions are unavailable until CashConnect supports
+              post-consent signing.
             </p>
           ) : null}
         </div>

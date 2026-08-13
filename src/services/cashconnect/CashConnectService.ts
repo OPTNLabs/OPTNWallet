@@ -1,3 +1,4 @@
+import { MemoryStore } from '@cashconnect-js/nostr';
 import {
   Wallet,
   doesActionRequireApproval,
@@ -11,6 +12,9 @@ import type {
 } from '@cashconnect-js/nostr';
 import WalletManager from '../../apis/WalletManager/WalletManager';
 import { Network } from '../../state/slices/networkSlice';
+import { subscribeWalletUtxoRefresh } from '../WalletUtxoRefreshService';
+import { zeroize } from '../../utils/secureMemory';
+import { logError } from '../../utils/errorHandling';
 
 import {
   getChangeTemplateDirectiveForCashConnect,
@@ -40,6 +44,7 @@ let wallet: Wallet | undefined;
 let walletId = 0;
 let proposalWaiter: CashConnectProposalWaiter | null = null;
 let actionWaiter: CashConnectActionWaiter | null = null;
+let unsubscribeUtxoRefresh: (() => void) | null = null;
 
 type UiHooks = {
   onSessions: (sessions: Record<string, WalletSession>) => void;
@@ -68,6 +73,16 @@ function expectedChain(network: Network): SessionProposalResponse['chain'] {
   return network === Network.MAINNET ? 'bitcoincash' : 'bchtest';
 }
 
+function assertCashConnectActive(expectedWalletId: number): void {
+  if (!wallet || walletId !== expectedWalletId) {
+    throw new Error('CashConnect request aborted');
+  }
+}
+
+export function isCashConnectActive(expectedWalletId: number): boolean {
+  return wallet !== undefined && walletId === expectedWalletId;
+}
+
 export async function startCashConnect(nextWalletId: number): Promise<void> {
   if (wallet && walletId === nextWalletId) return;
   await stopCashConnect();
@@ -89,63 +104,94 @@ export async function startCashConnect(nextWalletId: number): Promise<void> {
     accountPath: info.derivation_path,
   };
   const identityKey = await deriveCashConnectIdentityKey(nextSeed);
+  let client: Wallet;
+  try {
+    client = new Wallet({
+      cashConnectPrivateKey: identityKey,
+      store: new MemoryStore<WalletSession>(),
+      eventCallbacks: {
+        onSessionsUpdated(sessions) {
+          hooks?.onSessions(sessions);
+        },
+        onSessionProposal(proposal) {
+          if (proposal.chain !== expectedChain(nextSeed.network)) {
+            return Promise.reject(
+              new Error(
+                `CashConnect dApp is on ${proposal.chain}; this wallet is ${expectedChain(nextSeed.network)}.`
+              )
+            );
+          }
+          hooks?.onProposal(proposal);
+          return new Promise<SessionCreateRequest>((resolve, reject) => {
+            proposalWaiter = {
+              resolve: () =>
+                resolve({ allowedTokens: proposal.allowedTokens ?? [] }),
+              reject,
+            };
+          });
+        },
+        async onExecuteAction(session, request, _response, signal) {
+          if (signal.aborted || !isCashConnectActive(nextWalletId)) {
+            throw new Error('CashConnect request aborted');
+          }
+          if (doesActionRequireApproval(session, request.action)) {
+            throw new Error(
+              'CashConnect transaction signing requires a post-consent signer API'
+            );
+          }
+        },
+        onError(error) {
+          hooks?.onError(error.message);
+        },
+      },
+      contextCallbacks: {
+        getSpendableUTXOs: () => {
+          assertCashConnectActive(nextWalletId);
+          return getSpendableUTXOsForCashConnect(nextWalletId);
+        },
+        getChangeTemplateDirective: () => {
+          assertCashConnectActive(nextWalletId);
+          return getChangeTemplateDirectiveForCashConnect(
+            nextWalletId,
+            nextSeed
+          );
+        },
+        getSourceOutput: (hash, index) => {
+          assertCashConnectActive(nextWalletId);
+          return getSourceOutputForCashConnect(hash, index);
+        },
+      },
+    });
+  } finally {
+    zeroize(identityKey);
+  }
 
+  wallet = client;
   walletId = nextWalletId;
-  wallet = new Wallet({
-    cashConnectPrivateKey: identityKey,
-    eventCallbacks: {
-      onSessionsUpdated(sessions) {
-        hooks?.onSessions(sessions);
-      },
-      onSessionProposal(proposal) {
-        if (proposal.chain !== expectedChain(nextSeed.network)) {
-          return Promise.reject(
-            new Error(
-              `CashConnect dApp is on ${proposal.chain}; this wallet is ${expectedChain(nextSeed.network)}.`
-            )
-          );
-        }
-        hooks?.onProposal(proposal);
-        return new Promise<SessionCreateRequest>((resolve, reject) => {
-          proposalWaiter = {
-            resolve: () =>
-              resolve({ allowedTokens: proposal.allowedTokens ?? [] }),
-            reject,
-          };
-        });
-      },
-      onExecuteAction(session, request, response, signal) {
-        if (!doesActionRequireApproval(session, request.action)) {
-          return Promise.resolve();
-        }
-        hooks?.onAction({ session, request, response });
-        return new Promise<void>((resolve, reject) => {
-          actionWaiter = { resolve, reject };
-          signal.addEventListener(
-            'abort',
-            () => {
-              hooks?.onClearAction();
-              actionWaiter = null;
-              reject(new Error('DApp cancelled the request'));
-            },
-            { once: true }
-          );
-        });
-      },
-      onError(error) {
-        hooks?.onError(error.message);
-      },
-    },
-    contextCallbacks: {
-      getSpendableUTXOs: () =>
-        getSpendableUTXOsForCashConnect(nextWalletId, nextSeed),
-      getChangeTemplateDirective: () =>
-        getChangeTemplateDirectiveForCashConnect(nextWalletId, nextSeed),
-      getSourceOutput: getSourceOutputForCashConnect,
-    },
+  unsubscribeUtxoRefresh = subscribeWalletUtxoRefresh((refreshedWalletId) => {
+    if (refreshedWalletId !== nextWalletId) return;
+    void notifyCashConnectBalancesChanged();
   });
-  await wallet.start();
-  hooks?.onSessions(wallet.getActiveSessions());
+
+  try {
+    await client.start();
+    if (wallet !== client) {
+      throw new Error('CashConnect startup was cancelled');
+    }
+    hooks?.onSessions(client.getActiveSessions());
+  } catch (error) {
+    if (wallet === client) {
+      wallet = undefined;
+      walletId = 0;
+    }
+    try {
+      await client.stop();
+    } catch (stopError) {
+      logError('CashConnectService.start.stopAfterFailure', stopError);
+      throw stopError;
+    }
+    throw error;
+  }
 }
 
 export async function stopCashConnect(): Promise<void> {
@@ -155,6 +201,8 @@ export async function stopCashConnect(): Promise<void> {
   actionWaiter = null;
   hooks?.onClearProposal();
   hooks?.onClearAction();
+  unsubscribeUtxoRefresh?.();
+  unsubscribeUtxoRefresh = null;
   const previous = wallet;
   wallet = undefined;
   walletId = 0;
@@ -196,6 +244,14 @@ export function rejectCashConnectAction(): void {
   actionWaiter?.reject(new Error('User cancelled'));
   actionWaiter = null;
   hooks?.onClearAction();
+}
+
+export async function notifyCashConnectBalancesChanged(): Promise<void> {
+  try {
+    await wallet?.notifyBalancesChanged();
+  } catch (error) {
+    logError('CashConnectService.notifyBalancesChanged', error);
+  }
 }
 
 export function getCashConnectWallet(): Wallet | undefined {
