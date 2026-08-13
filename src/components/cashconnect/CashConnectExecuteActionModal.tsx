@@ -6,6 +6,7 @@ import {
   rejectCashConnectActionAction,
 } from '../../state/slices/cashconnectSlice';
 import { normalizeExternalUrl } from '../../utils/externalUrl';
+import WalletPopupSheet from '../ui/WalletPopupSheet';
 
 function formatMeta(
   segments: Array<string | { type: string }> | undefined
@@ -40,30 +41,9 @@ export default function CashConnectExecuteActionModal() {
   const description = formatMeta(response.meta?.description);
 
   return (
-    <div className="wallet-popup-backdrop">
-      <div className="wallet-popup-panel max-w-md w-full">
-        <h2 className="text-xl font-bold text-center mb-4">{title}</h2>
-        <p className="text-center font-semibold">{session.dapp.name}</p>
-        {dappUrl ? (
-          <a
-            href={dappUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="block text-center text-sm wallet-link break-all"
-          >
-            {session.dapp.url}
-          </a>
-        ) : null}
-        {description ? (
-          <p className="mt-3 text-sm wallet-muted">{description}</p>
-        ) : null}
-        <div className="mt-4 text-sm space-y-1">
-          <p className="font-semibold">Balance change</p>
-          {Object.entries(response.balanceChanges).map(([category, amount]) => (
-            <p key={category}>{formatBalance(category, amount)}</p>
-          ))}
-        </div>
-        <div className="grid grid-cols-2 gap-3 mt-6">
+    <WalletPopupSheet
+      footer={
+        <div className="grid grid-cols-2 gap-3">
           <button
             type="button"
             className="wallet-btn-primary px-3 py-2"
@@ -79,7 +59,29 @@ export default function CashConnectExecuteActionModal() {
             Reject
           </button>
         </div>
+      }
+    >
+      <h2 className="text-xl font-bold text-center mb-3">{title}</h2>
+      <p className="text-center font-semibold">{session.dapp.name}</p>
+      {dappUrl ? (
+        <a
+          href={dappUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="block text-center text-sm wallet-link break-all"
+        >
+          {session.dapp.url}
+        </a>
+      ) : null}
+      {description ? (
+        <p className="mt-3 text-sm wallet-muted">{description}</p>
+      ) : null}
+      <div className="mt-4 text-sm space-y-1">
+        <p className="font-semibold">Balance change</p>
+        {Object.entries(response.balanceChanges).map(([category, amount]) => (
+          <p key={category}>{formatBalance(category, amount)}</p>
+        ))}
       </div>
-    </div>
+    </WalletPopupSheet>
   );
 }
