@@ -69,8 +69,18 @@ export type BatchedTransactionRequest = {
  */
 class TransactionService {
   private dbService = DatabaseService();
-  private contractManager = ContractManager();
+  // Lazy: constructing ContractManager at module load hits a circular import
+  // (TransactionService → ContractManager → AddonsRegistry → …) and Vitest
+  // throws TDZ on `__vite_ssr_import_*` during OptnKeyManager tests.
+  private contractManager: ReturnType<typeof ContractManager> | null = null;
   private transactionManager: ReturnType<typeof TransactionManager> | null = null;
+
+  private getContractManager() {
+    if (!this.contractManager) {
+      this.contractManager = ContractManager();
+    }
+    return this.contractManager;
+  }
 
   private getTransactionManager() {
     if (!this.transactionManager) {
@@ -191,7 +201,7 @@ class TransactionService {
 
     // Fetch contract instances
     const contractInstances: ContractInstanceRow[] =
-      await this.contractManager.fetchContractInstances();
+      await this.getContractManager().fetchContractInstances();
 
     // Fetch contract UTXOs
     const contractUTXOs: UTXO[] = contractInstances.flatMap((contract) =>
