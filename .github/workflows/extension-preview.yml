@@ -6,7 +6,7 @@ name: Extension Preview
 
 on:
   pull_request:
-    branches: [dev]
+    branches: [dev, staging]
     paths:
       - 'src/**'
       - 'public/**'
@@ -16,7 +16,7 @@ on:
       - 'package.json'
       - '.github/workflows/extension-preview.yml'
   push:
-    branches: [dev]
+    branches: [dev, staging]
     paths:
       - 'src/**'
       - 'public/**'
