@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState, type MutableRefObject } from 'react';
+import { App as CapacitorApp } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { StatusBar, Style } from '@capacitor/status-bar';
-import { useLocation } from 'react-router-dom';
+import { Toast } from '@capacitor/toast';
+import { useLocation, useNavigate } from 'react-router-dom';
 import WalletManager from '../apis/WalletManager/WalletManager';
 import { startUTXOWorker, stopUTXOWorker } from '../workers/UTXOWorkerService';
 import { initWalletConnect } from '../state/slices/walletconnectSlice';
@@ -12,8 +14,16 @@ import {
 } from '../state/slices/wizardconnectSlice';
 import {
   initCashConnect,
+  pairCashConnectThunk,
   stopCashConnectThunk,
 } from '../state/slices/cashconnectSlice';
+import {
+  extractCashConnectUriFromOpenUrl,
+  stashCashConnectInvite,
+  takeStashedCashConnectInvite,
+} from '../services/cashconnect/cashconnectDeepLink';
+import { toErrorMessage } from '../utils/errorHandling';
+import { isNativePlatform } from '../utils/platform';
 import {
   checkAndDisconnectExpiredSessions,
   syncWalletConnectSessions,
@@ -41,7 +51,7 @@ import ScreenSecurity from '../platform/plugins/ScreenSecurity';
 import ElectrumServer from '../apis/ElectrumServer/ElectrumServer';
 import WalletBackendSyncService from '../services/WalletBackendSyncService';
 import PlayUpdateService from '../services/PlayUpdateService';
-import { ROUTE_PATHS } from '../navigation/routes';
+import { homeRoute, ROUTE_PATHS } from '../navigation/routes';
 import BcmrService from '../services/BcmrService';
 import { useWalletConfirm } from '../components/WalletConfirmDialog';
 import { refreshWalletTransactionHistory } from '../services/WalletHistoryRefreshService';
@@ -80,6 +90,74 @@ export function useCashConnectInitialization(
     }
     void dispatch(initCashConnect(walletId));
   }, [dispatch, walletId]);
+}
+
+export function useCashConnectDeepLink(
+  walletId: number | null,
+  dispatch: AppDispatch,
+  enabled: boolean
+) {
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!enabled || !isNativePlatform()) return;
+
+    const handleOpenUrl = async (openUrl: string) => {
+      const invite = extractCashConnectUriFromOpenUrl(openUrl);
+      if (!invite) return;
+      if (!walletId || walletId <= 0) {
+        stashCashConnectInvite(invite);
+        await Toast.show({
+          text: 'Open a wallet to approve this CashConnect request.',
+        });
+        return;
+      }
+      try {
+        await dispatch(initCashConnect(walletId)).unwrap();
+        await dispatch(pairCashConnectThunk(invite)).unwrap();
+        navigate(homeRoute(walletId));
+        await Toast.show({
+          text: 'CashConnect pairing started. Approve the request on this screen.',
+        });
+      } catch (error) {
+        await Toast.show({ text: toErrorMessage(error) });
+      }
+    };
+
+    let remove: { remove: () => Promise<void> } | undefined;
+    void CapacitorApp.getLaunchUrl()
+      .then((launch) => {
+        if (launch?.url) return handleOpenUrl(launch.url);
+      })
+      .catch(() => undefined);
+    void CapacitorApp.addListener('appUrlOpen', (event) => {
+      void handleOpenUrl(event.url);
+    }).then((handle) => {
+      remove = handle;
+    });
+
+    return () => {
+      void remove?.remove();
+    };
+  }, [dispatch, enabled, navigate, walletId]);
+
+  useEffect(() => {
+    if (!enabled || !walletId || walletId <= 0) return;
+    const invite = takeStashedCashConnectInvite();
+    if (!invite) return;
+    void (async () => {
+      try {
+        await dispatch(initCashConnect(walletId)).unwrap();
+        await dispatch(pairCashConnectThunk(invite)).unwrap();
+        navigate(homeRoute(walletId));
+        await Toast.show({
+          text: 'CashConnect pairing started. Approve the request on this screen.',
+        });
+      } catch (error) {
+        await Toast.show({ text: toErrorMessage(error) });
+      }
+    })();
+  }, [dispatch, enabled, navigate, walletId]);
 }
 
 export function useWalletConnectSessionWatch(
