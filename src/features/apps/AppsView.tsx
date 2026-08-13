@@ -214,8 +214,7 @@ const AppsView = () => {
                             return;
                           }
                           if (app.id === 'optn.wallet.cashfusion') {
-                            // First-class app route — not Settings (that felt like a UI bug).
-                            navigate('/cashfusion', { state: { returnTo: '/apps' } });
+                            navigate('/settings?panel=cashfusion', { state: { returnTo: '/apps' } });
                             return;
                           }
                           if (app.id === 'optn.wallet.nostr-chat') {
