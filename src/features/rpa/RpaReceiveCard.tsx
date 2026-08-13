@@ -115,9 +115,15 @@ export const RpaReceiveCard: React.FC<RpaReceiveCardProps> = ({ walletId }) => {
 
           {paycode && (
             <>
-              {/* QR code */}
+              {/* QR code — same tap-to-copy as the Receive address QR above */}
               <div className="flex flex-col items-center gap-3">
-                <div className="rounded-2xl border border-[rgba(0,0,0,0.08)] bg-white p-2 shadow-sm">
+                <button
+                  type="button"
+                  className="rounded-2xl border border-[rgba(0,0,0,0.08)] bg-white p-2 shadow-sm transition-transform duration-200 hover:scale-[1.01] focus:outline-none focus:ring-2 focus:ring-[var(--wallet-accent)] focus:ring-offset-2"
+                  onClick={() => void handleCopy(paycode)}
+                  aria-label="Copy paycode"
+                  title="Tap to copy paycode"
+                >
                   <QRCodeSVG
                     value={paycode}
                     size={160}
@@ -126,7 +132,7 @@ export const RpaReceiveCard: React.FC<RpaReceiveCardProps> = ({ walletId }) => {
                     level="M"
                     marginSize={1}
                   />
-                </div>
+                </button>
                 <p className="text-[10px] wallet-muted text-center max-w-[240px] leading-relaxed">
                   {t('rpa.shareDescription')}
                 </p>

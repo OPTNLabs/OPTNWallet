@@ -314,23 +314,23 @@ export function decodePaycode(paycodeStr: string): DecodedPaycode | null {
   }
 }
 
+export function looksLikeRpaPaycode(recipient: string): boolean {
+  const bare = recipient.trim().split('?')[0].toLowerCase();
+  return (
+    bare.startsWith(`${PAYCODE_PREFIX_MAINNET}:`) ||
+    bare.startsWith(`${PAYCODE_PREFIX_TESTNET}:`)
+  );
+}
+
 /**
- * Return a user-facing reason why an RPA-looking recipient must not enter the
- * ordinary CashAddress transaction builder. A complete sender implementation
- * must choose a designated input, derive the shared secret from that input's
- * private key and outpoint, and grind its signature nonce. Until that exact
- * path exists, failing closed is safer than producing an invalid or
- * privacy-degrading transaction.
+ * Block only invalid / wrong-network paycodes. A valid paycode is sent
+ * through finalizeRpaPayment (dummy dest → ECDH dest → prefix grind).
  */
 export function getRpaSendBlockReason(
   recipient: string,
   network: Network
 ): string | null {
-  const bare = recipient.trim().split('?')[0].toLowerCase();
-  const looksLikePaycode =
-    bare.startsWith(`${PAYCODE_PREFIX_MAINNET}:`) ||
-    bare.startsWith(`${PAYCODE_PREFIX_TESTNET}:`);
-  if (!looksLikePaycode) return null;
+  if (!looksLikeRpaPaycode(recipient)) return null;
 
   const decoded = decodePaycode(recipient);
   if (!decoded) {
@@ -346,10 +346,14 @@ export function getRpaSendBlockReason(
     return `This RPA paycode is for ${label}, not the wallet's active network. No transaction was created.`;
   }
 
-  return (
-    'Sending to reusable payment addresses (RPA) is not available yet. ' +
-    'The required designated-input derivation and signature nonce grinding are not active, so no transaction was created.'
-  );
+  if (decoded.expiry !== 0) {
+    const oneWeek = Math.floor(Date.now() / 1000) + 604_800;
+    if (decoded.expiry < oneWeek) {
+      return 'This paycode has expired. No transaction was created.';
+    }
+  }
+
+  return null;
 }
 
 // Derive + encode paycode in one call (convenience wrapper).
