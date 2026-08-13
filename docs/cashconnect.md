@@ -3,13 +3,22 @@
 BCH contract-system connector over Nostr. Separate from WalletConnect and
 WizardConnect.
 
-- Package: `@cashconnect-js/nostr` (`Wallet`)
-- Invite scheme: `bch-cc-v1:`
+- Package: `@cashconnect-js/nostr` (`Wallet`) `1.0.0-alpha.31`
+- Invite scheme: `bch-cc-v1:` — validated with `Wallet.parseInviteUrl`
 - Identity key: HD purpose **5001** (`derivationPathToCashConnectPath`), not
-  the spend path and not chat Nostr
+  the spend path and not chat Nostr. The temporary identity bytes are zeroed
+  after `Wallet` construction.
+- Sessions: in-memory `MemoryStore` only. The SDK default is localStorage
+  (includes session private keys). Encrypted per-wallet persistence is the
+  next step (Selene `cashconnect_sessions`).
+- Spend safety: alpha.31 builds and signs **before** `onExecuteAction`.
+  Context UTXOs are key-free and transaction actions are rejected until the
+  SDK exposes a post-consent signer. Pairing still works; spends do not.
+- Lifecycle: start on wallet open, stop on wallet close / lock / logout.
+  UTXO refresh notifies paired dApps via `notifyBalancesChanged`.
 - UI: Settings home + Actions → CashConnect. Home **Scan QR** opens a
   connect popup (paste or scan `bch-cc-v1:` / `wc:` / payment address).
-  Approve and sign popups are app-wide overlays on Home, like Paytaca.
+  Session-approve overlays are app-wide on Home.
 
-Reference: Cashonize `cashconnectStore.ts` and
-`src/components/cashconnect/`.
+Reference: Cashonize `cashconnectStore.ts`, and Selene
+[MR 281](https://git.xulu.tech/selene.cash/selene-wallet/-/merge_requests/281).

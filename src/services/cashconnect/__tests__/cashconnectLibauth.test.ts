@@ -19,7 +19,11 @@ import {
   getBchAccountPath,
 } from '../../HdWalletService';
 import { deriveCashConnectIdentityKey } from '../cashconnectKey';
-import { tokenFromUtxo } from '../cashconnectContext';
+import {
+  cashConnectChangeData,
+  cashConnectKeyFreeData,
+  tokenFromUtxo,
+} from '../cashconnectContext';
 
 const TEST_MNEMONIC = bip39.entropyToMnemonic('0'.repeat(32));
 
@@ -109,6 +113,35 @@ describe('CashConnect libauth', () => {
       transaction: generated.transaction,
     });
     expect(verified).toBe(true);
+  });
+
+  it('keeps live CashConnect context key-free and compiles change from a public key', async () => {
+    expect(cashConnectKeyFreeData()).toEqual({});
+
+    const keys = await deriveBchKeyMaterial(
+      Network.CHIPNET,
+      TEST_MNEMONIC,
+      '',
+      0,
+      1,
+      0
+    );
+    expect(keys).not.toBeNull();
+    if (!keys) return;
+
+    const compiler = walletTemplateToCompilerBCH(walletTemplateP2pkhNonHd);
+    const data = cashConnectChangeData(keys.publicKey);
+    expect(data).not.toHaveProperty('keys');
+    const lock = compiler.generateBytecode({
+      data,
+      scriptId: 'lock',
+    });
+    expect(lock.success).toBe(true);
+    if (!lock.success) return;
+    const fromAddress = cashAddressToLockingBytecode(keys.address);
+    expect(typeof fromAddress).not.toBe('string');
+    if (typeof fromAddress === 'string') return;
+    expect(binToHex(lock.bytecode)).toBe(binToHex(fromAddress.bytecode));
   });
 
   it('maps CashToken UTXO fields into a libauth Output token', () => {

@@ -10,7 +10,10 @@ import {
   initWizardConnect,
   syncWizardConnections,
 } from '../state/slices/wizardconnectSlice';
-import { initCashConnect } from '../state/slices/cashconnectSlice';
+import {
+  initCashConnect,
+  stopCashConnectThunk,
+} from '../state/slices/cashconnectSlice';
 import {
   checkAndDisconnectExpiredSessions,
   syncWalletConnectSessions,
@@ -71,7 +74,10 @@ export function useCashConnectInitialization(
   dispatch: AppDispatch
 ) {
   useEffect(() => {
-    if (!walletId || walletId <= 0) return;
+    if (!walletId || walletId <= 0) {
+      void dispatch(stopCashConnectThunk());
+      return;
+    }
     void dispatch(initCashConnect(walletId));
   }, [dispatch, walletId]);
 }
