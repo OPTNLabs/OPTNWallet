@@ -11,6 +11,24 @@ import {
 } from '../../services/cashconnect/cashconnectProposal';
 import WalletPopupSheet from '../ui/WalletPopupSheet';
 import { shortenHash } from '../../utils/shortenHash';
+import useSharedTokenMetadata from '../../hooks/useSharedTokenMetadata';
+
+const KNOWN_TOKEN_LABELS: Record<string, string> = {
+  d9ab24ed15a7846cc3d9e004aa5cb976860f13dac1ead05784ee4f4622af96ea: 'FURU',
+};
+
+function tokenLabel(
+  category: string,
+  metadata?: { name?: string; symbol?: string }
+): string {
+  const known = KNOWN_TOKEN_LABELS[category.toLowerCase()];
+  if (known) return known;
+  const symbol = metadata?.symbol?.trim();
+  if (symbol) return symbol;
+  const name = metadata?.name?.trim();
+  if (name && name.toLowerCase() !== category.toLowerCase()) return name;
+  return shortenHash(category, 6, 4);
+}
 
 function humanizeTemplateName(name: string): string {
   return name.replace(/^_+/, '').replace(/([a-z])([A-Z])/g, '$1 $2');
@@ -21,6 +39,7 @@ export default function CashConnectSessionProposalModal() {
   const proposal = useSelector(
     (state: RootState) => state.cashconnect.pendingProposal
   );
+  const tokenMetadata = useSharedTokenMetadata(proposal?.allowedTokens ?? []);
   if (!proposal) return null;
 
   const dappUrl = normalizeExternalUrl(proposal.dapp.url);
@@ -92,12 +111,9 @@ export default function CashConnectSessionProposalModal() {
         {proposal.allowedTokens.length > 0 ? (
           <p>
             <span className="font-semibold">Tokens:</span>{' '}
-            {proposal.allowedTokens.length} categor
-            {proposal.allowedTokens.length === 1 ? 'y' : 'ies'} (
             {proposal.allowedTokens
-              .map((token) => shortenHash(token, 6, 4))
+              .map((token) => tokenLabel(token, tokenMetadata[token]))
               .join(', ')}
-            )
           </p>
         ) : null}
         {hasTransactionActions ? (
