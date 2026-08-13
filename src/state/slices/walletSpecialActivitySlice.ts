@@ -87,12 +87,13 @@ export function rpaPayloadStealthSats(payload: unknown): number {
 
 /** Stealth BCH sats already claimed/scanned for this wallet. Not in UTXO total. */
 export const selectRpaStealthSats = (
-  state: { walletSpecialActivity: WalletSpecialActivityState },
+  state: { walletSpecialActivity?: WalletSpecialActivityState },
   walletId: number | null | undefined
 ): number => {
   const numericId = Number(walletId);
   if (!Number.isInteger(numericId) || numericId <= 0) return 0;
-  const byWallet = state.walletSpecialActivity.byWallet;
+  const byWallet = state.walletSpecialActivity?.byWallet;
+  if (!byWallet) return 0;
   const record =
     byWallet[numericId]?.rpa ??
     byWallet[String(numericId) as unknown as number]?.rpa ??

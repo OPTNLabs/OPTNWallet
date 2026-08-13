@@ -600,7 +600,7 @@ export default function useSimpleSend() {
             network: currentNetwork,
           });
           for (const key of inputKeys) key.priv.fill(0);
-          if (!finalized.ok) {
+          if (finalized.ok === false) {
             setError(finalized.error);
             setMode('error');
             return;

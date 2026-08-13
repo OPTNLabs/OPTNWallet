@@ -1,13 +1,16 @@
 // Desktop Home — swapped in for src/features/home/Home.tsx (vite.desktop.config.ts).
 //
-// FAITHFUL COPY of upstream Home.tsx. Desktop-only extras: `unitFor` balance
-// labels, and the shared Home connect popup (CashConnect / WalletConnect).
-// When upstream Home.tsx changes, re-copy this file and reapply the marked
-// `unit` spots plus the HomeConnectPopup wiring.
+// FAITHFUL COPY of upstream Home.tsx. The ONLY behavioural change is the balance
+// unit label: it reads `unit` (BCH on mainnet, tBCH on chipnet/testnet) via the
+// shared `unitFor` instead of a hardcoded "BCH", so test coins aren't mislabelled
+// as mainnet value. When upstream Home.tsx changes, re-copy this file and reapply
+// the three marked spots (import, `const unit`, the two `${unit}` strings).
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { FaArrowDown, FaArrowUp, FaBitcoin, FaQrcode } from 'react-icons/fa';
+import { CapacitorBarcodeScannerTypeHint } from '@capacitor/barcode-scanner';
+import { Toast } from '@capacitor/toast';
 import { AppDispatch, RootState } from '../../state/store';
 import {
   setFetchingUTXOs,
@@ -33,7 +36,6 @@ import {
   refreshWalletTransactionHistory,
 } from '../../services/WalletHistoryRefreshService';
 import { Network } from '../../state/slices/networkSlice';
-import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import { SATSINBITCOIN } from '../../utils/constants';
 import { selectRpaStealthSats } from '../../state/slices/walletSpecialActivitySlice';
 import { loadStoredWalletSpecialActivities } from '../../services/WalletSpecialActivityService';
@@ -49,9 +51,12 @@ import { isTxConfirmed } from '../../utils/txConfirmation';
 import { isFusionTransaction } from './fusionCoinDepth';
 import { useFusionDepthRevision } from './useFusionDepthRevision';
 import { FusionBadge } from '../../components/FusionBadge';
-import HomeConnectPopup from '../../components/home/HomeConnectPopup';
 import { preloadTokenMetadata } from '../../hooks/useSharedTokenMetadata';
-import { useHomeConnect } from '../../features/home/useHomeConnect';
+import {
+  getBarcodeScannerErrorMessage,
+  scanBarcodeSafely,
+} from '../../utils/barcodeScanner';
+import { classifyScannedQrPayload } from '../../utils/qrScan';
 import { unitFor } from './unitLabel'; // ← desktop-only: per-network unit label
 
 type QuickActionButtonProps = {
@@ -119,13 +124,15 @@ const Home: React.FC = () => {
       EMPTY_TRANSACTIONS
     );
   });
-  const currentNetwork = useSelector(selectCurrentNetwork);
+  const currentNetwork = useSelector(
+    (state: RootState) => state.network.currentNetwork
+  );
   const unit = unitFor(currentNetwork); // ← desktop-only: BCH / tBCH
   const bchUsdQuote = useSelector(
     (state: RootState) => state.priceFeed['BCH-USD']?.price
   );
   const [displayMode, setDisplayMode] = useState<'BCH' | 'USD'>('BCH');
-  const homeConnect = useHomeConnect();
+  const [scanBusy, setScanBusy] = useState(false);
   const [syncElapsedSec, setSyncElapsedSec] = useState(0);
 
   // Wall-clock only. Multi-phase sync (markers → Electrum batch → history)
@@ -343,6 +350,57 @@ const Home: React.FC = () => {
     sessionGeneration,
   ]);
 
+  const handleScanQr = useCallback(async () => {
+    if (scanBusy) return;
+
+    try {
+      setScanBusy(true);
+      const result = await scanBarcodeSafely({
+        hint: CapacitorBarcodeScannerTypeHint.ALL,
+        cameraDirection: 1,
+      });
+
+      const scanned = result?.ScanResult?.trim();
+      if (!scanned) {
+        await Toast.show({ text: 'No QR code detected. Try again.' });
+        return;
+      }
+
+      const parsed = classifyScannedQrPayload(scanned, currentNetwork);
+      const returnTo = `/home/${currentWalletId ?? ''}`;
+
+      if (parsed.kind === 'paper-wallet') {
+        navigate('/paper-wallet-sweep', {
+          state: {
+            returnTo,
+            scannedWif: parsed.paperWalletWif,
+          },
+        });
+        return;
+      }
+
+      if (parsed.kind === 'recipient') {
+        navigate('/send', {
+          state: {
+            returnTo,
+            recipient: parsed.normalizedAddress,
+            amountBch: parsed.amountRaw ?? '',
+          },
+        });
+        return;
+      }
+
+      await Toast.show({
+        text: 'QR scanned, but it was not a supported wallet payload.',
+      });
+    } catch (error) {
+      await Toast.show({ text: getBarcodeScannerErrorMessage(error) });
+      logError('Home.handleScanQr', error, { walletId: currentWalletId });
+    } finally {
+      setScanBusy(false);
+    }
+  }, [currentNetwork, currentWalletId, navigate, scanBusy]);
+
   return (
     <WalletScreen maxWidthClassName="max-w-md" scrollable={false}>
       <div className="flex h-full min-h-0 flex-col gap-4">
@@ -443,8 +501,8 @@ const Home: React.FC = () => {
               action={
                 <button
                   type="button"
-                  onClick={homeConnect.openPopup}
-                  disabled={homeConnect.scanning || homeConnect.submitting}
+                  onClick={() => void handleScanQr()}
+                  disabled={scanBusy}
                   className="wallet-card inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--wallet-border)] bg-[color-mix(in_oklab,var(--wallet-accent-soft)_42%,transparent)] px-3 text-[var(--wallet-accent-strong)] transition hover:brightness-[1.03] disabled:cursor-not-allowed disabled:opacity-70 self-center"
                   aria-label="Scan QR"
                   title="Scan QR"
@@ -453,7 +511,7 @@ const Home: React.FC = () => {
                     Scan QR
                   </span>
                   <FaQrcode
-                    className={`text-base ${homeConnect.scanning ? 'animate-pulse' : ''}`}
+                    className={`text-base ${scanBusy ? 'animate-pulse' : ''}`}
                   />
                 </button>
               }
@@ -558,17 +616,6 @@ const Home: React.FC = () => {
           </SectionCard>
         </div>
       </div>
-      {homeConnect.popupOpen ? (
-        <HomeConnectPopup
-          uri={homeConnect.uri}
-          onChange={homeConnect.setUri}
-          onScan={() => void homeConnect.scanQr()}
-          onConnect={() => void homeConnect.connectUri(homeConnect.uri)}
-          onClose={homeConnect.closePopup}
-          scanning={homeConnect.scanning}
-          submitting={homeConnect.submitting}
-        />
-      ) : null}
     </WalletScreen>
   );
 };
