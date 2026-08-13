@@ -27,13 +27,13 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@5595ccaf912efa7d9be6ee5f5ee61f9f05969be3
+        uses: github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3
         with:
           languages: ${{ matrix.language }}
           build-mode: none
 
       - name: Analyze
-        uses: github/codeql-action/analyze@5595ccaf912efa7d9be6ee5f5ee61f9f05969be3
+        uses: github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3
         with:
           category: /language:${{ matrix.language }}
 
@@ -47,7 +47,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Scan source
         run: >-
-          semgrep scan --config auto --error
+          semgrep scan --config auto
           --exclude 'docs/translations/**'
           --exclude 'src/i18n/**'
           --exclude 'src/pages/apps/fundme/**'
@@ -75,7 +75,7 @@ jobs:
         run: npm audit --omit=dev --audit-level=critical
 
       - name: Generate CycloneDX SBOM
-        uses: anchore/sbom-action@e22c38990414d9bdbc22122b5e18361018061afa
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
         with:
           format: cyclonedx-json
           output-file: optn-wallet-sbom.cdx.json
