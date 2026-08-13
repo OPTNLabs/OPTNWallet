@@ -47,7 +47,7 @@ jobs:
         run: npm ci
 
       - name: Fetch bundled Tor (integrated CashFusion privacy)
-        run: node scripts/fetch-tor.mjs linux-x86_64
+        run: npx --no-install tsx scripts/fetch-tor.mts linux-x86_64
 
       - name: Install tauri-driver
         run: cargo install tauri-driver --locked
