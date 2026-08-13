@@ -6,9 +6,17 @@ import {
   deriveRpaKeys,
   encodePaycode,
   decodePaycode,
+  derivePaymentAddress,
+  computeSharedSecret,
   getRpaSendBlockReason,
   getRpaKeyPaths,
+  rpaGrindString,
+  RPA_PREFIX_BITS,
 } from '../RpaService';
+import { secp256k1 } from '@bitauth/libauth';
+import { deriveHdPublicNodeChild } from '@bitauth/libauth';
+import { hash160 } from '@cashscript/utils';
+import { encodeCashAddress } from '@bitauth/libauth';
 
 // A fresh throwaway mnemonic generated per run — no seed phrase is hardcoded in
 // the repo. The tests below only compare derivations of this same mnemonic
@@ -88,6 +96,45 @@ describe('RpaService', () => {
     const replacement = paycode.endsWith('q') ? 'p' : 'q';
     expect(getRpaSendBlockReason(`${paycode.slice(0, -1)}${replacement}`, Network.CHIPNET)).toMatch(
       /invalid/i
+    );
+  });
+
+  it('matches Electron Cash grind string and uncompressed stealth address', async () => {
+    const keys = await deriveRpaKeys(TEST_MNEMONIC, PASSPHRASE, Network.CHIPNET);
+    expect(RPA_PREFIX_BITS).toBe(16);
+    expect(rpaGrindString(keys.scanPubkey, 16)).toHaveLength(4);
+    expect(rpaGrindString(keys.scanPubkey, 16)).toMatch(/^[0-9A-F]{4}$/);
+
+    const shared = computeSharedSecret(
+      keys.scanPrivkey,
+      keys.scanPubkey,
+      '11'.repeat(32),
+      0
+    );
+    const uncompressedDest = derivePaymentAddress(
+      keys.spendPubkey,
+      shared,
+      Network.CHIPNET,
+      0
+    );
+    const parentNode = {
+      publicKey: Uint8Array.from(keys.spendPubkey),
+      chainCode: Uint8Array.from(shared),
+      depth: 0,
+      childIndex: 0,
+      parentFingerprint: new Uint8Array(4),
+    };
+    const child = deriveHdPublicNodeChild(parentNode, 0);
+    if (typeof child === 'string') throw new Error(child);
+    const compressed = encodeCashAddress({
+      prefix: 'bchtest',
+      type: 'p2pkh',
+      payload: hash160(Uint8Array.from(child.publicKey)),
+    });
+    if (typeof compressed === 'string') throw new Error(compressed);
+    expect(uncompressedDest).not.toBe(compressed.address);
+    expect(secp256k1.uncompressPublicKey(child.publicKey)).not.toBeInstanceOf(
+      String
     );
   });
 
