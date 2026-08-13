@@ -916,6 +916,7 @@ export default function useSimpleSend() {
     refreshBchUtxos,
     setAmountBch,
     applyCoinControl,
+    isHardwareWallet,
   ]);
 
   const doSend = useCallback(async () => {
