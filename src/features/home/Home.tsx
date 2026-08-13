@@ -2,8 +2,6 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { FaArrowDown, FaArrowUp, FaBitcoin, FaQrcode } from 'react-icons/fa';
-import { CapacitorBarcodeScannerTypeHint } from '@capacitor/barcode-scanner';
-import { Toast } from '@capacitor/toast';
 import { AppDispatch, RootState } from '../../state/store';
 import {
   setFetchingUTXOs,
@@ -34,12 +32,9 @@ import { takeRecentTransactions } from '../../utils/transactionHistoryOrder';
 import { isFusionTransaction } from '../../platform/desktop/fusionCoinDepth';
 import { useFusionDepthRevision } from '../../platform/desktop/useFusionDepthRevision';
 import { FusionBadge } from '../../components/FusionBadge';
+import HomeConnectPopup from '../../components/home/HomeConnectPopup';
 import { preloadTokenMetadata } from '../../hooks/useSharedTokenMetadata';
-import {
-  getBarcodeScannerErrorMessage,
-  scanBarcodeSafely,
-} from '../../utils/barcodeScanner';
-import { classifyScannedQrPayload } from '../../utils/qrScan';
+import { useHomeConnect } from './useHomeConnect';
 
 type QuickActionButtonProps = {
   title: string;
@@ -98,7 +93,7 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
     (state: RootState) => state.priceFeed['BCH-USD']?.price
   );
   const [displayMode, setDisplayMode] = useState<'BCH' | 'USD'>('BCH');
-  const [scanBusy, setScanBusy] = useState(false);
+  const homeConnect = useHomeConnect();
   const totalBch = totalBalance / SATSINBITCOIN;
   const totalUsd =
     typeof bchUsdQuote === 'number' ? totalBch * bchUsdQuote : null;
@@ -161,57 +156,6 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
       dispatch(setFetchingUTXOs(false));
     }
   }, [currentWalletId, dbService, dispatch, fetchingUTXOsRedux]);
-
-  const handleScanQr = useCallback(async () => {
-    if (scanBusy) return;
-
-    try {
-      setScanBusy(true);
-      const result = await scanBarcodeSafely({
-        hint: CapacitorBarcodeScannerTypeHint.ALL,
-        cameraDirection: 1,
-      });
-
-      const scanned = result?.ScanResult?.trim();
-      if (!scanned) {
-        await Toast.show({ text: 'No QR code detected. Try again.' });
-        return;
-      }
-
-      const parsed = classifyScannedQrPayload(scanned, currentNetwork);
-      const returnTo = `/home/${currentWalletId ?? ''}`;
-
-      if (parsed.kind === 'paper-wallet') {
-        navigate('/paper-wallet-sweep', {
-          state: {
-            returnTo,
-            scannedWif: parsed.paperWalletWif,
-          },
-        });
-        return;
-      }
-
-      if (parsed.kind === 'recipient') {
-        navigate('/send', {
-          state: {
-            returnTo,
-            recipient: parsed.normalizedAddress,
-            amountBch: parsed.amountRaw ?? '',
-          },
-        });
-        return;
-      }
-
-      await Toast.show({
-        text: 'QR scanned, but it was not a supported wallet payload.',
-      });
-    } catch (error) {
-      await Toast.show({ text: getBarcodeScannerErrorMessage(error) });
-      logError('Home.handleScanQr', error, { walletId: currentWalletId });
-    } finally {
-      setScanBusy(false);
-    }
-  }, [currentNetwork, currentWalletId, navigate, scanBusy]);
 
   return (
     <WalletScreen maxWidthClassName="max-w-md" scrollable={false}>
@@ -298,8 +242,8 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
                 viewerOnly ? undefined : (
                   <button
                     type="button"
-                    onClick={() => void handleScanQr()}
-                    disabled={scanBusy}
+                    onClick={homeConnect.openPopup}
+                    disabled={homeConnect.scanning || homeConnect.submitting}
                     className="wallet-card inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--wallet-border)] bg-[color-mix(in_oklab,var(--wallet-accent-soft)_42%,transparent)] px-3 text-[var(--wallet-accent-strong)] transition hover:brightness-[1.03] disabled:cursor-not-allowed disabled:opacity-70 self-center"
                     aria-label="Scan QR"
                     title="Scan QR"
@@ -308,7 +252,7 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
                       Scan QR
                     </span>
                     <FaQrcode
-                      className={`text-base ${scanBusy ? 'animate-pulse' : ''}`}
+                      className={`text-base ${homeConnect.scanning ? 'animate-pulse' : ''}`}
                     />
                   </button>
                 )
@@ -408,6 +352,17 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
           </SectionCard>
         </div>
       </div>
+      {!viewerOnly && homeConnect.popupOpen ? (
+        <HomeConnectPopup
+          uri={homeConnect.uri}
+          onChange={homeConnect.setUri}
+          onScan={() => void homeConnect.scanQr()}
+          onConnect={() => void homeConnect.connectUri(homeConnect.uri)}
+          onClose={homeConnect.closePopup}
+          scanning={homeConnect.scanning}
+          submitting={homeConnect.submitting}
+        />
+      ) : null}
     </WalletScreen>
   );
 };
