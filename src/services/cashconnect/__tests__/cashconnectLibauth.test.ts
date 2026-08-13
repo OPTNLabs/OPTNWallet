@@ -21,7 +21,7 @@ import {
 import { deriveCashConnectIdentityKey } from '../cashconnectKey';
 import {
   cashConnectChangeData,
-  cashConnectKeyFreeData,
+  cashConnectSpendData,
   tokenFromUtxo,
 } from '../cashconnectContext';
 
@@ -115,9 +115,7 @@ describe('CashConnect libauth', () => {
     expect(verified).toBe(true);
   });
 
-  it('keeps live CashConnect context key-free and compiles change from a public key', async () => {
-    expect(cashConnectKeyFreeData()).toEqual({});
-
+  it('compiles change from a public key and carries spend keys for live context', async () => {
     const keys = await deriveBchKeyMaterial(
       Network.CHIPNET,
       TEST_MNEMONIC,
@@ -142,6 +140,9 @@ describe('CashConnect libauth', () => {
     expect(typeof fromAddress).not.toBe('string');
     if (typeof fromAddress === 'string') return;
     expect(binToHex(lock.bytecode)).toBe(binToHex(fromAddress.bytecode));
+    expect(cashConnectSpendData(keys.privateKey).keys.privateKeys.key).toEqual(
+      keys.privateKey
+    );
   });
 
   it('maps CashToken UTXO fields into a libauth Output token', () => {

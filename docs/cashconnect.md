@@ -11,9 +11,9 @@ WizardConnect.
 - Sessions: in-memory `MemoryStore` only. The SDK default is localStorage
   (includes session private keys). Encrypted per-wallet persistence is the
   next step (Selene `cashconnect_sessions`).
-- Spend safety: alpha.31 builds and signs **before** `onExecuteAction`.
-  Context UTXOs are key-free and transaction actions are rejected until the
-  SDK exposes a post-consent signer. Pairing still works; spends do not.
+- Spends: alpha.31 builds and signs before `onExecuteAction`. The wallet
+  still shows an approve sheet; Reject withholds the signed tx from the
+  dApp. Pairing a template that includes transaction actions is allowed.
 - Lifecycle: start on wallet open, stop on wallet close / lock / logout.
   UTXO refresh notifies paired dApps via `notifyBalancesChanged`.
 - UI: Settings home + Actions → CashConnect. Home **Scan QR** opens a

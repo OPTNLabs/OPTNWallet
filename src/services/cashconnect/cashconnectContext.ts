@@ -15,7 +15,11 @@ import { Network } from '../../state/slices/networkSlice';
 import { store } from '../../state/store';
 import type { UTXO } from '../../types/types';
 import { reservedOutpoints } from '../../platform/desktop/fusionRoundState';
-import { deriveBchKeyMaterial } from '../HdWalletService';
+import {
+  deriveBchKeyMaterial,
+  derivePrivateKeyAtPath,
+  getBchAddressPath,
+} from '../HdWalletService';
 import { zeroize } from '../../utils/secureMemory';
 import KeyService from '../KeyService';
 
@@ -53,10 +57,6 @@ export function tokenFromUtxo(utxo: UTXO): Output['token'] | undefined {
   return out;
 }
 
-export function cashConnectKeyFreeData(): Record<string, never> {
-  return {};
-}
-
 export function cashConnectChangeData(publicKey: Uint8Array) {
   return {
     bytecode: {
@@ -65,23 +65,38 @@ export function cashConnectChangeData(publicKey: Uint8Array) {
   };
 }
 
+export function cashConnectSpendData(privateKey: Uint8Array) {
+  return { keys: { privateKeys: { key: Uint8Array.from(privateKey) } } };
+}
+
 export async function getSpendableUTXOsForCashConnect(
-  walletId: number
+  walletId: number,
+  seed: WalletSeed
 ): Promise<SpendableUTXO[]> {
-  // alpha.31 builds and signs before onExecuteAction. Keep the context
-  // key-free so spend actions fail closed until a post-consent signer exists.
+  // alpha.31 builds (and signs) before onExecuteAction. Rejecting that
+  // callback still withholds the signed tx from the dApp.
   const compiler = walletTemplateToCompilerBCH(walletTemplateP2pkhNonHd);
   const keys = (await KeyService.retrieveKeys(walletId)) as KeyRow[];
   const byAddress = new Map(keys.map((key) => [key.address, key]));
   const reserved = reservedOutpoints(walletId);
   const spendable: SpendableUTXO[] = [];
-  const data = cashConnectKeyFreeData();
 
   for (const [address, utxos] of Object.entries(asUtxoMap())) {
     const key = byAddress.get(address);
     if (!key || !utxos?.length) continue;
     const locking = cashAddressToLockingBytecode(address);
     if (typeof locking === 'string') continue;
+    const privateKey = await derivePrivateKeyAtPath(
+      seed.mnemonic,
+      seed.passphrase,
+      getBchAddressPath(
+        seed.network,
+        key.accountIndex,
+        key.changeIndex,
+        key.addressIndex,
+        seed.accountPath
+      )
+    );
     for (const utxo of utxos) {
       const outpoint = `${utxo.tx_hash}:${utxo.tx_pos}`;
       if (reserved.has(outpoint)) continue;
@@ -92,7 +107,7 @@ export async function getSpendableUTXOsForCashConnect(
         unlockingBytecode: {
           compiler,
           script: 'unlock',
-          data,
+          data: cashConnectSpendData(privateKey),
         },
         sourceOutput: {
           lockingBytecode: locking.bytecode,
@@ -130,7 +145,7 @@ export async function getChangeTemplateDirectiveForCashConnect(
   }
   try {
     const compiler = walletTemplateToCompilerBCH(walletTemplateP2pkhNonHd);
-    const data = cashConnectChangeData(material.publicKey);
+    const data = cashConnectSpendData(material.privateKey);
     return {
       lock: { compiler, data, script: 'lock' },
       unlock: { compiler, data, script: 'unlock' },

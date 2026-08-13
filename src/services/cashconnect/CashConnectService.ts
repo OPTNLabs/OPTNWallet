@@ -135,15 +135,26 @@ export async function startCashConnect(nextWalletId: number): Promise<void> {
             };
           });
         },
-        async onExecuteAction(session, request, _response, signal) {
+        onExecuteAction(session, request, response, signal) {
           if (signal.aborted || !isCashConnectActive(nextWalletId)) {
-            throw new Error('CashConnect request aborted');
+            return Promise.reject(new Error('CashConnect request aborted'));
           }
-          if (doesActionRequireApproval(session, request.action)) {
-            throw new Error(
-              'CashConnect transaction signing requires a post-consent signer API'
+          if (!doesActionRequireApproval(session, request.action)) {
+            return Promise.resolve();
+          }
+          hooks?.onAction({ session, request, response });
+          return new Promise<void>((resolve, reject) => {
+            actionWaiter = { resolve, reject };
+            signal.addEventListener(
+              'abort',
+              () => {
+                hooks?.onClearAction();
+                actionWaiter = null;
+                reject(new Error('DApp cancelled the request'));
+              },
+              { once: true }
             );
-          }
+          });
         },
         onError(error) {
           hooks?.onError(error.message);
@@ -152,7 +163,7 @@ export async function startCashConnect(nextWalletId: number): Promise<void> {
       contextCallbacks: {
         getSpendableUTXOs: () => {
           assertCashConnectActive(nextWalletId);
-          return getSpendableUTXOsForCashConnect(nextWalletId);
+          return getSpendableUTXOsForCashConnect(nextWalletId, nextSeed);
         },
         getChangeTemplateDirective: () => {
           assertCashConnectActive(nextWalletId);
