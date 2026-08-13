@@ -14,10 +14,6 @@ import {
   formatAtomicTokenAmount,
   resolveTokenPresentation,
 } from '../../../utils/tokenPresentation';
-import { coinDepth } from '../../../platform/desktop/fusionCoinDepth';
-import { outpointKey } from '../../../platform/desktop/CoinLabelService';
-import { FusionBadge } from '../../../components/FusionBadge';
-import { selectWalletId } from '../../../state/slices/walletSlice';
 
 interface SelectedUTXOsDisplayProps {
   selectedUtxos: UTXO[];
@@ -74,7 +70,6 @@ export default function SelectedUTXOsDisplay({
   );
 
   const prices = useSelector((s: RootState) => s.priceFeed);
-  const walletId = useSelector(selectWalletId);
   const bchUsd = prices['BCH-USD']?.price ?? 0;
 
   const togglePopup = () => setShowPopup((v) => !v);
@@ -169,15 +164,6 @@ export default function SelectedUTXOsDisplay({
                       <>
                         <span className="w-full">
                           {formatSatsToBchString(sats)} BCH
-                          {walletId > 0 && (
-                            <FusionBadge
-                              depth={coinDepth(
-                                walletId,
-                                outpointKey(utxo.tx_hash, utxo.tx_pos)
-                              )}
-                              className="ml-2"
-                            />
-                          )}
                         </span>
                         <span className="w-full">
                           Tx Hash: {shortenTxHash(utxo.tx_hash)}

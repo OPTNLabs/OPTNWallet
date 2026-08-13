@@ -12,7 +12,6 @@ import {
 import { DesktopWalletPickerActions } from '../DesktopWalletPickerActions';
 import { WatchOnlyWalletPreview } from '../WatchOnlyWalletPreview';
 import { deriveWatchOnlyAccountPreview } from '../watchOnlyAccountPreview';
-import { masterFingerprintBytes } from '../watchOnlyWallet';
 
 const TEST_MNEMONIC = bip39.entropyToMnemonic('0'.repeat(32));
 
@@ -30,9 +29,9 @@ describe('desktop watch-only preview', () => {
 
     expect(html).toContain('Add another wallet');
     expect(html).toContain('Create Watch-Only Wallet');
-    expect(html).toContain('Use a hardware device');
-    // Airgap/Keystone live inside create-watch-only, not on the landing list.
-    expect(html).not.toContain('Set up Keystone');
+    expect(html.indexOf('Connect Hardware Wallet')).toBeLessThan(
+      html.indexOf('Create Watch-Only Wallet')
+    );
   });
 
   it('derives the first receive and change addresses from a BCH account xPub', async () => {
@@ -68,8 +67,7 @@ describe('desktop watch-only preview', () => {
     expect(preview).not.toHaveProperty('privateKey');
   });
 
-  it('aligns xpub/tpub version bytes when the wallet network differs', async () => {
-    // Version bytes only — same HD node. Trezor/chipnet exports often need this.
+  it('rejects an xPub whose encoded network does not match the selected network', async () => {
     const mainnetXpub = await deriveHdPublicKeyAtPath(
       TEST_MNEMONIC,
       '',
@@ -77,72 +75,22 @@ describe('desktop watch-only preview', () => {
       getBchAccountPath(Network.MAINNET, 0)
     );
 
-    const preview = deriveWatchOnlyAccountPreview(Network.CHIPNET, mainnetXpub);
-    expect(preview.receive.address.startsWith('bchtest:')).toBe(true);
-    expect(preview.accountPath).toBe("m/44'/1'/0'");
+    expect(() =>
+      deriveWatchOnlyAccountPreview(Network.CHIPNET, mainnetXpub)
+    ).toThrow(/network/i);
   });
 
-  it('saves and opens without an xPub preview step; single-sig and multisig for PSBT', () => {
+  it('labels the screen as a preview and does not claim save, sign, or broadcast support', () => {
     const html = renderToStaticMarkup(
-      <WatchOnlyWalletPreview
-        onBack={() => undefined}
-        onCreated={() => undefined}
-      />
+      <WatchOnlyWalletPreview onBack={() => undefined} />
     );
 
-    expect(html).toContain('Create Watch-Only Wallet');
-    expect(html).toContain('Wallet name');
-    expect(html).toContain('Single-sig');
-    expect(html).toContain('Multisig');
-    expect(html).toContain('Save and open wallet');
-    expect(html).not.toContain('Preview public addresses');
-    expect(html).not.toContain('Public preview only');
-  });
-
-  it('puts Keystone in an Airgap section at the bottom of create watch-only', () => {
-    const html = renderToStaticMarkup(
-      <WatchOnlyWalletPreview
-        onBack={() => undefined}
-        onCreated={() => undefined}
-      />
-    );
-
-    expect(html).toContain('Airgap');
-    expect(html).toContain('Keystone');
-    expect(html).toContain('not USB, not PSBT');
-    expect(html.indexOf('Save and open wallet')).toBeLessThan(
-      html.indexOf('Airgap')
-    );
-  });
-
-  it('does not ask for a master fingerprint on the main xPub form', () => {
-    const html = renderToStaticMarkup(
-      <WatchOnlyWalletPreview
-        onBack={() => undefined}
-        onCreated={() => undefined}
-      />
-    );
-
-    expect(html).not.toContain('Master fingerprint');
-    expect(html).not.toContain('8 hex chars');
-  });
-
-  it('decodes a valid master fingerprint to its 4 bytes', () => {
-    expect(masterFingerprintBytes('4c9a1f7b')).toEqual(
-      Uint8Array.from([0x4c, 0x9a, 0x1f, 0x7b])
-    );
-    expect(masterFingerprintBytes('DEADBEEF')).toEqual(
-      Uint8Array.from([0xde, 0xad, 0xbe, 0xef])
-    );
-  });
-
-  it('rejects fingerprints that are not exactly 8 hex chars', () => {
-    expect(masterFingerprintBytes('')).toBeNull();
-    expect(masterFingerprintBytes('4c9a1f7')).toBeNull();
-    expect(masterFingerprintBytes('4c9a1f7bc')).toBeNull();
-    expect(masterFingerprintBytes('zzzzzzzz')).toBeNull();
-    expect(masterFingerprintBytes('4c 9a 1f 7b')).toBeNull();
-    expect(masterFingerprintBytes(undefined)).toBeNull();
-    expect(masterFingerprintBytes(null)).toBeNull();
+    expect(html).toContain('Watch-Only Wallet Preview');
+    expect(html).toContain('Standard');
+    expect(html).toContain('Multisign');
+    expect(html).toContain('Coming next');
+    expect(html).toContain('does not save a watch-only wallet');
+    expect(html).toContain('sign');
+    expect(html).toContain('broadcast');
   });
 });

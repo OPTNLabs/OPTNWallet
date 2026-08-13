@@ -38,8 +38,7 @@ export const StealthBalanceCard: React.FC<StealthBalanceCardProps> = ({ walletId
     setServerNote(
       activity.serverSupported
         ? null
-        : activity.error ??
-            'This Electrum server does not support RPA scanning. Use a Fulcrum-RPA server or disable Experimental → RPA.'
+        : activity.error ?? 'This server does not support RPA scanning.'
     );
   }, []);
 

@@ -23,8 +23,7 @@ use prost::Message;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use super::{
-    connect_stream, pb, recv_frame, recv_frame_unbounded, send_frame, FusionServerStatus,
-    Transport, VERSION,
+    connect_stream, recv_frame, send_frame, pb, FusionServerStatus, Transport, VERSION,
 };
 
 /// Live status of one fusion tier (a tier is the per-player output size in sats).
@@ -106,10 +105,7 @@ where
             donation_address: h.donation_address,
         },
         pb::server_message::Msg::Error(e) => {
-            return Err(format!(
-                "server rejected us: {}",
-                e.message.unwrap_or_default()
-            ))
+            return Err(format!("server rejected us: {}", e.message.unwrap_or_default()))
         }
         _ => return Err("unexpected reply — expected ServerHello".into()),
     };
@@ -132,21 +128,11 @@ where
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            return Ok(FusionJoinResult {
-                server,
-                tiers: latest,
-                began: None,
-            });
+            return Ok(FusionJoinResult { server, tiers: latest, began: None });
         }
 
-        let frame = match tokio::time::timeout(remaining, recv_frame_unbounded(stream)).await {
-            Err(_) => {
-                return Ok(FusionJoinResult {
-                    server,
-                    tiers: latest,
-                    began: None,
-                })
-            }
+        let frame = match tokio::time::timeout(remaining, recv_frame(stream)).await {
+            Err(_) => return Ok(FusionJoinResult { server, tiers: latest, began: None }),
             Ok(r) => r?,
         };
 
@@ -214,10 +200,7 @@ mod tests {
 
     #[test]
     fn join_reads_tier_status_then_fusion_begin() {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async {
             let (mut client, mut server) = tokio::io::duplex(8192);
 
@@ -225,13 +208,8 @@ mod tests {
                 // ClientHello in
                 let raw = recv_frame(&mut server).await.unwrap();
                 let m = pb::ClientMessage::decode(raw.as_slice()).unwrap();
-                assert!(matches!(
-                    m.msg,
-                    Some(pb::client_message::Msg::Clienthello(_))
-                ));
-                send_frame(&mut server, &server_hello().encode_to_vec())
-                    .await
-                    .unwrap();
+                assert!(matches!(m.msg, Some(pb::client_message::Msg::Clienthello(_))));
+                send_frame(&mut server, &server_hello().encode_to_vec()).await.unwrap();
 
                 // JoinPools in — assert the tiers we asked for arrive verbatim.
                 let raw = recv_frame(&mut server).await.unwrap();
@@ -271,19 +249,12 @@ mod tests {
                         server_time: 1_700_000_000,
                     })),
                 };
-                send_frame(&mut server, &begin.encode_to_vec())
-                    .await
-                    .unwrap();
+                send_frame(&mut server, &begin.encode_to_vec()).await.unwrap();
             });
 
-            let res = run_join(
-                &mut client,
-                vec![10_000, 100_000],
-                None,
-                Duration::from_secs(5),
-            )
-            .await
-            .unwrap();
+            let res = run_join(&mut client, vec![10_000, 100_000], None, Duration::from_secs(5))
+                .await
+                .unwrap();
             server_task.await.unwrap();
 
             assert_eq!(res.server.num_components, 23);
@@ -300,18 +271,13 @@ mod tests {
 
     #[test]
     fn join_returns_latest_status_when_window_closes_without_begin() {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async {
             let (mut client, mut server) = tokio::io::duplex(8192);
 
             let server_task = tokio::spawn(async move {
                 let _ = recv_frame(&mut server).await.unwrap();
-                send_frame(&mut server, &server_hello().encode_to_vec())
-                    .await
-                    .unwrap();
+                send_frame(&mut server, &server_hello().encode_to_vec()).await.unwrap();
                 let _ = recv_frame(&mut server).await.unwrap(); // JoinPools
                 let mut statuses = std::collections::HashMap::new();
                 statuses.insert(

@@ -1,11 +1,7 @@
 import { useMemo, useState } from 'react';
 import { TransactionHistoryItem } from '../../types/types';
-import {
-  sortTransactionsByRecency,
-  type TransactionSortOrder,
-} from '../../utils/transactionHistoryOrder';
 
-type SortOrder = TransactionSortOrder;
+type SortOrder = 'asc' | 'desc';
 
 type UseTransactionHistoryPaginationParams = {
   transactions: TransactionHistoryItem[];
@@ -18,10 +14,14 @@ export function useTransactionHistoryPagination({
   const [currentPage, setCurrentPage] = useState(1);
   const [transactionsPerPage, setTransactionsPerPage] = useState(10);
 
-  const sortedTransactions = useMemo(
-    () => sortTransactionsByRecency(transactions, sortOrder),
-    [transactions, sortOrder]
-  );
+  const sortedTransactions = useMemo(() => {
+    const unconfirmed = transactions.filter((tx) => tx.height <= 0).reverse();
+    const confirmed = transactions.filter((tx) => tx.height > 0);
+    const sortedConfirmed = [...confirmed].sort((a, b) =>
+      sortOrder === 'asc' ? a.height - b.height : b.height - a.height
+    );
+    return [...unconfirmed, ...sortedConfirmed];
+  }, [transactions, sortOrder]);
 
   const hasTransactions = transactions.length > 0;
   const rawTotalPages = Math.ceil(transactions.length / transactionsPerPage);

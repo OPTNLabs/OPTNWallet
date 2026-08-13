@@ -24,7 +24,6 @@ import {
   setTorPortManual,
 } from '../../state/slices/experimentalSlice';
 import { readTransportConfig, writeTransportConfig } from './transportConfig';
-import { ensureTorAvailable } from './FusionTorResolver';
 
 export function useTransportConfig(): void {
   const dispatch = useDispatch();
@@ -65,17 +64,6 @@ export function useTransportConfig(): void {
       }
     }
     loaded.current = true;
-    // Ensure Tor is available on wallet open: check system Tor (9050/9150) first,
-    // start the built-in process only if neither is found. Runs once per window.
-    if (torEnabled) {
-      void ensureTorAvailable({
-        enabled: true,
-        auto: torAuto,
-        host: torHost,
-        manualPort: torPortManual,
-      });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only: re-running on settings change would re-start Tor
   }, [dispatch]);
 
   useEffect(() => {
