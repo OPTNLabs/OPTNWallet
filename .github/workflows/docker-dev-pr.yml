@@ -1,6 +1,7 @@
 # Read-only contributor validation for the lab image.
 # Publishing and provenance attestation live in docker-dev.yml and are limited
 # to trusted tag/manual release paths.
+# Touch this file so required check "Build docker-dev (PR)" runs on docs PRs.
 
 name: Docker dev PR
 
