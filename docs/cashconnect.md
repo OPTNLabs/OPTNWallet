@@ -16,7 +16,8 @@ WizardConnect.
   dApp. Pairing a template that includes transaction actions is allowed.
 - Lifecycle: start on wallet open, stop on wallet close / lock / logout.
   UTXO refresh notifies paired dApps via `notifyBalancesChanged`.
-- UI: Settings home + Actions → CashConnect. Home **Scan QR** opens a
+- UI: Settings → Connections & features, next to WalletConnect and
+  WizardConnect. Home **Scan QR** opens a
   connect popup (paste or scan `bch-cc-v1:` / `wc:` / payment address).
   Session-approve overlays are app-wide on Home.
 - Mobile: Android and iOS register the `bch-cc-v1` URL scheme. A tapped

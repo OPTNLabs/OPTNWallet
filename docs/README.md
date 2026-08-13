@@ -31,12 +31,14 @@ Technical documentation for contributors and third-party integrators.
   - Adversary classes for the shipped P2P design.
 - [P2P CashFusion FAQ](./p2p-cashfusion-faq.md)
   - Short answers: missing signature, blame, onion, ACK-shrink, 0-conf.
+- [Proposed blame for P2P CashFusion](./proposed-blame-p2p-cashfusion.md)
+  - Planning only: safe blame boundary, optional v5 fanout (not implemented).
 - [Watch-only + SeedCash](./watch-only-seedcash.md)
   - xPub import, PSBTv145, UR export/import, optional fingerprint.
 - [Integration Guide](./integration-guide.md)
   - How to integrate a third-party product with OPTN Wallet.
 - [CashConnect](./cashconnect.md)
-  - Nostr contract-system connector (Settings home + Actions).
+  - Nostr contract-system connector (Connections & features).
 - [CashScript Contract Systems](./cashscript-contract-systems.md)
   - BCH covenant design patterns, state-machine rules, and testing checklist.
 - [Custody Vault Design Notes](./custody-vault-design-notes.md)

@@ -172,9 +172,7 @@ export function getVisibleWalletRows(
     (row) => row.key !== 'faucet' || currentNetwork === Network.CHIPNET
   );
   const commonKeys = new Set(['network', 'faucet', 'pending-outbox']);
-  const home = networkRows.filter((row) => commonKeys.has(String(row.key)));
-  const cashconnect = CONNECTION_ROWS.find((row) => row.key === 'cashconnect');
-  return cashconnect ? [...home, cashconnect] : home;
+  return networkRows.filter((row) => commonKeys.has(String(row.key)));
 }
 
 export function getSettingsGroupRows(
