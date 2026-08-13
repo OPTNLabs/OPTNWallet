@@ -4,7 +4,6 @@ import { WalletConnectionManager, type PendingSignRequest } from '@wizardconnect
 
 import type { AppDispatch, RootState } from '../store';
 import { logError } from '../../utils/errorHandling';
-import WalletManager from '../../apis/WalletManager/WalletManager';
 import { OptnWizardWalletAdapter } from '../../services/wizardconnect/OptnWizardWalletAdapter';
 import {
   disconnectAllWizardConnections,
@@ -16,7 +15,7 @@ import { initialState, type ActiveWizardConnections } from '../../redux/wizardco
 let wizardManagerSingleton: WalletConnectionManager | null = null;
 let wizardAdapterSingleton: OptnWizardWalletAdapter | null = null;
 let wizardInitPromise: Promise<{
-  manager: WalletConnectionManager | null;
+  manager: WalletConnectionManager;
   activeConnections: ActiveWizardConnections;
   walletId: number;
 }> | null = null;
@@ -56,24 +55,6 @@ function registerWizardListeners(manager: WalletConnectionManager, dispatch: App
 }
 
 async function initializeWizardConnect(walletId: number, dispatch: AppDispatch) {
-  // A watch-only wallet cannot sign, and its row has no mnemonic for the
-  // adapter to load. Skip the adapter entirely instead of throwing "Unable to
-  // load wallet mnemonic for WizardConnect" on every open. syncWizardConnections
-  // already treats a null manager as "no connections", so the watcher hooks
-  // keep working without any per-wallet special-casing.
-  const walletMetadata = await WalletManager().getWalletMetadata(walletId);
-  if (!walletMetadata || walletMetadata.walletType === 'watch-only') {
-    wizardManagerSingleton?.disconnectAll();
-    wizardManagerSingleton = null;
-    wizardAdapterSingleton = null;
-    wizardListenersBoundWalletId = null;
-    return {
-      manager: null,
-      activeConnections: {},
-      walletId,
-    };
-  }
-
   if (wizardManagerSingleton && wizardListenersBoundWalletId === walletId) {
     return {
       manager: wizardManagerSingleton,

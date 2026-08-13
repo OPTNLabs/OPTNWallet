@@ -8,7 +8,7 @@ import ExtensionSecurityGate from './ExtensionSecurityGate';
 
 const ExtensionAppShell: React.FC = () => (
   <ExtensionSecurityGate>
-    <AppShell viewerOnly />
+    <AppShell />
   </ExtensionSecurityGate>
 );
 

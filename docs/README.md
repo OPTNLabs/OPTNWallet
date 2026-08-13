@@ -15,9 +15,6 @@ Technical documentation for contributors and third-party integrators.
   - Images update **from** git tags; installers stay the primary ship.
 - [Wallet Architecture](./wallet-architecture.md)
   - Runtime shape, major modules, and where responsibilities live.
-- [Wallet Ledger & Sync Design](./wallet-ledger-sync-design.md)
-  - Option A hybrid: txi/txo ledger, status hashes, UTXO cache projection,
-    Manual Sync vs Rebuild Wallet.
 - [CashFusion status](./cashfusion-implementation-scope.md)
   - Both P2P and classic server paths as they exist in this tree.
 - [P2P CashFusion Privacy Layers](./p2p-cashfusion-privacy-layers.md)

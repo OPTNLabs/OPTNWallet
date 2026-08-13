@@ -1,5 +1,3 @@
-import ContractDetails from './ContractDetails';
-
 const AboutView = () => {
   return (
     <div className="flex flex-col items-center justify-center p-4">
@@ -128,7 +126,7 @@ const AboutView = () => {
 
         {/* Feedback and Support Section */}
         <h3 className="text-2xl font-bold mb-2">Feedback and Support</h3>
-        <p className="mb-8">
+        <p>
           Your feedback helps us improve the OPTN wallet. If you have
           suggestions, run into issues, or need support, please contact us at{' '}
           <a
@@ -139,11 +137,6 @@ const AboutView = () => {
           </a>
           . We’re here to assist you!
         </p>
-
-        {/* Was a separate Settings → Contract Info panel; lives under About now. */}
-        <div className="border-t border-[color-mix(in_oklab,var(--wallet-border)_70%,transparent)] pt-6">
-          <ContractDetails embedded />
-        </div>
       </div>
     </div>
   );
