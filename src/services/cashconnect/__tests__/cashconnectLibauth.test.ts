@@ -24,6 +24,7 @@ import {
   cashConnectSpendData,
   tokenFromUtxo,
 } from '../cashconnectContext';
+import { createP2pkhUTXOSpendable } from '../cashconnectSpendable';
 
 const TEST_MNEMONIC = bip39.entropyToMnemonic('0'.repeat(32));
 
@@ -143,6 +144,44 @@ describe('CashConnect libauth', () => {
     expect(cashConnectSpendData(keys.privateKey).keys.privateKeys.key).toEqual(
       keys.privateKey
     );
+  });
+
+  it('wraps P2PKH as lock/unlock/fee and adapts to the alpha.31 template shape', async () => {
+    const keys = await deriveBchKeyMaterial(
+      Network.CHIPNET,
+      TEST_MNEMONIC,
+      '',
+      0,
+      0,
+      0
+    );
+    expect(keys).not.toBeNull();
+    if (!keys) return;
+
+    const coin = createP2pkhUTXOSpendable({
+      privateKey: keys.privateKey,
+      publicKey: keys.publicKey,
+    });
+    const fromAddress = cashAddressToLockingBytecode(keys.address);
+    expect(typeof fromAddress).not.toBe('string');
+    if (typeof fromAddress === 'string') return;
+
+    expect(binToHex(coin.lock())).toBe(binToHex(fromAddress.bytecode));
+    expect(coin.fee).toBe(1000);
+
+    const change = coin.toChangeTemplateDirective();
+    expect(change.fee).toBe(1000n);
+    expect(change.lock.script).toBe('lock');
+    expect(change.unlock.script).toBe('unlock');
+    expect(change.unlock.data).not.toBe(change.lock.data);
+
+    const compiledLock = change.lock.compiler.generateBytecode({
+      data: change.lock.data,
+      scriptId: change.lock.script,
+    });
+    expect(compiledLock.success).toBe(true);
+    if (!compiledLock.success) return;
+    expect(binToHex(compiledLock.bytecode)).toBe(binToHex(coin.lock()));
   });
 
   it('maps CashToken UTXO fields into a libauth Output token', () => {
