@@ -9,6 +9,7 @@ lerna-debug.log*
 
 node_modules
 target/
+target-frozen/
 dist
 dist-ssr
 dist-extension-chrome
@@ -41,6 +42,7 @@ android/key.properties
 
 # Assistant-internal tooling (not part of the app)
 .serena/
+VERIFIED-AGENT-GRAPH.json
 
 # Tor binary fetched at build time (scripts/fetch-tor.mjs), not committed
 src-tauri/resources/tor/

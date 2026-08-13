@@ -158,6 +158,102 @@ describe('ElectrumServer', () => {
     expect(results).toEqual(['batched-1', 'batched-2']);
   });
 
+  it('scales requestMany timeout with batch size (evidence: requestMany(250) @ 12s)', async () => {
+    // Live error: `requestMany(250) timed out after 12000ms` with a flat budget.
+    // Formula must exceed 12s for N=250 while single calls stay ~12s.
+    const { requestManyTimeoutMs } = await import('../ElectrumServer');
+    expect(requestManyTimeoutMs(1)).toBe(12_000);
+    expect(requestManyTimeoutMs(250)).toBeGreaterThan(12_000);
+    expect(requestManyTimeoutMs(250)).toBe(12_000 + 249 * 80);
+    expect(requestManyTimeoutMs(10_000)).toBe(90_000); // cap
+  });
+
+  it('requestMany rotates servers when every batch entry reports a lost connection', async () => {
+    const first = makeMockClient();
+    const second = makeMockClient();
+    first.connection.send.mockImplementationOnce((message: string) => {
+      const parsed = JSON.parse(message) as Array<{ id: number }>;
+      queueMicrotask(() => {
+        for (const { id } of parsed) {
+          first.requestResolvers[id]?.(new Error('Connection lost'));
+          delete first.requestResolvers[id];
+        }
+      });
+      return true;
+    });
+    const server = await loadServerWithMocks(
+      [first, second],
+      ['wss://stale.example:50004', 'wss://healthy.example:50004']
+    );
+
+    const results = await server.requestMany([
+      { method: 'blockchain.address.listunspent', params: ['bitcoincash:q1'] },
+      { method: 'blockchain.address.listunspent', params: ['bitcoincash:q2'] },
+    ]);
+
+    expect(results).toEqual(['batched-1', 'batched-2']);
+    expect(first.disconnect).toHaveBeenCalledWith(true);
+    expect(second.connection.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('requestMany retries only transport-failed members on another server', async () => {
+    const first = makeMockClient();
+    const second = makeMockClient();
+    first.connection.send.mockImplementationOnce((message: string) => {
+      const parsed = JSON.parse(message) as Array<{ id: number }>;
+      queueMicrotask(() => {
+        first.requestResolvers[parsed[0].id]?.(undefined, ['first-ok']);
+        first.requestResolvers[parsed[1].id]?.(new Error('Connection lost'));
+      });
+      return true;
+    });
+    const server = await loadServerWithMocks(
+      [first, second],
+      ['wss://stale.example:50004', 'wss://healthy.example:50004']
+    );
+    const calls = [
+      { method: 'blockchain.scripthash.listunspent', params: ['hash-1'] },
+      { method: 'blockchain.scripthash.listunspent', params: ['hash-2'] },
+    ];
+
+    const results = await server.requestMany(calls);
+
+    expect(results).toEqual([['first-ok'], 'batched-1']);
+    expect(first.disconnect).toHaveBeenCalledWith(true);
+    expect(second.connection.send).toHaveBeenCalledTimes(1);
+    const retried = JSON.parse(second.connection.send.mock.calls[0][0]) as Array<{
+      params: string[];
+    }>;
+    expect(retried).toHaveLength(1);
+    expect(retried[0].params).toEqual(['hash-2']);
+  });
+
+  it('requestMany fails closed when every configured server loses the batch', async () => {
+    const first = makeMockClient();
+    const second = makeMockClient();
+    for (const client of [first, second]) {
+      client.connection.send.mockImplementationOnce((message: string) => {
+        const parsed = JSON.parse(message) as Array<{ id: number }>;
+        queueMicrotask(() => {
+          for (const { id } of parsed) {
+            client.requestResolvers[id]?.(new Error('Connection lost'));
+          }
+        });
+        return true;
+      });
+    }
+    const server = await loadServerWithMocks(
+      [first, second],
+      ['wss://dead-1.example:50004', 'wss://dead-2.example:50004']
+    );
+
+    await expect(
+      server.requestMany([
+        { method: 'blockchain.scripthash.listunspent', params: ['hash-1'] },
+      ])
+    ).rejects.toThrow(/connection lost/i);
+  });
+
   it('subscribe and unsubscribe manage address subscriptions', async () => {
     const client = makeMockClient();
     const server = await loadServerWithMocks([client]);

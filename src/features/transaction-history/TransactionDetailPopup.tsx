@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useSelector } from 'react-redux';
 import Popup from '../../components/transaction/Popup';
 import StatusChip from '../../components/ui/StatusChip';
 import type {
@@ -6,6 +7,11 @@ import type {
   TransactionDetailParticipant,
 } from '../../types/types';
 import ElectrumService from '../../services/ElectrumService';
+import {
+  getCoinLabel,
+  setCoinLabel,
+} from '../../platform/desktop/CoinLabelService';
+import { selectWalletId } from '../../state/slices/walletSlice';
 
 type Props = {
   txid: string;
@@ -95,9 +101,11 @@ export default function TransactionDetailPopup({
   walletAddresses,
   onClose,
 }: Props) {
+  const walletId = useSelector(selectWalletId);
   const [details, setDetails] = useState<TransactionDetails | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [txLabel, setTxLabel] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -106,7 +114,7 @@ export default function TransactionDetailPopup({
       setLoading(true);
       setError('');
       try {
-        const next = await ElectrumService.getTransactionDetails(txid);
+        const next = await ElectrumService.getTransactionDetails(txid, { forceRefresh: true });
         if (!cancelled) {
           setDetails(next);
           if (!next)
@@ -133,6 +141,32 @@ export default function TransactionDetailPopup({
     };
   }, [txid]);
 
+  useEffect(() => {
+    if (walletId <= 0 || !txid) {
+      setTxLabel(null);
+      return;
+    }
+    let cancelled = false;
+    void getCoinLabel(walletId, 'txid', txid).then((label) => {
+      if (!cancelled) setTxLabel(label);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [walletId, txid]);
+
+  const editTxLabel = useCallback(async () => {
+    if (walletId <= 0) return;
+    const next = window.prompt(
+      'Label this transaction (empty to clear). Personal note only.',
+      txLabel ?? ''
+    );
+    if (next === null) return;
+    await setCoinLabel(walletId, 'txid', txid, next);
+    const cleaned = next.trim();
+    setTxLabel(cleaned ? cleaned.slice(0, 200) : null);
+  }, [walletId, txid, txLabel]);
+
   const markedInputs = useMemo(
     () => markWalletParticipants(details?.inputs ?? [], walletAddresses),
     [details?.inputs, walletAddresses]
@@ -150,6 +184,23 @@ export default function TransactionDetailPopup({
           <div className="font-mono text-sm break-all wallet-text-strong">
             {txid}
           </div>
+          {walletId > 0 && (
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+              <span className="text-xs wallet-muted">Label</span>
+              <span className="wallet-text-strong">
+                {txLabel || (
+                  <span className="wallet-muted italic">none</span>
+                )}
+              </span>
+              <button
+                type="button"
+                className="text-xs underline wallet-muted hover:wallet-text-strong"
+                onClick={() => void editTxLabel()}
+              >
+                Edit
+              </button>
+            </div>
+          )}
         </div>
 
         <section className="wallet-card p-4">

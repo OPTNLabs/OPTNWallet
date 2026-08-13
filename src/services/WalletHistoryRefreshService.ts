@@ -22,8 +22,10 @@ import { planTransactionDetailRefresh } from './transactionDetailSync';
 import {
   runOutboundReconcile,
   runWalletHistoryRefresh,
+  runWalletHistoryRefreshExclusive,
 } from './RefreshCoordinator';
 import QuantumrootTrackingService from './QuantumrootTrackingService';
+import { mergeRecordedFusionTxsIntoHistory } from '../platform/desktop/fusionCoinDepth';
 
 type SqlLikeDb = {
   prepare: (sql: string) => {
@@ -56,7 +58,9 @@ export function loadStoredTransactions(
   const query = db.prepare(`
     SELECT tx_hash, height, timestamp, amount
     FROM transactions
-    WHERE wallet_id = ?;
+    WHERE wallet_id = ?
+    ORDER BY height DESC, timestamp DESC
+    LIMIT 2000;
   `);
   query.bind([walletId]);
   const rows: TransactionHistoryItem[] = [];
@@ -80,6 +84,12 @@ export interface RefreshWalletHistoryOptions {
    * that changed and refresh nothing.
    */
   skipAddresses?: ReadonlySet<string>;
+  /**
+   * User-initiated (Manual Sync / Rebuild). Does not join a background history
+   * pass (those freeze the bar at 55% with no onProgress). Skips the status-hash
+   * gate so every known address is re-fetched.
+   */
+  force?: boolean;
   onProgress?: (percent: number) => void;
 }
 
@@ -104,6 +114,7 @@ export async function refreshWalletTransactionHistory(
     dispatch,
     sessionGeneration,
     skipAddresses,
+    force = false,
     onProgress,
   } = options;
   if (!Number.isSafeInteger(walletId) || walletId <= 0) {
@@ -114,8 +125,7 @@ export async function refreshWalletTransactionHistory(
   let scannedAddresses: string[] = [];
   let refreshed = false;
 
-  await runWalletHistoryRefresh(walletId, async () => {
-    await ElectrumService.reconnect();
+  const runBody = async () => {
     await dbService.ensureDatabaseStarted();
     const db = dbService.getDatabase() as SqlLikeDb | null;
     if (!db) {
@@ -138,12 +148,20 @@ export async function refreshWalletTransactionHistory(
       dispatch(
         setTransactions({
           wallet_id: walletId,
-          transactions: previousStoredTransactions,
+          // Re-attach known fusion CoinJoins (P2P + server) so a stale DB
+          // snapshot never looks like fused history was deleted.
+          transactions: mergeRecordedFusionTxsIntoHistory(
+            walletId,
+            previousStoredTransactions
+          ),
           sessionGeneration,
         })
       );
     }
 
+    // Prefer the addresses table (software wallets register there via createKeys).
+    // Hardware / older watch-only rows may only have `keys` populated — fall back
+    // so history and Recent Activity are not permanently empty.
     const addressesQuery = db.prepare(`
       SELECT address FROM addresses WHERE wallet_id = ?;
     `);
@@ -154,6 +172,20 @@ export async function refreshWalletTransactionHistory(
       if (typeof row.address === 'string') addresses.push(row.address);
     }
     addressesQuery.free();
+
+    if (addresses.length === 0) {
+      const keysQuery = db.prepare(`
+        SELECT address FROM keys WHERE wallet_id = ? AND address IS NOT NULL;
+      `);
+      keysQuery.bind([walletId]);
+      while (keysQuery.step()) {
+        const row = keysQuery.getAsObject();
+        if (typeof row.address === 'string' && row.address) {
+          addresses.push(row.address);
+        }
+      }
+      keysQuery.free();
+    }
 
     const quantumrootAddresses =
       await QuantumrootTrackingService.listTrackedAddresses(walletId);
@@ -170,31 +202,71 @@ export async function refreshWalletTransactionHistory(
       return;
     }
 
+    // Network is the long phase — report while batches complete, not only after
+    // the entire multi-address history RPC returns (that made the bar freeze
+    // then jump, and made manual Sync feel like the "old slow path").
+    onProgress?.(5);
+
+    // Status-hash delta (EC/Selene): skip addresses whose local history status
+    // already matches the Electrum address state. Force / Manual Sync skips the
+    // gate entirely (statuses were cleared or user wants a full recheck).
+    let toFetch = pending;
+    if (!force) {
+      try {
+        const ledger = await import('../platform/desktop/WalletLedgerService');
+        const partition = await ledger.partitionAddressesByStatus(
+          walletId,
+          pending
+        );
+        toFetch = partition.dirty;
+        onProgress?.(
+          5 + Math.round(20 * (1 - toFetch.length / Math.max(pending.length, 1)))
+        );
+      } catch {
+        toFetch = pending;
+      }
+    } else {
+      onProgress?.(10);
+    }
+
     const transactionManager = TransactionManager();
+    const mapHistoryProgress = (done: number, total: number) => {
+      if (total <= 0) return;
+      // Reserve 25–90% for Electrum history batches; DB/redux publish is 90–100.
+      onProgress?.(25 + Math.round(65 * (done / total)));
+    };
     const historyByAddress =
-      sessionGeneration === undefined
-        ? await transactionManager.fetchAndStoreTransactionHistories(
-            walletId,
-            pending
-          )
-        : await transactionManager.fetchAndStoreTransactionHistories(
-            walletId,
-            pending,
-            sessionGeneration
-          );
+      toFetch.length === 0
+        ? ({} as Record<string, TransactionHistoryItem[] | undefined>)
+        : sessionGeneration === undefined
+          ? await transactionManager.fetchAndStoreTransactionHistories(
+              walletId,
+              toFetch,
+              undefined,
+              mapHistoryProgress
+            )
+          : await transactionManager.fetchAndStoreTransactionHistories(
+              walletId,
+              toFetch,
+              sessionGeneration,
+              mapHistoryProgress
+            );
 
     const processed: string[] = [];
-    pending.forEach((address, index) => {
+    for (const address of pending) {
       if (Array.isArray(historyByAddress[address])) processed.push(address);
-      onProgress?.(Math.round(((index + 1) / pending.length) * 100));
-    });
+    }
     scannedAddresses = processed;
+    onProgress?.(90);
 
     const liveDb = dbService.getDatabase() as SqlLikeDb | null;
     if (!liveDb) {
       console.error('Database not started after history fetch.');
     } else {
-      const storedTransactions = loadStoredTransactions(liveDb, walletId);
+      const storedTransactions = mergeRecordedFusionTxsIntoHistory(
+        walletId,
+        loadStoredTransactions(liveDb, walletId)
+      );
       const refreshPlan = planTransactionDetailRefresh({
         previous: previousStoredTransactions,
         next: storedTransactions,
@@ -228,7 +300,15 @@ export async function refreshWalletTransactionHistory(
       reconcileOutboundTransactions(walletId)
     );
     onProgress?.(100);
-  });
+  };
+
+  if (force) {
+    // Manual Sync: exclusive pass with our onProgress (see coordinator).
+    onProgress?.(2);
+    await runWalletHistoryRefreshExclusive(walletId, runBody);
+  } else {
+    await runWalletHistoryRefresh(walletId, runBody);
+  }
 
   return { scannedAddresses, refreshed };
 }

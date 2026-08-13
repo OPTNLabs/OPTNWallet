@@ -1,7 +1,7 @@
 name: Desktop Preview
 
 # Mirrors android-preview.yml — builds on every push/PR to dev
-# Produces unsigned debug builds for all 3 desktop platforms
+# Produces unsigned debug builds for every native desktop target
 
 on:
   pull_request:
@@ -11,6 +11,7 @@ on:
       - 'public/**'
       - 'src-tauri/**'
       - 'reference/**'
+      - 'scripts/fetch-tor.mts'
       - 'vite.desktop.config.ts'
       - 'package.json'
       - '.github/workflows/desktop-preview.yml'
@@ -21,6 +22,7 @@ on:
       - 'public/**'
       - 'src-tauri/**'
       - 'reference/**'
+      - 'scripts/fetch-tor.mts'
       - 'vite.desktop.config.ts'
       - 'package.json'
       - '.github/workflows/desktop-preview.yml'
@@ -32,7 +34,8 @@ concurrency:
 jobs:
   build-desktop-preview:
     name: Preview (${{ matrix.platform }})
-    timeout-minutes: 40
+    # Uncached Linux AppImage packaging can take slightly over 40 minutes.
+    timeout-minutes: 60
     env:
       # macOS runners have less memory; the Vite frontend build (Tauri beforeBuildCommand)
       # OOMs at Node's default heap. Raise it for all platforms (harmless on Windows/Linux).
@@ -42,42 +45,60 @@ jobs:
       matrix:
         include:
           - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            tor-target: windows-x86_64
             artifact-name: preview-windows
-            bundle-args: ''
           - platform: macos-latest
-            artifact-name: preview-macos
-            bundle-args: ''
-          # Linux: skip the AppImage bundle. linuxdeploy fails on GitHub runners
-          # (no FUSE; APPIMAGE_EXTRACT_AND_RUN didn't help either), and a debug
-          # preview only needs an installable — deb+rpm bundle fine. The release
-          # workflow still builds the AppImage (with libfuse2) for distribution.
+            target: aarch64-apple-darwin
+            tor-target: macos-aarch64
+            artifact-name: preview-macos-arm
+          - platform: macos-15-intel
+            target: x86_64-apple-darwin
+            tor-target: macos-x86_64
+            artifact-name: preview-macos-intel
           - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            tor-target: linux-x86_64
             artifact-name: preview-linux
-            bundle-args: '--bundles deb,rpm'
+          - platform: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            tor-target: linux-aarch64
+            artifact-name: preview-linux-arm
 
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Setup Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: '20'
           cache: 'npm'
 
       - name: Linux system dependencies
-        if: matrix.platform == 'ubuntu-22.04'
+        if: startsWith(matrix.platform, 'ubuntu')
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev libappindicator3-dev \
-            librsvg2-dev patchelf libssl-dev libgtk-3-dev
+            librsvg2-dev patchelf libssl-dev libgtk-3-dev libfuse2 \
+            libevent-2.1-7 \
+            libudev-dev libusb-1.0-0-dev pkg-config
+          # hidapi (Ledger/Trezor native USB) needs libudev; rusb needs libusb.
+          if [ "${{ matrix.tor-target }}" = 'linux-aarch64' ]; then
+            # Tor ARM is built from the checksum-pinned source release.
+            sudo apt-get install -y build-essential libevent-dev zlib1g-dev
+          fi
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          targets: ${{ matrix.target }}
 
       - name: Rust cache
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: './src-tauri -> target'
 
@@ -85,18 +106,35 @@ jobs:
         run: npm ci
 
       - name: Fetch bundled Tor (integrated CashFusion privacy)
-        run: node scripts/fetch-tor.mjs
+        run: npx --no-install tsx scripts/fetch-tor.mts ${{ matrix.tor-target }}
 
       - name: Build Tauri (debug)
-        # bundle-args is empty on Windows/macOS and '--bundles deb,rpm' on Linux
-        # (skips the AppImage that linuxdeploy can't build on the runner).
-        run: npx tauri build --debug ${{ matrix.bundle-args }}
+        # No --bundles: tauri.conf.json already says targets "all", and a preview
+        # that skipped a format would stop being a preview of what ships. Linux
+        # builds the AppImage here too, which is the only place linuxdeploy runs
+        # before release.yml gates a release on the resulting file.
+        #
+        # --verbose because the AppImage bundler swallows linuxdeploy's stderr:
+        # a failure prints `failed to run linuxdeploy` and nothing else, which
+        # is not enough to fix anything. Drop it once the AppImage builds green.
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+          NO_STRIP: 'true'
+        run: npx tauri build --debug --target ${{ matrix.target }} --verbose
+
+      - name: Smoke-test packaged Linux Tor
+        if: startsWith(matrix.platform, 'ubuntu')
+        shell: bash
+        run: |
+          APPIMAGE_PATH="$(find "src-tauri/target/${{ matrix.target }}/debug/bundle" -type f -name '*.AppImage' -print -quit)"
+          test -n "$APPIMAGE_PATH"
+          npx --no-install tsx scripts/smoke-tor-artifact.mts "$APPIMAGE_PATH" "${{ matrix.tor-target }}"
 
       - name: Upload preview artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ matrix.artifact-name }}
           path: |
-            src-tauri/target/debug/bundle/**
+            src-tauri/target/${{ matrix.target }}/debug/bundle/**
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error

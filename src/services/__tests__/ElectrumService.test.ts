@@ -24,6 +24,16 @@ vi.mock('../../state/store', () => ({
   },
 }));
 
+// Deterministic scripthash so arbitrary test addresses work without libauth.
+vi.mock('../../services/electrum/helpers', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../services/electrum/helpers')>();
+  return {
+    ...actual,
+    addressToElectrumScripthash: (address: string) =>
+      `scripthash:${address.replace(/[^a-z0-9]/gi, '_')}`,
+  };
+});
+
 describe('ElectrumService', () => {
   const mockedElectrumServer = vi.mocked(ElectrumServer);
   const mockedDatabaseService = vi.mocked(DatabaseService);
@@ -83,20 +93,18 @@ describe('ElectrumService', () => {
     expect(server.request).toHaveBeenCalledTimes(1);
   });
 
-  it('getUTXOsMany falls back to scripthash for addresses rejected by address RPC', async () => {
+  it('getUTXOsMany batches scripthash.listunspent directly (no per-call fallback)', async () => {
     const server = {
-      request: vi
-        .fn()
-        .mockRejectedValueOnce(new Error('Invalid address: bchtest:qtest'))
-        .mockResolvedValueOnce([
+      requestMany: vi.fn(async () => [
+        [
           {
             tx_hash: 'c'.repeat(64),
             tx_pos: 1,
             value: 546,
             height: 33,
           },
-        ]),
-      requestMany: vi.fn(async () => [new Error('Invalid address: bchtest:qtest')]),
+        ],
+      ]),
       subscribe: vi.fn(async () => {}),
       unsubscribe: vi.fn(async () => {}),
       onNotification: vi.fn(() => () => {}),
@@ -117,16 +125,10 @@ describe('ElectrumService', () => {
       }),
     ]);
     expect(server.requestMany).toHaveBeenCalledTimes(1);
-    expect(server.request).toHaveBeenNthCalledWith(
-      1,
-      'blockchain.address.listunspent',
-      address
+    expect(server.requestMany.mock.calls[0][0][0].method).toBe(
+      'blockchain.scripthash.listunspent'
     );
-    expect(server.request).toHaveBeenNthCalledWith(
-      2,
-      'blockchain.scripthash.listunspent',
-      expect.any(String)
-    );
+    expect(server.requestMany.mock.calls[0][0][0].params[0]).toContain('scripthash:');
   });
 
   it('getUTXOsMany omits addresses that fail without a usable response', async () => {
@@ -144,6 +146,91 @@ describe('ElectrumService', () => {
 
     expect(result).not.toHaveProperty(address);
     expect(server.requestMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('splits a large wallet UTXO scan into bounded Electrum batches', async () => {
+    const server = {
+      requestMany: vi.fn(async (calls: unknown[]) => calls.map(() => [])),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+    mockedElectrumServer.mockReturnValue(server as never);
+    const addresses = Array.from(
+      { length: 617 },
+      (_, index) => `bitcoincash:qbatch${index}`
+    );
+
+    const result = await ElectrumService.getUTXOsMany(addresses);
+
+    // Batch size 50 (was 250): 617 = 12×50 + 17. Live error was requestMany(250)@12s.
+    // Chunks may complete out of order under concurrency=2 — compare multiset.
+    const sizes = server.requestMany.mock.calls
+      .map(([calls]) => (calls as unknown[]).length)
+      .sort((a, b) => b - a);
+    expect(sizes).toEqual([
+      50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 17,
+    ]);
+    expect(server.requestMany).toHaveBeenCalledTimes(13);
+    expect(Object.keys(result)).toHaveLength(617);
+  });
+
+  it('runs at most two listunspent chunks concurrently', async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const server = {
+      requestMany: vi.fn(async (calls: unknown[]) => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((r) => setTimeout(r, 15));
+        inFlight -= 1;
+        return (calls as unknown[]).map(() => []);
+      }),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+    mockedElectrumServer.mockReturnValue(server as never);
+    const addresses = Array.from(
+      { length: 120 },
+      (_, index) => `bitcoincash:qpar${index}`
+    );
+
+    await ElectrumService.getUTXOsMany(addresses);
+
+    expect(maxInFlight).toBeLessThanOrEqual(2);
+    expect(maxInFlight).toBeGreaterThanOrEqual(2);
+    expect(server.requestMany).toHaveBeenCalledTimes(3); // 50+50+20
+  });
+
+  it('deduplicates overlapping wallet-wide scans by address', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const server = {
+      requestMany: vi.fn(async (calls: unknown[]) => {
+        await gate;
+        return calls.map(() => []);
+      }),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+    mockedElectrumServer.mockReturnValue(server as never);
+    const addresses = Array.from(
+      { length: 60 },
+      (_, index) => `bitcoincash:qoverlap${index}`
+    );
+
+    const first = ElectrumService.getUTXOsMany(addresses);
+    await Promise.resolve();
+    const second = ElectrumService.getUTXOsMany(addresses);
+    await Promise.resolve();
+    release();
+    await Promise.all([first, second]);
+
+    expect(server.requestMany).toHaveBeenCalledTimes(2); // one 50 + one 10
   });
 
   it('primeUTXOCache seeds cache used by getUTXOs', async () => {
@@ -204,6 +291,19 @@ describe('ElectrumService', () => {
       value: 1000,
     });
     expect(server.request).not.toHaveBeenCalled();
+  });
+
+  it('refreshes through the current healthy connection without forcing a disconnect', async () => {
+    const server = {
+      ensureFreshConnection: vi.fn(async () => undefined),
+      electrumReconnect: vi.fn(async () => undefined),
+    };
+    mockedElectrumServer.mockReturnValue(server as never);
+
+    await ElectrumService.ensureFreshConnection();
+
+    expect(server.ensureFreshConnection).toHaveBeenCalledOnce();
+    expect(server.electrumReconnect).not.toHaveBeenCalled();
   });
 
   it('can subscribe to future headers without replaying the current tip', async () => {
@@ -329,8 +429,36 @@ describe('ElectrumService', () => {
     ]);
 
     expect(server.requestMany).toHaveBeenCalledTimes(1);
+    expect(server.requestMany.mock.calls[0][0][0].method).toBe(
+      'blockchain.scripthash.get_history'
+    );
     expect(result['bitcoincash:q1']).toEqual([{ tx_hash: 'abc', height: 10 }]);
     expect(result['bitcoincash:q2']).toEqual([{ tx_hash: 'def', height: 12 }]);
+  });
+
+  it('splits a large wallet history scan into bounded Electrum batches', async () => {
+    const server = {
+      request: vi.fn(async () => []),
+      requestMany: vi.fn(async (calls: unknown[]) => calls.map(() => [])),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+    mockedElectrumServer.mockReturnValue(server as never);
+    const addresses = Array.from(
+      { length: 617 },
+      (_, index) => `bitcoincash:qhistory${index}`
+    );
+
+    const result = await ElectrumService.getTransactionHistoryMany(addresses);
+
+    expect(
+      server.requestMany.mock.calls.map(([calls]) => calls.length)
+    // Batch size 50 (was 250): 617 = 12×50 + 17. Live error was requestMany(250)@12s.
+    ).toEqual([
+      50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 17,
+    ]);
+    expect(Object.keys(result)).toHaveLength(617);
   });
 
   it('getTransactionVisibility detects seen and missing transactions', async () => {

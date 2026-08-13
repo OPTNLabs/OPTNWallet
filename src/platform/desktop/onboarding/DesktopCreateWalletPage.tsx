@@ -9,7 +9,6 @@ import { useNavigate } from 'react-router-dom';
 import DatabaseService from '../../../apis/DatabaseManager/DatabaseService';
 import KeyService from '../../../services/KeyService';
 import {
-  getBchAccountPath,
   normalizeBchAccountPath,
 } from '../../../services/HdWalletService';
 import { Network, setNetwork } from '../../../state/slices/networkSlice';
@@ -25,6 +24,8 @@ import OnboardingCard from '../../../features/onboarding/components/OnboardingCa
 import OnboardingScreen from '../../../features/onboarding/components/OnboardingScreen';
 import DerivationPathField from '../../../features/onboarding/components/DerivationPathField';
 import { createWalletWithPassword } from '../DesktopWalletManager';
+import { validateNewWalletPassword } from '../passwordPolicy';
+import { defaultDesktopAccountPath } from '../desktopDerivationDefaults';
 
 type Step = 'loading' | 'reveal' | 'confirm' | 'path' | 'name';
 
@@ -56,7 +57,9 @@ const DesktopCreateWalletPage = () => {
   const navigate = useNavigate();
   const currentNetwork = useSelector(selectCurrentNetwork);
   const dispatch = useDispatch();
-  const [derivationPath, setDerivationPath] = useState(() => getBchAccountPath(currentNetwork));
+  const [derivationPath, setDerivationPath] = useState(() =>
+    defaultDesktopAccountPath(currentNetwork)
+  );
   const [customDerivationPath, setCustomDerivationPath] = useState(false);
 
   useEffect(() => {
@@ -64,7 +67,8 @@ const DesktopCreateWalletPage = () => {
   }, [dispatch]);
 
   useEffect(() => {
-    if (!customDerivationPath) setDerivationPath(getBchAccountPath(currentNetwork));
+    if (!customDerivationPath)
+      setDerivationPath(defaultDesktopAccountPath(currentNetwork));
   }, [currentNetwork, customDerivationPath]);
 
   useEffect(() => {
@@ -111,8 +115,9 @@ const DesktopCreateWalletPage = () => {
       setNameError('Give this wallet a name.');
       return;
     }
-    if (password !== passwordConfirm) {
-      setNameError('Passwords do not match.');
+    const passErr = validateNewWalletPassword(password, passwordConfirm);
+    if (passErr) {
+      setNameError(passErr);
       return;
     }
     setNameError('');
@@ -276,8 +281,9 @@ const DesktopCreateWalletPage = () => {
     <OnboardingScreen>
       <OnboardingCard title="Name This Wallet">
         <p className="text-sm wallet-muted text-center mb-3">
-          Give this wallet a name and a password. Each wallet on this device has its own
-          independent password — you can create more wallets later with different passwords.
+          Give this wallet a name and a password (at least 8 characters). Each wallet on this
+          device has its own independent password. The password protects the seed at rest —
+          do not leave it blank or use a short guessable value.
         </p>
         <div className="space-y-3 mb-2">
           <input
@@ -292,7 +298,8 @@ const DesktopCreateWalletPage = () => {
             type="password"
             value={password}
             onChange={(e) => { setPassword(e.target.value); setNameError(''); }}
-            placeholder="Password (or leave blank)"
+            placeholder="Password (min 8 characters)"
+            autoComplete="new-password"
             className="wallet-input w-full px-3 py-2 rounded-md wallet-text-strong"
           />
           <input
@@ -300,6 +307,7 @@ const DesktopCreateWalletPage = () => {
             value={passwordConfirm}
             onChange={(e) => { setPasswordConfirm(e.target.value); setNameError(''); }}
             placeholder="Confirm password"
+            autoComplete="new-password"
             className="wallet-input w-full px-3 py-2 rounded-md wallet-text-strong"
           />
         </div>

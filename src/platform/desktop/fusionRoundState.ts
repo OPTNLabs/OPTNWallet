@@ -23,11 +23,25 @@ import { getLocalStorage } from '../../utils/browserStorage';
 
 const ROUND_KEYS_PREFIX = 'optn-fusion-round-keys-';
 const INPUT_LOCKS_PREFIX = 'optn-fusion-input-locks-';
+/** Global (all wallets/windows): keys that withdrew or finished a gather. */
+const RETIRED_KEYS_KEY = 'optn-fusion-retired-round-keys';
+/**
+ * Ephemeral session keys that were *verified* blame targets this attempt.
+ * Not a person ban — throwaway keys only, short TTL. Never for timeouts.
+ */
+const BLAMED_SESSION_KEYS_KEY = 'optn-fusion-blamed-session-keys';
 
 /** Long enough to cover a stored announcement's discoverable lifetime. */
 const ROUND_KEY_TTL_MS = 10 * 60_000;
 /** A round that dies without cleanup must not strand coins beyond this. */
 const INPUT_LOCK_TTL_MS = 5 * 60_000;
+/**
+ * How long other windows treat a finished/withdrawn throwaway key as a ghost.
+ * Must cover relay replay of replaceable announcements after withdraw.
+ */
+const RETIRED_KEY_TTL_MS = 5 * 60_000;
+/** How long a blamed throwaway key is excluded from local gather/propose. */
+const BLAMED_SESSION_KEY_TTL_MS = 10 * 60_000;
 
 /** value -> epoch ms it was recorded. */
 type Stamped = Record<string, number>;
@@ -83,6 +97,49 @@ export function isOwnRoundKey(walletId: number, pubkey: string): boolean {
   return live(`${ROUND_KEYS_PREFIX}${walletId}`, ROUND_KEY_TTL_MS).has(pubkey);
 }
 
+/**
+ * Mark a throwaway round key as dead for EVERY window.
+ * Call on withdraw / after gather ends so other wallets stop counting it as a
+ * "live peer" (user: 4 wallets, "7 live peers" from abandoned Start clicks).
+ */
+export function retireRoundKey(pubkey: string): void {
+  if (!pubkey || pubkey.length < 32) return;
+  const entries = read(RETIRED_KEYS_KEY);
+  entries[pubkey] = Date.now();
+  write(RETIRED_KEYS_KEY, entries, RETIRED_KEY_TTL_MS);
+}
+
+/**
+ * Before minting a new round key, retire every previous attempt of this wallet.
+ * Other windows share localStorage and stop counting those throwaways as peers —
+ * same wallet double-Start was a main source of "5–7 live with 4 wallets".
+ */
+export function retireAllOwnRoundKeys(walletId: number): void {
+  const keys = live(`${ROUND_KEYS_PREFIX}${walletId}`, ROUND_KEY_TTL_MS);
+  keys.forEach((pubkey) => retireRoundKey(pubkey));
+}
+
+/** True when any wallet has retired this announcement key. */
+export function isRetiredRoundKey(pubkey: string): boolean {
+  return live(RETIRED_KEYS_KEY, RETIRED_KEY_TTL_MS).has(pubkey);
+}
+
+/**
+ * Record a verified blame target (ephemeral session pubkey only).
+ * Local-only; does not publish identity or IP.
+ */
+export function recordBlamedSessionKey(pubkey: string): void {
+  if (!pubkey || pubkey.length < 32) return;
+  const entries = read(BLAMED_SESSION_KEYS_KEY);
+  entries[pubkey] = Date.now();
+  write(BLAMED_SESSION_KEYS_KEY, entries, BLAMED_SESSION_KEY_TTL_MS);
+}
+
+/** True when this throwaway key was blamed recently (exclude from propose). */
+export function isBlamedSessionKey(pubkey: string): boolean {
+  return live(BLAMED_SESSION_KEYS_KEY, BLAMED_SESSION_KEY_TTL_MS).has(pubkey);
+}
+
 /** Outpoints currently claimed by an in-flight round of this wallet. */
 export function reservedOutpoints(walletId: number): Set<string> {
   return live(`${INPUT_LOCKS_PREFIX}${walletId}`, INPUT_LOCK_TTL_MS);
@@ -109,5 +166,49 @@ export function releaseOutpoints(walletId: number, outpoints: string[]): void {
   write(storageKey, entries, INPUT_LOCK_TTL_MS);
 }
 
+/**
+ * Drop every outpoint lock for this wallet. Safe only when no live fusion lease
+ * exists (idle reconcile / HMR ghost cleanup). Without this, a crashed round
+ * greys out coins for up to {@link INPUT_LOCK_TTL_MS} while Start stayed clickable.
+ */
+export function clearOutpointReservations(walletId: number): void {
+  if (!Number.isInteger(walletId) || walletId <= 0) return;
+  try {
+    getLocalStorage()?.removeItem(`${INPUT_LOCKS_PREFIX}${walletId}`);
+  } catch {
+    /* storage unavailable */
+  }
+}
+
 export const outpointKey = (txid: string, index: number): string =>
   `${txid}:${index}`;
+
+export interface FusionCoinAvailability {
+  /** Non-token UTXOs in the wallet view. */
+  total: number;
+  /** Not reserved by a fusion round. */
+  free: number;
+  /** Held by a (possibly ghost) fusion reservation. */
+  reserved: number;
+}
+
+/**
+ * How many non-token coins are free to fuse right now.
+ * Used by CashFusion UI to grey Start/Fuse instead of failing after click.
+ */
+export function fusionCoinAvailability(
+  walletId: number,
+  utxos: ReadonlyArray<{ tx_hash: string; tx_pos: number; token?: unknown }>
+): FusionCoinAvailability {
+  const nonToken = utxos.filter((utxo) => !utxo.token);
+  const claimed = reservedOutpoints(walletId);
+  let free = 0;
+  for (const utxo of nonToken) {
+    if (!claimed.has(outpointKey(utxo.tx_hash, utxo.tx_pos))) free += 1;
+  }
+  return {
+    total: nonToken.length,
+    free,
+    reserved: nonToken.length - free,
+  };
+}

@@ -4,7 +4,10 @@ import PageHeader from '../components/ui/PageHeader';
 import { selectWalletId } from '../state/slices/walletSlice';
 import useOutboundTransactions from '../hooks/useOutboundTransactions';
 import EmptyState from '../components/ui/EmptyState';
-import { OUTBOUND_RELEASE_DELAY_MS } from '../services/OutboundTransactionTracker';
+import {
+  OUTBOUND_RELEASE_DELAY_MS,
+  isFusionVerificationPending,
+} from '../services/OutboundTransactionTracker';
 import WalletScreen from '../components/ui/WalletScreen';
 
 function relativeAge(timestamp?: string | null): string {
@@ -23,13 +26,8 @@ function relativeAge(timestamp?: string | null): string {
 export default function Outbox() {
   const navigate = useNavigate();
   const walletId = useSelector(selectWalletId);
-  const {
-    outboundTransactions,
-    canClear,
-    reconciling,
-    refresh,
-    release,
-  } = useOutboundTransactions(walletId);
+  const { outboundTransactions, canClear, reconciling, refresh, release } =
+    useOutboundTransactions(walletId);
 
   return (
     <WalletScreen maxWidthClassName="max-w-md" className="pt-4">
@@ -39,10 +37,11 @@ export default function Outbox() {
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="font-semibold wallet-text-strong">
-              Pending outgoing transactions
+              Transaction verification
             </div>
             <div className="text-sm wallet-muted mt-1">
-              Offline-first protection keeps new sends paused until these transactions are seen or safely released.
+              Signed transactions stay protected until wallet sync confirms
+              whether they reached the network.
             </div>
           </div>
           <button
@@ -60,7 +59,7 @@ export default function Outbox() {
 
       <div className="mt-3">
         {outboundTransactions.length === 0 ? (
-          <EmptyState message="No pending outgoing transactions." />
+          <EmptyState message="No transactions awaiting verification." />
         ) : (
           <div className="space-y-3">
             {outboundTransactions.map((record) => (
@@ -75,7 +74,9 @@ export default function Outbox() {
                     </div>
                   </div>
                   <div className="text-xs wallet-muted capitalize">
-                    {record.state.replaceAll('_', ' ')}
+                    {isFusionVerificationPending(record)
+                      ? 'Fusion verification pending'
+                      : record.state.replaceAll('_', ' ')}
                   </div>
                 </div>
 
@@ -90,14 +91,18 @@ export default function Outbox() {
                   {record.recipientSummary && (
                     <div>
                       <div className="text-xs wallet-muted">Destination</div>
-                      <div className="wallet-text-strong">{record.recipientSummary}</div>
+                      <div className="wallet-text-strong">
+                        {record.recipientSummary}
+                      </div>
                     </div>
                   )}
 
                   {record.amountSummary && (
                     <div>
                       <div className="text-xs wallet-muted">Amount</div>
-                      <div className="wallet-text-strong">{record.amountSummary}</div>
+                      <div className="wallet-text-strong">
+                        {record.amountSummary}
+                      </div>
                     </div>
                   )}
 
@@ -114,15 +119,21 @@ export default function Outbox() {
                   {record.userPrompt && (
                     <div>
                       <div className="text-xs wallet-muted">Prompt</div>
-                      <div className="wallet-text-strong">{record.userPrompt}</div>
+                      <div className="wallet-text-strong">
+                        {record.userPrompt}
+                      </div>
                     </div>
                   )}
 
-                  {record.lastError && (
+                  {(record.verificationMessage || record.lastError) && (
                     <div>
-                      <div className="text-xs wallet-muted">Last network issue</div>
+                      <div className="text-xs wallet-muted">
+                        {isFusionVerificationPending(record)
+                          ? 'Verification status'
+                          : 'Last network issue'}
+                      </div>
                       <div className="wallet-text-strong">
-                        {record.lastError}
+                        {record.verificationMessage || record.lastError}
                       </div>
                     </div>
                   )}
@@ -144,16 +155,20 @@ export default function Outbox() {
                     disabled={!canClear(record.txid)}
                     className="wallet-btn-secondary px-3 py-2 text-sm"
                     title={
-                      record.state === 'submitted'
-                        ? 'Clear this pending lock if the transaction was not actually sent'
-                        : `Available after ${Math.round(
-                            OUTBOUND_RELEASE_DELAY_MS / 60000
-                          )} minutes if the transaction is still unresolved`
+                      isFusionVerificationPending(record)
+                        ? 'Wallet sync must verify this Fusion transaction before its inputs can be reused'
+                        : record.state === 'submitted'
+                          ? 'Clear this pending lock if the transaction was not actually sent'
+                          : `Available after ${Math.round(
+                              OUTBOUND_RELEASE_DELAY_MS / 60000
+                            )} minutes if the transaction is still unresolved`
                     }
                   >
-                    {record.state === 'submitted'
-                      ? 'Clear pending lock'
-                      : 'Release if stale'}
+                    {isFusionVerificationPending(record)
+                      ? 'Awaiting verification'
+                      : record.state === 'submitted'
+                        ? 'Clear pending lock'
+                        : 'Release if stale'}
                   </button>
                 </div>
               </div>

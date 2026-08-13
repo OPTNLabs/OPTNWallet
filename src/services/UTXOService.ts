@@ -3,7 +3,7 @@ import {
   cashAddressToLockingBytecode,
   decodeTransaction,
 } from '@bitauth/libauth';
-import ElectrumService from './ElectrumService';
+import ElectrumService, { invalidateUTXOCache } from './ElectrumService';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 import UTXOManager from '../apis/UTXOManager/UTXOManager';
 import AddressManager from '../apis/AddressManager/AddressManager';
@@ -18,6 +18,9 @@ import { normalizeTokenField } from '../utils/tokenNormalization';
 import { logError } from '../utils/errorHandling';
 import { isWebPlatform } from '../utils/platform';
 import { binToHex, hexToBin } from '../utils/hex';
+
+const bcmrCache = new Map<string, { ts: number; data: Awaited<ReturnType<BcmrService['getSnapshot']>> | null }>();
+const BCMR_CACHE_TTL_MS = 300_000;
 
 function getPrefix(): string {
   try {
@@ -34,7 +37,8 @@ type DecodedTransaction = Exclude<ReturnType<typeof decodeTransaction>, string>;
 type DecodedOutput = DecodedTransaction['outputs'][number];
 
 function outpointKey(utxo: Pick<UTXO, 'tx_hash' | 'tx_pos'>): string {
-  return `${utxo.tx_hash}:${utxo.tx_pos}`;
+  // Lowercase txid so reserved-outbound filters match Electrum casing.
+  return `${String(utxo.tx_hash).trim().toLowerCase()}:${utxo.tx_pos}`;
 }
 
 async function collectReservedOutboundOutpointKeys(
@@ -168,7 +172,12 @@ async function enrichCachedTokenMetadata(
   const metadataResults = await Promise.all(
     categoryList.map(async (category) => {
       try {
+        const cached = bcmrCache.get(category);
+        if (cached && Date.now() - cached.ts < BCMR_CACHE_TTL_MS) {
+          return { category, metadata: cached.data };
+        }
         const metadata = await bcmrService.getSnapshot(category);
+        bcmrCache.set(category, { ts: Date.now(), data: metadata });
         return { category, metadata };
       } catch {
         return { category, metadata: null };
@@ -240,18 +249,37 @@ type UTXOFetchOptions = {
    * spending action must not block on a new BIP44 history scan.
    */
   discover?: boolean;
+  /**
+   * Full-pass flag (open / Manual Sync). HOT already listunspents every address
+   * in the call; kept for API compatibility with Manual Sync / open callers.
+   */
+  force?: boolean;
+  /**
+   * Reported as Electrum batch chunks complete so the UI can show real,
+   * in-flight UTXO progress instead of a coarse coarse phase jump (which made
+   * the ETA extrapolate "2s left" while the fetch was actually mid-flight).
+   */
+  onProgress?: (completedCount: number, totalCount: number) => void;
 };
 
 const UTXOService = {
   async fetchAndStoreUTXOs(walletId: number, address: string): Promise<UTXO[]> {
     try {
-      const results = await UTXOService.fetchAndStoreUTXOsMany(walletId, [
-        address,
-      ]);
+      // Subscription / single-address path: never BIP44 rediscovery, never
+      // full-wallet ledger rebuild (that rewrote every UTXO on each notify and
+      // produced fake balances + console floods of total:1 dirty:1).
+      const results = await UTXOService.fetchAndStoreUTXOsMany(
+        walletId,
+        [address],
+        { discover: false }
+      );
       return results[address] ?? [];
     } catch (error) {
       logError('UTXOService.fetchAndStoreUTXOs', error, { walletId, address });
-      return [];
+      // A subscription refresh must distinguish "the address is empty" from
+      // "the server disconnected". Returning [] here made the worker erase a
+      // previously visible balance after any transport-wide failure.
+      throw error;
     }
   },
 
@@ -262,6 +290,7 @@ const UTXOService = {
   ): Promise<Record<string, UTXO[]>> {
     try {
       const currentNetwork = store.getState().network.currentNetwork;
+      const tDiscovery = performance.now();
       const discoveredAddresses =
         options.discover === false
           ? []
@@ -270,6 +299,12 @@ const UTXOService = {
               currentNetwork,
               hasElectrumBatchUsage
             )) ?? []);
+      if (options.discover !== false) {
+        console.info('[UTXOService] discovery took', {
+          ms: Math.round(performance.now() - tDiscovery),
+          discovered: discoveredAddresses.length,
+        });
+      }
       const manager = await UTXOManager();
       const addressManager = AddressManager();
       const uniqueAddresses = Array.from(
@@ -280,12 +315,70 @@ const UTXOService = {
       );
       if (uniqueAddresses.length === 0) return {};
 
+      // Mark entry into the UTXO network phase immediately (manual Sync was
+      // stuck on a phase marker until the first Electrum chunk completed).
+      options.onProgress?.(0, uniqueAddresses.length);
+
+      // ── HOT path (OPTN 1.7.0 law) ──────────────────────────────────────
+      // Always listunspent every address in this call (like Labs 1.7.0).
+      // Status-hash "skip clean" was leaving poisoned SQL as balance forever.
+      // Single-address subscription still skips via addressHistoryIsFresh in worker.
+
       const existingSnapshot = await manager.fetchUTXOsFromDatabase(
         uniqueAddresses.map((address) => ({ address })),
         walletId
       );
-      const utxosByAddress =
-        await ElectrumService.getUTXOsMany(uniqueAddresses);
+
+      // Never serve stale Electrum TTL cache for wallet-wide / force passes.
+      for (const address of uniqueAddresses) {
+        invalidateUTXOCache(address);
+      }
+
+      const tFetch = performance.now();
+      let utxosByAddress: Record<string, UTXO[]> = {};
+      try {
+        utxosByAddress = await ElectrumService.getUTXOsMany(
+          uniqueAddresses,
+          options.onProgress
+            ? (done, total) => options.onProgress?.(done, total)
+            : undefined
+        );
+      } catch (fetchError) {
+        // Soft-fail on transport/backoff: keep last SQL so reconnect does not wipe.
+        const msg =
+          fetchError instanceof Error ? fetchError.message : String(fetchError);
+        if (
+          /backoff|connection lost|not connected|timeout|ECONN/i.test(msg)
+        ) {
+          logError('UTXOService.fetchAndStoreUTXOsMany.softFail', fetchError, {
+            walletId,
+            addressCount: uniqueAddresses.length,
+          });
+          options.onProgress?.(
+            uniqueAddresses.length,
+            uniqueAddresses.length
+          );
+          // Still strip outbound-spent coins so a soft-fail after broadcast
+          // cannot re-surface pre-fusion inputs as spendable balance.
+          const reservedOutpoints =
+            await collectReservedOutboundOutpointKeys(walletId);
+          const fromDb: Record<string, UTXO[]> = {};
+          for (const address of uniqueAddresses) {
+            fromDb[address] = [
+              ...(existingSnapshot.utxosMap[address] ?? []),
+              ...(existingSnapshot.cashTokenUtxosMap[address] ?? []),
+            ].filter((utxo) => !reservedOutpoints.has(outpointKey(utxo)));
+          }
+          return fromDb;
+        }
+        throw fetchError;
+      }
+      if (uniqueAddresses.length > 1) {
+        console.info('[UTXOService] getUTXOsMany took', {
+          ms: Math.round(performance.now() - tFetch),
+          addresses: uniqueAddresses.length,
+        });
+      }
       for (const fetchedUTXOs of Object.values(utxosByAddress)) {
         for (const u of fetchedUTXOs) {
           const uAny = u as UTXO & { token_data?: unknown };
@@ -308,8 +401,12 @@ const UTXOService = {
       const formattedByAddress: Record<string, UTXO[]> = {};
 
       for (const address of uniqueAddresses) {
-        const fetchedUTXOs = utxosByAddress[address];
-        if (!fetchedUTXOs) {
+        // Missing key = RPC failure (not empty). Empty array = server said 0 coins.
+        const hasNetworkResult = Object.prototype.hasOwnProperty.call(
+          utxosByAddress,
+          address
+        );
+        if (!hasNetworkResult) {
           formattedByAddress[address] = [
             ...(existingSnapshot.utxosMap[address] ?? []),
             ...(existingSnapshot.cashTokenUtxosMap[address] ?? []),
@@ -319,10 +416,14 @@ const UTXOService = {
           continue;
         }
 
+        // Network returned a key (including empty []). Trust listunspent like
+        // 1.7.0 — do not keep prior coins over an authoritative empty set.
+        const fetchedUTXOs = utxosByAddress[address] ?? [];
         const previousUtxos = [
           ...(existingSnapshot.utxosMap[address] ?? []),
           ...(existingSnapshot.cashTokenUtxosMap[address] ?? []),
         ];
+
         const mergedUTXOs = mergeKnownTokenData(
           fetchedUTXOs,
           previousUtxos
@@ -357,22 +458,36 @@ const UTXOService = {
         }
       }
 
+      // HOT write: SQL UTXOs are the durable spendable set; return same map
+      // for Redux. No ledger projection (cold archive must not set balance).
       await manager.replaceWalletAddressUTXOs(walletId, formattedByAddress);
-
       const dbService = DatabaseService();
       if (isWebPlatform()) {
         await dbService.flushDatabaseToFile(walletId);
       } else {
         dbService.scheduleDatabaseSave(walletId);
       }
-
+      if (uniqueAddresses.length >= 20) {
+        const totalSats = Object.values(formattedByAddress)
+          .flat()
+          .reduce((s, u) => s + (u.value ?? u.amount ?? 0), 0);
+        console.info('[UTXOService] HOT balance (SQL UTXOs)', {
+          walletId,
+          addresses: Object.keys(formattedByAddress).length,
+          coins: Object.values(formattedByAddress).flat().length,
+          totalSats,
+        });
+      }
       return formattedByAddress;
     } catch (error) {
       logError('UTXOService.fetchAndStoreUTXOsMany', error, {
         walletId,
         addressCount: addresses.length,
       });
-      return {};
+      // A transport-wide failure is not an authoritative empty wallet. Let
+      // wallet-level callers preserve their last known snapshot and retry on
+      // another server instead of replacing every address with zero UTXOs.
+      throw error;
     }
   },
 

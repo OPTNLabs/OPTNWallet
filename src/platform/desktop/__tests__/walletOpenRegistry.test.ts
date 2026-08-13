@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   claimWalletOpen,
+  runExclusiveWalletOpen,
   refreshWalletOpenClaim,
   releaseWalletOpen,
   windowHoldingWallet,
@@ -121,6 +122,39 @@ describe('single-window rule for an open wallet', () => {
     // a missed round, refusing to open a wallet makes the app unusable.
     expect(await claimWalletOpen(5, 'window-a')).toBeNull();
   });
+
+  it('releases a claim when password verification rejects the open', async () => {
+    await expect(
+      runExclusiveWalletOpen(5, 'window-a', async () => null)
+    ).resolves.toEqual({ status: 'rejected' });
+
+    expect(windowHoldingWallet(5)).toBeNull();
+    expect(await claimWalletOpen(5, 'window-b')).toBeNull();
+  });
+
+  it('releases a claim when wallet opening throws', async () => {
+    await expect(
+      runExclusiveWalletOpen(5, 'window-a', async () => {
+        throw new Error('database failed');
+      })
+    ).rejects.toThrow('database failed');
+
+    expect(windowHoldingWallet(5)).toBeNull();
+  });
+
+  it('keeps a successful biometric or password claim until the wallet closes', async () => {
+    await expect(
+      runExclusiveWalletOpen(5, 'window-a', async () => ({ unlocked: true }))
+    ).resolves.toEqual({
+      status: 'opened',
+      value: { unlocked: true },
+    });
+
+    expect(windowHoldingWallet(5)).toBe('window-a');
+    await expect(
+      runExclusiveWalletOpen(5, 'window-b', async () => ({ unlocked: true }))
+    ).resolves.toEqual({ status: 'held', windowLabel: 'window-a' });
+  });
 });
 
 describe('a claim held by a window that no longer exists', () => {
@@ -157,5 +191,36 @@ describe('a claim held by a window that no longer exists', () => {
         throw new Error('cannot enumerate windows');
       })
     ).toBe('window-a');
+  });
+
+  it('does not let two contenders both replace the same dead claim', async () => {
+    await claimWalletOpen(6, 'window-gone');
+
+    let probes = 0;
+    let releaseProbes!: () => void;
+    const bothProbed = new Promise<void>((resolve) => {
+      releaseProbes = resolve;
+    });
+    const isWindowOpen = async (label: string) => {
+      expect(label).toBe('window-gone');
+      probes += 1;
+      if (probes === 2) releaseProbes();
+      await bothProbed;
+      return false;
+    };
+
+    const [fromB, fromC] = await Promise.all([
+      claimWalletOpen(6, 'window-b', Date.now(), isWindowOpen),
+      claimWalletOpen(6, 'window-c', Date.now(), isWindowOpen),
+    ]);
+
+    const winners = [
+      fromB === null ? 'window-b' : null,
+      fromC === null ? 'window-c' : null,
+    ].filter((label): label is string => label !== null);
+    expect(winners).toHaveLength(1);
+    const winner = winners[0];
+    expect([fromB, fromC].filter((held) => held === winner)).toHaveLength(1);
+    expect(windowHoldingWallet(6)).toBe(winner);
   });
 });

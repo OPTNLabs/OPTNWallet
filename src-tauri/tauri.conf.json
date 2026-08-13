@@ -1,12 +1,12 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "OPTNWallet",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "identifier": "com.optilabs.wallet",
   "build": {
     "frontendDist": "../dist",
-    "devUrl": "http://localhost:5174",
-    "beforeDevCommand": "npx vite --config vite.desktop.config.ts --host --port 5174",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npx vite --config vite.desktop.config.ts --host --port 5173",
     "beforeBuildCommand": "npx vite build --config vite.desktop.config.ts"
   },
   "app": {
@@ -25,7 +25,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost https://ipc.localhost https://*.optnlabs.com https://app.cauldron.quest https://indexer.riften.net https://indexer-chipnet.riften.net https://cashtokens.org wss: ws:; img-src 'self' data: blob: https:; font-src 'self' data:; frame-src 'none'; object-src 'none'; base-uri 'self'"
+      "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost https://ipc.localhost http://127.0.0.1:21325 http://localhost:21325 https://*.optnlabs.com https://app.cauldron.quest https://indexer.riften.net https://indexer-chipnet.riften.net https://cashtokens.org wss: ws:; img-src 'self' data: blob: https:; font-src 'self' data:; frame-src 'none'; object-src 'none'; base-uri 'self'"
     }
   },
   "bundle": {

@@ -78,6 +78,9 @@ describe('DesktopWalletManager network cleanup', () => {
       0,
       20
     );
+    expect(dbService.scheduleDatabaseSave).not.toHaveBeenCalled();
+    expect(dbService.flushDatabaseToFile).toHaveBeenCalledOnce();
+    expect(dbService.flushDatabaseToFile).toHaveBeenCalledWith(6);
     expect(mockedVaultCache.clear.mock.invocationCallOrder[0]).toBeLessThan(
       mockedKeyService.bootstrapInitialAddressBatch.mock.invocationCallOrder[0]
     );
@@ -88,7 +91,13 @@ describe('DesktopWalletManager network cleanup', () => {
   });
 
   it('clears wallet 7 cached vaults when a purge removes zero database rows', async () => {
+    const marker = makeCountStatement(0);
+    marker.getAsObject.mockReturnValue({
+      network_cleanup_version: 0,
+      network_cleanup_network: null,
+    });
     const db = {
+      prepare: vi.fn(() => marker),
       run: vi.fn(),
       getRowsModified: vi.fn(() => 0),
     };
@@ -104,11 +113,47 @@ describe('DesktopWalletManager network cleanup', () => {
 
     expect(mockedVaultCache.clear).toHaveBeenCalledOnce();
     expect(mockedVaultCache.clear).toHaveBeenCalledWith(7);
+    expect(db.run).toHaveBeenCalledWith(
+      `UPDATE wallets
+       SET network_cleanup_version = ?, network_cleanup_network = ?
+       WHERE id = ?`,
+      [1, Network.CHIPNET, 7]
+    );
+    // The immediate wallet-scoped flush is the persistence operation. Queuing
+    // a generic save first makes performQueuedSave write twice on first unlock.
     expect(dbService.scheduleDatabaseSave).not.toHaveBeenCalled();
-    expect(dbService.flushDatabaseToFile).not.toHaveBeenCalled();
+    expect(dbService.flushDatabaseToFile).toHaveBeenCalledWith(7);
     expect(mockedLog.info).toHaveBeenCalledWith(
       'NetworkPurge',
       'wallet=7 target=chipnet cacheCleared=true rowsRemoved=0 status=complete'
     );
+  });
+
+  it('skips the legacy cleanup scans after this wallet and network are marked complete', async () => {
+    const marker = makeCountStatement(0);
+    marker.getAsObject.mockReturnValue({
+      network_cleanup_version: 1,
+      network_cleanup_network: Network.CHIPNET,
+    });
+    const db = {
+      prepare: vi.fn(() => marker),
+      run: vi.fn(),
+      getRowsModified: vi.fn(() => 0),
+    };
+    const dbService = {
+      ensureDatabaseStarted: vi.fn(async () => {}),
+      getDatabase: vi.fn(() => db),
+      scheduleDatabaseSave: vi.fn(),
+      flushDatabaseToFile: vi.fn(async () => {}),
+    };
+    mockedDatabaseService.mockReturnValue(dbService as never);
+
+    await purgeCrossNetworkData(7, Network.CHIPNET);
+
+    expect(mockedVaultCache.clear).toHaveBeenCalledWith(7);
+    expect(db.run).not.toHaveBeenCalled();
+    expect(dbService.scheduleDatabaseSave).not.toHaveBeenCalled();
+    expect(dbService.flushDatabaseToFile).not.toHaveBeenCalled();
+    expect(mockedLog.info).not.toHaveBeenCalled();
   });
 });

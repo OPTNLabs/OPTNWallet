@@ -3,6 +3,7 @@
 // Loads the browser UMD build via <script> tag so the WASM runtime runs
 // exactly as compiled, then proxies the same initSqlJs API.
 
+
 // Minimal type stubs so DatabaseService.ts's `Database` annotation works.
 // (TSC is not run during `tauri dev`; esbuild strips these at build time.)
 export interface Database {
@@ -38,12 +39,18 @@ function loadSqlJsScript(): Promise<void> {
   }
   loadPromise = new Promise<void>((resolve, reject) => {
     const script = document.createElement('script');
+    // Served verbatim from public/ on purpose. This is a CLASSIC script: its
+    // top-level `var initSqlJs` only becomes a global when the file is delivered
+    // untouched. Importing it as `sql.js/dist/sql-wasm.js?url` instead routes a
+    // node_modules file through Vite, which does not guarantee that, and the
+    // load then fails with "loaded without initSqlJs".
     script.src = '/sql-wasm-browser.js';
     script.onload = () => {
       if (window.initSqlJs) resolve();
-      else reject(new Error('sql-wasm-browser.js loaded but initSqlJs not on window'));
+      else reject(new Error('sql.js browser runtime loaded without initSqlJs'));
     };
-    script.onerror = () => reject(new Error('Failed to load /sql-wasm-browser.js'));
+    script.onerror = () =>
+      reject(new Error('Failed to load the sql.js browser runtime'));
     document.head.appendChild(script);
   });
   return loadPromise;
@@ -53,8 +60,9 @@ async function initSqlJs(config?: InitSqlJsConfig): Promise<SqlJsStatic> {
   console.log('[sql-js-shim] initSqlJs called — loading browser UMD');
   await loadSqlJsScript();
   console.log('[sql-js-shim] script ready, calling window.initSqlJs');
-  if (!window.initSqlJs) throw new Error('initSqlJs not available after script load');
-  // Always use the browser WASM paired with sql-wasm-browser.js.
+  if (!window.initSqlJs)
+    throw new Error('initSqlJs not available after script load');
+  // Always use the browser WASM paired with the browser runtime.
   // Upstream passes locateFile: () => '/sql-wasm.wasm' which points to the Node.js build
   // (wrong WASM for the browser UMD) — we override it here regardless of caller config.
   const result = await window.initSqlJs({

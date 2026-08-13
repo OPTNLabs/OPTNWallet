@@ -7,6 +7,15 @@ import {
 import { isAndroidNativePlatform } from '../utils/platform';
 
 export const SECRET_ENC_PREFIX = 'enc:v1:';
+/**
+ * localStorage key for the WebCrypto fallback AES material.
+ *
+ * SECURITY (Mythos HIGH): this stores raw key bytes next to IndexedDB ciphertext
+ * on web / iOS / Android-when-SecureKeyStore-unavailable. That is *not* real
+ * at-rest secrecy against XSS or local profile theft. Desktop + extension builds
+ * replace this entire module with a password-derived key (see vite.*.config.ts).
+ * Android encrypt now fails closed instead of writing new secrets under this key.
+ */
 const FALLBACK_KEY_STORAGE = 'optn_wallet_fallback_key_v1';
 
 let fallbackCryptoKey: CryptoKey | null = null;
@@ -124,9 +133,21 @@ async function encryptRaw(plaintext: string): Promise<string> {
       const { ciphertext } = await SecureKeyStore.encrypt({ plaintext });
       return ciphertext;
     } catch (error) {
-      console.warn('SecureKeyStore.encrypt failed, falling back to WebCrypto', error);
+      // FAIL CLOSED: never write *new* secrets under the localStorage AES key.
+      // That key lives next to the SQLite/IndexedDB ciphertext (Mythos HIGH) —
+      // silent fallback permanently downgrades hardware-backed encryption.
+      console.error(
+        'SecureKeyStore.encrypt failed; refusing insecure localStorage fallback',
+        error
+      );
+      throw error instanceof Error
+        ? error
+        : new Error('SecureKeyStore.encrypt failed (no localStorage fallback)');
     }
   }
+  // Web / iOS without SecureKeyStore: localStorage-backed AES key (known weak
+  // at-rest model — key material adjacent to ciphertext). Desktop and extension
+  // builds swap this module for a password-derived implementation.
   return await encryptWithFallback(plaintext);
 }
 
@@ -136,7 +157,23 @@ async function decryptRaw(ciphertext: string): Promise<string> {
       const { plaintext } = await SecureKeyStore.decrypt({ ciphertext });
       return plaintext;
     } catch (error) {
-      console.warn('SecureKeyStore.decrypt failed, falling back to WebCrypto', error);
+      // Android ciphertext must never silently downgrade to a raw key stored
+      // beside the wallet database. A failed decrypt is either a wrong/corrupt
+      // payload or an explicit key-migration case that must be handled by a
+      // versioned migration flow.
+      //
+      // Surface one actionable message instead of re-throwing the raw plugin
+      // error. Two real cases land here — a row written under the localStorage
+      // key by a build from before fail-closed encrypt shipped, and a Keystore
+      // key the OS invalidated (lock-screen or biometric change, restore to a
+      // new device). Neither is recoverable in-app, and the only thing the user
+      // can act on is their recovery phrase. An opaque Keystore error does not
+      // tell them that. The original is logged above for diagnosis.
+      console.error('SecureKeyStore.decrypt failed; refusing fallback', error);
+      throw new Error(
+        "This wallet's secure storage key is no longer available on this " +
+          'device. Restore the wallet from your recovery phrase to continue.'
+      );
     }
   }
   return await decryptWithFallback(ciphertext);
@@ -159,6 +196,22 @@ async function decryptText(ciphertextOrPlaintext: string): Promise<string> {
   return await decryptRaw(ciphertextOrPlaintext.slice(SECRET_ENC_PREFIX.length));
 }
 
+/**
+ * Decrypt a related set of wallet fields through the platform implementation.
+ * Desktop replaces this module with a scoped implementation that derives its
+ * password key once for the whole batch; other platforms keep their existing
+ * secure-storage/fallback key behavior.
+ */
+async function decryptTextBatch(
+  values: readonly string[],
+  _ownerWalletId?: number
+): Promise<string[]> {
+  // Accepted for signature parity with the desktop replacement, which scopes a
+  // derived password key per wallet. This implementation has no such key.
+  void _ownerWalletId;
+  return await Promise.all(values.map((value) => decryptText(value)));
+}
+
 async function encryptBytes(data: Uint8Array): Promise<string> {
   const asBase64 = bytesToBase64(data);
   return await encryptText(asBase64);
@@ -179,6 +232,7 @@ async function decryptBytes(
 const SecretCryptoService = {
   encryptText,
   decryptText,
+  decryptTextBatch,
   encryptBytes,
   decryptBytes,
 };

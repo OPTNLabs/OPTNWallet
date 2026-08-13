@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 type DesktopWalletPickerActionsProps = {
   hasWallets: boolean;
   onHardware: () => void;
+  /** Opens create watch-only (xPub + password; Airgap/Keystone section inside). */
   onWatchOnly: () => void;
 };
 
@@ -31,7 +32,7 @@ export const DesktopWalletPickerActions: FC<
       onClick={onHardware}
       className="wallet-btn-secondary w-full text-center py-3 font-bold"
     >
-      Connect Hardware Wallet
+      Use a hardware device
     </button>
     <button
       type="button"

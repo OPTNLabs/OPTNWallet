@@ -16,10 +16,10 @@ describe('experimentalSlice CashFusion preferences', () => {
     const state = reducer(undefined, { type: 'unknown' });
 
     expect(state.autoFuseEnabled).toBe(true);
-    expect(state.p2pFusionEnabled).toBe(false);
+    expect(state.p2pFusionEnabled).toBe(true);
     expect(selectAutoFuseEnabled({ experimental: state } as never)).toBe(true);
     expect(selectP2pFusionEnabled({ experimental: state } as never)).toBe(
-      false
+      true
     );
   });
 
@@ -47,19 +47,19 @@ describe('experimentalSlice CashFusion preferences', () => {
     expect(restored).toMatchObject({
       cashFusionEnabled: true,
       autoFuseEnabled: true,
-      p2pFusionEnabled: false,
+      p2pFusionEnabled: true,
     });
   });
 
   it('does not overwrite saved choices during persisted-state normalization', () => {
     const restored = normalizeExperimentalPersistedState({
       autoFuseEnabled: false,
-      p2pFusionEnabled: true,
+      p2pFusionEnabled: false,
     });
 
     expect(restored).toMatchObject({
       autoFuseEnabled: false,
-      p2pFusionEnabled: true,
+      p2pFusionEnabled: false,
     });
   });
 });

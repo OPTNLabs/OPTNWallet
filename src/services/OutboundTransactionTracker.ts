@@ -3,12 +3,15 @@ import { isDeterministicBroadcastError } from '../utils/broadcastErrors';
 import { binToHex, hexToBin } from '../utils/hex';
 import { sha256 } from '../utils/hash';
 import type { UTXO } from '../types/types';
+import { getLocalStorage } from '../utils/browserStorage';
 
 export type OutboundTransactionState =
   | 'broadcasting'
   | 'submitted'
   | 'broadcasted'
   | 'seen';
+
+export type OutboundPrivacyRoute = 'default' | 'tor-only';
 
 export const OUTBOUND_BROADCASTING_STALE_MS = 90 * 1000;
 export const OUTBOUND_RELEASE_DELAY_MS = 20 * 60 * 1000;
@@ -25,6 +28,12 @@ export type OutboundTransactionRecord = {
   walletId: number | null;
   source: string;
   sourceLabel?: string | null;
+  /**
+   * `tor-only` records must never be queried or rebroadcast through the normal
+   * Electrum/HTTP path. Optional for backwards compatibility with records saved
+   * before route metadata existed; an absent value means `default`.
+   */
+  privacyRoute?: OutboundPrivacyRoute;
   recipientSummary?: string | null;
   amountSummary?: string | null;
   sessionTopic?: string | null;
@@ -38,13 +47,29 @@ export type OutboundTransactionRecord = {
   lastCheckedAt?: string | null;
   spentOutpoints: TrackedOutpoint[];
   lastError?: string | null;
+  /** Signed Tor-only transaction whose network visibility is still unknown. */
+  verificationPending?: boolean;
+  verificationMessage?: string | null;
 };
+
+export function isFusionVerificationPending(
+  record: OutboundTransactionRecord
+): boolean {
+  if (record.verificationPending === true) return true;
+  return (
+    record.privacyRoute === 'tor-only' &&
+    /fusion/i.test(record.source) &&
+    record.state !== 'seen' &&
+    !isDeterministicBroadcastError(record.lastError)
+  );
+}
 
 type TrackAttemptArgs = {
   rawTx: string;
   walletId: number | null;
   source: string;
   sourceLabel?: string | null;
+  privacyRoute?: OutboundPrivacyRoute;
   recipientSummary?: string | null;
   amountSummary?: string | null;
   sessionTopic?: string | null;
@@ -60,6 +85,7 @@ type RecordBroadcastArgs = TrackAttemptArgs & {
 };
 
 const STORAGE_PREFIX = 'outbound-tx:';
+const FALLBACK_STORAGE_KEY = 'optn-outbound-recovery-v1';
 const trackerStore = localForage.createInstance({
   name: 'optn-wallet',
   storeName: 'outbound_transactions',
@@ -88,9 +114,83 @@ function legacyStorageKey(txid: string): string {
   return `${STORAGE_PREFIX}${txid}`;
 }
 
+function readFallbackRecords(): Record<string, OutboundTransactionRecord> {
+  try {
+    const raw = getLocalStorage()?.getItem(FALLBACK_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, OutboundTransactionRecord>;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeFallbackRecords(
+  records: Record<string, OutboundTransactionRecord>
+): boolean {
+  const storage = getLocalStorage();
+  if (!storage) return false;
+  try {
+    const keys = Object.keys(records);
+    if (keys.length === 0) storage.removeItem(FALLBACK_STORAGE_KEY);
+    else storage.setItem(FALLBACK_STORAGE_KEY, JSON.stringify(records));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function fallbackRecord(
+  txid: string,
+  walletId?: number | null
+): OutboundTransactionRecord | null {
+  const records = readFallbackRecords();
+  if (walletId !== undefined) {
+    return records[storageKey(txid, walletId)] ?? null;
+  }
+  return Object.values(records).find((record) => record.txid === txid) ?? null;
+}
+
+function saveFallbackRecord(record: OutboundTransactionRecord): boolean {
+  const records = readFallbackRecords();
+  records[storageKey(record.txid, record.walletId)] = record;
+  return writeFallbackRecords(records);
+}
+
+function removeFallbackRecords(
+  predicate: (record: OutboundTransactionRecord) => boolean
+): void {
+  const records = readFallbackRecords();
+  let changed = false;
+  for (const [key, record] of Object.entries(records)) {
+    if (!predicate(record)) continue;
+    delete records[key];
+    changed = true;
+  }
+  if (changed) writeFallbackRecords(records);
+}
+
+async function migrateFallbackRecords(): Promise<
+  Record<string, OutboundTransactionRecord>
+> {
+  const records = readFallbackRecords();
+  let changed = false;
+  for (const [key, record] of Object.entries(records)) {
+    try {
+      await trackerStore.setItem(key, record);
+      delete records[key];
+      changed = true;
+    } catch {
+      // Keep the recovery record until IndexedDB accepts it.
+    }
+  }
+  if (changed) writeFallbackRecords(records);
+  return records;
+}
+
 function toTrackedOutpoints(inputs?: UTXO[]): TrackedOutpoint[] {
   return (inputs ?? []).map((utxo) => ({
-    tx_hash: utxo.tx_hash,
+    tx_hash: String(utxo.tx_hash).trim().toLowerCase(),
     tx_pos: utxo.tx_pos,
   }));
 }
@@ -104,7 +204,19 @@ export function deriveTrackedTxid(rawTx: string): string | null {
 }
 
 async function saveRecord(record: OutboundTransactionRecord): Promise<void> {
-  await trackerStore.setItem(storageKey(record.txid, record.walletId), record);
+  const key = storageKey(record.txid, record.walletId);
+  try {
+    await trackerStore.setItem(key, record);
+    removeFallbackRecords(
+      (fallback) =>
+        fallback.txid === record.txid && fallback.walletId === record.walletId
+    );
+  } catch (error) {
+    // IndexedDB can be temporarily unavailable (notably during WebView storage
+    // recovery). Keep a small localStorage shadow so spent outpoints remain
+    // reserved and the reconciler can migrate the broadcast later.
+    if (!saveFallbackRecord(record)) throw error;
+  }
   emitChange();
 }
 
@@ -121,40 +233,55 @@ const OutboundTransactionTracker = {
     walletId?: number | null
   ): Promise<OutboundTransactionRecord | null> {
     if (walletId !== undefined) {
-      const scoped = await trackerStore.getItem<OutboundTransactionRecord>(
-        storageKey(txid, walletId)
-      );
-      if (scoped) return scoped;
+      try {
+        const scoped = await trackerStore.getItem<OutboundTransactionRecord>(
+          storageKey(txid, walletId)
+        );
+        if (scoped) return scoped;
 
+        const legacy = await trackerStore.getItem<OutboundTransactionRecord>(
+          legacyStorageKey(txid)
+        );
+        if (legacy?.walletId === walletId) {
+          // Migration is best-effort; never discard the record we already
+          // recovered just because the replacement write is unavailable.
+          try {
+            await saveRecord(legacy);
+            await trackerStore.removeItem(legacyStorageKey(txid));
+          } catch {
+            // Keep the legacy row in place and return it to the caller.
+          }
+          return legacy;
+        }
+      } catch {
+        // Fall through to the durable localStorage recovery shadow.
+      }
+      return fallbackRecord(txid, walletId);
+    }
+
+    try {
       const legacy = await trackerStore.getItem<OutboundTransactionRecord>(
         legacyStorageKey(txid)
       );
-      if (legacy?.walletId === walletId) {
-        await saveRecord(legacy);
-        await trackerStore.removeItem(legacyStorageKey(txid));
-        return legacy;
-      }
-      return null;
-    }
+      if (legacy) return legacy;
 
-    const legacy = await trackerStore.getItem<OutboundTransactionRecord>(
-      legacyStorageKey(txid)
-    );
-    if (legacy) return legacy;
-
-    let found: OutboundTransactionRecord | null = null;
-    await trackerStore.iterate<OutboundTransactionRecord, void>(
-      (value, key) => {
-        if (
-          !found &&
-          key.startsWith(STORAGE_PREFIX) &&
-          value?.txid === txid
-        ) {
-          found = value;
+      let found: OutboundTransactionRecord | null = null;
+      await trackerStore.iterate<OutboundTransactionRecord, void>(
+        (value, key) => {
+          if (
+            !found &&
+            key.startsWith(STORAGE_PREFIX) &&
+            value?.txid === txid
+          ) {
+            found = value;
+          }
         }
-      }
-    );
-    return found;
+      );
+      if (found) return found;
+    } catch {
+      // Fall through to the durable localStorage recovery shadow.
+    }
+    return fallbackRecord(txid);
   },
 
   async getByRawTx(
@@ -180,6 +307,12 @@ const OutboundTransactionTracker = {
       walletId: args.walletId,
       source: existing?.source ?? args.source,
       sourceLabel: existing?.sourceLabel ?? args.sourceLabel ?? null,
+      ...(existing?.privacyRoute || args.privacyRoute
+        ? {
+            privacyRoute:
+              existing?.privacyRoute ?? args.privacyRoute ?? 'default',
+          }
+        : {}),
       recipientSummary:
         existing?.recipientSummary ?? args.recipientSummary ?? null,
       amountSummary: existing?.amountSummary ?? args.amountSummary ?? null,
@@ -199,6 +332,8 @@ const OutboundTransactionTracker = {
         ? existing.spentOutpoints
         : toTrackedOutpoints(args.spentInputs),
       lastError: existing?.lastError ?? null,
+      verificationPending: existing?.verificationPending ?? false,
+      verificationMessage: existing?.verificationMessage ?? null,
     };
     await saveRecord(record);
     return record;
@@ -245,6 +380,35 @@ const OutboundTransactionTracker = {
       updatedAt: new Date().toISOString(),
       lastCheckedAt: new Date().toISOString(),
       lastError,
+      verificationPending:
+        state === 'seen' || state === 'broadcasted'
+          ? false
+          : existing.verificationPending,
+      verificationMessage:
+        state === 'seen' || state === 'broadcasted'
+          ? null
+          : existing.verificationMessage,
+    };
+    await saveRecord(next);
+    return next;
+  },
+
+  async markVerificationPending(
+    txid: string,
+    message: string,
+    walletId?: number | null
+  ): Promise<OutboundTransactionRecord | null> {
+    const existing = await this.getByTxid(txid, walletId);
+    if (!existing) return null;
+    const now = new Date().toISOString();
+    const next: OutboundTransactionRecord = {
+      ...existing,
+      state: 'submitted',
+      updatedAt: now,
+      lastCheckedAt: now,
+      lastError: null,
+      verificationPending: true,
+      verificationMessage: message,
     };
     await saveRecord(next);
     return next;
@@ -269,18 +433,28 @@ const OutboundTransactionTracker = {
   },
 
   canRelease(record: OutboundTransactionRecord): boolean {
+    if (isFusionVerificationPending(record)) return false;
     if (record.state === 'seen' || record.state === 'broadcasted') return false;
     const ageMs = Date.now() - Date.parse(record.updatedAt);
     return !Number.isNaN(ageMs) && ageMs >= OUTBOUND_RELEASE_DELAY_MS;
   },
 
   canClear(record: OutboundTransactionRecord): boolean {
+    if (isFusionVerificationPending(record)) return false;
     if (isDeterministicBroadcastError(record.lastError)) return true;
-    if (record.state === 'submitted') return true;
+    // submitted = we lost the broadcast race; broadcasted = already on wire.
+    // User must be able to unblock Simple Send without waiting 20 minutes when
+    // history sync has not written the tx row yet (common on hardware wallets).
+    if (record.state === 'submitted' || record.state === 'broadcasted')
+      return true;
     return this.canRelease(record);
   },
 
   shouldRebroadcast(record: OutboundTransactionRecord): boolean {
+    // Tor-only transactions have their own native relay path. Sending one
+    // through the ordinary transaction manager would link the Fusion to the
+    // wallet's normal network identity.
+    if (record.privacyRoute === 'tor-only') return false;
     if (record.state !== 'submitted') return false;
     const baseline = record.lastCheckedAt ?? record.updatedAt;
     const ageMs = Date.now() - Date.parse(baseline);
@@ -289,49 +463,78 @@ const OutboundTransactionTracker = {
 
   async remove(txid: string, walletId?: number | null): Promise<void> {
     if (walletId !== undefined) {
-      await trackerStore.removeItem(storageKey(txid, walletId));
-      const legacy = await trackerStore.getItem<OutboundTransactionRecord>(
-        legacyStorageKey(txid)
-      );
-      if (legacy?.walletId === walletId) {
-        await trackerStore.removeItem(legacyStorageKey(txid));
+      try {
+        await trackerStore.removeItem(storageKey(txid, walletId));
+        const legacy = await trackerStore.getItem<OutboundTransactionRecord>(
+          legacyStorageKey(txid)
+        );
+        if (legacy?.walletId === walletId) {
+          await trackerStore.removeItem(legacyStorageKey(txid));
+        }
+      } catch {
+        // The recovery shadow remains independently removable.
       }
+      removeFallbackRecords(
+        (record) => record.txid === txid && record.walletId === walletId
+      );
       emitChange();
       return;
     }
 
-    const keys: string[] = [legacyStorageKey(txid)];
-    await trackerStore.iterate<OutboundTransactionRecord, void>(
-      (value, key) => {
-        if (key.startsWith(STORAGE_PREFIX) && value?.txid === txid) {
-          keys.push(key);
+    try {
+      const keys: string[] = [legacyStorageKey(txid)];
+      await trackerStore.iterate<OutboundTransactionRecord, void>(
+        (value, key) => {
+          if (key.startsWith(STORAGE_PREFIX) && value?.txid === txid) {
+            keys.push(key);
+          }
         }
-      }
-    );
-    await Promise.all(
-      Array.from(new Set(keys)).map((key) => trackerStore.removeItem(key))
-    );
+      );
+      await Promise.all(
+        Array.from(new Set(keys)).map((key) => trackerStore.removeItem(key))
+      );
+    } catch {
+      // The recovery shadow remains independently removable.
+    }
+    removeFallbackRecords((record) => record.txid === txid);
     emitChange();
   },
 
   async listAll(
     walletId?: number | null
   ): Promise<OutboundTransactionRecord[]> {
-    const records: OutboundTransactionRecord[] = [];
-    await trackerStore.iterate<OutboundTransactionRecord, void>(
-      (value, key) => {
-        if (!key.startsWith(STORAGE_PREFIX) || !value) return;
-        if (
-          walletId !== undefined &&
-          walletId !== null &&
-          value.walletId !== walletId
-        ) {
-          return;
+    const records = new Map<string, OutboundTransactionRecord>();
+    const fallback = await migrateFallbackRecords();
+    try {
+      await trackerStore.iterate<OutboundTransactionRecord, void>(
+        (value, key) => {
+          if (!key.startsWith(STORAGE_PREFIX) || !value) return;
+          if (
+            walletId !== undefined &&
+            walletId !== null &&
+            value.walletId !== walletId
+          ) {
+            return;
+          }
+          records.set(storageKey(value.txid, value.walletId), value);
         }
-        records.push(value);
+      );
+    } catch {
+      // Return the recovery shadow while IndexedDB is unavailable.
+    }
+    for (const [key, value] of Object.entries(fallback)) {
+      if (
+        walletId !== undefined &&
+        walletId !== null &&
+        value.walletId !== walletId
+      ) {
+        continue;
       }
+      records.set(key, value);
+    }
+    return [...records.values()].sort((a, b) =>
+      b.updatedAt.localeCompare(a.updatedAt)
     );
-    return records.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   },
 
   async listActive(
@@ -339,6 +542,13 @@ const OutboundTransactionTracker = {
   ): Promise<OutboundTransactionRecord[]> {
     const records = await this.listAll(walletId);
     return records.filter((record) => record.state !== 'seen');
+  },
+
+  async findFusionVerificationPending(
+    walletId?: number | null
+  ): Promise<OutboundTransactionRecord | null> {
+    const records = await this.listActive(walletId);
+    return records.find(isFusionVerificationPending) ?? null;
   },
 
   async listReservedOutpoints(

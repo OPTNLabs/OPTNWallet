@@ -1,9 +1,9 @@
 import type { FusionInputRef } from './fusionRound';
 
 const DEFAULT_MIN_OUTPUT = 10_000;
-const MAX_OUTPUTS_PER_PEER = 4;
+const MAX_OUTPUTS_PER_PEER = 6;
 const MAX_PARTICIPANTS = 20;
-const MAX_INPUTS_PER_PEER = 100;
+const MAX_INPUTS_PER_PEER = 20;
 const TX_OVERHEAD_BYTES = 10;
 const P2PKH_OUTPUT_BYTES = 34;
 
@@ -12,9 +12,28 @@ export interface P2pOutputPlanOptions {
   participantCount: number;
   feerate: number;
   minOutput?: number;
+  /** Tier in sats — used for output value quantization. */
+  tier?: number;
   /** Test seam. Production always uses Web Crypto. Must return [0, 1). */
   randomUnit?: () => number;
 }
+
+/**
+ * Quantization grid for a given tier. Output values are rounded to the nearest
+ * grid point, making different tiers look similar on-chain. The grid uses a
+ * log-scale: small tiers get fine grids, large tiers get coarser grids.
+ * This prevents tier fingerprinting while keeping output values meaningful.
+ */
+export function quantizationGrid(tier: number): number {
+  if (tier <= 0) return 1;
+  // Log-scale grid: tier=10K → 100, tier=100K → 500, tier=1M → 5000
+  const magnitude = Math.pow(10, Math.floor(Math.log10(tier)));
+  return Math.max(100, Math.round(magnitude / 20));
+}
+
+/** Maximum fee fuzz as a fraction of the fee — caps noise at 0.5%. */
+const MAX_FEE_FUSS_FRACTION = 0.005;
+const MAX_FEE_FUSS_SATS = 500;
 
 export interface P2pOutputPlan {
   values: number[];
@@ -126,19 +145,45 @@ export function planP2pOutputValues(
     options.participantCount,
     options.feerate
   );
-  const outputTotal = sumIn - feeShare;
-  const distributable = outputTotal - minimum * outputCount;
+
+  // Fee fuzz: add small random noise to prevent a chain analyst from inferring
+  // the exact tier structure from the fee. Capped at 0.5% of the fee or 500
+  // sats, whichever is smaller — and never more than leftover headroom after
+  // funding minimum * outputCount (otherwise distributable goes negative and
+  // values can drop below dust).
+  const tier = options.tier ?? Math.max(...options.inputs.map((i) => i.value));
+  const grid = quantizationGrid(tier);
+  const maxFuzz = Math.min(
+    Math.floor(feeShare * MAX_FEE_FUSS_FRACTION),
+    MAX_FEE_FUSS_SATS,
+    grid
+  );
+  const headroom = sumIn - feeShare - minimum * outputCount;
+  const fuzzBudget = Math.max(0, Math.min(maxFuzz, headroom));
+  const feeFuzz =
+    fuzzBudget > 0
+      ? Math.floor(checkedRandom(randomUnit) * fuzzBudget)
+      : 0;
+  const fuzzedFee = feeShare + feeFuzz;
+
+  const outputTotal = sumIn - fuzzedFee;
+  const distributable = Math.max(0, outputTotal - minimum * outputCount);
   const weights = Array.from(
     { length: outputCount },
     () => checkedRandom(randomUnit) + 0.1
   );
   const weightTotal = weights.reduce((sum, weight) => sum + weight, 0);
+
+  // Quantize each output value to the grid so different tiers produce
+  // similar-looking outputs on-chain, defeating post-hoc tier fingerprinting.
   const values = weights.map(
-    (weight) => minimum + Math.floor((weight / weightTotal) * distributable)
+    (weight) =>
+      minimum +
+      Math.floor(((weight / weightTotal) * distributable) / grid) * grid
   );
   const used = values.reduce((sum, value) => sum + value, 0);
   const remainderTarget = Math.floor(checkedRandom(randomUnit) * outputCount);
   values[remainderTarget] += outputTotal - used;
 
-  return { values, feeShare };
+  return { values, feeShare: fuzzedFee };
 }

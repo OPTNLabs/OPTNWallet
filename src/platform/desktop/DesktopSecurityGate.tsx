@@ -7,7 +7,7 @@
 //   ready    — key is loaded; renders children normally
 //
 // Passphrase is mandatory — the app cannot be used without one.
-// An empty passphrase is accepted (PBKDF2 still runs; provides OS-account protection).
+// Min length matches extension + per-wallet policy (blank is no longer accepted).
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
@@ -17,7 +17,8 @@ import {
   unlockApp,
   setPassphraseConfigured,
 } from '../../state/slices/appLockSlice';
-import { EcKeyManager } from './EcKeyManager';
+import { OptnKeyManager } from './OptnKeyManager';
+import { validateNewWalletPassword } from './passwordPolicy';
 
 type GateState = 'loading' | 'setup' | 'locked' | 'ready';
 
@@ -44,11 +45,11 @@ export const DesktopSecurityGate: React.FC<Props> = ({ children }) => {
     initialised.current = true;
 
     void (async () => {
-      if (EcKeyManager.isUnlocked()) {
+      if (OptnKeyManager.isUnlocked()) {
         setGateState('ready');
         return;
       }
-      const setup = await EcKeyManager.hasSetup();
+      const setup = await OptnKeyManager.hasSetup();
       if (setup) {
         setGateState('locked');
       } else {
@@ -63,8 +64,8 @@ export const DesktopSecurityGate: React.FC<Props> = ({ children }) => {
     let cancelled = false;
     void (async () => {
       const [available, enrolled] = await Promise.all([
-        EcKeyManager.isBiometricAvailable(),
-        EcKeyManager.hasBiometricEnrolled(),
+        OptnKeyManager.isBiometricAvailable(),
+        OptnKeyManager.hasBiometricEnrolled(),
       ]);
       if (!cancelled) setBiometricOffered(available && enrolled);
     })();
@@ -77,7 +78,7 @@ export const DesktopSecurityGate: React.FC<Props> = ({ children }) => {
     setBiometricBusy(true);
     setError('');
     try {
-      const ok = await EcKeyManager.unlockWithBiometric();
+      const ok = await OptnKeyManager.unlockWithBiometric();
       if (ok) {
         dispatch(unlockApp());
         setGateState('ready');
@@ -96,7 +97,7 @@ export const DesktopSecurityGate: React.FC<Props> = ({ children }) => {
   // When Redux signals a lock (inactivity), transition to locked state.
   useEffect(() => {
     if (isLockedRedux && gateState === 'ready') {
-      EcKeyManager.lock();
+      OptnKeyManager.lock();
       setGateState('locked');
       setPassphrase('');
       setPassphraseConfirm('');
@@ -108,14 +109,15 @@ export const DesktopSecurityGate: React.FC<Props> = ({ children }) => {
 
   const handleSetup = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
-    if (passphrase !== passphraseConfirm) {
-      setError('Passphrases do not match.');
+    const passErr = validateNewWalletPassword(passphrase, passphraseConfirm);
+    if (passErr) {
+      setError(passErr);
       return;
     }
     setBusy(true);
     setError('');
     try {
-      await EcKeyManager.setup(passphrase);
+      await OptnKeyManager.setup(passphrase);
       dispatch(setPassphraseConfigured(true));
       dispatch(unlockApp());
       setGateState('ready');
@@ -136,7 +138,7 @@ export const DesktopSecurityGate: React.FC<Props> = ({ children }) => {
     setBusy(true);
     setError('');
     try {
-      const ok = await EcKeyManager.unlock(passphrase);
+      const ok = await OptnKeyManager.unlock(passphrase);
       if (ok) {
         dispatch(unlockApp());
         setGateState('ready');
@@ -172,8 +174,8 @@ export const DesktopSecurityGate: React.FC<Props> = ({ children }) => {
             <div className="text-3xl mb-2">🔐</div>
             <h2 className="text-lg font-bold wallet-text-strong">Secure your wallet</h2>
             <p className="text-sm wallet-muted">
-              Set a password to encrypt your wallet. You'll need it every time you open the app.
-              Leave blank to use OS-account protection only.
+              Set a password (at least 8 characters) to encrypt wallet secrets.
+              You will need it every time you open the app.
             </p>
           </div>
 
@@ -182,7 +184,8 @@ export const DesktopSecurityGate: React.FC<Props> = ({ children }) => {
               type="password"
               value={passphrase}
               onChange={(e) => { setPassphrase(e.target.value); setError(''); }}
-              placeholder="Password (or leave blank)"
+              placeholder="Password (min 8 characters)"
+              autoComplete="new-password"
               autoFocus
               className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-4 py-3 text-sm wallet-text-strong placeholder:wallet-muted outline-none focus:ring-2 focus:ring-[var(--wallet-accent)]"
             />
@@ -191,6 +194,7 @@ export const DesktopSecurityGate: React.FC<Props> = ({ children }) => {
               value={passphraseConfirm}
               onChange={(e) => { setPassphraseConfirm(e.target.value); setError(''); }}
               placeholder="Confirm password"
+              autoComplete="new-password"
               className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-4 py-3 text-sm wallet-text-strong placeholder:wallet-muted outline-none focus:ring-2 focus:ring-[var(--wallet-accent)]"
             />
             {error && <p className="text-sm text-red-400 text-center">{error}</p>}
@@ -206,6 +210,7 @@ export const DesktopSecurityGate: React.FC<Props> = ({ children }) => {
 
           <p className="text-xs wallet-muted text-center">
             Your password is never stored — it derives your encryption key locally.
+            Blank or short passwords are not allowed: they do not protect seeds at rest.
           </p>
         </div>
       </div>
@@ -232,7 +237,7 @@ export const DesktopSecurityGate: React.FC<Props> = ({ children }) => {
               className="w-full flex items-center justify-center gap-2 rounded-xl border border-[var(--wallet-border)] py-3 text-sm font-medium wallet-text-strong disabled:opacity-50"
             >
               <span className="text-lg">👆</span>
-              <span>{biometricBusy ? 'Authenticating…' : `Use ${EcKeyManager.getBiometricLabel()}`}</span>
+              <span>{biometricBusy ? 'Authenticating…' : `Use ${OptnKeyManager.getBiometricLabel()}`}</span>
             </button>
           )}
 

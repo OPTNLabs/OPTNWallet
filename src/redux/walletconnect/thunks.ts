@@ -165,7 +165,7 @@ export const respondWithMessageSignature = createAsyncThunk(
       );
 
     const address = requestedAddress ?? allKeys[0].address;
-    const privKey = await KeyService.fetchAddressPrivateKey(address);
+    const privKey = await KeyService.fetchAddressPrivateKey(address, 'spend');
     if (!privKey) throw new Error('No private key found');
     try {
       const { id, topic } = signMsgRequest;

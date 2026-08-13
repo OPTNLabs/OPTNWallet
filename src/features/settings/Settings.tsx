@@ -10,7 +10,6 @@ import { resetContract } from '../../state/slices/contractSlice';
 import { Network, resetNetwork } from '../../state/slices/networkSlice';
 import { clearTransaction } from '../../state/slices/transactionBuilderSlice';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
-import ContractDetails from '../../components/ContractDetails';
 import { NetworkSettings } from './NetworkSettings';
 import { DerivationPathSettings } from './DerivationPathSettings';
 import { ServerSettings } from './ServerSettings';
@@ -27,6 +26,9 @@ import FaucetView from '../../components/FaucetView';
 import WalletConnectPanel from '../../components/walletconnect/WalletConnectPanel';
 import WizardConnectPanel from '../../components/wizardconnect/WizardConnectPanel';
 import { AppLockSettings } from '../../platform/desktop/AppLockSettings';
+import { RebuildWalletSettings } from '../../platform/desktop/RebuildWalletSettings';
+import { ExportColdArchiveSettings } from '../../platform/desktop/ExportColdArchiveSettings';
+
 import { disconnectAllWizardConnections } from '../../state/slices/wizardconnectSlice';
 import getElectrumAdapter from '../../services/ElectrumAdapter';
 import { waitForWalletHistoryRefresh } from '../../services/RefreshCoordinator';
@@ -91,7 +93,7 @@ const Settings: React.FC = () => {
     // on desktop's multi-wallet picker wiped all saved wallets on logout.
     if (desktop) {
       try {
-        const { lock } = await import('../../platform/desktop/EcKeyManager');
+        const { lock } = await import('../../platform/desktop/OptnKeyManager');
         lock();
       } catch {
         /* ignore */
@@ -143,13 +145,18 @@ const Settings: React.FC = () => {
       case 'contact':
         return <ContactUs />;
       case 'contract':
-        return <ContractDetails />;
+        // Legacy deep link — content now lives under About.
+        return <AboutView />;
       case 'walletconnect':
         return <WalletConnectPanel />;
       case 'wizardconnect':
         return <WizardConnectPanel />;
       case 'app-lock':
         return <AppLockSettings />;
+      case 'export-archive':
+        return desktop ? <ExportColdArchiveSettings /> : null;
+      case 'rebuild-wallet':
+        return desktop ? <RebuildWalletSettings /> : null;
       case 'network':
         return <NetworkSettings />;
       case 'faucet':
@@ -184,9 +191,13 @@ const Settings: React.FC = () => {
       case 'contact':
         return 'Contact Us';
       case 'contract':
-        return 'Contract Info';
+        return 'About';
       case 'app-lock':
         return 'App Lock';
+      case 'export-archive':
+        return 'Wallet pack export';
+      case 'rebuild-wallet':
+        return 'Rebuild Wallet';
       case 'server':
         return 'Server';
       case 'derivation':

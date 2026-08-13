@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { getVisibleWalletRows, WALLET_ROWS } from '../settingsConfig';
+import {
+  getSettingsGroupRows,
+  getVisibleWalletRows,
+  WALLET_ROWS,
+} from '../settingsConfig';
 import { Network } from '../../../state/slices/networkSlice';
 
 describe('settingsConfig', () => {
@@ -24,6 +28,7 @@ describe('settingsConfig', () => {
       expect.arrayContaining([
         'faucet',
         'app-lock',
+        'rebuild-wallet',
         'console',
         'experimental',
         'addons',
@@ -46,5 +51,44 @@ describe('settingsConfig', () => {
       'faucet',
       'pending-outbox',
     ]);
+  });
+
+  it('puts Rebuild Wallet under Wallet & security on desktop only', () => {
+    const desktopWallet = getSettingsGroupRows(
+      'wallet',
+      true,
+      Network.MAINNET
+    ).map((row) => row.key);
+    const mobileWallet = getSettingsGroupRows(
+      'wallet',
+      false,
+      Network.MAINNET
+    ).map((row) => row.key);
+
+    expect(desktopWallet).toEqual(
+      expect.arrayContaining([
+        'recovery',
+        'derivation',
+        'app-lock',
+        'export-archive',
+        'rebuild-wallet',
+      ])
+    );
+    // Hardware is wallet-list / create flow (Electron Cash), not in-wallet Settings.
+    expect(desktopWallet).not.toContain('hardware-wallet');
+    expect(mobileWallet).not.toContain('rebuild-wallet');
+    expect(mobileWallet).not.toContain('export-archive');
+    expect(mobileWallet).not.toContain('app-lock');
+  });
+
+  it('puts Bitcoin Cash Contracts info under About, not Features', () => {
+    const features = getSettingsGroupRows('features', true, Network.MAINNET).map(
+      (row) => row.key
+    );
+    const about = getSettingsGroupRows('about', true, Network.MAINNET);
+    const aboutRow = about.find((row) => row.key === 'about');
+
+    expect(features).not.toContain('contract-info');
+    expect(aboutRow?.description).toMatch(/Bitcoin Cash Contracts info/i);
   });
 });

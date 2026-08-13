@@ -53,6 +53,21 @@ fn parse_bootstrap(line: &str) -> Option<u8> {
     digits.parse().ok()
 }
 
+fn observe_child_log(line: &str) {
+    if let Some(percent) = parse_bootstrap(line) {
+        BOOTSTRAP.store(percent, Ordering::SeqCst);
+        if percent >= 100 {
+            RUNNING.store(true, Ordering::SeqCst);
+        }
+    }
+}
+
+fn observe_child_exit() {
+    RUNNING.store(false, Ordering::SeqCst);
+    SPAWNED.store(false, Ordering::SeqCst);
+    BOOTSTRAP.store(0, Ordering::SeqCst);
+}
+
 /// Start tor and wait until it has bootstrapped (or the timeout elapses).
 /// Returns the SOCKS port it's listening on. Idempotent: if tor is already
 /// running, returns the existing port.
@@ -73,31 +88,13 @@ pub async fn start(
     {
         let mut child_guard = CHILD.lock().await;
         if child_guard.is_none() {
-            // A tor from a previous (crashed or closed) app run may still hold this
-            // SOCKS port. Spawning a rival with the same port + DataDirectory would
-            // just fail to bind and exit ("port clash"), which is the usual cause of
-            // "tor exited before finishing bootstrap" after a restart. Instead adopt
-            // the existing listener and reuse it; the frontend's SOCKS check still
-            // gates real use, so a stuck leftover is caught before any fusion round.
+            // Integrated Tor is app-owned. Never adopt an existing listener: it
+            // could be unrelated or hostile. Only this spawned child's bootstrap
+            // output may mark the managed route ready.
             let addr = std::net::SocketAddr::from(([127, 0, 0, 1], socks_port));
-            if std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok() {
-                SOCKS_PORT.store(socks_port, Ordering::SeqCst);
-                RUNNING.store(true, Ordering::SeqCst);
-                SPAWNED.store(true, Ordering::SeqCst);
-                // BOOTSTRAP is only ever advanced by parsing a tor process's own
-                // stdout, which an ADOPTED tor does not give us — we never spawned
-                // it, so there is no log to read and the counter would sit at 0
-                // forever. Consumers gate on `bootstrap_percent >= 100`
-                // (CashFusionSettings.currentTorConfig), so leaving it at 0 makes
-                // the Tor panel report "Running ✓" from `running` while P2P fusion
-                // simultaneously refuses with "enable Tor and wait for bootstrap".
-                // A listener we can reach is treated as bootstrapped; that stays
-                // honest because adoption is deliberately optimistic and the real
-                // verification is fusion_tor_check, which runP2pFusion calls before
-                // every round and which fails closed on a stuck leftover.
-                BOOTSTRAP.store(100, Ordering::SeqCst);
-                return Ok(socks_port);
-            }
+            let reservation = std::net::TcpListener::bind(addr)
+                .map_err(|_| format!("integrated Tor SOCKS port {socks_port} is already in use"))?;
+            drop(reservation);
 
             std::fs::create_dir_all(&paths.data_dir)
                 .map_err(|e| format!("could not create tor data dir: {e}"))?;
@@ -136,16 +133,10 @@ pub async fn start(
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stdout).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    if let Some(pct) = parse_bootstrap(&line) {
-                        BOOTSTRAP.store(pct, Ordering::SeqCst);
-                        if pct >= 100 {
-                            RUNNING.store(true, Ordering::SeqCst);
-                        }
-                    }
+                    observe_child_log(&line);
                 }
                 // stdout closed => tor exited.
-                RUNNING.store(false, Ordering::SeqCst);
-                SPAWNED.store(false, Ordering::SeqCst);
+                observe_child_exit();
             });
 
             *child_guard = Some(child);
@@ -184,6 +175,7 @@ pub async fn stop() -> Result<(), String> {
     RUNNING.store(false, Ordering::SeqCst);
     SPAWNED.store(false, Ordering::SeqCst);
     BOOTSTRAP.store(0, Ordering::SeqCst);
+    SOCKS_PORT.store(0, Ordering::SeqCst);
     if let Some(mut child) = CHILD.lock().await.take() {
         let _ = child.kill().await;
     }
@@ -202,6 +194,13 @@ pub fn status() -> TorStatus {
 mod tests {
     use super::*;
 
+    fn reset_status() {
+        RUNNING.store(false, Ordering::SeqCst);
+        SPAWNED.store(false, Ordering::SeqCst);
+        BOOTSTRAP.store(0, Ordering::SeqCst);
+        SOCKS_PORT.store(0, Ordering::SeqCst);
+    }
+
     #[test]
     fn parses_bootstrap_percentages() {
         assert_eq!(
@@ -217,5 +216,49 @@ mod tests {
             Some(100)
         );
         assert_eq!(parse_bootstrap("[notice] Opening Socks listener"), None);
+    }
+
+    #[tokio::test]
+    async fn occupied_managed_port_fails_closed() {
+        reset_status();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let paths = TorPaths {
+            binary: PathBuf::from("unused"),
+            data_dir: std::env::temp_dir().join("optn-tor-occupied-port-test"),
+            geoip: None,
+            geoip6: None,
+        };
+        let error = start(paths, port, Duration::from_millis(10))
+            .await
+            .unwrap_err();
+        assert!(error.contains("already in use"));
+        assert!(!status().running);
+    }
+
+    #[tokio::test]
+    async fn status_does_not_promote_an_open_socket_to_ready() {
+        reset_status();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        SOCKS_PORT.store(listener.local_addr().unwrap().port(), Ordering::SeqCst);
+        let observed = status();
+        assert!(!observed.running);
+        assert_eq!(observed.bootstrap_percent, 0);
+        reset_status();
+    }
+
+    #[test]
+    fn child_log_and_exit_control_the_readiness_lifecycle() {
+        reset_status();
+        SPAWNED.store(true, Ordering::SeqCst);
+
+        observe_child_log("[notice] Bootstrapped 100% (done): Done");
+        assert!(status().running);
+        assert_eq!(status().bootstrap_percent, 100);
+
+        observe_child_exit();
+        assert!(!status().running);
+        assert_eq!(status().bootstrap_percent, 0);
+        assert!(!SPAWNED.load(Ordering::SeqCst));
     }
 }

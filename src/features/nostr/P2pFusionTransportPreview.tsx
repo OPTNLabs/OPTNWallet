@@ -26,12 +26,41 @@ export const P2pFusionTransportPreview: React.FC<P2pFusionPanelProps> = ({
 }) => (
   <div className="space-y-2.5 rounded-xl border border-violet-400/20 bg-violet-400/5 p-3">
     <p className="text-xs font-semibold text-violet-400">P2P Fusion over Nostr</p>
+    <div className="mt-2 rounded-lg border border-violet-400/20 bg-violet-400/5 px-2.5 py-2 text-[10px] wallet-muted leading-relaxed space-y-1">
+      <p className="font-semibold text-violet-300/90">Privacy stack (always on)</p>
+      <ul className="list-disc pl-3.5 space-y-0.5">
+        <li>
+          <span className="wallet-text-strong">Tor</span> — hide your IP from
+          relays
+        </li>
+        <li>
+          <span className="wallet-text-strong">NIP-59 gift-wrap</span> — encrypt
+          round messages on Nostr
+        </li>
+        <li>
+          <span className="wallet-text-strong">Throwaway round key</span> —
+          fresh secp256k1 identity per attempt (not your chat key)
+        </li>
+        <li>
+          <span className="wallet-text-strong">Pedersen + blind Schnorr</span> —
+          CashFusion credential math
+        </li>
+        <li>
+          <span className="wallet-text-strong">Output onion</span> — peers peel
+          + shuffle outputs (not the same as Tor)
+        </li>
+      </ul>
+      <p className="pt-0.5">
+        Compatible wallets that speak the same Nostr pool tags and round
+        messages can fuse together — liquidity grows as more wallets adopt
+        this P2P protocol (not only OPTN).
+      </p>
+    </div>
     <p className="text-[10px] leading-relaxed wallet-muted">
-      No server: peers meet on Nostr relays over Tor, deterministically elect a
-      coordinator, and run the CoinJoin peer-to-peer. Outputs are unlinkable
-      (throwaway keys + Tor); you sign only your own inputs, and only after
-      verifying your own outputs are present — a hostile coordinator can never make
-      you sign away funds.
+      No server: peers meet on Nostr over Tor, elect a coordinator, and run the
+      CoinJoin peer-to-peer. Outputs use throwaway keys + mandatory peel-onion
+      among peers. You sign only your own inputs after verifying your outputs —
+      a hostile coordinator cannot make you sign away funds.
     </p>
 
     {/* Live 1–5 stepper */}
@@ -66,16 +95,24 @@ export const P2pFusionTransportPreview: React.FC<P2pFusionPanelProps> = ({
       type="button"
       onClick={onStart}
       disabled={disabled || busy}
-      className="w-full rounded-xl border border-violet-400/40 px-3 py-2 text-xs font-semibold text-violet-400 hover:bg-violet-400/5 disabled:cursor-not-allowed disabled:opacity-50"
+      aria-busy={busy}
+      className="w-full rounded-xl border border-violet-400/40 px-3 py-2 text-xs font-semibold text-violet-400 hover:bg-violet-400/5 disabled:cursor-not-allowed disabled:opacity-40 disabled:grayscale"
     >
-      {busy ? 'Running P2P round…' : 'Start P2P round'}
+      {busy ? 'Fusing…' : 'Start P2P round'}
     </button>
 
-    {disabled && disabledReason ? (
-      <p className="text-center text-[9px] wallet-muted">{disabledReason}</p>
+    {disabled || busy ? (
+      <p className="text-center text-[9px] wallet-muted">
+        {disabledReason ??
+          (busy
+            ? 'Round in progress — button stays disabled until it finishes.'
+            : 'Requires Tor and ≥3 peers in the same amount tier.')}
+      </p>
     ) : (
       <p className="text-center text-[9px] wallet-muted">
-        Requires Tor + at least 2 peers in the same tier.
+        Requires Tor and ≥3 peers in the same amount tier. Leave Auto on — it
+        retries after send, receive, or any UTXO change that leaves coins below
+        rounds-per-coin. Manual Start joins peers already in the pool.
       </p>
     )}
 

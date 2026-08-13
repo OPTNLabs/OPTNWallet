@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Network } from '../../../state/slices/networkSlice';
+import { getBchAccountPath } from '../../HdWalletService';
 import { buildBip44Path } from '../hardwareWalletSigning';
 
 // Regression test for a real bug found in review: this function used to
@@ -14,10 +15,21 @@ describe('hardwareWalletSigning buildBip44Path', () => {
     expect(buildBip44Path(Network.MAINNET, 'defi', 5)).toBe("m/44'/145'/0'/7/5");
   });
 
-  it('uses testnet coin type 1 on chipnet', () => {
-    const mainnetPath = buildBip44Path(Network.MAINNET, 'receive', 0);
-    const chipnetPath = buildBip44Path(Network.CHIPNET, 'receive', 0);
-    expect(chipnetPath).toBe("m/44'/1'/0'/0/0");
-    expect(chipnetPath).not.toBe(mainnetPath);
+  // The device must be asked for the same path the wallet derives locally. If
+  // these ever diverge the hardware wallet signs with a key the wallet does not
+  // own, so assert against getBchAccountPath rather than a literal coin type —
+  // changing the network default must not be able to separate them.
+  it('follows the wallet account path on every network', () => {
+    for (const network of [Network.MAINNET, Network.CHIPNET]) {
+      expect(buildBip44Path(network, 'receive', 0)).toBe(
+        `${getBchAccountPath(network, 0)}/0/0`
+      );
+    }
+  });
+
+  it('honors a custom account path instead of the network default', () => {
+    expect(
+      buildBip44Path(Network.CHIPNET, 'change', 3, "m/44'/145'/2'")
+    ).toBe("m/44'/145'/2'/1/3");
   });
 });

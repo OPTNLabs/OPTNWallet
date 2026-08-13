@@ -266,7 +266,8 @@ export default function TransactionBuilderHelper(
             }
           } else {
             signingKey = await KeyService.fetchAddressPrivateKey(
-              processedUtxo.address
+              processedUtxo.address,
+              'spend'
             );
             if (!signingKey || signingKey.length === 0) {
               throw new Error(

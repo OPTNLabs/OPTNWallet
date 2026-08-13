@@ -5,7 +5,7 @@ import { AppDispatch } from '../../state/store';
 import { selectAutoLockMinutes, setAutoLockMinutes } from '../../state/slices/appLockSlice';
 import { selectWalletId, resetWallet } from '../../state/slices/walletSlice';
 import { ROUTE_PATHS } from '../../navigation/routes';
-import { EcKeyManager } from './EcKeyManager';
+import { OptnKeyManager } from './OptnKeyManager';
 import {
   changeWalletPassword,
   isBiometricAvailable,
@@ -14,13 +14,19 @@ import {
   disableWalletBiometric,
   getBiometricLabel,
 } from './DesktopWalletManager';
+import { validateNewWalletPassword } from './passwordPolicy';
 
+// A CashFusion round takes minutes and dies with the key when the wallet
+// locks, so sub-15-minute choices are unusable while fusing and were removed.
+// Default is Never (spend re-auth + 10 min cache when set to Never). A locked
+// wallet must still actually lock — do not suppress the timer mid-round.
 const AUTO_LOCK_OPTIONS = [
   { label: 'Never', value: 0 },
-  { label: '1 minute', value: 1 },
-  { label: '5 minutes', value: 5 },
   { label: '15 minutes', value: 15 },
   { label: '30 minutes', value: 30 },
+  { label: '1 hour', value: 60 },
+  { label: '2 hours', value: 120 },
+  { label: '4 hours', value: 240 },
 ];
 
 export const AppLockSettings: React.FC = () => {
@@ -103,7 +109,7 @@ export const AppLockSettings: React.FC = () => {
 
   const handleLockNow = () => {
     // Close this wallet: wipe its key, clear the open-wallet id, return to picker.
-    EcKeyManager.lock();
+    OptnKeyManager.lock();
     dispatch(resetWallet());
     navigate(ROUTE_PATHS.landing);
   };
@@ -117,8 +123,9 @@ export const AppLockSettings: React.FC = () => {
       setError('No wallet is open.');
       return;
     }
-    if (newPass !== confirmPass) {
-      setError('New passwords do not match.');
+    const passErr = validateNewWalletPassword(newPass, confirmPass);
+    if (passErr) {
+      setError(passErr);
       return;
     }
 
@@ -172,7 +179,7 @@ export const AppLockSettings: React.FC = () => {
             type="password"
             value={newPass}
             onChange={(e) => { setNewPass(e.target.value); setError(''); }}
-            placeholder="New password"
+            placeholder="New password (min 8 characters)"
             className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-sm wallet-text-strong placeholder:wallet-muted outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
           />
           <input
