@@ -249,6 +249,17 @@ export function ReviewCard({
                   {visibleRecipient}
                 </span>
               </div>
+              {review.rpaStealthAddress && (
+                <div className="wallet-stat-row">
+                  <span className="font-medium">Stealth address</span>
+                  <span
+                    className="font-mono break-all text-right max-w-[70%] wallet-text-strong"
+                    title={review.rpaStealthAddress}
+                  >
+                    {review.rpaStealthAddress}
+                  </span>
+                </div>
+              )}
 
               {assetType === 'bch' && (
                 <div className="wallet-stat-row">

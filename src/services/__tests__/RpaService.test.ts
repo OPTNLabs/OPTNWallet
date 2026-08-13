@@ -84,9 +84,7 @@ describe('RpaService', () => {
 
     expect(getRpaSendBlockReason('bchtest:qordinary', Network.CHIPNET)).toBeNull();
     expect(getRpaSendBlockReason(paycode, Network.MAINNET)).toMatch(/Chipnet/i);
-    expect(getRpaSendBlockReason(paycode, Network.CHIPNET)).toMatch(
-      /not available yet/i
-    );
+    expect(getRpaSendBlockReason(paycode, Network.CHIPNET)).toBeNull();
     const replacement = paycode.endsWith('q') ? 'p' : 'q';
     expect(getRpaSendBlockReason(`${paycode.slice(0, -1)}${replacement}`, Network.CHIPNET)).toMatch(
       /invalid/i

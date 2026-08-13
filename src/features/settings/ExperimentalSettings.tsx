@@ -79,8 +79,8 @@ export const ExperimentalSettings: React.FC = () => {
       <FeatureToggle
         title="Reusable Payment Addresses (RPA)"
         badge="BCH RPA"
-        description="Generates a static paycode (paycode:q...) that you can share publicly. Senders derive a unique one-time address for each payment via ECDH — no notification transaction, no chain bloat. Received stealth funds appear separately as 'Stealth BCH'. Scanning requires a Fulcrum-RPA capable server."
-        warning="Sending to paycodes requires signature grinding (not yet implemented). Receiving and scanning are available."
+        description="Generates a static paycode (paycode:q... / paycodetest:q...) that you can share publicly. Senders derive a unique one-time address for each payment via ECDH — no notification transaction, no chain bloat. Received stealth funds appear separately as 'Stealth BCH'. Scanning requires a Fulcrum-RPA capable server."
+        warning="Send to a paycode from a software wallet (BCH only). The other wallet needs a Fulcrum-RPA server to see Stealth BCH."
         enabled={rpaEnabled}
         onToggle={(v) => dispatch(setRpaEnabled(v))}
       />
