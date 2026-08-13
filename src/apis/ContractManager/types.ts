@@ -70,7 +70,7 @@ export type ContractManagerApi = {
   getContractArtifact: (contractName: string) => Promise<ContractArtifact | null>;
   listAvailableArtifacts: () => Promise<AvailableContractEntry[]>;
   deleteContractInstance: (contractId: number) => Promise<void>;
-  fetchContractInstances: (walletId?: number) => Promise<ContractInstanceRow[]>;
+  fetchContractInstances: () => Promise<ContractInstanceRow[]>;
   getContractInstanceByAddress: (
     address: string
   ) => Promise<ContractInstanceRow | null>;

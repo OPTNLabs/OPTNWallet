@@ -243,8 +243,7 @@ describe('ContractManager', () => {
     );
 
     expect(mockedKeyService.fetchAddressPrivateKey).toHaveBeenCalledWith(
-      'bitcoincash:qsigner',
-      'spend'
+      'bitcoincash:qsigner'
     );
     expect(mockContractUnlockClaim).toHaveBeenCalledTimes(1);
     expect(result.lockingBytecode).toBe('76a9...88ac');

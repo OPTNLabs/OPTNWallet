@@ -82,7 +82,7 @@ const persistConfig = {
     'experimental',
     'hardwareWallet',
   ],
-  version: 4,
+  version: 3,
   migrate: (async (state: PersistedState) => {
     if (!state) return state;
     const sanitizedState: PersistedState & { [key: string]: unknown } = {
@@ -95,18 +95,6 @@ const persistConfig = {
     );
     if (experimental) {
       sanitizedState.experimental = experimental;
-    }
-    // v4: drop 1- and 5-minute auto-lock (unusable with fusion; removed from UI).
-    // Map legacy short timers onto Never so the spend re-auth + 10 min cache path
-    // is what those installs get, matching the new product default.
-    const appLock = sanitizedState.appLock as
-      | { autoLockMinutes?: number }
-      | undefined;
-    if (
-      appLock &&
-      (appLock.autoLockMinutes === 1 || appLock.autoLockMinutes === 5)
-    ) {
-      sanitizedState.appLock = { ...appLock, autoLockMinutes: 0 };
     }
     return sanitizedState;
   }) as PersistMigrate,

@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-function createFakeDatabase(exportBytes: number[], initialVersion = 0) {
+function createFakeDatabase(exportBytes: number[]) {
   return class FakeDatabase {
-    version = initialVersion;
+    version = 0;
 
     prepare() {
       return {
@@ -29,8 +29,6 @@ function createFakeDatabase(exportBytes: number[], initialVersion = 0) {
     export() {
       return new Uint8Array(exportBytes);
     }
-
-    close() {}
   };
 }
 
@@ -93,30 +91,6 @@ describe('DatabaseService', () => {
     expect(db).toBeTruthy();
     expect(createTables).toHaveBeenCalledTimes(1);
     expect(idbSet).toHaveBeenCalledTimes(1);
-  });
-
-  it('does not rewrite an unchanged current database during startup', async () => {
-    const idbGet = vi.fn(async () => new Uint8Array([4, 5, 6]));
-    const idbSet = vi.fn(async () => {});
-
-    vi.doMock('idb-keyval', () => ({
-      get: idbGet,
-      set: idbSet,
-    }));
-    vi.doMock('../../../utils/schema/schema', () => ({
-      createTables: vi.fn(),
-      createTransactionDetailsTable: vi.fn(),
-    }));
-    vi.doMock('sql.js', () => ({
-      default: vi.fn(async () => ({
-        Database: createFakeDatabase([4, 5, 6], 999),
-      })),
-    }));
-
-    const mod = await import('../DatabaseService');
-    await mod.default().startDatabase();
-
-    expect(idbSet).not.toHaveBeenCalled();
   });
 
   it('saveDatabaseToFile debounces multiple save calls', async () => {
