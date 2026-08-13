@@ -38,7 +38,7 @@ Technical documentation for contributors and third-party integrators.
 - [Integration Guide](./integration-guide.md)
   - How to integrate a third-party product with OPTN Wallet.
 - [CashConnect](./cashconnect.md)
-  - Nostr contract-system connector (Settings home + Actions).
+  - Nostr contract-system connector (Connections & features).
 - [CashScript Contract Systems](./cashscript-contract-systems.md)
   - BCH covenant design patterns, state-machine rules, and testing checklist.
 - [Custody Vault Design Notes](./custody-vault-design-notes.md)

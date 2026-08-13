@@ -24,7 +24,7 @@ describe('settingsConfig', () => {
       (row) => row.key
     );
 
-    expect(visibleKeys).toEqual(['network', 'pending-outbox', 'cashconnect']);
+    expect(visibleKeys).toEqual(['network', 'pending-outbox']);
     expect(visibleKeys).not.toEqual(
       expect.arrayContaining([
         'faucet',
@@ -51,8 +51,12 @@ describe('settingsConfig', () => {
       'network',
       'faucet',
       'pending-outbox',
-      'cashconnect',
     ]);
+    expect(
+      getSettingsGroupRows('features', true, Network.CHIPNET).map((row) => row.key)
+    ).toEqual(
+      expect.arrayContaining(['walletconnect', 'wizardconnect', 'cashconnect'])
+    );
   });
 
   it('sends CashConnect and WalletConnect back to Connections & features', () => {
