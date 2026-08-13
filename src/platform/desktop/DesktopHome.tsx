@@ -33,6 +33,7 @@ import {
   refreshWalletTransactionHistory,
 } from '../../services/WalletHistoryRefreshService';
 import { Network } from '../../state/slices/networkSlice';
+import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import { SATSINBITCOIN } from '../../utils/constants';
 import type { TransactionHistoryItem } from '../../types/types';
 import SettingsRow from '../../components/ui/SettingsRow';
@@ -113,9 +114,7 @@ const Home: React.FC = () => {
       EMPTY_TRANSACTIONS
     );
   });
-  const currentNetwork = useSelector(
-    (state: RootState) => state.network.currentNetwork
-  );
+  const currentNetwork = useSelector(selectCurrentNetwork);
   const unit = unitFor(currentNetwork); // ← desktop-only: BCH / tBCH
   const bchUsdQuote = useSelector(
     (state: RootState) => state.priceFeed['BCH-USD']?.price

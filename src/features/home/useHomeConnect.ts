@@ -18,6 +18,7 @@ import {
 } from '../../utils/barcodeScanner';
 import { toErrorMessage } from '../../utils/errorHandling';
 import { classifyScannedQrPayload } from '../../utils/qrScan';
+import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 
 export function useHomeConnect() {
   const navigate = useNavigate();
@@ -25,9 +26,7 @@ export function useHomeConnect() {
   const currentWalletId = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
   );
-  const currentNetwork = useSelector(
-    (state: RootState) => state.network.currentNetwork
-  );
+  const currentNetwork = useSelector(selectCurrentNetwork);
   const pendingProposal = useSelector(
     (state: RootState) =>
       state.cashconnect.pendingProposal ?? state.walletconnect.pendingProposal

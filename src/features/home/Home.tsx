@@ -24,6 +24,7 @@ import {
 import { refreshUTXOWorkerSubscriptions } from '../../workers/UTXOWorkerService';
 import { logError } from '../../utils/errorHandling';
 import { Network } from '../../state/slices/networkSlice';
+import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import { SATSINBITCOIN } from '../../utils/constants';
 import SettingsRow from '../../components/ui/SettingsRow';
 import EmptyState from '../../components/ui/EmptyState';
@@ -86,9 +87,7 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
   const transactions = useSelector(
     (state: RootState) => state.transactions.transactions[currentWalletId]
   );
-  const currentNetwork = useSelector(
-    (state: RootState) => state.network.currentNetwork
-  );
+  const currentNetwork = useSelector(selectCurrentNetwork);
   const bchUsdQuote = useSelector(
     (state: RootState) => state.priceFeed['BCH-USD']?.price
   );
