@@ -30,7 +30,6 @@ import { Network } from '../state/slices/networkSlice';
 import type { TransactionOutput, UTXO } from '../types/types';
 import {
   computeSharedSecret,
-  decodePaycode,
   derivePaymentAddress,
   type DecodedPaycode,
 } from './RpaService';
