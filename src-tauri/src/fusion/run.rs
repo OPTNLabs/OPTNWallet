@@ -2212,7 +2212,7 @@ mod tests {
                 .await
                 .expect("run_fusion should not error");
             server.await.unwrap().expect("mock server ok");
-            lookup_server.await.unwrap();
+            lookup_server.abort();
 
             assert!(outcome.ok, "fusion should succeed: {}", outcome.message);
             assert!(
@@ -2265,12 +2265,16 @@ mod tests {
                     script
                 })
                 .collect::<Vec<_>>();
+            // Warmup may use 1 accept (batch) or 2 (batch + fallback).
+            // skip_signatures + empty TheirProofsList does not open another.
             let (lookup_endpoint, lookup_server) = electrum_endpoint_n(
                 r#"{"id":1,"result":[{"tx_hash":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd","tx_pos":0,"height":1,"value":200000}]}"#,
-                3,
+                2,
             ).await;
 
-            let outcome = run_fusion(FusionRunParams {
+            let outcome = tokio::time::timeout(
+                Duration::from_secs(30),
+                run_fusion(FusionRunParams {
                 wallet_tag_seed: b"test-wallet".to_vec(),
                 self_fuse_limit: 1,
                 host: "127.0.0.1",
@@ -2319,11 +2323,19 @@ mod tests {
                     min_excess_fee: 0,
                     max_excess_fee: 10_000,
                 },
-            })
+                }),
+            )
             .await
+            .expect("blame restart test timed out")
             .expect("blame restart should remain on the live Fusion session");
-            server.await.unwrap().expect("mock server transcript");
-            lookup_server.await.unwrap();
+            tokio::time::timeout(Duration::from_secs(5), server)
+                .await
+                .expect("mock server did not finish")
+                .unwrap()
+                .expect("mock server transcript");
+            // Warmup may use fewer accepts than `count`. Do not join the extra
+            // accept() — that is what hung this test for hours.
+            lookup_server.abort();
 
             assert!(
                 outcome.ok,
