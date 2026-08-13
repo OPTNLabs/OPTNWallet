@@ -108,6 +108,52 @@ jobs:
       - name: Fetch bundled Tor (integrated CashFusion privacy)
         run: npx --no-install tsx scripts/fetch-tor.mts ${{ matrix.tor-target }}
 
+      - name: Prefetch linuxdeploy (AppImage tools)
+        # tauri-bundler 2.9 downloads these with ureq, which has no retry.
+        # After a 20-minute rust compile the GitHub asset CDN regularly drops
+        # the connection (`io: Peer disconnected`) and the whole preview dies
+        # even though deb/rpm already bundled. Seed ~/.cache/tauri first —
+        # prepare_tools() skips any file that already exists there.
+        if: startsWith(matrix.platform, 'ubuntu')
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools_arch="${{ matrix.target }}"
+          tools_arch="${tools_arch%%-*}"
+          cache="${XDG_CACHE_HOME:-$HOME/.cache}/tauri"
+          mkdir -p "$cache"
+          download() {
+            local url="$1" dest="$2"
+            if [ -s "$dest" ]; then
+              echo "already have $dest"
+              return 0
+            fi
+            echo "fetching $url"
+            curl --proto '=https' --tlsv1.2 \
+              --retry 10 --retry-all-errors --retry-delay 2 \
+              --location --fail --show-error \
+              --output "$dest.tmp" "$url"
+            chmod 770 "$dest.tmp"
+            mv "$dest.tmp" "$dest"
+          }
+          download \
+            "https://github.com/tauri-apps/binary-releases/releases/download/apprun-old/AppRun-${tools_arch}" \
+            "$cache/AppRun-${tools_arch}"
+          download \
+            "https://github.com/tauri-apps/binary-releases/releases/download/linuxdeploy/linuxdeploy-${tools_arch}.AppImage" \
+            "$cache/linuxdeploy-${tools_arch}.AppImage"
+          download \
+            "https://raw.githubusercontent.com/tauri-apps/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh" \
+            "$cache/linuxdeploy-plugin-gtk.sh"
+          download \
+            "https://raw.githubusercontent.com/tauri-apps/linuxdeploy-plugin-gstreamer/master/linuxdeploy-plugin-gstreamer.sh" \
+            "$cache/linuxdeploy-plugin-gstreamer.sh"
+          # Optional plugin — linuxdeploy falls back to its built-in copy.
+          download \
+            "https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-${tools_arch}.AppImage" \
+            "$cache/linuxdeploy-plugin-appimage.AppImage" \
+            || rm -f "$cache/linuxdeploy-plugin-appimage.AppImage" "$cache/linuxdeploy-plugin-appimage.AppImage.tmp"
+
       - name: Build Tauri (debug)
         # No --bundles: tauri.conf.json already says targets "all", and a preview
         # that skipped a format would stop being a preview of what ships. Linux
