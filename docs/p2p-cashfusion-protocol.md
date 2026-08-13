@@ -561,31 +561,21 @@ Never multi-minute fee cooldowns for ordinary fail/success.
 ### 8.6 Blame (P2P-specific)
 
 Not EC `blame.rs`. The server can accuse by connection identity. P2P cannot:
-happy-path components have no `from`. Unique mechanic — **abort, then
-disclose** (`fusionSession.ts` `runBlamePhase`, `fusionBlame.ts`):
+happy-path components have no `from`.
 
-1. Round fails. Happy path disclosed nothing.
-2. Coordinator waits `BLAME_WINDOW_MS` (1.2s). Each peer may send openings
-   on the control plane (round key): blind `a||b`, component salt,
-   Pedersen nonce.
-3. Unproven claims are dropped. A forged opening is
-   `invalid_input_credential`. A bound opening that fails the commitment
-   is `invalid_component_commitment`.
-4. `findFaultInDisclosures` then: two peers claim one coin →
-   `duplicate_outpoint`; a peer’s **proven** outpoints are not in
-   `signedOutpoints` → `invalid_signature_set`.
-5. `verifyBlameReport` — every peer re-checks before honoring a remote
-   `blame`. A fake report is rejected. Consistent timeout or **no
-   disclosure** → no accused (`if (!disclosure) continue`).
+**Prove-or-don't-blame.** Named blame is only for mid-round crypto that
+any peer can re-check (`blameAndFail` + `verifyBlameReport`):
+`pedersen_unbalanced`, `credential_slot_oob`, plus forged / invalid
+openings and `duplicate_outpoint` when those arrive on a named
+control-plane message. Generic abort never requests
+`component_disclosure`. `invalid_signature_set` is not accepted as
+missing-signature blame. A coordinator-local receive map is not proof
+of non-sending.
 
-**Prove-or-don't-blame** codes only: `pedersen_unbalanced`,
-`invalid_component_commitment`, `credential_slot_oob`,
-`invalid_input_credential`, `duplicate_outpoint`, `invalid_signature_set`.
-Mid-round named `from` only uses Pedersen / slot-oob today
-(`blameAndFail`). Never Tor / late join / missing ACK. A silent no-sign
-(no disclose) is a timeout abort, not a missing-signature blame. Accused
-= ephemeral round key; local 10-minute ghost only. See
-[FAQ](./p2p-cashfusion-faq.md).
+Missing signature → `ambiguous_signature_timeout`, no accused, retry.
+Never Tor / late join / missing ACK. Accused = ephemeral round key;
+local 10-minute ghost only. See [FAQ](./p2p-cashfusion-faq.md) and
+[proposed-blame-p2p-cashfusion.md](./proposed-blame-p2p-cashfusion.md).
 
 ---
 

@@ -62,7 +62,6 @@ import {
   peerCredentialSlotBase,
   totalCredentialSlots,
   verifyBchSchnorrHex,
-  verifyCredentialOpening,
 } from './fusionBlindSchnorr';
 import {
   encodeInputComponent,
@@ -71,10 +70,7 @@ import {
   saltedComponentHashHex,
 } from './fusionComponentV4';
 import {
-  componentCommitmentOpeningMatches,
-  componentCredentialOpeningMatches,
   createBlameReport,
-  findFaultInDisclosures,
   formatBlameAbortReason,
   isBlameCode,
   parseBlameEvidence,
@@ -82,10 +78,7 @@ import {
   type BlameCode,
   type BlameEvidence,
   type BlameReport,
-  type ComponentDisclosure,
   type ComponentDisclosureOpening,
-  type ComponentCommitmentOpening,
-  type DisclosureFinding,
 } from './fusionBlame';
 import {
   clearRoundNullifiers,
@@ -236,18 +229,9 @@ export type RoundMessage =
     } & MessageBinding)
   | ({
       /**
-       * Post-abort component disclosure (Electron Cash blame phase).
-       *
-       * Components travel anonymously, so a failed round has nobody to accuse —
-       * `verifyBlameReport` rejects an accused outside the participant set. This
-       * message is the answer, and it is deliberately CONTROL PLANE: it is sent
-       * under the round identity, never added to the anonymous set in
-       * `fusionTransport.ts`. A peer therefore proves which components were its
-       * own, and a peer that stays silent is identified BY ABSENCE — which is
-       * what makes an anonymous griefer attributable again.
-       *
-       * Sent ONLY when a round aborts. A successful round discloses nothing, so
-       * the unlinkability of the happy path is untouched.
+       * Legacy post-abort opening. Stage 1 never requests or emits this.
+       * Parser still accepts it so an old peer cannot crash a v4 round.
+       * It is never used as missing-signature evidence.
        */
       type: 'component_disclosure';
       session: string;
@@ -1089,36 +1073,11 @@ export interface RoundResult {
 /** Active-round ceiling = server T_START_CLOSE_BLAME (fusionTiming). */
 const DEFAULT_TIMEOUT = P2P_ROUND_TIMEOUT_MS;
 /**
- * How long the coordinator keeps listening for `component_disclosure` after it
- * has already told every peer the round is dead.
- *
- * Deliberately bounded and awaited BEFORE `cleanup()`/`reject()`, never after.
- * An earlier attempt kept the transport subscription alive past the settled
- * promise instead; that leaked a live handler, which is what
- * `hub.activeHandlerCount()).toBe(0)` in the session tests exists to catch
- * (it failed as `expected 1 to be +0`). The window closes early as soon as
- * every peer has disclosed, so the honest path pays milliseconds, not this
- * ceiling.
+ * Extra time a PEER waits after the shared round deadline so the coordinator's
+ * abort or mid-round blame can still arrive. Stage 1 does not collect openings
+ * in this window. Same numeric margin as before (1.2s + 1.8s).
  */
-const BLAME_WINDOW_MS = 1_200;
-const BLAME_POLL_MS = 20;
-/**
- * E0 — how much longer than the coordinator a PEER waits before giving up.
- *
- * Every caller passes one `timeoutMs` for the whole round, so without this
- * every role hit its deadline in the same tick: peers tore down and
- * unsubscribed before the coordinator's abort could reach them, disclosed
- * nothing, and the blame phase then burned its entire ceiling waiting for
- * messages that could never arrive. The machinery was correct and the round
- * still ended with no accused.
- *
- * The coordinator must lose first. Derived from the blame window, not a
- * hand-picked number, so the two cannot drift apart: the margin has to cover
- * the abort reaching a peer plus that peer's disclosure coming back. The cost
- * is that a genuinely silent coordinator keeps peers waiting this much longer,
- * which is bounded and worth an attributable abort.
- */
-const PEER_TIMEOUT_MARGIN_MS = BLAME_WINDOW_MS + 1_800;
+const PEER_TIMEOUT_MARGIN_MS = 3_000;
 
 function sessionId(participants: string[], tier: number): string {
   return `${electCoordinator(participants)}:${tier}`;
@@ -1225,16 +1184,6 @@ function runParticipant(
     const declaredOnionCounts = new Map<string, number>();
     let onionBatchProcessing = false;
     let onionBatchDone = false;
-    /**
-     * Credential serials this peer used for its own anonymous outputs. Held so
-     * an aborted round can be explained: disclosed ONLY on abort, never on a
-     * successful round, so happy-path unlinkability is unaffected.
-     */
-    let myOutputSerials: string[] = [];
-    /** Input openings for abort disclosure only — never sent on success. */
-    let myInputOpenings: ComponentDisclosureOpening[] = [];
-    let myComponentOpenings: ComponentCommitmentOpening[] = [];
-
     const expectedOnionCount = (): number | null => {
       if (declaredOnionCounts.size < params.participants.length) return null;
       let sum = 0;
@@ -1561,24 +1510,10 @@ function runParticipant(
       // Only coordinator messages below
       if (from !== coordinator) return;
       if (message.type === 'abort') {
-        // Electron Cash blame phase. Components travelled anonymously, so the
-        // coordinator cannot name anyone for a failed round. Disclosing our own
-        // components under the ROUND IDENTITY lets it cross-check who did what
-        // — and makes silence itself evidence, since a griefer that never
-        // discloses is identified by absence. Best-effort: the round is already
-        // failing, so a send error must not mask the real abort reason.
-        void transport
-          .send(coordinator, {
-            ...messageBinding(),
-            type: 'component_disclosure',
-            session,
-            outpoints: params.myContribution.inputs.map(inputKey),
-            serials: myOutputSerials,
-            openings: myInputOpenings,
-            componentOpenings: myComponentOpenings,
-          })
-          .catch(() => undefined)
-          .finally(() => void fail(abortError(message.reason), false));
+        // Generic abort must not force identity-bearing openings. A coordinator
+        // that dropped an honest signature could otherwise demand disclose and
+        // frame the owner. Missing-sig stays an unattributed timeout.
+        void fail(abortError(message.reason), false);
         return;
       }
       if (message.type === 'credential_params') {
@@ -1676,8 +1611,7 @@ function runParticipant(
           ),
           true
         ),
-      // E0: outlast the coordinator so its abort still finds us subscribed and
-      // we can disclose. Same caller timeout, later deadline for this role.
+      // Outlast the coordinator so its abort or mid-round blame still arrives.
       (params.timeoutMs ?? DEFAULT_TIMEOUT) + PEER_TIMEOUT_MARGIN_MS
     );
     params.onPhase?.(2);
@@ -1713,7 +1647,6 @@ function runParticipant(
         amountCommitments,
         pedersenTotalNonce,
         excessFee,
-        componentOpenings,
       } = buildComponentCredentialRequests(
         params.myContribution,
         params.participants,
@@ -1723,15 +1656,6 @@ function runParticipant(
         credentialContext,
         params.feerate
       );
-      // Kept for the blame phase only. Never sent unless the round aborts.
-      myOutputSerials = outputSerials;
-      myComponentOpenings = componentOpenings;
-      myInputOpenings = params.myContribution.inputs.map((input, i) => ({
-        outpoint: inputKey(input),
-        slotIndex: requests[i].index,
-        // Capture before finalizeHex — same a||b the verifier recomputes.
-        openingHex: pending[i].openingHex(),
-      }));
       const myInputSalts = inputSaltCommitments;
       const myOutputSalts = outputSaltCommitments;
       const responseWait = waitCredResponse();
@@ -1987,24 +1911,6 @@ function runCoordinator(
      * peer sent it, so these are never keyed by pubkey.
      */
     const anonymousInputs: FusionInputRef[] = [];
-    /**
-     * Post-abort component disclosures, keyed by the peer's ROUND identity —
-     * disclosure is control plane, so `from` is attributable. First disclosure
-     * per peer wins; a second is ignored rather than allowed to overwrite.
-     */
-    const disclosuresByPeer = new Map<string, ComponentDisclosure>();
-    /**
-     * Blinded challenges `e` the coordinator actually signed, keyed by slot.
-     * Required to verify post-abort openings (C3): without the retained `e`,
-     * `verifyCredentialOpening` has nothing honest to compare against.
-     */
-    const signedChallengeBySlot = new Map<number, string>();
-    const componentCommitmentsByPeer = new Map<
-      string,
-      Map<number, { saltedComponentHash: string; amountCommitment: string }>
-    >();
-    /** Outpoint → salt_commitment used when the input credential was verified. */
-    const saltCommitmentByOutpoint = new Map<string, string>();
     const inputPool = (): FusionInputRef[] => [
       ...[...inputsByPeer.values()].flat(),
       ...anonymousInputs,
@@ -2104,270 +2010,6 @@ function runCoordinator(
       unsubscribe();
       unsubscribeProtocolError();
     };
-    /**
-     * Wait for peers to answer our abort with their component disclosures.
-     * Resolves as soon as everyone has answered, at the ceiling, or the moment
-     * the caller cancels — whichever comes first. The transport subscription is
-     * still live here on purpose; `cleanup()` runs after we return.
-     */
-    const awaitDisclosures = () =>
-      new Promise<void>((resolveWait) => {
-        if (disclosuresByPeer.size >= others.length) return resolveWait();
-        const deadline = Date.now() + BLAME_WINDOW_MS;
-        const finish = () => {
-          clearInterval(poll);
-          params.signal?.removeEventListener('abort', finish);
-          resolveWait();
-        };
-        const poll = setInterval(() => {
-          if (disclosuresByPeer.size >= others.length || Date.now() >= deadline)
-            finish();
-        }, BLAME_POLL_MS);
-        params.signal?.addEventListener('abort', finish, { once: true });
-      });
-    /**
-     * Electron Cash blame phase for the anonymous component plane.
-     *
-     * Components arrived under throwaway keys, so a failed round has no accused
-     * until the peers say what they contributed. Cross-referencing those
-     * disclosures under the round identity restores attribution for the codes
-     * `d9accdbd` cost us. Diagnosis only — the accused is an ephemeral key, so
-     * this identifies a fault, it does not exclude anyone.
-     */
-    /**
-     * Prove openings before cross-check. Drop unproven outpoints; if a peer
-     * *claims* an outpoint with a bad opening, that is
-     * `invalid_input_credential` (C4) — not silent ignore.
-     */
-    const verifiedDisclosures = (): {
-      verified: Map<string, ComponentDisclosure>;
-      credentialFault: DisclosureFinding | null;
-      componentFault: DisclosureFinding | null;
-    } => {
-      const verified = new Map<string, ComponentDisclosure>();
-      const poolByKey = new Map(
-        anonymousInputs.map((input) => [inputKey(input), input] as const)
-      );
-      const outputBySerial = new Map(
-        anonymousOutputBatches
-          .flat()
-          .map(
-            (output) => [output.credentialSerial.toLowerCase(), output] as const
-          )
-      );
-      let credentialFault: DisclosureFinding | null = null;
-      let componentFault: DisclosureFinding | null = null;
-      for (const peer of [...params.participants].sort()) {
-        if (peer === params.myPubkey) continue;
-        const raw = disclosuresByPeer.get(peer);
-        if (!raw) continue;
-        const base = peerCredentialSlotBase(params.participants, peer);
-        const proven: string[] = [];
-        const failedOpenings: NonNullable<
-          Extract<
-            BlameEvidence,
-            { kind: 'invalid_input_credential' }
-          >['failedOpenings']
-        > = [];
-        const failedInputs: FusionInputRef[] = [];
-        for (const opening of raw.openings ?? []) {
-          if (!raw.outpoints.includes(opening.outpoint)) continue;
-          const input = poolByKey.get(opening.outpoint);
-          const requestHex = signedChallengeBySlot.get(opening.slotIndex);
-          const rPointHex = issuer.rPointsHex[opening.slotIndex];
-          const slotOk =
-            opening.slotIndex >= base &&
-            opening.slotIndex < base + CREDENTIAL_SLOTS_PER_PEER;
-          const saltCommitment = saltCommitmentByOutpoint.get(opening.outpoint);
-          const ok =
-            !!input &&
-            !!requestHex &&
-            !!rPointHex &&
-            !!saltCommitment &&
-            slotOk &&
-            verifyCredentialOpening({
-              roundPubkeyHex: issuer.pubkeyHex,
-              rPointHex,
-              messageHash: inputCredentialMessageHash(input, saltCommitment),
-              openingHex: opening.openingHex,
-              requestHex,
-            });
-          if (ok) {
-            if (!proven.includes(opening.outpoint))
-              proven.push(opening.outpoint);
-            continue;
-          }
-          // Peer claimed this outpoint with a non-proof — accuse, don't only drop.
-          if (input && requestHex && rPointHex && saltCommitment) {
-            failedInputs.push(input);
-            failedOpenings.push({
-              outpoint: opening.outpoint,
-              slotIndex: opening.slotIndex,
-              openingHex: opening.openingHex,
-              requestHex,
-              rPointHex,
-              saltCommitmentHex: saltCommitment,
-            });
-          } else if (input) {
-            // Slot OOB or missing coordinator state: still an invalid claim.
-            failedInputs.push(input);
-            failedOpenings.push({
-              outpoint: opening.outpoint,
-              slotIndex: opening.slotIndex,
-              openingHex: opening.openingHex,
-              requestHex: requestHex ?? '00'.repeat(32),
-              rPointHex:
-                rPointHex ?? issuer.rPointsHex[0] ?? '02' + '00'.repeat(32),
-              saltCommitmentHex:
-                saltCommitment ??
-                saltCommitmentByOutpoint.values().next().value ??
-                '00'.repeat(32),
-            });
-          }
-        }
-        if (failedOpenings.length > 0 && !credentialFault) {
-          credentialFault = {
-            accused: peer,
-            code: 'invalid_input_credential',
-            evidence: {
-              kind: 'invalid_input_credential',
-              roundPubkey: issuer.pubkeyHex,
-              inputs: failedInputs,
-              credentialSigs: [],
-              failedOpenings,
-            },
-          };
-        }
-        for (const opening of raw.componentOpenings ?? []) {
-          if (componentFault) break;
-          const requestHex = signedChallengeBySlot.get(opening.slotIndex);
-          const rPointHex = issuer.rPointsHex[opening.slotIndex];
-          const initial = componentCommitmentsByPeer
-            .get(peer)
-            ?.get(opening.slotIndex);
-          const slotOk =
-            opening.slotIndex >= base &&
-            opening.slotIndex < base + CREDENTIAL_SLOTS_PER_PEER;
-          if (!requestHex || !rPointHex || !initial || !slotOk) continue;
-
-          let evidence: Extract<
-            BlameEvidence,
-            { kind: 'invalid_component_commitment' }
-          > | null = null;
-          if (opening.kind === 'input') {
-            const input = poolByKey.get(opening.outpoint);
-            const saltCommitmentHex = saltCommitmentByOutpoint.get(
-              opening.outpoint
-            );
-            if (input && saltCommitmentHex) {
-              evidence = {
-                kind: 'invalid_component_commitment',
-                feerate: params.feerate,
-                component: { kind: 'input', input, saltCommitmentHex },
-                saltHex: opening.saltHex,
-                pedersenNonceHex: opening.pedersenNonceHex,
-                initialCommitment: initial,
-                roundPubkey: issuer.pubkeyHex,
-                rPointHex,
-                requestHex,
-                openingHex: opening.openingHex,
-              };
-            }
-          } else {
-            const output = outputBySerial.get(
-              opening.credentialSerial.toLowerCase()
-            );
-            if (output) {
-              evidence = {
-                kind: 'invalid_component_commitment',
-                feerate: params.feerate,
-                component: {
-                  kind: 'output',
-                  output: { script: output.script, value: output.value },
-                  saltCommitmentHex: output.saltCommitment,
-                  credentialSerial: output.credentialSerial,
-                },
-                saltHex: opening.saltHex,
-                pedersenNonceHex: opening.pedersenNonceHex,
-                initialCommitment: initial,
-                roundPubkey: issuer.pubkeyHex,
-                rPointHex,
-                requestHex,
-                openingHex: opening.openingHex,
-              };
-            }
-          }
-          if (
-            evidence &&
-            componentCredentialOpeningMatches(evidence) &&
-            !componentCommitmentOpeningMatches(evidence)
-          ) {
-            componentFault = {
-              accused: peer,
-              code: 'invalid_component_commitment',
-              evidence,
-            };
-          }
-        }
-        verified.set(peer, {
-          outpoints: proven,
-          serials: [...raw.serials],
-          openings: raw.openings,
-          componentOpenings: raw.componentOpenings,
-        });
-      }
-      return { verified, credentialFault, componentFault };
-    };
-    const runBlamePhase = async () => {
-      // Nothing anonymous ever arrived, so there is nothing a disclosure could
-      // attribute — `findFaultInDisclosures` would return null and we would
-      // have spent the whole window to learn it. A round that dies in the
-      // control plane still fails immediately.
-      if (anonymousInputs.length === 0 && signaturesByOutpoint.size === 0)
-        return;
-      await awaitDisclosures();
-      const { verified, credentialFault, componentFault } =
-        verifiedDisclosures();
-      // Bad openings first (C4): a forged proof is itself the fault.
-      const finding =
-        componentFault ??
-        credentialFault ??
-        findFaultInDisclosures({
-          participants: [...params.participants],
-          disclosures: verified,
-          signedOutpoints: new Set(signaturesByOutpoint.keys()),
-        });
-      // Mutually consistent disclosures mean the round died of something that
-      // is nobody's provable fault — a timeout, a dropped relay. Never blame.
-      if (!finding) return;
-      const report = createBlameReport(
-        session,
-        finding.accused,
-        finding.code,
-        finding.evidence
-      );
-      const check = verifyBlameReport(report, {
-        session,
-        participants: params.participants,
-        feerate: params.feerate,
-      });
-      // Our own report must survive the same verification every peer applies,
-      // or it is worse than sending nothing.
-      if (check.ok === false) return;
-      params.onBlame?.(report);
-      params.onStatus?.(formatBlameAbortReason(report));
-      const blameMsg: RoundMessage = {
-        ...messageBinding(),
-        type: 'blame',
-        session,
-        accused: finding.accused,
-        code: finding.code,
-        evidence: finding.evidence,
-      };
-      await Promise.allSettled(
-        others.map((peer) => transport.send(peer, blameMsg))
-      );
-    };
     const fail = async (
       error: Error,
       notifyPeers: boolean,
@@ -2387,10 +2029,6 @@ function runCoordinator(
         await Promise.allSettled(
           others.map((peer) => transport.send(peer, message))
         );
-        // Only after peers have been told, and only while we can still hear
-        // them. A blame phase must never outlive the promise we are about to
-        // settle — see BLAME_WINDOW_MS.
-        await runBlamePhase().catch(() => undefined);
       }
       cleanup();
       reject(error);
@@ -2505,20 +2143,7 @@ function runCoordinator(
         }
       }
       const responses: Array<{ index: number; s: string }> = [];
-      const peerCommitments = new Map<
-        number,
-        { saltedComponentHash: string; amountCommitment: string }
-      >();
-      for (const commitment of message.componentCommitments) {
-        peerCommitments.set(commitment.index, {
-          saltedComponentHash: commitment.saltedComponentHash.toLowerCase(),
-          amountCommitment: commitment.amountCommitment.toLowerCase(),
-        });
-      }
-      componentCommitmentsByPeer.set(from, peerCommitments);
       for (const req of message.requests) {
-        // Retain `e` for opening verification on abort (C3).
-        signedChallengeBySlot.set(req.index, req.e);
         responses.push({
           index: req.index,
           s: issuer.signHex(req.index, req.e),
@@ -2583,7 +2208,6 @@ function runCoordinator(
           throw new Error('duplicate outpoint in round');
         }
         credentialedInputs.add(key);
-        saltCommitmentByOutpoint.set(key, saltCommitments[i].toLowerCase());
       }
       anonymousInputs.push(...inputs);
     };
@@ -2837,32 +2461,8 @@ function runCoordinator(
 
     unsubscribe = transport.onMessage((from, message) => {
       if (message.session !== session) return;
-      // Handled BEFORE the settled guard on purpose: a disclosure only ever
-      // arrives after the round aborted, which is exactly when `settled` is
-      // already true. Dropping it here would leave the blame phase with
-      // nothing to cross-reference.
-      if (
-        message.type === 'component_disclosure' &&
-        params.participants.includes(from)
-      ) {
-        if (!disclosuresByPeer.has(from)) {
-          disclosuresByPeer.set(from, {
-            outpoints: [...message.outpoints],
-            serials: [...message.serials],
-            openings: message.openings
-              ? message.openings.map((entry) => ({
-                  outpoint: entry.outpoint,
-                  slotIndex: entry.slotIndex,
-                  openingHex: entry.openingHex,
-                }))
-              : [],
-            componentOpenings: message.componentOpenings
-              ? message.componentOpenings.map((entry) => ({ ...entry }))
-              : [],
-          });
-        }
-        return;
-      }
+      // Stage 1: never collect abort openings. A late component_disclosure
+      // is dropped with every other settled-round message.
       if (settled) return;
       if (seenNonces.has(message.nonce)) return;
       seenNonces.add(message.nonce);

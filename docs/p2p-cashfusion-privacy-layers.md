@@ -242,10 +242,10 @@ Control-plane messages (ACK, `credential_request` / quota and Pedersen,
 ready, abort) stay under the round identity. The coordinator therefore knows
 each peer's **counts**, not which later anonymous UTXO is whose.
 
-Happy-path blame cannot key a component by `from`. After an abort, peers may
-disclose openings under the round identity so codes in `fusionBlame.ts` have
-an accused ephemeral key. That is diagnosis only — it does not exclude a
-wallet.
+Happy-path blame cannot key a component by `from`. Generic abort never
+forces openings. Named blame is only mid-round crypto on the control
+plane (`blameAndFail`). A missing signature is an ambiguous timeout, not
+an accused. That is diagnosis only — it does not exclude a wallet.
 
 ---
 
