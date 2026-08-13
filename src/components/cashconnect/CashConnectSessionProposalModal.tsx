@@ -10,6 +10,11 @@ import {
   listCashConnectActionNames,
 } from '../../services/cashconnect/cashconnectProposal';
 import WalletPopupSheet from '../ui/WalletPopupSheet';
+import { shortenHash } from '../../utils/shortenHash';
+
+function humanizeTemplateName(name: string): string {
+  return name.replace(/^_+/, '').replace(/([a-z])([A-Z])/g, '$1 $2');
+}
 
 export default function CashConnectSessionProposalModal() {
   const dispatch = useDispatch<AppDispatch>();
@@ -74,8 +79,8 @@ export default function CashConnectSessionProposalModal() {
       </div>
       <div className="mt-4 text-sm space-y-2">
         <p>
-          <span className="font-semibold">Template:</span>{' '}
-          {proposal.template.name}
+          <span className="font-semibold">What:</span>{' '}
+          {humanizeTemplateName(proposal.template.name)}
         </p>
         <p>
           <span className="font-semibold">Network:</span> {proposal.chain}
@@ -85,14 +90,19 @@ export default function CashConnectSessionProposalModal() {
           {actionNames.join(', ') || 'none'}
         </p>
         {proposal.allowedTokens.length > 0 ? (
-          <p className="break-all">
+          <p>
             <span className="font-semibold">Tokens:</span>{' '}
-            {proposal.allowedTokens.join(', ')}
+            {proposal.allowedTokens.length} categor
+            {proposal.allowedTokens.length === 1 ? 'y' : 'ies'} (
+            {proposal.allowedTokens
+              .map((token) => shortenHash(token, 6, 4))
+              .join(', ')}
+            )
           </p>
         ) : null}
         {hasTransactionActions ? (
           <p className="text-sm wallet-muted">
-            Each spend will ask for a separate approval before it is sent.
+            Connecting does not send coins. Each spend asks again.
           </p>
         ) : null}
       </div>
