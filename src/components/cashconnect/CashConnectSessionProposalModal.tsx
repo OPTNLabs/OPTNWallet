@@ -90,9 +90,8 @@ export default function CashConnectSessionProposalModal() {
           </p>
         ) : null}
         {hasTransactionActions ? (
-          <p className="text-amber-600 dark:text-amber-400">
-            Transaction actions are unavailable until CashConnect supports
-            post-consent signing.
+          <p className="text-sm wallet-muted">
+            Each spend will ask for a separate approval before it is sent.
           </p>
         ) : null}
       </div>
