@@ -133,7 +133,7 @@ export async function onionLayer(
   // Derive AES key from shared secret (first 32 bytes)
   const aesKey = await crypto.subtle.importKey(
     'raw',
-    shared,
+    Uint8Array.from(shared),
     { name: 'AES-GCM' },
     false,
     ['encrypt']
@@ -145,7 +145,7 @@ export async function onionLayer(
     await crypto.subtle.encrypt(
       { name: 'AES-GCM', iv, tagLength: 128 },
       aesKey,
-      data
+      Uint8Array.from(data)
     )
   );
 
@@ -177,7 +177,7 @@ export async function onionPeel(
   // Derive AES key from shared secret
   const aesKey = await crypto.subtle.importKey(
     'raw',
-    shared,
+    Uint8Array.from(shared),
     { name: 'AES-GCM' },
     false,
     ['decrypt']
@@ -188,7 +188,7 @@ export async function onionPeel(
     await crypto.subtle.decrypt(
       { name: 'AES-GCM', iv, tagLength: 128 },
       aesKey,
-      ct
+      Uint8Array.from(ct)
     )
   );
 
@@ -253,9 +253,9 @@ export async function onionWrap(
   padded[raw.length] = 1; // sentinel byte
 
   // Wrap layers in reverse order (last peeler encrypts first)
-  let data = padded;
+  let data = Uint8Array.from(padded);
   for (let i = peelerPubHexes.length - 1; i >= 0; i--) {
-    data = await onionLayer(data, peelerPubHexes[i]);
+    data = Uint8Array.from(await onionLayer(data, peelerPubHexes[i]));
   }
 
   return data;

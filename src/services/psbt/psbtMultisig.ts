@@ -65,7 +65,9 @@ export function sortPublicKeysBip67(publicKeys: Uint8Array[]): Uint8Array[] {
 
 function opcodeForSmallInteger(value: number): number {
   if (value < 1 || value > 16) {
-    throw new Error(`Multisig thresholds must be between 1 and 16 (got ${value}).`);
+    throw new Error(
+      `Multisig thresholds must be between 1 and 16 (got ${value}).`
+    );
   }
   return 0x50 + value; // OP_1 (0x51) .. OP_16 (0x60)
 }
@@ -95,10 +97,15 @@ export function buildMultisigRedeemScript(
     );
   }
   const sorted = sortPublicKeysBip67(publicKeys);
-  const parts = [Uint8Array.from([opcodeForSmallInteger(requiredSignatures)])];
+  const parts: Uint8Array[] = [
+    Uint8Array.from([opcodeForSmallInteger(requiredSignatures)]),
+  ];
   for (const key of sorted) parts.push(push33(key));
   parts.push(
-    Uint8Array.from([opcodeForSmallInteger(publicKeys.length), OP_CHECKMULTISIG])
+    Uint8Array.from([
+      opcodeForSmallInteger(publicKeys.length),
+      OP_CHECKMULTISIG,
+    ])
   );
   const total = parts.reduce((sum, part) => sum + part.length, 0);
   const out = new Uint8Array(total);
@@ -160,12 +167,7 @@ export function isMultisigRedeemScript(script: Uint8Array): boolean {
 /** P2SH20 locking script for a redeem script (HASH160 <hash> EQUAL). */
 export function p2shLockingBytecodeFor(redeemScript: Uint8Array): Uint8Array {
   const hash = hash160(redeemScript);
-  return new Uint8Array([
-    OP_HASH160,
-    0x14,
-    ...hash,
-    OP_EQUAL,
-  ]);
+  return new Uint8Array([OP_HASH160, 0x14, ...hash, OP_EQUAL]);
 }
 
 /** Script push for one payload: direct length byte, or PUSHDATA1 for longer data. */
@@ -367,8 +369,7 @@ function encodeFromParsed(
       satoshis: input.spentSatoshis,
       lockingBytecode: input.spentLockingBytecode,
       redeemScript: input.redeemScript ?? undefined,
-      derivations:
-        input.derivations.length > 0 ? input.derivations : undefined,
+      derivations: input.derivations.length > 0 ? input.derivations : undefined,
       sequence: input.sequence ?? 0xffffffff,
       partialSignatures: Array.from(signatures.values()).filter(
         (signature) => signature.inputIndex === index
@@ -381,13 +382,11 @@ function encodeFromParsed(
     satoshis: output.satoshis ?? 0n,
     redeemScript: output.redeemScript ?? undefined,
     token: output.token ?? undefined,
-    derivations:
-      output.derivations.length > 0 ? output.derivations : undefined,
+    derivations: output.derivations.length > 0 ? output.derivations : undefined,
   }));
 
   return encodeUnsignedPsbt(inputs, outputs, sighashType, {
-    globalXpubs:
-      parsed.globalXpubs.length > 0 ? parsed.globalXpubs : undefined,
+    globalXpubs: parsed.globalXpubs.length > 0 ? parsed.globalXpubs : undefined,
   });
 }
 
@@ -452,10 +451,10 @@ export function mergePsbts(psbts: Uint8Array[]): PsbtMergeOutcome {
               `Failed signature verification on PSBT at index ${i}, input ${inputIndex}.`
             );
           }
-          signatureUnion.set(
-            `${inputIndex}:${binToHex(signature.publicKey)}`,
-            { ...signature, inputIndex }
-          );
+          signatureUnion.set(`${inputIndex}:${binToHex(signature.publicKey)}`, {
+            ...signature,
+            inputIndex,
+          });
         }
       }
       results.push({ index: i, combined: true });
@@ -463,8 +462,7 @@ export function mergePsbts(psbts: Uint8Array[]): PsbtMergeOutcome {
       results.push({
         index: i,
         combined: false,
-        error:
-          error instanceof Error ? error.message : 'Could not merge PSBT.',
+        error: error instanceof Error ? error.message : 'Could not merge PSBT.',
       });
     }
   }
