@@ -50,21 +50,23 @@ export default function CashConnectSessionProposalModal() {
     <WalletPopupSheet
       onDismiss={() => dispatch(rejectCashConnectProposalAction())}
       footer={
-        <div className="grid grid-cols-2 gap-3">
-          <button
-            type="button"
-            className="wallet-btn-primary px-3 py-2"
-            onClick={() => dispatch(approveCashConnectProposalAction())}
-          >
-            Approve
-          </button>
-          <button
-            type="button"
-            className="wallet-btn-danger px-3 py-2"
-            onClick={() => dispatch(rejectCashConnectProposalAction())}
-          >
-            Reject
-          </button>
+        <div className="space-y-2">
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              type="button"
+              className="wallet-btn-primary px-3 py-2"
+              onClick={() => dispatch(approveCashConnectProposalAction())}
+            >
+              Approve
+            </button>
+            <button
+              type="button"
+              className="wallet-btn-danger px-3 py-2"
+              onClick={() => dispatch(rejectCashConnectProposalAction())}
+            >
+              Reject
+            </button>
+          </div>
         </div>
       }
     >
