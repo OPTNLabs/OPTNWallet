@@ -95,22 +95,6 @@ const cashconnectSlice = createSlice({
     setCashConnectError(state, action: PayloadAction<string | null>) {
       state.errorMessage = action.payload;
     },
-    approveCashConnectProposalAction(state) {
-      approveCashConnectProposal();
-      state.pendingProposal = null;
-    },
-    rejectCashConnectProposalAction(state) {
-      rejectCashConnectProposal();
-      state.pendingProposal = null;
-    },
-    approveCashConnectActionAction(state) {
-      approveCashConnectAction();
-      state.pendingAction = null;
-    },
-    rejectCashConnectActionAction(state) {
-      rejectCashConnectAction();
-      state.pendingAction = null;
-    },
   },
 });
 
@@ -119,10 +103,38 @@ export const {
   setCashConnectProposal,
   setCashConnectAction,
   setCashConnectError,
-  approveCashConnectProposalAction,
-  rejectCashConnectProposalAction,
-  approveCashConnectActionAction,
-  rejectCashConnectActionAction,
 } = cashconnectSlice.actions;
+
+export const approveCashConnectProposalAction = createAsyncThunk(
+  'cashconnect/approveProposal',
+  async (_, { dispatch }) => {
+    approveCashConnectProposal();
+    dispatch(setCashConnectProposal(null));
+  }
+);
+
+export const rejectCashConnectProposalAction = createAsyncThunk(
+  'cashconnect/rejectProposal',
+  async (_, { dispatch }) => {
+    rejectCashConnectProposal();
+    dispatch(setCashConnectProposal(null));
+  }
+);
+
+export const approveCashConnectActionAction = createAsyncThunk(
+  'cashconnect/approveAction',
+  async (_, { dispatch }) => {
+    approveCashConnectAction();
+    dispatch(setCashConnectAction(null));
+  }
+);
+
+export const rejectCashConnectActionAction = createAsyncThunk(
+  'cashconnect/rejectAction',
+  async (_, { dispatch }) => {
+    rejectCashConnectAction();
+    dispatch(setCashConnectAction(null));
+  }
+);
 
 export default cashconnectSlice.reducer;
