@@ -114,10 +114,15 @@ export async function startCashConnect(nextWalletId: number): Promise<void> {
           hooks?.onSessions(sessions);
         },
         onSessionProposal(proposal) {
-          if (proposal.chain !== expectedChain(nextSeed.network)) {
+          const walletChain = expectedChain(nextSeed.network);
+          if (proposal.chain !== walletChain) {
+            const dappNet =
+              proposal.chain === 'bitcoincash' ? 'Mainnet' : 'Chipnet';
+            const walletNet =
+              nextSeed.network === Network.MAINNET ? 'Mainnet' : 'Chipnet';
             return Promise.reject(
               new Error(
-                `CashConnect dApp is on ${proposal.chain}; this wallet is ${expectedChain(nextSeed.network)}.`
+                `This CashConnect dApp is ${dappNet}. This wallet is ${walletNet}. Open a ${dappNet} wallet to connect.`
               )
             );
           }
