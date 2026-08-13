@@ -1,16 +1,14 @@
 # Read-only contributor validation for the lab image.
 # Publishing and provenance attestation live in docker-dev.yml and are limited
 # to trusted tag/manual release paths.
+#
+# Always run so the required check "Build docker-dev (PR)" posts a status on
+# every PR. The image is only built when docker-related paths change.
 
 name: Docker dev PR
 
 on:
   pull_request:
-    paths:
-      - 'packages/docker-dev/**'
-      - '.github/workflows/docker-dev.yml'
-      - '.github/workflows/docker-dev-pr.yml'
-      - '.github/workflows/docker-dev-testcore.yml'
 
 permissions:
   contents: read
@@ -24,11 +22,36 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch PR base for path diff
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: git fetch --no-tags --depth=1 origin "$BASE_SHA"
+
+      - name: Detect docker-related path changes
+        id: docker
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          changed="$(git diff --name-only "$BASE_SHA" HEAD | grep -E '^(packages/docker-dev/|\.github/workflows/docker-dev(\.yml|-pr\.yml|-testcore\.yml)$)' || true)"
+          if [ -n "$changed" ]; then
+            echo "run_build=true" >> "$GITHUB_OUTPUT"
+            echo "Docker-related paths changed; running image build."
+            printf '%s\n' "$changed"
+          else
+            echo "run_build=false" >> "$GITHUB_OUTPUT"
+            echo "Docker-related paths unchanged; posting success without building."
+          fi
 
       - name: Set up Docker Buildx
+        if: steps.docker.outputs.run_build == 'true'
         uses: docker/setup-buildx-action@v3
 
       - name: Build locally
+        if: steps.docker.outputs.run_build == 'true'
         uses: docker/build-push-action@v6
         with:
           context: packages/docker-dev
@@ -39,6 +62,7 @@ jobs:
           tags: optn-docker-dev:pr
 
       - name: Smoke — node/npm as non-root
+        if: steps.docker.outputs.run_build == 'true'
         run: |
           set -euo pipefail
           docker run --rm --user 1000:1000 optn-docker-dev:pr node -v
@@ -49,6 +73,7 @@ jobs:
           echo "$id_out" | grep -E 'uid=1000'
 
       - name: npm ci + test:core inside image
+        if: steps.docker.outputs.run_build == 'true'
         run: |
           set -euo pipefail
           sudo chown -R 1000:1000 "$GITHUB_WORKSPACE"
@@ -61,3 +86,7 @@ jobs:
             -e npm_config_cache=/tmp/npm-cache \
             optn-docker-dev:pr \
             bash -lc 'npm ci && npm run test:core'
+
+      - name: Skip image build (paths unchanged)
+        if: steps.docker.outputs.run_build != 'true'
+        run: echo "No docker-dev path changes on this PR; required check posted as success."

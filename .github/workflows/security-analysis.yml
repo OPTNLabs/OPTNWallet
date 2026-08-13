@@ -1,0 +1,85 @@
+name: Security analysis
+
+on:
+  pull_request:
+  push:
+    branches: [main, staging, dev]
+  schedule:
+    - cron: '37 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript, rust]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3
+        with:
+          category: /language:${{ matrix.language }}
+
+  semgrep:
+    name: Semgrep CE
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Scan source
+        run: >-
+          semgrep scan --config auto
+          --exclude 'docs/translations/**'
+          --exclude 'src/i18n/**'
+          --exclude 'src/pages/apps/fundme/**'
+          --exclude 'src/pages/apps/FundMe.tsx'
+          --exclude 'android/app/src/main/AndroidManifest.xml'
+
+  supply-chain:
+    name: Supply-chain policy and SBOM
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install production dependency graph
+        run: npm ci --ignore-scripts
+
+      - name: Production critical audit
+        run: npm audit --omit=dev --audit-level=critical
+
+      - name: Generate CycloneDX SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
+        with:
+          format: cyclonedx-json
+          output-file: optn-wallet-sbom.cdx.json
+          artifact-name: optn-wallet-sbom
+          upload-artifact: true
+          upload-artifact-retention: 30
+          upload-release-assets: false
