@@ -66,7 +66,25 @@ export function getRpaKeyPaths(
 // ─── Paycode constants ────────────────────────────────────────────────────────
 
 // Prefix sizes (number of bits of scan_pubkey used as Electrum filter)
-export const RPA_PREFIX_BITS = 8; // 1/256 bandwidth — good default
+// Electron Cash default prefix_size="10" (16 bits). Encoded in the paycode so
+// senders grind the same width the receiver will query.
+export const RPA_PREFIX_BITS = 16;
+
+/** Fulcrum-RPA / EC grind string: hex of scan pubkey after the 02/03 byte. */
+export function rpaGrindString(
+  scanPubkey: Uint8Array,
+  prefixBits = RPA_PREFIX_BITS
+): string {
+  const chars = prefixBits / 4;
+  if (!Number.isInteger(chars) || chars < 1 || chars > 4) {
+    throw new Error(`Unsupported RPA prefix size: ${prefixBits} bits`);
+  }
+  return Array.from(scanPubkey)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
+    .slice(2, 2 + chars)
+    .toUpperCase();
+}
 
 // Paycode version bytes
 const VERSION_MAINNET = 0x01; // mainnet P2PKH
@@ -428,7 +446,15 @@ export function derivePaymentAddress(
   const child = deriveHdPublicNodeChild(parentNode, index);
   if (typeof child === 'string') throw new Error(`CKD_pub failed: ${child}`);
 
-  const pkh = hash160(Uint8Array.from(child.publicKey));
+  // Electron Cash hashes the *uncompressed* child pubkey (paycode.py
+  // use_uncompressed = True). Compressed hash160 would not match EC.
+  const uncompressed = secp256k1.uncompressPublicKey(
+    Uint8Array.from(child.publicKey)
+  );
+  if (typeof uncompressed === 'string') {
+    throw new Error(`Uncompress payment pubkey failed: ${uncompressed}`);
+  }
+  const pkh = hash160(uncompressed);
   const prefix = network === Network.MAINNET ? 'bitcoincash' : 'bchtest';
   const result = encodeCashAddress({ prefix, type: 'p2pkh', payload: pkh });
   if (typeof result === 'string') throw new Error(`Address encoding failed: ${result}`);

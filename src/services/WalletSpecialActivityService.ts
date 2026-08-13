@@ -7,9 +7,9 @@ import { hexToBin } from '../utils/hex';
 import getElectrumAdapter, { type ElectrumAdapter } from './ElectrumAdapter';
 import {
   computeSharedSecret,
-  deriveAndEncodePaycode,
   derivePaymentAddress,
   deriveRpaKeys,
+  rpaGrindString,
   RPA_PREFIX_BITS,
 } from './RpaService';
 import type {
@@ -133,18 +133,19 @@ function toNonEmptyString(value: unknown): string | null {
 /**
  * Turn Electrum/network failures into short user-facing copy.
  *
- * `rpa.getaddresshistory` is **not** standard ElectrumX — only Fulcrum builds
- * with the RPA plugin answer it. Ordinary chipnet/mainnet servers reply
- * "Unsupported request: rpa.getaddresshistory", which is accurate protocol
- * text but useless in the Assets card.
+ * Electron Cash talks to Fulcrum-RPA via `blockchain.reusable.get_history`
+ * (not `rpa.getaddresshistory`). Ordinary ElectrumX replies "unsupported".
  */
 function normalizeActivityError(error: unknown): string {
   const message = toErrorMessage(error).trim();
   const lower = message.toLowerCase();
   if (
+    lower.includes('blockchain.reusable') ||
     lower.includes('rpa.getaddresshistory') ||
-    (lower.includes('unsupported request') && lower.includes('rpa')) ||
-    lower.includes('method not found') && lower.includes('rpa')
+    (lower.includes('unsupported request') &&
+      (lower.includes('rpa') || lower.includes('reusable'))) ||
+    (lower.includes('method not found') &&
+      (lower.includes('rpa') || lower.includes('reusable')))
   ) {
     return (
       'This Electrum server does not support RPA scanning. ' +
@@ -359,20 +360,39 @@ export async function scanRpaActivity(params: {
   const { mnemonic, passphrase, network, accountPath } = params;
   const adapter = params.adapter ?? getElectrumAdapter();
   const keys = await deriveRpaKeys(mnemonic, passphrase, network, accountPath);
-  const paycode = await deriveAndEncodePaycode(
-    mnemonic,
-    passphrase,
-    network,
-    RPA_PREFIX_BITS,
-    accountPath
-  );
+  // Electron Cash: blockchain.reusable.get_history(height, count, grind)
+  // and get_mempool(grind). grind is the scan-pubkey prefix, not the paycode.
+  const grind = rpaGrindString(keys.scanPubkey, RPA_PREFIX_BITS);
 
   let history: RpaHistoryEntry[];
   try {
-    history = (await adapter.request(
-      'rpa.getaddresshistory',
-      paycode
+    let tip = 0;
+    try {
+      const header = (await adapter.request(
+        'blockchain.headers.subscribe'
+      )) as { height?: number };
+      tip = toSafeNumber(header?.height, 0);
+    } catch {
+      tip = 0;
+    }
+    const count = 200;
+    const startHeight = tip > 0 ? Math.max(0, tip - count) : 0;
+    const confirmed = (await adapter.request(
+      'blockchain.reusable.get_history',
+      startHeight,
+      count + 1,
+      grind
     )) as RpaHistoryEntry[];
+    let mempool: RpaHistoryEntry[] = [];
+    try {
+      mempool = (await adapter.request(
+        'blockchain.reusable.get_mempool',
+        grind
+      )) as RpaHistoryEntry[];
+    } catch {
+      mempool = [];
+    }
+    history = [...(Array.isArray(confirmed) ? confirmed : []), ...(Array.isArray(mempool) ? mempool : [])];
   } catch (error) {
     return {
       status: 'unavailable',

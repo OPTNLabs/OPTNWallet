@@ -33,7 +33,8 @@ vi.mock('../RpaService', () => ({
   deriveAndEncodePaycode: deriveAndEncodePaycodeMock,
   computeSharedSecret: computeSharedSecretMock,
   derivePaymentAddress: derivePaymentAddressMock,
-  RPA_PREFIX_BITS: 8,
+  rpaGrindString: () => 'AABB',
+  RPA_PREFIX_BITS: 16,
 }));
 
 vi.mock('../cauldron/planner', () => ({
@@ -81,7 +82,9 @@ describe('WalletSpecialActivityService', () => {
   it('verifies RPA candidates and counts only currently unspent outputs', async () => {
     const adapter = {
       request: vi.fn(async (method: string) => {
-        if (method === 'rpa.getaddresshistory') return [{ tx_hash: 'tx1' }];
+        if (method === 'blockchain.headers.subscribe') return { height: 1000 };
+        if (method === 'blockchain.reusable.get_history') return [{ tx_hash: 'tx1' }];
+        if (method === 'blockchain.reusable.get_mempool') return [];
         if (method === 'blockchain.transaction.get') {
           return {
             inputs: [
@@ -127,19 +130,20 @@ describe('WalletSpecialActivityService', () => {
       Network.CHIPNET,
       "m/44'/1'/0'"
     );
-    expect(deriveAndEncodePaycodeMock).toHaveBeenCalledWith(
-      'test mnemonic',
-      '',
-      Network.CHIPNET,
-      8,
-      "m/44'/1'/0'"
+    expect(adapter.request).toHaveBeenCalledWith(
+      'blockchain.reusable.get_history',
+      800,
+      201,
+      'AABB'
     );
   });
 
   it('does not treat a spent RPA output as part of the balance', async () => {
     const adapter = {
       request: vi.fn(async (method: string) => {
-        if (method === 'rpa.getaddresshistory') return [{ tx_hash: 'tx1' }];
+        if (method === 'blockchain.headers.subscribe') return { height: 1000 };
+        if (method === 'blockchain.reusable.get_history') return [{ tx_hash: 'tx1' }];
+        if (method === 'blockchain.reusable.get_mempool') return [];
         if (method === 'blockchain.transaction.get') {
           return {
             inputs: [
@@ -173,8 +177,9 @@ describe('WalletSpecialActivityService', () => {
   it('maps ordinary Electrum "Unsupported request: rpa.getaddresshistory" to a clear note', async () => {
     const adapter = {
       request: vi.fn(async (method: string) => {
-        if (method === 'rpa.getaddresshistory') {
-          throw new Error('Unsupported request: rpa.getaddresshistory');
+        if (method === 'blockchain.headers.subscribe') return { height: 1000 };
+        if (method === 'blockchain.reusable.get_history') {
+          throw new Error('Unsupported request: blockchain.reusable.get_history');
         }
         throw new Error(`Unexpected method: ${method}`);
       }),
