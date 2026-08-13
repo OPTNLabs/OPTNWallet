@@ -508,22 +508,21 @@ export default function useSimpleSend() {
         }
       }
 
-      {
+      if (!rpaPaycode) {
         const netErr = recipientNetworkError(recipient, currentNetwork);
         if (netErr) {
           setError(netErr);
           setMode('error');
           return;
         }
-      }
-      if (
-        !rpaPaycode &&
-        (!parsedRecipient.isValidAddress ||
-          !validateRecipient(normalizedRecipient))
-      ) {
-        setError('Please enter a valid destination address for this network.');
-        setMode('error');
-        return;
+        if (
+          !parsedRecipient.isValidAddress ||
+          !validateRecipient(normalizedRecipient)
+        ) {
+          setError('Please enter a valid destination address for this network.');
+          setMode('error');
+          return;
+        }
       }
       if (!selectedChangeAddress) {
         setError('Please choose a change address.');
@@ -833,22 +832,21 @@ export default function useSimpleSend() {
       setMode('error');
       return;
     }
-    {
+    if (!rpaPaycode) {
       const netErr = recipientNetworkError(recipient, currentNetwork);
       if (netErr) {
         setError(netErr);
         setMode('error');
         return;
       }
-    }
-    if (
-      !rpaPaycode &&
-      (!parsedRecipient.isValidAddress ||
-        !validateRecipient(normalizedRecipient))
-    ) {
-      setError('Enter a valid destination address for this network first.');
-      setMode('error');
-      return;
+      if (
+        !parsedRecipient.isValidAddress ||
+        !validateRecipient(normalizedRecipient)
+      ) {
+        setError('Enter a valid destination address for this network first.');
+        setMode('error');
+        return;
+      }
     }
     if (!selectedChangeAddress) {
       setError('Change address is still loading. Try again in a moment.');
