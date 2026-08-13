@@ -15,14 +15,22 @@ The unique step is **abort, then disclose**. After the round fails, each
 peer may send a control-plane **opening** (blind `a||b`, component salt,
 Pedersen nonce) under its **round key**. That binds an anonymous
 component back to the attributed `InitialCommitment` *without* putting
-identity on the happy path. `findFaultInDisclosures` +
-`verifyBlameReport` re-check the crypto. A fake accusation is rejected
-(for example an opening that actually verifies cannot be used as
-`invalid_input_credential`). A consistent timeout finds nobody.
+identity on the happy path. Unproven claims are dropped. Forged openings
+are themselves `invalid_input_credential`. Then
+`findFaultInDisclosures` + `verifyBlameReport` re-check the crypto. A
+fake accusation is rejected. A consistent timeout finds nobody.
 
-**Prove-or-don't-blame.** Only those re-verifiable codes count. **Never**
-blame Tor lag, relay timeout, late join, or a missing signature — a
-silent no-sign is just a timeout abort.
+**Prove-or-don't-blame.** Only those re-verifiable codes count:
+`pedersen_unbalanced`, `invalid_component_commitment`,
+`credential_slot_oob`, `invalid_input_credential`, `duplicate_outpoint`,
+`invalid_signature_set`. **Never** blame Tor lag, relay timeout, or late
+join.
+
+A **disclosed** unsigned outpoint is `invalid_signature_set` (the
+anonymous-griefer catch once they admit the coins). A peer who **never
+signs and never discloses** is skipped (`if (!disclosure) continue`) —
+that is still a timeout abort, not an accused. The FAQ used to say
+“never blame a missing signature”; the code is narrower than that.
 
 The accused is an **ephemeral round key**. That is diagnosis, not a
 wallet ban and not DoS defense. The same person comes back as a new key
@@ -39,7 +47,11 @@ do not move.
 
 The set cannot be rewritten at that point. A missing signer cannot be dropped
 so the rest continue. Same as classic CashFusion: incomplete signatures mean
-no CoinJoin, not a smaller one. Auto tries again later.
+no CoinJoin, not a smaller one.
+
+If that peer then **discloses** those unsigned coins under the round key,
+blame names that key (`invalid_signature_set`). If they stay silent after
+abort, there is no accused. Auto tries again later.
 
 ## What is this, vs Electron Cash CashFusion?
 
