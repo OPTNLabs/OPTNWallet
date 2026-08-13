@@ -38,6 +38,18 @@ export default function WalletPopupSheet({
         role="dialog"
         aria-modal="true"
       >
+        {onDismiss ? (
+          <div className="mb-2 flex justify-end shrink-0">
+            <button
+              type="button"
+              className="wallet-btn-secondary px-3 py-1.5 text-sm"
+              onClick={onDismiss}
+              aria-label="Close"
+            >
+              Close
+            </button>
+          </div>
+        ) : null}
         <div className="min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain touch-pan-y pr-1">
           {children}
         </div>
