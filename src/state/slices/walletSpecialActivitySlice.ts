@@ -64,4 +64,41 @@ export const selectWalletSpecialActivity = (
   return state.walletSpecialActivity.byWallet[walletId]?.[activityType] ?? null;
 };
 
+/** Sum stealth sats from a stored RPA payload (field or output list). */
+export function rpaPayloadStealthSats(payload: unknown): number {
+  if (!payload || typeof payload !== 'object') return 0;
+  const record = payload as {
+    unspentSats?: unknown;
+    unspentOutputs?: Array<{ valueSats?: unknown }>;
+  };
+  const fromField = Number(record.unspentSats);
+  const fromOutputs = Array.isArray(record.unspentOutputs)
+    ? record.unspentOutputs.reduce(
+        (sum, output) => sum + (Number(output.valueSats) || 0),
+        0
+      )
+    : 0;
+  const sats = Math.max(
+    Number.isFinite(fromField) ? fromField : 0,
+    fromOutputs
+  );
+  return sats > 0 ? sats : 0;
+}
+
+/** Stealth BCH sats already claimed/scanned for this wallet. Not in UTXO total. */
+export const selectRpaStealthSats = (
+  state: { walletSpecialActivity: WalletSpecialActivityState },
+  walletId: number | null | undefined
+): number => {
+  const numericId = Number(walletId);
+  if (!Number.isInteger(numericId) || numericId <= 0) return 0;
+  const byWallet = state.walletSpecialActivity.byWallet;
+  const record =
+    byWallet[numericId]?.rpa ??
+    byWallet[String(numericId) as unknown as number]?.rpa ??
+    null;
+  if (!record) return 0;
+  return rpaPayloadStealthSats(record.payload);
+};
+
 export default walletSpecialActivitySlice.reducer;

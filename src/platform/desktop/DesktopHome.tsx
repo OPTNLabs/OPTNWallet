@@ -35,6 +35,8 @@ import {
 import { Network } from '../../state/slices/networkSlice';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import { SATSINBITCOIN } from '../../utils/constants';
+import { selectRpaStealthSats } from '../../state/slices/walletSpecialActivitySlice';
+import { loadStoredWalletSpecialActivities } from '../../services/WalletSpecialActivityService';
 import type { TransactionHistoryItem } from '../../types/types';
 import SettingsRow from '../../components/ui/SettingsRow';
 import EmptyState from '../../components/ui/EmptyState';
@@ -106,6 +108,9 @@ const Home: React.FC = () => {
   const totalBalance = useSelector(
     (state: RootState) => state.utxos.totalBalance
   );
+  const stealthSats = useSelector((state: RootState) =>
+    selectRpaStealthSats(state, currentWalletId)
+  );
   const transactions = useSelector((state: RootState) => {
     const byWallet = state.transactions.transactions;
     return (
@@ -144,7 +149,7 @@ const Home: React.FC = () => {
     const interval = setInterval(tick, 500);
     return () => clearInterval(interval);
   }, [fetchingUTXOsRedux, syncingStartedAtMs]);
-  const totalBch = totalBalance / SATSINBITCOIN;
+  const totalBch = (totalBalance + stealthSats) / SATSINBITCOIN;
   const totalUsd =
     typeof bchUsdQuote === 'number' ? totalBch * bchUsdQuote : null;
   // Sort by block height / unconfirmed — NOT array index. Redux history is
@@ -179,6 +184,13 @@ const Home: React.FC = () => {
     if (!currentWalletId || tokenCategories.length === 0) return;
     void preloadTokenMetadata(tokenCategories);
   }, [currentWalletId, tokenCategories]);
+
+  useEffect(() => {
+    if (!currentWalletId) return;
+    void loadStoredWalletSpecialActivities(currentWalletId).catch(() => {
+      /* stored stealth total is optional on Home */
+    });
+  }, [currentWalletId]);
 
   // Load this wallet's transaction history when it opens.
   //
@@ -401,6 +413,13 @@ const Home: React.FC = () => {
                         : 'USD price unavailable'
                       : `${totalBch.toFixed(8)} ${unit}`}
                   </div>
+                  {stealthSats > 0 && (
+                    <div className="text-[10px] wallet-muted mt-0.5">
+                      {(totalBalance / SATSINBITCOIN).toFixed(8)} spendable
+                      {' + '}
+                      {(stealthSats / SATSINBITCOIN).toFixed(8)} stealth
+                    </div>
+                  )}
                 </button>
               </div>
               <button

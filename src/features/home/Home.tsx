@@ -26,6 +26,8 @@ import { logError } from '../../utils/errorHandling';
 import { Network } from '../../state/slices/networkSlice';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import { SATSINBITCOIN } from '../../utils/constants';
+import { selectRpaStealthSats } from '../../state/slices/walletSpecialActivitySlice';
+import { loadStoredWalletSpecialActivities } from '../../services/WalletSpecialActivityService';
 import SettingsRow from '../../components/ui/SettingsRow';
 import EmptyState from '../../components/ui/EmptyState';
 import { shortenTxHash } from '../../utils/shortenHash';
@@ -84,6 +86,9 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
   const totalBalance = useSelector(
     (state: RootState) => state.utxos.totalBalance
   );
+  const stealthSats = useSelector((state: RootState) =>
+    selectRpaStealthSats(state, currentWalletId)
+  );
   const transactions = useSelector(
     (state: RootState) => state.transactions.transactions[currentWalletId]
   );
@@ -93,7 +98,7 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
   );
   const [displayMode, setDisplayMode] = useState<'BCH' | 'USD'>('BCH');
   const homeConnect = useHomeConnect();
-  const totalBch = totalBalance / SATSINBITCOIN;
+  const totalBch = (totalBalance + stealthSats) / SATSINBITCOIN;
   const totalUsd =
     typeof bchUsdQuote === 'number' ? totalBch * bchUsdQuote : null;
   // Sort by height / unconfirmed — not array index (Electrum merge order).
@@ -118,6 +123,13 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
     if (!currentWalletId || tokenCategories.length === 0) return;
     void preloadTokenMetadata(tokenCategories);
   }, [currentWalletId, tokenCategories]);
+
+  useEffect(() => {
+    if (!currentWalletId) return;
+    void loadStoredWalletSpecialActivities(currentWalletId).catch(() => {
+      /* stored stealth total is optional on Home */
+    });
+  }, [currentWalletId]);
 
   const handleRefresh = useCallback(async () => {
     if (fetchingUTXOsRedux || !currentWalletId) return;
@@ -217,6 +229,13 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
                         : 'USD price unavailable'
                       : `${totalBch.toFixed(8)} BCH`}
                   </div>
+                  {stealthSats > 0 && (
+                    <div className="text-[10px] wallet-muted mt-0.5">
+                      {(totalBalance / SATSINBITCOIN).toFixed(8)} spendable
+                      {' + '}
+                      {(stealthSats / SATSINBITCOIN).toFixed(8)} stealth
+                    </div>
+                  )}
                 </button>
               </div>
               <button

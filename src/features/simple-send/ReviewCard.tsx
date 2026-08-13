@@ -7,7 +7,9 @@ import { resolveTokenPresentation } from '../../utils/tokenPresentation';
 import { coinDepth } from '../../platform/desktop/fusionCoinDepth';
 import { outpointKey } from '../../platform/desktop/CoinLabelService';
 import { FusionBadge } from '../../components/FusionBadge';
+import { StealthBadge } from '../../components/StealthBadge';
 import { selectWalletId } from '../../state/slices/walletSlice';
+import type { RootState } from '../../state/store';
 
 type ReviewCardProps = {
   open: boolean;
@@ -50,6 +52,21 @@ export function ReviewCard({
   onConfirmSend,
 }: ReviewCardProps) {
   const walletId = useSelector(selectWalletId);
+  const rpaRecord = useSelector(
+    (state: RootState) =>
+      walletId > 0
+        ? state.walletSpecialActivity.byWallet[walletId]?.rpa ?? null
+        : null
+  );
+  const stealthKeys = useMemo(() => {
+    const keys = new Set<string>();
+    if (rpaRecord && 'unspentOutputs' in rpaRecord.payload) {
+      for (const output of rpaRecord.payload.unspentOutputs) {
+        keys.add(outpointKey(output.txHash, output.outputIndex));
+      }
+    }
+    return keys;
+  }, [rpaRecord]);
   const HANDLE_SIZE = 56;
   const trackRef = useRef<HTMLDivElement>(null);
   const [dragX, setDragX] = useState(0);
@@ -115,9 +132,10 @@ export function ReviewCard({
           sats: Number(u.amount ?? u.value ?? 0),
           pending: typeof u.height === 'number' ? u.height <= 0 : false,
           depth: walletId > 0 ? coinDepth(walletId, key) : 0,
+          stealth: stealthKeys.has(key),
         };
       }),
-    [selectedForTx, walletId]
+    [selectedForTx, stealthKeys, walletId]
   );
 
   const technicalOutputs = useMemo(
@@ -406,6 +424,9 @@ export function ReviewCard({
                                 depth={input.depth}
                                 className="ml-1.5"
                               />
+                            )}
+                            {input.stealth && (
+                              <StealthBadge className="ml-1.5" />
                             )}
                           </div>
                           {input.pending && (

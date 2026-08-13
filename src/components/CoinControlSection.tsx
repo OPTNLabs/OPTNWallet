@@ -1,15 +1,20 @@
 // Global coin control for Simple Send (and any other spend surface).
 // When off, the wallet auto-picks coins. When on, only checked UTXOs are used.
-// Shows local CashFusion depth badges — never on-chain metadata.
+// Shows local CashFusion + Stealth badges — never on-chain metadata.
 
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo } from 'react';
+import { useSelector } from 'react-redux';
 import type { UTXO } from '../types/types';
+import type { RootState } from '../state/store';
 import { SATSINBITCOIN } from '../utils/constants';
 import { shortenTxHash } from '../utils/shortenHash';
 import { coinDepth } from '../platform/desktop/fusionCoinDepth';
 import { useFusionDepthRevision } from '../platform/desktop/useFusionDepthRevision';
 import { outpointKey } from '../platform/desktop/CoinLabelService';
 import { FusionBadge } from './FusionBadge';
+import { StealthBadge } from './StealthBadge';
+import { loadStoredWalletSpecialActivities } from '../services/WalletSpecialActivityService';
+import type { RpaUnspentOutput } from '../services/WalletSpecialActivityService';
 
 function utxoOutpointKey(utxo: Pick<UTXO, 'tx_hash' | 'tx_pos'>): string {
   return outpointKey(utxo.tx_hash, utxo.tx_pos);
@@ -24,6 +29,18 @@ function utxoSats(u: UTXO): number {
   const raw = u.amount ?? u.value ?? 0;
   if (typeof raw === 'bigint') return Number(raw);
   return Number(raw) || 0;
+}
+
+function rpaOutputToUtxo(output: RpaUnspentOutput, walletId: number): UTXO {
+  return {
+    wallet_id: walletId,
+    address: output.address,
+    height: output.height,
+    tx_hash: output.txHash,
+    tx_pos: output.outputIndex,
+    value: output.valueSats,
+    amount: output.valueSats,
+  };
 }
 
 export type CoinControlSectionProps = {
@@ -52,10 +69,44 @@ export function CoinControlSection({
 }: CoinControlSectionProps): React.ReactElement {
   // Re-render when server/P2P fusion stamps depth so "Fused" badges appear live.
   const fusionDepthRev = useFusionDepthRevision(walletId);
-  const bchUtxos = useMemo(
-    () => utxos.filter((u) => !u.token && !u.token_data),
-    [utxos]
+  const rpaRecord = useSelector(
+    (state: RootState) =>
+      walletId > 0
+        ? state.walletSpecialActivity.byWallet[walletId]?.rpa ?? null
+        : null
   );
+  const stealthOutputs = useMemo(() => {
+    if (!rpaRecord || !('unspentOutputs' in rpaRecord.payload)) return [];
+    return rpaRecord.payload.unspentOutputs;
+  }, [rpaRecord]);
+  const stealthKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const output of stealthOutputs) {
+      keys.add(outpointKey(output.txHash, output.outputIndex));
+    }
+    return keys;
+  }, [stealthOutputs]);
+
+  useEffect(() => {
+    if (walletId <= 0) return;
+    void loadStoredWalletSpecialActivities(walletId).catch(() => {
+      /* optional — badges just stay hidden */
+    });
+  }, [walletId]);
+
+  const bchUtxos = useMemo(() => {
+    const regular = utxos.filter((u) => !u.token && !u.token_data);
+    if (stealthOutputs.length === 0) return regular;
+    const seen = new Set(regular.map(utxoOutpointKey));
+    const merged = [...regular];
+    for (const output of stealthOutputs) {
+      const key = outpointKey(output.txHash, output.outputIndex);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(rpaOutputToUtxo(output, walletId));
+    }
+    return merged;
+  }, [stealthOutputs, utxos, walletId]);
 
   const selectedSats = useMemo(() => {
     let sum = 0;
@@ -88,8 +139,8 @@ export function CoinControlSection({
         <div className="min-w-0">
           <div className="text-sm font-semibold wallet-text-strong">{title}</div>
           <p className="text-[11px] wallet-muted mt-0.5">
-            Off = wallet picks coins. On = only the coins you check are spent
-            (and shown with Fused depth when known).
+            Off = wallet picks coins. On = only the coins you check are spent.
+            Fused and Stealth coins are labeled.
           </p>
         </div>
         <label className="flex shrink-0 items-center gap-2 text-xs wallet-text-strong">
@@ -148,6 +199,7 @@ export function CoinControlSection({
                 // fusionDepthRev: re-read after localStorage depth write
                 void fusionDepthRev;
                 const depth = walletId > 0 ? coinDepth(walletId, key) : 0;
+                const stealth = stealthKeys.has(key);
                 const sats = utxoSats(u);
                 const pending =
                   typeof u.height === 'number' ? u.height <= 0 : false;
@@ -173,6 +225,7 @@ export function CoinControlSection({
                           {formatBch(sats)} BCH
                         </span>
                         {depth > 0 && <FusionBadge depth={depth} />}
+                        {stealth && <StealthBadge />}
                         {pending && (
                           <span className="wallet-muted">unconfirmed</span>
                         )}
