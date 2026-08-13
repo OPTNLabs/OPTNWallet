@@ -9,6 +9,7 @@ export type SettingsPanelKey =
   | 'contract'
   | 'walletconnect'
   | 'wizardconnect'
+  | 'cashconnect'
   | 'network'
   | 'faucet'
   | 'wallet-info'
@@ -168,7 +169,9 @@ export function getVisibleWalletRows(
     (row) => row.key !== 'faucet' || currentNetwork === Network.CHIPNET
   );
   const commonKeys = new Set(['network', 'faucet', 'pending-outbox']);
-  return networkRows.filter((row) => commonKeys.has(String(row.key)));
+  const home = networkRows.filter((row) => commonKeys.has(String(row.key)));
+  const cashconnect = CONNECTION_ROWS.find((row) => row.key === 'cashconnect');
+  return cashconnect ? [...home, cashconnect] : home;
 }
 
 export function getSettingsGroupRows(
@@ -219,6 +222,22 @@ export function getSettingsGroupRows(
   });
 }
 
+/** Parent settings group for a drilled-in panel, or null if it is a home row. */
+export function getParentSettingsGroup(
+  panel: string,
+  isDesktop: boolean,
+  currentNetwork: Network
+): SettingsGroupKey | null {
+  if (!panel || panel.startsWith('group:')) return null;
+  for (const group of SETTINGS_GROUPS) {
+    const rows = getSettingsGroupRows(group.key, isDesktop, currentNetwork);
+    if (rows.some((row) => row.target === panel || row.key === panel)) {
+      return group.key;
+    }
+  }
+  return null;
+}
+
 /** @deprecated Contract info is embedded in About — kept for deep-link compat. */
 export const CONTRACT_ROWS: SettingsRowConfig[] = [];
 
@@ -236,6 +255,13 @@ export const CONNECTION_ROWS: SettingsRowConfig[] = [
     description: 'Connect to token wizards',
     action: 'panel',
     target: 'wizardconnect',
+  },
+  {
+    key: 'cashconnect',
+    title: 'CashConnect',
+    description: 'Contract-system dApps over Nostr',
+    action: 'panel',
+    target: 'cashconnect',
   },
 ];
 

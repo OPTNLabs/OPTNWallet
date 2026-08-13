@@ -12,6 +12,7 @@ import transactionReducer from '../state/slices/transactionSlice';
 import priceFeedReducer from '../state/slices/priceFeedSlice';
 import walletconnectReducer from '../state/slices/walletconnectSlice';
 import wizardconnectReducer from '../state/slices/wizardconnectSlice';
+import cashconnectReducer from '../state/slices/cashconnectSlice';
 import preferencesReducer from '../state/slices/preferencesSlice';
 import notificationsReducer from '../state/slices/notificationsSlice';
 import serverNotificationsReducer from '../state/slices/serverNotificationsSlice';
@@ -122,6 +123,7 @@ const rootReducer = combineReducers({
   priceFeed: priceFeedReducer,
   walletconnect: walletconnectReducer,
   wizardconnect: wizardconnectReducer,
+  cashconnect: cashconnectReducer,
   notifications: notificationsReducer,
   serverNotifications: serverNotificationsReducer,
   preferences: preferencesReducer,

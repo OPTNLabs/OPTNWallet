@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  getParentSettingsGroup,
   getSettingsGroupRows,
   getVisibleWalletRows,
   WALLET_ROWS,
@@ -23,7 +24,7 @@ describe('settingsConfig', () => {
       (row) => row.key
     );
 
-    expect(visibleKeys).toEqual(['network', 'pending-outbox']);
+    expect(visibleKeys).toEqual(['network', 'pending-outbox', 'cashconnect']);
     expect(visibleKeys).not.toEqual(
       expect.arrayContaining([
         'faucet',
@@ -50,7 +51,20 @@ describe('settingsConfig', () => {
       'network',
       'faucet',
       'pending-outbox',
+      'cashconnect',
     ]);
+  });
+
+  it('sends CashConnect and WalletConnect back to Connections & features', () => {
+    expect(
+      getParentSettingsGroup('cashconnect', true, Network.CHIPNET)
+    ).toBe('features');
+    expect(
+      getParentSettingsGroup('walletconnect', true, Network.MAINNET)
+    ).toBe('features');
+    expect(getParentSettingsGroup('network', true, Network.CHIPNET)).toBe(
+      null
+    );
   });
 
   it('puts Rebuild Wallet under Wallet & security on desktop only', () => {
