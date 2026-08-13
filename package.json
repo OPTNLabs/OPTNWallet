@@ -65,6 +65,7 @@
     "@capacitor/splash-screen": "^7.0.0",
     "@capacitor/status-bar": "^7.0.3",
     "@capacitor/toast": "^7.0.0",
+    "@cashconnect-js/nostr": "^1.0.0-alpha.31",
     "@cashscript/utils": "0.13.0-next.3",
     "@choochmeque/tauri-plugin-biometry-api": "0.2.6",
     "@electrum-cash/network": "^4.1.3",

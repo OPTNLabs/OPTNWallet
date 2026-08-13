@@ -25,12 +25,14 @@ import ContactUs from '../../components/ContactUs';
 import FaucetView from '../../components/FaucetView';
 import WalletConnectPanel from '../../components/walletconnect/WalletConnectPanel';
 import WizardConnectPanel from '../../components/wizardconnect/WizardConnectPanel';
+import CashConnectPanel from '../../components/cashconnect/CashConnectPanel';
 import { AppLockSettings } from '../../platform/desktop/AppLockSettings';
 import { RebuildWalletSettings } from '../../platform/desktop/RebuildWalletSettings';
 import { ExportColdArchiveSettings } from '../../platform/desktop/ExportColdArchiveSettings';
 import { WalletInfoSettings } from './WalletInfoSettings';
 
 import { disconnectAllWizardConnections } from '../../state/slices/wizardconnectSlice';
+import { stopCashConnectThunk } from '../../state/slices/cashconnectSlice';
 import getElectrumAdapter from '../../services/ElectrumAdapter';
 import { waitForWalletHistoryRefresh } from '../../services/RefreshCoordinator';
 import { useTheme } from '../../app/theme/useTheme';
@@ -45,6 +47,7 @@ import { getReturnPath } from '../../utils/navigation';
 import {
   SETTINGS_GROUPS,
   getSettingsGroupRows,
+  getParentSettingsGroup,
   getVisibleWalletRows,
   type SettingsRowConfig,
 } from './settingsConfig';
@@ -106,6 +109,7 @@ const Settings: React.FC = () => {
       dispatch(resetContract());
       dispatch(clearTransaction());
       await dispatch(disconnectAllWizardConnections());
+      await dispatch(stopCashConnectThunk());
       try {
         await getElectrumAdapter().disconnect();
       } catch (e) {
@@ -126,6 +130,7 @@ const Settings: React.FC = () => {
     dispatch(resetNetwork());
     dispatch(clearTransaction());
     await dispatch(disconnectAllWizardConnections());
+    await dispatch(stopCashConnectThunk());
     try {
       const electrum = getElectrumAdapter();
       await electrum.disconnect();
@@ -152,6 +157,8 @@ const Settings: React.FC = () => {
         return <WalletConnectPanel />;
       case 'wizardconnect':
         return <WizardConnectPanel />;
+      case 'cashconnect':
+        return <CashConnectPanel />;
       case 'app-lock':
         return <AppLockSettings />;
       case 'export-archive':
@@ -221,6 +228,8 @@ const Settings: React.FC = () => {
         return 'WalletConnect';
       case 'wizardconnect':
         return 'WizardConnect';
+      case 'cashconnect':
+        return 'CashConnect';
       case 'network':
         return 'Network';
       case 'faucet':
@@ -230,7 +239,24 @@ const Settings: React.FC = () => {
     }
   };
 
-  const closeDetails = () => setSelectedOption('');
+  const handleBack = () => {
+    if (groupConfig) {
+      setSelectedOption('');
+      return;
+    }
+    if (selectedOption) {
+      const parent = getParentSettingsGroup(
+        selectedOption,
+        desktop,
+        currentNetwork
+      );
+      setSelectedOption(parent ? `group:${parent}` : '');
+      return;
+    }
+    if (returnTarget) {
+      navigate(returnTarget);
+    }
+  };
   const handleRowClick = (row: SettingsRowConfig) => {
     if (row.action === 'panel' && row.target) {
       setSelectedOption(row.target);
@@ -352,13 +378,7 @@ const Settings: React.FC = () => {
               <div className="mt-auto pb-2 pt-3">
                 <button
                   className="wallet-btn-danger w-full py-3 text-base font-semibold"
-                  onClick={() => {
-                    if (returnTarget) {
-                      navigate(returnTarget);
-                      return;
-                    }
-                    closeDetails();
-                  }}
+                  onClick={handleBack}
                 >
                   Back
                 </button>

@@ -28,6 +28,10 @@ import { usePrices } from '../hooks/usePrices';
 import { SignTransactionModal } from '../components/walletconnect/SignTransactionModal';
 import { SignMessageModal } from '../components/walletconnect/SignMessageModal';
 import WizardSignTransactionModal from '../components/wizardconnect/WizardSignTransactionModal';
+import SessionProposalModal from '../components/walletconnect/SessionProposalModal';
+import CashConnectSessionProposalModal from '../components/cashconnect/CashConnectSessionProposalModal';
+import CashConnectExecuteActionModal from '../components/cashconnect/CashConnectExecuteActionModal';
+import CashConnectErrorModal from '../components/cashconnect/CashConnectErrorModal';
 import {
   useLocalNotificationSetup,
   useNotificationQueueReset,
@@ -42,6 +46,7 @@ import {
   useWalletConnectInitialization,
   useWalletConnectSessionWatch,
   useWizardConnectInitialization,
+  useCashConnectInitialization,
   useWizardConnectSessionWatch,
   useWorkerLifecycle,
   useWalletBackendSync,
@@ -87,6 +92,7 @@ function App({ viewerOnly = false }: AppShellProps) {
 
   useWalletConnectInitialization(dispatch, !viewerOnly);
   useWizardConnectInitialization(viewerOnly ? null : walletId, dispatch);
+  useCashConnectInitialization(viewerOnly ? null : walletId, dispatch);
   useStatusBarSync();
   useOptionalPlayUpdateCheck();
   useLocalNotificationSetup();
@@ -240,9 +246,13 @@ function App({ viewerOnly = false }: AppShellProps) {
         {/* 🔥 Always active modals */}
         {!viewerOnly && (
           <>
+            <SessionProposalModal />
             <SignMessageModal />
             <SignTransactionModal />
             <WizardSignTransactionModal />
+            <CashConnectSessionProposalModal />
+            <CashConnectExecuteActionModal />
+            <CashConnectErrorModal />
           </>
         )}
         {/* 🔔 Always-on in-app UTXO popup (only when wallet exists) */}
