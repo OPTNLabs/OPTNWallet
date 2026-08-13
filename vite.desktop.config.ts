@@ -211,6 +211,7 @@ const desktopAdditions = defineConfig({
       '@capacitor/status-bar': resolvePath(__dirname, 'src/platform/desktop/status-bar.ts'),
       '@capacitor/splash-screen': resolvePath(__dirname, 'src/platform/desktop/splash-screen.ts'),
       '@capacitor/camera': resolvePath(__dirname, 'src/platform/desktop/camera.ts'),
+      '@capacitor/app': resolvePath(__dirname, 'src/platform/desktop/capacitor-app.ts'),
     },
   },
 });

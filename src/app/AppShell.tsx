@@ -47,6 +47,7 @@ import {
   useWalletConnectSessionWatch,
   useWizardConnectInitialization,
   useCashConnectInitialization,
+  useCashConnectDeepLink,
   useWizardConnectSessionWatch,
   useWorkerLifecycle,
   useWalletBackendSync,
@@ -93,6 +94,7 @@ function App({ viewerOnly = false }: AppShellProps) {
   useWalletConnectInitialization(dispatch, !viewerOnly);
   useWizardConnectInitialization(viewerOnly ? null : walletId, dispatch);
   useCashConnectInitialization(viewerOnly ? null : walletId, dispatch);
+  useCashConnectDeepLink(viewerOnly ? null : walletId, dispatch, !viewerOnly);
   useStatusBarSync();
   useOptionalPlayUpdateCheck();
   useLocalNotificationSetup();

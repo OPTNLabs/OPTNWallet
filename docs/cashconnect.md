@@ -19,6 +19,9 @@ WizardConnect.
 - UI: Settings home + Actions → CashConnect. Home **Scan QR** opens a
   connect popup (paste or scan `bch-cc-v1:` / `wc:` / payment address).
   Session-approve overlays are app-wide on Home.
+- Mobile: Android and iOS register the `bch-cc-v1` URL scheme. A tapped
+  invite opens the wallet and pairs once a wallet is unlocked. Same Home
+  approve overlay as desktop.
 
 Reference: Cashonize `cashconnectStore.ts`, and Selene
 [MR 281](https://git.xulu.tech/selene.cash/selene-wallet/-/merge_requests/281).
