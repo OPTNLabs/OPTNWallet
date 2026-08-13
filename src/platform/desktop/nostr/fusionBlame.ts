@@ -177,9 +177,9 @@ export interface DisclosureFinding {
  *
  * Components travel anonymously, so a failed round has nobody to accuse —
  * `verifyBlameReport` rejects an accused outside the participant set. The
- * disclosure message is control-plane (sent under the round identity), so
- * cross-referencing what each peer admits to restores attribution WITHOUT
- * weakening the happy path, which discloses nothing at all.
+ * disclosure message is control-plane. Stage 1 never requests these openings
+ * and never treats a missing signature as blame. Duplicate-outpoint from
+ * voluntary openings remains a structural check only.
  *
  * Pure on purpose: no transport, no timers, no session state. Every input is
  * already held by the coordinator when a round aborts.
@@ -223,29 +223,10 @@ export function findFaultInDisclosures(args: {
     };
   }
 
-  // 2. A peer that admits to outpoints it never signed. This is the code that
-  //    catches the anonymous griefer: registering inputs and then withholding
-  //    signatures used to be unattributable once components went anonymous.
-  for (const peer of [...participants].sort()) {
-    const disclosure = disclosures.get(peer);
-    if (!disclosure) continue;
-    const unsigned = disclosure.outpoints.filter(
-      (outpoint) => !signedOutpoints.has(outpoint)
-    );
-    if (unsigned.length === 0) continue;
-    return {
-      accused: peer,
-      code: 'invalid_signature_set',
-      evidence: {
-        kind: 'invalid_signature_set',
-        expectedOutpoints: [...disclosure.outpoints],
-        receivedOutpoints: disclosure.outpoints.filter((outpoint) =>
-          signedOutpoints.has(outpoint)
-        ),
-      },
-    };
-  }
-
+  // Missing signatures are never attributed here. A coordinator-local
+  // signedOutpoints map does not prove a peer never sent, and ownership
+  // openings do not prove non-delivery.
+  void signedOutpoints;
   return null;
 }
 
@@ -643,34 +624,11 @@ export function verifyBlameReport(
       }
       return { ok: true };
     }
-    case 'invalid_signature_set': {
-      const e = report.evidence;
-      if (
-        !Array.isArray(e.expectedOutpoints) ||
-        !Array.isArray(e.receivedOutpoints) ||
-        e.expectedOutpoints.length > 64 ||
-        e.receivedOutpoints.length > 64 ||
-        !e.expectedOutpoints.every(
-          (o) => typeof o === 'string' && o.length <= 80
-        ) ||
-        !e.receivedOutpoints.every(
-          (o) => typeof o === 'string' && o.length <= 80
-        )
-      ) {
-        return { ok: false, reason: 'malformed signature-set evidence' };
-      }
-      const exp = new Set(e.expectedOutpoints);
-      const got = new Set(e.receivedOutpoints);
-      const same =
-        exp.size === got.size &&
-        exp.size === e.expectedOutpoints.length &&
-        got.size === e.receivedOutpoints.length &&
-        [...exp].every((k) => got.has(k));
-      if (same) {
-        return { ok: false, reason: 'signature sets actually match' };
-      }
-      return { ok: true };
-    }
+    case 'invalid_signature_set':
+      return {
+        ok: false,
+        reason: 'signature absence is not blame evidence',
+      };
     default:
       return { ok: false, reason: 'unsupported evidence' };
   }

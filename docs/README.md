@@ -31,6 +31,8 @@ Technical documentation for contributors and third-party integrators.
   - Adversary classes for the shipped P2P design.
 - [P2P CashFusion FAQ](./p2p-cashfusion-faq.md)
   - Short answers: missing signature, blame, onion, ACK-shrink, 0-conf.
+- [Proposed blame for P2P CashFusion](./proposed-blame-p2p-cashfusion.md)
+  - Planning only: safe blame boundary, optional v5 fanout (not implemented).
 - [Watch-only + SeedCash](./watch-only-seedcash.md)
   - xPub import, PSBTv145, UR export/import, optional fingerprint.
 - [Integration Guide](./integration-guide.md)

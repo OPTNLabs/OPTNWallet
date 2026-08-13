@@ -1076,13 +1076,9 @@ describe('P2P fusion round choreography (4 peers, in-memory)', () => {
     ).rejects.toThrow('Invalid Fusion round message');
   });
 
-  // ── Option 3 blame emit (C2) ───────────────────────────────────────────────
-  // Components travel under throwaway keys, so a failed round has no accused
-  // until peers disclose what they contributed. These lock the coordinator's
-  // post-abort cross-check. Diagnosis only: the accused is an ephemeral round
-  // key, so a report identifies a fault — it never excludes anyone.
+  // ── Stage 1: abort never opens identity, missing-sig is not blame ──────────
 
-  it('names the peer that withheld its signatures, once disclosures land', async () => {
+  it('does not blame a withheld signature (absence is not evidence)', async () => {
     const peers = makePeers();
     const participants = peers.map((peer) => peer.round.pubHex);
     const coordinator = coordinatorOf(participants);
@@ -1126,20 +1122,18 @@ describe('P2P fusion round choreography (4 peers, in-memory)', () => {
     );
 
     expect(settled.every((result) => result.status === 'rejected')).toBe(true);
-    // The whole point: an anonymous-plane fault now has an accused again.
-    expect(blames).toHaveLength(1);
-    expect(blames[0].code).toBe('invalid_signature_set');
-    expect(blames[0].accused).toBe(silent);
-    // And it actually reached the other peers, not just the local callback.
+    expect(blames).toHaveLength(0);
     expect(
       hub.sent.some(
-        (entry) => entry.from === coordinator && entry.message.type === 'blame'
+        (entry) =>
+          entry.message.type === 'blame' ||
+          entry.message.type === 'component_disclosure'
       )
-    ).toBe(true);
+    ).toBe(false);
     expect(hub.activeHandlerCount()).toBe(0);
   });
 
-  it('blames a peer that forges a disclosure opening (invalid_input_credential)', async () => {
+  it('does not open identity after a generic abort even if a peer would forge', async () => {
     const peers = makePeers();
     const participants = peers.map((peer) => peer.round.pubHex);
     const coordinator = coordinatorOf(participants);
@@ -1186,13 +1180,14 @@ describe('P2P fusion round choreography (4 peers, in-memory)', () => {
     );
 
     expect(settled.every((result) => result.status === 'rejected')).toBe(true);
-    expect(blames).toHaveLength(1);
-    expect(blames[0].code).toBe('invalid_input_credential');
-    expect(blames[0].accused).toBe(liar);
+    expect(blames).toHaveLength(0);
+    expect(
+      hub.sent.some((entry) => entry.message.type === 'component_disclosure')
+    ).toBe(false);
     expect(hub.activeHandlerCount()).toBe(0);
   });
 
-  it('blames a peer whose balanced Pedersen commitments open to different components', async () => {
+  it('does not blame missing signatures after a balanced-but-mismatched commit', async () => {
     const peers = makePeers();
     const participants = peers.map((peer) => peer.round.pubHex);
     const coordinator = coordinatorOf(participants);
@@ -1258,9 +1253,10 @@ describe('P2P fusion round choreography (4 peers, in-memory)', () => {
     );
 
     expect(settled.every((result) => result.status === 'rejected')).toBe(true);
-    expect(blames).toHaveLength(1);
-    expect(blames[0].code).toBe('invalid_component_commitment');
-    expect(blames[0].accused).toBe(liar);
+    expect(blames).toHaveLength(0);
+    expect(
+      hub.sent.some((entry) => entry.message.type === 'component_disclosure')
+    ).toBe(false);
     expect(hub.activeHandlerCount()).toBe(0);
   });
 
