@@ -78,6 +78,7 @@ import {
   type BlameCode,
   type BlameEvidence,
   type BlameReport,
+  type ComponentCommitmentOpening,
   type ComponentDisclosureOpening,
 } from './fusionBlame';
 import {
