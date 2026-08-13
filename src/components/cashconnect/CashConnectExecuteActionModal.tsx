@@ -42,6 +42,7 @@ export default function CashConnectExecuteActionModal() {
 
   return (
     <WalletPopupSheet
+      onDismiss={() => dispatch(rejectCashConnectActionAction())}
       footer={
         <div className="grid grid-cols-2 gap-3">
           <button

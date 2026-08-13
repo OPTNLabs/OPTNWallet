@@ -78,6 +78,9 @@ function SessionProposalModal() {
 
   return (
     <WalletPopupSheet
+      onDismiss={() => {
+        if (!submitting) void handleReject();
+      }}
       footer={
         <div className="grid grid-cols-2 gap-3">
           <button

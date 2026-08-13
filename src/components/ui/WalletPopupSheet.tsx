@@ -1,25 +1,44 @@
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 
 type WalletPopupSheetProps = {
   children: ReactNode;
   footer: ReactNode;
   maxWidthClassName?: string;
+  onDismiss?: () => void;
 };
 
 export default function WalletPopupSheet({
   children,
   footer,
   maxWidthClassName = 'max-w-md',
+  onDismiss,
 }: WalletPopupSheetProps) {
-  return (
-    <div className="wallet-popup-backdrop p-3 sm:p-4">
+  useEffect(() => {
+    if (!onDismiss) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onDismiss();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onDismiss]);
+
+  const sheet = (
+    <div
+      className="wallet-popup-backdrop z-[1300] p-3 sm:p-4"
+      onClick={onDismiss}
+      role="presentation"
+    >
       <div
         className={`wallet-popup-panel ${maxWidthClassName} flex w-full min-w-0 flex-col overflow-hidden`}
         style={{
-          maxHeight: 'calc(100dvh - var(--safe-bottom, 0px) - 1rem)',
+          maxHeight: 'calc(100dvh - var(--safe-bottom, 0px) - 1.5rem)',
         }}
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
       >
-        <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain touch-pan-y pr-1">
+        <div className="min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain touch-pan-y pr-1">
           {children}
         </div>
         <div
@@ -31,4 +50,9 @@ export default function WalletPopupSheet({
       </div>
     </div>
   );
+
+  if (typeof document === 'undefined' || !document.body) {
+    return sheet;
+  }
+  return createPortal(sheet, document.body);
 }
