@@ -1,5 +1,15 @@
+import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+
+vi.mock('react-dom', async () => {
+  const actual = await vi.importActual<typeof import('react-dom')>('react-dom');
+  return {
+    ...actual,
+    createPortal: (node: React.ReactNode) => node,
+  };
+});
+
 import WalletPopupSheet from '../WalletPopupSheet';
 
 describe('WalletPopupSheet', () => {

@@ -85,6 +85,7 @@ export function useHomeConnect() {
         if (!currentWalletId || currentWalletId <= 0) {
           throw new Error('No active wallet');
         }
+        setPopupOpen(false);
         await dispatch(initCashConnect(currentWalletId)).unwrap();
         await dispatch(pairCashConnectThunk(parsed.uri)).unwrap();
         await Toast.show({
@@ -154,9 +155,8 @@ export function useHomeConnect() {
   }, []);
 
   const closePopup = useCallback(() => {
-    if (scanning || submitting) return;
     setPopupOpen(false);
-  }, [scanning, submitting]);
+  }, []);
 
   return {
     popupOpen,

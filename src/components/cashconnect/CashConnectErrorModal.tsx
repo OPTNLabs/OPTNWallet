@@ -12,6 +12,7 @@ export default function CashConnectErrorModal() {
 
   return (
     <WalletPopupSheet
+      onDismiss={() => dispatch(setCashConnectError(null))}
       footer={
         <button
           type="button"
