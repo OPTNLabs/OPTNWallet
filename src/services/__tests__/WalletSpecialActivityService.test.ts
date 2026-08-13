@@ -45,7 +45,10 @@ vi.mock('../cauldron/planner', () => ({
 
 vi.mock('../../state/store', () => ({
   store: {
-    getState: vi.fn(() => ({ experimental: { rpaEnabled: true } })),
+    getState: vi.fn(() => ({
+      experimental: { rpaEnabled: true },
+      walletSpecialActivity: { byWallet: {} },
+    })),
     dispatch: vi.fn(),
   },
 }));
@@ -53,7 +56,15 @@ vi.mock('../../state/store', () => ({
 vi.mock('../../apis/DatabaseManager/DatabaseService', () => ({
   default: vi.fn(() => ({
     ensureDatabaseStarted: vi.fn(async () => {}),
-    getDatabase: vi.fn(() => null),
+    getDatabase: vi.fn(() => ({
+      run: vi.fn(),
+      prepare: vi.fn(() => ({
+        bind: vi.fn(),
+        step: () => false,
+        getAsObject: () => ({}),
+        free: vi.fn(),
+      })),
+    })),
     scheduleDatabaseSave: vi.fn(),
   })),
 }));
@@ -70,6 +81,7 @@ vi.mock('../../apis/WalletManager/WalletManager', () => ({
 }));
 
 import {
+  claimRpaTransaction,
   scanCauldronActivity,
   scanRpaActivity,
 } from '../WalletSpecialActivityService';
@@ -138,6 +150,55 @@ describe('WalletSpecialActivityService', () => {
     );
   });
 
+  it('prefers official Fulcrum blockchain.rpa.get_history when the server advertises rpa', async () => {
+    const adapter = {
+      request: vi.fn(async (method: string) => {
+        if (method === 'blockchain.headers.subscribe') return { height: 1000 };
+        if (method === 'server.features') {
+          return { rpa: { history_block_limit: 60, prefix_bits_min: 8 } };
+        }
+        if (method === 'blockchain.rpa.get_history') return [{ tx_hash: 'tx1' }];
+        if (method === 'blockchain.rpa.get_mempool') return [];
+        if (method === 'blockchain.transaction.get') {
+          return {
+            inputs: [
+              {
+                prevout_hash: 'prevtx',
+                prevout_n: 0,
+                pubkeys: [`02${'11'.repeat(32)}`],
+              },
+            ],
+            outputs: [{ address: 'bchtest:qexpected', value: 1500 }],
+          };
+        }
+        if (method === 'blockchain.address.listunspent') {
+          return [{ tx_hash: 'tx1', tx_pos: 0, value: 1500, height: 42 }];
+        }
+        throw new Error(`Unexpected method: ${method}`);
+      }),
+    };
+
+    const result = await scanRpaActivity({
+      mnemonic: 'test mnemonic',
+      passphrase: '',
+      network: Network.CHIPNET,
+      accountPath: "m/44'/1'/0'",
+      adapter,
+    });
+
+    expect(result.status).toBe('complete');
+    expect(result.payload.unspentSats).toBe(1500);
+    expect(adapter.request).toHaveBeenCalledWith(
+      'blockchain.rpa.get_history',
+      'aabb',
+      940,
+      -1
+    );
+    expect(adapter.request.mock.calls.some((call) =>
+      String(call[0]).includes('reusable')
+    )).toBe(false);
+  });
+
   it('does not treat a spent RPA output as part of the balance', async () => {
     const adapter = {
       request: vi.fn(async (method: string) => {
@@ -174,6 +235,44 @@ describe('WalletSpecialActivityService', () => {
     expect(result.payload.unspentSats).toBe(0);
   });
 
+  it('keeps a previously checked txid when Fulcrum RPA scan is unavailable', async () => {
+    const adapter = {
+      request: vi.fn(async (method: string) => {
+        if (method === 'blockchain.headers.subscribe') return { height: 1000 };
+        if (method === 'blockchain.transaction.get') {
+          return {
+            inputs: [
+              {
+                prevout_hash: 'prevtx',
+                prevout_n: 0,
+                pubkeys: [`02${'11'.repeat(32)}`],
+              },
+            ],
+            outputs: [{ address: 'bchtest:qexpected', value: 1500 }],
+          };
+        }
+        if (method === 'blockchain.address.listunspent') {
+          return [{ tx_hash: 'tx1', tx_pos: 0, value: 1500, height: 42 }];
+        }
+        throw new Error('Unsupported request: blockchain.rpa.get_history');
+      }),
+    };
+
+    const result = await scanRpaActivity({
+      mnemonic: 'test mnemonic',
+      passphrase: '',
+      network: Network.CHIPNET,
+      accountPath: "m/44'/1'/0'",
+      adapter,
+      knownTxids: ['tx1'],
+    });
+
+    expect(result.status).toBe('complete');
+    expect(result.payload.serverSupported).toBe(false);
+    expect(result.payload.unspentSats).toBe(1500);
+    expect(result.payload.knownTxids).toContain('tx1');
+  });
+
   it('maps ordinary Electrum "Unsupported request: rpa.getaddresshistory" to a clear note', async () => {
     const adapter = {
       request: vi.fn(async (method: string) => {
@@ -195,8 +294,56 @@ describe('WalletSpecialActivityService', () => {
 
     expect(result.status).toBe('unavailable');
     expect(result.payload.serverSupported).toBe(false);
-    expect(result.payload.error).toMatch(/Fulcrum-RPA/i);
+    expect(result.payload.error).toMatch(/Fulcrum RPA/i);
     expect(result.payload.error).not.toMatch(/^Unsupported request:/);
+  });
+
+  it('claims a known txid from raw hex without calling reusable.*', async () => {
+    const txid = 'ab'.repeat(32);
+    const detect = await import('../RpaDetect');
+    vi.spyOn(detect, 'matchRpaPaymentsInRawTx').mockReturnValue([
+      {
+        outputIndex: 0,
+        address: 'bchtest:qexpected',
+        valueSats: 1500,
+        prevoutHash: 'cc'.repeat(32),
+        prevoutIndex: 0,
+      },
+    ]);
+    const adapter = {
+      request: vi.fn(async (method: string) => {
+        if (method === 'blockchain.transaction.get') return '00'.repeat(20);
+        if (method === 'blockchain.address.listunspent') {
+          return [{ tx_hash: txid, tx_pos: 0, value: 1500, height: 9 }];
+        }
+        throw new Error(`Unexpected method: ${method}`);
+      }),
+    };
+
+    const record = await claimRpaTransaction({
+      walletId: 7,
+      txid,
+      adapter,
+    });
+
+    expect(record.status).toBe('complete');
+    expect(record.activityType).toBe('rpa');
+    if (record.activityType !== 'rpa' || !('unspentSats' in record.payload)) {
+      throw new Error('expected RPA payload');
+    }
+    expect(record.payload.unspentSats).toBe(1500);
+    expect(record.payload.unspentOutputs[0]).toMatchObject({
+      txHash: txid,
+      outputIndex: 0,
+      valueSats: 1500,
+    });
+    expect(adapter.request).not.toHaveBeenCalledWith(
+      'blockchain.reusable.get_history',
+      expect.anything()
+    );
+    expect(adapter.request.mock.calls.some((call) =>
+      String(call[0]).includes('reusable')
+    )).toBe(false);
   });
 
   it('queries Cauldron using the active wallet branches and summarizes pool balances', async () => {

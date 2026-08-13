@@ -6,6 +6,10 @@
 // only from the first input's key + outpoint, so sequence is not part of
 // the stealth address.
 //
+// Grind values MUST stay in [0x80000000, 0xffffffff]. Incrementing from
+// 0xfffffffe wraps to 0 after two tries; nSequence < 0x80000000 enables
+// BIP68 relative locktime and nodes reject the tx as non-BIP68-final (64).
+//
 // Reference: electroncash/rpa/paycode.py
 
 import {
@@ -30,7 +34,6 @@ import { Network } from '../state/slices/networkSlice';
 import type { TransactionOutput, UTXO } from '../types/types';
 import {
   computeSharedSecret,
-  decodePaycode,
   derivePaymentAddress,
   type DecodedPaycode,
 } from './RpaService';
@@ -38,6 +41,23 @@ import {
 const HASHTYPE =
   SigningSerializationFlag.allOutputs | SigningSerializationFlag.forkId;
 const MAX_GRIND_TRIES = 100_000;
+/** BIP68: bit 31 set disables relative locktime. */
+export const RPA_SEQUENCE_DISABLE_LOCKTIME = 0x80000000;
+
+/**
+ * nSequence values used for the RPA prefix grind. Decrement from 0xffffffff
+ * so we never wrap into the BIP68 relative-locktime range.
+ */
+export function rpaGrindSequence(offset: number): number {
+  if (!Number.isInteger(offset) || offset < 0) {
+    throw new Error('RPA grind offset must be a non-negative integer');
+  }
+  const sequence = (0xffffffff - offset) >>> 0;
+  if (sequence < RPA_SEQUENCE_DISABLE_LOCKTIME) {
+    throw new Error('RPA grind exhausted BIP68-final nSequence values');
+  }
+  return sequence;
+}
 
 export type RpaFinalizeResult =
   | {
@@ -263,13 +283,17 @@ export async function finalizeRpaPayment(args: {
   }));
 
   const target = rpaPrefixTargetHex(paycode.scanPubkey, paycode.prefixBits);
-  const startSequence = transaction.inputs[0].sequenceNumber >>> 0;
+  for (const input of transaction.inputs) {
+    if ((input.sequenceNumber >>> 0) < RPA_SEQUENCE_DISABLE_LOCKTIME) {
+      input.sequenceNumber = 0xffffffff;
+    }
+  }
   let grindTries = 0;
   let matched: Input | null = null;
 
   for (let offset = 0; offset < MAX_GRIND_TRIES; offset++) {
     grindTries = offset + 1;
-    transaction.inputs[0].sequenceNumber = (startSequence + offset) >>> 0;
+    transaction.inputs[0].sequenceNumber = rpaGrindSequence(offset);
     signAllInputs(transaction, sourceOutputs, inputKeys);
     const serialized = encodeTransactionInput(transaction.inputs[0]);
     if (serializedInputPrefixHex(serialized, paycode.prefixBits) === target) {

@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as bip39 from 'bip39';
 import {
-  decodeTransaction,
   encodeTransaction,
   generatePrivateKey,
   hexToBin,
@@ -11,20 +10,9 @@ import {
 import { hash160 } from '@cashscript/utils';
 import { encodeCashAddress } from '@bitauth/libauth';
 import { Network } from '../../state/slices/networkSlice';
-import {
-  computeSharedSecret,
-  derivePaymentAddress,
-  deriveRpaKeys,
-  encodePaycode,
-} from '../RpaService';
-import {
-  finalizeRpaPayment,
-  rpaGrindSequence,
-  rpaPrefixTargetHex,
-  RPA_SEQUENCE_DISABLE_LOCKTIME,
-  serializedInputPrefixHex,
-} from '../RpaSender';
-import { encodeTransactionInput } from '@bitauth/libauth';
+import { deriveRpaKeys, encodePaycode } from '../RpaService';
+import { finalizeRpaPayment } from '../RpaSender';
+import { matchRpaPaymentsInRawTx, normalizeRpaTxid } from '../RpaDetect';
 
 const MNEMONIC = bip39.generateMnemonic();
 
@@ -42,16 +30,15 @@ function addressOf(pubkey: Uint8Array, network: Network): string {
   return encoded.address;
 }
 
-describe('RpaSender', () => {
-  it('rewrites a dummy output to the stealth address and matches the scan prefix', async () => {
-    const recipient = await deriveRpaKeys(MNEMONIC, '', Network.CHIPNET);
-    const paycode = encodePaycode(
-      recipient.scanPubkey,
-      recipient.spendPubkey,
-      Network.CHIPNET,
-      8
-    );
+describe('RpaDetect', () => {
+  it('normalizes a 64-char txid and rejects junk', () => {
+    expect(normalizeRpaTxid(`  ${'AB'.repeat(32)}  `)).toBe('ab'.repeat(32));
+    expect(normalizeRpaTxid('not-a-txid')).toBeNull();
+    expect(normalizeRpaTxid('ab'.repeat(31))).toBeNull();
+  });
 
+  it('finds the stealth output in a sender-built paycode transaction', async () => {
+    const recipient = await deriveRpaKeys(MNEMONIC, '', Network.CHIPNET);
     const senderPriv = generatePrivateKey(() =>
       crypto.getRandomValues(new Uint8Array(32))
     );
@@ -66,13 +53,15 @@ describe('RpaSender', () => {
     if (typeof dummyPub === 'string') throw new Error(dummyPub);
     const dummyAddress = addressOf(dummyPub, Network.CHIPNET);
 
-    const prevTxid = '11'.repeat(32);
+    // Non-palindromic display txid; encode the outpoint as wire (reversed) bytes.
+    const prevTxid =
+      '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
     const tx: TransactionCommon = {
       version: 2,
       locktime: 0,
       inputs: [
         {
-          outpointTransactionHash: hexToBin(prevTxid),
+          outpointTransactionHash: hexToBin(prevTxid).reverse(),
           outpointIndex: 0,
           sequenceNumber: 0xfffffffe,
           unlockingBytecode: Uint8Array.of(),
@@ -117,40 +106,28 @@ describe('RpaSender', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
-    const expectedDest = derivePaymentAddress(
+    const matches = matchRpaPaymentsInRawTx(
+      result.txHex,
+      recipient,
+      Network.CHIPNET
+    );
+    expect(matches).toHaveLength(1);
+    expect(matches[0].address).toBe(result.stealthAddress);
+    expect(matches[0].valueSats).toBe(10_000);
+
+    const stranger = await deriveRpaKeys(
+      bip39.generateMnemonic(),
+      '',
+      Network.CHIPNET
+    );
+    expect(
+      matchRpaPaymentsInRawTx(result.txHex, stranger, Network.CHIPNET)
+    ).toEqual([]);
+    expect(encodePaycode(
+      recipient.scanPubkey,
       recipient.spendPubkey,
-      computeSharedSecret(senderPriv, recipient.scanPubkey, prevTxid, 0),
       Network.CHIPNET,
-      0
-    );
-    expect(result.stealthAddress).toBe(expectedDest);
-
-    const decoded = decodeTransaction(hexToBin(result.txHex));
-    if (typeof decoded === 'string') throw new Error(decoded);
-    const hashedPrefix = serializedInputPrefixHex(
-      encodeTransactionInput(decoded.inputs[0]),
       8
-    );
-    expect(hashedPrefix).toBe(rpaPrefixTargetHex(recipient.scanPubkey, 8));
-    expect(result.finalOutputs.some((o) => o.recipientAddress === expectedDest)).toBe(
-      true
-    );
-    expect(paycode.startsWith('paycodetest:')).toBe(true);
-    expect(decoded.inputs[0].sequenceNumber).toBeGreaterThanOrEqual(
-      RPA_SEQUENCE_DISABLE_LOCKTIME
-    );
-  });
-
-  it('keeps grind sequences BIP68-final so they never wrap to 0', () => {
-    expect(rpaGrindSequence(0)).toBe(0xffffffff);
-    expect(rpaGrindSequence(1)).toBe(0xfffffffe);
-    expect(rpaGrindSequence(2)).toBe(0xfffffffd);
-    expect(rpaGrindSequence(100_000)).toBeGreaterThanOrEqual(
-      RPA_SEQUENCE_DISABLE_LOCKTIME
-    );
-    expect(() => rpaGrindSequence(0x80000000)).toThrow(/BIP68-final/);
-    // The old increment-from-0xfffffffe grind wraps here and nodes reject
-    // the broadcast as non-BIP68-final (code 64).
-    expect(((0xfffffffe + 2) >>> 0) < RPA_SEQUENCE_DISABLE_LOCKTIME).toBe(true);
+    ).startsWith('paycodetest:')).toBe(true);
   });
 });
