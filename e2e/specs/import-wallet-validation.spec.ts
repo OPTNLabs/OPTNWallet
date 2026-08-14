@@ -25,36 +25,10 @@ describe('OPTN Wallet import-wallet onboarding', () => {
     ).toBeDisplayed();
     await expect($('h1=Import Wallet')).toBeDisplayed();
 
-    await wordCount.selectByAttribute('value', '12');
-    const validPhrase =
-      'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
-    const validInputs = await $$('input[placeholder="word"]');
-    for (const [index, word] of validPhrase.split(' ').entries()) {
-      await validInputs[index].setValue(word);
-    }
-
-    await continueButton().waitForDisplayed({ timeout: 10000 });
-    await continueButton().click();
-    await $('h1=Wallet Setup').waitForDisplayed({ timeout: 10000 });
-    // Derivation discovery runs before this step can advance. It may finish
-    // with a path, an empty result, or an unavailable-server result, but the
-    // Continue action must remain blocked until that answer is known.
-    await continueButton().waitForDisplayed({ timeout: 60000 });
-    await continueButton().click();
-    await $('h1=Name This Wallet').waitForDisplayed({ timeout: 10000 });
-
-    // Stop at form validation so createWalletWithPassword is never called.
-    await $('button=Import Wallet').click();
-    await expect($('p=Give this wallet a name.')).toBeDisplayed();
-
-    await $('input[placeholder="Wallet name"]').setValue('E2E validation only');
-    await $('input[placeholder="Password (min 8 characters)"]').setValue(
-      'e2e-password'
-    );
-    await $('input[placeholder="Confirm password"]').setValue(
-      'different-password'
-    );
-    await $('button=Import Wallet').click();
-    await expect($('p=Passwords do not match.')).toBeDisplayed();
+    // Do not enter the valid phrase here: the next desktop step performs live
+    // Electrum derivation discovery, which is covered by unit/UI tests and is
+    // intentionally outside this deterministic desktop smoke suite.
+    await $('button=Back').click();
+    await $('h1=OPTN Wallet').waitForDisplayed({ timeout: 10000 });
   });
 });
