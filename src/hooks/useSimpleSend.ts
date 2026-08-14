@@ -902,6 +902,7 @@ export default function useSimpleSend() {
     }
   }, [
     assetType,
+    isHardwareWallet,
     maxBusy,
     recipient,
     currentNetwork,
