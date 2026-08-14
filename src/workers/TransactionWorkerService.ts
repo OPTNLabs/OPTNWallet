@@ -8,6 +8,7 @@ import { requestWalletUTXORefresh } from './UTXOWorkerService';
 import ElectrumService from '../services/ElectrumService';
 import { planTransactionDetailRefresh } from '../services/transactionDetailSync';
 import QuantumrootTrackingService from '../services/QuantumrootTrackingService';
+import { backfillConfirmedHistoryHeights } from '../services/historyHeightBackfill';
 
 let transactionInterval: NodeJS.Timeout | null = null;
 let transactionStartRetry: NodeJS.Timeout | null = null;
@@ -45,24 +46,72 @@ async function fetchAndStoreTransactionHistory() {
       );
 
     const mergedByHash = new Map(
-      currentTransactions.map((tx) => [tx.tx_hash, tx] as const)
+      currentTransactions.map((tx) => [
+        String(tx.tx_hash).trim().toLowerCase(),
+        { ...tx, tx_hash: String(tx.tx_hash).trim().toLowerCase() },
+      ])
     );
     for (const address of addresses) {
       const updatedHistory = historyByAddress[address] ?? [];
       for (const tx of updatedHistory) {
-        mergedByHash.set(tx.tx_hash, tx);
+        const hash = String(tx.tx_hash).trim().toLowerCase();
+        const existing = mergedByHash.get(hash);
+        // Prefer positive height so address history cannot re-stick a fusion
+        // row that already received a verbose height write-back.
+        const height =
+          typeof tx.height === 'number' && tx.height > 0
+            ? tx.height
+            : typeof existing?.height === 'number' && existing.height > 0
+              ? existing.height
+              : tx.height;
+        mergedByHash.set(hash, {
+          ...(existing ?? {}),
+          ...tx,
+          tx_hash: hash,
+          height,
+          timestamp: tx.timestamp || existing?.timestamp,
+        });
       }
     }
-    const nextTransactions = Array.from(mergedByHash.values());
+
+    // Await height backfill BEFORE publishing. Fusion injects height 0; the
+    // previous fire-and-forget warm lost races to address-history dispatches
+    // and also bailed when Electrum returned confs without height.
+    let nextTransactions = Array.from(mergedByHash.values());
+    nextTransactions = await backfillConfirmedHistoryHeights({
+      walletId: currentWalletId,
+      transactions: nextTransactions,
+      sessionGeneration,
+      forceRefresh: true,
+    });
+
+    const activeWallet = store.getState().wallet_id;
+    if (
+      activeWallet.currentWalletId !== currentWalletId ||
+      (activeWallet.sessionGeneration ?? 0) !== sessionGeneration
+    ) {
+      return;
+    }
+
+    if (nextTransactions.length > 0) {
+      store.dispatch(
+        addTransactions({
+          wallet_id: currentWalletId,
+          transactions: nextTransactions,
+          sessionGeneration,
+        })
+      );
+    }
+
     const refreshPlan = planTransactionDetailRefresh({
       previous: currentTransactions,
       next: nextTransactions,
     });
-
     const txidsToWarm = refreshPlan.reorgDetected
       ? nextTransactions.map((tx) => tx.tx_hash)
       : refreshPlan.txidsToRefresh;
     if (txidsToWarm.length > 0) {
+      // Detail cache warm only — heights already resolved above.
       void Promise.allSettled(
         txidsToWarm.map((txid) =>
           ElectrumService.getTransactionDetails(txid, {
@@ -72,25 +121,6 @@ async function fetchAndStoreTransactionHistory() {
       );
     }
 
-    for (const address of addresses) {
-      const activeWallet = store.getState().wallet_id;
-      if (
-        activeWallet.currentWalletId !== currentWalletId ||
-        (activeWallet.sessionGeneration ?? 0) !== sessionGeneration
-      ) {
-        return;
-      }
-      const updatedHistory = historyByAddress[address] ?? [];
-      if (updatedHistory.length > 0) {
-        store.dispatch(
-          addTransactions({
-            wallet_id: currentWalletId,
-            transactions: updatedHistory,
-            sessionGeneration,
-          })
-        );
-      }
-    }
     requestWalletUTXORefresh(60);
   } catch (error) {
     console.error('Error fetching and storing transaction history:', error);

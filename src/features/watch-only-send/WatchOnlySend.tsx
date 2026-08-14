@@ -474,6 +474,14 @@ export const WatchOnlySend: FC = () => {
       setError('Enter the destination address.');
       return;
     }
+    {
+      const { recipientNetworkError } = await import('../../utils/bip21');
+      const netErr = recipientNetworkError(recipient.trim(), currentNetwork);
+      if (netErr) {
+        setError(netErr);
+        return;
+      }
+    }
     if (amountSats === null || amountSats <= 0n) {
       setError('Enter an amount greater than 0.');
       return;

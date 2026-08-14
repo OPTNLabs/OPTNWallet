@@ -174,8 +174,8 @@ export const DesktopSecurityGate: React.FC<Props> = ({ children }) => {
             <div className="text-3xl mb-2">🔐</div>
             <h2 className="text-lg font-bold wallet-text-strong">Secure your wallet</h2>
             <p className="text-sm wallet-muted">
-              Set a password (at least 8 characters) to encrypt wallet secrets.
-              You will need it every time you open the app.
+              Optional: leave empty for no app password, or use at least 8
+              characters to encrypt wallet secrets.
             </p>
           </div>
 
@@ -184,7 +184,7 @@ export const DesktopSecurityGate: React.FC<Props> = ({ children }) => {
               type="password"
               value={passphrase}
               onChange={(e) => { setPassphrase(e.target.value); setError(''); }}
-              placeholder="Password (min 8 characters)"
+              placeholder="Password (empty = none, or min 8)"
               autoComplete="new-password"
               autoFocus
               className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-4 py-3 text-sm wallet-text-strong placeholder:wallet-muted outline-none focus:ring-2 focus:ring-[var(--wallet-accent)]"

@@ -375,9 +375,11 @@ export function useAutoFusion(policyReady = true): void {
               txid: outcome.txid,
             }
           );
-          // Wallet sync/activity performs reconciliation. Do not chain another
-          // fee-spending round while this signed transaction is still unknown.
-          requeueMs = null;
+          // Reconcile on the next tick (history row / spent coins gone). Do
+          // not start a new fee-spending round until that clears — but do
+          // not stop Auto forever (live: peers sat here while another
+          // wallet already showed Fused ✓ for the same txid).
+          requeueMs = AUTO_FUSION_RETRY_MS;
         } else if (outcome.status === 'fused') {
           if (outcome.warning) {
             logError(

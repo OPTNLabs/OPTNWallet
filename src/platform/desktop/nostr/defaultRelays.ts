@@ -4,7 +4,8 @@
  * Only relays the user adds themselves get a Remove button.
  *
  * Protocol: Nostr (NIP-01) uses WebSockets. Built-in relays are TLS-protected
- * and fusion/chat only uses the secure relay scheme.
+ * and fusion/chat only uses the secure relay scheme. There is no plain TCP Nostr
+ * relay API like Electrum; server CashFusion TCP is a different protocol.
  *
  * Bootstrap list for settings / merge. Fusion pool discovery uses only the
  * first ~8 (shared prefix) so multi-wallet Tor does not partition; gift-wrap
@@ -80,7 +81,9 @@ export function isDefaultNostrRelay(url: string): boolean {
  * user extras that are not defaults. Retired dead hosts are stripped so they
  * do not linger as removable reds after we drop them from DEFAULT_RELAYS.
  */
-export function mergeWithDefaultRelays(relays: string[] | undefined | null): string[] {
+export function mergeWithDefaultRelays(
+  relays: string[] | undefined | null
+): string[] {
   const retired = RETIRED_SET();
   const user = (relays ?? [])
     .map((r) => r.trim())

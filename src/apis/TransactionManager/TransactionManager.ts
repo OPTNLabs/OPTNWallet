@@ -91,8 +91,17 @@ export default function TransactionManager() {
         INSERT INTO transactions (wallet_id, tx_hash, height, timestamp, amount)
         VALUES (?, ?, ?, ?, 0)
         ON CONFLICT(wallet_id, tx_hash) DO UPDATE SET
-          height = excluded.height,
-          timestamp = excluded.timestamp
+          height = CASE
+            WHEN excluded.height > 0 AND excluded.height >= COALESCE(transactions.height, 0)
+              THEN excluded.height
+            WHEN COALESCE(transactions.height, 0) > 0 THEN transactions.height
+            ELSE excluded.height
+          END,
+          timestamp = CASE
+            WHEN excluded.timestamp IS NOT NULL AND excluded.timestamp != ''
+              THEN excluded.timestamp
+            ELSE transactions.timestamp
+          END
       `);
 
       for (const tx of history) {
@@ -684,6 +693,69 @@ export default function TransactionManager() {
     ).default.fetchAddressPrivateKey(address, 'spend');
   }
 
+  /**
+   * Write confirmed height/timestamp back after a verbose Electrum fetch so
+   * Home/list stop showing "Pending" for long-confirmed fusion txs that were
+   * first inserted with height 0.
+   *
+   * Pass `persist: false` when applying many rows, then call
+   * `persistConfirmedHeights(walletId)` once — avoids N disk saves (and the
+   * open-time “one fusion flips at a time” feel when each save raced the UI).
+   */
+  async function applyConfirmedHeight(
+    walletId: number,
+    txHash: string,
+    height: number,
+    timestamp?: string,
+    options?: { persist?: boolean }
+  ): Promise<void> {
+    if (!Number.isInteger(walletId) || walletId <= 0) return;
+    if (!(typeof height === 'number' && height > 0)) return;
+    const hash = String(txHash ?? '')
+      .trim()
+      .toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(hash)) return;
+
+    const db = dbService.getDatabase();
+    if (!db) return;
+    const ts =
+      timestamp != null && String(timestamp).trim() !== ''
+        ? String(timestamp)
+        : '';
+    db.run(
+      `INSERT INTO transactions (wallet_id, tx_hash, height, timestamp, amount)
+       VALUES (?, ?, ?, ?, 0)
+       ON CONFLICT(wallet_id, tx_hash) DO UPDATE SET
+         height = CASE
+           WHEN excluded.height > COALESCE(transactions.height, 0)
+             THEN excluded.height
+           ELSE transactions.height
+         END,
+         timestamp = CASE
+           WHEN excluded.timestamp != '' AND (transactions.timestamp IS NULL OR transactions.timestamp = '')
+             THEN excluded.timestamp
+           WHEN excluded.timestamp != '' THEN excluded.timestamp
+           ELSE transactions.timestamp
+         END`,
+      [walletId, hash, height, ts]
+    );
+    if (options?.persist === false) return;
+    try {
+      await dbService.saveDatabaseToFile(walletId);
+    } catch {
+      /* best-effort; Redux still updates */
+    }
+  }
+
+  async function persistConfirmedHeights(walletId: number): Promise<void> {
+    if (!Number.isInteger(walletId) || walletId <= 0) return;
+    try {
+      await dbService.saveDatabaseToFile(walletId);
+    } catch {
+      /* best-effort */
+    }
+  }
+
   return {
     fetchAndStoreTransactionHistory,
     fetchAndStoreTransactionHistories,
@@ -691,5 +763,7 @@ export default function TransactionManager() {
     addOutput,
     buildTransaction,
     fetchPrivateKey,
+    applyConfirmedHeight,
+    persistConfirmedHeights,
   };
 }

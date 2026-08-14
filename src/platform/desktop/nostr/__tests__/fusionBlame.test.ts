@@ -188,23 +188,15 @@ describe('fusionBlame (prove-or-don\'t-blame)', () => {
     });
   });
 
-  it('verifies invalid_signature_set when sets differ', () => {
+  it('rejects invalid_signature_set — absence is not evidence', () => {
     const report = createBlameReport('s', A, 'invalid_signature_set', {
       kind: 'invalid_signature_set',
       expectedOutpoints: ['aa:0', 'bb:1'],
       receivedOutpoints: ['aa:0'],
     });
     expect(verifyBlameReport(report, { session: 's', participants })).toEqual({
-      ok: true,
-    });
-    const same = createBlameReport('s', A, 'invalid_signature_set', {
-      kind: 'invalid_signature_set',
-      expectedOutpoints: ['aa:0'],
-      receivedOutpoints: ['aa:0'],
-    });
-    expect(verifyBlameReport(same, { session: 's', participants })).toEqual({
       ok: false,
-      reason: 'signature sets actually match',
+      reason: 'signature absence is not blame evidence',
     });
   });
 
@@ -276,7 +268,7 @@ describe('findFaultInDisclosures (post-abort blame phase)', () => {
     });
   });
 
-  it('names the peer that registered inputs and then withheld signatures', () => {
+  it('does not name a peer for withheld signatures', () => {
     const finding = findFaultInDisclosures({
       participants,
       disclosures: new Map([
@@ -285,8 +277,7 @@ describe('findFaultInDisclosures (post-abort blame phase)', () => {
       ]),
       signedOutpoints: new Set([outpointA]),
     });
-    expect(finding?.code).toBe('invalid_signature_set');
-    expect(finding?.accused).toBe(bob);
+    expect(finding).toBeNull();
   });
 
   // The whole point: the report must survive the verifier that rejected the

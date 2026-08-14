@@ -13,6 +13,13 @@ import {
 } from '../WalletKeyCache';
 import { WATCH_ONLY_WALLET_TYPE } from '../onboarding/watchOnlyWallet';
 
+const ensureWatchOnlyWalletKeys = vi.fn(async () => ({
+  keyCount: 40,
+  rebuilt: false,
+  firstReceive: 'bchtest:qtest',
+}));
+const ensureWatchOnlyWalletAddresses = vi.fn(async () => 0);
+
 vi.mock('../../../apis/WalletManager/WalletManager', () => ({
   default: vi.fn(),
 }));
@@ -26,6 +33,19 @@ vi.mock('../../../services/QuantumrootVaultCacheService', () => ({
     clear: vi.fn(),
   },
 }));
+
+vi.mock('../onboarding/watchOnlyWallet', async () => {
+  const actual = await vi.importActual<
+    typeof import('../onboarding/watchOnlyWallet')
+  >('../onboarding/watchOnlyWallet');
+  return {
+    ...actual,
+    ensureWatchOnlyWalletKeys: (...args: unknown[]) =>
+      ensureWatchOnlyWalletKeys(...args),
+    ensureWatchOnlyWalletAddresses: (...args: unknown[]) =>
+      ensureWatchOnlyWalletAddresses(...args),
+  };
+});
 
 const watchOnlyMetadata = {
   id: 9,
@@ -73,6 +93,10 @@ describe('openWatchOnlyWallet', () => {
     expect(info?.walletType).toBe(WATCH_ONLY_WALLET_TYPE);
     expect(hasWatchOnlySession(9)).toBe(true);
     expect(hasCachedCredentialsForWallet(9)).toBe(true);
+    // Parity with hardware open: rebuild/dual-write keys so empty tables cannot
+    // leave Home stuck at 0 forever after funds arrive on-chain.
+    expect(ensureWatchOnlyWalletKeys).toHaveBeenCalledWith(9);
+    expect(ensureWatchOnlyWalletAddresses).toHaveBeenCalledWith(9);
   });
 
   it('refuses to open a standard wallet through the watch-only door', async () => {

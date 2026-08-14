@@ -20,6 +20,8 @@ import type { TransactionHistoryItem } from '../../types/types';
 import { isFusionTransaction } from '../../platform/desktop/fusionCoinDepth';
 import { useFusionDepthRevision } from '../../platform/desktop/useFusionDepthRevision';
 import { FusionBadge } from '../../components/FusionBadge';
+import { isTxConfirmed } from '../../utils/txConfirmation';
+import { isMempoolLike } from '../../utils/transactionHistoryOrder';
 
 const EMPTY_TRANSACTIONS: TransactionHistoryItem[] = [];
 
@@ -195,10 +197,14 @@ const TransactionHistory: React.FC = () => {
                           )}
                         </div>
                       </div>
-                      {tx.height > 0 || tx.timestamp ? (
-                        <StatusChip tone="success">Confirmed</StatusChip>
+                      {isTxConfirmed(tx) || !isMempoolLike(tx) ? (
+                        <StatusChip tone="success">
+                          {fused ? 'Fused · Confirmed' : 'Confirmed'}
+                        </StatusChip>
                       ) : (
-                        <StatusChip tone="warning">Pending</StatusChip>
+                        <StatusChip tone="warning">
+                          {fused ? 'Fused · Unconfirmed' : 'Unconfirmed'}
+                        </StatusChip>
                       )}
                     </div>
                     <div className="mt-2 text-sm">
@@ -206,9 +212,17 @@ const TransactionHistory: React.FC = () => {
                         <span className="wallet-text-strong">
                           Block: {tx.height || '—'}
                         </span>
-                      ) : (
+                      ) : isTxConfirmed(tx) ? (
+                        <span className="wallet-text-strong">Confirmed</span>
+                      ) : isMempoolLike(tx) ? (
                         <span className="wallet-muted">
-                          Awaiting confirmation
+                          {fused
+                            ? 'Broadcast — waiting for a block (height not yet in history)'
+                            : 'Awaiting confirmation'}
+                        </span>
+                      ) : (
+                        <span className="wallet-text-strong">
+                          {fused ? 'On chain' : 'Confirmed'}
                         </span>
                       )}
                     </div>

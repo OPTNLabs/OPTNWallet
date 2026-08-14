@@ -67,6 +67,7 @@ describe('settingsConfig', () => {
 
     expect(desktopWallet).toEqual(
       expect.arrayContaining([
+        'wallet-info',
         'recovery',
         'derivation',
         'app-lock',
@@ -79,6 +80,12 @@ describe('settingsConfig', () => {
     expect(mobileWallet).not.toContain('rebuild-wallet');
     expect(mobileWallet).not.toContain('export-archive');
     expect(mobileWallet).not.toContain('app-lock');
+  });
+
+  it('does not list CashFusion as experimental', () => {
+    const experimental = WALLET_ROWS.find((row) => row.key === 'experimental');
+    expect(experimental?.description).not.toMatch(/CashFusion/i);
+    expect(experimental?.description).toMatch(/RPA/i);
   });
 
   it('puts Bitcoin Cash Contracts info under About, not Features', () => {

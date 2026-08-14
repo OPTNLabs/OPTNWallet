@@ -963,6 +963,24 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
     let mut first_round = true;
     let mut rounds_run = 0usize;
 
+    // Electron Cash `check_coins()` is a local wallet scan. A live Electrum
+    // re-check is still worth doing, but the server only waits
+    // TS_EXPECTING_COMMITMENTS (3s) after StartRound for PlayerCommit. Doing
+    // the lookup here — during the 30s warmup — leaves PlayerCommit as
+    // local crypto + one write. Live logs showed ~12s of lookup after
+    // StartRound, then "timed out waiting for BlindSigResponses" because
+    // the server had already dropped us as a late commitment.
+    let warmup_revalidate_started = Instant::now();
+    cancellable(
+        &cancel,
+        revalidate_own_inputs(&inputs, &lookup_endpoints, lookup_transport, "FusionBegin"),
+    )
+    .await?;
+    log::info!(
+        "[FusionTrace] native warmup revalidate ok elapsed_ms={}",
+        warmup_revalidate_started.elapsed().as_millis()
+    );
+
     loop {
         rounds_run += 1;
         if rounds_run > MAX_ROUNDS_PER_SESSION {
@@ -1045,13 +1063,8 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
             return Err("selected tier plan changed before PlayerCommit".into());
         }
 
-        // Electron Cash's final `check_coins()` before PlayerCommit. Nothing
-        // amount/key-bearing has been disclosed if this fails.
-        cancellable(
-            &cancel,
-            revalidate_own_inputs(&inputs, &lookup_endpoints, lookup_transport, "PlayerCommit"),
-        )
-        .await?;
+        // Do not Electrum-revalidate here. The server gathers PlayerCommit
+        // until covert_T0 + 3s; a chipnet listunspent often exceeds that.
 
         let rc = build_round_commit(
             &fusion_inputs,
@@ -1071,6 +1084,10 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
             )),
         };
         cancellable(&cancel, send_frame(&mut main, &commit.encode_to_vec())).await?;
+        log::info!(
+            "[FusionTrace] native PlayerCommit sent elapsed_ms={}",
+            covert_t0.elapsed().as_millis()
+        );
 
         // --- BlindSigResponses -> finalize each into a component signature ---
         let components_start = covert_t0 + timing.comps_at;
@@ -1253,22 +1270,12 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
             return Err("selected tier plan changed before signing".into());
         }
 
-        // Electron Cash's second `check_coins()` after covert components are
-        // fixed but before any transaction signature is produced. If lookups
-        // cannot complete inside the EC signature window, fail closed.
-        cancellable(
-            &round_irreversible,
-            revalidate_own_inputs(
-                &inputs,
-                &lookup_endpoints,
-                lookup_transport,
-                "transaction signing",
-            ),
-        )
-        .await?;
-        if Instant::now() > covert_t0 + timing.sigs_at {
-            return Err("wallet input revalidation missed the signature window".into());
-        }
+        // EC's second check_coins() is a local wallet scan. A second Electrum
+        // listunspent here costs ~12s on this machine and lands after
+        // T_START_SIGS (20s), aborting an otherwise live round:
+        // "wallet input revalidation missed the signature window".
+        // Inputs were already checked during warmup. From here we only verify
+        // the shared tx and sign our exact inputs.
 
         // --- Verify the shared transaction, then sign ONLY our exact inputs ---
         verify_shared_transaction(&all_components, &inputs, &output_scripts, &output_values)?;
@@ -2205,7 +2212,7 @@ mod tests {
                 .await
                 .expect("run_fusion should not error");
             server.await.unwrap().expect("mock server ok");
-            lookup_server.await.unwrap();
+            lookup_server.abort();
 
             assert!(outcome.ok, "fusion should succeed: {}", outcome.message);
             assert!(
@@ -2258,12 +2265,16 @@ mod tests {
                     script
                 })
                 .collect::<Vec<_>>();
+            // Warmup may use 1 accept (batch) or 2 (batch + fallback).
+            // skip_signatures + empty TheirProofsList does not open another.
             let (lookup_endpoint, lookup_server) = electrum_endpoint_n(
                 r#"{"id":1,"result":[{"tx_hash":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd","tx_pos":0,"height":1,"value":200000}]}"#,
-                3,
+                2,
             ).await;
 
-            let outcome = run_fusion(FusionRunParams {
+            let outcome = tokio::time::timeout(
+                Duration::from_secs(30),
+                run_fusion(FusionRunParams {
                 wallet_tag_seed: b"test-wallet".to_vec(),
                 self_fuse_limit: 1,
                 host: "127.0.0.1",
@@ -2312,11 +2323,19 @@ mod tests {
                     min_excess_fee: 0,
                     max_excess_fee: 10_000,
                 },
-            })
+                }),
+            )
             .await
+            .expect("blame restart test timed out")
             .expect("blame restart should remain on the live Fusion session");
-            server.await.unwrap().expect("mock server transcript");
-            lookup_server.await.unwrap();
+            tokio::time::timeout(Duration::from_secs(5), server)
+                .await
+                .expect("mock server did not finish")
+                .unwrap()
+                .expect("mock server transcript");
+            // Warmup may use fewer accepts than `count`. Do not join the extra
+            // accept() — that is what hung this test for hours.
+            lookup_server.abort();
 
             assert!(
                 outcome.ok,

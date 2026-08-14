@@ -6,6 +6,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const upstreamRequest = vi.fn();
 const upstreamRequestMany = vi.fn();
 const upstreamSubscribe = vi.fn();
+const upstreamEnsureFresh = vi.fn();
+const upstreamDisconnect = vi.fn();
+const upstreamGetCurrentServer = vi.fn();
 
 vi.mock('../../../apis/ElectrumServer/ElectrumServer', () => ({
   default: vi.fn(() => ({
@@ -13,6 +16,9 @@ vi.mock('../../../apis/ElectrumServer/ElectrumServer', () => ({
     requestMany: upstreamRequestMany,
     subscribe: upstreamSubscribe,
     unsubscribe: vi.fn(),
+    ensureFreshConnection: upstreamEnsureFresh,
+    electrumDisconnect: upstreamDisconnect,
+    getCurrentServer: upstreamGetCurrentServer,
   })),
 }));
 
@@ -32,6 +38,13 @@ vi.mock('../backendSelection', () => ({
 }));
 vi.mock('../Bip37Backend', () => ({ nodeSync: vi.fn(), nodeBroadcast: vi.fn() }));
 vi.mock('../../../utils/servers/userNodes', () => ({ parseNodeTarget: vi.fn() }));
+vi.mock('../../../utils/servers/ElectrumServers', () => ({
+  getElectrumServers: vi.fn((network: string) =>
+    network === 'mainnet'
+      ? ['mainnet.example.com']
+      : ['chipnet.example.com']
+  ),
+}));
 
 const MAINNET_ADDR = 'bitcoincash:qp7upv0ja5plgmzgjxpl6mqams6emhnc0ylkdsj3gn';
 const CHIPNET_ADDR = 'bchtest:qq6a228gundm2rywwxka9rxppraplvtjjcywpep3av';
@@ -43,6 +56,9 @@ describe('ElectrumServerRouter cross-network address guard', () => {
     upstreamRequest.mockResolvedValue([]);
     upstreamRequestMany.mockImplementation(async (calls: unknown[]) => calls.map(() => []));
     upstreamSubscribe.mockResolvedValue(undefined);
+    upstreamEnsureFresh.mockResolvedValue(undefined);
+    upstreamDisconnect.mockResolvedValue(true);
+    upstreamGetCurrentServer.mockReturnValue(null);
   });
 
   it('rejects a mainnet address on chipnet without hitting the server', async () => {
@@ -99,5 +115,25 @@ describe('ElectrumServerRouter cross-network address guard', () => {
       ElectrumServer().request('blockchain.address.listunspent', CHIPNET_ADDR)
     ).rejects.toThrow(/network guard/);
     expect(upstreamRequest).not.toHaveBeenCalled();
+  });
+
+  it('drops a mainnet socket before chipnet listunspent so balance is not permanently 0', async () => {
+    // Live host from a prior mainnet wallet; menu lock did not disconnect.
+    upstreamGetCurrentServer.mockReturnValue('mainnet.example.com');
+    const { default: ElectrumServer } = await import('../ElectrumServerRouter');
+    await ElectrumServer().request(
+      'blockchain.address.listunspent',
+      CHIPNET_ADDR
+    );
+    expect(upstreamDisconnect).toHaveBeenCalledOnce();
+    expect(upstreamRequest).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the socket when it already belongs to the current network pool', async () => {
+    upstreamGetCurrentServer.mockReturnValue('chipnet.example.com');
+    const { default: ElectrumServer } = await import('../ElectrumServerRouter');
+    await ElectrumServer().ensureFreshConnection();
+    expect(upstreamDisconnect).not.toHaveBeenCalled();
+    expect(upstreamEnsureFresh).toHaveBeenCalledOnce();
   });
 });

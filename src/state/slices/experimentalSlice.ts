@@ -7,7 +7,7 @@ import {
   mergeWithDefaultRelays,
 } from '../../platform/desktop/nostr/defaultRelays';
 
-// Electron Cash ships exactly one default mainnet fusion server (conf.py
+// Electron Cash ships exactly one default mainnet fusion server (conf.py)
 // _get_default_server_list) — fusion.servo.cash:8789. That is the live public
 // coordinator; treat it as the production target for mainnet Auto/manual.
 //
@@ -130,11 +130,15 @@ export function normalizeExperimentalPersistedState(
 
   const persisted = state as Record<string, unknown>;
   const defaultOnAlreadyApplied = persisted.nostrChatDefaultOnApplied === true;
+  // Protocol player floors/caps/timings are not wallet settings. Drop any
+  // leftover persisted overlay so it cannot re-enter redux.
+  const persistedWithoutProtocolKnobs = { ...persisted };
+  delete persistedWithoutProtocolKnobs.p2pKnobs;
 
   return {
     autoFuseEnabled: true,
     p2pFusionEnabled: true,
-    ...persisted,
+    ...persistedWithoutProtocolKnobs,
     // Spread first, then clamp: a wallet persisted before this field existed
     // gets the default, and a persisted out-of-range value is pulled back into
     // bounds rather than letting the engine loop on a 0 or negative depth.

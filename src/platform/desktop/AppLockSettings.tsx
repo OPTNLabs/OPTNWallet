@@ -13,8 +13,12 @@ import {
   enableWalletBiometric,
   disableWalletBiometric,
   getBiometricLabel,
+  verifyWalletPassword,
 } from './DesktopWalletManager';
-import { validateNewWalletPassword } from './passwordPolicy';
+import {
+  isWalletPasswordLongEnough,
+  validateNewWalletPassword,
+} from './passwordPolicy';
 
 // A CashFusion round takes minutes and dies with the key when the wallet
 // locks, so sub-15-minute choices are unusable while fusing and were removed.
@@ -38,11 +42,13 @@ export const AppLockSettings: React.FC = () => {
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
 
-  // Password change form
+  // Password set / change form
   const [oldPass, setOldPass] = useState('');
   const [newPass, setNewPass] = useState('');
   const [confirmPass, setConfirmPass] = useState('');
   const [changing, setChanging] = useState(false);
+  /** True when empty string unlocks this wallet (no password set yet). */
+  const [hasNoPassword, setHasNoPassword] = useState<boolean | null>(null);
 
   // Biometric unlock
   const [biometricAvailable, setBiometricAvailable] = useState(false);
@@ -60,6 +66,26 @@ export const AppLockSettings: React.FC = () => {
       if (available) setBiometricLabel(getBiometricLabel());
       setBiometricEnabled(walletId > 0 ? await hasWalletBiometric(walletId) : false);
     })();
+  }, [walletId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setHasNoPassword(null);
+    if (!walletId || walletId <= 0) {
+      setHasNoPassword(null);
+      return;
+    }
+    void (async () => {
+      try {
+        const emptyOk = await verifyWalletPassword(walletId, '');
+        if (!cancelled) setHasNoPassword(emptyOk);
+      } catch {
+        if (!cancelled) setHasNoPassword(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [walletId]);
 
   const clearStatus = () => setTimeout(() => setStatus(''), 3000);
@@ -114,7 +140,7 @@ export const AppLockSettings: React.FC = () => {
     navigate(ROUTE_PATHS.landing);
   };
 
-  const handleChangePassword = async (e: React.FormEvent) => {
+  const handlePasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setStatus('');
@@ -123,30 +149,61 @@ export const AppLockSettings: React.FC = () => {
       setError('No wallet is open.');
       return;
     }
-    const passErr = validateNewWalletPassword(newPass, confirmPass);
-    if (passErr) {
-      setError(passErr);
-      return;
+
+    // First-time set: require a real password (≥8). Change may set empty again.
+    if (hasNoPassword) {
+      if (!isWalletPasswordLongEnough(newPass)) {
+        setError('Use at least 8 characters for a new password.');
+        return;
+      }
+      if (newPass !== confirmPass) {
+        setError('Passwords do not match.');
+        return;
+      }
+    } else {
+      const passErr = validateNewWalletPassword(newPass, confirmPass);
+      if (passErr) {
+        setError(passErr);
+        return;
+      }
     }
 
     setChanging(true);
     try {
-      // Change ONLY the currently-open wallet's password (Electron Cash model:
-      // each wallet is independent). changeWalletPassword verifies the old
-      // password against THIS wallet's own data — no app-wide gate involved.
-      const ok = await changeWalletPassword(walletId, oldPass, newPass);
+      // Set/change ONLY this wallet (EC model). Empty oldPass when hasNoPassword.
+      const ok = await changeWalletPassword(
+        walletId,
+        hasNoPassword ? '' : oldPass,
+        newPass
+      );
       if (!ok) {
-        setError('Current password is incorrect.');
+        setError(
+          hasNoPassword
+            ? 'Could not set password. Try again.'
+            : 'Current password is incorrect.'
+        );
         return;
       }
       setOldPass('');
       setNewPass('');
       setConfirmPass('');
-      setStatus('Password changed successfully.');
+      const nowEmpty = newPass.length === 0;
+      setHasNoPassword(nowEmpty);
+      setStatus(
+        hasNoPassword
+          ? 'Password set successfully.'
+          : nowEmpty
+            ? 'Password removed.'
+            : 'Password changed successfully.'
+      );
       clearStatus();
     } catch (err) {
-      console.error('[AppLockSettings] Password change failed:', err);
-      setError('Password change failed. Please try again.');
+      console.error('[AppLockSettings] Password update failed:', err);
+      setError(
+        hasNoPassword
+          ? 'Could not set password. Please try again.'
+          : 'Password change failed. Please try again.'
+      );
     } finally {
       setChanging(false);
     }
@@ -164,40 +221,81 @@ export const AppLockSettings: React.FC = () => {
         </p>
       </div>
 
-      {/* Change password */}
+      {/* Set password (no password yet) vs Change password */}
       <div className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-4 space-y-3">
-        <p className="text-sm font-semibold wallet-text-strong">Change Password</p>
-        <form onSubmit={(e) => void handleChangePassword(e)} className="flex flex-col gap-2">
-          <input
-            type="password"
-            value={oldPass}
-            onChange={(e) => { setOldPass(e.target.value); setError(''); }}
-            placeholder="Current password"
-            className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-sm wallet-text-strong placeholder:wallet-muted outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
-          />
+        <p className="text-sm font-semibold wallet-text-strong">
+          {hasNoPassword === null
+            ? 'Password'
+            : hasNoPassword
+              ? 'Set a password'
+              : 'Change password'}
+        </p>
+        <form
+          onSubmit={(e) => void handlePasswordSubmit(e)}
+          className="flex flex-col gap-2"
+        >
+          {hasNoPassword === true && (
+            <p className="text-xs wallet-muted">
+              This wallet has no password. Choose one with at least 8 characters.
+            </p>
+          )}
+          {hasNoPassword === false && (
+            <p className="text-xs wallet-muted">
+              Enter your current password, then a new one (empty = remove
+              password, or at least 8 characters).
+            </p>
+          )}
+          {hasNoPassword === false && (
+            <input
+              type="password"
+              value={oldPass}
+              onChange={(e) => {
+                setOldPass(e.target.value);
+                setError('');
+              }}
+              placeholder="Current password"
+              className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-sm wallet-text-strong placeholder:wallet-muted outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
+            />
+          )}
           <input
             type="password"
             value={newPass}
-            onChange={(e) => { setNewPass(e.target.value); setError(''); }}
-            placeholder="New password (min 8 characters)"
+            onChange={(e) => {
+              setNewPass(e.target.value);
+              setError('');
+            }}
+            placeholder={
+              hasNoPassword
+                ? 'Password (min 8 characters)'
+                : 'New password (empty = none, or min 8)'
+            }
             className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-sm wallet-text-strong placeholder:wallet-muted outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
           />
           <input
             type="password"
             value={confirmPass}
-            onChange={(e) => { setConfirmPass(e.target.value); setError(''); }}
-            placeholder="Confirm new password"
+            onChange={(e) => {
+              setConfirmPass(e.target.value);
+              setError('');
+            }}
+            placeholder={
+              hasNoPassword ? 'Confirm password' : 'Confirm new password'
+            }
             className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-sm wallet-text-strong placeholder:wallet-muted outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
           />
           {error && <p className="text-xs text-red-400">{error}</p>}
           {status && <p className="text-xs text-green-400">{status}</p>}
           <button
             type="submit"
-            disabled={changing || !oldPass}
+            disabled={changing || hasNoPassword === null}
             className="w-full rounded-xl py-2 text-sm font-semibold text-white disabled:opacity-50"
             style={{ background: 'var(--wallet-accent, #6366f1)' }}
           >
-            {changing ? 'Updating…' : 'Change Password'}
+            {changing
+              ? 'Updating…'
+              : hasNoPassword
+                ? 'Set password'
+                : 'Change password'}
           </button>
         </form>
       </div>
@@ -245,7 +343,10 @@ export const AppLockSettings: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  disabled={biometricBusy || !biometricPassword}
+                  disabled={
+                    biometricBusy ||
+                    (!hasNoPassword && !biometricPassword)
+                  }
                   className="flex-1 rounded-xl py-2 text-sm font-semibold text-white disabled:opacity-50"
                   style={{ background: 'var(--wallet-accent, #6366f1)' }}
                 >

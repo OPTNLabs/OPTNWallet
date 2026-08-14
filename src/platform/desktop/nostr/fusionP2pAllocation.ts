@@ -76,7 +76,7 @@ function localFeeShare(
 }
 
 /**
- * Plan 2-4 random-valued outputs while assigning only this peer's measured
+ * Plan 2–6 random-valued outputs while assigning only this peer's measured
  * transaction-byte share to fees. Unlike the old tier allocator, every other
  * satoshi remains in wallet-controlled outputs.
  */

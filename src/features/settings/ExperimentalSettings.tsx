@@ -2,10 +2,8 @@ import React from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import {
   selectRpaEnabled,
-  selectCashFusionEnabled,
   selectQuantumrootEnabled,
   setRpaEnabled,
-  setCashFusionEnabled,
   setQuantumrootEnabled,
 } from '../../state/slices/experimentalSlice';
 import { useI18n } from '../../i18n/useI18n';
@@ -72,7 +70,6 @@ export const ExperimentalSettings: React.FC = () => {
   const dispatch = useDispatch();
   const { t } = useI18n();
   const rpaEnabled = useSelector(selectRpaEnabled);
-  const cashFusionEnabled = useSelector(selectCashFusionEnabled);
   const quantumrootEnabled = useSelector(selectQuantumrootEnabled);
 
   return (
@@ -111,19 +108,6 @@ export const ExperimentalSettings: React.FC = () => {
         onToggle={(v) => dispatch(setRpaEnabled(v))}
       />
 
-      <FeatureToggle
-        title="CashFusion"
-        badge={t('experimental.privacy')}
-        description={t('experimental.cashFusionDescription')}
-        warning={t('experimental.cashFusionWarning')}
-        toggleLabel={
-          cashFusionEnabled
-            ? t('experimental.disable')
-            : t('experimental.enable')
-        }
-        enabled={cashFusionEnabled}
-        onToggle={(v) => dispatch(setCashFusionEnabled(v))}
-      />
     </div>
   );
 };

@@ -122,6 +122,7 @@ export const AppLockGate: React.FC = () => {
 
   const isSpendScope = integrityScope === 'fetchAddressPrivateKey_spend';
   const isPrivKeyScope = integrityScope === 'private_key_reveal';
+  const isXpubScope = integrityScope === 'xpub_reveal';
 
   return (
     <div
@@ -140,7 +141,9 @@ export const AppLockGate: React.FC = () => {
               ? 'Enter your password to confirm this transaction.'
               : isPrivKeyScope
                 ? 'Enter your password to reveal this private key.'
-                : 'Enter your password to reveal the backup phrase.'}
+                : isXpubScope
+                  ? 'Enter your password to reveal wallet information.'
+                  : 'Enter your password to reveal the backup phrase.'}
           </p>
         </div>
 

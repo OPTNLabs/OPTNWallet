@@ -26,6 +26,8 @@ async function persistFusionHistoryRow(
     throw new Error('Wallet database is unavailable.');
   }
   const hash = txid.trim().toLowerCase();
+  // height 0 = broadcast not yet in a block. Never overwrite a confirmed height
+  // if Electrum already wrote one for this CoinJoin.
   db.run(
     `INSERT INTO transactions (wallet_id, tx_hash, height, timestamp, amount)
      VALUES (?, ?, 0, ?, 0)
@@ -34,6 +36,10 @@ async function persistFusionHistoryRow(
          WHEN transactions.timestamp IS NULL OR transactions.timestamp = ''
          THEN excluded.timestamp
          ELSE transactions.timestamp
+       END,
+       height = CASE
+         WHEN COALESCE(transactions.height, 0) > 0 THEN transactions.height
+         ELSE excluded.height
        END`,
     [walletId, hash, timestamp]
   );

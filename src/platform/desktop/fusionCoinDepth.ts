@@ -350,7 +350,11 @@ export function listRecordedFusionTxids(walletId: number): string[] {
 /**
  * Ensure history lists still show known fusion CoinJoins after Electrum refresh.
  * Shared by P2P and server — both stamp txids via completeFusionBroadcast.
- * Missing rows are re-attached at height 0 so they are not wiped by Sync.
+ *
+ * Only re-attach rows that are truly absent. Never invent a height-0 stub when
+ * the same txid is already present (even with height 0) — that caused "Fused ·
+ * Unconfirmed" forever for on-chain CoinJoins. Stubs stay height 0 only as a
+ * last resort until Electrum backfill writes a real height.
  */
 export function mergeRecordedFusionTxsIntoHistory<
   T extends { tx_hash: string; height: number; timestamp?: string },
@@ -366,6 +370,7 @@ export function mergeRecordedFusionTxsIntoHistory<
       (tx_hash) =>
         ({
           tx_hash,
+          // Sentinel only — callers must run height backfill for these.
           height: 0,
           timestamp: new Date().toISOString(),
         }) as T

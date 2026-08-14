@@ -364,6 +364,47 @@ export async function listWalletFiles(): Promise<string[]> {
   }
 }
 
+/**
+ * Relative AppData path of the auto-saved `.optn` mirror for this DB id, if any.
+ * Watch-only / hardware may have no pack; standard wallets usually have one.
+ */
+export async function findWalletFileRelForSourceId(
+  sourceId: number
+): Promise<string | null> {
+  if (!Number.isSafeInteger(sourceId) || sourceId <= 0) return null;
+  for (const rel of await listWalletFiles()) {
+    if ((await ownerOf(rel)) === sourceId) return rel;
+  }
+  return null;
+}
+
+/**
+ * Best-effort absolute path for display in Wallet info (Settings).
+ * Falls back to the relative AppData path when the absolute root is unavailable.
+ */
+export async function resolveWalletFileDisplayPath(
+  sourceId: number,
+  walletName?: string
+): Promise<{ absolute: string | null; relative: string | null }> {
+  const relative = await findWalletFileRelForSourceId(sourceId);
+  if (!relative) {
+    // Expected default name if a mirror were created later (hint only).
+    const hint =
+      walletName && walletName.trim()
+        ? `${WALLETS_DIR}/${defaultWalletFileName(walletName)}`
+        : null;
+    return { absolute: null, relative: hint };
+  }
+  try {
+    const { appDataDir, join } = await import('@tauri-apps/api/path');
+    const root = await appDataDir();
+    const absolute = await join(root, ...relative.split(/[/\\]+/));
+    return { absolute, relative };
+  } catch {
+    return { absolute: null, relative };
+  }
+}
+
 /** Read + parse a wallet file at an absolute path (from the OS open dialog). */
 export async function readWalletFileAt(
   absolutePath: string
