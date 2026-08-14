@@ -8,24 +8,33 @@ Short answers checked against the desktop code. Wire detail:
 Yes — it is a **P2P-specific** mechanic, not a port of Electron Cash
 `blame.rs`. The fusion server can accuse mid-round because it already
 knows who sent each component. Here it cannot: happy-path `inputs` /
-`outputs` / `signature` are anonymous.
+`outputs` / `signature` are anonymous, so a dead round has **no name on
+the coin**.
 
-**Prove-or-don't-blame.** Only re-verifiable crypto faults count:
+The unique step is **abort, then disclose**. After the round fails, each
+peer may send a control-plane **opening** (blind `a||b`, component salt,
+Pedersen nonce) under its **round key**. That binds an anonymous
+component back to the attributed `InitialCommitment` *without* putting
+identity on the happy path. Unproven claims are dropped. Forged openings
+are themselves `invalid_input_credential`. Then
+`findFaultInDisclosures` + `verifyBlameReport` re-check the crypto. A
+fake accusation is rejected. A consistent timeout finds nobody.
+
+**Prove-or-don't-blame.** Only those re-verifiable codes count:
 `pedersen_unbalanced`, `invalid_component_commitment`,
-`credential_slot_oob`, `invalid_input_credential`, `duplicate_outpoint`.
-These fire mid-round when a named control-plane peer sends junk
-(`blameAndFail`). **Never** blame Tor lag, relay timeout, late join, or
-a missing signature.
+`credential_slot_oob`, `invalid_input_credential`, `duplicate_outpoint`,
+`invalid_signature_set`. **Never** blame Tor lag, relay timeout, or late
+join.
 
-Generic abort never requests `component_disclosure`. A coordinator that
-dropped an honest signature must not demand openings and frame the owner.
-`invalid_signature_set` is rejected as evidence of non-delivery.
+A **disclosed** unsigned outpoint is `invalid_signature_set` (the
+anonymous-griefer catch once they admit the coins). A peer who **never
+signs and never discloses** is skipped (`if (!disclosure) continue`) —
+that is still a timeout abort, not an accused. The FAQ used to say
+“never blame a missing signature”; the code is narrower than that.
 
-A missing signature is an **ambiguous timeout**. The round dies. Auto
-tries again. There is no accused.
-
-The accused (when there is one) is an **ephemeral round key**. That is
-diagnosis, not a wallet ban. A local 10-minute ghost record is not shared.
+The accused is an **ephemeral round key**. That is diagnosis, not a
+wallet ban and not DoS defense. The same person comes back as a new key
+next attempt. A local 10-minute ghost record is not shared with peers.
 
 ## What happens if someone does not sign an input?
 
@@ -40,7 +49,9 @@ The set cannot be rewritten at that point. A missing signer cannot be dropped
 so the rest continue. Same as classic CashFusion: incomplete signatures mean
 no CoinJoin, not a smaller one.
 
-There is no accused. Auto tries again later.
+If that peer then **discloses** those unsigned coins under the round key,
+blame names that key (`invalid_signature_set`). If they stay silent after
+abort, there is no accused. Auto tries again later.
 
 ## What is this, vs Electron Cash CashFusion?
 
