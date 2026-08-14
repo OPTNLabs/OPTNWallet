@@ -27,7 +27,7 @@ const useHandleTransaction = (
   contractFunctionInputs: { [key: string]: string } | null,
   changeAddress: string,
   selectedUtxos: UTXO[],
-  setBytecodeSize: React.Dispatch<React.SetStateAction<number | null>>,
+  setBytecodeSize: (value: number) => void,
   setRawTX: React.Dispatch<React.SetStateAction<string>>,
   setErrorMessage: React.Dispatch<React.SetStateAction<string | null>>,
   setShowRawTxPopup: React.Dispatch<React.SetStateAction<boolean>>,
@@ -57,7 +57,10 @@ const useHandleTransaction = (
     // Calculate the sum of transaction outputs as bigint
     const outputSum = txOutputs.reduce((sum, txOutput) => {
       // Ensure that txOutput.amount is a bigint
-      const txAmount = BigInt(txOutput.amount);
+      const txAmount =
+        'amount' in txOutput && txOutput.amount !== undefined
+          ? BigInt(txOutput.amount)
+          : 0n;
       return sum + txAmount;
     }, 0n);
 

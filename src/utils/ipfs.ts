@@ -72,7 +72,10 @@ async function fetchFromGateways(ipfsPath: string, options?: RequestInit) {
         ipfsGateways,
         async (gateway) => {
           const controller = new AbortController();
-          const signal = mergeAbortSignals(options?.signal, controller.signal);
+          const signal = mergeAbortSignals(
+            options?.signal ?? undefined,
+            controller.signal
+          );
           const timeoutId = globalThis.setTimeout(() => {
             controller.abort(new Error(`Timeout after ${IPFS_GATEWAY_TIMEOUT_MS}ms`));
           }, IPFS_GATEWAY_TIMEOUT_MS);
@@ -105,7 +108,10 @@ async function fetchFromGateways(ipfsPath: string, options?: RequestInit) {
   return typeof response.clone === 'function' ? response.clone() : response;
 }
 
-export async function ipfsFetch(uri, options?) {
+export async function ipfsFetch(
+  uri: string,
+  options?: RequestInit
+): Promise<Response> {
   const ipfsPath = extractIpfsPath(uri);
   if (ipfsPath) {
     return fetchFromGateways(ipfsPath, options);

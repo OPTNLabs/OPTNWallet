@@ -9,12 +9,18 @@ import { useEffect } from 'react';
 import { flushSync } from 'react-dom';
 import { useNavigate, type NavigateFunction } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
-import { Menu, Submenu, MenuItem, PredefinedMenuItem } from '@tauri-apps/api/menu';
-import { listen as listenToEvent } from '@tauri-apps/api/event';
 import {
-  getAllWebviewWindows,
-} from '@tauri-apps/api/webviewWindow';
-import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
+  Menu,
+  Submenu,
+  MenuItem,
+  PredefinedMenuItem,
+} from '@tauri-apps/api/menu';
+import { listen as listenToEvent } from '@tauri-apps/api/event';
+import { getAllWebviewWindows } from '@tauri-apps/api/webviewWindow';
+import {
+  open as openDialog,
+  save as saveDialog,
+} from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { appDataDir, join } from '@tauri-apps/api/path';
 import { AppDispatch, RootState, store } from '../../state/store';
@@ -34,6 +40,8 @@ import {
   releaseWalletOpen,
   OPEN_CLAIM_HEARTBEAT_MS,
 } from './walletOpenRegistry';
+import { useI18n } from '../../i18n/useI18n';
+import type { I18nContextValue } from '../../i18n/I18nContext';
 
 // Landing page listens for these.
 export const OPEN_WALLET_EVENT = 'optn:open-wallet'; // quick-open a saved DB wallet by id
@@ -276,13 +284,14 @@ async function openPicker(navigate: (p: string) => void) {
 }
 
 async function handleOpenWalletFile(
+  t: I18nContextValue['t'],
   navigate: (p: string) => void,
   leaveCurrentWallet: () => void = () => undefined
 ) {
   const picked = await openDialog({
     multiple: false,
     directory: false,
-    title: 'Open Wallet File',
+    title: t('desktopMenu.openWalletFile'),
     defaultPath: await walletsDir(),
     filters: [{ name: 'OPTN Wallet', extensions: ['optn'] }],
   });
@@ -293,22 +302,28 @@ async function handleOpenWalletFile(
     leaveCurrentWallet();
     navigate(ROUTE_PATHS.landing);
     setTimeout(() => {
-      window.dispatchEvent(new CustomEvent(IMPORT_FILE_EVENT, { detail: { file } }));
+      window.dispatchEvent(
+        new CustomEvent(IMPORT_FILE_EVENT, { detail: { file } })
+      );
     }, 50);
   } catch (err) {
     console.error('[menu] Open Wallet File failed:', err);
     window.dispatchEvent(
-      new CustomEvent('optn:toast', { detail: { message: 'That is not a valid OPTN wallet file.' } })
+      new CustomEvent('optn:toast', {
+        detail: { message: t('desktopMenu.invalidWalletFile') },
+      })
     );
   }
 }
 
-async function handleExportWallet(walletId: number) {
+async function handleExportWallet(t: I18nContextValue['t'], walletId: number) {
   if (!walletId) return;
   const contents = await buildWalletFileContents(walletId);
   if (!contents) {
     window.dispatchEvent(
-      new CustomEvent('optn:toast', { detail: { message: 'This wallet cannot be exported.' } })
+      new CustomEvent('optn:toast', {
+        detail: { message: t('desktopMenu.cannotExport') },
+      })
     );
     return;
   }
@@ -322,7 +337,7 @@ async function handleExportWallet(walletId: number) {
   const dir = await walletsDir();
   const suggested = defaultWalletFileName(walletId, name);
   const dest = await saveDialog({
-    title: 'Export Wallet',
+    title: t('desktopMenu.exportWallet'),
     defaultPath: dir ? await join(dir, suggested) : suggested,
     filters: [{ name: 'OPTN Wallet', extensions: ['optn'] }],
   });
@@ -330,12 +345,16 @@ async function handleExportWallet(walletId: number) {
   try {
     await invoke('write_wallet_file', { path: dest, contents });
     window.dispatchEvent(
-      new CustomEvent('optn:toast', { detail: { message: 'Wallet exported.' } })
+      new CustomEvent('optn:toast', {
+        detail: { message: t('desktopMenu.exported') },
+      })
     );
   } catch (err) {
     console.error('[menu] Export Wallet failed:', err);
     window.dispatchEvent(
-      new CustomEvent('optn:toast', { detail: { message: 'Could not export the wallet.' } })
+      new CustomEvent('optn:toast', {
+        detail: { message: t('desktopMenu.exportFailed') },
+      })
     );
   }
 }
@@ -345,6 +364,7 @@ export function useMenuBar(): void {
   const dispatch = useDispatch<AppDispatch>();
   const walletId = useSelector((s: RootState) => selectWalletId(s));
   const { toggleMode } = useTheme();
+  const { t } = useI18n();
 
   useEffect(() => {
     let disposed = false;
@@ -360,7 +380,7 @@ export function useMenuBar(): void {
     const handlers: DesktopMenuActionHandlers = {
       openPicker: () => openPicker(navigate),
       openWalletFile: () =>
-        handleOpenWalletFile(navigate, () => {
+        handleOpenWalletFile(t, navigate, () => {
           EcKeyManager.lock();
           flushSync(() => dispatch(resetWallet()));
         }),
@@ -386,7 +406,8 @@ export function useMenuBar(): void {
       history: () => {
         if (walletId) navigate(transactionsRoute(walletId));
       },
-      exportWallet: () => (walletId ? handleExportWallet(walletId) : undefined),
+      exportWallet: () =>
+        walletId ? handleExportWallet(t, walletId) : undefined,
       settings: () => {
         if (walletId) navigate(ROUTE_PATHS.settings);
       },
@@ -401,7 +422,7 @@ export function useMenuBar(): void {
 
     const dispatchMenuAction = (id: string) => {
       void dispatchDesktopMenuAction(id, handlers).catch((err) => {
-        console.error(`[menu] ${id} failed:`, err);
+        console.error('[menu] action failed', { id, error: err });
       });
     };
 
@@ -474,7 +495,7 @@ export function useMenuBar(): void {
     };
     const menuAction = (id: string) => () => {
       void routeAction(id).catch((err) => {
-        console.error(`[menu] could not route ${id}:`, err);
+        console.error('[menu] could not route action', { id, error: err });
       });
     };
 
@@ -502,26 +523,35 @@ export function useMenuBar(): void {
         // Browse the disk for a .optn wallet file (Windows Explorer / native picker).
         await MenuItem.new({
           id: 'open_wallet_file',
-          text: 'Open Wallet File…',
+          text: t('desktopMenu.openWalletFile'),
           action: menuAction('open_wallet_file'),
         }),
         await PredefinedMenuItem.new({ item: 'Separator' }),
         ...(quickOpenItems.length > 0
           ? quickOpenItems
-          : [await MenuItem.new({ id: 'open_wallet_none', text: 'No saved wallets', enabled: false })]),
+          : [
+              await MenuItem.new({
+                id: 'open_wallet_none',
+                text: t('desktopMenu.noSavedWallets'),
+                enabled: false,
+              }),
+            ]),
       ];
 
-      const openWalletSubmenu = await Submenu.new({ text: 'Open Wallet', items: openWalletChildren });
+      const openWalletSubmenu = await Submenu.new({
+        text: t('desktopMenu.openWallet'),
+        items: openWalletChildren,
+      });
 
       const fileMenu = await Submenu.new({
-        text: 'File',
+        text: t('desktopMenu.file'),
         items: [
           // Opens a NEW independent window at the wallet picker (Electron Cash
           // style), where the user can create, import, connect a hardware
           // wallet, or pick an existing one — isolated from this window.
           await MenuItem.new({
             id: 'new_wallet',
-            text: 'Import New Wallet',
+            text: t('desktopMenu.importNewWallet'),
             accelerator: 'CmdOrCtrl+N',
             action: menuAction('new_wallet'),
           }),
@@ -529,40 +559,43 @@ export function useMenuBar(): void {
           await PredefinedMenuItem.new({ item: 'Separator' }),
           await MenuItem.new({
             id: 'lock_wallet',
-            text: 'Lock Wallet',
+            text: t('desktopMenu.lockWallet'),
             accelerator: 'CmdOrCtrl+L',
             enabled: walletActionEnabled,
             action: menuAction('lock_wallet'),
           }),
           await PredefinedMenuItem.new({ item: 'Separator' }),
-          await PredefinedMenuItem.new({ item: 'Quit', text: 'Quit' }),
+          await PredefinedMenuItem.new({
+            item: 'Quit',
+            text: t('desktopMenu.quit'),
+          }),
         ],
       });
 
       const walletMenu = await Submenu.new({
-        text: 'Wallet',
+        text: t('desktopMenu.wallet'),
         items: [
           await MenuItem.new({
             id: 'receive',
-            text: 'Receive',
+            text: t('desktopMenu.receive'),
             enabled: walletActionEnabled,
             action: menuAction('receive'),
           }),
           await MenuItem.new({
             id: 'send',
-            text: 'Send',
+            text: t('desktopMenu.send'),
             enabled: walletActionEnabled,
             action: menuAction('send'),
           }),
           await MenuItem.new({
             id: 'history',
-            text: 'Transaction History',
+            text: t('desktopMenu.history'),
             enabled: walletActionEnabled,
             action: menuAction('history'),
           }),
           await MenuItem.new({
             id: 'refresh_wallet',
-            text: 'Refresh Wallet',
+            text: t('desktopMenu.refreshWallet'),
             accelerator: 'CmdOrCtrl+R',
             enabled: walletActionEnabled,
             action: menuAction('refresh_wallet'),
@@ -570,14 +603,14 @@ export function useMenuBar(): void {
           await PredefinedMenuItem.new({ item: 'Separator' }),
           await MenuItem.new({
             id: 'export_wallet',
-            text: 'Export Wallet…',
+            text: t('desktopMenu.exportWallet'),
             enabled: walletActionEnabled,
             action: menuAction('export_wallet'),
           }),
           await PredefinedMenuItem.new({ item: 'Separator' }),
           await MenuItem.new({
             id: 'settings',
-            text: 'Settings',
+            text: t('desktopMenu.settings'),
             enabled: walletActionEnabled,
             action: menuAction('settings'),
           }),
@@ -585,30 +618,36 @@ export function useMenuBar(): void {
       });
 
       const viewMenu = await Submenu.new({
-        text: 'View',
+        text: t('desktopMenu.view'),
         items: [
           await MenuItem.new({
             id: 'toggle_theme',
-            text: 'Toggle Theme',
+            text: t('desktopMenu.toggleTheme'),
             action: menuAction('toggle_theme'),
           }),
         ],
       });
 
       const helpMenu = await Submenu.new({
-        text: 'Help',
+        text: t('desktopMenu.help'),
         items: [
           await MenuItem.new({
             id: 'about',
-            text: 'About OPTN Wallet',
+            text: t('desktopMenu.about'),
             action: menuAction('about'),
           }),
         ],
       });
 
-      const menu = await Menu.new({ items: [fileMenu, walletMenu, viewMenu, helpMenu] });
+      const menu = await Menu.new({
+        items: [fileMenu, walletMenu, viewMenu, helpMenu],
+      });
       if (disposed) return;
-      await attachDesktopMenu(menu, currentWindow, requiresAppMenu);
+      await attachDesktopMenu(
+        menu as unknown as DesktopMenuLike<typeof currentWindow>,
+        currentWindow,
+        requiresAppMenu
+      );
     };
 
     void buildMenu();
@@ -623,5 +662,5 @@ export function useMenuBar(): void {
       if (claimTimer) clearInterval(claimTimer);
       window.removeEventListener('beforeunload', releaseOnClose);
     };
-  }, [navigate, dispatch, walletId, toggleMode]);
+  }, [navigate, dispatch, walletId, toggleMode, t]);
 }

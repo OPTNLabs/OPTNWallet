@@ -30,9 +30,19 @@ declare global {
 
 let loadPromise: Promise<void> | null = null;
 
+function getBrowserInitSqlJs():
+  | ((config?: InitSqlJsConfig) => Promise<SqlJsStatic>)
+  | undefined {
+  const candidate = (window as unknown as Record<string, unknown>).initSqlJs;
+  return typeof candidate === 'function'
+    ? (candidate as (config?: InitSqlJsConfig) => Promise<SqlJsStatic>)
+    : undefined;
+}
+
 function loadSqlJsScript(): Promise<void> {
   if (loadPromise) return loadPromise;
-  if (window.initSqlJs) {
+  const existingInitSqlJs = getBrowserInitSqlJs();
+  if (existingInitSqlJs) {
     loadPromise = Promise.resolve();
     return loadPromise;
   }
@@ -40,7 +50,7 @@ function loadSqlJsScript(): Promise<void> {
     const script = document.createElement('script');
     script.src = '/sql-wasm-browser.js';
     script.onload = () => {
-      if (window.initSqlJs) resolve();
+      if (getBrowserInitSqlJs()) resolve();
       else reject(new Error('sql-wasm-browser.js loaded but initSqlJs not on window'));
     };
     script.onerror = () => reject(new Error('Failed to load /sql-wasm-browser.js'));
@@ -53,11 +63,12 @@ async function initSqlJs(config?: InitSqlJsConfig): Promise<SqlJsStatic> {
   console.log('[sql-js-shim] initSqlJs called — loading browser UMD');
   await loadSqlJsScript();
   console.log('[sql-js-shim] script ready, calling window.initSqlJs');
-  if (!window.initSqlJs) throw new Error('initSqlJs not available after script load');
+  const browserInitSqlJs = getBrowserInitSqlJs();
+  if (!browserInitSqlJs) throw new Error('initSqlJs not available after script load');
   // Always use the browser WASM paired with sql-wasm-browser.js.
   // Upstream passes locateFile: () => '/sql-wasm.wasm' which points to the Node.js build
   // (wrong WASM for the browser UMD) — we override it here regardless of caller config.
-  const result = await window.initSqlJs({
+  const result = await browserInitSqlJs({
     ...config,
     locateFile: (_file: string) => {
       void _file;

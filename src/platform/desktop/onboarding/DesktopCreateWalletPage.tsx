@@ -25,6 +25,8 @@ import OnboardingCard from '../../../features/onboarding/components/OnboardingCa
 import OnboardingScreen from '../../../features/onboarding/components/OnboardingScreen';
 import DerivationPathField from '../../../features/onboarding/components/DerivationPathField';
 import { createWalletWithPassword } from '../DesktopWalletManager';
+import { useI18n } from '../../../i18n/useI18n';
+import { getBip39LanguageForLocale } from '../../../services/Bip39Service';
 
 type Step = 'loading' | 'reveal' | 'confirm' | 'path' | 'name';
 
@@ -42,7 +44,9 @@ const DesktopCreateWalletPage = () => {
   const [step, setStep] = useState<Step>('loading');
   const [mnemonic, setMnemonic] = useState('');
   const [confirmIndices, setConfirmIndices] = useState<number[]>([]);
-  const [confirmInputs, setConfirmInputs] = useState<Record<number, string>>({});
+  const [confirmInputs, setConfirmInputs] = useState<Record<number, string>>(
+    {}
+  );
   const [confirmError, setConfirmError] = useState('');
 
   const [walletName, setWalletName] = useState('');
@@ -56,7 +60,10 @@ const DesktopCreateWalletPage = () => {
   const navigate = useNavigate();
   const currentNetwork = useSelector(selectCurrentNetwork);
   const dispatch = useDispatch();
-  const [derivationPath, setDerivationPath] = useState(() => getBchAccountPath(currentNetwork));
+  const { locale, t } = useI18n();
+  const [derivationPath, setDerivationPath] = useState(() =>
+    getBchAccountPath(currentNetwork)
+  );
   const [customDerivationPath, setCustomDerivationPath] = useState(false);
 
   useEffect(() => {
@@ -64,7 +71,8 @@ const DesktopCreateWalletPage = () => {
   }, [dispatch]);
 
   useEffect(() => {
-    if (!customDerivationPath) setDerivationPath(getBchAccountPath(currentNetwork));
+    if (!customDerivationPath)
+      setDerivationPath(getBchAccountPath(currentNetwork));
   }, [currentNetwork, customDerivationPath]);
 
   useEffect(() => {
@@ -75,20 +83,27 @@ const DesktopCreateWalletPage = () => {
       try {
         const dbStarted = await dbService.startDatabase();
         if (!dbStarted) throw new Error('Failed to start the database.');
-        const generated = await KeyService.generateMnemonic();
+        const generated = await KeyService.generateMnemonic(
+          getBip39LanguageForLocale(locale)
+        );
         setMnemonic(generated);
         setStep('reveal');
       } catch (error) {
-        console.error('[DesktopCreateWalletPage] Error generating wallet:', error);
+        console.error(
+          '[DesktopCreateWalletPage] Error generating wallet:',
+          error
+        );
       }
     })();
-  }, [dbService]);
+  }, [dbService, locale]);
 
   const mnemonicWords = mnemonic ? mnemonic.split(' ') : [];
   const halfLength = Math.ceil(mnemonicWords.length / 2);
 
   const handleRevealContinue = () => {
-    setConfirmIndices(pickConfirmIndices(mnemonicWords.length, CONFIRM_WORD_COUNT));
+    setConfirmIndices(
+      pickConfirmIndices(mnemonicWords.length, CONFIRM_WORD_COUNT)
+    );
     setConfirmInputs({});
     setConfirmError('');
     setStep('confirm');
@@ -99,7 +114,7 @@ const DesktopCreateWalletPage = () => {
       (i) => (confirmInputs[i] ?? '').trim().toLowerCase() === mnemonicWords[i]
     );
     if (!allMatch) {
-      setConfirmError("Those don't match your seed phrase. Check the words and try again.");
+      setConfirmError(t('onboarding.confirmError'));
       return;
     }
     setConfirmError('');
@@ -108,11 +123,11 @@ const DesktopCreateWalletPage = () => {
 
   const handleCreate = async () => {
     if (!walletName.trim()) {
-      setNameError('Give this wallet a name.');
+      setNameError(t('onboarding.nameRequired'));
       return;
     }
     if (password !== passwordConfirm) {
-      setNameError('Passwords do not match.');
+      setNameError(t('onboarding.passwordMismatch'));
       return;
     }
     setNameError('');
@@ -130,7 +145,7 @@ const DesktopCreateWalletPage = () => {
         password,
       });
       if (walletId == null) {
-        setNameError('Could not create this wallet. It may already exist.');
+        setNameError(t('onboarding.walletAlreadyExists'));
         return;
       }
 
@@ -153,7 +168,7 @@ const DesktopCreateWalletPage = () => {
       navigate(`/home/${walletId}`);
     } catch (error) {
       console.error('[DesktopCreateWalletPage] Error creating wallet:', error);
-      setNameError('Wallet creation failed. Please try again.');
+      setNameError(t('onboarding.creationFailed'));
     } finally {
       setIsSubmitting(false);
     }
@@ -162,8 +177,10 @@ const DesktopCreateWalletPage = () => {
   if (step === 'loading') {
     return (
       <OnboardingScreen>
-        <OnboardingCard title="Create Wallet">
-          <div className="text-center wallet-text-strong py-12">Generating seed phrase…</div>
+        <OnboardingCard title={t('onboarding.createWallet')}>
+          <div className="text-center wallet-text-strong py-12">
+            {t('onboarding.generatingSeed')}
+          </div>
         </OnboardingCard>
       </OnboardingScreen>
     );
@@ -172,36 +189,50 @@ const DesktopCreateWalletPage = () => {
   if (step === 'reveal') {
     return (
       <OnboardingScreen>
-        <OnboardingCard title="Your Seed Phrase">
+        <OnboardingCard title={t('onboarding.seedTitle')}>
           <p className="text-sm wallet-muted text-center mb-3">
-            Write these 12 words down in order and keep them somewhere safe. Anyone with this
-            phrase can spend your funds — never share it or store it digitally.
+            {t('onboarding.seedInstruction')}
           </p>
           <div className="grid grid-cols-2 gap-4 mb-4 p-3 rounded-xl wallet-surface-strong border border-[var(--wallet-border)]">
             <div>
               {mnemonicWords.slice(0, halfLength).map((word, index) => (
                 <div key={index} className="flex items-center mb-2">
-                  <span className="w-8 wallet-text-strong font-semibold">{index + 1}.</span>
-                  <span className="wallet-text-strong font-semibold">{word}</span>
+                  <span className="w-8 wallet-text-strong font-semibold">
+                    {index + 1}.
+                  </span>
+                  <span className="wallet-text-strong font-semibold">
+                    {word}
+                  </span>
                 </div>
               ))}
             </div>
             <div>
               {mnemonicWords.slice(halfLength).map((word, index) => (
-                <div key={index + halfLength} className="flex items-center mb-2">
+                <div
+                  key={index + halfLength}
+                  className="flex items-center mb-2"
+                >
                   <span className="w-8 wallet-text-strong font-semibold">
                     {index + halfLength + 1}.
                   </span>
-                  <span className="wallet-text-strong font-semibold">{word}</span>
+                  <span className="wallet-text-strong font-semibold">
+                    {word}
+                  </span>
                 </div>
               ))}
             </div>
           </div>
-          <button onClick={handleRevealContinue} className="wallet-btn-primary w-full my-2 text-xl font-bold">
-            I've written it down
+          <button
+            onClick={handleRevealContinue}
+            className="wallet-btn-primary w-full my-2 text-xl font-bold"
+          >
+            {t('onboarding.wroteItDown')}
           </button>
-          <button onClick={() => navigate('/')} className="wallet-btn-danger w-full my-2 text-xl font-bold">
-            Back
+          <button
+            onClick={() => navigate('/')}
+            className="wallet-btn-danger w-full my-2 text-xl font-bold"
+          >
+            {t('onboarding.back')}
           </button>
         </OnboardingCard>
       </OnboardingScreen>
@@ -211,14 +242,16 @@ const DesktopCreateWalletPage = () => {
   if (step === 'confirm') {
     return (
       <OnboardingScreen>
-        <OnboardingCard title="Confirm Your Seed Phrase">
+        <OnboardingCard title={t('onboarding.confirmSeed')}>
           <p className="text-sm wallet-muted text-center mb-3">
-            Type the requested words to prove you saved them correctly.
+            {t('onboarding.confirmInstruction')}
           </p>
           <div className="space-y-3 mb-4 p-3 rounded-xl wallet-surface-strong border border-[var(--wallet-border)]">
             {confirmIndices.map((i) => (
               <div key={i} className="flex items-center gap-2">
-                <span className="w-16 shrink-0 wallet-text-strong font-semibold">Word {i + 1}</span>
+                <span className="w-16 shrink-0 wallet-text-strong font-semibold">
+                  {t('onboarding.word')} {i + 1}
+                </span>
                 <input
                   type="text"
                   autoCapitalize="none"
@@ -227,7 +260,10 @@ const DesktopCreateWalletPage = () => {
                   spellCheck={false}
                   value={confirmInputs[i] ?? ''}
                   onChange={(e) => {
-                    setConfirmInputs((prev) => ({ ...prev, [i]: e.target.value }));
+                    setConfirmInputs((prev) => ({
+                      ...prev,
+                      [i]: e.target.value,
+                    }));
                     setConfirmError('');
                   }}
                   className="wallet-input flex-1 px-3 py-2 rounded-md wallet-text-strong"
@@ -235,12 +271,22 @@ const DesktopCreateWalletPage = () => {
               </div>
             ))}
           </div>
-          {confirmError && <p className="text-sm text-red-400 text-center mb-2">{confirmError}</p>}
-          <button onClick={handleConfirmSubmit} className="wallet-btn-primary w-full my-2 text-xl font-bold">
-            Confirm
+          {confirmError && (
+            <p className="text-sm text-red-400 text-center mb-2">
+              {confirmError}
+            </p>
+          )}
+          <button
+            onClick={handleConfirmSubmit}
+            className="wallet-btn-primary w-full my-2 text-xl font-bold"
+          >
+            {t('onboarding.confirm')}
           </button>
-          <button onClick={() => setStep('reveal')} className="wallet-btn-secondary w-full my-2 text-lg">
-            Back to seed phrase
+          <button
+            onClick={() => setStep('reveal')}
+            className="wallet-btn-secondary w-full my-2 text-lg"
+          >
+            {t('onboarding.back')}
           </button>
         </OnboardingCard>
       </OnboardingScreen>
@@ -250,9 +296,9 @@ const DesktopCreateWalletPage = () => {
   if (step === 'path') {
     return (
       <OnboardingScreen>
-        <OnboardingCard title="Wallet Setup">
+        <OnboardingCard title={t('onboarding.walletSetup')}>
           <p className="text-sm wallet-muted text-center mb-3">
-            Choose the network and address path this wallet will use.
+            {t('onboarding.walletSetupDescription')}
           </p>
           <DerivationPathField
             network={currentNetwork}
@@ -263,8 +309,11 @@ const DesktopCreateWalletPage = () => {
               setCustomDerivationPath(custom);
             }}
           />
-          <button onClick={() => setStep('name')} className="wallet-btn-primary w-full my-2 text-xl font-bold">
-            Continue
+          <button
+            onClick={() => setStep('name')}
+            className="wallet-btn-primary w-full my-2 text-xl font-bold"
+          >
+            {t('onboarding.continue')}
           </button>
         </OnboardingCard>
       </OnboardingScreen>
@@ -274,42 +323,54 @@ const DesktopCreateWalletPage = () => {
   // step === 'name'
   return (
     <OnboardingScreen>
-      <OnboardingCard title="Name This Wallet">
+      <OnboardingCard title={t('onboarding.nameWallet')}>
         <p className="text-sm wallet-muted text-center mb-3">
-          Give this wallet a name and a password. Each wallet on this device has its own
-          independent password — you can create more wallets later with different passwords.
+          {t('onboarding.nameWalletDescription')}
         </p>
         <div className="space-y-3 mb-2">
           <input
             type="text"
             value={walletName}
-            onChange={(e) => { setWalletName(e.target.value); setNameError(''); }}
-            placeholder="Wallet name"
+            onChange={(e) => {
+              setWalletName(e.target.value);
+              setNameError('');
+            }}
+            placeholder={t('onboarding.walletNamePlaceholder')}
             autoFocus
             className="wallet-input w-full px-3 py-2 rounded-md wallet-text-strong"
           />
           <input
             type="password"
             value={password}
-            onChange={(e) => { setPassword(e.target.value); setNameError(''); }}
-            placeholder="Password (or leave blank)"
+            onChange={(e) => {
+              setPassword(e.target.value);
+              setNameError('');
+            }}
+            placeholder={t('onboarding.passwordPlaceholder')}
             className="wallet-input w-full px-3 py-2 rounded-md wallet-text-strong"
           />
           <input
             type="password"
             value={passwordConfirm}
-            onChange={(e) => { setPasswordConfirm(e.target.value); setNameError(''); }}
-            placeholder="Confirm password"
+            onChange={(e) => {
+              setPasswordConfirm(e.target.value);
+              setNameError('');
+            }}
+            placeholder={t('onboarding.confirmPasswordPlaceholder')}
             className="wallet-input w-full px-3 py-2 rounded-md wallet-text-strong"
           />
         </div>
-        {nameError && <p className="text-sm text-red-400 text-center mb-2">{nameError}</p>}
+        {nameError && (
+          <p className="text-sm text-red-400 text-center mb-2">{nameError}</p>
+        )}
         <button
           onClick={() => void handleCreate()}
           disabled={isSubmitting}
           className="wallet-btn-primary w-full my-2 text-xl font-bold"
         >
-          {isSubmitting ? 'Creating Wallet…' : 'Create Wallet'}
+          {isSubmitting
+            ? t('onboarding.creating')
+            : t('onboarding.createWallet')}
         </button>
       </OnboardingCard>
     </OnboardingScreen>

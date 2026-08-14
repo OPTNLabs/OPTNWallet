@@ -7,7 +7,7 @@ const useFetchWalletAddresses = (
     React.SetStateAction<{ address: string; tokenAddress: string }[]>
   >,
   setChangeAddress: React.Dispatch<React.SetStateAction<string>>,
-  setErrorMessage: React.Dispatch<React.SetStateAction<string | null>>
+  setErrorMessage: (value: string | null) => void
 ) => {
   useEffect(() => {
     if (walletId === null) return;

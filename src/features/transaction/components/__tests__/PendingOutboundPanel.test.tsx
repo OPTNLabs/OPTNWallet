@@ -11,9 +11,10 @@ vi.mock('react-dom', async () => {
 });
 
 vi.mock('react-router-dom', async () => {
-  const actual = await vi.importActual<typeof import('react-router-dom')>(
-    'react-router-dom'
-  );
+  const actual =
+    await vi.importActual<typeof import('react-router-dom')>(
+      'react-router-dom'
+    );
   type LinkProps = {
     to: string;
     children?: React.ReactNode;
@@ -29,6 +30,8 @@ vi.mock('react-router-dom', async () => {
 });
 
 import PendingOutboundPanel from '../PendingOutboundPanel';
+import { I18nContext } from '../../../../i18n/I18nContext';
+import { translations } from '../../../../i18n/resources';
 
 describe('PendingOutboundPanel', () => {
   const originalDocument = globalThis.document;
@@ -51,21 +54,29 @@ describe('PendingOutboundPanel', () => {
 
   it('renders as a portal-backed modal overlay', () => {
     const html = renderToStaticMarkup(
-      <PendingOutboundPanel
-        records={[
-          {
-            txid: 'a'.repeat(64),
-            rawTx: '',
-            walletId: 1,
-            source: 'test',
-            state: 'submitted',
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            spentOutpoints: [],
-          },
-        ]}
-        onClose={() => undefined}
-      />
+      <I18nContext.Provider
+        value={{
+          locale: 'en',
+          setLocale: () => undefined,
+          t: (key) => translations.en[key],
+        }}
+      >
+        <PendingOutboundPanel
+          records={[
+            {
+              txid: 'a'.repeat(64),
+              rawTx: '',
+              walletId: 1,
+              source: 'test',
+              state: 'submitted',
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+              spentOutpoints: [],
+            },
+          ]}
+          onClose={() => undefined}
+        />
+      </I18nContext.Provider>
     );
 
     expect(html).toContain('wallet-popup-backdrop');

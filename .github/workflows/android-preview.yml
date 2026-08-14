@@ -1,7 +1,7 @@
 name: Android Preview (Debug APK)
 on:
   pull_request:
-    branches: [dev]
+    branches: [dev, staging]
     paths:
       - 'src/**'
       - '!src/platform/desktop/**'
@@ -14,7 +14,7 @@ on:
       - 'reference/**'
       - '.github/workflows/android-preview.yml'
   push:
-    branches: [dev]
+    branches: [dev, staging]
     paths:
       - 'src/**'
       - '!src/platform/desktop/**'
@@ -37,12 +37,12 @@ concurrency:
 jobs:
   debug-apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Setup Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 20
           cache: npm
@@ -51,22 +51,257 @@ jobs:
         run: npm ci
 
       - name: Setup Java (JDK 21)
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
         with:
           distribution: 'temurin'
           java-version: '21'
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699
 
       - name: Enable Gradle cache
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb
 
       - name: Build Debug APK
         run: npm run android:apk:dev
 
+      - name: Android JVM tests
+        run: npm run android:test
+
+      - name: Prepare Android instrumentation tests
+        run: cd android && ./gradlew assembleDebugAndroidTest
+
+      - name: Enable KVM for Android emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
+            sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          test -r /dev/kvm
+          test -w /dev/kvm
+
+      - name: Android emulator smoke tests
+        run: |
+          set -eu
+
+          emulator_serial=emulator-5554
+          emulator_log="$RUNNER_TEMP/android-emulator.log"
+          avd_home="$RUNNER_TEMP/android-avd"
+          mkdir -p "$avd_home"
+          export ANDROID_AVD_HOME="$avd_home"
+
+          yes | sdkmanager --licenses >/dev/null
+          sdkmanager --install \
+            'build-tools;37.0.0' \
+            'platform-tools' \
+            'platforms;android-36' \
+            'emulator' \
+            'system-images;android-36;google_apis;x86_64' >/dev/null
+          echo no | avdmanager create avd --force \
+            --name test \
+            --package 'system-images;android-36;google_apis;x86_64' \
+            --device pixel_2
+          test -f "$ANDROID_AVD_HOME/test.ini"
+
+          "$ANDROID_HOME/emulator/emulator" \
+            -port 5554 \
+            -avd test \
+            -no-window \
+            -gpu swiftshader_indirect \
+            -memory 2048 \
+            -cores 2 \
+            -no-snapshot \
+            -noaudio \
+            -no-boot-anim >"$emulator_log" 2>&1 &
+          emulator_pid=$!
+
+          adb_timeout_seconds=15
+          adb_with_timeout() {
+            timeout "${adb_timeout_seconds}s" adb "$@"
+          }
+
+          cleanup() {
+            exit_code=$?
+            if [ "$exit_code" -ne 0 ]; then
+              echo 'Android emulator log:'
+              tail -n 120 "$emulator_log" || true
+            fi
+            adb_with_timeout -s "$emulator_serial" emu kill >/dev/null 2>&1 || true
+            wait "$emulator_pid" 2>/dev/null || true
+            trap - EXIT
+            exit "$exit_code"
+          }
+          trap cleanup EXIT
+
+          adb_with_timeout start-server
+
+          device_state=
+          device_deadline=$((SECONDS + 360))
+          while [ "$SECONDS" -lt "$device_deadline" ]; do
+            device_state="$(adb_with_timeout devices |
+              awk -v serial="$emulator_serial" '$1 == serial { print $2 }')"
+            if [ "$device_state" = 'device' ]; then
+              break
+            fi
+            sleep 2
+          done
+          echo "Emulator device state: ${device_state:-unavailable}"
+          test "$device_state" = 'device'
+
+          boot_completed=
+          boot_deadline=$((SECONDS + 1200))
+          while [ "$SECONDS" -lt "$boot_deadline" ]; do
+            boot_completed="$(adb_with_timeout -s "$emulator_serial" shell getprop \
+              sys.boot_completed 2>/dev/null | tr -d '\r')" || true
+            if [ "$boot_completed" = '1' ]; then
+              break
+            fi
+            sleep 2
+          done
+          echo "Emulator boot completed: ${boot_completed:-unavailable}"
+          test "$boot_completed" = '1'
+
+          api_level=
+          api_deadline=$((SECONDS + 300))
+          while [ "$SECONDS" -lt "$api_deadline" ]; do
+            api_level="$(adb_with_timeout -s "$emulator_serial" shell getprop \
+              ro.build.version.sdk 2>/dev/null | tr -d '\r')" || true
+            if [ "$api_level" = '36' ]; then
+              break
+            fi
+            sleep 5
+          done
+          echo "Emulator API level: ${api_level:-unavailable}"
+          test "$api_level" = '36'
+
+          activity_manager_config=
+          activity_manager_ready=
+          activity_manager_successes=0
+          activity_manager_deadline=$((SECONDS + 300))
+          while [ "$SECONDS" -lt "$activity_manager_deadline" ]; do
+            activity_manager_config="$(adb_with_timeout -s "$emulator_serial" shell am \
+              get-config 2>&1 | tr -d '\r')" || true
+            if printf '%s' "$activity_manager_config" | grep -q '^config: '; then
+              activity_manager_successes=$((activity_manager_successes + 1))
+            else
+              activity_manager_successes=0
+            fi
+            if [ "$activity_manager_successes" -ge 3 ]; then
+              activity_manager_ready=1
+              break
+            fi
+            sleep 5
+          done
+          echo "Android Activity Manager ready: ${activity_manager_ready:-unavailable}"
+          echo "Activity Manager consecutive probes: $activity_manager_successes"
+          test "$activity_manager_ready" = '1'
+
+          settings_state=
+          settings_ready=
+          services_deadline=$((SECONDS + 120))
+          while [ "$SECONDS" -lt "$services_deadline" ]; do
+            settings_state="$(adb_with_timeout -s "$emulator_serial" shell settings get \
+              system screen_off_timeout 2>/dev/null | tr -d '\r')" || true
+            if [ -n "$settings_state" ] && ! printf '%s' "$settings_state" |
+              grep -Eq '(^null$|Can.t find service|Failure calling service)' && adb_with_timeout -s \
+              "$emulator_serial" shell input keyevent 82 >/dev/null 2>&1; then
+              settings_ready=1
+              break
+            fi
+            sleep 5
+          done
+          echo "Android services ready: ${settings_ready:-unavailable}"
+          test "$settings_ready" = '1'
+
+          wait_for_package_manager() {
+            wait_seconds="$1"
+            package_manager_successes=0
+            package_manager_deadline=$((SECONDS + wait_seconds))
+            while [ "$SECONDS" -lt "$package_manager_deadline" ]; do
+              package_manager_output="$(adb_with_timeout -s "$emulator_serial" shell cmd package \
+                list packages --user 0 2>&1 | tr -d '\r')" || true
+              if printf '%s' "$package_manager_output" | grep -q '^package:android$'; then
+                package_manager_successes=$((package_manager_successes + 1))
+              else
+                package_manager_successes=0
+              fi
+              if [ "$package_manager_successes" -ge 3 ]; then
+                echo "Android package manager ready: 1"
+                echo "Package manager consecutive probes: $package_manager_successes"
+                return 0
+              fi
+              sleep 5
+            done
+            echo "Android package manager ready: unavailable"
+            echo "Package manager consecutive probes: $package_manager_successes"
+            return 1
+          }
+          wait_for_package_manager 300
+
+          app_apk="android/app/build/outputs/apk/debug/app-debug.apk"
+          test_apk="android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk"
+          instrumentation_log="$RUNNER_TEMP/android-instrumentation.log"
+          test -f "$app_apk"
+          test -f "$test_apk"
+          install_timeout_seconds=900
+          install_apk() {
+            apk_path="$1"
+            package_name="$2"
+            install_flags="${3:-}"
+            remote_apk="/data/local/tmp/$(basename "$apk_path")"
+            install_output="$RUNNER_TEMP/$(basename "$apk_path").install.log"
+            install_attempt=1
+            while [ "$install_attempt" -le 3 ]; do
+              echo "Installing $(basename "$apk_path") ($(stat -c '%s' "$apk_path") bytes; attempt $install_attempt/3)"
+              timeout "${install_timeout_seconds}s" adb -s "$emulator_serial" push \
+                "$apk_path" "$remote_apk"
+              set +e
+              timeout "${install_timeout_seconds}s" adb -s "$emulator_serial" shell pm install \
+                -r --skip-verification $install_flags "$remote_apk" \
+                2>&1 | tee "$install_output"
+              install_exit=${PIPESTATUS[0]}
+              set -e
+              timeout 30s adb -s "$emulator_serial" shell rm -f "$remote_apk" || true
+              package_path="$(timeout 30s adb -s "$emulator_serial" shell pm path \
+                "$package_name" 2>&1)" || true
+              if [ "$install_exit" -eq 0 ] &&
+                printf '%s' "$package_path" | grep -q '^package:'; then
+                return 0
+              fi
+              if [ "$install_exit" -ne 0 ]; then
+                echo "Package install command exited with status $install_exit."
+              fi
+              if [ "$install_attempt" -lt 3 ]; then
+                echo 'Package state is not installed; waiting for the package service before retrying.'
+                wait_for_package_manager 180 || true
+              fi
+              install_attempt=$((install_attempt + 1))
+            done
+            echo "Package $package_name was not installed after 3 attempts."
+            return 1
+          }
+          install_apk "$app_apk" optn.wallet.app
+          install_apk "$test_apk" optn.wallet.app.test -t
+
+          set +e
+          timeout 300s adb -s "$emulator_serial" shell am instrument -w -r \
+            optn.wallet.app.test/androidx.test.runner.AndroidJUnitRunner \
+            | tee "$instrumentation_log"
+          instrumentation_exit=${PIPESTATUS[0]}
+          set -e
+          if grep -q '^INSTRUMENTATION_FAILED:' "$instrumentation_log" ||
+            ! grep -q '^INSTRUMENTATION_CODE: -1$' "$instrumentation_log"; then
+            echo 'Android instrumentation tests failed.'
+            echo 'Android instrumentation output:'
+            cat "$instrumentation_log" || true
+            echo 'Android logcat:'
+            adb_with_timeout -s "$emulator_serial" logcat -d -t 400 || true
+            exit 1
+          fi
+          test "$instrumentation_exit" -eq 0
+
       - name: Upload Debug APK
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: app-debug
           path: android/**/outputs/apk/debug/*.apk

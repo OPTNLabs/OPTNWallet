@@ -20,7 +20,8 @@ const APP_BINARY = process.env.TAURI_E2E_APP_BINARY;
 
 // Path to tauri-driver (installed via `cargo install tauri-driver`).
 const TAURI_DRIVER_PATH =
-  process.env.TAURI_E2E_DRIVER_PATH ?? path.resolve(os.homedir(), '.cargo', 'bin', 'tauri-driver');
+  process.env.TAURI_E2E_DRIVER_PATH ??
+  path.resolve(os.homedir(), '.cargo', 'bin', 'tauri-driver');
 
 // Windows only: path to msedgedriver.exe matching the installed WebView2
 // Runtime version exactly (see docs/e2e-testing.md for how to fetch it).
@@ -34,6 +35,7 @@ export const config: WebdriverIO.Config = {
   port: 4444,
   specs: ['./specs/**/*.spec.ts'],
   maxInstances: 1,
+  maxInstancesPerCapability: 1,
   capabilities: [
     {
       maxInstances: 1,
@@ -42,6 +44,8 @@ export const config: WebdriverIO.Config = {
       },
     } as WebdriverIO.Capabilities,
   ],
+  // Do not echo seed/password input values through WebDriver command logs.
+  logLevel: 'warn',
   reporters: ['spec'],
   framework: 'mocha',
   mochaOpts: {
@@ -59,7 +63,9 @@ export const config: WebdriverIO.Config = {
   },
 
   beforeSession: () => {
-    const args = NATIVE_DRIVER_PATH ? ['--native-driver', NATIVE_DRIVER_PATH] : [];
+    const args = NATIVE_DRIVER_PATH
+      ? ['--native-driver', NATIVE_DRIVER_PATH]
+      : [];
     tauriDriverProcess = spawn(TAURI_DRIVER_PATH, args, {
       stdio: [null, process.stdout, process.stderr],
     });

@@ -17,12 +17,10 @@ export type SettingsPanelKey =
   | 'experimental'
   | 'cashfusion'
   | 'nostr'
-  | 'addons';
+  | 'addons'
+  | 'language';
 
-export type SettingsGroupKey =
-  | 'wallet'
-  | 'features'
-  | 'about';
+export type SettingsGroupKey = 'wallet' | 'features' | 'about';
 
 export type SettingsRowConfig = {
   key: SettingsPanelKey | string;
@@ -34,6 +32,13 @@ export type SettingsRowConfig = {
 };
 
 export const WALLET_ROWS: SettingsRowConfig[] = [
+  {
+    key: 'language',
+    title: 'Language',
+    description: 'Choose the wallet interface language',
+    action: 'panel',
+    target: 'language',
+  },
   {
     key: 'network',
     title: 'Network',
@@ -171,8 +176,12 @@ export function getSettingsGroupRows(
   };
 
   return rowsByGroup[group].filter((row) => {
-    if (row.key === 'faucet' && currentNetwork !== Network.CHIPNET) return false;
-    if (!isDesktop && ['app-lock', 'console', 'addons'].includes(String(row.key))) {
+    if (row.key === 'faucet' && currentNetwork !== Network.CHIPNET)
+      return false;
+    if (
+      !isDesktop &&
+      ['app-lock', 'console', 'addons'].includes(String(row.key))
+    ) {
       return false;
     }
     return true;
@@ -207,6 +216,7 @@ export const CONNECTION_ROWS: SettingsRowConfig[] = [
 ];
 
 export const ABOUT_ROWS: SettingsRowConfig[] = [
+  WALLET_ROWS.find((row) => row.key === 'language')!,
   {
     key: 'about',
     title: 'About OPTN',

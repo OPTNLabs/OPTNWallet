@@ -4,6 +4,7 @@ import React, { useRef, useState } from 'react';
 import Popup from './Popup';
 import Draggable from 'react-draggable';
 import { TransactionOutput, UTXO } from '../../../types/types';
+import { useI18n } from '../../../i18n/useI18n';
 
 interface TransactionActionsProps {
   loading: boolean;
@@ -24,6 +25,7 @@ const TransactionActions: React.FC<TransactionActionsProps> = ({
   selectedUtxos,
   sendingLocked = false,
 }) => {
+  const { t } = useI18n();
   const [isPopupOpen, setIsPopupOpen] = useState(false);
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const nodeRef = useRef<HTMLDivElement | null>(null);
@@ -55,34 +57,26 @@ const TransactionActions: React.FC<TransactionActionsProps> = ({
         <div className="mb-6">
           <div className="font-bold flex flex-col text-xl">
             {rawTX === ''
-              ? '(4) Build Transaction'
-              : '(5) Confirm and Send Transaction'}
+              ? `(4) ${t('builder.buildTransaction')}`
+              : `(5) ${t('builder.confirmAndSend')}`}
           </div>
           <div className="flex justify-between mt-4">
             <button
               onClick={buildTransaction}
               disabled={loading || sendingLocked}
               className="wallet-btn-primary font-bold"
-              title={
-                sendingLocked
-                  ? 'Wait for your previous outgoing transaction to sync first'
-                  : undefined
-              }
+              title={sendingLocked ? t('send.waitPrevious') : undefined}
             >
-              Build TX
+              {t('builder.buildTx')}
             </button>
             {rawTX !== '' && (
               <button
                 onClick={handleOpenPopup}
                 disabled={loading || sendingLocked}
                 className="wallet-btn-danger font-bold"
-                title={
-                  sendingLocked
-                    ? 'Wait for your previous outgoing transaction to sync first'
-                    : undefined
-                }
+                title={sendingLocked ? t('send.waitPrevious') : undefined}
               >
-                Send TX
+                {t('builder.sendTx')}
               </button>
             )}
           </div>
@@ -91,16 +85,16 @@ const TransactionActions: React.FC<TransactionActionsProps> = ({
 
       {/* Popup with Warning and Swipe Confirmation */}
       {isPopupOpen && (
-        <Popup closePopups={handleClose} closeButtonText="Back">
+        <Popup closePopups={handleClose} closeButtonText={t('builder.back')}>
           <div className="flex flex-col items-center p-4">
-            <h2 className="text-2xl font-bold mb-4">Confirm Transaction</h2>
+            <h2 className="text-2xl font-bold mb-4">
+              {t('builder.confirmTransaction')}
+            </h2>
             <p className="font-bold text-xl mb-6 text-center wallet-danger-text">
-              ⚠️ Warning
+              {t('builder.warning')}
             </p>
             <p className="font-semibold text-sm text-center mb-6 wallet-danger-text">
-              You are about to <strong>send</strong> a transaction. Please
-              confirm that all details are correct. This action{' '}
-              <strong>cannot</strong> be undone.
+              {t('builder.sendWarning')}
             </p>
             <div className="relative w-[200px] h-12 wallet-surface-strong rounded-lg overflow-hidden border border-[var(--wallet-border)]">
               <div
@@ -114,7 +108,7 @@ const TransactionActions: React.FC<TransactionActionsProps> = ({
                 style={{ width: `${position.x}px` }}
               />
               <div className="absolute inset-0 flex items-center justify-center text-sm font-semibold z-10 pointer-events-none">
-                Drag to Confirm
+                {t('builder.dragToConfirm')}
               </div>
               <Draggable
                 nodeRef={nodeRef}

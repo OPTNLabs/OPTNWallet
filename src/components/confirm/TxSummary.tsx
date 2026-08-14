@@ -1,3 +1,6 @@
+import { useI18n } from '../../i18n/useI18n';
+import { formatNumber } from '../../i18n/format';
+
 export type TxSummaryInput = {
   txid: string;
   vout: number;
@@ -31,8 +34,8 @@ type Props = {
   [k: string]: unknown;
 };
 
-function fmt(n: number) {
-  return Number.isFinite(n) ? n.toLocaleString('en-US') : '0';
+function fmt(n: number, locale: Parameters<typeof formatNumber>[1]) {
+  return Number.isFinite(n) ? formatNumber(n, locale) : '0';
 }
 
 function toNum(v: unknown): number {
@@ -99,27 +102,27 @@ function normalizeOutputs(
     });
   }
   if (!Array.isArray(maybeTxOutputs)) return [];
-  return maybeTxOutputs
-    .map((o, idx: number) => {
-      const row = (o ?? {}) as Record<string, unknown>;
-      if (Array.isArray(row.opReturn)) {
-        return {
-          index: idx,
-          address: 'OP_RETURN',
-          sats: 0,
-          kind: 'bch' as const,
-        };
-      }
+  return maybeTxOutputs.map((o, idx: number) => {
+    const row = (o ?? {}) as Record<string, unknown>;
+    if (Array.isArray(row.opReturn)) {
       return {
         index: idx,
-        address: String(row.recipientAddress ?? ''),
-        sats: toNum(row.amount ?? 0),
-        kind: row.token ? ('token' as const) : ('bch' as const),
+        address: 'OP_RETURN',
+        sats: 0,
+        kind: 'bch' as const,
       };
-    });
+    }
+    return {
+      index: idx,
+      address: String(row.recipientAddress ?? ''),
+      sats: toNum(row.amount ?? 0),
+      kind: row.token ? ('token' as const) : ('bch' as const),
+    };
+  });
 }
 
 export default function TxSummary(props: Props) {
+  const { locale, t } = useI18n();
   const genericInputs = props.inputs;
   const genericOutputs = props.outputs;
   const utxoInputs = props.inputsRaw ?? props.inputs;
@@ -142,7 +145,9 @@ export default function TxSummary(props: Props) {
     <div className="space-y-4">
       {(props.title || props.subtitle) && (
         <div className="space-y-1">
-          {props.title ? <div className="text-lg font-semibold">{props.title}</div> : null}
+          {props.title ? (
+            <div className="text-lg font-semibold">{props.title}</div>
+          ) : null}
           {props.subtitle ? (
             <div className="text-sm wallet-muted">{props.subtitle}</div>
           ) : null}
@@ -151,9 +156,9 @@ export default function TxSummary(props: Props) {
 
       <div className="wallet-card overflow-hidden">
         <div className="px-4 py-3 border-b">
-          <div className="text-sm wallet-muted">Inputs</div>
+          <div className="text-sm wallet-muted">{t('txSummary.inputs')}</div>
           <div className="text-base sm:text-lg font-semibold wallet-text-strong">
-            {inputs.length} • {fmt(inTotal)} sats
+            {inputs.length} • {fmt(inTotal, locale)} {t('txSummary.sats')}
           </div>
         </div>
 
@@ -168,12 +173,14 @@ export default function TxSummary(props: Props) {
                   {shortRef(i.txid, i.vout)}
                 </div>
                 <div className="text-sm wallet-muted">
-                  {i.token ? 'token input' : 'bch input'}
+                  {i.token
+                    ? t('txSummary.tokenInput')
+                    : t('txSummary.bchInput')}
                 </div>
               </div>
 
               <div className="text-sm sm:text-base font-semibold whitespace-nowrap">
-                {fmt(i.sats)} sats
+                {fmt(i.sats, locale)} {t('txSummary.sats')}
               </div>
             </div>
           ))}
@@ -182,9 +189,9 @@ export default function TxSummary(props: Props) {
 
       <div className="wallet-card overflow-hidden">
         <div className="px-4 py-3 border-b">
-          <div className="text-sm wallet-muted">Outputs</div>
+          <div className="text-sm wallet-muted">{t('txSummary.outputs')}</div>
           <div className="text-base sm:text-lg font-semibold wallet-text-strong">
-            {outputs.length} • {fmt(outTotal)} sats
+            {outputs.length} • {fmt(outTotal, locale)} {t('txSummary.sats')}
           </div>
         </div>
 
@@ -196,7 +203,10 @@ export default function TxSummary(props: Props) {
             >
               <div className="min-w-0">
                 <div className="text-sm sm:text-base font-semibold">
-                  [{o.index}] {o.kind}
+                  [{o.index}]{' '}
+                  {o.kind === 'token'
+                    ? t('txSummary.token')
+                    : t('txSummary.bch')}
                 </div>
                 <div className="font-mono text-sm sm:text-base break-all">
                   {shortAddr(o.address)}
@@ -204,7 +214,7 @@ export default function TxSummary(props: Props) {
               </div>
 
               <div className="text-sm sm:text-base font-semibold whitespace-nowrap">
-                {fmt(o.sats)} sats
+                {fmt(o.sats, locale)} {t('txSummary.sats')}
               </div>
             </div>
           ))}
@@ -213,17 +223,21 @@ export default function TxSummary(props: Props) {
 
       <div className="wallet-card px-4 py-3">
         <div className="grid grid-cols-2 gap-y-2 text-sm sm:text-base">
-          <div className="wallet-muted">Tx size</div>
+          <div className="wallet-muted">{t('txSummary.txSize')}</div>
           <div className="text-right font-semibold">
-            {txSizeBytes != null ? `${fmt(txSizeBytes)} bytes` : '—'}
+            {txSizeBytes != null
+              ? `${fmt(txSizeBytes, locale)} ${t('txSummary.bytes')}`
+              : '—'}
           </div>
 
-          <div className="wallet-muted">Fee</div>
+          <div className="wallet-muted">{t('txSummary.fee')}</div>
           <div className="text-right font-semibold">
-            {feeSats != null ? `${fmt(feeSats)} sats` : '—'}
+            {feeSats != null
+              ? `${fmt(feeSats, locale)} ${t('txSummary.sats')}`
+              : '—'}
           </div>
 
-          <div className="wallet-muted">Fee rate</div>
+          <div className="wallet-muted">{t('txSummary.feeRate')}</div>
           <div className="text-right font-semibold">
             {computedFeeRate != null ? `${computedFeeRate} sat/byte` : '—'}
           </div>

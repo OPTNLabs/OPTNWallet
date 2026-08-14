@@ -1,6 +1,7 @@
 // src/addons/builtin/index.ts
 import type { AddonManifest } from '../../types/addons';
 import { shouldExposeDevOnlyApps } from '../../services/AddonsAllowlist';
+import { BUILTIN_ADDON_LOCALE_BUNDLES } from './locales';
 
 /**
  * Keep this list small. These are "shipped with the app" addons.
@@ -12,6 +13,7 @@ const BUILTIN_ADDONS_BASE: AddonManifest[] = [
     name: 'OPTN Builtin Demo',
     version: '0.0.1',
     description: 'Builtin addon scaffold to validate addon contract loading.',
+    localeBundles: BUILTIN_ADDON_LOCALE_BUNDLES['optn.builtin.demo'],
     trustTier: 'internal',
     permissions: [
       {
@@ -115,6 +117,7 @@ const BUILTIN_ADDONS_BASE: AddonManifest[] = [
     version: '0.0.1',
     description:
       'Builtin BCH and CashToken airdrop workspace for batch distribution.',
+    localeBundles: BUILTIN_ADDON_LOCALE_BUNDLES['optn.builtin.events'],
     trustTier: 'internal',
     permissions: [
       {
@@ -165,6 +168,7 @@ const BUILTIN_ADDONS_BASE: AddonManifest[] = [
     name: 'FundMe',
     version: '0.0.1',
     description: 'Demo showcase for BCH crowdfunding flows in OPTN Wallet.',
+    localeBundles: BUILTIN_ADDON_LOCALE_BUNDLES['optn.builtin.fundme'],
     trustTier: 'internal',
     permissions: [
       {

@@ -5,6 +5,8 @@ import OutboundTransactionTracker, {
 } from '../../../services/OutboundTransactionTracker';
 import WalletTooltip from '../../../components/ui/WalletTooltip';
 import { shortenTxHash } from '../../../utils/shortenHash';
+import { useI18n } from '../../../i18n/useI18n';
+import type { TranslationKey } from '../../../i18n/resources';
 
 type PendingOutboundPanelProps = {
   records: OutboundTransactionRecord[];
@@ -15,16 +17,19 @@ type PendingOutboundPanelProps = {
   compact?: boolean;
 };
 
-function stateLabel(record: OutboundTransactionRecord): string {
+function stateLabel(
+  record: OutboundTransactionRecord,
+  t: (key: TranslationKey) => string
+): string {
   switch (record.state) {
     case 'broadcasted':
-      return 'Broadcasted, syncing wallet';
+      return t('home.syncing');
     case 'submitted':
-      return 'Awaiting network visibility';
+      return t('history.awaitingConfirmation');
     case 'broadcasting':
-      return 'Sending';
+      return t('send.sending');
     default:
-      return 'Pending';
+      return t('send.pending');
   }
 }
 
@@ -36,6 +41,7 @@ export default function PendingOutboundPanel({
   onClose,
   compact = false,
 }: PendingOutboundPanelProps) {
+  const { t } = useI18n();
   if (records.length === 0) return null;
   if (typeof document === 'undefined') return null;
 
@@ -64,12 +70,11 @@ export default function PendingOutboundPanel({
               className="text-sm font-semibold wallet-text-strong"
             >
               {records.length === 1
-                ? 'Finalizing transaction'
-                : `Finalizing ${records.length} transactions`}
+                ? t('outbox.finalizing')
+                : t('outbox.finalizingMultiple', { count: records.length })}
             </div>
             <div className="text-xs wallet-muted mt-1">
-              Your wallet history will update automatically. This usually takes
-              a moment.
+              {t('outbox.historyUpdate')}
             </div>
           </div>
           {onRefresh && (
@@ -78,7 +83,7 @@ export default function PendingOutboundPanel({
                 to="/outbox"
                 className="wallet-btn-secondary px-3 py-1.5 text-xs"
               >
-                Outbox
+                {t('outbox.title')}
               </Link>
               <button
                 type="button"
@@ -86,7 +91,7 @@ export default function PendingOutboundPanel({
                 disabled={refreshing}
                 className="wallet-btn-secondary px-3 py-1.5 text-xs"
               >
-                {refreshing ? 'Syncing' : 'Sync'}
+                {refreshing ? t('home.syncing') : t('home.sync')}
               </button>
             </div>
           )}
@@ -95,10 +100,10 @@ export default function PendingOutboundPanel({
               type="button"
               onClick={onClose}
               className="wallet-btn-secondary px-3 py-1.5 text-xs"
-              aria-label="Dismiss pending transactions popup"
-              title="Dismiss"
+              aria-label={t('outbox.dismissPending')}
+              title={t('outbox.dismiss')}
             >
-              Dismiss
+              {t('outbox.dismiss')}
             </button>
           )}
         </div>
@@ -124,7 +129,7 @@ export default function PendingOutboundPanel({
                   content={record.txid}
                 />
                 <div className="text-[11px] wallet-muted">
-                  {stateLabel(record)}
+                  {stateLabel(record, t)}
                 </div>
               </div>
               {onRelease && OutboundTransactionTracker.canRelease(record) && (
@@ -134,7 +139,7 @@ export default function PendingOutboundPanel({
                     onClick={() => onRelease(record.txid)}
                     className="wallet-btn-secondary px-2.5 py-1 text-[11px]"
                   >
-                    Release send lock
+                    {t('outbox.releaseSendLock')}
                   </button>
                 </div>
               )}
@@ -147,7 +152,7 @@ export default function PendingOutboundPanel({
                       onClick={() => onRelease(record.txid)}
                       className="wallet-btn-secondary px-2.5 py-1 text-[11px]"
                     >
-                      Clear pending lock
+                      {t('outbox.clearPending')}
                     </button>
                   </div>
                 )}

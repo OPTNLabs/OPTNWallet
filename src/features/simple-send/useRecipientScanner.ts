@@ -1,7 +1,5 @@
 import { useState } from 'react';
-import {
-  CapacitorBarcodeScannerTypeHint,
-} from '@capacitor/barcode-scanner';
+import { CapacitorBarcodeScannerTypeHint } from '@capacitor/barcode-scanner';
 import { Toast } from '@capacitor/toast';
 import { Network } from '../../state/slices/networkSlice';
 import { AssetType } from '../../hooks/simple-send/types';
@@ -10,6 +8,7 @@ import {
   getBarcodeScannerErrorMessage,
   scanBarcodeSafely,
 } from '../../utils/barcodeScanner';
+import { useI18n } from '../../i18n/useI18n';
 
 type UseRecipientScannerParams = {
   setRecipient: (value: string) => void;
@@ -24,6 +23,7 @@ export function useRecipientScanner({
   setAssetType,
   currentNetwork,
 }: UseRecipientScannerParams) {
+  const { t } = useI18n();
   const [scanBusy, setScanBusy] = useState(false);
 
   const handleScanRecipient = async () => {
@@ -36,7 +36,7 @@ export function useRecipientScanner({
 
       const scanned = result?.ScanResult?.trim();
       if (!scanned) {
-        await Toast.show({ text: 'No QR detected. Try again.' });
+        await Toast.show({ text: t('home.noQrCode') });
         return;
       }
 
@@ -46,15 +46,15 @@ export function useRecipientScanner({
         if (parsed.amountRaw) {
           setAssetType('bch');
           setAmountBch(parsed.amountRaw);
-          await Toast.show({ text: 'Recipient and amount loaded from QR.' });
+          await Toast.show({ text: t('send.recipientAmountLoaded') });
           return;
         }
-        await Toast.show({ text: 'Recipient loaded from QR.' });
+        await Toast.show({ text: t('send.recipientLoaded') });
         return;
       }
 
       setRecipient(scanned);
-      await Toast.show({ text: 'QR scanned. Verify recipient before sending.' });
+      await Toast.show({ text: t('send.verifyRecipient') });
     } catch (e) {
       console.error('QR scan failed:', e);
       await Toast.show({

@@ -14,6 +14,7 @@
 // format.
 
 import { getCachedWalletKey } from './WalletKeyCache';
+import { toArrayBufferBytes } from '../../utils/arrayBuffer';
 
 export const SECRET_ENC_PREFIX = 'enc:v1:';
 
@@ -51,9 +52,9 @@ async function encryptRaw(plaintext: string): Promise<string> {
   const key = requireCachedKey();
   const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
   const cipher = await globalThis.crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv },
+    { name: 'AES-GCM', iv: toArrayBufferBytes(iv) },
     key,
-    textEncoder.encode(plaintext),
+    toArrayBufferBytes(textEncoder.encode(plaintext))
   );
   const merged = new Uint8Array(12 + cipher.byteLength);
   merged.set(iv, 0);
@@ -66,7 +67,11 @@ async function decryptRaw(ciphertext: string): Promise<string> {
   const merged = base64ToBytes(ciphertext);
   const iv = merged.slice(0, 12);
   const data = merged.slice(12);
-  const plain = await globalThis.crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data);
+  const plain = await globalThis.crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: toArrayBufferBytes(iv) },
+    key,
+    toArrayBufferBytes(data)
+  );
   return textDecoder.decode(plain);
 }
 
@@ -80,7 +85,9 @@ async function encryptText(plaintext: string): Promise<string> {
 async function decryptText(ciphertextOrPlaintext: string): Promise<string> {
   if (!ciphertextOrPlaintext) return '';
   if (!isEncryptedPayload(ciphertextOrPlaintext)) return ciphertextOrPlaintext;
-  return await decryptRaw(ciphertextOrPlaintext.slice(SECRET_ENC_PREFIX.length));
+  return await decryptRaw(
+    ciphertextOrPlaintext.slice(SECRET_ENC_PREFIX.length)
+  );
 }
 
 async function encryptBytes(data: Uint8Array): Promise<string> {

@@ -13,10 +13,12 @@ dist
 dist-ssr
 dist-extension-chrome
 dist-extension-firefox
+coverage/
 *.local
 vite.config.js
 vite.config.d.ts
 tsconfig.node.tsbuildinfo
+tsconfig.tsbuildinfo
 
 # Editor directories and files
 .vscode/*
@@ -28,6 +30,7 @@ tsconfig.node.tsbuildinfo
 *.njsproj
 *.sln
 *.sw?
+*.code-workspace
 .env
 .env.*
 

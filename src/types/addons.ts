@@ -1,5 +1,7 @@
 // src/types/addons.ts
 
+import type { SupportedLocale } from '../i18n/types';
+
 /**
  * Marketplace Add-ons v1
  *
@@ -11,6 +13,17 @@
  */
 
 export type AddonId = string;
+export type AddonLocale = SupportedLocale;
+
+/**
+ * Add-on-owned translations. These messages never enter the core wallet
+ * catalog; the host only resolves metadata or passes the bundle to the
+ * add-on's own screen.
+ */
+export interface AddonLocaleBundle {
+  locale: AddonLocale;
+  messages: Record<string, string>;
+}
 
 export const ADDON_CAPABILITIES = [
   'wallet:context:read',
@@ -172,6 +185,9 @@ export interface AddonManifest {
   version: string;
   author?: string;
   description?: string;
+
+  /** Optional add-on-owned metadata/UI messages, keyed by locale. */
+  localeBundles?: AddonLocaleBundle[];
 
   /**
    * Permissions requested by the addon.

@@ -9,8 +9,16 @@ export type CauldronQuoteSafetyBanner = {
   messages: string[];
 };
 
+type QuoteSafetyTranslate = (
+  key: string,
+  fallback: string,
+  values?: Record<string, string | number>
+) => string;
+
 function dedupeMessages(messages: string[]): string[] {
-  return [...new Set(messages.map((message) => message.trim()).filter(Boolean))];
+  return [
+    ...new Set(messages.map((message) => message.trim()).filter(Boolean)),
+  ];
 }
 
 export function buildCauldronQuoteSafetyBanner(args: {
@@ -18,8 +26,15 @@ export function buildCauldronQuoteSafetyBanner(args: {
   liveUpdatesEnabled: boolean;
   liveUpdatedAt: number | null;
   nowMs: number;
+  translate?: QuoteSafetyTranslate;
 }): CauldronQuoteSafetyBanner | null {
   const { quote, liveUpdatesEnabled, liveUpdatedAt, nowMs } = args;
+  const translate =
+    args.translate ??
+    ((_: string, fallback: string, values?: Record<string, string | number>) =>
+      fallback.replace(/\{(\w+)\}/g, (_, key: string) =>
+        String(values?.[key] ?? `{${key}}`)
+      ));
   if (!quote) return null;
 
   const messages: string[] = [];
@@ -27,26 +42,39 @@ export function buildCauldronQuoteSafetyBanner(args: {
 
   if (!liveUpdatesEnabled) {
     staleReasons.push(
-      'Live pool updates are unavailable right now, so this quote should be refreshed before confirming.'
+      translate(
+        'module.liveUpdatesUnavailable',
+        'Live pool updates are unavailable right now, so this quote should be refreshed before confirming.'
+      )
     );
   }
 
   if (quote.usedCachedPools) {
     staleReasons.push(
-      'This quote used the already-visible pool set because live pool confirmation was rate-limited.'
+      translate(
+        'module.cachedPoolSet',
+        'This quote used the already-visible pool set because live pool confirmation was rate-limited.'
+      )
     );
   }
 
   if (liveUpdatedAt != null && quote.builtAt < liveUpdatedAt) {
     staleReasons.push(
-      'The market changed after this quote was built. Refresh the quote before confirming.'
+      translate(
+        'module.marketChangedAfterQuote',
+        'The market changed after this quote was built. Refresh the quote before confirming.'
+      )
     );
   }
 
   const ageSeconds = Math.max(0, Math.floor((nowMs - quote.builtAt) / 1000));
   if (ageSeconds >= 60) {
     staleReasons.push(
-      `This quote is ${ageSeconds}s old. Refresh it before confirming.`
+      translate(
+        'module.quoteAge',
+        'This quote is {seconds}s old. Refresh it before confirming.',
+        { seconds: ageSeconds }
+      )
     );
   }
 
@@ -57,8 +85,8 @@ export function buildCauldronQuoteSafetyBanner(args: {
   return {
     title:
       staleReasons.length > 0
-        ? 'Quote may be stale'
-        : 'Review quote risks',
+        ? translate('module.quoteMayBeStale', 'Quote may be stale')
+        : translate('module.reviewQuoteRisks', 'Review quote risks'),
     messages: uniqueMessages,
   };
 }

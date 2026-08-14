@@ -29,7 +29,22 @@ Legacy root scripts (`build.sh`, `releaseBuild.sh`) are deprecated and should no
 - `npm run android:apk:dev`
 
   - Produces a debug APK.
+  - Keeps the private-key view disabled by default.
   - Output: `android/app/build/outputs/apk/debug/app-debug.apk`
+  - This local path has been verified on the development environment.
+
+- `npm run android:apk:dev:private-key-view`
+
+  - Explicitly opts into the controlled development-only private-key view.
+  - Never use this path for release or shared preview artifacts.
+
+- `npm run android:test`
+
+  - Runs Android JVM unit tests.
+
+- `npm run android:test:instrumented`
+
+  - Runs Android emulator/device smoke tests through `adb`.
 
 - `npm run android:apk:dev:install`
 

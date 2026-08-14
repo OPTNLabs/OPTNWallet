@@ -125,14 +125,18 @@ export default function TransactionBuilderHelper(
     source: string,
     functionName: string
   ): string | null {
-    const functionRegex = new RegExp(
-      `function\\s+${functionName}\\s*\\(.*?\\)\\s*{`,
-      's'
+    const declaration = `function ${functionName}`;
+    const declarationIndex = source.indexOf(declaration);
+    if (declarationIndex < 0) return null;
+    const openingParen = source.indexOf(
+      '(',
+      declarationIndex + declaration.length
     );
-    const match = source.match(functionRegex);
-    if (!match || match.index === undefined) return null;
+    if (openingParen < 0) return null;
+    const openingBrace = source.indexOf('{', openingParen);
+    if (openingBrace < 0) return null;
 
-    const startIndex = match.index + match[0].length;
+    const startIndex = openingBrace + 1;
     let braceCount = 1;
     let endIndex = startIndex;
 
@@ -265,10 +269,10 @@ export default function TransactionBuilderHelper(
               );
             }
           } else {
-            signingKey = await KeyService.fetchAddressPrivateKey(
+            const fetchedKey = await KeyService.fetchAddressPrivateKey(
               processedUtxo.address
             );
-            if (!signingKey || signingKey.length === 0) {
+            if (!fetchedKey || fetchedKey.length === 0) {
               throw new Error(
                 [
                   'Private key not found for selected input address.',
@@ -281,6 +285,7 @@ export default function TransactionBuilderHelper(
                 ].join(' ')
               );
             }
+            signingKey = fetchedKey;
           }
 
           const signatureTemplate = new SignatureTemplate(

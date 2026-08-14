@@ -60,10 +60,9 @@ export default function useSimpleSend() {
     return () => window.cancelAnimationFrame(raf);
   }, []);
 
-  const setErrorMessage = useCallback(
-    (value: string | null) => setError(value ?? ''),
-    []
-  );
+  const setErrorMessage = useCallback((value: string | null) => {
+    setError(value ?? '');
+  }, []);
 
   useFetchWalletAddresses(
     hydrated ? walletId : null,
