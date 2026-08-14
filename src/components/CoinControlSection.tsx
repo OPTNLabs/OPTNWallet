@@ -69,11 +69,10 @@ export function CoinControlSection({
 }: CoinControlSectionProps): React.ReactElement {
   // Re-render when server/P2P fusion stamps depth so "Fused" badges appear live.
   const fusionDepthRev = useFusionDepthRevision(walletId);
-  const rpaRecord = useSelector(
-    (state: RootState) =>
-      walletId > 0
-        ? state.walletSpecialActivity.byWallet[walletId]?.rpa ?? null
-        : null
+  const rpaRecord = useSelector((state: RootState) =>
+    walletId > 0
+      ? state.walletSpecialActivity.byWallet[walletId]?.rpa ?? null
+      : null
   );
   const stealthOutputs = useMemo(() => {
     if (!rpaRecord || !('unspentOutputs' in rpaRecord.payload)) return [];
@@ -116,10 +115,7 @@ export function CoinControlSection({
     return sum;
   }, [bchUtxos, selectedKeys]);
 
-  const allKeys = useMemo(
-    () => bchUtxos.map(utxoOutpointKey),
-    [bchUtxos]
-  );
+  const allKeys = useMemo(() => bchUtxos.map(utxoOutpointKey), [bchUtxos]);
   const allSelected =
     allKeys.length > 0 && allKeys.every((k) => selectedKeys.has(k));
 
@@ -137,7 +133,9 @@ export function CoinControlSection({
     <div className="wallet-section space-y-2">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="text-sm font-semibold wallet-text-strong">{title}</div>
+          <div className="text-sm font-semibold wallet-text-strong">
+            {title}
+          </div>
           <p className="text-[11px] wallet-muted mt-0.5">
             Off = wallet picks coins. On = only the coins you check are spent.
             Fused and Stealth coins are labeled.

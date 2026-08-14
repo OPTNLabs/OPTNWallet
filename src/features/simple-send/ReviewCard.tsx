@@ -52,11 +52,10 @@ export function ReviewCard({
   onConfirmSend,
 }: ReviewCardProps) {
   const walletId = useSelector(selectWalletId);
-  const rpaRecord = useSelector(
-    (state: RootState) =>
-      walletId > 0
-        ? state.walletSpecialActivity.byWallet[walletId]?.rpa ?? null
-        : null
+  const rpaRecord = useSelector((state: RootState) =>
+    walletId > 0
+      ? state.walletSpecialActivity.byWallet[walletId]?.rpa ?? null
+      : null
   );
   const stealthKeys = useMemo(() => {
     const keys = new Set<string>();
@@ -485,7 +484,10 @@ export function ReviewCard({
                   : 'Slide to confirm'}
           </div>
           {isSending && isHardwareWallet && (
-            <div className="text-[12px] mb-2.5 px-1" style={{ color: 'var(--wallet-warning-text, #d97706)' }}>
+            <div
+              className="text-[12px] mb-2.5 px-1"
+              style={{ color: 'var(--wallet-warning-text, #d97706)' }}
+            >
               Look at the Ledger screen and approve the amount/address with both
               buttons. Finalization waits on the device (not the computer).
             </div>
