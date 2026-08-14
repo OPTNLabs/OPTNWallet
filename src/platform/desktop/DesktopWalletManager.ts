@@ -796,6 +796,17 @@ export async function openWatchOnlyWallet(
     password
   );
   if (!info) return null;
+  try {
+    const { ensureWatchOnlyWalletAddresses, ensureWatchOnlyWalletKeys } =
+      await import('./onboarding/watchOnlyWallet');
+    await ensureWatchOnlyWalletKeys(walletId);
+    await ensureWatchOnlyWalletAddresses(walletId);
+  } catch (error) {
+    console.warn('[DesktopWalletManager] watch-only open repair failed', {
+      walletId,
+      error,
+    });
+  }
   return info;
 }
 
