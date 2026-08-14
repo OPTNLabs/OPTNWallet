@@ -8,14 +8,16 @@ describe('OPTN Wallet import-wallet onboarding', () => {
     await wordCount.selectByAttribute('value', '24');
     expect(await $$('input[placeholder="word"]')).toHaveLength(24);
 
-    await $('button=Continue').click();
+    const continueButton = () => $('button=Continue');
+    await continueButton().waitForDisplayed({ timeout: 10000 });
+    await continueButton().click();
     await expect($('p=Word 1 is missing.')).toBeDisplayed();
 
     const recoveryInputs = await $$('input[placeholder="word"]');
     for (const input of recoveryInputs) {
       await input.setValue('abandon');
     }
-    await $('button=Continue').click();
+    await continueButton().click();
     await expect(
       $(
         'p=Enter a valid English BIP39 recovery phrase with 12, 15, 18, 21, or 24 words.'
@@ -31,9 +33,14 @@ describe('OPTN Wallet import-wallet onboarding', () => {
       await validInputs[index].setValue(word);
     }
 
-    await $('button=Continue').click();
+    await continueButton().waitForDisplayed({ timeout: 10000 });
+    await continueButton().click();
     await $('h1=Wallet Setup').waitForDisplayed({ timeout: 10000 });
-    await $('button=Continue').click();
+    // Derivation discovery runs before this step can advance. It may finish
+    // with a path, an empty result, or an unavailable-server result, but the
+    // Continue action must remain blocked until that answer is known.
+    await continueButton().waitForDisplayed({ timeout: 60000 });
+    await continueButton().click();
     await $('h1=Name This Wallet').waitForDisplayed({ timeout: 10000 });
 
     // Stop at form validation so createWalletWithPassword is never called.
@@ -41,7 +48,7 @@ describe('OPTN Wallet import-wallet onboarding', () => {
     await expect($('p=Give this wallet a name.')).toBeDisplayed();
 
     await $('input[placeholder="Wallet name"]').setValue('E2E validation only');
-    await $('input[placeholder="Password (or leave blank)"]').setValue(
+    await $('input[placeholder="Password (min 8 characters)"]').setValue(
       'e2e-password'
     );
     await $('input[placeholder="Confirm password"]').setValue(
