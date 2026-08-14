@@ -20,6 +20,7 @@ export const ROUTE_PATHS = {
   send: '/send',
   outbox: '/outbox',
   transactionBuilder: '/transaction',
+  qrSigningDemo: '/qr-signing-demo',
   transactions: '/transactions/:wallet_id',
   historyLegacy: '/history/:wallet_id',
   settings: '/settings',

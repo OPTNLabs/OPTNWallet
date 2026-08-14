@@ -22,10 +22,7 @@ export type SettingsPanelKey =
   | 'rebuild-wallet'
   | 'export-archive';
 
-export type SettingsGroupKey =
-  | 'wallet'
-  | 'features'
-  | 'about';
+export type SettingsGroupKey = 'wallet' | 'features' | 'about';
 
 export type SettingsRowConfig = {
   key: SettingsPanelKey | string;
@@ -140,7 +137,8 @@ export const SETTINGS_GROUPS: Array<{
   {
     key: 'wallet',
     title: 'Wallet & security',
-    description: 'Recovery, derivation path, app lock, rebuild, and wallet controls',
+    description:
+      'Recovery, derivation path, app lock, rebuild, and wallet controls',
   },
   {
     key: 'features',
@@ -194,7 +192,8 @@ export function getSettingsGroupRows(
   };
 
   return rowsByGroup[group].filter((row) => {
-    if (row.key === 'faucet' && currentNetwork !== Network.CHIPNET) return false;
+    if (row.key === 'faucet' && currentNetwork !== Network.CHIPNET)
+      return false;
     if (
       !isDesktop &&
       [

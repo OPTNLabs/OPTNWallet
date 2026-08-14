@@ -31,9 +31,19 @@ declare global {
 
 let loadPromise: Promise<void> | null = null;
 
+function getBrowserInitSqlJs():
+  | ((config?: InitSqlJsConfig) => Promise<SqlJsStatic>)
+  | undefined {
+  const candidate = (window as unknown as Record<string, unknown>).initSqlJs;
+  return typeof candidate === 'function'
+    ? (candidate as (config?: InitSqlJsConfig) => Promise<SqlJsStatic>)
+    : undefined;
+}
+
 function loadSqlJsScript(): Promise<void> {
   if (loadPromise) return loadPromise;
-  if (window.initSqlJs) {
+  const existingInitSqlJs = getBrowserInitSqlJs();
+  if (existingInitSqlJs) {
     loadPromise = Promise.resolve();
     return loadPromise;
   }
@@ -46,7 +56,7 @@ function loadSqlJsScript(): Promise<void> {
     // load then fails with "loaded without initSqlJs".
     script.src = '/sql-wasm-browser.js';
     script.onload = () => {
-      if (window.initSqlJs) resolve();
+      if (getBrowserInitSqlJs()) resolve();
       else reject(new Error('sql.js browser runtime loaded without initSqlJs'));
     };
     script.onerror = () =>

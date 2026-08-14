@@ -14,6 +14,7 @@ import {
   reloadActiveWallet,
   reconfigureActiveWallet,
 } from '../../services/WalletReconfigurationService';
+import { useI18n } from '../../i18n/useI18n';
 
 // To add a new network in future:
 //  1. Add its value to the Network enum in networkSlice.ts
@@ -22,20 +23,14 @@ import {
 //  4. Add an entry to SUPPORTED_NETWORKS below — UI handles the rest
 const SUPPORTED_NETWORKS: {
   id: Network;
-  label: string;
-  description: string;
   color: string;
 }[] = [
   {
     id: Network.MAINNET,
-    label: 'Mainnet',
-    description: 'Live BCH network — real funds',
     color: '#22c55e',
   },
   {
     id: Network.CHIPNET,
-    label: 'Chipnet',
-    description: 'BCH testnet for upcoming CHIPs — test funds only',
     color: '#6366f1',
   },
 ];
@@ -46,6 +41,7 @@ export const NetworkSettings: React.FC = () => {
   const walletId = useSelector(selectWalletId);
   const currentPath = useSelector(selectWalletDerivationPath);
   const pathSource = useSelector(selectWalletDerivationPathSource);
+  const { t } = useI18n();
   const [switching, setSwitching] = useState(false);
 
   const handleSwitch = async (target: Network) => {
@@ -87,9 +83,7 @@ export const NetworkSettings: React.FC = () => {
   return (
     <div className="flex flex-col gap-4">
       <p className="text-xs wallet-muted leading-relaxed">
-        Switching networks clears the active network records, derives the
-        network path, and resynchronizes receive/change addresses. Custom paths
-        are preserved across network changes.
+        {t('settingsNetwork.description')}
       </p>
 
       <button
@@ -98,7 +92,9 @@ export const NetworkSettings: React.FC = () => {
         disabled={switching || walletId <= 0}
         className="wallet-btn-secondary w-full"
       >
-        {switching ? 'Reloading wallet…' : 'Reload and resync current wallet'}
+        {switching
+          ? t('settingsNetwork.reloading')
+          : t('settingsNetwork.reload')}
       </button>
 
       <div className="flex flex-col gap-2">
@@ -123,19 +119,25 @@ export const NetworkSettings: React.FC = () => {
                       ●
                     </span>
                     <span className="font-semibold wallet-text-strong">
-                      {net.label}
+                      {net.id === Network.MAINNET
+                        ? t('settingsNetwork.mainnet')
+                        : t('settingsNetwork.chipnet')}
                     </span>
                   </div>
-                  <p className="text-xs wallet-muted pl-5">{net.description}</p>
+                  <p className="text-xs wallet-muted pl-5">
+                    {net.id === Network.MAINNET
+                      ? t('settingsNetwork.mainnetDescription')
+                      : t('settingsNetwork.chipnetDescription')}
+                  </p>
                 </div>
                 {isActive && (
                   <span className="text-xs font-semibold text-[var(--wallet-accent)]">
-                    Active
+                    {t('settingsNetwork.active')}
                   </span>
                 )}
                 {!isActive && switching && (
                   <span className="text-xs wallet-muted animate-pulse">
-                    Switching…
+                    {t('settingsNetwork.switching')}
                   </span>
                 )}
               </div>
@@ -143,7 +145,11 @@ export const NetworkSettings: React.FC = () => {
           );
         })}
 
-        {['Testnet3', 'Testnet4', 'Regtest'].map((label) => (
+        {[
+          t('settingsNetwork.testnet3'),
+          t('settingsNetwork.testnet4'),
+          t('settingsNetwork.regtest'),
+        ].map((label) => (
           <div
             key={label}
             className="w-full rounded-xl border border-[var(--wallet-border)] wallet-surface p-4 text-left opacity-50 cursor-not-allowed"
@@ -157,7 +163,7 @@ export const NetworkSettings: React.FC = () => {
                 <span className="font-semibold wallet-muted">{label}</span>
               </div>
               <span className="text-[10px] font-semibold wallet-muted uppercase tracking-wide">
-                Coming soon
+                {t('settingsNetwork.comingSoon')}
               </span>
             </div>
           </div>

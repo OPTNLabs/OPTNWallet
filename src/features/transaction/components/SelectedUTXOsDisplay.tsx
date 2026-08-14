@@ -150,7 +150,7 @@ export default function SelectedUTXOsDisplay({
                     {/* Address */}
                     <span className="w-full">
                       {shortenTxHash(
-                        meta ? utxo.tokenAddress : utxo.address,
+                        meta ? utxo.tokenAddress ?? utxo.address : utxo.address,
                         PREFIX[currentNetwork].length
                       )}
                     </span>

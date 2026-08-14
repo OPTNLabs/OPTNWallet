@@ -13,6 +13,7 @@ import {
   MEMO_PREFIX,
   type MemoPageCursor,
 } from './services/chaingraphMemoClient';
+import { useAddonI18n } from '../../../i18n/useAddonI18n';
 
 type Props = {
   sdk: AddonSDK;
@@ -38,26 +39,29 @@ const QUERY_BATCH_MULTIPLIER = 6;
 const MAX_BATCH_ROUNDS = 8;
 const MIN_REQUEST_GAP_MS = 450;
 
-function actionLabel(action: MemoAction): string {
+function actionLabel(
+  action: MemoAction,
+  addonT: (key: string, fallback: string) => string
+): string {
   switch (action.type) {
     case 'post':
-      return 'Post';
+      return addonT('common.posts', 'Posts');
     case 'reply':
-      return 'Reply';
+      return addonT('common.reply', 'Reply');
     case 'set_name':
-      return 'Set Name';
+      return addonT('common.setName', 'Set name');
     case 'set_profile_text':
-      return 'Set Profile Text';
+      return addonT('common.setProfileText', 'Set profile text');
     case 'set_profile_picture':
-      return 'Set Profile Picture';
+      return addonT('common.setProfilePicture', 'Set profile picture');
     case 'follow':
-      return 'Follow';
+      return addonT('common.follow', 'Follow');
     case 'unfollow':
-      return 'Unfollow';
+      return addonT('common.unfollow', 'Unfollow');
     case 'like_tip':
-      return 'Like/Tip';
+      return addonT('common.likeTip', 'Like/Tip');
     case 'post_topic':
-      return 'Topic Post';
+      return addonT('common.topicPost', 'Topic post');
     default:
       return 'Memo';
   }
@@ -103,15 +107,14 @@ function normalizeRepeatedMessage(action: MemoAction): string | null {
       ? action.message
       : `${action.topic} ${action.message}`.trim();
 
-  const normalized = raw
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-    .trim();
+  const normalized = raw.toLowerCase().replace(/\s+/g, ' ').trim();
 
   return normalized || null;
 }
 
-function buildProfilesByAddress(rows: DecodedMemoRow[]): Map<string, ProfileState> {
+function buildProfilesByAddress(
+  rows: DecodedMemoRow[]
+): Map<string, ProfileState> {
   const profiles = new Map<string, ProfileState>();
 
   for (const row of rows) {
@@ -153,6 +156,7 @@ function buildProfilesByAddress(rows: DecodedMemoRow[]): Map<string, ProfileStat
 }
 
 export default function MemoCashReaderApp({ sdk }: Props) {
+  const { t: addonT } = useAddonI18n();
   const [network, setNetwork] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>('');
@@ -241,7 +245,8 @@ export default function MemoCashReaderApp({ sdk }: Props) {
         });
 
         const sortedRows = [...batch.rows].sort((a, b) => {
-          if (a.internalId === b.internalId) return a.outputIndex - b.outputIndex;
+          if (a.internalId === b.internalId)
+            return a.outputIndex - b.outputIndex;
           return a.internalId > b.internalId ? -1 : 1;
         });
 
@@ -288,7 +293,9 @@ export default function MemoCashReaderApp({ sdk }: Props) {
     busyRef.current = true;
     lastRequestAtRef.current = now;
     setLoading(true);
-    setQueryingLabel('Refreshing latest posts...');
+    setQueryingLabel(
+      addonT('common.refreshLatest', 'Refreshing latest posts…')
+    );
     setError('');
     try {
       await fetchRecentNames().catch(() => undefined);
@@ -304,7 +311,7 @@ export default function MemoCashReaderApp({ sdk }: Props) {
       setLoading(false);
       setQueryingLabel('');
     }
-  }, [fetchPage, fetchRecentNames]);
+  }, [addonT, fetchPage, fetchRecentNames]);
 
   useEffect(() => {
     void loadFirstPage();
@@ -350,7 +357,8 @@ export default function MemoCashReaderApp({ sdk }: Props) {
   const rowsToRender = useMemo(() => {
     if (prefix === MEMO_PREFIX.post) {
       return pageRows.filter(
-        (item) => item.action.type === 'post' || item.action.type === 'post_topic'
+        (item) =>
+          item.action.type === 'post' || item.action.type === 'post_topic'
       );
     }
     return pageRows;
@@ -388,7 +396,7 @@ export default function MemoCashReaderApp({ sdk }: Props) {
     }
 
     setLoading(true);
-    setQueryingLabel('Loading older posts...');
+    setQueryingLabel(addonT('common.loadingOlder', 'Loading older posts…'));
     setError('');
     try {
       const next = await fetchPage(last.nextCursor, priorSeenByMessage);
@@ -419,9 +427,14 @@ export default function MemoCashReaderApp({ sdk }: Props) {
   return (
     <div className="wallet-page p-4 max-w-3xl mx-auto h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] flex flex-col overflow-hidden">
       <div className="wallet-card p-4 mb-4 shrink-0">
-        <div className="text-xl font-semibold">Memo.cash Reader</div>
+        <div className="text-xl font-semibold">
+          {addonT('module.title', 'Memo.cash Reader')}
+        </div>
         <div className="wallet-muted text-sm mt-1">
-          Cursor-paginated OP_RETURN feed from Chaingraph.
+          {addonT(
+            'module.description',
+            'Cursor-paginated OP_RETURN feed from Chaingraph.'
+          )}
         </div>
 
         <div className="mt-3 flex flex-wrap gap-2">
@@ -430,28 +443,28 @@ export default function MemoCashReaderApp({ sdk }: Props) {
             onClick={() => setPrefix(MEMO_PREFIX.any)}
             disabled={loading}
           >
-            All Memo
+            {addonT('common.all', 'All')} Memo
           </button>
           <button
             className={`wallet-btn-secondary ${prefix === MEMO_PREFIX.post ? 'ring-2 ring-[var(--wallet-accent)]' : ''}`}
             onClick={() => setPrefix(MEMO_PREFIX.post)}
             disabled={loading}
           >
-            Posts
+            {addonT('common.posts', 'Posts')}
           </button>
           <button
             className={`wallet-btn-secondary ${prefix === MEMO_PREFIX.reply ? 'ring-2 ring-[var(--wallet-accent)]' : ''}`}
             onClick={() => setPrefix(MEMO_PREFIX.reply)}
             disabled={loading}
           >
-            Replies
+            {addonT('module.replies', 'Replies')}
           </button>
           <button
             className={`wallet-btn-secondary ${prefix === MEMO_PREFIX.set_name ? 'ring-2 ring-[var(--wallet-accent)]' : ''}`}
             onClick={() => setPrefix(MEMO_PREFIX.set_name)}
             disabled={loading}
           >
-            Names
+            {addonT('common.names', 'Names')}
           </button>
         </div>
 
@@ -462,16 +475,22 @@ export default function MemoCashReaderApp({ sdk }: Props) {
             className="wallet-input py-2 px-3 text-sm"
             disabled={loading}
           >
-            <option value={10}>10 per page</option>
-            <option value={20}>20 per page</option>
-            <option value={30}>30 per page</option>
+            <option value={10}>
+              10 {addonT('module.perPage', 'per page')}
+            </option>
+            <option value={20}>
+              20 {addonT('module.perPage', 'per page')}
+            </option>
+            <option value={30}>
+              30 {addonT('module.perPage', 'per page')}
+            </option>
           </select>
           <button
             className="wallet-btn-primary"
             onClick={() => void loadFirstPage()}
             disabled={loading}
           >
-            Refresh
+            {addonT('common.refresh', 'Refresh')}
           </button>
         </div>
       </div>
@@ -484,8 +503,11 @@ export default function MemoCashReaderApp({ sdk }: Props) {
 
       {activePage && activePage.suppressedCount > 0 && (
         <div className="wallet-card p-2 mb-3 text-xs wallet-muted shrink-0">
-          Suppressed {activePage.suppressedCount} repetitive post
-          {activePage.suppressedCount === 1 ? '' : 's'} on this page.
+          {addonT(
+            'common.suppressed',
+            'Suppressed repetitive posts on this page.'
+          )}{' '}
+          ({activePage.suppressedCount})
         </div>
       )}
 
@@ -495,30 +517,43 @@ export default function MemoCashReaderApp({ sdk }: Props) {
             const profile = row.actorAddress
               ? profilesByAddress.get(row.actorAddress)
               : undefined;
-            const display = profile?.name || row.actorAddress || 'Unknown author';
+            const display =
+              profile?.name ||
+              row.actorAddress ||
+              addonT('common.unknownAuthor', 'Unknown author');
 
             return (
               <article key={row.id} className="wallet-card p-4 rounded">
                 <div className="flex items-center justify-between gap-3">
                   <div className="font-medium">{display}</div>
-                  <div className="wallet-muted text-xs">{actionLabel(row.action)}</div>
+                  <div className="wallet-muted text-xs">
+                    {actionLabel(row.action, addonT)}
+                  </div>
                 </div>
-                <div className="wallet-muted text-xs mt-1 break-all">{row.txid}</div>
+                <div className="wallet-muted text-xs mt-1 break-all">
+                  {row.txid}
+                </div>
                 <div className="mt-2 whitespace-pre-wrap break-words">
                   {excerpt(row.action) || (
-                    <span className="wallet-muted">No text payload</span>
+                    <span className="wallet-muted">
+                      {addonT('module.noPayload', 'No text payload')}
+                    </span>
                   )}
                 </div>
 
                 {row.action.type === 'post_topic' && (
                   <div className="mt-2 text-xs wallet-muted">
-                    Topic: <span className="font-mono">{row.action.topic}</span>
+                    {addonT('common.topic', 'Topic')}:{' '}
+                    <span className="font-mono">{row.action.topic}</span>
                   </div>
                 )}
 
-                {(row.action.type === 'post' || row.action.type === 'post_topic') && (
+                {(row.action.type === 'post' ||
+                  row.action.type === 'post_topic') && (
                   <div className="mt-3 border-t border-[var(--wallet-border)] pt-2">
-                    <div className="text-xs wallet-muted mb-1">Replies</div>
+                    <div className="text-xs wallet-muted mb-1">
+                      {addonT('module.replies', 'Replies')}
+                    </div>
                     <div className="space-y-2">
                       {replies
                         .filter(
@@ -532,14 +567,18 @@ export default function MemoCashReaderApp({ sdk }: Props) {
                             ? profilesByAddress.get(reply.actorAddress)
                             : undefined;
                           const replyDisplay =
-                            replyProfile?.name || reply.actorAddress || 'Unknown';
+                            replyProfile?.name ||
+                            reply.actorAddress ||
+                            addonT('common.unknownAuthor', 'Unknown author');
 
                           return (
                             <div
                               key={reply.id}
                               className="wallet-surface-strong rounded p-2"
                             >
-                              <div className="text-xs wallet-muted">{replyDisplay}</div>
+                              <div className="text-xs wallet-muted">
+                                {replyDisplay}
+                              </div>
                               <div className="text-sm whitespace-pre-wrap break-words">
                                 {reply.action.message}
                               </div>
@@ -561,7 +600,7 @@ export default function MemoCashReaderApp({ sdk }: Props) {
           className="wallet-btn-secondary py-2 px-3 text-sm font-bold"
           disabled={loading || currentPage === 1}
         >
-          First
+          {addonT('common.first', 'First')}
         </button>
         <button
           onClick={handlePreviousPage}
@@ -587,15 +626,17 @@ export default function MemoCashReaderApp({ sdk }: Props) {
         <button
           onClick={handleLastLoadedPage}
           className="wallet-btn-secondary py-2 px-3 text-sm font-bold"
-          disabled={loading || pages.length === 0 || currentPage === pages.length}
+          disabled={
+            loading || pages.length === 0 || currentPage === pages.length
+          }
         >
-          Last
+          {addonT('common.last', 'Last')}
         </button>
       </div>
 
       {loading && (
         <div className="wallet-muted text-sm py-2 shrink-0">
-          {queryingLabel || 'Querying Chaingraph...'}
+          {queryingLabel || addonT('common.querying', 'Querying Chaingraph…')}
         </div>
       )}
     </div>

@@ -1,7 +1,13 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSelector } from 'react-redux';
-import { FaArrowDown, FaBitcoin, FaPaperPlane, FaPlus, FaQrcode } from 'react-icons/fa';
+import {
+  FaArrowDown,
+  FaBitcoin,
+  FaPaperPlane,
+  FaPlus,
+  FaQrcode,
+} from 'react-icons/fa';
 import { RootState } from '../../state/store';
 import PageHeader from '../../components/ui/PageHeader';
 import SectionCard from '../../components/ui/SectionCard';
@@ -14,8 +20,54 @@ import KeyService from '../../services/KeyService';
 import { logError } from '../../utils/errorHandling';
 import { ADVANCED_ACTIONS, BASIC_ACTIONS } from './actionsConfig';
 import { selectQuantumrootEnabled } from '../../state/slices/experimentalSlice';
+import { useI18n } from '../../i18n/useI18n';
+import type { TranslationKey } from '../../i18n/resources';
 
 type ActionsMode = 'basic' | 'advanced';
+
+const ACTION_COPY: Record<
+  string,
+  { title: TranslationKey; description: TranslationKey; badge?: TranslationKey }
+> = {
+  Send: { title: 'actions.send', description: 'actions.sendDescription' },
+  Receive: {
+    title: 'actions.receive',
+    description: 'actions.receiveDescription',
+  },
+  'Scan QR': {
+    title: 'actions.scanQr',
+    description: 'actions.scanQrDescription',
+  },
+  'New Address': {
+    title: 'actions.newAddress',
+    description: 'actions.newAddressDescription',
+  },
+  CashTokens: {
+    title: 'actions.cashTokens',
+    description: 'actions.cashTokensDescription',
+  },
+  Quantumroot: {
+    title: 'actions.quantumroot',
+    description: 'actions.quantumrootDescription',
+    badge: 'actions.quantumrootBadge',
+  },
+  'Transaction Builder': {
+    title: 'actions.transactionBuilder',
+    description: 'actions.transactionBuilderDescription',
+  },
+  WalletConnect: {
+    title: 'actions.walletConnect',
+    description: 'actions.walletConnectDescription',
+  },
+  WizardConnect: {
+    title: 'actions.wizardConnect',
+    description: 'actions.wizardConnectDescription',
+  },
+  Contracts: {
+    title: 'actions.contracts',
+    description: 'actions.contractsDescription',
+  },
+};
 
 function getBasicActionIcon(title: string) {
   switch (title) {
@@ -47,6 +99,7 @@ function getAdvancedActionIcon(title: string) {
 
 const Actions: React.FC = () => {
   const navigate = useNavigate();
+  const { t } = useI18n();
   const [mode, setMode] = useState<ActionsMode>('basic');
   const currentWalletId = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
@@ -76,18 +129,24 @@ const Actions: React.FC = () => {
       await KeyService.createKeys(currentWalletId, 0, 1, nextAddressIndex);
       navigate('/receive?panel=addresses', { state: { returnTo: '/actions' } });
     } catch (error) {
-      logError('Actions.handleGenerateNewAddress', error, { walletId: currentWalletId });
+      logError('Actions.handleGenerateNewAddress', error, {
+        walletId: currentWalletId,
+      });
     }
   };
   return (
     <WalletScreen maxWidthClassName="max-w-md">
       <div className="flex h-full min-h-0 flex-col gap-4">
-        <PageHeader title="Actions" subtitle="Simple wallet actions for everyday use" compact />
+        <PageHeader
+          title={t('actions.title')}
+          subtitle={t('actions.subtitle')}
+          compact
+        />
 
         <SectionCard className="p-3">
           <SectionHeader
-            title="Task mode"
-            subtitle="Basic tasks first, advanced tools one step deeper"
+            title={t('actions.taskMode')}
+            subtitle={t('actions.taskModeDescription')}
             compact
           />
           <SegmentedSubnav
@@ -95,8 +154,8 @@ const Actions: React.FC = () => {
             onChange={setMode}
             stretch
             options={[
-              { value: 'basic', label: 'Basic' },
-              { value: 'advanced', label: 'Advanced' },
+              { value: 'basic', label: t('actions.basic') },
+              { value: 'advanced', label: t('actions.advanced') },
             ]}
           />
         </SectionCard>
@@ -105,42 +164,106 @@ const Actions: React.FC = () => {
           {mode === 'basic' ? (
             <>
               <SectionCard className="p-3">
-                <SectionHeader title="Basic Actions" subtitle="Common wallet tasks" compact />
+                <SectionHeader
+                  title={t('actions.basicActions')}
+                  subtitle={t('actions.commonWalletTasks')}
+                  compact
+                />
                 <div className="space-y-2.5">
-                  {BASIC_ACTIONS.map((action) => (
+                  {BASIC_ACTIONS.map((action) => {
+                    const copy = ACTION_COPY[action.title];
+                    return (
+                      <ActionTile
+                        key={action.title}
+                        compact
+                        title={copy ? t(copy.title) : action.title}
+                        icon={getBasicActionIcon(action.title)}
+                        layout="horizontal"
+                        description={
+                          copy?.description
+                            ? t(copy.description)
+                            : action.description
+                        }
+                        descriptionLines={2}
+                        onClick={() => {
+                          if (action.title === 'New Address') {
+                            void handleGenerateNewAddress();
+                            return;
+                          }
+                          if (action.title === 'CashTokens') {
+                            navigate('/mint-cashtokens-poc', {
+                              state: { returnTo: '/actions' },
+                            });
+                            return;
+                          }
+                          const returnTo = '/actions';
+                          if (
+                            action.to === '/send' ||
+                            action.to.startsWith('/receive')
+                          ) {
+                            navigate(action.to, { state: { returnTo } });
+                            return;
+                          }
+                          if (action.to.startsWith('/settings?panel=')) {
+                            navigate(action.to, { state: { returnTo } });
+                            return;
+                          }
+                          if (action.to === '/mint-cashtokens-poc') {
+                            navigate(action.to, { state: { returnTo } });
+                            return;
+                          }
+                          if (action.to === '/quantumroot') {
+                            navigate(action.to, { state: { returnTo } });
+                            return;
+                          }
+                          if (action.to === '/contract') {
+                            navigate(action.to, { state: { returnTo } });
+                            return;
+                          }
+                          navigate(action.to, { state: { returnTo } });
+                        }}
+                      />
+                    );
+                  })}
+                </div>
+              </SectionCard>
+            </>
+          ) : (
+            <SectionCard className="p-3 wallet-surface-strong">
+              <SectionHeader
+                title={t('actions.advancedActions')}
+                subtitle={t('actions.deeperTools')}
+                compact
+              />
+              <div className="space-y-2.5">
+                {advancedActions.map((action) => {
+                  const copy = ACTION_COPY[action.title];
+                  return (
                     <ActionTile
                       key={action.title}
                       compact
-                      title={action.title}
-                      icon={getBasicActionIcon(action.title)}
+                      title={copy ? t(copy.title) : action.title}
+                      description={
+                        copy?.description
+                          ? t(copy.description)
+                          : action.description
+                      }
+                      icon={getAdvancedActionIcon(action.title)}
                       layout="horizontal"
-                      description={action.description}
-                      descriptionLines={2}
+                      trailing={
+                        action.badge ? (
+                          <StatusChip>
+                            {copy?.badge ? t(copy.badge) : action.badge}
+                          </StatusChip>
+                        ) : undefined
+                      }
                       onClick={() => {
-                        if (action.title === 'New Address') {
-                          void handleGenerateNewAddress();
-                          return;
-                        }
-                        if (action.title === 'CashTokens') {
-                          navigate('/mint-cashtokens-poc', {
-                            state: { returnTo: '/actions' },
-                          });
-                          return;
-                        }
                         const returnTo = '/actions';
-                        if (action.to === '/send' || action.to.startsWith('/receive')) {
-                          navigate(action.to, { state: { returnTo } });
-                          return;
-                        }
-                        if (action.to.startsWith('/settings?panel=')) {
-                          navigate(action.to, { state: { returnTo } });
-                          return;
-                        }
-                        if (action.to === '/mint-cashtokens-poc') {
-                          navigate(action.to, { state: { returnTo } });
-                          return;
-                        }
                         if (action.to === '/quantumroot') {
+                          navigate(action.to, { state: { returnTo } });
+                          return;
+                        }
+                        if (action.to === '/transaction') {
                           navigate(action.to, { state: { returnTo } });
                           return;
                         }
@@ -148,54 +271,15 @@ const Actions: React.FC = () => {
                           navigate(action.to, { state: { returnTo } });
                           return;
                         }
-                        navigate(action.to, { state: { returnTo } });
+                        if (action.to.startsWith('/settings?panel=')) {
+                          navigate(action.to, { state: { returnTo } });
+                          return;
+                        }
+                        navigate(action.to);
                       }}
                     />
-                  ))}
-                </div>
-              </SectionCard>
-            </>
-          ) : (
-            <SectionCard className="p-3 wallet-surface-strong">
-              <SectionHeader
-                title="Advanced Actions"
-                subtitle="Deeper tools and workflows"
-                compact
-              />
-              <div className="space-y-2.5">
-                {advancedActions.map((action) => (
-                  <ActionTile
-                    key={action.title}
-                    compact
-                    title={action.title}
-                    description={action.description}
-                    icon={getAdvancedActionIcon(action.title)}
-                    layout="horizontal"
-                    trailing={
-                      action.badge ? <StatusChip>{action.badge}</StatusChip> : undefined
-                    }
-                    onClick={() => {
-                      const returnTo = '/actions';
-                      if (action.to === '/quantumroot') {
-                        navigate(action.to, { state: { returnTo } });
-                        return;
-                      }
-                      if (action.to === '/transaction') {
-                        navigate(action.to, { state: { returnTo } });
-                        return;
-                      }
-                      if (action.to === '/contract') {
-                        navigate(action.to, { state: { returnTo } });
-                        return;
-                      }
-                      if (action.to.startsWith('/settings?panel=')) {
-                        navigate(action.to, { state: { returnTo } });
-                        return;
-                      }
-                      navigate(action.to);
-                    }}
-                  />
-                ))}
+                  );
+                })}
               </div>
             </SectionCard>
           )}

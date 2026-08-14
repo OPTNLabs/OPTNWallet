@@ -15,7 +15,7 @@ import Popup from '../components/transaction/Popup';
 import TokenQuery from '../components/TokenQuery';
 import WalletScreen from '../components/ui/WalletScreen';
 import TransactionService from '../services/TransactionService';
-import type { UTXO } from '../types/types';
+import type { ContractAddressRecord, UTXO } from '../types/types';
 import useFetchWalletData from '../hooks/useFetchWalletData';
 import UTXOService from '../services/UTXOService';
 import { logError } from '../utils/errorHandling';
@@ -66,7 +66,7 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
   const [walletAddresses, setWalletAddresses] = useState<
     { address: string; tokenAddress: string }[]
   >([]);
-  const [, setWalletContractAddresses] = useState<unknown[]>([]);
+  const [, setWalletContractAddresses] = useState<ContractAddressRecord[]>([]);
   const [, setWalletContractUtxos] = useState<UTXO[]>([]);
   const [, setDefaultChangeAddress] = useState<string>('');
   const [, setWalletError] = useState<string | null>(null);
@@ -194,14 +194,15 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
     > = {};
 
     for (const utxo of tokenUtxos) {
-      const category = utxo.token?.category;
+      const token = utxo.token;
+      const category = token?.category;
       if (!category) continue;
       const amount =
-        typeof utxo.token.amount === 'bigint'
-          ? utxo.token.amount
-          : BigInt(Math.trunc(Number(utxo.token.amount ?? 0) || 0));
-      const decimals = utxo.token.BcmrTokenMetadata?.token?.decimals ?? 0;
-      const nft = !!utxo.token.nft;
+        typeof token.amount === 'bigint'
+          ? token.amount
+          : BigInt(Math.trunc(Number(token.amount ?? 0) || 0));
+      const decimals = token.BcmrTokenMetadata?.token?.decimals ?? 0;
+      const nft = !!token.nft;
       const current = tokenTotals[category] ?? { amount: 0n, decimals, nft };
       tokenTotals[category] = {
         amount: current.amount + amount,

@@ -280,6 +280,9 @@ const ContractView = () => {
     }
     try {
       const privKey = await KeyService.fetchAddressPrivateKey(address, 'spend');
+      if (!privKey) {
+        throw new Error('Private key unavailable for selected address.');
+      }
       const signer = new DataSigner(privKey);
       const message = signer.createMessage(data);
       const signature = signer.signMessage(message);

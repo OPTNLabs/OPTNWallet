@@ -63,12 +63,10 @@ const Settings: React.FC = () => {
   );
   const desktop = isDesktopPlatform();
 
-  const [selectedOption, setSelectedOption] = useState(
-    () => {
-      const panel = searchParams.get('panel') ?? '';
-      return !desktop && panel === 'app-lock' ? '' : panel;
-    }
-  );
+  const [selectedOption, setSelectedOption] = useState(() => {
+    const panel = searchParams.get('panel') ?? '';
+    return !desktop && panel === 'app-lock' ? '' : panel;
+  });
   const [isLogoutPopupOpen, setIsLogoutPopupOpen] = useState(false);
   const logoutNodeRef = useRef<HTMLDivElement | null>(null);
   const returnTarget = getReturnPath(location, '');
@@ -76,7 +74,9 @@ const Settings: React.FC = () => {
   const selectedGroup = selectedOption.startsWith('group:')
     ? selectedOption.slice('group:'.length)
     : null;
-  const groupConfig = SETTINGS_GROUPS.find((group) => group.key === selectedGroup);
+  const groupConfig = SETTINGS_GROUPS.find(
+    (group) => group.key === selectedGroup
+  );
 
   useEffect(() => {
     const panel = searchParams.get('panel') ?? '';
@@ -255,7 +255,9 @@ const Settings: React.FC = () => {
             ) : undefined
           }
           disabled={row.action === 'noop'}
-          onClick={row.action === 'noop' ? undefined : () => handleRowClick(row)}
+          onClick={
+            row.action === 'noop' ? undefined : () => handleRowClick(row)
+          }
         />
       ))}
     </div>

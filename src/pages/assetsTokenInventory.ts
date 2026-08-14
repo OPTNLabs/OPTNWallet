@@ -75,14 +75,16 @@ export function summarizeNftInstances(utxos: UTXO[]): NftInstanceSummary[] {
     if (seen.has(outpoint)) continue;
     seen.add(outpoint);
 
-    const capability = utxo.token.nft!.capability;
+    const token = utxo.token;
+    if (!token?.nft || !token.category) continue;
+    const capability = token.nft.capability;
     instances.push({
       outpoint,
       txHash: utxo.tx_hash,
       txPos: utxo.tx_pos,
-      category: utxo.token.category,
+      category: token.category,
       capability,
-      commitment: utxo.token.nft?.commitment ?? '',
+      commitment: token.nft.commitment,
       utxo,
     });
   }

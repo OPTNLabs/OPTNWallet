@@ -406,7 +406,8 @@ export default function useSharedTokenMetadata(categories: string[]) {
           let resolved = getCachedTokenMetadata(category);
 
           if (!resolved) {
-            resolved = await resolveTokenMetadata(category);
+            const fetched = await resolveTokenMetadata(category);
+            resolved = fetched ?? undefined;
           }
 
           if (!resolved || cancelled) return;

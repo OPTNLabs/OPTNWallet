@@ -2,6 +2,7 @@ import { createAsyncThunk } from '@reduxjs/toolkit';
 import type { WalletKitTypes } from '@reown/walletkit';
 import { getSdkError } from '@walletconnect/utils';
 import type { RootState } from '../../state/store';
+import { selectLocale } from '../../state/slices/preferencesSlice';
 import KeyService from '../../services/KeyService';
 import { enqueueNotification } from '../../state/slices/notificationsSlice';
 import { SignedMessage } from '../../utils/signed';
@@ -15,6 +16,7 @@ import {
 } from './helpers';
 import { PREFIX } from '../../utils/constants';
 import { zeroize } from '../../utils/secureMemory';
+import { translate } from '../../i18n/translate';
 
 export const approveSessionProposal = createAsyncThunk(
   'walletconnect/approveSessionProposal',
@@ -107,6 +109,7 @@ export const syncWalletConnectSessions = createAsyncThunk(
 
     for (const topic of staleTopics) {
       const session = previousSessions[topic];
+      const locale = selectLocale(state);
       dispatch({
         type: 'walletconnect/clearPendingSignMsgForTopic',
         payload: topic,
@@ -119,10 +122,12 @@ export const syncWalletConnectSessions = createAsyncThunk(
         enqueueNotification({
           id: `walletconnect:session:sync:${topic}:${Date.now()}`,
           kind: 'walletconnect',
-          title: 'WalletConnect session disconnected',
+          title: translate(locale, 'wc.sessionDisconnectedTitle'),
           body: session?.peer?.metadata?.name
-            ? `Disconnected from ${session.peer.metadata.name}.`
-            : 'A WalletConnect session disconnected remotely or expired.',
+            ? translate(locale, 'wc.sessionDisconnectedFrom', {
+                name: session.peer.metadata.name,
+              })
+            : translate(locale, 'wc.sessionDisconnectedBody'),
           createdAt: Date.now(),
         })
       );
@@ -160,8 +165,9 @@ export const respondWithMessageSignature = createAsyncThunk(
 
     const requestedAddress = candidateValues
       .map((candidate) => normalizeWalletAddressCandidate(candidate, prefix))
-      .find((candidate): candidate is string =>
-        !!candidate && walletAddresses.has(candidate)
+      .find(
+        (candidate): candidate is string =>
+          !!candidate && walletAddresses.has(candidate)
       );
 
     const address = requestedAddress ?? allKeys[0].address;

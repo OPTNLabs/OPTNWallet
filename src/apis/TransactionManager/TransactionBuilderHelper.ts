@@ -265,10 +265,11 @@ export default function TransactionBuilderHelper(
               );
             }
           } else {
-            signingKey = await KeyService.fetchAddressPrivateKey(
+            const fetchedKey = await KeyService.fetchAddressPrivateKey(
               processedUtxo.address,
               'spend'
             );
+            signingKey = fetchedKey ?? undefined;
             if (!signingKey || signingKey.length === 0) {
               throw new Error(
                 [

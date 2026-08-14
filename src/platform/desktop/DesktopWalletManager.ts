@@ -213,8 +213,8 @@ export async function createWalletWithPassword(
     // Without its salt row this wallet can never be reopened (it would be
     // treated as legacy and checked against the gate key). Surface loudly.
     console.error(
-      `[DesktopWalletManager] CRITICAL: wallet ${walletId} was created but its kdf_salt could not be written — it will not be openable. Delete and recreate it.`,
-      err
+      '[DesktopWalletManager] CRITICAL: wallet kdf_salt could not be written',
+      { walletId, error: err }
     );
     restorePrevious();
     return null;

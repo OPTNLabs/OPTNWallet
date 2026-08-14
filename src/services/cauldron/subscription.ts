@@ -27,9 +27,25 @@ type CauldronRostrumPoolRow = Record<string, unknown> & {
 
 const CONNECT_TIMEOUT_MS = 8000;
 
-function parseServerEntry(entry: string, defaultPort = 50004) {
-  if (entry.startsWith('ws://') || entry.startsWith('wss://')) {
+function isLoopbackHost(host: string): boolean {
+  const normalized = host.toLowerCase().replace(/^\[|\]$/g, '');
+  return (
+    normalized === 'localhost' ||
+    normalized === '::1' ||
+    normalized === '127.0.0.1' ||
+    /^127(?:\.\d{1,3}){3}$/.test(normalized)
+  );
+}
+
+export function parseCauldronServerEntry(entry: string, defaultPort = 50004) {
+  if (entry.includes('://')) {
     const url = new URL(entry);
+    if (url.protocol !== 'ws:' && url.protocol !== 'wss:') {
+      throw new Error('Cauldron Rostrum server must use a WebSocket URL');
+    }
+    if (url.protocol === 'ws:' && !isLoopbackHost(url.hostname)) {
+      throw new Error('Unencrypted Cauldron Rostrum WebSocket requires a loopback host');
+    }
     return {
       host: url.hostname,
       port: url.port ? Number(url.port) : url.protocol === 'wss:' ? 50004 : 50003,
@@ -100,7 +116,7 @@ export class CauldronSubscriptionService {
     const servers = getCauldronRostrumServers(this.network);
     this.connectPromise = (async () => {
       for (const entry of servers) {
-        const { host, port, encrypted } = parseServerEntry(entry);
+        const { host, port, encrypted } = parseCauldronServerEntry(entry);
         const socket = new ElectrumWebSocket(host, port, encrypted, CONNECT_TIMEOUT_MS);
         const client = new ElectrumClient<ElectrumClientEvents>(
           'OPTNWallet-Cauldron',

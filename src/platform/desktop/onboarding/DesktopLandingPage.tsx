@@ -40,6 +40,7 @@ import { resolveBiometricEnrollment } from '../biometricEnrollment';
 import { DesktopWalletPickerActions } from './DesktopWalletPickerActions';
 import { WatchOnlyWalletPreview } from './WatchOnlyWalletPreview';
 import { HardwareWalletWizard } from './HardwareWalletWizard';
+import { useI18n } from '../../../i18n/useI18n';
 
 interface WalletRow {
   id: number;
@@ -117,6 +118,7 @@ const DesktopLandingPage = () => {
   const location = useLocation();
   const dispatch = useDispatch();
   const currentNetwork = useSelector(selectCurrentNetwork);
+  const { t } = useI18n();
 
   useEffect(() => {
     void (async () => {
@@ -217,12 +219,15 @@ const DesktopLandingPage = () => {
     }
   };
 
-  const finishOpen = (id: number, info: {
-    networkType?: Network | null;
-    walletType?: ExtendedWalletType | null;
-    derivation_path?: string;
-    derivation_path_source?: 'default' | 'custom';
-  }) => {
+  const finishOpen = (
+    id: number,
+    info: {
+      networkType?: Network | null;
+      walletType?: ExtendedWalletType | null;
+      derivation_path?: string;
+      derivation_path_source?: 'default' | 'custom';
+    }
+  ) => {
     dispatch(setWalletId(id));
     dispatch(setWalletNetwork(info.networkType ?? Network.MAINNET));
     dispatch(setWalletType(info.walletType ?? WalletType.STANDARD));
@@ -230,7 +235,8 @@ const DesktopLandingPage = () => {
       dispatch(
         setWalletDerivationPath({
           path: info.derivation_path,
-          source: info.derivation_path_source === 'custom' ? 'custom' : 'default',
+          source:
+            info.derivation_path_source === 'custom' ? 'custom' : 'default',
         })
       );
     }
@@ -264,7 +270,10 @@ const DesktopLandingPage = () => {
       }
       finishOpen(walletId, attempt.value);
     } catch (err) {
-      console.error('[DesktopLandingPage] Open created watch-only wallet failed:', err);
+      console.error(
+        '[DesktopLandingPage] Open created watch-only wallet failed:',
+        err
+      );
       setError('Wallet created, but could not open it.');
       setView('list');
     } finally {
@@ -316,20 +325,26 @@ const DesktopLandingPage = () => {
   useEffect(() => {
     const onImportFile = (e: Event) => {
       const detail = (
-        e as CustomEvent<{ file: WalletFileV1; coldArchiveText?: string | null }>
+        e as CustomEvent<{
+          file: WalletFileV1;
+          coldArchiveText?: string | null;
+        }>
       ).detail;
       const file = detail?.file;
       if (file) {
         setImportFile(file);
         setImportColdText(
-          typeof detail.coldArchiveText === 'string' ? detail.coldArchiveText : null
+          typeof detail.coldArchiveText === 'string'
+            ? detail.coldArchiveText
+            : null
         );
         setPassword('');
         setError('');
       }
     };
     window.addEventListener('optn:import-wallet-file', onImportFile);
-    return () => window.removeEventListener('optn:import-wallet-file', onImportFile);
+    return () =>
+      window.removeEventListener('optn:import-wallet-file', onImportFile);
   }, []);
 
   const handleImportSubmit = async () => {
@@ -346,10 +361,8 @@ const DesktopLandingPage = () => {
       else if (fileNet === 'mainnet') preferredNetwork = Network.MAINNET;
       else if (importColdText) {
         try {
-          const {
-            parseEncryptedColdArchive,
-            decryptColdArchive,
-          } = await import('../WalletColdExportService');
+          const { parseEncryptedColdArchive, decryptColdArchive } =
+            await import('../WalletColdExportService');
           const enc = parseEncryptedColdArchive(importColdText);
           const archive = await decryptColdArchive(enc, password);
           if (archive.network === 'chipnet') preferredNetwork = Network.CHIPNET;
@@ -367,7 +380,7 @@ const DesktopLandingPage = () => {
         preferredNetwork
       );
       if (!result) {
-        setError('Incorrect password for this wallet file.');
+        setError(t('desktopWallet.incorrectFilePassword'));
         return;
       }
       if (importColdText) {
@@ -389,7 +402,7 @@ const DesktopLandingPage = () => {
           setError(
             coldErr instanceof Error
               ? `Wallet keys imported, but data file failed: ${coldErr.message}`
-              : 'Wallet keys imported, but data file failed.'
+              : t('desktopWallet.importFailed')
           );
         }
       }
@@ -400,7 +413,8 @@ const DesktopLandingPage = () => {
         dispatch(
           setWalletDerivationPath({
             path: result.derivationPath,
-            source: result.derivationPathSource === 'custom' ? 'custom' : 'default',
+            source:
+              result.derivationPathSource === 'custom' ? 'custom' : 'default',
           })
         );
       }
@@ -411,7 +425,7 @@ const DesktopLandingPage = () => {
       navigate(homeRoute(result.walletId));
     } catch (err) {
       console.error('[DesktopLandingPage] Import wallet file failed:', err);
-      setError('Could not import this wallet file.');
+      setError(t('desktopWallet.importFailed'));
     } finally {
       setBusy(false);
     }
@@ -442,17 +456,17 @@ const DesktopLandingPage = () => {
       );
       if (attempt.status === 'held') {
         await focusWalletWindow(attempt.windowLabel);
-        setError('That wallet is already open in another window.');
+        setError(t('desktopWallet.alreadyOpen'));
         return;
       }
       if (attempt.status === 'rejected') {
-        setError('Incorrect password.');
+        setError(t('desktopWallet.incorrectFilePassword'));
         return;
       }
       finishOpen(openingId, attempt.value);
     } catch (err) {
       console.error('[DesktopLandingPage] Open wallet failed:', err);
-      setError('Could not open this wallet. Please try again.');
+      setError(t('desktopWallet.openFailed'));
     } finally {
       setBusy(false);
     }
@@ -478,7 +492,7 @@ const DesktopLandingPage = () => {
       );
       if (attempt.status === 'held') {
         await focusWalletWindow(attempt.windowLabel);
-        setError('That wallet is already open in another window.');
+        setError(t('desktopWallet.alreadyOpen'));
         setView('list');
         return;
       }
@@ -486,7 +500,7 @@ const DesktopLandingPage = () => {
         // Existing passworded wallet: send user to type password on the list.
         setOpeningId(result.walletId);
         setPassword('');
-        setError('Enter the password for this hardware wallet.');
+        setError(t('desktopWallet.password'));
         setView('list');
         return;
       }
@@ -498,7 +512,7 @@ const DesktopLandingPage = () => {
     } catch (err) {
       console.error('[DesktopLandingPage] hardware open failed:', err);
       setError(
-        err instanceof Error ? err.message : 'Could not open hardware wallet.'
+        err instanceof Error ? err.message : t('desktopWallet.openFailed')
       );
       setView('list');
     } finally {
@@ -534,32 +548,45 @@ const DesktopLandingPage = () => {
           <div className="wallet-card w-full max-w-xs mx-4 p-6 space-y-4">
             <div className="text-center space-y-1">
               <div className="text-2xl">📂</div>
-              <h3 className="font-bold text-lg wallet-text-strong">Open “{importFile.name}”</h3>
+              <h3 className="font-bold text-lg wallet-text-strong">
+                Open “{importFile.name}”
+              </h3>
               <p className="text-sm wallet-muted">
                 Enter this wallet file's password
                 {importFile.network
                   ? ` · ${importFile.network === 'chipnet' ? 'Chipnet' : 'Mainnet'}`
                   : ''}
-                . If this wallet is already saved, it will be opened — not duplicated.
+                . If this wallet is already saved, it will be opened — not
+                duplicated.
               </p>
             </div>
             <input
               type="password"
               value={password}
               autoFocus
-              onChange={(e) => { setPassword(e.target.value); setError(''); }}
-              onKeyDown={(e) => { if (e.key === 'Enter') void handleImportSubmit(); }}
-              placeholder="Password"
+              onChange={(e) => {
+                setPassword(e.target.value);
+                setError('');
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void handleImportSubmit();
+              }}
+              placeholder={t('desktopWallet.password')}
               className="wallet-input w-full px-3 py-2 rounded-md wallet-text-strong text-center"
             />
-            {error && <p className="text-center text-xs text-red-400">{error}</p>}
+            {error && (
+              <p className="text-center text-xs text-red-400">{error}</p>
+            )}
             <div className="flex gap-3">
               <button
                 type="button"
                 className="flex-1 wallet-btn-secondary py-2"
-                onClick={() => { setImportFile(null); setError(''); }}
+                onClick={() => {
+                  setImportFile(null);
+                  setError('');
+                }}
               >
-                Cancel
+                {t('desktopWallet.cancel')}
               </button>
               <button
                 type="button"
@@ -567,7 +594,7 @@ const DesktopLandingPage = () => {
                 onClick={() => void handleImportSubmit()}
                 disabled={busy}
               >
-                {busy ? 'Opening…' : 'Open'}
+                {busy ? t('desktopWallet.opening') : t('desktopWallet.open')}
               </button>
             </div>
           </div>
@@ -575,20 +602,29 @@ const DesktopLandingPage = () => {
       )}
 
       <div className="w-full max-w-md space-y-6">
-        <h1 className="text-xl font-bold wallet-text-strong text-center">OPTN Wallet</h1>
+        <h1 className="text-xl font-bold wallet-text-strong text-center">
+          OPTN Wallet
+        </h1>
 
         {wallets && wallets.length > 0 && (
           <div className="space-y-2">
-            <p className="text-sm wallet-muted">Your wallets</p>
+            <p className="text-sm wallet-muted">
+              {t('desktopWallet.yourWallets')}
+            </p>
             {wallets.map((w) => (
               <div key={w.id} className="wallet-card p-3">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="font-semibold wallet-text-strong">{w.wallet_name || 'Unnamed wallet'}</p>
+                    <p className="font-semibold wallet-text-strong">
+                      {w.wallet_name ||
+                        t('desktopWallet.walletNumber', { id: w.id })}
+                    </p>
                     <p className="text-[10px] wallet-muted">
                       #{w.id}
                       {' · '}
-                      {w.networkType === Network.CHIPNET ? 'Chipnet' : 'Mainnet'}
+                      {w.networkType === Network.CHIPNET
+                        ? t('settingsNetwork.chipnet')
+                        : t('settingsNetwork.mainnet')}
                       {w.walletType === 'watch-only' && (
                         <span className="ml-1.5 rounded border border-[var(--wallet-border)] px-1 py-px text-[9px] uppercase tracking-wide">
                           Watch-only
@@ -606,13 +642,24 @@ const DesktopLandingPage = () => {
                       onClick={() => handleOpenClick(w.id)}
                       className="wallet-btn-secondary px-4 py-1.5 text-sm"
                     >
-                      Open
+                      {t('desktopWallet.openButton')}
                     </button>
                     <button
-                      onClick={() => { setDeletingId(deletingId === w.id ? null : w.id); setOpeningId(null); }}
+                      onClick={() => {
+                        setDeletingId(deletingId === w.id ? null : w.id);
+                        setOpeningId(null);
+                      }}
                       className="text-xs text-red-400/60 hover:text-red-400 px-1.5 py-1"
-                      title="Delete this wallet"
-                      aria-label={`Delete ${w.wallet_name || 'unnamed wallet'}`}
+                      title={t('desktopWallet.deleteLabel', {
+                        name:
+                          w.wallet_name ||
+                          t('desktopWallet.walletNumber', { id: w.id }),
+                      })}
+                      aria-label={t('desktopWallet.deleteLabel', {
+                        name:
+                          w.wallet_name ||
+                          t('desktopWallet.walletNumber', { id: w.id }),
+                      })}
                     >
                       🗑
                     </button>
@@ -622,19 +669,32 @@ const DesktopLandingPage = () => {
                 {deletingId === w.id && (
                   <div className="mt-2 rounded-lg border border-red-400/30 bg-red-400/5 p-2.5 text-xs space-y-2">
                     <p className="wallet-text-strong">
-                      Delete “{w.wallet_name || 'Unnamed wallet'}” ({w.networkType === Network.CHIPNET ? 'Chipnet' : 'Mainnet'})?
-                      Its saved <span className="font-mono">.optn</span> file is kept, so you can re-import it later.
+                      {t('desktopWallet.deleteConfirm', {
+                        name:
+                          w.wallet_name ||
+                          t('desktopWallet.walletNumber', { id: w.id }),
+                        network:
+                          w.networkType === Network.CHIPNET
+                            ? t('settingsNetwork.chipnet')
+                            : t('settingsNetwork.mainnet'),
+                        id: w.id,
+                      })}
                     </p>
                     <div className="flex gap-2">
-                      <button onClick={() => setDeletingId(null)} className="flex-1 wallet-btn-secondary py-1.5">
-                        Cancel
+                      <button
+                        onClick={() => setDeletingId(null)}
+                        className="flex-1 wallet-btn-secondary py-1.5"
+                      >
+                        {t('desktopWallet.cancel')}
                       </button>
                       <button
                         onClick={() => void handleDelete(w.id)}
                         disabled={deleteBusy}
                         className="flex-1 py-1.5 rounded-md bg-red-500/80 text-white font-semibold disabled:opacity-50"
                       >
-                        {deleteBusy ? 'Deleting…' : 'Delete'}
+                        {deleteBusy
+                          ? t('desktopWallet.deleting')
+                          : t('desktopWallet.delete')}
                       </button>
                     </div>
                   </div>
@@ -646,9 +706,14 @@ const DesktopLandingPage = () => {
                       type="password"
                       value={password}
                       autoFocus
-                      onChange={(e) => { setPassword(e.target.value); setError(''); }}
-                      onKeyDown={(e) => { if (e.key === 'Enter') void handleUnlock(); }}
-                      placeholder="Password"
+                      onChange={(e) => {
+                        setPassword(e.target.value);
+                        setError('');
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') void handleUnlock();
+                      }}
+                      placeholder={t('desktopWallet.password')}
                       className="wallet-input w-full px-3 py-2 rounded-md wallet-text-strong"
                     />
                     {error && <p className="text-xs text-red-400">{error}</p>}
@@ -657,17 +722,24 @@ const DesktopLandingPage = () => {
                       disabled={busy}
                       className="wallet-btn-primary w-full py-2 text-sm font-semibold"
                     >
-                      {busy ? 'Unlocking…' : 'Unlock'}
+                      {busy
+                        ? t('desktopWallet.unlocking')
+                        : t('desktopWallet.unlock')}
                     </button>
-                    {bioEnrolledId === w.id && w.walletType !== 'watch-only' && w.walletType !== 'hardware' && (
-                      <button
-                        onClick={() => void handleBiometricUnlock(w.id)}
-                        disabled={busy}
-                        className="wallet-btn-secondary w-full py-2 text-sm font-semibold"
-                      >
-                        Use {bioLabel}
-                      </button>
-                    )}
+                    {bioEnrolledId === w.id &&
+                      w.walletType !== 'watch-only' &&
+                      w.walletType !== 'hardware' && (
+                        <button
+                          onClick={() => void handleBiometricUnlock(w.id)}
+                          disabled={busy}
+                          className="wallet-btn-secondary w-full py-2 text-sm font-semibold"
+                        >
+                          {t('desktopWallet.useBiometric', {
+                            label:
+                              bioLabel ?? t('desktopWallet.biometricUnlock'),
+                          })}
+                        </button>
+                      )}
                   </div>
                 )}
               </div>

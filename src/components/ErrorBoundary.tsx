@@ -1,6 +1,8 @@
 // src/components/ErrorBoundary.tsx
 
 import React from 'react';
+import { I18nContext } from '../i18n/I18nContext';
+import { recordDiagnostic } from '../services/diagnostics/DiagnosticsService';
 
 interface ErrorBoundaryProps {
   children: React.ReactNode;
@@ -15,6 +17,8 @@ class ErrorBoundary extends React.Component<
   ErrorBoundaryProps,
   ErrorBoundaryState
 > {
+  static contextType = I18nContext;
+  declare context: React.ContextType<typeof I18nContext>;
   constructor(props: ErrorBoundaryProps) {
     super(props);
     this.state = { hasError: false, error: null };
@@ -26,8 +30,10 @@ class ErrorBoundary extends React.Component<
   }
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    // You can also log the error to an error reporting service
-    console.error('Error Boundary Caught an Error:', error, errorInfo);
+    recordDiagnostic('react.error_boundary', {
+      message: error.message,
+      componentStack: errorInfo.componentStack ?? '',
+    });
   }
 
   render() {
@@ -35,7 +41,9 @@ class ErrorBoundary extends React.Component<
       // Render fallback UI
       return (
         <div className="flex flex-col items-center justify-center h-screen wallet-surface">
-          <h1 className="text-2xl font-bold mb-4 wallet-text-strong">Something went wrong.</h1>
+          <h1 className="text-2xl font-bold mb-4 wallet-text-strong">
+            {this.context?.t('error.somethingWrong') ?? 'Something went wrong.'}
+          </h1>
           <p className="wallet-muted">{this.state.error.message}</p>
         </div>
       );

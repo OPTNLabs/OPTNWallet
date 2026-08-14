@@ -10,9 +10,13 @@ import type {
 import { isArrayBufferLike, isString } from '../utils/typeGuards';
 import { SignedMessage } from '../utils/signed';
 import DeviceIntegrityService from './DeviceIntegrityService';
-import type { QuantumrootVaultRecord, SignedMessageResponseI } from '../types/types';
+import type {
+  QuantumrootVaultRecord,
+  SignedMessageResponseI,
+} from '../types/types';
 import { Network } from '../state/slices/networkSlice';
 import type { deriveQuantumrootVault } from './QuantumrootService';
+import type { Bip39Language } from './Bip39Service';
 
 /**
  * Why a caller wants a private key. Platform integrity services decide what
@@ -34,9 +38,9 @@ const KEY_PURPOSE_SCOPES: Record<KeyPurpose, string> = {
 };
 
 const KeyService = {
-  async generateMnemonic() {
+  async generateMnemonic(language?: Bip39Language) {
     const keyGen = KeyGeneration();
-    return await keyGen.generateMnemonic();
+    return await keyGen.generateMnemonic(language);
   },
 
   async retrieveKeys(walletId: number) {
@@ -118,7 +122,11 @@ const KeyService = {
     accountNumber = 0
   ): Promise<QuantumrootVaultRecord> {
     const keyManager = KeyManager();
-    return await keyManager.createQuantumrootVault(walletId, addressIndex, accountNumber);
+    return await keyManager.createQuantumrootVault(
+      walletId,
+      addressIndex,
+      accountNumber
+    );
   },
 
   async configureQuantumrootVault(
@@ -172,7 +180,9 @@ const KeyService = {
     address: string,
     purpose: KeyPurpose
   ): Promise<Uint8Array | null> {
-    await DeviceIntegrityService.assertDeviceIntegrity(KEY_PURPOSE_SCOPES[purpose]);
+    await DeviceIntegrityService.assertDeviceIntegrity(
+      KEY_PURPOSE_SCOPES[purpose]
+    );
     const keyManager = KeyManager();
     const privateKeyData = await keyManager.fetchAddressPrivateKey(address);
 

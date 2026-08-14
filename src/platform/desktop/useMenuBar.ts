@@ -299,7 +299,7 @@ async function handleOpenWalletFile(
     const { pickWalletPackFiles, importColdDataIntoOpenWallet } = await import(
       './WalletPackService'
     );
-    const pack = await pickWalletPackFiles(await walletsDir());
+    const pack = await pickWalletPackFiles((await walletsDir()) ?? null);
     if (!pack) return;
 
     // Data-only: apply into the currently open wallet.
@@ -380,7 +380,7 @@ async function handleExportWallet(walletId: number) {
   try {
     // Password resolved from unlock session / empty-password wallets / prompt.
     const { exportWalletPack } = await import('./WalletPackService');
-    const result = await exportWalletPack(walletId, await walletsDir());
+    const result = await exportWalletPack(walletId, (await walletsDir()) ?? null);
     const dataMsg = result.coldPath
       ? `Data: ${result.coldPath}`
       : `Data file skipped: ${result.coldSkippedReason ?? 'unknown'}`;
@@ -687,7 +687,11 @@ export function useMenuBar(): void {
 
       const menu = await Menu.new({ items: [fileMenu, walletMenu, viewMenu, helpMenu] });
       if (disposed) return;
-      await attachDesktopMenu(menu, currentWindow, requiresAppMenu);
+      await attachDesktopMenu(
+        menu as unknown as DesktopMenuLike<typeof currentWindow>,
+        currentWindow,
+        requiresAppMenu
+      );
     };
 
     void buildMenu();

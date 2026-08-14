@@ -27,9 +27,11 @@ import {
   integratedTorStatus,
   type ManagedTorStatus,
 } from '../../services/fusion/FusionStatusService';
+import { useI18n } from '../../i18n/useI18n';
 
 export const TorSettings: React.FC = () => {
   const dispatch = useDispatch();
+  const { t } = useI18n();
   const torEnabled = useSelector(selectTorEnabled);
   const torAuto = useSelector(selectTorAuto);
   const torHost = useSelector(selectTorHost);
@@ -40,7 +42,11 @@ export const TorSettings: React.FC = () => {
   const [torChecking, setTorChecking] = useState(false);
 
   // Integrated (app-managed) Tor.
-  const [managed, setManaged] = useState<ManagedTorStatus>({ running: false, bootstrap_percent: 0, socks_port: 0 });
+  const [managed, setManaged] = useState<ManagedTorStatus>({
+    running: false,
+    bootstrap_percent: 0,
+    socks_port: 0,
+  });
   const [torBusy, setTorBusy] = useState(false);
   const [torError, setTorError] = useState<string | null>(null);
 
@@ -103,17 +109,23 @@ export const TorSettings: React.FC = () => {
     <div className="flex flex-col gap-3 border-t border-[var(--wallet-border)] pt-4">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <p className="text-xs font-semibold wallet-muted uppercase tracking-wide">Tor</p>
-          <p className="text-[10px] wallet-muted">Required for remote CashFusion servers</p>
+          <p className="text-xs font-semibold wallet-muted uppercase tracking-wide">
+            {t('tor.title')}
+          </p>
+          <p className="text-[10px] wallet-muted">{t('tor.remoteRequired')}</p>
         </div>
         <button
           onClick={() => dispatch(setTorEnabled(!torEnabled))}
           className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors ${
-            torEnabled ? 'bg-[var(--wallet-accent)] border-[var(--wallet-accent)]' : 'wallet-surface-strong border-[var(--wallet-border)]'
+            torEnabled
+              ? 'bg-[var(--wallet-accent)] border-[var(--wallet-accent)]'
+              : 'wallet-surface-strong border-[var(--wallet-border)]'
           }`}
-          aria-label={`${torEnabled ? 'Disable' : 'Enable'} Tor`}
+          aria-label={`${torEnabled ? t('tor.disable') : t('tor.enable')} Tor`}
         >
-          <span className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${torEnabled ? 'translate-x-5' : 'translate-x-0.5'}`} />
+          <span
+            className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${torEnabled ? 'translate-x-5' : 'translate-x-0.5'}`}
+          />
         </button>
       </div>
 
@@ -124,8 +136,12 @@ export const TorSettings: React.FC = () => {
             <div className="rounded-lg border border-[var(--wallet-border)] bg-[var(--wallet-surface-strong)] p-3 space-y-2">
               <div className="flex items-center justify-between gap-2">
                 <div>
-                  <p className="text-[11px] font-semibold wallet-text-strong">Integrated Tor</p>
-                  <p className="text-[10px] wallet-muted">The app runs its own Tor — no Tor Browser needed</p>
+                  <p className="text-[11px] font-semibold wallet-text-strong">
+                    {t('tor.integrated')}
+                  </p>
+                  <p className="text-[10px] wallet-muted">
+                    {t('tor.appRunsOwn')}
+                  </p>
                 </div>
                 {managed.running ? (
                   <button
@@ -134,7 +150,7 @@ export const TorSettings: React.FC = () => {
                     disabled={torBusy}
                     className="rounded-lg border border-red-400/40 px-2.5 py-1 text-[10px] font-semibold text-red-400 disabled:opacity-50"
                   >
-                    Stop
+                    {t('tor.stop')}
                   </button>
                 ) : (
                   <button
@@ -143,16 +159,26 @@ export const TorSettings: React.FC = () => {
                     disabled={torBusy}
                     className="rounded-lg border border-[var(--wallet-accent)]/50 bg-[var(--wallet-accent)]/10 px-2.5 py-1 text-[10px] font-semibold text-[var(--wallet-accent)] disabled:opacity-50"
                   >
-                    {torBusy ? 'Starting…' : 'Start integrated Tor'}
+                    {torBusy ? t('tor.starting') : t('tor.startIntegrated')}
                   </button>
                 )}
               </div>
               {managed.running ? (
-                <p className="text-[10px] text-green-400 font-semibold">Running on port {managed.socks_port} ✓</p>
+                <p className="text-[10px] text-green-400 font-semibold">
+                  {t('tor.runningOn', { port: managed.socks_port })}
+                </p>
               ) : torBusy ? (
-                <p className="text-[10px] wallet-muted">Bootstrapping Tor… {managed.bootstrap_percent}%</p>
+                <p className="text-[10px] wallet-muted">
+                  {t('tor.bootstrapping', {
+                    percent: managed.bootstrap_percent,
+                  })}
+                </p>
               ) : null}
-              {torError && <p className="text-[10px] text-red-400/80 leading-relaxed">{torError}</p>}
+              {torError && (
+                <p className="text-[10px] text-red-400/80 leading-relaxed">
+                  {torError}
+                </p>
+              )}
             </div>
           )}
 
@@ -161,67 +187,81 @@ export const TorSettings: React.FC = () => {
               the running integrated Tor above. */}
           {!managed.running && (
             <>
-          <p className="text-[10px] wallet-muted">Or use a Tor you run yourself:</p>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => dispatch(setTorAuto(true))}
-              className={`flex-1 rounded-lg border px-2 py-1.5 text-[10px] font-semibold transition-colors ${
-                torAuto ? 'border-[var(--wallet-accent)]/50 bg-[var(--wallet-accent)]/10 text-[var(--wallet-accent)]' : 'border-[var(--wallet-border)] wallet-muted'
-              }`}
-            >
-              Auto-detect (9050 / 9150)
-            </button>
-            <button
-              type="button"
-              onClick={() => dispatch(setTorAuto(false))}
-              className={`flex-1 rounded-lg border px-2 py-1.5 text-[10px] font-semibold transition-colors ${
-                !torAuto ? 'border-[var(--wallet-accent)]/50 bg-[var(--wallet-accent)]/10 text-[var(--wallet-accent)]' : 'border-[var(--wallet-border)] wallet-muted'
-              }`}
-            >
-              Manual port
-            </button>
-          </div>
+              <p className="text-[10px] wallet-muted">
+                {t('tor.externalOption')}
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => dispatch(setTorAuto(true))}
+                  className={`flex-1 rounded-lg border px-2 py-1.5 text-[10px] font-semibold transition-colors ${
+                    torAuto
+                      ? 'border-[var(--wallet-accent)]/50 bg-[var(--wallet-accent)]/10 text-[var(--wallet-accent)]'
+                      : 'border-[var(--wallet-border)] wallet-muted'
+                  }`}
+                >
+                  {t('tor.autoDetect')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => dispatch(setTorAuto(false))}
+                  className={`flex-1 rounded-lg border px-2 py-1.5 text-[10px] font-semibold transition-colors ${
+                    !torAuto
+                      ? 'border-[var(--wallet-accent)]/50 bg-[var(--wallet-accent)]/10 text-[var(--wallet-accent)]'
+                      : 'border-[var(--wallet-border)] wallet-muted'
+                  }`}
+                >
+                  {t('tor.manualPort')}
+                </button>
+              </div>
 
-          {!torAuto && (
-            <input
-              type="number"
-              value={torPortManual}
-              onChange={(e) => dispatch(setTorPortManual(Number(e.target.value) || 9050))}
-              placeholder="9050"
-              className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface-strong)] px-3 py-2 font-mono text-xs wallet-text-strong focus:outline-none focus:border-[var(--wallet-accent)]/60"
-            />
-          )}
+              {!torAuto && (
+                <input
+                  type="number"
+                  value={torPortManual}
+                  onChange={(e) =>
+                    dispatch(setTorPortManual(Number(e.target.value) || 9050))
+                  }
+                  placeholder="9050"
+                  className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface-strong)] px-3 py-2 font-mono text-xs wallet-text-strong focus:outline-none focus:border-[var(--wallet-accent)]/60"
+                />
+              )}
 
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => void refreshTor()}
-              disabled={torChecking || !FUSION_SUPPORTED}
-              className="rounded-lg border border-[var(--wallet-border)] bg-[var(--wallet-surface-strong)] px-2.5 py-1 text-[10px] font-semibold wallet-text-strong disabled:opacity-50"
-            >
-              {torChecking ? 'Checking…' : 'Check Tor'}
-            </button>
-            {!FUSION_SUPPORTED ? (
-              <span className="text-[10px] wallet-muted">Desktop only</span>
-            ) : torAuto && torDetected !== null ? (
-              torDetected > 0 ? (
-                <span className="text-[10px] text-green-400 font-semibold">Tor found on port {torDetected} ✓</span>
-              ) : (
-                <span className="text-[10px] text-red-400 font-semibold">No Tor proxy running ✗</span>
-              )
-            ) : (
-              <span className="text-[10px] wallet-muted">Using manual port {torPortManual}</span>
-            )}
-          </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void refreshTor()}
+                  disabled={torChecking || !FUSION_SUPPORTED}
+                  className="rounded-lg border border-[var(--wallet-border)] bg-[var(--wallet-surface-strong)] px-2.5 py-1 text-[10px] font-semibold wallet-text-strong disabled:opacity-50"
+                >
+                  {torChecking ? t('tor.checking') : t('tor.check')}
+                </button>
+                {!FUSION_SUPPORTED ? (
+                  <span className="text-[10px] wallet-muted">
+                    {t('tor.desktopOnly')}
+                  </span>
+                ) : torAuto && torDetected !== null ? (
+                  torDetected > 0 ? (
+                    <span className="text-[10px] text-green-400 font-semibold">
+                      {t('tor.foundOnPort', { port: torDetected })}
+                    </span>
+                  ) : (
+                    <span className="text-[10px] text-red-400 font-semibold">
+                      {t('tor.noProxy')}
+                    </span>
+                  )
+                ) : (
+                  <span className="text-[10px] wallet-muted">
+                    {t('tor.usingManual', { port: torPortManual })}
+                  </span>
+                )}
+              </div>
 
-          {torAuto && torDetected === -1 && (
-            <p className="text-[10px] text-yellow-400/80 leading-relaxed">
-              No external Tor found. Either press “Start integrated Tor” above (recommended), or
-              start Tor Browser (9150) / a system Tor daemon (9050) and press “Check Tor”.
-              Without Tor, remote CashFusion is blocked.
-            </p>
-          )}
+              {torAuto && torDetected === -1 && (
+                <p className="text-[10px] text-yellow-400/80 leading-relaxed">
+                  {t('tor.noExternal')}
+                </p>
+              )}
             </>
           )}
         </>

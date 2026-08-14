@@ -3,11 +3,13 @@ import { useSelector } from 'react-redux';
 import WalletManager from '../apis/WalletManager/WalletManager';
 import DeviceIntegrityService from '../services/DeviceIntegrityService';
 import { selectWalletId } from '../state/slices/walletSlice';
+import { useI18n } from '../i18n/useI18n';
 
 const RecoveryPhrase = () => {
   const [mnemonic, setMnemonic] = useState('');
   const [isRevealed, setIsRevealed] = useState<boolean>(false);
   const walletId = useSelector(selectWalletId);
+  const { t } = useI18n();
 
   useEffect(() => {
     return () => {
@@ -16,7 +18,9 @@ const RecoveryPhrase = () => {
   }, []);
 
   const handleReveal = async () => {
-    await DeviceIntegrityService.assertDeviceIntegrity('recovery_phrase_reveal');
+    await DeviceIntegrityService.assertDeviceIntegrity(
+      'recovery_phrase_reveal'
+    );
     const walletManager = WalletManager();
     if (walletId) {
       const walletInfo = await walletManager.getWalletInfo(walletId);
@@ -42,17 +46,14 @@ const RecoveryPhrase = () => {
             <div className="flex justify-center items-base line mt-4">
               <img
                 src="/assets/images/OPTNWelcome3.png"
-                alt="Welcome"
+                alt={t('onboarding.welcomeAlt')}
                 className="max-w-full h-auto"
                 width={'68%'}
                 height={'68%'}
               />
             </div>
-            <button
-              onClick={handleReveal}
-              className="wallet-btn-danger"
-            >
-              Reveal Backup Phrase
+            <button onClick={handleReveal} className="wallet-btn-danger">
+              {t('recovery.reveal')}
             </button>
           </>
         ) : (
@@ -64,20 +65,17 @@ const RecoveryPhrase = () => {
                 </div>
               ))}
             </div>
-            {/* Optional: Hide button */}
-            <button
-              onClick={handleHide}
-              className="wallet-btn-primary mt-4"
-            >
-              Hide Backup Phrase
+            <button onClick={handleHide} className="wallet-btn-primary mt-4">
+              {t('recovery.hide')}
             </button>
           </>
         )}
         <div className="my-4 text-center">
-          <p className="font-bold underline text-xl wallet-danger-text">Warning</p>
+          <p className="font-bold underline text-xl wallet-danger-text">
+            {t('recovery.warning')}
+          </p>
           <p className="justify-center text-sm my-2 p-1 wallet-muted">
-            Displaying your mnemonic backup phrase can compromise your funds.
-            Ensure you keep it secure.
+            {t('recovery.warningDescription')}
           </p>
         </div>
       </div>

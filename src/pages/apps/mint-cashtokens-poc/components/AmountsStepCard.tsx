@@ -3,6 +3,7 @@ import { Badge, CardShell } from './uiPrimitives';
 import type { MintAppUtxo, MintOutputDraft } from '../types';
 import { shortHash, utxoKey } from '../utils';
 import { getMintSourceCategory } from '../utils/sourceHelpers';
+import { useAddonI18n } from '../../../../i18n/useAddonI18n';
 
 type AmountsStepCardProps = {
   selectedUtxos: MintAppUtxo[];
@@ -19,6 +20,7 @@ function AmountsStepCardImpl({
   onOpenAddOutputDraftForm,
   onOpenEditOutputDraftForm,
 }: AmountsStepCardProps) {
+  const { t: addonT } = useAddonI18n();
   const selectedSourceByKey = useMemo(() => {
     const out = new Map<string, MintAppUtxo>();
     for (const u of selectedUtxos) out.set(utxoKey(u), u);
@@ -38,7 +40,7 @@ function AmountsStepCardImpl({
 
   return (
     <CardShell
-      title="Amounts"
+      title={addonT('module.amounts', 'Amounts')}
       right={
         outputDrafts.length > 0 ? (
           <Badge tone="green">{`${outputDrafts.length} output${
@@ -68,7 +70,7 @@ function AmountsStepCardImpl({
               onClick={onOpenAddOutputDraftForm}
               className="wallet-btn-primary px-3 py-2 text-sm font-semibold"
             >
-              + Add output
+              + {addonT('common.addOutput', 'Add output')}
             </button>
           </div>
 

@@ -40,6 +40,8 @@ import experimentalReducer, {
   setCashFusionEnabled,
   setP2pFusionEnabled,
 } from '../../../state/slices/experimentalSlice';
+import preferencesReducer from '../../../state/slices/preferencesSlice';
+import { I18nProvider } from '../../../i18n/I18nProvider';
 
 describe('CashFusion settings mode enforcement', () => {
   afterEach(() => {
@@ -53,6 +55,7 @@ describe('CashFusion settings mode enforcement', () => {
         wallet_id: (state = { currentWalletId: 7 }) => state,
         network: (state = { currentNetwork: 'chipnet' }) => state,
         utxos: (state = { utxos: {} }) => state,
+        preferences: preferencesReducer,
       },
     });
     store.dispatch(setCashFusionEnabled(true));
@@ -60,7 +63,9 @@ describe('CashFusion settings mode enforcement', () => {
 
     const html = renderToStaticMarkup(
       <Provider store={store}>
-        <CashFusionSettings />
+        <I18nProvider>
+          <CashFusionSettings />
+        </I18nProvider>
       </Provider>
     );
     const serverCardStart = html.indexOf('aria-disabled="true"');

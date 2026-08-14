@@ -249,7 +249,7 @@ export function createSimpleSendPlanner({
       const inputs = confirmedPool.slice(0, k);
       const res = await tryBuild(inputs, outputs);
       if (res.ok && res.changeSats >= 0) {
-        return { ok: true, inputs, ...res };
+        return { ...res, inputs };
       }
       if (!res.ok && 'err' in res) lastErr = res.err;
     }
@@ -259,7 +259,7 @@ export function createSimpleSendPlanner({
       const inputs = combined.slice(0, k);
       const res = await tryBuild(inputs, outputs);
       if (res.ok && res.changeSats >= 0) {
-        return { ok: true, inputs, ...res };
+        return { ...res, inputs };
       }
       if (!res.ok && 'err' in res) lastErr = res.err;
     }

@@ -1,5 +1,6 @@
 import React, {
   memo,
+  useContext,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -7,6 +8,7 @@ import React, {
 } from 'react';
 import Draggable from 'react-draggable';
 import { createPortal } from 'react-dom';
+import { AddonI18nContext } from '../../../../i18n/AddonI18nContext';
 
 export const Badge: React.FC<{
   children: React.ReactNode;
@@ -187,6 +189,13 @@ export const ContainedSwipeConfirmModal: React.FC<{
   onConfirm,
   children,
 }) => {
+  const addonI18n = useContext(AddonI18nContext);
+  const cancelLabel = addonI18n?.t('common.cancel', 'Cancel') ?? 'Cancel';
+  const defaultWarning =
+    addonI18n?.t(
+      'common.broadcastWarning',
+      'Broadcasts immediately after confirmation.'
+    ) ?? 'Broadcasts immediately after confirmation.';
   const HANDLE_SIZE = 56;
   const trackRef = useRef<HTMLDivElement>(null);
   const [dragX, setDragX] = useState(0);
@@ -292,7 +301,8 @@ export const ContainedSwipeConfirmModal: React.FC<{
           aria-modal="true"
           aria-label={title}
           style={{
-            maxHeight: 'min(84vh, calc(100dvh - var(--safe-top) - var(--safe-bottom) - 24px))',
+            maxHeight:
+              'min(84vh, calc(100dvh - var(--safe-top) - var(--safe-bottom) - 24px))',
           }}
         >
           <div className="px-5 pt-3 pb-3 wallet-surface">
@@ -315,8 +325,8 @@ export const ContainedSwipeConfirmModal: React.FC<{
                 onClick={onCancel}
                 disabled={loading}
                 className="shrink-0 inline-flex items-center justify-center rounded-full h-9 w-9 wallet-surface-strong wallet-text-strong disabled:opacity-50"
-                aria-label="Cancel"
-                title="Cancel"
+                aria-label={cancelLabel}
+                title={cancelLabel}
               >
                 ✕
               </button>
@@ -328,7 +338,7 @@ export const ContainedSwipeConfirmModal: React.FC<{
               </div>
             ) : (
               <div className="mt-3 rounded-2xl wallet-surface-strong border border-[var(--wallet-border)] px-3.5 py-2.5 text-[13px] leading-5 wallet-text-strong">
-                Broadcasts immediately after confirmation.
+                {defaultWarning}
               </div>
             )}
           </div>

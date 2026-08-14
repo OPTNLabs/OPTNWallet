@@ -44,39 +44,46 @@ jobs:
       attestations: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       - name: Set up QEMU
         if: github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.push == 'true')
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
 
       - name: Decide whether to push
         id: meta
         shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_PUSH: ${{ inputs.push }}
+          INPUT_PLATFORMS: ${{ inputs.platforms }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
           PUSH=false
           PLATFORMS="linux/amd64"
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            if [[ "${{ inputs.push }}" == "true" ]]; then
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            if [[ "$INPUT_PUSH" == "true" ]]; then
               PUSH=true
-              PLATFORMS="${{ inputs.platforms }}"
+              PLATFORMS="$INPUT_PLATFORMS"
             fi
-          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
+          elif [[ "$REF_TYPE" == "tag" ]]; then
             PUSH=true
             PLATFORMS="linux/amd64,linux/arm64"
           fi
           echo "push=${PUSH}" >> "$GITHUB_OUTPUT"
           echo "platforms=${PLATFORMS}" >> "$GITHUB_OUTPUT"
 
-          OWNER_LC="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          OWNER_LC="$(printf '%s' "$REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
           echo "owner_lc=${OWNER_LC}" >> "$GITHUB_OUTPUT"
 
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            RAW="${{ github.ref_name }}"
+          if [[ "$REF_TYPE" == "tag" ]]; then
+            RAW="$REF_NAME"
             STRIPPED="${RAW#v}"
             echo "version_tag=${RAW}" >> "$GITHUB_OUTPUT"
             echo "version_stripped=${STRIPPED}" >> "$GITHUB_OUTPUT"
@@ -88,7 +95,7 @@ jobs:
 
       - name: Log in to GHCR
         if: steps.meta.outputs.push == 'true'
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -96,7 +103,7 @@ jobs:
 
       - name: Docker metadata
         id: docker_meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051
         with:
           images: ghcr.io/${{ steps.meta.outputs.owner_lc }}/${{ env.IMAGE_NAME }}
           tags: |
@@ -111,7 +118,7 @@ jobs:
 
       - name: Build (and push on tag / dispatch)
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
         with:
           context: packages/docker-dev
           file: packages/docker-dev/Dockerfile
@@ -140,7 +147,7 @@ jobs:
 
       - name: Attest build provenance (push only)
         if: steps.meta.outputs.push == 'true' && steps.build.outputs.digest != ''
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
         with:
           subject-name: ghcr.io/${{ steps.meta.outputs.owner_lc }}/${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.build.outputs.digest }}

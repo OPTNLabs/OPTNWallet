@@ -840,21 +840,27 @@ export function parseRoundMessage(content: string): RoundMessage | null {
           return null;
         }
         break;
-      case 'credential_request':
+      case 'credential_request': {
+        const requests = message.requests as Array<{ index: number; e: string }>;
+        const amountCommitments = message.amountCommitments as string[];
+        const componentCommitments = message.componentCommitments as Array<{
+          index: number;
+          amountCommitment: string;
+        }>;
         if (
-          !Array.isArray(message.requests) ||
-          message.requests.length < 1 ||
-          message.requests.length > MAX_COMPONENTS ||
-          !message.requests.every(validCredentialRequestSlot) ||
-          !Array.isArray(message.amountCommitments) ||
-          message.amountCommitments.length < 1 ||
-          message.amountCommitments.length > MAX_COMPONENTS ||
-          !message.amountCommitments.every(
+          !Array.isArray(requests) ||
+          requests.length < 1 ||
+          requests.length > MAX_COMPONENTS ||
+          !requests.every(validCredentialRequestSlot) ||
+          !Array.isArray(amountCommitments) ||
+          amountCommitments.length < 1 ||
+          amountCommitments.length > MAX_COMPONENTS ||
+          !amountCommitments.every(
             (c) => typeof c === 'string' && HEX_130.test(c)
           ) ||
-          !Array.isArray(message.componentCommitments) ||
-          message.componentCommitments.length !== message.requests.length ||
-          !message.componentCommitments.every(
+          !Array.isArray(componentCommitments) ||
+          componentCommitments.length !== requests.length ||
+          !componentCommitments.every(
             validInitialComponentCommitment
           ) ||
           typeof message.pedersenTotalNonce !== 'string' ||
@@ -870,22 +876,23 @@ export function parseRoundMessage(content: string): RoundMessage | null {
             1,
             MAX_OUTPUT_CREDENTIALS_PER_PEER
           ) ||
-          message.requests.length !==
+          requests.length !==
             message.inputCount + message.outputCount ||
-          message.amountCommitments.length !== message.requests.length ||
-          message.requests.length > CREDENTIAL_SLOTS_PER_PEER ||
-          new Set(message.requests.map((request) => request.index)).size !==
-            message.requests.length ||
-          message.componentCommitments.some(
+          amountCommitments.length !== requests.length ||
+          requests.length > CREDENTIAL_SLOTS_PER_PEER ||
+          new Set(requests.map((request) => request.index)).size !==
+            requests.length ||
+          componentCommitments.some(
             (commitment, index) =>
-              commitment.index !== message.requests[index].index ||
+              commitment.index !== requests[index].index ||
               commitment.amountCommitment.toLowerCase() !==
-                message.amountCommitments[index].toLowerCase()
+                amountCommitments[index].toLowerCase()
           )
         ) {
           return null;
         }
         break;
+      }
       case 'credential_response':
         if (
           !Array.isArray(message.responses) ||

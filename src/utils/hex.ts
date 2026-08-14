@@ -82,7 +82,7 @@ for (let n = 0; n < 0x100; n++) {
 
 // faster (4x) binToHex implementation: https://archive.is/2v7QZ
 // libauth uses slower array conversion method
-export function binToHex(buffer) {
+export function binToHex(buffer: Uint8Array) {
   let out = '';
   for (let idx = 0, edx = buffer.length; idx < edx; idx++) {
     out += LUT_HEX_8B[buffer[idx]];

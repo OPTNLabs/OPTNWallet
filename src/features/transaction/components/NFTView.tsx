@@ -3,11 +3,10 @@ import { FaCamera } from 'react-icons/fa';
 import { UTXO } from '../../../types/types';
 import { DUST } from '../../../utils/constants';
 import type { BcmrTokenMetadataState } from '../../../types/bcmr';
-import {
-  resolveTokenPresentation,
-} from '../../../utils/tokenPresentation';
+import { resolveTokenPresentation } from '../../../utils/tokenPresentation';
 import type { TokenPresentationFallback } from '../../../utils/tokenPresentation';
 import TokenIdentityBadge from '../../../components/ui/TokenIdentityBadge';
+import { useI18n } from '../../../i18n/useI18n';
 
 interface NFTViewProps {
   recipientAddress: string;
@@ -40,6 +39,7 @@ const NFTView: React.FC<NFTViewProps> = ({
   selectedTokenMetadata = null,
   selectedTokenFallback = null,
 }) => {
+  const { t } = useI18n();
   const presentation = resolveTokenPresentation(
     selectedTokenCategory || 'nft-token',
     selectedTokenMetadata,
@@ -54,7 +54,9 @@ const NFTView: React.FC<NFTViewProps> = ({
           showStatus
         />
       </div>
-      <label className="block font-medium mb-1">Recipient Address</label>
+      <label className="block font-medium mb-1">
+        {t('builder.recipientAddress')}
+      </label>
       <div className="flex items-center mb-2">
         <input
           type="text"
@@ -65,13 +67,15 @@ const NFTView: React.FC<NFTViewProps> = ({
         <button
           onClick={scanBarcode}
           className="ml-2 wallet-btn-primary p-2"
-          title="Scan QR Code"
+          title={t('builder.scanQrCode')}
         >
           <FaCamera />
         </button>
       </div>
       <div className="mb-2">
-        <label className="block font-medium mb-1">BCH amount (sats)</label>
+        <label className="block font-medium mb-1">
+          {t('builder.bchAmountSats')}
+        </label>
         <input
           type="number"
           value={transferAmount}
@@ -81,7 +85,9 @@ const NFTView: React.FC<NFTViewProps> = ({
         />
       </div>
       <div className="mb-2">
-        <label className="block font-medium mb-1">Collectible amount</label>
+        <label className="block font-medium mb-1">
+          {t('builder.collectibleAmount')}
+        </label>
         <input
           type="number"
           value={
@@ -96,14 +102,14 @@ const NFTView: React.FC<NFTViewProps> = ({
       </div>
       <div className="mb-2">
         <label className="block font-medium mb-1">
-          Genesis input for this collectible
+          {t('builder.genesisCollectible')}
         </label>
         <select
           value={selectedTokenCategory}
           onChange={(e) => setSelectedTokenCategory(e.target.value)}
           className="wallet-input p-2 w-full break-words whitespace-normal"
         >
-          <option value="">Select genesis input</option>
+          <option value="">{t('builder.selectGenesisInput')}</option>
           {selectedUtxos
             .filter((utxo) => !utxo.token && utxo.tx_pos === 0)
             .map((utxo, index) => (
@@ -118,13 +124,13 @@ const NFTView: React.FC<NFTViewProps> = ({
           onClick={() => setShowNFTConfigPopup(true)}
           className="wallet-btn-secondary font-bold py-2 px-4"
         >
-          Configure collectible
+          {t('builder.configureCollectible')}
         </button>
         <button
           onClick={handleAddOutput}
           className="wallet-btn-primary font-bold py-2 px-4"
         >
-          Add recipient
+          {t('builder.addRecipient')}
         </button>
       </div>
     </>
