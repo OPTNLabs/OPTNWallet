@@ -1,0 +1,71 @@
+name: Desktop E2E
+
+on:
+  pull_request:
+    branches: [main, staging, dev]
+
+concurrency:
+  group: desktop-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop-e2e:
+    name: Desktop E2E (Linux)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install Linux WebView and display dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf libssl-dev libgtk-3-dev \
+            libevent-2.1-7 libudev-dev libusb-1.0-0-dev pkg-config \
+            webkit2gtk-driver xvfb
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Fetch bundled Tor (integrated CashFusion privacy)
+        run: npx --no-install tsx scripts/fetch-tor.mts linux-x86_64
+
+      - name: Install tauri-driver
+        run: cargo install tauri-driver --locked
+
+      - name: Build unbundled debug desktop binary
+        run: npx tauri build --debug --no-bundle
+
+      - name: Run WebdriverIO E2E suite
+        env:
+          TAURI_E2E_APP_BINARY: ${{ github.workspace }}/src-tauri/target/debug/optn-wallet-desktop
+        run: |
+          if [ ! -x "$HOME/.cargo/bin/tauri-driver" ]; then
+            echo "tauri-driver was not installed at $HOME/.cargo/bin/tauri-driver"
+            exit 1
+          fi
+          if [ ! -x "$TAURI_E2E_APP_BINARY" ]; then
+            echo "missing debug binary at $TAURI_E2E_APP_BINARY"
+            ls -la src-tauri/target/debug || true
+            exit 1
+          fi
+          xvfb-run --auto-servernum --server-args='-screen 0 1280x1024x24' npm run test:e2e
