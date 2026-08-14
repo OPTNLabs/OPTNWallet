@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useSelector } from 'react-redux';
+import { useDispatch, useSelector } from 'react-redux';
 import Popup from '../../components/transaction/Popup';
 import StatusChip from '../../components/ui/StatusChip';
 import type {
@@ -7,11 +7,14 @@ import type {
   TransactionDetailParticipant,
 } from '../../types/types';
 import ElectrumService from '../../services/ElectrumService';
+import TransactionManager from '../../apis/TransactionManager/TransactionManager';
 import {
   getCoinLabel,
   setCoinLabel,
 } from '../../platform/desktop/CoinLabelService';
+import { addTransactions } from '../../state/slices/transactionSlice';
 import { selectWalletId } from '../../state/slices/walletSlice';
+import { isTxConfirmed } from '../../utils/txConfirmation';
 
 type Props = {
   txid: string;
@@ -102,6 +105,7 @@ export default function TransactionDetailPopup({
   onClose,
 }: Props) {
   const walletId = useSelector(selectWalletId);
+  const dispatch = useDispatch();
   const [details, setDetails] = useState<TransactionDetails | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -114,13 +118,41 @@ export default function TransactionDetailPopup({
       setLoading(true);
       setError('');
       try {
-        const next = await ElectrumService.getTransactionDetails(txid, { forceRefresh: true });
+        const next = await ElectrumService.getTransactionDetails(txid, {
+          forceRefresh: true,
+        });
         if (!cancelled) {
           setDetails(next);
           if (!next)
             setError(
               'Transaction details are not available from Electrum right now.'
             );
+          // Write confirmed height back so Home/list stop showing Unconfirmed
+          // for fusion rows that were inserted with height 0 at broadcast.
+          // Verbose Electrum often has confs without height — derive via tip.
+          if (next && walletId > 0 && isTxConfirmed(next)) {
+            const { resolveConfirmedBlockHeight } = await import(
+              '../../services/historyHeightBackfill'
+            );
+            const height = await resolveConfirmedBlockHeight(next);
+            if (height != null && height > 0) {
+              dispatch(
+                addTransactions({
+                  wallet_id: walletId,
+                  transactions: [
+                    {
+                      tx_hash: txid,
+                      height,
+                      timestamp: next.timestamp,
+                    },
+                  ],
+                })
+              );
+              void TransactionManager()
+                .applyConfirmedHeight(walletId, txid, height, next.timestamp)
+                .catch(() => undefined);
+            }
+          }
         }
       } catch (err) {
         if (!cancelled) {
@@ -139,7 +171,7 @@ export default function TransactionDetailPopup({
     return () => {
       cancelled = true;
     };
-  }, [txid]);
+  }, [txid, walletId, dispatch]);
 
   useEffect(() => {
     if (walletId <= 0 || !txid) {
@@ -208,15 +240,27 @@ export default function TransactionDetailPopup({
             <div>
               <div className="text-xs wallet-muted mb-1">Status</div>
               <div className="text-sm wallet-text-strong">
-                {details?.confirmations || txHeight > 0
-                  ? `${details?.confirmations ?? 1} confirmation${(details?.confirmations ?? 1) === 1 ? '' : 's'}`
-                  : 'Pending'}
+                {loading
+                  ? 'Loading…'
+                  : isTxConfirmed({
+                        confirmations: details?.confirmations,
+                        height: details?.height ?? txHeight,
+                      })
+                    ? `${details?.confirmations ?? 1} confirmation${
+                        (details?.confirmations ?? 1) === 1 ? '' : 's'
+                      }`
+                    : 'Unconfirmed'}
               </div>
             </div>
-            {details?.confirmations || txHeight > 0 ? (
+            {loading ? (
+              <StatusChip tone="neutral">Loading</StatusChip>
+            ) : isTxConfirmed({
+                confirmations: details?.confirmations,
+                height: details?.height ?? txHeight,
+              }) ? (
               <StatusChip tone="success">Confirmed</StatusChip>
             ) : (
-              <StatusChip tone="warning">Pending</StatusChip>
+              <StatusChip tone="warning">Unconfirmed</StatusChip>
             )}
           </div>
 
@@ -224,19 +268,22 @@ export default function TransactionDetailPopup({
             <div>
               <div className="text-xs wallet-muted">Block</div>
               <div className="wallet-text-strong">
-                {details?.height ?? (txHeight > 0 ? txHeight : 'Unconfirmed')}
+                {loading
+                  ? '…'
+                  : (details?.height ??
+                    (txHeight > 0 ? txHeight : 'Unconfirmed'))}
               </div>
             </div>
             <div>
               <div className="text-xs wallet-muted">Fee</div>
               <div className="wallet-text-strong">
-                {formatSats(details?.feeSats)}
+                {loading ? '…' : formatSats(details?.feeSats)}
               </div>
             </div>
             <div className="col-span-2">
               <div className="text-xs wallet-muted">Timestamp</div>
               <div className="wallet-text-strong">
-                {formatTimestamp(details?.timestamp)}
+                {loading ? '…' : formatTimestamp(details?.timestamp)}
               </div>
             </div>
             <div className="col-span-2">

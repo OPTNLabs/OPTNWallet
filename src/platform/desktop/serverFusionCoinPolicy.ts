@@ -4,9 +4,12 @@
  * `select_random_coins`, and `FUSE_DEPTH_THRESHOLD`).
  *
  * Adopted behavior:
- * - address is the indivisible linkage bucket;
- * - one bad coin rejects the entire address;
- * - only 1–3 confirmed, non-token, non-frozen coins per address are eligible;
+ * - address is the linkage bucket;
+ * - token / frozen / bad-value coins are left behind; remaining plain BCH
+ *   on that address can still fuse;
+ * - more than 3 UTXOs on one address no longer kills the bucket — we keep
+ *   the 3 largest usable coins (EC skips the address; that trapped reuse of
+ *   a single receive address: 8 coins, 0 eligible);
  * - random selection is per bucket, capped at 20 coins, with EC's first-bucket
  *   fallback when sampling selects nothing;
  * - depth completion is by eligible value and stops at 99.9%; EC considers an
@@ -32,10 +35,19 @@ export type ServerFusionCoin = UTXO & {
   frozenFlags?: string;
 };
 
+export type ServerFusionSkipReason =
+  | 'unconfirmed'
+  | 'token'
+  | 'frozen'
+  | 'too-many-coins'
+  | 'bad-value'
+  | 'empty-address';
+
 export type ServerFusionAddressBucket = Readonly<{
   address: string;
   coins: ServerFusionCoin[];
   value: number;
+  skipReason?: ServerFusionSkipReason;
 }>;
 
 export type ServerFusionClassification = Readonly<{
@@ -43,6 +55,7 @@ export type ServerFusionClassification = Readonly<{
   ineligibleBuckets: ServerFusionAddressBucket[];
   totalValue: number;
   hasUnconfirmed: boolean;
+  skipCounts: Partial<Record<ServerFusionSkipReason, number>>;
 }>;
 
 function coinValue(coin: ServerFusionCoin): number {
@@ -62,54 +75,148 @@ function hasFrozenFlag(coin: ServerFusionCoin): boolean {
 
 function bucketOf(
   address: string,
-  coins: ServerFusionCoin[]
+  coins: ServerFusionCoin[],
+  skipReason?: ServerFusionSkipReason
 ): ServerFusionAddressBucket {
   return {
     address,
     coins: [...coins],
     value: coins.reduce((sum, coin) => sum + coinValue(coin), 0),
+    ...(skipReason ? { skipReason } : {}),
   };
 }
 
-export function classifyServerFusionCoins(
+function coinLooksConfirmed(coin: ServerFusionCoin): boolean {
+  if (Number(coin.height) > 0) return true;
+  const confs = Number((coin as { confirmations?: number }).confirmations);
+  return Number.isFinite(confs) && confs > 0;
+}
+
+function coinSkipReason(
+  coin: ServerFusionCoin,
+  requireConfirmed: boolean
+): ServerFusionSkipReason | undefined {
+  if (coin.token != null || coin.token_data != null) return 'token';
+  if (hasFrozenFlag(coin)) return 'frozen';
+  const value = coinValue(coin);
+  if (!Number.isSafeInteger(value) || value < 0) return 'bad-value';
+  if (requireConfirmed && !coinLooksConfirmed(coin)) return 'unconfirmed';
+  return undefined;
+}
+
+function takeLargestUsable(
   coins: readonly ServerFusionCoin[]
-): ServerFusionClassification {
+): ServerFusionCoin[] {
+  return [...coins]
+    .sort((a, b) => coinValue(b) - coinValue(a))
+    .slice(0, EC_SERVER_FUSION_MAX_COINS_PER_ADDRESS);
+}
+
+function groupUsableByAddress(
+  coins: readonly ServerFusionCoin[],
+  requireConfirmed: boolean
+): {
+  byAddress: Map<string, ServerFusionCoin[]>;
+  usableByAddress: Map<string, ServerFusionCoin[]>;
+  totalValue: number;
+  hasUnconfirmed: boolean;
+} {
   const byAddress = new Map<string, ServerFusionCoin[]>();
+  const usableByAddress = new Map<string, ServerFusionCoin[]>();
   let totalValue = 0;
   let hasUnconfirmed = false;
 
   for (const coin of coins) {
     totalValue += coinValue(coin);
-    if (!(Number(coin.height) > 0)) hasUnconfirmed = true;
+    if (!coinLooksConfirmed(coin)) hasUnconfirmed = true;
     const address = String(coin.address ?? '');
     const bucket = byAddress.get(address) ?? [];
     bucket.push(coin);
     byAddress.set(address, bucket);
+    if (!address || coinSkipReason(coin, requireConfirmed)) continue;
+    const usable = usableByAddress.get(address) ?? [];
+    usable.push(coin);
+    usableByAddress.set(address, usable);
   }
+
+  return { byAddress, usableByAddress, totalValue, hasUnconfirmed };
+}
+
+export function classifyServerFusionCoins(
+  coins: readonly ServerFusionCoin[],
+  options?: { requireConfirmed?: boolean }
+): ServerFusionClassification {
+  const requireConfirmed = options?.requireConfirmed === true;
+  const { byAddress, usableByAddress, totalValue, hasUnconfirmed } =
+    groupUsableByAddress(coins, requireConfirmed);
 
   const eligibleBuckets: ServerFusionAddressBucket[] = [];
   const ineligibleBuckets: ServerFusionAddressBucket[] = [];
+  const skipCounts: Partial<Record<ServerFusionSkipReason, number>> = {};
   for (const [address, addressCoins] of byAddress) {
-    const eligible =
-      address.length > 0 &&
-      addressCoins.length <= EC_SERVER_FUSION_MAX_COINS_PER_ADDRESS &&
-      addressCoins.every((coin) => {
-        const value = coinValue(coin);
-        return (
-          Number.isSafeInteger(value) &&
-          value >= 0 &&
-          Number(coin.height) > 0 &&
-          coin.token == null &&
-          coin.token_data == null &&
-          !hasFrozenFlag(coin)
-        );
-      });
-    (eligible ? eligibleBuckets : ineligibleBuckets).push(
-      bucketOf(address, addressCoins)
-    );
+    const usable = usableByAddress.get(address) ?? [];
+    if (usable.length === 0) {
+      const skipReason = !address
+        ? 'empty-address'
+        : coinSkipReason(addressCoins[0], requireConfirmed) ?? 'empty-address';
+      skipCounts[skipReason] = (skipCounts[skipReason] ?? 0) + 1;
+      ineligibleBuckets.push(bucketOf(address, addressCoins, skipReason));
+      continue;
+    }
+    eligibleBuckets.push(bucketOf(address, takeLargestUsable(usable)));
   }
 
-  return { eligibleBuckets, ineligibleBuckets, totalValue, hasUnconfirmed };
+  return {
+    eligibleBuckets,
+    ineligibleBuckets,
+    totalValue,
+    hasUnconfirmed,
+    skipCounts,
+  };
+}
+
+/**
+ * Addresses with more usable plain coins than CashFusion will take in one
+ * round. Caller can consolidate these to one fresh address before fusing.
+ */
+export function findCrowdedPlainAddressBuckets(
+  coins: readonly ServerFusionCoin[],
+  options?: { requireConfirmed?: boolean }
+): ServerFusionAddressBucket[] {
+  const requireConfirmed = options?.requireConfirmed === true;
+  const { usableByAddress } = groupUsableByAddress(coins, requireConfirmed);
+  const crowded: ServerFusionAddressBucket[] = [];
+  for (const [address, usable] of usableByAddress) {
+    if (usable.length > EC_SERVER_FUSION_MAX_COINS_PER_ADDRESS) {
+      crowded.push(bucketOf(address, usable));
+    }
+  }
+  crowded.sort((a, b) => b.coins.length - a.coins.length);
+  return crowded;
+}
+
+/** Why server Fusion has zero eligible address buckets. */
+export function formatServerFusionEmptyReason(
+  classified: ServerFusionClassification,
+  options?: { auto?: boolean }
+): string {
+  const prefix = options?.auto ? 'Auto: ' : '';
+  const bits = Object.entries(classified.skipCounts)
+    .filter(([, n]) => (n ?? 0) > 0)
+    .map(([reason, n]) => `${reason}=${n}`);
+  const why =
+    bits.length > 0
+      ? ` Skips: ${bits.join(', ')}.`
+      : classified.ineligibleBuckets.length > 0
+        ? ` ${classified.ineligibleBuckets.length} address bucket(s) skipped.`
+        : '';
+  return (
+    `${prefix}no eligible server CashFusion address buckets.${why} ` +
+    `Need 1–3 plain BCH coins on an address (no tokens, not frozen` +
+    `${classified.hasUnconfirmed && (classified.skipCounts.unconfirmed ?? 0) > 0 ? ', confirmed height' : ''}). ` +
+    `A crowded address now uses its 3 largest plain coins. ` +
+    `Auto still stops at the rounds-per-coin box.`
+  );
 }
 
 export type ServerFusionRandomSelectionOptions = Readonly<{

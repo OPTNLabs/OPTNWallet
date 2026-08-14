@@ -1,6 +1,6 @@
 # OPTN Hot / Cold Wallet Design
 
-**Status:** adopted 2026-08-05 (PR #12 worktree)  
+**Status:** adopted — HOT UTXO map is spendable truth; history/depth stay cold.
 **Base:** OPTN Labs 1.7.0 spendable-coin path  
 **Goal:** one truth for money + decades of depth without dual-boss balance bugs
 

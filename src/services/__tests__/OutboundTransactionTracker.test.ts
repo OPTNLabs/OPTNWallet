@@ -232,6 +232,47 @@ describe('OutboundTransactionTracker Fusion completion', () => {
     ).resolves.toBeNull();
   });
 
+  it('does not let a delayed rebroadcast demote a seen Fusion record', async () => {
+    const { default: OutboundTransactionTracker } = await import(
+      '../OutboundTransactionTracker'
+    );
+    const txid =
+      '9a538906e6466ebd2617d321f71bc94e56056ce213d366773699e28158e00614';
+    await OutboundTransactionTracker.trackAttempt({
+      rawTx: '00',
+      walletId: 5,
+      source: 'p2p-fusion',
+      privacyRoute: 'tor-only',
+      spentInputs: [],
+    });
+    await OutboundTransactionTracker.markState(txid, 'seen', null, 5);
+
+    const retried = await OutboundTransactionTracker.trackAttempt({
+      rawTx: '00',
+      walletId: 5,
+      source: 'p2p-fusion',
+      privacyRoute: 'tor-only',
+      spentInputs: [],
+    });
+    expect(retried).toMatchObject({
+      state: 'seen',
+      verificationPending: false,
+    });
+
+    const pending = await OutboundTransactionTracker.markVerificationPending(
+      txid,
+      'Awaiting independent network visibility.',
+      5
+    );
+    expect(pending).toMatchObject({
+      state: 'seen',
+      verificationPending: false,
+    });
+    await expect(
+      OutboundTransactionTracker.findFusionVerificationPending(5)
+    ).resolves.toBeNull();
+  });
+
   it('durably reserves spent inputs when IndexedDB is temporarily unavailable', async () => {
     setItemMock.mockRejectedValue(new Error('IndexedDB unavailable'));
     const { default: OutboundTransactionTracker } = await import(

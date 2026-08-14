@@ -57,7 +57,7 @@ import {
   removeData as bioRemoveData,
 } from '@choochmeque/tauri-plugin-biometry-api';
 import {
-  isWalletPasswordLongEnough,
+  isWalletPasswordAcceptable,
   validateNewWalletPassword,
   walletPasswordTooShortMessage,
 } from './passwordPolicy';
@@ -149,8 +149,8 @@ export async function createWalletWithPassword(
     derivationPath,
     derivationPathSource,
   } = args;
-  // Enforce min length at the API so every caller (create/import/file open) is covered.
-  if (!isWalletPasswordLongEnough(password)) {
+  // Empty = no password (EC-style); non-empty must be ≥ 8 characters.
+  if (!isWalletPasswordAcceptable(password)) {
     throw new Error(walletPasswordTooShortMessage());
   }
   const walletType = args.walletType ?? WalletType.STANDARD;
@@ -668,7 +668,7 @@ async function protectPublicKeyWalletWithPassword(
   walletType: typeof WATCH_ONLY_WALLET_TYPE | typeof HARDWARE_WALLET_TYPE,
   gatePrefix: string
 ): Promise<void> {
-  if (!isWalletPasswordLongEnough(password)) {
+  if (!isWalletPasswordAcceptable(password)) {
     throw new Error(walletPasswordTooShortMessage());
   }
   const manager = WalletManager();
@@ -771,8 +771,8 @@ async function openPublicKeyWallet(
       await purgeCrossNetworkData(walletId, net);
     } catch (err) {
       console.warn(
-        '[DesktopWalletManager] cross-network purge on wallet open failed',
-        { expectedType, error: err }
+        `[DesktopWalletManager] cross-network purge on ${expectedType} open failed:`,
+        err
       );
     }
   } else {
@@ -790,7 +790,13 @@ export async function openWatchOnlyWallet(
   walletId: number,
   password?: string
 ): Promise<WalletMetadata | null> {
-  return openPublicKeyWallet(walletId, WATCH_ONLY_WALLET_TYPE, password);
+  const info = await openPublicKeyWallet(
+    walletId,
+    WATCH_ONLY_WALLET_TYPE,
+    password
+  );
+  if (!info) return null;
+  return info;
 }
 
 /**
@@ -823,15 +829,6 @@ export async function openHardwareWallet(
         (keys.rebuilt ? ' (rebuilt from xpub)' : '') +
         (keys.firstReceive ? ` firstReceive=${keys.firstReceive}` : '')
     );
-    // Kick Electrum listunspent so Home is not stuck at 0 after repair.
-    try {
-      const { bootstrapAllUTXOs } = await import(
-        '../../workers/UTXOWorkerService'
-      );
-      void bootstrapAllUTXOs();
-    } catch {
-      /* worker may start via lifecycle */
-    }
   } catch (err) {
     console.warn('[DesktopWalletManager] hardware open repair failed:', err);
   }

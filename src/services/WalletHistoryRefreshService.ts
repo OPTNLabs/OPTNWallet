@@ -26,6 +26,7 @@ import {
 } from './RefreshCoordinator';
 import QuantumrootTrackingService from './QuantumrootTrackingService';
 import { mergeRecordedFusionTxsIntoHistory } from '../platform/desktop/fusionCoinDepth';
+import { backfillConfirmedHistoryHeights } from './historyHeightBackfill';
 
 type SqlLikeDb = {
   prepare: (sql: string) => {
@@ -37,9 +38,17 @@ type SqlLikeDb = {
 };
 
 function toHistoryItem(row: Record<string, unknown>): TransactionHistoryItem {
+  const sqlHeight = Number(row.height ?? 0);
+  const detailHeight = Number(row.detail_height ?? 0);
+  const confirmations = Number(row.confirmations ?? 0);
+  const height =
+    detailHeight > 0 && detailHeight >= sqlHeight
+      ? detailHeight
+      : sqlHeight;
   return {
     tx_hash: String(row.tx_hash ?? ''),
-    height: Number(row.height ?? 0),
+    height,
+    confirmations: confirmations > 0 ? confirmations : undefined,
     timestamp:
       row.timestamp === null || row.timestamp === undefined
         ? undefined
@@ -55,20 +64,66 @@ export function loadStoredTransactions(
   db: SqlLikeDb,
   walletId: number
 ): TransactionHistoryItem[] {
-  const query = db.prepare(`
-    SELECT tx_hash, height, timestamp, amount
-    FROM transactions
-    WHERE wallet_id = ?
-    ORDER BY height DESC, timestamp DESC
-    LIMIT 2000;
-  `);
-  query.bind([walletId]);
-  const rows: TransactionHistoryItem[] = [];
-  while (query.step()) {
-    rows.push(toHistoryItem(query.getAsObject()));
+  // Prefer verbose Electrum details (confirmations / height) so a fusion
+  // CoinJoin stored at height 0 still paints Confirmed on the next open.
+  let query;
+  try {
+    query = db.prepare(`
+      SELECT t.tx_hash AS tx_hash,
+             t.height AS height,
+             t.timestamp AS timestamp,
+             t.amount AS amount,
+             d.height AS detail_height,
+             d.confirmations AS confirmations
+      FROM transactions t
+      LEFT JOIN transaction_details d
+        ON d.wallet_id = t.wallet_id
+       AND lower(d.tx_hash) = lower(t.tx_hash)
+      WHERE t.wallet_id = ?
+      ORDER BY
+        CASE WHEN COALESCE(d.height, t.height, 0) > 0
+          THEN COALESCE(d.height, t.height) ELSE 0 END DESC,
+        t.timestamp DESC
+      LIMIT 2000;
+    `);
+  } catch {
+    query = db.prepare(`
+      SELECT tx_hash, height, timestamp, amount
+      FROM transactions
+      WHERE wallet_id = ?
+      ORDER BY height DESC, timestamp DESC
+      LIMIT 2000;
+    `);
   }
-  query.free();
-  return rows;
+  try {
+    query.bind([walletId]);
+    const rows: TransactionHistoryItem[] = [];
+    while (query.step()) {
+      rows.push(toHistoryItem(query.getAsObject()));
+    }
+    query.free();
+    return rows;
+  } catch {
+    try {
+      query.free();
+    } catch {
+      /* already freed */
+    }
+    const fallback = db.prepare(`
+      SELECT tx_hash, height, timestamp, amount
+      FROM transactions
+      WHERE wallet_id = ?
+      ORDER BY height DESC, timestamp DESC
+      LIMIT 2000;
+    `);
+    fallback.bind([walletId]);
+    const rows: TransactionHistoryItem[] = [];
+    while (fallback.step()) {
+      rows.push(toHistoryItem(fallback.getAsObject()));
+    }
+    fallback.free();
+    return rows;
+  }
 }
 
 export interface RefreshWalletHistoryOptions {
@@ -98,6 +153,42 @@ export interface RefreshWalletHistoryResult {
   scannedAddresses: string[];
   /** False when the refresh was joined/coalesced or the DB was unavailable. */
   refreshed: boolean;
+}
+
+/**
+ * Local-first paint: last saved SQL history → Redux. No Electrum, no
+ * coordinator/cooldown (those skipped the paint and made Home look empty).
+ *
+ * Call as soon as the wallet id is set (open / Home mount). Network refresh
+ * can follow; it must not gate this.
+ */
+export async function publishStoredWalletHistory(args: {
+  walletId: number;
+  dispatch: AppDispatch;
+  sessionGeneration?: number;
+}): Promise<number> {
+  const { walletId, dispatch, sessionGeneration } = args;
+  if (!Number.isSafeInteger(walletId) || walletId <= 0) return 0;
+
+  const dbService = DatabaseService();
+  await dbService.ensureDatabaseStarted();
+  const db = dbService.getDatabase() as SqlLikeDb | null;
+  if (!db) return 0;
+
+  const stored = mergeRecordedFusionTxsIntoHistory(
+    walletId,
+    loadStoredTransactions(db, walletId)
+  );
+  if (stored.length === 0) return 0;
+
+  dispatch(
+    setTransactions({
+      wallet_id: walletId,
+      transactions: stored,
+      sessionGeneration,
+    })
+  );
+  return stored.length;
 }
 
 /**
@@ -135,28 +226,45 @@ export async function refreshWalletTransactionHistory(
 
     const previousStoredTransactions = loadStoredTransactions(db, walletId);
 
-    // Show what we already know BEFORE going to the network.
-    //
-    // The history is never lost — it lives in the `transactions` table — but
-    // nothing loaded it into redux when a wallet opened, so Recent Activity
-    // rendered empty until a network round trip finished. Electron Cash does not
-    // behave that way: the wallet file already holds the history, so it appears
-    // immediately and the network only updates it. Publishing the stored rows
-    // first gives the same feel, and a wallet opened offline still shows its
-    // history instead of looking wiped.
-    if (previousStoredTransactions.length > 0) {
+    // Local-first (EC / Selene / Monero GUI): paint last saved SQL history
+    // immediately. No per-row streaming. Background backfill publishes ONCE
+    // when all stuck heights resolve, then address history scan may replace.
+    const initialPaint = mergeRecordedFusionTxsIntoHistory(
+      walletId,
+      previousStoredTransactions
+    );
+    if (initialPaint.length > 0) {
       dispatch(
         setTransactions({
           wallet_id: walletId,
-          // Re-attach known fusion CoinJoins (P2P + server) so a stale DB
-          // snapshot never looks like fused history was deleted.
-          transactions: mergeRecordedFusionTxsIntoHistory(
-            walletId,
-            previousStoredTransactions
-          ),
+          transactions: initialPaint,
           sessionGeneration,
         })
       );
+    }
+
+    const hasStuckHeights = initialPaint.some(
+      (tx) => !(typeof tx.height === 'number' && tx.height > 0)
+    );
+    let earlyBackfill: Promise<TransactionHistoryItem[]> = Promise.resolve(
+      initialPaint
+    );
+    if (hasStuckHeights) {
+      // Single batched Redux update inside backfill when dispatch is set.
+      earlyBackfill = (async () => {
+        try {
+          await ElectrumService.ensureFreshConnection();
+        } catch {
+          /* offline */
+        }
+        return backfillConfirmedHistoryHeights({
+          walletId,
+          transactions: initialPaint,
+          sessionGeneration,
+          dispatch,
+          forceRefresh: true,
+        });
+      })();
     }
 
     // Prefer the addresses table (software wallets register there via createKeys).
@@ -263,10 +371,48 @@ export async function refreshWalletTransactionHistory(
     if (!liveDb) {
       console.error('Database not started after history fetch.');
     } else {
-      const storedTransactions = mergeRecordedFusionTxsIntoHistory(
+      let storedTransactions = mergeRecordedFusionTxsIntoHistory(
         walletId,
         loadStoredTransactions(liveDb, walletId)
       );
+      // Keep heights the early open-time backfill already resolved (prefer > 0).
+      try {
+        const earlyFilled = await earlyBackfill;
+        const earlyByHash = new Map(
+          earlyFilled.map((tx) => [
+            String(tx.tx_hash).trim().toLowerCase(),
+            tx,
+          ] as const)
+        );
+        storedTransactions = storedTransactions.map((tx) => {
+          const key = String(tx.tx_hash).trim().toLowerCase();
+          const early = earlyByHash.get(key);
+          if (
+            early &&
+            typeof early.height === 'number' &&
+            early.height > 0 &&
+            !(typeof tx.height === 'number' && tx.height > 0)
+          ) {
+            return {
+              ...tx,
+              height: early.height,
+              timestamp: early.timestamp ?? tx.timestamp,
+            };
+          }
+          return tx;
+        });
+      } catch {
+        /* early backfill best-effort */
+      }
+      // Any rows still at height 0 (new from network history) get a second pass.
+      storedTransactions = await backfillConfirmedHistoryHeights({
+        walletId,
+        transactions: storedTransactions,
+        sessionGeneration,
+        dispatch,
+        forceRefresh: true,
+      });
+
       const refreshPlan = planTransactionDetailRefresh({
         previous: previousStoredTransactions,
         next: storedTransactions,
@@ -286,6 +432,7 @@ export async function refreshWalletTransactionHistory(
         );
       }
 
+      // Publish AFTER backfill so Sync cannot repaint height-0 fusion stubs.
       dispatch(
         setTransactions({
           wallet_id: walletId,

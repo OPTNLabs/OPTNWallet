@@ -9,11 +9,26 @@
 // until confirmed; Electrum merges must keep that timestamp (see transactionSlice).
 
 import type { TransactionHistoryItem } from '../types/types';
+import { isTxConfirmed } from './txConfirmation';
 
 export type TransactionSortOrder = 'asc' | 'desc';
 
+/** Live mempool only. Stale height-0 fusion rows are NOT treated as unconfirmed. */
+const MEMPOOL_GRACE_MS = 20 * 60 * 1000;
+
+export function isMempoolLike(
+  tx: TransactionHistoryItem,
+  now = Date.now()
+): boolean {
+  if (isTxConfirmed(tx)) return false;
+  if (typeof tx.height === 'number' && tx.height > 0) return false;
+  const ts = tx.timestamp ? Date.parse(String(tx.timestamp)) : NaN;
+  if (!Number.isNaN(ts) && now - ts > MEMPOOL_GRACE_MS) return false;
+  return true;
+}
+
 function isUnconfirmed(tx: TransactionHistoryItem): boolean {
-  return !Number.isFinite(tx.height) || tx.height <= 0;
+  return isMempoolLike(tx);
 }
 
 /** Prefer real timestamps; else use list index (later merge = more recent). */

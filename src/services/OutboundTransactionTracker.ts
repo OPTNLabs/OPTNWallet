@@ -321,8 +321,13 @@ const OutboundTransactionTracker = {
       dappUrl: existing?.dappUrl ?? args.dappUrl ?? null,
       requestId: existing?.requestId ?? args.requestId ?? null,
       userPrompt: existing?.userPrompt ?? args.userPrompt ?? null,
+      // Never demote a finished Fusion/send. A peer's delayed P2P rebroadcast
+      // calls trackAttempt 2–8s after `final`; flipping `seen` back to
+      // `broadcasting` re-armed verification-pending and parked Auto.
       state:
-        existing?.state === 'submitted' || existing?.state === 'broadcasted'
+        existing?.state === 'seen' ||
+        existing?.state === 'submitted' ||
+        existing?.state === 'broadcasted'
           ? existing.state
           : 'broadcasting',
       createdAt: existing?.createdAt ?? now,
@@ -332,7 +337,10 @@ const OutboundTransactionTracker = {
         ? existing.spentOutpoints
         : toTrackedOutpoints(args.spentInputs),
       lastError: existing?.lastError ?? null,
-      verificationPending: existing?.verificationPending ?? false,
+      verificationPending:
+        existing?.state === 'seen' || existing?.state === 'broadcasted'
+          ? false
+          : (existing?.verificationPending ?? false),
       verificationMessage: existing?.verificationMessage ?? null,
     };
     await saveRecord(record);
@@ -400,6 +408,9 @@ const OutboundTransactionTracker = {
   ): Promise<OutboundTransactionRecord | null> {
     const existing = await this.getByTxid(txid, walletId);
     if (!existing) return null;
+    if (existing.state === 'seen' || existing.state === 'broadcasted') {
+      return existing;
+    }
     const now = new Date().toISOString();
     const next: OutboundTransactionRecord = {
       ...existing,

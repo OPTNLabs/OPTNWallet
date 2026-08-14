@@ -31,13 +31,21 @@ import {
   isActiveWalletSession,
 } from '../../services/WalletUtxoRefreshService';
 import { logError } from '../../utils/errorHandling';
-import { refreshWalletTransactionHistory } from '../../services/WalletHistoryRefreshService';
+import {
+  publishStoredWalletHistory,
+  refreshWalletTransactionHistory,
+} from '../../services/WalletHistoryRefreshService';
 import { Network } from '../../state/slices/networkSlice';
 import { SATSINBITCOIN } from '../../utils/constants';
+import type { TransactionHistoryItem } from '../../types/types';
 import SettingsRow from '../../components/ui/SettingsRow';
 import EmptyState from '../../components/ui/EmptyState';
 import { shortenTxHash } from '../../utils/shortenHash';
-import { takeRecentTransactions } from '../../utils/transactionHistoryOrder';
+import {
+  isMempoolLike,
+  takeRecentTransactions,
+} from '../../utils/transactionHistoryOrder';
+import { isTxConfirmed } from '../../utils/txConfirmation';
 import { isFusionTransaction } from './fusionCoinDepth';
 import { useFusionDepthRevision } from './useFusionDepthRevision';
 import { FusionBadge } from '../../components/FusionBadge';
@@ -60,6 +68,8 @@ function getQuickActionTextClass(title: string) {
     title.length > 5 ? 'tracking-[-0.01em]' : ''
   }`;
 }
+
+const EMPTY_TRANSACTIONS: TransactionHistoryItem[] = [];
 
 function QuickActionButton({ title, icon, onClick }: QuickActionButtonProps) {
   return (
@@ -101,9 +111,14 @@ const Home: React.FC = () => {
   const totalBalance = useSelector(
     (state: RootState) => state.utxos.totalBalance
   );
-  const transactions = useSelector(
-    (state: RootState) => state.transactions.transactions[currentWalletId]
-  );
+  const transactions = useSelector((state: RootState) => {
+    const byWallet = state.transactions.transactions;
+    return (
+      byWallet[currentWalletId] ??
+      byWallet[String(currentWalletId)] ??
+      EMPTY_TRANSACTIONS
+    );
+  });
   const currentNetwork = useSelector(
     (state: RootState) => state.network.currentNetwork
   );
@@ -174,21 +189,44 @@ const Home: React.FC = () => {
 
   // Load this wallet's transaction history when it opens.
   //
-  // Recent Activity renders `state.transactions`, which only the history fetch
-  // populates — and that fetch lived in a hook mounted by the transactions PAGE.
-  // This screen mounts no such hook, so the list stayed empty until the user
-  // opened that page, which is why "click View all" appeared to sync it. The
-  // service publishes the rows already stored in SQLite before going to the
-  // network, so the list fills immediately and then updates.
+  // 1) SQL paint first (no coordinator / no Electrum) so Recent Activity is
+  //    last-session state immediately — like EC / Selene / Monero GUI.
+  // 2) Network refresh after; cooldown on the coordinator must not skip (1).
   useEffect(() => {
     if (!currentWalletId) return;
-    void refreshWalletTransactionHistory({
-      walletId: currentWalletId,
-      dispatch,
-      sessionGeneration,
-    }).catch((error) => {
-      logError('DesktopHome.loadHistory', error, { walletId: currentWalletId });
-    });
+    let cancelled = false;
+    void (async () => {
+      try {
+        await publishStoredWalletHistory({
+          walletId: currentWalletId,
+          dispatch,
+          sessionGeneration,
+        });
+      } catch (error) {
+        if (!cancelled) {
+          logError('DesktopHome.paintStoredHistory', error, {
+            walletId: currentWalletId,
+          });
+        }
+      }
+      if (cancelled) return;
+      try {
+        await refreshWalletTransactionHistory({
+          walletId: currentWalletId,
+          dispatch,
+          sessionGeneration,
+        });
+      } catch (error) {
+        if (!cancelled) {
+          logError('DesktopHome.loadHistory', error, {
+            walletId: currentWalletId,
+          });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [currentWalletId, dispatch, sessionGeneration]);
 
   const handleRefresh = useCallback(async () => {
@@ -518,7 +556,15 @@ const Home: React.FC = () => {
                       description={
                         tx.height > 0
                           ? `Block ${tx.height}`
-                          : 'Pending confirmation'
+                          : isTxConfirmed(tx)
+                            ? 'Confirmed'
+                            : isMempoolLike(tx)
+                              ? fused
+                                ? 'Broadcast — waiting for block'
+                                : 'Unconfirmed'
+                              : fused
+                                ? 'On chain'
+                                : 'Confirmed'
                       }
                       right={
                         <span
@@ -529,12 +575,12 @@ const Home: React.FC = () => {
                           }
                         >
                           {fused
-                            ? tx.height > 0
+                            ? isTxConfirmed(tx) || !isMempoolLike(tx)
                               ? 'Fused · Confirmed'
-                              : 'Fused · Pending'
-                            : tx.height > 0
+                              : 'Fused · Unconfirmed'
+                            : isTxConfirmed(tx) || !isMempoolLike(tx)
                               ? 'Confirmed'
-                              : 'Pending'}
+                              : 'Unconfirmed'}
                         </span>
                       }
                       compact

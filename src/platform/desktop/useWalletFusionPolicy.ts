@@ -21,6 +21,7 @@ import {
   setP2pFusionEnabled,
   setSpendOnlyFusedCoins,
 } from '../../state/slices/experimentalSlice';
+import { resetFusionKnobs } from './fusionKnobs';
 import type { RootState } from '../../state/store';
 import {
   readWalletFusionPolicy,
@@ -62,6 +63,9 @@ export function useWalletFusionPolicy(): boolean {
     dispatch(setP2pFusionEnabled(policy.p2pFusionEnabled));
     dispatch(setFuseDepth(policy.fuseDepth));
     dispatch(setSpendOnlyFusedCoins(policy.spendOnlyFusedCoins));
+    // Player floors/caps/timings are protocol constants, not per-wallet
+    // settings. Drop any leftover live overlay from an older build.
+    resetFusionKnobs();
     setLoadedForWallet(walletId);
   }, [walletId, dispatch, loadedForWallet]);
 

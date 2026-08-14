@@ -101,6 +101,34 @@ describe('UTXOManager', () => {
     });
   });
 
+  it('fetchAddressesByWalletId unions keys, addresses, and stored UTXO addresses', async () => {
+    const queryStmt = makeStmt([
+      { address: 'bitcoincash:receive' },
+      { address: 'bitcoincash:change' },
+      { address: 'bitcoincash:fusion' },
+    ]);
+    const db = {
+      prepare: vi.fn(() => queryStmt),
+    };
+    mockedDatabaseService.mockReturnValue({
+      ensureDatabaseStarted: vi.fn(async () => {}),
+      getDatabase: vi.fn(() => db),
+    } as never);
+
+    const mgr = UTXOManager();
+    const result = await mgr.fetchAddressesByWalletId(9);
+
+    expect(db.prepare).toHaveBeenCalledWith(
+      expect.stringMatching(/FROM keys[\s\S]*UNION[\s\S]*FROM addresses[\s\S]*UNION[\s\S]*FROM UTXOs/)
+    );
+    expect(queryStmt.bind).toHaveBeenCalledWith([9, 9, 9]);
+    expect(result.map((row) => row.address)).toEqual([
+      'bitcoincash:receive',
+      'bitcoincash:change',
+      'bitcoincash:fusion',
+    ]);
+  });
+
   it('fetchUTXOsFromDatabase returns empty maps when wallet id is missing', async () => {
     mockedDatabaseService.mockReturnValue({
       ensureDatabaseStarted: vi.fn(async () => {}),

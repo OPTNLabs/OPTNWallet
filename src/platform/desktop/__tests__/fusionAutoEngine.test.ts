@@ -139,6 +139,11 @@ describe('server Auto scheduling (Electron Cash compatible)', () => {
     ).toBe(true);
     expect(isAutoTransientFailure('too few remaining live players')).toBe(true);
     expect(
+      isAutoTransientFailure(
+        'P2P Fusion needs at least 4 fresh peers (CashFusion-style anonymity floor).'
+      )
+    ).toBe(true);
+    expect(
       isAutoTransientFailure('Selected inputs cannot afford any fusion tier.')
     ).toBe(false);
   });

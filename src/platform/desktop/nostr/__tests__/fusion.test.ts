@@ -10,6 +10,8 @@ import {
   poolEpoch,
   parsePoolAnnouncement,
   selectFusionGroup,
+  MIN_PARTICIPANTS,
+  MAX_PARTICIPANTS,
   FUSION_POOL_PROTOCOL,
   POOL_ANNOUNCE_KIND,
   POOL_EPOCH_SECONDS,
@@ -18,6 +20,11 @@ import {
 import { verifyEvent } from 'nostr-tools';
 
 describe('P2P fusion coordination', () => {
+  it('live P2P floor defaults to gather 6 / max 10', () => {
+    expect(MIN_PARTICIPANTS).toBe(6);
+    expect(MAX_PARTICIPANTS).toBe(10);
+  });
+
   it('round identity is a fresh throwaway key', () => {
     const a = generateRoundIdentity();
     const b = generateRoundIdentity();
@@ -202,7 +209,7 @@ describe('P2P fusion coordination', () => {
       { pubkey: '03', tiers: [10_000], numInputs: 1 },
     ];
 
-    // MIN_PARTICIPANTS = 3 — never form a pair.
+    // Explicit min=3 still never forms a pair (selector unit test).
     expect(selectFusionGroup(peers, 3, 10)).toEqual({
       tier: 10_000,
       participants: ['01', '02', '03'],
@@ -211,7 +218,7 @@ describe('P2P fusion coordination', () => {
 
   it('never forms a group whose worst-case inputs and outputs exceed 100 components', () => {
     // 40 inputs + 4 max outputs = 44/peer → 2 peers = 88, 3 peers = 132 > 100.
-    // With min=3 (onion floor) no legal group exists; do not fall back to a pair.
+    // With min=3 no legal group exists; do not fall back to a pair.
     const peers = [
       { pubkey: '01', tiers: [100_000], numInputs: 40 },
       { pubkey: '02', tiers: [100_000], numInputs: 40 },

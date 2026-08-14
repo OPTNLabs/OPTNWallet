@@ -133,7 +133,7 @@ class Hub {
   }
 }
 
-function makePeers(count = 3) {
+function makePeers(count = 4) {
   return Array.from({ length: count }, (_, index) => {
     const n = index + 1;
     const inKey = keypair(n * 10 + 1);
@@ -179,10 +179,10 @@ function deferred<T>(): {
   return { promise, resolve, reject };
 }
 
-describe('P2P fusion round choreography (3 peers, in-memory)', () => {
+describe('P2P fusion round choreography (4 peers, in-memory)', () => {
   it('all peers converge on a single broadcast, VM-valid CoinJoin', async () => {
-    // Three peers, each fusing one 100k coin into one fresh 99.6k output (fee 400 each).
-    const peers = [1, 2, 3].map((n) => {
+    // Four peers, each fusing one 100k coin into one fresh 99.6k output (fee 400 each).
+    const peers = [1, 2, 3, 4].map((n) => {
       const inKey = keypair(n * 10 + 1);
       const outKey = keypair(n * 10 + 2);
       const round = keypair(n * 10 + 3); // pool/announce ephemeral identity
@@ -257,17 +257,17 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
     const vm = createVirtualMachineBCH2023();
     expect(vm.verify({ transaction: decoded, sourceOutputs })).toBe(true);
 
-    // Sanity: 3 inputs + 3 outputs actually got fused together.
-    expect(decoded.inputs).toHaveLength(3);
-    expect(decoded.outputs).toHaveLength(3);
+    // Sanity: 4 inputs + 4 outputs actually got fused together.
+    expect(decoded.inputs).toHaveLength(4);
+    expect(decoded.outputs).toHaveLength(4);
     expect(hub.activeHandlerCount()).toBe(0);
   });
 
   it('routes outputs through the onion mix-net and still lands a VM-valid CoinJoin', async () => {
     // Same round as above, but with the mix-net on. Until this existed the whole
-    // peel/shuffle/forward path — onion is hardcoded essential for 3+ peers
+    // peel/shuffle/forward path — onion is hardcoded essential for 4+ peers
     // by any test or by production, so none of it had ever run.
-    const peers = [1, 2, 3].map((n) => {
+    const peers = [1, 2, 3, 4].map((n) => {
       const inKey = keypair(n * 10 + 1);
       const outKey = keypair(n * 10 + 2);
       const round = keypair(n * 10 + 3);
@@ -350,43 +350,45 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
     expect(
       onionVm.verify({ transaction: decodedOnion, sourceOutputs: onionSources })
     ).toBe(true);
-    expect(decodedOnion.inputs).toHaveLength(3);
-    expect(decodedOnion.outputs).toHaveLength(3);
+    expect(decodedOnion.inputs).toHaveLength(4);
+    expect(decodedOnion.outputs).toHaveLength(4);
     expect(hub.activeHandlerCount()).toBe(0);
   });
 
-  it('rejects rounds with fewer than 3 participants (no 2-party path)', async () => {
-    const peers = makePeers(2);
-    const participants = peers.map((p) => p.round.pubHex);
+  it('rejects rounds below the 4-peer floor (no 2- or 3-party path)', async () => {
     const hub = new Hub();
-    await expect(
-      runFusionRound(
-        {
-          myPubkey: peers[0].round.pubHex,
-          participants,
-          tier: 100_000,
-          feerate: 1000,
-          myContribution: peers[0].contribution,
-          keysByPubkey: peers[0].keys,
-          broadcast: async () => '00'.repeat(32),
-          timeoutMs: 500,
-          jitterMs: [0, 0],
-        },
-        hub.transportFor(peers[0].round.pubHex)
-      )
-    ).rejects.toThrow(/≥3 peers|at least 3/i);
+    for (const count of [2, 3]) {
+      const peers = makePeers(count);
+      const participants = peers.map((p) => p.round.pubHex);
+      await expect(
+        runFusionRound(
+          {
+            myPubkey: peers[0].round.pubHex,
+            participants,
+            tier: 100_000,
+            feerate: 1000,
+            myContribution: peers[0].contribution,
+            keysByPubkey: peers[0].keys,
+            broadcast: async () => '00'.repeat(32),
+            timeoutMs: 500,
+            jitterMs: [0, 0],
+          },
+          hub.transportFor(peers[0].round.pubHex)
+        )
+      ).rejects.toThrow(/≥4 peers|at least 4/i);
+    }
   });
 
   it('onion mix-net completes when peers inject unequal output counts (not peer count)', async () => {
     // Regression: expectedOnionCount === participants.length hung whenever
     // sum(outputs) !== N (random 2–4 outputs/peer from planP2pOutputValues).
-    const peers = [1, 2, 3].map((n) => {
+    const peers = [1, 2, 3, 4].map((n) => {
       const inKey = keypair(n * 10 + 1);
       const outputKeys = Array.from({ length: n }, (_, i) =>
         keypair(n * 100 + i + 2)
       );
       const round = keypair(n * 10 + 4);
-      const outCount = n; // 1, 2, 3 — sum 6 ≠ 3 peers
+      const outCount = n; // 1, 2, 3, 4 — sum 10 ≠ 4 peers
       const perOut = Math.floor(99_500 / outCount);
       const outputs = Array.from({ length: outCount }, (_, i) => ({
         script: p2pkhHex(outputKeys[i].pubHex),
@@ -444,11 +446,76 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
       (s, p) => s + p.contribution.outputs.length,
       0
     );
-    expect(totalOutputs).toBe(6);
+    expect(totalOutputs).toBe(10);
     const decoded = decodeTransaction(
       hexToBin(results[0].txHex)
     ) as TransactionCommon;
-    expect(decoded.outputs).toHaveLength(6);
+    expect(decoded.outputs).toHaveLength(10);
+  });
+
+  it('onion mix-net peels when a peer injects 5 outputs (credential cap, not stale 4)', async () => {
+    // Live chipnet 2026-08-12: w1 declared 5, hop 1 collected 12 blobs, but
+    // expectedOnionCount treated count>4 as missing → never forwarded.
+    const counts = [5, 4, 3, 2];
+    const peers = counts.map((outCount, index) => {
+      const n = index + 1;
+      const inKey = keypair(n * 10 + 1);
+      const outputKeys = Array.from({ length: outCount }, (_, i) =>
+        keypair(n * 100 + i + 2)
+      );
+      const round = keypair(n * 10 + 7);
+      const perOut = Math.floor(99_500 / outCount);
+      const outputs = Array.from({ length: outCount }, (_, i) => ({
+        script: p2pkhHex(outputKeys[i].pubHex),
+        value: perOut,
+      }));
+      outputs[0].value += 99_500 - perOut * outCount;
+      const contribution: PeerContribution = {
+        inputs: [
+          {
+            prevTxid: `${n}${'d'.repeat(63)}`,
+            prevIndex: n,
+            value: 100_000,
+            pubkey: inKey.pubHex,
+          },
+        ],
+        outputs,
+      };
+      return {
+        round,
+        keys: new Map([
+          [inKey.pubHex, inKey.priv],
+          [round.pubHex, round.priv],
+        ]),
+        contribution,
+      };
+    });
+    const participants = peers.map((p) => p.round.pubHex);
+    const hub = new Hub();
+    const results = await Promise.all(
+      peers.map((p) =>
+        runFusionRound(
+          {
+            myPubkey: p.round.pubHex,
+            participants,
+            network: 'chipnet',
+            tier: 100_000,
+            feerate: 1000,
+            myContribution: p.contribution,
+            keysByPubkey: p.keys,
+            broadcast: async (txHex) => txidOf(txHex),
+            timeoutMs: 8_000,
+            jitterMs: [0, 0],
+          },
+          hub.transportFor(p.round.pubHex)
+        )
+      )
+    );
+    expect(new Set(results.map((r) => r.txid)).size).toBe(1);
+    const decoded = decodeTransaction(
+      hexToBin(results[0].txHex)
+    ) as TransactionCommon;
+    expect(decoded.outputs).toHaveLength(14);
   });
 
   it('forwards a full four-peer onion batch without serially exhausting the round deadline', async () => {
@@ -901,8 +968,8 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
   });
 
   it('broadcasts an abort so duplicate inputs fail every peer promptly', async () => {
-    // Three peers; two share the same outpoint so the coord aborts on duplicate.
-    const peers = [1, 2, 3].map((n) => {
+    // Four peers; two share the same outpoint so the coord aborts on duplicate.
+    const peers = [1, 2, 3, 4].map((n) => {
       const inKey = keypair(n * 10 + 1);
       const outKey = keypair(n * 10 + 2);
       const round = keypair(n * 10 + 3);
@@ -951,7 +1018,7 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
       )
     );
 
-    expect(settled).toHaveLength(3);
+    expect(settled).toHaveLength(4);
     expect(settled.every((r) => r.status === 'rejected')).toBe(true);
     expect(
       settled.some(
@@ -965,9 +1032,9 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
   it('fails immediately when the authenticated coordinator sends a malformed message', async () => {
     const input = keypair(81);
     const output = keypair(82);
-    const trio = ['0'.repeat(64), 'a'.repeat(64), 'f'.repeat(64)];
-    const coordinator = '0'.repeat(64);
-    const participant = 'f'.repeat(64);
+    const quartet = ['0'.repeat(64), 'a'.repeat(64), 'b'.repeat(64), 'f'.repeat(64)];
+    const coordinator = electCoordinator(quartet) as string;
+    const participant = quartet.find((key) => key !== coordinator) as string;
     const contribution: PeerContribution = {
       inputs: [
         {
@@ -994,7 +1061,7 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
       runFusionRound(
         {
           myPubkey: participant,
-          participants: trio,
+          participants: quartet,
           session: 'c'.repeat(64),
           tier: 100_000,
           feerate: 1_000,
@@ -1009,13 +1076,9 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
     ).rejects.toThrow('Invalid Fusion round message');
   });
 
-  // ── Option 3 blame emit (C2) ───────────────────────────────────────────────
-  // Components travel under throwaway keys, so a failed round has no accused
-  // until peers disclose what they contributed. These lock the coordinator's
-  // post-abort cross-check. Diagnosis only: the accused is an ephemeral round
-  // key, so a report identifies a fault — it never excludes anyone.
+  // ── Stage 1: abort never opens identity, missing-sig is not blame ──────────
 
-  it('names the peer that withheld its signatures, once disclosures land', async () => {
+  it('does not blame a withheld signature (absence is not evidence)', async () => {
     const peers = makePeers();
     const participants = peers.map((peer) => peer.round.pubHex);
     const coordinator = coordinatorOf(participants);
@@ -1059,20 +1122,18 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
     );
 
     expect(settled.every((result) => result.status === 'rejected')).toBe(true);
-    // The whole point: an anonymous-plane fault now has an accused again.
-    expect(blames).toHaveLength(1);
-    expect(blames[0].code).toBe('invalid_signature_set');
-    expect(blames[0].accused).toBe(silent);
-    // And it actually reached the other peers, not just the local callback.
+    expect(blames).toHaveLength(0);
     expect(
       hub.sent.some(
-        (entry) => entry.from === coordinator && entry.message.type === 'blame'
+        (entry) =>
+          entry.message.type === 'blame' ||
+          entry.message.type === 'component_disclosure'
       )
-    ).toBe(true);
+    ).toBe(false);
     expect(hub.activeHandlerCount()).toBe(0);
   });
 
-  it('blames a peer that forges a disclosure opening (invalid_input_credential)', async () => {
+  it('does not open identity after a generic abort even if a peer would forge', async () => {
     const peers = makePeers();
     const participants = peers.map((peer) => peer.round.pubHex);
     const coordinator = coordinatorOf(participants);
@@ -1119,13 +1180,14 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
     );
 
     expect(settled.every((result) => result.status === 'rejected')).toBe(true);
-    expect(blames).toHaveLength(1);
-    expect(blames[0].code).toBe('invalid_input_credential');
-    expect(blames[0].accused).toBe(liar);
+    expect(blames).toHaveLength(0);
+    expect(
+      hub.sent.some((entry) => entry.message.type === 'component_disclosure')
+    ).toBe(false);
     expect(hub.activeHandlerCount()).toBe(0);
   });
 
-  it('blames a peer whose balanced Pedersen commitments open to different components', async () => {
+  it('does not blame missing signatures after a balanced-but-mismatched commit', async () => {
     const peers = makePeers();
     const participants = peers.map((peer) => peer.round.pubHex);
     const coordinator = coordinatorOf(participants);
@@ -1191,9 +1253,10 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
     );
 
     expect(settled.every((result) => result.status === 'rejected')).toBe(true);
-    expect(blames).toHaveLength(1);
-    expect(blames[0].code).toBe('invalid_component_commitment');
-    expect(blames[0].accused).toBe(liar);
+    expect(blames).toHaveLength(0);
+    expect(
+      hub.sent.some((entry) => entry.message.type === 'component_disclosure')
+    ).toBe(false);
     expect(hub.activeHandlerCount()).toBe(0);
   });
 

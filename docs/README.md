@@ -18,18 +18,23 @@ Technical documentation for contributors and third-party integrators.
 - [Wallet Ledger & Sync Design](./wallet-ledger-sync-design.md)
   - Option A hybrid: txi/txo ledger, status hashes, UTXO cache projection,
     Manual Sync vs Rebuild Wallet.
-- [CashFusion Implementation Status](./cashfusion-implementation-scope.md)
-  - **Shipped:** both P2P and classic server CashFusion maps (no longer a
-    “Phase 2 not started” plan).
+- [CashFusion status](./cashfusion-implementation-scope.md)
+  - Both P2P and classic server paths as they exist in this tree.
 - [P2P CashFusion Privacy Layers](./p2p-cashfusion-privacy-layers.md)
-  - **PR #12 shipped naming map:** Tor vs NIP-59 vs Pedersen vs blind Schnorr
-    vs **output onion** (what each does, infrastructure, essential?).
+  - Tor vs NIP-59 vs Pedersen vs blind Schnorr vs **output onion**.
 - [P2P CashFusion Protocol](./p2p-cashfusion-protocol.md)
-  - Exact mechanism of the peer-to-peer CashFusion path (discovery, election,
-    blind credentials, output onion, assembly, signing). Audit-oriented
-    reference — not the root README.
+  - Discovery, election, v4 credentials, onion, assembly, signing.
+- [P2P CashFusion protocol knobs](./p2p-cashfusion-knobs.md)
+  - Internal 6 / 4 / 10 floors, tiers, timing. Edit `fusionKnobs.ts` — not
+    the wallet UI.
 - [P2P CashFusion Threat Model](./THREAT_MODEL.md)
-  - Adversary classes for the shipped P2P fusion design.
+  - Adversary classes for the shipped P2P design.
+- [P2P CashFusion FAQ](./p2p-cashfusion-faq.md)
+  - Short answers: missing signature, blame, onion, ACK-shrink, 0-conf.
+- [Proposed blame for P2P CashFusion](./proposed-blame-p2p-cashfusion.md)
+  - Planning only: safe blame boundary, optional v5 fanout (not implemented).
+- [Watch-only + SeedCash](./watch-only-seedcash.md)
+  - xPub import, PSBTv145, UR export/import, optional fingerprint.
 - [Integration Guide](./integration-guide.md)
   - How to integrate a third-party product with OPTN Wallet.
 - [CashScript Contract Systems](./cashscript-contract-systems.md)
@@ -51,3 +56,11 @@ Technical documentation for contributors and third-party integrators.
 - If you are integrating a dApp: `Integration Guide` -> `WalletConnect` section.
 - If you are embedding custom wallet app logic: `Integration Guide` -> `Addon Development Guide` -> `Addon SDK Reference`.
 - If you are contributing to core wallet internals: `Wallet Architecture` first.
+- If you are working on CashFusion: status → knobs → protocol → privacy layers → [FAQ](./p2p-cashfusion-faq.md).
+
+## Still open (not shipped)
+
+- [Keystone hardware wallet](./keystone-hardware-wallet-scope.md) — UI disabled (“Coming soon”).
+- [UX improvement plan](./UX_IMPROVEMENT_PLAN.md) — product hierarchy, not done.
+- [Airdrops addon plan](./OPTN_WALLET_AIRDROPS_ADDON_PLAN.md) — backend + wallet MVP.
+- [Paytaca Nostr chat parity](./paytaca-nostr-chat-parity-plan.md) — groups, receipts, attachments still missing.

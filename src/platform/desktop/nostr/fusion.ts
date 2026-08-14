@@ -17,6 +17,7 @@ import {
 } from 'nostr-tools';
 
 import { isRetiredRoundKey, retireRoundKey } from '../fusionRoundState';
+import { FUSION_KNOB_DEFAULTS } from '../fusionKnobs';
 
 // Public ready announcement. A NIP-01 REPLACEABLE kind (10000-19999): the relay
 // keeps only the latest event per throwaway pubkey and REPLAYS it to any new
@@ -64,16 +65,11 @@ const MAX_INPUTS = 20;
 const MAX_TOTAL_COMPONENTS = 120;
 const MAX_OUTPUTS_PER_PEER = 6;
 
-// ─── Gathering model: 3–8 peers (CashFusion-style anonymity floor) ─────
-/** Maximum participants per round (onion mix-net cap). */
-export const MAX_PARTICIPANTS = 8;
-/**
- * Minimum participants to start a P2P round.
- * CashFusion server pools start well above 2 (reference min_clients is often 8);
- * privacy-wise 2-party is barely a CoinJoin. Onion mix needs ≥2 peelers ⇒ ≥3
- * wallets. Match that floor: never start P2P with only a pair.
- */
-export const MIN_PARTICIPANTS = 3;
+// ─── Gathering model — live values live in fusionKnobs.ts ──────────────
+/** Default max players (edit fusionKnobs.ts; see docs/p2p-cashfusion-knobs.md). */
+export const MAX_PARTICIPANTS = FUSION_KNOB_DEFAULTS.maxPlayers;
+/** Default min players (edit fusionKnobs.ts; see docs/p2p-cashfusion-knobs.md). */
+export const MIN_PARTICIPANTS = FUSION_KNOB_DEFAULTS.minPlayers;
 /** How long to wait for peers to gather before starting with whoever we have. */
 export const GATHER_TIMEOUT_MS = 30_000;
 

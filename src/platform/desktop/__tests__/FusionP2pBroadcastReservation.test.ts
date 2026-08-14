@@ -226,6 +226,32 @@ vi.mock('../nostr/fusionP2pAllocation', () => ({
   planP2pOutputValues: vi.fn(() => ({ values: [2_000_000, 2_000_000] })),
 }));
 
+// Gather now reads live knobs, not the fusionTiming constants. Three mocked
+// peers must be a legal set or runP2pFusion waits out gatherMaxMs (120s).
+vi.mock('../fusionKnobs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../fusionKnobs')>();
+  return {
+    ...actual,
+    getFusionKnobs: () => ({
+      ...actual.FUSION_KNOB_DEFAULTS,
+      minPlayers: 3,
+      minSafePlayers: 3,
+      maxPlayers: 3,
+      gatherMaxMs: 500,
+      gatherAloneMs: 500,
+      gatherAloneAutoMs: 500,
+      gatherMinMs: 0,
+      gatherFastWarmupMs: 0,
+      smallSetHoldMs: 0,
+      peerSetStableMs: 0,
+      peerSetStableFastMs: 0,
+      peakGraceMs: 0,
+      rendezvousMs: 1_000,
+      proposalTimeoutMs: 1_000,
+    }),
+  };
+});
+
 // Collapse every gather budget so the peer loop locks on its first pass.
 vi.mock('../fusionTiming', () => ({
   P2P_COMPONENT_JITTER_MS: 0,
@@ -241,6 +267,8 @@ vi.mock('../fusionTiming', () => ({
   P2P_RENDEZVOUS_MS: 1_000,
   P2P_ROUND_TIMEOUT_MS: 2_000,
   P2P_SMALL_SET_HOLD_MS: 0,
+  p2pRoundTimeoutMs: () => 2_000,
+  p2pMissingOutputsWaitMs: () => 2_000,
 }));
 
 vi.mock('../logger', () => ({
@@ -358,6 +386,28 @@ describe('F1 — unresolved P2P broadcast keeps its input reservations', () => {
     expect(error?.message).toContain('Fusion broadcast rejected');
     expect(completeFusionBroadcastMock).not.toHaveBeenCalled();
     expect(removeTrackedMock).toHaveBeenCalledWith(EXPECTED_TXID, 1);
+    expect(releaseOutpointsMock).toHaveBeenCalledWith(1, [COIN_OUTPOINT]);
+  });
+
+  it('completes as fused when a peer receives final before its own rebroadcast', async () => {
+    armBroadcast(false, false);
+    // Peer path: runFusionRound succeeds from a verified `final` without
+    // calling broadcast (that fire-and-forget starts 2–8s later).
+    runFusionRoundMock.mockResolvedValue({
+      txid: EXPECTED_TXID,
+      txHex: TX_HEX,
+    });
+
+    const { statuses, error } = await runRound();
+
+    expect(error).toBeNull();
+    expect(completeFusionBroadcastMock).toHaveBeenCalledWith(
+      expect.objectContaining({ txid: EXPECTED_TXID, walletId: 1 })
+    );
+    expect(statuses.some((line) => line.includes('Fused ✓'))).toBe(true);
+    expect(statuses.some((line) => line.startsWith('Fusion pending —'))).toBe(
+      false
+    );
     expect(releaseOutpointsMock).toHaveBeenCalledWith(1, [COIN_OUTPOINT]);
   });
 

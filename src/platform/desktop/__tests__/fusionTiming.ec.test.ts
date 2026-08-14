@@ -5,6 +5,11 @@ import {
   EC_DEFAULT_MAX_COINS,
   EC_MAX_FUSE_DEPTH,
   P2P_GATHER_MAX_MS,
+  P2P_CREDENTIAL_WAIT_MS,
+  P2P_MISSING_OUTPUTS_ONION_MS,
+  P2P_ROUND_TIMEOUT_MS,
+  p2pMissingOutputsWaitMs,
+  p2pRoundTimeoutMs,
   SERVER_BLAME_VERIFY_MS,
   SERVER_COMPS_END_MS,
   SERVER_COMPS_START_MS,
@@ -85,5 +90,20 @@ describe('unconfirmed inputs + no block-wait between Auto rounds', () => {
     expect(AUTO_WAIT_FOR_BLOCK_BEFORE_NEXT_ROUND).toBe(false);
     // Post-success delay is Electrum lag only — far below one block (~10 min).
     expect(AUTO_FUSION_COOLDOWN_MS).toBeLessThan(60_000);
+  });
+});
+
+describe('P2P onion wait scales with peeler count', () => {
+  it('keeps the 2-peeler 3-peer budget at one hop', () => {
+    expect(p2pMissingOutputsWaitMs(2)).toBe(P2P_MISSING_OUTPUTS_ONION_MS * 2);
+    expect(p2pRoundTimeoutMs(2)).toBe(
+      P2P_CREDENTIAL_WAIT_MS + P2P_MISSING_OUTPUTS_ONION_MS * 2
+    );
+  });
+
+  it('gives a 5-peer / 4-peeler round more than the old flat 36s', () => {
+    expect(p2pMissingOutputsWaitMs(4)).toBe(P2P_MISSING_OUTPUTS_ONION_MS * 4);
+    expect(p2pMissingOutputsWaitMs(4)).toBeGreaterThan(36_000);
+    expect(p2pRoundTimeoutMs(4)).toBeGreaterThan(P2P_ROUND_TIMEOUT_MS);
   });
 });

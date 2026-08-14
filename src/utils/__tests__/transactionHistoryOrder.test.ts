@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  isMempoolLike,
   sortTransactionsByRecency,
   takeRecentTransactions,
 } from '../transactionHistoryOrder';
@@ -14,18 +15,21 @@ const tx = (
   ...(timestamp ? { timestamp } : {}),
 });
 
+const minutesAgo = (m: number) =>
+  new Date(Date.now() - m * 60_000).toISOString();
+
 describe('transactionHistoryOrder — newest first', () => {
-  it('unconfirmed first, then confirmed high block → older blocks', () => {
+  it('live mempool first, then confirmed high block → older blocks', () => {
     const list = [
       tx('old', 100),
       tx('fused_conf', 500),
       tx('mid', 200),
-      tx('mempool', 0, '2026-08-06T10:00:00.000Z'),
-      tx('pending', -1, '2026-08-06T11:00:00.000Z'),
+      tx('mempool', 0, minutesAgo(5)),
+      tx('pending', -1, minutesAgo(1)),
     ];
     const sorted = sortTransactionsByRecency(list, 'desc');
     expect(sorted.map((t) => t.tx_hash)).toEqual([
-      'pending', // newest unconfirmed
+      'pending',
       'mempool',
       'fused_conf',
       'mid',
@@ -33,11 +37,11 @@ describe('transactionHistoryOrder — newest first', () => {
     ]);
   });
 
-  it('puts a recent fusion above older unconfirmed by timestamp', () => {
+  it('puts a recent fusion above older live unconfirmed by timestamp', () => {
     const list = [
-      tx('old_pending', 0, '2026-01-01T00:00:00.000Z'),
+      tx('old_pending', 0, minutesAgo(10)),
       tx('older_conf', 100),
-      tx('fused_new', 0, '2026-08-06T12:00:00.000Z'),
+      tx('fused_new', 0, minutesAgo(1)),
     ];
     const sorted = sortTransactionsByRecency(list, 'desc');
     expect(sorted.map((t) => t.tx_hash)).toEqual([
@@ -45,6 +49,14 @@ describe('transactionHistoryOrder — newest first', () => {
       'old_pending',
       'older_conf',
     ]);
+  });
+
+  it('does not park stale height-0 fusion above real confirmed blocks', () => {
+    const stale = tx('old_fusion', 0, minutesAgo(24 * 60));
+    expect(isMempoolLike(stale)).toBe(false);
+    const list = [stale, tx('real_conf', 317_000)];
+    const sorted = sortTransactionsByRecency(list, 'desc');
+    expect(sorted.map((t) => t.tx_hash)).toEqual(['real_conf', 'old_fusion']);
   });
 
   it('does not treat array index as time (slice(-N).reverse bug)', () => {
@@ -65,7 +77,7 @@ describe('transactionHistoryOrder — newest first', () => {
     ]);
   });
 
-  it('oldest-first puts unconfirmed last', () => {
+  it('oldest-first puts live unconfirmed last', () => {
     const list = [tx('a', 10), tx('b', 0), tx('c', 20)];
     const sorted = sortTransactionsByRecency(list, 'asc');
     expect(sorted.map((t) => t.tx_hash)).toEqual(['a', 'c', 'b']);

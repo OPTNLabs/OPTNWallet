@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { UTXO } from '../../../types/types';
 import {
   classifyServerFusionCoins,
+  findCrowdedPlainAddressBuckets,
+  formatServerFusionEmptyReason,
   isServerFusionDepthSatisfied,
   selectServerFusionBuckets,
 } from '../serverFusionCoinPolicy';
@@ -25,7 +27,7 @@ const coin = (
 });
 
 describe('Electron Cash server Fusion coin policy', () => {
-  it('rejects the whole address bucket for tokens, frozen flags, unconfirmed coins, or more than three coins', () => {
+  it('rejects addresses that have no usable coins; leaves token/frozen coins behind', () => {
     const coins: PolicyCoin[] = [
       coin('eligible', 1),
       coin('eligible', 2),
@@ -35,28 +37,57 @@ describe('Electron Cash server Fusion coin policy', () => {
       }),
       coin('frozen-address', 5, { is_frozen_coin: true }),
       coin('unconfirmed-address', 6, { height: 0 }),
-      coin('too-many', 7),
-      coin('too-many', 8),
-      coin('too-many', 9),
-      coin('too-many', 10),
     ];
 
-    const result = classifyServerFusionCoins(coins);
+    const result = classifyServerFusionCoins(coins, {
+      requireConfirmed: true,
+    });
 
-    expect(result.eligibleBuckets.map((bucket) => bucket.address)).toEqual([
-      'eligible',
-    ]);
-    expect(result.eligibleBuckets[0].coins).toHaveLength(2);
+    expect(
+      result.eligibleBuckets.map((bucket) => bucket.address).sort()
+    ).toEqual(['eligible', 'token-address']);
+    expect(
+      result.eligibleBuckets.find((bucket) => bucket.address === 'eligible')
+        ?.coins
+    ).toHaveLength(2);
+    expect(
+      result.eligibleBuckets.find((bucket) => bucket.address === 'token-address')
+        ?.coins
+    ).toHaveLength(1);
     expect(
       result.ineligibleBuckets.map((bucket) => bucket.address).sort()
-    ).toEqual([
-      'frozen-address',
-      'token-address',
-      'too-many',
-      'unconfirmed-address',
-    ]);
+    ).toEqual(['frozen-address', 'unconfirmed-address']);
     expect(result.hasUnconfirmed).toBe(true);
-    expect(result.totalValue).toBe(10_000);
+    expect(result.totalValue).toBe(6_000);
+  });
+
+  it('keeps the 3 largest plain coins when one address is crowded', () => {
+    const coins: PolicyCoin[] = [
+      coin('crowded', 1, { value: 100 }),
+      coin('crowded', 2, { value: 400 }),
+      coin('crowded', 3, { value: 200 }),
+      coin('crowded', 4, { value: 800 }),
+      coin('crowded', 5, { value: 50 }),
+    ];
+    const result = classifyServerFusionCoins(coins);
+    expect(result.eligibleBuckets).toHaveLength(1);
+    expect(result.eligibleBuckets[0].coins.map((c) => Number(c.value))).toEqual([
+      800, 400, 200,
+    ]);
+    expect(result.ineligibleBuckets).toHaveLength(0);
+  });
+
+  it('reports crowded addresses so fusion can consolidate first', () => {
+    const coins: PolicyCoin[] = [
+      coin('crowded', 1),
+      coin('crowded', 2),
+      coin('crowded', 3),
+      coin('crowded', 4),
+      coin('ok', 5),
+    ];
+    const crowded = findCrowdedPlainAddressBuckets(coins);
+    expect(crowded.map((bucket) => bucket.address)).toEqual(['crowded']);
+    expect(crowded[0].coins).toHaveLength(4);
   });
 
   it('randomly selects whole address buckets without exceeding the EC 20-coin cap', () => {
@@ -137,5 +168,26 @@ describe('Electron Cash server Fusion coin policy', () => {
       eligibleValue: 1_000,
       depthSatisfiedValue: 1_000,
     });
+  });
+
+  it('by default allows height-0 coins (0-conf / stale height bookkeeping)', () => {
+    const result = classifyServerFusionCoins([
+      coin('fresh-fusion', 1, { height: 0 }),
+    ]);
+    expect(result.eligibleBuckets.map((b) => b.address)).toEqual([
+      'fresh-fusion',
+    ]);
+  });
+
+  it('explains empty server eligibility without blaming Manual for Auto', () => {
+    const classified = classifyServerFusionCoins(
+      [coin('unconfirmed-address', 6, { height: 0 })],
+      { requireConfirmed: true }
+    );
+    const auto = formatServerFusionEmptyReason(classified, { auto: true });
+    const manual = formatServerFusionEmptyReason(classified);
+    expect(auto.startsWith('Auto:')).toBe(true);
+    expect(manual.startsWith('Auto:')).toBe(false);
+    expect(manual).toMatch(/unconfirmed/i);
   });
 });

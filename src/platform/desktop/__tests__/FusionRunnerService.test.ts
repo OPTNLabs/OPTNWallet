@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const reconcile = vi.fn();
 const findPendingFusion = vi.fn();
+const consolidateCrowded = vi.fn();
 vi.mock('../../../services/WalletUtxoRefreshService', () => ({
   // Fusion uses the exclusive spend path so background joins cannot soft-fail.
   reconcileActiveWalletUtxosForSpend: (...a: unknown[]) => reconcile(...a),
@@ -11,6 +12,14 @@ vi.mock('../../../services/OutboundTransactionTracker', () => ({
   default: {
     findFusionVerificationPending: (...a: unknown[]) => findPendingFusion(...a),
   },
+}));
+vi.mock('../../../services/OutboundTransactionReconciler', () => ({
+  reconcileOutboundTransactions: vi.fn(async () => []),
+}));
+vi.mock('../fusionPreConsolidate', () => ({
+  consolidateCrowdedFusionAddress: (...a: unknown[]) =>
+    consolidateCrowded(...a),
+  walletCanPreConsolidate: () => true,
 }));
 
 import {
@@ -104,6 +113,11 @@ describe('FusionRunnerService — one path for manual and automatic rounds', () 
     installLocks();
     clearFusionDepth(3);
     findPendingFusion.mockReset().mockResolvedValue(null);
+    consolidateCrowded.mockReset().mockResolvedValue({
+      ok: false,
+      skipped: true,
+      reason: 'no crowded address',
+    });
     reconcile.mockReset();
     runP2p.mockReset().mockResolvedValue({ txid: 'a'.repeat(64) });
     runServer.mockReset().mockResolvedValue({ txid: 'b'.repeat(64) });
@@ -376,17 +390,115 @@ describe('FusionRunnerService — one path for manual and automatic rounds', () 
     expect(runP2p).not.toHaveBeenCalled();
   });
 
-  it('applies confirmed whole-address eligibility to server Fusion only', async () => {
+  it('lets server Fusion take up to three coins from a crowded address', async () => {
     reconcile.mockResolvedValue({
-      addr: [coin('aa'), { ...coin('bb'), height: 0 }],
+      addr: [coin('aa'), coin('bb'), coin('cc'), coin('dd')],
+    });
+    runServer.mockResolvedValue({
+      txid: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
     });
 
     await expect(
       startFusionRound({ ...base(), mode: 'server', trigger: 'manual' })
-    ).resolves.toEqual({
-      status: 'no-eligible-coins',
-      detail: 'No eligible coins to fuse.',
+    ).resolves.toMatchObject({ status: 'fused' });
+    expect(runServer).toHaveBeenCalledTimes(1);
+    expect(runServer.mock.calls[0][0]).toHaveLength(3);
+  });
+
+  it('consolidates a crowded address before server Fusion when the helper succeeds', async () => {
+    reconcile
+      .mockResolvedValueOnce({
+        addr: [coin('aa'), coin('bb'), coin('cc'), coin('dd')],
+      })
+      .mockResolvedValueOnce({
+        addr: [coin('ee')],
+      });
+    consolidateCrowded.mockResolvedValue({
+      ok: true,
+      txid: 'c'.repeat(64),
+      fromAddress: 'bchtest:q',
+      toAddress: 'bchtest:new',
+      coinCount: 4,
     });
+
+    await expect(
+      startFusionRound({ ...base(), mode: 'server', trigger: 'manual' })
+    ).resolves.toMatchObject({ status: 'fused' });
+    expect(consolidateCrowded).toHaveBeenCalledTimes(1);
+    expect(runServer.mock.calls[0][0]).toHaveLength(1);
+    expect(runServer.mock.calls[0][0][0].tx_hash).toBe('ee');
+  });
+
+  it('Auto consolidates a crowded address in the same tick, then fuses', async () => {
+    reconcile
+      .mockResolvedValueOnce({
+        addr: [coin('aa'), coin('bb'), coin('cc'), coin('dd')],
+      })
+      .mockResolvedValueOnce({
+        addr: [coin('ee')],
+      });
+    consolidateCrowded.mockResolvedValue({
+      ok: true,
+      txid: 'c'.repeat(64),
+      fromAddress: 'bchtest:q',
+      toAddress: 'bchtest:new',
+      coinCount: 4,
+    });
+
+    await expect(
+      startFusionRound({ ...base(), mode: 'server', trigger: 'auto' })
+    ).resolves.toMatchObject({ status: 'fused' });
+    expect(consolidateCrowded).toHaveBeenCalledTimes(1);
+    expect(runServer).toHaveBeenCalledTimes(1);
+    expect(runServer.mock.calls[0][0][0].tx_hash).toBe('ee');
+  });
+
+  it('P2P Auto consolidates a crowded address the same way as server', async () => {
+    reconcile
+      .mockResolvedValueOnce({
+        addr: [coin('aa'), coin('bb'), coin('cc'), coin('dd')],
+      })
+      .mockResolvedValueOnce({
+        addr: [coin('ee')],
+      });
+    consolidateCrowded.mockResolvedValue({
+      ok: true,
+      txid: 'c'.repeat(64),
+      fromAddress: 'bchtest:q',
+      toAddress: 'bchtest:new',
+      coinCount: 4,
+    });
+
+    await expect(
+      startFusionRound({ ...base(), mode: 'p2p', trigger: 'auto' })
+    ).resolves.toMatchObject({ status: 'fused', mode: 'p2p' });
+    expect(consolidateCrowded).toHaveBeenCalledTimes(1);
+    expect(runP2p).toHaveBeenCalledTimes(1);
+    expect(runServer).not.toHaveBeenCalled();
+    expect(runP2p.mock.calls[0][0][0].tx_hash).toBe('ee');
+  });
+
+  it('Auto does not consolidate when every address already has 1–3 coins', async () => {
+    reconcile.mockResolvedValue({
+      a: [coin('aa')],
+      b: [coin('bb'), coin('cc')],
+    });
+
+    await expect(
+      startFusionRound({ ...base(), mode: 'server', trigger: 'auto' })
+    ).resolves.toMatchObject({ status: 'fused' });
+    expect(consolidateCrowded).not.toHaveBeenCalled();
+    expect(runServer).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips a server Fusion address when every coin there is a token', async () => {
+    reconcile.mockResolvedValue({
+      addr: [coin('aa', true), coin('bb', true)],
+    });
+
+    await expect(
+      startFusionRound({ ...base(), mode: 'server', trigger: 'manual' })
+    ).resolves.toMatchObject({ status: 'no-eligible-coins' });
     expect(runServer).not.toHaveBeenCalled();
   });
 

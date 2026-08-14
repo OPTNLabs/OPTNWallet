@@ -11,6 +11,28 @@ vi.mock('../nostr/fusion', async (importOriginal) => {
   };
 });
 
+vi.mock('../fusionKnobs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../fusionKnobs')>();
+  return {
+    ...actual,
+    getFusionKnobs: () => ({
+      ...actual.FUSION_KNOB_DEFAULTS,
+      minPlayers: 4,
+      minSafePlayers: 4,
+      maxPlayers: 4,
+      gatherMaxMs: 10_000,
+      gatherAloneMs: 10_000,
+      gatherAloneAutoMs: 10_000,
+      gatherMinMs: 0,
+      gatherFastWarmupMs: 10_000,
+      smallSetHoldMs: 0,
+      peerSetStableMs: 0,
+      peerSetStableFastMs: 0,
+      peakGraceMs: 3_000,
+    }),
+  };
+});
+
 vi.mock('../fusionTiming', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../fusionTiming')>();
   return {
