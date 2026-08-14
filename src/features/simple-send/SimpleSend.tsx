@@ -215,7 +215,10 @@ export default function SimpleSend() {
     if (err.toLowerCase().includes('insufficient funds')) {
       return 'Not enough funds. Check your balance or reduce the amount.';
     }
-    if (err.toLowerCase().includes('network')) {
+    if (
+      /\b(connection|timeout|econnrefused|offline|unreachable)\b/i.test(err) ||
+      /^network error\b/i.test(err)
+    ) {
       return 'Network error. Check your connection and try again.';
     }
     // Default to original

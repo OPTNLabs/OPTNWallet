@@ -41,7 +41,14 @@ import {
   getLegacyDefaultChangeAddress,
   getPreferredBchChangeAddress,
 } from '../utils/changeAddressPreference';
-import { getRpaSendBlockReason } from '../services/RpaService';
+import {
+  decodePaycode,
+  getRpaSendBlockReason,
+  looksLikeRpaPaycode,
+} from '../services/RpaService';
+import { finalizeRpaPayment, makeRpaDummyAddress } from '../services/RpaSender';
+import KeyService from '../services/KeyService';
+import { secp256k1 } from '@bitauth/libauth';
 
 export default function useSimpleSend() {
   // Redux
@@ -482,19 +489,39 @@ export default function useSimpleSend() {
         setMode('error');
         return;
       }
+      const rpaPaycode = looksLikeRpaPaycode(recipient)
+        ? decodePaycode(recipient)
+        : null;
+      if (rpaPaycode) {
+        if (isHardwareWallet) {
+          setError(
+            'Sending to a paycode is not available on hardware wallets. Use a software wallet.'
+          );
+          setMode('error');
+          return;
+        }
+        if (assetType !== 'bch') {
+          setError('Paycodes only accept BCH, not tokens.');
+          setMode('error');
+          return;
+        }
+      }
 
-      {
+      if (!rpaPaycode) {
         const netErr = recipientNetworkError(recipient, currentNetwork);
         if (netErr) {
           setError(netErr);
           setMode('error');
           return;
         }
-      }
-      if (!parsedRecipient.isValidAddress || !validateRecipient(normalizedRecipient)) {
-        setError('Please enter a valid destination address for this network.');
-        setMode('error');
-        return;
+        if (
+          !parsedRecipient.isValidAddress ||
+          !validateRecipient(normalizedRecipient)
+        ) {
+          setError('Please enter a valid destination address for this network.');
+          setMode('error');
+          return;
+        }
       }
       if (!selectedChangeAddress) {
         setError('Please choose a change address.');
@@ -520,8 +547,11 @@ export default function useSimpleSend() {
           setMode('error');
           return;
         }
+        const dummyAddress = rpaPaycode
+          ? makeRpaDummyAddress(currentNetwork)
+          : '';
         const freshPlanner = createSimpleSendPlanner({
-          recipient: normalizedRecipient,
+          recipient: rpaPaycode ? dummyAddress : normalizedRecipient,
           selectedCategory,
           amountToken,
           tokenChangeAddress,
@@ -536,12 +566,56 @@ export default function useSimpleSend() {
           return;
         }
 
+        let rawTx = attempt.rawTx;
+        let finalOutputs = attempt.finalOutputs;
+        let rpaStealthAddress: string | undefined;
+        if (rpaPaycode) {
+          const inputKeys: Array<{ priv: Uint8Array; pub: Uint8Array }> = [];
+          for (const utxo of attempt.inputs) {
+            const priv = await KeyService.fetchAddressPrivateKey(
+              utxo.address,
+              'spend'
+            );
+            if (!priv) {
+              setError('Could not unlock a selected coin to pay this paycode.');
+              setMode('error');
+              return;
+            }
+            const pub = secp256k1.derivePublicKeyCompressed(priv);
+            if (typeof pub === 'string') {
+              priv.fill(0);
+              setError('Could not derive a public key for a selected coin.');
+              setMode('error');
+              return;
+            }
+            inputKeys.push({ priv, pub: Uint8Array.from(pub) });
+          }
+          const finalized = await finalizeRpaPayment({
+            rawTxHex: attempt.rawTx,
+            dummyAddress,
+            paycode: rpaPaycode,
+            utxos: attempt.inputs,
+            inputKeys,
+            network: currentNetwork,
+          });
+          for (const key of inputKeys) key.priv.fill(0);
+          if (!finalized.ok) {
+            setError(finalized.error);
+            setMode('error');
+            return;
+          }
+          rawTx = finalized.txHex;
+          finalOutputs = finalized.finalOutputs;
+          rpaStealthAddress = finalized.stealthAddress;
+        }
+
         setSelectedForTx(attempt.inputs);
         setReview({
-          rawTx: attempt.rawTx,
+          rawTx,
           feeSats: attempt.feeSats,
           totalSats: attempt.totalSats,
-          finalOutputs: attempt.finalOutputs,
+          finalOutputs,
+          rpaStealthAddress,
         });
         setMode('review');
         return;
@@ -747,18 +821,31 @@ export default function useSimpleSend() {
       setMode('error');
       return;
     }
-    {
+    const rpaPaycode = looksLikeRpaPaycode(recipient)
+      ? decodePaycode(recipient)
+      : null;
+    if (rpaPaycode && isHardwareWallet) {
+      setError(
+        'Sending to a paycode is not available on hardware wallets. Use a software wallet.'
+      );
+      setMode('error');
+      return;
+    }
+    if (!rpaPaycode) {
       const netErr = recipientNetworkError(recipient, currentNetwork);
       if (netErr) {
         setError(netErr);
         setMode('error');
         return;
       }
-    }
-    if (!parsedRecipient.isValidAddress || !validateRecipient(normalizedRecipient)) {
-      setError('Enter a valid destination address for this network first.');
-      setMode('error');
-      return;
+      if (
+        !parsedRecipient.isValidAddress ||
+        !validateRecipient(normalizedRecipient)
+      ) {
+        setError('Enter a valid destination address for this network first.');
+        setMode('error');
+        return;
+      }
     }
     if (!selectedChangeAddress) {
       setError('Change address is still loading. Try again in a moment.');
@@ -781,7 +868,9 @@ export default function useSimpleSend() {
         return;
       }
       const freshPlanner = createSimpleSendPlanner({
-        recipient: normalizedRecipient,
+        recipient: rpaPaycode
+          ? makeRpaDummyAddress(currentNetwork)
+          : normalizedRecipient,
         selectedCategory,
         amountToken,
         tokenChangeAddress,
@@ -813,6 +902,7 @@ export default function useSimpleSend() {
     }
   }, [
     assetType,
+    isHardwareWallet,
     maxBusy,
     recipient,
     currentNetwork,

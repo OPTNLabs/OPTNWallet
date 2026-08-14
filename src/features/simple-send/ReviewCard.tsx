@@ -7,7 +7,9 @@ import { resolveTokenPresentation } from '../../utils/tokenPresentation';
 import { coinDepth } from '../../platform/desktop/fusionCoinDepth';
 import { outpointKey } from '../../platform/desktop/CoinLabelService';
 import { FusionBadge } from '../../components/FusionBadge';
+import { StealthBadge } from '../../components/StealthBadge';
 import { selectWalletId } from '../../state/slices/walletSlice';
+import type { RootState } from '../../state/store';
 
 type ReviewCardProps = {
   open: boolean;
@@ -50,6 +52,20 @@ export function ReviewCard({
   onConfirmSend,
 }: ReviewCardProps) {
   const walletId = useSelector(selectWalletId);
+  const rpaRecord = useSelector((state: RootState) =>
+    walletId > 0
+      ? state.walletSpecialActivity.byWallet[walletId]?.rpa ?? null
+      : null
+  );
+  const stealthKeys = useMemo(() => {
+    const keys = new Set<string>();
+    if (rpaRecord && 'unspentOutputs' in rpaRecord.payload) {
+      for (const output of rpaRecord.payload.unspentOutputs) {
+        keys.add(outpointKey(output.txHash, output.outputIndex));
+      }
+    }
+    return keys;
+  }, [rpaRecord]);
   const HANDLE_SIZE = 56;
   const trackRef = useRef<HTMLDivElement>(null);
   const [dragX, setDragX] = useState(0);
@@ -115,9 +131,10 @@ export function ReviewCard({
           sats: Number(u.amount ?? u.value ?? 0),
           pending: typeof u.height === 'number' ? u.height <= 0 : false,
           depth: walletId > 0 ? coinDepth(walletId, key) : 0,
+          stealth: stealthKeys.has(key),
         };
       }),
-    [selectedForTx, walletId]
+    [selectedForTx, stealthKeys, walletId]
   );
 
   const technicalOutputs = useMemo(
@@ -249,6 +266,17 @@ export function ReviewCard({
                   {visibleRecipient}
                 </span>
               </div>
+              {review.rpaStealthAddress && (
+                <div className="wallet-stat-row">
+                  <span className="font-medium">Stealth address</span>
+                  <span
+                    className="font-mono break-all text-right max-w-[70%] wallet-text-strong"
+                    title={review.rpaStealthAddress}
+                  >
+                    {review.rpaStealthAddress}
+                  </span>
+                </div>
+              )}
 
               {assetType === 'bch' && (
                 <div className="wallet-stat-row">
@@ -396,6 +424,9 @@ export function ReviewCard({
                                 className="ml-1.5"
                               />
                             )}
+                            {input.stealth && (
+                              <StealthBadge className="ml-1.5" />
+                            )}
                           </div>
                           {input.pending && (
                             <div className="wallet-muted">Pending</div>
@@ -453,7 +484,10 @@ export function ReviewCard({
                   : 'Slide to confirm'}
           </div>
           {isSending && isHardwareWallet && (
-            <div className="text-[12px] mb-2.5 px-1" style={{ color: 'var(--wallet-warning-text, #d97706)' }}>
+            <div
+              className="text-[12px] mb-2.5 px-1"
+              style={{ color: 'var(--wallet-warning-text, #d97706)' }}
+            >
               Look at the Ledger screen and approve the amount/address with both
               buttons. Finalization waits on the device (not the computer).
             </div>
