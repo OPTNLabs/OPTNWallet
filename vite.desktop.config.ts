@@ -18,6 +18,13 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // dual endsWith checks. srcPath() is the one true way to build alias keys here.
 const srcPath = (rel: string) => normalizePath(resolvePath(__dirname, rel));
 
+// Vite may append a query to an importer/resolved module id (for example while
+// transforming an HMR request). Module swaps are source-file decisions, so a
+// query must never make the desktop wrapper look different from its own target.
+// Without stripping it, DesktopAppShell's import of the real AppShell is
+// rewritten back to DesktopAppShell and React recurses until the WebView stalls.
+const modulePath = (id: string) => normalizePath(id.replace(/[?#].*$/, ''));
+
 // Inject desktop.css and the HTTP bridge into the build without touching main.tsx.
 // The HTTP bridge is imported first so window.fetch is patched before any module
 // (e.g. the price feed) issues a request.
@@ -113,20 +120,33 @@ const MODULE_SWAPS = new Map<string, string>([
   [srcPath('src/pages/onboarding/ImportWalletPage.tsx'), srcPath('src/platform/desktop/onboarding/DesktopImportWalletPage.tsx')],
 ]);
 
+/** Emscripten sql.js replacement. Swapped on an exact specifier only. */
+const SQL_JS_SHIM = resolvePath(
+  __dirname,
+  'src/platform/desktop/sql-js-shim.ts'
+);
+
 function desktopModuleSwapPlugin(): Plugin {
   return {
     name: 'optn-desktop-module-swap',
     enforce: 'pre',
     async resolveId(source, importer, options) {
+      // sql.js must be swapped on an EXACT specifier, not through resolve.alias.
+      // A string alias key matches `id === key` OR `id.startsWith(key + '/')`,
+      // so an alias would also capture the shim's own
+      // `sql.js/dist/sql-wasm.js?url` and rewrite it to
+      // `<shim>/dist/sql-wasm.js?url`, which does not exist — the alias eats the
+      // very import meant to escape it, and the desktop app fails to boot.
+      if (source === 'sql.js') return SQL_JS_SHIM;
       if (!importer) return null;
       const resolved = await this.resolve(source, importer, { ...options, skipSelf: true });
       if (!resolved) return null;
-      const target = MODULE_SWAPS.get(normalizePath(resolved.id));
+      const target = MODULE_SWAPS.get(modulePath(resolved.id));
       if (!target) return null;
       // When the replacement module itself imports the original (e.g.
       // DesktopAppShell imports the real AppShell), let it through untouched —
       // otherwise the swap would point the module at itself.
-      if (normalizePath(importer) === target) return null;
+      if (modulePath(importer) === target) return null;
       return target;
     },
   };
@@ -168,11 +188,9 @@ const desktopAdditions = defineConfig({
       // keys only match raw import specifiers, so absolute-path keys silently
       // never fire. Only bare package specifiers belong in this block.
 
-      // sql.js uses Emscripten-generated code with onRuntimeInitialized callbacks
-      // that break under both rolldown (TypeError) and esbuild pre-bundling (silent hang).
-      // The browser UMD build is served as a static file and loaded via <script> tag,
-      // bypassing Vite's module system entirely.
-      'sql.js': resolvePath(__dirname, 'src/platform/desktop/sql-js-shim.ts'),
+      // sql.js is NOT aliased here — see SQL_JS_SHIM in desktopModuleSwapPlugin.
+      // A prefix-matching alias would also capture the shim's own
+      // `sql.js/dist/...` import and break the desktop boot.
 
       // Native TCP(+TLS) Electrum transport. The web build can only open
       // WebSockets, but most Fulcrum servers expose only the raw TCP-SSL port

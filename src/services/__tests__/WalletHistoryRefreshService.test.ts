@@ -3,6 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const fetchAndStore = vi.fn();
 const ensureDatabaseStarted = vi.fn(async () => {});
 const getDatabase = vi.fn();
+const { reconnect } = vi.hoisted(() => ({
+  reconnect: vi.fn(async () => {}),
+}));
 
 vi.mock('../../apis/TransactionManager/TransactionManager', () => ({
   default: () => ({ fetchAndStoreTransactionHistories: fetchAndStore }),
@@ -12,7 +15,7 @@ vi.mock('../../apis/DatabaseManager/DatabaseService', () => ({
 }));
 vi.mock('../ElectrumService', () => ({
   default: {
-    reconnect: vi.fn(async () => {}),
+    reconnect,
     getTransactionDetails: vi.fn(async () => ({})),
   },
 }));
@@ -21,6 +24,13 @@ vi.mock('../OutboundTransactionReconciler', () => ({
 }));
 vi.mock('../QuantumrootTrackingService', () => ({
   default: { listTrackedAddresses: vi.fn(async () => []) },
+}));
+vi.mock('../../platform/desktop/WalletLedgerService', () => ({
+  partitionAddressesByStatus: vi.fn(async (_walletId: number, addresses: string[]) => ({
+    dirty: addresses,
+    clean: [],
+    probed: 0,
+  })),
 }));
 
 import { refreshWalletTransactionHistory } from '../WalletHistoryRefreshService';
@@ -63,8 +73,29 @@ describe('wallet history refresh service', () => {
       walletId: 101,
       dispatch,
     });
-    expect(fetchAndStore).toHaveBeenCalledWith(101, ['addr1', 'addr2']);
+    expect(fetchAndStore).toHaveBeenCalledWith(
+      101,
+      ['addr1', 'addr2'],
+      undefined,
+      expect.any(Function)
+    );
     expect(result.refreshed).toBe(true);
+  });
+
+  it('does not tear down a healthy Electrum connection before scanning history', async () => {
+    const result = await refreshWalletTransactionHistory({
+      walletId: 108,
+      dispatch,
+    });
+
+    expect(result.refreshed).toBe(true);
+    expect(fetchAndStore).toHaveBeenCalledWith(
+      108,
+      ['addr1', 'addr2'],
+      undefined,
+      expect.any(Function)
+    );
+    expect(reconnect).not.toHaveBeenCalled();
   });
 
   it('honours a skip set for an incremental first load', async () => {
@@ -73,7 +104,12 @@ describe('wallet history refresh service', () => {
       dispatch,
       skipAddresses: new Set(['addr1']),
     });
-    expect(fetchAndStore).toHaveBeenCalledWith(102, ['addr2']);
+    expect(fetchAndStore).toHaveBeenCalledWith(
+      102,
+      ['addr2'],
+      undefined,
+      expect.any(Function)
+    );
   });
 
   it('still refreshes when every address was previously scanned', async () => {
@@ -81,7 +117,12 @@ describe('wallet history refresh service', () => {
     // so a NEW payment on an already-scanned address refreshed nothing. A full
     // pass must not be filtered away.
     await refreshWalletTransactionHistory({ walletId: 103, dispatch });
-    expect(fetchAndStore).toHaveBeenCalledWith(103, ['addr1', 'addr2']);
+    expect(fetchAndStore).toHaveBeenCalledWith(
+      103,
+      ['addr1', 'addr2'],
+      undefined,
+      expect.any(Function)
+    );
   });
 
   it('publishes the stored transactions to redux', async () => {

@@ -8,10 +8,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import DatabaseService from '../../../apis/DatabaseManager/DatabaseService';
 import KeyService from '../../../services/KeyService';
-import {
-  getBchAccountPath,
-  normalizeBchAccountPath,
-} from '../../../services/HdWalletService';
+import { normalizeBchAccountPath } from '../../../services/HdWalletService';
 import { Network, setNetwork } from '../../../state/slices/networkSlice';
 import { selectCurrentNetwork } from '../../../state/selectors/networkSelectors';
 import {
@@ -25,6 +22,8 @@ import OnboardingCard from '../../../features/onboarding/components/OnboardingCa
 import OnboardingScreen from '../../../features/onboarding/components/OnboardingScreen';
 import DerivationPathField from '../../../features/onboarding/components/DerivationPathField';
 import { createWalletWithPassword } from '../DesktopWalletManager';
+import { validateNewWalletPassword } from '../passwordPolicy';
+import { defaultDesktopAccountPath } from '../desktopDerivationDefaults';
 import { useI18n } from '../../../i18n/useI18n';
 import { getBip39LanguageForLocale } from '../../../services/Bip39Service';
 
@@ -62,7 +61,7 @@ const DesktopCreateWalletPage = () => {
   const dispatch = useDispatch();
   const { locale, t } = useI18n();
   const [derivationPath, setDerivationPath] = useState(() =>
-    getBchAccountPath(currentNetwork)
+    defaultDesktopAccountPath(currentNetwork)
   );
   const [customDerivationPath, setCustomDerivationPath] = useState(false);
 
@@ -72,7 +71,7 @@ const DesktopCreateWalletPage = () => {
 
   useEffect(() => {
     if (!customDerivationPath)
-      setDerivationPath(getBchAccountPath(currentNetwork));
+      setDerivationPath(defaultDesktopAccountPath(currentNetwork));
   }, [currentNetwork, customDerivationPath]);
 
   useEffect(() => {
@@ -126,8 +125,13 @@ const DesktopCreateWalletPage = () => {
       setNameError(t('onboarding.nameRequired'));
       return;
     }
-    if (password !== passwordConfirm) {
-      setNameError(t('onboarding.passwordMismatch'));
+    const passErr = validateNewWalletPassword(password, passwordConfirm);
+    if (passErr) {
+      setNameError(
+        password !== passwordConfirm
+          ? t('onboarding.passwordMismatch')
+          : passErr
+      );
       return;
     }
     setNameError('');
@@ -347,6 +351,7 @@ const DesktopCreateWalletPage = () => {
               setNameError('');
             }}
             placeholder={t('onboarding.passwordPlaceholder')}
+            autoComplete="new-password"
             className="wallet-input w-full px-3 py-2 rounded-md wallet-text-strong"
           />
           <input
@@ -357,6 +362,7 @@ const DesktopCreateWalletPage = () => {
               setNameError('');
             }}
             placeholder={t('onboarding.confirmPasswordPlaceholder')}
+            autoComplete="new-password"
             className="wallet-input w-full px-3 py-2 rounded-md wallet-text-strong"
           />
         </div>
@@ -368,9 +374,7 @@ const DesktopCreateWalletPage = () => {
           disabled={isSubmitting}
           className="wallet-btn-primary w-full my-2 text-xl font-bold"
         >
-          {isSubmitting
-            ? t('onboarding.creating')
-            : t('onboarding.createWallet')}
+          {t('onboarding.createWallet')}
         </button>
       </OnboardingCard>
     </OnboardingScreen>

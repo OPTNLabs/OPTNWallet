@@ -93,7 +93,7 @@ describe('RpaService', () => {
     );
   });
 
-  it('uses different key paths on mainnet and chipnet', async () => {
+  it('uses network-specific coin-type key paths for mainnet and chipnet', async () => {
     const mainnet = await deriveRpaKeys(TEST_MNEMONIC, PASSPHRASE, Network.MAINNET);
     const chipnet = await deriveRpaKeys(TEST_MNEMONIC, PASSPHRASE, Network.CHIPNET);
     expect(Buffer.from(mainnet.scanPubkey).toString('hex')).not.toBe(

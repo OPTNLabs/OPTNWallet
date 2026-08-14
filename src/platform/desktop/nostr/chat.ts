@@ -16,15 +16,9 @@ import { get as idbGet, set as idbSet } from 'idb-keyval';
 import WalletManager from '../../../apis/WalletManager/WalletManager';
 import { deriveNostrIdentity, type NostrIdentity } from './identity';
 
-// Sensible public relays as a starting set; users can add their own.
-// relay.nostr.band was dropped: it refuses/never completes the WSS handshake
-// (ERR_CONNECTION_TIMED_OUT), and every fusion publish/subscribe stalled on it
-// before falling through to the working relays.
-export const DEFAULT_RELAYS = [
-  'wss://relay.damus.io',
-  'wss://nos.lol',
-  'wss://relay.primal.net',
-];
+// Built-in bootstrap list — single source: defaultRelays.ts (also used by Redux).
+export { DEFAULT_RELAYS, isDefaultNostrRelay } from './defaultRelays';
+import { DEFAULT_RELAYS } from './defaultRelays';
 
 const GIFT_WRAP = 1059;
 const METADATA = 0;
@@ -222,12 +216,19 @@ const CHAT_STORE_KEY = (pubkey: string) => `nostr-chat:${pubkey}`;
 
 /**
  * Check which relays are reachable right now by opening a WebSocket to each.
- * Returns a url→online map. Used to show live relay status and to auto-pick the
- * relays that actually work.
+ * Returns a url→online map for the settings UI.
+ *
+ * This only probes reachability — it cannot force a third-party relay to stay
+ * up. Fusion already treats the pool as multi-relay (first OK wins); a few red
+ * dots are normal and do not block a round by themselves.
+ *
+ * @param timeoutMs per-relay open budget (Tor needs more than LAN; default 8s)
+ * @param onProgress optional per-URL update as each socket finishes
  */
 export function checkRelayStatus(
   relays: string[],
-  timeoutMs = 4000
+  timeoutMs = 8_000,
+  onProgress?: (url: string, online: boolean) => void
 ): Promise<Record<string, boolean>> {
   return Promise.all(
     relays.map(
@@ -243,11 +244,13 @@ export function checkRelayStatus(
             } catch {
               /* ignore */
             }
+            onProgress?.(url, ok);
             resolve([url, ok]);
           };
           try {
             ws = new WebSocket(url);
           } catch {
+            onProgress?.(url, false);
             resolve([url, false]);
             return;
           }

@@ -14,7 +14,10 @@ import {
   formatAtomicTokenAmount,
   resolveTokenPresentation,
 } from '../../../utils/tokenPresentation';
-import { useI18n } from '../../../i18n/useI18n';
+import { coinDepth } from '../../../platform/desktop/fusionCoinDepth';
+import { outpointKey } from '../../../platform/desktop/CoinLabelService';
+import { FusionBadge } from '../../../components/FusionBadge';
+import { selectWalletId } from '../../../state/slices/walletSlice';
 
 interface SelectedUTXOsDisplayProps {
   selectedUtxos: UTXO[];
@@ -63,13 +66,15 @@ export default function SelectedUTXOsDisplay({
   handleUtxoClick,
   currentNetwork,
 }: SelectedUTXOsDisplayProps) {
-  const { t } = useI18n();
   const [showPopup, setShowPopup] = useState(false);
   const tokenMetadata = useSharedTokenMetadata(
-    selectedUtxos.map((u) => u.token?.category).filter((c): c is string => !!c)
+    selectedUtxos
+      .map((u) => u.token?.category)
+      .filter((c): c is string => !!c)
   );
 
   const prices = useSelector((s: RootState) => s.priceFeed);
+  const walletId = useSelector(selectWalletId);
   const bchUsd = prices['BCH-USD']?.price ?? 0;
 
   const togglePopup = () => setShowPopup((v) => !v);
@@ -86,21 +91,19 @@ export default function SelectedUTXOsDisplay({
       {selectedUtxos.length > 0 ? (
         <div className="flex justify-between items-center mb-4">
           <div>
-            <h3 className="text-lg font-semibold">
-              {t('builder.selectedFunds')}
-            </h3>
+            <h3 className="text-lg font-semibold">Selected funds</h3>
           </div>
           <button
             onClick={togglePopup}
             className="wallet-btn-primary font-bold py-1 px-2"
           >
-            {t('builder.reviewFunds')}
+            Review funds
           </button>
         </div>
       ) : selectedAddresses.length > 0 ||
         selectedContractAddresses.length > 0 ? (
         <div className="text-sm wallet-muted">
-          {t('builder.noFundsSelected')}
+          No funds selected yet.
         </div>
       ) : (
         <></>
@@ -109,11 +112,11 @@ export default function SelectedUTXOsDisplay({
       {showPopup && (
         <Popup closePopups={() => setShowPopup(false)}>
           <h3 className="text-lg font-semibold text-center mb-4">
-            {t('builder.selectedFunds')}
+            Selected funds
           </h3>
           <div className="max-h-[50vh] overflow-y-auto">
             {selectedUtxos.length === 0 ? (
-              <p>{t('builder.noUtxosSelected')}</p>
+              <p>No UTXOs selected.</p>
             ) : (
               selectedUtxos.map((utxo) => {
                 const key = utxo.id ?? `${utxo.tx_hash}-${utxo.tx_pos}`;
@@ -125,7 +128,8 @@ export default function SelectedUTXOsDisplay({
                       name: utxo.token.BcmrTokenMetadata.name,
                       symbol: utxo.token.BcmrTokenMetadata.token.symbol,
                       decimals: utxo.token.BcmrTokenMetadata.token.decimals,
-                      iconUri: utxo.token.BcmrTokenMetadata.uris?.icon ?? null,
+                      iconUri:
+                        utxo.token.BcmrTokenMetadata.uris?.icon ?? null,
                     }
                   : null;
                 const presentation = resolveTokenPresentation(
@@ -147,16 +151,14 @@ export default function SelectedUTXOsDisplay({
                     <span className="w-full">
                       {shortenTxHash(
                         meta ? utxo.tokenAddress ?? utxo.address : utxo.address,
-                        currentNetwork === Network.MAINNET
-                          ? PREFIX.mainnet.length
-                          : PREFIX.chipnet.length
+                        PREFIX[currentNetwork].length
                       )}
                     </span>
 
                     {/* Conditional rendering based on whether it's a token */}
                     {isToken ? (
                       <span className="w-full">
-                        {t('builder.amount')}:{' '}
+                        Amount:{' '}
                         {formatAtomicTokenAmount(
                           utxo.token!.amount,
                           presentation.decimals
@@ -167,9 +169,18 @@ export default function SelectedUTXOsDisplay({
                       <>
                         <span className="w-full">
                           {formatSatsToBchString(sats)} BCH
+                          {walletId > 0 && (
+                            <FusionBadge
+                              depth={coinDepth(
+                                walletId,
+                                outpointKey(utxo.tx_hash, utxo.tx_pos)
+                              )}
+                              className="ml-2"
+                            />
+                          )}
                         </span>
                         <span className="w-full">
-                          {t('builder.txHash')}: {shortenTxHash(utxo.tx_hash)}
+                          Tx Hash: {shortenTxHash(utxo.tx_hash)}
                         </span>
                       </>
                     )}
@@ -177,12 +188,12 @@ export default function SelectedUTXOsDisplay({
                     {/* Contract Function */}
                     {utxo.contractFunction && (
                       <span className="w-full">
-                        {t('builder.contractFunction')}: {utxo.contractFunction}
+                        Contract Function: {utxo.contractFunction}
                       </span>
                     )}
                     {!utxo.unlocker && utxo.abi && (
                       <span className="wallet-danger-text w-full">
-                        {t('builder.missingUnlocker')}
+                        Missing unlocker!
                       </span>
                     )}
 
@@ -205,9 +216,7 @@ export default function SelectedUTXOsDisplay({
                         <>
                           <div className="flex items-center">
                             <FaBitcoin className="wallet-accent-icon text-3xl mr-2" />
-                            <span className="font-medium">
-                              {t('assets.bitcoinCash')}
-                            </span>
+                            <span className="font-medium">Bitcoin Cash</span>
                           </div>
                           <span />
                         </>
@@ -225,12 +234,7 @@ export default function SelectedUTXOsDisplay({
         <div className="mt-4">
           <h3 className="flex flex-col">
             <span>
-              {`${t(
-                selectedUtxos.length === 1
-                  ? 'builder.selectedItem'
-                  : 'builder.selectedItems',
-                { count: selectedUtxos.length }
-              )} - ${totalBchStr} BCH`}
+              {`${selectedUtxos.length} selected item${selectedUtxos.length === 1 ? '' : 's'} - ${totalBchStr} BCH`}
             </span>
             <span>{`$ ${totalUsd} USD`}</span>
           </h3>

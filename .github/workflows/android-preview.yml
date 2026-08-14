@@ -71,14 +71,22 @@ jobs:
       - name: Prepare Android instrumentation tests
         run: cd android && ./gradlew assembleDebugAndroidTest
 
-      - name: Enable KVM for Android emulator
+      - name: Configure Android emulator acceleration
+        shell: bash
         run: |
+          set -euo pipefail
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
             sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-          test -r /dev/kvm
-          test -w /dev/kvm
+          sudo udevadm control --reload-rules || true
+          sudo udevadm trigger --name-match=kvm || true
+          if [ -e /dev/kvm ] && sudo chmod 666 /dev/kvm 2>/dev/null &&
+            [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+            echo 'ANDROID_EMULATOR_ACCEL=on' >> "$GITHUB_ENV"
+            echo 'KVM is available; using accelerated Android emulator.'
+          else
+            echo 'ANDROID_EMULATOR_ACCEL=off' >> "$GITHUB_ENV"
+            echo 'KVM is unavailable; using software Android emulator.'
+          fi
 
       - name: Android emulator smoke tests
         run: |
@@ -103,6 +111,11 @@ jobs:
             --device pixel_2
           test -f "$ANDROID_AVD_HOME/test.ini"
 
+          emulator_args=()
+          if [ "${ANDROID_EMULATOR_ACCEL:-off}" = 'off' ]; then
+            emulator_args=(-accel off)
+          fi
+
           "$ANDROID_HOME/emulator/emulator" \
             -port 5554 \
             -avd test \
@@ -112,7 +125,8 @@ jobs:
             -cores 2 \
             -no-snapshot \
             -noaudio \
-            -no-boot-anim >"$emulator_log" 2>&1 &
+            -no-boot-anim \
+            "${emulator_args[@]}" >"$emulator_log" 2>&1 &
           emulator_pid=$!
 
           adb_timeout_seconds=15

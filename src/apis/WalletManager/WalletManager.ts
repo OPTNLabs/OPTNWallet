@@ -4,13 +4,33 @@ import { Network } from '../../state/slices/networkSlice';
 import SecretCryptoService from '../../services/SecretCryptoService';
 import QuantumrootVaultCacheService from '../../services/QuantumrootVaultCacheService';
 import WalletDiscoveryService from '../../services/WalletDiscoveryService';
-import { WalletLookup, WalletRecord, WalletType } from '../../types/wallet';
+import {
+  WalletLookup,
+  WalletRecord,
+  WalletType,
+  type ExtendedWalletType,
+  type WalletMetadata,
+} from '../../types/wallet';
 import { DerivationPathSource } from '../../types/wallet';
 import { getBchAccountPath, normalizeBchAccountPath } from '../../services/HdWalletService';
 
 // Helper function to safely cast SQL values to number
 function toNumber(value: unknown): number {
   return typeof value === 'number' ? value : parseInt(String(value), 10);
+}
+
+/**
+ * Map a stored walletType TEXT value to the app's type union. Unknown values
+ * fall back to STANDARD exactly as before; desktop-only types (watch-only) are
+ * passed through rather than erased, because a watch-only row has no mnemonic
+ * and must not be treated as a signing standard wallet.
+ */
+function normalizeWalletType(raw: unknown): ExtendedWalletType {
+  if (raw === WalletType.QUANTUMROOT) return WalletType.QUANTUMROOT;
+  if (raw === 'watch-only') return 'watch-only';
+  // Desktop USB hardware keystore (Ledger etc.) — public keys on disk, signs on device.
+  if (raw === 'hardware') return 'hardware';
+  return WalletType.STANDARD;
 }
 
 export default function WalletManager() {
@@ -22,6 +42,7 @@ export default function WalletManager() {
     deleteWallet,
     walletExists,
     getWalletInfo,
+    getWalletMetadata,
     getAllWallets,
     clearAllData,
   };
@@ -57,7 +78,7 @@ export default function WalletManager() {
         const walletType =
           row.walletType === WalletType.QUANTUMROOT
             ? WalletType.QUANTUMROOT
-            : WalletType.STANDARD;
+            : normalizeWalletType(row.walletType);
         rows.push({
           id: toNumber(row.id),
           wallet_name: typeof row.wallet_name === 'string' ? row.wallet_name : '',
@@ -70,6 +91,75 @@ export default function WalletManager() {
     } catch (error) {
       console.error('Error listing wallets:', error);
       return [];
+    }
+  }
+
+  /**
+   * Read only the public fields required to establish a wallet session.
+   * Unlock already proved the candidate key against the encrypted mnemonic;
+   * decrypting both secrets again merely to learn the network/path delayed the
+   * route transition and unnecessarily widened secret exposure in memory.
+   */
+  async function getWalletMetadata(
+    walletId: number
+  ): Promise<WalletMetadata | null> {
+    const dbService = DatabaseService();
+    await dbService.ensureDatabaseStarted();
+    const db = dbService.getDatabase();
+    if (!db) return null;
+
+    createTables(db);
+    try {
+      const query = db.prepare(
+        `SELECT id, wallet_name, networkType, walletType, balance,
+                derivation_path, derivation_path_source
+           FROM wallets WHERE id = ?`
+      );
+      query.bind([walletId]);
+      if (!query.step()) {
+        query.free();
+        return null;
+      }
+      const row = query.getAsObject() as Record<string, unknown>;
+      query.free();
+
+      const networkType =
+        row.networkType === Network.MAINNET
+          ? Network.MAINNET
+          : row.networkType === Network.CHIPNET
+            ? Network.CHIPNET
+            : null;
+      const walletType =
+        row.walletType === WalletType.QUANTUMROOT
+          ? WalletType.QUANTUMROOT
+          : normalizeWalletType(row.walletType);
+      const fallbackNetwork = networkType ?? Network.MAINNET;
+      let derivationPath = getBchAccountPath(fallbackNetwork);
+      if (typeof row.derivation_path === 'string') {
+        try {
+          derivationPath = normalizeBchAccountPath(row.derivation_path);
+        } catch {
+          // Repair malformed/legacy metadata to the network default in memory.
+        }
+      }
+
+      return {
+        id: toNumber(row.id),
+        wallet_name:
+          typeof row.wallet_name === 'string' ? row.wallet_name : null,
+        networkType,
+        walletType,
+        balance:
+          row.balance === null || row.balance === undefined
+            ? null
+            : toNumber(row.balance),
+        derivation_path: derivationPath,
+        derivation_path_source:
+          row.derivation_path_source === 'custom' ? 'custom' : 'default',
+      };
+    } catch (error) {
+      console.error('Error getting wallet metadata:', error);
+      return null;
     }
   }
 
@@ -400,7 +490,7 @@ export default function WalletManager() {
         const walletType =
           rawWalletInfo.walletType === WalletType.QUANTUMROOT
             ? WalletType.QUANTUMROOT
-              : WalletType.STANDARD;
+            : normalizeWalletType(rawWalletInfo.walletType);
         const fallbackNetwork = networkType ?? Network.MAINNET;
         let derivationPath = getBchAccountPath(fallbackNetwork);
         if (typeof rawWalletInfo.derivation_path === 'string') {

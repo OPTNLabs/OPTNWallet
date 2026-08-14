@@ -1,9 +1,13 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useSelector } from 'react-redux';
 import Draggable from 'react-draggable';
 import { AssetType, ReviewState, SimpleSendInput, TokenMetaMap } from './types';
 import { formatFtAmount } from './utils';
 import { resolveTokenPresentation } from '../../utils/tokenPresentation';
-import { useI18n } from '../../i18n/useI18n';
+import { coinDepth } from '../../platform/desktop/fusionCoinDepth';
+import { outpointKey } from '../../platform/desktop/CoinLabelService';
+import { FusionBadge } from '../../components/FusionBadge';
+import { selectWalletId } from '../../state/slices/walletSlice';
 
 type ReviewCardProps = {
   open: boolean;
@@ -19,6 +23,9 @@ type ReviewCardProps = {
   selectedForTx: SimpleSendInput[];
   rawHexLen: number;
   isSending: boolean;
+  /** Optional live status (hardware: "Confirm on Ledger…"). */
+  sendStatus?: string;
+  isHardwareWallet?: boolean;
   onClose: () => void;
   onConfirmSend: () => void;
 };
@@ -37,10 +44,12 @@ export function ReviewCard({
   selectedForTx,
   rawHexLen,
   isSending,
+  sendStatus = '',
+  isHardwareWallet = false,
   onClose,
   onConfirmSend,
 }: ReviewCardProps) {
-  const { t } = useI18n();
+  const walletId = useSelector(selectWalletId);
   const HANDLE_SIZE = 56;
   const trackRef = useRef<HTMLDivElement>(null);
   const [dragX, setDragX] = useState(0);
@@ -90,21 +99,25 @@ export function ReviewCard({
 
   const technicalInputs = useMemo(
     () =>
-      selectedForTx.map((u) => ({
-        key: `${u.tx_hash}:${u.tx_pos}`,
-        address: (() => {
-          const raw = u.address ?? '';
-          const withoutPrefix = raw.includes(':')
-            ? raw.slice(raw.indexOf(':') + 1)
-            : raw;
-          return withoutPrefix.length > 12
-            ? `${withoutPrefix.slice(0, 8)}…${withoutPrefix.slice(-6)}`
-            : withoutPrefix;
-        })(),
-        sats: Number(u.amount ?? u.value ?? 0),
-        pending: typeof u.height === 'number' ? u.height <= 0 : false,
-      })),
-    [selectedForTx]
+      selectedForTx.map((u) => {
+        const key = outpointKey(u.tx_hash, u.tx_pos);
+        return {
+          key,
+          address: (() => {
+            const raw = u.address ?? '';
+            const withoutPrefix = raw.includes(':')
+              ? raw.slice(raw.indexOf(':') + 1)
+              : raw;
+            return withoutPrefix.length > 12
+              ? `${withoutPrefix.slice(0, 8)}…${withoutPrefix.slice(-6)}`
+              : withoutPrefix;
+          })(),
+          sats: Number(u.amount ?? u.value ?? 0),
+          pending: typeof u.height === 'number' ? u.height <= 0 : false,
+          depth: walletId > 0 ? coinDepth(walletId, key) : 0,
+        };
+      }),
+    [selectedForTx, walletId]
   );
 
   const technicalOutputs = useMemo(
@@ -204,10 +217,10 @@ export function ReviewCard({
           <div className="flex items-start justify-between gap-3">
             <div>
               <div className="text-xl font-bold wallet-text-strong">
-                {t('send.reviewTitle')}
+                Review Transaction
               </div>
               <div className="text-sm wallet-muted mt-1">
-                {t('send.verifySlide')}
+                Verify details and slide to send.
               </div>
             </div>
             <button
@@ -216,7 +229,7 @@ export function ReviewCard({
               disabled={isSending}
               className="wallet-btn-secondary px-3 py-1.5 text-xs"
             >
-              {t('receive.close')}
+              Close
             </button>
           </div>
         </div>
@@ -224,11 +237,11 @@ export function ReviewCard({
         <div className="p-4 space-y-4 max-h-[56vh] overflow-y-auto">
           <div className="rounded-2xl border wallet-keyline wallet-signature-panel p-3">
             <div className="mb-3 flex items-center justify-between gap-3">
-              <div className="wallet-kicker">{t('send.summary')}</div>
+              <div className="wallet-kicker">Summary</div>
             </div>
             <div className="text-sm space-y-2">
               <div className="wallet-stat-row">
-                <span className="font-medium">{t('send.to')}</span>
+                <span className="font-medium">To</span>
                 <span
                   className="font-mono truncate max-w-[60%] wallet-text-strong"
                   title={recipient}
@@ -239,7 +252,7 @@ export function ReviewCard({
 
               {assetType === 'bch' && (
                 <div className="wallet-stat-row">
-                  <span className="font-medium">{t('send.amount')}</span>
+                  <span className="font-medium">Amount</span>
                   <span className="wallet-text-strong">
                     {(Number.parseFloat(amountBch) || 0).toFixed(8)} BCH
                     {!!fiatSummary.amountUsd && (
@@ -254,7 +267,7 @@ export function ReviewCard({
 
               {assetType !== 'bch' && (
                 <div className="wallet-stat-row">
-                  <span className="font-medium">{t('send.asset')}</span>
+                  <span className="font-medium">Asset</span>
                   <span className="font-mono wallet-text-strong">
                     {assetType.toUpperCase()} ·{' '}
                     {selectedCategory ? displayNameFor(selectedCategory) : '—'}
@@ -267,7 +280,7 @@ export function ReviewCard({
 
               {review.tokenChange && (
                 <div className="wallet-stat-row">
-                  <span className="font-medium">{t('send.tokenChange')}</span>
+                  <span className="font-medium">Token change</span>
                   <span
                     className="font-mono wallet-text-strong"
                     title={review.tokenChange.amount.toString()}
@@ -287,7 +300,7 @@ export function ReviewCard({
                 </div>
               )}
               <div className="wallet-stat-row">
-                <span className="font-medium">{t('send.fee')}</span>
+                <span className="font-medium">Fee</span>
                 <span className="wallet-text-strong">
                   {(review.feeSats / 100_000_000).toFixed(8)} BCH
                   {!!fiatSummary.feeUsd && (
@@ -299,7 +312,7 @@ export function ReviewCard({
                 </span>
               </div>
               <div className="wallet-stat-row">
-                <span className="font-medium">{t('send.totalBch')}</span>
+                <span className="font-medium">Total (BCH)</span>
                 <span className="wallet-text-strong">
                   {(review.totalSats / 100_000_000).toFixed(8)} BCH
                   {!!fiatSummary.totalUsd && (
@@ -320,10 +333,10 @@ export function ReviewCard({
               onClick={() => setShowTechnicalDetails((prev) => !prev)}
             >
               <span className="font-semibold wallet-text-strong">
-                {t('send.technicalDetails')}
+                Technical details
               </span>
               <span className="text-xs wallet-muted">
-                {showTechnicalDetails ? t('send.hide') : t('send.show')}
+                {showTechnicalDetails ? 'Hide' : 'Show'}
               </span>
             </button>
 
@@ -331,40 +344,32 @@ export function ReviewCard({
               <div className="mt-3 space-y-3">
                 <div className="space-y-1 text-xs">
                   <div className="wallet-stat-row">
-                    <span className="wallet-muted">{t('send.inputs')}</span>
+                    <span className="wallet-muted">Inputs</span>
                     <span className="font-mono wallet-text-strong">
                       {technicalSummary.inputCount}
                     </span>
                   </div>
                   <div className="wallet-stat-row">
-                    <span className="wallet-muted">
-                      {t('send.transactionSize')}
-                    </span>
+                    <span className="wallet-muted">Transaction size</span>
                     <span className="font-mono wallet-text-strong">
-                      {technicalSummary.txBytes} {t('send.bytes')}
+                      {technicalSummary.txBytes} bytes
                     </span>
                   </div>
                   <div className="wallet-stat-row">
-                    <span className="wallet-muted">
-                      {t('send.tokenInputs')}
-                    </span>
+                    <span className="wallet-muted">Token inputs</span>
                     <span className="font-mono wallet-text-strong">
                       {technicalSummary.tokenInputCount}
                     </span>
                   </div>
                   <div className="wallet-stat-row">
-                    <span className="wallet-muted">
-                      {t('send.unconfirmedInputs')}
-                    </span>
+                    <span className="wallet-muted">Unconfirmed inputs</span>
                     <span className="font-mono wallet-text-strong">
                       {technicalSummary.unconfirmedCount}
                     </span>
                   </div>
                   {technicalSummary.contractCount > 0 && (
                     <div className="wallet-stat-row">
-                      <span className="wallet-muted">
-                        {t('send.contractInputs')}
-                      </span>
+                      <span className="wallet-muted">Contract inputs</span>
                       <span className="font-mono wallet-text-strong">
                         {technicalSummary.contractCount}
                       </span>
@@ -374,7 +379,7 @@ export function ReviewCard({
 
                 <div className="rounded-xl border border-[var(--wallet-border)] wallet-surface px-3 py-2.5">
                   <div className="mb-2 text-xs font-semibold wallet-muted">
-                    {t('send.inputsUsed')}
+                    Inputs used
                   </div>
                   <div className="space-y-1.5">
                     {technicalInputs.map((input) => (
@@ -385,11 +390,15 @@ export function ReviewCard({
                         <div className="min-w-0">
                           <div className="font-mono wallet-text-strong truncate">
                             {input.address}
+                            {input.depth > 0 && (
+                              <FusionBadge
+                                depth={input.depth}
+                                className="ml-1.5"
+                              />
+                            )}
                           </div>
                           {input.pending && (
-                            <div className="wallet-muted">
-                              {t('send.pending')}
-                            </div>
+                            <div className="wallet-muted">Pending</div>
                           )}
                         </div>
                         <div className="font-mono wallet-text-strong shrink-0">
@@ -402,7 +411,7 @@ export function ReviewCard({
 
                 <div className="rounded-xl border border-[var(--wallet-border)] wallet-surface px-3 py-2.5">
                   <div className="mb-2 text-xs font-semibold wallet-muted">
-                    {t('send.outputsCreated')}
+                    Outputs created
                   </div>
                   <div className="space-y-1.5">
                     {technicalOutputs.map((output) => (
@@ -433,13 +442,22 @@ export function ReviewCard({
         <div className="px-4 pb-4 pt-3 wallet-surface border-t border-[var(--wallet-border)]">
           <div className="text-[14px] wallet-muted mb-2.5 px-1">
             {isSending
-              ? t('send.sending')
+              ? sendStatus ||
+                (isHardwareWallet
+                  ? 'Confirm on your Ledger device…'
+                  : 'Sending…')
               : slideCompleted
-                ? t('send.confirmed')
+                ? 'Confirmed'
                 : nearingSend
-                  ? t('send.releaseToSend')
-                  : t('send.slideToConfirm')}
+                  ? 'Release to send'
+                  : 'Slide to confirm'}
           </div>
+          {isSending && isHardwareWallet && (
+            <div className="text-[12px] mb-2.5 px-1" style={{ color: 'var(--wallet-warning-text, #d97706)' }}>
+              Look at the Ledger screen and approve the amount/address with both
+              buttons. Finalization waits on the device (not the computer).
+            </div>
+          )}
 
           <div
             ref={trackRef}
@@ -481,7 +499,7 @@ export function ReviewCard({
                     : pendingText,
                 }}
               >
-                {t('send.send')}
+                SEND
               </span>
             </div>
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
@@ -494,12 +512,14 @@ export function ReviewCard({
                 }}
               >
                 {isSending
-                  ? t('send.sending')
+                  ? isHardwareWallet
+                    ? 'Check Ledger…'
+                    : 'Sending…'
                   : slideCompleted
-                    ? t('send.confirmed')
+                    ? 'Confirmed'
                     : nearingSend
-                      ? t('send.releaseToSend')
-                      : t('send.slideToConfirm')}
+                      ? 'Release to send'
+                      : 'Slide to confirm'}
               </span>
             </div>
             <Draggable

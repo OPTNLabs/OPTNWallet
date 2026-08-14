@@ -5,6 +5,7 @@ import { useI18n } from '../../../i18n/useI18n';
 type DesktopWalletPickerActionsProps = {
   hasWallets: boolean;
   onHardware: () => void;
+  /** Opens create watch-only (xPub + password; Airgap/Keystone section inside). */
   onWatchOnly: () => void;
 };
 
@@ -12,11 +13,12 @@ export const DesktopWalletPickerActions: FC<
   DesktopWalletPickerActionsProps
 > = ({ hasWallets, onHardware, onWatchOnly }) => {
   const { t } = useI18n();
-
   return (
     <div className="space-y-2">
       <p className="text-sm wallet-muted">
-        {hasWallets ? t('desktopWallet.addAnother') : t('onboarding.helpTitle')}
+        {hasWallets
+          ? t('desktopWallet.addAnother')
+          : t('onboarding.createWallet')}
       </p>
       <Link
         to="/createwallet"

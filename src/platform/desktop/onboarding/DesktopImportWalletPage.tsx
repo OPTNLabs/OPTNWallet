@@ -2,15 +2,13 @@
 // minus seed re-confirmation (the user already typed the real words once).
 // Replaces src/features/onboarding/ImportWalletPage.tsx via a Vite alias
 // (desktop builds only); the upstream mobile page is untouched.
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import DatabaseService from '../../../apis/DatabaseManager/DatabaseService';
+import ElectrumServer from '../../../apis/ElectrumServer/ElectrumServer';
 import KeyService from '../../../services/KeyService';
-import {
-  getBchAccountPath,
-  normalizeBchAccountPath,
-} from '../../../services/HdWalletService';
+import { normalizeBchAccountPath } from '../../../services/HdWalletService';
 import { Network, setNetwork } from '../../../state/slices/networkSlice';
 import { selectCurrentNetwork } from '../../../state/selectors/networkSelectors';
 import {
@@ -24,16 +22,25 @@ import InfoTooltipIcon from '../../../features/onboarding/components/InfoTooltip
 import OnboardingCard from '../../../features/onboarding/components/OnboardingCard';
 import OnboardingScreen from '../../../features/onboarding/components/OnboardingScreen';
 import DerivationPathField from '../../../features/onboarding/components/DerivationPathField';
-import { createWalletWithPassword } from '../DesktopWalletManager';
+import DerivationDiscoveryResult from '../../../components/DerivationDiscoveryResult';
+import {
+  isValidImportMnemonic,
+  useImportDerivationDiscovery,
+} from '../../../hooks/useImportDerivationDiscovery';
 import {
   BIP39_WORD_COUNTS,
   DEFAULT_BIP39_WORD_COUNT,
-  isValidBip39Mnemonic,
   type Bip39WordCount,
 } from '../../../services/Bip39Service';
+import { createWalletWithPassword } from '../DesktopWalletManager';
+import { defaultDesktopAccountPath } from '../desktopDerivationDefaults';
+import { validateNewWalletPassword } from '../passwordPolicy';
 import { useI18n } from '../../../i18n/useI18n';
 
 type Step = 'words' | 'path' | 'name';
+
+const normalizeRecoveryWord = (word: string) =>
+  word.replace(/\s+/g, ' ').trim().toLowerCase();
 
 const DesktopImportWalletPage = () => {
   const [step, setStep] = useState<Step>('words');
@@ -59,9 +66,36 @@ const DesktopImportWalletPage = () => {
   const dispatch = useDispatch();
   const { t } = useI18n();
   const [derivationPath, setDerivationPath] = useState(() =>
-    getBchAccountPath(currentNetwork)
+    defaultDesktopAccountPath(currentNetwork)
   );
   const [customDerivationPath, setCustomDerivationPath] = useState(false);
+  const networkDefaultPath = useMemo(
+    () => defaultDesktopAccountPath(currentNetwork),
+    [currentNetwork]
+  );
+  const recoveryPhrase = useMemo(
+    () => recoveryWords.map(normalizeRecoveryWord).join(' '),
+    [recoveryWords]
+  );
+  const recoveryPhraseComplete = useMemo(
+    () => recoveryWords.every((word) => normalizeRecoveryWord(word).length > 0),
+    [recoveryWords]
+  );
+
+  const adoptDiscoveredPath = useCallback(
+    (path: string) => {
+      setDerivationPath(path);
+      setCustomDerivationPath(path !== networkDefaultPath);
+    },
+    [networkDefaultPath]
+  );
+  const importDiscovery = useImportDerivationDiscovery({
+    enabled: step === 'path' && recoveryPhraseComplete,
+    network: currentNetwork,
+    mnemonic: recoveryPhrase,
+    passphrase: '',
+    onAdopt: adoptDiscoveredPath,
+  });
 
   useEffect(() => {
     dispatch(setNetwork(Network.MAINNET));
@@ -69,7 +103,7 @@ const DesktopImportWalletPage = () => {
 
   useEffect(() => {
     if (!customDerivationPath)
-      setDerivationPath(getBchAccountPath(currentNetwork));
+      setDerivationPath(defaultDesktopAccountPath(currentNetwork));
   }, [currentNetwork, customDerivationPath]);
 
   useEffect(() => {
@@ -79,6 +113,14 @@ const DesktopImportWalletPage = () => {
       try {
         const dbStarted = await dbService.startDatabase();
         if (!dbStarted) throw new Error('Failed to start the database.');
+        try {
+          await ElectrumServer().ensureFreshConnection();
+        } catch (error) {
+          console.warn(
+            '[DesktopImportWalletPage] Electrum warm-up failed:',
+            error
+          );
+        }
       } catch (error) {
         console.error(
           '[DesktopImportWalletPage] Error initializing database:',
@@ -88,12 +130,10 @@ const DesktopImportWalletPage = () => {
     })();
   }, [dbService]);
 
-  const normalize = (word: string) =>
-    word.replace(/\s+/g, ' ').trim().toLowerCase();
   const focusIndex = (index: number) => inputsRef.current[index]?.focus();
 
   const handleWordChange = (index: number, raw: string) => {
-    const parts = normalize(raw).split(' ').filter(Boolean);
+    const parts = normalizeRecoveryWord(raw).split(' ').filter(Boolean);
     setRecoveryWords((prev) => {
       const next = [...prev];
       if (parts.length <= 1) {
@@ -155,7 +195,7 @@ const DesktopImportWalletPage = () => {
 
   const handleWordsContinue = () => {
     const missingWordIndex = recoveryWords.findIndex(
-      (word) => !normalize(word)
+      (word) => !normalizeRecoveryWord(word)
     );
     if (missingWordIndex !== -1) {
       setWordsError(
@@ -167,8 +207,7 @@ const DesktopImportWalletPage = () => {
       focusIndex(missingWordIndex);
       return;
     }
-    const recoveryPhrase = recoveryWords.map(normalize).join(' ');
-    if (!isValidBip39Mnemonic(recoveryPhrase)) {
+    if (!isValidImportMnemonic(recoveryPhrase)) {
       setWordsError(t('onboarding.invalidMnemonic'));
       return;
     }
@@ -177,19 +216,24 @@ const DesktopImportWalletPage = () => {
   };
 
   const handleImport = async () => {
+    if (importDiscovery.blocking) return;
     if (!walletName.trim()) {
       setNameError(t('onboarding.nameRequired'));
       return;
     }
-    if (password !== passwordConfirm) {
-      setNameError(t('onboarding.passwordMismatch'));
+    const passErr = validateNewWalletPassword(password, passwordConfirm);
+    if (passErr) {
+      setNameError(
+        password !== passwordConfirm
+          ? t('onboarding.passwordMismatch')
+          : passErr
+      );
       return;
     }
     setNameError('');
     setIsSubmitting(true);
     try {
       const normalizedDerivationPath = normalizeBchAccountPath(derivationPath);
-      const recoveryPhrase = recoveryWords.map(normalize).join(' ');
       const walletId = await createWalletWithPassword({
         name: walletName.trim(),
         mnemonic: recoveryPhrase,
@@ -331,16 +375,40 @@ const DesktopImportWalletPage = () => {
             onChange={(path, custom) => {
               setDerivationPath(path);
               setCustomDerivationPath(custom);
+              importDiscovery.cancel();
             }}
           />
+          <div className="w-full my-3" aria-live="polite">
+            <DerivationDiscoveryResult
+              state={importDiscovery.state}
+              currentPath={derivationPath}
+              defaultPath={networkDefaultPath}
+              selectedPath={importDiscovery.selectedPath}
+              onAdopt={importDiscovery.selectPath}
+              onCancel={importDiscovery.cancel}
+              onRetry={importDiscovery.retry}
+              context="import"
+            />
+          </div>
           <button
             onClick={() => setStep('name')}
+            disabled={importDiscovery.blocking}
             className="wallet-btn-primary w-full my-2 text-xl font-bold"
           >
-            {t('onboarding.continue')}
+            {importDiscovery.state.status === 'done' &&
+            importDiscovery.state.result.ambiguous &&
+            !importDiscovery.state.result.incomplete &&
+            importDiscovery.selectedPath === null
+              ? 'Choose a derivation path'
+              : importDiscovery.blocking
+                ? 'Checking wallet history…'
+                : t('onboarding.continue')}
           </button>
           <button
-            onClick={() => setStep('words')}
+            onClick={() => {
+              importDiscovery.cancel();
+              setStep('words');
+            }}
             className="wallet-btn-secondary w-full my-2 text-lg"
           >
             {t('onboarding.back')}
@@ -377,6 +445,7 @@ const DesktopImportWalletPage = () => {
               setNameError('');
             }}
             placeholder={t('onboarding.passwordPlaceholder')}
+            autoComplete="new-password"
             className="wallet-input w-full px-3 py-2 rounded-md wallet-text-strong"
           />
           <input
@@ -387,6 +456,7 @@ const DesktopImportWalletPage = () => {
               setNameError('');
             }}
             placeholder={t('onboarding.confirmPasswordPlaceholder')}
+            autoComplete="new-password"
             className="wallet-input w-full px-3 py-2 rounded-md wallet-text-strong"
           />
         </div>

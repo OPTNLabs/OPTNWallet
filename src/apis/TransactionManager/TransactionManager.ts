@@ -69,12 +69,12 @@ function requiredFeeForBytes(bytes: number): bigint {
 export default function TransactionManager() {
   const dbService = DatabaseService();
 
-  function storeTransactionHistory(
+  async function storeTransactionHistory(
     walletId: number,
     address: string,
     history: TransactionHistoryItem[],
     sessionGeneration?: number
-  ): TransactionHistoryItem[] {
+  ): Promise<TransactionHistoryItem[]> {
     if (!isCurrentWalletSession(walletId, sessionGeneration)) return [];
     const db = dbService.getDatabase();
     if (!db) {
@@ -112,6 +112,16 @@ export default function TransactionManager() {
       });
     }
 
+    // Await status write so the next status-hash gate sees scanned-empty
+    // addresses (EMPTY_HISTORY_STATUS). Fire-and-forget left every gap addr
+    // permanently dirty → single-address spam + fake ledger rebuilds.
+    try {
+      const ledger = await import('../../platform/desktop/WalletLedgerService');
+      await ledger.recordHistoryItems(walletId, address, history);
+    } catch {
+      /* desktop ledger optional for non-desktop builds */
+    }
+
     return history;
   }
 
@@ -136,11 +146,13 @@ export default function TransactionManager() {
   async function fetchAndStoreTransactionHistories(
     walletId: number,
     addresses: string[],
-    sessionGeneration?: number
+    sessionGeneration?: number,
+    onProgress?: (completedCount: number, totalCount: number) => void
   ): Promise<Record<string, TransactionHistoryItem[] | undefined>> {
     const uniqueAddresses = Array.from(new Set(addresses.filter(Boolean)));
     const histories = await ElectrumService.getTransactionHistoryMany(
-      uniqueAddresses
+      uniqueAddresses,
+      onProgress
     );
     const stored: Record<string, TransactionHistoryItem[] | undefined> = {};
 
@@ -167,7 +179,7 @@ export default function TransactionManager() {
 
       try {
         if (!isCurrentWalletSession(walletId, sessionGeneration)) return stored;
-        stored[address] = storeTransactionHistory(
+        stored[address] = await storeTransactionHistory(
           walletId,
           address,
           history,
@@ -669,7 +681,7 @@ export default function TransactionManager() {
   async function fetchPrivateKey(address: string): Promise<Uint8Array | null> {
     return await (
       await import('../../services/KeyService')
-    ).default.fetchAddressPrivateKey(address);
+    ).default.fetchAddressPrivateKey(address, 'spend');
   }
 
   return {

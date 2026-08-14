@@ -1,6 +1,6 @@
 # Browser extension (Firefox + Chrome): what shipped, and the real constraint on the rest
 
-## Status: minimal viewer MVP shipped this session
+## Status: read-only viewer MVP
 
 `vite.extension.config.ts` + `extension/manifest.{chrome,firefox}.json` +
 `popup.html` + `src/platform/extension/*` build a real, working popup-only
@@ -9,37 +9,36 @@ extension for both browsers (`npm run build:extension:chrome` /
 just configured and assumed). What it does:
 
 - Own password gate (`ExtensionSecurityGate.tsx` / `ExtensionKeyManager.ts`):
-  same PBKDF2(600k)/AES-GCM primitives as the desktop `EcKeyManager`, but the
+  same PBKDF2(600k)/AES-GCM primitives as the desktop `OptnKeyManager`, but the
   salt/verify-token live in `localStorage` (scoped to the extension's own
   origin) instead of an OS keychain, since there is no Tauri keychain bridge
   inside a browser extension. Re-locks every time the popup is closed and
   reopened — by construction, not as a fallback, since nothing survives
   between popup opens anyway.
-- Reuses the real, unmodified upstream `AppShell`/`RootHandler`/onboarding —
-  first open walks through the normal create/import-wallet flow, same as a
-  fresh mobile install, because the extension's storage (IndexedDB,
-  localStorage) is a separate origin from the desktop app or any website tab.
+- Reuses the real upstream `AppShell`/`RootHandler`/onboarding in explicit
+  viewer mode. First open walks through the normal create/import-wallet flow
+  because the extension's storage (IndexedDB, localStorage) is a separate
+  origin from the desktop app or any website tab.
 - **Deliberately has no background service worker.** The MV3
   service-worker-eviction problem below (the one genuinely hard part) does
   not apply to this MVP: the popup owns its own Electrum connection only for
   as long as it stays open, same as a normal browser tab. There is nothing to
   evict because nothing runs when the popup is closed.
-- **Sending has NOT been verified against the popup's lifecycle.** The
-  full app (including Send) is present since `AppShell` is reused unmodified
-  — this was a deliberate choice to avoid hacking a feature-gate into shared
-  upstream UI under time pressure — but only the unlock → view balance →
-  view receive-address path has been exercised this session. Keep the popup
-  open for the entire duration of a send until this has been verified in a
-  dedicated follow-up.
+- **Sending is unavailable in this artifact.** Viewer mode registers only
+  Home, Assets, Receive, and Activity routes, disables signing-session
+  lifecycles, and swaps `TransactionService` for a fail-closed broadcaster.
+  A dedicated popup-lifecycle signing design and test must land before any
+  browser release exposes Send.
 - Icons reused from `src-tauri/icons/` (32/64/128), copied into
   `public/extension-icons/` — no new artwork.
 
 ## What's still not done (same constraint as before, now narrower)
 
-## Confirmed state of this codebase (checked, not assumed)
+## Constraints confirmed in this codebase
 
-- No extension tooling exists yet: no `manifest.json`, no
-  `webextension-polyfill` dependency, no MV3-anything.
+- Extension build tooling and MV3 manifests now exist, but there is still no
+  background service worker or browser-extension API dependency. The current
+  release artifact remains a popup-lifecycle wallet viewer.
 - The app already depends on **long-lived background work** that matters a
   lot for this decision: `src/workers/UTXOWorkerService.ts` +
   `TransactionWorkerService.ts` (real Web Workers) and
@@ -121,9 +120,8 @@ component. The remaining work is exactly the part flagged as hard before:
    every time), re-establishing on every wake and leaning on the EXISTING
    reconnect/resubscribe logic in `ElectrumServer`/`UTXOWorkerService`
    rather than new logic.
-2. Verifying Send specifically within a popup-lifetime session (build a
-   transaction, broadcast, confirm the popup staying open for the duration
-   is actually sufficient — no code changes expected here, just testing).
+2. Designing and verifying Send within a popup-lifetime session, including
+   key lifetime, review, broadcast, ambiguous submission, and popup closure.
 3. The product decision from above (re-prompt-every-open vs. Chrome-only
    side-panel persistence vs. accept a shorter session) — still open, still
    not picked silently.

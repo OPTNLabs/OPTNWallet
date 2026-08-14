@@ -22,21 +22,29 @@ import { logError } from '../utils/errorHandling';
 import type { TokenPresentationFallback } from '../utils/tokenPresentation';
 import { StealthBalanceCard } from '../features/rpa/StealthBalanceCard';
 import { CauldronActivityCard } from '../features/cauldron/CauldronActivityCard';
-import { dedupeTokenUtxos, getStableTokenUtxos } from './assetsTokenInventory';
-import type { TokenCapability } from '../services/cashtokens';
+import {
+  buildNftCardModels,
+  dedupeTokenUtxos,
+  getStableTokenUtxos,
+  summarizeNftInstances,
+} from './assetsTokenInventory';
+import type { NftCategory } from '@bitauth/libauth';
+import { resolveParyonNftParseInfo } from '../services/paryon/nftRegistry';
+import type { NftParseInfo } from '../services/nftParsing/nftParsing';
 import {
   formatAtomicTokenAmount,
   resolveTokenPresentation,
 } from '../utils/tokenPresentation';
-import { useI18n } from '../i18n/useI18n';
-import { formatNumber } from '../i18n/format';
 
 type AssetTab = 'BCH' | 'Tokens' | 'NFTs';
 const isDev = import.meta.env.DEV;
 
-const Assets: React.FC = () => {
+type AssetsProps = {
+  viewerOnly?: boolean;
+};
+
+const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
   const navigate = useNavigate();
-  const { locale, t } = useI18n();
   const [tab, setTab] = useState<AssetTab>('BCH');
   const [selectedTokenCategory, setSelectedTokenCategory] = useState<
     string | null
@@ -76,15 +84,9 @@ const Assets: React.FC = () => {
     () =>
       currentWalletId
         ? getStableTokenUtxos(
-            // The worker's Redux snapshot is refreshed by address
-            // notifications and block events. Prefer it when available so
-            // externally received mempool tokens can replace this page's
-            // older local snapshot without forcing a database read on every
-            // render. Keep the local/native snapshots as fallbacks while the
-            // worker is loading or a refresh fails.
-            reduxTokenUtxos,
             refreshedTokenUtxos,
-            walletTokenUtxos
+            walletTokenUtxos,
+            reduxTokenUtxos
           )
         : [],
     [currentWalletId, refreshedTokenUtxos, walletTokenUtxos, reduxTokenUtxos]
@@ -217,22 +219,6 @@ const Assets: React.FC = () => {
   );
   const fungibleTokens = entries.filter(([, value]) => value.amount > 0n);
   const nftTokens = entries.filter(([, value]) => value.nft);
-  const nftGroups = useMemo(() => {
-    const groups: Record<TokenCapability, Record<string, number>> = {
-      none: {},
-      mutable: {},
-      minting: {},
-    };
-
-    for (const utxo of tokenUtxos) {
-      const category = utxo.token?.category;
-      const capability = utxo.token?.nft?.capability;
-      if (!category || !capability) continue;
-      groups[capability][category] = (groups[capability][category] ?? 0) + 1;
-    }
-
-    return groups;
-  }, [tokenUtxos]);
   const tokenMetadata = useSharedTokenMetadata(tokenCategories);
   const tokenFallbackByCategory = useMemo(() => {
     const byCategory = new Map<string, TokenPresentationFallback>();
@@ -255,20 +241,49 @@ const Assets: React.FC = () => {
   const selectedTokenMetadata = selectedTokenCategory
     ? tokenMetadata[selectedTokenCategory]
     : null;
-  const totalBch = totalBalance / SATSINBITCOIN;
+  const nftInstances = useMemo(
+    () => summarizeNftInstances(tokenUtxos),
+    [tokenUtxos]
+  );
+  const nftCardMetadata = useMemo(() => {
+    const byCategory: Record<
+      string,
+      { symbol: string; nfts: NftCategory | undefined }
+    > = {};
+    for (const instance of nftInstances) {
+      if (byCategory[instance.category]) continue;
+      const metadata = tokenMetadata[instance.category];
+      const fallback = tokenFallbackByCategory.get(instance.category);
+      byCategory[instance.category] = {
+        symbol: metadata?.symbol || fallback?.symbol || '',
+        nfts: metadata?.snapshot?.token?.nfts,
+      };
+    }
+    return byCategory;
+  }, [nftInstances, tokenMetadata, tokenFallbackByCategory]);
+  const nftCards = useMemo(() => {
+    // Categories without BCMR metadata fall back to the bundled ParyonUSD
+    // type registry (loan and loan-key NFTs have no per-category registry).
+    const familyParseInfoByCategory: Record<string, NftParseInfo> = {};
+    for (const instance of nftInstances) {
+      if (familyParseInfoByCategory[instance.category]) continue;
+      if (nftCardMetadata[instance.category]?.nfts) continue;
+      const familyParseInfo = resolveParyonNftParseInfo(
+        currentNetwork,
+        instance.category
+      );
+      if (familyParseInfo) {
+        familyParseInfoByCategory[instance.category] = familyParseInfo;
+      }
+    }
+    return buildNftCardModels(
+      nftInstances,
+      nftCardMetadata,
+      familyParseInfoByCategory
+    );
+  }, [nftInstances, nftCardMetadata, currentNetwork]);  const totalBch = totalBalance / SATSINBITCOIN;
   const totalUsd =
     typeof bchUsdQuote === 'number' ? totalBch * bchUsdQuote : null;
-  const formattedBch = formatNumber(totalBch, locale, {
-    minimumFractionDigits: 8,
-    maximumFractionDigits: 8,
-  });
-  const formattedUsd =
-    totalUsd !== null
-      ? formatNumber(totalUsd, locale, {
-          minimumFractionDigits: 2,
-          maximumFractionDigits: 2,
-        })
-      : null;
 
   useEffect(() => {
     if (!isDev) return;
@@ -297,10 +312,8 @@ const Assets: React.FC = () => {
     <WalletScreen maxWidthClassName="max-w-md" scrollable={false}>
       <div className="flex h-full min-h-0 flex-col gap-3">
         <PageHeader
-          title={t('assets.title')}
-          subtitle={
-            currentNetwork === Network.CHIPNET ? t('assets.chipnet') : ''
-          }
+          title="Assets"
+          subtitle={currentNetwork === Network.CHIPNET ? 'Chipnet' : ''}
           compact
         />
 
@@ -317,11 +330,7 @@ const Assets: React.FC = () => {
                     : 'wallet-segment-inactive border-[var(--wallet-border)]'
                 }`}
               >
-                {name === 'BCH'
-                  ? t('assets.tabBch')
-                  : name === 'Tokens'
-                    ? t('assets.tabTokens')
-                    : t('assets.tabNfts')}
+                {name}
               </button>
             ))}
           </div>
@@ -332,8 +341,8 @@ const Assets: React.FC = () => {
             <div className="flex h-full min-h-0 flex-col gap-3">
               <SectionCard className="p-3">
                 <SectionHeader
-                  title={t('assets.bitcoinCash')}
-                  subtitle={t('assets.primaryBalance')}
+                  title="Bitcoin Cash"
+                  subtitle="Primary wallet balance"
                   compact
                 />
                 <div className="flex items-center justify-between gap-3">
@@ -349,17 +358,17 @@ const Assets: React.FC = () => {
                     >
                       <div className="text-2xl font-bold wallet-text-strong">
                         {displayMode === 'BCH'
-                          ? `${formattedBch} BCH`
-                          : formattedUsd !== null
-                            ? `$${formattedUsd} USD`
-                            : t('assets.usdUnavailable')}
+                          ? `${totalBch.toFixed(8)} BCH`
+                          : totalUsd !== null
+                            ? `$${totalUsd.toFixed(2)} USD`
+                            : 'USD unavailable'}
                       </div>
                       <div className="text-xs wallet-muted">
                         {displayMode === 'BCH'
-                          ? formattedUsd !== null
-                            ? `$${formattedUsd} USD`
-                            : t('assets.usdPriceUnavailable')
-                          : `${formattedBch} BCH`}
+                          ? totalUsd !== null
+                            ? `$${totalUsd.toFixed(2)} USD`
+                            : 'USD price unavailable'
+                          : `${totalBch.toFixed(8)} BCH`}
                       </div>
                     </button>
                   </div>
@@ -369,20 +378,24 @@ const Assets: React.FC = () => {
                       setDisplayMode((mode) => (mode === 'BCH' ? 'USD' : 'BCH'))
                     }
                     className="flex h-14 w-14 items-center justify-center rounded-3xl bg-[color-mix(in_oklab,var(--wallet-accent-soft)_72%,transparent)] text-[var(--wallet-accent-strong)] transition hover:brightness-[1.04]"
-                    aria-label={t('assets.toggleBalance')}
+                    aria-label="Toggle BCH and USD balance"
                   >
                     <FaBitcoin className="text-2xl" />
                   </button>
                 </div>
               </SectionCard>
 
-              <StealthBalanceCard walletId={currentWalletId} />
-              <CauldronActivityCard walletId={currentWalletId} />
+              {!viewerOnly && (
+                <>
+                  <StealthBalanceCard walletId={currentWalletId} />
+                  <CauldronActivityCard walletId={currentWalletId} />
+                </>
+              )}
 
               <SectionCard className="p-3">
                 <SectionHeader
-                  title={t('assets.cashTokenHoldings')}
-                  subtitle={t('assets.quickInventory')}
+                  title="CashToken holdings"
+                  subtitle="Quick view of your wallet inventory"
                   compact
                 />
                 <div className="grid grid-cols-3 gap-2.5">
@@ -390,25 +403,19 @@ const Assets: React.FC = () => {
                     <div className="text-lg font-bold wallet-text-strong">
                       {fungibleTokens.length}
                     </div>
-                    <div className="text-xs wallet-muted">
-                      {t('assets.fungible')}
-                    </div>
+                    <div className="text-xs wallet-muted">fungible</div>
                   </div>
                   <div className="wallet-card p-3 text-left">
                     <div className="text-lg font-bold wallet-text-strong">
                       {nftTokens.length}
                     </div>
-                    <div className="text-xs wallet-muted">
-                      {t('assets.nfts')}
-                    </div>
+                    <div className="text-xs wallet-muted">NFTs</div>
                   </div>
                   <div className="wallet-card p-3 text-left">
                     <div className="text-lg font-bold wallet-text-strong">
                       {entries.length}
                     </div>
-                    <div className="text-xs wallet-muted">
-                      {t('assets.categories')}
-                    </div>
+                    <div className="text-xs wallet-muted">categories</div>
                   </div>
                 </div>
               </SectionCard>
@@ -419,8 +426,8 @@ const Assets: React.FC = () => {
             <div className="flex h-full min-h-0 flex-col gap-2.5">
               <SectionCard className="min-h-0 flex-1 overflow-hidden p-3">
                 <SectionHeader
-                  title={t('assets.cashTokens')}
-                  subtitle={t('assets.fungibleHoldings')}
+                  title="CashTokens"
+                  subtitle="Fungible token holdings"
                   compact
                 />
                 <div className="h-full min-h-0 space-y-2.5 overflow-y-auto overscroll-contain pb-[calc(var(--safe-bottom)+1rem)] pr-1">
@@ -466,17 +473,19 @@ const Assets: React.FC = () => {
                       );
                     })
                   ) : (
-                    <EmptyState message={t('assets.noFungibleTokens')} />
+                    <EmptyState message="No fungible CashTokens found." />
                   )}
                 </div>
               </SectionCard>
-              <button
-                type="button"
-                className="wallet-btn-primary w-full py-2.5"
-                onClick={() => navigate('/mint-cashtokens-poc')}
-              >
-                {t('assets.mintTokens')}
-              </button>
+              {!viewerOnly && (
+                <button
+                  type="button"
+                  className="wallet-btn-primary w-full py-2.5"
+                  onClick={() => navigate('/mint-cashtokens-poc')}
+                >
+                  Mint Tokens
+                </button>
+              )}
             </div>
           )}
 
@@ -484,92 +493,105 @@ const Assets: React.FC = () => {
             <div className="flex h-full min-h-0 flex-col gap-2.5">
               <SectionCard className="min-h-0 flex-1 overflow-hidden p-3">
                 <SectionHeader
-                  title={t('assets.tabNfts')}
-                  subtitle={t('assets.nonFungibleHoldings')}
+                  title="NFTs"
+                  subtitle="Non-fungible holdings"
                   compact
                 />
                 <div className="h-full min-h-0 space-y-2.5 overflow-y-auto overscroll-contain pb-[calc(var(--safe-bottom)+1rem)] pr-1">
-                  {nftTokens.length > 0 ? (
-                    (['none', 'mutable', 'minting'] as TokenCapability[]).map(
-                      (capability) => {
-                        const groupEntries = Object.entries(
-                          nftGroups[capability]
-                        );
-                        if (groupEntries.length === 0) return null;
-                        const title =
-                          capability === 'none'
-                            ? t('assets.plainNfts')
-                            : capability === 'mutable'
-                              ? t('assets.mutableNfts')
-                              : t('assets.mintingNfts');
-                        const subtitle =
-                          capability === 'none'
-                            ? t('assets.plainNftsDescription')
-                            : capability === 'mutable'
-                              ? t('assets.mutableNftsDescription')
-                              : t('assets.mintingNftsDescription');
-                        return (
-                          <div key={capability} className="space-y-2">
-                            <div className="px-1">
-                              <div className="text-sm font-semibold wallet-text-strong">
-                                {title}
-                              </div>
-                              <div className="text-xs wallet-muted">
-                                {subtitle}
-                              </div>
-                            </div>
-                            {groupEntries.map(([category]) => {
-                              const metadata = tokenMetadata[category];
-                              const presentation = resolveTokenPresentation(
-                                category,
-                                metadata,
-                                tokenFallbackByCategory.get(category) ?? null
-                              );
-                              return (
-                                <button
-                                  key={category}
-                                  type="button"
-                                  className="wallet-card w-full p-2.5 text-left transition hover:brightness-[0.98]"
-                                  onClick={() =>
-                                    setSelectedTokenCategory(category)
-                                  }
-                                >
-                                  <div className="flex items-center gap-2.5">
-                                    <TokenIdentityBadge
-                                      presentation={presentation}
-                                      className="flex-1"
-                                      avatarClassName="h-9 w-9"
-                                      primaryClassName="text-sm"
-                                      secondaryClassName="text-xs"
-                                    />
+                  {nftCards.length > 0 ? (
+                    nftCards.map((card) => {
+                      const presentation = resolveTokenPresentation(
+                        card.category,
+                        tokenMetadata[card.category],
+                        tokenFallbackByCategory.get(card.category) ?? null
+                      );
+                      return (
+                        <button
+                          key={card.outpoint}
+                          type="button"
+                          className="wallet-card w-full p-2.5 text-left transition hover:brightness-[0.98]"
+                          onClick={() => setSelectedTokenCategory(card.category)}
+                        >
+                          <div className="flex items-center gap-2.5">
+                            {card.imageUri ? (
+                              <img
+                                src={card.imageUri}
+                                alt={card.primaryLabel}
+                                className="h-9 w-9 shrink-0 rounded-lg border border-[var(--wallet-border)] object-cover"
+                              />
+                            ) : null}
+                            <TokenIdentityBadge
+                              presentation={presentation}
+                              className="flex-1"
+                              avatarClassName="h-9 w-9"
+                              primaryClassName="text-sm"
+                              secondaryClassName="text-xs"
+                              detail={
+                                <div className="shrink-0 text-right">
+                                  <div className="text-sm font-semibold wallet-text-strong">
+                                    {card.primaryLabel}
                                   </div>
-                                </button>
-                              );
-                            })}
+                                  <div className="text-xs wallet-muted">
+                                    {card.parsed
+                                      ? card.fields.length === 1
+                                        ? '1 field'
+                                        : `${card.fields.length} fields`
+                                      : 'unparsed'}
+                                  </div>
+                                </div>
+                              }
+                            />
                           </div>
-                        );
-                      }
-                    )
+                          {card.fields.length > 0 ? (
+                            <div className="mt-2 space-y-1 border-t border-[var(--wallet-border)] pt-2">
+                              {card.fields.map((field, index) => (
+                                <div
+                                  key={index}
+                                  className="flex items-baseline justify-between gap-2 text-xs"
+                                >
+                                  <span className="wallet-muted">
+                                    {field.name ??
+                                      field.fieldId ??
+                                      `field ${index}`}
+                                  </span>
+                                  <span className="wallet-text-strong font-mono">
+                                    {field.parsedValue?.formatted ??
+                                      field.value}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
+                          {!card.parsed && card.parseError ? (
+                            <p className="mt-1 truncate text-[10px] wallet-danger-text">
+                              {card.parseError}
+                            </p>
+                          ) : null}
+                        </button>
+                      );
+                    })
                   ) : (
-                    <EmptyState message={t('assets.noNfts')} />
+                    <EmptyState message="No NFTs found." />
                   )}
                 </div>
               </SectionCard>
-              <button
-                type="button"
-                className="wallet-btn-primary w-full py-2.5"
-                onClick={() => navigate('/mint-cashtokens-poc')}
-              >
-                {t('assets.mintTokens')}
-              </button>
+              {!viewerOnly && (
+                <button
+                  type="button"
+                  className="wallet-btn-primary w-full py-2.5"
+                  onClick={() => navigate('/mint-cashtokens-poc')}
+                >
+                  Mint Tokens
+                </button>
+              )}
             </div>
           )}
         </div>
 
-        {tab === 'BCH' && (
+        {!viewerOnly && tab === 'BCH' && (
           <SectionCard className="shrink-0 p-3">
             <SectionHeader
-              title={t('assets.quantumroot')}
+              title="Quantumroot"
               compact
               action={
                 <button
@@ -577,7 +599,7 @@ const Assets: React.FC = () => {
                   onClick={() => navigate('/quantumroot')}
                   className="wallet-btn-secondary px-3 py-1.5 text-sm"
                 >
-                  {t('assets.openVaults')}
+                  Open vaults
                 </button>
               }
             />
@@ -585,11 +607,11 @@ const Assets: React.FC = () => {
               <div>
                 <div className="text-sm font-semibold wallet-text-strong">
                   {currentNetwork === Network.CHIPNET
-                    ? t('assets.advancedVaultWorkspace')
-                    : t('assets.vaultWorkspace')}
+                    ? 'Advanced vault workspace'
+                    : 'Vault workspace'}
                 </div>
                 <div className="text-xs wallet-muted">
-                  {t('assets.advancedVaultDescription')}
+                  Receive and recovery tools for advanced vaults
                 </div>
               </div>
             </div>

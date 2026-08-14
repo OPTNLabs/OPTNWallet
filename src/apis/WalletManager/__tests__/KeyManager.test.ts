@@ -17,15 +17,21 @@ vi.mock('../../DatabaseManager/DatabaseService', () => ({
   default: vi.fn(),
 }));
 
+const { registerAddress, decryptText } = vi.hoisted(() => ({
+  registerAddress: vi.fn(async () => {}),
+  decryptText: vi.fn(),
+}));
+
 vi.mock('../../AddressManager/AddressManager', () => ({
-  default: vi.fn(() => ({
-    registerAddress: vi.fn(async () => {}),
-  })),
+  default: vi.fn(() => ({ registerAddress })),
 }));
 
 vi.mock('../../../services/SecretCryptoService', () => ({
   default: {
-    decryptText: vi.fn(),
+    decryptText,
+    decryptTextBatch: vi.fn(async (values: string[]) =>
+      Promise.all(values.map((value) => decryptText(value)))
+    ),
     decryptBytes: vi.fn(),
     encryptBytes: vi.fn(),
   },
@@ -45,7 +51,11 @@ vi.mock('../../../services/QuantumrootService', () => ({
     (
       walletId: number,
       accountIndex: number,
-      vault: { addressIndex: number; receiveAddress: string; quantumLockAddress: string },
+      vault: {
+        addressIndex: number;
+        receiveAddress: string;
+        quantumLockAddress: string;
+      },
       onlineQuantumSigner = 0,
       vaultTokenCategory = '00'.repeat(32)
     ) => ({
@@ -94,7 +104,9 @@ describe('KeyManager', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockedSecretCryptoService.decryptText.mockImplementation(async (value: string) => value);
+    mockedSecretCryptoService.decryptText.mockImplementation(
+      async (value: string) => value
+    );
     mockedVaultCache.list.mockReturnValue([]);
   });
 
@@ -206,9 +218,82 @@ describe('KeyManager', () => {
     } as never);
 
     const km = KeyManager();
-    await expect(km.fetchAddressPrivateKey('bitcoincash:qmissing')).rejects.toThrow(
-      'No private key found'
-    );
+    await expect(
+      km.fetchAddressPrivateKey('bitcoincash:qmissing')
+    ).rejects.toThrow('No private key found');
+  });
+
+  it('repairs the companion address row when a derived key already exists', async () => {
+    const walletLookup = {
+      get: vi.fn(() => ['enc:mnemonic', 'enc:passphrase', Network.MAINNET]),
+      free: vi.fn(),
+    };
+    const addressCount = {
+      bind: vi.fn(),
+      step: vi.fn(() => true),
+      getAsObject: vi.fn(() => ({ count: 1 })),
+      free: vi.fn(),
+    };
+    const tokenCount = {
+      bind: vi.fn(),
+      step: vi.fn(() => true),
+      getAsObject: vi.fn(() => ({ count: 1 })),
+      free: vi.fn(),
+    };
+    const existingKey = {
+      bind: vi.fn(),
+      step: vi.fn(() => true),
+      getAsObject: vi.fn(() => ({
+        wallet_id: 7,
+        address: 'bitcoincash:qexisting',
+        token_address: 'simpleledger:qexisting',
+      })),
+      free: vi.fn(),
+    };
+    const db = {
+      prepare: vi.fn((sql: string) => {
+        if (sql.includes('FROM wallets WHERE id = ?')) return walletLookup;
+        if (sql.includes('COUNT(*) as count FROM keys WHERE address')) {
+          return addressCount;
+        }
+        if (sql.includes('COUNT(*) as count FROM keys WHERE token_address')) {
+          return tokenCount;
+        }
+        if (sql.includes('SELECT wallet_id, address, token_address')) {
+          return existingKey;
+        }
+        throw new Error(`Unexpected SQL: ${sql}`);
+      }),
+    };
+    const flushDatabaseToFile = vi.fn(async () => {});
+    mockedDatabaseService.mockReturnValue({
+      ensureDatabaseStarted: vi.fn(async () => {}),
+      getDatabase: vi.fn(() => db),
+      flushDatabaseToFile,
+    } as never);
+    mockedSecretCryptoService.decryptText
+      .mockResolvedValueOnce('wallet mnemonic')
+      .mockResolvedValueOnce('wallet passphrase');
+    vi.mocked(deriveBchChild).mockResolvedValue({
+      privateKey: Uint8Array.from([1, 2, 3]),
+      publicKey: Uint8Array.from([4, 5, 6]),
+      publicKeyHash: Uint8Array.from([7, 8, 9]),
+      address: 'bitcoincash:qexisting',
+      tokenAddress: 'simpleledger:qexisting',
+    });
+
+    await KeyManager().createKeys(7, 0, 1, 5, Network.MAINNET);
+
+    expect(registerAddress).toHaveBeenCalledWith({
+      wallet_id: 7,
+      address: 'bitcoincash:qexisting',
+      token_address: 'simpleledger:qexisting',
+      balance: 0,
+      hd_index: 5,
+      change_index: 1,
+      prefix: 'bitcoincash',
+    });
+    expect(flushDatabaseToFile).toHaveBeenCalledWith(7);
   });
 
   it('getXpubs derives standard wallet xpubs from stored seed material', async () => {
@@ -253,6 +338,49 @@ describe('KeyManager', () => {
       'wallet passphrase',
       2,
       "m/44'/145'/0'"
+    );
+  });
+
+  it('derives discovery xpubs from the candidate path instead of the stored path', async () => {
+    const walletLookup = {
+      get: vi.fn(() => [
+        'enc:mnemonic',
+        'enc:passphrase',
+        Network.MAINNET,
+        "m/44'/145'/0'",
+      ]),
+      free: vi.fn(),
+    };
+
+    mockedDatabaseService.mockReturnValue({
+      ensureDatabaseStarted: vi.fn(async () => {}),
+      getDatabase: vi.fn(() => ({ prepare: vi.fn(() => walletLookup) })),
+      flushDatabaseToFile: vi.fn(async () => {}),
+    } as never);
+    mockedSecretCryptoService.decryptText
+      .mockResolvedValueOnce('wallet mnemonic')
+      .mockResolvedValueOnce('wallet passphrase');
+    vi.mocked(deriveBchStandardXpubs).mockResolvedValue({
+      receive: 'candidate-receive',
+      change: 'candidate-change',
+      defi: 'candidate-defi',
+      rpa: 'candidate-rpa',
+    });
+
+    await expect(
+      KeyManager().getXpubsForAccountPath(7, "m/44'/0'/1'")
+    ).resolves.toEqual({
+      receive: 'candidate-receive',
+      change: 'candidate-change',
+      defi: 'candidate-defi',
+      rpa: 'candidate-rpa',
+    });
+    expect(deriveBchStandardXpubs).toHaveBeenCalledWith(
+      Network.MAINNET,
+      'wallet mnemonic',
+      'wallet passphrase',
+      0,
+      "m/44'/0'/1'"
     );
   });
 
@@ -347,7 +475,9 @@ describe('KeyManager', () => {
     });
 
     const km = KeyManager();
-    await expect(km.deriveQuantumrootVaultForWallet(7, 7, 0)).resolves.toMatchObject({
+    await expect(
+      km.deriveQuantumrootVaultForWallet(7, 7, 0)
+    ).resolves.toMatchObject({
       receiveAddress: 'bitcoincash:preceive',
       quantumLockAddress: 'bitcoincash:pquantum',
       addressIndex: 7,

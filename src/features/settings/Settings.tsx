@@ -10,7 +10,6 @@ import { resetContract } from '../../state/slices/contractSlice';
 import { Network, resetNetwork } from '../../state/slices/networkSlice';
 import { clearTransaction } from '../../state/slices/transactionBuilderSlice';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
-import ContractDetails from '../../components/ContractDetails';
 import { NetworkSettings } from './NetworkSettings';
 import { DerivationPathSettings } from './DerivationPathSettings';
 import { ServerSettings } from './ServerSettings';
@@ -27,6 +26,9 @@ import FaucetView from '../../components/FaucetView';
 import WalletConnectPanel from '../../components/walletconnect/WalletConnectPanel';
 import WizardConnectPanel from '../../components/wizardconnect/WizardConnectPanel';
 import { AppLockSettings } from '../../platform/desktop/AppLockSettings';
+import { RebuildWalletSettings } from '../../platform/desktop/RebuildWalletSettings';
+import { ExportColdArchiveSettings } from '../../platform/desktop/ExportColdArchiveSettings';
+
 import { disconnectAllWizardConnections } from '../../state/slices/wizardconnectSlice';
 import getElectrumAdapter from '../../services/ElectrumAdapter';
 import { waitForWalletHistoryRefresh } from '../../services/RefreshCoordinator';
@@ -46,9 +48,6 @@ import {
   type SettingsRowConfig,
 } from './settingsConfig';
 import { isDesktopPlatform } from '../../utils/platform';
-import { useI18n } from '../../i18n/useI18n';
-import { LanguageSettings } from './LanguageSettings';
-import type { TranslationKey } from '../../i18n/resources';
 
 const Settings: React.FC = () => {
   const navigate = useNavigate();
@@ -63,7 +62,6 @@ const Settings: React.FC = () => {
     selectCurrentNetwork(state)
   );
   const desktop = isDesktopPlatform();
-  const { t } = useI18n();
 
   const [selectedOption, setSelectedOption] = useState(() => {
     const panel = searchParams.get('panel') ?? '';
@@ -80,78 +78,6 @@ const Settings: React.FC = () => {
     (group) => group.key === selectedGroup
   );
 
-  const getGroupTitle = (key: (typeof SETTINGS_GROUPS)[number]['key']) => {
-    switch (key) {
-      case 'wallet':
-        return t('settings.walletSecurity');
-      case 'features':
-        return t('settings.connectionsFeatures');
-      case 'about':
-        return t('settings.aboutSupport');
-    }
-  };
-
-  const getGroupDescription = (
-    key: (typeof SETTINGS_GROUPS)[number]['key']
-  ) => {
-    switch (key) {
-      case 'wallet':
-        return t('settings.walletSecurityDescription');
-      case 'features':
-        return t('settings.connectionsFeaturesDescription');
-      case 'about':
-        return t('settings.aboutSupportDescription');
-    }
-  };
-
-  const getRowTitle = (row: SettingsRowConfig) => {
-    const keys: Record<string, TranslationKey> = {
-      language: 'settingsRows.language',
-      network: 'settingsRows.network',
-      faucet: 'settingsRows.faucet',
-      derivation: 'settingsRows.derivation',
-      recovery: 'settingsRows.recovery',
-      'pending-outbox': 'settingsRows.pendingOutbox',
-      'app-lock': 'settingsRows.appLock',
-      nostr: 'settingsRows.nostr',
-      server: 'settingsRows.server',
-      console: 'settingsRows.console',
-      experimental: 'settingsRows.experimental',
-      addons: 'settingsRows.addons',
-      'contract-info': 'settingsRows.contractInfo',
-      walletconnect: 'settingsRows.walletConnect',
-      wizardconnect: 'settingsRows.wizardConnect',
-      about: 'settingsRows.about',
-      terms: 'settingsRows.terms',
-      contact: 'settingsRows.contact',
-    };
-    return keys[row.key] ? t(keys[row.key]) : row.title;
-  };
-
-  const getRowDescription = (row: SettingsRowConfig) => {
-    const keys: Record<string, TranslationKey> = {
-      language: 'settingsRows.languageDescription',
-      network: 'settingsRows.networkDescription',
-      faucet: 'settingsRows.faucetDescription',
-      derivation: 'settingsRows.derivationDescription',
-      recovery: 'settingsRows.recoveryDescription',
-      'pending-outbox': 'settingsRows.pendingOutboxDescription',
-      'app-lock': 'settingsRows.appLockDescription',
-      nostr: 'settingsRows.nostrDescription',
-      server: 'settingsRows.serverDescription',
-      console: 'settingsRows.consoleDescription',
-      experimental: 'settingsRows.experimentalDescription',
-      addons: 'settingsRows.addonsDescription',
-      'contract-info': 'settingsRows.contractInfoDescription',
-      walletconnect: 'settingsRows.walletConnectDescription',
-      wizardconnect: 'settingsRows.wizardConnectDescription',
-      about: 'settingsRows.aboutDescription',
-      terms: 'settingsRows.termsDescription',
-      contact: 'settingsRows.contactDescription',
-    };
-    return keys[row.key] ? t(keys[row.key]) : row.description;
-  };
-
   useEffect(() => {
     const panel = searchParams.get('panel') ?? '';
     setSelectedOption(!desktop && panel === 'app-lock' ? '' : panel);
@@ -167,7 +93,7 @@ const Settings: React.FC = () => {
     // on desktop's multi-wallet picker wiped all saved wallets on logout.
     if (desktop) {
       try {
-        const { lock } = await import('../../platform/desktop/EcKeyManager');
+        const { lock } = await import('../../platform/desktop/OptnKeyManager');
         lock();
       } catch {
         /* ignore */
@@ -212,8 +138,6 @@ const Settings: React.FC = () => {
     switch (selectedOption) {
       case 'recovery':
         return <RecoveryPhrase />;
-      case 'language':
-        return <LanguageSettings />;
       case 'about':
         return <AboutView />;
       case 'terms':
@@ -221,13 +145,18 @@ const Settings: React.FC = () => {
       case 'contact':
         return <ContactUs />;
       case 'contract':
-        return <ContractDetails />;
+        // Legacy deep link — content now lives under About.
+        return <AboutView />;
       case 'walletconnect':
         return <WalletConnectPanel />;
       case 'wizardconnect':
         return <WizardConnectPanel />;
       case 'app-lock':
         return <AppLockSettings />;
+      case 'export-archive':
+        return desktop ? <ExportColdArchiveSettings /> : null;
+      case 'rebuild-wallet':
+        return desktop ? <RebuildWalletSettings /> : null;
       case 'network':
         return <NetworkSettings />;
       case 'faucet':
@@ -254,41 +183,43 @@ const Settings: React.FC = () => {
   const renderTitle = () => {
     switch (selectedOption) {
       case 'recovery':
-        return t('settings.recovery');
+        return 'Recovery Phrase';
       case 'about':
-        return t('settings.about');
+        return 'About';
       case 'terms':
-        return t('settings.terms');
+        return 'Terms of Use';
       case 'contact':
-        return t('settings.contact');
-      case 'language':
-        return t('settings.language');
+        return 'Contact Us';
       case 'contract':
-        return t('settingsPanels.contract');
+        return 'About';
       case 'app-lock':
-        return t('settingsPanels.appLock');
+        return 'App Lock';
+      case 'export-archive':
+        return 'Wallet pack export';
+      case 'rebuild-wallet':
+        return 'Rebuild Wallet';
       case 'server':
-        return t('settingsPanels.server');
+        return 'Server';
       case 'derivation':
-        return t('settingsPanels.derivation');
+        return 'Derivation Path';
       case 'console':
-        return t('settingsPanels.console');
+        return 'Console';
       case 'experimental':
-        return t('settingsPanels.experimental');
+        return 'Experimental Features';
       case 'cashfusion':
-        return t('settingsPanels.cashfusion');
+        return 'CashFusion';
       case 'nostr':
-        return t('settingsPanels.nostr');
+        return 'Nostr & Chat';
       case 'addons':
-        return t('settingsPanels.addons');
+        return 'Addons';
       case 'walletconnect':
-        return t('settingsPanels.walletConnect');
+        return 'WalletConnect';
       case 'wizardconnect':
-        return t('settingsPanels.wizardConnect');
+        return 'WizardConnect';
       case 'network':
-        return t('settings.network');
+        return 'Network';
       case 'faucet':
-        return t('settingsPanels.faucet');
+        return 'Chipnet Faucet';
       default:
         return '';
     }
@@ -311,8 +242,8 @@ const Settings: React.FC = () => {
       {rows.map((row) => (
         <SettingsRow
           key={row.key}
-          title={getRowTitle(row)}
-          description={getRowDescription(row)}
+          title={row.title}
+          description={row.description}
           compact
           right={
             row.key === 'network' ? (
@@ -335,16 +266,16 @@ const Settings: React.FC = () => {
   return (
     <WalletScreen maxWidthClassName="max-w-md" scrollable={false}>
       <div className="flex h-full min-h-0 flex-col gap-4">
-        <PageHeader title={t('app.settings')} compact />
+        <PageHeader title="Settings" compact />
         <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 -mt-8">
           <div aria-hidden="true" />
           <h1 className="justify-self-center text-[1.6rem] font-bold tracking-[-0.04em] wallet-text-strong">
-            {t('app.settings')}
+            Settings
           </h1>
           <button
             onClick={toggleMode}
             className="justify-self-end flex items-center gap-2 rounded-full wallet-surface-strong border border-[var(--wallet-border)] px-2 py-1.5 text-sm font-semibold wallet-text-strong whitespace-nowrap"
-            aria-label={t('app.toggleTheme')}
+            aria-label="Toggle theme"
           >
             <MdSunny className="text-[12px] wallet-muted" />
             <span
@@ -370,15 +301,15 @@ const Settings: React.FC = () => {
               <div className="flex h-full min-h-0 flex-col gap-4">
                 <div className="grid min-h-0 flex-1 grid-cols-1 gap-2.5 overflow-y-auto overscroll-contain pr-1">
                   <SectionCard className="p-0">
-                    <SectionHeader title={t('app.quickAccess')} compact />
+                    <SectionHeader title="Quick access" compact />
                     {renderRows(visibleWalletRows)}
                   </SectionCard>
 
                   {SETTINGS_GROUPS.map((group) => (
                     <SettingsRow
                       key={group.key}
-                      title={getGroupTitle(group.key)}
-                      description={getGroupDescription(group.key)}
+                      title={group.title}
+                      description={group.description}
                       compact
                       onClick={() => setSelectedOption(`group:${group.key}`)}
                     />
@@ -389,7 +320,7 @@ const Settings: React.FC = () => {
                   onClick={() => setIsLogoutPopupOpen(true)}
                   className="wallet-btn-danger w-full py-3 text-base"
                 >
-                  {t('app.logOut')}
+                  Log Out
                 </button>
               </div>
             </SectionCard>
@@ -426,7 +357,7 @@ const Settings: React.FC = () => {
                     closeDetails();
                   }}
                 >
-                  {t('app.back')}
+                  Back
                 </button>
               </div>
             </>
@@ -440,13 +371,13 @@ const Settings: React.FC = () => {
               className="wallet-card mx-auto w-full max-w-md p-4"
             >
               <div className="mb-3 text-center text-sm wallet-muted">
-                {t('app.confirmLogoutDescription')}
+                Confirm logout to remove this wallet from the device.
               </div>
               <button
                 className="wallet-btn-danger mt-2 w-full"
                 onClick={handleLogout}
               >
-                {t('app.confirmLogout')}
+                Confirm Logout
               </button>
             </div>
           </Popup>

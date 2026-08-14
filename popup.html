@@ -13,14 +13,23 @@
       /* Extension popups size to their content unless constrained — fix a
          phone-like footprint so the app's existing mobile-first layout
          renders exactly as it does on a real phone viewport. */
-      html, body, #root { height: 100%; margin: 0; }
-      html, body { width: 380px; min-height: 560px; }
+      html,
+      body,
+      #root {
+        height: 100%;
+        margin: 0;
+      }
+      html,
+      body {
+        width: 380px;
+        min-height: 560px;
+      }
     </style>
   </head>
   <body>
     <div id="root"></div>
 
-    <script src="/extension-shim.js"></script>
+    <script type="module" src="/src/platform/extension-shim.ts"></script>
     <script type="module" src="/src/platform/extension/main.tsx"></script>
   </body>
 </html>
