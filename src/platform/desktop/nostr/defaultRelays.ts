@@ -3,9 +3,8 @@
  * These are not user-removable in settings (same idea as Fulcrum seed servers).
  * Only relays the user adds themselves get a Remove button.
  *
- * Protocol: Nostr (NIP-01) is **WebSocket only** — `wss://` (TLS) or rarely
- * `ws://`. There is no plain TCP Nostr relay API like Electrum; server CashFusion
- * TCP is a different protocol. We only allow `wss://` in fusion/chat.
+ * Protocol: Nostr (NIP-01) uses WebSockets. Built-in relays are TLS-protected
+ * and fusion/chat only uses the secure relay scheme.
  *
  * Bootstrap list for settings / merge. Fusion pool discovery uses only the
  * first ~8 (shared prefix) so multi-wallet Tor does not partition; gift-wrap

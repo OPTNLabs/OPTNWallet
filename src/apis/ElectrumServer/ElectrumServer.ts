@@ -161,10 +161,25 @@ function subKey(method: string, params?: ElectrumParams): string {
   return `${method}:${JSON.stringify(params ?? [])}`;
 }
 
+function isLoopbackHost(host: string): boolean {
+  const normalized = host.toLowerCase().replace(/^\[|\]$/g, '');
+  return (
+    normalized === 'localhost' ||
+    normalized === '::1' ||
+    normalized === '127.0.0.1' ||
+    /^127(?:\.\d{1,3}){3}$/.test(normalized)
+  );
+}
+
 function parseServerEntry(entry: string, defaultPort = WSS_PORT) {
-  // Supports "wss://host:50004", "ws://host:50003", or just "host"
-  if (entry.startsWith('ws://') || entry.startsWith('wss://')) {
+  if (entry.includes('://')) {
     const u = new URL(entry);
+    if (u.protocol !== 'ws:' && u.protocol !== 'wss:') {
+      throw new Error('Electrum server must use a WebSocket URL');
+    }
+    if (u.protocol === 'ws:' && !isLoopbackHost(u.hostname)) {
+      throw new Error('Unencrypted Electrum WebSocket requires a loopback host');
+    }
     const host = u.hostname;
     const port = u.port
       ? Number(u.port)

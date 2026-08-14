@@ -771,8 +771,8 @@ async function openPublicKeyWallet(
       await purgeCrossNetworkData(walletId, net);
     } catch (err) {
       console.warn(
-        `[DesktopWalletManager] cross-network purge on ${expectedType} open failed:`,
-        err
+        '[DesktopWalletManager] cross-network purge on wallet open failed',
+        { expectedType, error: err }
       );
     }
   } else {

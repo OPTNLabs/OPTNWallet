@@ -1,9 +1,12 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { StaticRouter } from 'react-router-dom/server';
+import { Provider } from 'react-redux';
 import { describe, expect, it } from 'vitest';
 import * as bip39 from 'bip39';
 
 import { Network } from '../../../../state/slices/networkSlice';
+import { I18nProvider } from '../../../../i18n/I18nProvider';
+import { store } from '../../../../state/store';
 import {
   deriveBchKeyMaterial,
   deriveHdPublicKeyAtPath,
@@ -19,18 +22,24 @@ const TEST_MNEMONIC = bip39.entropyToMnemonic('0'.repeat(32));
 describe('desktop watch-only preview', () => {
   it('exposes Create Watch-Only Wallet as a wallet-picker action', () => {
     const html = renderToStaticMarkup(
-      <StaticRouter location="/">
-        <DesktopWalletPickerActions
-          hasWallets
-          onHardware={() => undefined}
-          onWatchOnly={() => undefined}
-        />
-      </StaticRouter>
+      <Provider store={store}>
+        <I18nProvider>
+          <StaticRouter location="/">
+            <DesktopWalletPickerActions
+              hasWallets
+              onHardware={() => undefined}
+              onWatchOnly={() => undefined}
+            />
+          </StaticRouter>
+        </I18nProvider>
+      </Provider>
     );
 
     expect(html).toContain('Add another wallet');
     expect(html).toContain('Create Watch-Only Wallet');
-    expect(html).toContain('Use a hardware device');
+    expect(html.indexOf('Connect Hardware Wallet')).toBeLessThan(
+      html.indexOf('Create Watch-Only Wallet')
+    );
     // Airgap/Keystone live inside create-watch-only, not on the landing list.
     expect(html).not.toContain('Set up Keystone');
   });

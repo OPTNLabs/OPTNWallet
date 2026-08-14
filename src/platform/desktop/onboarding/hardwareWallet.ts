@@ -343,8 +343,8 @@ export async function ensureHardwareWalletKeys(
     alignedXpub = alignHdPublicKeyNetwork(network, accountXpub);
   } catch (err) {
     console.error(
-      `[hardwareWallet] wallet ${walletId} cannot align account_xpub for ${network}:`,
-      err
+      '[hardwareWallet] cannot align account_xpub for wallet network',
+      { walletId, network, error: err }
     );
     return { keyCount, rebuilt: false, firstReceive: null };
   }
@@ -377,8 +377,8 @@ export async function ensureHardwareWalletKeys(
     preview = deriveWatchOnlyAccountPreview(network, accountXpub);
   } catch (err) {
     console.error(
-      `[hardwareWallet] wallet ${walletId} rebuild preview failed:`,
-      err
+      '[hardwareWallet] watch-only rebuild preview failed',
+      { walletId, error: err }
     );
     return { keyCount: 0, rebuilt: false, firstReceive: null };
   }
