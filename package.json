@@ -65,6 +65,7 @@
   "dependencies": {
     "@bitauth/libauth": "3.1.0-next.8",
     "@capacitor/android": "^7.0.0",
+    "@capacitor/app": "^7.1.2",
     "@capacitor/barcode-scanner": "^2.0.3",
     "@capacitor/camera": "^7.0.0",
     "@capacitor/clipboard": "^7.0.0",
@@ -76,6 +77,7 @@
     "@capacitor/splash-screen": "^7.0.0",
     "@capacitor/status-bar": "^7.0.3",
     "@capacitor/toast": "^7.0.0",
+    "@cashconnect-js/nostr": "^1.0.0-alpha.31",
     "@cashscript/utils": "0.13.0-next.3",
     "@choochmeque/tauri-plugin-biometry-api": "0.2.6",
     "@electrum-cash/network": "^4.1.3",

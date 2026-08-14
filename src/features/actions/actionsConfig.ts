@@ -56,6 +56,11 @@ export const ADVANCED_ACTIONS: ActionConfig[] = [
     to: '/settings?panel=wizardconnect',
   },
   {
+    title: 'CashConnect',
+    description: 'Contract-system dApps over Nostr',
+    to: '/settings?panel=cashconnect',
+  },
+  {
     title: 'Contracts',
     description: 'Manage contract instances',
     to: '/contract',

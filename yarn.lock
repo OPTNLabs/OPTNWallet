@@ -74,6 +74,11 @@
   resolved "https://registry.npmjs.org/@capacitor/android/-/android-7.4.2.tgz"
   integrity sha512-FZ7M9NwFkljR7EP5eXiE32mAIfZNcYw2CzRMCG3rQu0u0ZaIoeOeq5/oK4YcDnGpNmu8jpngKJqZ+9OiSQSwDg==
 
+"@capacitor/app@^7.1.2":
+  version "7.1.2"
+  resolved "https://registry.npmjs.org/@capacitor/app/-/app-7.1.2.tgz"
+  integrity sha512-d4I/oF/PRu4megL7/IGKYfe5j7yzSON1FRFgq6kH+m5kH6g7V+wyjHRLauCzGNjdRx4S+nWOumINds0qcRBtKg==
+
 "@capacitor/assets@^3.0.5":
   version "3.0.5"
   resolved "https://registry.npmjs.org/@capacitor/assets/-/assets-3.0.5.tgz"
@@ -203,6 +208,23 @@
   version "7.0.1"
   resolved "https://registry.npmjs.org/@capacitor/toast/-/toast-7.0.1.tgz"
   integrity sha512-3GFhejVwKqUjosYnpQVfq5eml7X6B97jcVpncY75lBDiTlCYJeRanj63OChZPuw1KWudkBTYZMcXdRYWguJdKw==
+
+"@cashconnect-js/core@1.0.0-alpha.31":
+  version "1.0.0-alpha.31"
+  resolved "https://registry.npmjs.org/@cashconnect-js/core/-/core-1.0.0-alpha.31.tgz"
+  integrity sha512-pD0txUK0CAlec4K6KrT/YGgF+k6nEla3fFgWK/DD515yofIqZ0MD2OcSjhKLplCyXyxJ/cp61pVGHUz29f7Ggg==
+  dependencies:
+    "@bitauth/libauth" "^3.1.0-next.8"
+    zod "^4.1.12"
+
+"@cashconnect-js/nostr@^1.0.0-alpha.31":
+  version "1.0.0-alpha.31"
+  resolved "https://registry.npmjs.org/@cashconnect-js/nostr/-/nostr-1.0.0-alpha.31.tgz"
+  integrity sha512-/BebQtgfXrWQyhVPF3gvCYq1SCTeKQABEMbvzKeSi0pVdPYvchMjaOCAM2B0vRlnDHMbmXoc5z47GBXHvPO22g==
+  dependencies:
+    "@bitauth/libauth" "^3.1.0-next.8"
+    "@cashconnect-js/core" "1.0.0-alpha.31"
+    zod "^4.4.3"
 
 "@cashscript/utils@0.13.0-next.3":
   version "0.13.0-next.3"
@@ -11601,6 +11623,11 @@ zip-stream@^6.0.1:
     archiver-utils "^5.0.0"
     compress-commons "^6.0.2"
     readable-stream "^4.0.0"
+
+zod@^3.22.0 || ^4.0.0, zod@^4.1.12, zod@^4.4.3:
+  version "4.4.3"
+  resolved "https://registry.npmjs.org/zod/-/zod-4.4.3.tgz"
+  integrity sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==
 
 zwitch@^2.0.4:
   version "2.0.4"
