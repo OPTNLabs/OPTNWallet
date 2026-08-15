@@ -10,13 +10,11 @@ describe('OPTN Wallet onboarding navigation', () => {
 
     const saveButton = await $('button=Save and open wallet');
     await expect(saveButton).toBeDisabled();
-    await $('input[placeholder="e.g. Cold storage"]').setValue(
-      'E2E watch-only validation'
-    );
-    await $('input[placeholder="At least 4 characters"]').setValue(
-      'e2e-password'
-    );
-    await $('input[placeholder="Repeat password"]').setValue('e2e-password');
+    await $('input[type="text"]').setValue('E2E watch-only validation');
+    const passwordInputs = await $$('input[type="password"]');
+    await expect(passwordInputs).toHaveLength(2);
+    await passwordInputs[0].setValue('e2e-password');
+    await passwordInputs[1].setValue('e2e-password');
     await expect(saveButton).toBeDisabled();
 
     await $('button=Back to wallets').click();
