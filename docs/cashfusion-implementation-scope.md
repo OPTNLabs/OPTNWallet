@@ -20,7 +20,7 @@ This is **not** a third-party crypto audit. Design, tests, and the threat model 
 
 ## Two paths, same outer loop
 
-```
+```text
                     ┌─────────────────────────┐
                     │   Wallet outer loop     │
                     │  FusionRunnerService    │
@@ -117,4 +117,6 @@ Never fuse mainnet funds in automated tests.
 
 ---
 
-*Last updated: 6 / 4 / 10 knobs, ACK-shrink, v4 credentials, anonymous inputs/sigs, CashFusion off Experimental.*
+*Last updated: 2026-08-14. Shipped status: 6/4/10 knobs, ACK-shrink, v4
+credentials, anonymous inputs/signatures, and CashFusion removed from
+Experimental.*

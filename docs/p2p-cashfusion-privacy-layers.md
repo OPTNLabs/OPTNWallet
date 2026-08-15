@@ -151,7 +151,7 @@ Issuer nonce slots are **one-shot**. Retrying sign on the same slot is forbidden
 
 ### mixOrder and who peels
 
-```
+```text
 mixOrder = sort(participants \ { coordinator })
 // Coordinator assembles the CoinJoin. It does NOT peel.
 ```
