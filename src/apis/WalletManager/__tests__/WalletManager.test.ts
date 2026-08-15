@@ -78,7 +78,9 @@ describe('WalletManager', () => {
       networkType: Network.CHIPNET,
       derivation_path: "m/44'/145'/0'",
     });
-    expect(db.prepare).toHaveBeenCalledWith(expect.not.stringContaining('mnemonic'));
+    expect(db.prepare).toHaveBeenCalledWith(
+      expect.not.stringContaining('mnemonic')
+    );
     expect(vi.mocked(SecretCryptoService).decryptText).not.toHaveBeenCalled();
   });
 
@@ -109,7 +111,12 @@ describe('WalletManager', () => {
     mockedDatabaseService.mockImplementation(() => dbService as never);
 
     const wm = WalletManager();
-    const created = await wm.createWallet('name', 'mnemonic', 'pass', Network.CHIPNET);
+    const created = await wm.createWallet(
+      'name',
+      'mnemonic',
+      'pass',
+      Network.CHIPNET
+    );
 
     expect(created).toBe(false);
     expect(insertStmt.run).not.toHaveBeenCalled();
@@ -144,7 +151,12 @@ describe('WalletManager', () => {
     mockedDatabaseService.mockImplementation(() => dbService as never);
 
     const wm = WalletManager();
-    const created = await wm.createWallet('name', 'mnemonic', 'pass', Network.MAINNET);
+    const created = await wm.createWallet(
+      'name',
+      'mnemonic',
+      'pass',
+      Network.MAINNET
+    );
 
     expect(created).toBe(true);
     expect(insertStmt.run).toHaveBeenCalledWith([
@@ -222,6 +234,46 @@ describe('WalletManager', () => {
 
     const wm = WalletManager();
     const walletId = await wm.setWalletId('mnemonic', 'pass', {
+      networkType: Network.MAINNET,
+      walletType: WalletType.STANDARD,
+    });
+
+    expect(walletId).toBe(42);
+  });
+
+  it('skips an undecryptable wallet row while resolving another wallet', async () => {
+    const selectStmt = makeStmt([
+      {
+        id: '21',
+        mnemonic: 'enc:unavailable',
+        passphrase: 'enc:unavailable-pass',
+        networkType: Network.MAINNET,
+        walletType: WalletType.STANDARD,
+      },
+      {
+        id: '42',
+        mnemonic: 'enc:mnemonic',
+        passphrase: 'enc:pass',
+        networkType: Network.MAINNET,
+        walletType: WalletType.STANDARD,
+      },
+    ]);
+    const db = {
+      prepare: vi.fn(() => selectStmt),
+    };
+
+    mockedDatabaseService.mockImplementation(
+      () =>
+        ({
+          ensureDatabaseStarted: vi.fn(async () => {}),
+          getDatabase: vi.fn(() => db),
+        }) as never
+    );
+    vi.mocked(SecretCryptoService).decryptText.mockRejectedValueOnce(
+      new Error('wallet row key unavailable')
+    );
+
+    const walletId = await WalletManager().setWalletId('mnemonic', 'pass', {
       networkType: Network.MAINNET,
       walletType: WalletType.STANDARD,
     });

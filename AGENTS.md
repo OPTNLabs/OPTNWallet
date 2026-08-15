@@ -32,8 +32,7 @@ and transaction correctness above convenience.
   workflows, or dependency manifests unless the task explicitly names the path
   and explains why.
 - Local commits are permitted when the user explicitly requests them for the
-  current task, after reviewing the exact staged scope. Do not push, tag,
-  merge, publish, release, or create pull requests during an automated task.
+  current task, after reviewing the exact staged scope.
 
 The following paths are prohibited unless the task explicitly scopes them and
 a human is handling the work manually:

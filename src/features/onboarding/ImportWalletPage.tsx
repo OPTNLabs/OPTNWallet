@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Toast } from '@capacitor/toast';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
@@ -19,11 +19,7 @@ import InfoTooltipIcon from './components/InfoTooltipIcon';
 import OnboardingCard from './components/OnboardingCard';
 import OnboardingScreen from './components/OnboardingScreen';
 import DerivationPathField from './components/DerivationPathField';
-import DerivationDiscoveryResult from '../../components/DerivationDiscoveryResult';
-import {
-  isValidImportMnemonic,
-  useImportDerivationDiscovery,
-} from '../../hooks/useImportDerivationDiscovery';
+import { isValidImportMnemonic } from '../../hooks/useImportDerivationDiscovery';
 import {
   getBchAccountPath,
   normalizeBchAccountPath,
@@ -41,38 +37,15 @@ const ImportWalletPage = () => {
   );
   const [passphrase] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [importError, setImportError] = useState('');
   const [derivationPath, setDerivationPath] = useState(() =>
     getBchAccountPath(currentNetwork)
   );
   const [customDerivationPath, setCustomDerivationPath] = useState(false);
-  const networkDefaultPath = useMemo(
-    () => getBchAccountPath(currentNetwork),
-    [currentNetwork]
-  );
   const recoveryPhrase = useMemo(
     () => recoveryWords.map(normalizeRecoveryWord).join(' '),
     [recoveryWords]
   );
-  const recoveryPhraseComplete = useMemo(
-    () => recoveryWords.every((word) => normalizeRecoveryWord(word).length > 0),
-    [recoveryWords]
-  );
-
-  const adoptDiscoveredPath = useCallback(
-    (path: string) => {
-      setDerivationPath(path);
-      setCustomDerivationPath(path !== networkDefaultPath);
-    },
-    [networkDefaultPath]
-  );
-  const importDiscovery = useImportDerivationDiscovery({
-    enabled: recoveryPhraseComplete,
-    network: currentNetwork,
-    mnemonic: recoveryPhrase,
-    passphrase,
-    onAdopt: adoptDiscoveredPath,
-  });
-
   const dbService = useMemo(() => DatabaseService(), []);
   const walletManager = useMemo(() => WalletManager(), []);
   const hasInitialized = useRef(false);
@@ -80,10 +53,6 @@ const ImportWalletPage = () => {
 
   const navigate = useNavigate();
   const dispatch = useDispatch();
-
-  useEffect(() => {
-    dispatch(setNetwork(Network.MAINNET));
-  }, [dispatch]);
 
   useEffect(() => {
     if (!customDerivationPath)
@@ -119,6 +88,7 @@ const ImportWalletPage = () => {
   const focusIndex = (index: number) => inputsRef.current[index]?.focus();
 
   const handleWordChange = (index: number, raw: string) => {
+    setImportError('');
     const parts = normalizeRecoveryWord(raw).split(' ').filter(Boolean);
 
     setRecoveryWords((prev) => {
@@ -182,7 +152,8 @@ const ImportWalletPage = () => {
   };
 
   const handleImportAccount = async () => {
-    if (isSubmitting || importDiscovery.blocking) return;
+    if (isSubmitting) return;
+    setImportError('');
 
     const missingWordIndex = recoveryWords.findIndex(
       (word) => !normalizeRecoveryWord(word)
@@ -191,21 +162,26 @@ const ImportWalletPage = () => {
     if (missingWordIndex !== -1) {
       console.error(`Word #${missingWordIndex + 1} is empty.`);
       focusIndex(missingWordIndex);
-      await Toast.show({ text: `Word ${missingWordIndex + 1} is missing.` });
+      const message = `Word ${missingWordIndex + 1} is missing.`;
+      setImportError(message);
+      await Toast.show({ text: message });
       return;
     }
 
     if (!isValidImportMnemonic(recoveryPhrase)) {
-      await Toast.show({
-        text: 'Recovery phrase checksum is invalid. Check the words and their order.',
-      });
+      const message =
+        'Recovery phrase checksum is invalid. Check the words and their order.';
+      setImportError(message);
+      await Toast.show({ text: message });
       return;
     }
 
     setIsSubmitting(true);
+    let importStage = 'starting import';
 
     try {
       const normalizedDerivationPath = normalizeBchAccountPath(derivationPath);
+      importStage = 'checking existing wallet';
       const accountExists = await walletManager.checkAccount(
         recoveryPhrase,
         passphrase,
@@ -213,6 +189,7 @@ const ImportWalletPage = () => {
       );
 
       if (!accountExists) {
+        importStage = 'saving wallet';
         const created = await walletManager.createWallet(
           ONBOARDING_WALLET_NAME,
           recoveryPhrase,
@@ -224,11 +201,14 @@ const ImportWalletPage = () => {
         );
         if (!created) {
           console.error('Failed to import account.');
-          await Toast.show({ text: 'Wallet import failed on this device.' });
+          const message = 'Wallet import failed on this device.';
+          setImportError(message);
+          await Toast.show({ text: message });
           return;
         }
       }
 
+      importStage = 'resolving wallet ID';
       const walletID = await walletManager.setWalletId(
         recoveryPhrase,
         passphrase,
@@ -236,13 +216,17 @@ const ImportWalletPage = () => {
       );
       if (walletID == null) {
         console.error('Failed to set wallet ID.');
-        await Toast.show({
-          text: 'Wallet was saved, but the wallet ID could not be resolved.',
-        });
+        const message =
+          'Wallet was saved, but the wallet ID could not be resolved.';
+        setImportError(message);
+        await Toast.show({ text: message });
         return;
       }
 
-      const walletInfo = await walletManager.getWalletInfo(walletID);
+      importStage = 'loading wallet metadata';
+      // Metadata is sufficient to establish the session. Do not decrypt the
+      // recovery material a second time just to read network/path settings.
+      const walletInfo = await walletManager.getWalletMetadata(walletID);
       const resolvedNetwork =
         walletInfo?.networkType === Network.MAINNET
           ? Network.MAINNET
@@ -250,11 +234,7 @@ const ImportWalletPage = () => {
             ? Network.CHIPNET
             : currentNetwork;
 
-      // Materialize one address pair so the worker can start immediately. It
-      // performs the full BIP44 discovery/gap-limit scan after navigation;
-      // waiting for all 40 key rows here makes import unnecessarily slow.
-      await KeyService.bootstrapInitialAddressBatch(walletID, 0, 1);
-
+      importStage = 'opening wallet';
       dispatch(setWalletId(walletID));
       dispatch(setWalletNetwork(resolvedNetwork));
       dispatch(setWalletType(walletInfo?.walletType ?? WalletType.STANDARD));
@@ -269,9 +249,25 @@ const ImportWalletPage = () => {
       );
       dispatch(setNetwork(resolvedNetwork));
       navigate(`/home/${walletID}`);
+
+      // Keep the initial key window consistent with desktop. The worker then
+      // performs the bounded history-based branch discovery pass.
+      void KeyService.bootstrapInitialAddressBatch(walletID, 0, 20).catch(
+        (error) => {
+          console.error('[ImportWalletPage] Initial address bootstrap failed', {
+            walletId: walletID,
+            error,
+          });
+        }
+      );
     } catch (error) {
-      console.error('Error importing account:', error);
-      await Toast.show({ text: 'Wallet import failed on this device.' });
+      console.error('[ImportWalletPage] Import failed', {
+        stage: importStage,
+        error,
+      });
+      const message = `Wallet import failed while ${importStage}.`;
+      setImportError(message);
+      await Toast.show({ text: message });
     } finally {
       setIsSubmitting(false);
     }
@@ -288,7 +284,6 @@ const ImportWalletPage = () => {
             onChange={(path, custom) => {
               setDerivationPath(path);
               setCustomDerivationPath(custom);
-              importDiscovery.cancel();
             }}
           />
 
@@ -333,36 +328,22 @@ const ImportWalletPage = () => {
               </div>
             </div>
           </div>
-
-          <div className="w-full px-2 mb-3" aria-live="polite">
-            <DerivationDiscoveryResult
-              state={importDiscovery.state}
-              currentPath={derivationPath}
-              defaultPath={networkDefaultPath}
-              selectedPath={importDiscovery.selectedPath}
-              onAdopt={importDiscovery.selectPath}
-              onCancel={importDiscovery.cancel}
-              onRetry={importDiscovery.retry}
-              context="import"
-            />
-          </div>
+          {importError && (
+            <p
+              role="alert"
+              className="w-full px-2 mb-2 text-sm leading-relaxed wallet-danger-text"
+            >
+              {importError}
+            </p>
+          )}
         </div>
 
         <button
           onClick={handleImportAccount}
-          disabled={isSubmitting || importDiscovery.blocking}
+          disabled={isSubmitting}
           className="wallet-btn-primary w-full my-2 text-xl font-bold"
         >
-          {isSubmitting
-            ? 'Importing Wallet...'
-            : importDiscovery.state.status === 'done' &&
-                importDiscovery.state.result.ambiguous &&
-                !importDiscovery.state.result.incomplete &&
-                importDiscovery.selectedPath === null
-              ? 'Choose a derivation path'
-              : importDiscovery.blocking
-                ? 'Checking wallet history...'
-                : 'Import Wallet'}
+          {isSubmitting ? 'Importing Wallet...' : 'Import Wallet'}
         </button>
         <button
           onClick={() => navigate('/')}

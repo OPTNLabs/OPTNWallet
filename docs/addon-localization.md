@@ -54,6 +54,7 @@ code. The current module IDs and catalog files are:
 | `mint-cashtokens`  | `src/pages/apps/mint-cashtokens-poc/locales.ts` |
 | `paper-wallet`     | `src/pages/apps/paper-wallet-sweep/locales.ts`  |
 | `paryon`           | `src/pages/apps/paryon/locales.ts`              |
+| `merchant-pay`     | `src/pages/apps/merchant-pay/locales.ts`        |
 
 `AddonI18nProvider` merges the selected module catalog with the owning
 manifest bundle. Manifest messages take precedence, so an installed developer

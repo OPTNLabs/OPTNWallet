@@ -26,7 +26,8 @@ vi.mock('../../state/store', () => ({
 
 // Deterministic scripthash so arbitrary test addresses work without libauth.
 vi.mock('../../services/electrum/helpers', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../services/electrum/helpers')>();
+  const actual =
+    await importOriginal<typeof import('../../services/electrum/helpers')>();
   return {
     ...actual,
     addressToElectrumScripthash: (address: string) =>
@@ -128,7 +129,9 @@ describe('ElectrumService', () => {
     expect(server.requestMany.mock.calls[0][0][0].method).toBe(
       'blockchain.scripthash.listunspent'
     );
-    expect(server.requestMany.mock.calls[0][0][0].params[0]).toContain('scripthash:');
+    expect(server.requestMany.mock.calls[0][0][0].params[0]).toContain(
+      'scripthash:'
+    );
   });
 
   it('getUTXOsMany omits addresses that fail without a usable response', async () => {
@@ -146,6 +149,40 @@ describe('ElectrumService', () => {
 
     expect(result).not.toHaveProperty(address);
     expect(server.requestMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to the address UTXO method when scripthash is unavailable', async () => {
+    const server = {
+      requestMany: vi.fn(async () => [new Error('Method not found')]),
+      request: vi.fn(async () => [
+        {
+          tx_hash: 'f'.repeat(64),
+          tx_pos: 0,
+          value: 321,
+          height: 7,
+        },
+      ]),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+
+    mockedElectrumServer.mockReturnValue(server as never);
+
+    const address = 'bitcoincash:qfallback';
+    const result = await ElectrumService.getUTXOsMany([address]);
+
+    expect(result[address]).toEqual([
+      expect.objectContaining({
+        address,
+        tx_hash: 'f'.repeat(64),
+        value: 321,
+      }),
+    ]);
+    expect(server.request).toHaveBeenCalledWith(
+      'blockchain.address.listunspent',
+      address
+    );
   });
 
   it('splits a large wallet UTXO scan into bounded Electrum batches', async () => {
@@ -168,9 +205,7 @@ describe('ElectrumService', () => {
     const sizes = server.requestMany.mock.calls
       .map(([calls]) => (calls as unknown[]).length)
       .sort((a, b) => b - a);
-    expect(sizes).toEqual([
-      50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 17,
-    ]);
+    expect(sizes).toEqual([50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 17]);
     expect(server.requestMany).toHaveBeenCalledTimes(13);
     expect(Object.keys(result)).toHaveLength(617);
   });
@@ -342,7 +377,9 @@ describe('ElectrumService', () => {
 
     mockedElectrumServer.mockReturnValue(server as never);
 
-    await expect(ElectrumService.getBalance('bitcoincash:q1')).resolves.toBe(12);
+    await expect(ElectrumService.getBalance('bitcoincash:q1')).resolves.toBe(
+      12
+    );
     await expect(ElectrumService.getBalance('bitcoincash:q1')).resolves.toBe(0);
   });
 
@@ -359,7 +396,9 @@ describe('ElectrumService', () => {
 
     mockedElectrumServer.mockReturnValue(server as never);
 
-    await expect(ElectrumService.broadcastTransaction('rawhex')).resolves.toBe('txid123');
+    await expect(ElectrumService.broadcastTransaction('rawhex')).resolves.toBe(
+      'txid123'
+    );
     await expect(ElectrumService.broadcastTransaction('rawhex')).resolves.toBe(
       'Invalid transaction hash response'
     );
@@ -378,10 +417,12 @@ describe('ElectrumService', () => {
 
     mockedElectrumServer.mockReturnValue(server as never);
 
-    await expect(ElectrumService.getTransactionHistory('bitcoincash:q1')).resolves.toEqual([
-      { tx_hash: 'abc', height: 10 },
-    ]);
-    await expect(ElectrumService.getTransactionHistory('bitcoincash:q2')).resolves.toBeNull();
+    await expect(
+      ElectrumService.getTransactionHistory('bitcoincash:q1')
+    ).resolves.toEqual([{ tx_hash: 'abc', height: 10 }]);
+    await expect(
+      ElectrumService.getTransactionHistory('bitcoincash:q2')
+    ).resolves.toBeNull();
   });
 
   it('coalesces inflight history requests for the same address', async () => {
@@ -436,6 +477,27 @@ describe('ElectrumService', () => {
     expect(result['bitcoincash:q2']).toEqual([{ tx_hash: 'def', height: 12 }]);
   });
 
+  it('falls back to the address history method when scripthash is unavailable', async () => {
+    const server = {
+      requestMany: vi.fn(async () => [new Error('Unknown method')]),
+      request: vi.fn(async () => [{ tx_hash: 'fallback-tx', height: 3 }]),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+
+    mockedElectrumServer.mockReturnValue(server as never);
+
+    const address = 'bitcoincash:qhistoryfallback';
+    const result = await ElectrumService.getTransactionHistoryMany([address]);
+
+    expect(result[address]).toEqual([{ tx_hash: 'fallback-tx', height: 3 }]);
+    expect(server.request).toHaveBeenCalledWith(
+      'blockchain.address.get_history',
+      address
+    );
+  });
+
   it('splits a large wallet history scan into bounded Electrum batches', async () => {
     const server = {
       request: vi.fn(async () => []),
@@ -454,10 +516,8 @@ describe('ElectrumService', () => {
 
     expect(
       server.requestMany.mock.calls.map(([calls]) => calls.length)
-    // Batch size 50 (was 250): 617 = 12×50 + 17. Live error was requestMany(250)@12s.
-    ).toEqual([
-      50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 17,
-    ]);
+      // Batch size 50 (was 250): 617 = 12×50 + 17. Live error was requestMany(250)@12s.
+    ).toEqual([50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 17]);
     expect(Object.keys(result)).toHaveLength(617);
   });
 
@@ -467,7 +527,9 @@ describe('ElectrumService', () => {
         .fn()
         .mockResolvedValueOnce({ confirmations: 0, height: 0 })
         .mockResolvedValueOnce({ confirmations: 2, height: 123 })
-        .mockRejectedValueOnce(new Error('No such mempool or blockchain transaction')),
+        .mockRejectedValueOnce(
+          new Error('No such mempool or blockchain transaction')
+        ),
       subscribe: vi.fn(async () => {}),
       unsubscribe: vi.fn(async () => {}),
       onNotification: vi.fn(() => () => {}),
@@ -475,15 +537,21 @@ describe('ElectrumService', () => {
 
     mockedElectrumServer.mockReturnValue(server as never);
 
-    await expect(ElectrumService.getTransactionVisibility('a'.repeat(64))).resolves.toEqual({
+    await expect(
+      ElectrumService.getTransactionVisibility('a'.repeat(64))
+    ).resolves.toEqual({
       seen: true,
       confirmed: false,
     });
-    await expect(ElectrumService.getTransactionVisibility('b'.repeat(64))).resolves.toEqual({
+    await expect(
+      ElectrumService.getTransactionVisibility('b'.repeat(64))
+    ).resolves.toEqual({
       seen: true,
       confirmed: true,
     });
-    await expect(ElectrumService.getTransactionVisibility('c'.repeat(64))).resolves.toEqual({
+    await expect(
+      ElectrumService.getTransactionVisibility('c'.repeat(64))
+    ).resolves.toEqual({
       seen: false,
       confirmed: false,
     });
@@ -590,7 +658,11 @@ describe('ElectrumService', () => {
       timestamp: '2023-11-14T22:13:20.000Z',
       inputs: [{ address: 'bitcoincash:qsender', amountSats: 110000 }],
       outputs: [
-        { address: 'bitcoincash:qrecipient', amountSats: 100000, outputIndex: 0 },
+        {
+          address: 'bitcoincash:qrecipient',
+          amountSats: 100000,
+          outputIndex: 0,
+        },
       ],
     });
   });
@@ -602,8 +674,12 @@ describe('ElectrumService', () => {
       height: 555,
       fee_sats: 222,
       timestamp: '2026-03-14T18:00:00.000Z',
-      inputs_json: JSON.stringify([{ address: 'bitcoincash:qfrom', amountSats: 1000 }]),
-      outputs_json: JSON.stringify([{ address: 'bitcoincash:qto', amountSats: 778 }]),
+      inputs_json: JSON.stringify([
+        { address: 'bitcoincash:qfrom', amountSats: 1000 },
+      ]),
+      outputs_json: JSON.stringify([
+        { address: 'bitcoincash:qto', amountSats: 778 },
+      ]),
     };
 
     const server = {

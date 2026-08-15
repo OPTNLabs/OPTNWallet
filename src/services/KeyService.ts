@@ -80,7 +80,10 @@ const KeyService = {
     const state = store.getState();
     const currentNetwork = selectCurrentNetwork(state);
     const walletManager = WalletManager();
-    const walletInfo = await walletManager.getWalletInfo(walletId);
+    // Key derivation only needs public wallet metadata here. Re-decrypting the
+    // wallet row before every address can fail when other wallet rows use a
+    // different device-scoped key.
+    const walletInfo = await walletManager.getWalletMetadata(walletId);
     const resolvedNetwork =
       walletInfo?.networkType === Network.MAINNET
         ? Network.MAINNET

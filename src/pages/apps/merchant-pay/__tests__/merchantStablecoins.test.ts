@@ -12,20 +12,22 @@ describe('merchantStablecoins', () => {
     expect(stablecoins).toEqual([
       {
         tokenId:
-          'b38a33f750f84c5c169a6f23cb873e6e79605021585d4f3408789689ed87f366',
-        symbol: 'MUSD',
-        name: 'Moria USD',
-        decimals: 2,
-      },
-      {
-        tokenId:
           '2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544',
         symbol: 'PUSD',
         name: 'ParyonUSD',
         decimals: 2,
       },
+      {
+        tokenId:
+          'b38a33f750f84c5c169a6f23cb873e6e79605021585d4f3408789689ed87f366',
+        symbol: 'MUSD',
+        name: 'Moria USD',
+        decimals: 2,
+      },
     ]);
-    expect(getDefaultMerchantStablecoin(Network.MAINNET)).toEqual(stablecoins[0]);
+    expect(getDefaultMerchantStablecoin(Network.MAINNET)).toEqual(
+      stablecoins[0]
+    );
   });
 
   it('returns the chipnet PUSD stablecoin and validates token ids', () => {

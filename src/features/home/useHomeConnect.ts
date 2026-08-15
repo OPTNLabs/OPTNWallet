@@ -81,6 +81,17 @@ export function useHomeConnect() {
         return true;
       }
 
+      if (parsed.kind === 'merchant-proposal-stream') {
+        setPopupOpen(false);
+        navigate('/apps/optn.builtin.demo:cauldronSwapApp', {
+          state: {
+            returnTo,
+            merchantProposalInitialQrPayload: parsed.initialQrPayload,
+          },
+        });
+        return true;
+      }
+
       if (parsed.kind === 'cashconnect') {
         if (!currentWalletId || currentWalletId <= 0) {
           throw new Error('No active wallet');

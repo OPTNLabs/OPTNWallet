@@ -28,11 +28,12 @@ export default function CauldronFlowTabs({
 }: CauldronFlowTabsProps) {
   const modes: Array<{ mode: CauldronFlowMode; label: string }> = [
     { mode: 'swap', label: 'Swap' },
+    { mode: 'merchant', label: 'Merchant Pay' },
     { mode: 'pool', label: 'Pool' },
   ];
 
   return (
-    <div className="grid grid-cols-2 gap-2">
+    <div className="grid grid-cols-3 gap-2">
       {modes.map(({ mode, label }) => (
         <button
           key={mode}

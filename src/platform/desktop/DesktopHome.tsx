@@ -156,7 +156,7 @@ const Home: React.FC = () => {
   // merge order from Electrum, so slice(-N).reverse() put old txs on top and
   // new fused CoinJoins lower. Same rule as full History (newest first).
   const recentTransactions = useMemo(
-    () => takeRecentTransactions(transactions, 8),
+    () => takeRecentTransactions(transactions, 3),
     [transactions]
   );
   const tokenCategories = useMemo(
@@ -243,14 +243,14 @@ const Home: React.FC = () => {
     reportSyncProgress(2);
 
     try {
-      // Same network path as open-bootstrap for balances: scripthash batches,
-      // no second BIP44 rediscovery (open already expanded the key set).
+      // Same network path as open-bootstrap for balances: scripthash batches
+      // plus the shared regular/CashFusion/Cauldron branch discovery.
       //
       // Do NOT use runWalletUtxoRefresh here. That coordinator joins any
       // in-flight background reconcile (subscriptions / block tip), which has
-      // no onProgress and often still runs discovery — so the UI froze at 8%
-      // for a minute while we waited on someone else's task. Manual Sync is
-      // user-initiated: run our own fast path only.
+      // no onProgress and can hide the branch scan behind someone else's task.
+      // Manual Sync is user-initiated: run our own fast path so discovery and
+      // its progress remain visible on desktop just as they are on mobile.
       //
       // Manual Sync = force recheck (clear status hashes) but does NOT wipe
       // the ledger. Rebuild Wallet in Settings is the nuclear wipe.
@@ -279,7 +279,7 @@ const Home: React.FC = () => {
         walletSession,
         undefined,
         {
-          discover: false,
+          discover: true,
           // Statuses were cleared above; force still short-circuits any race
           // where a concurrent path rewrote a status before listunspent.
           force: true,
@@ -372,7 +372,7 @@ const Home: React.FC = () => {
                   >
                     {fetchingUTXOsRedux ? 'Syncing…' : 'Sync'}
                   </button>
-                  {(fetchingUTXOsRedux && syncingProgress !== null) && (
+                  {fetchingUTXOsRedux && syncingProgress !== null && (
                     <div className="flex items-center gap-1.5 text-xs wallet-muted">
                       <div className="h-1 w-16 overflow-hidden rounded-full bg-[color-mix(in_oklab,var(--wallet-accent-soft)_45%,transparent)]">
                         <div

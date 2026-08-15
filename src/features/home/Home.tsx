@@ -103,7 +103,7 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
     typeof bchUsdQuote === 'number' ? totalBch * bchUsdQuote : null;
   // Sort by height / unconfirmed — not array index (Electrum merge order).
   const recentTransactions = useMemo(
-    () => takeRecentTransactions(transactions, 8),
+    () => takeRecentTransactions(transactions, 3),
     [transactions]
   );
   const tokenCategories = useMemo(

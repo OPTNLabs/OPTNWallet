@@ -52,6 +52,8 @@ import {
   type SettingsRowConfig,
 } from './settingsConfig';
 import { isDesktopPlatform } from '../../utils/platform';
+import { useI18n } from '../../i18n/useI18n';
+import { LanguageSettings } from './LanguageSettings';
 
 const Settings: React.FC = () => {
   const navigate = useNavigate();
@@ -66,6 +68,7 @@ const Settings: React.FC = () => {
     selectCurrentNetwork(state)
   );
   const desktop = isDesktopPlatform();
+  const { t } = useI18n();
 
   const [selectedOption, setSelectedOption] = useState(() => {
     const panel = searchParams.get('panel') ?? '';
@@ -144,6 +147,8 @@ const Settings: React.FC = () => {
     switch (selectedOption) {
       case 'recovery':
         return <RecoveryPhrase />;
+      case 'language':
+        return <LanguageSettings />;
       case 'about':
         return <AboutView />;
       case 'terms':
@@ -196,6 +201,8 @@ const Settings: React.FC = () => {
         return 'Recovery Phrase';
       case 'about':
         return 'About';
+      case 'language':
+        return 'Language';
       case 'terms':
         return 'Terms of Use';
       case 'contact':
@@ -273,8 +280,12 @@ const Settings: React.FC = () => {
       {rows.map((row) => (
         <SettingsRow
           key={row.key}
-          title={row.title}
-          description={row.description}
+          title={row.key === 'language' ? t('settings.language') : row.title}
+          description={
+            row.key === 'language'
+              ? t('settings.languageDescription')
+              : row.description
+          }
           compact
           right={
             row.key === 'network' ? (

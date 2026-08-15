@@ -4,6 +4,7 @@ import {
   setInitialized,
   setFetchingUTXOs,
 } from '../../state/slices/utxoSlice';
+import { WalletType } from '../../types/wallet';
 
 vi.mock('@capacitor/core', () => ({
   Capacitor: {
@@ -20,6 +21,7 @@ vi.mock('@capacitor/core', () => ({
 const dispatchMock = vi.fn();
 const getStateMock = vi.fn();
 const retrieveKeysMock = vi.fn();
+const bootstrapInitialAddressBatchMock = vi.fn();
 const fetchAndStoreUTXOsManyMock = vi.fn();
 const fetchUTXOsFromDatabaseMock = vi.fn();
 const fetchContractInstancesMock = vi.fn();
@@ -40,6 +42,7 @@ const unsubscribeBlockHeadersMock = vi.fn();
 const fetchAndStoreTransactionHistoriesMock = vi.fn();
 const fetchAndStoreTransactionHistoryMock = vi.fn();
 const reconcileActiveWalletUtxosMock = vi.fn();
+const refreshWalletTransactionHistoryMock = vi.fn();
 const runWalletUtxoRefreshMock = vi.fn(
   async (_walletId: number, task: () => Promise<void>) => task()
 );
@@ -54,6 +57,7 @@ vi.mock('../../state/store', () => ({
 vi.mock('../../services/KeyService', () => ({
   default: {
     retrieveKeys: retrieveKeysMock,
+    bootstrapInitialAddressBatch: bootstrapInitialAddressBatchMock,
   },
 }));
 
@@ -128,6 +132,10 @@ vi.mock('../../services/RefreshCoordinator', () => ({
   runWalletUtxoRefresh: runWalletUtxoRefreshMock,
 }));
 
+vi.mock('../../services/WalletHistoryRefreshService', () => ({
+  refreshWalletTransactionHistory: refreshWalletTransactionHistoryMock,
+}));
+
 vi.mock('../../services/WalletUtxoRefreshService', () => ({
   reconcileActiveWalletUtxos: reconcileActiveWalletUtxosMock,
 }));
@@ -154,10 +162,15 @@ describe('UTXOWorkerService.bootstrapAllUTXOs', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getStateMock.mockReturnValue({
-      wallet_id: { currentWalletId: 42, sessionGeneration: 1 },
+      wallet_id: {
+        currentWalletId: 42,
+        sessionGeneration: 1,
+        walletType: WalletType.STANDARD,
+      },
       network: { currentNetwork: 'MAINNET' },
     });
     retrieveKeysMock.mockResolvedValue([{ address: 'bitcoincash:qaddr1' }]);
+    bootstrapInitialAddressBatchMock.mockResolvedValue(undefined);
     fetchContractInstancesMock.mockResolvedValue([]);
     fetchUTXOsFromDatabaseMock.mockResolvedValue({
       utxosMap: {},
@@ -173,6 +186,10 @@ describe('UTXOWorkerService.bootstrapAllUTXOs', () => {
     unsubscribeAddressMock.mockResolvedValue(undefined);
     unsubscribeBlockHeadersMock.mockResolvedValue(undefined);
     reconcileActiveWalletUtxosMock.mockResolvedValue({});
+    refreshWalletTransactionHistoryMock.mockResolvedValue({
+      scannedAddresses: [],
+      refreshed: true,
+    });
     syncWalletSpecialActivitiesMock.mockResolvedValue([]);
   });
 
@@ -343,7 +360,11 @@ describe('UTXOWorkerService.bootstrapAllUTXOs', () => {
     expect(fetchAndStoreUTXOsManyMock).toHaveBeenCalledWith(
       42,
       ['bitcoincash:qaddr1', 'bchtest:qtracked'],
-      expect.objectContaining({ onProgress: expect.any(Function) })
+      expect.objectContaining({
+        discover: false,
+        force: true,
+        onProgress: expect.any(Function),
+      })
     );
   });
 
@@ -457,6 +478,21 @@ describe('UTXOWorkerService.bootstrapAllUTXOs', () => {
 
     expect(subscribeBlockHeadersMock).not.toHaveBeenCalled();
     expect(subscribeAddressMock).not.toHaveBeenCalled();
+  });
+
+  it('bootstraps a standard wallet with no key rows before starting the scan', async () => {
+    retrieveKeysMock
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ address: 'bitcoincash:qaddr1' }]);
+    fetchAndStoreUTXOsManyMock.mockResolvedValue({
+      'bitcoincash:qaddr1': [],
+    });
+
+    const { startUTXOWorker } = await import('../UTXOWorkerService');
+    await startUTXOWorker();
+
+    expect(bootstrapInitialAddressBatchMock).toHaveBeenCalledWith(42, 0, 20);
+    expect(fetchAndStoreUTXOsManyMock).toHaveBeenCalledTimes(1);
   });
 
   it('does not wait for optional special activity scans before completing startup', async () => {

@@ -1,5 +1,6 @@
 import type { CSSProperties } from 'react';
 
+import { useAddonI18n } from '../../../i18n/useAddonI18n';
 import { sanitizeDecimalInput } from '../../../services/cauldron/amount';
 
 type MerchantAmountPadProps = {
@@ -53,6 +54,7 @@ export default function MerchantAmountPad({
   className = '',
   showHint = true,
 }: MerchantAmountPadProps) {
+  const { t: addonT } = useAddonI18n();
   const displayValue = amount.trim() || '0';
 
   return (
@@ -69,14 +71,17 @@ export default function MerchantAmountPad({
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="text-[10px] uppercase tracking-[0.22em] wallet-muted opacity-70">
-              Amount to receive
+              {addonT('module.amountToReceive', 'Amount to receive')}
             </div>
             <div className="mt-1 break-words text-[clamp(2.2rem,8vw,3.5rem)] font-black leading-none tracking-tight wallet-text-strong">
               {displayValue}
             </div>
             {showHint ? (
               <p className="mt-1 text-xs leading-5 wallet-muted">
-                Enter the stablecoin amount you want to receive.
+                {addonT(
+                  'module.enterStablecoinAmount',
+                  'Enter the stablecoin amount you want to receive.'
+                )}
               </p>
             ) : null}
           </div>
@@ -101,7 +106,7 @@ export default function MerchantAmountPad({
               style={keyStyle}
               disabled={disabled}
             >
-              Clear
+              {addonT('module.clear', 'Clear')}
             </button>
           </div>
         </div>

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AddonSDK } from '../../../../services/AddonsSDK';
+import { Network } from '../../../../state/slices/networkSlice';
 import { attemptMerchantAutoSettlement } from '../merchantPaySettlement';
 
 const mocks = vi.hoisted(() => ({
@@ -63,6 +64,7 @@ describe('attemptMerchantAutoSettlement', () => {
         requestId: 'req-1',
         createdAt: 1,
         expiresAt: 2,
+        network: Network.MAINNET,
         merchantAddress: 'bitcoincash:qpayment',
         merchantAddressBaselineOutpoints: [],
         stablecoin: {
@@ -77,7 +79,7 @@ describe('attemptMerchantAutoSettlement', () => {
         customerPaysDisplay: '0.05000000 BCH',
         quoteProtectionBps: 100n,
         routePoolCount: 2,
-        paymentUri: 'bitcoincash:qpayment?amount=0.05',
+        maxBchSats: 5_000_000n,
         detailsText: 'details',
       },
       draftTrades: [{ pool: {} } as never],
@@ -159,6 +161,7 @@ describe('attemptMerchantAutoSettlement', () => {
         requestId: 'req-2',
         createdAt: 1,
         expiresAt: 2,
+        network: Network.MAINNET,
         merchantAddress: 'bitcoincash:qpayment',
         merchantAddressBaselineOutpoints: ['tx-old:0'],
         stablecoin: {
@@ -173,7 +176,7 @@ describe('attemptMerchantAutoSettlement', () => {
         customerPaysDisplay: '0.04000000 BCH',
         quoteProtectionBps: 100n,
         routePoolCount: 2,
-        paymentUri: 'bitcoincash:qpayment?amount=0.04',
+        maxBchSats: 4_000_000n,
         detailsText: 'details',
       },
       draftTrades: [{ pool: {} } as never],
@@ -188,7 +191,9 @@ describe('attemptMerchantAutoSettlement', () => {
     expect(result.status).toBe('settled');
     expect(result.txid).toBe('txid-123');
     expect(mocks.buildMerchantPaymentWithFundingMock).toHaveBeenCalledTimes(1);
-    expect(mocks.buildMerchantPaymentWithFundingMock.mock.calls[0]?.[0]).toEqual(
+    expect(
+      mocks.buildMerchantPaymentWithFundingMock.mock.calls[0]?.[0]
+    ).toEqual(
       expect.objectContaining({
         walletId: 7,
         merchantAddress: 'bitcoincash:zmerchant',

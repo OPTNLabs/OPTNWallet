@@ -787,9 +787,7 @@ export async function scanCauldronActivity(params: {
   } = await import('./cauldron/planner');
   const walletAddresses = await fetchCauldronDerivedWalletAddresses(
     params.walletId,
-    params.network,
-    32,
-    0
+    params.network
   );
   const userPools = await fetchNormalizedCauldronUserPools(
     params.network,

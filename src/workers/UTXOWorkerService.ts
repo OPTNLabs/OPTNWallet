@@ -19,6 +19,7 @@ import { enqueueNotification } from '../state/slices/notificationsSlice';
 import { invalidateUTXOCache } from '../services/ElectrumService';
 import { logError, logWarn } from '../utils/errorHandling';
 import { UTXO } from '../types/types';
+import { WalletType } from '../types/wallet';
 import { runWalletUtxoRefresh } from '../services/RefreshCoordinator';
 import { reconcileActiveWalletUtxos } from '../services/WalletUtxoRefreshService';
 import QuantumrootTrackingService from '../services/QuantumrootTrackingService';
@@ -207,9 +208,7 @@ async function refreshWalletAddress(address: string, session: WorkerSession) {
   try {
     const ledger = await import('../platform/desktop/WalletLedgerService');
     const remote = await ElectrumService.getAddressState(address);
-    if (
-      await ledger.addressHistoryIsFresh(currentWalletId, address, remote)
-    ) {
+    if (await ledger.addressHistoryIsFresh(currentWalletId, address, remote)) {
       return;
     }
   } catch {
@@ -371,7 +370,9 @@ export async function bootstrapAllUTXOs(
   const currentWalletId =
     expectedSession?.walletId ?? state.wallet_id.currentWalletId;
   const sessionGeneration =
-    expectedSession?.sessionGeneration ?? state.wallet_id.sessionGeneration ?? 0;
+    expectedSession?.sessionGeneration ??
+    state.wallet_id.sessionGeneration ??
+    0;
   const bootstrapIsCurrent = () =>
     isCurrentWalletSession(currentWalletId, sessionGeneration) &&
     (expectedEpoch === undefined ||
@@ -400,7 +401,8 @@ export async function bootstrapAllUTXOs(
   store.dispatch(setFetchingUTXOs(true));
   // Progress sweeps upward across distinct phases so the Home bar visibly moves
   // even while a single batched network call is in flight (it cannot sub-divide).
-  const report = (percent: number) => store.dispatch(setSyncingProgress(percent));
+  const report = (percent: number) =>
+    store.dispatch(setSyncingProgress(percent));
 
   try {
     report(5);
@@ -496,6 +498,9 @@ export async function bootstrapAllUTXOs(
       currentWalletId,
       trackedAddresses,
       {
+        // Keep the initial wallet pass limited to materialized addresses. The
+        // mobile worker must not block ordinary UTXO loading on optional
+        // derivation discovery; desktop/manual Sync performs that pass.
         discover: false,
         force: true,
         onProgress: (done, total) => {
@@ -640,12 +645,9 @@ async function establishSubscriptions(session: WorkerSession) {
     if (toSubscribe.length > 0) {
       // Bulk-subscribe; on later status *change* refresh only that address
       // (Selene). Never refresh the whole set on one notify.
-      await ElectrumService.subscribeAddressesBulk(
-        toSubscribe,
-        (addr) => {
-          refreshAddressSoon(addr, 80, session);
-        }
-      );
+      await ElectrumService.subscribeAddressesBulk(toSubscribe, (addr) => {
+        refreshAddressSoon(addr, 80, session);
+      });
       if (!isCurrentWorkerContext(session)) return;
       for (const addr of toSubscribe) {
         subscribedAddresses.set(addr, {
@@ -718,7 +720,31 @@ function startUTXOWorker(): Promise<void> {
 
     const tryStart = async (): Promise<void> => {
       if (!isCurrentWorkerContext(session)) return;
-      const keys = await KeyService.retrieveKeys(session.walletId);
+      let keys = await KeyService.retrieveKeys(session.walletId);
+      if (!isCurrentWorkerContext(session)) return;
+
+      // Existing wallets can have a valid encrypted seed but no materialized
+      // key rows (for example after a restore or an interrupted import). The
+      // worker must repair that state before deciding there is nothing to
+      // scan. Never do this for watch-only or hardware wallets.
+      if (
+        (!keys || keys.length === 0) &&
+        store.getState().wallet_id.walletType === WalletType.STANDARD
+      ) {
+        try {
+          await KeyService.bootstrapInitialAddressBatch(
+            session.walletId,
+            0,
+            20
+          );
+          keys = await KeyService.retrieveKeys(session.walletId);
+        } catch (error) {
+          logError('UTXOWorker.start.bootstrapInitialKeys', error, {
+            walletId: session.walletId,
+          });
+        }
+      }
+
       if (!isCurrentWorkerContext(session)) return;
       if (!keys || keys.length === 0) {
         if (utxoStartRetry) clearTimeout(utxoStartRetry);

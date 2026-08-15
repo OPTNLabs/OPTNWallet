@@ -2,14 +2,14 @@
 // minus seed re-confirmation (the user already typed the real words once).
 // Replaces src/features/onboarding/ImportWalletPage.tsx via a Vite alias
 // (desktop builds only); the upstream mobile page is untouched.
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import DatabaseService from '../../../apis/DatabaseManager/DatabaseService';
 import ElectrumServer from '../../../apis/ElectrumServer/ElectrumServer';
 import KeyService from '../../../services/KeyService';
 import { normalizeBchAccountPath } from '../../../services/HdWalletService';
-import { Network, setNetwork } from '../../../state/slices/networkSlice';
+import { setNetwork } from '../../../state/slices/networkSlice';
 import { selectCurrentNetwork } from '../../../state/selectors/networkSelectors';
 import {
   setWalletId,
@@ -22,11 +22,7 @@ import InfoTooltipIcon from '../../../features/onboarding/components/InfoTooltip
 import OnboardingCard from '../../../features/onboarding/components/OnboardingCard';
 import OnboardingScreen from '../../../features/onboarding/components/OnboardingScreen';
 import DerivationPathField from '../../../features/onboarding/components/DerivationPathField';
-import DerivationDiscoveryResult from '../../../components/DerivationDiscoveryResult';
-import {
-  isValidImportMnemonic,
-  useImportDerivationDiscovery,
-} from '../../../hooks/useImportDerivationDiscovery';
+import { isValidImportMnemonic } from '../../../hooks/useImportDerivationDiscovery';
 import {
   BIP39_WORD_COUNTS,
   DEFAULT_BIP39_WORD_COUNT,
@@ -69,38 +65,10 @@ const DesktopImportWalletPage = () => {
     defaultDesktopAccountPath(currentNetwork)
   );
   const [customDerivationPath, setCustomDerivationPath] = useState(false);
-  const networkDefaultPath = useMemo(
-    () => defaultDesktopAccountPath(currentNetwork),
-    [currentNetwork]
-  );
   const recoveryPhrase = useMemo(
     () => recoveryWords.map(normalizeRecoveryWord).join(' '),
     [recoveryWords]
   );
-  const recoveryPhraseComplete = useMemo(
-    () => recoveryWords.every((word) => normalizeRecoveryWord(word).length > 0),
-    [recoveryWords]
-  );
-
-  const adoptDiscoveredPath = useCallback(
-    (path: string) => {
-      setDerivationPath(path);
-      setCustomDerivationPath(path !== networkDefaultPath);
-    },
-    [networkDefaultPath]
-  );
-  const importDiscovery = useImportDerivationDiscovery({
-    enabled: step === 'path' && recoveryPhraseComplete,
-    network: currentNetwork,
-    mnemonic: recoveryPhrase,
-    passphrase: '',
-    onAdopt: adoptDiscoveredPath,
-  });
-
-  useEffect(() => {
-    dispatch(setNetwork(Network.MAINNET));
-  }, [dispatch]);
-
   useEffect(() => {
     if (!customDerivationPath)
       setDerivationPath(defaultDesktopAccountPath(currentNetwork));
@@ -216,7 +184,6 @@ const DesktopImportWalletPage = () => {
   };
 
   const handleImport = async () => {
-    if (importDiscovery.blocking) return;
     if (!walletName.trim()) {
       setNameError(t('onboarding.nameRequired'));
       return;
@@ -249,10 +216,9 @@ const DesktopImportWalletPage = () => {
         return;
       }
 
-      // Materialize one address pair so the worker can start immediately. It
-      // performs the full BIP44 discovery/gap-limit scan after navigation;
-      // waiting for all 40 key rows here makes import unnecessarily slow.
-      await KeyService.bootstrapInitialAddressBatch(walletId, 0, 1);
+      // Materialize the same initial receive/change window used by desktop
+      // network switching before opening Settings or Home.
+      await KeyService.bootstrapInitialAddressBatch(walletId, 0, 20);
 
       dispatch(setWalletId(walletId));
       dispatch(setWalletNetwork(currentNetwork));
@@ -375,40 +341,16 @@ const DesktopImportWalletPage = () => {
             onChange={(path, custom) => {
               setDerivationPath(path);
               setCustomDerivationPath(custom);
-              importDiscovery.cancel();
             }}
           />
-          <div className="w-full my-3" aria-live="polite">
-            <DerivationDiscoveryResult
-              state={importDiscovery.state}
-              currentPath={derivationPath}
-              defaultPath={networkDefaultPath}
-              selectedPath={importDiscovery.selectedPath}
-              onAdopt={importDiscovery.selectPath}
-              onCancel={importDiscovery.cancel}
-              onRetry={importDiscovery.retry}
-              context="import"
-            />
-          </div>
           <button
             onClick={() => setStep('name')}
-            disabled={importDiscovery.blocking}
             className="wallet-btn-primary w-full my-2 text-xl font-bold"
           >
-            {importDiscovery.state.status === 'done' &&
-            importDiscovery.state.result.ambiguous &&
-            !importDiscovery.state.result.incomplete &&
-            importDiscovery.selectedPath === null
-              ? 'Choose a derivation path'
-              : importDiscovery.blocking
-                ? 'Checking wallet history…'
-                : t('onboarding.continue')}
+            {t('onboarding.continue')}
           </button>
           <button
-            onClick={() => {
-              importDiscovery.cancel();
-              setStep('words');
-            }}
+            onClick={() => setStep('words')}
             className="wallet-btn-secondary w-full my-2 text-lg"
           >
             {t('onboarding.back')}

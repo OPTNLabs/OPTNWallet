@@ -1,6 +1,7 @@
 import { store } from '../state/store';
 import { replaceAllUTXOs } from '../state/slices/utxoSlice';
 import type { UTXO } from '../types/types';
+import { WalletType } from '../types/wallet';
 import { invalidateUTXOCache, primeUTXOCache } from './ElectrumService';
 import KeyService from './KeyService';
 import QuantumrootTrackingService from './QuantumrootTrackingService';
@@ -10,9 +11,7 @@ import {
 } from './RefreshCoordinator';
 import UTXOService from './UTXOService';
 
-export type WalletUtxoSnapshot = Readonly<
-  Record<string, readonly UTXO[]>
->;
+export type WalletUtxoSnapshot = Readonly<Record<string, readonly UTXO[]>>;
 type WalletUtxoRefreshListener = (
   walletId: number,
   snapshot: WalletUtxoSnapshot
@@ -102,7 +101,16 @@ export async function fetchActiveWalletUtxos(
   const discover = options.discover !== false;
 
   options.onProgress?.(0, 1);
-  const keyPairs = await KeyService.retrieveKeys(walletId);
+  let keyPairs = await KeyService.retrieveKeys(walletId);
+  if (
+    (!keyPairs || keyPairs.length === 0) &&
+    store.getState().wallet_id.walletType === WalletType.STANDARD
+  ) {
+    // Manual Sync must be able to recover a restored or interrupted standard
+    // wallet before discovery tries to scan its public address inventory.
+    await KeyService.bootstrapInitialAddressBatch(walletId, 0, 20);
+    keyPairs = await KeyService.retrieveKeys(walletId);
+  }
   if (signal?.aborted || !isActiveWalletSession(session)) return null;
 
   const quantumrootAddresses =
@@ -124,11 +132,15 @@ export async function fetchActiveWalletUtxos(
   if (addresses.length > 0) {
     options.onProgress?.(0, addresses.length);
   }
-  const fetched = await UTXOService.fetchAndStoreUTXOsMany(walletId, addresses, {
-    discover,
-    force: options.force === true,
-    onProgress: options.onProgress,
-  });
+  const fetched = await UTXOService.fetchAndStoreUTXOsMany(
+    walletId,
+    addresses,
+    {
+      discover,
+      force: options.force === true,
+      onProgress: options.onProgress,
+    }
+  );
   if (signal?.aborted || !isActiveWalletSession(session)) return null;
 
   const snapshot: Record<string, UTXO[]> = {};

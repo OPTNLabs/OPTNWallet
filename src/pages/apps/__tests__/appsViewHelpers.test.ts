@@ -99,7 +99,7 @@ describe('appsViewHelpers', () => {
     ).toBe(false);
     expect(
       shouldHideApp('optn.builtin.merchant-pay:merchantPayApp', 'Merchant Pay')
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it('marks CashFusion as desktop-only UI', () => {

@@ -73,6 +73,23 @@ const BUILTIN_ADDONS_BASE: AddonManifest[] = [
         },
       },
       {
+        id: 'merchantPayApp',
+        name: 'Merchant Pay',
+        description:
+          'Accept PUSD while customers pay BCH through Cauldron pools',
+        iconUri: '/assets/images/OPTNUIkeyline.png',
+        kind: 'declarative',
+        requiredCapabilities: [
+          'wallet:context:read',
+          'wallet:addresses:read',
+          'utxo:address:read',
+          'chain:query',
+        ],
+        config: {
+          screen: 'MerchantPayApp',
+        },
+      },
+      {
         id: 'paryonWorkspaceApp',
         name: 'ParyonUSD',
         description:

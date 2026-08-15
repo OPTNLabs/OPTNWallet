@@ -31,6 +31,8 @@ import {
 import { getQuantumrootNetworkSupport } from '../services/QuantumrootNetworkSupportService';
 import { getReturnPath } from '../utils/navigation';
 import { RpaReceiveCard } from '../features/rpa/RpaReceiveCard';
+import { isDesktopPlatform } from '../utils/platform';
+import { WalletType } from '../types/wallet';
 
 type QRCodeType = 'address' | 'pubKey' | 'pkh' | 'privkey';
 const PRIVKEY_UNLOCK_TAPS = 10;
@@ -122,17 +124,20 @@ const Receive: React.FC = () => {
   const [bip21Amount, setBip21Amount] = useState('');
   const [bip21Label, setBip21Label] = useState('');
   const [bip21Message, setBip21Message] = useState('');
-  const [selectedWalletKey, setSelectedWalletKey] = useState<WalletKeyPair | null>(null);
+  const [selectedWalletKey, setSelectedWalletKey] =
+    useState<WalletKeyPair | null>(null);
   const [selectedQuantumrootVault, setSelectedQuantumrootVault] =
     useState<QuantumrootVaultRecord | null>(null);
   const [showQuantumrootStatusPopup, setShowQuantumrootStatusPopup] =
     useState(false);
-  const [quantumrootStatus, setQuantumrootStatus] = useState<QuantumrootVaultStatus | null>(
-    null
-  );
-  const [loadingQuantumrootStatus, setLoadingQuantumrootStatus] = useState(false);
-  const [privKeyUnlockToastVisible, setPrivKeyUnlockToastVisible] = useState(false);
-  const [privKeyUnlockToastMessage, setPrivKeyUnlockToastMessage] = useState('');
+  const [quantumrootStatus, setQuantumrootStatus] =
+    useState<QuantumrootVaultStatus | null>(null);
+  const [loadingQuantumrootStatus, setLoadingQuantumrootStatus] =
+    useState(false);
+  const [privKeyUnlockToastVisible, setPrivKeyUnlockToastVisible] =
+    useState(false);
+  const [privKeyUnlockToastMessage, setPrivKeyUnlockToastMessage] =
+    useState('');
   const [qrCodeSize, setQrCodeSize] = useState(180);
   const [searchParams] = useSearchParams();
   const receiveHeaderRef = useRef<HTMLDivElement | null>(null);
@@ -146,11 +151,15 @@ const Receive: React.FC = () => {
   const currentWalletId = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
   );
+  const walletType = useSelector(
+    (state: RootState) => state.wallet_id.walletType
+  );
   const currentNetwork = useSelector((state: RootState) =>
     selectCurrentNetwork(state)
   );
   const derivationPath = useSelector(selectWalletDerivationPath);
-  const quantumrootNetworkSupport = getQuantumrootNetworkSupport(currentNetwork);
+  const quantumrootNetworkSupport =
+    getQuantumrootNetworkSupport(currentNetwork);
   const wallet_id = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
   );
@@ -160,9 +169,24 @@ const Receive: React.FC = () => {
       if (!currentWalletId) return;
 
       try {
-        const existingKeys = (await KeyService.retrieveKeys(
+        let existingKeys = (await KeyService.retrieveKeys(
           currentWalletId
         )) as WalletKeyPair[];
+
+        // A desktop wallet can reach this shared screen from a restored
+        // session before the landing-page bootstrap has completed. Repair only
+        // standard Tauri wallets here; mobile has its own onboarding bootstrap,
+        // and public-key wallet types must never attempt mnemonic derivation.
+        if (
+          existingKeys.length === 0 &&
+          isDesktopPlatform() &&
+          walletType === WalletType.STANDARD
+        ) {
+          await KeyService.bootstrapInitialAddressBatch(currentWalletId, 0, 20);
+          existingKeys = (await KeyService.retrieveKeys(
+            currentWalletId
+          )) as WalletKeyPair[];
+        }
 
         const mainKeys = existingKeys
           .filter((key) => key.changeIndex === 0)
@@ -202,7 +226,7 @@ const Receive: React.FC = () => {
     };
 
     fetchKeys();
-  }, [currentWalletId, currentNetwork]);
+  }, [currentWalletId, currentNetwork, walletType]);
 
   const handleInitializeReceiveAddresses = async () => {
     if (!currentWalletId) return;
@@ -357,10 +381,12 @@ const Receive: React.FC = () => {
 
   useLayoutEffect(() => {
     const updateQrSize = () => {
-      const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+      const viewportHeight =
+        window.visualViewport?.height ?? window.innerHeight;
       const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
       const addressBrowserHeight = addressBrowserRef.current?.offsetHeight ?? 0;
-      const addressTypeToggleHeight = addressTypeToggleRef.current?.offsetHeight ?? 0;
+      const addressTypeToggleHeight =
+        addressTypeToggleRef.current?.offsetHeight ?? 0;
       const qrMetaHeight = qrMetaRef.current?.offsetHeight ?? 0;
 
       const containerWidth = Math.min(
@@ -432,7 +458,8 @@ const Receive: React.FC = () => {
   // Load WIF only when the user has unlocked the private-key view (password
   // re-prompt is intentional for reveal). Never on plain Receive / address pick.
   useEffect(() => {
-    if (!isPrivKeyUnlocked || !selectedAddress || !ALLOW_PRIVATE_KEY_VIEW) return;
+    if (!isPrivKeyUnlocked || !selectedAddress || !ALLOW_PRIVATE_KEY_VIEW)
+      return;
     let cancelled = false;
     void (async () => {
       const wif = await fetchAddressWif(selectedAddress, currentNetwork);
@@ -465,9 +492,7 @@ const Receive: React.FC = () => {
       });
     }
     setSelectedAddress(
-      nextIsTokenAddress
-        ? sourcePair.tokenAddress
-        : sourcePair.address
+      nextIsTokenAddress ? sourcePair.tokenAddress : sourcePair.address
     );
   };
 
@@ -483,9 +508,9 @@ const Receive: React.FC = () => {
     addressType === 'main' ? mainKeyPairs : changeKeyPairs;
   const primaryKeyPair = keyPairsToDisplay[0] ?? null;
 
-  const activeAddress =
-    selectedAddress ?? primaryKeyPair?.address ?? '';
-  const addressPrefixLength = PREFIX[currentNetwork]?.length ?? PREFIX.mainnet.length;
+  const activeAddress = selectedAddress ?? primaryKeyPair?.address ?? '';
+  const addressPrefixLength =
+    PREFIX[currentNetwork]?.length ?? PREFIX.mainnet.length;
   const receiveAddressLabelMaskLength = 6;
   const bip21Uri = (() => {
     if (!activeAddress) return '';
@@ -497,7 +522,9 @@ const Receive: React.FC = () => {
     if (label) params.set('label', label);
     if (message) params.set('message', message);
     const query = params.toString();
-    return query ? `bitcoincash:${activeAddress}?${query}` : `bitcoincash:${activeAddress}`;
+    return query
+      ? `bitcoincash:${activeAddress}?${query}`
+      : `bitcoincash:${activeAddress}`;
   })();
   const addressPayload = showBip21Popup && bip21Uri ? bip21Uri : activeAddress;
   const activeQrPayload =
@@ -512,9 +539,11 @@ const Receive: React.FC = () => {
     qrCodeType === 'address'
       ? addressPayload
       : qrCodeType === 'pubKey'
-        ? selectedPubKey || (primaryKeyPair ? hexString(primaryKeyPair.publicKey) : '')
+        ? selectedPubKey ||
+          (primaryKeyPair ? hexString(primaryKeyPair.publicKey) : '')
         : qrCodeType === 'pkh'
-          ? selectedPKH || (primaryKeyPair ? hexString(primaryKeyPair.pubkeyHash) : '')
+          ? selectedPKH ||
+            (primaryKeyPair ? hexString(primaryKeyPair.pubkeyHash) : '')
           : selectedPrivKey || '';
   const activeLabelDisplay =
     qrCodeType === 'address'
@@ -570,7 +599,8 @@ const Receive: React.FC = () => {
       mainKeyPairs: mainKeyPairs.length,
       changeKeyPairs: changeKeyPairs.length,
       primaryKeyPair: primaryKeyPair ? primaryKeyPair.address : null,
-      selectedQuantumrootVault: selectedQuantumrootVault?.receive_address ?? null,
+      selectedQuantumrootVault:
+        selectedQuantumrootVault?.receive_address ?? null,
       quantumrootNetworkSupport,
       canShowQuantumrootStatus,
       activeAddress,
@@ -653,14 +683,18 @@ const Receive: React.FC = () => {
   const renderAddressTypeToggle = () => {
     return (
       <div className="flex items-center justify-center gap-2">
-        <span className={isTokenAddress ? 'wallet-muted' : 'wallet-text-strong'}>
+        <span
+          className={isTokenAddress ? 'wallet-muted' : 'wallet-text-strong'}
+        >
           Regular
         </span>
         <button
           type="button"
           onClick={toggleAddressType}
           className={`relative flex h-6 w-12 items-center rounded-full border border-[var(--wallet-border)] transition-colors duration-300 ${
-            isTokenAddress ? 'bg-[var(--wallet-accent)]' : 'wallet-surface-strong'
+            isTokenAddress
+              ? 'bg-[var(--wallet-accent)]'
+              : 'wallet-surface-strong'
           }`}
           aria-label="Toggle receive address type"
         >
@@ -671,7 +705,9 @@ const Receive: React.FC = () => {
             style={{ backgroundColor: 'var(--wallet-card-bg)' }}
           />
         </button>
-        <span className={isTokenAddress ? 'wallet-text-strong' : 'wallet-muted'}>
+        <span
+          className={isTokenAddress ? 'wallet-text-strong' : 'wallet-muted'}
+        >
           CashToken
         </span>
       </div>
@@ -956,8 +992,8 @@ const Receive: React.FC = () => {
               )}
             </div>
             <p className="mb-3 text-xs wallet-muted">
-              This view is read-only. It shows vault status and key receive data,
-              but no spending or recovery actions.
+              This view is read-only. It shows vault status and key receive
+              data, but no spending or recovery actions.
             </p>
             {quantumrootStatus ? (
               <div className="max-h-[60vh] space-y-3 overflow-y-auto pr-1 text-sm">
@@ -1002,7 +1038,8 @@ const Receive: React.FC = () => {
                     Quantum Lock Address
                   </div>
                   <div className="break-all font-mono text-xs">
-                    {selectedQuantumrootVault?.quantum_lock_address ?? 'Unavailable'}
+                    {selectedQuantumrootVault?.quantum_lock_address ??
+                      'Unavailable'}
                   </div>
                 </div>
               </div>
@@ -1027,7 +1064,10 @@ const Receive: React.FC = () => {
       )}
 
       {showQrPopup && (
-        <Popup closePopups={() => setShowQrPopup(false)} closeButtonText="Close">
+        <Popup
+          closePopups={() => setShowQrPopup(false)}
+          closeButtonText="Close"
+        >
           <div className="space-y-4 p-1 sm:p-2">
             <div className="space-y-1 text-center">
               <h3 className="text-lg font-bold">Receive QR</h3>
@@ -1044,7 +1084,10 @@ const Receive: React.FC = () => {
               >
                 <QRCodeSVG
                   value={activeQrPayload}
-                  size={Math.max(220, Math.min(320, Math.floor(qrCodeSize * 1.6)))}
+                  size={Math.max(
+                    220,
+                    Math.min(320, Math.floor(qrCodeSize * 1.6))
+                  )}
                   bgColor="#ffffff"
                   fgColor="#000000"
                   level="H"
@@ -1072,7 +1115,10 @@ const Receive: React.FC = () => {
       )}
 
       {showBip21Popup && (
-        <Popup closePopups={() => setShowBip21Popup(false)} closeButtonText="Done">
+        <Popup
+          closePopups={() => setShowBip21Popup(false)}
+          closeButtonText="Done"
+        >
           <SectionHeader
             title="BIP21 payment request"
             subtitle="Encode amount, label, and message into the QR payload."
@@ -1135,11 +1181,13 @@ const Receive: React.FC = () => {
             </div>
             <p className="text-[11px] wallet-muted">
               When enabled, the QR and copied payload use a BIP21-style
-              `bitcoincash:` URI so compatible wallets can autofill request details.
+              `bitcoincash:` URI so compatible wallets can autofill request
+              details.
             </p>
             {hasBip21Fields && (
               <p className="text-[11px] wallet-muted">
-                Request details are active and the QR is now encoding the BIP21 URI.
+                Request details are active and the QR is now encoding the BIP21
+                URI.
               </p>
             )}
           </div>
@@ -1196,7 +1244,10 @@ const Receive: React.FC = () => {
                       type="button"
                       className="w-full p-3 text-left"
                       onClick={() => {
-                        void handleAddressSelect(keyPair.tokenAddress, displayAddress);
+                        void handleAddressSelect(
+                          keyPair.tokenAddress,
+                          displayAddress
+                        );
                         setShowAddressListPopup(false);
                       }}
                     >

@@ -83,7 +83,10 @@ export function getAppSortPriority(app: { id: string; name: string }): number {
     normalizedName === 'paper wallet'
   )
     return 1;
-  if (normalizedId.endsWith(':merchantpayapp') || normalizedName === 'merchant pay')
+  if (
+    normalizedId.endsWith(':merchantpayapp') ||
+    normalizedName === 'merchant pay'
+  )
     return 1;
   if (
     normalizedId.endsWith(':mintcashtokenspocapp') ||
@@ -160,13 +163,7 @@ export function getAppIconFrame(app: { name: string }): string {
 export function shouldHideApp(appId: string, appName: string): boolean {
   const normalizedId = appId.toLowerCase();
   const normalizedName = appName.toLowerCase();
-  return (
-    normalizedId.endsWith(':authguard') ||
-    normalizedName === 'authguard' ||
-    normalizedId.endsWith(':merchantpayapp') ||
-    normalizedName === 'merchant pay' ||
-    normalizedName.includes('merchant pay')
-  );
+  return normalizedId.endsWith(':authguard') || normalizedName === 'authguard';
 }
 
 export function isDesktopOnlyApp(appId: string): boolean {

@@ -52,7 +52,11 @@ export const DerivationPathSettings: React.FC = () => {
         walletId,
         accountPath
       );
-      return { receive: xpubs.receive, change: xpubs.change };
+      return {
+        receive: xpubs.receive,
+        change: xpubs.change,
+        defi: xpubs.defi,
+      };
     },
     [keyManager, walletId]
   );

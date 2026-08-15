@@ -6,6 +6,7 @@ import { renderDeclarativeScreen } from '../marketplaceScreenResolver';
 import AirdropsApp from '../airdrops/AirdropsApp';
 import MintCashTokensPoCApp from '../mint-cashtokens-poc/MintCashTokensPoCApp';
 import CauldronSwapApp from '../cauldron/CauldronSwapApp';
+import MerchantPayApp from '../merchant-pay/MerchantPayApp';
 
 describe('marketplaceScreenResolver', () => {
   const manifest: AddonManifest = {
@@ -93,7 +94,7 @@ describe('marketplaceScreenResolver', () => {
     }
   });
 
-  it('returns null for merchant pay screen ids', () => {
+  it('returns MerchantPayApp for merchant pay screen ids', () => {
     const rendered = renderDeclarativeScreen({
       screenId: 'MerchantPayApp',
       resolved: { manifest, app },
@@ -101,6 +102,9 @@ describe('marketplaceScreenResolver', () => {
       loadWalletAddresses: vi.fn().mockResolvedValue(new Set()),
     });
 
-    expect(rendered).toBeNull();
+    expect(isValidElement(rendered)).toBe(true);
+    if (isValidElement(rendered)) {
+      expect(rendered.type).toBe(MerchantPayApp);
+    }
   });
 });

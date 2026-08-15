@@ -392,6 +392,48 @@
     box-shadow: 0 0 0 4px var(--wallet-focus-ring);
   }
 
+  .wallet-customize-toggle {
+    @apply inline-flex min-h-9 cursor-pointer items-center gap-2 rounded-lg border px-3 py-1.5 text-sm font-semibold transition;
+    border-color: var(--wallet-border);
+    color: var(--wallet-text-strong);
+    background-color: var(--wallet-surface-strong);
+  }
+  .wallet-customize-toggle:hover {
+    border-color: var(--wallet-accent);
+  }
+  .wallet-customize-toggle:focus-within {
+    outline: none;
+    border-color: var(--wallet-accent);
+    box-shadow: 0 0 0 4px var(--wallet-focus-ring);
+  }
+  .wallet-customize-toggle[data-active='true'] {
+    border-color: var(--wallet-accent);
+    background-color: color-mix(
+      in oklab,
+      var(--wallet-accent-soft) 72%,
+      var(--wallet-surface-strong) 28%
+    );
+  }
+  .wallet-customize-toggle input {
+    width: 1rem;
+    height: 1rem;
+    accent-color: var(--wallet-accent-strong);
+  }
+
+  .wallet-language-select {
+    color: var(--wallet-text-strong);
+    background-color: var(--wallet-surface-strong);
+    border-color: var(--wallet-accent);
+    color-scheme: light;
+  }
+  .wallet-language-select option {
+    color: var(--wallet-text-strong);
+    background-color: var(--wallet-surface-strong);
+  }
+  html.dark .wallet-language-select {
+    color-scheme: dark;
+  }
+
   .wallet-select {
     @apply wallet-input w-full;
     appearance: none;

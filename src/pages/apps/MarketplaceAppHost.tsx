@@ -183,6 +183,9 @@ function getAddonModuleId(screenId: string): AddonModuleId | undefined {
     case 'ParyonWorkspaceApp':
     case 'paryonWorkspaceApp':
       return 'paryon';
+    case 'MerchantPayApp':
+    case 'merchantPayApp':
+      return 'merchant-pay';
     default:
       return undefined;
   }
@@ -416,11 +419,14 @@ export default function MarketplaceAppHost() {
           return;
         }
         const keys = await KeyService.retrieveKeys(walletId);
-        const set = new Set<string>(
-          keys
-            .map((k: { address?: string | null }) => k.address)
-            .filter(Boolean)
-        );
+        const set = new Set<string>();
+        for (const key of keys as Array<{
+          address?: string | null;
+          tokenAddress?: string | null;
+        }>) {
+          if (key.address) set.add(key.address);
+          if (key.tokenAddress) set.add(key.tokenAddress);
+        }
         if (mounted) setWalletAddresses(set);
       } catch {
         // best-effort; address-scoped SDK methods will fail closed if allowlist is unavailable
@@ -599,9 +605,15 @@ export default function MarketplaceAppHost() {
     if (walletAddresses) return walletAddresses;
 
     const keys = await KeyService.retrieveKeys(walletId);
-    return new Set<string>(
-      keys.map((k: { address?: string | null }) => k.address).filter(Boolean)
-    );
+    const addresses = new Set<string>();
+    for (const key of keys as Array<{
+      address?: string | null;
+      tokenAddress?: string | null;
+    }>) {
+      if (key.address) addresses.add(key.address);
+      if (key.tokenAddress) addresses.add(key.tokenAddress);
+    }
+    return addresses;
   };
 
   // Patient-0: map declarative app => local component
