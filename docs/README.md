@@ -34,7 +34,8 @@ Technical documentation for contributors and third-party integrators.
 - [P2P CashFusion FAQ](./p2p-cashfusion-faq.md)
   - Short answers: missing signature, blame, onion, ACK-shrink, 0-conf.
 - [Proposed blame for P2P CashFusion](./proposed-blame-p2p-cashfusion.md)
-  - Planning only: safe blame boundary, optional v5 fanout (not implemented).
+  - Stage 1 shipped (no abort disclosure; silence is timeout). v5 fanout /
+    quarantine not implemented.
 - [Watch-only + SeedCash](./watch-only-seedcash.md)
   - xPub import, PSBTv145, UR export/import, optional fingerprint.
 - [Integration Guide](./integration-guide.md)
@@ -61,7 +62,8 @@ Technical documentation for contributors and third-party integrators.
 - If you are embedding custom wallet app logic: `Integration Guide` -> `Addon Development Guide` -> `Addon SDK Reference`.
 - If you are contributing to core wallet internals: `Wallet Architecture` first.
 - If you are working on CashFusion: status → knobs → protocol → component
-  plane → privacy layers → [FAQ](./p2p-cashfusion-faq.md).
+  plane → privacy layers → [FAQ](./p2p-cashfusion-faq.md) →
+  [blame](./proposed-blame-p2p-cashfusion.md).
 
 ## Still open (not shipped)
 

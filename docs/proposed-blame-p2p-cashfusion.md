@@ -12,11 +12,13 @@ does not claim to name a silent signer.
 This is the only code required to make the existing blame boundary safe.
 
 - Generic abort never requests or triggers `component_disclosure`.
-- Delete `invalid_signature_set` entirely as missing-signature blame.
+- `invalid_signature_set` remains on the wire type for compat;
+  `verifyBlameReport` **rejects** it as evidence. Do not emit it.
 - Coordinator receipt state is never evidence of non-sending.
 - Named blame requires positive, independently re-verifiable evidence that
   does not depend on an abort-forced identity opening.
-- Missing signature becomes `ambiguous_signature_timeout`; no accused peer.
+- Missing signature is an **ambiguous abort** (timeout class), not a
+  `BlameCode` and not an accused peer.
 
 Keep blame only for hard crypto faults already in v4: Pedersen imbalance,
 credential slot out of range, forged/invalid opening, bad component

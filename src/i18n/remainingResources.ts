@@ -216,12 +216,12 @@ export const remainingTranslations = {
     'experimental.rpaDescription':
       "Generates a static paycode (paycode:q...) that you can share publicly. Senders derive a unique one-time address for each payment via ECDH — no notification transaction, no chain bloat. Received stealth funds appear separately as 'Stealth BCH'. Scanning requires a Fulcrum-RPA capable server.",
     'experimental.rpaWarning':
-      'Sending to paycodes requires signature grinding (not yet implemented). Receiving and scanning are available.',
+      'Sending grinds input-0 nSequence and keeps it ≥ 0x80000000 (BIP68). Scanning needs a Fulcrum server with blockchain.rpa.* (for example chipnet.bch.ninja).',
     'experimental.privacy': 'Privacy',
     'experimental.cashFusionDescription':
-      'CashFusion is a non-custodial privacy protocol that combines your UTXOs with those of other users in a way that breaks transaction history linkage. Connect to a CashFusion server to participate. Your funds are never at risk — the protocol is trustless.',
+      'CashFusion is a non-custodial CoinJoin. Desktop supports P2P (Nostr + Tor) and a classic fusion server. Enable it on the CashFusion card under Servers. The per-wallet master switch defaults off.',
     'experimental.cashFusionWarning':
-      'Requires an active CashFusion server connection. Coming soon — toggle currently reserved.',
+      'Desktop only. Open Servers → CashFusion. Not an Experimental toggle.',
 
     'tor.title': 'Tor',
     'tor.remoteRequired': 'Required for remote CashFusion servers',
@@ -690,9 +690,9 @@ export const remainingTranslations = {
     'fusion.or': 'or',
     'fusion.coinjoinBoth': 'Both run a real CoinJoin.',
     'fusion.protocolNote':
-      'Steps 1–4 run end-to-end on the server path: the wallet joins a pool, exchanges blind signatures, submits over Tor, and broadcasts the assembled CoinJoin. P2P Fusion runs the same round without a server over Nostr and Tor. Experimental wallet-hardening items are still pending, but your own outputs are verified before signing, so an invalid round fails safely.',
+      'Steps 1–4 run end-to-end on the server path: the wallet joins a pool, exchanges blind signatures, submits over Tor, and broadcasts the assembled CoinJoin. P2P Fusion runs the same round without a server over Nostr and Tor. Your own outputs are verified before signing, so an invalid round fails safely.',
     'fusion.coinjoinAnyNetwork':
-      'Both the server path and P2P Fusion run real CoinJoins on any network. Some wallet-hardening items are still pending, but each round verifies your own outputs before signing, so it fails safely.',
+      'Both the server path and P2P Fusion run real CoinJoins on any network. Each round verifies your own outputs before signing, so an invalid round fails safely.',
     'fusion.nowDescription':
       'CoinJoin via the server configured in Servers. Needs Tor + at least 2 players in a tier.',
     'fusion.now': 'Fuse Now',

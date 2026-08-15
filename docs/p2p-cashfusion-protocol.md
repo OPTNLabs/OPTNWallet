@@ -378,8 +378,8 @@ keep the persistent pools; only publishing is one-shot.
 Control plane stays named: ACK, `credential_request` (quota + Pedersen),
 ready, abort. That is **how many**, not **which UTXO**. Signatures use a
 throwaway key so a round-key signature batch cannot re-group anonymous
-inputs. After an abort, optional control-plane disclosures restore an
-accused *ephemeral* key for `fusionBlame.ts` diagnosis only.
+inputs. A generic abort does **not** restore an accused key via
+control-plane disclosures. Stage 1 leaves a dead round unnamed.
 
 ### Phase E — Assemble, verify, sign
 
@@ -430,7 +430,8 @@ usually `session`.
 | `signature`           | peer → coordinator                   | `sigs[]` (`prevTxid`, `prevIndex`, `unlockingBytecode`)                                             |
 | `final`               | coordinator → peers                  | `txid`, `txHex`                                                                                     |
 | `abort`               | any                                  | `reason` (≤240 chars)                                                                               |
-| `blame`               | any (verifiable)                     | `accused`, `code`, `evidence` — **prove-or-don't-blame**                                            |
+| `blame`               | any (verifiable)                     | `accused`, `code`, `evidence` — **prove-or-don't-blame** (hard crypto only)                          |
+| `component_disclosure`| legacy parse only                    | **Not sent.** Old peers may still emit it; Stage 1 drops it and never uses it as evidence.          |
 
 Parsing is strict (`parseRoundMessage`): size caps, hex shapes, participant
 sets, money bounds. Invalid messages surface as protocol errors.
@@ -562,31 +563,29 @@ Never multi-minute fee cooldowns for ordinary fail/success.
 ### 8.6 Blame (P2P-specific)
 
 Not EC `blame.rs`. The server can accuse by connection identity. P2P cannot:
-happy-path components have no `from`. Unique mechanic — **abort, then
-disclose** (`fusionSession.ts` `runBlamePhase`, `fusionBlame.ts`):
+happy-path components have no `from`.
 
-1. Round fails. Happy path disclosed nothing.
-2. Coordinator waits `BLAME_WINDOW_MS` (1.2s). Each peer may send openings
-   on the control plane (round key): blind `a||b`, component salt,
-   Pedersen nonce.
-3. Unproven claims are dropped. A forged opening is
-   `invalid_input_credential`. A bound opening that fails the commitment
-   is `invalid_component_commitment`.
-4. `findFaultInDisclosures` then: two peers claim one coin →
-   `duplicate_outpoint`; a peer’s **proven** outpoints are not in
-   `signedOutpoints` → `invalid_signature_set`.
-5. `verifyBlameReport` — every peer re-checks before honoring a remote
-   `blame`. A fake report is rejected. Consistent timeout or **no
-   disclosure** → no accused (`if (!disclosure) continue`).
+**Stage 1 (shipped)** — abort does **not** open a disclosure window.
+There is no `runBlamePhase` and no `BLAME_WINDOW_MS`. Generic abort never
+requests or emits `component_disclosure`. A late disclosure from an old
+peer is dropped. `findFaultInDisclosures` is unwired (tests only).
 
-**Prove-or-don't-blame** codes only: `pedersen_unbalanced`,
-`invalid_component_commitment`, `credential_slot_oob`,
-`invalid_input_credential`, `duplicate_outpoint`, `invalid_signature_set`.
-Mid-round named `from` only uses Pedersen / slot-oob today
-(`blameAndFail`). Never Tor / late join / missing ACK. A silent no-sign
-(no disclose) is a timeout abort, not a missing-signature blame. Accused
-= ephemeral round key; local 10-minute ghost only. See
-[FAQ](./p2p-cashfusion-faq.md).
+Live path:
+
+1. A **received** message fails a hard crypto/structural check.
+2. Coordinator (or any peer) may `blameAndFail` with evidence.
+3. Every peer runs `verifyBlameReport` before honoring a remote `blame`.
+   Unverifiable reports are ignored (anti-frame).
+4. A missing signature, timeout, late join, or missing ACK is an
+   **ambiguous abort**. Nobody is named. `invalid_signature_set` is
+   rejected as evidence.
+
+**Prove-or-don't-blame** codes: `pedersen_unbalanced`,
+`credential_slot_oob`, `invalid_component_commitment`,
+`invalid_input_credential`, `duplicate_outpoint`. Accused = ephemeral
+round key; local 10-minute ghost only (`recordBlamedSessionKey`). See
+[FAQ](./p2p-cashfusion-faq.md) and
+[proposed-blame](./proposed-blame-p2p-cashfusion.md).
 
 ---
 
@@ -600,7 +599,7 @@ Mid-round named `from` only uses Pedersen / slot-oob today
 | Pedersen                | Full component model + blame           | Per-peer commit at credential time          |
 | Blind Schnorr           | Server signs; client requester in Rust | Coordinator `BlindIssuer`; TS requester     |
 | Covert / output privacy | Separate Tor circuits per component    | **One-shot socket per anonymous component** + jitter + **output onion** |
-| Blame                   | Full EC-style component blame          | P2P prove-or-don't-blame                    |
+| Blame                   | Full EC-style component blame          | Stage 1: crypto faults only; no abort disclosure |
 | Assembly trust          | Server proposes; client checks         | Coordinator proposes; **every** peer checks |
 | Broadcast               | Client/server paths                    | Coordinator + peer liveness broadcast       |
 | Outer wallet loop       | Same `FusionRunnerService`             | Same                                        |

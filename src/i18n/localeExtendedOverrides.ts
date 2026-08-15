@@ -36,7 +36,7 @@ export const localeExtendedOverrides: Partial<
     'settingsRows.console': 'Console',
     'settingsRows.consoleDescription': 'Log do app · Electrum RPC',
     'settingsRows.experimental': 'Recursos experimentais',
-    'settingsRows.experimentalDescription': 'RPA · CashFusion',
+    'settingsRows.experimentalDescription': 'RPA · Quantumroot',
     'settingsRows.addons': 'Add-ons',
     'settingsRows.addonsDescription':
       'Instalar e gerenciar add-ons de terceiros',
@@ -186,7 +186,7 @@ export const localeExtendedOverrides: Partial<
     'settingsRows.console': 'Bảng điều khiển',
     'settingsRows.consoleDescription': 'Nhật ký ứng dụng · Electrum RPC',
     'settingsRows.experimental': 'Tính năng thử nghiệm',
-    'settingsRows.experimentalDescription': 'RPA · CashFusion',
+    'settingsRows.experimentalDescription': 'RPA · Quantumroot',
     'settingsRows.addons': 'Tiện ích bổ sung',
     'settingsRows.addonsDescription':
       'Cài đặt và quản lý tiện ích của bên thứ ba',
@@ -331,7 +331,7 @@ export const localeExtendedOverrides: Partial<
     'settingsRows.console': '主控台',
     'settingsRows.consoleDescription': '應用程式記錄 · Electrum RPC',
     'settingsRows.experimental': '實驗性功能',
-    'settingsRows.experimentalDescription': 'RPA · CashFusion',
+    'settingsRows.experimentalDescription': 'RPA · Quantumroot',
     'settingsRows.addons': '附加元件',
     'settingsRows.addonsDescription': '安裝並管理第三方附加元件',
     'settingsRows.contractInfo': '合約資訊',
@@ -477,7 +477,7 @@ export const localeExtendedOverrides: Partial<
     'settingsRows.consoleDescription':
       'Journal de l’application · Electrum RPC',
     'settingsRows.experimental': 'Fonctionnalités expérimentales',
-    'settingsRows.experimentalDescription': 'RPA · CashFusion',
+    'settingsRows.experimentalDescription': 'RPA · Quantumroot',
     'settingsRows.addons': 'Modules complémentaires',
     'settingsRows.addonsDescription': 'Installer et gérer les modules tiers',
     'settingsRows.contractInfo': 'Informations sur les contrats',
@@ -627,7 +627,7 @@ export const localeExtendedOverrides: Partial<
     'settingsRows.console': '콘솔',
     'settingsRows.consoleDescription': '앱 로그 · Electrum RPC',
     'settingsRows.experimental': '실험적 기능',
-    'settingsRows.experimentalDescription': 'RPA · CashFusion',
+    'settingsRows.experimentalDescription': 'RPA · Quantumroot',
     'settingsRows.addons': '애드온',
     'settingsRows.addonsDescription': '타사 애드온 설치 및 관리',
     'settingsRows.contractInfo': '컨트랙트 정보',
@@ -772,7 +772,7 @@ export const localeExtendedOverrides: Partial<
     'settingsRows.console': 'コンソール',
     'settingsRows.consoleDescription': 'アプリログ · Electrum RPC',
     'settingsRows.experimental': '実験的機能',
-    'settingsRows.experimentalDescription': 'RPA · CashFusion',
+    'settingsRows.experimentalDescription': 'RPA · Quantumroot',
     'settingsRows.addons': 'アドオン',
     'settingsRows.addonsDescription':
       'サードパーティ製アドオンをインストール・管理',
@@ -925,7 +925,7 @@ export const localeExtendedOverrides: Partial<
     'settingsRows.console': 'Консоль',
     'settingsRows.consoleDescription': 'Журнал приложения · Electrum RPC',
     'settingsRows.experimental': 'Экспериментальные функции',
-    'settingsRows.experimentalDescription': 'RPA · CashFusion',
+    'settingsRows.experimentalDescription': 'RPA · Quantumroot',
     'settingsRows.addons': 'Дополнения',
     'settingsRows.addonsDescription':
       'Устанавливать дополнения сторонних разработчиков',
@@ -1074,7 +1074,7 @@ export const localeExtendedOverrides: Partial<
     'settingsRows.console': 'Console',
     'settingsRows.consoleDescription': 'Log na manhaja · Electrum RPC',
     'settingsRows.experimental': 'Abubuwan gwaji',
-    'settingsRows.experimentalDescription': 'RPA · CashFusion',
+    'settingsRows.experimentalDescription': 'RPA · Quantumroot',
     'settingsRows.addons': 'Ƙarin manhajoji',
     'settingsRows.addonsDescription':
       'Sanya da sarrafa ƙarin manhajojin ɓangare na uku',
