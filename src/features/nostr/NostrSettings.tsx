@@ -19,9 +19,11 @@ import {
 } from '../../platform/desktop/nostr/chat';
 // Import from source of truth (not re-export) so Remove never desyncs from list.
 import { isDefaultNostrRelay } from '../../platform/desktop/nostr/defaultRelays';
+import { useI18n } from '../../i18n/useI18n';
 
 export const NostrSettings: React.FC = () => {
   const dispatch = useDispatch();
+  const { t } = useI18n();
   const enabled = useSelector(selectNostrChatEnabled);
   const relays = useSelector(selectNostrRelays);
   const walletId = useSelector((s: RootState) => s.wallet_id.currentWalletId);
@@ -75,12 +77,11 @@ export const NostrSettings: React.FC = () => {
   }, [enabled, relays, refreshRelays]);
 
   const activeCount = relays.filter((r) => relayStatus[r] === true).length;
-  const knownCount = relays.filter((r) => relayStatus[r] !== undefined).length;
 
   const addRelay = () => {
     const relay = normalizeRelayDraft(relayDraft);
     if (!relay) {
-      setDraftError('Enter a secure relay URL beginning with wss://');
+      setDraftError(t('nostr.invalidRelay'));
       return;
     }
     dispatch(addNostrRelay(relay));
@@ -93,9 +94,11 @@ export const NostrSettings: React.FC = () => {
       {/* Enable toggle */}
       <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-3">
         <div>
-          <p className="text-sm font-semibold wallet-text-strong">Nostr chat</p>
+          <p className="text-sm font-semibold wallet-text-strong">
+            {t('nostr.chat')}
+          </p>
           <p className="mt-0.5 text-[11px] wallet-muted">
-            End-to-end encrypted DMs using NIP-17.
+            {t('nostr.dmDescription')}
           </p>
         </div>
         <button
@@ -105,7 +108,7 @@ export const NostrSettings: React.FC = () => {
               ? 'bg-[var(--wallet-accent)] border-[var(--wallet-accent)]'
               : 'wallet-surface-strong border-[var(--wallet-border)]'
           }`}
-          aria-label={`${enabled ? 'Disable' : 'Enable'} Nostr chat`}
+          aria-label={`${enabled ? t('nostr.disable') : t('nostr.enable')} ${t('nostr.chat')}`}
         >
           <span
             className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${enabled ? 'translate-x-5' : 'translate-x-0.5'}`}
@@ -123,14 +126,13 @@ export const NostrSettings: React.FC = () => {
               </div>
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-semibold wallet-text-strong">
-                  Nostr identity
+                  {t('nostr.identity')}
                 </p>
                 <p className="mt-1 text-[11px] leading-relaxed wallet-muted">
-                  Derived from your seed via NIP-06 (a separate path) — your
-                  spending keys are never reused.
+                  {t('nostr.identityDescription')}
                 </p>
                 <div className="mt-3 rounded-lg border border-[var(--wallet-border)] px-3 py-2 font-mono text-[10px] break-all wallet-text-strong">
-                  {npub ?? idErr ?? 'Deriving…'}
+                  {npub ?? idErr ?? t('nostr.deriving')}
                 </div>
               </div>
             </div>
@@ -145,13 +147,10 @@ export const NostrSettings: React.FC = () => {
               />
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-semibold wallet-text-strong">
-                  Relays
+                  {t('nostr.relays')}
                 </p>
                 <p className="mt-1 text-[11px] leading-relaxed wallet-muted">
-                  WSS relays for chat and P2P fusion. Status auto-refreshes
-                  about every 45s (and when you reopen this screen). Green =
-                  reachable right now — we cannot force third-party servers to
-                  stay online. Fusion still works if some are red (multi-relay).
+                  {t('nostr.relaysDescription')}
                 </p>
               </div>
               <button
@@ -159,16 +158,19 @@ export const NostrSettings: React.FC = () => {
                 onClick={refreshRelays}
                 disabled={checking}
                 className="flex shrink-0 items-center gap-1 rounded-lg border border-[var(--wallet-border)] px-2 py-1 text-[10px] font-semibold wallet-text-strong disabled:opacity-50"
-                aria-label="Check relay status now"
-                title="Optional manual re-check; health also runs automatically"
+                aria-label={t('nostr.checkRelayStatus')}
+                title={t('nostr.checkRelayStatus')}
               >
                 <MdRefresh
                   className={checking ? 'animate-spin' : ''}
                   aria-hidden="true"
                 />
                 {checking
-                  ? `Checking… ${knownCount}/${relays.length}`
-                  : `${activeCount}/${relays.length} up`}
+                  ? t('nostr.checking')
+                  : t('nostr.active', {
+                      active: activeCount,
+                      total: relays.length,
+                    })}
               </button>
             </div>
 
@@ -190,10 +192,10 @@ export const NostrSettings: React.FC = () => {
                       }`}
                       title={
                         online === undefined
-                          ? 'unknown'
+                          ? t('nostr.unknown')
                           : online
-                            ? 'connected'
-                            : 'unreachable'
+                            ? t('nostr.connected')
+                            : t('nostr.unreachable')
                       }
                     />
                     <p className="min-w-0 flex-1 truncate font-mono text-[10px] wallet-text-strong">
@@ -206,9 +208,9 @@ export const NostrSettings: React.FC = () => {
                         type="button"
                         onClick={() => dispatch(removeNostrRelay(url))}
                         className="shrink-0 px-1 text-[10px] text-red-400/70 hover:text-red-400"
-                        aria-label={`Remove ${url}`}
+                        aria-label={`${t('nostr.remove')} ${url}`}
                       >
-                        Remove
+                        {t('nostr.remove')}
                       </button>
                     )}
                   </div>
@@ -232,7 +234,7 @@ export const NostrSettings: React.FC = () => {
                   className="flex items-center gap-1 rounded-xl border border-[var(--wallet-accent)]/40 px-3 py-2 text-xs font-semibold text-[var(--wallet-accent)]"
                 >
                   <MdAdd aria-hidden="true" />
-                  Add
+                  {t('nostr.add')}
                 </button>
               </div>
               {draftError ? (
@@ -243,9 +245,7 @@ export const NostrSettings: React.FC = () => {
 
           <section className="rounded-xl border border-yellow-400/20 bg-yellow-400/5 px-3 py-2.5">
             <p className="text-[10px] leading-relaxed text-yellow-400/90">
-              Relay operators can still observe connection metadata, timing, and
-              recipient tags. Encrypted content is not the same as network
-              anonymity.
+              {t('nostr.privacyWarning')}
             </p>
           </section>
         </>

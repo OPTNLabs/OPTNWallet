@@ -33,6 +33,7 @@ import { getReturnPath } from '../utils/navigation';
 import { RpaReceiveCard } from '../features/rpa/RpaReceiveCard';
 import { isDesktopPlatform } from '../utils/platform';
 import { WalletType } from '../types/wallet';
+import { useI18n } from '../i18n/useI18n';
 
 type QRCodeType = 'address' | 'pubKey' | 'pkh' | 'privkey';
 const PRIVKEY_UNLOCK_TAPS = 10;
@@ -101,6 +102,7 @@ function renderMaskedLabel(
 
 const Receive: React.FC = () => {
   const navigate = useNavigate();
+  const { t } = useI18n();
   const location = useLocation();
   const backTarget = getReturnPath(location, '/apps');
   const [mainKeyPairs, setMainKeyPairs] = useState<WalletKeyPair[]>([]);
@@ -473,10 +475,10 @@ const Receive: React.FC = () => {
   const handleCopy = async (text: string) => {
     try {
       await navigator.clipboard.writeText(text);
-      await Toast.show({ text: 'Copied to clipboard!' });
+      await Toast.show({ text: t('receive.copied') });
     } catch (error) {
       console.error('Failed to copy:', error);
-      await Toast.show({ text: 'Failed to copy.' });
+      await Toast.show({ text: t('receive.copyFailed') });
     }
   };
 
@@ -669,7 +671,7 @@ const Receive: React.FC = () => {
 
     const remainingTaps = Math.max(0, PRIVKEY_UNLOCK_TAPS - pubKeyTapCount);
     setPrivKeyUnlockToastMessage(
-      `PrivKey unlock in ${remainingTaps} tap${remainingTaps === 1 ? '' : 's'}`
+      t('receive.privKeyUnlock', { count: remainingTaps })
     );
     setPrivKeyUnlockToastVisible(true);
 
@@ -678,7 +680,7 @@ const Receive: React.FC = () => {
     }, 4000);
 
     return () => window.clearTimeout(timer);
-  }, [isPrivKeyUnlocked, pubKeyTapCount]);
+  }, [isPrivKeyUnlocked, pubKeyTapCount, t]);
 
   const renderAddressTypeToggle = () => {
     return (
@@ -686,7 +688,7 @@ const Receive: React.FC = () => {
         <span
           className={isTokenAddress ? 'wallet-muted' : 'wallet-text-strong'}
         >
-          Regular
+          {t('receive.regular')}
         </span>
         <button
           type="button"
@@ -696,7 +698,7 @@ const Receive: React.FC = () => {
               ? 'bg-[var(--wallet-accent)]'
               : 'wallet-surface-strong'
           }`}
-          aria-label="Toggle receive address type"
+          aria-label={t('receive.toggleAddressType')}
         >
           <span
             className={`h-6 w-6 rounded-full shadow-md transition-transform duration-300 ${
@@ -708,7 +710,7 @@ const Receive: React.FC = () => {
         <span
           className={isTokenAddress ? 'wallet-text-strong' : 'wallet-muted'}
         >
-          CashToken
+          {t('receive.cashToken')}
         </span>
       </div>
     );
@@ -719,18 +721,18 @@ const Receive: React.FC = () => {
       return (
         <SectionCard className="p-4">
           <SectionHeader
-            title="Receive addresses not ready"
-            subtitle="Prepare addresses to show your receive QR and address list."
+            title={t('receive.addressesNotReady')}
+            subtitle={t('receive.prepareAddressesDescription')}
             compact
           />
           <div className="space-y-3">
-            <EmptyState message="This wallet does not have receive addresses loaded yet." />
+            <EmptyState message={t('receive.noAddressesLoaded')} />
             <button
               type="button"
               className="wallet-btn-secondary w-full"
               onClick={() => void handleInitializeReceiveAddresses()}
             >
-              Prepare receive addresses
+              {t('receive.prepareAddresses')}
             </button>
           </div>
         </SectionCard>
@@ -744,7 +746,7 @@ const Receive: React.FC = () => {
             type="button"
             className="rounded-2xl border border-[rgba(0,0,0,0.08)] bg-white p-1 shadow-sm transition-transform duration-200 hover:scale-[1.01] focus:outline-none focus:ring-2 focus:ring-[var(--wallet-accent)] focus:ring-offset-2"
             onClick={() => setShowQrPopup(true)}
-            aria-label="Open larger QR code preview"
+            aria-label={t('receive.openQrPreview')}
           >
             <QRCodeSVG
               value={activeQrPayload}
@@ -800,8 +802,16 @@ const Receive: React.FC = () => {
         <SectionCard className="p-3">
           <div className="flex items-center justify-between gap-3">
             <SectionHeader
-              title="Switch address"
-              subtitle={`${keyPairsToDisplay.length} ${addressType} addresses`}
+              title={t('receive.switchAddress')}
+              subtitle={
+                addressType === 'main'
+                  ? t('receive.mainAddressCount', {
+                      count: keyPairsToDisplay.length,
+                    })
+                  : t('receive.changeAddressCount', {
+                      count: keyPairsToDisplay.length,
+                    })
+              }
               compact
             />
             <button
@@ -809,7 +819,7 @@ const Receive: React.FC = () => {
               className="wallet-btn-secondary px-3 py-1.5 text-xs"
               onClick={() => setShowAddressListPopup(true)}
             >
-              switch
+              {t('receive.switch')}
             </button>
           </div>
         </SectionCard>
@@ -899,18 +909,18 @@ const Receive: React.FC = () => {
           {!selectedAddress && (
             <SectionCard className="p-4">
               <SectionHeader
-                title="Receive addresses not ready"
-                subtitle="Prepare addresses to show your receive QR and address list."
+                title={t('receive.addressesNotReady')}
+                subtitle={t('receive.prepareAddressesDescription')}
                 compact
               />
               <div className="mt-3 space-y-3">
-                <EmptyState message="This wallet does not have receive addresses loaded yet." />
+                <EmptyState message={t('receive.noAddressesLoaded')} />
                 <button
                   type="button"
                   className="wallet-btn-secondary w-full"
                   onClick={() => void handleInitializeReceiveAddresses()}
                 >
-                  Prepare receive addresses
+                  {t('receive.prepareAddresses')}
                 </button>
               </div>
             </SectionCard>
@@ -936,15 +946,17 @@ const Receive: React.FC = () => {
                     {privKeyUnlockToastMessage}
                   </div>
                   <div className="mt-0.5 text-xs wallet-muted">
-                    Tap PubKey to reveal the private key view.
+                    {isPrivKeyUnlocked
+                      ? t('receive.privKeyReady')
+                      : t('receive.tapPubKey')}
                   </div>
                 </div>
                 <button
                   type="button"
                   onClick={() => setPrivKeyUnlockToastVisible(false)}
                   className="ml-1 rounded-full p-1 wallet-muted hover:brightness-95"
-                  aria-label="Dismiss unlock alert"
-                  title="Dismiss"
+                  aria-label={t('receive.dismissUnlockAlert')}
+                  title={t('receive.dismiss')}
                 >
                   ✕
                 </button>
@@ -958,7 +970,7 @@ const Receive: React.FC = () => {
               onClick={() => navigate(backTarget)}
               className="wallet-btn-danger w-full py-3 font-semibold shadow-xl"
             >
-              Back
+              {t('receive.back')}
             </button>
           </div>
         </div>
@@ -970,7 +982,7 @@ const Receive: React.FC = () => {
     <WalletScreen maxWidthClassName="max-w-md" scrollable={false}>
       <div className="flex h-full min-h-0 flex-col gap-4">
         <div ref={receiveHeaderRef}>
-          <PageHeader title="Receive" compact />
+          <PageHeader title={t('receive.title')} compact />
         </div>
 
         {renderReceiveContent()}
@@ -986,21 +998,24 @@ const Receive: React.FC = () => {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="mb-2 flex items-center justify-between gap-3">
-              <h3 className="text-lg font-bold">Quantumroot Status</h3>
+              <h3 className="text-lg font-bold">
+                {t('receive.quantumrootStatus')}
+              </h3>
               {loadingQuantumrootStatus && (
-                <span className="text-xs wallet-muted">Syncing…</span>
+                <span className="text-xs wallet-muted">
+                  {t('receive.syncing')}
+                </span>
               )}
             </div>
             <p className="mb-3 text-xs wallet-muted">
-              This view is read-only. It shows vault status and key receive
-              data, but no spending or recovery actions.
+              {t('receive.readOnlyStatus')}
             </p>
             {quantumrootStatus ? (
               <div className="max-h-[60vh] space-y-3 overflow-y-auto pr-1 text-sm">
                 <div className="grid grid-cols-2 gap-2">
                   <div className="wallet-surface-strong rounded-[14px] p-3">
                     <div className="mb-1 text-[11px] font-semibold wallet-muted">
-                      Receive Balance
+                      {t('receive.receiveBalance')}
                     </div>
                     <div className="font-bold">
                       {formatQuantumrootBalance(
@@ -1013,7 +1028,7 @@ const Receive: React.FC = () => {
                   </div>
                   <div className="wallet-surface-strong rounded-[14px] p-3">
                     <div className="mb-1 text-[11px] font-semibold wallet-muted">
-                      Quantum Lock
+                      {t('receive.quantumLock')}
                     </div>
                     <div className="font-bold">
                       {formatQuantumrootBalance(
@@ -1027,26 +1042,27 @@ const Receive: React.FC = () => {
                 </div>
                 <div className="wallet-surface-strong rounded-[14px] p-3">
                   <div className="mb-1 text-[11px] font-semibold wallet-muted">
-                    Receive Address
+                    {t('receive.receiveAddress')}
                   </div>
                   <div className="break-all font-mono text-xs">
-                    {selectedQuantumrootVault?.receive_address ?? 'Unavailable'}
+                    {selectedQuantumrootVault?.receive_address ??
+                      t('receive.unavailable')}
                   </div>
                 </div>
                 <div className="wallet-surface-strong rounded-[14px] p-3">
                   <div className="mb-1 text-[11px] font-semibold wallet-muted">
-                    Quantum Lock Address
+                    {t('receive.quantumLockAddress')}
                   </div>
                   <div className="break-all font-mono text-xs">
                     {selectedQuantumrootVault?.quantum_lock_address ??
-                      'Unavailable'}
+                      t('receive.unavailable')}
                   </div>
                 </div>
               </div>
             ) : (
               !loadingQuantumrootStatus && (
                 <p className="text-sm wallet-muted">
-                  No Quantumroot vault funds detected yet.
+                  {t('receive.noVaultFunds')}
                 </p>
               )
             )}
@@ -1056,7 +1072,7 @@ const Receive: React.FC = () => {
                 className="wallet-btn-secondary flex-1"
                 onClick={() => setShowQuantumrootStatusPopup(false)}
               >
-                Close
+                {t('receive.close')}
               </button>
             </div>
           </div>
@@ -1066,13 +1082,13 @@ const Receive: React.FC = () => {
       {showQrPopup && (
         <Popup
           closePopups={() => setShowQrPopup(false)}
-          closeButtonText="Close"
+          closeButtonText={t('receive.close')}
         >
           <div className="space-y-4 p-1 sm:p-2">
             <div className="space-y-1 text-center">
-              <h3 className="text-lg font-bold">Receive QR</h3>
+              <h3 className="text-lg font-bold">{t('receive.receiveQr')}</h3>
               <p className="text-xs wallet-muted">
-                Tap the QR to copy the current payload. Close to return.
+                {t('receive.qrCopyDescription')}
               </p>
             </div>
             <div className="flex justify-center">
@@ -1080,7 +1096,7 @@ const Receive: React.FC = () => {
                 type="button"
                 className="rounded-[24px] border border-[rgba(0,0,0,0.08)] bg-white p-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-[var(--wallet-accent)] focus:ring-offset-2"
                 onClick={() => handleCopy(activeQrPayload)}
-                aria-label="Copy receive QR payload"
+                aria-label={t('receive.copyQrPayload')}
               >
                 <QRCodeSVG
                   value={activeQrPayload}
@@ -1117,45 +1133,45 @@ const Receive: React.FC = () => {
       {showBip21Popup && (
         <Popup
           closePopups={() => setShowBip21Popup(false)}
-          closeButtonText="Done"
+          closeButtonText={t('receive.close')}
         >
           <SectionHeader
-            title="BIP21 payment request"
-            subtitle="Encode amount, label, and message into the QR payload."
+            title={t('receive.bip21Title')}
+            subtitle={t('receive.bip21Description')}
             compact
           />
           <div className="mt-3 space-y-3">
             <div>
               <label className="mb-1 block text-xs font-semibold wallet-muted">
-                Amount (BCH)
+                {t('receive.amountBch')}
               </label>
               <input
                 value={bip21Amount}
                 onChange={(e) => handleBip21AmountChange(e.target.value)}
                 inputMode="decimal"
-                placeholder="Optional, e.g. 0.0105"
+                placeholder={t('receive.optionalExample')}
                 className="w-full rounded-[14px] border border-[var(--wallet-border)] bg-transparent px-3 py-2 outline-none wallet-surface-strong"
               />
             </div>
             <div>
               <label className="mb-1 block text-xs font-semibold wallet-muted">
-                Label
+                {t('receive.label')}
               </label>
               <input
                 value={bip21Label}
                 onChange={(e) => setBip21Label(e.target.value)}
-                placeholder="Optional"
+                placeholder={t('receive.optional')}
                 className="w-full rounded-[14px] border border-[var(--wallet-border)] bg-transparent px-3 py-2 outline-none wallet-surface-strong"
               />
             </div>
             <div>
               <label className="mb-1 block text-xs font-semibold wallet-muted">
-                Message
+                {t('receive.message')}
               </label>
               <input
                 value={bip21Message}
                 onChange={(e) => setBip21Message(e.target.value)}
-                placeholder="Optional"
+                placeholder={t('receive.optional')}
                 className="w-full rounded-[14px] border border-[var(--wallet-border)] bg-transparent px-3 py-2 outline-none wallet-surface-strong"
               />
             </div>
@@ -1165,7 +1181,7 @@ const Receive: React.FC = () => {
                 className="wallet-btn-secondary px-3 py-1.5 text-xs"
                 onClick={() => void handleCopy(bip21Uri || activeAddress)}
               >
-                Copy BIP21 URI
+                {t('receive.copyBip21')}
               </button>
               <button
                 type="button"
@@ -1176,18 +1192,13 @@ const Receive: React.FC = () => {
                   setBip21Message('');
                 }}
               >
-                Clear
+                {t('receive.clear')}
               </button>
             </div>
-            <p className="text-[11px] wallet-muted">
-              When enabled, the QR and copied payload use a BIP21-style
-              `bitcoincash:` URI so compatible wallets can autofill request
-              details.
-            </p>
+            <p className="text-[11px] wallet-muted">{t('receive.bip21Help')}</p>
             {hasBip21Fields && (
               <p className="text-[11px] wallet-muted">
-                Request details are active and the QR is now encoding the BIP21
-                URI.
+                {t('receive.bip21Active')}
               </p>
             )}
           </div>
@@ -1197,11 +1208,19 @@ const Receive: React.FC = () => {
       {showAddressListPopup && (
         <Popup
           closePopups={() => setShowAddressListPopup(false)}
-          closeButtonText="Close"
+          closeButtonText={t('receive.close')}
         >
           <SectionHeader
-            title="See all addresses"
-            subtitle={`${keyPairsToDisplay.length} ${addressType} addresses`}
+            title={t('receive.seeAllAddresses')}
+            subtitle={
+              addressType === 'main'
+                ? t('receive.mainAddressCount', {
+                    count: keyPairsToDisplay.length,
+                  })
+                : t('receive.changeAddressCount', {
+                    count: keyPairsToDisplay.length,
+                  })
+            }
             compact
           />
           <div className="mt-3 flex items-center justify-center gap-2">
@@ -1212,7 +1231,7 @@ const Receive: React.FC = () => {
               }`}
               onClick={() => setAddressType('main')}
             >
-              Main
+              {t('receive.main')}
             </button>
             <button
               type="button"
@@ -1221,7 +1240,7 @@ const Receive: React.FC = () => {
               }`}
               onClick={() => setAddressType('change')}
             >
-              Change
+              {t('receive.change')}
             </button>
           </div>
           <div className="mt-3 max-h-[60vh] space-y-2 overflow-y-auto overscroll-contain pr-1">
@@ -1273,7 +1292,7 @@ const Receive: React.FC = () => {
                 );
               })
             ) : (
-              <EmptyState message="No addresses found in this branch yet." />
+              <EmptyState message={t('receive.noBranchAddresses')} />
             )}
           </div>
         </Popup>

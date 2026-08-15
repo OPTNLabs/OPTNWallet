@@ -20,6 +20,7 @@ import {
   reconfigureActiveWallet,
 } from '../../services/WalletReconfigurationService';
 import { useWalletConfirm } from '../../components/WalletConfirmDialog';
+import { useI18n } from '../../i18n/useI18n';
 
 export const DerivationPathSettings: React.FC = () => {
   const walletId = useSelector(selectWalletId);
@@ -33,6 +34,7 @@ export const DerivationPathSettings: React.FC = () => {
   const [pathValid, setPathValid] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
   const confirm = useWalletConfirm();
+  const { t } = useI18n();
   const activePath = storedPath || getBchAccountPath(network);
   const networkDefaultPath = getDefaultPathForNetwork(network);
 
@@ -84,19 +86,19 @@ export const DerivationPathSettings: React.FC = () => {
       normalizedPath = normalizeBchAccountPath(path);
     } catch (error) {
       setMessage(
-        error instanceof Error ? error.message : 'Invalid derivation path.'
+        error instanceof Error
+          ? error.message
+          : t('settingsDerivation.invalidPath')
       );
       return;
     }
 
     if (normalizedPath === storedPath && nextSource === source) {
-      setMessage('This derivation path is already active.');
+      setMessage(t('settingsDerivation.alreadyActive'));
       return;
     }
 
-    const confirmed = await confirm(
-      'Changing the derivation path clears the current address, history, and UTXO records. The wallet will then regenerate and resync only the new path. Continue?'
-    );
+    const confirmed = await confirm(t('settingsDerivation.confirm'));
     if (!confirmed) return;
 
     setSaving(true);
@@ -113,13 +115,11 @@ export const DerivationPathSettings: React.FC = () => {
       // The scan answered a question about the old path; keep it on screen and
       // it now describes a wallet that no longer exists.
       resetScan();
-      setMessage('Derivation path changed and wallet resync completed.');
+      setMessage(t('settingsDerivation.completed'));
     } catch (error) {
       console.error('[DerivationPathSettings] reconfiguration failed:', error);
       setMessage(
-        error instanceof Error
-          ? error.message
-          : 'Wallet reconfiguration failed.'
+        error instanceof Error ? error.message : t('settingsDerivation.failed')
       );
     } finally {
       setSaving(false);
@@ -138,7 +138,7 @@ export const DerivationPathSettings: React.FC = () => {
     // is a choice to keep it, not permission to purge and rebuild the wallet.
     if (path === activePath) {
       resetScan();
-      setMessage('This derivation path is already active.');
+      setMessage(t('settingsDerivation.alreadyActive'));
       return;
     }
 
@@ -148,13 +148,11 @@ export const DerivationPathSettings: React.FC = () => {
   return (
     <div className="flex flex-col gap-4">
       <p className="text-xs wallet-muted leading-relaxed">
-        OPTN supports one active BIP44 account path at a time. Reconfiguring it
-        removes the old derived records and performs a fresh receive/change
-        discovery and resync.
+        {t('settingsDerivation.description')}
       </p>
       <div className="flex flex-col gap-2">
         <span className="text-sm font-semibold wallet-text-strong">
-          Active BIP44 account path
+          {t('settingsDerivation.activePath')}
         </span>
         <Bip44AccountPathFields
           network={network}
@@ -165,7 +163,12 @@ export const DerivationPathSettings: React.FC = () => {
         />
       </div>
       <p className="text-xs wallet-muted">
-        Current mode: {source === 'custom' ? 'custom' : 'network default'}.
+        {t('settingsDerivation.currentMode', {
+          mode:
+            source === 'custom'
+              ? t('settingsDerivation.custom')
+              : t('settingsDerivation.networkDefault'),
+        })}
       </p>
       {message && <p className="text-xs wallet-muted">{message}</p>}
       <div className="flex flex-col gap-2 sm:flex-row">
@@ -175,7 +178,9 @@ export const DerivationPathSettings: React.FC = () => {
           disabled={saving || walletId <= 0 || !pathValid}
           className="wallet-btn-primary flex-1"
         >
-          {saving ? 'Reconfiguring…' : 'Change and resync'}
+          {saving
+            ? t('settingsDerivation.reconfiguring')
+            : t('settingsDerivation.changeResync')}
         </button>
         <button
           type="button"
@@ -183,7 +188,7 @@ export const DerivationPathSettings: React.FC = () => {
           disabled={saving}
           className="wallet-btn-secondary flex-1"
         >
-          Use network default
+          {t('settingsDerivation.useDefault')}
         </button>
       </div>
       <div className="flex flex-col gap-2 border-t wallet-border pt-4">

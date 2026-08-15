@@ -47,7 +47,19 @@ vi.mock('react-router-dom', () => ({
 
 vi.mock('../../../i18n/useI18n', () => ({
   useI18n: () => ({
-    t: (key: string) => key,
+    t: (key: string, values?: Record<string, string | number>) => {
+      const messages: Record<string, string> = {
+        'onboarding.importWallet': 'Import Wallet',
+        'onboarding.invalidMnemonic':
+          'Recovery phrase checksum is invalid. Check the words and their order.',
+        'onboarding.missingWord': 'Word {number} is missing.',
+      };
+      let message = messages[key] ?? key;
+      for (const [name, value] of Object.entries(values ?? {})) {
+        message = message.replace(`{${name}}`, String(value));
+      }
+      return message;
+    },
   }),
 }));
 

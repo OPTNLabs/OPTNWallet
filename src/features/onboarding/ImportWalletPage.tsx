@@ -25,6 +25,7 @@ import {
   normalizeBchAccountPath,
 } from '../../services/HdWalletService';
 import ElectrumServer from '../../apis/ElectrumServer/ElectrumServer';
+import { useI18n } from '../../i18n/useI18n';
 
 const TOTAL_WORDS = 12;
 const normalizeRecoveryWord = (word: string) =>
@@ -53,6 +54,7 @@ const ImportWalletPage = () => {
 
   const navigate = useNavigate();
   const dispatch = useDispatch();
+  const { t } = useI18n();
 
   useEffect(() => {
     if (!customDerivationPath)
@@ -77,13 +79,13 @@ const ImportWalletPage = () => {
       } catch (error) {
         console.error('Error initializing database:', error);
         await Toast.show({
-          text: 'Could not prepare wallet import on this device.',
+          text: t('onboarding.databasePreparationFailed'),
         });
       }
     };
 
     void initDb();
-  }, [dbService]);
+  }, [dbService, t]);
 
   const focusIndex = (index: number) => inputsRef.current[index]?.focus();
 
@@ -162,15 +164,17 @@ const ImportWalletPage = () => {
     if (missingWordIndex !== -1) {
       console.error(`Word #${missingWordIndex + 1} is empty.`);
       focusIndex(missingWordIndex);
-      const message = `Word ${missingWordIndex + 1} is missing.`;
+      const message = t('onboarding.missingWord').replace(
+        '{number}',
+        String(missingWordIndex + 1)
+      );
       setImportError(message);
       await Toast.show({ text: message });
       return;
     }
 
     if (!isValidImportMnemonic(recoveryPhrase)) {
-      const message =
-        'Recovery phrase checksum is invalid. Check the words and their order.';
+      const message = t('onboarding.invalidMnemonic');
       setImportError(message);
       await Toast.show({ text: message });
       return;
@@ -201,7 +205,7 @@ const ImportWalletPage = () => {
         );
         if (!created) {
           console.error('Failed to import account.');
-          const message = 'Wallet import failed on this device.';
+          const message = t('onboarding.importFailed');
           setImportError(message);
           await Toast.show({ text: message });
           return;
@@ -216,8 +220,7 @@ const ImportWalletPage = () => {
       );
       if (walletID == null) {
         console.error('Failed to set wallet ID.');
-        const message =
-          'Wallet was saved, but the wallet ID could not be resolved.';
+        const message = t('onboarding.walletSavedIdFailed');
         setImportError(message);
         await Toast.show({ text: message });
         return;
@@ -265,7 +268,7 @@ const ImportWalletPage = () => {
         stage: importStage,
         error,
       });
-      const message = `Wallet import failed while ${importStage}.`;
+      const message = t('onboarding.importFailed');
       setImportError(message);
       await Toast.show({ text: message });
     } finally {
@@ -275,7 +278,10 @@ const ImportWalletPage = () => {
 
   return (
     <OnboardingScreen>
-      <OnboardingCard title="Import Wallet" maxWidthClassName="max-w-lg">
+      <OnboardingCard
+        title={t('onboarding.importWallet')}
+        maxWidthClassName="max-w-lg"
+      >
         <div className="flex flex-col items-center min-h-[300px] w-full">
           <DerivationPathField
             network={currentNetwork}
@@ -290,12 +296,12 @@ const ImportWalletPage = () => {
           <div className="w-full mb-3">
             <div className="mb-2 flex items-center justify-center gap-2">
               <span className="wallet-text-strong font-bold text-xl">
-                Recovery Phrase
+                {t('onboarding.recoveryPhrase')}
               </span>
               <InfoTooltipIcon
                 id="recovery-tooltip"
-                content="Enter your 12-word recovery (seed) phrase. Each box corresponds to the word order."
-                ariaLabel="Recovery phrase information"
+                content={t('onboarding.recoveryDescription')}
+                ariaLabel={t('onboarding.recoveryPhrase')}
               />
             </div>
 
@@ -321,7 +327,7 @@ const ImportWalletPage = () => {
                       onKeyDown={(event) => handleKeyDown(index, event)}
                       enterKeyHint={index < TOTAL_WORDS - 1 ? 'next' : 'done'}
                       className="wallet-input wallet-surface-strong flex-1 min-w-0 px-3 py-1 rounded-md wallet-text-strong placeholder:opacity-60"
-                      placeholder="word"
+                      placeholder={t('onboarding.wordPlaceholder')}
                     />
                   </div>
                 ))}
@@ -343,13 +349,15 @@ const ImportWalletPage = () => {
           disabled={isSubmitting}
           className="wallet-btn-primary w-full my-2 text-xl font-bold"
         >
-          {isSubmitting ? 'Importing Wallet...' : 'Import Wallet'}
+          {isSubmitting
+            ? t('onboarding.importing')
+            : t('onboarding.importWallet')}
         </button>
         <button
           onClick={() => navigate('/')}
           className="wallet-btn-danger w-full my-2 text-xl font-bold"
         >
-          Back
+          {t('onboarding.back')}
         </button>
       </OnboardingCard>
     </OnboardingScreen>

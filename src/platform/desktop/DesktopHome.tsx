@@ -53,6 +53,7 @@ import HomeConnectPopup from '../../components/home/HomeConnectPopup';
 import { preloadTokenMetadata } from '../../hooks/useSharedTokenMetadata';
 import { useHomeConnect } from '../../features/home/useHomeConnect';
 import { unitFor } from './unitLabel'; // ← desktop-only: per-network unit label
+import { useI18n } from '../../i18n/useI18n';
 
 type QuickActionButtonProps = {
   title: string;
@@ -126,6 +127,7 @@ const Home: React.FC = () => {
   );
   const [displayMode, setDisplayMode] = useState<'BCH' | 'USD'>('BCH');
   const homeConnect = useHomeConnect();
+  const { t } = useI18n();
   const [syncElapsedSec, setSyncElapsedSec] = useState(0);
 
   // Wall-clock only. Multi-phase sync (markers → Electrum batch → history)
@@ -347,8 +349,10 @@ const Home: React.FC = () => {
     <WalletScreen maxWidthClassName="max-w-md" scrollable={false}>
       <div className="flex h-full min-h-0 flex-col gap-4">
         <PageHeader
-          title="Home"
-          subtitle={currentNetwork === Network.CHIPNET ? 'Chipnet' : undefined}
+          title={t('home.title')}
+          subtitle={
+            currentNetwork === Network.CHIPNET ? t('assets.chipnet') : undefined
+          }
           compact
         />
 
@@ -359,8 +363,8 @@ const Home: React.FC = () => {
 
           <SectionCard className="shrink-0 p-3">
             <SectionHeader
-              title="Portfolio"
-              subtitle="Wallet overview"
+              title={t('home.portfolio')}
+              subtitle={t('home.walletOverview')}
               compact
               action={
                 <div className="flex flex-col items-end gap-1">
@@ -370,7 +374,7 @@ const Home: React.FC = () => {
                     className="wallet-btn-secondary px-3 py-1.5 text-sm"
                     disabled={fetchingUTXOsRedux}
                   >
-                    {fetchingUTXOsRedux ? 'Syncing…' : 'Sync'}
+                    {fetchingUTXOsRedux ? t('home.syncing') : t('home.sync')}
                   </button>
                   {fetchingUTXOsRedux && syncingProgress !== null && (
                     <div className="flex items-center gap-1.5 text-xs wallet-muted">
@@ -404,13 +408,13 @@ const Home: React.FC = () => {
                       ? `${totalBch.toFixed(8)} ${unit}`
                       : totalUsd !== null
                         ? `$${totalUsd.toFixed(2)} USD`
-                        : 'USD unavailable'}
+                        : t('home.usdUnavailable')}
                   </div>
                   <div className="text-xs wallet-muted">
                     {displayMode === 'BCH'
                       ? totalUsd !== null
                         ? `$${totalUsd.toFixed(2)} USD`
-                        : 'USD price unavailable'
+                        : t('home.usdPriceUnavailable')
                       : `${totalBch.toFixed(8)} ${unit}`}
                   </div>
                   {stealthSats > 0 && (
@@ -428,7 +432,7 @@ const Home: React.FC = () => {
                   setDisplayMode((mode) => (mode === 'BCH' ? 'USD' : 'BCH'))
                 }
                 className="flex h-14 w-14 items-center justify-center rounded-3xl bg-[color-mix(in_oklab,var(--wallet-accent-soft)_72%,transparent)] text-[var(--wallet-accent-strong)] transition hover:brightness-[1.04]"
-                aria-label={`Toggle ${unit} and USD balance`}
+                aria-label={t('home.toggleBalance')}
               >
                 <FaBitcoin className="text-2xl" />
               </button>
@@ -437,7 +441,7 @@ const Home: React.FC = () => {
 
           <SectionCard className="shrink-0 p-3">
             <SectionHeader
-              title="Quick Actions"
+              title={t('home.quickActions')}
               compact
               className="items-center"
               action={
@@ -446,11 +450,11 @@ const Home: React.FC = () => {
                   onClick={homeConnect.openPopup}
                   disabled={homeConnect.scanning || homeConnect.submitting}
                   className="wallet-card inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--wallet-border)] bg-[color-mix(in_oklab,var(--wallet-accent-soft)_42%,transparent)] px-3 text-[var(--wallet-accent-strong)] transition hover:brightness-[1.03] disabled:cursor-not-allowed disabled:opacity-70 self-center"
-                  aria-label="Scan QR"
-                  title="Scan QR"
+                  aria-label={t('home.scanQr')}
+                  title={t('home.scanQr')}
                 >
                   <span className="text-sm font-semibold wallet-text-strong">
-                    Scan QR
+                    {t('home.scanQr')}
                   </span>
                   <FaQrcode
                     className={`text-base ${homeConnect.scanning ? 'animate-pulse' : ''}`}
@@ -460,7 +464,7 @@ const Home: React.FC = () => {
             />
             <div className="flex items-stretch gap-2.5">
               <QuickActionButton
-                title="Receive"
+                title={t('home.receive')}
                 icon={<FaArrowDown />}
                 onClick={() =>
                   navigate('/receive', {
@@ -469,7 +473,7 @@ const Home: React.FC = () => {
                 }
               />
               <QuickActionButton
-                title="Send"
+                title={t('home.send')}
                 icon={<FaArrowUp />}
                 onClick={() =>
                   navigate('/send', {
@@ -482,15 +486,15 @@ const Home: React.FC = () => {
 
           <SectionCard className="shrink-0 p-3">
             <SectionHeader
-              title="Recent Activity"
-              subtitle="Latest wallet activity"
+              title={t('home.recentActivity')}
+              subtitle={t('home.latestActivity')}
               compact
               action={
                 <button
                   className="wallet-link text-sm"
                   onClick={() => navigate(`/transactions/${currentWalletId}`)}
                 >
-                  View all
+                  {t('home.viewAll')}
                 </button>
               }
             />
@@ -516,16 +520,16 @@ const Home: React.FC = () => {
                       }
                       description={
                         tx.height > 0
-                          ? `Block ${tx.height}`
+                          ? `${t('home.block')} ${tx.height}`
                           : isTxConfirmed(tx)
-                            ? 'Confirmed'
+                            ? t('home.confirmed')
                             : isMempoolLike(tx)
                               ? fused
                                 ? 'Broadcast — waiting for block'
-                                : 'Unconfirmed'
+                                : t('home.pending')
                               : fused
                                 ? 'On chain'
-                                : 'Confirmed'
+                                : t('home.confirmed')
                       }
                       right={
                         <span
@@ -537,11 +541,11 @@ const Home: React.FC = () => {
                         >
                           {fused
                             ? isTxConfirmed(tx) || !isMempoolLike(tx)
-                              ? 'Fused · Confirmed'
-                              : 'Fused · Unconfirmed'
+                              ? `Fused · ${t('home.confirmed')}`
+                              : `Fused · ${t('home.pending')}`
                             : isTxConfirmed(tx) || !isMempoolLike(tx)
-                              ? 'Confirmed'
-                              : 'Unconfirmed'}
+                              ? t('home.confirmed')
+                              : t('home.pending')}
                         </span>
                       }
                       compact
@@ -552,7 +556,7 @@ const Home: React.FC = () => {
                   );
                 })
               ) : (
-                <EmptyState message="No recent activity yet." />
+                <EmptyState message={t('home.noRecentActivity')} />
               )}
             </div>
           </SectionCard>

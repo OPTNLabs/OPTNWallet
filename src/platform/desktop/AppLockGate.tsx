@@ -21,13 +21,21 @@ import {
   resolveIntegrityCheck,
   rejectIntegrityCheck,
 } from './DeviceIntegrityService';
+import { useI18n } from '../../i18n/useI18n';
 
-const ACTIVITY_EVENTS = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll'] as const;
+const ACTIVITY_EVENTS = [
+  'mousemove',
+  'mousedown',
+  'keydown',
+  'touchstart',
+  'scroll',
+] as const;
 
 export const AppLockGate: React.FC = () => {
   const navigate = useNavigate();
   const dispatch = useDispatch();
   const autoLockMinutes = useSelector(selectAutoLockMinutes);
+  const { t } = useI18n();
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const walletId = useSelector(selectWalletId);
@@ -49,32 +57,47 @@ export const AppLockGate: React.FC = () => {
   const resetTimer = useCallback(() => {
     if (!shouldAutoLock) return;
     if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => {
-      console.log(`[AppLock] No activity for ${autoLockMinutes} min — closing wallet`);
-      OptnKeyManager.lock();
-      dispatch(resetWallet());
-      navigate(ROUTE_PATHS.landing);
-      resyncAfterWalletClosed('AppLock');
-    }, autoLockMinutes * 60 * 1000);
+    timerRef.current = setTimeout(
+      () => {
+        console.log(
+          `[AppLock] No activity for ${autoLockMinutes} min — closing wallet`
+        );
+        OptnKeyManager.lock();
+        dispatch(resetWallet());
+        navigate(ROUTE_PATHS.landing);
+        resyncAfterWalletClosed('AppLock');
+      },
+      autoLockMinutes * 60 * 1000
+    );
   }, [shouldAutoLock, autoLockMinutes, navigate, dispatch]);
 
   useEffect(() => {
     if (shouldAutoLock) resetTimer();
-    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
   }, [shouldAutoLock, resetTimer]);
 
   useEffect(() => {
     if (!shouldAutoLock) return;
     const handleActivity = () => resetTimer();
-    ACTIVITY_EVENTS.forEach((e) => window.addEventListener(e, handleActivity, { passive: true }));
-    return () => { ACTIVITY_EVENTS.forEach((e) => window.removeEventListener(e, handleActivity)); };
+    ACTIVITY_EVENTS.forEach((e) =>
+      window.addEventListener(e, handleActivity, { passive: true })
+    );
+    return () => {
+      ACTIVITY_EVENTS.forEach((e) =>
+        window.removeEventListener(e, handleActivity)
+      );
+    };
   }, [shouldAutoLock, resetTimer]);
 
   // ── Integrity check event listener ────────────────────────────────────────
 
   useEffect(() => {
     const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail as { scope?: string } | undefined;
+      const detail = (e as CustomEvent).detail as
+        | { scope?: string }
+        | undefined;
       setIntegrityScope(detail?.scope ?? null);
       setIntegrityPassphrase('');
       setIntegrityError('');
@@ -98,15 +121,15 @@ export const AppLockGate: React.FC = () => {
         setIntegrityScope(null);
         resolveIntegrityCheck();
       } else {
-        setIntegrityError('Incorrect passphrase. Try again.');
+        setIntegrityError(t('appLock.incorrect'));
       }
     } catch {
-      setIntegrityError('Verification failed. Please try again.');
+      setIntegrityError(t('appLock.verificationFailed'));
     } finally {
       setIntegrityChecking(false);
       setIntegrityPassphrase('');
     }
-  }, [integrityPassphrase, walletId]);
+  }, [integrityPassphrase, walletId, t]);
 
   const handleIntegrityCancel = useCallback(() => {
     setIntegrityVisible(false);
@@ -135,7 +158,9 @@ export const AppLockGate: React.FC = () => {
       >
         <div className="text-center space-y-1">
           <div className="text-2xl">🔐</div>
-          <h3 className="font-bold text-lg wallet-text-strong">Confirm password</h3>
+          <h3 className="font-bold text-lg wallet-text-strong">
+            {t('appLock.confirmPassword')}
+          </h3>
           <p className="text-sm wallet-muted">
             {isSpendScope
               ? 'Enter your password to confirm this transaction.'
@@ -143,7 +168,7 @@ export const AppLockGate: React.FC = () => {
                 ? 'Enter your password to reveal this private key.'
                 : isXpubScope
                   ? 'Enter your password to reveal wallet information.'
-                  : 'Enter your password to reveal the backup phrase.'}
+                  : t('appLock.revealBackup')}
           </p>
         </div>
 
@@ -151,14 +176,18 @@ export const AppLockGate: React.FC = () => {
           type="password"
           value={integrityPassphrase}
           onChange={(e) => setIntegrityPassphrase(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') void handleIntegritySubmit(); }}
-          placeholder="Password"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void handleIntegritySubmit();
+          }}
+          placeholder={t('appLock.password')}
           className="w-full rounded-[14px] border border-[var(--wallet-border)] bg-transparent px-4 py-3 text-center text-lg outline-none wallet-surface-strong"
           autoFocus
         />
 
         {integrityError && (
-          <p className="text-center text-sm wallet-danger-text">{integrityError}</p>
+          <p className="text-center text-sm wallet-danger-text">
+            {integrityError}
+          </p>
         )}
 
         <div className="flex gap-3">
@@ -167,7 +196,7 @@ export const AppLockGate: React.FC = () => {
             className="flex-1 wallet-btn-secondary"
             onClick={handleIntegrityCancel}
           >
-            Cancel
+            {t('appLock.cancel')}
           </button>
           <button
             type="button"
@@ -175,7 +204,7 @@ export const AppLockGate: React.FC = () => {
             onClick={() => void handleIntegritySubmit()}
             disabled={integrityChecking}
           >
-            {integrityChecking ? 'Checking…' : 'Confirm'}
+            {integrityChecking ? t('appLock.checking') : t('appLock.confirm')}
           </button>
         </div>
       </div>

@@ -451,6 +451,10 @@ export const coreTranslations = {
     'receive.copyFailed': 'Failed to copy.',
 
     'send.title': 'Simple Send',
+    'send.coin': 'coin',
+    'send.coins': 'coins',
+    'send.spendableSummary':
+      'Spendable {amount} BCH from {count} {coins} (same set as Home, minus token coins).',
     'send.send': 'Send',
     'send.guidedDescription':
       'Send BCH, fungible tokens, or NFTs with one guided flow.',
@@ -798,6 +802,7 @@ export const coreTranslations = {
     'settingsRows.walletConnectDescription': 'Manage dApp connections',
     'settingsRows.wizardConnect': 'WizardConnect',
     'settingsRows.wizardConnectDescription': 'Connect to token wizards',
+    'settingsRows.cashConnectDescription': 'Contract-system dApps over Nostr',
     'settingsRows.about': 'About OPTN',
     'settingsRows.aboutDescription': 'Version info',
     'settingsRows.terms': 'Terms of Use',
@@ -1366,6 +1371,10 @@ export const coreTranslations = {
     'receive.copyFailed': 'No se pudo copiar.',
 
     'send.title': 'Envío sencillo',
+    'send.coin': 'moneda',
+    'send.coins': 'monedas',
+    'send.spendableSummary':
+      'Disponible {amount} BCH de {count} {coins} (mismo conjunto que Inicio, sin monedas de tokens).',
     'send.send': 'Enviar',
     'send.guidedDescription':
       'Envía BCH, tokens fungibles o NFT con un único flujo guiado.',
@@ -1729,6 +1738,8 @@ export const coreTranslations = {
     'settingsRows.walletConnectDescription': 'Gestiona conexiones de dApps',
     'settingsRows.wizardConnect': 'WizardConnect',
     'settingsRows.wizardConnectDescription': 'Conecta con asistentes de tokens',
+    'settingsRows.cashConnectDescription':
+      'dApps del sistema de contratos sobre Nostr',
     'settingsRows.about': 'Acerca de OPTN',
     'settingsRows.aboutDescription': 'Información de la versión',
     'settingsRows.terms': 'Términos de uso',
@@ -2242,6 +2253,10 @@ export const coreTranslations = {
     'receive.copyFailed': '复制失败。',
 
     'send.title': '简单发送',
+    'send.coin': '枚硬币',
+    'send.coins': '枚硬币',
+    'send.spendableSummary':
+      '可用 {amount} BCH，来自 {count} 个{coins}（与首页相同，但不含代币币）。',
     'send.send': '发送',
     'send.guidedDescription': '通过一个引导流程发送 BCH、同质化代币或 NFT。',
     'send.debug': '调试',
@@ -2570,6 +2585,7 @@ export const coreTranslations = {
     'settingsRows.walletConnectDescription': '管理 dApp 连接',
     'settingsRows.wizardConnect': 'WizardConnect',
     'settingsRows.wizardConnectDescription': '连接代币向导',
+    'settingsRows.cashConnectDescription': '通过 Nostr 使用合约系统 dApp',
     'settingsRows.about': '关于 OPTN',
     'settingsRows.aboutDescription': '版本信息',
     'settingsRows.terms': '使用条款',

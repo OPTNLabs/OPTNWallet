@@ -14,6 +14,8 @@ import {
   type RpaActivityPayload,
 } from '../../services/WalletSpecialActivityService';
 import { SATSINBITCOIN } from '../../utils/constants';
+import { useI18n } from '../../i18n/useI18n';
+import { formatDate, formatNumber } from '../../i18n/format';
 
 type StealthBalanceCardProps = {
   walletId: number;
@@ -22,6 +24,7 @@ type StealthBalanceCardProps = {
 export const StealthBalanceCard: React.FC<StealthBalanceCardProps> = ({
   walletId,
 }) => {
+  const { locale, t } = useI18n();
   const rpaEnabled = useSelector(selectRpaEnabled);
   const storedActivity = useSelector(
     (state: RootState) =>
@@ -42,16 +45,20 @@ export const StealthBalanceCard: React.FC<StealthBalanceCardProps> = ({
       setStealthSats(activity.unspentSats);
       setMatchCount(activity.detectedPaymentCount);
       setLastSynced(
-        updatedAt ? new Date(updatedAt).toLocaleTimeString() : null
+        updatedAt
+          ? formatDate(new Date(updatedAt), locale, {
+              hour: 'numeric',
+              minute: '2-digit',
+            })
+          : null
       );
       setServerNote(
         activity.serverSupported
           ? null
-          : activity.error ??
-              'This Electrum server does not have Fulcrum RPA. On Chipnet, switch Servers to chipnet.bch.ninja, then Sync.'
+          : activity.error ?? t('rpa.serverUnsupported')
       );
     },
-    []
+    [locale, t]
   );
 
   useEffect(() => {
@@ -128,19 +135,18 @@ export const StealthBalanceCard: React.FC<StealthBalanceCardProps> = ({
         <div>
           <div className="flex items-center gap-2">
             <span className="text-sm font-semibold wallet-text-strong">
-              Stealth BCH
+              {t('rpa.stealthBalance')}
             </span>
             <span className="rounded-full border border-[var(--wallet-accent)]/30 bg-[var(--wallet-accent)]/10 px-1.5 py-0.5 text-[9px] font-bold text-[var(--wallet-accent)] uppercase tracking-wide">
               RPA
             </span>
           </div>
           <div className="text-xl font-bold wallet-text-strong mt-0.5">
-            {stealthBch.toFixed(8)} BCH
+            {formatNumber(stealthBch, locale, { maximumFractionDigits: 8 })} BCH
           </div>
           {matchCount !== null && (
             <div className="text-xs wallet-muted mt-0.5">
-              {matchCount} confirmed stealth payment
-              {matchCount !== 1 ? 's' : ''} found
+              {t('rpa.confirmedPayments', { count: matchCount })}
             </div>
           )}
         </div>
@@ -150,7 +156,7 @@ export const StealthBalanceCard: React.FC<StealthBalanceCardProps> = ({
           disabled={syncing}
           className="rounded-xl border border-[var(--wallet-accent)]/40 px-3 py-1.5 text-xs font-semibold text-[var(--wallet-accent)] disabled:opacity-50 hover:bg-[var(--wallet-accent)]/5 transition-colors"
         >
-          {syncing ? 'Scanning…' : 'Sync'}
+          {syncing ? t('rpa.scanning') : t('rpa.sync')}
         </button>
       </div>
 
@@ -165,7 +171,9 @@ export const StealthBalanceCard: React.FC<StealthBalanceCardProps> = ({
       )}
 
       {lastSynced && !syncError && (
-        <p className="text-[10px] wallet-muted">Last scanned: {lastSynced}</p>
+        <p className="text-[10px] wallet-muted">
+          {t('rpa.lastScanned')}: {lastSynced}
+        </p>
       )}
 
       <div className="space-y-1.5">

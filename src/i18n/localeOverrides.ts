@@ -82,6 +82,9 @@ export const localeOverrides = {
       'Sessões de dApps habilitadas por chave XPub',
     'actions.contracts': 'Contratos',
     'actions.contractsDescription': 'Gerenciar instâncias de contratos',
+    'actions.cashConnectDescription': 'dApps do sistema de contratos via Nostr',
+    'settingsRows.cashConnectDescription':
+      'dApps do sistema de contratos via Nostr',
     'onboarding.helpTitle': 'Primeiros passos',
     'onboarding.helpDescription':
       'Crie uma carteira pela primeira vez ou restaure uma que você já possui.',
@@ -175,6 +178,10 @@ export const localeOverrides = {
     'send.asset': 'Ativo',
     'send.fee': 'Taxa',
     'send.totalBch': 'Total (BCH)',
+    'send.coin': 'moeda',
+    'send.coins': 'moedas',
+    'send.spendableSummary':
+      'Disponível: {amount} BCH de {count} {coins} (mesmo conjunto da tela inicial, sem moedas de token).',
     'send.pending': 'Pendente',
     'send.sending': 'Enviando…',
     'send.confirmed': 'Confirmada',
@@ -334,6 +341,8 @@ export const localeOverrides = {
     'actions.wizardConnectDescription': 'Phiên dApp có khóa XPub',
     'actions.contracts': 'Hợp đồng',
     'actions.contractsDescription': 'Quản lý các phiên bản hợp đồng',
+    'actions.cashConnectDescription': 'dApp hệ thống hợp đồng qua Nostr',
+    'settingsRows.cashConnectDescription': 'dApp hệ thống hợp đồng qua Nostr',
     'onboarding.helpTitle': 'Bắt đầu',
     'onboarding.helpDescription': 'Tạo ví lần đầu hoặc khôi phục ví bạn đã có.',
     'onboarding.toggleTheme': 'Đổi giao diện',
@@ -426,6 +435,10 @@ export const localeOverrides = {
     'send.asset': 'Tài sản',
     'send.fee': 'Phí',
     'send.totalBch': 'Tổng (BCH)',
+    'send.coin': 'đồng',
+    'send.coins': 'đồng',
+    'send.spendableSummary':
+      'Có thể chi {amount} BCH từ {count} {coins} (giống Trang chủ, không gồm coin token).',
     'send.pending': 'Đang chờ',
     'send.sending': 'Đang gửi…',
     'send.confirmed': 'Đã xác nhận',
@@ -582,6 +595,8 @@ export const localeOverrides = {
     'actions.wizardConnectDescription': '支援 XPub 金鑰的 dApp 工作階段',
     'actions.contracts': '合約',
     'actions.contractsDescription': '管理合約執行個體',
+    'actions.cashConnectDescription': '透過 Nostr 使用合約系統 dApp',
+    'settingsRows.cashConnectDescription': '透過 Nostr 使用合約系統 dApp',
     'onboarding.helpTitle': '開始使用',
     'onboarding.helpDescription': '建立新錢包，或復原已有的錢包。',
     'onboarding.toggleTheme': '切換主題',
@@ -673,6 +688,10 @@ export const localeOverrides = {
     'send.asset': '資產',
     'send.fee': '費用',
     'send.totalBch': '總計（BCH）',
+    'send.coin': '枚硬幣',
+    'send.coins': '枚硬幣',
+    'send.spendableSummary':
+      '可花費 {amount} BCH，來自 {count} 個{coins}（與首頁相同，但不含代幣幣）。',
     'send.pending': '待處理',
     'send.sending': '傳送中…',
     'send.confirmed': '已確認',
@@ -830,6 +849,9 @@ export const localeOverrides = {
     'actions.wizardConnectDescription': 'جلسات dApp مفعّلة بمفتاح XPub',
     'actions.contracts': 'العقود',
     'actions.contractsDescription': 'إدارة مثيلات العقود',
+    'actions.cashConnectDescription': 'تطبيقات dApp لنظام العقود عبر Nostr',
+    'settingsRows.cashConnectDescription':
+      'تطبيقات dApp لنظام العقود عبر Nostr',
     'onboarding.helpTitle': 'البدء',
     'onboarding.helpDescription':
       'أنشئ محفظة لأول مرة أو استعد محفظة لديك بالفعل.',
@@ -922,6 +944,10 @@ export const localeOverrides = {
     'send.asset': 'الأصل',
     'send.fee': 'الرسوم',
     'send.totalBch': 'الإجمالي (BCH)',
+    'send.coin': 'عملة',
+    'send.coins': 'عملات',
+    'send.spendableSummary':
+      '{amount} BCH قابل للإنفاق من {count} {coins} (مثل الصفحة الرئيسية، باستثناء عملات الرموز).',
     'send.pending': 'معلّق',
     'send.sending': 'جارٍ الإرسال…',
     'send.confirmed': 'مؤكد',
@@ -1232,6 +1258,10 @@ export const localeOverrides = {
     'wc.enterUri': 'أدخل URI الخاص بـ WalletConnect',
     'wc.scanQr': 'مسح QR',
     'wc.connect': 'اتصال',
+    'homeConnect.description':
+      'ألصق أو امسح دعوة CashConnect أو URI لـ WalletConnect أو عنوان دفع. تتم الموافقة على الطلبات من الصفحة الرئيسية.',
+    'homeConnect.placeholder': 'bch-cc-v1:… أو wc:…',
+    'homeConnect.pasteUri': 'ألصق أو امسح URI للاتصال أو عنوان دفع.',
     'wc.noQr': 'لم يتم العثور على رمز QR. حاول مرة أخرى.',
     'wc.validUri': 'أدخل URI صالحًا لـ WalletConnect.',
     'wc.pairingStarted': 'بدأ اقتران WalletConnect.',
@@ -2818,6 +2848,9 @@ export const localeOverrides = {
       'Sessions dApp compatibles avec les xPub',
     'actions.contracts': 'Contrats',
     'actions.contractsDescription': 'Gérer les instances de contrats',
+    'actions.cashConnectDescription': 'dApps du système de contrats via Nostr',
+    'settingsRows.cashConnectDescription':
+      'dApps du système de contrats via Nostr',
     'onboarding.helpTitle': 'Pour commencer',
     'onboarding.helpDescription':
       'Créez un portefeuille pour la première fois ou restaurez-en un existant.',
@@ -2989,6 +3022,10 @@ export const localeOverrides = {
     'send.asset': 'Actif',
     'send.fee': 'Frais',
     'send.totalBch': 'Total BCH',
+    'send.coin': 'pièce',
+    'send.coins': 'pièces',
+    'send.spendableSummary':
+      'Dépensable : {amount} BCH provenant de {count} {coins} (même ensemble que l’accueil, hors pièces de tokens).',
     'send.hide': 'Masquer',
     'send.show': 'Afficher',
     'send.inputs': 'Entrées',
@@ -3140,6 +3177,8 @@ export const localeOverrides = {
     'actions.wizardConnectDescription': 'XPub 키를 사용하는 dApp 세션',
     'actions.contracts': '컨트랙트',
     'actions.contractsDescription': '컨트랙트 인스턴스 관리',
+    'actions.cashConnectDescription': 'Nostr 기반 컨트랙트 시스템 dApp',
+    'settingsRows.cashConnectDescription': 'Nostr 기반 컨트랙트 시스템 dApp',
     'onboarding.helpTitle': '시작하기',
     'onboarding.helpDescription':
       '처음 지갑을 만들거나 기존 지갑을 복원하세요.',
@@ -3306,6 +3345,10 @@ export const localeOverrides = {
     'send.asset': '자산',
     'send.fee': '수수료',
     'send.totalBch': '총 BCH',
+    'send.coin': '코인',
+    'send.coins': '코인',
+    'send.spendableSummary':
+      '사용 가능: {count}개의 {coins}에서 {amount} BCH (홈과 동일한 집합이며 토큰 코인 제외).',
     'send.hide': '숨기기',
     'send.show': '표시',
     'send.inputs': '입력',
@@ -3456,6 +3499,9 @@ export const localeOverrides = {
     'actions.wizardConnectDescription': 'XPub キー対応 dApp セッション',
     'actions.contracts': 'コントラクト',
     'actions.contractsDescription': 'コントラクトインスタンスを管理',
+    'actions.cashConnectDescription': 'Nostr 上のコントラクトシステム dApp',
+    'settingsRows.cashConnectDescription':
+      'Nostr 上のコントラクトシステム dApp',
     'onboarding.helpTitle': 'はじめに',
     'onboarding.helpDescription':
       '初めてウォレットを作成するか、既存のウォレットを復元します。',
@@ -3624,6 +3670,10 @@ export const localeOverrides = {
     'send.asset': '資産',
     'send.fee': '手数料',
     'send.totalBch': 'BCH 合計',
+    'send.coin': 'コイン',
+    'send.coins': 'コイン',
+    'send.spendableSummary':
+      '使用可能: {count}{coins}から {amount} BCH（ホームと同じセット、トークンコインを除く）。',
     'send.hide': '隠す',
     'send.show': '表示',
     'send.inputs': '入力',
@@ -3777,6 +3827,9 @@ export const localeOverrides = {
     'actions.wizardConnectDescription': 'Сессии dApp с поддержкой ключей XPub',
     'actions.contracts': 'Контракты',
     'actions.contractsDescription': 'Управлять экземплярами контрактов',
+    'actions.cashConnectDescription': 'dApp контрактной системы через Nostr',
+    'settingsRows.cashConnectDescription':
+      'dApp контрактной системы через Nostr',
     'onboarding.helpTitle': 'Начало работы',
     'onboarding.helpDescription':
       'Создайте новый кошелёк или восстановите существующий.',
@@ -3949,6 +4002,10 @@ export const localeOverrides = {
     'send.asset': 'Актив',
     'send.fee': 'Комиссия',
     'send.totalBch': 'Всего BCH',
+    'send.coin': 'монета',
+    'send.coins': 'монет',
+    'send.spendableSummary':
+      'Доступно {amount} BCH из {count} {coins} (тот же набор, что на главном экране, без токеновых монет).',
     'send.hide': 'Скрыть',
     'send.show': 'Показать',
     'send.inputs': 'Входы',
@@ -4102,6 +4159,8 @@ export const localeOverrides = {
       'Zaman dApp masu amfani da makullin XPub',
     'actions.contracts': 'Kwangiloli',
     'actions.contractsDescription': 'Sarrafa misalan kwangila',
+    'actions.cashConnectDescription': 'dApp na tsarin kwangila ta Nostr',
+    'settingsRows.cashConnectDescription': 'dApp na tsarin kwangila ta Nostr',
     'onboarding.helpTitle': 'Fara amfani',
     'onboarding.helpDescription':
       'Ƙirƙiri sabon walat ko dawo da wanda kuke da shi.',
@@ -4273,6 +4332,10 @@ export const localeOverrides = {
     'send.asset': 'Kadara',
     'send.fee': 'Kuɗin aiki',
     'send.totalBch': 'Jimillar BCH',
+    'send.coin': 'tsabar',
+    'send.coins': 'tsabar',
+    'send.spendableSummary':
+      '{amount} BCH da za a iya kashewa daga {count} {coins} (kamar Shafin gida, ban da tsabar token).',
     'send.hide': 'Ɓoye',
     'send.show': 'Nuna',
     'send.inputs': 'Abubuwan shiga',
