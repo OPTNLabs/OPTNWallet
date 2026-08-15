@@ -153,10 +153,9 @@ const DesktopCreateWalletPage = () => {
         return;
       }
 
-      // Materialize one address pair so the worker can start immediately. It
-      // performs the full BIP44 discovery/gap-limit scan after navigation;
-      // waiting for all 40 key rows here makes wallet creation unnecessarily slow.
-      await KeyService.bootstrapInitialAddressBatch(walletId, 0, 1);
+      // Materialize the same initial receive/change window used by desktop
+      // network switching before opening Settings or Home.
+      await KeyService.bootstrapInitialAddressBatch(walletId, 0, 20);
 
       dispatch(setWalletId(walletId));
       dispatch(setWalletNetwork(currentNetwork));

@@ -19,7 +19,10 @@ import { logError } from '../utils/errorHandling';
 import { isWebPlatform } from '../utils/platform';
 import { binToHex, hexToBin } from '../utils/hex';
 
-const bcmrCache = new Map<string, { ts: number; data: Awaited<ReturnType<BcmrService['getSnapshot']>> | null }>();
+const bcmrCache = new Map<
+  string,
+  { ts: number; data: Awaited<ReturnType<BcmrService['getSnapshot']>> | null }
+>();
 const BCMR_CACHE_TTL_MS = 300_000;
 
 function getPrefix(): string {
@@ -291,20 +294,28 @@ const UTXOService = {
   ): Promise<Record<string, UTXO[]>> {
     try {
       const currentNetwork = store.getState().network.currentNetwork;
-      const tDiscovery = performance.now();
-      const discoveredAddresses =
-        options.discover === false
-          ? []
-          : ((await WalletDiscoveryService.ensureInitialAddressBatches(
+      let discoveredAddresses: string[] = [];
+      if (options.discover !== false) {
+        const tDiscovery = performance.now();
+        try {
+          discoveredAddresses =
+            (await WalletDiscoveryService.ensureInitialAddressBatches(
               walletId,
               currentNetwork,
               hasElectrumBatchUsage
-            )) ?? []);
-      if (options.discover !== false) {
-        console.info('[UTXOService] discovery took', {
-          ms: Math.round(performance.now() - tDiscovery),
-          discovered: discoveredAddresses.length,
-        });
+            )) ?? [];
+          console.info('[UTXOService] discovery took', {
+            ms: Math.round(performance.now() - tDiscovery),
+            discovered: discoveredAddresses.length,
+          });
+        } catch (error) {
+          // Discovery is an enhancement to the known-address pass. A server
+          // capability or path-probe failure must never prevent listunspent
+          // from refreshing addresses already materialized for this wallet.
+          logError('UTXOService.fetchAndStoreUTXOsMany.discovery', error, {
+            walletId,
+          });
+        }
       }
       const manager = await UTXOManager();
       const addressManager = AddressManager();
@@ -348,17 +359,12 @@ const UTXOService = {
         // Soft-fail on transport/backoff: keep last SQL so reconnect does not wipe.
         const msg =
           fetchError instanceof Error ? fetchError.message : String(fetchError);
-        if (
-          /backoff|connection lost|not connected|timeout|ECONN/i.test(msg)
-        ) {
+        if (/backoff|connection lost|not connected|timeout|ECONN/i.test(msg)) {
           logError('UTXOService.fetchAndStoreUTXOsMany.softFail', fetchError, {
             walletId,
             addressCount: uniqueAddresses.length,
           });
-          options.onProgress?.(
-            uniqueAddresses.length,
-            uniqueAddresses.length
-          );
+          options.onProgress?.(uniqueAddresses.length, uniqueAddresses.length);
           // Still strip outbound-spent coins so a soft-fail after broadcast
           // cannot re-surface pre-fusion inputs as spendable balance.
           const reservedOutpoints =
@@ -411,9 +417,7 @@ const UTXOService = {
           formattedByAddress[address] = [
             ...(existingSnapshot.utxosMap[address] ?? []),
             ...(existingSnapshot.cashTokenUtxosMap[address] ?? []),
-          ].filter(
-            (utxo) => !reservedOutpoints.has(outpointKey(utxo))
-          );
+          ].filter((utxo) => !reservedOutpoints.has(outpointKey(utxo)));
           continue;
         }
 
@@ -526,8 +530,7 @@ const UTXOService = {
       const allDbUtxos = Object.values(utxosMap)
         .flat()
         .filter(
-          (utxo) =>
-            !utxo.token && !reservedOutpoints.has(outpointKey(utxo))
+          (utxo) => !utxo.token && !reservedOutpoints.has(outpointKey(utxo))
         );
       const dbTokenUtxos = Object.values(cashTokenUtxosMap)
         .flat()

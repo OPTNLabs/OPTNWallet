@@ -27,6 +27,9 @@ export const BUILTIN_ADDON_LOCALE_BUNDLES: Record<string, AddonLocaleBundle[]> =
         'app.paryonWorkspaceApp.name': 'ParyonUSD',
         'app.paryonWorkspaceApp.description':
           'Stablecoin dashboard with live network verification and contract status.',
+        'app.merchantPayApp.name': 'Merchant Pay',
+        'app.merchantPayApp.description':
+          'Accept stablecoin payments while customers pay BCH through Cauldron pools.',
         'screen.back': 'Back',
         'screen.walletError': 'Wallet error',
         'screen.unavailable': 'Unavailable',
@@ -47,6 +50,9 @@ export const BUILTIN_ADDON_LOCALE_BUNDLES: Record<string, AddonLocaleBundle[]> =
         'app.paryonWorkspaceApp.name': 'ParyonUSD',
         'app.paryonWorkspaceApp.description':
           'Panel de la stablecoin con verificación de red en vivo y estado del contrato.',
+        'app.merchantPayApp.name': 'Pago para comercios',
+        'app.merchantPayApp.description':
+          'Acepta pagos en stablecoin mientras los clientes pagan BCH mediante pools de Cauldron.',
         'screen.back': 'Volver',
         'screen.walletError': 'Error de la cartera',
         'screen.unavailable': 'No disponible',
@@ -68,6 +74,9 @@ export const BUILTIN_ADDON_LOCALE_BUNDLES: Record<string, AddonLocaleBundle[]> =
         'app.paryonWorkspaceApp.name': 'ParyonUSD',
         'app.paryonWorkspaceApp.description':
           'Painel da stablecoin com verificação da rede em tempo real e status do contrato.',
+        'app.merchantPayApp.name': 'Pagamento para comerciantes',
+        'app.merchantPayApp.description':
+          'Aceite pagamentos em stablecoin enquanto os clientes pagam BCH pelos pools do Cauldron.',
         'screen.back': 'Voltar',
         'screen.walletError': 'Erro da carteira',
         'screen.unavailable': 'Indisponível',
@@ -88,6 +97,9 @@ export const BUILTIN_ADDON_LOCALE_BUNDLES: Record<string, AddonLocaleBundle[]> =
         'app.paryonWorkspaceApp.name': 'ParyonUSD',
         'app.paryonWorkspaceApp.description':
           '提供实时网络验证和合约状态的稳定币面板。',
+        'app.merchantPayApp.name': '商户支付',
+        'app.merchantPayApp.description':
+          '通过 Cauldron 池接收稳定币支付，同时让客户支付 BCH。',
         'screen.back': '返回',
         'screen.walletError': '钱包错误',
         'screen.unavailable': '不可用',
@@ -107,6 +119,9 @@ export const BUILTIN_ADDON_LOCALE_BUNDLES: Record<string, AddonLocaleBundle[]> =
         'app.paryonWorkspaceApp.name': 'ParyonUSD',
         'app.paryonWorkspaceApp.description':
           '提供即時網路驗證與合約狀態的穩定幣面板。',
+        'app.merchantPayApp.name': '商戶支付',
+        'app.merchantPayApp.description':
+          '透過 Cauldron 池接收穩定幣付款，同時讓客戶支付 BCH。',
         'screen.back': '返回',
         'screen.walletError': '錢包錯誤',
         'screen.unavailable': '無法使用',
@@ -127,6 +142,9 @@ export const BUILTIN_ADDON_LOCALE_BUNDLES: Record<string, AddonLocaleBundle[]> =
         'app.paryonWorkspaceApp.name': 'ParyonUSD',
         'app.paryonWorkspaceApp.description':
           'Bảng điều khiển stablecoin với xác minh mạng trực tiếp và trạng thái hợp đồng.',
+        'app.merchantPayApp.name': 'Thanh toán cho người bán',
+        'app.merchantPayApp.description':
+          'Nhận thanh toán bằng stablecoin trong khi khách hàng trả BCH qua các pool Cauldron.',
         'screen.back': 'Quay lại',
         'screen.walletError': 'Lỗi ví',
         'screen.unavailable': 'Không khả dụng',
@@ -146,6 +164,9 @@ export const BUILTIN_ADDON_LOCALE_BUNDLES: Record<string, AddonLocaleBundle[]> =
         'app.paryonWorkspaceApp.name': 'ParyonUSD',
         'app.paryonWorkspaceApp.description':
           'لوحة عملة مستقرة مع التحقق المباشر من الشبكة وحالة العقد.',
+        'app.merchantPayApp.name': 'دفع التاجر',
+        'app.merchantPayApp.description':
+          'اقبل مدفوعات العملة المستقرة بينما يدفع العملاء BCH عبر مجمعات Cauldron.',
         'screen.back': 'رجوع',
         'screen.walletError': 'خطأ في المحفظة',
         'screen.unavailable': 'غير متاح',
@@ -166,6 +187,9 @@ export const BUILTIN_ADDON_LOCALE_BUNDLES: Record<string, AddonLocaleBundle[]> =
         'app.paryonWorkspaceApp.name': 'ParyonUSD',
         'app.paryonWorkspaceApp.description':
           'Tableau de bord du stablecoin avec vérification réseau en direct et état du contrat.',
+        'app.merchantPayApp.name': 'Paiement marchand',
+        'app.merchantPayApp.description':
+          'Acceptez des paiements en stablecoin tandis que les clients paient en BCH via les pools Cauldron.',
         'screen.back': 'Retour',
         'screen.walletError': 'Erreur du portefeuille',
         'screen.unavailable': 'Indisponible',
@@ -187,6 +211,9 @@ export const BUILTIN_ADDON_LOCALE_BUNDLES: Record<string, AddonLocaleBundle[]> =
         'app.paryonWorkspaceApp.name': 'ParyonUSD',
         'app.paryonWorkspaceApp.description':
           '실시간 네트워크 검증과 계약 상태를 제공하는 스테이블코인 대시보드입니다.',
+        'app.merchantPayApp.name': '가맹점 결제',
+        'app.merchantPayApp.description':
+          '고객이 Cauldron 풀을 통해 BCH를 결제하는 동안 스테이블코인 결제를 받습니다.',
         'screen.back': '뒤로',
         'screen.walletError': '지갑 오류',
         'screen.unavailable': '사용할 수 없음',
@@ -207,6 +234,9 @@ export const BUILTIN_ADDON_LOCALE_BUNDLES: Record<string, AddonLocaleBundle[]> =
         'app.paryonWorkspaceApp.name': 'ParyonUSD',
         'app.paryonWorkspaceApp.description':
           'ネットワークのライブ検証とコントラクト状態を確認できるステーブルコインダッシュボードです。',
+        'app.merchantPayApp.name': '加盟店決済',
+        'app.merchantPayApp.description':
+          '顧客がCauldronプール経由でBCHを支払う間、ステーブルコイン決済を受け付けます。',
         'screen.back': '戻る',
         'screen.walletError': 'ウォレットエラー',
         'screen.unavailable': '利用できません',
@@ -228,6 +258,9 @@ export const BUILTIN_ADDON_LOCALE_BUNDLES: Record<string, AddonLocaleBundle[]> =
         'app.paryonWorkspaceApp.name': 'ParyonUSD',
         'app.paryonWorkspaceApp.description':
           'Панель стейблкоина с проверкой сети в реальном времени и статусом контракта.',
+        'app.merchantPayApp.name': 'Оплата продавцу',
+        'app.merchantPayApp.description':
+          'Принимайте платежи в стейблкоинах, пока клиенты платят BCH через пулы Cauldron.',
         'screen.back': 'Назад',
         'screen.walletError': 'Ошибка кошелька',
         'screen.unavailable': 'Недоступно',
@@ -248,6 +281,9 @@ export const BUILTIN_ADDON_LOCALE_BUNDLES: Record<string, AddonLocaleBundle[]> =
         'app.paryonWorkspaceApp.name': 'ParyonUSD',
         'app.paryonWorkspaceApp.description':
           'Allon stablecoin mai tabbatar da hanyar sadarwa kai tsaye da matsayin kwangila.',
+        'app.merchantPayApp.name': 'Biyan mai siyarwa',
+        'app.merchantPayApp.description':
+          'Karɓi biyan stablecoin yayin da abokan ciniki ke biyan BCH ta wuraren Cauldron.',
         'screen.back': 'Koma baya',
         'screen.walletError': 'Kuskuren walat',
         'screen.unavailable': 'Ba ya samuwa',

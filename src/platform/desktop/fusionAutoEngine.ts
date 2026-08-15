@@ -22,6 +22,8 @@ export interface AutoFusionInputs {
   cashFusionEnabled: boolean;
   /** The shared auto-fusion policy, used by both cards. */
   autoFuseEnabled: boolean;
+  /** Session-only permission granted by an explicit manual Fusion start. */
+  autoFusionSessionArmed: boolean;
   /** Which transport the user selected; the two are mutually exclusive. */
   p2pFusionEnabled: boolean;
   /** 0 means no wallet is open. */
@@ -144,6 +146,8 @@ export function decideAutoFusion(input: AutoFusionInputs): AutoFusionDecision {
     return { run: false, reason: 'CashFusion is off' };
   if (!input.autoFuseEnabled)
     return { run: false, reason: 'Auto-fusion is off' };
+  if (!input.autoFusionSessionArmed)
+    return { run: false, reason: 'Fusion must be started explicitly first' };
   if (!Number.isInteger(input.walletId) || input.walletId <= 0) {
     return { run: false, reason: 'No wallet open' };
   }

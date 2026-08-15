@@ -22,7 +22,7 @@ export default function ConnectionUriScanCard({
   onConnect,
   scanning = false,
   submitting = false,
-  connectLabel = 'Connect',
+  connectLabel,
 }: ConnectionUriScanCardProps) {
   const { t } = useI18n();
   return (
@@ -50,7 +50,7 @@ export default function ConnectionUriScanCard({
         className="wallet-btn-primary w-full"
         disabled={submitting}
       >
-        {scanning ? t('qr.scanning') : connectLabel}
+        {scanning ? t('qr.scanning') : connectLabel ?? t('wc.connect')}
       </button>
     </div>
   );

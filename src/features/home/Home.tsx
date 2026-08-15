@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { FaArrowDown, FaArrowUp, FaBitcoin, FaQrcode } from 'react-icons/fa';
@@ -27,7 +27,6 @@ import { Network } from '../../state/slices/networkSlice';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import { SATSINBITCOIN } from '../../utils/constants';
 import { selectRpaStealthSats } from '../../state/slices/walletSpecialActivitySlice';
-import { loadStoredWalletSpecialActivities } from '../../services/WalletSpecialActivityService';
 import SettingsRow from '../../components/ui/SettingsRow';
 import EmptyState from '../../components/ui/EmptyState';
 import { shortenTxHash } from '../../utils/shortenHash';
@@ -38,6 +37,7 @@ import { FusionBadge } from '../../components/FusionBadge';
 import HomeConnectPopup from '../../components/home/HomeConnectPopup';
 import { preloadTokenMetadata } from '../../hooks/useSharedTokenMetadata';
 import { useHomeConnect } from './useHomeConnect';
+import { useI18n } from '../../i18n/useI18n';
 
 type QuickActionButtonProps = {
   title: string;
@@ -73,13 +73,13 @@ type HomeProps = {
 const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
   const navigate = useNavigate();
   const dispatch = useDispatch<AppDispatch>();
+  const { t } = useI18n();
   const dbService = useMemo(() => DatabaseService(), []);
 
   const currentWalletId = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
   );
   const fusionDepthRev = useFusionDepthRevision(Number(currentWalletId) || 0);
-  const reduxUTXOs = useSelector((state: RootState) => state.utxos.utxos);
   const fetchingUTXOsRedux = useSelector(
     (state: RootState) => state.utxos.fetchingUTXOs
   );
@@ -103,34 +103,9 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
     typeof bchUsdQuote === 'number' ? totalBch * bchUsdQuote : null;
   // Sort by height / unconfirmed — not array index (Electrum merge order).
   const recentTransactions = useMemo(
-    () => takeRecentTransactions(transactions, 8),
+    () => takeRecentTransactions(transactions, 3),
     [transactions]
   );
-  const tokenCategories = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          Object.values(reduxUTXOs)
-            .flat()
-            .map((utxo) => utxo.token?.category)
-            .filter((category): category is string => Boolean(category))
-        )
-      ),
-    [reduxUTXOs]
-  );
-
-  useEffect(() => {
-    if (!currentWalletId || tokenCategories.length === 0) return;
-    void preloadTokenMetadata(tokenCategories);
-  }, [currentWalletId, tokenCategories]);
-
-  useEffect(() => {
-    if (!currentWalletId) return;
-    void loadStoredWalletSpecialActivities(currentWalletId).catch(() => {
-      /* stored stealth total is optional on Home */
-    });
-  }, [currentWalletId]);
-
   const handleRefresh = useCallback(async () => {
     if (fetchingUTXOsRedux || !currentWalletId) return;
     const walletSession = captureActiveWalletSession(currentWalletId);
@@ -172,14 +147,14 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
     <WalletScreen maxWidthClassName="max-w-md" scrollable={false}>
       <div className="flex h-full min-h-0 flex-col gap-4">
         <PageHeader
-          title="Home"
+          title={t('home.title')}
           subtitle={
             viewerOnly
               ? currentNetwork === Network.CHIPNET
-                ? 'Chipnet - Browser viewer'
+                ? `${t('assets.chipnet')} - Browser viewer`
                 : 'Browser viewer'
               : currentNetwork === Network.CHIPNET
-                ? 'Chipnet'
+                ? t('assets.chipnet')
                 : undefined
           }
           compact
@@ -192,8 +167,8 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
 
           <SectionCard className="shrink-0 p-3">
             <SectionHeader
-              title="Portfolio"
-              subtitle="Wallet overview"
+              title={t('home.portfolio')}
+              subtitle={t('home.walletOverview')}
               compact
               action={
                 <button
@@ -202,7 +177,7 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
                   className="wallet-btn-secondary px-3 py-1.5 text-sm"
                   disabled={fetchingUTXOsRedux}
                 >
-                  {fetchingUTXOsRedux ? 'Syncing…' : 'Sync'}
+                  {fetchingUTXOsRedux ? t('home.syncing') : t('home.sync')}
                 </button>
               }
             />
@@ -220,13 +195,13 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
                       ? `${totalBch.toFixed(8)} BCH`
                       : totalUsd !== null
                         ? `$${totalUsd.toFixed(2)} USD`
-                        : 'USD unavailable'}
+                        : t('home.usdUnavailable')}
                   </div>
                   <div className="text-xs wallet-muted">
                     {displayMode === 'BCH'
                       ? totalUsd !== null
                         ? `$${totalUsd.toFixed(2)} USD`
-                        : 'USD price unavailable'
+                        : t('home.usdPriceUnavailable')
                       : `${totalBch.toFixed(8)} BCH`}
                   </div>
                   {stealthSats > 0 && (
@@ -244,7 +219,7 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
                   setDisplayMode((mode) => (mode === 'BCH' ? 'USD' : 'BCH'))
                 }
                 className="flex h-14 w-14 items-center justify-center rounded-3xl bg-[color-mix(in_oklab,var(--wallet-accent-soft)_72%,transparent)] text-[var(--wallet-accent-strong)] transition hover:brightness-[1.04]"
-                aria-label="Toggle BCH and USD balance"
+                aria-label={t('home.toggleBalance')}
               >
                 <FaBitcoin className="text-2xl" />
               </button>
@@ -253,7 +228,7 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
 
           <SectionCard className="shrink-0 p-3">
             <SectionHeader
-              title="Quick Actions"
+              title={t('home.quickActions')}
               compact
               className="items-center"
               action={
@@ -263,11 +238,11 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
                     onClick={homeConnect.openPopup}
                     disabled={homeConnect.scanning || homeConnect.submitting}
                     className="wallet-card inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--wallet-border)] bg-[color-mix(in_oklab,var(--wallet-accent-soft)_42%,transparent)] px-3 text-[var(--wallet-accent-strong)] transition hover:brightness-[1.03] disabled:cursor-not-allowed disabled:opacity-70 self-center"
-                    aria-label="Scan QR"
-                    title="Scan QR"
+                    aria-label={t('home.scanQr')}
+                    title={t('home.scanQr')}
                   >
                     <span className="text-sm font-semibold wallet-text-strong">
-                      Scan QR
+                      {t('home.scanQr')}
                     </span>
                     <FaQrcode
                       className={`text-base ${homeConnect.scanning ? 'animate-pulse' : ''}`}
@@ -278,7 +253,7 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
             />
             <div className="flex items-stretch gap-2.5">
               <QuickActionButton
-                title="Receive"
+                title={t('home.receive')}
                 icon={<FaArrowDown />}
                 onClick={() =>
                   navigate('/receive', {
@@ -288,7 +263,7 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
               />
               {!viewerOnly && (
                 <QuickActionButton
-                  title="Send"
+                  title={t('home.send')}
                   icon={<FaArrowUp />}
                   onClick={() =>
                     navigate('/send', {
@@ -302,15 +277,15 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
 
           <SectionCard className="shrink-0 p-3">
             <SectionHeader
-              title="Recent Activity"
-              subtitle="Latest wallet activity"
+              title={t('home.recentActivity')}
+              subtitle={t('home.latestActivity')}
               compact
               action={
                 <button
                   className="wallet-link text-sm"
                   onClick={() => navigate(`/transactions/${currentWalletId}`)}
                 >
-                  View all
+                  {t('home.viewAll')}
                 </button>
               }
             />
@@ -336,8 +311,8 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
                       }
                       description={
                         tx.height > 0
-                          ? `Block ${tx.height}`
-                          : 'Pending confirmation'
+                          ? `${t('home.block')} ${tx.height}`
+                          : t('home.pendingConfirmation')
                       }
                       right={
                         <span
@@ -349,11 +324,11 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
                         >
                           {fused
                             ? tx.height > 0
-                              ? 'Fused · Confirmed'
-                              : 'Fused · Pending'
+                              ? `Fused · ${t('home.confirmed')}`
+                              : `Fused · ${t('home.pending')}`
                             : tx.height > 0
-                              ? 'Confirmed'
-                              : 'Pending'}
+                              ? t('home.confirmed')
+                              : t('home.pending')}
                         </span>
                       }
                       compact
@@ -364,7 +339,7 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
                   );
                 })
               ) : (
-                <EmptyState message="No recent activity yet." />
+                <EmptyState message={t('home.noRecentActivity')} />
               )}
             </div>
           </SectionCard>

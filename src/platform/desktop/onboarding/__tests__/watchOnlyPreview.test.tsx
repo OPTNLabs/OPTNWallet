@@ -93,15 +93,19 @@ describe('desktop watch-only preview', () => {
 
   it('saves and opens without an xPub preview step; single-sig and multisig for PSBT', () => {
     const html = renderToStaticMarkup(
-      <WatchOnlyWalletPreview
-        onBack={() => undefined}
-        onCreated={() => undefined}
-      />
+      <Provider store={store}>
+        <I18nProvider>
+          <WatchOnlyWalletPreview
+            onBack={() => undefined}
+            onCreated={() => undefined}
+          />
+        </I18nProvider>
+      </Provider>
     );
 
     expect(html).toContain('Create Watch-Only Wallet');
     expect(html).toContain('Wallet name');
-    expect(html).toContain('Single-sig');
+    expect(html).toContain('Standard');
     expect(html).toContain('Multisig');
     expect(html).toContain('Save and open wallet');
     expect(html).not.toContain('Preview public addresses');
@@ -110,10 +114,14 @@ describe('desktop watch-only preview', () => {
 
   it('puts Keystone in an Airgap section at the bottom of create watch-only', () => {
     const html = renderToStaticMarkup(
-      <WatchOnlyWalletPreview
-        onBack={() => undefined}
-        onCreated={() => undefined}
-      />
+      <Provider store={store}>
+        <I18nProvider>
+          <WatchOnlyWalletPreview
+            onBack={() => undefined}
+            onCreated={() => undefined}
+          />
+        </I18nProvider>
+      </Provider>
     );
 
     expect(html).toContain('Airgap');
@@ -126,10 +134,14 @@ describe('desktop watch-only preview', () => {
 
   it('does not ask for a master fingerprint on the main xPub form', () => {
     const html = renderToStaticMarkup(
-      <WatchOnlyWalletPreview
-        onBack={() => undefined}
-        onCreated={() => undefined}
-      />
+      <Provider store={store}>
+        <I18nProvider>
+          <WatchOnlyWalletPreview
+            onBack={() => undefined}
+            onCreated={() => undefined}
+          />
+        </I18nProvider>
+      </Provider>
     );
 
     expect(html).not.toContain('Master fingerprint');

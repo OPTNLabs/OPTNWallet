@@ -66,6 +66,16 @@ export const BCH_STANDARD_BRANCH_INDEX = {
 
 export type BchStandardBranchName = keyof typeof BCH_STANDARD_BRANCH_INDEX;
 
+// These branches use ordinary BCH address derivation and therefore belong in
+// the wallet-wide history/UTXO scan. RPA branch 3 is a key gate (scan/spend
+// keys at child indexes 0 and 1), not a normal sequence of BCH addresses; it
+// is handled by RpaService instead.
+export const BCH_WALLET_SCAN_BRANCH_NAMES: readonly BchStandardBranchName[] = [
+  'receive',
+  'change',
+  'defi',
+];
+
 /**
  * SLIP-44 coin type for BCH account paths.
  *

@@ -54,7 +54,11 @@ import PlayUpdateService from '../services/PlayUpdateService';
 import { homeRoute, ROUTE_PATHS } from '../navigation/routes';
 import BcmrService from '../services/BcmrService';
 import { useWalletConfirm } from '../components/WalletConfirmDialog';
-import { refreshWalletTransactionHistory } from '../services/WalletHistoryRefreshService';
+import {
+  publishStoredWalletHistory,
+  refreshWalletTransactionHistory,
+} from '../services/WalletHistoryRefreshService';
+import { loadStoredWalletSpecialActivities } from '../services/WalletSpecialActivityService';
 
 let utxoWorkerStarted = false;
 let bcmrWarmupStarted = false;
@@ -266,7 +270,9 @@ export function useWizardConnectSessionWatch(
 interface WalletNetworkBootstrapDependencies {
   loadWalletMetadata: (walletId: number) => Promise<WalletMetadata | null>;
   ensureFreshConnection: () => Promise<unknown>;
+  publishStoredHistory: typeof publishStoredWalletHistory;
   refreshHistory: typeof refreshWalletTransactionHistory;
+  loadStoredSpecialActivities: typeof loadStoredWalletSpecialActivities;
   getSessionGeneration?: () => number;
 }
 
@@ -282,7 +288,9 @@ export async function bootstrapWalletNetwork(
   dependencies: WalletNetworkBootstrapDependencies = {
     loadWalletMetadata: (id) => WalletManager().getWalletMetadata(id),
     ensureFreshConnection: () => ElectrumServer().ensureFreshConnection(),
+    publishStoredHistory: publishStoredWalletHistory,
     refreshHistory: refreshWalletTransactionHistory,
+    loadStoredSpecialActivities: loadStoredWalletSpecialActivities,
     getSessionGeneration: () =>
       store.getState().wallet_id.sessionGeneration ?? 0,
   }
@@ -314,6 +322,24 @@ export async function bootstrapWalletNetwork(
     dependencies.getSessionGeneration?.() ??
     store.getState().wallet_id.sessionGeneration ??
     0;
+
+  // Hydrate durable wallet state once per wallet session. This runs for every
+  // surface through AppShell, so Home and Assets can remain render-only on
+  // both desktop and mobile instead of repeating SQL work on route mounts.
+  void dependencies
+    .publishStoredHistory({
+      walletId,
+      dispatch,
+      sessionGeneration,
+    })
+    .catch((error) =>
+      console.warn('Stored wallet history hydration failed:', error)
+    );
+  void dependencies
+    .loadStoredSpecialActivities(walletId)
+    .catch((error) =>
+      console.warn('Stored wallet activity hydration failed:', error)
+    );
 
   void dependencies
     .ensureFreshConnection()

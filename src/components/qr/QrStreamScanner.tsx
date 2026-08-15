@@ -10,6 +10,7 @@ type Props = {
   onComplete: (payload: Uint8Array) => void;
   onProgress?: (progress: QrStreamProgress | null) => void;
   onClose?: () => void;
+  initialPayload?: string;
   className?: string;
 };
 
@@ -18,6 +19,7 @@ export const QrStreamScanner: React.FC<Props> = ({
   onComplete,
   onProgress,
   onClose,
+  initialPayload,
   className,
 }) => {
   const { t } = useI18n();
@@ -48,6 +50,27 @@ export const QrStreamScanner: React.FC<Props> = ({
     let cancelled = false;
     const canvas = document.createElement('canvas');
     const context = canvas.getContext('2d', { willReadFrequently: true });
+
+    if (initialPayload) {
+      try {
+        const recovered = decoderRef.current.addQrPayload(initialPayload);
+        const nextProgress = decoderRef.current.progress;
+        setProgress(nextProgress);
+        onProgress?.(nextProgress);
+        if (recovered) {
+          onComplete(recovered);
+          return () => {
+            cancelled = true;
+          };
+        }
+      } catch (initialScanError) {
+        setError(
+          initialScanError instanceof Error
+            ? initialScanError.message
+            : t('qr.unableToDecode')
+        );
+      }
+    }
 
     const scan = () => {
       const video = videoRef.current;
@@ -117,7 +140,7 @@ export const QrStreamScanner: React.FC<Props> = ({
       cancelAnimationFrame(animationFrame);
       stream?.getTracks().forEach((track) => track.stop());
     };
-  }, [onComplete, onProgress, t]);
+  }, [initialPayload, onComplete, onProgress, t]);
 
   return (
     <div className={className}>

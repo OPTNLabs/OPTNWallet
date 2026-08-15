@@ -14,6 +14,18 @@ export const localeExtendedOverrides: Partial<
   'pt-BR': {
     'settingsRows.language': 'Idioma',
     'settingsRows.languageDescription': 'Escolher o idioma da interface',
+    'settingsRows.walletInfo': 'Informações da carteira',
+    'settingsRows.walletInfoDescription':
+      'Nome, tipo, rede · xPub e caminho protegidos por senha/biometria',
+    'settingsRows.exportArchive': 'Exportação do pacote da carteira',
+    'settingsRows.exportArchiveDescription':
+      'Exportar/importar .optn + .optn-cold (chaves + dados criptografados)',
+    'settingsRows.rebuildWallet': 'Reconstruir carteira',
+    'settingsRows.rebuildWalletDescription':
+      'Apagar dados da cadeia e sincronizar novamente pela rede (mantém a seed)',
+    'settingsPanels.walletInfo': 'Informações da carteira',
+    'settingsPanels.exportArchive': 'Exportação do pacote da carteira',
+    'settingsPanels.rebuildWallet': 'Reconstruir carteira',
     'settingsRows.network': 'Rede',
     'settingsRows.networkDescription': 'Alternar entre Mainnet e Chipnet',
     'settingsRows.faucet': 'Faucet do Chipnet',
@@ -165,6 +177,18 @@ export const localeExtendedOverrides: Partial<
   vi: {
     'settingsRows.language': 'Ngôn ngữ',
     'settingsRows.languageDescription': 'Chọn ngôn ngữ giao diện',
+    'settingsRows.walletInfo': 'Thông tin ví',
+    'settingsRows.walletInfoDescription':
+      'Tên, loại, mạng · xPub và đường dẫn được bảo vệ bằng mật khẩu/sinh trắc học',
+    'settingsRows.exportArchive': 'Xuất gói ví',
+    'settingsRows.exportArchiveDescription':
+      'Xuất/nhập .optn + .optn-cold (khóa + dữ liệu mã hóa)',
+    'settingsRows.rebuildWallet': 'Xây dựng lại ví',
+    'settingsRows.rebuildWalletDescription':
+      'Xóa dữ liệu chuỗi và đồng bộ lại từ mạng (giữ seed)',
+    'settingsPanels.walletInfo': 'Thông tin ví',
+    'settingsPanels.exportArchive': 'Xuất gói ví',
+    'settingsPanels.rebuildWallet': 'Xây dựng lại ví',
     'settingsRows.network': 'Mạng',
     'settingsRows.networkDescription': 'Chuyển đổi giữa Mainnet và Chipnet',
     'settingsRows.faucet': 'Vòi Chipnet',
@@ -312,6 +336,18 @@ export const localeExtendedOverrides: Partial<
   'zh-TW': {
     'settingsRows.language': '語言',
     'settingsRows.languageDescription': '選擇介面語言',
+    'settingsRows.walletInfo': '錢包資訊',
+    'settingsRows.walletInfoDescription':
+      '名稱、類型、網路 · xPub 與路徑受密碼/生物辨識保護',
+    'settingsRows.exportArchive': '錢包套件匯出',
+    'settingsRows.exportArchiveDescription':
+      '匯出/匯入 .optn + .optn-cold（金鑰 + 加密資料）',
+    'settingsRows.rebuildWallet': '重建錢包',
+    'settingsRows.rebuildWalletDescription':
+      '清除鏈上資料並從網路重新同步（保留種子）',
+    'settingsPanels.walletInfo': '錢包資訊',
+    'settingsPanels.exportArchive': '錢包套件匯出',
+    'settingsPanels.rebuildWallet': '重建錢包',
     'settingsRows.network': '網路',
     'settingsRows.networkDescription': '在 Mainnet 與 Chipnet 間切換',
     'settingsRows.faucet': 'Chipnet Faucet',
@@ -453,6 +489,18 @@ export const localeExtendedOverrides: Partial<
   fr: {
     'settingsRows.language': 'Langue',
     'settingsRows.languageDescription': 'Choisir la langue de l’interface',
+    'settingsRows.walletInfo': 'Informations du portefeuille',
+    'settingsRows.walletInfoDescription':
+      'Nom, type, réseau · xPub et chemin protégés par mot de passe/biométrie',
+    'settingsRows.exportArchive': 'Export du pack portefeuille',
+    'settingsRows.exportArchiveDescription':
+      'Exporter/importer .optn + .optn-cold (clés + données chiffrées)',
+    'settingsRows.rebuildWallet': 'Reconstruire le portefeuille',
+    'settingsRows.rebuildWalletDescription':
+      'Effacer les données de la chaîne et resynchroniser depuis le réseau (conserve la seed)',
+    'settingsPanels.walletInfo': 'Informations du portefeuille',
+    'settingsPanels.exportArchive': 'Export du pack portefeuille',
+    'settingsPanels.rebuildWallet': 'Reconstruire le portefeuille',
     'settingsRows.network': 'Réseau',
     'settingsRows.networkDescription': 'Basculer entre Mainnet et Chipnet',
     'settingsRows.faucet': 'Faucet Chipnet',
@@ -607,6 +655,18 @@ export const localeExtendedOverrides: Partial<
   ko: {
     'settingsRows.language': '언어',
     'settingsRows.languageDescription': '지갑 인터페이스 언어 선택',
+    'settingsRows.walletInfo': '지갑 정보',
+    'settingsRows.walletInfoDescription':
+      '이름, 유형, 네트워크 · xPub 및 경로는 비밀번호/생체 인증으로 보호됨',
+    'settingsRows.exportArchive': '지갑 팩 내보내기',
+    'settingsRows.exportArchiveDescription':
+      '.optn + .optn-cold 내보내기/가져오기 (키 + 암호화된 데이터)',
+    'settingsRows.rebuildWallet': '지갑 재구축',
+    'settingsRows.rebuildWalletDescription':
+      '체인 데이터를 지우고 네트워크에서 다시 동기화 (시드 유지)',
+    'settingsPanels.walletInfo': '지갑 정보',
+    'settingsPanels.exportArchive': '지갑 팩 내보내기',
+    'settingsPanels.rebuildWallet': '지갑 재구축',
     'settingsRows.network': '네트워크',
     'settingsRows.networkDescription': 'Mainnet과 Chipnet 사이 전환',
     'settingsRows.faucet': 'Chipnet Faucet',
@@ -751,6 +811,18 @@ export const localeExtendedOverrides: Partial<
   ja: {
     'settingsRows.language': '言語',
     'settingsRows.languageDescription': 'ウォレットの表示言語を選択',
+    'settingsRows.walletInfo': 'ウォレット情報',
+    'settingsRows.walletInfoDescription':
+      '名前、種類、ネットワーク · xPub とパスはパスワード/生体認証で保護',
+    'settingsRows.exportArchive': 'ウォレットパックのエクスポート',
+    'settingsRows.exportArchiveDescription':
+      '.optn + .optn-cold をエクスポート/インポート（鍵 + 暗号化データ）',
+    'settingsRows.rebuildWallet': 'ウォレットを再構築',
+    'settingsRows.rebuildWalletDescription':
+      'チェーンデータを消去してネットワークから再同期（シードは保持）',
+    'settingsPanels.walletInfo': 'ウォレット情報',
+    'settingsPanels.exportArchive': 'ウォレットパックのエクスポート',
+    'settingsPanels.rebuildWallet': 'ウォレットを再構築',
     'settingsRows.network': 'ネットワーク',
     'settingsRows.networkDescription': 'Mainnet と Chipnet を切り替え',
     'settingsRows.faucet': 'Chipnet Faucet',
@@ -902,6 +974,18 @@ export const localeExtendedOverrides: Partial<
   ru: {
     'settingsRows.language': 'Язык',
     'settingsRows.languageDescription': 'Выбрать язык интерфейса кошелька',
+    'settingsRows.walletInfo': 'Информация о кошельке',
+    'settingsRows.walletInfoDescription':
+      'Имя, тип, сеть · xPub и путь защищены паролем/биометрией',
+    'settingsRows.exportArchive': 'Экспорт пакета кошелька',
+    'settingsRows.exportArchiveDescription':
+      'Экспорт/импорт .optn + .optn-cold (ключи + зашифрованные данные)',
+    'settingsRows.rebuildWallet': 'Пересоздать кошелёк',
+    'settingsRows.rebuildWalletDescription':
+      'Удалить данные цепочки и синхронизировать заново из сети (сид-фраза сохраняется)',
+    'settingsPanels.walletInfo': 'Информация о кошельке',
+    'settingsPanels.exportArchive': 'Экспорт пакета кошелька',
+    'settingsPanels.rebuildWallet': 'Пересоздать кошелёк',
     'settingsRows.network': 'Сеть',
     'settingsRows.networkDescription': 'Переключаться между Mainnet и Chipnet',
     'settingsRows.faucet': 'Фаусет Chipnet',
@@ -1053,6 +1137,18 @@ export const localeExtendedOverrides: Partial<
   'ha-NG': {
     'settingsRows.language': 'Harshe',
     'settingsRows.languageDescription': 'Zaɓi harshen fuskar walat',
+    'settingsRows.walletInfo': 'Bayanin walat',
+    'settingsRows.walletInfoDescription':
+      "Suna, nau'i, hanyar sadarwa · xPub da hanya suna ƙarƙashin kalmar sirri/biometric",
+    'settingsRows.exportArchive': 'Fitar da fakitin walat',
+    'settingsRows.exportArchiveDescription':
+      'Fitar da/shigo da .optn + .optn-cold (maɓallai + bayanan da aka ɓoye)',
+    'settingsRows.rebuildWallet': 'Sake gina walat',
+    'settingsRows.rebuildWalletDescription':
+      'Goge bayanan sarka kuma sake daidaitawa daga hanyar sadarwa (ana riƙe seed)',
+    'settingsPanels.walletInfo': 'Bayanin walat',
+    'settingsPanels.exportArchive': 'Fitar da fakitin walat',
+    'settingsPanels.rebuildWallet': 'Sake gina walat',
     'settingsRows.network': 'Hanyar sadarwa',
     'settingsRows.networkDescription': 'Canza tsakanin Mainnet da Chipnet',
     'settingsRows.faucet': 'Chipnet Faucet',

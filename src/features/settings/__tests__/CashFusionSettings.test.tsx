@@ -13,27 +13,30 @@ const activityState = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('../../../platform/desktop/FusionRunnerService', async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import('../../../platform/desktop/FusionRunnerService')
-    >();
-  return {
-    ...actual,
-    // Activity only greys the UI when this window holds a real lease.
-    isFusionRunning: (walletId: number) =>
-      activityState.current?.walletId === walletId,
-    getFusionActivity: () => activityState.current,
-    reconcileIdleFusionState: async () => undefined,
-    subscribeFusionActivity: (
-      _walletId: number,
-      listener: (activity: typeof activityState.current) => void
-    ) => {
-      listener(activityState.current);
-      return () => undefined;
-    },
-  };
-});
+vi.mock(
+  '../../../platform/desktop/FusionRunnerService',
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import('../../../platform/desktop/FusionRunnerService')
+      >();
+    return {
+      ...actual,
+      // Activity only greys the UI when this window holds a real lease.
+      isFusionRunning: (walletId: number) =>
+        activityState.current?.walletId === walletId,
+      getFusionActivity: () => activityState.current,
+      reconcileIdleFusionState: async () => undefined,
+      subscribeFusionActivity: (
+        _walletId: number,
+        listener: (activity: typeof activityState.current) => void
+      ) => {
+        listener(activityState.current);
+        return () => undefined;
+      },
+    };
+  }
+);
 
 import { CashFusionSettings } from '../CashFusionSettings';
 import experimentalReducer, {
@@ -91,7 +94,8 @@ describe('CashFusion settings mode enforcement', () => {
         this.map.delete(key);
       }
     }
-    (globalThis as { localStorage?: unknown }).localStorage = new MemoryStorage();
+    (globalThis as { localStorage?: unknown }).localStorage =
+      new MemoryStorage();
 
     const { reserveOutpoints, outpointKey, clearOutpointReservations } =
       await import('../../../platform/desktop/fusionRoundState');
@@ -119,6 +123,7 @@ describe('CashFusion settings mode enforcement', () => {
             },
           }
         ) => state,
+        preferences: preferencesReducer,
       },
     });
     store.dispatch(setCashFusionEnabled(true));
@@ -126,17 +131,15 @@ describe('CashFusion settings mode enforcement', () => {
 
     const html = renderToStaticMarkup(
       <Provider store={store}>
-        <CashFusionSettings />
+        <I18nProvider>
+          <CashFusionSettings />
+        </I18nProvider>
       </Provider>
     );
 
     expect(html).toContain('Start P2P round');
-    expect(html).toContain(
-      'All coins are reserved by another fusion round'
-    );
-    expect(html).toMatch(
-      /disabled=""[^>]*>Start P2P round/
-    );
+    expect(html).toContain('All coins are reserved by another fusion round');
+    expect(html).toMatch(/disabled=""[^>]*>Start P2P round/);
     clearOutpointReservations(7);
   });
 
@@ -149,6 +152,7 @@ describe('CashFusion settings mode enforcement', () => {
           wallet_id: (state = { currentWalletId: 7 }) => state,
           network: (state = { currentNetwork: 'chipnet' }) => state,
           utxos: (state = { utxos: {} }) => state,
+          preferences: preferencesReducer,
         },
       });
       store.dispatch(setCashFusionEnabled(true));
@@ -162,13 +166,19 @@ describe('CashFusion settings mode enforcement', () => {
 
       const html = renderToStaticMarkup(
         <Provider store={store}>
-          <CashFusionSettings />
+          <I18nProvider>
+            <CashFusionSettings />
+          </I18nProvider>
         </Provider>
       );
 
-      expect(html).toContain('Fusing…');
+      expect(html).toContain(
+        mode === 'server' ? 'Fusing…' : 'Running P2P round…'
+      );
       expect(html).toContain('disabled=""');
-      expect(html).not.toContain('Running P2P round…');
+      if (mode === 'server') {
+        expect(html).not.toContain('Running P2P round…');
+      }
     }
   );
 });

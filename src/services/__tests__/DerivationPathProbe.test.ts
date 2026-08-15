@@ -41,6 +41,12 @@ const resolver = async (accountPath: string) => ({
   change: `${accountPath}|change`,
 });
 
+const resolverWithDefi = async (accountPath: string) => ({
+  receive: `${accountPath}|receive`,
+  change: `${accountPath}|change`,
+  defi: `${accountPath}|defi`,
+});
+
 type BatchCall = { method: string; params?: unknown[] };
 
 function answerBatch(
@@ -87,6 +93,25 @@ describe('scanDerivationPaths', () => {
     expect(result.ambiguous).toBe(false);
     expect(result.incomplete).toBe(false);
     expect(result.candidatesProbed).toBe(result.candidatesTotal);
+  });
+
+  it('adopts a path funded only on the DeFi/Cauldron branch', async () => {
+    const funded = "m/44'/1'/0'";
+    requestManyMock.mockImplementation(async (calls: BatchCall[]) =>
+      answerBatch(calls, (method, address) => {
+        if (method.endsWith('get_history')) {
+          return address === `${funded}|defi|0`
+            ? [{ tx_hash: 'cauldron', height: 1 }]
+            : [];
+        }
+        return address === `${funded}|defi|0` ? [{ value: 30_000 }] : [];
+      })
+    );
+
+    const result = await scanDerivationPaths(Network.CHIPNET, resolverWithDefi);
+
+    expect(result.chosen).toBe(funded);
+    expect(result.ambiguous).toBe(false);
   });
 
   it('reports ambiguity instead of silently picking when two paths hold coins', async () => {

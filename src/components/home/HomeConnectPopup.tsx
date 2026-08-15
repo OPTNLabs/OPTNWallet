@@ -1,4 +1,5 @@
 import ConnectionUriScanCard from '../connect/ConnectionUriScanCard';
+import { useI18n } from '../../i18n/useI18n';
 
 type HomeConnectPopupProps = {
   uri: string;
@@ -19,19 +20,18 @@ export default function HomeConnectPopup({
   scanning = false,
   submitting = false,
 }: HomeConnectPopupProps) {
+  const { t } = useI18n();
+
   return (
     <div className="wallet-popup-backdrop p-3 sm:p-4">
       <div className="wallet-popup-panel max-w-md w-full space-y-4">
         <div className="space-y-1 text-center">
-          <h2 className="text-xl font-bold">Connect</h2>
-          <p className="text-sm wallet-muted">
-            Paste or scan a CashConnect invite, WalletConnect URI, or payment
-            address. Approve requests stay on Home.
-          </p>
+          <h2 className="text-xl font-bold">{t('wc.connect')}</h2>
+          <p className="text-sm wallet-muted">{t('homeConnect.description')}</p>
         </div>
         <ConnectionUriScanCard
-          label="URI"
-          placeholder="bch-cc-v1:… or wc:…"
+          label={t('wc.connectionUri')}
+          placeholder={t('homeConnect.placeholder')}
           value={uri}
           onChange={onChange}
           onScan={onScan}
@@ -45,7 +45,7 @@ export default function HomeConnectPopup({
           onClick={onClose}
           disabled={scanning || submitting}
         >
-          Close
+          {t('app.close')}
         </button>
       </div>
     </div>

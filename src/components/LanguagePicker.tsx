@@ -11,7 +11,7 @@ export default function LanguagePicker() {
         aria-label={t('app.language')}
         value={locale}
         onChange={(event) => setLocale(event.target.value as typeof locale)}
-        className="wallet-input rounded-full px-2 py-1.5 text-sm"
+        className="wallet-input wallet-language-select min-w-[8.5rem] rounded-full px-3 py-1.5 text-sm font-semibold"
       >
         {SUPPORTED_LOCALES.map((supportedLocale) => (
           <option key={supportedLocale} value={supportedLocale}>

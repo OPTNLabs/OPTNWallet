@@ -7,7 +7,9 @@ export function isComingSoonApp(appId: string, appName: string): boolean {
     normalizedId.endsWith(':fundmeapp') ||
     normalizedName === 'fundme' ||
     normalizedId.endsWith(':paryonworkspaceapp') ||
-    normalizedName.includes('paryonusd')
+    normalizedName.includes('paryonusd') ||
+    normalizedId.endsWith(':merchantpayapp') ||
+    normalizedName === 'merchant pay'
   );
 }
 
@@ -44,6 +46,13 @@ export function getAppCategory(app: {
     return 'Wallet';
   }
   if (
+    normalizedId.endsWith(':merchantpayapp') ||
+    normalizedName === 'merchant pay' ||
+    normalizedName.includes('merchant pay')
+  ) {
+    return 'Wallet';
+  }
+  if (
     normalizedId.endsWith(':mintcashtokenspocapp') ||
     normalizedName === 'mint tokens' ||
     normalizedName.includes('paryonusd')
@@ -74,6 +83,11 @@ export function getAppSortPriority(app: { id: string; name: string }): number {
   if (
     normalizedId.endsWith(':paperwalletsweepapp') ||
     normalizedName === 'paper wallet'
+  )
+    return 1;
+  if (
+    normalizedId.endsWith(':merchantpayapp') ||
+    normalizedName === 'merchant pay'
   )
     return 1;
   if (
@@ -141,6 +155,8 @@ export function getAppIconFrame(app: { name: string }): string {
     return 'bg-amber-500/15 text-amber-300';
   if (normalized.includes('cauldron'))
     return 'bg-violet-500/15 text-violet-300';
+  if (normalized.includes('merchant'))
+    return 'bg-emerald-500/15 text-emerald-300';
   if (normalized.includes('mint')) return 'bg-emerald-500/15 text-emerald-300';
   if (normalized.includes('fundme')) return 'bg-rose-500/15 text-rose-300';
   return 'bg-[color-mix(in_oklab,var(--wallet-accent-soft)_70%,transparent)] text-[var(--wallet-accent-strong)]';

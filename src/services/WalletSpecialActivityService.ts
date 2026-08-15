@@ -418,6 +418,18 @@ export async function loadStoredWalletSpecialActivities(
   walletId: number
 ): Promise<WalletSpecialActivityRecord[]> {
   await DatabaseService().ensureDatabaseStarted();
+  const state = store.getState() as unknown as {
+    wallet_id?: { currentWalletId?: number | null };
+  };
+  // A route can unmount while the database is starting. Do not publish the
+  // previous wallet's activity into a newly selected wallet (or after lock).
+  if (
+    state.wallet_id &&
+    Object.prototype.hasOwnProperty.call(state.wallet_id, 'currentWalletId') &&
+    state.wallet_id.currentWalletId !== walletId
+  ) {
+    return [];
+  }
   ensureActivityTable();
   const db = DatabaseService().getDatabase();
   if (!db) return [];
@@ -440,6 +452,19 @@ export async function loadStoredWalletSpecialActivities(
   query.free();
 
   for (const record of records) {
+    const currentState = store.getState() as unknown as {
+      wallet_id?: { currentWalletId?: number | null };
+    };
+    if (
+      currentState.wallet_id &&
+      Object.prototype.hasOwnProperty.call(
+        currentState.wallet_id,
+        'currentWalletId'
+      ) &&
+      currentState.wallet_id.currentWalletId !== walletId
+    ) {
+      break;
+    }
     if (record.activityType === 'rpa') {
       const existing =
         store.getState().walletSpecialActivity?.byWallet?.[walletId]?.rpa ??
@@ -787,9 +812,7 @@ export async function scanCauldronActivity(params: {
   } = await import('./cauldron/planner');
   const walletAddresses = await fetchCauldronDerivedWalletAddresses(
     params.walletId,
-    params.network,
-    32,
-    0
+    params.network
   );
   const userPools = await fetchNormalizedCauldronUserPools(
     params.network,

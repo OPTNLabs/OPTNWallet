@@ -18,6 +18,7 @@ import {
 } from '../platform/desktop/CoinLabelService';
 import { selectWalletId } from '../state/slices/walletSlice';
 import { FusionBadge } from './FusionBadge';
+import { useI18n } from '../i18n/useI18n';
 
 interface UTXOCardProps {
   utxos: UTXO[];
@@ -50,6 +51,7 @@ function formatBchFromSats(
 }
 
 const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
+  const { t } = useI18n();
   const walletId = useSelector(selectWalletId);
   const [labels, setLabels] = useState<Record<string, string>>({});
   const tokenMetadata = useSharedTokenMetadata(
@@ -119,7 +121,7 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
             d="M4 12a8 8 0 018-8v8H4z"
           />
         </svg>
-        <span>Loading UTXOs…</span>
+        <span>{t('utxo.loading')}</span>
       </div>
     );
   }
@@ -132,12 +134,16 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
         const metadata = tokenData?.BcmrTokenMetadata || null;
         const category = tokenData?.category || null;
         const sharedMeta = category ? tokenMetadata[category] : null;
-        const presentation = resolveTokenPresentation(category ?? '', sharedMeta, {
-          name: metadata?.name ?? null,
-          symbol: metadata?.token.symbol ?? null,
-          decimals: metadata?.token.decimals ?? null,
-          iconUri: metadata?.uris?.icon ?? null,
-        });
+        const presentation = resolveTokenPresentation(
+          category ?? '',
+          sharedMeta,
+          {
+            name: metadata?.name ?? null,
+            symbol: metadata?.token.symbol ?? null,
+            decimals: metadata?.token.decimals ?? null,
+            iconUri: metadata?.uris?.icon ?? null,
+          }
+        );
 
         // ✅ Contract UTXOs may not have `value`, but do have `amount`
         const sats = (utxo.value ?? utxo.amount) as
@@ -158,15 +164,16 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
               {isToken ? (
                 <>
                   <p>
-                    <strong>Amount:</strong>{' '}
+                    <strong>{t('utxo.amount')}:</strong>{' '}
                     {formatAtomicTokenAmount(
                       tokenData!.amount,
                       presentation.decimals
                     )}{' '}
-                    {presentation.symbol || 'tokens'}
+                    {presentation.symbol || t('utxo.tokens')}
                   </p>
                   <p>
-                    <strong>Name:</strong> {presentation.primaryLabel}
+                    <strong>{t('utxo.name')}:</strong>{' '}
+                    {presentation.primaryLabel}
                   </p>
                   <p>
                     {formatBchFromSats(sats)} <strong>BCH</strong>
@@ -181,13 +188,14 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
                     )}
                   </p>
                   <p>
-                    <strong>Tx Hash:</strong> {shortenTxHash(utxo.tx_hash)}
+                    <strong>{t('utxo.txHash')}:</strong>{' '}
+                    {shortenTxHash(utxo.tx_hash)}
                   </p>
                   <p>
-                    <strong>Pos:</strong> {utxo.tx_pos}
+                    <strong>{t('utxo.pos')}:</strong> {utxo.tx_pos}
                   </p>
                   <p>
-                    <strong>Height:</strong> {utxo.height}
+                    <strong>{t('utxo.height')}:</strong> {utxo.height}
                   </p>
                 </>
               )}
@@ -223,14 +231,14 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
                   showStatus={false}
                   detail={
                     <span className="text-xs wallet-muted">
-                      {utxo.token?.nft ? 'NFT' : 'FT'}
+                      {utxo.token?.nft ? t('utxo.nft') : t('utxo.ft')}
                     </span>
                   }
                 />
               ) : (
                 <div className="text-center">
                   <div className="text-base font-semibold wallet-text-strong">
-                    Bitcoin Cash
+                    {t('utxo.bitcoinCash')}
                   </div>
                 </div>
               )}
@@ -239,7 +247,7 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
         );
       })}
 
-      {!utxos.length && <p className="wallet-muted">No UTXOs to display.</p>}
+      {!utxos.length && <p className="wallet-muted">{t('utxo.none')}</p>}
     </div>
   );
 };

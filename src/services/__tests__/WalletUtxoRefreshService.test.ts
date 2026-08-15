@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const getStateMock = vi.fn();
 const retrieveKeysMock = vi.fn();
+const bootstrapInitialAddressBatchMock = vi.fn();
 const listTrackedAddressesMock = vi.fn();
 const fetchAndStoreUTXOsManyMock = vi.fn();
 const primeUTXOCacheMock = vi.fn();
@@ -16,7 +17,10 @@ vi.mock('../../state/store', () => ({
 }));
 
 vi.mock('../KeyService', () => ({
-  default: { retrieveKeys: retrieveKeysMock },
+  default: {
+    retrieveKeys: retrieveKeysMock,
+    bootstrapInitialAddressBatch: bootstrapInitialAddressBatchMock,
+  },
 }));
 
 vi.mock('../QuantumrootTrackingService', () => ({
@@ -48,9 +52,14 @@ describe('fetchActiveWalletUtxos', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getStateMock.mockReturnValue({
-      wallet_id: { currentWalletId: 6, sessionGeneration: 10 },
+      wallet_id: {
+        currentWalletId: 6,
+        sessionGeneration: 10,
+        walletType: 'standard',
+      },
     });
     retrieveKeysMock.mockResolvedValue([{ address: 'bchtest:qwallet6' }]);
+    bootstrapInitialAddressBatchMock.mockResolvedValue(undefined);
     listTrackedAddressesMock.mockResolvedValue(['bchtest:pwallet6qr']);
     fetchAndStoreUTXOsManyMock.mockResolvedValue({
       'bchtest:qwallet6': [],
@@ -95,6 +104,25 @@ describe('fetchActiveWalletUtxos', () => {
       6,
       ['bchtest:qwallet6', 'bchtest:pwallet6qr'],
       { discover: false, force: false, onProgress: undefined }
+    );
+  });
+
+  it('materializes standard wallet keys before a manual UTXO refresh', async () => {
+    retrieveKeysMock
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ address: 'bchtest:qwallet6' }]);
+
+    const { captureActiveWalletSession, fetchActiveWalletUtxos } = await import(
+      '../WalletUtxoRefreshService'
+    );
+
+    await fetchActiveWalletUtxos(captureActiveWalletSession(6)!);
+
+    expect(bootstrapInitialAddressBatchMock).toHaveBeenCalledWith(6, 0, 20);
+    expect(fetchAndStoreUTXOsManyMock).toHaveBeenCalledWith(
+      6,
+      ['bchtest:qwallet6', 'bchtest:pwallet6qr'],
+      { discover: true, force: false, onProgress: undefined }
     );
   });
 

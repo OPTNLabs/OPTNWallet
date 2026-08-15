@@ -14,11 +14,8 @@ import TokenIdentityBadge from '../components/ui/TokenIdentityBadge';
 import Popup from '../components/transaction/Popup';
 import TokenQuery from '../components/TokenQuery';
 import WalletScreen from '../components/ui/WalletScreen';
-import TransactionService from '../services/TransactionService';
 import type { ContractAddressRecord, UTXO } from '../types/types';
 import useFetchWalletData from '../hooks/useFetchWalletData';
-import UTXOService from '../services/UTXOService';
-import { logError } from '../utils/errorHandling';
 import type { TokenPresentationFallback } from '../utils/tokenPresentation';
 import { StealthBalanceCard } from '../features/rpa/StealthBalanceCard';
 import { CauldronActivityCard } from '../features/cauldron/CauldronActivityCard';
@@ -35,6 +32,7 @@ import {
   formatAtomicTokenAmount,
   resolveTokenPresentation,
 } from '../utils/tokenPresentation';
+import { useI18n } from '../i18n/useI18n';
 
 type AssetTab = 'BCH' | 'Tokens' | 'NFTs';
 const isDev = import.meta.env.DEV;
@@ -45,6 +43,7 @@ type AssetsProps = {
 
 const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
   const navigate = useNavigate();
+  const { t } = useI18n();
   const [tab, setTab] = useState<AssetTab>('BCH');
   const [selectedTokenCategory, setSelectedTokenCategory] = useState<
     string | null
@@ -71,7 +70,6 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
   const [, setDefaultChangeAddress] = useState<string>('');
   const [, setWalletError] = useState<string | null>(null);
   const [walletUtxos, setWalletUtxos] = useState<UTXO[]>([]);
-  const [refreshedTokenUtxos, setRefreshedTokenUtxos] = useState<UTXO[]>([]);
   const reduxTokenUtxos = useMemo(
     () => dedupeTokenUtxos(Object.values(reduxUTXOs).flat()),
     [reduxUTXOs]
@@ -83,13 +81,9 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
   const tokenUtxos = useMemo(
     () =>
       currentWalletId
-        ? getStableTokenUtxos(
-            refreshedTokenUtxos,
-            walletTokenUtxos,
-            reduxTokenUtxos
-          )
+        ? getStableTokenUtxos(walletTokenUtxos, reduxTokenUtxos)
         : [],
-    [currentWalletId, refreshedTokenUtxos, walletTokenUtxos, reduxTokenUtxos]
+    [currentWalletId, walletTokenUtxos, reduxTokenUtxos]
   );
 
   useFetchWalletData(
@@ -102,90 +96,9 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
     setWalletError
   );
 
-  useEffect(() => {
-    setRefreshedTokenUtxos([]);
-  }, [currentWalletId]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadNativeTokenInventory(): Promise<void> {
-      if (!currentWalletId) return;
-
-      if (walletAddresses.length === 0) {
-        // Keep the last known token rows visible while the refreshed address
-        // list is still loading. Clearing here makes token holdings appear to
-        // disappear on every reload before the DB snapshot is restored.
-        return;
-      }
-
-      try {
-        await UTXOService.fetchAndStoreUTXOsMany(
-          currentWalletId,
-          walletAddresses.map((item) => item.address)
-        );
-        const nativeWalletUtxos =
-          await UTXOService.fetchAllWalletUtxos(currentWalletId);
-        let nextTokenUtxos = nativeWalletUtxos.tokenUtxos ?? [];
-
-        if (isDev) {
-          console.log('[Assets] native inventory snapshot', {
-            walletId: currentWalletId,
-            addressCount: walletAddresses.length,
-            addressSample: walletAddresses.slice(0, 3),
-            allUtxoCount: nativeWalletUtxos.allUtxos.length,
-            tokenUtxoCount: nativeWalletUtxos.tokenUtxos.length,
-            tokenCategories: nativeWalletUtxos.tokenUtxos
-              .map((utxo) => utxo.token?.category)
-              .filter(Boolean),
-          });
-        }
-
-        if (nextTokenUtxos.length === 0) {
-          const fallbackSnapshot =
-            await TransactionService.fetchAddressesAndUTXOs(currentWalletId);
-          nextTokenUtxos = (fallbackSnapshot.utxos ?? []).filter(
-            (utxo) => !!utxo.token
-          );
-
-          if (isDev) {
-            console.log('[Assets] fallback inventory snapshot', {
-              walletId: currentWalletId,
-              fallbackUtxoCount: fallbackSnapshot.utxos.length,
-              fallbackTokenUtxoCount: nextTokenUtxos.length,
-              fallbackTokenCategories: nextTokenUtxos
-                .map((utxo) => utxo.token?.category)
-                .filter(Boolean),
-            });
-          }
-        }
-
-        if (cancelled) return;
-        setRefreshedTokenUtxos(dedupeTokenUtxos(nextTokenUtxos));
-
-        if (isDev) {
-          console.log('[Assets] grouped token rows', {
-            walletId: currentWalletId,
-            groupedCount: nextTokenUtxos.length,
-            groupedCategories: nextTokenUtxos.map(
-              (utxo) => utxo.token?.category
-            ),
-          });
-        }
-      } catch (error) {
-        logError('Assets.loadNativeTokenInventory', error, {
-          walletId: currentWalletId,
-        });
-        // Preserve the previous token snapshot on fetch errors. The DB-backed
-        // state is still the safer source of truth than blanking the list.
-      }
-    }
-
-    void loadNativeTokenInventory();
-    return () => {
-      cancelled = true;
-    };
-  }, [currentWalletId, walletAddresses]);
+  // The shared worker already refreshes every tracked address and publishes
+  // the authoritative Redux UTXO snapshot. Assets must not start a second
+  // wallet-wide listunspent pass just because its route mounted.
 
   const entries = useMemo(() => {
     const tokenTotals: Record<
@@ -281,7 +194,8 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
       nftCardMetadata,
       familyParseInfoByCategory
     );
-  }, [nftInstances, nftCardMetadata, currentNetwork]);  const totalBch = totalBalance / SATSINBITCOIN;
+  }, [nftInstances, nftCardMetadata, currentNetwork]);
+  const totalBch = totalBalance / SATSINBITCOIN;
   const totalUsd =
     typeof bchUsdQuote === 'number' ? totalBch * bchUsdQuote : null;
 
@@ -312,8 +226,10 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
     <WalletScreen maxWidthClassName="max-w-md" scrollable={false}>
       <div className="flex h-full min-h-0 flex-col gap-3">
         <PageHeader
-          title="Assets"
-          subtitle={currentNetwork === Network.CHIPNET ? 'Chipnet' : ''}
+          title={t('assets.title')}
+          subtitle={
+            currentNetwork === Network.CHIPNET ? t('assets.chipnet') : ''
+          }
           compact
         />
 
@@ -330,7 +246,11 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
                     : 'wallet-segment-inactive border-[var(--wallet-border)]'
                 }`}
               >
-                {name}
+                {name === 'BCH'
+                  ? t('assets.tabBch')
+                  : name === 'Tokens'
+                    ? t('assets.tabTokens')
+                    : t('assets.tabNfts')}
               </button>
             ))}
           </div>
@@ -341,8 +261,8 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
             <div className="flex h-full min-h-0 flex-col gap-3">
               <SectionCard className="p-3">
                 <SectionHeader
-                  title="Bitcoin Cash"
-                  subtitle="Primary wallet balance"
+                  title={t('assets.bitcoinCash')}
+                  subtitle={t('assets.primaryBalance')}
                   compact
                 />
                 <div className="flex items-center justify-between gap-3">
@@ -361,13 +281,13 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
                           ? `${totalBch.toFixed(8)} BCH`
                           : totalUsd !== null
                             ? `$${totalUsd.toFixed(2)} USD`
-                            : 'USD unavailable'}
+                            : t('assets.usdUnavailable')}
                       </div>
                       <div className="text-xs wallet-muted">
                         {displayMode === 'BCH'
                           ? totalUsd !== null
                             ? `$${totalUsd.toFixed(2)} USD`
-                            : 'USD price unavailable'
+                            : t('assets.usdPriceUnavailable')
                           : `${totalBch.toFixed(8)} BCH`}
                       </div>
                     </button>
@@ -378,7 +298,7 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
                       setDisplayMode((mode) => (mode === 'BCH' ? 'USD' : 'BCH'))
                     }
                     className="flex h-14 w-14 items-center justify-center rounded-3xl bg-[color-mix(in_oklab,var(--wallet-accent-soft)_72%,transparent)] text-[var(--wallet-accent-strong)] transition hover:brightness-[1.04]"
-                    aria-label="Toggle BCH and USD balance"
+                    aria-label={t('assets.toggleBalance')}
                   >
                     <FaBitcoin className="text-2xl" />
                   </button>
@@ -394,8 +314,8 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
 
               <SectionCard className="p-3">
                 <SectionHeader
-                  title="CashToken holdings"
-                  subtitle="Quick view of your wallet inventory"
+                  title={t('assets.cashTokenHoldings')}
+                  subtitle={t('assets.quickInventory')}
                   compact
                 />
                 <div className="grid grid-cols-3 gap-2.5">
@@ -403,19 +323,25 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
                     <div className="text-lg font-bold wallet-text-strong">
                       {fungibleTokens.length}
                     </div>
-                    <div className="text-xs wallet-muted">fungible</div>
+                    <div className="text-xs wallet-muted">
+                      {t('assets.fungible')}
+                    </div>
                   </div>
                   <div className="wallet-card p-3 text-left">
                     <div className="text-lg font-bold wallet-text-strong">
                       {nftTokens.length}
                     </div>
-                    <div className="text-xs wallet-muted">NFTs</div>
+                    <div className="text-xs wallet-muted">
+                      {t('assets.nfts')}
+                    </div>
                   </div>
                   <div className="wallet-card p-3 text-left">
                     <div className="text-lg font-bold wallet-text-strong">
                       {entries.length}
                     </div>
-                    <div className="text-xs wallet-muted">categories</div>
+                    <div className="text-xs wallet-muted">
+                      {t('assets.categories')}
+                    </div>
                   </div>
                 </div>
               </SectionCard>
@@ -426,8 +352,8 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
             <div className="flex h-full min-h-0 flex-col gap-2.5">
               <SectionCard className="min-h-0 flex-1 overflow-hidden p-3">
                 <SectionHeader
-                  title="CashTokens"
-                  subtitle="Fungible token holdings"
+                  title={t('assets.cashTokens')}
+                  subtitle={t('assets.fungibleHoldings')}
                   compact
                 />
                 <div className="h-full min-h-0 space-y-2.5 overflow-y-auto overscroll-contain pb-[calc(var(--safe-bottom)+1rem)] pr-1">
@@ -463,7 +389,8 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
                                     {displayAmount}
                                   </div>
                                   <div className="text-xs wallet-muted">
-                                    {value.amount.toString()} units
+                                    {value.amount.toString()}{' '}
+                                    {t('assets.units')}
                                   </div>
                                 </div>
                               }
@@ -473,7 +400,7 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
                       );
                     })
                   ) : (
-                    <EmptyState message="No fungible CashTokens found." />
+                    <EmptyState message={t('assets.noFungibleTokens')} />
                   )}
                 </div>
               </SectionCard>
@@ -483,7 +410,7 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
                   className="wallet-btn-primary w-full py-2.5"
                   onClick={() => navigate('/mint-cashtokens-poc')}
                 >
-                  Mint Tokens
+                  {t('assets.mintTokens')}
                 </button>
               )}
             </div>
@@ -493,8 +420,8 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
             <div className="flex h-full min-h-0 flex-col gap-2.5">
               <SectionCard className="min-h-0 flex-1 overflow-hidden p-3">
                 <SectionHeader
-                  title="NFTs"
-                  subtitle="Non-fungible holdings"
+                  title={t('assets.tabNfts')}
+                  subtitle={t('assets.nonFungibleHoldings')}
                   compact
                 />
                 <div className="h-full min-h-0 space-y-2.5 overflow-y-auto overscroll-contain pb-[calc(var(--safe-bottom)+1rem)] pr-1">
@@ -510,7 +437,9 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
                           key={card.outpoint}
                           type="button"
                           className="wallet-card w-full p-2.5 text-left transition hover:brightness-[0.98]"
-                          onClick={() => setSelectedTokenCategory(card.category)}
+                          onClick={() =>
+                            setSelectedTokenCategory(card.category)
+                          }
                         >
                           <div className="flex items-center gap-2.5">
                             {card.imageUri ? (
@@ -571,7 +500,7 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
                       );
                     })
                   ) : (
-                    <EmptyState message="No NFTs found." />
+                    <EmptyState message={t('assets.noNfts')} />
                   )}
                 </div>
               </SectionCard>
@@ -581,7 +510,7 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
                   className="wallet-btn-primary w-full py-2.5"
                   onClick={() => navigate('/mint-cashtokens-poc')}
                 >
-                  Mint Tokens
+                  {t('assets.mintTokens')}
                 </button>
               )}
             </div>
@@ -591,7 +520,7 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
         {!viewerOnly && tab === 'BCH' && (
           <SectionCard className="shrink-0 p-3">
             <SectionHeader
-              title="Quantumroot"
+              title={t('assets.quantumroot')}
               compact
               action={
                 <button
@@ -599,7 +528,7 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
                   onClick={() => navigate('/quantumroot')}
                   className="wallet-btn-secondary px-3 py-1.5 text-sm"
                 >
-                  Open vaults
+                  {t('assets.openVaults')}
                 </button>
               }
             />
@@ -607,11 +536,11 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
               <div>
                 <div className="text-sm font-semibold wallet-text-strong">
                   {currentNetwork === Network.CHIPNET
-                    ? 'Advanced vault workspace'
-                    : 'Vault workspace'}
+                    ? t('assets.advancedVaultWorkspace')
+                    : t('assets.vaultWorkspace')}
                 </div>
                 <div className="text-xs wallet-muted">
-                  Receive and recovery tools for advanced vaults
+                  {t('assets.advancedVaultDescription')}
                 </div>
               </div>
             </div>

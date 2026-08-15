@@ -40,8 +40,9 @@ export function AutoFusionControls({
         <ul className="list-disc pl-4 space-y-0.5">
           <li>
             <span className="wallet-text-strong">Fuse automatically</span> —
-            start rounds in the background (on UTXO refresh + timer). Needs Tor
-            for P2P and peers online.
+            after you explicitly start a round, continue eligible rounds in the
+            background. It never starts a round by itself. Needs Tor for P2P and
+            peers online.
           </li>
           <li>
             <span className="wallet-text-strong">Rounds per coin</span> — how
@@ -63,9 +64,10 @@ export function AutoFusionControls({
             Fuse automatically
           </span>
           <span className="block text-[10px] wallet-muted">
-            Starts rounds on its own using the selected transport (P2P or
-            server). Each successful round pays a network fee; then waits ~40s
-            before Auto tries again (~25s after a failed attempt).
+            After you press Fuse Now or Start P2P round, continue using the
+            selected transport (P2P or server). It never starts while merely
+            opening the wallet. Each successful round pays a network fee; then
+            waits before Auto tries again.
           </span>
         </span>
         <input

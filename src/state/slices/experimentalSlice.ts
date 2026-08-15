@@ -101,7 +101,9 @@ const initialState: ExperimentalState = {
   nostrChatEnabled: true,
   nostrChatDefaultOnApplied: true,
   nostrRelays: DEFAULT_NOSTR_RELAYS,
-  autoFuseEnabled: true,
+  // Automatic Fusion is opt-in and also requires an explicit Fusion start in
+  // the current app session before the background engine can continue rounds.
+  autoFuseEnabled: false,
   fuseDepth: DEFAULT_FUSE_DEPTH,
   spendOnlyFusedCoins: false,
   p2pFusionEnabled: true,
@@ -136,7 +138,7 @@ export function normalizeExperimentalPersistedState(
   delete persistedWithoutProtocolKnobs.p2pKnobs;
 
   return {
-    autoFuseEnabled: true,
+    autoFuseEnabled: false,
     p2pFusionEnabled: true,
     ...persistedWithoutProtocolKnobs,
     // Spread first, then clamp: a wallet persisted before this field existed
@@ -317,9 +319,9 @@ export const selectNostrRelays = createSelector(
 /** True for built-in bootstrap relays (UI: no Remove button). */
 export { isDefaultNostrRelay };
 // Missing fields mean the wallet was persisted before these controls existed.
-// Preserve opt-out semantics for Auto Fuse and normalized booleans for the mode.
+// Auto Fuse is fail-closed; the mode remains normalized to a valid boolean.
 export const selectAutoFuseEnabled = (state: RootState) =>
-  state.experimental.autoFuseEnabled !== false;
+  state.experimental.autoFuseEnabled === true;
 export const selectP2pFusionEnabled = (state: RootState) =>
   state.experimental.p2pFusionEnabled === true;
 /** Shared by both Fusion cards, so the two controls can never disagree. */

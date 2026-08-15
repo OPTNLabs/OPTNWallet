@@ -20,6 +20,7 @@ export type SettingsPanelKey =
   | 'cashfusion'
   | 'nostr'
   | 'addons'
+  | 'language'
   | 'app-lock'
   | 'rebuild-wallet'
   | 'export-archive';
@@ -36,6 +37,13 @@ export type SettingsRowConfig = {
 };
 
 export const WALLET_ROWS: SettingsRowConfig[] = [
+  {
+    key: 'language',
+    title: 'Language',
+    description: 'Choose the wallet interface language',
+    action: 'panel',
+    target: 'language',
+  },
   {
     key: 'network',
     title: 'Network',
@@ -264,6 +272,7 @@ export const CONNECTION_ROWS: SettingsRowConfig[] = [
 ];
 
 export const ABOUT_ROWS: SettingsRowConfig[] = [
+  WALLET_ROWS.find((row) => row.key === 'language')!,
   {
     key: 'about',
     title: 'About OPTN',

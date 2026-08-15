@@ -23,6 +23,12 @@ describe('appsViewHelpers', () => {
     ).toBe('Wallet');
     expect(
       getAppCategory({
+        id: 'optn.builtin.merchant-pay:merchantPayApp',
+        name: 'Merchant Pay',
+      })
+    ).toBe('Wallet');
+    expect(
+      getAppCategory({
         id: 'optn.builtin.mint:mintCashTokensPoCApp',
         name: 'CashTokens',
       })
@@ -67,6 +73,12 @@ describe('appsViewHelpers', () => {
       })
     ).toBe(1);
     expect(
+      getAppSortPriority({
+        id: 'optn.builtin.merchant-pay:merchantPayApp',
+        name: 'Merchant Pay',
+      })
+    ).toBe(1);
+    expect(
       getAppDescription({
         id: 'optn.builtin.cauldron:cauldronSwapApp',
         name: 'Cauldron',
@@ -85,6 +97,9 @@ describe('appsViewHelpers', () => {
     expect(
       shouldHideApp('optn.builtin.cauldron:cauldronSwapApp', 'Cauldron')
     ).toBe(false);
+    expect(
+      shouldHideApp('optn.builtin.merchant-pay:merchantPayApp', 'Merchant Pay')
+    ).toBe(false);
   });
 
   it('marks CashFusion as desktop-only UI', () => {
@@ -92,12 +107,15 @@ describe('appsViewHelpers', () => {
     expect(isDesktopOnlyApp('optn.wallet.contracts')).toBe(false);
   });
 
-  it('only marks FundMe and ParyonUSD as coming soon outside dev mode', () => {
+  it('marks unreleased app surfaces as coming soon', () => {
     expect(isComingSoonApp('optn.builtin.fundme:fundmeApp', 'FundMe')).toBe(
       true
     );
     expect(
       isComingSoonApp('optn.builtin.paryon:paryonWorkspaceApp', 'ParyonUSD')
+    ).toBe(true);
+    expect(
+      isComingSoonApp('optn.builtin.demo:merchantPayApp', 'Merchant Pay')
     ).toBe(true);
     expect(
       isComingSoonApp('optn.builtin.cauldron:cauldronSwapApp', 'Cauldron')

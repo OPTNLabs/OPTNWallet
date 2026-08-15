@@ -199,7 +199,7 @@ themselves.
   generated Markdown companion and export script.
 - Wallet-owned add-on host chrome is translated. Built-in add-on metadata now
   has reviewed bundles for all twelve locales, and the sandbox passes the
-  selected locale to third-party iframe add-ons. The eight repo-owned module
+  selected locale to third-party iframe add-ons. The nine repo-owned module
   catalogs under `src/pages/apps/**/locales.ts` now provide all twelve locales;
   Marketplace screens merge the matching module catalog with manifest-owned
   messages, and standalone mobile/desktop routes use
