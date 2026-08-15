@@ -379,7 +379,7 @@ Control plane stays named: ACK, `credential_request` (quota + Pedersen),
 ready, abort. That is **how many**, not **which UTXO**. Signatures use a
 throwaway key so a round-key signature batch cannot re-group anonymous
 inputs. A generic abort does **not** restore an accused key via
-control-plane disclosures. Stage 1 leaves a dead round unnamed.
+control-plane disclosures. A dead round stays unnamed.
 
 ### Phase E — Assemble, verify, sign
 
@@ -431,7 +431,7 @@ usually `session`.
 | `final`               | coordinator → peers                  | `txid`, `txHex`                                                                                     |
 | `abort`               | any                                  | `reason` (≤240 chars)                                                                               |
 | `blame`               | any (verifiable)                     | `accused`, `code`, `evidence` — **prove-or-don't-blame** (hard crypto only)                          |
-| `component_disclosure`| legacy parse only                    | **Not sent.** Old peers may still emit it; Stage 1 drops it and never uses it as evidence.          |
+| `component_disclosure`| legacy parse only                    | **Not sent.** Old peers may still emit it; it is dropped and never used as evidence.                |
 
 Parsing is strict (`parseRoundMessage`): size caps, hex shapes, participant
 sets, money bounds. Invalid messages surface as protocol errors.
@@ -565,7 +565,7 @@ Never multi-minute fee cooldowns for ordinary fail/success.
 Not EC `blame.rs`. The server can accuse by connection identity. P2P cannot:
 happy-path components have no `from`.
 
-**Stage 1 (shipped)** — abort does **not** open a disclosure window.
+Shipped policy — abort does **not** open a disclosure window.
 There is no `runBlamePhase` and no `BLAME_WINDOW_MS`. Generic abort never
 requests or emits `component_disclosure`. A late disclosure from an old
 peer is dropped. `findFaultInDisclosures` is unwired (tests only).
@@ -599,7 +599,7 @@ round key; local 10-minute ghost only (`recordBlamedSessionKey`). See
 | Pedersen                | Full component model + blame           | Per-peer commit at credential time          |
 | Blind Schnorr           | Server signs; client requester in Rust | Coordinator `BlindIssuer`; TS requester     |
 | Covert / output privacy | Separate Tor circuits per component    | **One-shot socket per anonymous component** + jitter + **output onion** |
-| Blame                   | Full EC-style component blame          | Stage 1: crypto faults only; no abort disclosure |
+| Blame                   | Full EC-style component blame          | Crypto faults only; no abort disclosure     |
 | Assembly trust          | Server proposes; client checks         | Coordinator proposes; **every** peer checks |
 | Broadcast               | Client/server paths                    | Coordinator + peer liveness broadcast       |
 | Outer wallet loop       | Same `FusionRunnerService`             | Same                                        |

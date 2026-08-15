@@ -119,4 +119,4 @@ Never fuse mainnet funds in automated tests.
 
 *Last updated: 2026-08-15. Shipped status: 6/4/10 knobs, ACK-shrink, v4
 credentials, anonymous inputs/signatures, CashFusion off Experimental,
-Stage 1 blame (no abort disclosure).*
+shipped blame (no abort disclosure).*

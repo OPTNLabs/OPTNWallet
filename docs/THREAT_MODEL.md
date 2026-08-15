@@ -79,7 +79,7 @@ A peer participating in the same round but acting dishonestly.
   before acting (anti-frame). **Timeouts, relay ACK failures, late join,
   missing messages, and a missing signature are never blame** — honest
   poor-network peers must not be scapegoated. Not a permanent identity ban
-  (throwaway keys). Stage 1 never demands openings after abort.
+  (throwaway keys). Abort never demands openings.
 
 ### A2b: Intermediate output-onion peeler
 
@@ -153,7 +153,7 @@ If the integrated Tor binary or system Tor is compromised.
 - All fusion traffic is deanonymized (IP addresses visible to attacker)
 - Server-path blame proofs (`encrypt.rs`) may be intercepted and relayed
 - P2P `blame` reports are control-plane messages; a Tor attacker who
-  already sees the circuit can relay or drop them, but Stage 1 does not
+  already sees the circuit can relay or drop them, but P2P blame does not
   put identity openings on the wire after abort
 
 **Mitigation:**
@@ -243,7 +243,7 @@ NIP-59), or credential issuance (that is Pedersen + blind Schnorr).
 ### ECDH Encryption (server-path blame proofs)
 
 **Used for:** Encrypting **server-path** CashFusion blame proofs to
-specific participants. This is **not** the P2P Stage 1 `blame` report
+specific participants. This is **not** the P2P `blame` report
 (that is a verifiable control-plane message; abort does not open
 identity).
 

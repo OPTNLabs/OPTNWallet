@@ -157,7 +157,7 @@ const stableTermValues = new Set([
   'QR',
   'Quantumroot',
   'RPA',
-  'RPA · Quantumroot',
+  'RPA · CashFusion',
   'RPC',
   'Sats',
   'SeedCash',

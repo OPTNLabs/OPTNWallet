@@ -128,7 +128,7 @@ Per component, sorted as EC:
 - `salted_component_hash = sha256(salt || component_ser)`
 - `amount_commitment` (65-byte Pedersen uncompressed or EC encoding already used server-side)
 - `communication_key` (compressed) — keep for EC server-path parity.
-  Stage 1 P2P blame does **not** use abort openings.
+  Shipped P2P blame does **not** use abort openings.
 
 ### Blind message
 

@@ -242,7 +242,7 @@ Control-plane messages (ACK, `credential_request` / quota and Pedersen,
 ready, abort) stay under the round identity. The coordinator therefore knows
 each peer's **counts**, not which later anonymous UTXO is whose.
 
-Happy-path blame cannot key a component by `from`. Stage 1 does **not**
+Happy-path blame cannot key a component by `from`. Abort does **not**
 restore identity with post-abort openings. Named blame is only for
 re-verifiable crypto/structural faults on messages that actually arrived.
 A missing signature is a timeout, not an accused key.

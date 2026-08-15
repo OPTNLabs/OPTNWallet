@@ -11,12 +11,12 @@ knows who sent each component. Here it cannot: happy-path `inputs` /
 `outputs` / `signature` are anonymous, so a dead round has **no name on
 the coin**.
 
-**Stage 1 (shipped):** a generic abort does **not** open a disclosure
-phase. Peers do not send openings (`a||b`, salt, Pedersen nonce) after
-fail. `component_disclosure` is still parsed so an old peer cannot crash
-the round; it is never requested, never emitted, and never used as
-evidence. `findFaultInDisclosures` remains as a pure helper + unit tests
-only — it is not the live path.
+The shipped policy is complete: a generic abort does **not** open a
+disclosure phase. Peers do not send openings (`a||b`, salt, Pedersen
+nonce) after fail. `component_disclosure` is still parsed so an old peer
+cannot crash the round; it is never requested, never emitted, and never
+used as evidence. `findFaultInDisclosures` remains as a pure helper +
+unit tests only — it is not the live path.
 
 **Prove-or-don't-blame** on messages that **arrived**. Live codes today:
 `pedersen_unbalanced`, `credential_slot_oob` (via `blameAndFail`), plus
@@ -33,9 +33,11 @@ next attempt. A local 10-minute ghost record is not shared with peers.
 
 Why not disclose after fail: silence looks the same as a drop, and a
 dishonest coordinator can drop an honest signature, abort, and demand
-openings to frame the signer. Stage 1 prefers no name over a framed
-name. Later stages (v5 fanout, optional quarantine) are **not**
-implemented — see [proposed-blame-p2p-cashfusion.md](./proposed-blame-p2p-cashfusion.md).
+openings to frame the signer. No name is better than a framed name.
+That is the finished policy, not a half-build. Optional later ideas
+(padded fanout, local quarantine) are in
+[proposed-blame-p2p-cashfusion.md](./proposed-blame-p2p-cashfusion.md)
+and are not required for blame to be complete.
 
 ## What happens if someone does not sign an input?
 

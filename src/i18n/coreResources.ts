@@ -789,7 +789,7 @@ export const coreTranslations = {
     'settingsRows.console': 'Console',
     'settingsRows.consoleDescription': 'App log · Electrum RPC',
     'settingsRows.experimental': 'Experimental Features',
-    'settingsRows.experimentalDescription': 'RPA · Quantumroot',
+    'settingsRows.experimentalDescription': 'RPA · CashFusion',
     'settingsRows.addons': 'Addons',
     'settingsRows.addonsDescription': 'Install and manage third-party addons',
     'settingsRows.contractInfo': 'Contract Info',
@@ -1719,7 +1719,7 @@ export const coreTranslations = {
     'settingsRows.consoleDescription':
       'Registro de la aplicación · RPC de Electrum',
     'settingsRows.experimental': 'Funciones experimentales',
-    'settingsRows.experimentalDescription': 'RPA · Quantumroot',
+    'settingsRows.experimentalDescription': 'RPA · CashFusion',
     'settingsRows.addons': 'Complementos',
     'settingsRows.addonsDescription':
       'Instala y gestiona complementos de terceros',
@@ -2561,7 +2561,7 @@ export const coreTranslations = {
     'settingsRows.console': '控制台',
     'settingsRows.consoleDescription': '应用日志 · Electrum RPC',
     'settingsRows.experimental': '实验性功能',
-    'settingsRows.experimentalDescription': 'RPA · Quantumroot',
+    'settingsRows.experimentalDescription': 'RPA · CashFusion',
     'settingsRows.addons': '插件',
     'settingsRows.addonsDescription': '安装和管理第三方插件',
     'settingsRows.contractInfo': '合约信息',
