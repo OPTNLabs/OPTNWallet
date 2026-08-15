@@ -31,6 +31,10 @@ import {
   PARYON_LOCALE_BUNDLES,
   PARYON_MODULE_ID,
 } from '../pages/apps/paryon/locales';
+import {
+  MERCHANT_PAY_LOCALE_BUNDLES,
+  MERCHANT_PAY_MODULE_ID,
+} from '../pages/apps/merchant-pay/locales';
 
 export const ADDON_MODULE_IDS = [
   AIRDROPS_MODULE_ID,
@@ -41,6 +45,7 @@ export const ADDON_MODULE_IDS = [
   MINT_CASH_TOKENS_MODULE_ID,
   PAPER_WALLET_MODULE_ID,
   PARYON_MODULE_ID,
+  MERCHANT_PAY_MODULE_ID,
 ] as const;
 
 export type AddonModuleId = (typeof ADDON_MODULE_IDS)[number];
@@ -57,6 +62,7 @@ export const ADDON_MODULE_LOCALE_BUNDLES: Record<
   [MINT_CASH_TOKENS_MODULE_ID]: MINT_CASH_TOKENS_LOCALE_BUNDLES,
   [PAPER_WALLET_MODULE_ID]: PAPER_WALLET_LOCALE_BUNDLES,
   [PARYON_MODULE_ID]: PARYON_LOCALE_BUNDLES,
+  [MERCHANT_PAY_MODULE_ID]: MERCHANT_PAY_LOCALE_BUNDLES,
 };
 
 export function getAddonModuleLocaleMessages(

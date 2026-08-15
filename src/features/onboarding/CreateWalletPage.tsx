@@ -140,11 +140,6 @@ const CreateWalletPage = () => {
         throw new Error('Failed to resolve wallet network.');
       }
 
-      // Materialize one address pair so the worker can start immediately. It
-      // performs the full BIP44 discovery/gap-limit scan after navigation;
-      // waiting for all 40 key rows here makes wallet creation unnecessarily slow.
-      await KeyService.bootstrapInitialAddressBatch(walletID, 0, 1);
-
       dispatch(setWalletId(walletID));
       dispatch(setWalletNetwork(resolvedNetwork));
       dispatch(setWalletType(walletInfo?.walletType ?? WalletType.STANDARD));
@@ -160,6 +155,17 @@ const CreateWalletPage = () => {
       dispatch(setNetwork(resolvedNetwork));
 
       navigate(`/home/${walletID}`);
+
+      // Keep the initial key window consistent with desktop. The worker then
+      // performs the bounded history-based branch discovery pass.
+      void KeyService.bootstrapInitialAddressBatch(walletID, 0, 20).catch(
+        (error) => {
+          console.error('[CreateWalletPage] Initial address bootstrap failed', {
+            walletId: walletID,
+            error,
+          });
+        }
+      );
     } catch (error) {
       console.error('Error creating account:', error);
       await Toast.show({ text: t('onboarding.creationFailed') });

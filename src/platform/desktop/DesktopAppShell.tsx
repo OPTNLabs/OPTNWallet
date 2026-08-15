@@ -39,9 +39,9 @@ const DesktopAppShell: React.FC = () => {
       );
     }
   }, []);
-  // App-wide, so automatic rounds do not require the CashFusion screen to be
-  // open. It gates itself on wallet/session state and refuses unless the durable
-  // cooldown and the cross-window lease both allow a round.
+  // App-wide continuation engine. It is deliberately not a startup trigger:
+  // useAutoFusion remains dormant until the user explicitly starts a Fusion
+  // round from the CashFusion screen in this app session.
   // Fusion policy belongs to the wallet, not the window: loaded when a wallet
   // opens and written back on change, so it survives window close and restart.
   // Must run BEFORE the engine reads those values.

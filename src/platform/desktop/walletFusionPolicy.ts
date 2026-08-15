@@ -25,10 +25,10 @@ export interface WalletFusionPolicy {
   spendOnlyFusedCoins: boolean;
 }
 
-/** Matches the redux defaults, so a wallet with no stored policy behaves as before. */
+/** Automatic Fusion is opt-in; a wallet with no stored policy must not spend. */
 export const DEFAULT_WALLET_FUSION_POLICY: WalletFusionPolicy = {
   cashFusionEnabled: false,
-  autoFuseEnabled: true,
+  autoFuseEnabled: false,
   p2pFusionEnabled: true,
   fuseDepth: DEFAULT_FUSE_DEPTH,
   spendOnlyFusedCoins: false,

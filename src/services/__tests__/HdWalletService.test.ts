@@ -179,4 +179,20 @@ describe('HdWalletService', () => {
     expect(publicAddress?.address.startsWith('bchtest:')).toBe(true);
     expect(publicAddress?.tokenAddress.startsWith('bchtest:')).toBe(true);
   });
+
+  it("derives Chipnet addresses from the explicit m/44'/1'/0' path", async () => {
+    const keyMaterial = await deriveBchKeyMaterial(
+      Network.CHIPNET,
+      TEST_MNEMONIC,
+      '',
+      0,
+      0,
+      0,
+      "m/44'/1'/0'"
+    );
+
+    expect(keyMaterial).not.toBeNull();
+    expect(keyMaterial?.address.startsWith('bchtest:')).toBe(true);
+    expect(keyMaterial?.tokenAddress.startsWith('bchtest:')).toBe(true);
+  });
 });

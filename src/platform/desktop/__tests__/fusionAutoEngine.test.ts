@@ -18,6 +18,7 @@ import {
 const ready: AutoFusionInputs = {
   cashFusionEnabled: true,
   autoFuseEnabled: true,
+  autoFusionSessionArmed: true,
   p2pFusionEnabled: true,
   walletId: 4,
   torReady: true,
@@ -45,6 +46,7 @@ describe('auto-fusion policy decision', () => {
   it.each([
     ['master switch off', { cashFusionEnabled: false }],
     ['auto-fusion policy off', { autoFuseEnabled: false }],
+    ['no explicit Fusion start', { autoFusionSessionArmed: false }],
     ['no wallet open', { walletId: 0 }],
     ['a negative wallet id', { walletId: -1 }],
   ])('refuses to start when %s', (_label, override) => {

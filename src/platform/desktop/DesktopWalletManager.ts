@@ -636,6 +636,17 @@ export async function openWalletWithPassword(
       `[DesktopWalletManager] wallet ${walletId} has unknown networkType=${String(info.networkType)}; skipping purge`
     );
   }
+
+  // Existing standard wallets may predate address bootstrap, or may have had
+  // their key rows removed during a network repair. Materialize the same
+  // initial batch used by desktop onboarding before the wallet session is
+  // handed to AppShell; otherwise Receive can only report an empty key table.
+  // Other wallet types have separate open paths and must not attempt mnemonic
+  // derivation here.
+  if (info.walletType === WalletType.STANDARD && net) {
+    const { default: KeyService } = await import('../../services/KeyService');
+    await KeyService.bootstrapInitialAddressBatch(walletId, 0, 20);
+  }
   return info;
 }
 

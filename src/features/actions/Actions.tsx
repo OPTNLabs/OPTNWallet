@@ -27,7 +27,11 @@ type ActionsMode = 'basic' | 'advanced';
 
 const ACTION_COPY: Record<
   string,
-  { title: TranslationKey; description: TranslationKey; badge?: TranslationKey }
+  {
+    title?: TranslationKey;
+    description?: TranslationKey;
+    badge?: TranslationKey;
+  }
 > = {
   Send: { title: 'actions.send', description: 'actions.sendDescription' },
   Receive: {
@@ -62,6 +66,9 @@ const ACTION_COPY: Record<
   WizardConnect: {
     title: 'actions.wizardConnect',
     description: 'actions.wizardConnectDescription',
+  },
+  CashConnect: {
+    description: 'actions.cashConnectDescription',
   },
   Contracts: {
     title: 'actions.contracts',
@@ -176,7 +183,7 @@ const Actions: React.FC = () => {
                       <ActionTile
                         key={action.title}
                         compact
-                        title={copy ? t(copy.title) : action.title}
+                        title={copy?.title ? t(copy.title) : action.title}
                         icon={getBasicActionIcon(action.title)}
                         layout="horizontal"
                         description={
@@ -242,7 +249,7 @@ const Actions: React.FC = () => {
                     <ActionTile
                       key={action.title}
                       compact
-                      title={copy ? t(copy.title) : action.title}
+                      title={copy?.title ? t(copy.title) : action.title}
                       description={
                         copy?.description
                           ? t(copy.description)

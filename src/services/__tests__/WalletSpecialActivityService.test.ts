@@ -386,9 +386,7 @@ describe('WalletSpecialActivityService', () => {
     expect(result.payload.tokenAmountsByCategory['11'.repeat(32)]).toBe('75');
     expect(fetchCauldronDerivedWalletAddressesMock).toHaveBeenCalledWith(
       7,
-      Network.CHIPNET,
-      32,
-      0
+      Network.CHIPNET
     );
     expect(detectCauldronWalletPoolPositionsMock).toHaveBeenCalledWith(
       [pool],

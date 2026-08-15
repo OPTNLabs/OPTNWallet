@@ -2,6 +2,7 @@ import { NavLink } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 import { RootState } from '../state/store';
 import { useNavBarHeight } from './navigation/useNavBarHeight';
+import { useI18n } from '../i18n/useI18n';
 
 interface BottomNavBarProps {
   setNavBarHeight: (height: number) => void;
@@ -17,6 +18,7 @@ const BottomNavBar: React.FC<BottomNavBarProps> = ({
   const walletId = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
   );
+  const { t } = useI18n();
   const { navBarRef } = useNavBarHeight({ setNavBarHeight });
   const navItemClass = ({ isActive }: { isActive: boolean }) =>
     `wallet-nav-item ${isActive ? 'wallet-nav-item-active' : ''} ${disabled ? 'pointer-events-none opacity-50' : ''}`;
@@ -62,7 +64,7 @@ const BottomNavBar: React.FC<BottomNavBarProps> = ({
               strokeLinejoin="round"
             />
           </svg>
-          <span>Home</span>
+          <span>{t('nav.home')}</span>
         </NavLink>
 
         <NavLink
@@ -92,7 +94,7 @@ const BottomNavBar: React.FC<BottomNavBarProps> = ({
               strokeLinecap="round"
             />
           </svg>
-          <span>Assets</span>
+          <span>{t('nav.assets')}</span>
         </NavLink>
 
         {viewerOnly ? (
@@ -117,7 +119,7 @@ const BottomNavBar: React.FC<BottomNavBarProps> = ({
                 strokeLinejoin="round"
               />
             </svg>
-            <span>Receive</span>
+            <span>{t('receive.title')}</span>
           </NavLink>
         ) : (
           <NavLink
@@ -147,7 +149,7 @@ const BottomNavBar: React.FC<BottomNavBarProps> = ({
                 strokeLinejoin="round"
               />
             </svg>
-            <span>Actions</span>
+            <span>{t('nav.actions')}</span>
           </NavLink>
         )}
 
@@ -172,7 +174,7 @@ const BottomNavBar: React.FC<BottomNavBarProps> = ({
                 strokeLinecap="round"
               />
             </svg>
-            <span>Activity</span>
+            <span>{t('history.title')}</span>
           </NavLink>
         ) : (
           <NavLink
@@ -225,7 +227,7 @@ const BottomNavBar: React.FC<BottomNavBarProps> = ({
                 strokeWidth="2"
               />
             </svg>
-            <span>Apps</span>
+            <span>{t('nav.apps')}</span>
           </NavLink>
         )}
 
@@ -251,7 +253,7 @@ const BottomNavBar: React.FC<BottomNavBarProps> = ({
                 strokeLinejoin="round"
               />
             </svg>
-            <span>Settings</span>
+            <span>{t('nav.settings')}</span>
           </NavLink>
         )}
       </div>

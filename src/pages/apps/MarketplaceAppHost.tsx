@@ -21,7 +21,10 @@ import { createAddonSDK, type AddonSDK } from '../../services/AddonsSDK';
 import { renderDeclarativeScreen } from './marketplaceScreenResolver';
 import AddonIframeHost from './AddonIframeHost';
 import { getReturnPath } from '../../utils/navigation';
-import { isComingSoonApp } from '../../features/apps/appsViewHelpers';
+import {
+  isComingSoonApp,
+  shouldHideApp,
+} from '../../features/apps/appsViewHelpers';
 import { Capacitor } from '@capacitor/core';
 import { useI18n } from '../../i18n/useI18n';
 import { AddonI18nProvider } from '../../i18n/AddonI18nProvider';
@@ -180,25 +183,19 @@ function getAddonModuleId(screenId: string): AddonModuleId | undefined {
     case 'ParyonWorkspaceApp':
     case 'paryonWorkspaceApp':
       return 'paryon';
+    case 'MerchantPayApp':
+    case 'merchantPayApp':
+      return 'merchant-pay';
     default:
       return undefined;
   }
 }
 
 function isDisabledApp(app: AddonAppDefinition): boolean {
-  const screenId = getDeclarativeScreenId(app).toLowerCase();
-  const appId = app.id.toLowerCase();
-  const appName = app.name.toLowerCase();
   const isNativeRuntime = Capacitor.isNativePlatform();
   const comingSoon = isComingSoonApp(app.id, app.name);
 
-  return (
-    (comingSoon && isNativeRuntime) ||
-    screenId === 'authguard' ||
-    screenId === 'authguardapp' ||
-    appId === 'authguard' ||
-    appName === 'authguard'
-  );
+  return shouldHideApp(app.id, app.name) || (comingSoon && isNativeRuntime);
 }
 
 export default function MarketplaceAppHost() {
@@ -422,11 +419,14 @@ export default function MarketplaceAppHost() {
           return;
         }
         const keys = await KeyService.retrieveKeys(walletId);
-        const set = new Set<string>(
-          keys
-            .map((k: { address?: string | null }) => k.address)
-            .filter(Boolean)
-        );
+        const set = new Set<string>();
+        for (const key of keys as Array<{
+          address?: string | null;
+          tokenAddress?: string | null;
+        }>) {
+          if (key.address) set.add(key.address);
+          if (key.tokenAddress) set.add(key.tokenAddress);
+        }
         if (mounted) setWalletAddresses(set);
       } catch {
         // best-effort; address-scoped SDK methods will fail closed if allowlist is unavailable
@@ -445,6 +445,11 @@ export default function MarketplaceAppHost() {
     (async () => {
       try {
         if (!resolved || !walletId) {
+          if (!cancelled) setLaunchApproved(false);
+          return;
+        }
+
+        if (isDisabledApp(resolved.app)) {
           if (!cancelled) setLaunchApproved(false);
           return;
         }
@@ -600,9 +605,15 @@ export default function MarketplaceAppHost() {
     if (walletAddresses) return walletAddresses;
 
     const keys = await KeyService.retrieveKeys(walletId);
-    return new Set<string>(
-      keys.map((k: { address?: string | null }) => k.address).filter(Boolean)
-    );
+    const addresses = new Set<string>();
+    for (const key of keys as Array<{
+      address?: string | null;
+      tokenAddress?: string | null;
+    }>) {
+      if (key.address) addresses.add(key.address);
+      if (key.tokenAddress) addresses.add(key.tokenAddress);
+    }
+    return addresses;
   };
 
   // Patient-0: map declarative app => local component

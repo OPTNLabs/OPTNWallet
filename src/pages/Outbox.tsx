@@ -9,39 +9,49 @@ import {
   isFusionVerificationPending,
 } from '../services/OutboundTransactionTracker';
 import WalletScreen from '../components/ui/WalletScreen';
+import { useI18n } from '../i18n/useI18n';
+import type { TranslationKey } from '../i18n/resources';
 
-function relativeAge(timestamp?: string | null): string {
-  if (!timestamp) return 'just now';
+type Translate = (
+  key: TranslationKey,
+  values?: Record<string, string | number>
+) => string;
+
+function relativeAge(
+  timestamp: string | null | undefined,
+  t: Translate
+): string {
+  if (!timestamp) return t('outbox.justNow');
   const parsed = Date.parse(timestamp);
-  if (Number.isNaN(parsed)) return 'just now';
+  if (Number.isNaN(parsed)) return t('outbox.justNow');
   const diffMs = Date.now() - parsed;
   const mins = Math.max(0, Math.floor(diffMs / 60000));
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m ago`;
+  if (mins < 1) return t('outbox.justNow');
+  if (mins < 60) return t('outbox.minutesAgo', { count: mins });
   const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
+  if (hours < 24) return t('outbox.hoursAgo', { count: hours });
+  return t('outbox.daysAgo', { count: Math.floor(hours / 24) });
 }
 
 export default function Outbox() {
   const navigate = useNavigate();
+  const { t } = useI18n();
   const walletId = useSelector(selectWalletId);
   const { outboundTransactions, canClear, reconciling, refresh, release } =
     useOutboundTransactions(walletId);
 
   return (
     <WalletScreen maxWidthClassName="max-w-md" className="pt-4">
-      <PageHeader title="Outbox" compact />
+      <PageHeader title={t('outbox.title')} compact />
 
       <div className="wallet-card p-4 mt-3">
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="font-semibold wallet-text-strong">
-              Transaction verification
+              {t('outbox.pendingOutgoing')}
             </div>
             <div className="text-sm wallet-muted mt-1">
-              Signed transactions stay protected until wallet sync confirms
-              whether they reached the network.
+              {t('outbox.description')}
             </div>
           </div>
           <button
@@ -52,14 +62,14 @@ export default function Outbox() {
             disabled={reconciling}
             className="wallet-btn-secondary px-3 py-2 text-sm shrink-0"
           >
-            {reconciling ? 'Syncing' : 'Sync'}
+            {reconciling ? t('home.syncing') : t('home.sync')}
           </button>
         </div>
       </div>
 
       <div className="mt-3">
         {outboundTransactions.length === 0 ? (
-          <EmptyState message="No transactions awaiting verification." />
+          <EmptyState message={t('outbox.noPending')} />
         ) : (
           <div className="space-y-3">
             {outboundTransactions.map((record) => (
@@ -67,10 +77,12 @@ export default function Outbox() {
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <div className="font-semibold wallet-text-strong">
-                      {record.sourceLabel || 'Wallet send'}
+                      {record.sourceLabel || t('outbox.walletSend')}
                     </div>
                     <div className="text-xs wallet-muted mt-1">
-                      Updated {relativeAge(record.updatedAt)}
+                      {t('outbox.updated', {
+                        age: relativeAge(record.updatedAt, t),
+                      })}
                     </div>
                   </div>
                   <div className="text-xs wallet-muted capitalize">
@@ -82,7 +94,9 @@ export default function Outbox() {
 
                 <div className="mt-3 space-y-2 text-sm">
                   <div>
-                    <div className="text-xs wallet-muted">Txid</div>
+                    <div className="text-xs wallet-muted">
+                      {t('outbox.txid')}
+                    </div>
                     <div className="font-mono wallet-text-strong break-all">
                       {record.txid}
                     </div>
@@ -90,7 +104,9 @@ export default function Outbox() {
 
                   {record.recipientSummary && (
                     <div>
-                      <div className="text-xs wallet-muted">Destination</div>
+                      <div className="text-xs wallet-muted">
+                        {t('outbox.destination')}
+                      </div>
                       <div className="wallet-text-strong">
                         {record.recipientSummary}
                       </div>
@@ -99,7 +115,9 @@ export default function Outbox() {
 
                   {record.amountSummary && (
                     <div>
-                      <div className="text-xs wallet-muted">Amount</div>
+                      <div className="text-xs wallet-muted">
+                        {t('outbox.amount')}
+                      </div>
                       <div className="wallet-text-strong">
                         {record.amountSummary}
                       </div>
@@ -108,7 +126,9 @@ export default function Outbox() {
 
                   {record.dappName && (
                     <div>
-                      <div className="text-xs wallet-muted">Requested by</div>
+                      <div className="text-xs wallet-muted">
+                        {t('outbox.requestedBy')}
+                      </div>
                       <div className="wallet-text-strong">
                         {record.dappName}
                         {record.dappUrl ? ` (${record.dappUrl})` : ''}
@@ -118,7 +138,9 @@ export default function Outbox() {
 
                   {record.userPrompt && (
                     <div>
-                      <div className="text-xs wallet-muted">Prompt</div>
+                      <div className="text-xs wallet-muted">
+                        {t('outbox.prompt')}
+                      </div>
                       <div className="wallet-text-strong">
                         {record.userPrompt}
                       </div>
@@ -130,7 +152,7 @@ export default function Outbox() {
                       <div className="text-xs wallet-muted">
                         {isFusionVerificationPending(record)
                           ? 'Verification status'
-                          : 'Last network issue'}
+                          : t('outbox.lastNetworkIssue')}
                       </div>
                       <div className="wallet-text-strong">
                         {record.verificationMessage || record.lastError}
@@ -145,7 +167,7 @@ export default function Outbox() {
                     onClick={() => navigator.clipboard.writeText(record.txid)}
                     className="wallet-btn-secondary px-3 py-2 text-sm"
                   >
-                    Copy txid
+                    {t('outbox.copyTxid')}
                   </button>
                   <button
                     type="button"
@@ -158,17 +180,19 @@ export default function Outbox() {
                       isFusionVerificationPending(record)
                         ? 'Wallet sync must verify this Fusion transaction before its inputs can be reused'
                         : record.state === 'submitted'
-                          ? 'Clear this pending lock if the transaction was not actually sent'
-                          : `Available after ${Math.round(
-                              OUTBOUND_RELEASE_DELAY_MS / 60000
-                            )} minutes if the transaction is still unresolved`
+                          ? t('outbox.clearPendingTitle')
+                          : t('outbox.releaseStaleTitle', {
+                              minutes: Math.round(
+                                OUTBOUND_RELEASE_DELAY_MS / 60000
+                              ),
+                            })
                     }
                   >
                     {isFusionVerificationPending(record)
                       ? 'Awaiting verification'
                       : record.state === 'submitted'
-                        ? 'Clear pending lock'
-                        : 'Release if stale'}
+                        ? t('outbox.clearPending')
+                        : t('outbox.releaseStale')}
                   </button>
                 </div>
               </div>
@@ -183,7 +207,7 @@ export default function Outbox() {
           onClick={() => navigate(-1)}
           className="wallet-btn-danger w-full py-3 text-base font-semibold shadow-xl"
         >
-          Back
+          {t('send.back')}
         </button>
       </div>
     </WalletScreen>

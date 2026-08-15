@@ -95,6 +95,7 @@ const baseTranslations = {
     'actions.wizardConnectDescription': 'XPub-key-enabled dApp sessions',
     'actions.contracts': 'Contracts',
     'actions.contractsDescription': 'Manage contract instances',
+    'actions.cashConnectDescription': 'Contract-system dApps over Nostr',
     'onboarding.helpTitle': 'Getting started',
     'onboarding.helpDescription':
       'Create a wallet for the first time or restore one you already have.',
@@ -262,6 +263,8 @@ const baseTranslations = {
     'actions.wizardConnectDescription': 'Sesiones de dApps con XPub',
     'actions.contracts': 'Contratos',
     'actions.contractsDescription': 'Gestionar instancias de contratos',
+    'actions.cashConnectDescription':
+      'dApps del sistema de contratos sobre Nostr',
     'onboarding.helpTitle': 'Primeros pasos',
     'onboarding.helpDescription':
       'Crea una billetera por primera vez o restaura una que ya tienes.',
@@ -428,6 +431,7 @@ const baseTranslations = {
     'actions.wizardConnectDescription': '支持 XPub 的 dApp 会话',
     'actions.contracts': '合约',
     'actions.contractsDescription': '管理合约实例',
+    'actions.cashConnectDescription': '通过 Nostr 使用合约系统 dApp',
     'onboarding.helpTitle': '开始使用',
     'onboarding.helpDescription': '创建新钱包，或恢复已有钱包。',
     'onboarding.toggleTheme': '切换主题',

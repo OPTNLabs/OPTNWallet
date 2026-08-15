@@ -31,10 +31,13 @@ vi.mock('../../services/BcmrService', () => ({
 import {
   buildSharedTokenCategoriesKey,
   getCachedTokenMetadata,
+  isTokenMetadataRefreshDue,
+  METADATA_REFRESH_TTL_MS,
   preloadTokenMetadata,
   normalizeSharedTokenCategories,
   resolveTokenMetadata,
 } from '../useSharedTokenMetadata';
+import type { SharedTokenMetadata } from '../useSharedTokenMetadata';
 
 describe('useSharedTokenMetadata web preload', () => {
   beforeEach(() => {
@@ -187,5 +190,46 @@ describe('useSharedTokenMetadata web preload', () => {
       'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
       'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
     ]);
+  });
+
+  it('does not force-refresh recent metadata on every screen mount', () => {
+    const now = Date.parse('2026-06-11T00:04:00.000Z');
+    const recent: SharedTokenMetadata = {
+      status: 'ready' as const,
+      freshness: 'cached' as const,
+      name: 'Alpha Token',
+      symbol: 'ALPHA',
+      decimals: 0,
+      iconUri: null,
+      snapshot: { lastFetch: '2026-06-11T00:00:00.000Z' },
+      lastFetch: '2026-06-11T00:00:00.000Z',
+      isRefreshing: false,
+    };
+
+    expect(isTokenMetadataRefreshDue(recent, now)).toBe(false);
+    expect(
+      isTokenMetadataRefreshDue(recent, now + METADATA_REFRESH_TTL_MS)
+    ).toBe(true);
+  });
+
+  it('uses a recent persisted snapshot before considering a native refresh', async () => {
+    const category =
+      'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc';
+    getPlatformMock.mockReturnValue('android');
+    bcmrInstance.getSnapshot.mockResolvedValueOnce({
+      name: 'Cached Native Token',
+      description: '',
+      token: { category, symbol: 'CACHED', decimals: 0 },
+      is_nft: false,
+      uris: {},
+      extensions: {},
+      lastFetch: new Date(Date.now() - 1_000).toISOString(),
+    });
+    bcmrInstance.getCategoryAuthbase.mockResolvedValueOnce(category);
+    bcmrInstance.resolveIcon.mockResolvedValueOnce(null);
+
+    await preloadTokenMetadata([category]);
+
+    expect(bcmrInstance.resolveIdentityRegistry).not.toHaveBeenCalled();
   });
 });

@@ -33,6 +33,7 @@ import {
 } from '../../../services/psbt/keystoneAccount';
 import { CapacitorBarcodeScanner } from '../barcode-scanner';
 import { CameraQrScanner } from '../CameraQrScanner';
+import { useI18n } from '../../../i18n/useI18n';
 
 const MULTISIG_PRESETS = [
   [2, 2],
@@ -65,6 +66,7 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
   onBack,
   onCreated,
 }) => {
+  const { t } = useI18n();
   // main = PSBT watch-only card; keystone = airgap Keystone form
   const [panel, setPanel] = useState<'main' | 'keystone'>('main');
   const [mode, setMode] = useState<PsbtMode>('standard');
@@ -119,7 +121,8 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
   const applyPreset = (m: number, n: number) => {
     setCosigners((prev) => {
       const next = prev.slice(0, n);
-      while (next.length < n) next.push({ name: '', xpub: '', fingerprint: '' });
+      while (next.length < n)
+        next.push({ name: '', xpub: '', fingerprint: '' });
       return next;
     });
     setRequired(m);
@@ -282,18 +285,15 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
         <div className="w-full max-w-md space-y-4">
           <div className="space-y-1 text-center">
             <p className="text-[11px] uppercase tracking-wide wallet-muted">
-              Airgap · inside watch-only
+              Airgap · {t('onboarding.createWatchOnly')}
             </p>
             <h1 className="text-xl font-bold wallet-text-strong">Keystone</h1>
-            <p className="text-sm wallet-muted">
-              Scan account QR (path + fingerprint). Send &amp; receive airgap —
-              not USB, not PSBT.
-            </p>
+            <p className="text-sm wallet-muted">{t('watchOnly.description')}</p>
           </div>
 
           <div className="wallet-card space-y-4 p-4">
             <label className="block space-y-1 text-sm wallet-text-strong">
-              Wallet name
+              {t('onboarding.walletNamePlaceholder')}
               <input
                 value={walletName}
                 onChange={(e) => {
@@ -305,7 +305,7 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
               />
             </label>
             <label className="block space-y-1 text-sm wallet-text-strong">
-              Network
+              {t('watchOnly.network')}
               <select
                 value={network}
                 onChange={(e) => {
@@ -316,8 +316,12 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
                 }}
                 className="wallet-input w-full rounded-md px-3 py-2"
               >
-                <option value={Network.MAINNET}>Mainnet</option>
-                <option value={Network.CHIPNET}>Chipnet</option>
+                <option value={Network.MAINNET}>
+                  {t('watchOnly.mainnet')}
+                </option>
+                <option value={Network.CHIPNET}>
+                  {t('watchOnly.chipnet')}
+                </option>
               </select>
             </label>
 
@@ -331,7 +335,7 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
                 }}
                 className="wallet-btn-primary w-full py-2 font-semibold"
               >
-                Scan Keystone account QR
+                {t('watchOnly.scanCamera')}
               </button>
             ) : (
               <div className="space-y-2 text-[11px]">
@@ -339,7 +343,7 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
                   Account from device
                 </p>
                 <div className="flex justify-between gap-2">
-                  <span className="wallet-muted">Path</span>
+                  <span className="wallet-muted">{t('hardware.path')}</span>
                   <span className="font-mono wallet-text-strong">
                     {keystoneAccount.accountPath}
                   </span>
@@ -358,7 +362,7 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
                   }}
                   className="text-[11px] underline wallet-muted"
                 >
-                  Scan again
+                  {t('watchOnly.scanCamera')}
                 </button>
               </div>
             )}
@@ -375,13 +379,15 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
             )}
 
             <div className="border-t border-[var(--wallet-border)] pt-3 space-y-3">
-              <p className="text-sm font-semibold wallet-text-strong">Password</p>
+              <p className="text-sm font-semibold wallet-text-strong">
+                {t('desktopSecurity.password')}
+              </p>
               <p className="text-[11px] leading-relaxed wallet-muted">
                 Required every time you Open this wallet from the list. Private
                 keys are never stored here.
               </p>
               <label className="block space-y-1 text-sm wallet-text-strong">
-                Password
+                {t('desktopSecurity.password')}
                 <input
                   type="password"
                   autoComplete="new-password"
@@ -390,12 +396,12 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
                     setPassword(e.target.value);
                     setError('');
                   }}
-                  placeholder="At least 4 characters"
+                  placeholder={t('onboarding.passwordPlaceholder')}
                   className="wallet-input w-full rounded-md px-3 py-2"
                 />
               </label>
               <label className="block space-y-1 text-sm wallet-text-strong">
-                Confirm password
+                {t('desktopSecurity.confirmPassword')}
                 <input
                   type="password"
                   autoComplete="new-password"
@@ -404,7 +410,7 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
                     setPasswordConfirm(e.target.value);
                     setError('');
                   }}
-                  placeholder="Repeat password"
+                  placeholder={t('onboarding.passwordPlaceholder')}
                   className="wallet-input w-full rounded-md px-3 py-2"
                 />
               </label>
@@ -423,7 +429,7 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
             disabled={!canSave}
             className="wallet-btn-primary w-full py-2 font-semibold disabled:opacity-50"
           >
-            {busy ? 'Saving…' : 'Save and open wallet'}
+            {busy ? t('settingsAppLock.updating') : 'Save and open wallet'}
           </button>
           <button
             type="button"
@@ -435,7 +441,7 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
             }}
             className="wallet-btn-secondary w-full py-2 text-sm"
           >
-            Back to watch-only
+            {t('watchOnly.back')}
           </button>
         </div>
       </section>
@@ -462,18 +468,15 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
       <div className="w-full max-w-md space-y-4">
         <div className="space-y-1 text-center">
           <h1 className="text-xl font-bold wallet-text-strong">
-            Create Watch-Only Wallet
+            {t('onboarding.createWatchOnly')}
           </h1>
-          <p className="text-sm wallet-muted">
-            PSBT airgap (SeedCash-style). Public keys only — save under a
-            password and open.
-          </p>
+          <p className="text-sm wallet-muted">{t('watchOnly.description')}</p>
         </div>
 
         {/* Single-sig vs Multisig for PSBT */}
         <div
           className="grid grid-cols-2 gap-2"
-          aria-label="Watch-only PSBT type"
+          aria-label={t('watchOnly.type')}
         >
           <button
             type="button"
@@ -486,9 +489,11 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
             }`}
           >
             <p className="text-sm font-semibold wallet-text-strong">
-              Single-sig
+              {t('watchOnly.standard')}
             </p>
-            <p className="mt-1 text-[11px] wallet-muted">One account xPub</p>
+            <p className="mt-1 text-[11px] wallet-muted">
+              {t('watchOnly.accountXpub')}
+            </p>
           </button>
           <button
             type="button"
@@ -500,28 +505,32 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
               mode === 'multisig' ? 'border-[var(--wallet-accent)]' : ''
             }`}
           >
-            <p className="text-sm font-semibold wallet-text-strong">Multisig</p>
-            <p className="mt-1 text-[11px] wallet-muted">m-of-n cosigners</p>
+            <p className="text-sm font-semibold wallet-text-strong">
+              {t('watchOnly.multisign')}
+            </p>
+            <p className="mt-1 text-[11px] wallet-muted">
+              {t('watchOnly.multipleCosigners')}
+            </p>
           </button>
         </div>
 
         {/* One big card: name, network, keys, password */}
         <div className="wallet-card space-y-4 p-4">
           <label className="block space-y-1 text-sm wallet-text-strong">
-            Wallet name
+            {t('onboarding.walletNamePlaceholder')}
             <input
               value={walletName}
               onChange={(e) => {
                 setWalletName(e.target.value);
                 setError('');
               }}
-              placeholder="e.g. Cold storage"
+              placeholder={t('onboarding.walletNamePlaceholder')}
               className="wallet-input w-full rounded-md px-3 py-2"
             />
           </label>
 
           <label className="block space-y-1 text-sm wallet-text-strong">
-            Network
+            {t('watchOnly.network')}
             <select
               value={network}
               onChange={(e) => {
@@ -530,15 +539,15 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
               }}
               className="wallet-input w-full rounded-md px-3 py-2"
             >
-              <option value={Network.MAINNET}>Mainnet</option>
-              <option value={Network.CHIPNET}>Chipnet</option>
+              <option value={Network.MAINNET}>{t('watchOnly.mainnet')}</option>
+              <option value={Network.CHIPNET}>{t('watchOnly.chipnet')}</option>
             </select>
           </label>
 
           {mode === 'standard' && (
             <>
               <label className="block space-y-1 text-sm wallet-text-strong">
-                Account xPub
+                {t('watchOnly.accountXpub')}
                 <textarea
                   value={accountXpub}
                   onChange={(e) => {
@@ -548,7 +557,7 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
                   rows={3}
                   autoComplete="off"
                   spellCheck={false}
-                  placeholder="Paste or scan the account xPub"
+                  placeholder={t('watchOnly.xpubPlaceholder')}
                   className="wallet-input w-full resize-none rounded-md px-3 py-2 font-mono text-xs"
                 />
               </label>
@@ -558,7 +567,7 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
                   onClick={() => setScanning(true)}
                   className="flex-1 rounded-md border border-[var(--wallet-border)] py-2 text-sm font-semibold wallet-text-strong"
                 >
-                  Scan
+                  {t('watchOnly.scanCamera')}
                 </button>
                 <button
                   type="button"
@@ -581,7 +590,7 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
                   }}
                   className="flex-1 rounded-md border border-[var(--wallet-border)] py-2 text-sm font-semibold wallet-text-strong"
                 >
-                  Upload QR
+                  {t('watchOnly.uploadQr')}
                 </button>
               </div>
               {scanning && (
@@ -601,7 +610,7 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
             <div className="space-y-3">
               <div className="flex items-center justify-between gap-2">
                 <p className="text-sm font-semibold wallet-text-strong">
-                  Cosigners
+                  {t('watchOnly.multipleCosigners')}
                 </p>
                 <label className="text-[11px] wallet-muted">
                   <span className="mr-1">Load</span>
@@ -674,7 +683,9 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
                       <button
                         type="button"
                         onClick={() =>
-                          setCosigners(cosigners.filter((_, at) => at !== index))
+                          setCosigners(
+                            cosigners.filter((_, at) => at !== index)
+                          )
                         }
                         className="text-[11px] text-red-400"
                       >
@@ -698,7 +709,7 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
                     rows={2}
                     spellCheck={false}
                     autoComplete="off"
-                    placeholder="Account xPub"
+                    placeholder={t('watchOnly.accountXpub')}
                     className="wallet-input w-full resize-none rounded-md px-3 py-2 font-mono text-[11px]"
                   />
                   <div className="flex gap-2">
@@ -716,7 +727,7 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
                       onClick={() => setScanningCosigner(index)}
                       className="rounded-md border border-[var(--wallet-border)] px-3 text-[11px] font-semibold"
                     >
-                      Scan
+                      {t('watchOnly.scanCamera')}
                     </button>
                   </div>
                   {scanningCosigner === index && (
@@ -776,13 +787,15 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
 
           {/* Password block — same card */}
           <div className="border-t border-[var(--wallet-border)] pt-3 space-y-3">
-            <p className="text-sm font-semibold wallet-text-strong">Password</p>
+            <p className="text-sm font-semibold wallet-text-strong">
+              {t('desktopSecurity.password')}
+            </p>
             <p className="text-[11px] leading-relaxed wallet-muted">
               Required every time you Open this wallet from the list. Private
               keys are never stored here.
             </p>
             <label className="block space-y-1 text-sm wallet-text-strong">
-              Password
+              {t('desktopSecurity.password')}
               <input
                 type="password"
                 autoComplete="new-password"
@@ -796,7 +809,7 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
               />
             </label>
             <label className="block space-y-1 text-sm wallet-text-strong">
-              Confirm password
+              {t('desktopSecurity.confirmPassword')}
               <input
                 type="password"
                 autoComplete="new-password"
@@ -829,7 +842,7 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
           className="wallet-btn-primary w-full py-2 font-semibold disabled:opacity-50"
         >
           {busy
-            ? 'Saving…'
+            ? t('settingsAppLock.updating')
             : mode === 'multisig'
               ? `Save ${required}-of-${cosigners.length} and open`
               : 'Save and open wallet'}
@@ -866,7 +879,7 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
           onClick={onBack}
           className="wallet-btn-secondary w-full py-2 text-sm"
         >
-          Back to wallets
+          {t('watchOnly.back')}
         </button>
       </div>
     </section>

@@ -14,6 +14,7 @@ import { HashRouter } from 'react-router-dom';
 import { Provider } from 'react-redux';
 import { store } from '../../state/store';
 import { ThemeProvider } from '../../app/theme/ThemeContext';
+import { I18nProvider } from '../../i18n/I18nProvider';
 import ExtensionAppShell from './ExtensionAppShell';
 
 installProductionConsoleGuards();
@@ -23,9 +24,11 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <Provider store={store}>
       <ThemeProvider>
-        <HashRouter>
-          <ExtensionAppShell />
-        </HashRouter>
+        <I18nProvider>
+          <HashRouter>
+            <ExtensionAppShell />
+          </HashRouter>
+        </I18nProvider>
       </ThemeProvider>
     </Provider>
   </React.StrictMode>

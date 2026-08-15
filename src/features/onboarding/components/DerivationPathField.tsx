@@ -49,13 +49,16 @@ export const DerivationPathField: React.FC<DerivationPathFieldProps> = ({
             {t('derivation.addressDerivationDescription')}
           </p>
         </div>
-        <label className="flex items-center gap-2 text-xs wallet-muted">
+        <label
+          className="wallet-customize-toggle"
+          data-active={custom}
+        >
           <input
             type="checkbox"
             checked={custom}
             onChange={(event) => handleCustomToggle(event.target.checked)}
           />
-          {t('derivation.customize')}
+          <span>{t('derivation.customize')}</span>
         </label>
       </div>
       {custom ? (

@@ -1,15 +1,15 @@
-// Drives automatic fusion rounds, app-wide.
+// Continues automatic fusion rounds after an explicit user-started round.
 //
-// Mounted in DesktopAppShell rather than in the CashFusion screen: a timer
-// living in that component would only fuse while the user happened to be looking
-// at it, which is not what "fuse automatically" can mean.
+// Mounted in DesktopAppShell so continuation does not depend on the CashFusion
+// screen staying open. The in-memory session gate is intentionally separate from
+// the persisted preference: opening/restoring a wallet must never start a round.
 //
 // It decides nothing about coins, cooldowns or concurrency. Those belong to
 // FusionRunnerService, which is also what the manual buttons call, so automatic
 // and manual rounds cannot diverge. This hook is a clock and a wallet-session
 // guard.
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
 import { useSelector } from 'react-redux';
 
 import {
@@ -66,6 +66,11 @@ import {
   validateServerHello,
 } from './ServerFusionRunner';
 import { selectPreparedFusionServer } from './serverFusionFailover';
+import {
+  disarmAutoFusionSession,
+  isAutoFusionSessionArmed,
+  subscribeAutoFusionSession,
+} from './fusionAutoSession';
 
 function sleepMs(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -103,6 +108,11 @@ export function useAutoFusion(policyReady = true): void {
   const network = useSelector(
     (state: RootState) => state.network.currentNetwork
   );
+  const autoFusionSessionArmed = useSyncExternalStore(
+    subscribeAutoFusionSession,
+    () => isAutoFusionSessionArmed(walletId),
+    () => false
+  );
 
   /** Bumped whenever the wallet session changes, to strand stale completions. */
   const sessionRef = useRef(0);
@@ -133,6 +143,7 @@ export function useAutoFusion(policyReady = true): void {
       // Manual and automatic rounds are service-owned, so changing routes does
       // nothing. A real wallet-session boundary must still stop both transports.
       cancelFusionRound(previousWalletId, 'wallet fusion session changed');
+      disarmAutoFusionSession(previousWalletId);
     }
     sessionInitializedRef.current = true;
     previousWalletIdRef.current = walletId;
@@ -152,7 +163,7 @@ export function useAutoFusion(policyReady = true): void {
 
   const tick = useCallback(
     async (freshSnapshot?: WalletUtxoSnapshot) => {
-      if (!policyReady) return;
+      if (!policyReady || !autoFusionSessionArmed) return;
       if (activeControllerRef.current) return;
       // The recovery poll must be almost free during the durable cooldown: do
       // not probe or start Tor until another automatic attempt is actually due.
@@ -275,6 +286,7 @@ export function useAutoFusion(policyReady = true): void {
         const decision = decideAutoFusion({
           cashFusionEnabled,
           autoFuseEnabled,
+          autoFusionSessionArmed,
           p2pFusionEnabled,
           walletId,
           torReady,
@@ -412,6 +424,7 @@ export function useAutoFusion(policyReady = true): void {
           requeueMs !== null &&
           cashFusionEnabled &&
           autoFuseEnabled &&
+          autoFusionSessionArmed &&
           walletId > 0
         ) {
           if (followUpTimerRef.current) clearTimeout(followUpTimerRef.current);
@@ -440,6 +453,7 @@ export function useAutoFusion(policyReady = true): void {
       walletId,
       network,
       policyReady,
+      autoFusionSessionArmed,
     ]
   );
   tickRef.current = tick;
@@ -455,6 +469,7 @@ export function useAutoFusion(policyReady = true): void {
       !policyReady ||
       !cashFusionEnabled ||
       !autoFuseEnabled ||
+      !autoFusionSessionArmed ||
       walletId <= 0
     ) {
       lastFuseDepthRef.current = fuseDepth;
@@ -481,12 +496,19 @@ export function useAutoFusion(policyReady = true): void {
     walletId,
     cashFusionEnabled,
     autoFuseEnabled,
+    autoFusionSessionArmed,
     policyReady,
     tick,
   ]);
 
   useEffect(() => {
-    if (!policyReady || !cashFusionEnabled || !autoFuseEnabled || walletId <= 0)
+    if (
+      !policyReady ||
+      !cashFusionEnabled ||
+      !autoFuseEnabled ||
+      !autoFusionSessionArmed ||
+      walletId <= 0
+    )
       return;
     let disposed = false;
 
@@ -555,6 +577,7 @@ export function useAutoFusion(policyReady = true): void {
   }, [
     cashFusionEnabled,
     autoFuseEnabled,
+    autoFusionSessionArmed,
     walletId,
     p2pFusionEnabled,
     fuseDepth,

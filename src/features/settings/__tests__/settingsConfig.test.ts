@@ -47,28 +47,26 @@ describe('settingsConfig', () => {
   });
 
   it('keeps common wallet controls on the desktop settings home', () => {
-    expect(getVisibleWalletRows(true, Network.CHIPNET).map((row) => row.key)).toEqual([
-      'network',
-      'faucet',
-      'pending-outbox',
-    ]);
     expect(
-      getSettingsGroupRows('features', true, Network.CHIPNET).map((row) => row.key)
+      getVisibleWalletRows(true, Network.CHIPNET).map((row) => row.key)
+    ).toEqual(['network', 'faucet', 'pending-outbox']);
+    expect(
+      getSettingsGroupRows('features', true, Network.CHIPNET).map(
+        (row) => row.key
+      )
     ).toEqual(
       expect.arrayContaining(['walletconnect', 'wizardconnect', 'cashconnect'])
     );
   });
 
   it('sends CashConnect and WalletConnect back to Connections & features', () => {
-    expect(
-      getParentSettingsGroup('cashconnect', true, Network.CHIPNET)
-    ).toBe('features');
-    expect(
-      getParentSettingsGroup('walletconnect', true, Network.MAINNET)
-    ).toBe('features');
-    expect(getParentSettingsGroup('network', true, Network.CHIPNET)).toBe(
-      null
+    expect(getParentSettingsGroup('cashconnect', true, Network.CHIPNET)).toBe(
+      'features'
     );
+    expect(getParentSettingsGroup('walletconnect', true, Network.MAINNET)).toBe(
+      'features'
+    );
+    expect(getParentSettingsGroup('network', true, Network.CHIPNET)).toBe(null);
   });
 
   it('puts Rebuild Wallet under Wallet & security on desktop only', () => {
@@ -107,13 +105,30 @@ describe('settingsConfig', () => {
   });
 
   it('puts Bitcoin Cash Contracts info under About, not Features', () => {
-    const features = getSettingsGroupRows('features', true, Network.MAINNET).map(
-      (row) => row.key
-    );
+    const features = getSettingsGroupRows(
+      'features',
+      true,
+      Network.MAINNET
+    ).map((row) => row.key);
     const about = getSettingsGroupRows('about', true, Network.MAINNET);
     const aboutRow = about.find((row) => row.key === 'about');
 
     expect(features).not.toContain('contract-info');
     expect(aboutRow?.description).toMatch(/Bitcoin Cash Contracts info/i);
+  });
+
+  it('keeps language selection under About & support', () => {
+    const about = getSettingsGroupRows('about', false, Network.MAINNET);
+
+    expect(about.map((row) => row.key)).toEqual([
+      'language',
+      'about',
+      'terms',
+      'contact',
+    ]);
+    expect(about[0]).toMatchObject({
+      action: 'panel',
+      target: 'language',
+    });
   });
 });

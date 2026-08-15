@@ -28,15 +28,11 @@ import {
   isActiveWalletSession,
 } from '../../services/WalletUtxoRefreshService';
 import { logError } from '../../utils/errorHandling';
-import {
-  publishStoredWalletHistory,
-  refreshWalletTransactionHistory,
-} from '../../services/WalletHistoryRefreshService';
+import { refreshWalletTransactionHistory } from '../../services/WalletHistoryRefreshService';
 import { Network } from '../../state/slices/networkSlice';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import { SATSINBITCOIN } from '../../utils/constants';
 import { selectRpaStealthSats } from '../../state/slices/walletSpecialActivitySlice';
-import { loadStoredWalletSpecialActivities } from '../../services/WalletSpecialActivityService';
 import type { TransactionHistoryItem } from '../../types/types';
 import SettingsRow from '../../components/ui/SettingsRow';
 import EmptyState from '../../components/ui/EmptyState';
@@ -53,6 +49,7 @@ import HomeConnectPopup from '../../components/home/HomeConnectPopup';
 import { preloadTokenMetadata } from '../../hooks/useSharedTokenMetadata';
 import { useHomeConnect } from '../../features/home/useHomeConnect';
 import { unitFor } from './unitLabel'; // ← desktop-only: per-network unit label
+import { useI18n } from '../../i18n/useI18n';
 
 type QuickActionButtonProps = {
   title: string;
@@ -95,7 +92,6 @@ const Home: React.FC = () => {
   const sessionGeneration = useSelector(
     (state: RootState) => state.wallet_id.sessionGeneration ?? 0
   );
-  const reduxUTXOs = useSelector((state: RootState) => state.utxos.utxos);
   const fetchingUTXOsRedux = useSelector(
     (state: RootState) => state.utxos.fetchingUTXOs
   );
@@ -126,6 +122,7 @@ const Home: React.FC = () => {
   );
   const [displayMode, setDisplayMode] = useState<'BCH' | 'USD'>('BCH');
   const homeConnect = useHomeConnect();
+  const { t } = useI18n();
   const [syncElapsedSec, setSyncElapsedSec] = useState(0);
 
   // Wall-clock only. Multi-phase sync (markers → Electrum batch → history)
@@ -156,22 +153,9 @@ const Home: React.FC = () => {
   // merge order from Electrum, so slice(-N).reverse() put old txs on top and
   // new fused CoinJoins lower. Same rule as full History (newest first).
   const recentTransactions = useMemo(
-    () => takeRecentTransactions(transactions, 8),
+    () => takeRecentTransactions(transactions, 3),
     [transactions]
   );
-  const tokenCategories = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          Object.values(reduxUTXOs)
-            .flat()
-            .map((utxo) => utxo.token?.category)
-            .filter((category): category is string => Boolean(category))
-        )
-      ),
-    [reduxUTXOs]
-  );
-
   // Feed per-address history progress into the shared store field so the Home
   // progress bar (rendered under the Sync button) moves for the whole sync —
   // both the worker bootstrap phases and this history pass.
@@ -179,60 +163,6 @@ const Home: React.FC = () => {
     (percent: number) => dispatch(setSyncingProgress(percent)),
     [dispatch]
   );
-
-  useEffect(() => {
-    if (!currentWalletId || tokenCategories.length === 0) return;
-    void preloadTokenMetadata(tokenCategories);
-  }, [currentWalletId, tokenCategories]);
-
-  useEffect(() => {
-    if (!currentWalletId) return;
-    void loadStoredWalletSpecialActivities(currentWalletId).catch(() => {
-      /* stored stealth total is optional on Home */
-    });
-  }, [currentWalletId]);
-
-  // Load this wallet's transaction history when it opens.
-  //
-  // 1) SQL paint first (no coordinator / no Electrum) so Recent Activity is
-  //    last-session state immediately — like EC / Selene / Monero GUI.
-  // 2) Network refresh after; cooldown on the coordinator must not skip (1).
-  useEffect(() => {
-    if (!currentWalletId) return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        await publishStoredWalletHistory({
-          walletId: currentWalletId,
-          dispatch,
-          sessionGeneration,
-        });
-      } catch (error) {
-        if (!cancelled) {
-          logError('DesktopHome.paintStoredHistory', error, {
-            walletId: currentWalletId,
-          });
-        }
-      }
-      if (cancelled) return;
-      try {
-        await refreshWalletTransactionHistory({
-          walletId: currentWalletId,
-          dispatch,
-          sessionGeneration,
-        });
-      } catch (error) {
-        if (!cancelled) {
-          logError('DesktopHome.loadHistory', error, {
-            walletId: currentWalletId,
-          });
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [currentWalletId, dispatch, sessionGeneration]);
 
   const handleRefresh = useCallback(async () => {
     if (fetchingUTXOsRedux || !currentWalletId) return;
@@ -243,14 +173,14 @@ const Home: React.FC = () => {
     reportSyncProgress(2);
 
     try {
-      // Same network path as open-bootstrap for balances: scripthash batches,
-      // no second BIP44 rediscovery (open already expanded the key set).
+      // Same network path as open-bootstrap for balances: scripthash batches
+      // plus the shared regular/CashFusion/Cauldron branch discovery.
       //
       // Do NOT use runWalletUtxoRefresh here. That coordinator joins any
       // in-flight background reconcile (subscriptions / block tip), which has
-      // no onProgress and often still runs discovery — so the UI froze at 8%
-      // for a minute while we waited on someone else's task. Manual Sync is
-      // user-initiated: run our own fast path only.
+      // no onProgress and can hide the branch scan behind someone else's task.
+      // Manual Sync is user-initiated: run our own fast path so discovery and
+      // its progress remain visible on desktop just as they are on mobile.
       //
       // Manual Sync = force recheck (clear status hashes) but does NOT wipe
       // the ledger. Rebuild Wallet in Settings is the nuclear wipe.
@@ -279,7 +209,7 @@ const Home: React.FC = () => {
         walletSession,
         undefined,
         {
-          discover: false,
+          discover: true,
           // Statuses were cleared above; force still short-circuits any race
           // where a concurrent path rewrote a status before listunspent.
           force: true,
@@ -347,8 +277,10 @@ const Home: React.FC = () => {
     <WalletScreen maxWidthClassName="max-w-md" scrollable={false}>
       <div className="flex h-full min-h-0 flex-col gap-4">
         <PageHeader
-          title="Home"
-          subtitle={currentNetwork === Network.CHIPNET ? 'Chipnet' : undefined}
+          title={t('home.title')}
+          subtitle={
+            currentNetwork === Network.CHIPNET ? t('assets.chipnet') : undefined
+          }
           compact
         />
 
@@ -359,8 +291,8 @@ const Home: React.FC = () => {
 
           <SectionCard className="shrink-0 p-3">
             <SectionHeader
-              title="Portfolio"
-              subtitle="Wallet overview"
+              title={t('home.portfolio')}
+              subtitle={t('home.walletOverview')}
               compact
               action={
                 <div className="flex flex-col items-end gap-1">
@@ -370,9 +302,9 @@ const Home: React.FC = () => {
                     className="wallet-btn-secondary px-3 py-1.5 text-sm"
                     disabled={fetchingUTXOsRedux}
                   >
-                    {fetchingUTXOsRedux ? 'Syncing…' : 'Sync'}
+                    {fetchingUTXOsRedux ? t('home.syncing') : t('home.sync')}
                   </button>
-                  {(fetchingUTXOsRedux && syncingProgress !== null) && (
+                  {fetchingUTXOsRedux && syncingProgress !== null && (
                     <div className="flex items-center gap-1.5 text-xs wallet-muted">
                       <div className="h-1 w-16 overflow-hidden rounded-full bg-[color-mix(in_oklab,var(--wallet-accent-soft)_45%,transparent)]">
                         <div
@@ -404,13 +336,13 @@ const Home: React.FC = () => {
                       ? `${totalBch.toFixed(8)} ${unit}`
                       : totalUsd !== null
                         ? `$${totalUsd.toFixed(2)} USD`
-                        : 'USD unavailable'}
+                        : t('home.usdUnavailable')}
                   </div>
                   <div className="text-xs wallet-muted">
                     {displayMode === 'BCH'
                       ? totalUsd !== null
                         ? `$${totalUsd.toFixed(2)} USD`
-                        : 'USD price unavailable'
+                        : t('home.usdPriceUnavailable')
                       : `${totalBch.toFixed(8)} ${unit}`}
                   </div>
                   {stealthSats > 0 && (
@@ -428,7 +360,7 @@ const Home: React.FC = () => {
                   setDisplayMode((mode) => (mode === 'BCH' ? 'USD' : 'BCH'))
                 }
                 className="flex h-14 w-14 items-center justify-center rounded-3xl bg-[color-mix(in_oklab,var(--wallet-accent-soft)_72%,transparent)] text-[var(--wallet-accent-strong)] transition hover:brightness-[1.04]"
-                aria-label={`Toggle ${unit} and USD balance`}
+                aria-label={t('home.toggleBalance')}
               >
                 <FaBitcoin className="text-2xl" />
               </button>
@@ -437,7 +369,7 @@ const Home: React.FC = () => {
 
           <SectionCard className="shrink-0 p-3">
             <SectionHeader
-              title="Quick Actions"
+              title={t('home.quickActions')}
               compact
               className="items-center"
               action={
@@ -446,11 +378,11 @@ const Home: React.FC = () => {
                   onClick={homeConnect.openPopup}
                   disabled={homeConnect.scanning || homeConnect.submitting}
                   className="wallet-card inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--wallet-border)] bg-[color-mix(in_oklab,var(--wallet-accent-soft)_42%,transparent)] px-3 text-[var(--wallet-accent-strong)] transition hover:brightness-[1.03] disabled:cursor-not-allowed disabled:opacity-70 self-center"
-                  aria-label="Scan QR"
-                  title="Scan QR"
+                  aria-label={t('home.scanQr')}
+                  title={t('home.scanQr')}
                 >
                   <span className="text-sm font-semibold wallet-text-strong">
-                    Scan QR
+                    {t('home.scanQr')}
                   </span>
                   <FaQrcode
                     className={`text-base ${homeConnect.scanning ? 'animate-pulse' : ''}`}
@@ -460,7 +392,7 @@ const Home: React.FC = () => {
             />
             <div className="flex items-stretch gap-2.5">
               <QuickActionButton
-                title="Receive"
+                title={t('home.receive')}
                 icon={<FaArrowDown />}
                 onClick={() =>
                   navigate('/receive', {
@@ -469,7 +401,7 @@ const Home: React.FC = () => {
                 }
               />
               <QuickActionButton
-                title="Send"
+                title={t('home.send')}
                 icon={<FaArrowUp />}
                 onClick={() =>
                   navigate('/send', {
@@ -482,15 +414,15 @@ const Home: React.FC = () => {
 
           <SectionCard className="shrink-0 p-3">
             <SectionHeader
-              title="Recent Activity"
-              subtitle="Latest wallet activity"
+              title={t('home.recentActivity')}
+              subtitle={t('home.latestActivity')}
               compact
               action={
                 <button
                   className="wallet-link text-sm"
                   onClick={() => navigate(`/transactions/${currentWalletId}`)}
                 >
-                  View all
+                  {t('home.viewAll')}
                 </button>
               }
             />
@@ -516,16 +448,16 @@ const Home: React.FC = () => {
                       }
                       description={
                         tx.height > 0
-                          ? `Block ${tx.height}`
+                          ? `${t('home.block')} ${tx.height}`
                           : isTxConfirmed(tx)
-                            ? 'Confirmed'
+                            ? t('home.confirmed')
                             : isMempoolLike(tx)
                               ? fused
                                 ? 'Broadcast — waiting for block'
-                                : 'Unconfirmed'
+                                : t('home.pending')
                               : fused
                                 ? 'On chain'
-                                : 'Confirmed'
+                                : t('home.confirmed')
                       }
                       right={
                         <span
@@ -537,11 +469,11 @@ const Home: React.FC = () => {
                         >
                           {fused
                             ? isTxConfirmed(tx) || !isMempoolLike(tx)
-                              ? 'Fused · Confirmed'
-                              : 'Fused · Unconfirmed'
+                              ? `Fused · ${t('home.confirmed')}`
+                              : `Fused · ${t('home.pending')}`
                             : isTxConfirmed(tx) || !isMempoolLike(tx)
-                              ? 'Confirmed'
-                              : 'Unconfirmed'}
+                              ? t('home.confirmed')
+                              : t('home.pending')}
                         </span>
                       }
                       compact
@@ -552,7 +484,7 @@ const Home: React.FC = () => {
                   );
                 })
               ) : (
-                <EmptyState message="No recent activity yet." />
+                <EmptyState message={t('home.noRecentActivity')} />
               )}
             </div>
           </SectionCard>

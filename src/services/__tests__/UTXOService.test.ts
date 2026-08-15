@@ -135,17 +135,31 @@ describe('UTXOService', () => {
   it('can refresh known addresses without starting account discovery', async () => {
     const { default: UTXOService } = await import('../UTXOService');
 
-    await UTXOService.fetchAndStoreUTXOsMany(
-      11,
-      ['bitcoincash:q1'],
-      { discover: false }
-    );
+    await UTXOService.fetchAndStoreUTXOsMany(11, ['bitcoincash:q1'], {
+      discover: false,
+    });
 
     expect(ensureInitialAddressBatchesMock).not.toHaveBeenCalled();
     expect(getUTXOsManyMock).toHaveBeenCalledWith(
       ['bitcoincash:q1'],
       undefined
     );
+  });
+
+  it('still refreshes known addresses when discovery is unavailable', async () => {
+    ensureInitialAddressBatchesMock.mockRejectedValueOnce(
+      new Error('discovery endpoint unavailable')
+    );
+
+    const { default: UTXOService } = await import('../UTXOService');
+
+    await UTXOService.fetchAndStoreUTXOsMany(11, ['bitcoincash:q1']);
+
+    expect(getUTXOsManyMock).toHaveBeenCalledWith(
+      ['bitcoincash:q1'],
+      undefined
+    );
+    expect(flushDatabaseToFileMock).toHaveBeenCalledTimes(1);
   });
 
   it('uses one history batch for discovery before the wallet UTXO fetch', async () => {
@@ -157,8 +171,7 @@ describe('UTXOService', () => {
           walletId: number,
           batch: { address: string }[]
         ) => Promise<string[]>
-      ) =>
-        await checkUsage(11, [{ address: 'bitcoincash:q1' }])
+      ) => await checkUsage(11, [{ address: 'bitcoincash:q1' }])
     );
     fetchTransactionHistoriesMock.mockResolvedValue({
       'bitcoincash:q1': [],
@@ -542,39 +555,39 @@ describe('UTXOService', () => {
     );
     expect(result.allUtxos).toEqual([]);
     expect(decodeTransactionMock).toHaveBeenCalledWith(expect.any(Uint8Array));
-    });
   });
+});
 
-  it('soft-fails transport loss — returns last SQL snapshot, does not wipe', async () => {
-    getUTXOsManyMock.mockRejectedValue(new Error('Connection lost'));
-    fetchUTXOsFromDatabaseMock.mockResolvedValue({
-      utxosMap: {
-        'bitcoincash:q1': [
-          {
-            wallet_id: 11,
-            address: 'bitcoincash:q1',
-            height: 1,
-            tx_hash: 'aa'.repeat(32),
-            tx_pos: 0,
-            value: 5000,
-            amount: 5000,
-            prefix: 'bitcoincash',
-          },
-        ],
-      },
-      cashTokenUtxosMap: {},
-    });
-    const { default: UTXOService } = await import('../UTXOService');
-
-    const result = await UTXOService.fetchAndStoreUTXOsMany(11, [
-      'bitcoincash:q1',
-    ]);
-
-    expect(result['bitcoincash:q1']).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ tx_hash: 'aa'.repeat(32), value: 5000 }),
-      ])
-    );
-    // Soft-fail path must not replace the wallet with an empty network result.
-    expect(replaceWalletAddressUTXOsMock).not.toHaveBeenCalled();
+it('soft-fails transport loss — returns last SQL snapshot, does not wipe', async () => {
+  getUTXOsManyMock.mockRejectedValue(new Error('Connection lost'));
+  fetchUTXOsFromDatabaseMock.mockResolvedValue({
+    utxosMap: {
+      'bitcoincash:q1': [
+        {
+          wallet_id: 11,
+          address: 'bitcoincash:q1',
+          height: 1,
+          tx_hash: 'aa'.repeat(32),
+          tx_pos: 0,
+          value: 5000,
+          amount: 5000,
+          prefix: 'bitcoincash',
+        },
+      ],
+    },
+    cashTokenUtxosMap: {},
   });
+  const { default: UTXOService } = await import('../UTXOService');
+
+  const result = await UTXOService.fetchAndStoreUTXOsMany(11, [
+    'bitcoincash:q1',
+  ]);
+
+  expect(result['bitcoincash:q1']).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ tx_hash: 'aa'.repeat(32), value: 5000 }),
+    ])
+  );
+  // Soft-fail path must not replace the wallet with an empty network result.
+  expect(replaceWalletAddressUTXOsMock).not.toHaveBeenCalled();
+});

@@ -40,4 +40,15 @@ describe('classifyScannedQrPayload', () => {
       'unknown'
     );
   });
+
+  it('recognizes a merchant proposal QR stream frame', () => {
+    const initialQrPayload = 'qrstream/1/AQID';
+
+    expect(classifyScannedQrPayload(initialQrPayload, Network.MAINNET)).toEqual(
+      {
+        kind: 'merchant-proposal-stream',
+        initialQrPayload,
+      }
+    );
+  });
 });

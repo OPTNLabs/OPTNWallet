@@ -10,6 +10,10 @@ const BASE58_WIF_CANDIDATE_PATTERN =
 
 export type ScannedQrPayload =
   | {
+      kind: 'merchant-proposal-stream';
+      initialQrPayload: string;
+    }
+  | {
       kind: 'paper-wallet';
       scannedValue: string;
       paperWalletWif: string;
@@ -80,6 +84,13 @@ export function classifyScannedQrPayload(
 
   if (isWalletConnectUri(scannedValue)) {
     return { kind: 'walletconnect', scannedValue, uri: scannedValue };
+  }
+
+  if (/^qrstream\/1\/[A-Za-z0-9+/=_-]+$/i.test(scannedValue)) {
+    return {
+      kind: 'merchant-proposal-stream',
+      initialQrPayload: scannedValue,
+    };
   }
 
   for (const candidate of extractWifCandidates(scannedValue)) {

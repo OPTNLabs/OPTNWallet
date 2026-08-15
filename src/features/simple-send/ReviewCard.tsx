@@ -10,6 +10,7 @@ import { FusionBadge } from '../../components/FusionBadge';
 import { StealthBadge } from '../../components/StealthBadge';
 import { selectWalletId } from '../../state/slices/walletSlice';
 import type { RootState } from '../../state/store';
+import { useI18n } from '../../i18n/useI18n';
 
 type ReviewCardProps = {
   open: boolean;
@@ -51,6 +52,7 @@ export function ReviewCard({
   onClose,
   onConfirmSend,
 }: ReviewCardProps) {
+  const { t } = useI18n();
   const walletId = useSelector(selectWalletId);
   const rpaRecord = useSelector((state: RootState) =>
     walletId > 0
@@ -234,10 +236,10 @@ export function ReviewCard({
           <div className="flex items-start justify-between gap-3">
             <div>
               <div className="text-xl font-bold wallet-text-strong">
-                Review Transaction
+                {t('send.reviewTitle')}
               </div>
               <div className="text-sm wallet-muted mt-1">
-                Verify details and slide to send.
+                {t('send.verifySlide')}
               </div>
             </div>
             <button
@@ -246,7 +248,7 @@ export function ReviewCard({
               disabled={isSending}
               className="wallet-btn-secondary px-3 py-1.5 text-xs"
             >
-              Close
+              {t('receive.close')}
             </button>
           </div>
         </div>
@@ -254,11 +256,11 @@ export function ReviewCard({
         <div className="p-4 space-y-4 max-h-[56vh] overflow-y-auto">
           <div className="rounded-2xl border wallet-keyline wallet-signature-panel p-3">
             <div className="mb-3 flex items-center justify-between gap-3">
-              <div className="wallet-kicker">Summary</div>
+              <div className="wallet-kicker">{t('send.summary')}</div>
             </div>
             <div className="text-sm space-y-2">
               <div className="wallet-stat-row">
-                <span className="font-medium">To</span>
+                <span className="font-medium">{t('send.to')}</span>
                 <span
                   className="font-mono truncate max-w-[60%] wallet-text-strong"
                   title={recipient}
@@ -280,7 +282,7 @@ export function ReviewCard({
 
               {assetType === 'bch' && (
                 <div className="wallet-stat-row">
-                  <span className="font-medium">Amount</span>
+                  <span className="font-medium">{t('send.amount')}</span>
                   <span className="wallet-text-strong">
                     {(Number.parseFloat(amountBch) || 0).toFixed(8)} BCH
                     {!!fiatSummary.amountUsd && (
@@ -295,7 +297,7 @@ export function ReviewCard({
 
               {assetType !== 'bch' && (
                 <div className="wallet-stat-row">
-                  <span className="font-medium">Asset</span>
+                  <span className="font-medium">{t('send.asset')}</span>
                   <span className="font-mono wallet-text-strong">
                     {assetType.toUpperCase()} ·{' '}
                     {selectedCategory ? displayNameFor(selectedCategory) : '—'}
@@ -308,7 +310,7 @@ export function ReviewCard({
 
               {review.tokenChange && (
                 <div className="wallet-stat-row">
-                  <span className="font-medium">Token change</span>
+                  <span className="font-medium">{t('send.tokenChange')}</span>
                   <span
                     className="font-mono wallet-text-strong"
                     title={review.tokenChange.amount.toString()}
@@ -328,7 +330,7 @@ export function ReviewCard({
                 </div>
               )}
               <div className="wallet-stat-row">
-                <span className="font-medium">Fee</span>
+                <span className="font-medium">{t('send.fee')}</span>
                 <span className="wallet-text-strong">
                   {(review.feeSats / 100_000_000).toFixed(8)} BCH
                   {!!fiatSummary.feeUsd && (
@@ -340,7 +342,7 @@ export function ReviewCard({
                 </span>
               </div>
               <div className="wallet-stat-row">
-                <span className="font-medium">Total (BCH)</span>
+                <span className="font-medium">{t('send.totalBch')}</span>
                 <span className="wallet-text-strong">
                   {(review.totalSats / 100_000_000).toFixed(8)} BCH
                   {!!fiatSummary.totalUsd && (
@@ -361,10 +363,10 @@ export function ReviewCard({
               onClick={() => setShowTechnicalDetails((prev) => !prev)}
             >
               <span className="font-semibold wallet-text-strong">
-                Technical details
+                {t('send.technicalDetails')}
               </span>
               <span className="text-xs wallet-muted">
-                {showTechnicalDetails ? 'Hide' : 'Show'}
+                {showTechnicalDetails ? t('send.hide') : t('send.show')}
               </span>
             </button>
 
@@ -372,32 +374,40 @@ export function ReviewCard({
               <div className="mt-3 space-y-3">
                 <div className="space-y-1 text-xs">
                   <div className="wallet-stat-row">
-                    <span className="wallet-muted">Inputs</span>
+                    <span className="wallet-muted">{t('send.inputs')}</span>
                     <span className="font-mono wallet-text-strong">
                       {technicalSummary.inputCount}
                     </span>
                   </div>
                   <div className="wallet-stat-row">
-                    <span className="wallet-muted">Transaction size</span>
+                    <span className="wallet-muted">
+                      {t('send.transactionSize')}
+                    </span>
                     <span className="font-mono wallet-text-strong">
-                      {technicalSummary.txBytes} bytes
+                      {technicalSummary.txBytes} {t('send.bytes')}
                     </span>
                   </div>
                   <div className="wallet-stat-row">
-                    <span className="wallet-muted">Token inputs</span>
+                    <span className="wallet-muted">
+                      {t('send.tokenInputs')}
+                    </span>
                     <span className="font-mono wallet-text-strong">
                       {technicalSummary.tokenInputCount}
                     </span>
                   </div>
                   <div className="wallet-stat-row">
-                    <span className="wallet-muted">Unconfirmed inputs</span>
+                    <span className="wallet-muted">
+                      {t('send.unconfirmedInputs')}
+                    </span>
                     <span className="font-mono wallet-text-strong">
                       {technicalSummary.unconfirmedCount}
                     </span>
                   </div>
                   {technicalSummary.contractCount > 0 && (
                     <div className="wallet-stat-row">
-                      <span className="wallet-muted">Contract inputs</span>
+                      <span className="wallet-muted">
+                        {t('send.contractInputs')}
+                      </span>
                       <span className="font-mono wallet-text-strong">
                         {technicalSummary.contractCount}
                       </span>
@@ -407,7 +417,7 @@ export function ReviewCard({
 
                 <div className="rounded-xl border border-[var(--wallet-border)] wallet-surface px-3 py-2.5">
                   <div className="mb-2 text-xs font-semibold wallet-muted">
-                    Inputs used
+                    {t('send.inputsUsed')}
                   </div>
                   <div className="space-y-1.5">
                     {technicalInputs.map((input) => (
@@ -429,7 +439,9 @@ export function ReviewCard({
                             )}
                           </div>
                           {input.pending && (
-                            <div className="wallet-muted">Pending</div>
+                            <div className="wallet-muted">
+                              {t('send.pending')}
+                            </div>
                           )}
                         </div>
                         <div className="font-mono wallet-text-strong shrink-0">
@@ -442,7 +454,7 @@ export function ReviewCard({
 
                 <div className="rounded-xl border border-[var(--wallet-border)] wallet-surface px-3 py-2.5">
                   <div className="mb-2 text-xs font-semibold wallet-muted">
-                    Outputs created
+                    {t('send.outputsCreated')}
                   </div>
                   <div className="space-y-1.5">
                     {technicalOutputs.map((output) => (
@@ -473,15 +485,12 @@ export function ReviewCard({
         <div className="px-4 pb-4 pt-3 wallet-surface border-t border-[var(--wallet-border)]">
           <div className="text-[14px] wallet-muted mb-2.5 px-1">
             {isSending
-              ? sendStatus ||
-                (isHardwareWallet
-                  ? 'Confirm on your Ledger device…'
-                  : 'Sending…')
+              ? sendStatus || t('send.sending')
               : slideCompleted
-                ? 'Confirmed'
+                ? t('send.confirmed')
                 : nearingSend
-                  ? 'Release to send'
-                  : 'Slide to confirm'}
+                  ? t('send.releaseToSend')
+                  : t('send.slideToConfirm')}
           </div>
           {isSending && isHardwareWallet && (
             <div
@@ -533,7 +542,7 @@ export function ReviewCard({
                     : pendingText,
                 }}
               >
-                SEND
+                {t('send.send')}
               </span>
             </div>
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
@@ -546,14 +555,12 @@ export function ReviewCard({
                 }}
               >
                 {isSending
-                  ? isHardwareWallet
-                    ? 'Check Ledger…'
-                    : 'Sending…'
+                  ? t('send.sending')
                   : slideCompleted
-                    ? 'Confirmed'
+                    ? t('send.confirmed')
                     : nearingSend
-                      ? 'Release to send'
-                      : 'Slide to confirm'}
+                      ? t('send.releaseToSend')
+                      : t('send.slideToConfirm')}
               </span>
             </div>
             <Draggable

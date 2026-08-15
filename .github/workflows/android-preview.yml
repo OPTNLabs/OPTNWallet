@@ -6,6 +6,9 @@ on:
     branches: [dev, staging]
   push:
     branches: [dev, staging]
+  # Allows a maintainer to recover the required check when GitHub does not
+  # create the pull_request run for a head update.
+  workflow_dispatch:
 
 permissions:
   contents: read

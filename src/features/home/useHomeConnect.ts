@@ -19,6 +19,7 @@ import {
 import { toErrorMessage } from '../../utils/errorHandling';
 import { classifyScannedQrPayload } from '../../utils/qrScan';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
+import { useI18n } from '../../i18n/useI18n';
 
 export function useHomeConnect() {
   const navigate = useNavigate();
@@ -27,6 +28,7 @@ export function useHomeConnect() {
     (state: RootState) => state.wallet_id.currentWalletId
   );
   const currentNetwork = useSelector(selectCurrentNetwork);
+  const { t } = useI18n();
   const pendingProposal = useSelector(
     (state: RootState) =>
       state.cashconnect.pendingProposal ?? state.walletconnect.pendingProposal
@@ -55,7 +57,7 @@ export function useHomeConnect() {
     async (raw: string): Promise<boolean> => {
       const scanned = raw.trim();
       if (!scanned) {
-        await Toast.show({ text: 'Paste a URI or scan a QR code.' });
+        await Toast.show({ text: t('homeConnect.pasteUri') });
         return false;
       }
 
@@ -76,6 +78,17 @@ export function useHomeConnect() {
             returnTo,
             recipient: parsed.normalizedAddress,
             amountBch: parsed.amountRaw ?? '',
+          },
+        });
+        return true;
+      }
+
+      if (parsed.kind === 'merchant-proposal-stream') {
+        setPopupOpen(false);
+        navigate('/apps/optn.builtin.demo:cauldronSwapApp', {
+          state: {
+            returnTo,
+            merchantProposalInitialQrPayload: parsed.initialQrPayload,
           },
         });
         return true;
@@ -110,7 +123,7 @@ export function useHomeConnect() {
       });
       return false;
     },
-    [currentNetwork, currentWalletId, dispatch, navigate, returnTo]
+    [currentNetwork, currentWalletId, dispatch, navigate, returnTo, t]
   );
 
   const connectUri = useCallback(

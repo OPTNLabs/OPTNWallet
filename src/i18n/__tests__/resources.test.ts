@@ -85,6 +85,28 @@ describe('i18n resources', () => {
     }
   });
 
+  it('translates the remaining wallet controls on the settings page', () => {
+    const settingsKeys = [
+      'settingsRows.walletInfo',
+      'settingsRows.walletInfoDescription',
+      'settingsRows.exportArchive',
+      'settingsRows.exportArchiveDescription',
+      'settingsRows.rebuildWallet',
+      'settingsRows.rebuildWalletDescription',
+      'settingsPanels.walletInfo',
+      'settingsPanels.exportArchive',
+      'settingsPanels.rebuildWallet',
+    ] as const;
+
+    for (const locale of SUPPORTED_LOCALES.filter(
+      (supportedLocale) => supportedLocale !== 'en'
+    )) {
+      for (const key of settingsKeys) {
+        expect(translations[locale][key]).not.toBe(translations.en[key]);
+      }
+    }
+  });
+
   it('does not leave Arabic user-facing copy on the English fallback', () => {
     const untranslated = Object.keys(translations.en).filter(
       (key) =>

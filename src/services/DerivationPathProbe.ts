@@ -39,9 +39,14 @@ export const PROBE_GAP_LIMIT = 20;
  */
 export const PROBE_MAX_ADDRESSES = 200;
 
-export type BranchXpubs = { receive: string; change: string };
+export type BranchXpubs = {
+  receive: string;
+  change: string;
+  /** Optional ordinary BCH DeFi/Cauldron branch. */
+  defi?: string;
+};
 
-/** Resolve the receive and change xpubs for one candidate account path. */
+/** Resolve the ordinary BCH branch xpubs for one candidate account path. */
 export type AccountXpubResolver = (accountPath: string) => Promise<BranchXpubs>;
 
 export interface DerivationScanResult extends DerivationPathDiscovery {
@@ -101,7 +106,8 @@ async function requestFreshBatch(
 /**
  * Walk one branch until `gapLimit` consecutive addresses show no history.
  * Requests are batched in gap-sized windows, reducing an empty chipnet scan
- * from 240 serial round trips to 12 batches (receive + change per candidate).
+ * from hundreds of serial round trips to one request per gap-sized window on
+ * each ordinary branch (receive, change, and optional DeFi/Cauldron).
  *
  * Live UTXOs are read only for addresses that actually have history. Both
  * lookups bypass wallet caches and treat every partial/invalid response as
@@ -235,15 +241,20 @@ export async function scanDerivationPaths(
     async (accountPath) => {
       assertNotAborted(signal);
       try {
-        const { receive, change } = await resolveXpubs(accountPath);
-        const [receiveResult, changeResult] = await Promise.all([
-          scanBranch(network, receive, signal),
-          scanBranch(network, change, signal),
-        ]);
+        const xpubs = await resolveXpubs(accountPath);
+        const branchXpubs = [xpubs.receive, xpubs.change, xpubs.defi].filter(
+          (xpub): xpub is string =>
+            typeof xpub === 'string' && xpub.trim().length > 0
+        );
+        const results = await Promise.all(
+          branchXpubs.map((xpub) => scanBranch(network, xpub, signal))
+        );
         return {
-          usedAddresses:
-            receiveResult.usedAddresses + changeResult.usedAddresses,
-          satoshis: receiveResult.satoshis + changeResult.satoshis,
+          usedAddresses: results.reduce(
+            (sum, result) => sum + result.usedAddresses,
+            0
+          ),
+          satoshis: results.reduce((sum, result) => sum + result.satoshis, 0n),
         };
       } finally {
         // Counted in `finally` so the progress bar advances even for a candidate
@@ -294,6 +305,10 @@ export function mnemonicXpubResolver(
       0,
       accountPath
     );
-    return { receive: xpubs.receive, change: xpubs.change };
+    return {
+      receive: xpubs.receive,
+      change: xpubs.change,
+      defi: xpubs.defi,
+    };
   };
 }
