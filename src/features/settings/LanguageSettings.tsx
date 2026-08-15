@@ -20,7 +20,7 @@ export function LanguageSettings() {
         id="wallet-language"
         value={locale}
         onChange={(event) => setLocale(event.target.value as typeof locale)}
-        className="wallet-input mt-3 w-full rounded-md px-3 py-2 wallet-text-strong"
+        className="wallet-input wallet-language-select mt-3 w-full rounded-md px-3 py-2 wallet-text-strong"
       >
         {SUPPORTED_LOCALES.map((supportedLocale) => (
           <option key={supportedLocale} value={supportedLocale}>

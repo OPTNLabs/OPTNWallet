@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { FaArrowDown, FaArrowUp, FaBitcoin, FaQrcode } from 'react-icons/fa';
@@ -27,7 +27,6 @@ import { Network } from '../../state/slices/networkSlice';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import { SATSINBITCOIN } from '../../utils/constants';
 import { selectRpaStealthSats } from '../../state/slices/walletSpecialActivitySlice';
-import { loadStoredWalletSpecialActivities } from '../../services/WalletSpecialActivityService';
 import SettingsRow from '../../components/ui/SettingsRow';
 import EmptyState from '../../components/ui/EmptyState';
 import { shortenTxHash } from '../../utils/shortenHash';
@@ -81,7 +80,6 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
     (state: RootState) => state.wallet_id.currentWalletId
   );
   const fusionDepthRev = useFusionDepthRevision(Number(currentWalletId) || 0);
-  const reduxUTXOs = useSelector((state: RootState) => state.utxos.utxos);
   const fetchingUTXOsRedux = useSelector(
     (state: RootState) => state.utxos.fetchingUTXOs
   );
@@ -108,31 +106,6 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
     () => takeRecentTransactions(transactions, 3),
     [transactions]
   );
-  const tokenCategories = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          Object.values(reduxUTXOs)
-            .flat()
-            .map((utxo) => utxo.token?.category)
-            .filter((category): category is string => Boolean(category))
-        )
-      ),
-    [reduxUTXOs]
-  );
-
-  useEffect(() => {
-    if (!currentWalletId || tokenCategories.length === 0) return;
-    void preloadTokenMetadata(tokenCategories);
-  }, [currentWalletId, tokenCategories]);
-
-  useEffect(() => {
-    if (!currentWalletId) return;
-    void loadStoredWalletSpecialActivities(currentWalletId).catch(() => {
-      /* stored stealth total is optional on Home */
-    });
-  }, [currentWalletId]);
-
   const handleRefresh = useCallback(async () => {
     if (fetchingUTXOsRedux || !currentWalletId) return;
     const walletSession = captureActiveWalletSession(currentWalletId);

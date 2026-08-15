@@ -14,11 +14,8 @@ import TokenIdentityBadge from '../components/ui/TokenIdentityBadge';
 import Popup from '../components/transaction/Popup';
 import TokenQuery from '../components/TokenQuery';
 import WalletScreen from '../components/ui/WalletScreen';
-import TransactionService from '../services/TransactionService';
 import type { ContractAddressRecord, UTXO } from '../types/types';
 import useFetchWalletData from '../hooks/useFetchWalletData';
-import UTXOService from '../services/UTXOService';
-import { logError } from '../utils/errorHandling';
 import type { TokenPresentationFallback } from '../utils/tokenPresentation';
 import { StealthBalanceCard } from '../features/rpa/StealthBalanceCard';
 import { CauldronActivityCard } from '../features/cauldron/CauldronActivityCard';
@@ -73,7 +70,6 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
   const [, setDefaultChangeAddress] = useState<string>('');
   const [, setWalletError] = useState<string | null>(null);
   const [walletUtxos, setWalletUtxos] = useState<UTXO[]>([]);
-  const [refreshedTokenUtxos, setRefreshedTokenUtxos] = useState<UTXO[]>([]);
   const reduxTokenUtxos = useMemo(
     () => dedupeTokenUtxos(Object.values(reduxUTXOs).flat()),
     [reduxUTXOs]
@@ -85,13 +81,9 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
   const tokenUtxos = useMemo(
     () =>
       currentWalletId
-        ? getStableTokenUtxos(
-            refreshedTokenUtxos,
-            walletTokenUtxos,
-            reduxTokenUtxos
-          )
+        ? getStableTokenUtxos(walletTokenUtxos, reduxTokenUtxos)
         : [],
-    [currentWalletId, refreshedTokenUtxos, walletTokenUtxos, reduxTokenUtxos]
+    [currentWalletId, walletTokenUtxos, reduxTokenUtxos]
   );
 
   useFetchWalletData(
@@ -104,90 +96,9 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
     setWalletError
   );
 
-  useEffect(() => {
-    setRefreshedTokenUtxos([]);
-  }, [currentWalletId]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadNativeTokenInventory(): Promise<void> {
-      if (!currentWalletId) return;
-
-      if (walletAddresses.length === 0) {
-        // Keep the last known token rows visible while the refreshed address
-        // list is still loading. Clearing here makes token holdings appear to
-        // disappear on every reload before the DB snapshot is restored.
-        return;
-      }
-
-      try {
-        await UTXOService.fetchAndStoreUTXOsMany(
-          currentWalletId,
-          walletAddresses.map((item) => item.address)
-        );
-        const nativeWalletUtxos =
-          await UTXOService.fetchAllWalletUtxos(currentWalletId);
-        let nextTokenUtxos = nativeWalletUtxos.tokenUtxos ?? [];
-
-        if (isDev) {
-          console.log('[Assets] native inventory snapshot', {
-            walletId: currentWalletId,
-            addressCount: walletAddresses.length,
-            addressSample: walletAddresses.slice(0, 3),
-            allUtxoCount: nativeWalletUtxos.allUtxos.length,
-            tokenUtxoCount: nativeWalletUtxos.tokenUtxos.length,
-            tokenCategories: nativeWalletUtxos.tokenUtxos
-              .map((utxo) => utxo.token?.category)
-              .filter(Boolean),
-          });
-        }
-
-        if (nextTokenUtxos.length === 0) {
-          const fallbackSnapshot =
-            await TransactionService.fetchAddressesAndUTXOs(currentWalletId);
-          nextTokenUtxos = (fallbackSnapshot.utxos ?? []).filter(
-            (utxo) => !!utxo.token
-          );
-
-          if (isDev) {
-            console.log('[Assets] fallback inventory snapshot', {
-              walletId: currentWalletId,
-              fallbackUtxoCount: fallbackSnapshot.utxos.length,
-              fallbackTokenUtxoCount: nextTokenUtxos.length,
-              fallbackTokenCategories: nextTokenUtxos
-                .map((utxo) => utxo.token?.category)
-                .filter(Boolean),
-            });
-          }
-        }
-
-        if (cancelled) return;
-        setRefreshedTokenUtxos(dedupeTokenUtxos(nextTokenUtxos));
-
-        if (isDev) {
-          console.log('[Assets] grouped token rows', {
-            walletId: currentWalletId,
-            groupedCount: nextTokenUtxos.length,
-            groupedCategories: nextTokenUtxos.map(
-              (utxo) => utxo.token?.category
-            ),
-          });
-        }
-      } catch (error) {
-        logError('Assets.loadNativeTokenInventory', error, {
-          walletId: currentWalletId,
-        });
-        // Preserve the previous token snapshot on fetch errors. The DB-backed
-        // state is still the safer source of truth than blanking the list.
-      }
-    }
-
-    void loadNativeTokenInventory();
-    return () => {
-      cancelled = true;
-    };
-  }, [currentWalletId, walletAddresses]);
+  // The shared worker already refreshes every tracked address and publishes
+  // the authoritative Redux UTXO snapshot. Assets must not start a second
+  // wallet-wide listunspent pass just because its route mounted.
 
   const entries = useMemo(() => {
     const tokenTotals: Record<

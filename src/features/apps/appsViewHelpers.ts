@@ -7,7 +7,9 @@ export function isComingSoonApp(appId: string, appName: string): boolean {
     normalizedId.endsWith(':fundmeapp') ||
     normalizedName === 'fundme' ||
     normalizedId.endsWith(':paryonworkspaceapp') ||
-    normalizedName.includes('paryonusd')
+    normalizedName.includes('paryonusd') ||
+    normalizedId.endsWith(':merchantpayapp') ||
+    normalizedName === 'merchant pay'
   );
 }
 

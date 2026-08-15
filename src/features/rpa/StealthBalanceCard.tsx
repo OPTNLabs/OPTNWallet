@@ -9,7 +9,6 @@ import { selectRpaEnabled } from '../../state/slices/experimentalSlice';
 import type { RootState } from '../../state/store';
 import {
   claimRpaTransaction,
-  loadStoredWalletSpecialActivities,
   syncWalletSpecialActivities,
   type RpaActivityPayload,
 } from '../../services/WalletSpecialActivityService';
@@ -60,12 +59,6 @@ export const StealthBalanceCard: React.FC<StealthBalanceCardProps> = ({
     },
     [locale, t]
   );
-
-  useEffect(() => {
-    void loadStoredWalletSpecialActivities(walletId).catch((error) => {
-      console.warn('Failed to load stored RPA activity:', error);
-    });
-  }, [walletId]);
 
   useEffect(() => {
     if (

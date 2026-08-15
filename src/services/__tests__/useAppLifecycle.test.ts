@@ -12,7 +12,9 @@ describe('wallet network bootstrap', () => {
     });
     const dispatch = vi.fn();
     const ensureFreshConnection = vi.fn(() => connection);
+    const publishStoredHistory = vi.fn(async () => 0);
     const refreshHistory = vi.fn(async () => {});
+    const loadStoredSpecialActivities = vi.fn(async () => []);
     let bootstrapFinished = false;
 
     const bootstrap = bootstrapWalletNetwork(
@@ -30,7 +32,9 @@ describe('wallet network bootstrap', () => {
           derivation_path_source: 'default' as const,
         })),
         ensureFreshConnection,
+        publishStoredHistory,
         refreshHistory,
+        loadStoredSpecialActivities,
         getSessionGeneration: () => 3,
       }
     ).then(() => {
@@ -39,6 +43,12 @@ describe('wallet network bootstrap', () => {
 
     await vi.waitFor(() => expect(ensureFreshConnection).toHaveBeenCalledOnce());
     expect(bootstrapFinished).toBe(true);
+    expect(publishStoredHistory).toHaveBeenCalledWith({
+      walletId: 7,
+      dispatch,
+      sessionGeneration: 3,
+    });
+    expect(loadStoredSpecialActivities).toHaveBeenCalledWith(7);
     expect(refreshHistory).not.toHaveBeenCalled();
 
     finishConnection?.();
@@ -57,7 +67,9 @@ describe('wallet network bootstrap', () => {
       finishHistory = resolve;
     });
     const dispatch = vi.fn();
+    const publishStoredHistory = vi.fn(async () => 0);
     const refreshHistory = vi.fn(() => history);
+    const loadStoredSpecialActivities = vi.fn(async () => []);
 
     await bootstrapWalletNetwork(
       7,
@@ -74,7 +86,9 @@ describe('wallet network bootstrap', () => {
           derivation_path_source: 'default' as const,
         })),
         ensureFreshConnection: vi.fn(async () => {}),
+        publishStoredHistory,
         refreshHistory,
+        loadStoredSpecialActivities,
       }
     );
 

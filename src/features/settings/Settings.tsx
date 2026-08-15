@@ -115,10 +115,13 @@ const Settings: React.FC = () => {
       language: 'settingsRows.language',
       network: 'settingsRows.network',
       faucet: 'settingsRows.faucet',
+      'wallet-info': 'settingsRows.walletInfo',
       derivation: 'settingsRows.derivation',
       recovery: 'settingsRows.recovery',
       'pending-outbox': 'settingsRows.pendingOutbox',
       'app-lock': 'settingsRows.appLock',
+      'export-archive': 'settingsRows.exportArchive',
+      'rebuild-wallet': 'settingsRows.rebuildWallet',
       nostr: 'settingsRows.nostr',
       server: 'settingsRows.server',
       console: 'settingsRows.console',
@@ -139,10 +142,13 @@ const Settings: React.FC = () => {
       language: 'settingsRows.languageDescription',
       network: 'settingsRows.networkDescription',
       faucet: 'settingsRows.faucetDescription',
+      'wallet-info': 'settingsRows.walletInfoDescription',
       derivation: 'settingsRows.derivationDescription',
       recovery: 'settingsRows.recoveryDescription',
       'pending-outbox': 'settingsRows.pendingOutboxDescription',
       'app-lock': 'settingsRows.appLockDescription',
+      'export-archive': 'settingsRows.exportArchiveDescription',
+      'rebuild-wallet': 'settingsRows.rebuildWalletDescription',
       nostr: 'settingsRows.nostrDescription',
       server: 'settingsRows.serverDescription',
       console: 'settingsRows.consoleDescription',
@@ -286,13 +292,13 @@ const Settings: React.FC = () => {
       case 'app-lock':
         return t('settingsPanels.appLock');
       case 'export-archive':
-        return 'Wallet pack export';
+        return t('settingsPanels.exportArchive');
       case 'rebuild-wallet':
-        return 'Rebuild Wallet';
+        return t('settingsPanels.rebuildWallet');
       case 'server':
         return t('settingsPanels.server');
       case 'wallet-info':
-        return 'Wallet info';
+        return t('settingsPanels.walletInfo');
       case 'derivation':
         return t('settingsPanels.derivation');
       case 'console':

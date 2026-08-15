@@ -451,6 +451,7 @@ export async function bootstrapAllUTXOs(
     // like a bug; with the Sync bar + force listunspent below, the network
     // still wins and users get a usable Home in <100ms on reopen.
     try {
+      const sqlPaintStart = performance.now();
       const sqlSnap = await UTXOService.fetchUTXOsFromDatabase(
         trackedAddresses.map((address) => ({ address }))
       );
@@ -471,6 +472,7 @@ export async function bootstrapAllUTXOs(
         store.dispatch(replaceAllUTXOs({ utxosByAddress: provisional }));
         store.dispatch(setInitialized(true));
         console.info('[UTXOWorker] provisional SQL paint', {
+          ms: Math.round(performance.now() - sqlPaintStart),
           addresses: Object.keys(provisional).length,
           coins: provisionalCoins,
         });

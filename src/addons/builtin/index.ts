@@ -79,6 +79,7 @@ const BUILTIN_ADDONS_BASE: AddonManifest[] = [
           'Accept PUSD while customers pay BCH through Cauldron pools',
         iconUri: '/assets/images/OPTNUIkeyline.png',
         kind: 'declarative',
+        devOnly: true,
         requiredCapabilities: [
           'wallet:context:read',
           'wallet:addresses:read',

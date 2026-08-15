@@ -28,15 +28,11 @@ import {
   isActiveWalletSession,
 } from '../../services/WalletUtxoRefreshService';
 import { logError } from '../../utils/errorHandling';
-import {
-  publishStoredWalletHistory,
-  refreshWalletTransactionHistory,
-} from '../../services/WalletHistoryRefreshService';
+import { refreshWalletTransactionHistory } from '../../services/WalletHistoryRefreshService';
 import { Network } from '../../state/slices/networkSlice';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import { SATSINBITCOIN } from '../../utils/constants';
 import { selectRpaStealthSats } from '../../state/slices/walletSpecialActivitySlice';
-import { loadStoredWalletSpecialActivities } from '../../services/WalletSpecialActivityService';
 import type { TransactionHistoryItem } from '../../types/types';
 import SettingsRow from '../../components/ui/SettingsRow';
 import EmptyState from '../../components/ui/EmptyState';
@@ -96,7 +92,6 @@ const Home: React.FC = () => {
   const sessionGeneration = useSelector(
     (state: RootState) => state.wallet_id.sessionGeneration ?? 0
   );
-  const reduxUTXOs = useSelector((state: RootState) => state.utxos.utxos);
   const fetchingUTXOsRedux = useSelector(
     (state: RootState) => state.utxos.fetchingUTXOs
   );
@@ -161,19 +156,6 @@ const Home: React.FC = () => {
     () => takeRecentTransactions(transactions, 3),
     [transactions]
   );
-  const tokenCategories = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          Object.values(reduxUTXOs)
-            .flat()
-            .map((utxo) => utxo.token?.category)
-            .filter((category): category is string => Boolean(category))
-        )
-      ),
-    [reduxUTXOs]
-  );
-
   // Feed per-address history progress into the shared store field so the Home
   // progress bar (rendered under the Sync button) moves for the whole sync —
   // both the worker bootstrap phases and this history pass.
@@ -181,60 +163,6 @@ const Home: React.FC = () => {
     (percent: number) => dispatch(setSyncingProgress(percent)),
     [dispatch]
   );
-
-  useEffect(() => {
-    if (!currentWalletId || tokenCategories.length === 0) return;
-    void preloadTokenMetadata(tokenCategories);
-  }, [currentWalletId, tokenCategories]);
-
-  useEffect(() => {
-    if (!currentWalletId) return;
-    void loadStoredWalletSpecialActivities(currentWalletId).catch(() => {
-      /* stored stealth total is optional on Home */
-    });
-  }, [currentWalletId]);
-
-  // Load this wallet's transaction history when it opens.
-  //
-  // 1) SQL paint first (no coordinator / no Electrum) so Recent Activity is
-  //    last-session state immediately — like EC / Selene / Monero GUI.
-  // 2) Network refresh after; cooldown on the coordinator must not skip (1).
-  useEffect(() => {
-    if (!currentWalletId) return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        await publishStoredWalletHistory({
-          walletId: currentWalletId,
-          dispatch,
-          sessionGeneration,
-        });
-      } catch (error) {
-        if (!cancelled) {
-          logError('DesktopHome.paintStoredHistory', error, {
-            walletId: currentWalletId,
-          });
-        }
-      }
-      if (cancelled) return;
-      try {
-        await refreshWalletTransactionHistory({
-          walletId: currentWalletId,
-          dispatch,
-          sessionGeneration,
-        });
-      } catch (error) {
-        if (!cancelled) {
-          logError('DesktopHome.loadHistory', error, {
-            walletId: currentWalletId,
-          });
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [currentWalletId, dispatch, sessionGeneration]);
 
   const handleRefresh = useCallback(async () => {
     if (fetchingUTXOsRedux || !currentWalletId) return;

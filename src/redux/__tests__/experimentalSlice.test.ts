@@ -12,12 +12,12 @@ import reducer, {
 } from '../../state/slices/experimentalSlice';
 
 describe('experimentalSlice CashFusion preferences', () => {
-  it('defaults Auto Fuse on and P2P Fusion off', () => {
+  it('defaults automatic Fusion off and P2P Fusion on', () => {
     const state = reducer(undefined, { type: 'unknown' });
 
-    expect(state.autoFuseEnabled).toBe(true);
+    expect(state.autoFuseEnabled).toBe(false);
     expect(state.p2pFusionEnabled).toBe(true);
-    expect(selectAutoFuseEnabled({ experimental: state } as never)).toBe(true);
+    expect(selectAutoFuseEnabled({ experimental: state } as never)).toBe(false);
     expect(selectP2pFusionEnabled({ experimental: state } as never)).toBe(
       true
     );
@@ -46,7 +46,7 @@ describe('experimentalSlice CashFusion preferences', () => {
 
     expect(restored).toMatchObject({
       cashFusionEnabled: true,
-      autoFuseEnabled: true,
+      autoFuseEnabled: false,
       p2pFusionEnabled: true,
     });
   });

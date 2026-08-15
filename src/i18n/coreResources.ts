@@ -775,6 +775,9 @@ export const coreTranslations = {
     'settingsRows.networkDescription': 'Switch between Mainnet and Chipnet',
     'settingsRows.faucet': 'Chipnet Faucet',
     'settingsRows.faucetDescription': 'Get test BCH on Chipnet',
+    'settingsRows.walletInfo': 'Wallet info',
+    'settingsRows.walletInfoDescription':
+      'Name, type, network · xPub & path behind password/biometric',
     'settingsRows.derivation': 'Derivation Path',
     'settingsRows.derivationDescription':
       'Customize and resync the active BIP44 path',
@@ -785,6 +788,12 @@ export const coreTranslations = {
       'Review outgoing transaction locks',
     'settingsRows.appLock': 'App Lock',
     'settingsRows.appLockDescription': 'Auto-lock · Change password',
+    'settingsRows.exportArchive': 'Wallet pack export',
+    'settingsRows.exportArchiveDescription':
+      'Export/import .optn + .optn-cold (keys + encrypted data)',
+    'settingsRows.rebuildWallet': 'Rebuild Wallet',
+    'settingsRows.rebuildWalletDescription':
+      'Wipe chain data and resync from network (keeps seed)',
     'settingsRows.nostr': 'Nostr & Chat',
     'settingsRows.nostrDescription': 'Private messages · Identity · Relay pool',
     'settingsRows.server': 'Servers',
@@ -811,6 +820,9 @@ export const coreTranslations = {
     'settingsRows.contactDescription': 'Get help and support',
     'settingsPanels.contract': 'Contract Info',
     'settingsPanels.appLock': 'App Lock',
+    'settingsPanels.walletInfo': 'Wallet info',
+    'settingsPanels.exportArchive': 'Wallet pack export',
+    'settingsPanels.rebuildWallet': 'Rebuild Wallet',
     'settingsPanels.server': 'Server',
     'settingsPanels.derivation': 'Derivation Path',
     'settingsPanels.console': 'Console',
@@ -1707,6 +1719,9 @@ export const coreTranslations = {
     'settingsRows.networkDescription': 'Cambia entre Mainnet y Chipnet',
     'settingsRows.faucet': 'Grifo de Chipnet',
     'settingsRows.faucetDescription': 'Obtén BCH de prueba en Chipnet',
+    'settingsRows.walletInfo': 'Información de la billetera',
+    'settingsRows.walletInfoDescription':
+      'Nombre, tipo, red · xPub y ruta protegidos por contraseña/biometría',
     'settingsRows.derivation': 'Ruta de derivación',
     'settingsRows.derivationDescription':
       'Personaliza y vuelve a sincronizar la ruta BIP44 activa',
@@ -1718,6 +1733,12 @@ export const coreTranslations = {
     'settingsRows.appLock': 'Bloqueo de la aplicación',
     'settingsRows.appLockDescription':
       'Bloqueo automático · Cambiar contraseña',
+    'settingsRows.exportArchive': 'Exportación del paquete de billetera',
+    'settingsRows.exportArchiveDescription':
+      'Exporta/importa .optn + .optn-cold (claves + datos cifrados)',
+    'settingsRows.rebuildWallet': 'Reconstruir billetera',
+    'settingsRows.rebuildWalletDescription':
+      'Borra los datos de cadena y vuelve a sincronizar desde la red (conserva la semilla)',
     'settingsRows.nostr': 'Nostr y chat',
     'settingsRows.nostrDescription':
       'Mensajes privados · Identidad · Grupo de relés',
@@ -1748,6 +1769,9 @@ export const coreTranslations = {
     'settingsRows.contactDescription': 'Obtén ayuda y soporte',
     'settingsPanels.contract': 'Información del contrato',
     'settingsPanels.appLock': 'Bloqueo de la aplicación',
+    'settingsPanels.walletInfo': 'Información de la billetera',
+    'settingsPanels.exportArchive': 'Exportación del paquete de billetera',
+    'settingsPanels.rebuildWallet': 'Reconstruir billetera',
     'settingsPanels.server': 'Servidor',
     'settingsPanels.derivation': 'Ruta de derivación',
     'settingsPanels.console': 'Consola',
@@ -2561,6 +2585,9 @@ export const coreTranslations = {
     'settingsRows.networkDescription': '在主网和 Chipnet 之间切换',
     'settingsRows.faucet': 'Chipnet 水龙头',
     'settingsRows.faucetDescription': '在 Chipnet 获取测试 BCH',
+    'settingsRows.walletInfo': '钱包信息',
+    'settingsRows.walletInfoDescription':
+      '名称、类型、网络 · xPub 和路径受密码/生物识别保护',
     'settingsRows.derivation': '派生路径',
     'settingsRows.derivationDescription': '自定义并重新同步当前 BIP44 路径',
     'settingsRows.recovery': '恢复短语',
@@ -2569,6 +2596,12 @@ export const coreTranslations = {
     'settingsRows.pendingOutboxDescription': '查看转出交易锁',
     'settingsRows.appLock': '应用锁',
     'settingsRows.appLockDescription': '自动锁定 · 更改密码',
+    'settingsRows.exportArchive': '钱包包导出',
+    'settingsRows.exportArchiveDescription':
+      '导出/导入 .optn + .optn-cold（密钥 + 加密数据）',
+    'settingsRows.rebuildWallet': '重建钱包',
+    'settingsRows.rebuildWalletDescription':
+      '清除链上数据并从网络重新同步（保留种子）',
     'settingsRows.nostr': 'Nostr 与聊天',
     'settingsRows.nostrDescription': '私信 · 身份 · 中继池',
     'settingsRows.server': '服务器',
@@ -2594,6 +2627,9 @@ export const coreTranslations = {
     'settingsRows.contactDescription': '获取帮助和支持',
     'settingsPanels.contract': '合约信息',
     'settingsPanels.appLock': '应用锁',
+    'settingsPanels.walletInfo': '钱包信息',
+    'settingsPanels.exportArchive': '钱包包导出',
+    'settingsPanels.rebuildWallet': '重建钱包',
     'settingsPanels.server': '服务器',
     'settingsPanels.derivation': '派生路径',
     'settingsPanels.console': '控制台',

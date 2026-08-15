@@ -7,6 +7,7 @@ describe('builtin addon visibility', () => {
     const demo = addons.find((addon) => addon.id === 'optn.builtin.demo');
     const fundme = addons.find((addon) => addon.id === 'optn.builtin.fundme');
     const paryonApp = demo?.apps?.find((app) => app.id === 'paryonWorkspaceApp');
+    const merchantApp = demo?.apps?.find((app) => app.id === 'merchantPayApp');
     const demoCaps = demo?.permissions.find(
       (perm) => perm.kind === 'capabilities'
     );
@@ -16,6 +17,8 @@ describe('builtin addon visibility', () => {
       true
     );
     expect(fundme?.apps?.some((app) => app.id === 'fundmeApp')).toBe(true);
+    expect(merchantApp).toBeDefined();
+    expect(merchantApp?.devOnly).toBe(true);
     expect(paryonApp?.requiredCapabilities).toEqual(
       expect.arrayContaining(['utxo:address:read'])
     );
@@ -36,5 +39,6 @@ describe('builtin addon visibility', () => {
       demo?.contracts?.some((contract) => contract.id === 'paryon-contract-bundle')
     ).toBe(false);
     expect(fundme).toBeUndefined();
+    expect(demo?.apps?.some((app) => app.id === 'merchantPayApp')).toBe(false);
   });
 });

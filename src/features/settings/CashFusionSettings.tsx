@@ -10,6 +10,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import {
+  selectAutoFuseEnabled,
   selectCashFusionEnabled,
   selectFusionServer,
   selectFusionServers,
@@ -62,6 +63,7 @@ import {
   assertServerFusionSelected,
   getFusionModeAvailability,
 } from '../../platform/desktop/FusionMode';
+import { armAutoFusionSession } from '../../platform/desktop/fusionAutoSession';
 import type { RootState } from '../../state/store';
 import { useI18n } from '../../i18n/useI18n';
 import type { TranslationKey } from '../../i18n/resources';
@@ -131,6 +133,7 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
   const dispatch = useDispatch();
   const { t } = useI18n();
   const enabled = useSelector(selectCashFusionEnabled);
+  const autoFuse = useSelector(selectAutoFuseEnabled);
   const p2pFusionEnabled = useSelector(selectP2pFusionEnabled);
   const savedServer = useSelector(selectFusionServer);
   const servers = useSelector(selectFusionServers);
@@ -368,9 +371,11 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
   // requirements. A round completes only when enough players meet in a tier.
   const handleFuseNow = async () => {
     setFuseMsg(null);
+    let explicitStartAttempted = false;
     try {
       assertServerFusionSelected(p2pFusionEnabled);
       setFuseState('fusing');
+      explicitStartAttempted = true;
 
       // Coins come from startFusionRound's live reconciliation, never from the
       // redux list — a stale list is what produced signed CoinJoins spending
@@ -423,9 +428,15 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
 
       setFuseState(outcome.status === 'fused' ? 'done' : 'fail');
       setFuseMsg(describeFusionOutcome(outcome, t));
+      if (autoFuse && outcome.status !== 'busy') {
+        armAutoFusionSession(walletId);
+      }
     } catch (e) {
       setFuseState('fail');
       setFuseMsg(e instanceof Error ? e.message : String(e));
+      if (autoFuse && explicitStartAttempted) {
+        armAutoFusionSession(walletId);
+      }
     }
   };
 
@@ -450,6 +461,7 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
     setP2pState('fusing');
     setP2pMsg(null);
     setP2pPhase(0);
+    const explicitStartAttempted = true;
     try {
       const outcome = await startFusionRound({
         walletId,
@@ -494,6 +506,9 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
       const summary = describeFusionOutcome(outcome, t);
       setP2pState(outcome.status === 'fused' ? 'done' : 'fail');
       setP2pMsg(summary);
+      if (autoFuse && outcome.status !== 'busy') {
+        armAutoFusionSession(walletId);
+      }
       void import('../../platform/desktop/logger')
         .then(({ log }) =>
           log.info(
@@ -506,6 +521,9 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
       const err = e instanceof Error ? e.message : String(e);
       setP2pState('fail');
       setP2pMsg(err);
+      if (autoFuse && explicitStartAttempted) {
+        armAutoFusionSession(walletId);
+      }
       void import('../../platform/desktop/logger')
         .then(({ log }) =>
           log.error('p2p-live', `w${walletId} OUTCOME error: ${err}`)

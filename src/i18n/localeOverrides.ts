@@ -1124,6 +1124,9 @@ export const localeOverrides = {
     'settingsRows.networkDescription': 'التبديل بين Mainnet وChipnet',
     'settingsRows.faucet': 'صنبور Chipnet',
     'settingsRows.faucetDescription': 'احصل على BCH تجريبي على Chipnet',
+    'settingsRows.walletInfo': 'معلومات المحفظة',
+    'settingsRows.walletInfoDescription':
+      'الاسم والنوع والشبكة · xPub والمسار محميان بكلمة مرور/القياسات الحيوية',
     'settingsRows.derivation': 'مسار الاشتقاق',
     'settingsRows.derivationDescription':
       'تخصيص مسار BIP44 النشط وإعادة مزامنته',
@@ -1133,6 +1136,12 @@ export const localeOverrides = {
     'settingsRows.pendingOutboxDescription': 'مراجعة أقفال المعاملات الصادرة',
     'settingsRows.appLock': 'قفل التطبيق',
     'settingsRows.appLockDescription': 'قفل تلقائي · تغيير كلمة المرور',
+    'settingsRows.exportArchive': 'تصدير حزمة المحفظة',
+    'settingsRows.exportArchiveDescription':
+      'تصدير/استيراد .optn + .optn-cold (المفاتيح + البيانات المشفرة)',
+    'settingsRows.rebuildWallet': 'إعادة بناء المحفظة',
+    'settingsRows.rebuildWalletDescription':
+      'مسح بيانات السلسلة وإعادة المزامنة من الشبكة (مع الاحتفاظ بالبذرة)',
     'settingsRows.nostr': 'Nostr والدردشة',
     'settingsRows.nostrDescription': 'رسائل خاصة · الهوية · مجموعة المرحلات',
     'settingsRows.server': 'الخوادم',
@@ -1158,6 +1167,9 @@ export const localeOverrides = {
     'settingsRows.contactDescription': 'احصل على المساعدة والدعم',
     'settingsPanels.contract': 'معلومات العقد',
     'settingsPanels.appLock': 'قفل التطبيق',
+    'settingsPanels.walletInfo': 'معلومات المحفظة',
+    'settingsPanels.exportArchive': 'تصدير حزمة المحفظة',
+    'settingsPanels.rebuildWallet': 'إعادة بناء المحفظة',
     'settingsPanels.server': 'الخادم',
     'settingsPanels.derivation': 'مسار الاشتقاق',
     'settingsPanels.console': 'وحدة التحكم',

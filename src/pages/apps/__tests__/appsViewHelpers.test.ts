@@ -107,12 +107,15 @@ describe('appsViewHelpers', () => {
     expect(isDesktopOnlyApp('optn.wallet.contracts')).toBe(false);
   });
 
-  it('only marks FundMe and ParyonUSD as coming soon outside dev mode', () => {
+  it('marks unreleased app surfaces as coming soon', () => {
     expect(isComingSoonApp('optn.builtin.fundme:fundmeApp', 'FundMe')).toBe(
       true
     );
     expect(
       isComingSoonApp('optn.builtin.paryon:paryonWorkspaceApp', 'ParyonUSD')
+    ).toBe(true);
+    expect(
+      isComingSoonApp('optn.builtin.demo:merchantPayApp', 'Merchant Pay')
     ).toBe(true);
     expect(
       isComingSoonApp('optn.builtin.cauldron:cauldronSwapApp', 'Cauldron')

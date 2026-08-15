@@ -34,6 +34,7 @@ describe('per-wallet fusion policy', () => {
 
   it('returns defaults for a wallet that has never been configured', () => {
     expect(readWalletFusionPolicy(5)).toEqual(DEFAULT_WALLET_FUSION_POLICY);
+    expect(readWalletFusionPolicy(5).autoFuseEnabled).toBe(false);
   });
 
   it('follows the WALLET, not the window that set it', () => {

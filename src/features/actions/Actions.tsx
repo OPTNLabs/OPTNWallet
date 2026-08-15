@@ -74,10 +74,6 @@ const ACTION_COPY: Record<
     title: 'actions.contracts',
     description: 'actions.contractsDescription',
   },
-  'QR Signing Demo': {
-    title: 'qrSigning.title',
-    description: 'qrSigning.subtitle',
-  },
 };
 
 function getBasicActionIcon(title: string) {

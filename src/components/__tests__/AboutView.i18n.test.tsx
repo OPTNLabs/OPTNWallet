@@ -32,6 +32,9 @@ describe('AboutView localization', () => {
     );
 
     expect(screen.getByRole('heading', { name: 'Overview' })).toBeVisible();
+    expect(screen.getByRole('combobox', { name: 'Language' })).toHaveClass(
+      'wallet-language-select'
+    );
 
     fireEvent.change(screen.getByRole('combobox', { name: 'Language' }), {
       target: { value: 'es' },
