@@ -50,12 +50,27 @@ pub struct NetworkParams {
 /// labels fall back to mainnet.
 pub fn params_for(network: &str) -> NetworkParams {
     match network {
-        "chipnet" => NetworkParams { magic: [0xe2, 0xb7, 0xda, 0xaf], default_port: 48333 },
-        "testnet4" => NetworkParams { magic: [0xe2, 0xb7, 0xda, 0xaf], default_port: 28333 },
-        "testnet" | "testnet3" => NetworkParams { magic: [0xf4, 0xe5, 0xf3, 0xf4], default_port: 18333 },
-        "regtest" => NetworkParams { magic: [0xda, 0xb5, 0xbf, 0xfa], default_port: 18444 },
+        "chipnet" => NetworkParams {
+            magic: [0xe2, 0xb7, 0xda, 0xaf],
+            default_port: 48333,
+        },
+        "testnet4" => NetworkParams {
+            magic: [0xe2, 0xb7, 0xda, 0xaf],
+            default_port: 28333,
+        },
+        "testnet" | "testnet3" => NetworkParams {
+            magic: [0xf4, 0xe5, 0xf3, 0xf4],
+            default_port: 18333,
+        },
+        "regtest" => NetworkParams {
+            magic: [0xda, 0xb5, 0xbf, 0xfa],
+            default_port: 18444,
+        },
         // "mainnet" and anything unrecognized.
-        _ => NetworkParams { magic: [0xe3, 0xe1, 0xf3, 0xe8], default_port: 8333 },
+        _ => NetworkParams {
+            magic: [0xe3, 0xe1, 0xf3, 0xe8],
+            default_port: 8333,
+        },
     }
 }
 
@@ -281,9 +296,12 @@ pub async fn probe_node(
         }
         Transport::Tor { host: ph, port: pp } => {
             let token = format!("optn-node-{}", nonce());
-            tokio::time::timeout(CONNECT_TIMEOUT, tor::connect_via_tor(ph, pp, host, port, &token))
-                .await
-                .map_err(|_| format!("timed out connecting to {host}:{port} over Tor"))??
+            tokio::time::timeout(
+                CONNECT_TIMEOUT,
+                tor::connect_via_tor(ph, pp, host, port, &token),
+            )
+            .await
+            .map_err(|_| format!("timed out connecting to {host}:{port} over Tor"))??
         }
     };
     handshake(&mut stream, magic).await
@@ -320,19 +338,19 @@ pub fn genesis_hash(network: &str) -> [u8; 32] {
         // testnet4 + chipnet share a genesis (chipnet forked from testnet4 later):
         // 000000001dd410c49a788668ce26751718cc797474d3152a5fc073dd44fd9f7b
         "chipnet" | "testnet4" => [
-            0x7b, 0x9f, 0xfd, 0x44, 0xdd, 0x73, 0xc0, 0x5f, 0x2a, 0x15, 0xd3, 0x74, 0x74, 0x79, 0xcc,
-            0x18, 0x17, 0x75, 0x26, 0xce, 0x68, 0x86, 0x78, 0x9a, 0xc4, 0x10, 0xd4, 0x1d, 0x00, 0x00,
-            0x00, 0x00,
+            0x7b, 0x9f, 0xfd, 0x44, 0xdd, 0x73, 0xc0, 0x5f, 0x2a, 0x15, 0xd3, 0x74, 0x74, 0x79,
+            0xcc, 0x18, 0x17, 0x75, 0x26, 0xce, 0x68, 0x86, 0x78, 0x9a, 0xc4, 0x10, 0xd4, 0x1d,
+            0x00, 0x00, 0x00, 0x00,
         ],
         "testnet" | "testnet3" => [
-            0x43, 0x49, 0x7f, 0xd7, 0xf8, 0x26, 0x95, 0x71, 0x08, 0xf4, 0xa3, 0x0f, 0xd9, 0xce, 0xc3,
-            0xae, 0xba, 0x79, 0x97, 0x20, 0x84, 0xe9, 0x0e, 0xad, 0x01, 0xea, 0x33, 0x09, 0x00, 0x00,
-            0x00, 0x00,
+            0x43, 0x49, 0x7f, 0xd7, 0xf8, 0x26, 0x95, 0x71, 0x08, 0xf4, 0xa3, 0x0f, 0xd9, 0xce,
+            0xc3, 0xae, 0xba, 0x79, 0x97, 0x20, 0x84, 0xe9, 0x0e, 0xad, 0x01, 0xea, 0x33, 0x09,
+            0x00, 0x00, 0x00, 0x00,
         ],
         _ => [
-            0x6f, 0xe2, 0x8c, 0x0a, 0xb6, 0xf1, 0xb3, 0x72, 0xc1, 0xa6, 0xa2, 0x46, 0xae, 0x63, 0xf7,
-            0x4f, 0x93, 0x1e, 0x83, 0x65, 0xe1, 0x5a, 0x08, 0x9c, 0x68, 0xd6, 0x19, 0x00, 0x00, 0x00,
-            0x00, 0x00,
+            0x6f, 0xe2, 0x8c, 0x0a, 0xb6, 0xf1, 0xb3, 0x72, 0xc1, 0xa6, 0xa2, 0x46, 0xae, 0x63,
+            0xf7, 0x4f, 0x93, 0x1e, 0x83, 0x65, 0xe1, 0x5a, 0x08, 0x9c, 0x68, 0xd6, 0x19, 0x00,
+            0x00, 0x00, 0x00, 0x00,
         ],
     }
 }
@@ -404,7 +422,9 @@ where
                 break;
             }
             "ping" => {
-                let _ = stream.write_all(&encode_message(magic, "pong", &payload)).await;
+                let _ = stream
+                    .write_all(&encode_message(magic, "pong", &payload))
+                    .await;
             }
             _ => continue,
         }
@@ -451,9 +471,12 @@ pub async fn fetch_headers_after(
         }
         Transport::Tor { host: ph, port: pp } => {
             let token = format!("optn-node-{}", nonce());
-            tokio::time::timeout(CONNECT_TIMEOUT, tor::connect_via_tor(ph, pp, host, port, &token))
-                .await
-                .map_err(|_| format!("timed out connecting to {host}:{port} over Tor"))??
+            tokio::time::timeout(
+                CONNECT_TIMEOUT,
+                tor::connect_via_tor(ph, pp, host, port, &token),
+            )
+            .await
+            .map_err(|_| format!("timed out connecting to {host}:{port} over Tor"))??
         }
     };
     sync_headers_batch(&mut stream, magic, locator).await
@@ -490,7 +513,11 @@ where
 {
     handshake(stream, magic).await?;
 
-    let fl = encode_message(magic, "filterload", &filter.to_filterload_payload(bloom::BLOOM_UPDATE_ALL));
+    let fl = encode_message(
+        magic,
+        "filterload",
+        &filter.to_filterload_payload(bloom::BLOOM_UPDATE_ALL),
+    );
     tokio::time::timeout(IO_TIMEOUT, stream.write_all(&fl))
         .await
         .map_err(|_| "timed out sending filterload".to_string())?
@@ -509,7 +536,9 @@ where
         match cmd.as_str() {
             "merkleblock" => return merkleblock::parse_merkleblock(&payload),
             "ping" => {
-                let _ = stream.write_all(&encode_message(magic, "pong", &payload)).await;
+                let _ = stream
+                    .write_all(&encode_message(magic, "pong", &payload))
+                    .await;
             }
             _ => continue,
         }
@@ -536,9 +565,12 @@ pub async fn scan_block(
         }
         Transport::Tor { host: ph, port: pp } => {
             let token = format!("optn-node-{}", nonce());
-            tokio::time::timeout(CONNECT_TIMEOUT, tor::connect_via_tor(ph, pp, host, port, &token))
-                .await
-                .map_err(|_| format!("timed out connecting to {host}:{port} over Tor"))??
+            tokio::time::timeout(
+                CONNECT_TIMEOUT,
+                tor::connect_via_tor(ph, pp, host, port, &token),
+            )
+            .await
+            .map_err(|_| format!("timed out connecting to {host}:{port} over Tor"))??
         }
     };
     request_filtered_block(&mut stream, magic, block_hash, filter).await
@@ -564,7 +596,11 @@ pub struct ScanResult {
 }
 
 fn txid_hex(internal_le: &[u8; 32]) -> String {
-    internal_le.iter().rev().map(|b| format!("{b:02x}")).collect()
+    internal_le
+        .iter()
+        .rev()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// Scan `block_hashes` (internal LE) for outputs/inputs touching `watched`.
@@ -586,9 +622,12 @@ pub async fn scan_blocks(
         }
         Transport::Tor { host: ph, port: pp } => {
             let token = format!("optn-node-{}", nonce());
-            tokio::time::timeout(CONNECT_TIMEOUT, tor::connect_via_tor(ph, pp, host, port, &token))
-                .await
-                .map_err(|_| format!("timed out connecting to {host}:{port} over Tor"))??
+            tokio::time::timeout(
+                CONNECT_TIMEOUT,
+                tor::connect_via_tor(ph, pp, host, port, &token),
+            )
+            .await
+            .map_err(|_| format!("timed out connecting to {host}:{port} over Tor"))??
         }
     };
 
@@ -600,7 +639,11 @@ pub async fn scan_blocks(
     for h in watched {
         filter.insert(h);
     }
-    let fl = encode_message(magic, "filterload", &filter.to_filterload_payload(bloom::BLOOM_UPDATE_ALL));
+    let fl = encode_message(
+        magic,
+        "filterload",
+        &filter.to_filterload_payload(bloom::BLOOM_UPDATE_ALL),
+    );
     tokio::time::timeout(IO_TIMEOUT, stream.write_all(&fl))
         .await
         .map_err(|_| "timed out sending filterload".to_string())?
@@ -640,7 +683,9 @@ pub async fn scan_blocks(
                     got_txs += 1;
                 }
                 "ping" => {
-                    let _ = stream.write_all(&encode_message(magic, "pong", &payload)).await;
+                    let _ = stream
+                        .write_all(&encode_message(magic, "pong", &payload))
+                        .await;
                 }
                 _ => {}
             }
@@ -663,6 +708,9 @@ pub async fn scan_blocks(
 // broadcastTransaction when a node is the active backend.
 
 const MSG_TX: u32 = 1;
+const RELAY_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
+const OBSERVER_RESPONSE_TIMEOUT: Duration = Duration::from_secs(15);
+const MAX_RELAY_MESSAGES: usize = 30;
 
 fn build_inv_tx(txid_internal: &[u8; 32]) -> Vec<u8> {
     let mut p = Vec::with_capacity(1 + 36);
@@ -670,6 +718,228 @@ fn build_inv_tx(txid_internal: &[u8; 32]) -> Vec<u8> {
     p.extend_from_slice(&MSG_TX.to_le_bytes());
     p.extend_from_slice(txid_internal);
     p
+}
+
+fn txid_display(txid_internal: &[u8; 32]) -> String {
+    txid_internal
+        .iter()
+        .rev()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+fn inventory_contains_tx(payload: &[u8], expected_txid: &[u8; 32]) -> Result<bool, String> {
+    let mut pos = 0usize;
+    let count = read_varint(payload, &mut pos)?;
+    let max_entries = (MAX_PAYLOAD / 36) as u64;
+    if count > max_entries {
+        return Err(format!("inventory contains too many entries: {count}"));
+    }
+
+    let mut found = false;
+    for _ in 0..count {
+        let inventory_type = read_u32(payload, &mut pos)?;
+        let hash = take(payload, &mut pos, 32)?;
+        if inventory_type == MSG_TX && hash == expected_txid {
+            found = true;
+        }
+    }
+    if pos != payload.len() {
+        return Err("trailing bytes in inventory message".into());
+    }
+    Ok(found)
+}
+
+async fn connect_peer(
+    host: &str,
+    port: u16,
+    transport: Transport<'_>,
+) -> Result<TcpStream, String> {
+    match transport {
+        Transport::Direct => {
+            tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect((host, port)))
+                .await
+                .map_err(|_| format!("timed out connecting to {host}:{port}"))?
+                .map_err(|e| format!("could not connect to {host}:{port}: {e}"))
+        }
+        Transport::Tor { host: ph, port: pp } => {
+            let token = format!("optn-node-{}", nonce());
+            tokio::time::timeout(
+                CONNECT_TIMEOUT,
+                tor::connect_via_tor(ph, pp, host, port, &token),
+            )
+            .await
+            .map_err(|_| format!("timed out connecting to {host}:{port} over Tor"))?
+        }
+    }
+}
+
+/// Announce `tx_bytes` and send them only if this peer requests the exact txid.
+///
+/// The stream is generic so the complete inv/getdata/tx exchange can be tested
+/// over an in-memory duplex. `Ok(false)` means the bounded request window ended
+/// without the peer asking for this transaction; an explicit reject is an error.
+async fn relay_tx_on_stream<S>(
+    stream: &mut S,
+    magic: [u8; 4],
+    tx_bytes: &[u8],
+    expected_txid: [u8; 32],
+) -> Result<bool, String>
+where
+    S: AsyncReadExt + AsyncWriteExt + Unpin,
+{
+    let inv = encode_message(magic, "inv", &build_inv_tx(&expected_txid));
+    tokio::time::timeout(IO_TIMEOUT, stream.write_all(&inv))
+        .await
+        .map_err(|_| "timed out sending inv".to_string())?
+        .map_err(|e| format!("send failed: {e}"))?;
+
+    let exchange = async {
+        for _ in 0..MAX_RELAY_MESSAGES {
+            let (command, payload) = read_message(stream, magic).await?;
+            match command.as_str() {
+                "getdata" if inventory_contains_tx(&payload, &expected_txid)? => {
+                    let tx_message = encode_message(magic, "tx", tx_bytes);
+                    tokio::time::timeout(IO_TIMEOUT, stream.write_all(&tx_message))
+                        .await
+                        .map_err(|_| "timed out sending tx".to_string())?
+                        .map_err(|e| format!("send failed: {e}"))?;
+                    return Ok(true);
+                }
+                "reject" => {
+                    return Err(format!(
+                        "relay rejected tx {}",
+                        txid_display(&expected_txid)
+                    ))
+                }
+                "ping" => {
+                    let pong = encode_message(magic, "pong", &payload);
+                    tokio::time::timeout(IO_TIMEOUT, stream.write_all(&pong))
+                        .await
+                        .map_err(|_| "timed out sending pong".to_string())?
+                        .map_err(|e| format!("send failed: {e}"))?;
+                }
+                _ => {}
+            }
+        }
+        Ok(false)
+    };
+
+    match tokio::time::timeout(RELAY_RESPONSE_TIMEOUT, exchange).await {
+        Ok(result) => result,
+        Err(_) => Ok(false),
+    }
+}
+
+/// Ask an independent peer for one exact transaction.
+///
+/// `Ok(true)` is returned only for a `tx` message whose double-SHA256 equals
+/// `expected_txid`. A matching `notfound` or a bounded wait returns `Ok(false)`;
+/// a peer-provided transaction with any other txid is rejected as an error.
+async fn observe_tx_on_stream<S>(
+    stream: &mut S,
+    magic: [u8; 4],
+    expected_txid: [u8; 32],
+) -> Result<bool, String>
+where
+    S: AsyncReadExt + AsyncWriteExt + Unpin,
+{
+    let getdata = encode_message(magic, "getdata", &build_inv_tx(&expected_txid));
+    tokio::time::timeout(IO_TIMEOUT, stream.write_all(&getdata))
+        .await
+        .map_err(|_| "timed out requesting transaction from observer".to_string())?
+        .map_err(|e| format!("send failed: {e}"))?;
+
+    let exchange = async {
+        for _ in 0..MAX_RELAY_MESSAGES {
+            let (command, payload) = read_message(stream, magic).await?;
+            match command.as_str() {
+                "tx" => {
+                    if double_sha256(&payload) != expected_txid {
+                        return Err(format!(
+                            "observer returned mismatched transaction for {}",
+                            txid_display(&expected_txid)
+                        ));
+                    }
+                    return Ok(true);
+                }
+                "notfound" if inventory_contains_tx(&payload, &expected_txid)? => return Ok(false),
+                "reject" => {
+                    return Err(format!(
+                        "observer rejected getdata for {}",
+                        txid_display(&expected_txid)
+                    ))
+                }
+                "ping" => {
+                    let pong = encode_message(magic, "pong", &payload);
+                    tokio::time::timeout(IO_TIMEOUT, stream.write_all(&pong))
+                        .await
+                        .map_err(|_| "timed out sending pong".to_string())?
+                        .map_err(|e| format!("send failed: {e}"))?;
+                }
+                _ => {}
+            }
+        }
+        Ok(false)
+    };
+
+    match tokio::time::timeout(OBSERVER_RESPONSE_TIMEOUT, exchange).await {
+        Ok(result) => result,
+        Err(_) => Ok(false),
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FusionRelayObservation {
+    pub txid: String,
+    pub relay_submitted: bool,
+    pub observer_seen: bool,
+}
+
+/// Relay a transaction to one peer, then require an independent peer to return
+/// the exact raw transaction by txid. Both connections are established before
+/// announcement; separate `Transport::Tor` dials receive distinct isolation
+/// tokens in `connect_peer`.
+#[allow(clippy::too_many_arguments)]
+pub async fn relay_broadcast_and_observe(
+    relay_host: &str,
+    relay_port: u16,
+    relay_transport: Transport<'_>,
+    observer_host: &str,
+    observer_port: u16,
+    observer_transport: Transport<'_>,
+    network: &str,
+    tx_bytes: Vec<u8>,
+) -> Result<FusionRelayObservation, String> {
+    if tx_bytes.is_empty() {
+        return Err("transaction must not be empty".into());
+    }
+
+    let magic = params_for(network).magic;
+    let expected_txid = double_sha256(&tx_bytes);
+    let display_txid = txid_display(&expected_txid);
+
+    let mut observer = connect_peer(observer_host, observer_port, observer_transport).await?;
+    handshake(&mut observer, magic).await?;
+    let mut relay = connect_peer(relay_host, relay_port, relay_transport).await?;
+    handshake(&mut relay, magic).await?;
+
+    let relay_submitted = relay_tx_on_stream(&mut relay, magic, &tx_bytes, expected_txid).await?;
+    // Do not hard-fail when the observer misses: CashFusion servers (and any
+    // prior announcer) may already have flooded the network, so peers often
+    // never re-echo our inv. Callers re-check with Electrum `is_known` — a
+    // hard Err here made that fallback unreachable and burned ~25s of Tor
+    // wait before the UI could finish a successful round.
+    let observer_seen = observe_tx_on_stream(&mut observer, magic, expected_txid)
+        .await
+        .unwrap_or(false);
+
+    Ok(FusionRelayObservation {
+        txid: display_txid,
+        relay_submitted,
+        observer_seen,
+    })
 }
 
 pub async fn broadcast_tx(
@@ -681,57 +951,14 @@ pub async fn broadcast_tx(
 ) -> Result<String, String> {
     let magic = params_for(network).magic;
     let txid_internal = double_sha256(&tx_bytes);
-    let txid_display: String = txid_internal.iter().rev().map(|b| format!("{b:02x}")).collect();
-
-    let mut stream = match transport {
-        Transport::Direct => {
-            tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect((host, port)))
-                .await
-                .map_err(|_| format!("timed out connecting to {host}:{port}"))?
-                .map_err(|e| format!("could not connect to {host}:{port}: {e}"))?
-        }
-        Transport::Tor { host: ph, port: pp } => {
-            let token = format!("optn-node-{}", nonce());
-            tokio::time::timeout(CONNECT_TIMEOUT, tor::connect_via_tor(ph, pp, host, port, &token))
-                .await
-                .map_err(|_| format!("timed out connecting to {host}:{port} over Tor"))??
-        }
-    };
+    let display_txid = txid_display(&txid_internal);
+    let mut stream = connect_peer(host, port, transport).await?;
 
     handshake(&mut stream, magic).await?;
-
-    let inv = encode_message(magic, "inv", &build_inv_tx(&txid_internal));
-    tokio::time::timeout(IO_TIMEOUT, stream.write_all(&inv))
-        .await
-        .map_err(|_| "timed out sending inv".to_string())?
-        .map_err(|e| format!("send failed: {e}"))?;
-
-    // Wait for the node to request the tx (getdata) or reject it.
-    for _ in 0..30 {
-        let (cmd, payload) = read_message(&mut stream, magic).await?;
-        match cmd.as_str() {
-            "getdata" => {
-                let txmsg = encode_message(magic, "tx", &tx_bytes);
-                tokio::time::timeout(IO_TIMEOUT, stream.write_all(&txmsg))
-                    .await
-                    .map_err(|_| "timed out sending tx".to_string())?
-                    .map_err(|e| format!("send failed: {e}"))?;
-                return Ok(txid_display);
-            }
-            "reject" => {
-                // BIP61 reject: <varstr message><1 ccode><varstr reason>...
-                let mut pos = 0usize;
-                let _msg_len = read_varint(&payload, &mut pos).ok();
-                return Err(format!("node rejected tx {txid_display}"));
-            }
-            "ping" => {
-                let _ = stream.write_all(&encode_message(magic, "pong", &payload)).await;
-            }
-            _ => continue,
-        }
-    }
-    // Node already had the tx (no getdata) — treat as accepted.
-    Ok(txid_display)
+    let _submitted = relay_tx_on_stream(&mut stream, magic, &tx_bytes, txid_internal).await?;
+    // Preserve the original broadcast contract: no request within the bounded
+    // window means the peer may already have the transaction.
+    Ok(display_txid)
 }
 
 #[cfg(test)]
@@ -745,8 +972,12 @@ mod tests {
     #[test]
     #[ignore]
     fn live_filtered_block1_verifies() {
-        let host = std::env::var("OPTN_NODE_HOST").unwrap_or_else(|_| "bch.imaginary.cash".to_string());
-        let port: u16 = std::env::var("OPTN_NODE_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(8333);
+        let host =
+            std::env::var("OPTN_NODE_HOST").unwrap_or_else(|_| "bch.imaginary.cash".to_string());
+        let port: u16 = std::env::var("OPTN_NODE_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(8333);
         // Block 1 hash: display (big-endian) -> internal (little-endian) for the inv.
         let display = "00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048";
         let mut h = [0u8; 32];
@@ -754,12 +985,19 @@ mod tests {
             h[31 - i] = u8::from_str_radix(&display[i * 2..i * 2 + 2], 16).unwrap();
         }
         let filter = bloom::BloomFilter::new(1, 0.001, 0);
-        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         rt.block_on(async {
             let mb = scan_block(&host, port, "mainnet", Transport::Direct, h, &filter)
                 .await
                 .expect("merkleblock request failed");
-            println!("merkleblock valid={} matched={}", mb.valid, mb.matched_txids.len());
+            println!(
+                "merkleblock valid={} matched={}",
+                mb.valid,
+                mb.matched_txids.len()
+            );
             assert!(mb.valid, "merkleblock must verify against its header");
         });
     }
@@ -770,14 +1008,27 @@ mod tests {
     #[test]
     #[ignore]
     fn live_scan_first_blocks_mainnet() {
-        let host = std::env::var("OPTN_NODE_HOST").unwrap_or_else(|_| "bch.imaginary.cash".to_string());
-        let port: u16 = std::env::var("OPTN_NODE_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(8333);
+        let host =
+            std::env::var("OPTN_NODE_HOST").unwrap_or_else(|_| "bch.imaginary.cash".to_string());
+        let port: u16 = std::env::var("OPTN_NODE_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(8333);
         let network = std::env::var("OPTN_NODE_NETWORK").unwrap_or_else(|_| "mainnet".to_string());
-        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         rt.block_on(async {
-            let headers = fetch_headers_after(&host, port, &network, Transport::Direct, genesis_hash(&network))
-                .await
-                .unwrap();
+            let headers = fetch_headers_after(
+                &host,
+                port,
+                &network,
+                Transport::Direct,
+                genesis_hash(&network),
+            )
+            .await
+            .unwrap();
             let hashes: Vec<[u8; 32]> = headers
                 .iter()
                 .take(3)
@@ -793,7 +1044,11 @@ mod tests {
             let res = scan_blocks(&host, port, &network, Transport::Direct, &hashes, &watched)
                 .await
                 .unwrap();
-            println!("scanned {} blocks, owned {}", res.scanned_blocks, res.owned.len());
+            println!(
+                "scanned {} blocks, owned {}",
+                res.scanned_blocks,
+                res.owned.len()
+            );
             assert_eq!(res.scanned_blocks, 3);
         });
     }
@@ -818,6 +1073,178 @@ mod tests {
         assert_eq!(&p[5..37], &txid);
     }
 
+    fn three_byte_txid() -> [u8; 32] {
+        [
+            0x19, 0xc6, 0x19, 0x7e, 0x21, 0x40, 0xb9, 0xd0, 0x34, 0xfb, 0x20, 0xb9, 0xac, 0x7b,
+            0xb7, 0x53, 0xa4, 0x12, 0x33, 0xca, 0xf1, 0xe1, 0xda, 0xfd, 0xa7, 0x31, 0x6a, 0x99,
+            0xce, 0xf4, 0x14, 0x16,
+        ]
+    }
+
+    #[test]
+    fn relay_announces_and_sends_only_after_exact_request() {
+        let magic = params_for("mainnet").magic;
+        let tx = vec![1u8, 2, 3];
+        let expected_txid = three_byte_txid();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let (mut client, mut server) = tokio::io::duplex(4096);
+            let expected_tx = tx.clone();
+            let server_task = tokio::spawn(async move {
+                let (command, payload) = read_message(&mut server, magic).await.unwrap();
+                assert_eq!(command, "inv");
+                assert_eq!(payload, build_inv_tx(&expected_txid));
+
+                server
+                    .write_all(&encode_message(
+                        magic,
+                        "getdata",
+                        &build_inv_tx(&[0x55; 32]),
+                    ))
+                    .await
+                    .unwrap();
+                assert!(
+                    tokio::time::timeout(
+                        Duration::from_millis(25),
+                        read_message(&mut server, magic)
+                    )
+                    .await
+                    .is_err(),
+                    "relay sent raw tx for an unrelated inventory request"
+                );
+
+                server
+                    .write_all(&encode_message(
+                        magic,
+                        "getdata",
+                        &build_inv_tx(&expected_txid),
+                    ))
+                    .await
+                    .unwrap();
+                let (command, payload) = read_message(&mut server, magic).await.unwrap();
+                assert_eq!(command, "tx");
+                assert_eq!(payload, expected_tx);
+            });
+
+            assert!(relay_tx_on_stream(&mut client, magic, &tx, expected_txid)
+                .await
+                .unwrap());
+            server_task.await.unwrap();
+        });
+    }
+
+    #[test]
+    fn relay_explicit_reject_fails() {
+        let magic = params_for("mainnet").magic;
+        let tx = vec![1u8, 2, 3];
+        let expected_txid = three_byte_txid();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let (mut client, mut server) = tokio::io::duplex(4096);
+            let server_task = tokio::spawn(async move {
+                let _ = read_message(&mut server, magic).await.unwrap();
+                server
+                    .write_all(&encode_message(magic, "reject", &[]))
+                    .await
+                    .unwrap();
+            });
+
+            let err = relay_tx_on_stream(&mut client, magic, &tx, expected_txid)
+                .await
+                .unwrap_err();
+            server_task.await.unwrap();
+            assert!(err.contains("rejected"), "unexpected error: {err}");
+        });
+    }
+
+    #[test]
+    fn observer_accepts_only_the_exact_transaction() {
+        let magic = params_for("mainnet").magic;
+        let expected_txid = three_byte_txid();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let (mut client, mut server) = tokio::io::duplex(4096);
+            let server_task = tokio::spawn(async move {
+                let (command, payload) = read_message(&mut server, magic).await.unwrap();
+                assert_eq!(command, "getdata");
+                assert_eq!(payload, build_inv_tx(&expected_txid));
+                server
+                    .write_all(&encode_message(magic, "tx", &[1, 2, 3]))
+                    .await
+                    .unwrap();
+            });
+
+            assert!(observe_tx_on_stream(&mut client, magic, expected_txid)
+                .await
+                .unwrap());
+            server_task.await.unwrap();
+        });
+    }
+
+    #[test]
+    fn observer_rejects_a_mismatched_transaction() {
+        let magic = params_for("mainnet").magic;
+        let expected_txid = three_byte_txid();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let (mut client, mut server) = tokio::io::duplex(4096);
+            let server_task = tokio::spawn(async move {
+                let _ = read_message(&mut server, magic).await.unwrap();
+                server
+                    .write_all(&encode_message(magic, "tx", &[4, 5, 6]))
+                    .await
+                    .unwrap();
+            });
+
+            let err = observe_tx_on_stream(&mut client, magic, expected_txid)
+                .await
+                .unwrap_err();
+            server_task.await.unwrap();
+            assert!(err.contains("mismatched"), "unexpected error: {err}");
+        });
+    }
+
+    #[test]
+    fn observer_notfound_is_false() {
+        let magic = params_for("mainnet").magic;
+        let expected_txid = three_byte_txid();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let (mut client, mut server) = tokio::io::duplex(4096);
+            let server_task = tokio::spawn(async move {
+                let _ = read_message(&mut server, magic).await.unwrap();
+                server
+                    .write_all(&encode_message(
+                        magic,
+                        "notfound",
+                        &build_inv_tx(&expected_txid),
+                    ))
+                    .await
+                    .unwrap();
+            });
+
+            assert!(!observe_tx_on_stream(&mut client, magic, expected_txid)
+                .await
+                .unwrap());
+            server_task.await.unwrap();
+        });
+    }
+
     /// Live: sync the first header batch after genesis from a public mainnet
     /// node and prove parse + chain linkage (block 1's hash is well-known).
     ///   OPTN_NODE_HOST=seed.bch.loping.net cargo test -p optn-wallet-desktop \
@@ -825,14 +1252,27 @@ mod tests {
     #[test]
     #[ignore]
     fn live_sync_first_headers_mainnet() {
-        let host = std::env::var("OPTN_NODE_HOST").unwrap_or_else(|_| "seed.bch.loping.net".to_string());
-        let port: u16 = std::env::var("OPTN_NODE_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(8333);
+        let host =
+            std::env::var("OPTN_NODE_HOST").unwrap_or_else(|_| "seed.bch.loping.net".to_string());
+        let port: u16 = std::env::var("OPTN_NODE_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(8333);
         let network = std::env::var("OPTN_NODE_NETWORK").unwrap_or_else(|_| "mainnet".to_string());
-        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         rt.block_on(async {
-            let headers = fetch_headers_after(&host, port, &network, Transport::Direct, genesis_hash(&network))
-                .await
-                .expect("header sync failed");
+            let headers = fetch_headers_after(
+                &host,
+                port,
+                &network,
+                Transport::Direct,
+                genesis_hash(&network),
+            )
+            .await
+            .expect("header sync failed");
             println!(
                 "synced {} headers on {}; first={}",
                 headers.len(),
@@ -876,7 +1316,15 @@ mod tests {
 
     #[test]
     fn varint_round_trips_across_size_classes() {
-        for n in [0u64, 0xfc, 0xfd, 0xffff, 0x1_0000, 0xffff_ffff, 0x1_0000_0000] {
+        for n in [
+            0u64,
+            0xfc,
+            0xfd,
+            0xffff,
+            0x1_0000,
+            0xffff_ffff,
+            0x1_0000_0000,
+        ] {
             let mut buf = Vec::new();
             write_varint(&mut buf, n);
             let mut pos = 0;
@@ -905,7 +1353,10 @@ mod tests {
     #[test]
     fn handshake_parses_peer_version_and_sends_verack() {
         let magic = [0xe3, 0xe1, 0xf3, 0xe8];
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         rt.block_on(async {
             let (mut client, mut server) = tokio::io::duplex(4096);
 
@@ -932,7 +1383,10 @@ mod tests {
     #[test]
     fn rejects_wrong_magic() {
         let magic = [0xe3, 0xe1, 0xf3, 0xe8];
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         rt.block_on(async {
             let (mut client, mut server) = tokio::io::duplex(64);
             // A message under a different network's magic must be refused.
@@ -951,17 +1405,27 @@ mod tests {
     #[ignore]
     fn live_probe_mainnet_node() {
         let host = std::env::var("OPTN_NODE_HOST").unwrap_or_else(|_| "seed.bchd.cash".to_string());
-        let port: u16 = std::env::var("OPTN_NODE_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(8333);
+        let port: u16 = std::env::var("OPTN_NODE_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(8333);
         // Network magic must match the peer's chain, else it drops us (early eof).
         let network = std::env::var("OPTN_NODE_NETWORK").unwrap_or_else(|_| "mainnet".to_string());
-        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         rt.block_on(async {
             let probe = probe_node(&host, port, &network, Transport::Direct)
                 .await
                 .expect("handshake failed");
             println!(
                 "node {host}:{port} -> ua={:?} version={} height={} services={:#x} serves_bloom={}",
-                probe.user_agent, probe.protocol_version, probe.start_height, probe.services, probe.serves_bloom
+                probe.user_agent,
+                probe.protocol_version,
+                probe.start_height,
+                probe.services,
+                probe.serves_bloom
             );
             assert!(!probe.user_agent.is_empty(), "peer sent no user agent");
             assert!(probe.start_height > 0, "peer reported no block height");

@@ -7,6 +7,14 @@ interface UTXOState {
   totalBalance: number;
   fetchingUTXOs: boolean;
   initialized: boolean;
+  /** 0-100 sync progress, or null when no sync is in flight. */
+  syncingProgress: number | null;
+  /**
+   * Wall-clock start of the current Syncing session (ms since epoch).
+   * Survives Home remount so the elapsed-seconds counter does not restart
+   * when the user navigates away mid-sync and returns.
+   */
+  syncingStartedAtMs: number | null;
 }
 
 const initialState: UTXOState = {
@@ -14,6 +22,8 @@ const initialState: UTXOState = {
   totalBalance: 0,
   fetchingUTXOs: false,
   initialized: false,
+  syncingProgress: null,
+  syncingStartedAtMs: null,
 };
 
 const utxoAmount = (utxo: UTXO): number => utxo.value ?? utxo.amount ?? 0;
@@ -53,7 +63,23 @@ const utxoSlice = createSlice({
       state.totalBalance += nextBalance - prevBalance;
     },
     setFetchingUTXOs: (state, action: PayloadAction<boolean>) => {
-      state.fetchingUTXOs = action.payload;
+      const next = action.payload;
+      state.fetchingUTXOs = next;
+      if (next) {
+        // Only stamp the start of a *new* sync. Nested setFetchingUTXOs(true)
+        // while already syncing must not restart the elapsed counter.
+        if (state.syncingStartedAtMs == null) {
+          state.syncingStartedAtMs = Date.now();
+        }
+      } else {
+        state.syncingStartedAtMs = null;
+      }
+    },
+    setSyncingProgress: (state, action: PayloadAction<number | null>) => {
+      state.syncingProgress =
+        action.payload === null
+          ? null
+          : Math.max(0, Math.min(100, action.payload));
     },
     setInitialized: (state, action: PayloadAction<boolean>) => {
       state.initialized = action.payload;
@@ -91,6 +117,7 @@ export const {
   updateUTXOsForAddress,
   removeUTXOs,
   setFetchingUTXOs,
+  setSyncingProgress,
   setInitialized,
 } = utxoSlice.actions;
 

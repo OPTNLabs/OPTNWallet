@@ -35,6 +35,9 @@ async fn server_version_round_trip_over_tcp_ssl() {
     println!("server.version reply: {reply}");
     // A real Electrum server echoes our id and returns a result array
     // (server software string + protocol version).
-    assert!(reply.contains("\"id\": 0") || reply.contains("\"id\":0"), "no matching id in reply: {reply}");
+    assert!(
+        reply.contains("\"id\": 0") || reply.contains("\"id\":0"),
+        "no matching id in reply: {reply}"
+    );
     assert!(reply.contains("\"result\""), "no result in reply: {reply}");
 }

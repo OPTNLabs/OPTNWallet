@@ -4,7 +4,6 @@ import { useSelector, useDispatch } from 'react-redux';
 import { RootState, AppDispatch } from '../../state/store';
 
 import WcConnectionManager from '../WcConnectionManager';
-import SessionProposalModal from './SessionProposalModal';
 import { SessionList } from './SessionList';
 import SessionSettingsModal from './SessionSettingsModal';
 import { disconnectSession } from '../../state/slices/walletconnectSlice';
@@ -50,9 +49,6 @@ export default function WalletConnectPanel() {
     <div className="p-4">
       {/* <h2 className="text-3xl text-center font-bold mb-4">WalletConnect</h2> */}
       <WcConnectionManager />
-
-      {/* Incoming proposal */}
-      <SessionProposalModal />
 
       <div className="wallet-card p-4 space-y-3">
         {!sessions || Object.keys(sessions).length === 0 ? (

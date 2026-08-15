@@ -23,7 +23,6 @@ module.exports = {
         'src/services/AddonsSDK.ts',
       ],
       rules: {
-        // These files carry an explicit, documented WIP @ts-nocheck marker.
         '@typescript-eslint/ban-ts-comment': 'off',
       },
     },

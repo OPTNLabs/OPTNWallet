@@ -46,6 +46,8 @@ export interface TransactionHistoryItem {
   amount?: string | number;
   fee?: number; // Optional field if the transaction is from the mempool
   address?: string; // Optional field for including address
+  /** From Electrum verbose / transaction_details — list can confirm without height. */
+  confirmations?: number;
 }
 
 export interface TransactionDetailParticipant {

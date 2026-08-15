@@ -17,7 +17,11 @@ import TransactionDetailPopup from './TransactionDetailPopup';
 import QuantumrootTrackingService from '../../services/QuantumrootTrackingService';
 import WalletScreen from '../../components/ui/WalletScreen';
 import type { TransactionHistoryItem } from '../../types/types';
-import { useI18n } from '../../i18n/useI18n';
+import { isFusionTransaction } from '../../platform/desktop/fusionCoinDepth';
+import { useFusionDepthRevision } from '../../platform/desktop/useFusionDepthRevision';
+import { FusionBadge } from '../../components/FusionBadge';
+import { isTxConfirmed } from '../../utils/txConfirmation';
+import { isMempoolLike } from '../../utils/transactionHistoryOrder';
 
 const EMPTY_TRANSACTIONS: TransactionHistoryItem[] = [];
 
@@ -28,9 +32,12 @@ const selectTransactions = createSelector(
 );
 
 const TransactionHistory: React.FC = () => {
-  const { t } = useI18n();
   const dispatch = useDispatch<AppDispatch>();
   const { wallet_id } = useParams<{ wallet_id: string }>();
+  const walletIdNum = Number(wallet_id);
+  const fusionDepthRev = useFusionDepthRevision(
+    Number.isFinite(walletIdNum) && walletIdNum > 0 ? walletIdNum : 0
+  );
   const transactions = useSelector((state: RootState) =>
     selectTransactions(state, wallet_id || '')
   );
@@ -48,17 +55,16 @@ const TransactionHistory: React.FC = () => {
     txid: string;
     height: number;
   } | null>(null);
-  const [walletAddresses, setWalletAddresses] = useState<Set<string>>(
-    new Set()
-  );
+  const [walletAddresses, setWalletAddresses] = useState<Set<string>>(new Set());
 
-  const { loading, fetchTransactionHistory } = useTransactionHistoryFetch({
-    walletIdParam: wallet_id,
-    isInitialized: IsInitialized,
-    transactionCount: transactions.length,
-    sessionGeneration,
-    dispatch,
-  });
+  const { loading, fetchTransactionHistory } =
+    useTransactionHistoryFetch({
+      walletIdParam: wallet_id,
+      isInitialized: IsInitialized,
+      transactionCount: transactions.length,
+      sessionGeneration,
+      dispatch,
+    });
 
   const {
     sortOrder,
@@ -101,10 +107,9 @@ const TransactionHistory: React.FC = () => {
       }
       stmt.free();
 
-      const quantumrootAddresses =
-        await QuantumrootTrackingService.listTrackedAddresses(
-          Number(wallet_id)
-        );
+      const quantumrootAddresses = await QuantumrootTrackingService.listTrackedAddresses(
+        Number(wallet_id)
+      );
       for (const address of quantumrootAddresses) {
         next.add(address);
       }
@@ -124,12 +129,8 @@ const TransactionHistory: React.FC = () => {
     <WalletScreen maxWidthClassName="max-w-md" scrollable={false}>
       <div className="flex h-full min-h-0 flex-col gap-4">
         <PageHeader
-          title={t('history.title')}
-          subtitle={
-            hasTransactions
-              ? t('history.recorded', { count: transactions.length })
-              : t('history.noActivity')
-          }
+          title="Transaction History"
+          subtitle={hasTransactions ? `${transactions.length} recorded` : 'No activity yet'}
           compact
         />
 
@@ -139,18 +140,16 @@ const TransactionHistory: React.FC = () => {
               onClick={toggleSortOrder}
               className="wallet-btn-secondary col-span-4 py-2 px-3 text-sm"
             >
-              {sortOrder === 'asc'
-                ? t('history.oldestFirst')
-                : t('history.newestFirst')}
+              {sortOrder === 'asc' ? 'Oldest first' : 'Newest first'}
             </button>
             <select
               value={transactionsPerPage}
               onChange={handleTransactionsPerPageChange}
               className="wallet-input col-span-4 py-1.5 px-3 text-sm"
             >
-              <option value={10}>{t('history.perPage', { count: 10 })}</option>
-              <option value={20}>{t('history.perPage', { count: 20 })}</option>
-              <option value={30}>{t('history.perPage', { count: 30 })}</option>
+              <option value={10}>10 per page</option>
+              <option value={20}>20 per page</option>
+              <option value={30}>30 per page</option>
             </select>
             <button
               onClick={fetchTransactionHistory}
@@ -162,7 +161,7 @@ const TransactionHistory: React.FC = () => {
                   <span className="wallet-spinner" aria-hidden="true" />
                 </span>
               ) : (
-                t('history.sync')
+                'Sync'
               )}
             </button>
           </div>
@@ -170,51 +169,67 @@ const TransactionHistory: React.FC = () => {
 
         <div className="flex-1 min-h-0 overflow-hidden">
           {!hasTransactions ? (
-            <EmptyState message={t('history.noTransactions')} />
+            <EmptyState message="No transactions available yet." />
           ) : (
             <ul className="h-full space-y-3 overflow-y-auto overscroll-contain pr-1">
-              {paginatedTransactions.map((tx, id) => (
+              {paginatedTransactions.map((tx, id) => {
+                void fusionDepthRev;
+                const fused =
+                  Number.isFinite(walletIdNum) &&
+                  walletIdNum > 0 &&
+                  isFusionTransaction(walletIdNum, tx.tx_hash);
+                return (
                 <li key={id + tx.tx_hash}>
                   <button
                     type="button"
-                    onClick={() =>
-                      setSelectedTx({ txid: tx.tx_hash, height: tx.height })
-                    }
+                    onClick={() => setSelectedTx({ txid: tx.tx_hash, height: tx.height })}
                     className="wallet-card p-4 block w-full text-left hover:brightness-[0.98] transition"
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <div className="text-xs wallet-muted mb-1">
-                          {t('history.transactionHash')}
+                          Transaction Hash
                         </div>
                         <div className="font-mono text-sm break-all wallet-text-strong">
                           {shortenTxHash(tx.tx_hash)}
+                          {fused && (
+                            <FusionBadge asTx className="ml-2" />
+                          )}
                         </div>
                       </div>
-                      {tx.height > 0 ? (
+                      {isTxConfirmed(tx) || !isMempoolLike(tx) ? (
                         <StatusChip tone="success">
-                          {t('history.confirmed')}
+                          {fused ? 'Fused · Confirmed' : 'Confirmed'}
                         </StatusChip>
                       ) : (
                         <StatusChip tone="warning">
-                          {t('history.pending')}
+                          {fused ? 'Fused · Unconfirmed' : 'Unconfirmed'}
                         </StatusChip>
                       )}
                     </div>
                     <div className="mt-2 text-sm">
-                      {tx.height > 0 ? (
+                      {tx.height > 0 || tx.timestamp ? (
                         <span className="wallet-text-strong">
-                          {t('history.block')}: {tx.height}
+                          Block: {tx.height || '—'}
+                        </span>
+                      ) : isTxConfirmed(tx) ? (
+                        <span className="wallet-text-strong">Confirmed</span>
+                      ) : isMempoolLike(tx) ? (
+                        <span className="wallet-muted">
+                          {fused
+                            ? 'Broadcast — waiting for a block (height not yet in history)'
+                            : 'Awaiting confirmation'}
                         </span>
                       ) : (
-                        <span className="wallet-muted">
-                          {t('history.awaitingConfirmation')}
+                        <span className="wallet-text-strong">
+                          {fused ? 'On chain' : 'Confirmed'}
                         </span>
                       )}
                     </div>
                   </button>
                 </li>
-              ))}
+                );
+              })}
             </ul>
           )}
         </div>
@@ -225,31 +240,31 @@ const TransactionHistory: React.FC = () => {
             className="wallet-btn-secondary py-2 px-3 text-sm font-bold"
             disabled={!hasTransactions || currentPage === 1}
           >
-            {t('history.first')}
-          </button>
-          <button
-            onClick={handlePreviousPage}
-            className="wallet-btn-secondary py-2 px-3 text-sm font-bold"
-            disabled={!hasTransactions || currentPage === 1}
-          >
-            {'<'}
-          </button>
-          <div className="py-2 text-sm wallet-text-strong min-w-[56px] text-center">
-            {hasTransactions ? `${currentPage}/${totalPages}` : '0/0'}
-          </div>
-          <button
-            onClick={handleNextPage}
-            className="wallet-btn-secondary py-2 px-3 text-sm font-bold"
-            disabled={!hasTransactions || currentPage === totalPages}
-          >
-            {'>'}
-          </button>
+          First
+        </button>
+        <button
+          onClick={handlePreviousPage}
+          className="wallet-btn-secondary py-2 px-3 text-sm font-bold"
+          disabled={!hasTransactions || currentPage === 1}
+        >
+          {'<'}
+        </button>
+        <div className="py-2 text-sm wallet-text-strong min-w-[56px] text-center">
+          {hasTransactions ? `${currentPage}/${totalPages}` : '0/0'}
+        </div>
+        <button
+          onClick={handleNextPage}
+          className="wallet-btn-secondary py-2 px-3 text-sm font-bold"
+          disabled={!hasTransactions || currentPage === totalPages}
+        >
+          {'>'}
+        </button>
           <button
             onClick={handleLastPage}
             className="wallet-btn-secondary py-2 px-3 text-sm font-bold"
             disabled={!hasTransactions || currentPage === totalPages}
           >
-            {t('history.last')}
+            Last
           </button>
         </div>
 
@@ -257,11 +272,7 @@ const TransactionHistory: React.FC = () => {
           <TransactionDetailPopup
             txid={selectedTx.txid}
             txHeight={selectedTx.height}
-            explorerUrl={buildTxUrl(
-              explorerChoice,
-              currentNetwork,
-              selectedTx.txid
-            )}
+            explorerUrl={buildTxUrl(explorerChoice, currentNetwork, selectedTx.txid)}
             walletAddresses={walletAddresses}
             onClose={() => setSelectedTx(null)}
           />

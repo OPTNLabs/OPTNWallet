@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "OPTN Wallet",
-  "version": "1.6.2",
+  "version": "1.7.1",
   "description": "Bitcoin Cash wallet — view balance and receive address.",
   "action": {
     "default_popup": "popup.html",

@@ -1,0 +1,72 @@
+# CodeRabbit — https://docs.coderabbit.ai/reference/configuration
+#
+# Plan hard cap: 300 files/review (Pro+). This PR is ~500+ files vs `dev`.
+# Count is AFTER path_filters. Whitelist ship-critical paths (~250 files).
+# Docs: https://docs.coderabbit.ai/management/plans
+
+language: "en-US"
+
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  review_status: true
+  high_level_summary: true
+  auto_review:
+    enabled: true
+    drafts: true
+    base_branches:
+      - "dev"
+      - "main"
+      - "master"
+      - "release/.*"
+
+  # Includes first (review only these), then ! excludes for noise inside them.
+  path_filters:
+    # Hardware / PSBT / NFT parse / wallet core
+    - "src/services/hardware/**"
+    - "src/services/psbt/**"
+    - "src/services/nftParsing/**"
+    - "src/services/cashtokens/**"
+    - "src/services/HdWalletService.ts"
+    - "src/services/BcmrService.ts"
+    - "src/services/OutboundTransactionTracker.ts"
+    - "src/services/OutboundTransactionReconciler.ts"
+    - "src/services/WalletHistoryRefreshService.ts"
+    - "src/services/WalletReconfigurationService.ts"
+    - "src/services/WalletDiscoveryService.ts"
+    - "src/services/WalletUtxoRefreshService.ts"
+    - "src/services/WalletSpecialActivityService.ts"
+    - "src/platform/desktop/**"
+    - "src-tauri/src/**"
+    - "src-tauri/tauri.conf.json"
+    - "src-tauri/Cargo.toml"
+    - "src-tauri/build.rs"
+    - "src-tauri/capabilities/**"
+    - "scripts/fetch-tor.mjs"
+    - "scripts/__tests__/fetchTor.test.mjs"
+    - "scripts/__tests__/releaseWorkflow.test.mjs"
+    - ".github/workflows/**"
+    - "src/hooks/**"
+    - "src/features/simple-send/**"
+    - "src/features/watch-only-send/**"
+    - "src/apis/WalletManager/**"
+    - "src/apis/DatabaseManager/**"
+    - "src/types/**"
+    - ".coderabbit.yaml"
+    # Noise inside includes
+    - "!**/*lock*"
+    - "!**/Cargo.lock"
+    - "!**/package-lock.json"
+    - "!**/yarn.lock"
+    - "!src-tauri/target/**"
+    - "!**/node_modules/**"
+    - "!**/*generated*"
+    - "!**/secp256k1WasmBase64.generated.ts"
+    - "!**/*.png"
+    - "!**/*.svg"
+    - "!**/*.wasm"
+    - "!**/*.snap"
+    - "!**/fixtures/**"
+    - "!**/__fixtures__/**"
+    # Bulk generic service tests (keep hardware/psbt tests via their folders)
+    - "!src/services/__tests__/**"

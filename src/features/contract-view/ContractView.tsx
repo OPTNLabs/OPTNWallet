@@ -18,7 +18,9 @@ import WalletTooltip from '../../components/ui/WalletTooltip';
 import { logError, toErrorMessage } from '../../utils/errorHandling';
 import { getReturnPath } from '../../utils/navigation';
 
-import { CapacitorBarcodeScannerTypeHint } from '@capacitor/barcode-scanner';
+import {
+  CapacitorBarcodeScannerTypeHint,
+} from '@capacitor/barcode-scanner';
 import { FaCamera } from 'react-icons/fa';
 import { DataSigner } from '../../utils/dataSigner';
 import ElectrumService from '../../services/ElectrumService';
@@ -27,7 +29,10 @@ import {
   deleteContractAndFetchInstances,
   updateContractAndRebuildInstance,
 } from './services';
-import { parseConstructorArgs, validateConstructorArgsComplete } from './utils';
+import {
+  parseConstructorArgs,
+  validateConstructorArgsComplete,
+} from './utils';
 import PageHeader from '../../components/ui/PageHeader';
 import SectionCard from '../../components/ui/SectionCard';
 import EmptyState from '../../components/ui/EmptyState';
@@ -36,7 +41,6 @@ import {
   scanBarcodeSafely,
 } from '../../utils/barcodeScanner';
 import WalletScreen from '../../components/ui/WalletScreen';
-import { useI18n } from '../../i18n/useI18n';
 
 interface ContractArg {
   name: string;
@@ -83,7 +87,6 @@ const extractBlockHeight = (header: unknown): number | null => {
 };
 
 const ContractView = () => {
-  const { t } = useI18n();
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [availableContracts, setAvailableContracts] = useState<
@@ -180,7 +183,7 @@ const ContractView = () => {
         setAvailableContracts(contracts);
       } catch (err) {
         logError('ContractView.loadAvailableContracts', err);
-        setError(toErrorMessage(err, t('contractView.loadContractsFailed')));
+        setError(toErrorMessage(err, 'Failed to load available contracts.'));
       }
     };
 
@@ -190,13 +193,13 @@ const ContractView = () => {
         setContractInstances(instances);
       } catch (err) {
         logError('ContractView.loadContractInstances', err);
-        setError(toErrorMessage(err, t('contractView.loadInstancesFailed')));
+        setError(toErrorMessage(err, 'Failed to load contract instances.'));
       }
     };
 
     loadAvailableContracts();
     loadContractInstances();
-  }, [contractManager, t]);
+  }, [contractManager]);
 
   useEffect(() => {
     const loadContractDetails = async () => {
@@ -217,12 +220,12 @@ const ContractView = () => {
           logError('ContractView.loadContractDetails', err, {
             selectedContractFile,
           });
-          setError(toErrorMessage(err, t('contractView.loadDetailsFailed')));
+          setError(toErrorMessage(err, 'Failed to load contract details.'));
         }
       }
     };
     loadContractDetails();
-  }, [selectedContractFile, contractManager, t]);
+  }, [selectedContractFile, contractManager]);
 
   const handleInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = event.target;
@@ -232,10 +235,10 @@ const ContractView = () => {
   const handleCopyAddress = async (address: string) => {
     try {
       await navigator.clipboard.writeText(address);
-      await Toast.show({ text: t('contractView.addressCopied') });
+      await Toast.show({ text: 'Address copied to clipboard!' });
     } catch (error) {
       logError('ContractView.copyAddress', error, { address });
-      await Toast.show({ text: t('contractView.copyFailed') });
+      await Toast.show({ text: 'Failed to copy address.' });
     }
   };
 
@@ -271,24 +274,24 @@ const ContractView = () => {
     const data = dataToSign[argName];
     if (!address || !data) {
       await Toast.show({
-        text: t('contractView.selectData'),
+        text: 'Please select an address and enter data to sign.',
       });
       return;
     }
     try {
-      const privKey = await KeyService.fetchAddressPrivateKey(address);
+      const privKey = await KeyService.fetchAddressPrivateKey(address, 'spend');
       if (!privKey) {
-        throw new Error(t('contractView.privateKeyUnavailable'));
+        throw new Error('Private key unavailable for selected address.');
       }
       const signer = new DataSigner(privKey);
       const message = signer.createMessage(data);
       const signature = signer.signMessage(message);
       const signatureHex = Buffer.from(signature).toString('hex');
       setInputValues({ ...inputValues, [argName]: signatureHex });
-      await Toast.show({ text: t('contractView.signatureGenerated') });
+      await Toast.show({ text: 'Signature generated successfully!' });
     } catch (error) {
       logError('ContractView.generateSignature', error, { argName });
-      await Toast.show({ text: t('contractView.signatureFailed') });
+      await Toast.show({ text: 'Failed to generate signature.' });
     }
   };
 
@@ -303,7 +306,7 @@ const ContractView = () => {
       if (result && result.ScanResult) {
         setInputValues((prev) => ({ ...prev, [argName]: result.ScanResult }));
       } else {
-        await Toast.show({ text: t('contractView.noQr') });
+        await Toast.show({ text: 'No QR code detected. Please try again.' });
       }
     } catch (error) {
       logError('ContractView.scanBarcode', error, { argName });
@@ -322,7 +325,7 @@ const ContractView = () => {
     );
     if (!validation.valid) {
       setErrorMessage(
-        validation.errorMessage ?? t('contractView.fillRequired')
+        validation.errorMessage ?? 'Missing constructor arguments.'
       );
       setShowErrorPopup(true);
       return false;
@@ -349,15 +352,13 @@ const ContractView = () => {
       setSelectedAddresses({});
       setDataToSign({});
       setShowConstructorArgsPopup(false);
-      await Toast.show({ text: t('contractView.created') });
+      await Toast.show({ text: 'Contract created successfully!' });
     } catch (err) {
       logError('ContractView.createContract', err, {
         selectedContractFile,
       });
       setErrorMessage(
-        t('contractView.createFailed', {
-          message: toErrorMessage(err, t('contractView.unknownError')),
-        })
+        `Failed to create contract: ${toErrorMessage(err, 'Unknown error')}`
       );
       setShowErrorPopup(true);
     } finally {
@@ -372,11 +373,11 @@ const ContractView = () => {
         contractId: Number(contractId),
       });
       setContractInstances(instances as ContractInstanceRow[]);
-      await Toast.show({ text: t('contractView.deleted') });
+      await Toast.show({ text: 'Contract deleted successfully!' });
     } catch (err) {
       logError('ContractView.deleteContract', err, { contractId });
-      setError(toErrorMessage(err, t('contractView.deleteFailedFallback')));
-      await Toast.show({ text: t('contractView.deleteFailed') });
+      setError(toErrorMessage(err, 'Failed to delete contract.'));
+      await Toast.show({ text: 'Failed to delete contract.' });
     }
   };
 
@@ -399,11 +400,11 @@ const ContractView = () => {
             : inst
         )
       );
-      await Toast.show({ text: t('contractView.updated') });
+      await Toast.show({ text: 'Contract updated successfully!' });
     } catch (err) {
       logError('ContractView.updateContract', err, { address });
-      setError(toErrorMessage(err, t('contractView.updateFailedFallback')));
-      await Toast.show({ text: t('contractView.updateFailed') });
+      setError(toErrorMessage(err, 'Failed to update contract.'));
+      await Toast.show({ text: 'Failed to update contract.' });
     }
   };
 
@@ -415,10 +416,8 @@ const ContractView = () => {
   if (error) {
     return (
       <WalletScreen maxWidthClassName="max-w-xl">
-        <PageHeader title={t('contractView.title')} compact />
-        <EmptyState
-          message={t('contractView.errorPrefix', { message: error })}
-        />
+        <PageHeader title="Contracts" compact />
+        <EmptyState message={`Error: ${error}`} />
       </WalletScreen>
     );
   }
@@ -428,18 +427,16 @@ const ContractView = () => {
   return (
     <WalletScreen maxWidthClassName="max-w-xl">
       <div className="flex min-h-full flex-col gap-4">
-        <PageHeader title={t('contractView.title')} compact />
+        <PageHeader title="Contracts" compact />
         <div className="space-y-4">
-          <SectionCard title={t('contractView.create')} className="mb-4">
+          <SectionCard title="Create Contract" className="mb-4">
             <div className="space-y-3">
               <div className="wallet-surface-strong rounded-2xl p-3 text-sm wallet-muted">
-                <div className="font-semibold wallet-text-strong">
-                  {t('contractView.howWorks')}
-                </div>
+                <div className="font-semibold wallet-text-strong">How this works</div>
                 <div className="mt-2 grid gap-2">
-                  <div>{t('contractView.pickTemplate')}</div>
-                  <div>{t('contractView.fillInputs')}</div>
-                  <div>{t('contractView.createStep')}</div>
+                  <div>1. Pick a template</div>
+                  <div>2. Fill constructor inputs</div>
+                  <div>3. Create the contract</div>
                 </div>
               </div>
               <select
@@ -447,7 +444,7 @@ const ContractView = () => {
                 value={selectedContractFile}
                 onChange={(e) => setSelectedContractFile(e.target.value)}
               >
-                <option value="">{t('contractView.selectContract')}</option>
+                <option value="">Select a contract</option>
                 {availableContracts.map((contract, index) => (
                   <option key={index} value={contract.fileName}>
                     {contract.contractName}
@@ -456,13 +453,13 @@ const ContractView = () => {
               </select>
               {selectedContractFile && (
                 <div className="text-xs wallet-muted">
-                  {t('contractView.fillRequired')}
+                  Selected template will open a guided input sheet for constructor arguments.
                 </div>
               )}
             </div>
           </SectionCard>
 
-          <SectionCard title={t('contractView.instantiated')} className="mb-4">
+          <SectionCard title="Instantiated Contracts" className="mb-4">
             {contractInstances.length > 0 ? (
               <div className="max-h-[28rem] overflow-y-auto pr-1">
                 <ul className="space-y-3">
@@ -478,9 +475,7 @@ const ContractView = () => {
                           className="flex w-full items-center justify-between gap-3 text-left text-sm"
                           onClick={() => handleCopyAddress(instance.address)}
                         >
-                          <span className="wallet-muted">
-                            {t('contractView.address')}
-                          </span>
+                          <span className="wallet-muted">Address</span>
                           <span className="truncate font-mono wallet-text-strong">
                             {shortenTxHash(
                               instance.address,
@@ -492,13 +487,9 @@ const ContractView = () => {
                         <button
                           type="button"
                           className="flex w-full items-center justify-between gap-3 text-left text-sm"
-                          onClick={() =>
-                            handleCopyAddress(instance.token_address)
-                          }
+                          onClick={() => handleCopyAddress(instance.token_address)}
                         >
-                          <span className="wallet-muted">
-                            {t('contractView.tokenAddress')}
-                          </span>
+                          <span className="wallet-muted">Token address</span>
                           <span className="truncate font-mono wallet-text-strong">
                             {shortenTxHash(
                               instance.token_address,
@@ -508,11 +499,9 @@ const ContractView = () => {
                         </button>
 
                         <div className="text-sm">
-                          <span className="wallet-muted">
-                            {t('contractView.balance')}:
-                          </span>{' '}
+                          <span className="wallet-muted">Balance:</span>{' '}
                           <span className="font-semibold wallet-text-strong">
-                            {String(instance.balance)}
+                            {instance.balance.toString()}
                           </span>{' '}
                           satoshis
                         </div>
@@ -523,13 +512,13 @@ const ContractView = () => {
                           onClick={() => deleteContract(instance.id)}
                           className="wallet-btn-danger"
                         >
-                          {t('contractView.delete')}
+                          Delete
                         </button>
                         <button
                           onClick={() => updateContract(instance.address)}
                           className="wallet-btn-primary"
                         >
-                          {t('contractView.update')}
+                          Update
                         </button>
                       </div>
                     </li>
@@ -537,17 +526,14 @@ const ContractView = () => {
                 </ul>
               </div>
             ) : (
-              <EmptyState message={t('contractView.noInstances')} />
+              <EmptyState message="No contract instances yet." />
             )}
           </SectionCard>
         </div>
 
         <div className="mt-auto pb-2 pt-3">
-          <button
-            onClick={() => navigate(returnTarget)}
-            className="wallet-btn-danger w-full py-3 font-semibold"
-          >
-            {t('contractView.back')}
+          <button onClick={() => navigate(returnTarget)} className="wallet-btn-danger w-full py-3 font-semibold">
+            Back
           </button>
         </div>
       </div>
@@ -565,10 +551,10 @@ const ContractView = () => {
         >
           <div className="mb-4">
             <h2 className="text-lg font-semibold text-center">
-              {t('contractView.constructorArgs')}
+              Constructor Arguments
             </h2>
             <p className="wallet-muted text-center text-sm mt-1">
-              {t('contractView.fillRequired')}
+              Fill in each required value before creating the contract.
             </p>
           </div>
 
@@ -577,11 +563,11 @@ const ContractView = () => {
             style={{ borderColor: 'var(--wallet-border)' }}
           >
             <div className="flex items-center justify-center gap-1 text-sm wallet-muted">
-              <span>{t('contractView.blockHeight')}</span>
+              <span>Current Block Height</span>
               <span
                 data-tooltip-id="block-height"
                 className="cursor-pointer wallet-accent-icon text-base font-bold select-none"
-                aria-label={t('contractView.blockHeight')}
+                aria-label="Block height info"
                 role="img"
               >
                 ⓘ
@@ -591,10 +577,10 @@ const ContractView = () => {
               id="block-height"
               place="top"
               className="max-w-[80vw] whitespace-normal break-words text-sm leading-snug"
-              content={t('contractView.blockHeightInfo')}
+              content="Blocks increment on an average interval of 10 minutes."
             />
             <div className="text-center text-2xl font-semibold tabular-nums mt-1">
-              {blockHeight ?? t('contractView.unavailable')}
+              {blockHeight ?? 'Unavailable'}
             </div>
           </div>
 
@@ -604,7 +590,7 @@ const ContractView = () => {
                 className="rounded-xl border p-3 text-sm wallet-muted"
                 style={{ borderColor: 'var(--wallet-border)' }}
               >
-                {t('contractView.noInputs')}
+                This contract template has no constructor inputs.
               </div>
             )}
 
@@ -621,7 +607,7 @@ const ContractView = () => {
                       <span
                         data-tooltip-id={`datasig-tt-${index}`}
                         className="cursor-pointer wallet-accent-icon text-base font-bold select-none"
-                        aria-label={t('contractView.datasigInfo')}
+                        aria-label="Data signature info"
                         role="img"
                       >
                         ⓘ
@@ -630,7 +616,7 @@ const ContractView = () => {
                         id={`datasig-tt-${index}`}
                         place="top"
                         className="max-w-[80vw] whitespace-normal break-words text-sm leading-snug"
-                        content={t('contractView.selectData')}
+                        content="Sign arbitrary data with a selected wallet address. The resulting signature (hex) is passed to the constructor."
                       />
                     </label>
 
@@ -645,9 +631,7 @@ const ContractView = () => {
                         })
                       }
                       className="wallet-input w-full mb-2"
-                      placeholder={t('contractView.enterMessage', {
-                        name: arg.name,
-                      })}
+                      placeholder={`Enter message for ${arg.name}`}
                     />
 
                     <div className="flex items-center mb-2 gap-2">
@@ -661,9 +645,9 @@ const ContractView = () => {
                           isScanning ? 'opacity-50 cursor-not-allowed' : ''
                         }`}
                         disabled={isScanning}
-                        aria-label={`${t('contractView.selectAddress')} ${arg.name}`}
+                        aria-label={`Select Address for ${arg.name}`}
                       >
-                        {t('contractView.selectAddress')}
+                        Select Address
                       </button>
 
                       <button
@@ -678,13 +662,13 @@ const ContractView = () => {
                           !selectedAddresses[arg.name] || !dataToSign[arg.name]
                         }
                       >
-                        {t('contractView.signMessage')}
+                        Sign Message
                       </button>
                     </div>
 
                     {selectedAddresses[arg.name] && (
                       <div className="text-sm wallet-muted">
-                        {t('contractView.signingAddress')}:{' '}
+                        Signing address:{' '}
                         {shortenTxHash(
                           selectedAddresses[arg.name],
                           PREFIX[currentNetwork].length
@@ -693,8 +677,7 @@ const ContractView = () => {
                     )}
                     {inputValues[arg.name] && (
                       <div className="text-sm mt-1 wallet-muted">
-                        {t('contractView.signature')}:{' '}
-                        {shortenTxHash(inputValues[arg.name], 0)}
+                        Signature: {shortenTxHash(inputValues[arg.name], 0)}
                       </div>
                     )}
                   </div>
@@ -716,7 +699,7 @@ const ContractView = () => {
                     <span
                       data-tooltip-id={`argtype-tt-${index}`}
                       className="cursor-pointer wallet-accent-icon text-base font-bold select-none"
-                      aria-label={t('contractView.argumentTypeInfo')}
+                      aria-label="Argument type info"
                       role="img"
                     >
                       ⓘ
@@ -728,9 +711,9 @@ const ContractView = () => {
                       content={
                         isAddressType
                           ? arg.type === 'pubkey'
-                            ? t('contractView.publicKeyInfo')
-                            : t('contractView.hashInfo')
-                          : t('contractView.enterType', { type: arg.type })
+                            ? 'Public key in hex. Use “Select Address” to fill automatically.'
+                            : '20-byte hash (hex) of an address/public key. Use “Select Address”.'
+                          : `Enter a value matching type: ${arg.type}.`
                       }
                     />
                   </label>
@@ -748,9 +731,9 @@ const ContractView = () => {
                             isScanning ? 'opacity-50 cursor-not-allowed' : ''
                           }`}
                           disabled={isScanning}
-                          aria-label={`${t('contractView.selectAddress')} ${arg.name}`}
+                          aria-label={`Select Address for ${arg.name}`}
                         >
-                          {t('contractView.selectAddress')}
+                          Select Address
                         </button>
 
                         <button
@@ -760,9 +743,7 @@ const ContractView = () => {
                             isScanning ? 'opacity-50 cursor-not-allowed' : ''
                           }`}
                           disabled={isScanning}
-                          aria-label={t('contractView.scanQr', {
-                            name: arg.name,
-                          })}
+                          aria-label={`Scan QR Code for ${arg.name}`}
                         >
                           <FaCamera />
                         </button>
@@ -770,7 +751,7 @@ const ContractView = () => {
 
                       {inputValues[arg.name] && (
                         <div className="text-sm mt-2 wallet-muted break-all">
-                          {t('contractView.selected', { type: arg.type })}:{' '}
+                          Selected {arg.type}:{' '}
                           {shortenTxHash(inputValues[arg.name])}
                         </div>
                       )}
@@ -782,9 +763,7 @@ const ContractView = () => {
                       value={inputValues[arg.name] || ''}
                       onChange={handleInputChange}
                       className="wallet-input w-full"
-                      placeholder={t('contractView.enterMessage', {
-                        name: arg.name,
-                      })}
+                      placeholder={`Enter ${arg.name}`}
                     />
                   )}
                 </div>
@@ -816,7 +795,7 @@ const ContractView = () => {
                   radius="1"
                 />
               ) : (
-                <div className="font-bold">{t('contractView.create')}</div>
+                <div className="font-bold">Create Contract</div>
               )}
             </button>
           </div>
@@ -835,9 +814,7 @@ const ContractView = () => {
 
       {showErrorPopup && (
         <Popup closePopups={handleErrorPopupClose}>
-          <h2 className="text-lg font-semibold mb-2">
-            {t('contractView.error')}
-          </h2>
+          <h2 className="text-lg font-semibold mb-2">Error</h2>
           <p className="mb-4">{errorMessage}</p>
         </Popup>
       )}

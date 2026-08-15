@@ -66,7 +66,25 @@ export function getRpaKeyPaths(
 // ─── Paycode constants ────────────────────────────────────────────────────────
 
 // Prefix sizes (number of bits of scan_pubkey used as Electrum filter)
-export const RPA_PREFIX_BITS = 8; // 1/256 bandwidth — good default
+// Electron Cash default prefix_size="10" (16 bits). Encoded in the paycode so
+// senders grind the same width the receiver will query.
+export const RPA_PREFIX_BITS = 16;
+
+/** Fulcrum-RPA / EC grind string: hex of scan pubkey after the 02/03 byte. */
+export function rpaGrindString(
+  scanPubkey: Uint8Array,
+  prefixBits = RPA_PREFIX_BITS
+): string {
+  const chars = prefixBits / 4;
+  if (!Number.isInteger(chars) || chars < 1 || chars > 4) {
+    throw new Error(`Unsupported RPA prefix size: ${prefixBits} bits`);
+  }
+  return Array.from(scanPubkey)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
+    .slice(2, 2 + chars)
+    .toUpperCase();
+}
 
 // Paycode version bytes
 const VERSION_MAINNET = 0x01; // mainnet P2PKH
@@ -314,23 +332,23 @@ export function decodePaycode(paycodeStr: string): DecodedPaycode | null {
   }
 }
 
+export function looksLikeRpaPaycode(recipient: string): boolean {
+  const bare = recipient.trim().split('?')[0].toLowerCase();
+  return (
+    bare.startsWith(`${PAYCODE_PREFIX_MAINNET}:`) ||
+    bare.startsWith(`${PAYCODE_PREFIX_TESTNET}:`)
+  );
+}
+
 /**
- * Return a user-facing reason why an RPA-looking recipient must not enter the
- * ordinary CashAddress transaction builder. A complete sender implementation
- * must choose a designated input, derive the shared secret from that input's
- * private key and outpoint, and grind its signature nonce. Until that exact
- * path exists, failing closed is safer than producing an invalid or
- * privacy-degrading transaction.
+ * Block only invalid / wrong-network paycodes. A valid paycode is sent
+ * through finalizeRpaPayment (dummy dest → ECDH dest → prefix grind).
  */
 export function getRpaSendBlockReason(
   recipient: string,
   network: Network
 ): string | null {
-  const bare = recipient.trim().split('?')[0].toLowerCase();
-  const looksLikePaycode =
-    bare.startsWith(`${PAYCODE_PREFIX_MAINNET}:`) ||
-    bare.startsWith(`${PAYCODE_PREFIX_TESTNET}:`);
-  if (!looksLikePaycode) return null;
+  if (!looksLikeRpaPaycode(recipient)) return null;
 
   const decoded = decodePaycode(recipient);
   if (!decoded) {
@@ -346,10 +364,14 @@ export function getRpaSendBlockReason(
     return `This RPA paycode is for ${label}, not the wallet's active network. No transaction was created.`;
   }
 
-  return (
-    'Sending to reusable payment addresses (RPA) is not available yet. ' +
-    'The required designated-input derivation and signature nonce grinding are not active, so no transaction was created.'
-  );
+  if (decoded.expiry !== 0) {
+    const oneWeek = Math.floor(Date.now() / 1000) + 604_800;
+    if (decoded.expiry < oneWeek) {
+      return 'This paycode has expired. No transaction was created.';
+    }
+  }
+
+  return null;
 }
 
 // Derive + encode paycode in one call (convenience wrapper).
@@ -424,7 +446,15 @@ export function derivePaymentAddress(
   const child = deriveHdPublicNodeChild(parentNode, index);
   if (typeof child === 'string') throw new Error(`CKD_pub failed: ${child}`);
 
-  const pkh = hash160(Uint8Array.from(child.publicKey));
+  // Electron Cash hashes the *uncompressed* child pubkey (paycode.py
+  // use_uncompressed = True). Compressed hash160 would not match EC.
+  const uncompressed = secp256k1.uncompressPublicKey(
+    Uint8Array.from(child.publicKey)
+  );
+  if (typeof uncompressed === 'string') {
+    throw new Error(`Uncompress payment pubkey failed: ${uncompressed}`);
+  }
+  const pkh = hash160(uncompressed);
   const prefix = network === Network.MAINNET ? 'bitcoincash' : 'bchtest';
   const result = encodeCashAddress({ prefix, type: 'p2pkh', payload: pkh });
   if (typeof result === 'string') throw new Error(`Address encoding failed: ${result}`);

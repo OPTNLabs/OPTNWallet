@@ -69,12 +69,12 @@ function requiredFeeForBytes(bytes: number): bigint {
 export default function TransactionManager() {
   const dbService = DatabaseService();
 
-  function storeTransactionHistory(
+  async function storeTransactionHistory(
     walletId: number,
     address: string,
     history: TransactionHistoryItem[],
     sessionGeneration?: number
-  ): TransactionHistoryItem[] {
+  ): Promise<TransactionHistoryItem[]> {
     if (!isCurrentWalletSession(walletId, sessionGeneration)) return [];
     const db = dbService.getDatabase();
     if (!db) {
@@ -91,8 +91,17 @@ export default function TransactionManager() {
         INSERT INTO transactions (wallet_id, tx_hash, height, timestamp, amount)
         VALUES (?, ?, ?, ?, 0)
         ON CONFLICT(wallet_id, tx_hash) DO UPDATE SET
-          height = excluded.height,
-          timestamp = excluded.timestamp
+          height = CASE
+            WHEN excluded.height > 0 AND excluded.height >= COALESCE(transactions.height, 0)
+              THEN excluded.height
+            WHEN COALESCE(transactions.height, 0) > 0 THEN transactions.height
+            ELSE excluded.height
+          END,
+          timestamp = CASE
+            WHEN excluded.timestamp IS NOT NULL AND excluded.timestamp != ''
+              THEN excluded.timestamp
+            ELSE transactions.timestamp
+          END
       `);
 
       for (const tx of history) {
@@ -110,6 +119,16 @@ export default function TransactionManager() {
         address,
         walletId,
       });
+    }
+
+    // Await status write so the next status-hash gate sees scanned-empty
+    // addresses (EMPTY_HISTORY_STATUS). Fire-and-forget left every gap addr
+    // permanently dirty → single-address spam + fake ledger rebuilds.
+    try {
+      const ledger = await import('../../platform/desktop/WalletLedgerService');
+      await ledger.recordHistoryItems(walletId, address, history);
+    } catch {
+      /* desktop ledger optional for non-desktop builds */
     }
 
     return history;
@@ -136,11 +155,13 @@ export default function TransactionManager() {
   async function fetchAndStoreTransactionHistories(
     walletId: number,
     addresses: string[],
-    sessionGeneration?: number
+    sessionGeneration?: number,
+    onProgress?: (completedCount: number, totalCount: number) => void
   ): Promise<Record<string, TransactionHistoryItem[] | undefined>> {
     const uniqueAddresses = Array.from(new Set(addresses.filter(Boolean)));
     const histories = await ElectrumService.getTransactionHistoryMany(
-      uniqueAddresses
+      uniqueAddresses,
+      onProgress
     );
     const stored: Record<string, TransactionHistoryItem[] | undefined> = {};
 
@@ -167,7 +188,7 @@ export default function TransactionManager() {
 
       try {
         if (!isCurrentWalletSession(walletId, sessionGeneration)) return stored;
-        stored[address] = storeTransactionHistory(
+        stored[address] = await storeTransactionHistory(
           walletId,
           address,
           history,
@@ -669,7 +690,70 @@ export default function TransactionManager() {
   async function fetchPrivateKey(address: string): Promise<Uint8Array | null> {
     return await (
       await import('../../services/KeyService')
-    ).default.fetchAddressPrivateKey(address);
+    ).default.fetchAddressPrivateKey(address, 'spend');
+  }
+
+  /**
+   * Write confirmed height/timestamp back after a verbose Electrum fetch so
+   * Home/list stop showing "Pending" for long-confirmed fusion txs that were
+   * first inserted with height 0.
+   *
+   * Pass `persist: false` when applying many rows, then call
+   * `persistConfirmedHeights(walletId)` once — avoids N disk saves (and the
+   * open-time “one fusion flips at a time” feel when each save raced the UI).
+   */
+  async function applyConfirmedHeight(
+    walletId: number,
+    txHash: string,
+    height: number,
+    timestamp?: string,
+    options?: { persist?: boolean }
+  ): Promise<void> {
+    if (!Number.isInteger(walletId) || walletId <= 0) return;
+    if (!(typeof height === 'number' && height > 0)) return;
+    const hash = String(txHash ?? '')
+      .trim()
+      .toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(hash)) return;
+
+    const db = dbService.getDatabase();
+    if (!db) return;
+    const ts =
+      timestamp != null && String(timestamp).trim() !== ''
+        ? String(timestamp)
+        : '';
+    db.run(
+      `INSERT INTO transactions (wallet_id, tx_hash, height, timestamp, amount)
+       VALUES (?, ?, ?, ?, 0)
+       ON CONFLICT(wallet_id, tx_hash) DO UPDATE SET
+         height = CASE
+           WHEN excluded.height > COALESCE(transactions.height, 0)
+             THEN excluded.height
+           ELSE transactions.height
+         END,
+         timestamp = CASE
+           WHEN excluded.timestamp != '' AND (transactions.timestamp IS NULL OR transactions.timestamp = '')
+             THEN excluded.timestamp
+           WHEN excluded.timestamp != '' THEN excluded.timestamp
+           ELSE transactions.timestamp
+         END`,
+      [walletId, hash, height, ts]
+    );
+    if (options?.persist === false) return;
+    try {
+      await dbService.saveDatabaseToFile(walletId);
+    } catch {
+      /* best-effort; Redux still updates */
+    }
+  }
+
+  async function persistConfirmedHeights(walletId: number): Promise<void> {
+    if (!Number.isInteger(walletId) || walletId <= 0) return;
+    try {
+      await dbService.saveDatabaseToFile(walletId);
+    } catch {
+      /* best-effort */
+    }
   }
 
   return {
@@ -679,5 +763,7 @@ export default function TransactionManager() {
     addOutput,
     buildTransaction,
     fetchPrivateKey,
+    applyConfirmedHeight,
+    persistConfirmedHeights,
   };
 }

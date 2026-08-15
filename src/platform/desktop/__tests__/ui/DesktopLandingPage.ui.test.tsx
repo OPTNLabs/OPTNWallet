@@ -91,7 +91,12 @@ vi.mock('../../../../platform/desktop/DesktopWalletManager', () => ({
 }));
 
 vi.mock('../../../../platform/desktop/walletOpenRegistry', () => ({
-  claimWalletOpen: vi.fn().mockResolvedValue(null),
+  runExclusiveWalletOpen: vi.fn(async (_id, _label, open) => {
+    const value = await open();
+    return value === null
+      ? { status: 'rejected' }
+      : { status: 'opened', value };
+  }),
 }));
 
 vi.mock('../../../../platform/desktop/walletFusionPolicy', () => ({

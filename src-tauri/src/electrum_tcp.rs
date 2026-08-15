@@ -39,8 +39,12 @@ fn closed_event(id: u32) -> String {
 
 /// Drive one connection: split the stream, forward outbound bytes from `rx`, and
 /// emit inbound bytes as `data` events until EOF/error, then a `closed` event.
-async fn run_connection<S>(app: AppHandle, id: u32, stream: S, mut rx: mpsc::UnboundedReceiver<Vec<u8>>)
-where
+async fn run_connection<S>(
+    app: AppHandle,
+    id: u32,
+    stream: S,
+    mut rx: mpsc::UnboundedReceiver<Vec<u8>>,
+) where
     S: AsyncReadExt + AsyncWriteExt + Unpin + Send + 'static,
 {
     let (mut reader, mut writer) = tokio::io::split(stream);
@@ -147,7 +151,8 @@ pub async fn electrum_tcp_connect(
 pub async fn electrum_tcp_send(id: u32, data: String) -> Result<(), String> {
     let conns = CONNECTIONS.lock().await;
     let tx = conns.get(&id).ok_or("connection not open")?;
-    tx.send(data.into_bytes()).map_err(|_| "connection closed".to_string())
+    tx.send(data.into_bytes())
+        .map_err(|_| "connection closed".to_string())
 }
 
 /// Close a connection.

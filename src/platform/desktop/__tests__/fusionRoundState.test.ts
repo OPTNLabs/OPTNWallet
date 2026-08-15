@@ -1,12 +1,17 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  clearOutpointReservations,
+  fusionCoinAvailability,
   isOwnRoundKey,
+  isRetiredRoundKey,
   outpointKey,
   recordRoundKey,
   releaseOutpoints,
   reserveOutpoints,
   reservedOutpoints,
+  retireAllOwnRoundKeys,
+  retireRoundKey,
 } from '../fusionRoundState';
 
 // A minimal localStorage so this state can be exercised without a DOM.
@@ -56,6 +61,46 @@ describe('P2P fusion cross-window round state', () => {
     releaseOutpoints(7, [first]);
     expect(reservedOutpoints(7).has(first)).toBe(false);
     expect(reservedOutpoints(7).has(second)).toBe(true);
+  });
+
+  it('reports free vs reserved coins for greying Start/Fuse', () => {
+    const a = { tx_hash: 'aa'.repeat(32), tx_pos: 0 };
+    const b = { tx_hash: 'bb'.repeat(32), tx_pos: 1 };
+    reserveOutpoints(3, [outpointKey(a.tx_hash, a.tx_pos)]);
+    expect(fusionCoinAvailability(3, [a, b])).toEqual({
+      total: 2,
+      free: 1,
+      reserved: 1,
+    });
+    expect(fusionCoinAvailability(3, [a])).toEqual({
+      total: 1,
+      free: 0,
+      reserved: 1,
+    });
+    clearOutpointReservations(3);
+    expect(fusionCoinAvailability(3, [a, b])).toEqual({
+      total: 2,
+      free: 2,
+      reserved: 0,
+    });
+  });
+
+  it('retires finished throwaway keys so other windows stop counting ghosts', () => {
+    const dead = 'd'.repeat(64);
+    expect(isRetiredRoundKey(dead)).toBe(false);
+    retireRoundKey(dead);
+    expect(isRetiredRoundKey(dead)).toBe(true);
+  });
+
+  it('retireAllOwnRoundKeys marks every prior attempt of this wallet as retired', () => {
+    const a = 'a'.repeat(64);
+    const b = 'b'.repeat(64);
+    recordRoundKey(9, a);
+    recordRoundKey(9, b);
+    expect(isOwnRoundKey(9, a)).toBe(true);
+    retireAllOwnRoundKeys(9);
+    expect(isRetiredRoundKey(a)).toBe(true);
+    expect(isRetiredRoundKey(b)).toBe(true);
   });
 
   it('survives unreadable storage instead of throwing mid-round', () => {

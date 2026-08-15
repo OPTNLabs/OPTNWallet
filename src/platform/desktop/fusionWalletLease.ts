@@ -20,20 +20,33 @@
 // missed round; double-fusing costs a real fee twice.
 
 import { getLocalStorage } from '../../utils/browserStorage';
+import { AUTO_FUSION_COOLDOWN_MS } from './fusionAutoEngine';
+import { P2P_LEASE_TTL_MS } from './fusionTiming';
 
 const LEASE_PREFIX = 'optn-fusion-lease-';
 const COOLDOWN_PREFIX = 'optn-fusion-auto-attempt-';
 const LOCK_PREFIX = 'optn-fusion-lock-';
 
 /**
- * A round that dies without releasing must not lock the wallet forever, but this
- * must outlive a legitimately slow round: gather alone can take 75s, and the
- * whole round can exceed two minutes on Tor.
+ * Absolute backstop if heartbeats stop being written (process kill + no reclaim).
+ * Sized to server session ceiling (join + warmup + close) + small margin —
+ * see fusionTiming.P2P_LEASE_TTL_MS. Not a license for longer rounds.
  */
-const LEASE_TTL_MS = 10 * 60_000;
+export const LEASE_TTL_MS = P2P_LEASE_TTL_MS;
+
+/**
+ * A live round refreshes `at` every LEASE_HEARTBEAT_MS. If `at` is older than
+ * this, the holder is considered dead (HMR, crash, closed window) and the next
+ * acquire reclaims the lock. This is what fixes "already running" with a grey
+ * idle UI after a stuck attempt.
+ */
+export const LEASE_STALE_MS = 45_000;
+/** How often the holding window must refresh the durable lease. */
+export const LEASE_HEARTBEAT_MS = 12_000;
 
 interface LeaseRecord {
   owner: string;
+  /** Last heartbeat (or grant time). */
   at: number;
 }
 
@@ -44,7 +57,9 @@ type LockManagerLike = {
 function lockManager(): LockManagerLike | null {
   const candidate = (globalThis as { navigator?: { locks?: LockManagerLike } })
     .navigator?.locks;
-  return candidate && typeof candidate.request === 'function' ? candidate : null;
+  return candidate && typeof candidate.request === 'function'
+    ? candidate
+    : null;
 }
 
 /**
@@ -75,11 +90,17 @@ function readJson<T>(key: string): T | null {
   }
 }
 
-function writeJson(key: string, value: unknown): void {
+function writeJson(key: string, value: unknown): boolean {
+  const storage = getLocalStorage();
+  if (!storage) return false;
+  const serialized = JSON.stringify(value);
   try {
-    getLocalStorage()?.setItem(key, JSON.stringify(value));
+    storage.setItem(key, serialized);
+    // Web storage can be wrapped or fail silently. A fee-spending lease is not
+    // real until the exact record is readable while we still hold the Web Lock.
+    return storage.getItem(key) === serialized;
   } catch {
-    /* storage unavailable */
+    return false;
   }
 }
 
@@ -90,26 +111,64 @@ function newOwnerToken(): string {
 }
 
 /**
+ * True when another window (or a dead process) still holds a non-stale lease.
+ * Stale = no heartbeat within LEASE_STALE_MS, or past absolute LEASE_TTL_MS.
+ */
+function leaseIsLive(held: LeaseRecord | null, nowMs: number): boolean {
+  if (!held) return false;
+  const age = nowMs - held.at;
+  if (age < 0) return true; // clock skew: treat as held, fail closed
+  if (age >= LEASE_TTL_MS) return false;
+  if (age >= LEASE_STALE_MS) return false;
+  return true;
+}
+
+/**
  * Take the round lease for this wallet, covering BOTH transports and both manual
  * and automatic starts. Returns an owner token, or null when another window (or
  * this one) already holds a live lease.
  */
+function takeLeaseIfFree(walletId: number, nowMs: number): string | null {
+  const key = `${LEASE_PREFIX}${walletId}`;
+  const held = readJson<LeaseRecord>(key);
+  // Live holder still heartbeating → refuse. Dead/stale → reclaim.
+  if (leaseIsLive(held, nowMs)) return null;
+  const owner = newOwnerToken();
+  return writeJson(key, { owner, at: nowMs } satisfies LeaseRecord)
+    ? owner
+    : null;
+}
+
 export async function acquireRoundLease(
   walletId: number,
   nowMs = Date.now()
 ): Promise<string | null> {
+  const result = await withWalletLock(walletId, () =>
+    takeLeaseIfFree(walletId, nowMs)
+  );
+  // Every round can spend a fee. Manual starts need the same cross-window
+  // atomicity as Auto, so never create a storage-only lease.
+  return result.ran ? result.value : null;
+}
+
+/**
+ * Refresh the durable lease while a round is still running.
+ * Call from the holding window on an interval (LEASE_HEARTBEAT_MS).
+ */
+export async function touchRoundLease(
+  walletId: number,
+  owner: string,
+  nowMs = Date.now()
+): Promise<boolean> {
   const key = `${LEASE_PREFIX}${walletId}`;
   const result = await withWalletLock(walletId, () => {
     const held = readJson<LeaseRecord>(key);
-    // An expired lease belongs to a round that died; reclaiming it is the only
-    // way a crashed window does not lock the wallet out permanently.
-    if (held && nowMs - held.at < LEASE_TTL_MS) return null;
-    const owner = newOwnerToken();
-    writeJson(key, { owner, at: nowMs } satisfies LeaseRecord);
-    return owner;
+    if (!held || held.owner !== owner) return false;
+    return writeJson(key, { owner, at: nowMs } satisfies LeaseRecord);
   });
-  // No lock manager => exclusivity cannot be guaranteed => refuse.
-  return result.ran ? result.value : null;
+  // Losing the process-wide lock primitive mid-round is uncertainty, not a
+  // single-window mode. Abort before spending rather than refresh non-atomically.
+  return result.ran ? result.value : false;
 }
 
 /** Release only if we still hold it: a lease we already lost to TTL now belongs
@@ -119,7 +178,7 @@ export async function releaseRoundLease(
   owner: string
 ): Promise<void> {
   const key = `${LEASE_PREFIX}${walletId}`;
-  await withWalletLock(walletId, () => {
+  const drop = () => {
     const held = readJson<LeaseRecord>(key);
     if (held && held.owner === owner) {
       try {
@@ -128,36 +187,247 @@ export async function releaseRoundLease(
         /* storage unavailable */
       }
     }
-  });
+  };
+  const result = await withWalletLock(walletId, drop);
+  if (!result.ran) drop();
 }
 
 /**
- * Atomically decide whether an automatic round may start, and claim the slot in
- * the same critical section.
+ * Drop the durable round lease for this wallet regardless of owner.
  *
- * Check and claim must not be separable. Checking, doing network I/O, then
- * claiming lets a second window pass the check during that I/O window and pay a
- * second fee. Returns false — fail closed — when exclusivity is unavailable.
+ * Use for recovery when a round died without `releaseRoundLease` (HMR, crash,
+ * killed process) and the 10-minute TTL has not elapsed yet — the UI shows
+ * "already running" while nothing is actually fusing. Do not call this while a
+ * real round is live in another window of the same wallet.
+ */
+export async function reclaimStaleRoundState(
+  walletId: number,
+  cleanup: () => void
+): Promise<boolean> {
+  const key = `${LEASE_PREFIX}${walletId}`;
+  const result = await withWalletLock(walletId, () => {
+    // Re-read inside the wallet lock: another window may have replaced the
+    // stale lease while this recovery attempt waited for exclusivity.
+    if (leaseIsLive(readJson<LeaseRecord>(key), Date.now())) return false;
+    try {
+      getLocalStorage()?.removeItem(key);
+    } catch {
+      /* storage unavailable */
+    }
+    cleanup();
+    return true;
+  });
+  // Owner-independent deletion has no safe storage-only fallback across
+  // windows. Without Web Locks, fail closed and leave the record untouched.
+  return result.ran ? result.value : false;
+}
+
+export async function forceClearRoundLease(walletId: number): Promise<boolean> {
+  return reclaimStaleRoundState(walletId, () => undefined);
+}
+
+/** Read-only: whether a non-stale durable lease is recorded for this wallet. */
+export function hasLiveRoundLease(
+  walletId: number,
+  nowMs = Date.now()
+): boolean {
+  return leaseIsLive(
+    readJson<LeaseRecord>(`${LEASE_PREFIX}${walletId}`),
+    nowMs
+  );
+}
+
+/**
+ * Cooldown record: when the next auto attempt is allowed (`nextAllowedAt`).
+ * Legacy records only had `{ attempt }` (last start time) — treat those as
+ * nextAllowedAt = attempt + 90s so we do not keep a 5‑minute death-sentence
+ * from failed P2P "no peers" stamps.
+ *
+ * `reason: 'depth-met'` means Auto is sleeping because rounds-per-coin is
+ * already satisfied. Wallet activity (receive, send, any UTXO-changing tx)
+ * that leaves coins below depth may clear that idle without waiting out the
+ * long timer — short success/fail cooldowns never use this reason.
+ */
+type CooldownRecord = {
+  nextAllowedAt?: number;
+  /** @deprecated legacy last-start stamp */
+  attempt?: number;
+  reason?: 'depth-met' | 'success' | 'fail' | 'claim';
+};
+
+function readCooldownRecord(walletId: number): CooldownRecord | null {
+  return readJson<CooldownRecord>(`${COOLDOWN_PREFIX}${walletId}`);
+}
+
+function readNextAllowedAt(walletId: number): number | null {
+  const record = readCooldownRecord(walletId);
+  if (!record) return null;
+  if (
+    typeof record.nextAllowedAt === 'number' &&
+    Number.isFinite(record.nextAllowedAt)
+  ) {
+    return record.nextAllowedAt;
+  }
+  // Legacy records only stamped `attempt` (old code used ~5 min). Cap residual
+  // at success cooldown so upgrades never re-introduce multi-minute silence.
+  if (typeof record.attempt === 'number' && Number.isFinite(record.attempt)) {
+    return record.attempt + AUTO_FUSION_COOLDOWN_MS;
+  }
+  return null;
+}
+
+/**
+ * Atomically decide whether an automatic round may start.
+ * Reserves a short mutual-exclusion window so two windows do not both start;
+ * the final nextAllowedAt is set after the outcome (success vs failure).
  */
 export async function tryClaimAutoCooldown(
   walletId: number,
-  cooldownMs: number,
+  _cooldownMs: number,
   nowMs = Date.now()
 ): Promise<boolean> {
   const key = `${COOLDOWN_PREFIX}${walletId}`;
   const result = await withWalletLock(walletId, () => {
-    const previous = readJson<{ attempt: number }>(key);
-    const last = typeof previous?.attempt === 'number' ? previous.attempt : null;
-    // A clock that moved backwards must read as "not yet", never as "elapsed".
-    if (last !== null && nowMs - last < cooldownMs) return false;
-    writeJson(key, { attempt: nowMs });
-    return true;
+    const next = readNextAllowedAt(walletId);
+    if (next !== null && nowMs < next) return false;
+    // Soft hold until outcome stamps success or fail.
+    return writeJson(key, {
+      nextAllowedAt: nowMs + AUTO_FUSION_COOLDOWN_MS,
+      attempt: nowMs,
+      reason: 'claim',
+    });
   });
   return result.ran ? result.value : false;
 }
 
+/** Persist a cooldown stamp; prefer Web Lock, always write as best-effort. */
+async function stampCooldown(
+  walletId: number,
+  record: CooldownRecord
+): Promise<void> {
+  const key = `${COOLDOWN_PREFIX}${walletId}`;
+  const write = () => writeJson(key, record);
+  const result = await withWalletLock(walletId, write);
+  // Without a lock (or if request never runs) still write: silent no-op made
+  // depth-met / fail stamps vanish and Auto thrashed every engine tick.
+  if (!result.ran) write();
+}
+
+/** After a successful paid fuse — full spacing. */
+export async function stampAutoSuccess(
+  walletId: number,
+  cooldownMs: number,
+  nowMs = Date.now()
+): Promise<void> {
+  await stampCooldown(walletId, {
+    nextAllowedAt: nowMs + cooldownMs,
+    attempt: nowMs,
+    reason: 'success',
+  });
+}
+
+/** After a failed auto attempt (no fee spent) — short retry backoff. */
+export async function stampAutoFailure(
+  walletId: number,
+  backoffMs: number,
+  nowMs = Date.now()
+): Promise<void> {
+  await stampCooldown(walletId, {
+    nextAllowedAt: nowMs + backoffMs,
+    attempt: nowMs,
+    reason: 'fail',
+  });
+}
+
+/**
+ * Rounds-per-coin already met (or no BCH coins). Long silent idle — only a
+ * wallet UTXO change with below-depth coins should wake Auto early.
+ */
+export async function stampAutoDepthMetIdle(
+  walletId: number,
+  idleMs: number,
+  nowMs = Date.now()
+): Promise<void> {
+  await stampCooldown(walletId, {
+    nextAllowedAt: nowMs + idleMs,
+    attempt: nowMs,
+    reason: 'depth-met',
+  });
+}
+
+/** True while Auto is in the long depth-met sleep (not short success/fail). */
+export function isAutoDepthMetIdle(
+  walletId: number,
+  nowMs = Date.now()
+): boolean {
+  const record = readCooldownRecord(walletId);
+  if (!record || record.reason !== 'depth-met') return false;
+  const next = readNextAllowedAt(walletId);
+  return next !== null && nowMs < next;
+}
+
+/** Allow Auto to run immediately (e.g. after depth-met idle + wallet activity). */
+export async function clearAutoCooldown(walletId: number): Promise<void> {
+  const key = `${COOLDOWN_PREFIX}${walletId}`;
+  await withWalletLock(walletId, () => {
+    writeJson(key, { nextAllowedAt: 0, attempt: Date.now() });
+  });
+}
+
+/**
+ * Wallet activity wake: receive, send, change, any committed UTXO snapshot.
+ * If any coin is still below rounds-per-coin, clear long idles so Auto runs.
+ *
+ * Clears:
+ *   - explicit depth-met idle (`reason: 'depth-met'`)
+ *   - any remaining wait longer than a normal success cooldown (covers legacy
+ *     depth stamps that used `reason: 'fail'` with a 30m backoff — those never
+ *     woke after send/receive)
+ *
+ * Does NOT clear short success/fail spacing so post-fuse thrash is avoided when
+ * the same UTXO refresh fires after a paid round.
+ *
+ * Returns true if cooldown was cleared (caller should tick Auto).
+ */
+export async function wakeAutoFromWalletActivity(
+  walletId: number,
+  hasCoinsBelowDepth: boolean,
+  nowMs = Date.now()
+): Promise<boolean> {
+  if (!hasCoinsBelowDepth) return false;
+  if (isAutoDepthMetIdle(walletId, nowMs)) {
+    await clearAutoCooldown(walletId);
+    return true;
+  }
+  // Legacy multi-minute leftovers only — never clear a short success/fail
+  // cooldown (remaining is usually ≈ AUTO_FUSION_COOLDOWN_MS).
+  const next = readNextAllowedAt(walletId);
+  const remaining = next !== null ? next - nowMs : 0;
+  if (remaining > 2 * 60_000) {
+    await clearAutoCooldown(walletId);
+    return true;
+  }
+  return false;
+}
+
 /** Read-only view, for status text. Never gates spending on its own. */
 export function lastAutoAttemptAt(walletId: number): number | null {
-  const record = readJson<{ attempt: number }>(`${COOLDOWN_PREFIX}${walletId}`);
-  return typeof record?.attempt === 'number' ? record.attempt : null;
+  const record = readJson<CooldownRecord>(`${COOLDOWN_PREFIX}${walletId}`);
+  if (!record) return null;
+  if (typeof record.attempt === 'number') return record.attempt;
+  if (typeof record.nextAllowedAt === 'number') return record.nextAllowedAt;
+  return null;
+}
+
+/**
+ * Cheap advisory check used before expensive wallet/network reconciliation.
+ */
+export function isAutoCooldownReady(
+  walletId: number,
+  _cooldownMs: number,
+  nowMs = Date.now()
+): boolean {
+  const next = readNextAllowedAt(walletId);
+  if (next === null) return true;
+  return nowMs >= next;
 }

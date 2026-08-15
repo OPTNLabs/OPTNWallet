@@ -13,6 +13,7 @@ import type { ContractInstanceRow } from '../apis/ContractManager/ContractManage
 import TransactionManager from '../apis/TransactionManager/TransactionManager';
 import { store } from '../state/store';
 import { logError } from '../utils/errorHandling';
+import { reservedOutpoints as reservedFusionOutpoints } from '../platform/desktop/fusionRoundState';
 import OutboundTransactionTracker, {
   deriveTrackedTxid,
 } from './OutboundTransactionTracker';
@@ -68,8 +69,18 @@ export type BatchedTransactionRequest = {
  */
 class TransactionService {
   private dbService = DatabaseService();
-  private contractManager = ContractManager();
+  // Lazy: constructing ContractManager at module load hits a circular import
+  // (TransactionService → ContractManager → AddonsRegistry → …) and Vitest
+  // throws TDZ on `__vite_ssr_import_*` during OptnKeyManager tests.
+  private contractManager: ReturnType<typeof ContractManager> | null = null;
   private transactionManager: ReturnType<typeof TransactionManager> | null = null;
+
+  private getContractManager() {
+    if (!this.contractManager) {
+      this.contractManager = ContractManager();
+    }
+    return this.contractManager;
+  }
 
   private getTransactionManager() {
     if (!this.transactionManager) {
@@ -190,7 +201,7 @@ class TransactionService {
 
     // Fetch contract instances
     const contractInstances: ContractInstanceRow[] =
-      await this.contractManager.fetchContractInstances();
+      await this.getContractManager().fetchContractInstances();
 
     // Fetch contract UTXOs
     const contractUTXOs: UTXO[] = contractInstances.flatMap((contract) =>
@@ -364,6 +375,25 @@ class TransactionService {
     const requestedOutpoints = new Set(
       (spentInputs ?? []).map((input) => `${input.tx_hash}:${input.tx_pos}`)
     );
+    const fusionReserved = currentWalletId
+      ? reservedFusionOutpoints(currentWalletId)
+      : new Set<string>();
+    const conflictingFusionRound =
+      fusionReserved.size > 0 &&
+      (requestedOutpoints.size === 0 ||
+        [...requestedOutpoints].some((outpoint) =>
+          fusionReserved.has(outpoint)
+        ));
+    if (conflictingFusionRound) {
+      return {
+        txid: null,
+        errorMessage:
+          requestedOutpoints.size > 0
+            ? 'A Fusion round is already using one of these UTXOs.'
+            : 'A Fusion round is in progress. Wait for it to finish before sending.',
+      };
+    }
+
     const conflictingPending = activeOutbound.find(
       (record) =>
         (!currentTxid || record.txid !== currentTxid) &&
@@ -381,6 +411,27 @@ class TransactionService {
             ? 'Another outgoing transaction is already using one of these UTXOs.'
             : 'Another outgoing transaction is still syncing. Wait for it to appear in history before sending a new one.',
       };
+    }
+
+    // Send-time live outpoint check: HOT SQL cache is not trust-forever.
+    if (spentInputs && spentInputs.length > 0) {
+      try {
+        const { verifyOutpointsStillUnspent } = await import(
+          '../platform/desktop/WalletLedgerService'
+        );
+        const check = await verifyOutpointsStillUnspent(
+          spentInputs.map((u) => ({
+            tx_hash: u.tx_hash,
+            tx_pos: u.tx_pos,
+            address: u.address,
+          }))
+        );
+        if (check.ok === false) {
+          return { txid: null, errorMessage: check.message };
+        }
+      } catch {
+        /* verification is best-effort; broadcast still protected by the node */
+      }
     }
 
     const res: BroadcastResult = await this.getTransactionManager().sendTransaction(
@@ -442,6 +493,11 @@ class TransactionService {
         record.spentOutpoints.map((outpoint) => `${outpoint.tx_hash}:${outpoint.tx_pos}`)
       )
     );
+    if (currentWalletId) {
+      for (const outpoint of reservedFusionOutpoints(currentWalletId)) {
+        reserved.add(outpoint);
+      }
+    }
     const seenBatchOutpoints = new Set<string>();
 
     for (const request of requests) {

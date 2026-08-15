@@ -137,7 +137,7 @@ const baseTranslations = {
     'onboarding.nameWalletDescription':
       'Give this wallet a name and a password. Each wallet on this device has its own independent password.',
     'onboarding.walletNamePlaceholder': 'Wallet name',
-    'onboarding.passwordPlaceholder': 'Password (or leave blank)',
+    'onboarding.passwordPlaceholder': 'Password (min 8 characters)',
     'onboarding.confirmPasswordPlaceholder': 'Confirm password',
     'onboarding.nameRequired': 'Give this wallet a name.',
     'onboarding.passwordMismatch': 'Passwords do not match.',
@@ -305,7 +305,7 @@ const baseTranslations = {
     'onboarding.nameWalletDescription':
       'Dale un nombre y una contraseña a esta billetera. Cada billetera de este dispositivo tiene su propia contraseña independiente.',
     'onboarding.walletNamePlaceholder': 'Nombre de la billetera',
-    'onboarding.passwordPlaceholder': 'Contraseña (o déjalo en blanco)',
+    'onboarding.passwordPlaceholder': 'Contraseña (mínimo 8 caracteres)',
     'onboarding.confirmPasswordPlaceholder': 'Confirmar contraseña',
     'onboarding.nameRequired': 'Dale un nombre a esta billetera.',
     'onboarding.passwordMismatch': 'Las contraseñas no coinciden.',
@@ -467,7 +467,7 @@ const baseTranslations = {
     'onboarding.nameWalletDescription':
       '为钱包设置名称和密码。此设备上的每个钱包都有独立的密码。',
     'onboarding.walletNamePlaceholder': '钱包名称',
-    'onboarding.passwordPlaceholder': '密码（可留空）',
+    'onboarding.passwordPlaceholder': '密码（至少 8 个字符）',
     'onboarding.confirmPasswordPlaceholder': '确认密码',
     'onboarding.nameRequired': '请为钱包设置名称。',
     'onboarding.passwordMismatch': '两次输入的密码不一致。',

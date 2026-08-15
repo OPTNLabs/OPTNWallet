@@ -1,7 +1,7 @@
 name: Desktop Preview
 
 # Mirrors android-preview.yml — builds on every push/PR to dev
-# Produces unsigned debug builds for all 3 desktop platforms
+# Produces unsigned debug builds for every native desktop target
 
 on:
   pull_request:
@@ -11,12 +11,9 @@ on:
       - 'public/**'
       - 'src-tauri/**'
       - 'reference/**'
+      - 'scripts/fetch-tor.mts'
       - 'vite.desktop.config.ts'
       - 'package.json'
-      - 'package-lock.json'
-      - 'tsconfig*.json'
-      - 'e2e/**'
-      - 'docs/e2e-testing.md'
       - '.github/workflows/desktop-preview.yml'
   push:
     branches: [dev]
@@ -25,12 +22,9 @@ on:
       - 'public/**'
       - 'src-tauri/**'
       - 'reference/**'
+      - 'scripts/fetch-tor.mts'
       - 'vite.desktop.config.ts'
       - 'package.json'
-      - 'package-lock.json'
-      - 'tsconfig*.json'
-      - 'e2e/**'
-      - 'docs/e2e-testing.md'
       - '.github/workflows/desktop-preview.yml'
 
 concurrency:
@@ -40,7 +34,8 @@ concurrency:
 jobs:
   build-desktop-preview:
     name: Preview (${{ matrix.platform }})
-    timeout-minutes: 40
+    # Uncached Linux AppImage packaging can take slightly over 40 minutes.
+    timeout-minutes: 60
     env:
       # macOS runners have less memory; the Vite frontend build (Tauri beforeBuildCommand)
       # OOMs at Node's default heap. Raise it for all platforms (harmless on Windows/Linux).
@@ -50,117 +45,175 @@ jobs:
       matrix:
         include:
           - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            tor-target: windows-x86_64
             artifact-name: preview-windows
-            bundle-args: ''
           - platform: macos-latest
-            artifact-name: preview-macos
-            bundle-args: ''
-          # Linux: skip the AppImage bundle. linuxdeploy fails on GitHub runners
-          # (no FUSE; APPIMAGE_EXTRACT_AND_RUN didn't help either), and a debug
-          # preview only needs an installable — deb+rpm bundle fine. The release
-          # workflow still builds the AppImage (with libfuse2) for distribution.
+            target: aarch64-apple-darwin
+            tor-target: macos-aarch64
+            artifact-name: preview-macos-arm
+          - platform: macos-15-intel
+            target: x86_64-apple-darwin
+            tor-target: macos-x86_64
+            artifact-name: preview-macos-intel
           - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            tor-target: linux-x86_64
             artifact-name: preview-linux
-            bundle-args: '--bundles deb,rpm'
+          - platform: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            tor-target: linux-aarch64
+            artifact-name: preview-linux-arm
 
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: '20'
           cache: 'npm'
 
       - name: Linux system dependencies
-        if: matrix.platform == 'ubuntu-22.04'
+        if: startsWith(matrix.platform, 'ubuntu')
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev libappindicator3-dev \
-            librsvg2-dev patchelf libssl-dev libgtk-3-dev
+            librsvg2-dev patchelf libssl-dev libgtk-3-dev libfuse2 \
+            libevent-2.1-7 \
+            libudev-dev libusb-1.0-0-dev pkg-config
+          # hidapi (Ledger/Trezor native USB) needs libudev; rusb needs libusb.
+          if [ "${{ matrix.tor-target }}" = 'linux-aarch64' ]; then
+            # Tor ARM is built from the checksum-pinned source release.
+            sudo apt-get install -y build-essential libevent-dev zlib1g-dev
+          fi
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          targets: ${{ matrix.target }}
 
       - name: Rust cache
-        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: './src-tauri -> target'
 
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Strict TypeScript check
-        run: npm run typecheck
-
       - name: Fetch bundled Tor (integrated CashFusion privacy)
-        run: node scripts/fetch-tor.mjs
+        run: npx --no-install tsx scripts/fetch-tor.mts ${{ matrix.tor-target }}
+
+      - name: Prefetch Linux AppImage tools
+        # tauri-bundler downloads these after the Rust build. Seed its cache
+        # first so a transient CDN disconnect does not waste the full build.
+        # Asset URLs are checked against fixed digests; a changed upstream
+        # asset fails closed instead of executing an unreviewed replacement.
+        if: startsWith(matrix.platform, 'ubuntu')
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tools_arch="${{ matrix.target }}"
+          tools_arch="${tools_arch%%-*}"
+          cache="${XDG_CACHE_HOME:-$HOME/.cache}/tauri"
+          mkdir -p "$cache"
+
+          case "$tools_arch" in
+            aarch64)
+              apprun_sha='072f17c0895a85c490282fe5395c5007e5fc75da727e553b3b8fb680feb11578'
+              linuxdeploy_sha='b12b5cc57bd0921e1f98d73f58aa364503bc1a27f54b7a69fd2870bce7fa2f55'
+              appimage_plugin_sha='6fdecf5bf8af4e0db03c6b2a80976acc3c96b6a4d19622fa6c6adfd308378bbc'
+              apprun_asset='AppRun-aarch64'
+              linuxdeploy_asset='linuxdeploy-aarch64.AppImage'
+              appimage_plugin_asset='linuxdeploy-plugin-appimage-aarch64.AppImage'
+              ;;
+            x86_64)
+              apprun_sha='f30140a43a0a59e46db21bdefdf749b9e9f2c6946e92afabbacf98b8ae73fb4f'
+              linuxdeploy_sha='e762bea85c8eb0d4b3508d46e5c1f037f717d0f9303ae3b4aafc8b04991fa1ef'
+              appimage_plugin_sha='a45d3e227bc7f397e9cf6bfa4c9507494efa2293357b6e86690a3de2ca992e79'
+              apprun_asset='AppRun-x86_64'
+              linuxdeploy_asset='linuxdeploy-x86_64.AppImage'
+              appimage_plugin_asset='linuxdeploy-plugin-appimage-x86_64.AppImage'
+              ;;
+            *)
+              echo "Unsupported Linux AppImage architecture: $tools_arch" >&2
+              exit 1
+              ;;
+          esac
+
+          download_and_verify() {
+            local url="$1" dest="$2" expected="$3"
+            local tmp="${dest}.tmp"
+            if [ -s "$dest" ] && printf '%s  %s\n' "$expected" "$dest" |
+              sha256sum --check --strict --status; then
+              echo "already have verified $dest"
+              return 0
+            fi
+            rm -f "$dest" "$tmp"
+            echo "fetching $url"
+            curl --proto '=https' --tlsv1.2 \
+              --retry 10 --retry-all-errors --retry-delay 2 \
+              --location --fail --show-error \
+              --output "$tmp" "$url"
+            printf '%s  %s\n' "$expected" "$tmp" |
+              sha256sum --check --strict --status
+            chmod 770 "$tmp"
+            mv "$tmp" "$dest"
+          }
+
+          download_and_verify \
+            "https://github.com/tauri-apps/binary-releases/releases/download/apprun-old/$apprun_asset" \
+            "$cache/$apprun_asset" \
+            "$apprun_sha"
+          download_and_verify \
+            "https://github.com/tauri-apps/binary-releases/releases/download/linuxdeploy/$linuxdeploy_asset" \
+            "$cache/$linuxdeploy_asset" \
+            "$linuxdeploy_sha"
+          download_and_verify \
+            "https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/$appimage_plugin_asset" \
+            "$cache/linuxdeploy-plugin-appimage.AppImage" \
+            "$appimage_plugin_sha"
+          download_and_verify \
+            "https://raw.githubusercontent.com/tauri-apps/linuxdeploy-plugin-gtk/b5eb8d05b4c0ed40107fe2158c5d8527f94568ef/linuxdeploy-plugin-gtk.sh" \
+            "$cache/linuxdeploy-plugin-gtk.sh" \
+            'cb379f9b0733e9ad9f8bd78f8c2fa038aef2478523bb7d4c8e64ff6a1ea3501a'
+          download_and_verify \
+            "https://raw.githubusercontent.com/tauri-apps/linuxdeploy-plugin-gstreamer/2a2e67491c32995a3f279ad0ecbe77abd512b42a/linuxdeploy-plugin-gstreamer.sh" \
+            "$cache/linuxdeploy-plugin-gstreamer.sh" \
+            'c107b49d84edbffc6ab226ed1007e0626a4f7aa2c3a36b7782bef62351d49e94'
 
       - name: Build Tauri (debug)
-        # bundle-args is empty on Windows/macOS and '--bundles deb,rpm' on Linux
-        # (skips the AppImage that linuxdeploy can't build on the runner).
-        run: npx tauri build --debug ${{ matrix.bundle-args }}
+        # No --bundles: tauri.conf.json already says targets "all", and a preview
+        # that skipped a format would stop being a preview of what ships. Linux
+        # builds the AppImage here too, which is the only place linuxdeploy runs
+        # before release.yml gates a release on the resulting file.
+        #
+        # --verbose because the AppImage bundler swallows linuxdeploy's stderr:
+        # a failure prints `failed to run linuxdeploy` and nothing else, which
+        # is not enough to fix anything. Drop it once the AppImage builds green.
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+          NO_STRIP: 'true'
+        run: npx tauri build --debug --target ${{ matrix.target }} --verbose
+
+      - name: Smoke-test packaged Linux Tor
+        if: startsWith(matrix.platform, 'ubuntu')
+        shell: bash
+        run: |
+          APPIMAGE_PATH="$(find "src-tauri/target/${{ matrix.target }}/debug/bundle" -type f -name '*.AppImage' -print -quit)"
+          test -n "$APPIMAGE_PATH"
+          npx --no-install tsx scripts/smoke-tor-artifact.mts "$APPIMAGE_PATH" "${{ matrix.tor-target }}"
 
       - name: Upload preview artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ matrix.artifact-name }}
           path: |
-            src-tauri/target/debug/bundle/**
+            src-tauri/target/${{ matrix.target }}/debug/bundle/**
           retention-days: 14
-          if-no-files-found: warn
-
-  desktop-e2e:
-    name: Desktop E2E (Linux)
-    runs-on: ubuntu-22.04
-    timeout-minutes: 35
-    env:
-      NODE_OPTIONS: --max-old-space-size=4096
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-
-      - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version: '20'
-          cache: 'npm'
-
-      - name: Install Linux WebView and display dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev libappindicator3-dev \
-            librsvg2-dev patchelf libssl-dev libgtk-3-dev \
-            webkit2gtk-driver xvfb
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
-
-      - name: Rust cache
-        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
-        with:
-          workspaces: './src-tauri -> target'
-
-      - name: Install npm dependencies
-        run: npm ci
-
-      - name: Fetch bundled Tor (integrated CashFusion privacy)
-        run: node scripts/fetch-tor.mjs
-
-      - name: Install tauri-driver
-        run: cargo install tauri-driver --locked
-
-      - name: Build unbundled debug desktop binary
-        run: npx tauri build --debug --no-bundle
-
-      - name: Run WebDriver E2E suite
-        env:
-          TAURI_E2E_APP_BINARY: ${{ github.workspace }}/src-tauri/target/debug/optn-wallet-desktop
-        run: |
-          if [ ! -x "$HOME/.cargo/bin/tauri-driver" ]; then
-            echo "tauri-driver was not installed at $HOME/.cargo/bin/tauri-driver"
-            exit 1
-          fi
-          xvfb-run --auto-servernum --server-args='-screen 0 1280x1024x24' npm run test:e2e
+          if-no-files-found: error

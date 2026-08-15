@@ -1,5 +1,4 @@
 // src/workers/UTXOWorkerService.ts
-import { Capacitor } from '@capacitor/core';
 import KeyService from '../services/KeyService';
 import UTXOService from '../services/UTXOService';
 import ElectrumService from '../services/ElectrumService';
@@ -10,6 +9,7 @@ import { store } from '../state/store';
 import {
   replaceAllUTXOs,
   setFetchingUTXOs,
+  setSyncingProgress,
   updateUTXOsForAddress,
   setInitialized,
   removeUTXOs,
@@ -32,6 +32,10 @@ let utxoStartRetry: NodeJS.Timeout | null = null;
 let workerEpoch = 0;
 let desiredStarted = false;
 let lifecycleQueue: Promise<void> = Promise.resolve();
+/** Owner of the Home "Syncing…" flag. Bumped each time we set fetching true so
+ *  an abandoned/HMR-cancelled bootstrap still clears the flag when it was the
+ *  latest owner, without clobbering a newer bootstrap that took over. */
+let fetchingOwner = 0;
 
 interface WorkerSession {
   walletId: number;
@@ -197,6 +201,21 @@ async function refreshWalletAddress(address: string, session: WorkerSession) {
   const prev = store.getState().utxos.utxos[address] ?? [];
   const prevSet = new Set(prev.map((u) => `${u.tx_hash}:${u.tx_pos}`));
 
+  // Option A / Selene: scripthash notify often re-fires the same status.
+  // If local history status already matches Electrum, skip history + listunspent
+  // entirely (stops console spam of clean:1 / addresses:0 × hundreds).
+  try {
+    const ledger = await import('../platform/desktop/WalletLedgerService');
+    const remote = await ElectrumService.getAddressState(address);
+    if (
+      await ledger.addressHistoryIsFresh(currentWalletId, address, remote)
+    ) {
+      return;
+    }
+  } catch {
+    /* fall through to full refresh */
+  }
+
   const updatedHistory =
     await transactionManager.fetchAndStoreTransactionHistory(
       currentWalletId,
@@ -217,6 +236,9 @@ async function refreshWalletAddress(address: string, session: WorkerSession) {
   invalidateUTXOCache(address);
   const utxos = await UTXOService.fetchAndStoreUTXOs(currentWalletId, address);
   if (!isCurrentWorkerContext(session)) return;
+  // Ledger projection is authority (EC). Status gate already skipped clean
+  // addresses; empty here means dirty+listunspent=[] (real spend) or ledger
+  // has no unspents — publish it. Failed listunspent throws / keeps prior.
   store.dispatch(updateUTXOsForAddress({ address, utxos }));
 
   for (const u of utxos) {
@@ -336,10 +358,20 @@ async function refreshWallet(session: WorkerSession): Promise<void> {
   await run;
 }
 
-export async function bootstrapAllUTXOs(expectedEpoch?: number) {
+export type ExpectedWalletSession = {
+  walletId: number;
+  sessionGeneration: number;
+};
+
+export async function bootstrapAllUTXOs(
+  expectedEpoch?: number,
+  expectedSession?: ExpectedWalletSession
+) {
   const state = store.getState();
-  const currentWalletId = state.wallet_id.currentWalletId;
-  const sessionGeneration = state.wallet_id.sessionGeneration ?? 0;
+  const currentWalletId =
+    expectedSession?.walletId ?? state.wallet_id.currentWalletId;
+  const sessionGeneration =
+    expectedSession?.sessionGeneration ?? state.wallet_id.sessionGeneration ?? 0;
   const bootstrapIsCurrent = () =>
     isCurrentWalletSession(currentWalletId, sessionGeneration) &&
     (expectedEpoch === undefined ||
@@ -361,87 +393,188 @@ export async function bootstrapAllUTXOs(expectedEpoch?: number) {
     return;
   }
 
+  // Take ownership of the Syncing flag. If this run is cancelled (HMR, wallet
+  // switch, epoch bump) we still clear the flag when we were the latest owner —
+  // the previous "only if still current" finally left Home on Syncing forever.
+  const myFetch = ++fetchingOwner;
   store.dispatch(setFetchingUTXOs(true));
+  // Progress sweeps upward across distinct phases so the Home bar visibly moves
+  // even while a single batched network call is in flight (it cannot sub-divide).
+  const report = (percent: number) => store.dispatch(setSyncingProgress(percent));
 
-  const allUTXOs: Record<string, UTXO[]> = {};
-
-  // Wallet-owned and explicitly tracked addresses share one fresh Electrum
-  // batch. Bootstrap must not reuse the short UTXO cache: this run replaces the
-  // old per-address baseline scans after subscriptions are established.
-  const walletAddresses = keyPairs.map((keyPair) => keyPair.address);
-  let quantumrootAddresses: string[] = [];
   try {
-    quantumrootAddresses =
-      await QuantumrootTrackingService.listTrackedAddresses(currentWalletId);
-  } catch (e) {
-    logError('UTXOWorker.bootstrapAllUTXOs.quantumroot', e, {
-      walletId: currentWalletId,
-    });
-  }
-  if (!bootstrapIsCurrent()) return;
+    report(5);
+    const allUTXOs: Record<string, UTXO[]> = {};
 
-  const trackedAddresses = Array.from(
-    new Set([...walletAddresses, ...quantumrootAddresses].filter(Boolean))
-  );
-  for (const address of trackedAddresses) invalidateUTXOCache(address);
-  const fetchedWalletUTXOs = await UTXOService.fetchAndStoreUTXOsMany(
-    currentWalletId,
-    trackedAddresses
-  );
-  if (!bootstrapIsCurrent()) return;
-  // Discovery may materialize addresses beyond the key set captured above.
-  // Publish every address returned by the fetch, not only the pre-discovery
-  // subscription list, so a restored wallet's first balance is complete.
-  for (const [address, utxos] of Object.entries(fetchedWalletUTXOs)) {
-    allUTXOs[address] = utxos;
-  }
+    try {
+      const { ensureDesktopLedgerTables } = await import(
+        '../platform/desktop/desktopSchema'
+      );
+      await ensureDesktopLedgerTables();
+    } catch {
+      /* optional on non-desktop */
+    }
 
-  // Contract instances
-  try {
-    const instances = await contractManager.fetchContractInstances();
-    const contractAddresses = instances.map((i) => i.address);
-    const contractResults = await Promise.allSettled(
-      contractAddresses.map(async (address) => {
-        await contractManager.updateContractUTXOs(address);
-        return address;
-      })
-    );
-    for (let i = 0; i < contractResults.length; i++) {
-      const result = contractResults[i];
-      const address = contractAddresses[i];
-      if (result.status === 'fulfilled') {
-        contractAddressSet.add(result.value);
-        continue;
+    // Connect + load tracked addresses in parallel — do not serialize a
+    // socket wait with Quantumroot SQL that never needed the network.
+    const walletAddresses = keyPairs.map((keyPair) => keyPair.address);
+    const connectPromise = ElectrumService.ensureFreshConnection().catch(
+      (e) => {
+        logError('UTXOWorker.bootstrapAllUTXOs.ensureFreshConnection', e, {
+          walletId: currentWalletId,
+        });
       }
-      logError('UTXOWorker.bootstrapAllUTXOs.contract', result.reason, {
-        address,
+    );
+    let quantumrootAddresses: string[] = [];
+    try {
+      // listTrackedAddresses must stay O(vaults). It previously re-derived a
+      // Quantumroot vault for every HD key index and froze sync at 5%.
+      quantumrootAddresses =
+        await QuantumrootTrackingService.listTrackedAddresses(currentWalletId);
+    } catch (e) {
+      logError('UTXOWorker.bootstrapAllUTXOs.quantumroot', e, {
+        walletId: currentWalletId,
       });
     }
-  } catch (e) {
-    logError('UTXOWorker.bootstrapAllUTXOs.contractInit', e);
-  }
-  if (!bootstrapIsCurrent()) return;
+    if (!bootstrapIsCurrent()) return;
 
-  store.dispatch(replaceAllUTXOs({ utxosByAddress: allUTXOs }));
+    report(10);
+    const trackedAddresses = Array.from(
+      new Set([...walletAddresses, ...quantumrootAddresses].filter(Boolean))
+    );
 
-  const tokenCategories = collectTokenCategories(allUTXOs);
-  if (tokenCategories.length > 0) {
-    if (Capacitor.getPlatform() === 'web') {
+    // ── Provisional paint (safe) ────────────────────────────────────────
+    // Show last durable SQL balance immediately while Syncing… stays on.
+    // Earlier we refused this because a silent stale→correct flash looked
+    // like a bug; with the Sync bar + force listunspent below, the network
+    // still wins and users get a usable Home in <100ms on reopen.
+    try {
+      const sqlSnap = await UTXOService.fetchUTXOsFromDatabase(
+        trackedAddresses.map((address) => ({ address }))
+      );
+      if (!bootstrapIsCurrent()) return;
+      const provisional: Record<string, UTXO[]> = {};
+      let provisionalCoins = 0;
+      for (const address of trackedAddresses) {
+        const merged = [
+          ...(sqlSnap.utxosMap[address] ?? []),
+          ...(sqlSnap.cashTokenUtxosMap[address] ?? []),
+        ];
+        if (merged.length > 0) {
+          provisional[address] = merged;
+          provisionalCoins += merged.length;
+        }
+      }
+      if (provisionalCoins > 0) {
+        store.dispatch(replaceAllUTXOs({ utxosByAddress: provisional }));
+        store.dispatch(setInitialized(true));
+        console.info('[UTXOWorker] provisional SQL paint', {
+          addresses: Object.keys(provisional).length,
+          coins: provisionalCoins,
+        });
+      }
+    } catch (e) {
+      logError('UTXOWorker.bootstrapAllUTXOs.provisionalSql', e, {
+        walletId: currentWalletId,
+      });
+    }
+    if (!bootstrapIsCurrent()) return;
+    report(15);
+
+    // Socket should be warm before the HOT listunspent pass.
+    await connectPromise;
+    if (!bootstrapIsCurrent()) return;
+    report(20);
+
+    for (const address of trackedAddresses) invalidateUTXOCache(address);
+
+    // ── Open (HOT / OPTN 1.7.0) ─────────────────────────────────────────
+    // force:true — full listunspent of known addresses. Network result
+    // replaces the provisional SQL paint above (authoritative).
+    const fetchStart = performance.now();
+    const fetchedWalletUTXOs = await UTXOService.fetchAndStoreUTXOsMany(
+      currentWalletId,
+      trackedAddresses,
+      {
+        discover: false,
+        force: true,
+        onProgress: (done, total) => {
+          if (total <= 0) return;
+          const pct = 20 + Math.round(50 * (done / total));
+          store.dispatch(setSyncingProgress(Math.min(pct, 69)));
+        },
+      }
+    );
+    console.info('[UTXOWorker] fetchAndStoreUTXOsMany took', {
+      ms: Math.round(performance.now() - fetchStart),
+      addresses: trackedAddresses.length,
+      addressCount: Object.keys(fetchedWalletUTXOs).length,
+    });
+    if (!bootstrapIsCurrent()) return;
+    report(70);
+    // Discovery may materialize addresses beyond the key set captured above.
+    // Publish every address returned by the fetch, not only the pre-discovery
+    // subscription list, so a restored wallet's first balance is complete.
+    for (const [address, utxos] of Object.entries(fetchedWalletUTXOs)) {
+      allUTXOs[address] = utxos;
+    }
+
+    // Contract instances (optional; do not block balance paint)
+    try {
+      // The contract cache is global, but this worker owns exactly one wallet.
+      // Scanning every wallet's contracts in every window caused cross-wallet
+      // Electrum floods and made ordinary balances appear to hang.
+      const instances =
+        await contractManager.fetchContractInstances(currentWalletId);
+      const contractAddresses = instances.map((i) => i.address);
+      const contractResults = await Promise.allSettled(
+        contractAddresses.map(async (address) => {
+          await contractManager.updateContractUTXOs(address);
+          return address;
+        })
+      );
+      for (let i = 0; i < contractResults.length; i++) {
+        const result = contractResults[i];
+        const address = contractAddresses[i];
+        if (result.status === 'fulfilled') {
+          contractAddressSet.add(result.value);
+          continue;
+        }
+        logError('UTXOWorker.bootstrapAllUTXOs.contract', result.reason, {
+          address,
+        });
+      }
+    } catch (e) {
+      logError('UTXOWorker.bootstrapAllUTXOs.contractInit', e);
+    }
+    if (!bootstrapIsCurrent()) return;
+    report(85);
+
+    store.dispatch(replaceAllUTXOs({ utxosByAddress: allUTXOs }));
+
+    // Token icons never block balance/sync completion (web or native).
+    const tokenCategories = collectTokenCategories(allUTXOs);
+    if (tokenCategories.length > 0) {
       void preloadTokenMetadata(tokenCategories).catch((error) => {
         logError('UTXOWorker.bootstrapAllUTXOs.preloadTokenMetadata', error, {
           walletId: currentWalletId,
           categoryCount: tokenCategories.length,
         });
       });
-    } else {
-      await preloadTokenMetadata(tokenCategories);
+    }
+    if (!bootstrapIsCurrent()) return;
+
+    dbService.scheduleDatabaseSave(currentWalletId);
+    store.dispatch(setInitialized(true));
+  } finally {
+    // A failed Electrum batch is not an empty wallet. Clear Syncing when this
+    // attempt still owns the flag — including cancelled/HMR runs that never got
+    // a successor bootstrap.
+    if (myFetch === fetchingOwner) {
+      store.dispatch(setFetchingUTXOs(false));
+      store.dispatch(setSyncingProgress(null));
     }
   }
-  if (!bootstrapIsCurrent()) return;
-
-  dbService.scheduleDatabaseSave(currentWalletId);
-  store.dispatch(setFetchingUTXOs(false));
-  store.dispatch(setInitialized(true));
 }
 
 async function establishSubscriptions(session: WorkerSession) {
@@ -493,35 +626,37 @@ async function establishSubscriptions(session: WorkerSession) {
       await QuantumrootTrackingService.listTrackedAddresses(currentWalletId);
     if (!isCurrentWorkerContext(session)) return;
 
-    let addedWalletSubscription = false;
-    for (const addr of [...walletAddresses, ...quantumrootAddresses]) {
-      const existingOwner = subscribedAddresses.get(addr);
-      if (
-        existingOwner?.walletId === session.walletId &&
-        existingOwner.generation === session.generation
-      ) {
-        continue;
-      }
-      subscribedAddresses.set(addr, {
-        walletId: session.walletId,
-        generation: session.generation,
-      });
-      addedWalletSubscription = true;
+    const allAddresses = [...walletAddresses, ...quantumrootAddresses];
 
-      try {
-        await ElectrumService.subscribeAddress(addr, async () => {
+    const toSubscribe = allAddresses.filter(
+      (addr) =>
+        !(
+          subscribedAddresses.has(addr) &&
+          subscribedAddresses.get(addr)?.walletId === session.walletId &&
+          subscribedAddresses.get(addr)?.generation === session.generation
+        )
+    );
+
+    if (toSubscribe.length > 0) {
+      // Bulk-subscribe; on later status *change* refresh only that address
+      // (Selene). Never refresh the whole set on one notify.
+      await ElectrumService.subscribeAddressesBulk(
+        toSubscribe,
+        (addr) => {
           refreshAddressSoon(addr, 80, session);
-        });
-        if (!isCurrentWorkerContext(session)) return;
-      } catch (e) {
-        logError('UTXOWorker.establishSubscriptions.walletAddress', e, {
-          address: addr,
+        }
+      );
+      if (!isCurrentWorkerContext(session)) return;
+      for (const addr of toSubscribe) {
+        subscribedAddresses.set(addr, {
+          walletId: session.walletId,
+          generation: session.generation,
         });
       }
     }
-    if (addedWalletSubscription) {
-      refreshWalletSoon(120, session);
-    }
+
+    // No trailing refreshWalletSoon: open already painted ledger + delta.
+    // A second non-force reconcile here was overwriting a good balance.
   } catch (e) {
     logError('UTXOWorker.establishSubscriptions.walletInit', e);
   }

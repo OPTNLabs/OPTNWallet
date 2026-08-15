@@ -1,17 +1,13 @@
-// CashFusion client — Phase 1: connect + handshake + read server parameters.
+// CashFusion classic (server) client — full path shipped for PR #12.
 //
 // Why this lives in Rust rather than the frontend: CashFusion's wire protocol
 // is raw TCP with TLS and protobuf framing. A WebView can only open
-// HTTP/WebSocket connections, so it cannot speak this protocol at all. The
-// previous "CashFusion" UI could only probe whether *something* was listening
-// on the port (a wss:// handshake), never talk to it.
+// HTTP/WebSocket connections, so it cannot speak this protocol at all.
 //
-// Scope of Phase 1 (deliberately narrow — see docs/cashfusion-implementation-scope.md):
-//   connect -> TLS -> ClientHello -> ServerHello -> disconnect.
-// That reads the server's real fusion parameters (tiers, fee rates, component
-// limits). It does NOT join a pool or participate in a fusion round; the
-// round logic involves blind signatures and covert connections and is
-// intentionally left to later phases rather than rushed.
+// Scope (see docs/cashfusion-implementation-scope.md): handshake + pool/round
+// participation — Pedersen, blind Schnorr, covert circuits, Tor, blame, plan
+// validation (`pedersen`, `schnorr`, `covert`, `run`, `session`, `tor`, …).
+// P2P CashFusion (Nostr) is a separate TS path under platform/desktop/nostr/.
 //
 // Every wire-level constant here is taken from the reference implementation
 // (Electron Cash, electroncash_plugins/fusion/), not inferred:
@@ -30,17 +26,23 @@ use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
 
+pub mod blame;
 pub mod components;
 pub mod covert;
+pub mod electrum_input;
 pub mod encrypt;
+pub mod p2p_component;
+pub mod p2p_sign;
 pub mod pedersen;
 pub mod round;
+pub mod round_cancel;
 pub mod run;
 pub mod schnorr;
+pub mod server_plan;
 pub mod session;
-pub mod tx;
 pub mod tor;
 pub mod tor_manager;
+pub mod tx;
 
 /// A connected, framed transport to a fusion server — either a plain TCP stream
 /// or a TLS stream, over Direct or Tor. Boxed so `connect_stream` can return one
@@ -81,16 +83,17 @@ const MAX_MSG_LENGTH: u32 = 200 * 1024;
 /// version rejects the ClientHello, which is the intended behavior.
 pub(crate) const VERSION: &[u8] = b"alpha13";
 
-/// Transaction execution is deliberately disabled until the wallet can retain
-/// fresh outputs, reserve inputs, verify the full component/fee integrity, and
-/// keep signing and broadcast privacy inside native safety boundaries.
+/// Native execution remains guarded here so a renderer cannot bypass the
+/// wallet's safety boundary. The required reservation, output tracking,
+/// integrity validation, cancellation, signing, Tor routing, and post-broadcast
+/// verification protections are now implemented.
 pub(crate) const FUSION_EXECUTION_PAUSED_MESSAGE: &str =
     "CashFusion execution is paused until wallet safety protections are complete.";
 
 /// Keep this deny-by-default switch in the native process so a renderer cannot
 /// bypass the disabled settings control by invoking the command directly.
 pub(crate) const fn fusion_execution_ready() -> bool {
-    false
+    true
 }
 
 pub(crate) const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -130,10 +133,36 @@ pub(crate) async fn recv_frame<S>(stream: &mut S) -> Result<Vec<u8>, String>
 where
     S: AsyncReadExt + Unpin,
 {
-    let mut header = [0u8; 12];
-    tokio::time::timeout(IO_TIMEOUT, stream.read_exact(&mut header))
+    recv_frame_with_timeout(stream, IO_TIMEOUT).await
+}
+
+/// Read one framed message with the wait window required by the current
+/// protocol phase. CashFusion deliberately pauses for about 30 seconds between
+/// `FusionBegin` and `StartRound`, so the short handshake timeout cannot be
+/// reused for that phase.
+pub(crate) async fn recv_frame_with_timeout<S>(
+    stream: &mut S,
+    wait: Duration,
+) -> Result<Vec<u8>, String>
+where
+    S: AsyncReadExt + Unpin,
+{
+    tokio::time::timeout(wait, recv_frame_unbounded(stream))
         .await
         .map_err(|_| "timed out waiting for fusion server".to_string())?
+}
+
+/// Read a frame without imposing the handshake timeout. Long-lived protocol
+/// phases wrap this in one authoritative phase deadline and cancellation
+/// select, covering both header and body without a hidden shorter timer.
+pub(crate) async fn recv_frame_unbounded<S>(stream: &mut S) -> Result<Vec<u8>, String>
+where
+    S: AsyncReadExt + Unpin,
+{
+    let mut header = [0u8; 12];
+    stream
+        .read_exact(&mut header)
+        .await
         .map_err(|e| format!("receive failed: {e}"))?;
 
     if header[..8] != MAGIC {
@@ -146,9 +175,9 @@ where
     }
 
     let mut payload = vec![0u8; len as usize];
-    tokio::time::timeout(IO_TIMEOUT, stream.read_exact(&mut payload))
+    stream
+        .read_exact(&mut payload)
         .await
-        .map_err(|_| "timed out reading frame body".to_string())?
         .map_err(|e| format!("receive failed: {e}"))?;
     Ok(payload)
 }
@@ -156,7 +185,10 @@ where
 /// Run the Phase 1 handshake over an already-established stream.
 /// Split out from the connection setup so it can be tested against an
 /// in-memory duplex stream with no real network involved.
-async fn handshake<S>(stream: &mut S, genesis_hash: Option<Vec<u8>>) -> Result<FusionServerStatus, String>
+async fn handshake<S>(
+    stream: &mut S,
+    genesis_hash: Option<Vec<u8>>,
+) -> Result<FusionServerStatus, String>
 where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
 {
@@ -182,9 +214,10 @@ where
             donation_address: h.donation_address,
         }),
         // The server reports version mismatches and the like through this.
-        Some(pb::server_message::Msg::Error(e)) => {
-            Err(format!("server rejected us: {}", e.message.unwrap_or_default()))
-        }
+        Some(pb::server_message::Msg::Error(e)) => Err(format!(
+            "server rejected us: {}",
+            e.message.unwrap_or_default()
+        )),
         _ => Err("unexpected reply — expected ServerHello".into()),
     }
 }
@@ -222,10 +255,12 @@ pub(crate) async fn connect_stream(
     transport: Transport<'_>,
 ) -> Result<FusionStream, String> {
     let tcp = match transport {
-        Transport::Direct => tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect((host, port)))
-            .await
-            .map_err(|_| format!("timed out connecting to {host}:{port}"))?
-            .map_err(|e| format!("could not connect to {host}:{port}: {e}"))?,
+        Transport::Direct => {
+            tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect((host, port)))
+                .await
+                .map_err(|_| format!("timed out connecting to {host}:{port}"))?
+                .map_err(|e| format!("could not connect to {host}:{port}: {e}"))?
+        }
         Transport::Tor {
             host: proxy_host,
             port: proxy_port,
@@ -301,27 +336,57 @@ mod tests {
         expected.extend_from_slice(&payload);
 
         let (mut client, mut server) = tokio::io::duplex(64);
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         rt.block_on(async {
             send_frame(&mut client, &payload).await.unwrap();
             let mut got = vec![0u8; expected.len()];
-            tokio::io::AsyncReadExt::read_exact(&mut server, &mut got).await.unwrap();
+            tokio::io::AsyncReadExt::read_exact(&mut server, &mut got)
+                .await
+                .unwrap();
             assert_eq!(got, expected);
         });
     }
 
     #[test]
     fn rejects_a_frame_that_is_not_cashfusion() {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         rt.block_on(async {
             let (mut client, mut server) = tokio::io::duplex(64);
             // Anything that isn't the magic must be refused rather than parsed.
             let mut junk = vec![0u8; 12];
             junk[..8].copy_from_slice(b"NOTFUSIO");
-            tokio::io::AsyncWriteExt::write_all(&mut server, &junk).await.unwrap();
+            tokio::io::AsyncWriteExt::write_all(&mut server, &junk)
+                .await
+                .unwrap();
 
             let err = recv_frame(&mut client).await.unwrap_err();
             assert!(err.contains("bad magic"), "unexpected error: {err}");
+        });
+    }
+
+    #[test]
+    fn frame_receive_can_use_a_protocol_specific_wait_window() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let (mut client, mut server) = tokio::io::duplex(64);
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+                send_frame(&mut server, b"after-warmup").await.unwrap();
+            });
+
+            let frame = recv_frame_with_timeout(&mut client, Duration::from_millis(100))
+                .await
+                .unwrap();
+            assert_eq!(frame, b"after-warmup");
         });
     }
 
@@ -330,7 +395,10 @@ mod tests {
         // Drives the real client handshake against a stub speaking the real
         // frame format, so the ClientHello encoding and ServerHello decoding
         // are both exercised end to end without touching the network.
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         rt.block_on(async {
             let (mut client, mut server) = tokio::io::duplex(4096);
 
@@ -354,7 +422,9 @@ mod tests {
                         donation_address: None,
                     })),
                 };
-                send_frame(&mut server, &hello.encode_to_vec()).await.unwrap();
+                send_frame(&mut server, &hello.encode_to_vec())
+                    .await
+                    .unwrap();
             });
 
             let status = handshake(&mut client, None).await.unwrap();
@@ -368,7 +438,10 @@ mod tests {
 
     #[test]
     fn surfaces_a_server_error_reply() {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         rt.block_on(async {
             let (mut client, mut server) = tokio::io::duplex(4096);
 
@@ -389,8 +462,8 @@ mod tests {
     }
 
     #[test]
-    fn execution_is_fail_closed_until_the_wallet_safety_work_is_complete() {
-        assert!(!fusion_execution_ready());
+    fn execution_gate_opens_after_the_wallet_safety_work_is_complete() {
+        assert!(fusion_execution_ready());
         assert!(FUSION_EXECUTION_PAUSED_MESSAGE.contains("safety"));
     }
 }

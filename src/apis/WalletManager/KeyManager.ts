@@ -32,6 +32,31 @@ function toCount(value: unknown): number {
     : Number.parseInt(String(value), 10) || 0;
 }
 
+/** Serialize createKeys per wallet so concurrent auto-fuse / UI address mint
+ *  cannot both pass the existence check and then hit keys.token_address UNIQUE. */
+const createKeysTails = new Map<number, Promise<void>>();
+
+function enqueueCreateKeys(
+  walletId: number,
+  task: () => Promise<void>
+): Promise<void> {
+  const previous = createKeysTails.get(walletId) ?? Promise.resolve();
+  const run = previous.then(task, task);
+  createKeysTails.set(
+    walletId,
+    run.then(
+      () => undefined,
+      () => undefined
+    )
+  );
+  return run;
+}
+
+function isUniqueConstraintError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /UNIQUE constraint failed/i.test(message);
+}
+
 const textDecoder = new TextDecoder();
 
 async function decodePrivateKeyPayload(
@@ -62,6 +87,7 @@ export default function KeyManager() {
 
   return {
     getXpubs,
+    getXpubsForAccountPath,
     deriveAddressFromXpub,
     retrieveKeys,
     createKeys,
@@ -87,8 +113,10 @@ export default function KeyManager() {
       [];
     query.free();
 
-    const mnemonic = await SecretCryptoService.decryptText(toString(row[0]));
-    const passphrase = await SecretCryptoService.decryptText(toString(row[1]));
+    const [mnemonic, passphrase] = await SecretCryptoService.decryptTextBatch(
+      [toString(row[0]), toString(row[1])],
+      wallet_id
+    );
     const networkType =
       row[2] === Network.MAINNET
         ? Network.MAINNET
@@ -129,6 +157,32 @@ export default function KeyManager() {
       passphrase,
       accountNumber,
       derivationPath
+    );
+  }
+
+  /**
+   * Xpubs for an arbitrary candidate account path, for derivation-path
+   * discovery on an existing wallet.
+   *
+   * Deliberately separate from getXpubs, which is pinned to the wallet's stored
+   * path: discovery has to look at paths the wallet is NOT on. The seed is read,
+   * used, and dropped inside this function so callers never handle it — a
+   * scan runs entirely on public keys.
+   */
+  async function getXpubsForAccountPath(
+    wallet_id: number,
+    accountPath: string,
+    accountNumber = 0
+  ): Promise<Record<BchStandardBranchName, string>> {
+    const normalized = normalizeBchAccountPath(accountPath);
+    const { mnemonic, passphrase, networkType } =
+      await getWalletSeedMaterial(wallet_id);
+    return deriveBchStandardXpubs(
+      networkType,
+      mnemonic,
+      passphrase,
+      accountNumber,
+      normalized
     );
   }
 
@@ -261,42 +315,70 @@ export default function KeyManager() {
       return cached;
     }
 
+    // IMPORTANT: do NOT backfill by deriving a vault for every HD address_index
+    // in `keys`. That path re-ran heavy Quantumroot crypto for every receive
+    // index on every cold open (empty cache / new window), which froze Home
+    // sync at 5% for tens of seconds on ordinary wallets that never used
+    // Quantumroot. Only return vaults that were explicitly created/configured.
     await dbService.ensureDatabaseStarted();
     const db = dbService.getDatabase();
     if (db == null) {
       throw new Error('Database is null');
     }
 
-    const ensureVaultsFromKeysQuery = db.prepare(`
-      SELECT DISTINCT address_index
-      FROM keys
-      WHERE wallet_id = ?
-      ORDER BY address_index ASC;
-    `);
-    ensureVaultsFromKeysQuery.bind([wallet_id]);
-
-    const keyIndexes: number[] = [];
-    while (ensureVaultsFromKeysQuery.step()) {
-      const row = ensureVaultsFromKeysQuery.getAsObject() as Record<
-        string,
-        unknown
-      >;
-      const addressIndex =
-        typeof row.address_index === 'number'
-          ? row.address_index
-          : Number(row.address_index);
-      if (Number.isFinite(addressIndex)) {
-        keyIndexes.push(addressIndex);
-      }
-    }
-    ensureVaultsFromKeysQuery.free();
-
     const records: QuantumrootVaultRecord[] = [];
-    for (const addressIndex of keyIndexes) {
-      const record = await createQuantumrootVault(wallet_id, addressIndex, 0);
-      records.push(record);
+    try {
+      const query = db.prepare(`
+        SELECT
+          id,
+          wallet_id,
+          account_index,
+          address_index,
+          receive_address,
+          quantum_lock_address,
+          receive_locking_bytecode,
+          quantum_lock_locking_bytecode,
+          quantum_public_key,
+          quantum_key_identifier,
+          vault_token_category,
+          online_quantum_signer,
+          created_at,
+          updated_at
+        FROM quantumroot_vaults
+        WHERE wallet_id = ?
+        ORDER BY account_index ASC, address_index ASC;
+      `);
+      query.bind([wallet_id]);
+      while (query.step()) {
+        const row = query.getAsObject() as Record<string, unknown>;
+        const onlineSigner = Number(row.online_quantum_signer);
+        records.push({
+          id: typeof row.id === 'number' ? row.id : Number(row.id) || undefined,
+          wallet_id: Number(row.wallet_id),
+          account_index: Number(row.account_index),
+          address_index: Number(row.address_index),
+          receive_address: String(row.receive_address ?? ''),
+          quantum_lock_address: String(row.quantum_lock_address ?? ''),
+          receive_locking_bytecode: String(row.receive_locking_bytecode ?? ''),
+          quantum_lock_locking_bytecode: String(
+            row.quantum_lock_locking_bytecode ?? ''
+          ),
+          quantum_public_key: String(row.quantum_public_key ?? ''),
+          quantum_key_identifier: String(row.quantum_key_identifier ?? ''),
+          vault_token_category: String(row.vault_token_category ?? ''),
+          online_quantum_signer: onlineSigner === 1 ? 1 : 0,
+          created_at: String(row.created_at ?? ''),
+          updated_at: String(row.updated_at ?? ''),
+        });
+      }
+      query.free();
+    } catch {
+      // Table missing on a pre-migration DB — treat as no vaults.
     }
-    QuantumrootVaultCacheService.replace(wallet_id, records);
+
+    if (records.length > 0) {
+      QuantumrootVaultCacheService.replace(wallet_id, records);
+    }
     return records;
   }
 
@@ -367,6 +449,62 @@ export default function KeyManager() {
     addressNumber: number,
     networkType: Network // Accept networkType as a parameter
   ): Promise<void> {
+    return enqueueCreateKeys(wallet_id, () =>
+      createKeysUnlocked(
+        wallet_id,
+        accountNumber,
+        changeNumber,
+        addressNumber,
+        networkType
+      )
+    );
+  }
+
+  function lookupExistingKeyRow(
+    db: NonNullable<ReturnType<typeof dbService.getDatabase>>,
+    address: string,
+    tokenAddress: string
+  ): {
+    walletId: number | null;
+    address: string | null;
+    tokenAddress: string | null;
+  } {
+    const existingKeyDetailsQuery = db.prepare(`
+      SELECT wallet_id, address, token_address
+      FROM keys
+      WHERE address = ? OR token_address = ?
+      LIMIT 1;
+    `);
+    existingKeyDetailsQuery.bind([address, tokenAddress]);
+
+    let existingWalletId: number | null = null;
+    let existingAddress: string | null = null;
+    let existingTokenAddress: string | null = null;
+    if (existingKeyDetailsQuery.step()) {
+      const row = existingKeyDetailsQuery.getAsObject();
+      existingWalletId =
+        typeof row.wallet_id === 'number'
+          ? row.wallet_id
+          : Number(row.wallet_id);
+      existingAddress = typeof row.address === 'string' ? row.address : null;
+      existingTokenAddress =
+        typeof row.token_address === 'string' ? row.token_address : null;
+    }
+    existingKeyDetailsQuery.free();
+    return {
+      walletId: existingWalletId,
+      address: existingAddress,
+      tokenAddress: existingTokenAddress,
+    };
+  }
+
+  async function createKeysUnlocked(
+    wallet_id: number,
+    accountNumber: number,
+    changeNumber: number,
+    addressNumber: number,
+    networkType: Network
+  ): Promise<void> {
     await dbService.ensureDatabaseStarted();
     const db = dbService.getDatabase();
     if (db == null) {
@@ -388,7 +526,28 @@ export default function KeyManager() {
       addressNumber
     );
 
-    if (keys && 'privateKey' in keys) {
+    if (!(keys && 'privateKey' in keys)) {
+      throw new Error('Failed to generate keys');
+    }
+
+    try {
+      const ensureAddressRecord = async (): Promise<void> => {
+        const prefix =
+          networkType === Network.MAINNET ? PREFIX.mainnet : PREFIX.chipnet;
+        const address: Address = {
+          wallet_id,
+          address: keys.address,
+          token_address: keys.tokenAddress,
+          balance: 0,
+          hd_index: addressNumber,
+          change_index: changeNumber,
+          prefix,
+        };
+
+        await ManageAddress.registerAddress(address);
+        await dbService.flushDatabaseToFile(wallet_id);
+      };
+
       const existingKeyQuery = db.prepare(`
         SELECT COUNT(*) as count FROM keys WHERE address = ?;
       `);
@@ -406,41 +565,35 @@ export default function KeyManager() {
       existingTokenKeyQuery.free();
 
       if (count > 0 || tokenCount > 0) {
-        const existingKeyDetailsQuery = db.prepare(`
-          SELECT wallet_id, address, token_address
-          FROM keys
-          WHERE address = ? OR token_address = ?
-          LIMIT 1;
-        `);
-        existingKeyDetailsQuery.bind([keys.address, keys.tokenAddress]);
+        const existing = lookupExistingKeyRow(
+          db,
+          keys.address,
+          keys.tokenAddress
+        );
 
-        let existingWalletId: number | null = null;
-        let existingAddress: string | null = null;
-        let existingTokenAddress: string | null = null;
-        if (existingKeyDetailsQuery.step()) {
-          const row = existingKeyDetailsQuery.getAsObject();
-          existingWalletId =
-            typeof row.wallet_id === 'number'
-              ? row.wallet_id
-              : Number(row.wallet_id);
-          existingAddress =
-            typeof row.address === 'string' ? row.address : null;
-          existingTokenAddress =
-            typeof row.token_address === 'string' ? row.token_address : null;
-        }
-        existingKeyDetailsQuery.free();
-
+        // Same wallet already holds this derivation — idempotent (auto-fuse
+        // and address UI may both mint the next index).
         if (
-          existingWalletId === wallet_id &&
-          existingAddress === keys.address &&
-          existingTokenAddress === keys.tokenAddress
+          existing.walletId === wallet_id &&
+          existing.address === keys.address &&
+          existing.tokenAddress === keys.tokenAddress
         ) {
-          zeroize(keys.privateKey);
+          await ensureAddressRecord();
+          return;
+        }
+
+        // Token/address row present under our wallet but metadata mismatched
+        // (legacy import / partial row): treat as already ours if address matches.
+        if (
+          existing.walletId === wallet_id &&
+          existing.address === keys.address
+        ) {
+          await ensureAddressRecord();
           return;
         }
 
         throw new Error(
-          `Derived key already exists for wallet ${existingWalletId ?? 'unknown'}: ${keys.address} / ${keys.tokenAddress}`
+          `Derived key already exists for wallet ${existing.walletId ?? 'unknown'}: ${keys.address} / ${keys.tokenAddress}`
         );
       }
 
@@ -451,35 +604,48 @@ export default function KeyManager() {
         INSERT INTO keys (wallet_id, public_key, private_key, address, token_address, pubkey_hash, account_index, change_index, address_index) 
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
       `);
-      insertQuery.run([
-        wallet_id,
-        keys.publicKey,
-        encryptedPrivateKey,
-        keys.address,
-        keys.tokenAddress,
-        keys.publicKeyHash,
-        accountNumber,
-        changeNumber,
-        addressNumber,
-      ]);
-      insertQuery.free();
+      try {
+        insertQuery.run([
+          wallet_id,
+          keys.publicKey,
+          encryptedPrivateKey,
+          keys.address,
+          keys.tokenAddress,
+          keys.publicKeyHash,
+          accountNumber,
+          changeNumber,
+          addressNumber,
+        ]);
+      } catch (error) {
+        // Multi-window / interleaved mint: another writer won the race after
+        // our existence check. If the row is already ours, succeed quietly
+        // (raw "UNIQUE constraint failed: keys.token_address" was surfacing
+        // on Auto Fusion status).
+        if (isUniqueConstraintError(error)) {
+          const existing = lookupExistingKeyRow(
+            db,
+            keys.address,
+            keys.tokenAddress
+          );
+          if (
+            existing.walletId === wallet_id &&
+            existing.address === keys.address
+          ) {
+            await ensureAddressRecord();
+            return;
+          }
+          throw new Error(
+            `Derived key already exists for wallet ${existing.walletId ?? 'unknown'}: ${keys.address} / ${keys.tokenAddress}`
+          );
+        }
+        throw error;
+      } finally {
+        insertQuery.free();
+      }
 
-      const prefix =
-        networkType === Network.MAINNET ? PREFIX.mainnet : PREFIX.chipnet;
-      const newAddress: Address = {
-        wallet_id,
-        address: keys.address,
-        balance: 0,
-        hd_index: addressNumber,
-        change_index: changeNumber,
-        prefix,
-      };
-
-      await ManageAddress.registerAddress(newAddress);
-      await dbService.flushDatabaseToFile(wallet_id);
+      await ensureAddressRecord();
+    } finally {
       zeroize(keys.privateKey);
-    } else {
-      throw new Error('Failed to generate keys');
     }
   }
 

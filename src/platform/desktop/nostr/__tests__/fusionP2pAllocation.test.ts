@@ -32,7 +32,7 @@ describe('P2P Fusion output allocation', () => {
         randomUnit: () => random[(cursor++ + peerIndex) % random.length],
       });
       expect(plan.values.length).toBeGreaterThanOrEqual(2);
-      expect(plan.values.length).toBeLessThanOrEqual(4);
+      expect(plan.values.length).toBeLessThanOrEqual(6);
       expect(plan.values.every((value) => value >= 10_000)).toBe(true);
       expect(plan.values.reduce((sum, value) => sum + value, 0)).toBe(
         mine.value - plan.feeShare

@@ -9,6 +9,8 @@ export type ReviewState = {
     category: string;
     amount: bigint;
   };
+  /** One-time stealth P2PKH derived from the paycode + first input. */
+  rpaStealthAddress?: string;
 };
 
 export type SimpleSendMode = 'idle' | 'review' | 'sending' | 'sent' | 'error';

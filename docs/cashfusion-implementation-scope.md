@@ -1,78 +1,122 @@
-# CashFusion: implementation status and plan
+# CashFusion — current status
 
-## Phase 1 — DONE (real protocol client)
+Both paths are **implemented** on desktop (Tauri). This file is the status map.
+Wire details live in the protocol / knobs / privacy-layer docs.
 
-The wallet now speaks the actual CashFusion wire protocol. Not a probe, not a
-mock: `src-tauri/src/fusion/` connects over TCP+TLS, sends a real `ClientHello`,
-and decodes the server's `ServerHello`.
+| Path | Role | Status |
+| --- | --- | --- |
+| **P2P CashFusion** | Peer pool over Nostr + Tor; no fusion daemon | **Shipped in this lineage** — gather, v4 credentials, onion, Auto, ACK-shrink. Chipnet 10-way dogfooded. |
+| **Server CashFusion** | Electron Cash–compatible TCP/TLS client in Rust | **Shipped** — EC-aligned client. Local Chipnet fusion-server self-test is the supported dogfood; do not invent a 5-joiner. |
 
-**Verified live** against the public default server from Electron Cash's own
-`conf.py` (`fusion.servo.cash:8789`, SSL) — run it with
-`cargo test --test fusion_live -- --ignored --nocapture`:
+**Platform:** Desktop only. Mobile/web cannot speak classic TCP fusion and say so.
 
+**Funds safety:** Automated tests stay on **Chipnet / mocks**. Mainnet fusion is not a CI fixture.
+
+**Enablement:** CashFusion is a **product** setting (Servers / CashFusion card), **not** Experimental. The per-wallet master switch defaults **off**. Auto Fuse and P2P mode default **on** once the wallet is enabled. Protocol floors/caps/timings are **not** wallet settings — see [p2p-cashfusion-knobs.md](./p2p-cashfusion-knobs.md).
+
+This is **not** a third-party crypto audit. Design, tests, and the threat model are in-repo.
+
+---
+
+## Two paths, same outer loop
+
+```text
+                    ┌─────────────────────────┐
+                    │   Wallet outer loop     │
+                    │  FusionRunnerService    │
+                    │  Manual + Auto, depth,  │
+                    │  cooldown, lease        │
+                    └───────────┬─────────────┘
+                                │
+              ┌─────────────────┴─────────────────┐
+              ▼                                   ▼
+   ┌─────────────────────┐             ┌─────────────────────┐
+   │  P2P path (TS)      │             │  Server path (Rust) │
+   │  platform/desktop/  │             │  src-tauri/src/     │
+   │  nostr/* +          │             │  fusion/*           │
+   │  FusionP2pService   │             │                     │
+   └─────────────────────┘             └─────────────────────┘
+         Tor + NIP-59                        Tor + TLS
+         Nostr discovery                     Fusion server TCP
+         Output onion                        Covert circuits
+         Peer = elected issuer               Server issues blinds
 ```
-tiers: [ ...16 real pool tiers... ], num_components: 23,
-component_feerate: 1000, min_excess_fee: 10, max_excess_fee: 300000,
-donation_address: Some("bitcoincash:qpfkr2qsyz9qpfth4efvpqkha7u4mu3ft5a6khx8r0")
-```
 
-Settings → CashFusion's "Query Server" button surfaces exactly this. That test
-is `#[ignore]`d by default so CI never depends on a third-party host being up.
+P2P is a **different transport**, not a weaker crypto story.
 
-### Why the client is in Rust
-CashFusion is raw TCP with TLS and protobuf framing. A WebView can only open
-HTTP/WebSocket connections, so the frontend **cannot** speak this protocol at
-any level — the previous `wss://` "probe" could only detect that *something*
-was listening on the port. On mobile/web, `src/services/fusion/FusionStatusService.ts`
-therefore throws a clear platform-limit error rather than pretending; the desktop
-build swaps in the Rust-backed version via `vite.desktop.config.ts`.
+---
 
-### What Phase 1 deliberately does NOT do
-It joins no pool, submits no coins, and signs nothing — so it cannot move funds.
-`experimentalSlice.cashFusionEnabled` still defaults to `false`.
+## P2P (done)
 
-### Wire details (all read from the reference implementation, not guessed)
-Every constant traces to Electron Cash (`electroncash_plugins/fusion/`):
-- Frame: `<8-byte magic 765be8b4e4396dcf><4-byte big-endian length><protobuf>` — `connection.py`
-- `MAX_MSG_LENGTH = 200 KiB`, enforced before allocating — `connection.py`
-- Protocol version `alpha13` — `protocol.py`
-- Message schema — `protobuf/fusion.proto`, vendored verbatim to
-  `src-tauri/proto/fusion.proto` (MIT, © 2020 Mark B. Lundeberg)
+| Piece | Reality |
+| --- | --- |
+| Pool discovery | Nostr replaceable kind **12230**, ephemeral identities |
+| Tor | Fail-closed — no clearnet P2P fusion |
+| Round traffic | NIP-59 gift-wrap kind **1059** |
+| Gather / lock | **6** to lock, **10** cap, **4** ACK-shrink floor (`fusionKnobs.ts`) |
+| ACK | First proposal waits for the set; missing ACKs may shrink to the ACKed remainder if still ≥4. Mid-onion / mid-sign cannot shrink. |
+| Credentials | Protocol **v4** — `sha256(serialized EC Component)` (`fusionComponentV4.ts`) |
+| Anonymous components | `inputs`, `outputs`, `onion_output`, `signature` — throwaway key + one-shot Tor. Coordinator does not take `from` as identity. |
+| Control plane | ACK, `credential_request` (quota + Pedersen), ready, abort stay named — counts, not which UTXO |
+| Output onion | Mandatory; mix needs ≥3 wallets (≥2 peelers). Hides who created which output from other peers. |
+| Auto + fuse depth | `fusionAutoEngine.ts`, `fusionCoinDepth.ts` |
+| Too many coins | Server path take-largest-3 + Auto pre-consolidate (`fusionPreConsolidate.ts`) |
+| UI | CashFusion card + Servers. **No player-count knobs** in the wallet. |
 
-`build.rs` compiles the schema with **protox** (pure-Rust) rather than
-prost-build's default path, which shells out to a `protoc` binary that is not
-installed on this machine or on the CI runners.
+**Normative docs:** [privacy-layers](./p2p-cashfusion-privacy-layers.md), [protocol](./p2p-cashfusion-protocol.md), [knobs](./p2p-cashfusion-knobs.md), [threat model](./THREAT_MODEL.md), [FAQ](./p2p-cashfusion-faq.md).
+**Code:** `src/platform/desktop/nostr/` and `FusionP2pService.ts`.
 
-## Phase 2 — NOT STARTED: joining a pool and fusing coins
+Chipnet example (10-way): `7e41141a47ebe18496af131e51402019f41b602723c9ac4274aa0a91f52536f4`.
 
-This is the hard, privacy-critical half. It is deliberately left for a
-dedicated, carefully-reviewed pass rather than rushed, because a subtle bug
-here can **deanonymize the very user it is meant to protect** — and unlike a
-crash, that failure is silent.
+---
 
-Required pieces, each mapping to a reference file:
-1. **Pool join + tier selection** — `JoinPools` / `TierStatusUpdate`
-   (`fusion.py`). Mechanical now that Phase 1 exists.
-2. **Commitments and blind signatures** — `PlayerCommit` / `BlindSigResponses`.
-   Needs Pedersen commitments (`pedersen.py`) and blind Schnorr signing, so that
-   nobody — including the server — learns the input→output mapping.
-3. **Covert connections** — `covert.py`. Each participant opens *separate*,
-   independently-timed connections to submit components and signatures,
-   specifically so the server cannot correlate a submitter's inputs with its
-   outputs. Getting the timing/connection discipline wrong destroys the privacy
-   guarantee while the feature still appears to work.
-4. **Round state machine + blame** — `protocol.py`, `validation.py`. Handles
-   restarts and identifying misbehaving players.
-5. **Coin selection and fees** — must respect the tiers and feerates Phase 1
-   already reads from the server.
+## Server (done)
 
-## Phase 3 — Tor
+Classic CashFusion is raw TCP + TLS + protobuf. The WebView cannot speak that stack; desktop uses the Rust client via Tauri.
 
-Electron Cash routes covert connections over Tor. Without it, a network-level
-observer can correlate connections no matter how correct the cryptography is.
+| Piece | Code |
+| --- | --- |
+| Wire + hello | `mod.rs` |
+| Pool / tiers / plan | `round.rs`, `session.rs`, `server_plan.rs` |
+| Pedersen + blind Schnorr | `pedersen.rs`, `schnorr.rs` |
+| Covert circuits | `covert.rs` |
+| Blame / cancel | `blame.rs`, `round_cancel.rs` |
+| Coin selection / tx | `components.rs`, `tx.rs` |
+| Tor | `tor.rs`, `tor_manager.rs` |
+| Full run | `run.rs` |
 
-## Testing rule
+Wire constants still trace to Electron Cash (`connection.py`, `protocol.py`, vendored `src-tauri/proto/`).
+**Code root:** `src-tauri/src/fusion/`.
 
-Fusion work must never touch mainnet funds. Phase 1's live test performs only
-the read-only hello handshake (no wallet, no keys, no coins involved). Phase 2
-must run against a locally-run Electron Cash `server.py`, or Chipnet.
+A local Electron Cash fusion server may advertise a weaker `min_clients` for a 1-owner Chipnet self-test. That does **not** change P2P knobs.
+
+---
+
+## Shared product surface
+
+| Concern | Where |
+| --- | --- |
+| Manual / Auto | `FusionRunnerService.ts` |
+| P2P vs server | `FusionMode.ts`, CashFusion settings |
+| Tor readiness | `FusionTorResolver.ts` |
+| Completion / depth labels | `FusionCompletionService.ts` |
+| Cross-window lease | `fusionWalletLease.ts` |
+| Per-wallet on/off | `walletFusionPolicy.ts` (ignores leftover `p2pKnobs`) |
+
+---
+
+## Testing
+
+| Kind | Where |
+| --- | --- |
+| P2P unit / multi-peer | `nostr/__tests__/fusion*.test.ts` |
+| Rust crypto | `cargo test` under `src-tauri` fusion |
+| Chipnet dogfood | Multi-window P2P or local fusion server — not a CI merge gate |
+
+Never fuse mainnet funds in automated tests.
+
+---
+
+*Last updated: 2026-08-14. Shipped status: 6/4/10 knobs, ACK-shrink, v4
+credentials, anonymous inputs/signatures, and CashFusion removed from
+Experimental.*

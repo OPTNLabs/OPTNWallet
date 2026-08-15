@@ -71,14 +71,31 @@ describe('fetchActiveWalletUtxos', () => {
 
     expect(retrieveKeysMock).toHaveBeenCalledWith(6);
     expect(listTrackedAddressesMock).toHaveBeenCalledWith(6);
-    expect(fetchAndStoreUTXOsManyMock).toHaveBeenCalledWith(6, [
-      'bchtest:qwallet6',
-      'bchtest:pwallet6qr',
-    ]);
+    expect(fetchAndStoreUTXOsManyMock).toHaveBeenCalledWith(
+      6,
+      ['bchtest:qwallet6', 'bchtest:pwallet6qr'],
+      { discover: true, force: false, onProgress: undefined }
+    );
     expect(result).toEqual({
       'bchtest:qwallet6': [],
       'bchtest:pwallet6qr': [],
     });
+  });
+
+  it('can skip rediscovery for manual Home Sync', async () => {
+    const { captureActiveWalletSession, fetchActiveWalletUtxos } = await import(
+      '../WalletUtxoRefreshService'
+    );
+
+    await fetchActiveWalletUtxos(captureActiveWalletSession(6)!, undefined, {
+      discover: false,
+    });
+
+    expect(fetchAndStoreUTXOsManyMock).toHaveBeenCalledWith(
+      6,
+      ['bchtest:qwallet6', 'bchtest:pwallet6qr'],
+      { discover: false, force: false, onProgress: undefined }
+    );
   });
 
   it('invalidates every address before fetching a fresh wallet snapshot', async () => {
@@ -115,9 +132,7 @@ describe('fetchActiveWalletUtxos', () => {
       '../WalletUtxoRefreshService'
     );
 
-    const result = await fetchActiveWalletUtxos(
-      captureActiveWalletSession(6)!
-    );
+    const result = await fetchActiveWalletUtxos(captureActiveWalletSession(6)!);
 
     expect(result).toHaveProperty('bchtest:qrecovered');
     expect(primeUTXOCacheMock).toHaveBeenCalledWith(
@@ -151,10 +166,38 @@ describe('fetchActiveWalletUtxos', () => {
     expect(primeUTXOCacheMock).not.toHaveBeenCalled();
   });
 
-  it('publishes a completed refresh to the active wallet state', async () => {
-    const { refreshActiveWalletUtxos } = await import(
+  it('returns promptly and never commits when an in-flight refresh is cancelled', async () => {
+    const fetchGate = deferred<Record<string, never[]>>();
+    fetchAndStoreUTXOsManyMock.mockReturnValue(fetchGate.promise);
+    const { reconcileActiveWalletUtxos } = await import(
       '../WalletUtxoRefreshService'
     );
+    const controller = new AbortController();
+
+    const refreshPromise = reconcileActiveWalletUtxos(6, controller.signal);
+    for (
+      let i = 0;
+      i < 20 && fetchAndStoreUTXOsManyMock.mock.calls.length === 0;
+      i += 1
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    controller.abort();
+
+    await expect(refreshPromise).resolves.toBeNull();
+    expect(dispatchMock).not.toHaveBeenCalled();
+
+    fetchGate.resolve({ 'bchtest:qwallet6': [] });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it('publishes a completed refresh to the active wallet state', async () => {
+    const { refreshActiveWalletUtxos, subscribeWalletUtxoRefresh } =
+      await import('../WalletUtxoRefreshService');
+    const listener = vi.fn();
+    const unsubscribe = subscribeWalletUtxoRefresh(listener);
 
     await expect(refreshActiveWalletUtxos(6)).resolves.toBe(true);
 
@@ -167,6 +210,14 @@ describe('fetchActiveWalletUtxos', () => {
         },
       },
     });
+    expect(listener).toHaveBeenCalledWith(6, {
+      'bchtest:qwallet6': [],
+      'bchtest:pwallet6qr': [],
+    });
+
+    unsubscribe();
+    await refreshActiveWalletUtxos(6);
+    expect(listener).toHaveBeenCalledOnce();
   });
 
   it('rejects a joined older refresh so the caller can schedule a trailing fetch', async () => {

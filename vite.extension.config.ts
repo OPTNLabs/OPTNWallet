@@ -3,25 +3,34 @@
 // vite.config.ts without modifying it, same pattern as vite.desktop.config.ts.
 //
 // Scope of this build (see docs/browser-extension-scope.md): a POPUP-ONLY
-// wallet viewer — unlock, view balance and receive address. There is
+// read-only wallet viewer — unlock, sync, view balances/history, and receive.
+// Spending routes are not registered and TransactionService is replaced with
+// a fail-closed broadcaster. There is
 // deliberately NO background service worker, so MV3's service-worker-
 // eviction problem (the hard part flagged in the scope doc) does not apply
 // here: the popup owns its own Electrum connection only for as long as it
-// stays open, exactly like a normal browser tab. Sending has not been
-// verified against the popup's lifecycle this session — keep the popup open
-// for the whole operation until that's been exercised.
+// stays open, exactly like a normal browser tab. Sending remains unavailable
+// until its key and network lifecycle can be tested independently.
 
 import { fileURLToPath } from 'node:url';
 import { resolve as resolvePath, dirname } from 'node:path';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { defineConfig, mergeConfig, normalizePath, type Plugin, type ConfigEnv, type UserConfig } from 'vite';
+import {
+  defineConfig,
+  mergeConfig,
+  normalizePath,
+  type Plugin,
+  type ConfigEnv,
+  type UserConfig,
+} from 'vite';
 import wasm from 'vite-plugin-wasm';
 import topLevelAwait from 'vite-plugin-top-level-await';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const srcPath = (rel: string) => normalizePath(resolvePath(__dirname, rel));
 
-const EXTENSION_TARGET = process.env.EXTENSION_TARGET === 'firefox' ? 'firefox' : 'chrome';
+const EXTENSION_TARGET =
+  process.env.EXTENSION_TARGET === 'firefox' ? 'firefox' : 'chrome';
 const OUT_DIR = `dist-extension-${EXTENSION_TARGET}`;
 
 // Swap upstream SecretCryptoService for the password-gated one. Reuses the
@@ -30,7 +39,14 @@ const OUT_DIR = `dist-extension-${EXTENSION_TARGET}`;
 // See vite.desktop.config.ts for why this must be a resolveId swap and not
 // resolve.alias (alias keys only match raw import specifiers).
 const MODULE_SWAPS = new Map<string, string>([
-  [srcPath('src/services/SecretCryptoService.ts'), srcPath('src/platform/desktop/SecretCryptoService.ts')],
+  [
+    srcPath('src/services/SecretCryptoService.ts'),
+    srcPath('src/platform/desktop/SecretCryptoService.ts'),
+  ],
+  [
+    srcPath('src/services/TransactionService.ts'),
+    srcPath('src/platform/extension/TransactionService.ts'),
+  ],
 ]);
 
 function extensionModuleSwapPlugin(): Plugin {
@@ -39,7 +55,10 @@ function extensionModuleSwapPlugin(): Plugin {
     enforce: 'pre',
     async resolveId(source, importer, options) {
       if (!importer) return null;
-      const resolved = await this.resolve(source, importer, { ...options, skipSelf: true });
+      const resolved = await this.resolve(source, importer, {
+        ...options,
+        skipSelf: true,
+      });
       if (!resolved) return null;
       const target = MODULE_SWAPS.get(normalizePath(resolved.id));
       if (!target) return null;
@@ -58,7 +77,10 @@ function copyManifestPlugin(): Plugin {
     name: 'optn-extension-copy-manifest',
     apply: 'build',
     closeBundle() {
-      const src = resolvePath(__dirname, `extension/manifest.${EXTENSION_TARGET}.json`);
+      const src = resolvePath(
+        __dirname,
+        `extension/manifest.${EXTENSION_TARGET}.json`
+      );
       const outDir = resolvePath(__dirname, OUT_DIR);
       mkdirSync(outDir, { recursive: true });
       writeFileSync(resolvePath(outDir, 'manifest.json'), readFileSync(src));
@@ -94,7 +116,11 @@ export default defineConfig(async (env: ConfigEnv): Promise<UserConfig> => {
   const originalConfigOrFn = originalModule.default;
   const baseConfig: UserConfig =
     typeof originalConfigOrFn === 'function'
-      ? await (originalConfigOrFn as (env: ConfigEnv) => UserConfig | Promise<UserConfig>)(env)
+      ? await (
+          originalConfigOrFn as (
+            env: ConfigEnv
+          ) => UserConfig | Promise<UserConfig>
+        )(env)
       : originalConfigOrFn;
 
   const merged = mergeConfig(baseConfig, extensionAdditions);
