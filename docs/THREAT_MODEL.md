@@ -74,11 +74,12 @@ A peer participating in the same round but acting dishonestly.
 - Duplicate input detection prevents a wallet meeting itself in a pool
 - **Privacy-preserving blame** (`fusionBlame.ts`): on *received* messages that
   fail a hard crypto/structural check (bad credential, unbalanced Pedersen,
-  duplicate outpoint, bad sig set), peers broadcast a verifiable `blame` bound
+  duplicate outpoint), peers broadcast a verifiable `blame` bound
   to the **ephemeral session pubkey** only, then abort. Peers re-verify evidence
-  before acting (anti-frame). **Timeouts, relay ACK failures, late join, and
-  missing messages are never blame** — honest poor-network peers must not be
-  scapegoated. Not a permanent identity ban (throwaway keys).
+  before acting (anti-frame). **Timeouts, relay ACK failures, late join,
+  missing messages, and a missing signature are never blame** — honest
+  poor-network peers must not be scapegoated. Not a permanent identity ban
+  (throwaway keys). Abort never demands openings.
 
 ### A2b: Intermediate output-onion peeler
 
@@ -150,13 +151,17 @@ If the integrated Tor binary or system Tor is compromised.
 
 **Impact:**
 - All fusion traffic is deanonymized (IP addresses visible to attacker)
-- Blame proofs may be intercepted (encrypted to communication keys, but
-  the attacker can relay them)
+- Server-path blame proofs (`encrypt.rs`) may be intercepted and relayed
+- P2P `blame` reports are control-plane messages; a Tor attacker who
+  already sees the circuit can relay or drop them, but P2P blame does not
+  put identity openings on the wire after abort
 
 **Mitigation:**
 - System Tor is preferred over built-in Tor (reduces attack surface)
-- Blame proofs are ECDH-encrypted to per-component communication keys —
-  a Tor-level attacker cannot decrypt them
+- Server-path blame proofs are ECDH-encrypted to per-component
+  communication keys (`src-tauri/src/fusion/encrypt.rs`)
+- P2P named blame is a verifiable `blame` report, not an abort-forced
+  opening; peers reject unverifiable accusations
 - The integrated Tor process is sandboxed and only has access to the
   SOCKS5 port
 
@@ -235,9 +240,12 @@ same throwaway + one-shot Tor isolation (`fusionTransport.ts`).
 **Not used for:** IP privacy (that is Tor), relay content privacy (that is
 NIP-59), or credential issuance (that is Pedersen + blind Schnorr).
 
-### ECDH Encryption (Blame Proofs)
+### ECDH Encryption (server-path blame proofs)
 
-**Used for:** Encrypting blame proofs to specific participants
+**Used for:** Encrypting **server-path** CashFusion blame proofs to
+specific participants. This is **not** the P2P `blame` report
+(that is a verifiable control-plane message; abort does not open
+identity).
 
 **Implementation:** `src-tauri/src/fusion/encrypt.rs`
 
@@ -324,15 +332,16 @@ submitted which components.
 - Timeout: 120 seconds prevents indefinite hangs
 - Duplicate input detection prevents a wallet meeting itself
 
-**Blame is NOT a DoS mitigation.** It is fail-fast, provable diagnosis on
-abort: peers learn *that* a round broke and *which rule* broke it, with
-evidence, instead of hanging to the 120-second timeout. It does not stop a
-griefer. The accused is an ephemeral round key that is destroyed when the
-round ends, so the same attacker returns as a fresh, unrecognisable key on the
-next attempt. `recordBlamedSessionKey` keeps a blamed key out of the local
-gather for 10 minutes (`fusionRoundState.ts`), but that key is already dead
-and the record is never shared with other peers — it is not a ban and must not
-be counted as one.
+**Blame is NOT a DoS mitigation.** It is fail-fast, provable diagnosis when a
+**received** message fails a hard check: peers learn *that* a rule broke and
+*which* rule, with evidence, instead of hanging to the timeout. It does not
+stop a griefer and it **never fires on a silent no-sign**. The accused is an
+ephemeral round key that is destroyed when the round ends, so the same
+attacker returns as a fresh, unrecognisable key on the next attempt.
+`recordBlamedSessionKey` keeps a blamed key out of the local gather for 10
+minutes (`fusionRoundState.ts`), but that key is already dead and the record
+is never shared with other peers — it is not a ban and must not be counted as
+one.
 
 Electron Cash is no better here: its server kills the offending client
 mid-round and restarts, and caps *simultaneous* fuses per IP

@@ -11,34 +11,37 @@ knows who sent each component. Here it cannot: happy-path `inputs` /
 `outputs` / `signature` are anonymous, so a dead round has **no name on
 the coin**.
 
-The unique step is **abort, then disclose**. After the round fails, each
-peer may send a control-plane **opening** (blind `a||b`, component salt,
-Pedersen nonce) under its **round key**. That binds an anonymous
-component back to the attributed `InitialCommitment` *without* putting
-identity on the happy path. Unproven claims are dropped. Forged openings
-are themselves `invalid_input_credential`. Then
-`findFaultInDisclosures` + `verifyBlameReport` re-check the crypto. A
-fake accusation is rejected. A consistent timeout finds nobody.
+The shipped policy is complete: a generic abort does **not** open a
+disclosure phase. Peers do not send openings (`a||b`, salt, Pedersen
+nonce) after fail. `component_disclosure` is still parsed so an old peer
+cannot crash the round; it is never requested, never emitted, and never
+used as evidence. `findFaultInDisclosures` remains as a pure helper +
+unit tests only — it is not the live path.
 
-**Prove-or-don't-blame.** Only those re-verifiable codes count:
-`pedersen_unbalanced`, `invalid_component_commitment`,
-`credential_slot_oob`, `invalid_input_credential`, `duplicate_outpoint`,
-`invalid_signature_set`. **Never** blame Tor lag, relay timeout, or late
-join.
-
-A **disclosed** unsigned outpoint is `invalid_signature_set` (the
-anonymous-griefer catch once they admit the coins). A peer who **never
-signs and never discloses** is skipped (`if (!disclosure) continue`) —
-that is still a timeout abort, not an accused. The FAQ used to say
-“never blame a missing signature”; the code is narrower than that.
+**Prove-or-don't-blame** on messages that **arrived**. Live codes today:
+`pedersen_unbalanced`, `credential_slot_oob` (via `blameAndFail`), plus
+`invalid_component_commitment`, `invalid_input_credential`,
+`duplicate_outpoint` when independently re-verified.
+`verifyBlameReport` still gates every remote `blame`. It **rejects**
+`invalid_signature_set` (`signature absence is not blame evidence`).
+**Never** blame Tor lag, relay timeout, late join, or a missing
+signature.
 
 The accused is an **ephemeral round key**. That is diagnosis, not a
 wallet ban and not DoS defense. The same person comes back as a new key
 next attempt. A local 10-minute ghost record is not shared with peers.
 
+Why not disclose after fail: silence looks the same as a drop, and a
+dishonest coordinator can drop an honest signature, abort, and demand
+openings to frame the signer. No name is better than a framed name.
+That is the finished policy, not a half-build. Optional later ideas
+(padded fanout, local quarantine) are in
+[proposed-blame-p2p-cashfusion.md](./proposed-blame-p2p-cashfusion.md)
+and are not required for blame to be complete.
+
 ## What happens if someone does not sign an input?
 
-The round dies. No transaction.
+The round dies. No transaction. Nobody is named.
 
 Every assembled input must be signed (`SIGHASH_ALL | FORKID`). The coordinator
 waits and re-sends the assembled template. If a signature never arrives, the
@@ -49,9 +52,8 @@ The set cannot be rewritten at that point. A missing signer cannot be dropped
 so the rest continue. Same as classic CashFusion: incomplete signatures mean
 no CoinJoin, not a smaller one.
 
-If that peer then **discloses** those unsigned coins under the round key,
-blame names that key (`invalid_signature_set`). If they stay silent after
-abort, there is no accused. Auto tries again later.
+That timeout is an **ambiguous abort**, not `invalid_signature_set`. Auto
+tries again later.
 
 ## What is this, vs Electron Cash CashFusion?
 

@@ -1,22 +1,25 @@
 # Proposed blame for P2P CashFusion
 
-Status: **Stage 1 implemented in the running wallet; later stages not started**
+Status: **Shipped policy is complete** (§1). §§2–3 are optional future
+notes, not missing product.
 Protocol baseline: P2P CashFusion v4
 
 Silent no-sign cannot be honestly attributed on asynchronous Tor/Nostr.
 Absence looks the same as a drop, partition, crash, or withhold. This plan
 does not claim to name a silent signer.
 
-## 1. Stage 1 — mandatory for safe blame
+## 1. Shipped policy (complete)
 
-This is the only code required to make the existing blame boundary safe.
+This is the blame boundary. It is not a partial rollout.
 
 - Generic abort never requests or triggers `component_disclosure`.
-- Delete `invalid_signature_set` entirely as missing-signature blame.
+- `invalid_signature_set` remains on the wire type for compat;
+  `verifyBlameReport` **rejects** it as evidence. Do not emit it.
 - Coordinator receipt state is never evidence of non-sending.
 - Named blame requires positive, independently re-verifiable evidence that
   does not depend on an abort-forced identity opening.
-- Missing signature becomes `ambiguous_signature_timeout`; no accused peer.
+- Missing signature is an **ambiguous abort** (timeout class), not a
+  `BlameCode` and not an accused peer.
 
 Keep blame only for hard crypto faults already in v4: Pedersen imbalance,
 credential slot out of range, forged/invalid opening, bad component
@@ -63,7 +66,7 @@ unnamed. A dead round still does not rewrite the transaction or drop a
 missing signer.
 
 Coordinator-framing attack (honest signature sent, coordinator drops it,
-aborts, demands disclosure, claims missing): Stage 1 means the signer
+aborts, demands disclosure, claims missing): the signer
 reveals nothing, the accusation is rejected, the round ends ambiguously.
 With a budget-passing v5 fanout, other peers may still complete the exact
 transaction. Without fanout, they retry with nobody named.

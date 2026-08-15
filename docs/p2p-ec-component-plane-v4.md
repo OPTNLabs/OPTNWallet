@@ -118,7 +118,8 @@ Use the same logical fields as Electron Cash / `pb::Component` in this repo:
 ### Blank component (parity target)
 
 - zero amount component to pad to fixed `num_components` when tier requires it
-- Required for full EC metadata parity; **phase 2** if phase 1 ships inputs+outputs only with explicit residual
+- Required for full EC metadata parity; **padding follow-up** (not “fusion
+  Phase 2”) if the first cut ships inputs+outputs only with an explicit residual
 
 ### InitialCommitment (attributed, control plane)
 
@@ -126,7 +127,8 @@ Per component, sorted as EC:
 
 - `salted_component_hash = sha256(salt || component_ser)`
 - `amount_commitment` (65-byte Pedersen uncompressed or EC encoding already used server-side)
-- `communication_key` (compressed) — keep for blame / EC parity even if P2P blame uses openings first
+- `communication_key` (compressed) — keep for EC server-path parity.
+  Shipped P2P blame does **not** use abort openings.
 
 ### Blind message
 
@@ -160,7 +162,7 @@ Issuer (coordinator) signs blinded challenges for one-shot nonce slots, same sec
 7. Assemble tx from verified components  [same deterministic rules as peers]
 8. Anonymous per-input signatures        [throwaway + Tor]
 9. Final + Tor broadcast + reservation   [existing F1 rules]
-10. Abort → optional blame diagnosis     [control; openings; not a ban]
+10. Abort → no openings; optional `blame` for hard faults only [not a ban]
 ```
 
 ### Coordinator accept rules (component redeem)
