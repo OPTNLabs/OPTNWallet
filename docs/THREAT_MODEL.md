@@ -415,10 +415,12 @@ redundant in those cases and would only add friction.
 
 ### Tor Identity
 
-- Fresh Tor circuit per session (integrated Tor generates new circuits)
-- System Tor preferred over built-in Tor
-- `ensureTorAvailable()` runs once per window open: checks system Tor
-  first (9050/9150), starts built-in as fallback
+- Control-plane traffic uses the round identity for the duration of a round.
+- Anonymous `inputs`, `outputs`, `onion_output`, and `signature` messages use
+  fresh throwaway keys and one-shot Tor isolation per component message.
+- System Tor is preferred over built-in Tor.
+- `ensureTorAvailable()` runs once per window open: it checks system Tor first
+  (9050/9150) and starts built-in Tor as a fallback.
 
 ## On-Chain Privacy
 

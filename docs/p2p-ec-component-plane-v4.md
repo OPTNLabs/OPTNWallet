@@ -142,7 +142,7 @@ Issuer (coordinator) signs blinded challenges for one-shot nonce slots, same sec
 
 ## 6. Round phases (v4)
 
-```
+```text
 1. Gather + elect coordinator          [round key / public announce]
 2. Round start (session, tier, fee, n) [control]
 3. PlayerCommit-equivalent               [control, attributed]
@@ -191,9 +191,9 @@ Reject entire round (or refuse assembly) on missing/extra/duplicate/over-quota c
 
 ## 8. What v3 code is retired
 
-| v3 artifact                                             | v4 fate                                                                 |
-| ------------------------------------------------------- | ----------------------------------------------------------------------- | -------------------------------------------------- |
-| `outputCredentialMessageHash` / `optn-p2p-component-v3  | …`                                                                      | Delete or dead-code after cutover; no dual support |
+| v3 artifact                                              | v4 fate                                              |
+| --------------------------------------------------------- | ---------------------------------------------------- |
+| `outputCredentialMessageHash` / `optn-p2p-component-v3`  | Delete or dead-code after cutover; no dual support   |
 | `inputCredentialMessageHash` string domain              | Replace with `sha256(input component_ser)`                              |
 | Thin `{output, serial, credential}` as sole auth object | Replace with component + blind sig (+ serial if kept for P2P replay DB) |
 | Accepting components via attributed path                | Already removed for inputs/sigs in `d9accdbd` — keep                    |
@@ -202,21 +202,21 @@ Keep for now if still useful as non-auth metadata: session id, tier, feerate on 
 
 ---
 
-## 9. Implementation phases (strict order)
+## 9. Shipped implementation and maintenance
 
-### Phase A — Spec lock (this document)
+The v4 implementation described above is shipped in `dev`. The original phase
+plan is retained here as historical context; it is not a pending rollout.
+
+### Spec and shared encode/hash API
 
 - [x] Design written
 - [x] Reviewed in session
-
-### Phase B — Shared encode / hash API
-
 - [x] Native encode + `sha256(component)`: `src-tauri/src/fusion/p2p_component.rs`
 - [x] Tauri command: `fusion_p2p_encode_component`
 - [x] TS helpers + golden vector: `nostr/fusionComponentV4.ts` (+ tests)
 - [x] Golden tests match `components.rs` Electron Cash protobuf wire vector
 
-### Landed
+### Shipped behavior
 
 - Issuance uses EC component blind messages (`buildComponentCredentialRequests`)
 - Inputs redeem with `saltCommitments` + credential verify
@@ -227,22 +227,25 @@ Keep for now if still useful as non-auth metadata: session id, tier, feerate on 
 - Abort disclosures open the blind request, component salt, and Pedersen nonce
 - Adversarial suite covers binding and honest-round completion
 
-Optional later (not blocking): EC-style blank components for count-privacy parity.
+Remaining EC parity work, such as blank components for count-privacy parity, is
+optional and does not change the shipped v4 authorization contract.
 
 ---
 
-## 10. Blame (orthogonal but same PR track)
+## 10. Blame and abort diagnosis
 
-Option-3 abort disclosure remains:
+P2P blame is orthogonal to component authorization:
 
-- Restores diagnosis for faults that anonymity removed from happy-path attribution.
-- **Not** DoS mitigation; no Sybil work.
-- Finish emit without abort-path regression (`expected 1 to be +0`).
-- Can proceed **in parallel** with Phases B–C; must not block forever.
+- Happy-path component messages remain anonymous; blame reports identify only the
+  ephemeral round-control key when there is verifiable evidence.
+- Proven cryptographic faults may be reported. Transport timeouts, missing
+  signatures, and late joins remain ambiguous aborts and must not be treated as
+  proof of misbehavior.
+- Blame is diagnosis, not a durable ban or DoS mitigation.
 
 ---
 
-## 11. Risks (honest — not zero downside)
+## 11. Operational risks and safeguards
 
 | Risk                                                  | Mitigation                                                          |
 | ----------------------------------------------------- | ------------------------------------------------------------------- |
@@ -250,9 +253,10 @@ Option-3 abort disclosure remains:
 | Privacy regression if components sent under round key | Transport allowlist + isolation test + grouping regression test     |
 | Fee/size mismatch vs EC                               | Reuse native fee formulas (`component_fee`, sizes)                  |
 | Tor/relay load from full components                   | Already one socket per component; monitor soak                      |
-| Schedule                                              | Beta allows hard cut; still needs soak before “production” language |
+| Protocol changes                                     | Bump the wire version only with a complete migration and test update |
 
-**Benefits without free lunch:** F2/EC binding + shared core **yes**; zero engineering cost **no**; migration pain **no** (beta).
+The implementation has additional protocol surface, so keep the adversarial,
+isolation, and golden-vector tests in the merge gate.
 
 ---
 
@@ -268,12 +272,14 @@ Option-3 abort disclosure remains:
 
 ---
 
-## 13. Immediate next code steps
+## 13. Maintenance checklist
 
-1. Keep `fusionIdentityIsolation.test.ts` in suite (already added).
-2. Inventory Tauri surface for component build/sign verify; add commands if missing.
-3. Add `ROUND_MSG_VERSION` bump **only** when Phase D redeem path can run end-to-end — or feature-flag internal `4` behind tests first.
-4. Implement Phase B golden encode tests before deleting v3 hashes.
+1. Keep `fusionIdentityIsolation.test.ts`, adversarial component tests, and
+   golden vectors in the suite.
+2. Update `ROUND_MSG_VERSION` only when a complete wire migration is ready;
+   v4 clients must continue to reject v2/v3 round messages.
+3. Keep the TypeScript and Rust component, credential, and transport references
+   synchronized with this document and the protocol reference.
 
 ---
 
@@ -285,11 +291,12 @@ Option-3 abort disclosure remains:
 | `src-tauri/src/fusion/schnorr.rs`                  | Blind issuer + modified RFC6979 tx sign       |
 | `src-tauri/src/fusion/covert.rs`                   | Server covert isolation model                 |
 | `src/platform/desktop/nostr/fusionTransport.ts`    | Anonymous component transport                 |
-| `src/platform/desktop/nostr/fusionBlindSchnorr.ts` | Current v3 TS issuer (to be replaced/bridged) |
+| `src/platform/desktop/nostr/fusionBlindSchnorr.ts` | Current TS blind issuer and v4 credential path |
 | `src/platform/desktop/nostr/fusionSession.ts`      | Round choreography                            |
 | `docs/THREAT_MODEL.md`                             | Blame ≠ DoS; throwaway keys                   |
-| `docs/p2p-cashfusion-protocol.md`                  | Current v3 reference (update at cutover)      |
+| `docs/p2p-cashfusion-protocol.md`                  | Current v4 protocol reference                 |
 
 ---
 
-**End of design.** Implementation must follow phases B→F; do not ship a half-v4 that still signs v3 strings under a v4 version number.
+**Maintenance rule:** do not introduce a partial protocol migration or sign v3
+strings under a v4 version number.

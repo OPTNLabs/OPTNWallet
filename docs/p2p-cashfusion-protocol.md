@@ -69,7 +69,7 @@ commitments.
 
 ## 2. High-level picture
 
-```
+```text
 ┌─────────────┐     public Nostr      ┌─────────────┐
 │  Peer A     │◄── kind 12230 pool ──►│  Peer B     │
 │ (ephemeral  │     announcements     │ (ephemeral  │
@@ -231,7 +231,7 @@ knob change.
 
 ### 4.4 Election (set-bound)
 
-```
+```text
 commitment = sort(unique pubkeys).join('|')
 ticket(candidate) = hash of `${commitment}#${candidate}`
 winner = argmin(ticket), tie-break on pubkey string
@@ -301,7 +301,7 @@ Each peer:
    Electron Cash size/fee formulas shared with `fusionRound.ts`.
 2. For each **input**, builds a `BlindSignatureRequest` over:
 
-```
+```text
 msg = SHA256( UTF-8(
   "optn-p2p-input-v1|{prevTxid}|{prevIndex}|{value}|{pubkey}"
 ) )
@@ -435,8 +435,9 @@ usually `session`.
 Parsing is strict (`parseRoundMessage`): size caps, hex shapes, participant
 sets, money bounds. Invalid messages surface as protocol errors.
 
-Version 3 is fail-closed: a v2 message is rejected rather than downgraded. This
-wire-version change does not alter the deliberate chain transaction profile:
+Protocol v4 is fail-closed: v2 and v3 messages are rejected rather than
+downgraded. This wire-version change does not alter the deliberate chain
+transaction profile:
 P2P transactions remain version 2 and do not add the classic `FUZ` OP_RETURN.
 
 ---
@@ -456,7 +457,7 @@ Issuer holds `x`, publishes `P = x·G`, and for each slot `R = k·G`.
 
 Requester:
 
-```
+```text
 a,b ← random
 R' = ±(R + a·G + b·P)   // sign chosen so jacobi(R'.y)=+1
 e' = SHA256(R'.x || compressed(P) || m)
@@ -473,7 +474,7 @@ Implementation enforces one-shot slots in both TS and Rust.
 
 ### 7.3 Pedersen
 
-```
+```text
 H = decompress( 0x02 || "CashFusion gives us fungibility." )
 C = amount·H + nonce·G   // amount is signed (i64 as scalar)
 ```

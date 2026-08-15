@@ -11,8 +11,10 @@ flow. It is **implemented**, not a plan.
 2. SeedCash exports the BCH account xPub as a static QR. No mnemonic, xPriv,
    or child private key enters OPTN.
 3. OPTN **Create Watch-Only Wallet** scans the xPub, checks network/origin,
-   and restores the BIP44 public tree (`m/44'/145'/account'` → `/0/i` receive,
-   `/1/i` change).
+   and restores the BIP44 public tree. The default account path is
+   `m/44'/145'/account'` on mainnet and `m/44'/1'/account'` on chipnet; both
+   receive (`/0/i`) and change (`/1/i`) branches are restored. Existing wallets
+   retain their stored derivation path.
 4. Gap-limit discovery, receive, balance, history, UTXOs, and coin control
    work with no signing path.
 5. Send builds a binary Paytaca-compatible PSBT (global version `145`,

@@ -17,7 +17,7 @@
 
 ## HOT path (implemented)
 
-```
+```text
 listunspent → format → replaceWalletAddressUTXOs (SQL) → return map → Redux
 ```
 
@@ -57,6 +57,9 @@ listunspent → format → replaceWalletAddressUTXOs (SQL) → return map → Re
 - **Data-only:** open wallet, select only `.optn-cold`  
 - Import data restores labels + fusion only (**HOT** coins still from network listunspent)  
 - Re-import of the same keystore **opens the existing row** (no `wallet5_2` / `_3` clones)
+
+| Future cold-data capability | Status |
+| --------------------------- | ------ |
 | Archive compaction (old spent txs) | Planned |
 | Optional raw-tx ancestry (power user) | Later — still not balance boss |
 

@@ -24,6 +24,8 @@ Technical documentation for contributors and third-party integrators.
   - Tor vs NIP-59 vs Pedersen vs blind Schnorr vs **output onion**.
 - [P2P CashFusion Protocol](./p2p-cashfusion-protocol.md)
   - Discovery, election, v4 credentials, onion, assembly, signing.
+- [P2P CashFusion EC component plane v4](./p2p-ec-component-plane-v4.md)
+  - Component binding, version rejection, and v4 maintenance invariants.
 - [P2P CashFusion protocol knobs](./p2p-cashfusion-knobs.md)
   - Internal 6 / 4 / 10 floors, tiers, timing. Edit `fusionKnobs.ts` — not
     the wallet UI.
@@ -58,7 +60,8 @@ Technical documentation for contributors and third-party integrators.
 - If you are integrating a dApp: `Integration Guide` -> `WalletConnect` section.
 - If you are embedding custom wallet app logic: `Integration Guide` -> `Addon Development Guide` -> `Addon SDK Reference`.
 - If you are contributing to core wallet internals: `Wallet Architecture` first.
-- If you are working on CashFusion: status → knobs → protocol → privacy layers → [FAQ](./p2p-cashfusion-faq.md).
+- If you are working on CashFusion: status → knobs → protocol → component
+  plane → privacy layers → [FAQ](./p2p-cashfusion-faq.md).
 
 ## Still open (not shipped)
 
