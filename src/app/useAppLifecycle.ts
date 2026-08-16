@@ -450,9 +450,38 @@ export function useLocalNotificationSetup() {
       return;
     }
 
-    (async () => {
+    let disposed = false;
+    let setupStarted = false;
+    let appStateListener: { remove: () => Promise<void> } | undefined;
+
+    const setup = async () => {
+      if (disposed || setupStarted) return;
+
+      const appState = await CapacitorApp.getState();
+      if (!appState.isActive) {
+        if (!appStateListener) {
+          appStateListener = await CapacitorApp.addListener(
+            'appStateChange',
+            ({ isActive }) => {
+              if (isActive) void setup();
+            }
+          );
+        }
+        return;
+      }
+
+      setupStarted = true;
       try {
-        await LocalNotifications.requestPermissions();
+        // Capacitor registers the permission launcher during Activity setup.
+        // Defer one turn after the app becomes active so startup effects cannot
+        // launch it while the ActivityResultRegistry is still initializing.
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        if (disposed) return;
+
+        const permission = await LocalNotifications.checkPermissions();
+        if (permission.display !== 'granted') {
+          await LocalNotifications.requestPermissions();
+        }
         await LocalNotifications.createChannel({
           id: 'utxo',
           name: 'UTXO Alerts',
@@ -465,7 +494,14 @@ export function useLocalNotificationSetup() {
       } catch (e) {
         console.warn('LocalNotifications init failed:', e);
       }
-    })();
+    };
+
+    void setup();
+
+    return () => {
+      disposed = true;
+      void appStateListener?.remove();
+    };
   }, []);
 }
 
