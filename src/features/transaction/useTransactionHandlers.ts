@@ -167,6 +167,10 @@ export function useTransactionHandlers({
           setShowPopup(true);
           setTempUtxos(utxo);
           setCurrentContractABI(utxo.abi);
+          if (!constructorArgs?.artifact?.source) {
+            setErrorMessage('Contract artifact source is unavailable.');
+            return;
+          }
           setCurrentContractSource(constructorArgs.artifact.source);
           setSelectedContractAddresses((prev) => [...prev, utxo.address]);
           return;
@@ -316,7 +320,7 @@ export function useTransactionHandlers({
               ? raw.slice('sigaddr:'.length)
               : raw;
 
-            const pk = await KeyService.fetchAddressPrivateKey(address);
+            const pk = await KeyService.fetchAddressPrivateKey(address, 'spend');
             if (!pk) throw new Error(`Missing private key for address: ${address}`);
             return new SignatureTemplate(pk, HashType.SIGHASH_ALL);
           }

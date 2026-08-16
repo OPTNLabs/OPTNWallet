@@ -45,7 +45,9 @@ export function useSimpleSendViewModel({
     [tokenMeta]
   );
 
-  const prefixLen = PREFIX[currentNetwork]?.length ?? 0;
+  const prefix =
+    currentNetwork === 'mainnet' ? PREFIX.mainnet : PREFIX.chipnet;
+  const prefixLen = prefix.length;
   const mask = useCallback(
     (addr: string) => shortenTxHash(addr, prefixLen),
     [prefixLen]

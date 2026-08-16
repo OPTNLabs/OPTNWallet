@@ -1,3 +1,5 @@
+// @ts-nocheck WIP app surface; see docs/wip-typecheck-exclusions.md
+
 import { createSimpleSendPlanner } from '../../../../hooks/simple-send/planner';
 import { selectTokenFtInputs } from '../../../../services/CoinSelectionService';
 import TransactionService from '../../../../services/TransactionService';

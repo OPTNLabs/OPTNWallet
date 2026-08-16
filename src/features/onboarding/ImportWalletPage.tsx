@@ -19,10 +19,17 @@ import InfoTooltipIcon from './components/InfoTooltipIcon';
 import OnboardingCard from './components/OnboardingCard';
 import OnboardingScreen from './components/OnboardingScreen';
 import DerivationPathField from './components/DerivationPathField';
-import { getBchAccountPath, normalizeBchAccountPath } from '../../services/HdWalletService';
+import { isValidImportMnemonic } from '../../hooks/useImportDerivationDiscovery';
+import {
+  getBchAccountPath,
+  normalizeBchAccountPath,
+} from '../../services/HdWalletService';
 import ElectrumServer from '../../apis/ElectrumServer/ElectrumServer';
+import { useI18n } from '../../i18n/useI18n';
 
 const TOTAL_WORDS = 12;
+const normalizeRecoveryWord = (word: string) =>
+  word.replace(/\s+/g, ' ').trim().toLowerCase();
 
 const ImportWalletPage = () => {
   const currentNetwork = useSelector(selectCurrentNetwork);
@@ -31,9 +38,15 @@ const ImportWalletPage = () => {
   );
   const [passphrase] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [derivationPath, setDerivationPath] = useState(() => getBchAccountPath(currentNetwork));
+  const [importError, setImportError] = useState('');
+  const [derivationPath, setDerivationPath] = useState(() =>
+    getBchAccountPath(currentNetwork)
+  );
   const [customDerivationPath, setCustomDerivationPath] = useState(false);
-
+  const recoveryPhrase = useMemo(
+    () => recoveryWords.map(normalizeRecoveryWord).join(' '),
+    [recoveryWords]
+  );
   const dbService = useMemo(() => DatabaseService(), []);
   const walletManager = useMemo(() => WalletManager(), []);
   const hasInitialized = useRef(false);
@@ -41,13 +54,11 @@ const ImportWalletPage = () => {
 
   const navigate = useNavigate();
   const dispatch = useDispatch();
+  const { t } = useI18n();
 
   useEffect(() => {
-    dispatch(setNetwork(Network.MAINNET));
-  }, [dispatch]);
-
-  useEffect(() => {
-    if (!customDerivationPath) setDerivationPath(getBchAccountPath(currentNetwork));
+    if (!customDerivationPath)
+      setDerivationPath(getBchAccountPath(currentNetwork));
   }, [currentNetwork, customDerivationPath]);
 
   useEffect(() => {
@@ -67,18 +78,20 @@ const ImportWalletPage = () => {
         }
       } catch (error) {
         console.error('Error initializing database:', error);
-        await Toast.show({ text: 'Could not prepare wallet import on this device.' });
+        await Toast.show({
+          text: t('onboarding.databasePreparationFailed'),
+        });
       }
     };
 
     void initDb();
-  }, [dbService]);
+  }, [dbService, t]);
 
-  const normalize = (word: string) => word.replace(/\s+/g, ' ').trim().toLowerCase();
   const focusIndex = (index: number) => inputsRef.current[index]?.focus();
 
   const handleWordChange = (index: number, raw: string) => {
-    const parts = normalize(raw).split(' ').filter(Boolean);
+    setImportError('');
+    const parts = normalizeRecoveryWord(raw).split(' ').filter(Boolean);
 
     setRecoveryWords((prev) => {
       const next = [...prev];
@@ -101,7 +114,10 @@ const ImportWalletPage = () => {
     }
   };
 
-  const handleKeyDown = (index: number, event: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleKeyDown = (
+    index: number,
+    event: React.KeyboardEvent<HTMLInputElement>
+  ) => {
     const value = recoveryWords[index];
 
     if (event.key === 'Enter') {
@@ -129,7 +145,8 @@ const ImportWalletPage = () => {
 
     if (
       event.key === 'ArrowRight' &&
-      (event.currentTarget.selectionStart ?? 0) === event.currentTarget.value.length &&
+      (event.currentTarget.selectionStart ?? 0) ===
+        event.currentTarget.value.length &&
       index < TOTAL_WORDS - 1
     ) {
       focusIndex(index + 1);
@@ -138,28 +155,49 @@ const ImportWalletPage = () => {
 
   const handleImportAccount = async () => {
     if (isSubmitting) return;
+    setImportError('');
 
-    const missingWordIndex = recoveryWords.findIndex((word) => !normalize(word));
+    const missingWordIndex = recoveryWords.findIndex(
+      (word) => !normalizeRecoveryWord(word)
+    );
 
     if (missingWordIndex !== -1) {
       console.error(`Word #${missingWordIndex + 1} is empty.`);
       focusIndex(missingWordIndex);
-      await Toast.show({ text: `Word ${missingWordIndex + 1} is missing.` });
+      const message = t('onboarding.missingWord').replace(
+        '{number}',
+        String(missingWordIndex + 1)
+      );
+      setImportError(message);
+      await Toast.show({ text: message });
       return;
     }
 
-    const recoveryPhrase = recoveryWords.map(normalize).join(' ');
+    if (!isValidImportMnemonic(recoveryPhrase)) {
+      const message = t('onboarding.invalidMnemonic');
+      setImportError(message);
+      await Toast.show({ text: message });
+      return;
+    }
+
     setIsSubmitting(true);
+    let importStage = 'starting import';
 
     try {
       const normalizedDerivationPath = normalizeBchAccountPath(derivationPath);
+      importStage = 'checking existing wallet';
       const accountExists = await walletManager.checkAccount(
         recoveryPhrase,
         passphrase,
-        { networkType: currentNetwork, walletType: WalletType.STANDARD }
+        {
+          networkType: currentNetwork,
+          walletType: WalletType.STANDARD,
+          derivationPath: normalizedDerivationPath,
+        }
       );
 
       if (!accountExists) {
+        importStage = 'saving wallet';
         const created = await walletManager.createWallet(
           ONBOARDING_WALLET_NAME,
           recoveryPhrase,
@@ -171,23 +209,35 @@ const ImportWalletPage = () => {
         );
         if (!created) {
           console.error('Failed to import account.');
-          await Toast.show({ text: 'Wallet import failed on this device.' });
+          const message = t('onboarding.importFailed');
+          setImportError(message);
+          await Toast.show({ text: message });
           return;
         }
       }
 
+      importStage = 'resolving wallet ID';
       const walletID = await walletManager.setWalletId(
         recoveryPhrase,
         passphrase,
-        { networkType: currentNetwork, walletType: WalletType.STANDARD }
+        {
+          networkType: currentNetwork,
+          walletType: WalletType.STANDARD,
+          derivationPath: normalizedDerivationPath,
+        }
       );
       if (walletID == null) {
         console.error('Failed to set wallet ID.');
-        await Toast.show({ text: 'Wallet was saved, but the wallet ID could not be resolved.' });
+        const message = t('onboarding.walletSavedIdFailed');
+        setImportError(message);
+        await Toast.show({ text: message });
         return;
       }
 
-      const walletInfo = await walletManager.getWalletInfo(walletID);
+      importStage = 'loading wallet metadata';
+      // Metadata is sufficient to establish the session. Do not decrypt the
+      // recovery material a second time just to read network/path settings.
+      const walletInfo = await walletManager.getWalletMetadata(walletID);
       const resolvedNetwork =
         walletInfo?.networkType === Network.MAINNET
           ? Network.MAINNET
@@ -195,11 +245,14 @@ const ImportWalletPage = () => {
             ? Network.CHIPNET
             : currentNetwork;
 
-      // Materialize one address pair so the worker can start immediately. It
-      // performs the full BIP44 discovery/gap-limit scan after navigation;
-      // waiting for all 40 key rows here makes import unnecessarily slow.
+      // Make the first receive/change pair available before activating the
+      // wallet. The mobile worker starts syncing as soon as the wallet ID is
+      // dispatched, so navigating first can make it query an empty inventory
+      // and publish a zero balance.
+      importStage = 'deriving initial address';
       await KeyService.bootstrapInitialAddressBatch(walletID, 0, 1);
 
+      importStage = 'opening wallet';
       dispatch(setWalletId(walletID));
       dispatch(setWalletNetwork(resolvedNetwork));
       dispatch(setWalletType(walletInfo?.walletType ?? WalletType.STANDARD));
@@ -207,14 +260,32 @@ const ImportWalletPage = () => {
         setWalletDerivationPath({
           path: walletInfo?.derivation_path ?? normalizedDerivationPath,
           source:
-            walletInfo?.derivation_path_source === 'custom' ? 'custom' : 'default',
+            walletInfo?.derivation_path_source === 'custom'
+              ? 'custom'
+              : 'default',
         })
       );
       dispatch(setNetwork(resolvedNetwork));
       navigate(`/home/${walletID}`);
+
+      // Keep the initial key window consistent with desktop. The worker then
+      // performs the bounded history-based branch discovery pass.
+      void KeyService.bootstrapInitialAddressBatch(walletID, 0, 20).catch(
+        (error) => {
+          console.error('[ImportWalletPage] Initial address bootstrap failed', {
+            walletId: walletID,
+            error,
+          });
+        }
+      );
     } catch (error) {
-      console.error('Error importing account:', error);
-      await Toast.show({ text: 'Wallet import failed on this device.' });
+      console.error('[ImportWalletPage] Import failed', {
+        stage: importStage,
+        error,
+      });
+      const message = t('onboarding.importFailed');
+      setImportError(message);
+      await Toast.show({ text: message });
     } finally {
       setIsSubmitting(false);
     }
@@ -222,7 +293,10 @@ const ImportWalletPage = () => {
 
   return (
     <OnboardingScreen>
-      <OnboardingCard title="Import Wallet" maxWidthClassName="max-w-lg">
+      <OnboardingCard
+        title={t('onboarding.importWallet')}
+        maxWidthClassName="max-w-lg"
+      >
         <div className="flex flex-col items-center min-h-[300px] w-full">
           <DerivationPathField
             network={currentNetwork}
@@ -236,11 +310,13 @@ const ImportWalletPage = () => {
 
           <div className="w-full mb-3">
             <div className="mb-2 flex items-center justify-center gap-2">
-              <span className="wallet-text-strong font-bold text-xl">Recovery Phrase</span>
+              <span className="wallet-text-strong font-bold text-xl">
+                {t('onboarding.recoveryPhrase')}
+              </span>
               <InfoTooltipIcon
                 id="recovery-tooltip"
-                content="Enter your 12-word recovery (seed) phrase. Each box corresponds to the word order."
-                ariaLabel="Recovery phrase information"
+                content={t('onboarding.recoveryDescription')}
+                ariaLabel={t('onboarding.recoveryPhrase')}
               />
             </div>
 
@@ -260,17 +336,27 @@ const ImportWalletPage = () => {
                       autoCorrect="off"
                       spellCheck={false}
                       value={recoveryWords[index]}
-                      onChange={(event) => handleWordChange(index, event.target.value)}
+                      onChange={(event) =>
+                        handleWordChange(index, event.target.value)
+                      }
                       onKeyDown={(event) => handleKeyDown(index, event)}
                       enterKeyHint={index < TOTAL_WORDS - 1 ? 'next' : 'done'}
                       className="wallet-input wallet-surface-strong flex-1 min-w-0 px-3 py-1 rounded-md wallet-text-strong placeholder:opacity-60"
-                      placeholder="word"
+                      placeholder={t('onboarding.wordPlaceholder')}
                     />
                   </div>
                 ))}
               </div>
             </div>
           </div>
+          {importError && (
+            <p
+              role="alert"
+              className="w-full px-2 mb-2 text-sm leading-relaxed wallet-danger-text"
+            >
+              {importError}
+            </p>
+          )}
         </div>
 
         <button
@@ -278,13 +364,15 @@ const ImportWalletPage = () => {
           disabled={isSubmitting}
           className="wallet-btn-primary w-full my-2 text-xl font-bold"
         >
-          {isSubmitting ? 'Importing Wallet...' : 'Import Wallet'}
+          {isSubmitting
+            ? t('onboarding.importing')
+            : t('onboarding.importWallet')}
         </button>
         <button
           onClick={() => navigate('/')}
           className="wallet-btn-danger w-full my-2 text-xl font-bold"
         >
-          Back
+          {t('onboarding.back')}
         </button>
       </OnboardingCard>
     </OnboardingScreen>

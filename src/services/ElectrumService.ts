@@ -13,7 +13,11 @@
 
 import ElectrumServer from '../apis/ElectrumServer/ElectrumServer';
 import { RequestResponse } from '@electrum-cash/network';
-import { TransactionDetails, TransactionHistoryItem, UTXO } from '../types/types';
+import {
+  TransactionDetails,
+  TransactionHistoryItem,
+  UTXO,
+} from '../types/types';
 import { logError, toErrorMessage } from '../utils/errorHandling';
 import {
   TransactionVisibility,
@@ -33,9 +37,11 @@ import {
   readTransactionDetailsFromDb,
   resolveInputParticipants,
 } from './electrum/transaction';
+import { isDesktopPlatform } from '../utils/platform';
 import {
   clearBlockHeaderListeners,
   registerAddressSubscription,
+  registerAddressSubscriptionsBulk,
   registerBlockHeaderListener,
   registerDoubleSpendProofSubscription,
   registerTransactionSubscription,
@@ -47,26 +53,92 @@ import {
 const inflightByAddr = new Map<string, Promise<UTXO[]>>();
 const cacheByAddr = new Map<string, { ts: number; data: UTXO[] }>();
 const UTXO_TTL_MS = 3000;
-const inflightHistoryByAddr = new Map<string, Promise<TransactionHistoryItem[] | null>>();
+const inflightHistoryByAddr = new Map<
+  string,
+  Promise<TransactionHistoryItem[] | null>
+>();
 const historyCacheByAddr = new Map<
   string,
   { ts: number; data: TransactionHistoryItem[] | null }
 >();
 const HISTORY_TTL_MS = 3000;
-const inflightVisibilityByTxid = new Map<string, Promise<TransactionVisibility>>();
+const inflightVisibilityByTxid = new Map<
+  string,
+  Promise<TransactionVisibility>
+>();
 const visibilityCacheByTxid = new Map<
   string,
   { ts: number; data: TransactionVisibility }
 >();
 const VISIBILITY_TTL_MS = 5000;
-const inflightDetailsByTxid = new Map<string, Promise<TransactionDetails | null>>();
+const inflightDetailsByTxid = new Map<
+  string,
+  Promise<TransactionDetails | null>
+>();
 const detailsCacheByTxid = new Map<
   string,
   { ts: number; data: TransactionDetails | null }
 >();
 const DETAILS_TTL_MS = 60000;
+const MAX_CACHE_ENTRIES = 500;
+
+function evictStale<K, V extends { ts: number }>(
+  map: Map<K, V>,
+  ttlMs: number,
+  maxEntries: number = MAX_CACHE_ENTRIES
+) {
+  const now = Date.now();
+  if (map.size <= maxEntries) {
+    for (const [k, v] of map) {
+      if (now - v.ts > ttlMs) map.delete(k);
+    }
+    return;
+  }
+  const sorted = [...map.entries()].sort((a, b) => a[1].ts - b[1].ts);
+  const toDelete = sorted.length - maxEntries;
+  for (let i = 0; i < sorted.length; i++) {
+    if (i < toDelete || now - sorted[i][1].ts > ttlMs) {
+      map.delete(sorted[i][0]);
+    }
+  }
+}
+// 250 × 12s hard timeout produced live failures:
+//   `requestMany(250) timed out after 12000ms`
+// Smaller chunks + ElectrumServer.requestManyTimeoutMs(N) keep large wallets
+// (hundreds of addresses) from blowing the batch budget.
+const ELECTRUM_BATCH_SIZE = 50;
+/**
+ * How many listunspent chunks to fly at once on the same socket.
+ * Fully serial was safe but slow on large wallets; unbounded parallel
+ * overloaded Fulcrum (timeouts). Two in flight is the sweet spot we measured.
+ */
+const ELECTRUM_CHUNK_CONCURRENCY = 2;
+
+type ElectrumBatchCall = {
+  method: string;
+  params?: RequestResponse[];
+};
+
+function preferredAddressQuery(
+  address: string,
+  addressMethod: string,
+  scripthashMethod: string
+): { method: string; params: RequestResponse[] } {
+  if (!isDesktopPlatform()) {
+    // WSS gateways used by web/Capacitor can implement the address methods
+    // without returning useful results for scripthash requests. Desktop TCP
+    // keeps the scripthash path because it supports the raw batch transport.
+    return { method: addressMethod, params: [address] };
+  }
+
+  return {
+    method: scripthashMethod,
+    params: [addressToElectrumScripthash(address)],
+  };
+}
 
 export function primeUTXOCache(address: string, utxos: UTXO[]) {
+  evictStale(cacheByAddr, UTXO_TTL_MS);
   cacheByAddr.set(address, { ts: Date.now(), data: utxos });
 }
 
@@ -98,7 +170,7 @@ async function requestWithAddressFallback(
   try {
     return await server.request(addressMethod, address, ...extraParams);
   } catch (error) {
-    if (!isInvalidAddressError(error)) {
+    if (!shouldUseAlternateElectrumMethod(error)) {
       throw error;
     }
 
@@ -107,10 +179,122 @@ async function requestWithAddressFallback(
   }
 }
 
+function shouldUseAlternateElectrumMethod(error: unknown): boolean {
+  if (isInvalidAddressError(error)) return true;
+  const message = String(
+    error instanceof Error ? error.message : error
+  ).toLowerCase();
+  return /method not found|unknown method|not implemented|unsupported method|invalid method|invalid param/.test(
+    message
+  );
+}
+
+async function requestManyInChunks(
+  server: ReturnType<typeof ElectrumServer>,
+  calls: ElectrumBatchCall[],
+  onProgress?: (completedCount: number, totalCount: number) => void
+): Promise<Array<RequestResponse | Error>> {
+  if (calls.length === 0) return [];
+  const chunks: ElectrumBatchCall[][] = [];
+  for (let start = 0; start < calls.length; start += ELECTRUM_BATCH_SIZE) {
+    chunks.push(calls.slice(start, start + ELECTRUM_BATCH_SIZE));
+  }
+  // Bounded parallel: keep slot order so results map back to addresses.
+  // Concurrency 1 was correct but slow; unbounded parallel timed out.
+  const out: Array<RequestResponse | Error> = new Array(calls.length);
+  let nextChunk = 0;
+  let completed = 0;
+
+  const runWorker = async () => {
+    // Claim the next chunk index (single-threaded JS; safe across concurrent awaits).
+    for (
+      let chunkIndex = nextChunk++;
+      chunkIndex < chunks.length;
+      chunkIndex = nextChunk++
+    ) {
+      const chunk = chunks[chunkIndex];
+      const base = chunkIndex * ELECTRUM_BATCH_SIZE;
+      const results = await server.requestMany(chunk);
+      for (let i = 0; i < results.length; i++) {
+        out[base + i] = results[i];
+      }
+      completed += chunk.length;
+      onProgress?.(completed, calls.length);
+    }
+  };
+
+  const workers = Math.min(ELECTRUM_CHUNK_CONCURRENCY, chunks.length);
+  await Promise.all(Array.from({ length: workers }, () => runWorker()));
+  return out;
+}
+
 const ElectrumService = {
   async reconnect(customServer?: string) {
     const server = ElectrumServer();
     await server.electrumReconnect(customServer);
+  },
+
+  async ensureFreshConnection() {
+    await ElectrumServer().ensureFreshConnection();
+  },
+
+  /**
+   * Electrum address state (status hash). Same meaning as EC/Selene:
+   * server fingerprint of address history for delta sync.
+   */
+  async getAddressState(address: string): Promise<string | null> {
+    const many = await ElectrumService.getAddressStateMany([address]);
+    return many[address] ?? null;
+  },
+
+  /**
+   * Batch address-state probes via scripthash.subscribe.
+   * Used by the ledger status-hash gate — must stay fast; callers should only
+   * probe addresses that already have a local status to compare against.
+   */
+  async getAddressStateMany(
+    addresses: string[]
+  ): Promise<Record<string, string | null>> {
+    const unique = Array.from(new Set(addresses.filter(Boolean)));
+    const results: Record<string, string | null> = {};
+    if (unique.length === 0) return results;
+
+    const server = ElectrumServer();
+    const pending: string[] = [];
+    const calls: ElectrumBatchCall[] = [];
+
+    for (const address of unique) {
+      try {
+        const scripthash = addressToElectrumScripthash(address);
+        pending.push(address);
+        calls.push({
+          method: 'blockchain.scripthash.subscribe',
+          params: [scripthash],
+        });
+      } catch {
+        results[address] = null;
+      }
+    }
+
+    if (calls.length === 0) return results;
+
+    try {
+      const batchResults = await requestManyInChunks(server, calls);
+      batchResults.forEach((response, index) => {
+        const address = pending[index];
+        // Leave key absent on hard failure (do not confuse with unused=null).
+        if (response instanceof Error) {
+          return;
+        }
+        results[address] = typeof response === 'string' ? response : null;
+      });
+    } catch (error) {
+      logError('ElectrumService.getAddressStateMany', error, {
+        count: unique.length,
+      });
+      // Whole batch failed — leave keys absent (gate treats as dirty).
+    }
+    return results;
   },
 
   /** Fetch UTXOs for an address */
@@ -137,7 +321,11 @@ const ElectrumService = {
           address
         );
         if (Array.isArray(res)) {
-          const arr = mapUtxoRows(address, res as Array<Record<string, unknown>>);
+          const arr = mapUtxoRows(
+            address,
+            res as Array<Record<string, unknown>>
+          );
+          evictStale(cacheByAddr, UTXO_TTL_MS);
           cacheByAddr.set(address, { ts: Date.now(), data: arr });
           return arr;
         }
@@ -146,10 +334,15 @@ const ElectrumService = {
           address,
           res
         );
-        return cacheByAddr.get(address)?.data ?? [];
+        // Prefer short TTL cache over inventing empty (empty wiped balances).
+        const cachedFail = cacheByAddr.get(address);
+        if (cachedFail) return cachedFail.data;
+        throw new Error('listunspent non-array response');
       } catch (e) {
         logError('ElectrumService.getUTXOs', e, { address });
-        return cacheByAddr.get(address)?.data ?? [];
+        const cachedFail = cacheByAddr.get(address);
+        if (cachedFail) return cachedFail.data;
+        throw e instanceof Error ? e : new Error(String(e));
       } finally {
         inflightByAddr.delete(address);
       }
@@ -159,12 +352,18 @@ const ElectrumService = {
     return p;
   },
 
-  async getUTXOsMany(addresses: string[]): Promise<Record<string, UTXO[]>> {
+  async getUTXOsMany(
+    addresses: string[],
+    onProgress?: (completedCount: number, totalCount: number) => void
+  ): Promise<Record<string, UTXO[]>> {
     const server = ElectrumServer();
     const uniqueAddresses = Array.from(new Set(addresses.filter(Boolean)));
     const results: Record<string, UTXO[]> = {};
     const pending: string[] = [];
-    const pendingCalls: Array<{ method: string; params: RequestResponse[] }> = [];
+    const pendingCalls: Array<{ method: string; params: RequestResponse[] }> =
+      [];
+    const joinedInflight: Array<{ address: string; promise: Promise<UTXO[]> }> =
+      [];
     const now = Date.now();
 
     for (const address of uniqueAddresses) {
@@ -176,81 +375,185 @@ const ElectrumService = {
 
       const inflight = inflightByAddr.get(address);
       if (inflight) {
-        results[address] = await inflight;
+        joinedInflight.push({ address, promise: inflight });
         continue;
       }
 
-      pending.push(address);
-      pendingCalls.push({
-        method: 'blockchain.address.listunspent',
-        params: [address],
-      });
+      try {
+        pending.push(address);
+        pendingCalls.push(
+          preferredAddressQuery(
+            address,
+            'blockchain.address.listunspent',
+            'blockchain.scripthash.listunspent'
+          )
+        );
+      } catch {
+        // A runtime-specific libauth failure must not silently turn a funded
+        // address into an unqueried address. Keep the CashAddr request as a
+        // compatibility fallback for webviews/native builds.
+        pending.push(address);
+        pendingCalls.push({
+          method: 'blockchain.address.listunspent',
+          params: [address],
+        });
+      }
     }
 
-    if (pendingCalls.length === 0) return results;
+    const cachedCount =
+      uniqueAddresses.length - pending.length - joinedInflight.length;
+    if (cachedCount > 0) {
+      onProgress?.(cachedCount, uniqueAddresses.length);
+    }
+    if (pendingCalls.length === 0) {
+      await Promise.all(
+        joinedInflight.map(async ({ address, promise }) => {
+          try {
+            results[address] = await promise;
+          } catch {
+            // Failed listunspent — leave key absent (keep prior coins).
+          }
+        })
+      );
+      onProgress?.(uniqueAddresses.length, uniqueAddresses.length);
+      return results;
+    }
+
+    // Fire 0-progress immediately so callers (manual Sync) do not sit on a
+    // frozen phase marker while the first Electrum batch is in flight.
+    onProgress?.(cachedCount, uniqueAddresses.length);
 
     const batchPromise = (async () => {
       try {
-        const batchResults = await server.requestMany(pendingCalls);
-        await Promise.all(batchResults.map(async (response, index) => {
-          const address = pending[index];
-          if (response instanceof Error) {
-            if (isInvalidAddressError(response)) {
+        const batchResults = await requestManyInChunks(
+          server,
+          pendingCalls,
+          (done) => {
+            onProgress?.(cachedCount + done, uniqueAddresses.length);
+          }
+        );
+        await Promise.all(
+          batchResults.map(async (response, index) => {
+            const address = pending[index];
+            const tryAddressFallback = async (): Promise<boolean> => {
               try {
-                const fallbackResponse = await requestWithAddressFallback(
-                  server,
-                  'blockchain.address.listunspent',
-                  'blockchain.scripthash.listunspent',
-                  address
+                const fallbackResponse = isDesktopPlatform()
+                  ? await requestWithAddressFallback(
+                      server,
+                      'blockchain.address.listunspent',
+                      'blockchain.scripthash.listunspent',
+                      address
+                    )
+                  : await server.request(
+                      'blockchain.scripthash.listunspent',
+                      addressToElectrumScripthash(address)
+                    );
+                if (!Array.isArray(fallbackResponse)) return false;
+
+                const utxos = mapUtxoRows(
+                  address,
+                  fallbackResponse as Array<Record<string, unknown>>
                 );
-                if (Array.isArray(fallbackResponse)) {
-                  const utxos = mapUtxoRows(
-                    address,
-                    fallbackResponse as Array<Record<string, unknown>>
-                  );
-                  cacheByAddr.set(address, { ts: Date.now(), data: utxos });
-                  results[address] = utxos;
-                  return;
-                }
+                evictStale(cacheByAddr, UTXO_TTL_MS);
+                cacheByAddr.set(address, { ts: Date.now(), data: utxos });
+                results[address] = utxos;
+                return true;
               } catch (fallbackError) {
-                logError('ElectrumService.getUTXOsMany', fallbackError, { address });
+                logError(
+                  'ElectrumService.getUTXOsMany.fallback',
+                  fallbackError,
+                  { address }
+                );
+                return false;
               }
+            };
+
+            if (response instanceof Error) {
+              // Some Electrum-compatible servers expose only one of the
+              // address/scripthash variants. Retry the alternate method on
+              // protocol-level errors so an API mismatch cannot be mistaken
+              // for an empty wallet.
+              if (
+                shouldUseAlternateElectrumMethod(response) &&
+                (await tryAddressFallback())
+              )
+                return;
+              logError('ElectrumService.getUTXOsMany', response, { address });
+              // Do NOT write results[address] = [] — empty means "server said
+              // zero coins". Missing key means "RPC failed; keep prior coins".
+              return;
             }
 
-            logError('ElectrumService.getUTXOsMany', response, { address });
-            return;
-          }
+            if (Array.isArray(response)) {
+              const utxos = mapUtxoRows(
+                address,
+                response as Array<Record<string, unknown>>
+              );
+              evictStale(cacheByAddr, UTXO_TTL_MS);
+              cacheByAddr.set(address, { ts: Date.now(), data: utxos });
+              results[address] = utxos;
+              return;
+            }
 
-          if (Array.isArray(response)) {
-            const utxos = mapUtxoRows(
-              address,
-              response as Array<Record<string, unknown>>
+            // A few web-facing Electrum gateways return a JSON-RPC error
+            // object instead of an Error in a batch response. Treat that as a
+            // protocol mismatch and try the address form before dropping the
+            // address from the wallet snapshot.
+            if (await tryAddressFallback()) return;
+
+            logError(
+              'ElectrumService.getUTXOsMany.nonArrayResponse',
+              new Error('Non-array Electrum response'),
+              { address, response }
             );
-            cacheByAddr.set(address, { ts: Date.now(), data: utxos });
-            results[address] = utxos;
-            return;
-          }
-
-          logError(
-            'ElectrumService.getUTXOsMany.nonArrayResponse',
-            new Error('Non-array Electrum response'),
-            { address, response }
-          );
-        }));
+          })
+        );
       } finally {
         pending.forEach((address) => inflightByAddr.delete(address));
+      }
+      if (import.meta.env.DEV) {
+        const returnedUtxos = Object.values(results).flat();
+        console.info('[ElectrumService] UTXO response summary', {
+          requestedAddressCount: uniqueAddresses.length,
+          returnedAddressCount: Object.keys(results).length,
+          method: isDesktopPlatform()
+            ? 'blockchain.scripthash.listunspent'
+            : 'blockchain.address.listunspent',
+          coinCount: returnedUtxos.length,
+          totalSats: returnedUtxos.reduce(
+            (total, utxo) => total + (utxo.value ?? utxo.amount ?? 0),
+            0
+          ),
+        });
       }
       return results;
     })();
 
+    // CRITICAL: never resolve missing keys to []. Empty means "server said
+    // zero coins"; missing key means "RPC failed — keep prior HOT UTXOs".
     for (const address of pending) {
-      inflightByAddr.set(
-        address,
-        batchPromise.then((resolved) => resolved[address] ?? [])
-      );
+      const p = batchPromise.then((resolved) => {
+        if (Object.prototype.hasOwnProperty.call(resolved, address)) {
+          return resolved[address] as UTXO[];
+        }
+        throw new Error('listunspent failed for address (no result)');
+      });
+      // Prevent unhandled rejection when no concurrent joiner awaits.
+      void p.catch(() => undefined);
+      inflightByAddr.set(address, p);
     }
 
-    await batchPromise;
+    await Promise.all([
+      batchPromise,
+      ...joinedInflight.map(async ({ address, promise }) => {
+        try {
+          results[address] = await promise;
+        } catch {
+          // Failed listunspent — leave key absent (keep prior coins).
+        }
+      }),
+    ]);
+    onProgress?.(uniqueAddresses.length, uniqueAddresses.length);
     return results;
   },
 
@@ -295,6 +598,59 @@ const ElectrumService = {
     }
   },
 
+  /**
+   * Fetch raw transaction hex (verbose=false). Used by the Option A ledger to
+   * materialize full txi/txo from the wire format.
+   */
+  async getRawTransaction(txHash: string): Promise<string | null> {
+    const server = ElectrumServer();
+    try {
+      const response = await server.request(
+        'blockchain.transaction.get',
+        txHash,
+        false
+      );
+      if (isStringResponse(response) && response.length > 0) {
+        return response;
+      }
+      return null;
+    } catch (error) {
+      logError('ElectrumService.getRawTransaction', error, { txHash });
+      return null;
+    }
+  },
+
+  /** Batch raw-tx hex fetch. Returns only successfully resolved txids. */
+  async getRawTransactionMany(
+    txHashes: string[]
+  ): Promise<Record<string, string>> {
+    const unique = Array.from(new Set(txHashes.filter(Boolean)));
+    if (unique.length === 0) return {};
+
+    const server = ElectrumServer();
+    const results: Record<string, string> = {};
+    try {
+      const responses = await server.requestMany(
+        unique.map((txid) => ({
+          method: 'blockchain.transaction.get',
+          params: [txid, false],
+        }))
+      );
+      responses.forEach((response, index) => {
+        const txid = unique[index];
+        if (response instanceof Error) return;
+        if (isStringResponse(response) && response.length > 0) {
+          results[txid] = response;
+        }
+      });
+    } catch (error) {
+      logError('ElectrumService.getRawTransactionMany', error, {
+        count: unique.length,
+      });
+    }
+    return results;
+  },
+
   /** Fetch transaction history for an address */
   async getTransactionHistory(
     address: string
@@ -318,6 +674,7 @@ const ElectrumService = {
           address
         );
         if (isTransactionHistoryArray(history)) {
+          evictStale(historyCacheByAddr, HISTORY_TTL_MS);
           historyCacheByAddr.set(address, { ts: Date.now(), data: history });
           return history;
         }
@@ -335,13 +692,15 @@ const ElectrumService = {
   },
 
   async getTransactionHistoryMany(
-    addresses: string[]
+    addresses: string[],
+    onProgress?: (completedCount: number, totalCount: number) => void
   ): Promise<Record<string, TransactionHistoryItem[] | null>> {
     const server = ElectrumServer();
     const uniqueAddresses = Array.from(new Set(addresses.filter(Boolean)));
     const results: Record<string, TransactionHistoryItem[] | null> = {};
     const pending: string[] = [];
-    const pendingCalls: Array<{ method: string; params: RequestResponse[] }> = [];
+    const pendingCalls: Array<{ method: string; params: RequestResponse[] }> =
+      [];
     const now = Date.now();
 
     for (const address of uniqueAddresses) {
@@ -357,64 +716,108 @@ const ElectrumService = {
         continue;
       }
 
-      pending.push(address);
-      pendingCalls.push({
-        method: 'blockchain.address.get_history',
-        params: [address],
-      });
+      try {
+        pending.push(address);
+        pendingCalls.push(
+          preferredAddressQuery(
+            address,
+            'blockchain.address.get_history',
+            'blockchain.scripthash.get_history'
+          )
+        );
+      } catch {
+        continue;
+      }
     }
 
-    if (pendingCalls.length === 0) return results;
+    const cachedCount = uniqueAddresses.length - pending.length;
+    if (cachedCount > 0) {
+      onProgress?.(cachedCount, uniqueAddresses.length);
+    }
+
+    if (pendingCalls.length === 0) {
+      onProgress?.(uniqueAddresses.length, uniqueAddresses.length);
+      return results;
+    }
 
     const batchPromise = (async () => {
       try {
-        const batchResults = await server.requestMany(pendingCalls);
-        await Promise.all(batchResults.map(async (response, index) => {
-          const address = pending[index];
-          if (response instanceof Error) {
-            if (isInvalidAddressError(response)) {
-              try {
-                const fallbackResponse = await requestWithAddressFallback(
-                  server,
-                  'blockchain.address.get_history',
-                  'blockchain.scripthash.get_history',
-                  address
-                );
-                if (isTransactionHistoryArray(fallbackResponse)) {
-                  historyCacheByAddr.set(address, {
-                    ts: Date.now(),
-                    data: fallbackResponse,
-                  });
-                  results[address] = fallbackResponse;
-                  return;
+        const batchResults = await requestManyInChunks(
+          server,
+          pendingCalls,
+          (done) => {
+            onProgress?.(cachedCount + done, uniqueAddresses.length);
+          }
+        );
+        await Promise.all(
+          batchResults.map(async (response, index) => {
+            const address = pending[index];
+            if (response instanceof Error) {
+              if (shouldUseAlternateElectrumMethod(response)) {
+                try {
+                  const fallbackResponse = isDesktopPlatform()
+                    ? await requestWithAddressFallback(
+                        server,
+                        'blockchain.address.get_history',
+                        'blockchain.scripthash.get_history',
+                        address
+                      )
+                    : await server.request(
+                        'blockchain.scripthash.get_history',
+                        addressToElectrumScripthash(address)
+                      );
+                  if (isTransactionHistoryArray(fallbackResponse)) {
+                    evictStale(historyCacheByAddr, HISTORY_TTL_MS);
+                    historyCacheByAddr.set(address, {
+                      ts: Date.now(),
+                      data: fallbackResponse,
+                    });
+                    results[address] = fallbackResponse;
+                    return;
+                  }
+                } catch (fallbackError) {
+                  logError(
+                    'ElectrumService.getTransactionHistoryMany.fallback',
+                    fallbackError,
+                    { address }
+                  );
                 }
-              } catch (fallbackError) {
-                logError('ElectrumService.getTransactionHistoryMany', fallbackError, {
-                  address,
-                });
               }
+              logError('ElectrumService.getTransactionHistoryMany', response, {
+                address,
+              });
+              results[address] = historyCacheByAddr.get(address)?.data ?? null;
+              return;
             }
 
-            logError('ElectrumService.getTransactionHistoryMany', response, {
-              address,
-            });
+            if (isTransactionHistoryArray(response)) {
+              evictStale(historyCacheByAddr, HISTORY_TTL_MS);
+              historyCacheByAddr.set(address, {
+                ts: Date.now(),
+                data: response,
+              });
+              results[address] = response;
+              return;
+            }
+
             results[address] = historyCacheByAddr.get(address)?.data ?? null;
-            return;
-          }
-
-          if (isTransactionHistoryArray(response)) {
-            historyCacheByAddr.set(address, {
-              ts: Date.now(),
-              data: response,
-            });
-            results[address] = response;
-            return;
-          }
-
-          results[address] = historyCacheByAddr.get(address)?.data ?? null;
-        }));
+          })
+        );
       } finally {
         pending.forEach((address) => inflightHistoryByAddr.delete(address));
+      }
+      if (import.meta.env.DEV) {
+        const histories = Object.values(results);
+        console.info('[ElectrumService] history response summary', {
+          requestedAddressCount: uniqueAddresses.length,
+          returnedAddressCount: Object.keys(results).length,
+          method: isDesktopPlatform()
+            ? 'blockchain.scripthash.get_history'
+            : 'blockchain.address.get_history',
+          usedAddressCount: histories.filter(
+            (history) => Array.isArray(history) && history.length > 0
+          ).length,
+        });
       }
       return results;
     })();
@@ -430,7 +833,9 @@ const ElectrumService = {
     return results;
   },
 
-  async getTransactionVisibility(txHash: string): Promise<TransactionVisibility> {
+  async getTransactionVisibility(
+    txHash: string
+  ): Promise<TransactionVisibility> {
     const server = ElectrumServer();
     const now = Date.now();
     const cached = visibilityCacheByTxid.get(txHash);
@@ -450,6 +855,7 @@ const ElectrumService = {
         );
         const visibility = toVisibilityFromResponse(response);
 
+        evictStale(visibilityCacheByTxid, VISIBILITY_TTL_MS);
         visibilityCacheByTxid.set(txHash, {
           ts: Date.now(),
           data: visibility,
@@ -470,10 +876,12 @@ const ElectrumService = {
           return visibility;
         }
         logError('ElectrumService.getTransactionVisibility', error, { txHash });
-        return visibilityCacheByTxid.get(txHash)?.data ?? {
-          seen: false,
-          confirmed: false,
-        };
+        return (
+          visibilityCacheByTxid.get(txHash)?.data ?? {
+            seen: false,
+            confirmed: false,
+          }
+        );
       } finally {
         inflightVisibilityByTxid.delete(txHash);
       }
@@ -490,7 +898,8 @@ const ElectrumService = {
     const uniqueTxHashes = Array.from(new Set(txHashes.filter(Boolean)));
     const results: Record<string, TransactionVisibility> = {};
     const pending: string[] = [];
-    const pendingCalls: Array<{ method: string; params: RequestResponse[] }> = [];
+    const pendingCalls: Array<{ method: string; params: RequestResponse[] }> =
+      [];
     const now = Date.now();
 
     for (const txHash of uniqueTxHashes) {
@@ -517,7 +926,7 @@ const ElectrumService = {
 
     const batchPromise = (async () => {
       try {
-        const batchResults = await server.requestMany(pendingCalls);
+        const batchResults = await requestManyInChunks(server, pendingCalls);
         batchResults.forEach((response, index) => {
           const txHash = pending[index];
 
@@ -529,6 +938,7 @@ const ElectrumService = {
               message.includes('missing')
             ) {
               const visibility = { seen: false, confirmed: false };
+              evictStale(visibilityCacheByTxid, VISIBILITY_TTL_MS);
               visibilityCacheByTxid.set(txHash, {
                 ts: Date.now(),
                 data: visibility,
@@ -549,6 +959,7 @@ const ElectrumService = {
 
           try {
             const visibility = toVisibilityFromResponse(response);
+            evictStale(visibilityCacheByTxid, VISIBILITY_TTL_MS);
             visibilityCacheByTxid.set(txHash, {
               ts: Date.now(),
               data: visibility,
@@ -591,10 +1002,62 @@ const ElectrumService = {
     txHash: string,
     options?: { forceRefresh?: boolean }
   ): Promise<TransactionDetails | null> {
+    const deriveHeightFromConfs = async (
+      confs: number,
+      existingHeight?: number
+    ): Promise<number | undefined> => {
+      if (
+        typeof existingHeight === 'number' &&
+        Number.isFinite(existingHeight) &&
+        existingHeight > 0
+      ) {
+        return existingHeight;
+      }
+      if (!(confs > 0)) return existingHeight;
+      try {
+        const tipResp = await ElectrumService.getLatestBlock();
+        const tipObj =
+          typeof tipResp === 'object' && tipResp !== null
+            ? (tipResp as Record<string, unknown>)
+            : null;
+        const tipHeight =
+          tipObj &&
+          typeof tipObj.height === 'number' &&
+          Number.isFinite(tipObj.height)
+            ? tipObj.height
+            : typeof tipResp === 'number'
+              ? tipResp
+              : undefined;
+        if (tipHeight != null && tipHeight > 0) {
+          return tipHeight - confs + 1;
+        }
+      } catch {
+        /* non-fatal */
+      }
+      return existingHeight;
+    };
+
     const now = Date.now();
     const cached = detailsCacheByTxid.get(txHash);
     if (!options?.forceRefresh && cached && now - cached.ts < DETAILS_TTL_MS) {
-      return cached.data;
+      const data = cached.data;
+      if (
+        data &&
+        data.confirmations > 0 &&
+        !(typeof data.height === 'number' && data.height > 0)
+      ) {
+        const height = await deriveHeightFromConfs(
+          data.confirmations,
+          data.height
+        );
+        if (typeof height === 'number' && height > 0) {
+          const fixed = { ...data, height };
+          detailsCacheByTxid.set(txHash, { ts: Date.now(), data: fixed });
+          void persistTransactionDetails(fixed);
+          return fixed;
+        }
+      }
+      return data;
     }
 
     const inflight = inflightDetailsByTxid.get(txHash);
@@ -606,12 +1069,33 @@ const ElectrumService = {
           ? null
           : await readTransactionDetailsFromDb(txHash);
         if (persisted) {
-          detailsCacheByTxid.set(txHash, { ts: Date.now(), data: persisted });
-          return persisted;
+          // Prior persists often stored confs without height (servers omit it).
+          // Do not poison the list path — fill height from tip when missing.
+          let resolved = persisted;
+          if (
+            persisted.confirmations > 0 &&
+            !(typeof persisted.height === 'number' && persisted.height > 0)
+          ) {
+            const height = await deriveHeightFromConfs(
+              persisted.confirmations,
+              persisted.height
+            );
+            if (typeof height === 'number' && height > 0) {
+              resolved = { ...persisted, height };
+              void persistTransactionDetails(resolved);
+            }
+          }
+          evictStale(detailsCacheByTxid, DETAILS_TTL_MS);
+          detailsCacheByTxid.set(txHash, { ts: Date.now(), data: resolved });
+          return resolved;
         }
 
         const server = ElectrumServer();
-        const response = await server.request('blockchain.transaction.get', txHash, true);
+        const response = await server.request(
+          'blockchain.transaction.get',
+          txHash,
+          true
+        );
         if (!isVerboseTransaction(response)) {
           throw new Error('Invalid transaction details response');
         }
@@ -620,19 +1104,28 @@ const ElectrumService = {
           ? response.vout.map(mapOutputParticipant)
           : [];
         const inputs = await resolveInputParticipants(server, response);
+        const confs =
+          typeof response.confirmations === 'number' &&
+          Number.isFinite(response.confirmations)
+            ? response.confirmations
+            : 0;
+        const rawHeight =
+          typeof response.height === 'number' &&
+          Number.isFinite(response.height) &&
+          response.height > 0
+            ? response.height
+            : undefined;
+        // Some Electrum servers omit `height` in verbose tx response.  Derive
+        // it from confirmations + current chain tip so History/Home can leave
+        // "Unconfirmed" (they key off height > 0, not confirmations alone).
+        const txHeight = await deriveHeightFromConfs(confs, rawHeight);
         const details: TransactionDetails = {
           txid:
             typeof response.txid === 'string' && response.txid.trim()
               ? response.txid
               : txHash,
-          confirmations:
-            typeof response.confirmations === 'number' && Number.isFinite(response.confirmations)
-              ? response.confirmations
-              : 0,
-          height:
-            typeof response.height === 'number' && Number.isFinite(response.height)
-              ? response.height
-              : undefined,
+          confirmations: confs,
+          height: txHeight,
           feeSats: deriveFeeSats(response.fee, inputs, outputs),
           timestamp: extractTimestamp(response),
           inputs,
@@ -640,6 +1133,7 @@ const ElectrumService = {
         };
 
         await persistTransactionDetails(details);
+        evictStale(detailsCacheByTxid, DETAILS_TTL_MS);
         detailsCacheByTxid.set(txHash, { ts: Date.now(), data: details });
         return details;
       } catch (error) {
@@ -680,6 +1174,20 @@ const ElectrumService = {
       await registerAddressSubscription(address, callback);
     } catch (error) {
       logError('ElectrumService.subscribeAddress', error, { address });
+    }
+  },
+
+  /** Bulk-subscribe addresses in one batched round-trip */
+  async subscribeAddressesBulk(
+    addresses: string[],
+    callback?: (address: string, status: string) => void
+  ) {
+    try {
+      await registerAddressSubscriptionsBulk(addresses, callback);
+    } catch (error) {
+      logError('ElectrumService.subscribeAddressesBulk', error, {
+        addressCount: addresses.length,
+      });
     }
   },
 
@@ -726,7 +1234,9 @@ const ElectrumService = {
   /** Unsubscribe from address updates */
   async unsubscribeAddress(address: string): Promise<boolean> {
     try {
-      await ElectrumServer().unsubscribe('blockchain.address.subscribe', [address]);
+      await ElectrumServer().unsubscribe('blockchain.address.subscribe', [
+        address,
+      ]);
       unregisterAddressSubscription(address);
       return true;
     } catch (error) {
@@ -736,7 +1246,9 @@ const ElectrumService = {
   },
 
   /** Unsubscribe from block headers */
-  async unsubscribeBlockHeaders(callback?: (header: unknown) => void): Promise<boolean> {
+  async unsubscribeBlockHeaders(
+    callback?: (header: unknown) => void
+  ): Promise<boolean> {
     try {
       return await clearBlockHeaderListeners(callback);
     } catch (error) {
@@ -748,7 +1260,9 @@ const ElectrumService = {
   /** Unsubscribe from transaction updates */
   async unsubscribeTransaction(txHash: string): Promise<boolean> {
     try {
-      await ElectrumServer().unsubscribe('blockchain.transaction.subscribe', [txHash]);
+      await ElectrumServer().unsubscribe('blockchain.transaction.subscribe', [
+        txHash,
+      ]);
       unregisterTransactionSubscription(txHash);
       return true;
     } catch (error) {
@@ -760,13 +1274,16 @@ const ElectrumService = {
   /** Unsubscribe from double-spend proofs */
   async unsubscribeDoubleSpendProof(txHash: string): Promise<boolean> {
     try {
-      await ElectrumServer().unsubscribe('blockchain.transaction.dsproof.subscribe', [
-        txHash,
-      ]);
+      await ElectrumServer().unsubscribe(
+        'blockchain.transaction.dsproof.subscribe',
+        [txHash]
+      );
       unregisterDoubleSpendProofSubscription(txHash);
       return true;
     } catch (error) {
-      logError('ElectrumService.unsubscribeDoubleSpendProof', error, { txHash });
+      logError('ElectrumService.unsubscribeDoubleSpendProof', error, {
+        txHash,
+      });
       return false;
     }
   },

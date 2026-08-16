@@ -7,7 +7,7 @@
 //   ready    — key is loaded; renders children normally
 //
 // Passphrase is mandatory — the app cannot be used without one.
-// An empty passphrase is accepted (PBKDF2 still runs; provides OS-account protection).
+// Min length matches extension + per-wallet policy (blank is no longer accepted).
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
@@ -17,7 +17,9 @@ import {
   unlockApp,
   setPassphraseConfigured,
 } from '../../state/slices/appLockSlice';
-import { EcKeyManager } from './EcKeyManager';
+import { OptnKeyManager } from './OptnKeyManager';
+import { validateNewWalletPassword } from './passwordPolicy';
+import { useI18n } from '../../i18n/useI18n';
 
 type GateState = 'loading' | 'setup' | 'locked' | 'ready';
 
@@ -28,6 +30,7 @@ interface Props {
 export const DesktopSecurityGate: React.FC<Props> = ({ children }) => {
   const dispatch = useDispatch<AppDispatch>();
   const isLockedRedux = useSelector(selectIsLocked);
+  const { t } = useI18n();
 
   const [gateState, setGateState] = useState<GateState>('loading');
   const [passphrase, setPassphrase] = useState('');
@@ -44,11 +47,11 @@ export const DesktopSecurityGate: React.FC<Props> = ({ children }) => {
     initialised.current = true;
 
     void (async () => {
-      if (EcKeyManager.isUnlocked()) {
+      if (OptnKeyManager.isUnlocked()) {
         setGateState('ready');
         return;
       }
-      const setup = await EcKeyManager.hasSetup();
+      const setup = await OptnKeyManager.hasSetup();
       if (setup) {
         setGateState('locked');
       } else {
@@ -63,12 +66,14 @@ export const DesktopSecurityGate: React.FC<Props> = ({ children }) => {
     let cancelled = false;
     void (async () => {
       const [available, enrolled] = await Promise.all([
-        EcKeyManager.isBiometricAvailable(),
-        EcKeyManager.hasBiometricEnrolled(),
+        OptnKeyManager.isBiometricAvailable(),
+        OptnKeyManager.hasBiometricEnrolled(),
       ]);
       if (!cancelled) setBiometricOffered(available && enrolled);
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [gateState]);
 
   // ── Biometric unlock ──────────────────────────────────────────────────────
@@ -77,26 +82,26 @@ export const DesktopSecurityGate: React.FC<Props> = ({ children }) => {
     setBiometricBusy(true);
     setError('');
     try {
-      const ok = await EcKeyManager.unlockWithBiometric();
+      const ok = await OptnKeyManager.unlockWithBiometric();
       if (ok) {
         dispatch(unlockApp());
         setGateState('ready');
         setPassphrase('');
       } else {
-        setError('Biometric unlock failed. Use your password.');
+        setError(t('desktopSecurity.biometricFailed'));
       }
     } catch (err) {
       console.error('[DesktopSecurityGate] Biometric unlock error:', err);
-      setError('Biometric unlock failed. Use your password.');
+      setError(t('desktopSecurity.biometricFailed'));
     } finally {
       setBiometricBusy(false);
     }
-  }, [dispatch]);
+  }, [dispatch, t]);
 
   // When Redux signals a lock (inactivity), transition to locked state.
   useEffect(() => {
     if (isLockedRedux && gateState === 'ready') {
-      EcKeyManager.lock();
+      OptnKeyManager.lock();
       setGateState('locked');
       setPassphrase('');
       setPassphraseConfirm('');
@@ -106,58 +111,67 @@ export const DesktopSecurityGate: React.FC<Props> = ({ children }) => {
 
   // ── First-time setup ──────────────────────────────────────────────────────
 
-  const handleSetup = useCallback(async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (passphrase !== passphraseConfirm) {
-      setError('Passphrases do not match.');
-      return;
-    }
-    setBusy(true);
-    setError('');
-    try {
-      await EcKeyManager.setup(passphrase);
-      dispatch(setPassphraseConfigured(true));
-      dispatch(unlockApp());
-      setGateState('ready');
-      setPassphrase('');
-      setPassphraseConfirm('');
-    } catch (err) {
-      console.error('[DesktopSecurityGate] Setup error:', err);
-      setError('Failed to save passphrase. Please try again.');
-    } finally {
-      setBusy(false);
-    }
-  }, [passphrase, passphraseConfirm, dispatch]);
-
-  // ── Unlock ────────────────────────────────────────────────────────────────
-
-  const handleUnlock = useCallback(async (e: React.FormEvent) => {
-    e.preventDefault();
-    setBusy(true);
-    setError('');
-    try {
-      const ok = await EcKeyManager.unlock(passphrase);
-      if (ok) {
+  const handleSetup = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault();
+      const passErr = validateNewWalletPassword(passphrase, passphraseConfirm);
+      if (passErr) {
+        setError(passErr);
+        return;
+      }
+      setBusy(true);
+      setError('');
+      try {
+        await OptnKeyManager.setup(passphrase);
+        dispatch(setPassphraseConfigured(true));
         dispatch(unlockApp());
         setGateState('ready');
         setPassphrase('');
-      } else {
-        setError('Incorrect passphrase. Please try again.');
+        setPassphraseConfirm('');
+      } catch (err) {
+        console.error('[DesktopSecurityGate] Setup error:', err);
+        setError(t('desktopSecurity.saveFailed'));
+      } finally {
+        setBusy(false);
       }
-    } catch (err) {
-      console.error('[DesktopSecurityGate] Unlock error:', err);
-      setError('Unlock failed. Please try again.');
-    } finally {
-      setBusy(false);
-    }
-  }, [passphrase, dispatch]);
+    },
+    [passphrase, passphraseConfirm, dispatch, t]
+  );
+
+  // ── Unlock ────────────────────────────────────────────────────────────────
+
+  const handleUnlock = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault();
+      setBusy(true);
+      setError('');
+      try {
+        const ok = await OptnKeyManager.unlock(passphrase);
+        if (ok) {
+          dispatch(unlockApp());
+          setGateState('ready');
+          setPassphrase('');
+        } else {
+          setError(t('desktopSecurity.incorrect'));
+        }
+      } catch (err) {
+        console.error('[DesktopSecurityGate] Unlock error:', err);
+        setError(t('desktopSecurity.unlockFailed'));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [passphrase, dispatch, t]
+  );
 
   // ── Loading ───────────────────────────────────────────────────────────────
 
   if (gateState === 'loading') {
     return (
       <div className="fixed inset-0 flex items-center justify-center bg-[var(--wallet-bg,#0f0f0f)]">
-        <div className="text-sm wallet-muted animate-pulse">Loading wallet…</div>
+        <div className="text-sm wallet-muted animate-pulse">
+          {t('desktopSecurity.loading')}
+        </div>
       </div>
     );
   }
@@ -170,10 +184,12 @@ export const DesktopSecurityGate: React.FC<Props> = ({ children }) => {
         <div className="wallet-card w-full max-w-sm p-6 space-y-5">
           <div className="text-center space-y-1">
             <div className="text-3xl mb-2">🔐</div>
-            <h2 className="text-lg font-bold wallet-text-strong">Secure your wallet</h2>
+            <h2 className="text-lg font-bold wallet-text-strong">
+              {t('desktopSecurity.secureWallet')}
+            </h2>
             <p className="text-sm wallet-muted">
-              Set a password to encrypt your wallet. You'll need it every time you open the app.
-              Leave blank to use OS-account protection only.
+              Optional: leave empty for no app password, or use at least 8
+              characters to encrypt wallet secrets.
             </p>
           </div>
 
@@ -181,31 +197,45 @@ export const DesktopSecurityGate: React.FC<Props> = ({ children }) => {
             <input
               type="password"
               value={passphrase}
-              onChange={(e) => { setPassphrase(e.target.value); setError(''); }}
-              placeholder="Password (or leave blank)"
+              onChange={(e) => {
+                setPassphrase(e.target.value);
+                setError('');
+              }}
+              placeholder={t('desktopSecurity.passwordPlaceholder')}
+              autoComplete="new-password"
               autoFocus
               className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-4 py-3 text-sm wallet-text-strong placeholder:wallet-muted outline-none focus:ring-2 focus:ring-[var(--wallet-accent)]"
             />
             <input
               type="password"
               value={passphraseConfirm}
-              onChange={(e) => { setPassphraseConfirm(e.target.value); setError(''); }}
-              placeholder="Confirm password"
+              onChange={(e) => {
+                setPassphraseConfirm(e.target.value);
+                setError('');
+              }}
+              placeholder={t('desktopSecurity.confirmPassword')}
+              autoComplete="new-password"
               className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-4 py-3 text-sm wallet-text-strong placeholder:wallet-muted outline-none focus:ring-2 focus:ring-[var(--wallet-accent)]"
             />
-            {error && <p className="text-sm text-red-400 text-center">{error}</p>}
+            {error && (
+              <p className="text-sm text-red-400 text-center">{error}</p>
+            )}
             <button
               type="submit"
               disabled={busy}
               className="w-full rounded-xl py-3 text-sm font-semibold text-white disabled:opacity-50"
               style={{ background: 'var(--wallet-accent, #6366f1)' }}
             >
-              {busy ? 'Securing…' : 'Continue'}
+              {busy
+                ? t('desktopSecurity.securing')
+                : t('desktopSecurity.continue')}
             </button>
           </form>
 
           <p className="text-xs wallet-muted text-center">
-            Your password is never stored — it derives your encryption key locally.
+            Your password is never stored — it derives your encryption key
+            locally. Blank or short passwords are not allowed: they do not
+            protect seeds at rest.
           </p>
         </div>
       </div>
@@ -220,8 +250,12 @@ export const DesktopSecurityGate: React.FC<Props> = ({ children }) => {
         <div className="wallet-card w-full max-w-sm p-6 space-y-5">
           <div className="text-center space-y-1">
             <div className="text-3xl mb-2">🔒</div>
-            <h2 className="text-lg font-bold wallet-text-strong">Wallet locked</h2>
-            <p className="text-sm wallet-muted">Enter your password to unlock.</p>
+            <h2 className="text-lg font-bold wallet-text-strong">
+              {t('desktopSecurity.walletLocked')}
+            </h2>
+            <p className="text-sm wallet-muted">
+              {t('desktopSecurity.enterPassword')}
+            </p>
           </div>
 
           {biometricOffered && (
@@ -232,7 +266,13 @@ export const DesktopSecurityGate: React.FC<Props> = ({ children }) => {
               className="w-full flex items-center justify-center gap-2 rounded-xl border border-[var(--wallet-border)] py-3 text-sm font-medium wallet-text-strong disabled:opacity-50"
             >
               <span className="text-lg">👆</span>
-              <span>{biometricBusy ? 'Authenticating…' : `Use ${EcKeyManager.getBiometricLabel()}`}</span>
+              <span>
+                {biometricBusy
+                  ? t('desktopSecurity.authenticating')
+                  : t('desktopSecurity.useBiometric', {
+                      label: OptnKeyManager.getBiometricLabel(),
+                    })}
+              </span>
             </button>
           )}
 
@@ -240,24 +280,34 @@ export const DesktopSecurityGate: React.FC<Props> = ({ children }) => {
             <input
               type="password"
               value={passphrase}
-              onChange={(e) => { setPassphrase(e.target.value); setError(''); }}
-              placeholder="Password"
+              onChange={(e) => {
+                setPassphrase(e.target.value);
+                setError('');
+              }}
+              placeholder={t('desktopSecurity.password')}
               autoFocus
               className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-4 py-3 text-sm wallet-text-strong placeholder:wallet-muted outline-none focus:ring-2 focus:ring-[var(--wallet-accent)]"
-              onKeyDown={(e) => { if (e.key === 'Enter') void handleUnlock(e as unknown as React.FormEvent); }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter')
+                  void handleUnlock(e as unknown as React.FormEvent);
+              }}
             />
-            {error && <p className="text-sm text-red-400 text-center">{error}</p>}
+            {error && (
+              <p className="text-sm text-red-400 text-center">{error}</p>
+            )}
             <button
               type="submit"
               disabled={busy}
               className="w-full rounded-xl py-3 text-sm font-semibold text-white disabled:opacity-50"
               style={{ background: 'var(--wallet-accent, #6366f1)' }}
             >
-              {busy ? 'Unlocking…' : 'Unlock'}
+              {busy
+                ? t('desktopSecurity.unlocking')
+                : t('desktopSecurity.unlock')}
             </button>
           </form>
           <p className="text-xs wallet-muted text-center">
-            Forgot your password? Remove the wallet and re-import your seed phrase.
+            {t('desktopSecurity.forgotPassword')}
           </p>
         </div>
       </div>

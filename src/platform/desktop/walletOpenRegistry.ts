@@ -102,9 +102,11 @@ export async function claimWalletOpen(
   // Asked BEFORE taking the lock: the probe is async and the critical section
   // must stay synchronous so two windows cannot interleave inside it.
   let holderIsGone = false;
+  let probedHolder: OpenClaim | null = null;
   if (isWindowOpen) {
     const existing = readClaims()[String(walletId)];
     if (existing && existing.windowLabel !== windowLabel) {
+      probedHolder = existing;
       try {
         holderIsGone = !(await isWindowOpen(existing.windowLabel));
       } catch {
@@ -117,11 +119,16 @@ export async function claimWalletOpen(
   const claim = (): string | null => {
     const claims = readClaims();
     const held = claims[String(walletId)];
+    const canReplaceProbedHolder =
+      holderIsGone &&
+      probedHolder !== null &&
+      held?.windowLabel === probedHolder.windowLabel &&
+      held.at === probedHolder.at;
     if (
       held &&
       held.windowLabel !== windowLabel &&
       isLive(held, nowMs) &&
-      !holderIsGone
+      !canReplaceProbedHolder
     ) {
       return held.windowLabel;
     }
@@ -170,6 +177,44 @@ export async function releaseWalletOpen(
       writeClaims(claims);
     }
   });
+}
+
+export type ExclusiveWalletOpenResult<T> =
+  | { status: 'opened'; value: T }
+  | { status: 'held'; windowLabel: string }
+  | { status: 'rejected' };
+
+/**
+ * Claim, unlock, and either retain or roll back the wallet claim as one
+ * lifecycle. Password and biometric opens must use the same path: claiming
+ * before verification prevents duplicate key work, while rollback prevents a
+ * wrong password or database error from impersonating a live wallet window.
+ */
+export async function runExclusiveWalletOpen<T>(
+  walletId: number,
+  windowLabel: string,
+  open: () => Promise<T | null>,
+  isWindowOpen?: (label: string) => Promise<boolean>
+): Promise<ExclusiveWalletOpenResult<T>> {
+  const heldBy = await claimWalletOpen(
+    walletId,
+    windowLabel,
+    Date.now(),
+    isWindowOpen
+  );
+  if (heldBy) return { status: 'held', windowLabel: heldBy };
+
+  try {
+    const value = await open();
+    if (value === null) {
+      await releaseWalletOpen(walletId, windowLabel);
+      return { status: 'rejected' };
+    }
+    return { status: 'opened', value };
+  } catch (error) {
+    await releaseWalletOpen(walletId, windowLabel).catch(() => undefined);
+    throw error;
+  }
 }
 
 /** Window label holding this wallet, or null when nobody live does. */

@@ -9,14 +9,17 @@ lerna-debug.log*
 
 node_modules
 target/
+target-frozen/
 dist
 dist-ssr
 dist-extension-chrome
 dist-extension-firefox
+coverage/
 *.local
 vite.config.js
 vite.config.d.ts
 tsconfig.node.tsbuildinfo
+tsconfig.tsbuildinfo
 
 # Editor directories and files
 .vscode/*
@@ -28,6 +31,7 @@ tsconfig.node.tsbuildinfo
 *.njsproj
 *.sln
 *.sw?
+*.code-workspace
 .env
 .env.*
 
@@ -41,6 +45,7 @@ android/key.properties
 
 # Assistant-internal tooling (not part of the app)
 .serena/
+VERIFIED-AGENT-GRAPH.json
 
 # Tor binary fetched at build time (scripts/fetch-tor.mjs), not committed
 src-tauri/resources/tor/

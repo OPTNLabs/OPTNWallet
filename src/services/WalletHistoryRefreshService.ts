@@ -22,8 +22,11 @@ import { planTransactionDetailRefresh } from './transactionDetailSync';
 import {
   runOutboundReconcile,
   runWalletHistoryRefresh,
+  runWalletHistoryRefreshExclusive,
 } from './RefreshCoordinator';
 import QuantumrootTrackingService from './QuantumrootTrackingService';
+import { mergeRecordedFusionTxsIntoHistory } from '../platform/desktop/fusionCoinDepth';
+import { backfillConfirmedHistoryHeights } from './historyHeightBackfill';
 
 type SqlLikeDb = {
   prepare: (sql: string) => {
@@ -35,9 +38,17 @@ type SqlLikeDb = {
 };
 
 function toHistoryItem(row: Record<string, unknown>): TransactionHistoryItem {
+  const sqlHeight = Number(row.height ?? 0);
+  const detailHeight = Number(row.detail_height ?? 0);
+  const confirmations = Number(row.confirmations ?? 0);
+  const height =
+    detailHeight > 0 && detailHeight >= sqlHeight
+      ? detailHeight
+      : sqlHeight;
   return {
     tx_hash: String(row.tx_hash ?? ''),
-    height: Number(row.height ?? 0),
+    height,
+    confirmations: confirmations > 0 ? confirmations : undefined,
     timestamp:
       row.timestamp === null || row.timestamp === undefined
         ? undefined
@@ -53,18 +64,66 @@ export function loadStoredTransactions(
   db: SqlLikeDb,
   walletId: number
 ): TransactionHistoryItem[] {
-  const query = db.prepare(`
-    SELECT tx_hash, height, timestamp, amount
-    FROM transactions
-    WHERE wallet_id = ?;
-  `);
-  query.bind([walletId]);
-  const rows: TransactionHistoryItem[] = [];
-  while (query.step()) {
-    rows.push(toHistoryItem(query.getAsObject()));
+  // Prefer verbose Electrum details (confirmations / height) so a fusion
+  // CoinJoin stored at height 0 still paints Confirmed on the next open.
+  let query;
+  try {
+    query = db.prepare(`
+      SELECT t.tx_hash AS tx_hash,
+             t.height AS height,
+             t.timestamp AS timestamp,
+             t.amount AS amount,
+             d.height AS detail_height,
+             d.confirmations AS confirmations
+      FROM transactions t
+      LEFT JOIN transaction_details d
+        ON d.wallet_id = t.wallet_id
+       AND lower(d.tx_hash) = lower(t.tx_hash)
+      WHERE t.wallet_id = ?
+      ORDER BY
+        CASE WHEN COALESCE(d.height, t.height, 0) > 0
+          THEN COALESCE(d.height, t.height) ELSE 0 END DESC,
+        t.timestamp DESC
+      LIMIT 2000;
+    `);
+  } catch {
+    query = db.prepare(`
+      SELECT tx_hash, height, timestamp, amount
+      FROM transactions
+      WHERE wallet_id = ?
+      ORDER BY height DESC, timestamp DESC
+      LIMIT 2000;
+    `);
   }
-  query.free();
-  return rows;
+  try {
+    query.bind([walletId]);
+    const rows: TransactionHistoryItem[] = [];
+    while (query.step()) {
+      rows.push(toHistoryItem(query.getAsObject()));
+    }
+    query.free();
+    return rows;
+  } catch {
+    try {
+      query.free();
+    } catch {
+      /* already freed */
+    }
+    const fallback = db.prepare(`
+      SELECT tx_hash, height, timestamp, amount
+      FROM transactions
+      WHERE wallet_id = ?
+      ORDER BY height DESC, timestamp DESC
+      LIMIT 2000;
+    `);
+    fallback.bind([walletId]);
+    const rows: TransactionHistoryItem[] = [];
+    while (fallback.step()) {
+      rows.push(toHistoryItem(fallback.getAsObject()));
+    }
+    fallback.free();
+    return rows;
+  }
 }
 
 export interface RefreshWalletHistoryOptions {
@@ -80,6 +139,12 @@ export interface RefreshWalletHistoryOptions {
    * that changed and refresh nothing.
    */
   skipAddresses?: ReadonlySet<string>;
+  /**
+   * User-initiated (Manual Sync / Rebuild). Does not join a background history
+   * pass (those freeze the bar at 55% with no onProgress). Skips the status-hash
+   * gate so every known address is re-fetched.
+   */
+  force?: boolean;
   onProgress?: (percent: number) => void;
 }
 
@@ -88,6 +153,42 @@ export interface RefreshWalletHistoryResult {
   scannedAddresses: string[];
   /** False when the refresh was joined/coalesced or the DB was unavailable. */
   refreshed: boolean;
+}
+
+/**
+ * Local-first paint: last saved SQL history → Redux. No Electrum, no
+ * coordinator/cooldown (those skipped the paint and made Home look empty).
+ *
+ * Call as soon as the wallet id is set (open / Home mount). Network refresh
+ * can follow; it must not gate this.
+ */
+export async function publishStoredWalletHistory(args: {
+  walletId: number;
+  dispatch: AppDispatch;
+  sessionGeneration?: number;
+}): Promise<number> {
+  const { walletId, dispatch, sessionGeneration } = args;
+  if (!Number.isSafeInteger(walletId) || walletId <= 0) return 0;
+
+  const dbService = DatabaseService();
+  await dbService.ensureDatabaseStarted();
+  const db = dbService.getDatabase() as SqlLikeDb | null;
+  if (!db) return 0;
+
+  const stored = mergeRecordedFusionTxsIntoHistory(
+    walletId,
+    loadStoredTransactions(db, walletId)
+  );
+  if (stored.length === 0) return 0;
+
+  dispatch(
+    setTransactions({
+      wallet_id: walletId,
+      transactions: stored,
+      sessionGeneration,
+    })
+  );
+  return stored.length;
 }
 
 /**
@@ -104,6 +205,7 @@ export async function refreshWalletTransactionHistory(
     dispatch,
     sessionGeneration,
     skipAddresses,
+    force = false,
     onProgress,
   } = options;
   if (!Number.isSafeInteger(walletId) || walletId <= 0) {
@@ -114,8 +216,7 @@ export async function refreshWalletTransactionHistory(
   let scannedAddresses: string[] = [];
   let refreshed = false;
 
-  await runWalletHistoryRefresh(walletId, async () => {
-    await ElectrumService.reconnect();
+  const runBody = async () => {
     await dbService.ensureDatabaseStarted();
     const db = dbService.getDatabase() as SqlLikeDb | null;
     if (!db) {
@@ -125,25 +226,50 @@ export async function refreshWalletTransactionHistory(
 
     const previousStoredTransactions = loadStoredTransactions(db, walletId);
 
-    // Show what we already know BEFORE going to the network.
-    //
-    // The history is never lost — it lives in the `transactions` table — but
-    // nothing loaded it into redux when a wallet opened, so Recent Activity
-    // rendered empty until a network round trip finished. Electron Cash does not
-    // behave that way: the wallet file already holds the history, so it appears
-    // immediately and the network only updates it. Publishing the stored rows
-    // first gives the same feel, and a wallet opened offline still shows its
-    // history instead of looking wiped.
-    if (previousStoredTransactions.length > 0) {
+    // Local-first (EC / Selene / Monero GUI): paint last saved SQL history
+    // immediately. No per-row streaming. Background backfill publishes ONCE
+    // when all stuck heights resolve, then address history scan may replace.
+    const initialPaint = mergeRecordedFusionTxsIntoHistory(
+      walletId,
+      previousStoredTransactions
+    );
+    if (initialPaint.length > 0) {
       dispatch(
         setTransactions({
           wallet_id: walletId,
-          transactions: previousStoredTransactions,
+          transactions: initialPaint,
           sessionGeneration,
         })
       );
     }
 
+    const hasStuckHeights = initialPaint.some(
+      (tx) => !(typeof tx.height === 'number' && tx.height > 0)
+    );
+    let earlyBackfill: Promise<TransactionHistoryItem[]> = Promise.resolve(
+      initialPaint
+    );
+    if (hasStuckHeights) {
+      // Single batched Redux update inside backfill when dispatch is set.
+      earlyBackfill = (async () => {
+        try {
+          await ElectrumService.ensureFreshConnection();
+        } catch {
+          /* offline */
+        }
+        return backfillConfirmedHistoryHeights({
+          walletId,
+          transactions: initialPaint,
+          sessionGeneration,
+          dispatch,
+          forceRefresh: true,
+        });
+      })();
+    }
+
+    // Prefer the addresses table (software wallets register there via createKeys).
+    // Hardware / older watch-only rows may only have `keys` populated — fall back
+    // so history and Recent Activity are not permanently empty.
     const addressesQuery = db.prepare(`
       SELECT address FROM addresses WHERE wallet_id = ?;
     `);
@@ -154,6 +280,20 @@ export async function refreshWalletTransactionHistory(
       if (typeof row.address === 'string') addresses.push(row.address);
     }
     addressesQuery.free();
+
+    if (addresses.length === 0) {
+      const keysQuery = db.prepare(`
+        SELECT address FROM keys WHERE wallet_id = ? AND address IS NOT NULL;
+      `);
+      keysQuery.bind([walletId]);
+      while (keysQuery.step()) {
+        const row = keysQuery.getAsObject();
+        if (typeof row.address === 'string' && row.address) {
+          addresses.push(row.address);
+        }
+      }
+      keysQuery.free();
+    }
 
     const quantumrootAddresses =
       await QuantumrootTrackingService.listTrackedAddresses(walletId);
@@ -170,31 +310,109 @@ export async function refreshWalletTransactionHistory(
       return;
     }
 
+    // Network is the long phase — report while batches complete, not only after
+    // the entire multi-address history RPC returns (that made the bar freeze
+    // then jump, and made manual Sync feel like the "old slow path").
+    onProgress?.(5);
+
+    // Status-hash delta (EC/Selene): skip addresses whose local history status
+    // already matches the Electrum address state. Force / Manual Sync skips the
+    // gate entirely (statuses were cleared or user wants a full recheck).
+    let toFetch = pending;
+    if (!force) {
+      try {
+        const ledger = await import('../platform/desktop/WalletLedgerService');
+        const partition = await ledger.partitionAddressesByStatus(
+          walletId,
+          pending
+        );
+        toFetch = partition.dirty;
+        onProgress?.(
+          5 + Math.round(20 * (1 - toFetch.length / Math.max(pending.length, 1)))
+        );
+      } catch {
+        toFetch = pending;
+      }
+    } else {
+      onProgress?.(10);
+    }
+
     const transactionManager = TransactionManager();
+    const mapHistoryProgress = (done: number, total: number) => {
+      if (total <= 0) return;
+      // Reserve 25–90% for Electrum history batches; DB/redux publish is 90–100.
+      onProgress?.(25 + Math.round(65 * (done / total)));
+    };
     const historyByAddress =
-      sessionGeneration === undefined
-        ? await transactionManager.fetchAndStoreTransactionHistories(
-            walletId,
-            pending
-          )
-        : await transactionManager.fetchAndStoreTransactionHistories(
-            walletId,
-            pending,
-            sessionGeneration
-          );
+      toFetch.length === 0
+        ? ({} as Record<string, TransactionHistoryItem[] | undefined>)
+        : sessionGeneration === undefined
+          ? await transactionManager.fetchAndStoreTransactionHistories(
+              walletId,
+              toFetch,
+              undefined,
+              mapHistoryProgress
+            )
+          : await transactionManager.fetchAndStoreTransactionHistories(
+              walletId,
+              toFetch,
+              sessionGeneration,
+              mapHistoryProgress
+            );
 
     const processed: string[] = [];
-    pending.forEach((address, index) => {
+    for (const address of pending) {
       if (Array.isArray(historyByAddress[address])) processed.push(address);
-      onProgress?.(Math.round(((index + 1) / pending.length) * 100));
-    });
+    }
     scannedAddresses = processed;
+    onProgress?.(90);
 
     const liveDb = dbService.getDatabase() as SqlLikeDb | null;
     if (!liveDb) {
       console.error('Database not started after history fetch.');
     } else {
-      const storedTransactions = loadStoredTransactions(liveDb, walletId);
+      let storedTransactions = mergeRecordedFusionTxsIntoHistory(
+        walletId,
+        loadStoredTransactions(liveDb, walletId)
+      );
+      // Keep heights the early open-time backfill already resolved (prefer > 0).
+      try {
+        const earlyFilled = await earlyBackfill;
+        const earlyByHash = new Map(
+          earlyFilled.map((tx) => [
+            String(tx.tx_hash).trim().toLowerCase(),
+            tx,
+          ] as const)
+        );
+        storedTransactions = storedTransactions.map((tx) => {
+          const key = String(tx.tx_hash).trim().toLowerCase();
+          const early = earlyByHash.get(key);
+          if (
+            early &&
+            typeof early.height === 'number' &&
+            early.height > 0 &&
+            !(typeof tx.height === 'number' && tx.height > 0)
+          ) {
+            return {
+              ...tx,
+              height: early.height,
+              timestamp: early.timestamp ?? tx.timestamp,
+            };
+          }
+          return tx;
+        });
+      } catch {
+        /* early backfill best-effort */
+      }
+      // Any rows still at height 0 (new from network history) get a second pass.
+      storedTransactions = await backfillConfirmedHistoryHeights({
+        walletId,
+        transactions: storedTransactions,
+        sessionGeneration,
+        dispatch,
+        forceRefresh: true,
+      });
+
       const refreshPlan = planTransactionDetailRefresh({
         previous: previousStoredTransactions,
         next: storedTransactions,
@@ -214,6 +432,7 @@ export async function refreshWalletTransactionHistory(
         );
       }
 
+      // Publish AFTER backfill so Sync cannot repaint height-0 fusion stubs.
       dispatch(
         setTransactions({
           wallet_id: walletId,
@@ -228,7 +447,15 @@ export async function refreshWalletTransactionHistory(
       reconcileOutboundTransactions(walletId)
     );
     onProgress?.(100);
-  });
+  };
+
+  if (force) {
+    // Manual Sync: exclusive pass with our onProgress (see coordinator).
+    onProgress?.(2);
+    await runWalletHistoryRefreshExclusive(walletId, runBody);
+  } else {
+    await runWalletHistoryRefresh(walletId, runBody);
+  }
 
   return { scannedAddresses, refreshed };
 }

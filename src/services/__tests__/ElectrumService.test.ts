@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ElectrumServer from '../../apis/ElectrumServer/ElectrumServer';
+import { isDesktopPlatform } from '../../utils/platform';
 import ElectrumService, {
   invalidateUTXOCache,
   primeUTXOCache,
@@ -15,6 +16,10 @@ vi.mock('../../apis/DatabaseManager/DatabaseService', () => ({
   default: vi.fn(),
 }));
 
+vi.mock('../../utils/platform', () => ({
+  isDesktopPlatform: vi.fn(() => true),
+}));
+
 vi.mock('../../state/store', () => ({
   store: {
     getState: vi.fn(() => ({
@@ -24,13 +29,26 @@ vi.mock('../../state/store', () => ({
   },
 }));
 
+// Deterministic scripthash so arbitrary test addresses work without libauth.
+vi.mock('../../services/electrum/helpers', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../services/electrum/helpers')>();
+  return {
+    ...actual,
+    addressToElectrumScripthash: (address: string) =>
+      `scripthash:${address.replace(/[^a-z0-9]/gi, '_')}`,
+  };
+});
+
 describe('ElectrumService', () => {
   const mockedElectrumServer = vi.mocked(ElectrumServer);
   const mockedDatabaseService = vi.mocked(DatabaseService);
+  const mockedIsDesktopPlatform = vi.mocked(isDesktopPlatform);
   let dbRow: Record<string, unknown> | null;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockedIsDesktopPlatform.mockReturnValue(true);
     invalidateUTXOCache();
     dbRow = null;
 
@@ -83,20 +101,18 @@ describe('ElectrumService', () => {
     expect(server.request).toHaveBeenCalledTimes(1);
   });
 
-  it('getUTXOsMany falls back to scripthash for addresses rejected by address RPC', async () => {
+  it('getUTXOsMany batches scripthash.listunspent directly (no per-call fallback)', async () => {
     const server = {
-      request: vi
-        .fn()
-        .mockRejectedValueOnce(new Error('Invalid address: bchtest:qtest'))
-        .mockResolvedValueOnce([
+      requestMany: vi.fn(async () => [
+        [
           {
             tx_hash: 'c'.repeat(64),
             tx_pos: 1,
             value: 546,
             height: 33,
           },
-        ]),
-      requestMany: vi.fn(async () => [new Error('Invalid address: bchtest:qtest')]),
+        ],
+      ]),
       subscribe: vi.fn(async () => {}),
       unsubscribe: vi.fn(async () => {}),
       onNotification: vi.fn(() => () => {}),
@@ -117,15 +133,88 @@ describe('ElectrumService', () => {
       }),
     ]);
     expect(server.requestMany).toHaveBeenCalledTimes(1);
-    expect(server.request).toHaveBeenNthCalledWith(
-      1,
-      'blockchain.address.listunspent',
-      address
+    expect(server.requestMany.mock.calls[0][0][0].method).toBe(
+      'blockchain.scripthash.listunspent'
     );
-    expect(server.request).toHaveBeenNthCalledWith(
-      2,
+    expect(server.requestMany.mock.calls[0][0][0].params[0]).toContain(
+      'scripthash:'
+    );
+  });
+
+  it('uses address listunspent requests for mobile wallet-wide scans', async () => {
+    mockedIsDesktopPlatform.mockReturnValue(false);
+    const server = {
+      requestMany: vi.fn(async (calls: Array<{ method: string }>) =>
+        calls.map((call) =>
+          call.method === 'blockchain.address.listunspent'
+            ? [
+                {
+                  tx_hash: 'm'.repeat(64),
+                  tx_pos: 0,
+                  value: 777,
+                  height: 44,
+                },
+              ]
+            : []
+        )
+      ),
+      request: vi.fn(),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+
+    mockedElectrumServer.mockReturnValue(server as never);
+
+    const address = 'bchtest:qqqsmobilefunded';
+    const result = await ElectrumService.getUTXOsMany([address]);
+
+    expect(result[address]).toEqual([
+      expect.objectContaining({
+        address,
+        tx_hash: 'm'.repeat(64),
+        value: 777,
+      }),
+    ]);
+    expect(server.requestMany.mock.calls[0][0][0]).toEqual({
+      method: 'blockchain.address.listunspent',
+      params: [address],
+    });
+    expect(server.request).not.toHaveBeenCalled();
+  });
+
+  it('falls back to mobile scripthash listunspent on an address-method error', async () => {
+    mockedIsDesktopPlatform.mockReturnValue(false);
+    const server = {
+      requestMany: vi.fn(async () => [new Error('Method not found')]),
+      request: vi.fn(async () => [
+        {
+          tx_hash: 'n'.repeat(64),
+          tx_pos: 1,
+          value: 888,
+          height: 45,
+        },
+      ]),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+
+    mockedElectrumServer.mockReturnValue(server as never);
+
+    const address = 'bchtest:qqqsmobilefallback';
+    const result = await ElectrumService.getUTXOsMany([address]);
+
+    expect(result[address]).toEqual([
+      expect.objectContaining({
+        address,
+        tx_hash: 'n'.repeat(64),
+        value: 888,
+      }),
+    ]);
+    expect(server.request).toHaveBeenCalledWith(
       'blockchain.scripthash.listunspent',
-      expect.any(String)
+      expect.stringContaining('scripthash')
     );
   });
 
@@ -144,6 +233,160 @@ describe('ElectrumService', () => {
 
     expect(result).not.toHaveProperty(address);
     expect(server.requestMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to the address UTXO method when scripthash is unavailable', async () => {
+    const server = {
+      requestMany: vi.fn(async () => [new Error('Method not found')]),
+      request: vi.fn(async () => [
+        {
+          tx_hash: 'f'.repeat(64),
+          tx_pos: 0,
+          value: 321,
+          height: 7,
+        },
+      ]),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+
+    mockedElectrumServer.mockReturnValue(server as never);
+
+    const address = 'bitcoincash:qfallback';
+    const result = await ElectrumService.getUTXOsMany([address]);
+
+    expect(result[address]).toEqual([
+      expect.objectContaining({
+        address,
+        tx_hash: 'f'.repeat(64),
+        value: 321,
+      }),
+    ]);
+    expect(server.request).toHaveBeenCalledWith(
+      'blockchain.address.listunspent',
+      address
+    );
+  });
+
+  it('falls back when a web gateway returns a non-array batch response', async () => {
+    const server = {
+      requestMany: vi.fn(async () => [
+        { error: { message: 'Invalid params' } },
+      ]),
+      request: vi.fn(async () => [
+        {
+          tx_hash: 'e'.repeat(64),
+          tx_pos: 2,
+          value: 654,
+          height: 9,
+        },
+      ]),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+
+    mockedElectrumServer.mockReturnValue(server as never);
+
+    const address = 'bitcoincash:qgatewayfallback';
+    const result = await ElectrumService.getUTXOsMany([address]);
+
+    expect(result[address]).toEqual([
+      expect.objectContaining({
+        address,
+        tx_hash: 'e'.repeat(64),
+        tx_pos: 2,
+        value: 654,
+      }),
+    ]);
+    expect(server.request).toHaveBeenCalledWith(
+      'blockchain.address.listunspent',
+      address
+    );
+  });
+
+  it('splits a large wallet UTXO scan into bounded Electrum batches', async () => {
+    const server = {
+      requestMany: vi.fn(async (calls: unknown[]) => calls.map(() => [])),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+    mockedElectrumServer.mockReturnValue(server as never);
+    const addresses = Array.from(
+      { length: 617 },
+      (_, index) => `bitcoincash:qbatch${index}`
+    );
+
+    const result = await ElectrumService.getUTXOsMany(addresses);
+
+    // Batch size 50 (was 250): 617 = 12×50 + 17. Live error was requestMany(250)@12s.
+    // Chunks may complete out of order under concurrency=2 — compare multiset.
+    const sizes = server.requestMany.mock.calls
+      .map(([calls]) => (calls as unknown[]).length)
+      .sort((a, b) => b - a);
+    expect(sizes).toEqual([50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 17]);
+    expect(server.requestMany).toHaveBeenCalledTimes(13);
+    expect(Object.keys(result)).toHaveLength(617);
+  });
+
+  it('runs at most two listunspent chunks concurrently', async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const server = {
+      requestMany: vi.fn(async (calls: unknown[]) => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((r) => setTimeout(r, 15));
+        inFlight -= 1;
+        return (calls as unknown[]).map(() => []);
+      }),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+    mockedElectrumServer.mockReturnValue(server as never);
+    const addresses = Array.from(
+      { length: 120 },
+      (_, index) => `bitcoincash:qpar${index}`
+    );
+
+    await ElectrumService.getUTXOsMany(addresses);
+
+    expect(maxInFlight).toBeLessThanOrEqual(2);
+    expect(maxInFlight).toBeGreaterThanOrEqual(2);
+    expect(server.requestMany).toHaveBeenCalledTimes(3); // 50+50+20
+  });
+
+  it('deduplicates overlapping wallet-wide scans by address', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const server = {
+      requestMany: vi.fn(async (calls: unknown[]) => {
+        await gate;
+        return calls.map(() => []);
+      }),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+    mockedElectrumServer.mockReturnValue(server as never);
+    const addresses = Array.from(
+      { length: 60 },
+      (_, index) => `bitcoincash:qoverlap${index}`
+    );
+
+    const first = ElectrumService.getUTXOsMany(addresses);
+    await Promise.resolve();
+    const second = ElectrumService.getUTXOsMany(addresses);
+    await Promise.resolve();
+    release();
+    await Promise.all([first, second]);
+
+    expect(server.requestMany).toHaveBeenCalledTimes(2); // one 50 + one 10
   });
 
   it('primeUTXOCache seeds cache used by getUTXOs', async () => {
@@ -206,6 +449,19 @@ describe('ElectrumService', () => {
     expect(server.request).not.toHaveBeenCalled();
   });
 
+  it('refreshes through the current healthy connection without forcing a disconnect', async () => {
+    const server = {
+      ensureFreshConnection: vi.fn(async () => undefined),
+      electrumReconnect: vi.fn(async () => undefined),
+    };
+    mockedElectrumServer.mockReturnValue(server as never);
+
+    await ElectrumService.ensureFreshConnection();
+
+    expect(server.ensureFreshConnection).toHaveBeenCalledOnce();
+    expect(server.electrumReconnect).not.toHaveBeenCalled();
+  });
+
   it('can subscribe to future headers without replaying the current tip', async () => {
     const server = {
       request: vi.fn(async () => ({ height: 100 })),
@@ -242,7 +498,9 @@ describe('ElectrumService', () => {
 
     mockedElectrumServer.mockReturnValue(server as never);
 
-    await expect(ElectrumService.getBalance('bitcoincash:q1')).resolves.toBe(12);
+    await expect(ElectrumService.getBalance('bitcoincash:q1')).resolves.toBe(
+      12
+    );
     await expect(ElectrumService.getBalance('bitcoincash:q1')).resolves.toBe(0);
   });
 
@@ -259,7 +517,9 @@ describe('ElectrumService', () => {
 
     mockedElectrumServer.mockReturnValue(server as never);
 
-    await expect(ElectrumService.broadcastTransaction('rawhex')).resolves.toBe('txid123');
+    await expect(ElectrumService.broadcastTransaction('rawhex')).resolves.toBe(
+      'txid123'
+    );
     await expect(ElectrumService.broadcastTransaction('rawhex')).resolves.toBe(
       'Invalid transaction hash response'
     );
@@ -278,10 +538,12 @@ describe('ElectrumService', () => {
 
     mockedElectrumServer.mockReturnValue(server as never);
 
-    await expect(ElectrumService.getTransactionHistory('bitcoincash:q1')).resolves.toEqual([
-      { tx_hash: 'abc', height: 10 },
-    ]);
-    await expect(ElectrumService.getTransactionHistory('bitcoincash:q2')).resolves.toBeNull();
+    await expect(
+      ElectrumService.getTransactionHistory('bitcoincash:q1')
+    ).resolves.toEqual([{ tx_hash: 'abc', height: 10 }]);
+    await expect(
+      ElectrumService.getTransactionHistory('bitcoincash:q2')
+    ).resolves.toBeNull();
   });
 
   it('coalesces inflight history requests for the same address', async () => {
@@ -329,8 +591,86 @@ describe('ElectrumService', () => {
     ]);
 
     expect(server.requestMany).toHaveBeenCalledTimes(1);
+    expect(server.requestMany.mock.calls[0][0][0].method).toBe(
+      'blockchain.scripthash.get_history'
+    );
     expect(result['bitcoincash:q1']).toEqual([{ tx_hash: 'abc', height: 10 }]);
     expect(result['bitcoincash:q2']).toEqual([{ tx_hash: 'def', height: 12 }]);
+  });
+
+  it('uses address history requests for mobile discovery scans', async () => {
+    mockedIsDesktopPlatform.mockReturnValue(false);
+    const server = {
+      requestMany: vi.fn(async (calls: Array<{ method: string }>) =>
+        calls.map((call) =>
+          call.method === 'blockchain.address.get_history'
+            ? [{ tx_hash: 'mobile-history', height: 12 }]
+            : []
+        )
+      ),
+      request: vi.fn(),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+
+    mockedElectrumServer.mockReturnValue(server as never);
+
+    const address = 'bchtest:qqqsmobilehistory';
+    const result = await ElectrumService.getTransactionHistoryMany([address]);
+
+    expect(result[address]).toEqual([
+      { tx_hash: 'mobile-history', height: 12 },
+    ]);
+    expect(server.requestMany.mock.calls[0][0][0]).toEqual({
+      method: 'blockchain.address.get_history',
+      params: [address],
+    });
+    expect(server.request).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the address history method when scripthash is unavailable', async () => {
+    const server = {
+      requestMany: vi.fn(async () => [new Error('Unknown method')]),
+      request: vi.fn(async () => [{ tx_hash: 'fallback-tx', height: 3 }]),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+
+    mockedElectrumServer.mockReturnValue(server as never);
+
+    const address = 'bitcoincash:qhistoryfallback';
+    const result = await ElectrumService.getTransactionHistoryMany([address]);
+
+    expect(result[address]).toEqual([{ tx_hash: 'fallback-tx', height: 3 }]);
+    expect(server.request).toHaveBeenCalledWith(
+      'blockchain.address.get_history',
+      address
+    );
+  });
+
+  it('splits a large wallet history scan into bounded Electrum batches', async () => {
+    const server = {
+      request: vi.fn(async () => []),
+      requestMany: vi.fn(async (calls: unknown[]) => calls.map(() => [])),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+    mockedElectrumServer.mockReturnValue(server as never);
+    const addresses = Array.from(
+      { length: 617 },
+      (_, index) => `bitcoincash:qhistory${index}`
+    );
+
+    const result = await ElectrumService.getTransactionHistoryMany(addresses);
+
+    expect(
+      server.requestMany.mock.calls.map(([calls]) => calls.length)
+      // Batch size 50 (was 250): 617 = 12×50 + 17. Live error was requestMany(250)@12s.
+    ).toEqual([50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 17]);
+    expect(Object.keys(result)).toHaveLength(617);
   });
 
   it('getTransactionVisibility detects seen and missing transactions', async () => {
@@ -339,7 +679,9 @@ describe('ElectrumService', () => {
         .fn()
         .mockResolvedValueOnce({ confirmations: 0, height: 0 })
         .mockResolvedValueOnce({ confirmations: 2, height: 123 })
-        .mockRejectedValueOnce(new Error('No such mempool or blockchain transaction')),
+        .mockRejectedValueOnce(
+          new Error('No such mempool or blockchain transaction')
+        ),
       subscribe: vi.fn(async () => {}),
       unsubscribe: vi.fn(async () => {}),
       onNotification: vi.fn(() => () => {}),
@@ -347,15 +689,21 @@ describe('ElectrumService', () => {
 
     mockedElectrumServer.mockReturnValue(server as never);
 
-    await expect(ElectrumService.getTransactionVisibility('a'.repeat(64))).resolves.toEqual({
+    await expect(
+      ElectrumService.getTransactionVisibility('a'.repeat(64))
+    ).resolves.toEqual({
       seen: true,
       confirmed: false,
     });
-    await expect(ElectrumService.getTransactionVisibility('b'.repeat(64))).resolves.toEqual({
+    await expect(
+      ElectrumService.getTransactionVisibility('b'.repeat(64))
+    ).resolves.toEqual({
       seen: true,
       confirmed: true,
     });
-    await expect(ElectrumService.getTransactionVisibility('c'.repeat(64))).resolves.toEqual({
+    await expect(
+      ElectrumService.getTransactionVisibility('c'.repeat(64))
+    ).resolves.toEqual({
       seen: false,
       confirmed: false,
     });
@@ -462,7 +810,11 @@ describe('ElectrumService', () => {
       timestamp: '2023-11-14T22:13:20.000Z',
       inputs: [{ address: 'bitcoincash:qsender', amountSats: 110000 }],
       outputs: [
-        { address: 'bitcoincash:qrecipient', amountSats: 100000, outputIndex: 0 },
+        {
+          address: 'bitcoincash:qrecipient',
+          amountSats: 100000,
+          outputIndex: 0,
+        },
       ],
     });
   });
@@ -474,8 +826,12 @@ describe('ElectrumService', () => {
       height: 555,
       fee_sats: 222,
       timestamp: '2026-03-14T18:00:00.000Z',
-      inputs_json: JSON.stringify([{ address: 'bitcoincash:qfrom', amountSats: 1000 }]),
-      outputs_json: JSON.stringify([{ address: 'bitcoincash:qto', amountSats: 778 }]),
+      inputs_json: JSON.stringify([
+        { address: 'bitcoincash:qfrom', amountSats: 1000 },
+      ]),
+      outputs_json: JSON.stringify([
+        { address: 'bitcoincash:qto', amountSats: 778 },
+      ]),
     };
 
     const server = {

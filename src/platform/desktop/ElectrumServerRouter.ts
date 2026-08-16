@@ -26,6 +26,7 @@ import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import { getBackend } from './backendSelection';
 import { nodeSync, nodeBroadcast, type NodeSyncResult } from './Bip37Backend';
 import { parseNodeTarget } from '../../utils/servers/userNodes';
+import { getElectrumServers } from '../../utils/servers/ElectrumServers';
 import { selectWalletId } from '../../state/slices/walletSlice';
 import { Network } from '../../state/slices/networkSlice';
 
@@ -114,10 +115,44 @@ export function invalidateNodeScan(): void {
   scanCache = null;
 }
 
+/**
+ * Upstream ElectrumServer keeps a process-wide socket and only reconnects on
+ * idle/failed ping (`if (electrum) return electrum`). Menu lock and same-window
+ * wallet switches do not always disconnect, so a chipnet wallet can keep
+ * talking to a mainnet Fulcrum host — scripthash listunspent/history then
+ * return empty and the UI shows permanent 0 balance / "No activity yet".
+ *
+ * If the live host is not in the *current* network pool, drop it so the next
+ * connect/request rebuilds against the right servers.
+ */
+async function dropStaleNetworkSocket(
+  upstream: ReturnType<typeof UpstreamElectrumServer>
+): Promise<void> {
+  const network = selectCurrentNetwork(store.getState());
+  const servers = getElectrumServers(network);
+  if (servers.length === 0) return;
+  const current =
+    typeof upstream.getCurrentServer === 'function'
+      ? upstream.getCurrentServer()
+      : null;
+  if (!current || servers.includes(current)) return;
+  try {
+    await upstream.electrumDisconnect();
+  } catch {
+    /* best-effort; next connect rebuilds */
+  }
+}
+
 export default function ElectrumServer() {
   const upstream = UpstreamElectrumServer();
 
+  async function ensureFreshConnection(): Promise<void> {
+    await dropStaleNetworkSocket(upstream);
+    return upstream.ensureFreshConnection();
+  }
+
   async function request(method: string, ...params: ElectrumParams): Promise<RequestResponse> {
+    await dropStaleNetworkSocket(upstream);
     const network = selectCurrentNetwork(store.getState());
     assertOnCurrentNetwork(method, params, network);
     const backend = getBackend(network);
@@ -161,6 +196,7 @@ export default function ElectrumServer() {
   async function requestMany(
     calls: Array<{ method: string; params?: ElectrumParams }>
   ): Promise<Array<RequestResponse | Error>> {
+    await dropStaleNetworkSocket(upstream);
     const network = selectCurrentNetwork(store.getState());
 
     // Drop cross-network addresses from the batch rather than letting one bad
@@ -205,9 +241,10 @@ export default function ElectrumServer() {
   // upstream.subscribe() enters the resubscribe-on-reconnect registry, where it
   // re-breaks every future socket long after the switch that produced it.
   async function subscribe(method: string, params?: ElectrumParams): Promise<void> {
+    await dropStaleNetworkSocket(upstream);
     assertOnCurrentNetwork(method, params, selectCurrentNetwork(store.getState()));
     return upstream.subscribe(method, params);
   }
 
-  return { ...upstream, request, requestMany, subscribe };
+  return { ...upstream, request, requestMany, subscribe, ensureFreshConnection };
 }

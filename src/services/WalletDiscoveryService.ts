@@ -1,20 +1,61 @@
 import KeyService from './KeyService';
 import { logError } from '../utils/errorHandling';
 import { Network } from '../state/slices/networkSlice';
-import { deriveBchAddressFromHdPublicKey } from './HdWalletService';
+import {
+  BCH_STANDARD_BRANCH_INDEX,
+  BCH_WALLET_SCAN_BRANCH_NAMES,
+  type BchStandardBranchName,
+  deriveBchAddressFromHdPublicKey,
+} from './HdWalletService';
 import {
   getLocalStorage,
   readStorageItem,
   writeStorageItem,
 } from '../utils/browserStorage';
+import { isDesktopPlatform } from '../utils/platform';
 
-// BIP44's gap limit is measured on the external/receive chain. Keep the
-// network request at that same size so one discovery batch can prove a full
-// gap without probing change addresses as well.
+// BIP44's gap limit is measured in address indexes. Keep the network request
+// at that same size while checking the wallet branches selected for the
+// current transport.
 const ADDRESS_BATCH_SIZE = 20;
 const MAX_BATCHES_PER_PASS = 4;
+// CashFusion reserves fresh receive indexes before a round is known to have
+// succeeded. A failed round therefore leaves an unused gap that is not present
+// in ordinary BIP44 usage. Keep discovery bounded, but allow enough empty
+// receive windows to recover a wallet that was fused on another device.
+const MAX_EMPTY_BATCHES = 64;
 const DISCOVERY_COOLDOWN_MS = 30_000;
 const STORAGE_KEY = 'optn_wallet_discovery_state_v1';
+
+const DISCOVERY_BRANCHES = BCH_WALLET_SCAN_BRANCH_NAMES.map((name) => ({
+  name,
+  branchIndex: BCH_STANDARD_BRANCH_INDEX[name],
+}));
+const PRIMARY_WALLET_BRANCHES = ['receive', 'change'] as const;
+
+function getDiscoveryBranches(): ReadonlyArray<{
+  name: BchStandardBranchName;
+  branchIndex: number;
+}> {
+  // Desktop uses a raw Electrum TCP connection and can send the full batch
+  // shape. Web/Capacitor uses WSS and sends individual JSON-RPC frames, so the
+  // initial mobile restore only scans the standard wallet branches. CashFusion
+  // is desktop-only until its mobile transport is available.
+  return isDesktopPlatform()
+    ? DISCOVERY_BRANCHES
+    : PRIMARY_WALLET_BRANCHES.map((name) => ({
+        name,
+        branchIndex: BCH_STANDARD_BRANCH_INDEX[name],
+      }));
+}
+
+export type WalletDerivedAddressCandidate = {
+  address: string;
+  tokenAddress: string;
+  addressIndex: number;
+  changeIndex: number;
+  branchName: BchStandardBranchName;
+};
 
 type DiscoveryState = {
   nextBatchStart: number;
@@ -79,7 +120,11 @@ function keyInventory(keys: Array<{ addressIndex: number }>): {
 async function getCandidateBatch(
   network: Network,
   startIndex: number,
-  xpubs: Awaited<ReturnType<typeof KeyService.getWalletXpubs>>
+  xpubs: Awaited<ReturnType<typeof KeyService.getWalletXpubs>>,
+  branches: ReadonlyArray<{
+    name: BchStandardBranchName;
+    branchIndex: number;
+  }>
 ): Promise<
   {
     address: string;
@@ -97,31 +142,95 @@ async function getCandidateBatch(
 
   for (let offset = 0; offset < ADDRESS_BATCH_SIZE; offset += 1) {
     const addressIndex = startIndex + offset;
-    const receive = deriveBchAddressFromHdPublicKey(
-      network,
-      xpubs.receive,
-      BigInt(addressIndex)
-    );
-    if (!receive) continue;
+    for (const branch of branches) {
+      const xpub = xpubs[branch.name];
+      if (!xpub) continue;
 
-    // Change is materialized only when its paired receive index is used. It
-    // remains part of the local key inventory, but is deliberately excluded
-    // from account-discovery RPCs: BIP44 discovers accounts from external
-    // chain history and treats change as an internal chain.
-    const change = deriveBchAddressFromHdPublicKey(
-      network,
-      xpubs.change,
-      BigInt(addressIndex)
-    );
-    batch.push({
-      address: receive.address,
-      addressIndex,
-      changeIndex: 0,
-      pairedChangeAddress: change?.address ?? null,
-    });
+      const derived = deriveBchAddressFromHdPublicKey(
+        network,
+        xpub,
+        BigInt(addressIndex)
+      );
+      if (!derived) continue;
+
+      // Preserve the existing receive-to-change bootstrap, while also
+      // probing the branch-specific DeFi/Cauldron addresses.
+      const pairedChangeAddress =
+        branch.name === 'receive' && xpubs.change
+          ? deriveBchAddressFromHdPublicKey(
+              network,
+              xpubs.change,
+              BigInt(addressIndex)
+            )?.address ?? null
+          : null;
+
+      batch.push({
+        address: derived.address,
+        addressIndex,
+        changeIndex: branch.branchIndex,
+        pairedChangeAddress,
+      });
+    }
   }
 
   return batch;
+}
+
+/**
+ * Derive the same ordinary BCH branches used by wallet discovery without
+ * touching the database. Cauldron activity uses this read-only inventory too,
+ * so desktop and mobile cannot drift into different branch coverage.
+ */
+export async function deriveWalletAddressCandidates(
+  walletId: number,
+  network: Network,
+  options: {
+    startIndex?: number;
+    count?: number;
+    accountNumber?: number;
+    branchNames?: readonly BchStandardBranchName[];
+  } = {}
+): Promise<WalletDerivedAddressCandidate[]> {
+  const startIndex = options.startIndex ?? 0;
+  const count = options.count ?? ADDRESS_BATCH_SIZE;
+  if (
+    !Number.isSafeInteger(startIndex) ||
+    startIndex < 0 ||
+    !Number.isSafeInteger(count) ||
+    count < 1
+  ) {
+    throw new Error('Wallet address scan range is invalid.');
+  }
+
+  const xpubs = await KeyService.getWalletXpubs(
+    walletId,
+    options.accountNumber ?? 0
+  );
+  const branches = options.branchNames ?? BCH_WALLET_SCAN_BRANCH_NAMES;
+  const candidates: WalletDerivedAddressCandidate[] = [];
+
+  for (let offset = 0; offset < count; offset += 1) {
+    const addressIndex = startIndex + offset;
+    for (const branchName of branches) {
+      const xpub = xpubs[branchName];
+      if (!xpub) continue;
+      const derived = deriveBchAddressFromHdPublicKey(
+        network,
+        xpub,
+        BigInt(addressIndex)
+      );
+      if (!derived) continue;
+      candidates.push({
+        address: derived.address,
+        tokenAddress: derived.tokenAddress,
+        addressIndex,
+        changeIndex: BCH_STANDARD_BRANCH_INDEX[branchName],
+        branchName,
+      });
+    }
+  }
+
+  return candidates;
 }
 
 async function expandDiscovery(
@@ -134,22 +243,44 @@ async function expandDiscovery(
   const recoveredAddresses: string[] = [];
   const xpubs = await KeyService.getWalletXpubs(walletId, 0);
   const state = readState();
-  const { highestKnownIndex } = keyInventory(keys);
-  // The cursor is only a cooldown/status hint. Always restart from the highest
-  // key that is actually persisted: another wallet window may have overwritten
-  // a newer key row while leaving this window's old discovery cursor ahead.
-  const nextBatchStart =
-    highestKnownIndex >= 0 ? getBatchStart(highestKnownIndex) : 0;
+  const inventory = keyInventory(keys);
+  const initialHighestKnownIndex = inventory.highestKnownIndex;
+  const savedState = state[stateKey(walletId)];
+  const stateMatchesInventory =
+    savedState?.knownKeyCount === inventory.knownKeyCount &&
+    savedState.highestKnownIndex === inventory.highestKnownIndex;
+  const firstBatchStart =
+    inventory.highestKnownIndex >= 0
+      ? getBatchStart(inventory.highestKnownIndex)
+      : 0;
+  const savedBatchStart =
+    stateMatchesInventory &&
+    typeof savedState?.nextBatchStart === 'number' &&
+    Number.isSafeInteger(savedState.nextBatchStart) &&
+    savedState.nextBatchStart >= 0
+      ? getBatchStart(savedState.nextBatchStart)
+      : firstBatchStart;
+  // Keep the forward cursor after an empty batch. Restarting at the highest
+  // persisted key makes a cross-device restore stop forever at the first
+  // CashFusion gap, because unused/reserved indexes are intentionally not
+  // persisted on the restoring device.
+  const nextBatchStart = Math.max(firstBatchStart, savedBatchStart);
   let batchStart = nextBatchStart;
-  let consecutiveUnusedBatches = 0;
+  let consecutiveUnusedBatches =
+    stateMatchesInventory &&
+    typeof savedState?.consecutiveUnusedBatches === 'number' &&
+    Number.isSafeInteger(savedState.consecutiveUnusedBatches) &&
+    savedState.consecutiveUnusedBatches >= 0
+      ? savedState.consecutiveUnusedBatches
+      : 0;
   let batchesProcessed = 0;
+  const branches = getDiscoveryBranches();
 
-  while (batchesProcessed < MAX_BATCHES_PER_PASS) {
-    const batch = await getCandidateBatch(
-      network,
-      batchStart,
-      xpubs
-    );
+  while (
+    batchesProcessed < MAX_BATCHES_PER_PASS &&
+    consecutiveUnusedBatches < MAX_EMPTY_BATCHES
+  ) {
+    const batch = await getCandidateBatch(network, batchStart, xpubs, branches);
     if (batch.length === 0) {
       break;
     }
@@ -158,17 +289,35 @@ async function expandDiscovery(
     const used = new Set(usedAddresses);
     batchesProcessed += 1;
     batchStart += ADDRESS_BATCH_SIZE;
+    if (import.meta.env.DEV) {
+      console.info('[WalletDiscovery] history window', {
+        walletId,
+        transport: isDesktopPlatform() ? 'desktop-tcp' : 'mobile-wss',
+        startIndex: batchStart - ADDRESS_BATCH_SIZE,
+        candidateCount: batch.length,
+        usedCount: used.size,
+      });
+    }
 
     if (used.size > 0) {
+      let recoveredInBatch = false;
       for (const candidate of batch) {
         if (!used.has(candidate.address)) {
           continue;
         }
 
         if (!knownAddresses.has(candidate.address)) {
-          await KeyService.createKeys(walletId, 0, 0, candidate.addressIndex);
+          await KeyService.createKeys(
+            walletId,
+            0,
+            candidate.changeIndex,
+            candidate.addressIndex
+          );
           knownAddresses.add(candidate.address);
           recoveredAddresses.push(candidate.address);
+          recoveredInBatch =
+            recoveredInBatch ||
+            candidate.addressIndex > initialHighestKnownIndex;
         }
 
         if (
@@ -178,16 +327,23 @@ async function expandDiscovery(
           await KeyService.createKeys(walletId, 0, 1, candidate.addressIndex);
           knownAddresses.add(candidate.pairedChangeAddress);
           recoveredAddresses.push(candidate.pairedChangeAddress);
+          recoveredInBatch =
+            recoveredInBatch ||
+            candidate.addressIndex > initialHighestKnownIndex;
         }
       }
       consecutiveUnusedBatches = 0;
+      // Query recovered addresses as soon as their first used window is
+      // materialized. Continuing through later windows before returning made a
+      // funded imported wallet appear empty for the entire discovery pass.
+      if (recoveredInBatch) break;
       continue;
     }
 
     consecutiveUnusedBatches += 1;
-    // ADDRESS_BATCH_SIZE is the BIP44 gap limit. One completely unused
-    // external batch is enough to stop account discovery.
-    break;
+    // Do not stop at the first empty window. CashFusion can leave reserved,
+    // never-used indexes between successful rounds. The hard ceiling above
+    // prevents an unbounded scan of an otherwise unused account.
   }
 
   const persistedInventory = keyInventory(

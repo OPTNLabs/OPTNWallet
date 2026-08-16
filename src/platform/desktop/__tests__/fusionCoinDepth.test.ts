@@ -3,8 +3,10 @@ import {
   clearFusionDepth,
   coinDepth,
   coinsBelowDepth,
+  isFusionTransaction,
   pruneSpentDepth,
   recordFusionRound,
+  recordFusionTxid,
 } from '../fusionCoinDepth';
 
 const utxo = (txid: string, pos = 0) => ({ tx_hash: txid, tx_pos: pos });
@@ -37,6 +39,17 @@ describe('per-coin fuse depth', () => {
   it('treats never-fused coins as depth 0 and fusable', () => {
     expect(coinDepth(1, 'aaa:0')).toBe(0);
     expect(coinsBelowDepth(1, [utxo('aaa')], 3)).toHaveLength(1);
+  });
+
+  it('looks up depth case-insensitively on the txid half of the outpoint', () => {
+    const tx = 'Ab'.repeat(32);
+    recordFusionRound(1, ['seed:0'], [`${tx}:1`]);
+    expect(coinDepth(1, `${tx.toLowerCase()}:1`)).toBe(1);
+    expect(coinDepth(1, `${tx.toUpperCase()}:1`)).toBe(1);
+    // maxDepth 1 means "only fuse coins with depth < 1" — depth-1 coin excluded.
+    expect(
+      coinsBelowDepth(1, [utxo(tx.toUpperCase(), 1)], 1)
+    ).toHaveLength(0);
   });
 
   it('advances created coins one round beyond the deepest coin consumed', () => {
@@ -78,11 +91,45 @@ describe('per-coin fuse depth', () => {
     expect(coinsBelowDepth(1, [utxo('d')], 4)).toHaveLength(1);
   });
 
+  it('inherits depth via parent txid when outpoint keys do not match exactly', () => {
+    // First fuse records electrum-style outpoint.
+    recordFusionRound(1, ['seed:0'], ['aabbccdd'.repeat(8) + ':0']);
+    expect(coinDepth(1, `${'aabbccdd'.repeat(8)}:0`)).toBe(1);
+    // Next fuse spends the same coin under a different pos key that only
+    // shares the txid — live Electrum lag / index remap used to reset to 0.
+    // Per-txid depth keeps the chain climbing.
+    recordFusionRound(
+      1,
+      [`${'aabbccdd'.repeat(8)}:99`],
+      [`${'11223344'.repeat(8)}:0`]
+    );
+    expect(coinDepth(1, `${'11223344'.repeat(8)}:0`)).toBe(2);
+  });
+
   it('drops spent inputs so the map tracks live coins, not history', () => {
     recordFusionRound(1, ['spent:0'], ['made:0']);
     // The input was consumed by the round and can never reappear.
     expect(coinDepth(1, 'spent:0')).toBe(0);
     expect(coinDepth(1, 'made:0')).toBe(1);
+  });
+
+  it('remembers fusion txids for history labels after outputs are spent', () => {
+    const txid = 'ab'.repeat(32);
+    expect(isFusionTransaction(1, txid)).toBe(false);
+    recordFusionTxid(1, txid);
+    expect(isFusionTransaction(1, txid)).toBe(true);
+    // Coin outputs of that CoinJoin should show at least depth 1 for badges.
+    expect(coinDepth(1, `${txid}:0`)).toBeGreaterThanOrEqual(1);
+  });
+
+  it('server-style chain: fusion-txid stamp then recordFusionRound climbs depth', () => {
+    // First round only stamps txid (Electrum lag); second round inherits ≥1.
+    const a = 'aa'.repeat(32);
+    const b = 'bb'.repeat(32);
+    recordFusionTxid(1, a);
+    expect(coinDepth(1, `${a}:0`)).toBeGreaterThanOrEqual(1);
+    recordFusionRound(1, [`${a}:0`], [`${b}:0`]);
+    expect(coinDepth(1, `${b}:0`)).toBeGreaterThanOrEqual(2);
   });
 
   it('keeps wallets isolated from each other', () => {

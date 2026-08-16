@@ -20,6 +20,7 @@
 // test vectors are the correctness oracle: if this loader is wrong, those
 // keys/pubkeys stop matching.
 import { SECP256K1_WASM_BASE64 } from './secp256k1WasmBase64.generated';
+import { toArrayBufferBytes } from '../../utils/arrayBuffer';
 
 // tiny-secp256k1's own rand.browser.js / validate_error.js implementations,
 // reproduced here rather than deep-imported -- its package.json `exports`
@@ -30,10 +31,17 @@ import { SECP256K1_WASM_BASE64 } from './secp256k1WasmBase64.generated';
 function generateInt32(): number {
   const bytes = new Uint8Array(4);
   if (typeof crypto === 'undefined') {
-    throw new Error('The crypto object is unavailable. This may occur if your environment does not support the Web Cryptography API.');
+    throw new Error(
+      'The crypto object is unavailable. This may occur if your environment does not support the Web Cryptography API.'
+    );
   }
   crypto.getRandomValues(bytes);
-  return (bytes[0] << (3 * 8)) + (bytes[1] << (2 * 8)) + (bytes[2] << (1 * 8)) + bytes[3];
+  return (
+    (bytes[0] << (3 * 8)) +
+    (bytes[1] << (2 * 8)) +
+    (bytes[2] << (1 * 8)) +
+    bytes[3]
+  );
 }
 
 const ERROR_MESSAGES: Record<number, string> = {
@@ -47,7 +55,9 @@ const ERROR_MESSAGES: Record<number, string> = {
   7: 'Bad Recovery Id',
 };
 function throwError(errcode: number): void {
-  throw new TypeError(ERROR_MESSAGES[errcode] ?? `Unknow error code: ${errcode}`);
+  throw new TypeError(
+    ERROR_MESSAGES[errcode] ?? `Unknow error code: ${errcode}`
+  );
 }
 
 function base64ToBytes(b64: string): Uint8Array {
@@ -58,7 +68,7 @@ function base64ToBytes(b64: string): Uint8Array {
 }
 
 const wasmBytes = base64ToBytes(SECP256K1_WASM_BASE64);
-const wasmModule = new WebAssembly.Module(wasmBytes);
+const wasmModule = new WebAssembly.Module(toArrayBufferBytes(wasmBytes));
 const instance = new WebAssembly.Instance(wasmModule, {
   './rand.js': { generateInt32 },
   './validate_error.js': { throwError },

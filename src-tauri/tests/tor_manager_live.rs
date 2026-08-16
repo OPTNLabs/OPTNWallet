@@ -48,12 +48,18 @@ async fn starts_bundled_tor_and_fuses_through_it() {
         "fusion.servo.cash",
         8789,
         true,
-        Transport::Tor { host: "127.0.0.1", port },
+        Transport::Tor {
+            host: "127.0.0.1",
+            port,
+        },
         None,
     )
     .await
     .expect("fusion handshake through bundled tor failed");
-    println!("ServerHello through bundled tor => num_components={}", status.num_components);
+    println!(
+        "ServerHello through bundled tor => num_components={}",
+        status.num_components
+    );
     assert!(status.num_components > 0);
 
     tor_manager::stop().await.unwrap();

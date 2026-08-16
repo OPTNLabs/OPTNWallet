@@ -12,6 +12,7 @@ import {
 import type { UTXO } from '../../../../types/types';
 import {
   assertWalletInputsStillAvailable,
+  fetchCurrentLiquidityPoolsFromChain,
   fetchCurrentQuotedPoolsFromChain,
   fetchVisiblePoolsFromChain,
   getPoolSelectionId,
@@ -248,6 +249,56 @@ describe('cauldron preflight helpers', () => {
     expect(resolved.resolvedPools).toEqual([]);
   });
 
+  it('refreshes a pool successor that keeps the same locking bytecode', async () => {
+    const withdrawPublicKeyHash = new Uint8Array(20);
+    const reviewedPool = makePool({
+      txHash: '26'.repeat(32),
+      outputIndex: 1,
+      parameters: {
+        withdrawPublicKeyHash,
+      },
+      output: {
+        amountSatoshis: 2100n,
+        tokenCategory: 'dd'.repeat(32),
+        tokenAmount: 900n,
+        lockingBytecode: buildCauldronPoolV0LockingBytecode({
+          withdrawPublicKeyHash,
+        }),
+      },
+    });
+    const successorTxHash = '27'.repeat(32);
+
+    const sdk: ChaingraphSdk = {
+      chain: {
+        queryUnspentByLockingBytecode: async () => ({
+          data: {
+            output: [
+              {
+                transaction_hash: `\\x${successorTxHash}`,
+                output_index: 0,
+                value_satoshis: 2200,
+                token_category: `\\x${reviewedPool.output.tokenCategory}`,
+                fungible_token_amount: 880,
+                locking_bytecode: binToHex(reviewedPool.output.lockingBytecode),
+              },
+            ],
+          },
+        }),
+      },
+    };
+
+    const refreshed = await fetchCurrentLiquidityPoolsFromChain({
+      sdk,
+      quotedPools: [reviewedPool],
+    });
+
+    expect(refreshed.missingQuotedPoolCount).toBe(0);
+    expect(refreshed.currentPools).toHaveLength(1);
+    expect(refreshed.currentPools[0]?.txHash).toBe(successorTxHash);
+    expect(refreshed.currentPools[0]?.output.amountSatoshis).toBe(2200n);
+    expect(refreshed.currentPools[0]?.output.tokenAmount).toBe(880n);
+  });
+
   it('filters visible pools down to exact chain-confirmed outpoints for quoting', async () => {
     const withdrawPublicKeyHash = new Uint8Array(20);
     const confirmedPool = makePool({
@@ -325,6 +376,49 @@ describe('cauldron preflight helpers', () => {
             output: [
               {
                 transaction_hash: `\\x${confirmedPool.txHash}`,
+                output_index: confirmedPool.outputIndex,
+              },
+            ],
+          },
+        }),
+      },
+    };
+
+    const resolved = await fetchVisiblePoolsFromChain({
+      sdk,
+      visiblePools: [confirmedPool],
+    });
+
+    expect(resolved.missingVisiblePoolCount).toBe(0);
+    expect(resolved.confirmedPools).toEqual([confirmedPool]);
+  });
+
+  it('matches API pool outpoints when the API includes a hex prefix', async () => {
+    const withdrawPublicKeyHash = new Uint8Array(20);
+    const txHash = '25'.repeat(32);
+    const confirmedPool = makePool({
+      txHash: `0x${txHash.toUpperCase()}`,
+      outputIndex: 3,
+      parameters: {
+        withdrawPublicKeyHash,
+      },
+      output: {
+        amountSatoshis: 2100n,
+        tokenCategory: 'dd'.repeat(32),
+        tokenAmount: 900n,
+        lockingBytecode: buildCauldronPoolV0LockingBytecode({
+          withdrawPublicKeyHash,
+        }),
+      },
+    });
+
+    const sdk: ChaingraphSdk = {
+      chain: {
+        queryUnspentByLockingBytecode: async () => ({
+          data: {
+            output: [
+              {
+                transaction_hash: `\\x${txHash}`,
                 output_index: confirmedPool.outputIndex,
               },
             ],

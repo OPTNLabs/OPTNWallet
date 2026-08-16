@@ -12,8 +12,10 @@ import {
   uninstallAddon,
   type InstalledAddonSummary,
 } from '../../services/addons/AddonInstallService';
+import { useI18n } from '../../i18n/useI18n';
 
 export function AddonsSettings() {
+  const { t } = useI18n();
   const [addons, setAddons] = useState<InstalledAddonSummary[]>([]);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('');
@@ -43,7 +45,7 @@ export function AddonsSettings() {
         setBusy(false);
         return; // user cancelled the dialog
       }
-      setStatus(`Installed "${manifest.name}". Restart the app to load it.`);
+      setStatus(t('addons.installedStatus', { name: manifest.name }));
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -58,7 +60,7 @@ export function AddonsSettings() {
     setStatus('');
     try {
       await uninstallAddon(id);
-      setStatus('Uninstalled. Restart the app for it to fully disappear.');
+      setStatus(t('addons.uninstalledStatus'));
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -70,14 +72,15 @@ export function AddonsSettings() {
   return (
     <div className="flex flex-col gap-4">
       <div className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-4 space-y-2">
-        <p className="text-sm font-semibold wallet-text-strong">Installed addons</p>
+        <p className="text-sm font-semibold wallet-text-strong">
+          {t('addons.installed')}
+        </p>
         <p className="text-xs wallet-muted leading-relaxed">
-          Addons run in a sandboxed frame with no access to your wallet's keys
-          or memory — they can only do what the permissions you approve allow.
+          {t('addons.description')}
         </p>
 
         {addons.length === 0 ? (
-          <p className="text-xs wallet-muted italic">No addons installed.</p>
+          <p className="text-xs wallet-muted italic">{t('addons.none')}</p>
         ) : (
           <ul className="space-y-2">
             {addons.map((a) => (
@@ -86,7 +89,9 @@ export function AddonsSettings() {
                 className="flex items-center justify-between gap-3 rounded-lg border border-[var(--wallet-border)] px-3 py-2"
               >
                 <div className="min-w-0">
-                  <p className="text-sm font-medium wallet-text-strong truncate">{a.name}</p>
+                  <p className="text-sm font-medium wallet-text-strong truncate">
+                    {a.name}
+                  </p>
                   <p className="text-xs wallet-muted">
                     {a.id} · v{a.version}
                   </p>
@@ -97,7 +102,7 @@ export function AddonsSettings() {
                   onClick={() => void handleUninstall(a.id)}
                   className="shrink-0 rounded-lg border border-red-400/40 px-3 py-1.5 text-xs font-semibold text-red-400 disabled:opacity-50"
                 >
-                  Uninstall
+                  {t('addons.uninstall')}
                 </button>
               </li>
             ))}
@@ -113,12 +118,10 @@ export function AddonsSettings() {
           className="w-full rounded-xl py-2.5 text-sm font-semibold text-white disabled:opacity-50"
           style={{ background: 'var(--wallet-accent, #6366f1)' }}
         >
-          {busy ? 'Installing…' : 'Install from folder…'}
+          {busy ? t('addons.installing') : t('addons.installFolder')}
         </button>
       ) : (
-        <p className="text-xs wallet-muted italic">
-          Installing addons from a folder is only available on desktop.
-        </p>
+        <p className="text-xs wallet-muted italic">{t('addons.desktopOnly')}</p>
       )}
 
       {status && <p className="text-xs text-green-400">{status}</p>}

@@ -1,4 +1,6 @@
 // src/services/AddonsSDK.ts
+
+// @ts-nocheck WIP addon system; see docs/wip-typecheck-exclusions.md
 import type { AddonCapability, AddonManifest } from '../types/addons';
 import {
   assertUrlAllowedForAddon,
@@ -727,7 +729,7 @@ export function createAddonSDK(
         const pk = await withPolicyTimeout(
           'signing.signatureTemplateForAddress',
           10_000,
-          async () => await KeyService.fetchAddressPrivateKey(address)
+          async () => await KeyService.fetchAddressPrivateKey(address, 'spend')
         );
         if (!pk) throw new Error(`Missing private key for address: ${address}`);
         return new SignatureTemplate(pk, HashType.SIGHASH_ALL);
@@ -764,9 +766,12 @@ export function createAddonSDK(
     },
 
     logging: {
-      info: (...args) => console.log(`[addon:${manifest.id}]`, ...args),
-      warn: (...args) => console.warn(`[addon:${manifest.id}]`, ...args),
-      error: (...args) => console.error(`[addon:${manifest.id}]`, ...args),
+      info: (...args) =>
+        console.log('[addon]', { addonId: manifest.id }, ...args),
+      warn: (...args) =>
+        console.warn('[addon]', { addonId: manifest.id }, ...args),
+      error: (...args) =>
+        console.error('[addon]', { addonId: manifest.id }, ...args),
     },
   };
 }

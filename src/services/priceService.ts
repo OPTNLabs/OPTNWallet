@@ -18,12 +18,12 @@ export type Quote = {
  * PRICE_SERVER_BASE can be overridden for staging/local testing.
  */
 function env(name: string): string | undefined {
-  const metaEnv =
+  const metaEnv: Record<string, unknown> =
     typeof import.meta !== 'undefined'
       ? ((import.meta as ImportMeta & { env?: Record<string, unknown> }).env ??
         {})
       : {};
-  const nodeEnv =
+  const nodeEnv: Record<string, unknown> =
     typeof process !== 'undefined'
       ? ((process as { env?: Record<string, unknown> }).env ?? {})
       : {};

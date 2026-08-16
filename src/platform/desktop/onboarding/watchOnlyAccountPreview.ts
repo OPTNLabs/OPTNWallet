@@ -6,6 +6,7 @@ import {
 
 import { Network } from '../../../state/slices/networkSlice';
 import {
+  alignHdPublicKeyNetwork,
   deriveBchAddressFromHdPublicKey,
   getBchAccountPath,
   getHdKeyNetwork,
@@ -13,6 +14,10 @@ import {
 
 const HARDENED_INDEX = 0x80000000;
 const MAX_XPUB_LENGTH = 256;
+
+function accountPathHint(network: Network): string {
+  return getBchAccountPath(network, 0).replace(/0'$/, "account'");
+}
 
 type PublicAddressPreview = {
   path: string;
@@ -26,12 +31,30 @@ export type WatchOnlyAccountPreview = {
   change: PublicAddressPreview;
 };
 
+/**
+ * Branch-level xPub for receive (0) or change (1).
+ *
+ * Exported because persisting a watch-only wallet derives a whole gap range per
+ * branch, not just the preview's first address, and re-deriving the branch key
+ * per address would repeat the validation on every call.
+ */
+export function watchOnlyBranchXpub(
+  accountXpub: string,
+  network: Network,
+  branchIndex: 0 | 1
+): string {
+  return deriveBranchXpub(accountXpub, network, branchIndex);
+}
+
 function deriveBranchXpub(
   accountXpub: string,
   network: Network,
   branchIndex: 0 | 1
 ): string {
-  const decoded = decodeHdPublicKey(accountXpub);
+  // Align xpub/tpub version bytes to the wallet network (Trezor chipnet export
+  // reopened on mainnet stores tpub while networkType is mainnet).
+  const aligned = alignHdPublicKeyNetwork(network, accountXpub);
+  const decoded = decodeHdPublicKey(aligned);
   if (typeof decoded === 'string') {
     throw new Error('Enter a valid BIP32 public key.');
   }
@@ -40,7 +63,7 @@ function deriveBranchXpub(
   }
   if (decoded.node.depth !== 3 || decoded.node.childIndex < HARDENED_INDEX) {
     throw new Error(
-      "Use a hardened account xPub exported at m/44'/145'/account'."
+      `Use a hardened account xPub exported at ${accountPathHint(network)}.`
     );
   }
 
@@ -59,11 +82,13 @@ export function deriveWatchOnlyAccountPreview(
   network: Network,
   rawAccountXpub: string
 ): WatchOnlyAccountPreview {
-  const accountXpub = rawAccountXpub.trim();
-  if (accountXpub.length === 0 || accountXpub.length > MAX_XPUB_LENGTH) {
+  const trimmed = rawAccountXpub.trim();
+  if (trimmed.length === 0 || trimmed.length > MAX_XPUB_LENGTH) {
     throw new Error('Enter a valid BCH account xPub.');
   }
 
+  // Same version-byte alignment as branch derivation — key material only.
+  const accountXpub = alignHdPublicKeyNetwork(network, trimmed);
   const decoded = decodeHdPublicKey(accountXpub);
   if (typeof decoded === 'string') {
     throw new Error('Enter a valid BIP32 public key.');
@@ -73,7 +98,7 @@ export function deriveWatchOnlyAccountPreview(
   }
   if (decoded.node.depth !== 3 || decoded.node.childIndex < HARDENED_INDEX) {
     throw new Error(
-      "Use a hardened account xPub exported at m/44'/145'/account'."
+      `Use a hardened account xPub exported at ${accountPathHint(network)}.`
     );
   }
 

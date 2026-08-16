@@ -1,0 +1,92 @@
+name: OPTN quality gate
+description: Run the canonical dependency, formatting, type, test, and security checks.
+inputs:
+  node-version:
+    description: Node.js version used for the gate.
+    required: false
+    default: '20'
+  run-build:
+    description: Run the production web build after verification.
+    required: false
+    default: 'true'
+runs:
+  using: composite
+  steps:
+    - name: Setup Node
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: npm
+
+    - name: Install dependencies
+      shell: bash
+      run: |
+        set -Eeuo pipefail
+        for attempt in 1 2 3; do
+          if npm ci; then
+            exit 0
+          fi
+          if [ "$attempt" -lt 3 ]; then
+            echo "npm ci attempt $attempt failed; retrying"
+            sleep $((attempt * 10))
+          fi
+        done
+        exit 1
+
+    - name: Dependency policy
+      shell: bash
+      run: npm run deps:check
+
+    - name: License policy
+      shell: bash
+      run: npm run licenses:check
+
+    - name: Formatting
+      shell: bash
+      run: npm run format:check
+
+    - name: Lint
+      shell: bash
+      run: npm run lint:core
+
+    - name: Typecheck
+      shell: bash
+      run: npm run typecheck
+
+    - name: Core tests
+      shell: bash
+      run: npm run test:core
+
+    - name: App tests
+      shell: bash
+      run: npm run test:apps
+
+    - name: UI tests
+      shell: bash
+      run: npm run test:ui
+
+    - name: Coverage gate
+      shell: bash
+      run: npm run test:coverage
+
+    - name: Upload coverage summary
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: vitest-coverage
+        path: coverage/**
+        retention-days: 7
+        if-no-files-found: warn
+
+    - name: Addon validation
+      shell: bash
+      run: npm run addons:validate
+
+    - name: Security regression tests
+      shell: bash
+      run: npm run security:test
+
+    - name: Production build
+      if: ${{ inputs.run-build == 'true' }}
+      shell: bash
+      run: npm run build

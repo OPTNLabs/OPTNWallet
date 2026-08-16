@@ -7,6 +7,8 @@ import {
   type WalletOperationStage,
 } from '../state/slices/walletReconfigurationSlice';
 import type { RootState, AppDispatch } from '../state/store';
+import { useI18n } from '../i18n/useI18n';
+import type { TranslationKey } from '../i18n/resources';
 
 const STAGE_ORDER: WalletOperationStage[] = [
   'preparing',
@@ -17,41 +19,40 @@ const STAGE_ORDER: WalletOperationStage[] = [
 
 const STAGE_COPY: Record<
   WalletOperationStage,
-  { title: string; detail: string }
+  { title: TranslationKey; detail: TranslationKey }
 > = {
   preparing: {
-    title: 'Preparing wallet',
-    detail:
-      'Stopping background sync and reconnecting to the selected network.',
+    title: 'reconfiguration.preparing',
+    detail: 'reconfiguration.preparingDetail',
   },
   clearing: {
-    title: 'Clearing old wallet data',
-    detail: 'Removing the previous address, history, and UTXO records.',
+    title: 'reconfiguration.clearing',
+    detail: 'reconfiguration.clearingDetail',
   },
   deriving: {
-    title: 'Generating wallet addresses',
-    detail: 'Creating the receive and change addresses for this wallet path.',
+    title: 'reconfiguration.deriving',
+    detail: 'reconfiguration.derivingDetail',
   },
   syncing: {
-    title: 'Synchronizing wallet',
-    detail:
-      'Fetching balances, UTXOs, and transaction history. This can take 15–20 seconds.',
+    title: 'reconfiguration.syncing',
+    detail: 'reconfiguration.syncingDetail',
   },
 };
 
-const operationTitle = (kind: WalletOperationKind): string => {
+const operationTitle = (kind: WalletOperationKind): TranslationKey => {
   switch (kind) {
     case 'network-switch':
-      return 'Switching network';
+      return 'reconfiguration.switchingNetwork';
     case 'derivation-change':
-      return 'Changing derivation path';
+      return 'reconfiguration.changingPath';
     case 'reload':
-      return 'Reloading wallet';
+      return 'reconfiguration.reloading';
   }
 };
 
 const WalletReconfigurationOverlay: React.FC = () => {
   const dispatch = useDispatch<AppDispatch>();
+  const { t } = useI18n();
   const panelRef = useRef<HTMLDivElement | null>(null);
   const operation = useSelector(
     (state: RootState) => state.walletReconfiguration
@@ -104,20 +105,20 @@ const WalletReconfigurationOverlay: React.FC = () => {
               id="wallet-operation-title"
               className="text-xl font-bold wallet-text-strong"
             >
-              Wallet update failed
+              {t('reconfiguration.failed')}
             </h2>
             <p
               id="wallet-operation-detail"
               className="mt-2 text-sm wallet-muted"
             >
-              {operation.error || 'The wallet could not be reconfigured.'}
+              {operation.error || t('reconfiguration.failedDetail')}
             </p>
             <button
               type="button"
               className="wallet-btn-danger mt-5 w-full"
               onClick={() => dispatch(dismissWalletReconfiguration())}
             >
-              Dismiss
+              {t('reconfiguration.dismiss')}
             </button>
           </>
         ) : (
@@ -133,12 +134,12 @@ const WalletReconfigurationOverlay: React.FC = () => {
                   className="text-xl font-bold wallet-text-strong"
                 >
                   {operation.kind
-                    ? operationTitle(operation.kind)
-                    : 'Updating wallet'}
+                    ? t(operationTitle(operation.kind))
+                    : t('reconfiguration.updating')}
                 </h2>
                 {operation.kind === 'network-switch' && (
                   <p className="text-xs wallet-muted">
-                    Moving to {targetNetwork}
+                    {t('reconfiguration.movingTo', { network: targetNetwork })}
                   </p>
                 )}
               </div>
@@ -147,17 +148,22 @@ const WalletReconfigurationOverlay: React.FC = () => {
             <div className="mb-4 rounded-xl wallet-surface-strong p-3">
               <div className="flex items-center justify-between gap-3">
                 <span className="text-sm font-semibold wallet-text-strong">
-                  {currentStage?.title ?? 'Working…'}
+                  {currentStage
+                    ? t(currentStage.title)
+                    : t('reconfiguration.working')}
                 </span>
                 <span className="text-xs wallet-muted">
-                  Step {Math.max(activeIndex + 1, 1)} of {visibleStages.length}
+                  {t('reconfiguration.stepOf', {
+                    current: Math.max(activeIndex + 1, 1),
+                    total: visibleStages.length,
+                  })}
                 </span>
               </div>
               <p
                 id="wallet-operation-detail"
                 className="mt-1 text-xs leading-relaxed wallet-muted"
               >
-                {currentStage?.detail}
+                {currentStage ? t(currentStage.detail) : null}
               </p>
               <div
                 className="mt-3 h-1.5 overflow-hidden rounded-full bg-[var(--wallet-border)]"
@@ -165,7 +171,7 @@ const WalletReconfigurationOverlay: React.FC = () => {
                 aria-valuemin={0}
                 aria-valuemax={visibleStages.length}
                 aria-valuenow={Math.max(activeIndex + 1, 1)}
-                aria-label="Wallet update progress"
+                aria-label={t('reconfiguration.progress')}
               >
                 <div
                   className="h-full rounded-full bg-[var(--wallet-accent)] transition-all duration-500"
@@ -202,15 +208,14 @@ const WalletReconfigurationOverlay: React.FC = () => {
                     >
                       {complete ? '✓' : index + 1}
                     </span>
-                    {STAGE_COPY[stage].title}
+                    {t(STAGE_COPY[stage].title)}
                   </li>
                 );
               })}
             </ol>
 
             <p className="mt-5 text-center text-xs wallet-muted">
-              Please keep OPTN Wallet open. Navigation is temporarily disabled
-              while wallet data is rebuilt.
+              {t('reconfiguration.keepOpen')}
             </p>
           </>
         )}

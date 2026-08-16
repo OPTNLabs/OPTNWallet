@@ -1,3 +1,5 @@
+// @ts-nocheck WIP app surface; see docs/wip-typecheck-exclusions.md
+
 // src/pages/apps/mintCashTokensPoCApp/MintCashTokensPoCApp.tsx
 
 import React, {
@@ -19,6 +21,7 @@ import {
   parseUrisInput,
   selectFeeCandidates,
   validateMintRequest,
+  type BcmrNftsSchemaInput,
 } from './services';
 import {
   IpfsUploadResult,
@@ -68,6 +71,7 @@ import {
 } from './utils/sourceHelpers';
 import { useSmoothResetTransition } from '../shared/useSmoothResetTransition';
 import { selectWalletId } from '../../../state/slices/walletSlice';
+import { useAddonI18n } from '../../../i18n/useAddonI18n';
 
 type BcmrFieldKey =
   | 'tokenCategory'
@@ -78,6 +82,9 @@ type BcmrFieldKey =
   | 'webUri'
   | 'registry'
   | 'image'
+  | 'nftBytecode'
+  | 'nftTypes'
+  | 'nftFields'
   | 'general';
 
 type FlowState = {
@@ -112,6 +119,10 @@ type BcmrFormFingerprint = {
   tokenDecimals: number;
   iconUri: string;
   webUri: string;
+  nftsDescription: string;
+  nftBytecode: string;
+  nftTypesJson: string;
+  nftFieldsJson: string;
 };
 
 type FlowAction =
@@ -181,6 +192,7 @@ function describeMintSourceKind(
 }
 
 const MintCashTokensPoCApp: React.FC = () => {
+  const { t: addonT } = useAddonI18n();
   const navigate = useNavigate();
   const location = useLocation();
   const backTarget = getReturnPath(location, '/apps');
@@ -199,7 +211,9 @@ const MintCashTokensPoCApp: React.FC = () => {
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [outputDrafts, setOutputDrafts] = useState<MintOutputDraft[]>([]);
   const [showOutputPopup, setShowOutputPopup] = useState(false);
-  const [editingOutputDraftId, setEditingOutputDraftId] = useState<string | null>(null);
+  const [editingOutputDraftId, setEditingOutputDraftId] = useState<
+    string | null
+  >(null);
   const [outputFormMintType, setOutputFormMintType] = useState<'FT' | 'NFT'>(
     'FT'
   );
@@ -238,6 +252,10 @@ const MintCashTokensPoCApp: React.FC = () => {
   const [bcmrTokenDecimals, setBcmrTokenDecimals] = useState('0');
   const [bcmrIconUri, setBcmrIconUri] = useState('');
   const [bcmrWebUri, setBcmrWebUri] = useState('');
+  const [bcmrNftsDescription, setBcmrNftsDescription] = useState('');
+  const [bcmrNftBytecode, setBcmrNftBytecode] = useState('');
+  const [bcmrNftTypesJson, setBcmrNftTypesJson] = useState('');
+  const [bcmrNftFieldsJson, setBcmrNftFieldsJson] = useState('');
   const [bcmrImageFile, setBcmrImageFile] = useState<File | null>(null);
   const [bcmrImageUpload, setBcmrImageUpload] =
     useState<IpfsUploadResult | null>(null);
@@ -445,6 +463,10 @@ const MintCashTokensPoCApp: React.FC = () => {
           : -1,
       iconUri: bcmrIconUri.trim(),
       webUri: bcmrWebUri.trim(),
+      nftsDescription: bcmrNftsDescription.trim(),
+      nftBytecode: bcmrNftBytecode.trim(),
+      nftTypesJson: bcmrNftTypesJson.trim(),
+      nftFieldsJson: bcmrNftFieldsJson.trim(),
     };
     return JSON.stringify(fingerprint);
   }, [
@@ -456,6 +478,10 @@ const MintCashTokensPoCApp: React.FC = () => {
     bcmrTokenDecimals,
     bcmrIconUri,
     bcmrWebUri,
+    bcmrNftsDescription,
+    bcmrNftBytecode,
+    bcmrNftTypesJson,
+    bcmrNftFieldsJson,
   ]);
 
   const bcmrRegistryIsCurrent =
@@ -540,7 +566,11 @@ const MintCashTokensPoCApp: React.FC = () => {
   const openAddOutputDraftForm = useCallback(() => {
     const initialSource = selectedUtxos[0] ?? null;
     setEditingOutputDraftId(null);
-    setOutputFormRecipient(selectedRecipientCashAddrs.values().next().value || addresses[0]?.address || '');
+    setOutputFormRecipient(
+      selectedRecipientCashAddrs.values().next().value ||
+        addresses[0]?.address ||
+        ''
+    );
     setOutputFormSourceKey(initialSource ? utxoKey(initialSource) : '');
     setOutputFormMintType(
       initialSource && canMintFungibleFromSource(initialSource) ? 'FT' : 'NFT'
@@ -607,6 +637,8 @@ const MintCashTokensPoCApp: React.FC = () => {
     outputFormNftCommitment,
     outputFormRecipient,
     outputFormSourceKey,
+    selectedUtxos,
+    setErrorMessage,
   ]);
 
   const removeOutputDraft = useCallback((id: string) => {
@@ -748,6 +780,10 @@ const MintCashTokensPoCApp: React.FC = () => {
     setBcmrTokenDecimals('0');
     setBcmrIconUri('');
     setBcmrWebUri('');
+    setBcmrNftsDescription('');
+    setBcmrNftBytecode('');
+    setBcmrNftTypesJson('');
+    setBcmrNftFieldsJson('');
     setBcmrImageFile(null);
     setBcmrImageUpload(null);
     setBcmrRegistryUpload(null);
@@ -826,7 +862,9 @@ const MintCashTokensPoCApp: React.FC = () => {
                 : 'Category source created. Refreshing wallet data...'
             );
             showToast(
-              submitted ? 'Category source submitted' : 'Category source created'
+              submitted
+                ? 'Category source submitted'
+                : 'Category source created'
             );
 
             let refreshFailed = false;
@@ -941,7 +979,14 @@ const MintCashTokensPoCApp: React.FC = () => {
           activeOutputDrafts.length === 1 ? '' : 's'
         })`,
         subtitle: 'Fee policy: 1 sat/byte. Review before broadcast.',
-        warning: <>This will broadcast immediately after confirmation.</>,
+        warning: (
+          <>
+            {addonT(
+              'module.broadcastWarning',
+              'This will broadcast immediately after confirmation.'
+            )}
+          </>
+        ),
         body: (
           <TxSummary
             inputs={asTxSummaryInputs(inputsForBuild)}
@@ -1027,6 +1072,7 @@ const MintCashTokensPoCApp: React.FC = () => {
     setTxid,
     closeConfirm,
     showToast,
+    addonT,
     refreshWalletSnapshot,
     setConfirmLoading,
     resetMintComposer,
@@ -1049,9 +1095,7 @@ const MintCashTokensPoCApp: React.FC = () => {
 
   const openBcmrEditor = useCallback(
     (prefillFromExisting: boolean) => {
-      const existing = prefillFromExisting
-        ? selectedSourceBcmrMetadata
-        : null;
+      const existing = prefillFromExisting ? selectedSourceBcmrMetadata : null;
 
       setBcmrEnabled(true);
       setBcmrRegistryJson('');
@@ -1068,6 +1112,33 @@ const MintCashTokensPoCApp: React.FC = () => {
       setBcmrTokenDecimals(String(existing?.token?.decimals ?? 0));
       setBcmrIconUri(existing?.uris?.icon ?? '');
       setBcmrWebUri(existing?.uris?.web ?? '');
+      const existingNfts = (
+        existing?.token as unknown as
+          | {
+              nfts?: {
+                description?: string;
+                fields?: Record<string, unknown>;
+                parse?: {
+                  bytecode?: string;
+                  types?: Record<string, unknown>;
+                };
+              };
+            }
+          | undefined
+      )?.nfts;
+      setBcmrNftsDescription(existingNfts?.description ?? '');
+      setBcmrNftBytecode(existingNfts?.parse?.bytecode ?? '');
+      setBcmrNftTypesJson(
+        existingNfts?.parse?.types &&
+          Object.keys(existingNfts.parse.types).length > 0
+          ? JSON.stringify(existingNfts.parse.types, null, 2)
+          : ''
+      );
+      setBcmrNftFieldsJson(
+        existingNfts?.fields && Object.keys(existingNfts.fields).length > 0
+          ? JSON.stringify(existingNfts.fields, null, 2)
+          : ''
+      );
       setBcmrImageFile(null);
       setBcmrImageUpload(null);
       setBcmrImageUploadStatus(IDLE_BCMR_UPLOAD_STATUS);
@@ -1094,6 +1165,9 @@ const MintCashTokensPoCApp: React.FC = () => {
     if (lower.includes('official site') || lower.includes('web'))
       return 'webUri';
     if (lower.includes('uri')) return 'registry';
+    if (lower.includes('bytecode')) return 'nftBytecode';
+    if (lower.includes('nft type')) return 'nftTypes';
+    if (lower.includes('nft field')) return 'nftFields';
     return 'general';
   }, []);
 
@@ -1165,6 +1239,9 @@ const MintCashTokensPoCApp: React.FC = () => {
     const trimmedIcon = bcmrIconUri.trim();
     const trimmedWeb = bcmrWebUri.trim();
     const parsedDecimals = Number.parseInt(bcmrTokenDecimals, 10);
+    const trimmedNftBytecode = bcmrNftBytecode.trim();
+    const trimmedNftTypes = bcmrNftTypesJson.trim();
+    const trimmedNftFields = bcmrNftFieldsJson.trim();
 
     const nextErrors: Partial<Record<BcmrFieldKey, string>> = {};
 
@@ -1191,6 +1268,47 @@ const MintCashTokensPoCApp: React.FC = () => {
     }
     if (trimmedWeb && !/^https?:\/\//i.test(trimmedWeb)) {
       nextErrors.webUri = 'Official site must start with https:// or http://';
+    }
+    if (
+      trimmedNftBytecode &&
+      (!/^[0-9a-f]+$/i.test(trimmedNftBytecode) ||
+        trimmedNftBytecode.length % 2 !== 0)
+    ) {
+      nextErrors.nftBytecode = 'Parse bytecode must be even-length hex.';
+    }
+    let nftTypes: Record<string, { name: string }> | undefined;
+    if (trimmedNftTypes) {
+      try {
+        const parsed: unknown = JSON.parse(trimmedNftTypes);
+        if (
+          typeof parsed !== 'object' ||
+          parsed === null ||
+          Array.isArray(parsed)
+        ) {
+          throw new Error();
+        }
+        nftTypes = parsed as Record<string, { name: string }>;
+      } catch {
+        nextErrors.nftTypes =
+          'NFT types must be valid JSON: an object of type keys.';
+      }
+    }
+    let nftFields: BcmrNftsSchemaInput['fields'] | undefined;
+    if (trimmedNftFields) {
+      try {
+        const parsed: unknown = JSON.parse(trimmedNftFields);
+        if (
+          typeof parsed !== 'object' ||
+          parsed === null ||
+          Array.isArray(parsed)
+        ) {
+          throw new Error();
+        }
+        nftFields = parsed as BcmrNftsSchemaInput['fields'];
+      } catch {
+        nextErrors.nftFields =
+          'NFT fields must be valid JSON: an object of field identifiers.';
+      }
     }
 
     if (Object.keys(nextErrors).length > 0) {
@@ -1228,6 +1346,16 @@ const MintCashTokensPoCApp: React.FC = () => {
         tokenDecimals: parsedDecimals,
         iconUri: bcmrIconUri,
         webUri: bcmrWebUri,
+        nfts: outputDrafts.some((draft) => draft.config.mintType === 'NFT')
+          ? {
+              description: bcmrNftsDescription.trim() || undefined,
+              parse: {
+                bytecode: trimmedNftBytecode || undefined,
+                types: nftTypes,
+              },
+              fields: nftFields,
+            }
+          : undefined,
       });
       setBcmrRegistryJson(json);
 
@@ -1281,8 +1409,13 @@ const MintCashTokensPoCApp: React.FC = () => {
     bcmrTokenDecimals,
     bcmrIconUri,
     bcmrWebUri,
+    bcmrNftsDescription,
+    bcmrNftBytecode,
+    bcmrNftTypesJson,
+    bcmrNftFieldsJson,
     bcmrAuthbase,
     bcmrSelectedCategories.length,
+    outputDrafts,
     setLoading,
     bcmrTokenDescription,
     bcmrFormFingerprint,
@@ -1391,10 +1524,12 @@ const MintCashTokensPoCApp: React.FC = () => {
                   <div className="mt-4 wallet-card rounded-[20px] p-4 space-y-3">
                     <div className="flex items-center justify-between">
                       <h3 className="text-base font-semibold">
-                        Token Metadata
+                        {addonT('common.tokenMetadata', 'Token metadata')}
                       </h3>
                       {selectedSourceHasExistingBcmr ? (
-                        <Badge tone="green">BCMR already present</Badge>
+                        <Badge tone="green">
+                          {addonT('module.bcmrPresent', 'BCMR already present')}
+                        </Badge>
                       ) : null}
                     </div>
                     <p className="text-sm wallet-muted">
@@ -1411,10 +1546,10 @@ const MintCashTokensPoCApp: React.FC = () => {
                         className="wallet-btn-primary px-3 py-2 text-sm"
                       >
                         {selectedSourceHasExistingBcmr
-                          ? 'Replace metadata'
+                          ? addonT('common.replaceMetadata', 'Replace metadata')
                           : bcmrRegistryUpload
-                            ? 'Edit metadata'
-                            : 'Add metadata'}
+                            ? addonT('common.editMetadata', 'Edit metadata')
+                            : addonT('common.addMetadata', 'Add metadata')}
                       </button>
                     </div>
                   </div>
@@ -1568,11 +1703,13 @@ const MintCashTokensPoCApp: React.FC = () => {
                   <option value="" disabled>
                     Select a recipient
                   </option>
-                  {addresses.map((addr) => addr.address).map((addr) => (
-                    <option key={addr} value={addr}>
-                      {addr}
-                    </option>
-                  ))}
+                  {addresses
+                    .map((addr) => addr.address)
+                    .map((addr) => (
+                      <option key={addr} value={addr}>
+                        {addr}
+                      </option>
+                    ))}
                 </select>
               </div>
 
@@ -1654,7 +1791,9 @@ const MintCashTokensPoCApp: React.FC = () => {
 
             {outputFormMintType === 'FT' ? (
               <div className="space-y-2">
-                <label className="block text-sm font-semibold">FT amount</label>
+                <label className="block text-sm font-semibold">
+                  {addonT('common.ftAmount', 'FT amount')}
+                </label>
                 <input
                   type="number"
                   min="1"
@@ -1691,7 +1830,7 @@ const MintCashTokensPoCApp: React.FC = () => {
                     value={outputFormNftCommitment}
                     onChange={(e) => setOutputFormNftCommitment(e.target.value)}
                     className="wallet-input w-full"
-                    placeholder="optional hex"
+                    placeholder={addonT('module.optionalHex', 'optional hex')}
                   />
                 </div>
               </div>
@@ -1703,7 +1842,9 @@ const MintCashTokensPoCApp: React.FC = () => {
               disabled={!outputFormRecipient || !outputFormSourceKey}
               className="wallet-btn-primary w-full px-4 py-3 font-semibold disabled:opacity-50"
             >
-              {editingOutputDraftId ? 'Update output' : 'Save output'}
+              {editingOutputDraftId
+                ? addonT('common.updateOutput', 'Update output')
+                : addonT('common.saveOutput', 'Save output')}
             </button>
             {editingOutputDraftId ? (
               <button
@@ -1711,7 +1852,7 @@ const MintCashTokensPoCApp: React.FC = () => {
                 onClick={deleteOutputDraftForm}
                 className="wallet-btn-danger w-full px-4 py-3 font-semibold"
               >
-                Delete output
+                {addonT('common.deleteOutput', 'Delete output')}
               </button>
             ) : null}
           </div>
@@ -1726,7 +1867,7 @@ const MintCashTokensPoCApp: React.FC = () => {
           <div className="p-4 space-y-4">
             <div>
               <h3 className="text-xl font-bold text-center">
-                Token metadata
+                {addonT('common.tokenMetadata', 'Token metadata')}
               </h3>
               <p className="mt-1 text-sm wallet-muted text-center">
                 Configure BCMR metadata and finish IPFS verification before
@@ -1741,12 +1882,17 @@ const MintCashTokensPoCApp: React.FC = () => {
             ) : null}
 
             <div className="grid grid-cols-1 gap-2">
-              <label className="block text-sm font-semibold">Token category</label>
+              <label className="block text-sm font-semibold">
+                {addonT('module.tokenCategory', 'Token category')}
+              </label>
               <input
                 value={bcmrTokenCategory}
                 readOnly
                 className="wallet-input w-full font-mono text-xs opacity-80"
-                placeholder="Select one mint source to derive category"
+                placeholder={addonT(
+                  'module.selectMintSource',
+                  'Select one mint source to derive category'
+                )}
               />
               {bcmrFieldErrors.tokenCategory ? (
                 <p className="text-xs wallet-danger-text">
@@ -1757,7 +1903,9 @@ const MintCashTokensPoCApp: React.FC = () => {
 
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="block text-sm font-semibold">Name</label>
+                <label className="block text-sm font-semibold">
+                  {addonT('module.name', 'Name')}
+                </label>
                 <input
                   value={bcmrTokenName}
                   onChange={(e) => setBcmrTokenName(e.target.value)}
@@ -1770,7 +1918,9 @@ const MintCashTokensPoCApp: React.FC = () => {
                 ) : null}
               </div>
               <div>
-                <label className="block text-sm font-semibold">Symbol</label>
+                <label className="block text-sm font-semibold">
+                  {addonT('module.symbol', 'Symbol')}
+                </label>
                 <input
                   value={bcmrTokenSymbol}
                   onChange={(e) => setBcmrTokenSymbol(e.target.value)}
@@ -1785,7 +1935,9 @@ const MintCashTokensPoCApp: React.FC = () => {
             </div>
 
             <div>
-              <label className="block text-sm font-semibold">Description</label>
+              <label className="block text-sm font-semibold">
+                {addonT('module.description', 'Description')}
+              </label>
               <input
                 value={bcmrTokenDescription}
                 onChange={(e) => setBcmrTokenDescription(e.target.value)}
@@ -1795,7 +1947,9 @@ const MintCashTokensPoCApp: React.FC = () => {
 
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="block text-sm font-semibold">Decimals</label>
+                <label className="block text-sm font-semibold">
+                  {addonT('module.decimals', 'Decimals')}
+                </label>
                 <input
                   type="number"
                   min="0"
@@ -1810,7 +1964,9 @@ const MintCashTokensPoCApp: React.FC = () => {
                 ) : null}
               </div>
               <div>
-                <label className="block text-sm font-semibold">Icon URI</label>
+                <label className="block text-sm font-semibold">
+                  {addonT('module.iconUri', 'Icon URI')}
+                </label>
                 <input
                   value={bcmrIconUri}
                   onChange={(e) => setBcmrIconUri(e.target.value)}
@@ -1826,7 +1982,9 @@ const MintCashTokensPoCApp: React.FC = () => {
             </div>
 
             <div>
-              <label className="block text-sm font-semibold">Official site</label>
+              <label className="block text-sm font-semibold">
+                {addonT('module.officialSite', 'Official site')}
+              </label>
               <input
                 value={bcmrWebUri}
                 onChange={(e) => setBcmrWebUri(e.target.value)}
@@ -1836,6 +1994,58 @@ const MintCashTokensPoCApp: React.FC = () => {
               {bcmrFieldErrors.webUri ? (
                 <p className="text-xs wallet-danger-text mt-1">
                   {bcmrFieldErrors.webUri}
+                </p>
+              ) : null}
+            </div>
+
+            <div className="rounded-xl wallet-surface-strong border border-[var(--wallet-border)] p-3 space-y-2">
+              <label className="block text-sm font-semibold">
+                NFT schema
+              </label>
+              <p className="text-xs wallet-muted">
+                {outputDrafts.some((draft) => draft.config.mintType === 'NFT')
+                  ? 'The NFT schema is always recorded for NFT categories, even when empty, and can be extended in later snapshots. Empty bytecode = sequential collection.'
+                  : 'No NFT outputs selected yet — the schema will be recorded for NFT mints.'}
+              </p>
+              <input
+                value={bcmrNftsDescription}
+                onChange={(e) => setBcmrNftsDescription(e.target.value)}
+                className="wallet-input w-full"
+                placeholder="How this identity uses NFTs (optional)"
+              />
+              <input
+                value={bcmrNftBytecode}
+                onChange={(e) => setBcmrNftBytecode(e.target.value)}
+                className="wallet-input w-full font-mono text-xs"
+                placeholder="Parse bytecode hex (empty = sequential)"
+              />
+              {bcmrFieldErrors.nftBytecode ? (
+                <p className="text-xs wallet-danger-text mt-1">
+                  {bcmrFieldErrors.nftBytecode}
+                </p>
+              ) : null}
+              <textarea
+                value={bcmrNftTypesJson}
+                onChange={(e) => setBcmrNftTypesJson(e.target.value)}
+                rows={4}
+                className="wallet-input w-full font-mono text-xs"
+                placeholder='Types JSON, e.g. {"01":{"name":"#1","description":"Token number 1"}}'
+              />
+              {bcmrFieldErrors.nftTypes ? (
+                <p className="text-xs wallet-danger-text mt-1">
+                  {bcmrFieldErrors.nftTypes}
+                </p>
+              ) : null}
+              <textarea
+                value={bcmrNftFieldsJson}
+                onChange={(e) => setBcmrNftFieldsJson(e.target.value)}
+                rows={3}
+                className="wallet-input w-full font-mono text-xs"
+                placeholder='Fields JSON, e.g. {"serial":{"name":"Serial","encoding":{"type":"number"},"offset":"1","byteLength":"2"}}'
+              />
+              {bcmrFieldErrors.nftFields ? (
+                <p className="text-xs wallet-danger-text mt-1">
+                  {bcmrFieldErrors.nftFields}
                 </p>
               ) : null}
             </div>

@@ -29,6 +29,8 @@ import {
 } from '../state/slices/walletReconfigurationSlice';
 import type { DerivationPathSource } from '../types/wallet';
 import { getBchAccountPath, normalizeBchAccountPath } from './HdWalletService';
+import { clearParentTransactionCache } from './psbt/parentTransactions';
+import { clearCachedWalletUtxoSnapshot } from './WalletUtxoSnapshotCache';
 
 export type WalletReconfigurationRequest = {
   walletId: number;
@@ -98,6 +100,7 @@ function clearDerivedWalletState(walletId: number): void {
 
   QuantumrootVaultCacheService.clear(walletId);
   WalletDiscoveryService.clear(walletId);
+  clearCachedWalletUtxoSnapshot(walletId);
   invalidateUTXOCache();
   store.dispatch(clearWalletSpecialActivities(walletId));
 }
@@ -205,6 +208,11 @@ export async function reconfigureActiveWallet(
         resetCooldown: true,
       });
       invalidateUTXOCache();
+      // A network/path reconfiguration changes the address space. Do not
+      // paint the prior derivation's in-memory snapshot while the new one is
+      // being materialized; SQL remains available as the provisional source.
+      clearCachedWalletUtxoSnapshot(request.walletId);
+      clearParentTransactionCache();
       try {
         await ElectrumServer().electrumDisconnect();
       } catch {

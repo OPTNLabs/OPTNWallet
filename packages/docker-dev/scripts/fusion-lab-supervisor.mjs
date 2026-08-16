@@ -149,7 +149,8 @@ function runHeadlessCmd() {
   writeHealth('headless_running', { cmd: HEADLESS_CMD });
   return new Promise((resolve) => {
     const child = spawn(HEADLESS_CMD, {
-      shell: true,
+      // OPTN_HEADLESS_CMD is an executable path, not a shell command.
+      shell: false,
       stdio: 'inherit',
       env: {
         ...process.env,

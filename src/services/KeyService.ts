@@ -10,14 +10,37 @@ import type {
 import { isArrayBufferLike, isString } from '../utils/typeGuards';
 import { SignedMessage } from '../utils/signed';
 import DeviceIntegrityService from './DeviceIntegrityService';
-import type { QuantumrootVaultRecord, SignedMessageResponseI } from '../types/types';
+import type {
+  QuantumrootVaultRecord,
+  SignedMessageResponseI,
+} from '../types/types';
 import { Network } from '../state/slices/networkSlice';
 import type { deriveQuantumrootVault } from './QuantumrootService';
+import type { Bip39Language } from './Bip39Service';
+
+/**
+ * Why a caller wants a private key. Platform integrity services decide what
+ * each one costs the user:
+ *
+ * - `spend`      producing a signature that moves funds or binds the user to
+ *                something. May re-prompt for the wallet password.
+ * - `reveal`     handing the key itself to the user (WIF export). Always
+ *                re-prompts — the key leaves the app's control.
+ * - `background` unattended use the user already consented to, such as
+ *                auto-fusion. Must never prompt, or rounds die mid-flight.
+ */
+export type KeyPurpose = 'spend' | 'reveal' | 'background';
+
+const KEY_PURPOSE_SCOPES: Record<KeyPurpose, string> = {
+  spend: 'fetchAddressPrivateKey_spend',
+  reveal: 'private_key_reveal',
+  background: 'fetchAddressPrivateKey',
+};
 
 const KeyService = {
-  async generateMnemonic() {
+  async generateMnemonic(language?: Bip39Language) {
     const keyGen = KeyGeneration();
-    return await keyGen.generateMnemonic();
+    return await keyGen.generateMnemonic(language);
   },
 
   async retrieveKeys(walletId: number) {
@@ -57,7 +80,10 @@ const KeyService = {
     const state = store.getState();
     const currentNetwork = selectCurrentNetwork(state);
     const walletManager = WalletManager();
-    const walletInfo = await walletManager.getWalletInfo(walletId);
+    // Key derivation only needs public wallet metadata here. Re-decrypting the
+    // wallet row before every address can fail when other wallet rows use a
+    // different device-scoped key.
+    const walletInfo = await walletManager.getWalletMetadata(walletId);
     const resolvedNetwork =
       walletInfo?.networkType === Network.MAINNET
         ? Network.MAINNET
@@ -99,7 +125,11 @@ const KeyService = {
     accountNumber = 0
   ): Promise<QuantumrootVaultRecord> {
     const keyManager = KeyManager();
-    return await keyManager.createQuantumrootVault(walletId, addressIndex, accountNumber);
+    return await keyManager.createQuantumrootVault(
+      walletId,
+      addressIndex,
+      accountNumber
+    );
   },
 
   async configureQuantumrootVault(
@@ -143,9 +173,19 @@ const KeyService = {
     );
   },
 
-  // Consolidate the private key fetching and type handling here
-  async fetchAddressPrivateKey(address: string): Promise<Uint8Array | null> {
-    await DeviceIntegrityService.assertDeviceIntegrity('fetchAddressPrivateKey');
+  // Consolidate the private key fetching and type handling here.
+  //
+  // `purpose` is required on purpose. It used to default to non-spending, so a
+  // caller that simply forgot the argument got no re-auth and no warning — the
+  // dangerous case was the silent one. Making it explicit means the compiler,
+  // not a reviewer, catches the next spend path somebody adds.
+  async fetchAddressPrivateKey(
+    address: string,
+    purpose: KeyPurpose
+  ): Promise<Uint8Array | null> {
+    await DeviceIntegrityService.assertDeviceIntegrity(
+      KEY_PURPOSE_SCOPES[purpose]
+    );
     const keyManager = KeyManager();
     const privateKeyData = await keyManager.fetchAddressPrivateKey(address);
 
@@ -169,7 +209,7 @@ const KeyService = {
     message: string
   ): Promise<SignedMessageResponseI> {
     await DeviceIntegrityService.assertDeviceIntegrity('signMessageForAddress');
-    const privateKey = await this.fetchAddressPrivateKey(address);
+    const privateKey = await this.fetchAddressPrivateKey(address, 'spend');
     if (!privateKey) {
       throw new Error(`Missing private key for address: ${address}`);
     }

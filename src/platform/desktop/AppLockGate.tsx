@@ -5,7 +5,7 @@
 //      key and navigates back to the wallet picker. There is no app-level lock
 //      screen: reopening the wallet asks that wallet's own password.
 //   2. optn:integrity-check events — gated seed-phrase reveal: shows passphrase confirm modal,
-//      calls EcKeyManager.verify() without updating the cached key (verify-only path).
+//      calls OptnKeyManager.verify() without updating the cached key (verify-only path).
 
 import React, { useEffect, useRef, useCallback, useState } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
@@ -13,20 +13,29 @@ import { useNavigate } from 'react-router-dom';
 import { selectAutoLockMinutes } from '../../state/slices/appLockSlice';
 import { selectWalletId, resetWallet } from '../../state/slices/walletSlice';
 import { ROUTE_PATHS } from '../../navigation/routes';
-import { EcKeyManager } from './EcKeyManager';
+import { resyncAfterWalletClosed } from './walletSessionRelease';
+import { OptnKeyManager } from './OptnKeyManager';
 import { verifyWalletPassword } from './DesktopWalletManager';
 import {
   INTEGRITY_EVENT,
   resolveIntegrityCheck,
   rejectIntegrityCheck,
 } from './DeviceIntegrityService';
+import { useI18n } from '../../i18n/useI18n';
 
-const ACTIVITY_EVENTS = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll'] as const;
+const ACTIVITY_EVENTS = [
+  'mousemove',
+  'mousedown',
+  'keydown',
+  'touchstart',
+  'scroll',
+] as const;
 
 export const AppLockGate: React.FC = () => {
   const navigate = useNavigate();
   const dispatch = useDispatch();
   const autoLockMinutes = useSelector(selectAutoLockMinutes);
+  const { t } = useI18n();
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const walletId = useSelector(selectWalletId);
@@ -41,36 +50,55 @@ export const AppLockGate: React.FC = () => {
   const [integrityPassphrase, setIntegrityPassphrase] = useState('');
   const [integrityError, setIntegrityError] = useState('');
   const [integrityChecking, setIntegrityChecking] = useState(false);
+  const [integrityScope, setIntegrityScope] = useState<string | null>(null);
 
   // ── Inactivity auto-lock ──────────────────────────────────────────────────
 
   const resetTimer = useCallback(() => {
     if (!shouldAutoLock) return;
     if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => {
-      console.log(`[AppLock] No activity for ${autoLockMinutes} min — closing wallet`);
-      EcKeyManager.lock();
-      dispatch(resetWallet());
-      navigate(ROUTE_PATHS.landing);
-    }, autoLockMinutes * 60 * 1000);
+    timerRef.current = setTimeout(
+      () => {
+        console.log(
+          `[AppLock] No activity for ${autoLockMinutes} min — closing wallet`
+        );
+        OptnKeyManager.lock();
+        dispatch(resetWallet());
+        navigate(ROUTE_PATHS.landing);
+        resyncAfterWalletClosed('AppLock');
+      },
+      autoLockMinutes * 60 * 1000
+    );
   }, [shouldAutoLock, autoLockMinutes, navigate, dispatch]);
 
   useEffect(() => {
     if (shouldAutoLock) resetTimer();
-    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
   }, [shouldAutoLock, resetTimer]);
 
   useEffect(() => {
     if (!shouldAutoLock) return;
     const handleActivity = () => resetTimer();
-    ACTIVITY_EVENTS.forEach((e) => window.addEventListener(e, handleActivity, { passive: true }));
-    return () => { ACTIVITY_EVENTS.forEach((e) => window.removeEventListener(e, handleActivity)); };
+    ACTIVITY_EVENTS.forEach((e) =>
+      window.addEventListener(e, handleActivity, { passive: true })
+    );
+    return () => {
+      ACTIVITY_EVENTS.forEach((e) =>
+        window.removeEventListener(e, handleActivity)
+      );
+    };
   }, [shouldAutoLock, resetTimer]);
 
   // ── Integrity check event listener ────────────────────────────────────────
 
   useEffect(() => {
-    const handler = () => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as
+        | { scope?: string }
+        | undefined;
+      setIntegrityScope(detail?.scope ?? null);
       setIntegrityPassphrase('');
       setIntegrityError('');
       setIntegrityVisible(true);
@@ -90,28 +118,34 @@ export const AppLockGate: React.FC = () => {
         : false;
       if (ok) {
         setIntegrityVisible(false);
+        setIntegrityScope(null);
         resolveIntegrityCheck();
       } else {
-        setIntegrityError('Incorrect passphrase. Try again.');
+        setIntegrityError(t('appLock.incorrect'));
       }
     } catch {
-      setIntegrityError('Verification failed. Please try again.');
+      setIntegrityError(t('appLock.verificationFailed'));
     } finally {
       setIntegrityChecking(false);
       setIntegrityPassphrase('');
     }
-  }, [integrityPassphrase, walletId]);
+  }, [integrityPassphrase, walletId, t]);
 
   const handleIntegrityCancel = useCallback(() => {
     setIntegrityVisible(false);
     setIntegrityPassphrase('');
     setIntegrityError('');
+    setIntegrityScope(null);
     rejectIntegrityCheck('Cancelled by user');
   }, []);
 
   // ── Render ────────────────────────────────────────────────────────────────
 
   if (!integrityVisible) return null;
+
+  const isSpendScope = integrityScope === 'fetchAddressPrivateKey_spend';
+  const isPrivKeyScope = integrityScope === 'private_key_reveal';
+  const isXpubScope = integrityScope === 'xpub_reveal';
 
   return (
     <div
@@ -124,9 +158,17 @@ export const AppLockGate: React.FC = () => {
       >
         <div className="text-center space-y-1">
           <div className="text-2xl">🔐</div>
-          <h3 className="font-bold text-lg wallet-text-strong">Confirm password</h3>
+          <h3 className="font-bold text-lg wallet-text-strong">
+            {t('appLock.confirmPassword')}
+          </h3>
           <p className="text-sm wallet-muted">
-            Enter your password to reveal the backup phrase.
+            {isSpendScope
+              ? 'Enter your password to confirm this transaction.'
+              : isPrivKeyScope
+                ? 'Enter your password to reveal this private key.'
+                : isXpubScope
+                  ? 'Enter your password to reveal wallet information.'
+                  : t('appLock.revealBackup')}
           </p>
         </div>
 
@@ -134,14 +176,18 @@ export const AppLockGate: React.FC = () => {
           type="password"
           value={integrityPassphrase}
           onChange={(e) => setIntegrityPassphrase(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') void handleIntegritySubmit(); }}
-          placeholder="Password"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void handleIntegritySubmit();
+          }}
+          placeholder={t('appLock.password')}
           className="w-full rounded-[14px] border border-[var(--wallet-border)] bg-transparent px-4 py-3 text-center text-lg outline-none wallet-surface-strong"
           autoFocus
         />
 
         {integrityError && (
-          <p className="text-center text-sm wallet-danger-text">{integrityError}</p>
+          <p className="text-center text-sm wallet-danger-text">
+            {integrityError}
+          </p>
         )}
 
         <div className="flex gap-3">
@@ -150,7 +196,7 @@ export const AppLockGate: React.FC = () => {
             className="flex-1 wallet-btn-secondary"
             onClick={handleIntegrityCancel}
           >
-            Cancel
+            {t('appLock.cancel')}
           </button>
           <button
             type="button"
@@ -158,7 +204,7 @@ export const AppLockGate: React.FC = () => {
             onClick={() => void handleIntegritySubmit()}
             disabled={integrityChecking}
           >
-            {integrityChecking ? 'Checking…' : 'Confirm'}
+            {integrityChecking ? t('appLock.checking') : t('appLock.confirm')}
           </button>
         </div>
       </div>

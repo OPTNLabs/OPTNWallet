@@ -1,19 +1,30 @@
 // src/hooks/useSimpleSend.ts
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
 
 import { RootState } from '../state/store';
-import { selectWalletId } from '../state/slices/walletSlice';
+import {
+  selectWalletId,
+  selectWalletType,
+} from '../state/slices/walletSlice';
 import useFetchWalletAddresses from './useFetchWalletAddresses';
+import { signHardwarePayment } from '../services/hardware/hardwareSignTransaction';
 
 import { UTXO } from '../types/types';
 import TransactionService, {
   type BroadcastState,
 } from '../services/TransactionService';
 import { selectCurrentNetwork } from '../state/selectors/networkSelectors';
+import {
+  selectCustomFeeSatPerByte,
+  selectFeeMode,
+} from '../state/slices/preferencesSlice';
 import { SATSINBITCOIN } from '../utils/constants';
 import UTXOService from '../services/UTXOService';
+import { outpointKey } from '../platform/desktop/CoinLabelService';
+import { applySpendOnlyFusedPolicy } from '../platform/desktop/fusionSpendPolicy';
+import { selectSpendOnlyFusedCoins } from '../state/slices/experimentalSlice';
 import {
   selectNftInput,
   selectTokenFtInputs,
@@ -29,18 +40,33 @@ import {
 } from './simple-send/helpers';
 import { createSimpleSendPlanner } from './simple-send/planner';
 import { AssetType, ReviewState, SimpleSendMode } from './simple-send/types';
-import { parseBip21Uri } from '../utils/bip21';
+import { parseBip21Uri, recipientNetworkError } from '../utils/bip21';
 import {
   getLegacyDefaultChangeAddress,
   getPreferredBchChangeAddress,
 } from '../utils/changeAddressPreference';
-import { getRpaSendBlockReason } from '../services/RpaService';
+import {
+  decodePaycode,
+  getRpaSendBlockReason,
+  looksLikeRpaPaycode,
+} from '../services/RpaService';
+import { finalizeRpaPayment, makeRpaDummyAddress } from '../services/RpaSender';
+import KeyService from '../services/KeyService';
+import { secp256k1 } from '@bitauth/libauth';
 
 export default function useSimpleSend() {
   // Redux
   const prices = useSelector((s: RootState) => s.priceFeed);
   const walletId = useSelector(selectWalletId);
+  const walletType = useSelector(selectWalletType);
+  const isHardwareWallet = walletType === 'hardware';
   const currentNetwork = useSelector((s: RootState) => selectCurrentNetwork(s));
+  const feeMode = useSelector(selectFeeMode);
+  const customFeeSatPerByte = useSelector(selectCustomFeeSatPerByte);
+  const spendOnlyFusedCoins = useSelector(selectSpendOnlyFusedCoins);
+  const reduxUtxosByAddress = useSelector(
+    (s: RootState) => s.utxos.utxos
+  );
   const preferInternalChangeForBch = false;
 
   // Wallet addresses + default change (also gives tokenAddress mapping)
@@ -54,16 +80,20 @@ export default function useSimpleSend() {
   const [assetType, setAssetType] = useState<AssetType>('bch');
   const [hydrated, setHydrated] = useState(false);
   const [maxBusy, setMaxBusy] = useState(false);
+  /** True while Review is building a tx (keeps the button responsive / labeled). */
+  const [reviewBusy, setReviewBusy] = useState(false);
+  /** Live status while hardware signs (Ledger shows screens — user must press buttons). */
+  const [sendStatus, setSendStatus] = useState('');
+  const reviewInFlightRef = useRef(false);
 
   useEffect(() => {
     const raf = window.requestAnimationFrame(() => setHydrated(true));
     return () => window.cancelAnimationFrame(raf);
   }, []);
 
-  const setErrorMessage = useCallback(
-    (value: string | null) => setError(value ?? ''),
-    []
-  );
+  const setErrorMessage = useCallback((value: string | null) => {
+    setError(value ?? '');
+  }, []);
 
   useFetchWalletAddresses(
     hydrated ? walletId : null,
@@ -74,30 +104,101 @@ export default function useSimpleSend() {
 
   // DB-backed UTXOs across whole wallet
   const [dbUtxos, setDbUtxos] = useState<UTXO[]>([]);
+  const [walletUtxosLoaded, setWalletUtxosLoaded] = useState(false);
   const [tokenUtxos, setTokenUtxos] = useState<UTXO[]>([]);
+  /** Global coin control on Simple Send: restrict spend pool to checked coins. */
+  const [coinControlEnabled, setCoinControlEnabled] = useState(false);
+  const [selectedCoinKeys, setSelectedCoinKeys] = useState<Set<string>>(
+    () => new Set()
+  );
+
+  const homeBchUtxos = useMemo(
+    () =>
+      Object.values(reduxUtxosByAddress || {})
+        .flat()
+        .filter((utxo) => Boolean(utxo) && !utxo.token),
+    [reduxUtxosByAddress]
+  );
+
+  const mergeSpendableBchUtxos = useCallback(
+    (primary: UTXO[], extra: UTXO[]): UTXO[] => {
+      const merged: UTXO[] = [];
+      const seen = new Set<string>();
+      for (const utxo of [...primary, ...extra]) {
+        if (!utxo || utxo.token) continue;
+        const key = outpointKey(utxo.tx_hash, utxo.tx_pos);
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        merged.push(utxo);
+      }
+      return merged;
+    },
+    []
+  );
+
+  const applyCoinControl = useCallback(
+    (pool: UTXO[]): UTXO[] | { error: string } => {
+      let next = pool;
+      if (coinControlEnabled) {
+        if (selectedCoinKeys.size === 0) {
+          return {
+            error:
+              'Coin control is on but no coins are selected. Check at least one coin, or turn Manual off.',
+          };
+        }
+        next = pool.filter((u) =>
+          selectedCoinKeys.has(outpointKey(u.tx_hash, u.tx_pos))
+        );
+        if (next.length === 0) {
+          return {
+            error:
+              'None of the selected coins are available. Refresh the wallet or update coin control.',
+          };
+        }
+      }
+      return applySpendOnlyFusedPolicy(walletId, next, spendOnlyFusedCoins);
+    },
+    [coinControlEnabled, selectedCoinKeys, walletId, spendOnlyFusedCoins]
+  );
   useEffect(() => {
     if (!hydrated) return;
     let cancelled = false;
+    setWalletUtxosLoaded(false);
     (async () => {
       if (!walletId) return;
+      // Paint the same coins Home already shows, then overlay SQL so Send
+      // cannot briefly look like "only the receive UTXOs".
+      if (!cancelled && homeBchUtxos.length > 0) {
+        setDbUtxos((prev) =>
+          prev.length > 0 ? prev : homeBchUtxos
+        );
+      }
       const { allUtxos, tokenUtxos } =
         await UTXOService.fetchAllWalletUtxos(walletId);
       if (!cancelled) {
-        setDbUtxos((allUtxos || []).filter((u) => !u.token)); // non-token BCH UTXOs for fee funding
+        setDbUtxos(
+          mergeSpendableBchUtxos(allUtxos || [], homeBchUtxos)
+        );
         setTokenUtxos(tokenUtxos || []);
+        setWalletUtxosLoaded(true);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [walletId, addresses.length, hydrated]);
+    // homeBchUtxos is read for the initial paint / merge only. Re-running
+    // this on every Redux UTXO tick would refetch SQL on each subscription.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [walletId, addresses.length, hydrated, mergeSpendableBchUtxos]);
 
   // The worker normally keeps the SQL.js snapshot current, but each Tauri
-  // process has its own in-memory database. Refresh the BCH addresses at the
-  // point of sending so Review/Max cannot select from a stale process-local
-  // snapshot when another wallet instance has just received or broadcast a
-  // transaction. The service also reconstructs pending owned outputs from the
-  // shared outbound tracker, so unconfirmed change remains spendable.
+  // process has its own in-memory database. A full listunspent over every
+  // address is authoritative for multi-window freshness, but it is also the
+  // slow path (many addresses / Tor / Electrum). Review must not block the UI
+  // on that sweep — use the local snapshot when present (same as Max / token
+  // fee pool) and only force a network refresh when we have nothing to spend.
+  // The service also reconstructs pending owned outputs from the shared
+  // outbound tracker, so unconfirmed change remains spendable after a refresh.
   const refreshBchUtxos = useCallback(async (): Promise<UTXO[]> => {
     if (!walletId) return [];
 
@@ -113,10 +214,26 @@ export default function useSimpleSend() {
     }
 
     const { allUtxos } = await UTXOService.fetchAllWalletUtxos(walletId);
-    const refreshed = (allUtxos ?? []).filter((utxo) => !utxo.token);
+    const refreshed = mergeSpendableBchUtxos(allUtxos ?? [], homeBchUtxos);
     setDbUtxos(refreshed);
+    setWalletUtxosLoaded(true);
     return refreshed;
-  }, [walletId, addresses]);
+  }, [walletId, addresses, homeBchUtxos, mergeSpendableBchUtxos]);
+
+  /**
+   * Spendable BCH pool for Review/Max-style builds.
+   * Prefer the already-loaded snapshot so the button feels instant; kick a
+   * background network refresh so the next action sees fresher coins without
+   * freezing this click. Await the known-address refresh until the wallet-wide
+   * snapshot has finished loading or when the pool is empty.
+   */
+  const loadSpendableBchUtxos = useCallback(async (): Promise<UTXO[]> => {
+    if (walletUtxosLoaded && dbUtxos.length > 0) {
+      void refreshBchUtxos().catch(() => undefined);
+      return dbUtxos;
+    }
+    return await refreshBchUtxos();
+  }, [dbUtxos, refreshBchUtxos, walletUtxosLoaded]);
 
   // BCH change address (P2PKH cashaddr as selected)
   const [selectedChangeAddress, setSelectedChangeAddressState] =
@@ -361,43 +478,61 @@ export default function useSimpleSend() {
     setSelectedCategory('');
     setAmountToken('');
     setSelectedNftCommitment('');
+    setCoinControlEnabled(false);
+    setSelectedCoinKeys(new Set());
+    setReviewBusy(false);
+    reviewInFlightRef.current = false;
   }, [setAmountToken]);
 
-  const planner = useMemo(
-    () =>
-      createSimpleSendPlanner({
-        recipient: normalizedRecipient,
-        selectedCategory,
-        amountToken,
-        tokenChangeAddress,
-        selectedChangeAddress,
-        dbUtxos,
-      }),
-    [
-      normalizedRecipient,
-      selectedCategory,
-      amountToken,
-      tokenChangeAddress,
-      selectedChangeAddress,
-      dbUtxos,
-    ]
-  );
-
   const doReview = useCallback(async () => {
+    if (reviewInFlightRef.current) return;
+    reviewInFlightRef.current = true;
+    setReviewBusy(true);
+    setError('');
+    // Yield so React can paint "Preparing…" before build work.
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => resolve());
+    });
     try {
-      setError('');
-
       const rpaBlockReason = getRpaSendBlockReason(recipient, currentNetwork);
       if (rpaBlockReason) {
         setError(rpaBlockReason);
         setMode('error');
         return;
       }
+      const rpaPaycode = looksLikeRpaPaycode(recipient)
+        ? decodePaycode(recipient)
+        : null;
+      if (rpaPaycode) {
+        if (isHardwareWallet) {
+          setError(
+            'Sending to a paycode is not available on hardware wallets. Use a software wallet.'
+          );
+          setMode('error');
+          return;
+        }
+        if (assetType !== 'bch') {
+          setError('Paycodes only accept BCH, not tokens.');
+          setMode('error');
+          return;
+        }
+      }
 
-      if (!validateRecipient(normalizedRecipient)) {
-        setError('Please enter a valid destination address.');
-        setMode('error');
-        return;
+      if (!rpaPaycode) {
+        const netErr = recipientNetworkError(recipient, currentNetwork);
+        if (netErr) {
+          setError(netErr);
+          setMode('error');
+          return;
+        }
+        if (
+          !parsedRecipient.isValidAddress ||
+          !validateRecipient(normalizedRecipient)
+        ) {
+          setError('Please enter a valid destination address for this network.');
+          setMode('error');
+          return;
+        }
       }
       if (!selectedChangeAddress) {
         setError('Please choose a change address.');
@@ -414,14 +549,26 @@ export default function useSimpleSend() {
           return;
         }
 
-        const freshDbUtxos = await refreshBchUtxos();
+        // Local snapshot first (Max-style). Full Electrum refresh no longer
+        // blocks this click — it runs in the background via loadSpendableBchUtxos.
+        const freshDbUtxos = await loadSpendableBchUtxos();
+        const controlled = applyCoinControl(freshDbUtxos);
+        if ('error' in controlled) {
+          setError(controlled.error);
+          setMode('error');
+          return;
+        }
+        const dummyAddress = rpaPaycode
+          ? makeRpaDummyAddress(currentNetwork)
+          : '';
         const freshPlanner = createSimpleSendPlanner({
-          recipient: normalizedRecipient,
+          recipient: rpaPaycode ? dummyAddress : normalizedRecipient,
           selectedCategory,
           amountToken,
           tokenChangeAddress,
           selectedChangeAddress,
-          dbUtxos: freshDbUtxos,
+          dbUtxos: controlled,
+          hardwareWallet: isHardwareWallet,
         });
         const attempt = await freshPlanner.addBchOnlyUntilBuild(targetSats, 50);
         if (!attempt.ok) {
@@ -430,19 +577,70 @@ export default function useSimpleSend() {
           return;
         }
 
+        let rawTx = attempt.rawTx;
+        let finalOutputs = attempt.finalOutputs;
+        let rpaStealthAddress: string | undefined;
+        if (rpaPaycode) {
+          const inputKeys: Array<{ priv: Uint8Array; pub: Uint8Array }> = [];
+          for (const utxo of attempt.inputs) {
+            const priv = await KeyService.fetchAddressPrivateKey(
+              utxo.address,
+              'spend'
+            );
+            if (!priv) {
+              setError('Could not unlock a selected coin to pay this paycode.');
+              setMode('error');
+              return;
+            }
+            const pub = secp256k1.derivePublicKeyCompressed(priv);
+            if (typeof pub === 'string') {
+              priv.fill(0);
+              setError('Could not derive a public key for a selected coin.');
+              setMode('error');
+              return;
+            }
+            inputKeys.push({ priv, pub: Uint8Array.from(pub) });
+          }
+          const finalized = await finalizeRpaPayment({
+            rawTxHex: attempt.rawTx,
+            dummyAddress,
+            paycode: rpaPaycode,
+            utxos: attempt.inputs,
+            inputKeys,
+            network: currentNetwork,
+          });
+          for (const key of inputKeys) key.priv.fill(0);
+          if (!finalized.ok) {
+            setError(finalized.error);
+            setMode('error');
+            return;
+          }
+          rawTx = finalized.txHex;
+          finalOutputs = finalized.finalOutputs;
+          rpaStealthAddress = finalized.stealthAddress;
+        }
+
         setSelectedForTx(attempt.inputs);
         setReview({
-          rawTx: attempt.rawTx,
+          rawTx,
           feeSats: attempt.feeSats,
           totalSats: attempt.totalSats,
-          finalOutputs: attempt.finalOutputs,
+          finalOutputs,
+          rpaStealthAddress,
         });
         setMode('review');
         return;
       }
 
       // From here: token sends also need BCH for fees
-      if (!dbUtxos.length) {
+      const feePoolRaw = await loadSpendableBchUtxos();
+      const feePool = applyCoinControl(feePoolRaw);
+      if ('error' in feePool) {
+        setError(feePool.error);
+        setMode('error');
+        return;
+      }
+      if (!feePool.length) {
         setError('No non-token BCH UTXOs available to cover fees.');
         setMode('error');
         return;
@@ -494,13 +692,21 @@ export default function useSimpleSend() {
 
         const changeTok = totalFromInputs - tokAmt;
 
-        const outputs = [planner.makeTokenOutputForRecipientFT()];
+        const feePlanner = createSimpleSendPlanner({
+          recipient: normalizedRecipient,
+          selectedCategory,
+          amountToken,
+          tokenChangeAddress,
+          selectedChangeAddress,
+          dbUtxos: feePool,
+        });
+        const outputs = [feePlanner.makeTokenOutputForRecipientFT()];
         if (changeTok > 0n) {
-          outputs.push(planner.makeTokenChangeOutputFT(changeTok));
+          outputs.push(feePlanner.makeTokenChangeOutputFT(changeTok));
         }
 
         // Fixed token inputs; add BCH until fee+buffer are covered (BCH change only).
-        const built = await planner.addBchInputsUntilBuild(
+        const built = await feePlanner.addBchInputsUntilBuild(
           tokenInputs,
           outputs,
           100
@@ -547,10 +753,20 @@ export default function useSimpleSend() {
           return;
         }
 
-        const outputs = [planner.makeTokenOutputForRecipientNFT(nftInput)];
+        const feePlanner = createSimpleSendPlanner({
+          recipient: normalizedRecipient,
+          selectedCategory,
+          amountToken,
+          tokenChangeAddress,
+          selectedChangeAddress,
+          dbUtxos: feePool,
+        });
+        const outputs = [
+          feePlanner.makeTokenOutputForRecipientNFT(nftInput),
+        ];
 
         // Fixed NFT input; add BCH until fee+buffer are covered (BCH change only).
-        const built = await planner.addBchInputsUntilBuild(
+        const built = await feePlanner.addBchInputsUntilBuild(
           [nftInput],
           outputs,
           100
@@ -579,6 +795,9 @@ export default function useSimpleSend() {
     } catch (error: unknown) {
       setError(toErrorMessage(error, 'Failed to prepare transaction.'));
       setMode('error');
+    } finally {
+      reviewInFlightRef.current = false;
+      setReviewBusy(false);
     }
   }, [
     normalizedRecipient,
@@ -590,13 +809,14 @@ export default function useSimpleSend() {
     amountToken,
     selectedTokenDecimals,
     selectedNftCommitment,
-    dbUtxos,
     tokenUtxos,
     selectedChangeAddress,
     parsedRecipient.amountRaw,
-    planner,
-    refreshBchUtxos,
+    parsedRecipient.isValidAddress,
+    loadSpendableBchUtxos,
     tokenChangeAddress,
+    applyCoinControl,
+    isHardwareWallet,
   ]);
 
   // "Max": fills the BCH amount field with the full spendable balance minus
@@ -612,10 +832,31 @@ export default function useSimpleSend() {
       setMode('error');
       return;
     }
-    if (!validateRecipient(normalizedRecipient)) {
-      setError('Enter a valid destination address first.');
+    const rpaPaycode = looksLikeRpaPaycode(recipient)
+      ? decodePaycode(recipient)
+      : null;
+    if (rpaPaycode && isHardwareWallet) {
+      setError(
+        'Sending to a paycode is not available on hardware wallets. Use a software wallet.'
+      );
       setMode('error');
       return;
+    }
+    if (!rpaPaycode) {
+      const netErr = recipientNetworkError(recipient, currentNetwork);
+      if (netErr) {
+        setError(netErr);
+        setMode('error');
+        return;
+      }
+      if (
+        !parsedRecipient.isValidAddress ||
+        !validateRecipient(normalizedRecipient)
+      ) {
+        setError('Enter a valid destination address for this network first.');
+        setMode('error');
+        return;
+      }
     }
     if (!selectedChangeAddress) {
       setError('Change address is still loading. Try again in a moment.');
@@ -629,17 +870,27 @@ export default function useSimpleSend() {
       // The amount field is a preview. Use the already-loaded wallet snapshot
       // so Max is responsive; doReview performs the authoritative refresh
       // immediately before transaction construction.
-      const freshDbUtxos =
-        dbUtxos.length > 0 ? dbUtxos : await refreshBchUtxos();
+      const freshDbUtxos = await loadSpendableBchUtxos();
+      const controlled = applyCoinControl(freshDbUtxos);
+      if ('error' in controlled) {
+        setError(controlled.error);
+        setMode('error');
+        return;
+      }
       const freshPlanner = createSimpleSendPlanner({
-        recipient: normalizedRecipient,
+        recipient: rpaPaycode
+          ? makeRpaDummyAddress(currentNetwork)
+          : normalizedRecipient,
         selectedCategory,
         amountToken,
         tokenChangeAddress,
         selectedChangeAddress,
-        dbUtxos: freshDbUtxos,
+        dbUtxos: controlled,
+        feePreferences: { feeMode, customFeeSatPerByte },
+        hardwareWallet: isHardwareWallet,
       });
-      const result = await freshPlanner.sweepAllBchUntilBuild(50);
+      const estimated = freshPlanner.estimateSweepAllBch(50);
+      const result = estimated ?? (await freshPlanner.sweepAllBchUntilBuild(50));
       if (!result.ok) {
         setError(
           'err' in result ? result.err : 'Unable to compute max amount.'
@@ -664,27 +915,63 @@ export default function useSimpleSend() {
     }
   }, [
     assetType,
+    isHardwareWallet,
     maxBusy,
     recipient,
     currentNetwork,
     normalizedRecipient,
+    parsedRecipient.isValidAddress,
     amountToken,
     selectedCategory,
     tokenChangeAddress,
     selectedChangeAddress,
-    dbUtxos,
-    refreshBchUtxos,
+    loadSpendableBchUtxos,
     setAmountBch,
+    applyCoinControl,
+    feeMode,
+    customFeeSatPerByte,
   ]);
 
   const doSend = useCallback(async () => {
-    if (!review?.rawTx) return;
+    if (!review) return;
+    // Software path needs a signed rawTx from review. Hardware path signs on device now.
+    if (!isHardwareWallet && !review.rawTx) return;
     try {
       setMode('sending');
+      setSendStatus(
+        isHardwareWallet
+          ? 'Preparing hardware sign… Look at your Ledger.'
+          : 'Broadcasting…'
+      );
+      let rawHex = review.rawTx;
+
+      if (isHardwareWallet) {
+        // Electron Cash: sign_transaction after planning — device produces hex.
+        if (!walletId || walletId <= 0) {
+          throw new Error('No wallet open for hardware sign.');
+        }
+        if (!review.finalOutputs?.length) {
+          throw new Error('No planned outputs for hardware sign.');
+        }
+        rawHex = await signHardwarePayment({
+          walletId,
+          inputs: selectedForTx,
+          outputs: review.finalOutputs,
+          changeAddress: selectedChangeAddress || undefined,
+          onProgress: (_stage, detail) => {
+            setSendStatus(
+              detail ||
+                'Confirm the transaction on your Ledger (both buttons)…'
+            );
+          },
+        });
+        setSendStatus('Broadcasting signed transaction…');
+      }
+
       const { txid: sentId, errorMessage, broadcastState: sentState } =
-        await TransactionService.sendTransaction(review.rawTx, selectedForTx, {
+        await TransactionService.sendTransaction(rawHex, selectedForTx, {
           source: 'simple-send',
-          sourceLabel: 'Simple Send',
+          sourceLabel: isHardwareWallet ? 'Hardware Send' : 'Simple Send',
           recipientSummary: normalizedRecipient,
           amountSummary:
             assetType === 'bch'
@@ -697,9 +984,11 @@ export default function useSimpleSend() {
       if (!sentId) throw new Error('Broadcast failed with no txid returned.');
       setTxid(sentId);
       setBroadcastState(sentState ?? 'broadcasted');
+      setSendStatus('');
       setMode('sent');
     } catch (error: unknown) {
       setError(toErrorMessage(error, 'Failed to send transaction.'));
+      setSendStatus('');
       setMode('error');
     }
   }, [
@@ -710,6 +999,9 @@ export default function useSimpleSend() {
     review,
     normalizedRecipient,
     selectedForTx,
+    isHardwareWallet,
+    walletId,
+    selectedChangeAddress,
   ]);
 
   // derive token metadata (categories with totals & NFT commitments)
@@ -804,6 +1096,16 @@ export default function useSimpleSend() {
     txid,
     broadcastState,
     maxBusy,
+    reviewBusy,
+    sendStatus,
+    isHardwareWallet,
+
+    // coin control (global Simple Send)
+    dbUtxos,
+    coinControlEnabled,
+    setCoinControlEnabled,
+    selectedCoinKeys,
+    setSelectedCoinKeys,
 
     // actions
     reset,

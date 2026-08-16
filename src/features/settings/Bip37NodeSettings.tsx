@@ -11,12 +11,17 @@ import { invoke } from '@tauri-apps/api/core';
 import { Network } from '../../state/slices/networkSlice';
 import { selectWalletId } from '../../state/slices/walletSlice';
 import { getNodeLabel, parseNodeTarget } from '../../utils/servers/userNodes';
-import { nodeSync, type NodeSyncResult } from '../../platform/desktop/Bip37Backend';
+import {
+  nodeSync,
+  type NodeSyncResult,
+} from '../../platform/desktop/Bip37Backend';
 import {
   getBackend,
   setBackend,
   BACKEND_CHANGED_EVENT,
 } from '../../platform/desktop/backendSelection';
+import { useI18n } from '../../i18n/useI18n';
+import { formatNumber } from '../../i18n/format';
 
 interface NodeProbe {
   user_agent: string;
@@ -38,13 +43,15 @@ type SyncState =
   | { status: 'ok'; result: NodeSyncResult }
   | { status: 'fail'; error: string };
 
-const satsToBch = (sats: number) => (sats / 1e8).toLocaleString(undefined, { maximumFractionDigits: 8 });
+const satsToBch = (sats: number, locale: Parameters<typeof formatNumber>[1]) =>
+  formatNumber(sats / 1e8, locale, { maximumFractionDigits: 8 });
 
 export const Bip37NodeRow: React.FC<{
   target: string;
   network: Network;
   onRemove: (target: string) => void;
 }> = ({ target, network, onRemove }) => {
+  const { locale, t } = useI18n();
   const [state, setState] = useState<ProbeState>({ status: 'idle' });
   const [sync, setSync] = useState<SyncState>({ status: 'idle' });
   const walletId = useSelector(selectWalletId);
@@ -69,10 +76,17 @@ export const Bip37NodeRow: React.FC<{
     const { host, port } = parseNodeTarget(target, network);
     setState({ status: 'probing' });
     try {
-      const result = await invoke<NodeProbe>('bip37_node_probe', { host, port, network });
+      const result = await invoke<NodeProbe>('bip37_node_probe', {
+        host,
+        port,
+        network,
+      });
       setState({ status: 'ok', probe: result });
     } catch (err) {
-      setState({ status: 'fail', error: err instanceof Error ? err.message : String(err) });
+      setState({
+        status: 'fail',
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   };
 
@@ -85,7 +99,10 @@ export const Bip37NodeRow: React.FC<{
       const result = await nodeSync(host, port, network, walletId);
       setSync({ status: 'ok', result });
     } catch (err) {
-      setSync({ status: 'fail', error: err instanceof Error ? err.message : String(err) });
+      setSync({
+        status: 'fail',
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   };
 
@@ -99,7 +116,7 @@ export const Bip37NodeRow: React.FC<{
     >
       <div className="flex items-center gap-2">
         <span className="rounded-md border border-[var(--wallet-border)] px-1.5 py-0.5 text-[9px] font-semibold wallet-muted uppercase shrink-0">
-          Node
+          {t('bip37.node')}
         </span>
         <span className="flex-1 break-all font-mono wallet-text-strong">
           {label ? <span className="font-sans">{label} </span> : null}
@@ -107,15 +124,15 @@ export const Bip37NodeRow: React.FC<{
         </span>
         {isActive ? (
           <span className="text-[10px] font-semibold text-[var(--wallet-accent)] whitespace-nowrap">
-            ● in use
+            {t('bip37.inUse')}
           </span>
         ) : (
           <button
             onClick={() => setBackend(network, { kind: 'node', target })}
-            title="Use ONLY this node for wallet data (trustless; Electrum servers are not consulted)"
+            title={t('bip37.useNodeTitle')}
             className="rounded-lg border border-[var(--wallet-border)] px-2 py-1 text-[10px] font-semibold wallet-text-strong hover:border-[var(--wallet-accent)]/60"
           >
-            Use
+            {t('bip37.use')}
           </button>
         )}
         <button
@@ -123,63 +140,77 @@ export const Bip37NodeRow: React.FC<{
           disabled={state.status === 'probing'}
           className="rounded-lg border border-[var(--wallet-accent)]/40 px-2 py-1 text-[10px] font-semibold text-[var(--wallet-accent)] hover:bg-[var(--wallet-accent)]/5 disabled:opacity-50"
         >
-          {state.status === 'probing' ? 'Probing…' : 'Probe'}
+          {state.status === 'probing' ? t('bip37.probing') : t('bip37.probe')}
         </button>
         {walletId > 0 && (
           <button
             onClick={() => void runSync()}
             disabled={sync.status === 'syncing'}
-            title="Derive this wallet's balance directly from the node (trustless SPV)"
+            title={t('bip37.useBalanceTitle')}
             className="rounded-lg border border-[var(--wallet-border)] px-2 py-1 text-[10px] font-semibold wallet-text-strong hover:border-[var(--wallet-accent)]/60 disabled:opacity-50"
           >
-            {sync.status === 'syncing' ? 'Syncing…' : 'Sync'}
+            {sync.status === 'syncing' ? t('bip37.syncing') : t('bip37.sync')}
           </button>
         )}
         <button
           onClick={() => onRemove(target)}
           className="text-[10px] text-red-400/70 hover:text-red-400 px-1 shrink-0"
-          aria-label={`Remove ${target}`}
+          aria-label={`${t('bip37.remove')} ${target}`}
         >
-          Remove
+          {t('bip37.remove')}
         </button>
       </div>
 
       {state.status === 'ok' && (
         <div className="mt-1.5 space-y-0.5 text-[10px] wallet-muted">
-          <p className="font-mono wallet-text-strong break-all">{state.probe.user_agent}</p>
-          <p>
-            height {state.probe.start_height.toLocaleString()} · protocol {state.probe.protocol_version}
+          <p className="font-mono wallet-text-strong break-all">
+            {state.probe.user_agent}
           </p>
-          <p className={state.probe.serves_bloom ? 'text-green-400 font-semibold' : 'text-yellow-400/90 font-semibold'}>
-            {state.probe.serves_bloom ? 'Serves BIP37 ✓' : 'Does not serve BIP37 ✗ (bloom filtering off)'}
+          <p>
+            {t('bip37.height')} {formatNumber(state.probe.start_height, locale)}{' '}
+            · {t('bip37.protocol')} {state.probe.protocol_version}
+          </p>
+          <p
+            className={
+              state.probe.serves_bloom
+                ? 'text-green-400 font-semibold'
+                : 'text-yellow-400/90 font-semibold'
+            }
+          >
+            {state.probe.serves_bloom
+              ? t('bip37.serves')
+              : t('bip37.notServes')}
           </p>
         </div>
       )}
       {state.status === 'fail' && (
-        <p className="mt-1.5 text-[10px] text-red-400/90 leading-relaxed break-all">{state.error}</p>
+        <p className="mt-1.5 text-[10px] text-red-400/90 leading-relaxed break-all">
+          {state.error}
+        </p>
       )}
 
       {sync.status === 'syncing' && (
         <p className="mt-1.5 text-[10px] wallet-muted animate-pulse">
-          Syncing headers + scanning blocks via the node…
+          {t('bip37.syncingDetails')}
         </p>
       )}
       {sync.status === 'ok' && (
         <div className="mt-1.5 space-y-0.5 text-[10px] wallet-muted">
           <p className="text-green-400 font-semibold">
-            {satsToBch(sync.result.totalSats)} BCH from the node ✓
+            {satsToBch(sync.result.totalSats, locale)} {t('bip37.fromNode')}
           </p>
           <p>
-            scanned {sync.result.scannedBlocks} blocks · {sync.result.byAddress.size} address(es) with
-            coins · watching {sync.result.watchedAddresses}
+            {t('bip37.scanned')} {sync.result.scannedBlocks} {t('bip37.blocks')}{' '}
+            · {sync.result.byAddress.size} {t('bip37.addressesWithCoins')}·{' '}
+            {t('bip37.watching')} {sync.result.watchedAddresses}
           </p>
-          <p className="opacity-70 leading-relaxed">
-            Verified trustlessly: every matched tx proven by its block's merkle proof.
-          </p>
+          <p className="opacity-70 leading-relaxed">{t('bip37.verified')}</p>
         </div>
       )}
       {sync.status === 'fail' && (
-        <p className="mt-1.5 text-[10px] text-red-400/90 leading-relaxed break-all">{sync.error}</p>
+        <p className="mt-1.5 text-[10px] text-red-400/90 leading-relaxed break-all">
+          {sync.error}
+        </p>
       )}
     </div>
   );

@@ -132,4 +132,286 @@ describe('bcmrRegistryGenerator', () => {
       parsed.identities['a'.repeat(64)]['2026-02-01T00:00:00.000Z'].name
     ).toBe('Token A');
   });
+
+  it('emits an nfts schema block for parsable NFT categories', () => {
+    const json = generateBcmrRegistryJson({
+      authbase: 'a'.repeat(64),
+      tokenCategory: 'a'.repeat(64),
+      tokenName: 'Token A',
+      tokenSymbol: 'TKA',
+      tokenDecimals: 0,
+      latestRevision: '2026-01-01T00:00:00.000Z',
+      nfts: {
+        description: 'Pledge receipts with an on-chain value field.',
+        fields: {
+          pledgeValue: {
+            name: 'Pledge Value',
+            encoding: {
+              type: 'number',
+              aggregate: 'add',
+              decimals: 8,
+              unit: 'BCH',
+            },
+            offset: '1',
+            byteLength: '4',
+          },
+        },
+        parse: {
+          bytecode: '006b00cf6b',
+          types: {
+            '': {
+              name: 'Pledge Receipt',
+              description: 'A crowdfunding pledge.',
+              fields: ['pledgeValue'],
+            },
+          },
+        },
+      },
+    });
+
+    const parsed = JSON.parse(json) as {
+      identities: Record<
+        string,
+        Record<
+          string,
+          {
+            token: {
+              nfts: {
+                description: string;
+                fields: Record<string, { encoding: { type: string } }>;
+                parse: {
+                  bytecode: string;
+                  types: Record<string, { name: string; fields: string[] }>;
+                };
+              };
+            };
+          }
+        >
+      >;
+    };
+    const nfts =
+      parsed.identities['a'.repeat(64)]['2026-01-01T00:00:00.000Z'].token.nfts;
+
+    expect(nfts.description).toBe(
+      'Pledge receipts with an on-chain value field.'
+    );
+    expect(nfts.parse.bytecode).toBe('006b00cf6b');
+    expect(nfts.parse.types[''].name).toBe('Pledge Receipt');
+    expect(nfts.parse.types[''].fields).toEqual(['pledgeValue']);
+    expect(nfts.fields.pledgeValue.encoding).toMatchObject({
+      type: 'number',
+      aggregate: 'add',
+      decimals: 8,
+      unit: 'BCH',
+    });
+  });
+
+  it('always emits the nfts block for NFT categories, even when empty', () => {
+    const json = generateBcmrRegistryJson({
+      authbase: 'a'.repeat(64),
+      tokenCategory: 'a'.repeat(64),
+      tokenName: 'Token A',
+      tokenSymbol: 'TKA',
+      tokenDecimals: 0,
+      latestRevision: '2026-01-01T00:00:00.000Z',
+      nfts: { parse: {} },
+    });
+
+    const parsed = JSON.parse(json) as {
+      identities: Record<
+        string,
+        Record<string, { token: { nfts: { parse: { types: object } } } }>
+      >;
+    };
+    const nfts =
+      parsed.identities['a'.repeat(64)]['2026-01-01T00:00:00.000Z'].token.nfts;
+    expect(nfts.parse.types).toEqual({});
+    expect(JSON.stringify(parsed)).not.toContain('bytecode');
+
+    const imported = importMetadataRegistry(json);
+    expect(typeof imported).not.toBe('string');
+  });
+
+  it('omits bytecode for sequential NFT collections', () => {
+    const json = generateBcmrRegistryJson({
+      authbase: 'a'.repeat(64),
+      tokenCategory: 'a'.repeat(64),
+      tokenName: 'Token A',
+      tokenSymbol: 'TKA',
+      tokenDecimals: 0,
+      latestRevision: '2026-01-01T00:00:00.000Z',
+      nfts: {
+        parse: {
+          types: {
+            '8000': { name: '#128' },
+            '0001': { name: '#256' },
+          },
+        },
+      },
+    });
+
+    const parsed = JSON.parse(json) as {
+      identities: Record<
+        string,
+        Record<string, { token: { nfts: { parse: { types: Record<string, { name: string }> } } } }>
+      >;
+    };
+    const nfts =
+      parsed.identities['a'.repeat(64)]['2026-01-01T00:00:00.000Z'].token.nfts;
+    expect(nfts.parse.types['8000'].name).toBe('#128');
+    expect(nfts.parse.types['0001'].name).toBe('#256');
+
+    const imported = importMetadataRegistry(json);
+    expect(typeof imported).not.toBe('string');
+  });
+
+  it('merges base registry nfts types, fields and bytecode into the next snapshot', () => {
+    const baseRegistry = {
+      $schema: 'https://cashtokens.org/bcmr-v2.schema.json',
+      version: { major: 0, minor: 0, patch: 4 },
+      latestRevision: '2026-01-01T00:00:00.000Z',
+      registryIdentity: 'a'.repeat(64),
+      identities: {
+        ['a'.repeat(64)]: {
+          '2026-01-01T00:00:00.000Z': {
+            name: 'Token A',
+            token: {
+              category: 'a'.repeat(64),
+              symbol: 'TKA',
+              decimals: 0,
+              nfts: {
+                description: 'Existing description',
+                fields: {
+                  serial: { encoding: { type: 'number' } },
+                },
+                parse: {
+                  bytecode: '006b00cf6b',
+                  types: {
+                    '': { name: 'Existing Type' },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const json = generateBcmrRegistryJson({
+      authbase: 'a'.repeat(64),
+      tokenCategory: 'a'.repeat(64),
+      tokenName: 'Token A',
+      tokenSymbol: 'TKA',
+      tokenDecimals: 0,
+      latestRevision: '2026-02-01T00:00:00.000Z',
+      baseRegistry,
+      nfts: {
+        parse: {
+          types: {
+            '01': { name: 'New Type' },
+          },
+        },
+      },
+    });
+
+    const parsed = JSON.parse(json) as {
+      identities: Record<
+        string,
+        Record<
+          string,
+          {
+            token: {
+              nfts: {
+                description: string;
+                fields: Record<string, object>;
+                parse: {
+                  bytecode: string;
+                  types: Record<string, { name: string }>;
+                };
+              };
+            };
+          }
+        >
+      >;
+    };
+    const nfts =
+      parsed.identities['a'.repeat(64)]['2026-02-01T00:00:00.000Z'].token.nfts;
+
+    expect(nfts.description).toBe('Existing description');
+    expect(nfts.parse.bytecode).toBe('006b00cf6b');
+    expect(Object.keys(nfts.fields)).toEqual(['serial']);
+    expect(Object.keys(nfts.parse.types)).toEqual(['', '01']);
+    expect(nfts.parse.types[''].name).toBe('Existing Type');
+    expect(nfts.parse.types['01'].name).toBe('New Type');
+
+    const imported = importMetadataRegistry(json);
+    expect(typeof imported).not.toBe('string');
+  });
+
+  it('throws for invalid NFT schema input', () => {
+    expect(() =>
+      generateBcmrRegistryJson({
+        authbase: 'a'.repeat(64),
+        tokenCategory: 'a'.repeat(64),
+        tokenName: 'Token A',
+        tokenSymbol: 'TKA',
+        tokenDecimals: 0,
+        nfts: { parse: { bytecode: 'zz' } },
+      })
+    ).toThrow('Parse bytecode must be even-length hex.');
+
+    expect(() =>
+      generateBcmrRegistryJson({
+        authbase: 'a'.repeat(64),
+        tokenCategory: 'a'.repeat(64),
+        tokenName: 'Token A',
+        tokenSymbol: 'TKA',
+        tokenDecimals: 0,
+        nfts: { parse: { types: { 'xyz': { name: 'Bad' } } } },
+      })
+    ).toThrow('NFT type key must be even-length hex.');
+
+    expect(() =>
+      generateBcmrRegistryJson({
+        authbase: 'a'.repeat(64),
+        tokenCategory: 'a'.repeat(64),
+        tokenName: 'Token A',
+        tokenSymbol: 'TKA',
+        tokenDecimals: 0,
+        nfts: { parse: { types: { '01': { name: '' } } } },
+      })
+    ).toThrow('NFT type "01" name');
+
+    expect(() =>
+      generateBcmrRegistryJson({
+        authbase: 'a'.repeat(64),
+        tokenCategory: 'a'.repeat(64),
+        tokenName: 'Token A',
+        tokenSymbol: 'TKA',
+        tokenDecimals: 0,
+        nfts: {
+          parse: {},
+          fields: {
+            f: { encoding: { type: 'number', decimals: 20 } },
+          },
+        },
+      })
+    ).toThrow('decimals must be an integer between 0 and 18');
+
+    expect(() =>
+      generateBcmrRegistryJson({
+        authbase: 'a'.repeat(64),
+        tokenCategory: 'a'.repeat(64),
+        tokenName: 'Token A',
+        tokenSymbol: 'TKA',
+        tokenDecimals: 0,
+        nfts: {
+          parse: {},
+          fields: {
+            f: { encoding: { type: 'number' }, byteLength: 'waffle' },
+          },
+        },
+      })
+    ).toThrow('byteLength must be an integer or "variable"');
+  });
 });

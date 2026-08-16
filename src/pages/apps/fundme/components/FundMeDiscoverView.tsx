@@ -2,6 +2,7 @@ import React from 'react';
 
 import type { CampaignRecord, CampaignType } from '../types';
 import { formatBchFromSatoshis, isChainCampaign } from '../fundmeHelpers';
+import { useAddonI18n } from '../../../../i18n/useAddonI18n';
 
 type FundMeDiscoverViewProps = {
   campaignType: CampaignType;
@@ -26,13 +27,14 @@ const FundMeDiscoverView: React.FC<FundMeDiscoverViewProps> = ({
   onCampaignTypeChange,
   onOpenCampaignDetail,
 }) => {
+  const { t: addonT } = useAddonI18n();
   return (
     <section className="h-full min-h-0 rounded-[28px] wallet-card p-3 flex flex-col overflow-hidden">
       <div className="flex-none">
         <div className="grid grid-cols-3 gap-2">
           <div className="rounded-2xl wallet-surface-strong border border-[var(--wallet-border)] px-2.5 py-2">
             <div className="text-[10px] uppercase tracking-[0.12em] wallet-muted">
-              Campaigns
+              {addonT('module.campaigns', 'Campaigns')}
             </div>
             <div className="mt-1 text-lg font-semibold wallet-text-strong">
               {totalCampaignCount}
@@ -40,7 +42,7 @@ const FundMeDiscoverView: React.FC<FundMeDiscoverViewProps> = ({
           </div>
           <div className="rounded-2xl wallet-surface-strong border border-[var(--wallet-border)] px-2.5 py-2">
             <div className="text-[10px] uppercase tracking-[0.12em] wallet-muted">
-              Raised
+              {addonT('module.raised', 'Raised')}
             </div>
             <div className="mt-1 text-lg font-semibold wallet-text-strong">
               {totalRaisedBch.toFixed(2)}
@@ -48,7 +50,7 @@ const FundMeDiscoverView: React.FC<FundMeDiscoverViewProps> = ({
           </div>
           <div className="rounded-2xl wallet-surface-strong border border-[var(--wallet-border)] px-2.5 py-2">
             <div className="text-[10px] uppercase tracking-[0.12em] wallet-muted">
-              Live
+              {addonT('module.live', 'Live')}
             </div>
             <div className="mt-1 text-lg font-semibold wallet-text-strong">
               {activeCampaignsCount}
@@ -68,7 +70,11 @@ const FundMeDiscoverView: React.FC<FundMeDiscoverViewProps> = ({
                   : 'wallet-surface-strong border border-[var(--wallet-border)] wallet-text-strong'
               }`}
             >
-              {type}
+              {type === 'active'
+                ? addonT('module.activeCampaigns', 'Active campaigns')
+                : type === 'stopped'
+                  ? addonT('module.pastCampaigns', 'Past campaigns')
+                  : addonT('module.pastCampaigns', 'Past campaigns')}
             </button>
           ))}
         </div>
@@ -83,20 +89,26 @@ const FundMeDiscoverView: React.FC<FundMeDiscoverViewProps> = ({
 
         {loadingCampaigns ? (
           <div className="rounded-2xl wallet-surface-strong border border-[var(--wallet-border)] px-4 py-6 text-center wallet-muted">
-            Loading campaigns...
+            {addonT('module.loadingCampaigns', 'Loading campaigns…')}
           </div>
         ) : null}
 
         {!loadingCampaigns && displayedCampaigns.length === 0 ? (
           <div className="rounded-2xl wallet-surface-strong border border-[var(--wallet-border)] px-4 py-6 text-center wallet-muted">
-            No {campaignType} campaigns are available right now.
+            {addonT(
+              'module.noCampaigns',
+              'No campaigns are available right now.'
+            )}
           </div>
         ) : null}
 
         {displayedCampaigns.map((campaign) => {
           const progressPercent =
             isChainCampaign(campaign) && campaign.targetSatoshis > 0
-              ? Math.min((campaign.raisedSatoshis / campaign.targetSatoshis) * 100, 100)
+              ? Math.min(
+                  (campaign.raisedSatoshis / campaign.targetSatoshis) * 100,
+                  100
+                )
               : 0;
 
           return (
@@ -117,7 +129,10 @@ const FundMeDiscoverView: React.FC<FundMeDiscoverViewProps> = ({
                     {campaign.name}
                   </h3>
                   <p className="mt-1 text-xs wallet-muted">
-                    Campaign #{campaign.id} by {campaign.owner}
+                    {addonT('module.campaignBy', 'Campaign #{id} by {owner}', {
+                      id: campaign.id,
+                      owner: campaign.owner,
+                    })}
                   </p>
                 </div>
                 <span className="rounded-full px-3 py-1 text-xs font-semibold wallet-surface-strong border border-[var(--wallet-border)] wallet-text-strong shrink-0">
@@ -149,7 +164,10 @@ const FundMeDiscoverView: React.FC<FundMeDiscoverViewProps> = ({
                 </>
               ) : (
                 <div className="mt-4 text-sm wallet-muted">
-                  Hosted archive entry. Open to view the stored campaign description.
+                  {addonT(
+                    'module.hostedArchive',
+                    'Hosted archive entry. Open to view the stored campaign description.'
+                  )}
                 </div>
               )}
             </button>

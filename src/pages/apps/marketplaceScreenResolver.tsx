@@ -8,6 +8,7 @@ import MemoCashReaderApp from './memo-cash-reader/MemoCashReaderApp';
 import CauldronSwapApp from './cauldron/CauldronSwapApp';
 import ParyonWorkspaceApp from './paryon/ParyonWorkspaceApp';
 import MintCashTokensPoCApp from './mint-cashtokens-poc/MintCashTokensPoCApp';
+import MerchantPayApp from './merchant-pay/MerchantPayApp';
 
 type ResolvedAppLike = {
   manifest: AddonManifest;
@@ -53,12 +54,7 @@ export function renderDeclarativeScreen(params: {
 
     case 'FundMeAddonApp':
     case 'fundmeApp':
-      return (
-        <FundMeAddonApp
-          app={resolved.app}
-          sdk={sdk}
-        />
-      );
+      return <FundMeAddonApp app={resolved.app} sdk={sdk} />;
 
     case 'MintCashTokensPoCApp':
     case 'mintCashTokensPoCApp':
@@ -78,6 +74,16 @@ export function renderDeclarativeScreen(params: {
     case 'ParyonWorkspaceApp':
     case 'paryonWorkspaceApp':
       return <ParyonWorkspaceApp sdk={sdk} app={resolved.app} />;
+
+    case 'MerchantPayApp':
+    case 'merchantPayApp':
+      return (
+        <MerchantPayApp
+          manifest={resolved.manifest}
+          app={resolved.app}
+          sdk={sdk}
+        />
+      );
 
     default:
       return null;

@@ -7,6 +7,7 @@ import {
 } from '@reown/walletkit';
 
 import type { AppDispatch, RootState } from '../store';
+import { selectLocale } from './preferencesSlice';
 import KeyService from '../../services/KeyService';
 import {
   ActiveSessionsPayload,
@@ -31,6 +32,7 @@ import {
 } from '../../redux/walletconnect/thunks';
 import { registerWalletConnectListeners } from '../../redux/walletconnect/helpers';
 import { logError } from '../../utils/errorHandling';
+import { translate } from '../../i18n/translate';
 import {
   getWalletConnectMetadataUrl,
   getWalletConnectProjectId,
@@ -43,8 +45,8 @@ let walletKitInitPromise: Promise<{
 }> | null = null;
 let walletKitListenersRegistered = false;
 
-const walletConnectBootstrap =
-  (globalThis as typeof globalThis & {
+const walletConnectBootstrap = ((
+  globalThis as typeof globalThis & {
     __optnWalletConnectBootstrap?: {
       walletKitSingleton: IWalletKit | null;
       walletKitInitPromise: Promise<{
@@ -53,15 +55,17 @@ const walletConnectBootstrap =
       }> | null;
       walletKitListenersRegistered: boolean;
     };
-  }).__optnWalletConnectBootstrap ??= {
-    walletKitSingleton,
-    walletKitInitPromise,
-    walletKitListenersRegistered,
-  };
+  }
+).__optnWalletConnectBootstrap ??= {
+  walletKitSingleton,
+  walletKitInitPromise,
+  walletKitListenersRegistered,
+});
 
 walletKitSingleton = walletConnectBootstrap.walletKitSingleton;
 walletKitInitPromise = walletConnectBootstrap.walletKitInitPromise;
-walletKitListenersRegistered = walletConnectBootstrap.walletKitListenersRegistered;
+walletKitListenersRegistered =
+  walletConnectBootstrap.walletKitListenersRegistered;
 
 async function initializeWalletConnect(
   dispatch: AppDispatch,
@@ -88,20 +92,24 @@ async function initializeWalletConnect(
   if (!walletKitListenersRegistered) {
     registerWalletConnectListeners(walletKitSingleton, {
       onProposal: (proposal) => {
+        const locale = selectLocale(getState());
         dispatch(setPendingProposal(proposal));
         dispatch(
           enqueueNotification({
             id: `walletconnect:proposal:${proposal.id}`,
             kind: 'walletconnect',
-            title: 'WalletConnect session request',
+            title: translate(locale, 'wc.sessionRequestTitle'),
             body: proposal.params.proposer.metadata?.name
-              ? `Session request from ${proposal.params.proposer.metadata.name}.`
-              : 'A dApp requested a WalletConnect session.',
+              ? translate(locale, 'wc.sessionRequestFrom', {
+                  name: proposal.params.proposer.metadata.name,
+                })
+              : translate(locale, 'wc.sessionRequestGeneric'),
             createdAt: Date.now(),
           })
         );
       },
       onProposalExpire: (proposalId) => {
+        const locale = selectLocale(getState());
         const pendingProposal = getState().walletconnect.pendingProposal;
         if (pendingProposal?.id !== proposalId) return;
         dispatch(clearPendingProposal());
@@ -109,8 +117,8 @@ async function initializeWalletConnect(
           enqueueNotification({
             id: `walletconnect:proposal:expired:${proposalId}`,
             kind: 'walletconnect',
-            title: 'WalletConnect session request expired',
-            body: 'The WalletConnect session request timed out before approval.',
+            title: translate(locale, 'wc.sessionRequestExpiredTitle'),
+            body: translate(locale, 'wc.sessionRequestExpiredBody'),
             createdAt: Date.now(),
           })
         );
@@ -118,6 +126,7 @@ async function initializeWalletConnect(
       onSessionUpdate: () =>
         dispatch(setActiveSessions(walletKitSingleton!.getActiveSessions())),
       onSessionDelete: (topic) => {
+        const locale = selectLocale(getState());
         const session = walletKitSingleton!.getActiveSessions()[topic];
         dispatch(setActiveSessions(walletKitSingleton!.getActiveSessions()));
         dispatch(clearPendingSignMsgForTopic(topic));
@@ -126,16 +135,19 @@ async function initializeWalletConnect(
           enqueueNotification({
             id: `walletconnect:session:deleted:${topic}`,
             kind: 'walletconnect',
-            title: 'WalletConnect session disconnected',
+            title: translate(locale, 'wc.sessionDisconnectedTitle'),
             body: session?.peer?.metadata?.name
-              ? `Disconnected from ${session.peer.metadata.name}.`
-              : 'A WalletConnect session was disconnected remotely.',
+              ? translate(locale, 'wc.sessionDisconnectedFrom', {
+                  name: session.peer.metadata.name,
+                })
+              : translate(locale, 'wc.sessionDisconnectedBody'),
             createdAt: Date.now(),
           })
         );
       },
       onSessionRequestExpire: (requestId) => {
         const state = getState();
+        const locale = selectLocale(state);
         const pendingMsg = state.walletconnect.pendingSignMsg;
         const pendingTx = state.walletconnect.pendingSignTx;
         const expiredMsg = pendingMsg?.id === requestId;
@@ -152,8 +164,8 @@ async function initializeWalletConnect(
           enqueueNotification({
             id: `walletconnect:request:expired:${requestId}`,
             kind: 'walletconnect',
-            title: 'WalletConnect request expired',
-            body: 'The dApp request expired before it could be completed.',
+            title: translate(locale, 'wc.requestExpiredTitle'),
+            body: translate(locale, 'wc.requestExpiredBody'),
             createdAt: Date.now(),
           })
         );
@@ -229,7 +241,10 @@ export const handleWcRequest = createAsyncThunk(
       }
       case 'bch_signTransaction': {
         const existing = state.walletconnect.pendingSignTx;
-        if (existing?.id === sessionEvent.id && existing.topic === sessionEvent.topic) {
+        if (
+          existing?.id === sessionEvent.id &&
+          existing.topic === sessionEvent.topic
+        ) {
           return;
         }
         dispatch(setPendingSignTx(sessionEvent));
@@ -282,10 +297,7 @@ const walletconnectSlice = createSlice({
     clearPendingSignMsg: (state) => {
       state.pendingSignMsg = null;
     },
-    setPendingSignTx: (
-      state,
-      action: PayloadAction<PendingSignTxPayload>
-    ) => {
+    setPendingSignTx: (state, action: PayloadAction<PendingSignTxPayload>) => {
       state.pendingSignTx = action.payload;
     },
     clearPendingSignTx: (state) => {
@@ -357,7 +369,10 @@ const walletconnectSlice = createSlice({
       state.activeSessions = action.payload;
     });
     builder.addCase(syncWalletConnectSessions.rejected, (_, action) => {
-      logError('walletconnect.syncWalletConnectSessions.rejected', action.error);
+      logError(
+        'walletconnect.syncWalletConnectSessions.rejected',
+        action.error
+      );
     });
 
     builder

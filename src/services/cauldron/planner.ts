@@ -1,10 +1,10 @@
 import { binToHex, decodeTransaction, hexToBin } from '@bitauth/libauth';
 
 import { Network } from '../../state/slices/networkSlice';
-import KeyService from '../KeyService';
 import { parseSatoshis } from '../../utils/binary';
 import { derivePublicKeyHash } from '../../utils/derivePublicKeyHash';
-import { deriveBchAddressFromHdPublicKey } from '../HdWalletService';
+import { BCH_WALLET_SCAN_BRANCH_NAMES } from '../HdWalletService';
+import { deriveWalletAddressCandidates } from '../WalletDiscoveryService';
 import { CauldronApiClient, type CauldronActivePoolRow } from './api';
 import {
   calcCauldronPairRate,
@@ -204,14 +204,14 @@ export function collectWalletCreatedCauldronPoolCandidates(
       const tokenCategory = normalizeTokenCategory(output.token?.category);
       if (!tokenCategory) return;
 
+      const rawTokenAmount: unknown = output.token?.amount;
       const tokenAmount =
-        typeof output.token?.amount === 'bigint'
-          ? output.token.amount
-          : typeof output.token?.amount === 'number'
-            ? BigInt(Math.trunc(output.token.amount))
-            : typeof output.token?.amount === 'string' &&
-                output.token.amount.trim()
-              ? BigInt(output.token.amount)
+        typeof rawTokenAmount === 'bigint'
+          ? rawTokenAmount
+          : typeof rawTokenAmount === 'number'
+            ? BigInt(Math.trunc(rawTokenAmount))
+            : typeof rawTokenAmount === 'string' && rawTokenAmount.trim()
+              ? BigInt(rawTokenAmount)
               : 0n;
       if (tokenAmount <= 0n) return;
       if (spentOutpointSet.has(getCandidateOutputKey(record.txid, outputIndex))) {
@@ -848,7 +848,7 @@ function publicKeyHashHexFromAddress(address: string): string | null {
 export async function fetchCauldronDerivedWalletAddresses(
   walletId: number,
   network: Network,
-  maxAddressIndex = 32,
+  maxAddressIndex = 100,
   // OPTN maintains one active BIP44 account path at a time. The account index
   // is already part of the persisted wallet derivation path; probing sibling
   // accounts here would reintroduce multi-path discovery after a reload.
@@ -856,29 +856,21 @@ export async function fetchCauldronDerivedWalletAddresses(
 ): Promise<Array<{ address: string; tokenAddress: string }>> {
   const results: Array<{ address: string; tokenAddress: string }> = [];
   for (let accountIndex = 0; accountIndex <= maxAccountIndex; accountIndex += 1) {
-    let xpubs;
     try {
-      xpubs = await KeyService.getWalletXpubs(walletId, accountIndex);
+      const candidates = await deriveWalletAddressCandidates(walletId, network, {
+        count: maxAddressIndex,
+        accountNumber: accountIndex,
+        branchNames: BCH_WALLET_SCAN_BRANCH_NAMES,
+      });
+      results.push(
+        ...candidates.map(({ address, tokenAddress }) => ({
+          address,
+          tokenAddress,
+        }))
+      );
     } catch {
-      continue;
-    }
-
-    for (const branchName of ['receive', 'change', 'defi'] as const) {
-      const xpub = xpubs[branchName]?.trim();
-      if (!xpub) continue;
-
-      for (let index = 0; index < maxAddressIndex; index += 1) {
-        const derived = deriveBchAddressFromHdPublicKey(
-          network,
-          xpub,
-          BigInt(index)
-        );
-        if (!derived) continue;
-        results.push({
-          address: derived.address,
-          tokenAddress: derived.tokenAddress,
-        });
-      }
+      // Optional activity discovery should continue across other supported
+      // account indexes when one xpub cannot be resolved.
     }
   }
 

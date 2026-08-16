@@ -3,6 +3,8 @@ import { useSelector } from 'react-redux';
 import type { RelayConnectionState } from '@wizardconnect/wallet';
 import type { RootState } from '../../state/store';
 import WizardDappAvatar from './WizardDappAvatar';
+import { useI18n } from '../../i18n/useI18n';
+import { formatDate } from '../../i18n/format';
 
 interface Props {
   connectionId: string;
@@ -15,6 +17,7 @@ const WizardConnectionSettingsModal: React.FC<Props> = ({
   onDisconnect,
   onClose,
 }) => {
+  const { locale, t } = useI18n();
   const connection = useSelector(
     (state: RootState) => state.wizardconnect.activeConnections[connectionId]
   );
@@ -30,7 +33,10 @@ const WizardConnectionSettingsModal: React.FC<Props> = ({
     connection.connectedAt > 1_000_000_000_000
       ? connection.connectedAt
       : connection.connectedAt * 1000;
-  const connectedAt = new Date(connectedAtMs).toLocaleString();
+  const connectedAt = formatDate(connectedAtMs, locale, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  });
 
   return (
     <div className="wallet-popup-backdrop">
@@ -60,7 +66,7 @@ const WizardConnectionSettingsModal: React.FC<Props> = ({
 
         <div className="wallet-surface-strong border border-[var(--wallet-border)] rounded p-3 text-left space-y-2 mb-4">
           <div className="text-xs uppercase tracking-wide wallet-muted">
-            Connected On
+            {t('wizard.connectedOn')}
           </div>
           <div className="wallet-text-strong">{connectedAt}</div>
         </div>
@@ -70,13 +76,13 @@ const WizardConnectionSettingsModal: React.FC<Props> = ({
             onClick={onClose}
             className="wallet-btn-secondary px-3 py-2 text-sm sm:text-base"
           >
-            Close
+            {t('wizard.close')}
           </button>
           <button
             onClick={() => onDisconnect(connectionId)}
             className="wallet-btn-danger px-3 py-2 text-sm sm:text-base whitespace-nowrap"
           >
-            Disconnect
+            {t('wizard.disconnect')}
           </button>
         </div>
       </div>

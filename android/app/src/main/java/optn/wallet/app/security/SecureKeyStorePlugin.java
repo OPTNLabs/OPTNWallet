@@ -12,7 +12,6 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 
 import java.nio.charset.StandardCharsets;
 import java.security.KeyStore;
-import java.security.SecureRandom;
 
 import javax.crypto.Cipher;
 import javax.crypto.KeyGenerator;
@@ -57,11 +56,15 @@ public class SecureKeyStorePlugin extends Plugin {
       String plaintext = call.getString("plaintext", "");
       SecretKey secretKey = getOrCreateSecretKey();
 
-      byte[] iv = new byte[GCM_IV_LENGTH];
-      new SecureRandom().nextBytes(iv);
-
       Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-      cipher.init(Cipher.ENCRYPT_MODE, secretKey, new GCMParameterSpec(GCM_TAG_LENGTH, iv));
+      // The key requires randomized encryption. Let Android Keystore generate
+      // the nonce; supplying our own GCM IV is rejected by some devices with
+      // CALLER_NONCE_PROHIBITED even when the IV came from SecureRandom.
+      cipher.init(Cipher.ENCRYPT_MODE, secretKey);
+      byte[] iv = cipher.getIV();
+      if (iv == null || iv.length != GCM_IV_LENGTH) {
+        throw new IllegalStateException("Android Keystore returned an invalid GCM IV");
+      }
       byte[] encrypted = cipher.doFinal(plaintext.getBytes(StandardCharsets.UTF_8));
 
       byte[] merged = new byte[iv.length + encrypted.length];

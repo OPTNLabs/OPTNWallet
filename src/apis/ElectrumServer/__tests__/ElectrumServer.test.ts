@@ -28,9 +28,14 @@ function makeMockClient(): MockClient {
     }),
     connection: {
       send: vi.fn((message: string) => {
-        const parsed = JSON.parse(message) as Array<{ id: number }> | { id: number };
+        const parsed = JSON.parse(message) as
+          | Array<{ id: number }>
+          | { id: number };
         const responses = Array.isArray(parsed)
-          ? parsed.map((item) => ({ id: item.id, result: `batched-${item.id}` }))
+          ? parsed.map((item) => ({
+              id: item.id,
+              result: `batched-${item.id}`,
+            }))
           : [{ id: parsed.id, result: `batched-${parsed.id}` }];
         queueMicrotask(() => {
           for (const response of responses) {
@@ -54,7 +59,9 @@ function makeMockClient(): MockClient {
 
 async function loadServerWithMocks(
   clients: MockClient[],
-  servers: string[] = ['wss://electrum.example:50004']
+  servers: string[] = ['wss://electrum.example:50004'],
+  desktop = true,
+  networkRef: { currentNetwork: string } = { currentNetwork: 'mainnet' }
 ) {
   vi.resetModules();
 
@@ -73,12 +80,19 @@ async function loadServerWithMocks(
 
   vi.doMock('../../../state/store', () => ({
     store: {
-      getState: vi.fn(() => ({ network: { currentNetwork: 'mainnet' } })),
+      getState: vi.fn(() => ({ network: networkRef })),
     },
   }));
 
   vi.doMock('../../../state/selectors/networkSelectors', () => ({
-    selectCurrentNetwork: vi.fn(() => 'mainnet'),
+    selectCurrentNetwork: vi.fn(
+      (state: { network: { currentNetwork: string } }) =>
+        state.network.currentNetwork
+    ),
+  }));
+
+  vi.doMock('../../../utils/platform', () => ({
+    isDesktopPlatform: vi.fn(() => desktop),
   }));
 
   vi.doMock('../../../utils/servers/ElectrumServers', () => ({
@@ -91,7 +105,8 @@ async function loadServerWithMocks(
 
 async function loadServerWithMocksAndSpies(
   clients: MockClient[],
-  servers: string[]
+  servers: string[],
+  desktop = true
 ) {
   vi.resetModules();
 
@@ -118,6 +133,10 @@ async function loadServerWithMocksAndSpies(
 
   vi.doMock('../../../state/selectors/networkSelectors', () => ({
     selectCurrentNetwork: vi.fn(() => 'mainnet'),
+  }));
+
+  vi.doMock('../../../utils/platform', () => ({
+    isDesktopPlatform: vi.fn(() => desktop),
   }));
 
   vi.doMock('../../../utils/servers/ElectrumServers', () => ({
@@ -158,12 +177,160 @@ describe('ElectrumServer', () => {
     expect(results).toEqual(['batched-1', 'batched-2']);
   });
 
+  it('uses individual requests for WebSocket gateways instead of JSON-RPC arrays', async () => {
+    const client = makeMockClient();
+    client.request
+      .mockResolvedValueOnce('single-1')
+      .mockResolvedValueOnce('single-2');
+    const server = await loadServerWithMocks(
+      [client],
+      ['wss://electrum.example:50004'],
+      false
+    );
+
+    const results = await server.requestMany([
+      { method: 'blockchain.scripthash.listunspent', params: ['hash-1'] },
+      { method: 'blockchain.scripthash.listunspent', params: ['hash-2'] },
+    ]);
+
+    expect(results).toEqual(['single-1', 'single-2']);
+    expect(client.request).toHaveBeenCalledWith(
+      'blockchain.scripthash.listunspent',
+      'hash-1'
+    );
+    expect(client.request).toHaveBeenCalledWith(
+      'blockchain.scripthash.listunspent',
+      'hash-2'
+    );
+    expect(client.connection.send).not.toHaveBeenCalled();
+  });
+
+  it('reconnects when the active wallet network changes', async () => {
+    const first = makeMockClient();
+    const second = makeMockClient();
+    const networkRef = { currentNetwork: 'mainnet' };
+    const server = await loadServerWithMocks(
+      [first, second],
+      ['wss://electrum.example:50004'],
+      false,
+      networkRef
+    );
+
+    await expect(server.request('server.ping')).resolves.toBe('ok');
+
+    networkRef.currentNetwork = 'chipnet';
+    await expect(server.request('server.ping')).resolves.toBe('ok');
+
+    expect(first.disconnect).toHaveBeenCalledWith(true);
+    expect(second.request).toHaveBeenCalledWith('server.ping');
+  });
+
+  it('scales requestMany timeout with batch size (evidence: requestMany(250) @ 12s)', async () => {
+    // Live error: `requestMany(250) timed out after 12000ms` with a flat budget.
+    // Formula must exceed 12s for N=250 while single calls stay ~12s.
+    const { requestManyTimeoutMs } = await import('../ElectrumServer');
+    expect(requestManyTimeoutMs(1)).toBe(12_000);
+    expect(requestManyTimeoutMs(250)).toBeGreaterThan(12_000);
+    expect(requestManyTimeoutMs(250)).toBe(12_000 + 249 * 80);
+    expect(requestManyTimeoutMs(10_000)).toBe(90_000); // cap
+  });
+
+  it('requestMany rotates servers when every batch entry reports a lost connection', async () => {
+    const first = makeMockClient();
+    const second = makeMockClient();
+    first.connection.send.mockImplementationOnce((message: string) => {
+      const parsed = JSON.parse(message) as Array<{ id: number }>;
+      queueMicrotask(() => {
+        for (const { id } of parsed) {
+          first.requestResolvers[id]?.(new Error('Connection lost'));
+          delete first.requestResolvers[id];
+        }
+      });
+      return true;
+    });
+    const server = await loadServerWithMocks(
+      [first, second],
+      ['wss://stale.example:50004', 'wss://healthy.example:50004']
+    );
+
+    const results = await server.requestMany([
+      { method: 'blockchain.address.listunspent', params: ['bitcoincash:q1'] },
+      { method: 'blockchain.address.listunspent', params: ['bitcoincash:q2'] },
+    ]);
+
+    expect(results).toEqual(['batched-1', 'batched-2']);
+    expect(first.disconnect).toHaveBeenCalledWith(true);
+    expect(second.connection.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('requestMany retries only transport-failed members on another server', async () => {
+    const first = makeMockClient();
+    const second = makeMockClient();
+    first.connection.send.mockImplementationOnce((message: string) => {
+      const parsed = JSON.parse(message) as Array<{ id: number }>;
+      queueMicrotask(() => {
+        first.requestResolvers[parsed[0].id]?.(undefined, ['first-ok']);
+        first.requestResolvers[parsed[1].id]?.(new Error('Connection lost'));
+      });
+      return true;
+    });
+    const server = await loadServerWithMocks(
+      [first, second],
+      ['wss://stale.example:50004', 'wss://healthy.example:50004']
+    );
+    const calls = [
+      { method: 'blockchain.scripthash.listunspent', params: ['hash-1'] },
+      { method: 'blockchain.scripthash.listunspent', params: ['hash-2'] },
+    ];
+
+    const results = await server.requestMany(calls);
+
+    expect(results).toEqual([['first-ok'], 'batched-1']);
+    expect(first.disconnect).toHaveBeenCalledWith(true);
+    expect(second.connection.send).toHaveBeenCalledTimes(1);
+    const retried = JSON.parse(
+      second.connection.send.mock.calls[0][0]
+    ) as Array<{
+      params: string[];
+    }>;
+    expect(retried).toHaveLength(1);
+    expect(retried[0].params).toEqual(['hash-2']);
+  });
+
+  it('requestMany fails closed when every configured server loses the batch', async () => {
+    const first = makeMockClient();
+    const second = makeMockClient();
+    for (const client of [first, second]) {
+      client.connection.send.mockImplementationOnce((message: string) => {
+        const parsed = JSON.parse(message) as Array<{ id: number }>;
+        queueMicrotask(() => {
+          for (const { id } of parsed) {
+            client.requestResolvers[id]?.(new Error('Connection lost'));
+          }
+        });
+        return true;
+      });
+    }
+    const server = await loadServerWithMocks(
+      [first, second],
+      ['wss://dead-1.example:50004', 'wss://dead-2.example:50004']
+    );
+
+    await expect(
+      server.requestMany([
+        { method: 'blockchain.scripthash.listunspent', params: ['hash-1'] },
+      ])
+    ).rejects.toThrow(/connection lost/i);
+  });
+
   it('subscribe and unsubscribe manage address subscriptions', async () => {
     const client = makeMockClient();
     const server = await loadServerWithMocks([client]);
 
     await server.subscribe('blockchain.address.subscribe', ['bitcoincash:q1']);
-    await server.unsubscribe('blockchain.address.subscribe', ['bitcoincash:q1']);
+    await server.unsubscribe('blockchain.address.subscribe', [
+      'bitcoincash:q1',
+    ]);
 
     expect(client.subscribe).toHaveBeenCalledWith(
       'blockchain.address.subscribe',
@@ -219,7 +386,9 @@ describe('ElectrumServer', () => {
       ['wss://bad.example:50004', 'wss://good.example:50004']
     );
 
-    await expect(server.request('blockchain.headers.get_tip')).resolves.toBe('ok');
+    await expect(server.request('blockchain.headers.get_tip')).resolves.toBe(
+      'ok'
+    );
     expect(first.connect).toHaveBeenCalledTimes(1);
     expect(second.connect).toHaveBeenCalledTimes(1);
     expect(second.request).toHaveBeenCalledWith('blockchain.headers.get_tip');
