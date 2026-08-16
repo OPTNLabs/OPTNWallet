@@ -21,13 +21,25 @@ import hardware_shim
 
 hardware_shim.install()
 
-from seedcash.models.bip39 import Bip39  # noqa: E402
-from seedcash.models.psbt_parser import (  # noqa: E402
-    PSBTParser,
-    parse_psbt,
-    sign_psbt_with_xpriv,
+
+def _signer_imports():
+    """SeedCash moved signing out of psbt_parser; keep both layouts working."""
+    from seedcash.models.bip39 import Bip39  # noqa: E402
+    from seedcash.models.psbt_parser import PSBTParser, parse_psbt  # noqa: E402
+    from seedcash.models.wallet import Wallet  # noqa: E402
+
+    try:
+        from seedcash.models.psbt_parser import sign_psbt_with_xpriv  # noqa: E402
+    except ImportError:
+        from seedcash.models.psbt_signer import sign_psbt_with_xpriv  # noqa: E402
+    return Bip39, PSBTParser, parse_psbt, sign_psbt_with_xpriv, Wallet
+
+
+Bip39, PSBTParser, parse_psbt, sign_psbt_with_xpriv, Wallet = (
+    (None, None, None, None, None)
+    if len(sys.argv) >= 2 and sys.argv[1] == "decode-ur"
+    else _signer_imports()
 )
-from seedcash.models.wallet import Wallet  # noqa: E402
 
 TEST_MNEMONIC = " ".join(["abandon"] * 11 + ["about"])
 ACCOUNT_PATH = "m/44'/145'/0'"
@@ -159,23 +171,24 @@ def decode_ur(frames_path: str, out_path: str) -> None:
     message = decoder.result_message()
     raw = bytes(message.cbor)
 
-    # `ur:crypto-psbt` wraps the PSBT in a CBOR byte string (BCR-2020-006), so
-    # `.cbor` is the wrapper, not the payload. SeedCash's `get_data_psbt()`
-    # returns `.cbor` straight to its parser and therefore chokes on its own
-    # decode — see the note in seedcashUrRoundtrip.test.ts. Unwrap it here so
-    # the test can assert what the bytes on the wire actually are.
-    from seedcash.helpers.ur2.cbor_lite import CBORDecoder
-
-    payload, _ = CBORDecoder(raw).decodeBytes()
+    # Same path as SeedCash `decode_qr.py:get_data_psbt`: the UR CBOR field is
+    # handed to parse_psbt. OPTN now emits the raw PSBT there (SeedCash's own
+    # encode shape). A leftover Keystone wrap would start with a CBOR bstr
+    # major type, not `psbt\xff`, and this helper must not hide that regression.
+    if not raw.startswith(b"psbt\xff"):
+        raise SystemExit(
+            "SeedCash recovered UR CBOR that is not a PSBT "
+            f"(prefix {raw[:8].hex()}). Encoder drifted back to a CBOR wrap."
+        )
 
     with open(out_path, "w", encoding="utf-8") as handle:
-        handle.write(bytes(payload).hex())
+        handle.write(raw.hex())
     print(
         json.dumps(
             {
                 "frames": len(frames),
                 "type": message.type,
-                "cborPrefix": raw[: len(raw) - len(payload)].hex(),
+                "cborPrefix": raw[:8].hex(),
             }
         )
     )

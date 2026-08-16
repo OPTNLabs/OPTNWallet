@@ -62,7 +62,6 @@ import {
 } from '../../services/psbt/urPsbt';
 import {
   masterFingerprintBytes,
-  saveWatchOnlyMasterFingerprint,
   watchOnlyMasterFingerprint,
 } from '../../platform/desktop/onboarding/watchOnlyWallet';
 import { CameraQrScanner } from '../../platform/desktop/CameraQrScanner';
@@ -163,7 +162,6 @@ export const WatchOnlySend: FC = () => {
   const [inputs, setInputs] = useState<SpendableInput[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [fingerprint, setFingerprint] = useState('');
-  const [savedFingerprint, setSavedFingerprint] = useState('');
   const [accountPath, setAccountPath] = useState(() =>
     getBchAccountPath(currentNetwork)
   );
@@ -303,7 +301,6 @@ export const WatchOnlySend: FC = () => {
         const stored = await watchOnlyMasterFingerprint(currentWalletId);
         if (stored) {
           setFingerprint(stored);
-          setSavedFingerprint(stored);
         }
 
         const [utxoResult, keys] = await Promise.all([
@@ -534,25 +531,6 @@ export const WatchOnlySend: FC = () => {
             }
           : {}),
       });
-      const normalizedFingerprint = fingerprint.trim().toLowerCase();
-      // Only ever write a real value. Now that the field is optional, a blank
-      // one means "not supplied this time", not "forget the one I gave you" —
-      // persisting the empty string would wipe a fingerprint the user already
-      // read off the device and make the next send silently unrecognised.
-      if (
-        currentWalletId &&
-        normalizedFingerprint &&
-        normalizedFingerprint !== savedFingerprint
-      ) {
-        // The fingerprint lives on the signer, so it is commonly typed in for
-        // the first time here. Persist it so the next send does not ask again.
-        void saveWatchOnlyMasterFingerprint(currentWalletId, normalizedFingerprint)
-          .then(() => setSavedFingerprint(normalizedFingerprint))
-          .catch((err) => {
-            // Non-fatal: the unsigned transaction is still valid without it.
-            console.error('Could not persist master fingerprint', err);
-          });
-      }
       const proposal: WatchOnlyProposal = {
         rawUnsignedHex: result.rawUnsignedHex,
         inputs: inputsWithParents,
@@ -888,53 +866,9 @@ export const WatchOnlySend: FC = () => {
                     <span>Fee {satsToBch(proposalState.feeSats)} BCH</span>
                   )}
                 </div>
-                {/* Set once per wallet and remembered, so it stays out of the
-                    way of every later send. */}
-                <details className="text-xs">
-                  <summary className="cursor-pointer wallet-muted">
-                    Signer options
-                    {!fingerprint && ' — no master fingerprint set'}
-                  </summary>
-                  <label className="mt-2 block space-y-1 text-sm wallet-text-strong">
-                    Master fingerprint{' '}
-                    <span className="text-[11px] font-normal wallet-muted">
-                      (optional)
-                    </span>
-                    <input
-                      value={fingerprint}
-                      onChange={(event) => {
-                        setFingerprint(event.target.value);
-                        setError('');
-                      }}
-                      placeholder="8 hex chars, e.g. 4c9a1f7b"
-                      maxLength={8}
-                      autoComplete="off"
-                      spellCheck={false}
-                      className="wallet-input w-full rounded-md px-3 py-2 font-mono text-sm uppercase"
-                    />
-                  </label>
-                  {fingerprint && !masterFingerprintBytes(fingerprint) && (
-                    <p className="mt-1 text-[11px] text-red-400">
-                      Must be exactly 8 hex characters.
-                    </p>
-                  )}
-                  <p className="mt-2 text-[11px] leading-relaxed wallet-muted">
-                    SeedCash shows this on the same screen as Export Xpub. It
-                    cannot be derived from the xPub, and it is not used to
-                    produce the signature — it is what lets the device show
-                    these coins as its own while you review the transaction.
-                  </p>
-                </details>
-                {!fingerprint && (
-                  <p className="text-[11px] leading-relaxed text-amber-400">
-                    No master fingerprint set — SeedCash will still sign, but it
-                    will not show these coins as yours while you review.
-                  </p>
-                )}
                 <button
                   type="button"
                   onClick={() => void handleBuild()}
-                  disabled={!!fingerprint && !masterFingerprintBytes(fingerprint)}
                   className="wallet-btn-primary w-full py-2 font-semibold disabled:opacity-50"
                 >
                   Build unsigned transaction

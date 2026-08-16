@@ -39,9 +39,9 @@ describe('WatchOnlySend workspace', () => {
     expect(html).toContain('aria-current="step"');
   });
 
-  it('keeps the fingerprint out of the main send path', () => {
-    // It is set once per wallet and remembered. Sitting between the amount and
-    // the primary action, it read as something to fill in on every send.
+  it('does not ask for a master fingerprint on send', () => {
+    // SeedCash signs from the BIP32 path in the PSBT 0x06 record and ignores
+    // the fingerprint. Asking for it on this screen implied it was required.
     const html = renderToStaticMarkup(
       <Provider store={store}>
         <StaticRouter location="/send">
@@ -50,7 +50,8 @@ describe('WatchOnlySend workspace', () => {
       </Provider>
     );
 
-    // Present, but behind a disclosure rather than inline in the form.
-    expect(html).not.toContain('<label class="block space-y-1 text-sm wallet-text-strong">Master fingerprint');
+    expect(html).not.toContain('Master fingerprint');
+    expect(html).not.toContain('Signer options');
+    expect(html).not.toContain('no master fingerprint set');
   });
 });
