@@ -9,13 +9,13 @@ import { useDispatch, useSelector } from 'react-redux';
 import { useLocation, useNavigate } from 'react-router-dom';
 import WalletManager from '../../../apis/WalletManager/WalletManager';
 import DatabaseService from '../../../apis/DatabaseManager/DatabaseService';
-import { Network } from '../../../state/slices/networkSlice';
-import { setNetwork } from '../../../state/slices/networkSlice';
+import { Network, setNetwork } from '../../../state/slices/networkSlice';
+import { selectCurrentNetwork } from '../../../state/selectors/networkSelectors';
 import {
   getAllWebviewWindows,
   getCurrentWebviewWindow,
 } from '@tauri-apps/api/webviewWindow';
-import { claimWalletOpen } from '../walletOpenRegistry';
+import { runExclusiveWalletOpen } from '../walletOpenRegistry';
 import { clearWalletFusionPolicy } from '../walletFusionPolicy';
 import {
   setWalletId,
@@ -23,10 +23,12 @@ import {
   setWalletType,
   setWalletDerivationPath,
 } from '../../../state/slices/walletSlice';
-import { WalletType } from '../../../types/wallet';
+import { WalletType, type ExtendedWalletType } from '../../../types/wallet';
 import { homeRoute } from '../../../navigation/routes';
 import {
   openWalletWithPassword,
+  openWatchOnlyWallet,
+  openHardwareWallet,
   importWalletFile,
   isBiometricAvailable,
   hasWalletBiometric,
@@ -34,17 +36,35 @@ import {
   getBiometricLabel,
 } from '../DesktopWalletManager';
 import type { WalletFileV1 } from '../walletFile';
-import { selectHardwareWallet } from '../../../state/slices/hardwareWalletSlice';
-import { HardwareWalletSettings } from '../../../features/settings/HardwareWalletSettings';
 import { resolveBiometricEnrollment } from '../biometricEnrollment';
 import { DesktopWalletPickerActions } from './DesktopWalletPickerActions';
 import { WatchOnlyWalletPreview } from './WatchOnlyWalletPreview';
+import { HardwareWalletWizard } from './HardwareWalletWizard';
+import { useI18n } from '../../../i18n/useI18n';
 
 interface WalletRow {
   id: number;
   wallet_name: string;
   networkType: Network;
-  walletType: WalletType;
+  walletType: ExtendedWalletType;
+}
+
+type LandingNavigationState = {
+  openWalletId?: unknown;
+  importWalletFile?: unknown;
+  importColdText?: unknown;
+};
+
+function isWalletFile(value: unknown): value is WalletFileV1 {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  return (
+    record.format === 'optn-wallet' &&
+    record.version === 1 &&
+    typeof record.name === 'string' &&
+    typeof record.encryptedMnemonic === 'string' &&
+    typeof record.kdfSalt === 'string'
+  );
 }
 
 /**
@@ -85,6 +105,8 @@ const DesktopLandingPage = () => {
   const [busy, setBusy] = useState(false);
   const [view, setView] = useState<'list' | 'hardware' | 'watch-only'>('list');
   const [importFile, setImportFile] = useState<WalletFileV1 | null>(null);
+  /** Optional encrypted .optn-cold companion from multi-select open. */
+  const [importColdText, setImportColdText] = useState<string | null>(null);
   const [bioAvailable, setBioAvailable] = useState(false);
   const [bioEnrolledId, setBioEnrolledId] = useState<number | null>(null);
   const [bioLabel, setBioLabel] = useState('Biometric unlock');
@@ -95,7 +117,8 @@ const DesktopLandingPage = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const dispatch = useDispatch();
-  const hw = useSelector(selectHardwareWallet);
+  const currentNetwork = useSelector(selectCurrentNetwork);
+  const { t } = useI18n();
 
   useEffect(() => {
     void (async () => {
@@ -113,7 +136,10 @@ const DesktopLandingPage = () => {
     })();
   }, []);
 
-  const handleOpenClick = useCallback((id: number) => {
+  const handleOpenClick = useCallback(async (id: number) => {
+    // Watch-only and hardware are always password-gated (saved under a
+    // password at create). One list action: Open → enter password.
+    // Seed wallets also use the same password dialog.
     setOpeningId(id);
     setPassword('');
     setError('');
@@ -142,7 +168,7 @@ const DesktopLandingPage = () => {
   // Unlike the old setTimeout + CustomEvent handoff, this survives the picker
   // mount boundary and cannot fire before its listener exists.
   useEffect(() => {
-    const requestedId = (location.state as { openWalletId?: unknown } | null)
+    const requestedId = (location.state as LandingNavigationState | null)
       ?.openWalletId;
     if (
       typeof requestedId !== 'number' ||
@@ -155,6 +181,22 @@ const DesktopLandingPage = () => {
     handledOpenRequest.current = location.key;
     handleOpenClick(requestedId);
   }, [handleOpenClick, location.key, location.state]);
+
+  // File -> Open Wallet Pack routes the parsed pack through navigation state.
+  // Unlike a delayed CustomEvent, this survives the landing-page mount boundary
+  // even when the first render takes longer than expected.
+  useEffect(() => {
+    const state = location.state as LandingNavigationState | null;
+    if (!isWalletFile(state?.importWalletFile)) return;
+    if (handledOpenRequest.current === location.key) return;
+    handledOpenRequest.current = location.key;
+    setImportFile(state.importWalletFile);
+    setImportColdText(
+      typeof state.importColdText === 'string' ? state.importColdText : null
+    );
+    setPassword('');
+    setError('');
+  }, [location.key, location.state]);
 
   // Delete ONE wallet (e.g. a duplicate) without replacing changes written by
   // another open wallet window. Its .optn file remains a recoverable backup.
@@ -177,12 +219,15 @@ const DesktopLandingPage = () => {
     }
   };
 
-  const finishOpen = (id: number, info: {
-    networkType?: Network | null;
-    walletType?: WalletType | null;
-    derivation_path?: string;
-    derivation_path_source?: 'default' | 'custom';
-  }) => {
+  const finishOpen = (
+    id: number,
+    info: {
+      networkType?: Network | null;
+      walletType?: ExtendedWalletType | null;
+      derivation_path?: string;
+      derivation_path_source?: 'default' | 'custom';
+    }
+  ) => {
     dispatch(setWalletId(id));
     dispatch(setWalletNetwork(info.networkType ?? Network.MAINNET));
     dispatch(setWalletType(info.walletType ?? WalletType.STANDARD));
@@ -190,7 +235,8 @@ const DesktopLandingPage = () => {
       dispatch(
         setWalletDerivationPath({
           path: info.derivation_path,
-          source: info.derivation_path_source === 'custom' ? 'custom' : 'default',
+          source:
+            info.derivation_path_source === 'custom' ? 'custom' : 'default',
         })
       );
     }
@@ -198,12 +244,63 @@ const DesktopLandingPage = () => {
     navigate(homeRoute(id));
   };
 
+  // Called by the watch-only create screen once the wallet row + addresses are
+  // persisted. Opens it through the normal exclusive-open path so the freshly
+  // created wallet lands in a window with a valid session marker.
+  const handleWatchOnlyCreated = async (walletId: number) => {
+    setBusy(true);
+    setError('');
+    try {
+      const attempt = await runExclusiveWalletOpen(
+        walletId,
+        getCurrentWebviewWindow().label,
+        () => openWatchOnlyWallet(walletId),
+        isWalletWindowOpen
+      );
+      const rows = await WalletManager().getAllWallets();
+      setWallets(rows as WalletRow[]);
+      if (attempt.status === 'held') {
+        await focusWalletWindow(attempt.windowLabel);
+        setView('list');
+        return;
+      }
+      if (attempt.status === 'rejected' || !attempt.value) {
+        setView('list');
+        return;
+      }
+      finishOpen(walletId, attempt.value);
+    } catch (err) {
+      console.error(
+        '[DesktopLandingPage] Open created watch-only wallet failed:',
+        err
+      );
+      setError('Wallet created, but could not open it.');
+      setView('list');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleBiometricUnlock = async (id: number) => {
     setBusy(true);
     setError('');
     try {
-      const info = await unlockWalletWithBiometric(id);
-      finishOpen(id, info);
+      const attempt = await runExclusiveWalletOpen(
+        id,
+        getCurrentWebviewWindow().label,
+        () => unlockWalletWithBiometric(id),
+        isWalletWindowOpen
+      );
+      if (attempt.status === 'held') {
+        await focusWalletWindow(attempt.windowLabel);
+        setError('That wallet is already open in another window.');
+        return;
+      }
+      if (attempt.status === 'rejected') {
+        setError('Biometric unlock was not accepted.');
+        return;
+      }
+      finishOpen(id, attempt.value);
     } catch (err) {
       console.error('[DesktopLandingPage] Biometric unlock failed:', err);
       const msg = err instanceof Error ? err.message : String(err);
@@ -224,19 +321,30 @@ const DesktopLandingPage = () => {
     return () => window.removeEventListener('optn:open-wallet', onMenuOpen);
   }, [handleOpenClick]);
 
-  // File → Open Wallet ▸ Open Wallet File… picked a .optn on disk; ask for its
-  // password and import it into this app (a new DB row + its own auto-saved file).
+  // File → Open Wallet Pack…: .optn keystore and optional .optn-cold data.
   useEffect(() => {
     const onImportFile = (e: Event) => {
-      const file = (e as CustomEvent<{ file: WalletFileV1 }>).detail?.file;
+      const detail = (
+        e as CustomEvent<{
+          file: WalletFileV1;
+          coldArchiveText?: string | null;
+        }>
+      ).detail;
+      const file = detail?.file;
       if (file) {
         setImportFile(file);
+        setImportColdText(
+          typeof detail.coldArchiveText === 'string'
+            ? detail.coldArchiveText
+            : null
+        );
         setPassword('');
         setError('');
       }
     };
     window.addEventListener('optn:import-wallet-file', onImportFile);
-    return () => window.removeEventListener('optn:import-wallet-file', onImportFile);
+    return () =>
+      window.removeEventListener('optn:import-wallet-file', onImportFile);
   }, []);
 
   const handleImportSubmit = async () => {
@@ -244,10 +352,59 @@ const DesktopLandingPage = () => {
     setBusy(true);
     setError('');
     try {
-      const result = await importWalletFile(importFile, password, Network.MAINNET);
+      // Network priority: .optn network → .optn-cold network → app current.
+      // Never hardcode mainnet (that created chipnet wallet 5 again as mainnet).
+      let preferredNetwork = currentNetwork;
+      const { networkFromWalletFile } = await import('../walletFile');
+      const fileNet = networkFromWalletFile(importFile);
+      if (fileNet === 'chipnet') preferredNetwork = Network.CHIPNET;
+      else if (fileNet === 'mainnet') preferredNetwork = Network.MAINNET;
+      else if (importColdText) {
+        try {
+          const { parseEncryptedColdArchive, decryptColdArchive } =
+            await import('../WalletColdExportService');
+          const enc = parseEncryptedColdArchive(importColdText);
+          const archive = await decryptColdArchive(enc, password);
+          if (archive.network === 'chipnet') preferredNetwork = Network.CHIPNET;
+          else if (archive.network === 'mainnet') {
+            preferredNetwork = Network.MAINNET;
+          }
+        } catch {
+          /* cold optional for network peek; import may still succeed later */
+        }
+      }
+
+      const result = await importWalletFile(
+        importFile,
+        password,
+        preferredNetwork
+      );
       if (!result) {
-        setError('Incorrect password for this wallet file.');
+        setError(t('desktopWallet.incorrectFilePassword'));
         return;
+      }
+      if (importColdText) {
+        try {
+          const { importColdDataIntoOpenWallet } = await import(
+            '../WalletPackService'
+          );
+          await importColdDataIntoOpenWallet(
+            result.walletId,
+            importColdText,
+            password
+          );
+        } catch (coldErr) {
+          console.error(
+            '[DesktopLandingPage] Cold data import after keystore failed:',
+            coldErr
+          );
+          // Keys still imported — surface soft warning.
+          setError(
+            coldErr instanceof Error
+              ? `Wallet keys imported, but data file failed: ${coldErr.message}`
+              : t('desktopWallet.importFailed')
+          );
+        }
       }
       dispatch(setWalletId(result.walletId));
       dispatch(setWalletNetwork(result.network));
@@ -256,17 +413,19 @@ const DesktopLandingPage = () => {
         dispatch(
           setWalletDerivationPath({
             path: result.derivationPath,
-            source: result.derivationPathSource === 'custom' ? 'custom' : 'default',
+            source:
+              result.derivationPathSource === 'custom' ? 'custom' : 'default',
           })
         );
       }
       dispatch(setNetwork(result.network));
       window.dispatchEvent(new CustomEvent('optn:wallets-changed'));
       setImportFile(null);
+      setImportColdText(null);
       navigate(homeRoute(result.walletId));
     } catch (err) {
       console.error('[DesktopLandingPage] Import wallet file failed:', err);
-      setError('Could not import this wallet file.');
+      setError(t('desktopWallet.importFailed'));
     } finally {
       setBusy(false);
     }
@@ -277,30 +436,85 @@ const DesktopLandingPage = () => {
     setBusy(true);
     setError('');
     try {
+      const row = wallets?.find((w) => w.id === openingId);
       // Electron Cash's single-window rule: a wallet already open elsewhere is
       // raised, not loaded a second time. Checked BEFORE the password is used,
       // so a duplicate open never derives a key or touches wallet state.
-      const heldBy = await claimWalletOpen(
+      const attempt = await runExclusiveWalletOpen(
         openingId,
         getCurrentWebviewWindow().label,
-        Date.now(),
+        () => {
+          if (row?.walletType === 'watch-only') {
+            return openWatchOnlyWallet(openingId, password);
+          }
+          if (row?.walletType === 'hardware') {
+            return openHardwareWallet(openingId, password);
+          }
+          return openWalletWithPassword(openingId, password);
+        },
         isWalletWindowOpen
       );
-      if (heldBy) {
-        await focusWalletWindow(heldBy);
-        setError('That wallet is already open in another window.');
+      if (attempt.status === 'held') {
+        await focusWalletWindow(attempt.windowLabel);
+        setError(t('desktopWallet.alreadyOpen'));
         return;
       }
-
-      const info = await openWalletWithPassword(openingId, password);
-      if (!info) {
-        setError('Incorrect password.');
+      if (attempt.status === 'rejected') {
+        setError(t('desktopWallet.incorrectFilePassword'));
         return;
       }
-      finishOpen(openingId, info);
+      finishOpen(openingId, attempt.value);
     } catch (err) {
       console.error('[DesktopLandingPage] Open wallet failed:', err);
-      setError('Could not open this wallet. Please try again.');
+      setError(t('desktopWallet.openFailed'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleHardwareOpened = async (result: {
+    walletId: number;
+    created: boolean;
+    name: string;
+    network: Network;
+    accountPath: string;
+  }) => {
+    setBusy(true);
+    setError('');
+    try {
+      // Just-created wallets already have credentials cached from protect*.
+      // Existing wallets need the list password dialog — if open fails free, ask.
+      const attempt = await runExclusiveWalletOpen(
+        result.walletId,
+        getCurrentWebviewWindow().label,
+        () => openHardwareWallet(result.walletId),
+        isWalletWindowOpen
+      );
+      if (attempt.status === 'held') {
+        await focusWalletWindow(attempt.windowLabel);
+        setError(t('desktopWallet.alreadyOpen'));
+        setView('list');
+        return;
+      }
+      if (attempt.status === 'rejected' || !attempt.value) {
+        // Existing passworded wallet: send user to type password on the list.
+        setOpeningId(result.walletId);
+        setPassword('');
+        setError(t('desktopWallet.password'));
+        setView('list');
+        return;
+      }
+      // Refresh list so a newly created HW wallet shows next time.
+      const rows = await WalletManager().getAllWallets();
+      setWallets(rows as WalletRow[]);
+      window.dispatchEvent(new CustomEvent('optn:wallets-changed'));
+      finishOpen(result.walletId, attempt.value);
+    } catch (err) {
+      console.error('[DesktopLandingPage] hardware open failed:', err);
+      setError(
+        err instanceof Error ? err.message : t('desktopWallet.openFailed')
+      );
+      setView('list');
     } finally {
       setBusy(false);
     }
@@ -308,29 +522,23 @@ const DesktopLandingPage = () => {
 
   if (view === 'hardware') {
     return (
-      <section className="min-h-[100dvh] wallet-surface flex flex-col items-center px-4 py-10">
-        <div className="w-full max-w-md space-y-4">
-          <h1 className="text-xl font-bold wallet-text-strong text-center">Connect Hardware Wallet</h1>
-          <HardwareWalletSettings />
-          {hw.connected && (
-            <div className="wallet-card p-3 space-y-2">
-              <p className="text-sm wallet-text-strong">
-                {hw.deviceLabel ?? 'Device'} connected. It will be used automatically to sign
-                sends from software wallets while connected. Standalone hardware-only wallets
-                with their own receive addresses aren't supported yet.
-              </p>
-            </div>
-          )}
-          <button onClick={() => setView('list')} className="wallet-btn-secondary w-full py-2 text-sm">
-            Back to wallets
-          </button>
-        </div>
-      </section>
+      <HardwareWalletWizard
+        onBack={() => {
+          setError('');
+          setView('list');
+        }}
+        onOpened={(result) => void handleHardwareOpened(result)}
+      />
     );
   }
 
   if (view === 'watch-only') {
-    return <WatchOnlyWalletPreview onBack={() => setView('list')} />;
+    return (
+      <WatchOnlyWalletPreview
+        onBack={() => setView('list')}
+        onCreated={(walletId) => void handleWatchOnlyCreated(walletId)}
+      />
+    );
   }
 
   return (
@@ -340,26 +548,45 @@ const DesktopLandingPage = () => {
           <div className="wallet-card w-full max-w-xs mx-4 p-6 space-y-4">
             <div className="text-center space-y-1">
               <div className="text-2xl">📂</div>
-              <h3 className="font-bold text-lg wallet-text-strong">Open “{importFile.name}”</h3>
-              <p className="text-sm wallet-muted">Enter this wallet file's password.</p>
+              <h3 className="font-bold text-lg wallet-text-strong">
+                Open “{importFile.name}”
+              </h3>
+              <p className="text-sm wallet-muted">
+                Enter this wallet file's password
+                {importFile.network
+                  ? ` · ${importFile.network === 'chipnet' ? 'Chipnet' : 'Mainnet'}`
+                  : ''}
+                . If this wallet is already saved, it will be opened — not
+                duplicated.
+              </p>
             </div>
             <input
               type="password"
               value={password}
               autoFocus
-              onChange={(e) => { setPassword(e.target.value); setError(''); }}
-              onKeyDown={(e) => { if (e.key === 'Enter') void handleImportSubmit(); }}
-              placeholder="Password"
+              onChange={(e) => {
+                setPassword(e.target.value);
+                setError('');
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void handleImportSubmit();
+              }}
+              placeholder={t('desktopWallet.password')}
               className="wallet-input w-full px-3 py-2 rounded-md wallet-text-strong text-center"
             />
-            {error && <p className="text-center text-xs text-red-400">{error}</p>}
+            {error && (
+              <p className="text-center text-xs text-red-400">{error}</p>
+            )}
             <div className="flex gap-3">
               <button
                 type="button"
                 className="flex-1 wallet-btn-secondary py-2"
-                onClick={() => { setImportFile(null); setError(''); }}
+                onClick={() => {
+                  setImportFile(null);
+                  setError('');
+                }}
               >
-                Cancel
+                {t('desktopWallet.cancel')}
               </button>
               <button
                 type="button"
@@ -367,7 +594,7 @@ const DesktopLandingPage = () => {
                 onClick={() => void handleImportSubmit()}
                 disabled={busy}
               >
-                {busy ? 'Opening…' : 'Open'}
+                {busy ? t('desktopWallet.opening') : t('desktopWallet.open')}
               </button>
             </div>
           </div>
@@ -375,18 +602,39 @@ const DesktopLandingPage = () => {
       )}
 
       <div className="w-full max-w-md space-y-6">
-        <h1 className="text-xl font-bold wallet-text-strong text-center">OPTN Wallet</h1>
+        <h1 className="text-xl font-bold wallet-text-strong text-center">
+          OPTN Wallet
+        </h1>
 
         {wallets && wallets.length > 0 && (
           <div className="space-y-2">
-            <p className="text-sm wallet-muted">Your wallets</p>
+            <p className="text-sm wallet-muted">
+              {t('desktopWallet.yourWallets')}
+            </p>
             {wallets.map((w) => (
               <div key={w.id} className="wallet-card p-3">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="font-semibold wallet-text-strong">{w.wallet_name || `Wallet #${w.id}`}</p>
+                    <p className="font-semibold wallet-text-strong">
+                      {w.wallet_name ||
+                        t('desktopWallet.walletNumber', { id: w.id })}
+                    </p>
                     <p className="text-[10px] wallet-muted">
-                      {w.networkType === Network.CHIPNET ? 'Chipnet' : 'Mainnet'} · #{w.id}
+                      #{w.id}
+                      {' · '}
+                      {w.networkType === Network.CHIPNET
+                        ? t('settingsNetwork.chipnet')
+                        : t('settingsNetwork.mainnet')}
+                      {w.walletType === 'watch-only' && (
+                        <span className="ml-1.5 rounded border border-[var(--wallet-border)] px-1 py-px text-[9px] uppercase tracking-wide">
+                          Watch-only
+                        </span>
+                      )}
+                      {w.walletType === 'hardware' && (
+                        <span className="ml-1.5 rounded border border-[var(--wallet-border)] px-1 py-px text-[9px] uppercase tracking-wide">
+                          Hardware
+                        </span>
+                      )}
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
@@ -394,13 +642,24 @@ const DesktopLandingPage = () => {
                       onClick={() => handleOpenClick(w.id)}
                       className="wallet-btn-secondary px-4 py-1.5 text-sm"
                     >
-                      Open
+                      {t('desktopWallet.openButton')}
                     </button>
                     <button
-                      onClick={() => { setDeletingId(deletingId === w.id ? null : w.id); setOpeningId(null); }}
+                      onClick={() => {
+                        setDeletingId(deletingId === w.id ? null : w.id);
+                        setOpeningId(null);
+                      }}
                       className="text-xs text-red-400/60 hover:text-red-400 px-1.5 py-1"
-                      title="Delete this wallet"
-                      aria-label={`Delete ${w.wallet_name || `wallet ${w.id}`}`}
+                      title={t('desktopWallet.deleteLabel', {
+                        name:
+                          w.wallet_name ||
+                          t('desktopWallet.walletNumber', { id: w.id }),
+                      })}
+                      aria-label={t('desktopWallet.deleteLabel', {
+                        name:
+                          w.wallet_name ||
+                          t('desktopWallet.walletNumber', { id: w.id }),
+                      })}
                     >
                       🗑
                     </button>
@@ -410,19 +669,32 @@ const DesktopLandingPage = () => {
                 {deletingId === w.id && (
                   <div className="mt-2 rounded-lg border border-red-400/30 bg-red-400/5 p-2.5 text-xs space-y-2">
                     <p className="wallet-text-strong">
-                      Delete “{w.wallet_name || `Wallet #${w.id}`}” ({w.networkType === Network.CHIPNET ? 'Chipnet' : 'Mainnet'}, #{w.id})?
-                      Its saved <span className="font-mono">.optn</span> file is kept, so you can re-import it later.
+                      {t('desktopWallet.deleteConfirm', {
+                        name:
+                          w.wallet_name ||
+                          t('desktopWallet.walletNumber', { id: w.id }),
+                        network:
+                          w.networkType === Network.CHIPNET
+                            ? t('settingsNetwork.chipnet')
+                            : t('settingsNetwork.mainnet'),
+                        id: w.id,
+                      })}
                     </p>
                     <div className="flex gap-2">
-                      <button onClick={() => setDeletingId(null)} className="flex-1 wallet-btn-secondary py-1.5">
-                        Cancel
+                      <button
+                        onClick={() => setDeletingId(null)}
+                        className="flex-1 wallet-btn-secondary py-1.5"
+                      >
+                        {t('desktopWallet.cancel')}
                       </button>
                       <button
                         onClick={() => void handleDelete(w.id)}
                         disabled={deleteBusy}
                         className="flex-1 py-1.5 rounded-md bg-red-500/80 text-white font-semibold disabled:opacity-50"
                       >
-                        {deleteBusy ? 'Deleting…' : 'Delete'}
+                        {deleteBusy
+                          ? t('desktopWallet.deleting')
+                          : t('desktopWallet.delete')}
                       </button>
                     </div>
                   </div>
@@ -434,9 +706,14 @@ const DesktopLandingPage = () => {
                       type="password"
                       value={password}
                       autoFocus
-                      onChange={(e) => { setPassword(e.target.value); setError(''); }}
-                      onKeyDown={(e) => { if (e.key === 'Enter') void handleUnlock(); }}
-                      placeholder="Password"
+                      onChange={(e) => {
+                        setPassword(e.target.value);
+                        setError('');
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') void handleUnlock();
+                      }}
+                      placeholder={t('desktopWallet.password')}
                       className="wallet-input w-full px-3 py-2 rounded-md wallet-text-strong"
                     />
                     {error && <p className="text-xs text-red-400">{error}</p>}
@@ -445,17 +722,24 @@ const DesktopLandingPage = () => {
                       disabled={busy}
                       className="wallet-btn-primary w-full py-2 text-sm font-semibold"
                     >
-                      {busy ? 'Unlocking…' : 'Unlock'}
+                      {busy
+                        ? t('desktopWallet.unlocking')
+                        : t('desktopWallet.unlock')}
                     </button>
-                    {bioEnrolledId === w.id && (
-                      <button
-                        onClick={() => void handleBiometricUnlock(w.id)}
-                        disabled={busy}
-                        className="wallet-btn-secondary w-full py-2 text-sm font-semibold"
-                      >
-                        Use {bioLabel}
-                      </button>
-                    )}
+                    {bioEnrolledId === w.id &&
+                      w.walletType !== 'watch-only' &&
+                      w.walletType !== 'hardware' && (
+                        <button
+                          onClick={() => void handleBiometricUnlock(w.id)}
+                          disabled={busy}
+                          className="wallet-btn-secondary w-full py-2 text-sm font-semibold"
+                        >
+                          {t('desktopWallet.useBiometric', {
+                            label:
+                              bioLabel ?? t('desktopWallet.biometricUnlock'),
+                          })}
+                        </button>
+                      )}
                   </div>
                 )}
               </div>

@@ -1,10 +1,12 @@
+// @ts-nocheck WIP app surface; see docs/wip-typecheck-exclusions.md
+
 // Legacy FundMe web-app detail screen kept for compatibility/reference.
 // Native addon flows should prefer FundMeAddonApp.tsx and addon SDK services.
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 //import { useBlockchainContext } from '../../components/Context/BlockchainContext';
 import { Utxo, Contract, TransactionBuilder } from 'cashscript';
-import { AddressCashStarter, MasterCategoryID } from './values'
+import { AddressCashStarter, MasterCategoryID } from './values';
 import cashStarterPledge from './cashstarterPledge';
 import cashStarterRefund from './cashstarterRefund';
 import cashStarterClaim from './cashstarterClaim';
@@ -35,6 +37,8 @@ import type {
   WalletConnectSignedTransaction,
   WalletConnectTransactionRequest,
 } from './walletConnectTypes';
+import { AddonModuleI18nProvider } from '../../../i18n/AddonModuleI18nProvider';
+import { useAddonI18n } from '../../../i18n/useAddonI18n';
 
 interface Pledge {
   campaignID: string;
@@ -63,27 +67,42 @@ interface SignMessageParams {
   message: string;
   userPrompt?: string;
 }
-declare const walletConnectInstance: {
-  request: (args: { chainId: unknown; topic: string; request: unknown }) => Promise<unknown>;
-} | undefined;
+declare const walletConnectInstance:
+  | {
+      request: (args: {
+        chainId: unknown;
+        topic: string;
+        request: unknown;
+      }) => Promise<unknown>;
+    }
+  | undefined;
 declare const connectedChain: string | undefined;
 declare const walletConnectSession: { topic: string } | undefined;
 
-const CampaignDetail: React.FC = () => {
+const CampaignDetailScreen: React.FC = () => {
   const confirm = useWalletConfirm();
+  const { t: addonT } = useAddonI18n();
+  const signTransactionForAddon = (options: WalletConnectTransactionRequest) =>
+    signTransaction(options, (key, fallback) => addonT(key, fallback));
   const { id } = useParams(); // Get the campaign ID from the URL
   //const { walletConnectSession, walletConnectInstance, electrumServer, electrumCluster, usersAddress, connectedChain } = useBlockchainContext();
   const [campaignUTXO, setCampaignUTXO] = useState<Utxo>();
-  const [campaignMap, setCampaignMap] = useState<Map<number, CampaignUtxo | null>>(new Map());
+  const [campaignMap, setCampaignMap] = useState<
+    Map<number, CampaignUtxo | null>
+  >(new Map());
   const [contractsOK, setContractsOK] = useState(false);
   const [contractCashStarter, setContractCashStarter] = useState<Contract>();
-  const [contractCashStarterRefund, setContractCashStarterRefund] = useState<Contract>();
-  const [contractCashStarterStop, setContractCashStarterStop] = useState<Contract>();
-  const [contractCashStarterClaim, setContractCashStarterClaim] = useState<Contract>();
-  const [contractCashStarterCancel, setContractCashStarterCancel] = useState<Contract>();
+  const [contractCashStarterRefund, setContractCashStarterRefund] =
+    useState<Contract>();
+  const [contractCashStarterStop, setContractCashStarterStop] =
+    useState<Contract>();
+  const [contractCashStarterClaim, setContractCashStarterClaim] =
+    useState<Contract>();
+  const [contractCashStarterCancel, setContractCashStarterCancel] =
+    useState<Contract>();
   const [contractManager, setContractManager] = useState<Contract>();
   const [contractFailMinter, setContractFailMinter] = useState<Contract>();
-  const [stringPledgeAmount, setStringPledgeAmount] = useState<string>("");
+  const [stringPledgeAmount, setStringPledgeAmount] = useState<string>('');
   const [selectedNFT, setSelectedNFT] = useState<Utxo | null>();
   const [nfts, setNFTs] = useState<Utxo[]>([]);
   const [isExpired, setIsExpired] = useState(false);
@@ -91,7 +110,8 @@ const CampaignDetail: React.FC = () => {
   const [isFailed, setIsFailed] = useState(false);
   const [isClaimed, setIsClaimed] = useState(false);
   const [selectedTab, setSelectedTab] = useState('Overview');
-  const [transactionBuilder, setTransactionBuilder] = useState<TransactionBuilder>();
+  const [transactionBuilder, setTransactionBuilder] =
+    useState<TransactionBuilder>();
   const [endDate, setEndDate] = useState('');
   const [endBlock, setEndBlock] = useState(0);
   const [campaignInfo, setCampaignInfo] = useState<CampaignUtxo>();
@@ -105,7 +125,8 @@ const CampaignDetail: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [pledgeDetails, setPledgeDetails] = useState({ name: '', message: '' });
   const [pledgeTotal, setPledgeTotal] = useState<number>(0);
-  const [gotConsolidateError, setGotConsolidateError] = useState<boolean>(false);
+  const [gotConsolidateError, setGotConsolidateError] =
+    useState<boolean>(false);
   //update campaign info
   const [updateText, setUpdateText] = useState('');
   const [isComplete, setIsComplete] = useState(false);
@@ -115,7 +136,9 @@ const CampaignDetail: React.FC = () => {
   const location = useLocation();
   const backTarget = getReturnPath(location, '/apps');
 
-  const [usersAddress, setUsersAddress] = useState('bitcoincash:qz500000000000000000000000000000000000000000000000000000000000000');
+  const [usersAddress, setUsersAddress] = useState(
+    'bitcoincash:qz500000000000000000000000000000000000000000000000000000000000000'
+  );
   // Create an instance of ElectrumServer
   const electrumServer = ElectrumServer() as unknown as FundMeElectrumClient;
   void campaignMap;
@@ -152,411 +175,577 @@ const CampaignDetail: React.FC = () => {
   };
   //Function to convert string to bigint
   function convertStringToBigInt(string: string): bigint {
-    const bchAmount = parseFloat(string);                 //Parse the BCH string to a floating-point number
+    const bchAmount = parseFloat(string); //Parse the BCH string to a floating-point number
     const satoshis = Math.round(bchAmount * 100_000_000); //Convert BCH to satoshis and round the result to avoid precision issues
-    return BigInt(satoshis);                              //Convert the satoshis to bigint for precise integer arithmetic
+    return BigInt(satoshis); //Convert the satoshis to bigint for precise integer arithmetic
   }
-  function toLittleEndianHex(value: string | number | bigint, byteCount: number) {
-    let hex = (typeof value === 'bigint' ? value.toString(16) : Number(value).toString(16)); //Check number vs bigint and convert to hex accordingly
+  function toLittleEndianHex(
+    value: string | number | bigint,
+    byteCount: number
+  ) {
+    let hex =
+      typeof value === 'bigint'
+        ? value.toString(16)
+        : Number(value).toString(16); //Check number vs bigint and convert to hex accordingly
     hex = hex.padStart(byteCount * 2, '0'); // Pad with zeros to ensure correct byteCount
-    return hex.match(/../g)?.reverse().join('') ?? '';  //Split into chunks of 2 (bytes), reverse (for little endian), and join back
+    return hex.match(/../g)?.reverse().join('') ?? ''; //Split into chunks of 2 (bytes), reverse (for little endian), and join back
   }
   const handleSelectTab = (tabName: string) => {
     setSelectedTab(tabName);
   };
 
-  async function formatTime(blocks: number): Promise<string> {
-    //const blockHeight = await electrumServer.getBlockHeight();
-    const blockHeight = 90000;
-    const blocksRemaining = Math.max(blocks - blockHeight, 0);
+  const formatTime = useCallback(
+    async (blocks: number): Promise<string> => {
+      //const blockHeight = await electrumServer.getBlockHeight();
+      const blockHeight = 90000;
+      const blocksRemaining = Math.max(blocks - blockHeight, 0);
 
-    if (blocksRemaining == 0) {
-      return 'Expired';
-    }
+      if (blocksRemaining == 0) {
+        return addonT('module.expired', 'Expired');
+      }
 
-    const totalMinutes = blocksRemaining * 10;
-    const totalHours = totalMinutes / 60;
-    const remainingHours = totalHours % 24;
-    const days = Math.floor(totalHours / 24);
-    const hours = Math.floor(totalHours % 24);
-    const minutes = Math.floor((remainingHours - hours) * 60);
+      const totalMinutes = blocksRemaining * 10;
+      const totalHours = totalMinutes / 60;
+      const remainingHours = totalHours % 24;
+      const days = Math.floor(totalHours / 24);
+      const hours = Math.floor(totalHours % 24);
+      const minutes = Math.floor((remainingHours - hours) * 60);
 
-    let endDate = '';
-    if (days > 0) {
-      endDate += `${days}d `;
-    }
-    if (hours > 0 || days > 0) { // Include hours if there are any days
-      endDate += `${hours}h `;
-    }
-    endDate += `${minutes}m`;
+      let endDate = '';
+      if (days > 0) {
+        endDate += addonT('module.timeDays', '{count}d ', { count: days });
+      }
+      if (hours > 0 || days > 0) {
+        // Include hours if there are any days
+        endDate += addonT('module.timeHours', '{count}h ', { count: hours });
+      }
+      endDate += addonT('module.timeMinutes', '{count}m', { count: minutes });
 
-    return endDate;
-  }
+      return endDate;
+    },
+    [addonT]
+  );
 
   const formatSatoshiToBCH = (satoshis: bigint) => {
     const bch = Number(satoshis) / 100000000;
     return bch.toFixed(8);
   };
-  
-  async function signMessage({ message, userPrompt }: SignMessageParams): Promise<string | undefined> {
+
+  async function signMessage({
+    message,
+    userPrompt,
+  }: SignMessageParams): Promise<string | undefined> {
     const options = {
-        message: message,
-        userPrompt: userPrompt
-      };
+      message: message,
+      userPrompt: userPrompt,
+    };
 
     console.log('signing message...');
     try {
-        if (walletConnectInstance) {
+      if (walletConnectInstance) {
         const topic = walletConnectSession?.topic;
         if (!topic) return undefined;
         //const params = JSON.parse(stringify(options));
-        
+
         console.log('wc params:');
         console.log(options);
         const result = await walletConnectInstance.request({
-            chainId: connectedChain,
-            topic,
-            request: {
-                method: "bch_signMessage",
-                params: options,
-            },
+          chainId: connectedChain,
+          topic,
+          request: {
+            method: 'bch_signMessage',
+            params: options,
+          },
         });
         console.log('signMessage result: ');
         console.log(result);
         return typeof result === 'string' ? result : undefined;
-        }
+      }
     } catch (error) {
-        console.log('signMessage error: ' + error);
-        return undefined;
+      console.log('signMessage error: ' + error);
+      return undefined;
     }
-}
-void signMessage;
+  }
+  void signMessage;
 
-async function signTransaction(
-  options: WalletConnectTransactionRequest
-): Promise<WalletConnectSignedTransaction | undefined> {
-  console.log('signing transaction...');
-  try {
+  async function signTransaction(
+    options: WalletConnectTransactionRequest,
+    translate: (key: string, fallback: string) => string = (_key, fallback) =>
+      fallback
+  ): Promise<WalletConnectSignedTransaction | undefined> {
+    console.log('signing transaction...');
+    try {
       if (walletConnectInstance) {
-      const topic = walletConnectSession?.topic;
-      if (!topic) return undefined;
-      const params = JSON.parse(stringify(options));
-      console.log('wc params:');
-      console.log(params);
-      //toast.info(`Requesting signature from your wallet...`);
-      await Toast.show({
-        text: 'Requesting signature from your wallet...',
-      });
-      const result = await walletConnectInstance.request({
+        const topic = walletConnectSession?.topic;
+        if (!topic) return undefined;
+        const params = JSON.parse(stringify(options));
+        console.log('wc params:');
+        console.log(params);
+        //toast.info(`Requesting signature from your wallet...`);
+        await Toast.show({
+          text: translate(
+            'module.requestingSignature',
+            'Requesting signature from your wallet…'
+          ),
+        });
+        const result = await walletConnectInstance.request({
           chainId: connectedChain,
           topic,
           request: {
-          method: "bch_signTransaction",
-          params: params,
+            method: 'bch_signTransaction',
+            params: params,
           },
-      });
-      return result as WalletConnectSignedTransaction;
+        });
+        return result as WalletConnectSignedTransaction;
       }
-  } catch (error) {
+    } catch (error) {
       console.log('signTransation error: ' + error);
       return undefined;
+    }
   }
-}
 
   // Function to take users pledge string, verify only one decimal, remove all but numbers, set state
   const handleSetPledgeAmount = (value: string) => {
-    let newValue = value.replace(/[^0-9.]+/g, "").replace(/(\..*)\./g, '$1'); // Allow numbers and a single decimal point
+    let newValue = value.replace(/[^0-9.]+/g, '').replace(/(\..*)\./g, '$1'); // Allow numbers and a single decimal point
 
     // Check if there's a decimal point, and if so, limit the length after it to 8
     const decimalIndex = newValue.indexOf('.');
     if (decimalIndex !== -1) {
       const integerPart = newValue.substring(0, decimalIndex);
-      const decimalPart = newValue.substring(decimalIndex + 1, decimalIndex + 9); // Grab up to 8 decimal places
+      const decimalPart = newValue.substring(
+        decimalIndex + 1,
+        decimalIndex + 9
+      ); // Grab up to 8 decimal places
       newValue = `${integerPart}.${decimalPart}`;
     }
 
-    setStringPledgeAmount(newValue !== "" ? newValue : "");
-  }
+    setStringPledgeAmount(newValue !== '' ? newValue : '');
+  };
 
   const handlePledgeModal = () => {
     setIsModalOpen(true);
   };
 
-// Function to forward users pledge to the contract function
-const handlePledge = async (name: string, message: string) => {
-  setTXPending(true);
+  // Function to forward users pledge to the contract function
+  const handlePledge = async (name: string, message: string) => {
+    setTXPending(true);
 
-  if (electrumServer && usersAddress && campaignUTXO) {
-    const campaignID = campaignUTXO.token?.nft?.commitment.substring(70, 80) ?? "0";
-    const pledgeID = campaignUTXO.token?.nft?.commitment.substring(62, 70) ?? '0';
-    const pledgeAmount = convertStringToBigInt(stringPledgeAmount);
-    console.log('Pledge details:', { campaignID, pledgeID, name, message, pledgeAmount });
+    if (electrumServer && usersAddress && campaignUTXO) {
+      const campaignID =
+        campaignUTXO.token?.nft?.commitment.substring(70, 80) ?? '0';
+      const pledgeID =
+        campaignUTXO.token?.nft?.commitment.substring(62, 70) ?? '0';
+      const pledgeAmount = convertStringToBigInt(stringPledgeAmount);
+      console.log('Pledge details:', {
+        campaignID,
+        pledgeID,
+        name,
+        message,
+        pledgeAmount,
+      });
 
-    if (name == '') {
-      name = 'Anonymous';
-    }
-    if (message == '') {
-      message = ' ';
-    }
+      if (name == '') {
+        name = 'Anonymous';
+      }
+      if (message == '') {
+        message = ' ';
+      }
 
-    const signResult = await cashStarterPledge({electrumServer, usersAddress, contractCashStarter, campaignID, pledgeID, pledgeAmount, signTransaction, setError: (msg: string) => Toast.show({ text: msg }), setGotConsolidateError });
+      const signResult = await cashStarterPledge({
+        electrumServer,
+        usersAddress,
+        contractCashStarter,
+        campaignID,
+        pledgeID,
+        pledgeAmount,
+        signTransaction: signTransactionForAddon,
+        setError: (msg: string) => Toast.show({ text: msg }),
+        setGotConsolidateError,
+      });
 
-    if (signResult != undefined) {
-      const rawTx = signResult.signedTransaction;
-      console.log('signedTransaction from walletconnect: ');
-      console.log(signResult);
+      if (signResult != undefined) {
+        const rawTx = signResult.signedTransaction;
+        console.log('signedTransaction from walletconnect: ');
+        console.log(signResult);
 
-      try {
-        const result = await electrumServer.sendRawTransaction(rawTx);
-        //toast.info(`Pledge sent! TxID:\n${result}`);
-        await Toast.show({
-          text: `Pledge sent! TxID:\n${result}`,
-        });
-        console.log('Broadcasted, txid: ' + result);
-
-        const decimalCampaignID = hexToDecimal(campaignID);
-        const decimalPledgeID = hexToDecimal(pledgeID) + 1; //pledgeID is the current pledge# on the campaignUTXO, new pledge adds 1 to it during pledging
-
-        // Save to external server
-        await axios.post('https://fundme.cash/save-pledge', { campaignID: decimalCampaignID, pledgeID: decimalPledgeID, name, message, amount: stringPledgeAmount });
-        console.log('Pledge sent! TxID: ', result);
-
-        // Update server stats with the pledge
         try {
-          axios.post('https://fundme.cash/update-totalPledges', {
-            txid: result
+          const result = await electrumServer.sendRawTransaction(rawTx);
+          //toast.info(`Pledge sent! TxID:\n${result}`);
+          await Toast.show({
+            text: addonT('module.pledgeSent', 'Pledge sent! TxID:\n{txid}', {
+              txid: result,
+            }),
+          });
+          console.log('Broadcasted, txid: ' + result);
+
+          const decimalCampaignID = hexToDecimal(campaignID);
+          const decimalPledgeID = hexToDecimal(pledgeID) + 1; //pledgeID is the current pledge# on the campaignUTXO, new pledge adds 1 to it during pledging
+
+          // Save to external server
+          await axios.post('https://fundme.cash/save-pledge', {
+            campaignID: decimalCampaignID,
+            pledgeID: decimalPledgeID,
+            name,
+            message,
+            amount: stringPledgeAmount,
+          });
+          console.log('Pledge sent! TxID: ', result);
+
+          // Update server stats with the pledge
+          try {
+            axios.post('https://fundme.cash/update-totalPledges', {
+              txid: result,
+            });
+          } catch (error) {
+            console.error('Error updating totalPledges:', error);
+          }
+        } catch (error) {
+          console.error('Error pledging:', error);
+          await Toast.show({
+            text: addonT('module.errorPledging', 'Error pledging:\n{error}', {
+              error: String(error),
+            }),
+          });
+        }
+      }
+    } else {
+      console.log('Error pledging. Is your wallet connected?');
+      await Toast.show({
+        text: addonT(
+          'module.errorPledgingWallet',
+          'Error pledging. Is your wallet connected?'
+        ),
+      });
+    }
+
+    setTXPending(false);
+  };
+
+  // Function to forward users pledge to the contract function
+  const handleClaim = async (campaignID: string) => {
+    console.log('handleClaim camapignID: ', campaignID);
+    setClaimPending(true);
+
+    if (electrumServer && campaignID && usersAddress != '') {
+      const signResult = await cashStarterClaim({
+        electrumServer,
+        usersAddress,
+        contractCashStarter,
+        contractCashStarterClaim,
+        campaignID,
+        signTransaction: signTransactionForAddon,
+        setError: (msg: string) => Toast.show({ text: msg }),
+      });
+      if (signResult != undefined) {
+        const rawTx = signResult.signedTransaction;
+        //const rawTx = signResult;
+        console.log('signedTransaction from walletconnect: ');
+        console.log(signResult);
+
+        electrumServer
+          .sendRawTransaction(rawTx)
+          .then((result: string) => {
+            console.log('Broadcasted, txid: ' + result);
+            Toast.show({
+              text: addonT('module.claimed', 'Claimed! TxID:\n{txid}', {
+                txid: result,
+              }),
+            });
+
+            // Update server stats with the raised BCH
+            try {
+              const raisedBCH = Number(campaignUTXO?.satoshis) / 100000000;
+              axios.post('https://fundme.cash/update-stats', {
+                raisedBCH: raisedBCH,
+                txid: result,
+              });
+            } catch (statsError) {
+              console.error('Error updating stats:', statsError);
+            }
+          })
+          .catch((error: Error) => {
+            Toast.show({
+              text: addonT('module.errorClaiming', 'Error claiming:\n{error}', {
+                error: String(error),
+              }),
+            });
+            console.error('Error claiming:', error);
+          });
+      }
+    } else {
+      Toast.show({
+        text: addonT(
+          'module.errorClaimingWallet',
+          'Error claiming. Is the correct wallet connected?'
+        ),
+      });
+      console.log('Error claiming. Is the correct wallet connected?');
+    }
+
+    setClaimPending(false);
+  };
+
+  // Function to cancel
+  const handleCancel = async (campaignID: string) => {
+    console.log('handleClaim camapignID: ', campaignID);
+    setCancelPending(true);
+
+    if (electrumServer && campaignID && usersAddress != '') {
+      const signResult = await cashStarterCancel({
+        electrumServer,
+        usersAddress,
+        contractCashStarter,
+        contractCashStarterCancel,
+        campaignID,
+        signTransaction: signTransactionForAddon,
+        setError: (msg: string) => Toast.show({ text: msg }),
+      });
+      if (signResult != undefined) {
+        const rawTx = signResult.signedTransaction;
+        console.log('signedTransaction from walletconnect: ');
+        console.log(signResult);
+
+        // Ask user for confirmation before broadcasting
+        if (
+          await confirm(
+            addonT(
+              'module.confirmCancel',
+              'Are you absolutely sure you want to cancel?'
+            )
+          )
+        ) {
+          // User clicked OK
+          electrumServer
+            .sendRawTransaction(rawTx)
+            .then((result: string) => {
+              console.log('Broadcasted, txid: ' + result);
+              Toast.show({
+                text: addonT(
+                  'module.campaignCanceled',
+                  'Campaign canceled. TxID:\n{txid}',
+                  {
+                    txid: result,
+                  }
+                ),
+              });
+            })
+            .catch((error: Error) => {
+              console.error('Error canceling:', error);
+              Toast.show({
+                text: addonT(
+                  'module.errorCanceling',
+                  'Error canceling:\n{error}',
+                  {
+                    error: String(error),
+                  }
+                ),
+              });
+            });
+        } else {
+          // User clicked Cancel
+          Toast.show({
+            text: addonT('module.cancelNotSubmitted', 'Cancel not submitted'),
+          });
+          console.log('Cancel not submitted');
+        }
+      }
+    } else {
+      console.log('Error. Is your wallet connected?');
+      Toast.show({
+        text: addonT(
+          'module.errorWalletConnection',
+          'Error. Is your wallet connected?'
+        ),
+      });
+    }
+
+    setCancelPending(false);
+  };
+
+  // Function to forward users pledge to the contract function
+  const handleRefund = async (campaignID: string, selectedNFT: Utxo) => {
+    console.log('handleRefund camapignID: ', campaignID);
+    setRefundPending(true);
+
+    if (electrumServer && campaignID && selectedNFT) {
+      const campaignID =
+        selectedNFT.token?.nft?.commitment.substring(70, 80) ?? '0';
+      const pledgeID =
+        selectedNFT.token?.nft?.commitment.substring(62, 70) ?? '0';
+
+      const signResult = await cashStarterRefund({
+        electrumServer,
+        usersAddress,
+        contractCashStarter,
+        contractCashStarterRefund,
+        campaignID,
+        selectedNFT,
+        signTransaction: signTransactionForAddon,
+        setError: (msg: string) => Toast.show({ text: msg }),
+      });
+      if (signResult != undefined) {
+        const rawTx = signResult.signedTransaction;
+        console.log('signedTransaction from walletconnect: ');
+        console.log(signResult);
+
+        try {
+          const result = await electrumServer.sendRawTransaction(rawTx);
+          console.log('Broadcasted, txid: ' + result);
+
+          const decimalCampaignID = hexToDecimal(campaignID);
+          const decimalPledgeID = hexToDecimal(pledgeID);
+
+          // Send pledge deletion notice to external server
+          await axios.delete('https://fundme.cash/delete-pledge', {
+            data: {
+              campaignID: decimalCampaignID,
+              pledgeID: decimalPledgeID,
+              txid: result,
+            },
+          });
+          Toast.show({
+            text: addonT(
+              'module.refundSubmitted',
+              'Refund submitted. TxID:\n{txid}',
+              {
+                txid: result,
+              }
+            ),
           });
         } catch (error) {
-          console.error('Error updating totalPledges:', error);
+          console.error('Error refunding:', error);
+          Toast.show({
+            text: addonT('module.errorRefunding', 'Error refunding:\n{error}', {
+              error: String(error),
+            }),
+          });
         }
-
-      } catch (error) {
-        console.error('Error pledging:', error);
-        await Toast.show({
-          text: `Error pledging: \n${error}`,
-        });
       }
-    }
-
-  } else {
-    console.log('Error pledging. Is your wallet connected?');
-    await Toast.show({
-      text: 'Error pledging. Is your wallet connected?',
-    });
-  }
-
-  setTXPending(false);
-}
-
-// Function to forward users pledge to the contract function
-const handleClaim = async (campaignID: string) => {
-  console.log('handleClaim camapignID: ', campaignID);
-  setClaimPending(true);
-
-  if (electrumServer && campaignID && usersAddress != '') {
-    const signResult = await cashStarterClaim({electrumServer, usersAddress, contractCashStarter, contractCashStarterClaim, campaignID, signTransaction, setError: (msg: string) => Toast.show({ text: msg })});
-    if (signResult != undefined) {
-      const rawTx = signResult.signedTransaction;
-      //const rawTx = signResult;
-      console.log('signedTransaction from walletconnect: ');
-      console.log(signResult);
-
-      electrumServer.sendRawTransaction(rawTx).then((result: string) => {
-        console.log('Broadcasted, txid: ' + result);
-        Toast.show({
-          text: `Claimed! TxID: \n${result}`,
-        });
-
-        // Update server stats with the raised BCH
-        try {
-          const raisedBCH = Number(campaignUTXO?.satoshis) / 100000000;
-          axios.post('https://fundme.cash/update-stats', {
-            raisedBCH: raisedBCH,
-            txid: result
-          });
-        } catch (statsError) {
-          console.error('Error updating stats:', statsError);
-        }
-
-      }).catch((error: Error) => {
-        Toast.show({
-          text: `Error claiming: \n${error}`,
-        });
-        console.error('Error claiming:', error);
-      });
-    }
-  } else {
-    Toast.show({
-      text: `Error claiming. Is the correct wallet connected?`,
-    });
-    console.log('Error claiming. Is the correct wallet connected?');
-  }
-
-  setClaimPending(false);
-}
-
-// Function to cancel 
-const handleCancel = async (campaignID: string) => {
-  console.log('handleClaim camapignID: ', campaignID);
-  setCancelPending(true);
-
-  if (electrumServer && campaignID && usersAddress != '') {
-    const signResult = await cashStarterCancel({electrumServer, usersAddress, contractCashStarter, contractCashStarterCancel, campaignID, signTransaction, setError: (msg: string) => Toast.show({ text: msg })});
-    if (signResult != undefined) {
-      const rawTx = signResult.signedTransaction;
-      console.log('signedTransaction from walletconnect: ');
-      console.log(signResult);
-
-      // Ask user for confirmation before broadcasting
-      if (await confirm("Are you absolutely sure you want to cancel?")) {
-        // User clicked OK
-        electrumServer.sendRawTransaction(rawTx).then((result: string) => {
-          console.log('Broadcasted, txid: ' + result);
-          Toast.show({
-            text: `Campaign canceled. TxID:\n${result}`,
-          });
-        }).catch((error: Error) => {
-          console.error('Error canceling:', error);
-          Toast.show({
-            text: `Error canceling:\n${error}`,
-          });
-        });
-      } else {
-        // User clicked Cancel
-        Toast.show({
-          text: 'Cancel not submitted',
-        });
-        console.log('Cancel not submitted');
-      }
-    }
-  } else {
-    console.log('Error. Is your wallet connected?');
-    Toast.show({
-      text: `Error. Is your wallet connected?`,
-    });
-  }
-
-  setCancelPending(false);
-}
-
-// Function to forward users pledge to the contract function
-const handleRefund = async (campaignID: string, selectedNFT: Utxo) => {
-  console.log('handleRefund camapignID: ', campaignID);
-  setRefundPending(true);
-
-  if (electrumServer && campaignID && selectedNFT) {
-    const campaignID = selectedNFT.token?.nft?.commitment.substring(70, 80) ?? "0";
-    const pledgeID = selectedNFT.token?.nft?.commitment.substring(62, 70) ?? "0";
-
-    const signResult = await cashStarterRefund({electrumServer, usersAddress, contractCashStarter, contractCashStarterRefund, campaignID, selectedNFT, signTransaction, setError: (msg: string) => Toast.show({ text: msg })});
-    if (signResult != undefined) {
-      const rawTx = signResult.signedTransaction;
-      console.log('signedTransaction from walletconnect: ');
-      console.log(signResult);
-
-      try {
-        const result = await electrumServer.sendRawTransaction(rawTx);
-        console.log('Broadcasted, txid: ' + result);
-
-        const decimalCampaignID = hexToDecimal(campaignID);
-        const decimalPledgeID = hexToDecimal(pledgeID);
-
-        // Send pledge deletion notice to external server
-        await axios.delete('https://fundme.cash/delete-pledge', { data: { campaignID: decimalCampaignID, pledgeID: decimalPledgeID, txid: result } });
-        Toast.show({
-          text: `Refund submitted. TxID:\n${result}`,
-        });
-      } catch (error) {
-        console.error('Error refunding:', error);
-        Toast.show({
-          text: `Error refunding: \n${error}`,
-        });
-      }
-    }
-
-  } else {
-    console.log('Error refunding. Did you select the correct PledgeNFT?');
-    Toast.show({
-      text: `Error refunding. Did you select the correct PledgeNFT?`,
-    });
-  }
-
-  setRefundPending(false);
-
-}
-
-// Function to forward users pledge to the contract function
-const handleStop = async (campaignID: string) => {
-  console.log('handleStop camapignID: ', campaignID);
-  setStopPending(true);
-
-  if (electrumServer && campaignID) {
-
-    const signResult = await cashStarterStop({electrumServer, contractCashStarter, contractCashStarterStop, campaignID });
-    if (signResult != undefined) {
-      //const rawTx = signResult.signedTransaction; //using walletConnect
-      const rawTx = signResult; //anyone can spend
-      console.log('signedTransaction from walletconnect: ');
-      console.log(signResult);
-
-      electrumServer.sendRawTransaction(rawTx).then((result: string) => {
-          console.log('Broadcasted, txid: ' + result);
-          Toast.show({
-            text: `Campaign stopped. TxID:\n${result}`,
-          });
-      }).catch((error: Error) => {
-          console.error('Error stopping campaign:', error);
-          Toast.show({
-            text: `Error stopping campaign: \n${error}`,
-          });
-      });
-
-    }
-  } else {
-    console.log('Error stopping campaign. Is your wallet connected?');
-    Toast.show({
-      text: `Error stopping campaign. Is your wallet connected?`,
-    });
-  }
-
-  setStopPending(false);
-}
-
-async function handleConsolidateUtxos() {
-  setTXPending(true);
-
-  if (electrumServer && usersAddress && transactionBuilder) { 
-    const signResult = await consolidateUTXOs({electrumServer, usersAddress, transactionBuilder, signTransaction, setError: (msg: string) => Toast.show({ text: msg }) });
-    if (!signResult) {
-      setTXPending(false);
-      return;
-    }
-    const rawTx = signResult.signedTransaction; 
-    console.log('signedTransaction from walletconnect: ');
-    console.log(signResult);
-    
-    electrumServer.sendRawTransaction(rawTx).then((result: string) => {
+    } else {
+      console.log('Error refunding. Did you select the correct PledgeNFT?');
       Toast.show({
-        text: `Consolidated. TxID:\n${result}`,
+        text: addonT(
+          'module.errorRefundingSelection',
+          'Error refunding. Did you select the correct PledgeNFT?'
+        ),
       });
-      console.log('Broadcasted, txid: ' + result);
-    }).catch((error: Error) => {
-      Toast.show({
-        text: `Error consolidating: \n${error}`,
-      });
-      console.log('Error consolidating: ', error);
-    });
+    }
 
-  } else {
-    console.log('Error consolidating, connect wallet or refresh?');
-    Toast.show({
-      text: 'Error consolidating, connect wallet or refresh?',
-    });
+    setRefundPending(false);
+  };
+
+  // Function to forward users pledge to the contract function
+  const handleStop = async (campaignID: string) => {
+    console.log('handleStop camapignID: ', campaignID);
+    setStopPending(true);
+
+    if (electrumServer && campaignID) {
+      const signResult = await cashStarterStop({
+        electrumServer,
+        contractCashStarter,
+        contractCashStarterStop,
+        campaignID,
+      });
+      if (signResult != undefined) {
+        //const rawTx = signResult.signedTransaction; //using walletConnect
+        const rawTx = signResult; //anyone can spend
+        console.log('signedTransaction from walletconnect: ');
+        console.log(signResult);
+
+        electrumServer
+          .sendRawTransaction(rawTx)
+          .then((result: string) => {
+            console.log('Broadcasted, txid: ' + result);
+            Toast.show({
+              text: addonT(
+                'module.campaignStopped',
+                'Campaign stopped. TxID:\n{txid}',
+                {
+                  txid: result,
+                }
+              ),
+            });
+          })
+          .catch((error: Error) => {
+            console.error('Error stopping campaign:', error);
+            Toast.show({
+              text: addonT(
+                'module.errorStopping',
+                'Error stopping campaign:\n{error}',
+                {
+                  error: String(error),
+                }
+              ),
+            });
+          });
+      }
+    } else {
+      console.log('Error stopping campaign. Is your wallet connected?');
+      Toast.show({
+        text: addonT(
+          'module.errorStoppingWallet',
+          'Error stopping campaign. Is your wallet connected?'
+        ),
+      });
+    }
+
+    setStopPending(false);
+  };
+
+  async function handleConsolidateUtxos() {
+    setTXPending(true);
+
+    if (electrumServer && usersAddress && transactionBuilder) {
+      const signResult = await consolidateUTXOs({
+        electrumServer,
+        usersAddress,
+        transactionBuilder,
+        signTransaction: signTransactionForAddon,
+        setError: (msg: string) => Toast.show({ text: msg }),
+      });
+      if (!signResult) {
+        setTXPending(false);
+        return;
+      }
+      const rawTx = signResult.signedTransaction;
+      console.log('signedTransaction from walletconnect: ');
+      console.log(signResult);
+
+      electrumServer
+        .sendRawTransaction(rawTx)
+        .then((result: string) => {
+          Toast.show({
+            text: addonT('module.consolidated', 'Consolidated. TxID:\n{txid}', {
+              txid: result,
+            }),
+          });
+          console.log('Broadcasted, txid: ' + result);
+        })
+        .catch((error: Error) => {
+          Toast.show({
+            text: addonT(
+              'module.errorConsolidating',
+              'Error consolidating:\n{error}',
+              {
+                error: String(error),
+              }
+            ),
+          });
+          console.log('Error consolidating: ', error);
+        });
+    } else {
+      console.log('Error consolidating, connect wallet or refresh?');
+      Toast.show({
+        text: addonT(
+          'module.errorConsolidatingWallet',
+          'Error consolidating. Connect your wallet or refresh.'
+        ),
+      });
+    }
+
+    setTXPending(false);
   }
-  
-  setTXPending(false);
-}
-/*
+  /*
   useEffect(() => {
     //console.log('1. useEffect called');
     async function checkAndCompileContracts() {
@@ -601,12 +790,12 @@ async function handleConsolidateUtxos() {
       if (!electrumServer) return;
       console.log('electrumServer detected');
 
-      setIsLoading(true);  //starts loading spinner graphic
+      setIsLoading(true); //starts loading spinner graphic
 
-      //fetch campaign metadata from server       
+      //fetch campaign metadata from server
       let response;
       let currentCampaignInfo: CampaignUtxo | undefined;
-      try {   
+      try {
         response = await axios.get(`https://fundme.cash/get-campaign/` + id);
         const fetchedCampaignInfo = response.data as CampaignUtxo;
         currentCampaignInfo = fetchedCampaignInfo;
@@ -616,7 +805,6 @@ async function handleConsolidateUtxos() {
           0
         );
         setPledgeTotal(pledgeTotal);
-        
       } catch (err) {
         const error = err as AxiosError;
         if (error.response && error.response.status === 404) {
@@ -629,34 +817,44 @@ async function handleConsolidateUtxos() {
         return;
       }
 
-
       //delay to allow electrum to stabilize
       setTimeout(async () => {
-        const cashStarterUTXOs: Utxo[] = await electrumServer.getUtxos(AddressCashStarter);
-        let campaignUTXO = cashStarterUTXOs.find( 
-          utxo => utxo.token?.category == MasterCategoryID //only CashStarter NFT's
-            && utxo.token?.nft?.capability == 'minting' //only minting ones
-            && utxo.token.nft?.commitment.substring(70, 80) != 'ffffffffff' //not the masterNFT
-            && utxo.token.nft?.commitment.substring(70, 80) == toLittleEndianHex(id, 5) //this campaign id
+        const cashStarterUTXOs: Utxo[] =
+          await electrumServer.getUtxos(AddressCashStarter);
+        let campaignUTXO = cashStarterUTXOs.find(
+          (utxo) =>
+            utxo.token?.category == MasterCategoryID && //only CashStarter NFT's
+            utxo.token?.nft?.capability == 'minting' && //only minting ones
+            utxo.token.nft?.commitment.substring(70, 80) != 'ffffffffff' && //not the masterNFT
+            utxo.token.nft?.commitment.substring(70, 80) ==
+              toLittleEndianHex(id, 5) //this campaign id
         );
 
-        if (!campaignUTXO) {  //no utxo found, could be failed already
-          campaignUTXO = cashStarterUTXOs.find( 
-            utxo => utxo.token?.category == MasterCategoryID  //only CashStarter NFT's
-              && utxo.token?.nft?.capability == 'mutable'        //only fail()'d campaigns
-              && utxo.token.nft?.commitment.substring(70, 80) != 'ffffffffff' //not the masterNFT
-              && utxo.token.nft?.commitment.substring(70, 80) == toLittleEndianHex(id, 5) //this specific id
+        if (!campaignUTXO) {
+          //no utxo found, could be failed already
+          campaignUTXO = cashStarterUTXOs.find(
+            (utxo) =>
+              utxo.token?.category == MasterCategoryID && //only CashStarter NFT's
+              utxo.token?.nft?.capability == 'mutable' && //only fail()'d campaigns
+              utxo.token.nft?.commitment.substring(70, 80) != 'ffffffffff' && //not the masterNFT
+              utxo.token.nft?.commitment.substring(70, 80) ==
+                toLittleEndianHex(id, 5) //this specific id
           );
         }
-        setCampaignUTXO(campaignUTXO);  //save found campaign
+        setCampaignUTXO(campaignUTXO); //save found campaign
 
-        if (campaignUTXO) { //if an active or fail'd campaign was found
+        if (campaignUTXO) {
+          //if an active or fail'd campaign was found
           const tempCampaignMap = new Map<number, CampaignUtxo>(); //Temporary map to populate with CampaignUtxo entries
           void tempCampaignMap;
           const capability = campaignUTXO.token?.nft?.capability;
-          const campaignId = hexToDecimal(campaignUTXO.token?.nft?.commitment.substring(70,80) ?? "0");
+          const campaignId = hexToDecimal(
+            campaignUTXO.token?.nft?.commitment.substring(70, 80) ?? '0'
+          );
           void campaignId;
-          const endBlock = hexToDecimal(campaignUTXO.token?.nft?.commitment.substring(52, 60) ?? "0");
+          const endBlock = hexToDecimal(
+            campaignUTXO.token?.nft?.commitment.substring(52, 60) ?? '0'
+          );
           setEndBlock(endBlock);
           const endDate = await formatTime(endBlock);
 
@@ -666,20 +864,25 @@ async function handleConsolidateUtxos() {
             setIsExpired(true);
             setEndDate(endBlock.toString());
 
-          //if campaign is still active, or not yet fail'd
+            //if campaign is still active, or not yet fail'd
           } else if (capability == 'minting') {
-            const campaignId = hexToDecimal(campaignUTXO.token?.nft?.commitment.substring(70,80) ?? "0");
+            const campaignId = hexToDecimal(
+              campaignUTXO.token?.nft?.commitment.substring(70, 80) ?? '0'
+            );
             void campaignId;
-            const endBlock = hexToDecimal(campaignUTXO.token?.nft?.commitment.substring(52, 60) ?? "0");
+            const endBlock = hexToDecimal(
+              campaignUTXO.token?.nft?.commitment.substring(52, 60) ?? '0'
+            );
             const blockHeight = await electrumServer.getBlockHeight();
 
             //set whether campaign has passed its expiry block, enables Fail button
             if (blockHeight >= endBlock) {
               setIsExpired(true);
             }
-            
-              //set map data with block it will be endable at
-              {/*
+
+            //set map data with block it will be endable at
+            {
+              /*
               tempCampaignMap.set(campaignId, {
                 ...campaignUTXO,
                 name: campaignInfo.name,
@@ -689,12 +892,13 @@ async function handleConsolidateUtxos() {
                 logo: campaignInfo.logo,
                 endDate: endDate
               });
-            */}
+            */
+            }
             setEndDate(endDate);
             //setCampaignMap(tempCampaignMap);
           }
 
-        //else no UTXO was found but its campaignInfo was, campaign was claimed
+          //else no UTXO was found but its campaignInfo was, campaign was claimed
         } else if (!campaignUTXO && currentCampaignInfo) {
           setIsClaimed(true);
         }
@@ -704,104 +908,118 @@ async function handleConsolidateUtxos() {
     }
 
     getCampaign();
-  }, [id, electrumServer]);
+  }, [formatTime, id, electrumServer]);
 
-// Get refund NFT's for listing so user can select one
-async function fetchReceiptNFTs() {
-  if (electrumServer && usersAddress != '') {
-    try {
-      const utxos: Utxo[] = await electrumServer.getUtxos(usersAddress);
+  // Get refund NFT's for listing so user can select one
+  async function fetchReceiptNFTs() {
+    if (electrumServer && usersAddress != '') {
+      try {
+        const utxos: Utxo[] = await electrumServer.getUtxos(usersAddress);
 
-      const filteredNFTs: Utxo[] = utxos.filter(utxo => 
-        utxo.token?.category == MasterCategoryID
-        && utxo.token?.nft?.commitment.substring(70,80) === toLittleEndianHex(id, 5) // Filter to only this campaign ID
-        && utxo.token?.nft?.capability == 'none')     // Filter to only receiptNFTs
-      setNFTs(filteredNFTs);
-      console.log('set NFTs: ', filteredNFTs);
-    } catch (error) {
-      console.error('Error fetching UTXOs:', error);
+        const filteredNFTs: Utxo[] = utxos.filter(
+          (utxo) =>
+            utxo.token?.category == MasterCategoryID &&
+            utxo.token?.nft?.commitment.substring(70, 80) ===
+              toLittleEndianHex(id, 5) && // Filter to only this campaign ID
+            utxo.token?.nft?.capability == 'none'
+        ); // Filter to only receiptNFTs
+        setNFTs(filteredNFTs);
+        console.log('set NFTs: ', filteredNFTs);
+      } catch (error) {
+        console.error('Error fetching UTXOs:', error);
+      }
     }
   }
-}
 
-////////// Campaign owner posts an update //////////
-const handleSubmitUpdate = async () => {
-  // Check the size of the campaign data
-  const update = JSON.stringify({
-    campaignID: id,
-    updateText,
-    isComplete,
-    urlAddress,
-    usersAddress
-  });
-  const updateSizeMB = Buffer.byteLength(update, 'utf8') / (1024 * 1024);
-
-  if (updateSizeMB > MAX_CAMPAIGN_SIZE_MB) {
-    Toast.show({
-      text: `Error: Campaign size (${updateSizeMB.toFixed(2)} MB) exceeds max of (${MAX_CAMPAIGN_SIZE_MB} MB)`,
-    });
-    return;
-  }
-
-  try {
-    const response = await axios.post(`https://fundme.cash/update-campaign`, {
-      campaignID: id, // Assuming you have access to the campaign ID
+  ////////// Campaign owner posts an update //////////
+  const handleSubmitUpdate = async () => {
+    // Check the size of the campaign data
+    const update = JSON.stringify({
+      campaignID: id,
       updateText,
       isComplete,
       urlAddress,
-      usersAddress
+      usersAddress,
     });
-    if (response.status === 200) {
-      // Clear the inputs after successful submission
-      setUpdateText('');
-      setIsComplete(false);
-      setUrlAddress('');
+    const updateSizeMB = Buffer.byteLength(update, 'utf8') / (1024 * 1024);
 
+    if (updateSizeMB > MAX_CAMPAIGN_SIZE_MB) {
       Toast.show({
-        text: 'Update submitted',
+        text: addonT(
+          'module.errorCampaignSize',
+          'Error: Campaign size ({size} MB) exceeds the maximum of ({max} MB).',
+          { size: updateSizeMB.toFixed(2), max: MAX_CAMPAIGN_SIZE_MB }
+        ),
       });
+      return;
     }
 
-  } catch (error) {
-    Toast.show({
-      text: 'Error submitting update, check console',
-    });
-    console.error('Error updating campaign:', error);
-  }
-};
+    try {
+      const response = await axios.post(`https://fundme.cash/update-campaign`, {
+        campaignID: id, // Assuming you have access to the campaign ID
+        updateText,
+        isComplete,
+        urlAddress,
+        usersAddress,
+      });
+      if (response.status === 200) {
+        // Clear the inputs after successful submission
+        setUpdateText('');
+        setIsComplete(false);
+        setUrlAddress('');
 
-//////////////////////////////////////////////////
-////////// Return PledgeNFT UTXO
-//////////////////////////////////////////////////
-const NFTItem: React.FC<{ utxo: Utxo }> = ({ utxo }) => {
-  const [isSelected, setIsSelected] = useState<boolean>(false);
+        Toast.show({
+          text: addonT('module.updateSubmitted', 'Update submitted'),
+        });
+      }
+    } catch (error) {
+      Toast.show({
+        text: addonT(
+          'module.errorSubmittingUpdate',
+          'Error submitting update. Check the console.'
+        ),
+      });
+      console.error('Error updating campaign:', error);
+    }
+  };
 
-  function handleSetSelectedNFT() {
-    setIsSelected(current => !current);
-    setSelectedNFT(utxo)
-  }
-  return (
-    <div 
-      onClick={handleSetSelectedNFT}
-      className={`
+  //////////////////////////////////////////////////
+  ////////// Return PledgeNFT UTXO
+  //////////////////////////////////////////////////
+  const NFTItem: React.FC<{ utxo: Utxo }> = ({ utxo }) => {
+    const [isSelected, setIsSelected] = useState<boolean>(false);
+
+    function handleSetSelectedNFT() {
+      setIsSelected((current) => !current);
+      setSelectedNFT(utxo);
+    }
+    return (
+      <div
+        onClick={handleSetSelectedNFT}
+        className={`
         cursor-pointer rounded-lg p-4 
         ${isSelected ? 'bg-[#0AC18E] text-white' : 'bg-gray-800 hover:bg-gray-700'} 
         transition-colors duration-200
       `}
-    >
-    <div className="font-semibold mb-2">
-      Pledge #{hexToDecimal(utxo.token?.nft?.commitment.substring(62, 70) ?? "0")}
-    </div>
-    <div className="flex items-center gap-2">
-      <div 
-        className="h-5 w-5 bg-cover bg-center"
-        style={{ backgroundImage: `url(${BCHLogo})` }}
-      />
-      {formatSatoshiToBCH(BigInt(hexToDecimal(utxo.token?.nft?.commitment.substring(0, 11) ?? "0")))}
-    </div>
-  </div>
-  );
-};
+      >
+        <div className="font-semibold mb-2">
+          Pledge #
+          {hexToDecimal(utxo.token?.nft?.commitment.substring(62, 70) ?? '0')}
+        </div>
+        <div className="flex items-center gap-2">
+          <div
+            className="h-5 w-5 bg-cover bg-center"
+            style={{ backgroundImage: `url(${BCHLogo})` }}
+          />
+          {formatSatoshiToBCH(
+            BigInt(
+              hexToDecimal(utxo.token?.nft?.commitment.substring(0, 11) ?? '0')
+            )
+          )}
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] w-full overflow-y-auto overscroll-contain touch-pan-y bg-black text-gray-50">
@@ -809,319 +1027,44 @@ const NFTItem: React.FC<{ utxo: Utxo }> = ({ utxo }) => {
       <div className="flex justify-center mt-4">
         <img
           src="/assets/images/OPTNWelcome1.png"
-          alt="Welcome"
+          alt={addonT('module.welcome', 'Welcome')}
           className="max-w-full h-auto"
         />
       </div>
 
-
-        <div className="flex justify-between items-center mb-6">
-          <button
-            onClick={() => navigate(backTarget)}
-            className="bg-red-500 hover:bg-red-600 text-white py-2 px-4 rounded z-20"
-          >
-            Back
-          </button>
-        </div>
+      <div className="flex justify-between items-center mb-6">
+        <button
+          onClick={() => navigate(backTarget)}
+          className="bg-red-500 hover:bg-red-600 text-white py-2 px-4 rounded z-20"
+        >
+          {addonT('common.back', 'Back')}
+        </button>
+      </div>
 
       <div className="absolute inset-0 bg-gradient-to-b from-[#0AC18E]/20 to-transparent" />
 
-        <PledgeModal
-          isOpen={isModalOpen}
-          onRequestClose={() => setIsModalOpen(false)}
-          onSubmit={handlePledge}
-          pledgeAmount={stringPledgeAmount}
+      <PledgeModal
+        isOpen={isModalOpen}
+        onRequestClose={() => setIsModalOpen(false)}
+        onSubmit={handlePledge}
+        pledgeAmount={stringPledgeAmount}
+      />
+
+      {gotConsolidateError && (
+        <ConsolidateModal
+          onRequestClose={() => setGotConsolidateError(false)}
+          onSubmit={handleConsolidateUtxos}
+          stringPledgeAmount={stringPledgeAmount}
         />
+      )}
 
-        {gotConsolidateError && (
-          <ConsolidateModal
-            onRequestClose={() => setGotConsolidateError(false)}
-            onSubmit={handleConsolidateUtxos}
-            stringPledgeAmount={stringPledgeAmount}
-          />
-        )}
-
-        {/* Campaign Exists on server */}
-        {campaignUTXO && campaignInfo && (
-          <div className="max-w-6xl mx-auto p-4">
-            <div className="flex flex-col gap-6">
-              {/* Banner Section */}
-              <div className="flex flex-col">
-                <div 
-                  className="w-full h-[200px] bg-cover bg-center rounded-t-lg"
-                  style={{ backgroundImage: `url(${campaignInfo.banner})` }}
-                />
-                <div className="flex items-center p-4 bg-black/50">
-                  {isLoading ? (
-                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#0AC18E]" />
-                  ) : (
-                    <>
-                      <div 
-                        className="h-12 w-12 bg-cover bg-center rounded-full"
-                        style={{ backgroundImage: `url(${campaignInfo.logo})` }}
-                      />
-                      <span className="ml-3 font-medium">{campaignInfo.owner}</span>
-                    </>
-                  )}
-                </div>
-              </div>
-
-              {/* Title */}
-              <h1 className="text-2xl font-bold text-center">{campaignInfo.name}</h1>
-
-              {/* Progress Bar */}
-              <div 
-                className="relative w-full h-8 bg-gray-800 rounded-full cursor-pointer"
-                onClick={() => {
-                  if (campaignUTXO) {
-                    const currentAmount = Number(campaignUTXO.satoshis) / 100000000;
-                    const targetAmount = hexToDecimal(campaignUTXO.token?.nft?.commitment.substring(0, 12) ?? "0") / 100000000;
-                    const remainingAmount = (targetAmount - currentAmount).toFixed(8);
-                    handleSetPledgeAmount(remainingAmount);
-                  }
-                }}
-              >
-                <div 
-                  className="absolute left-0 top-0 h-full bg-[#0AC18E] rounded-full transition-all"
-                  style={{ 
-                    width: `${(Number(campaignUTXO.satoshis) / hexToDecimal(campaignUTXO.token?.nft?.commitment.substring(0, 12) ?? "0")) * 100}%` 
-                  }}
-                />
-                <div className="absolute inset-0 flex justify-center items-center">
-                  {((Number(campaignUTXO.satoshis) / hexToDecimal(campaignUTXO.token?.nft?.commitment.substring(0, 12) ?? "0")) * 100).toFixed(2)}%
-                </div>
-                <div className="absolute -bottom-6 w-full text-center text-sm">
-                  {(Number(campaignUTXO.satoshis) / 100000000)} / {(hexToDecimal(campaignUTXO.token?.nft?.commitment.substring(0, 12) ?? "0") / 100000000)}
-                </div>
-                {!isFailed && !isClaimed && isExpired && (
-                  <button 
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleStop(campaignUTXO.token?.nft?.commitment.substring(70,80) ?? "0")
-                    }}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 px-4 py-1 bg-red-500 text-white rounded-full hover:bg-red-600"
-                  >
-                    Stop
-                  </button>
-                )}
-              </div>
-
-              {/* Campaign Details Section */}
-              <div className="bg-gray-900 rounded-lg p-6 space-y-6">
-                {/* Campaign ID and End Date Row */}
-                <div className="flex justify-between items-center">
-                  <span><b>Campaign:</b> #{hexToDecimal(campaignUTXO.token?.nft?.commitment.substring(70,80) ?? "0")}</span>
-                  {campaignUTXO.token?.nft?.capability == 'mutable' ? (
-                    <span className="text-red-500">Campaign Stopped</span>
-                  ) : (
-                    <span><b>Ends:</b> {endDate}</span>
-                  )}
-                  <span><b>End Block:</b> {endBlock}</span>
-                </div>
-
-                {/* Pledge Input Section */}
-                <div className="space-y-4">
-                  <h3 className="text-lg font-semibold">Make a Pledge</h3>
-                  <div className="flex items-center gap-4">
-                    <div 
-                      className="h-10 w-10 bg-cover bg-center"
-                      style={{ backgroundImage: `url(${BCHLogo})` }}
-                    />
-                    <input
-                      type="text"
-                      placeholder="0.0001"
-                      value={stringPledgeAmount}
-                      onChange={(e) => handleSetPledgeAmount(e.target.value)}
-                      className="bg-white text-black px-4 py-2 rounded-lg"
-                    />
-                    <button
-                      disabled={isFailed || isClaimed}
-                      onClick={() => handlePledgeModal()}
-                      className="px-6 py-2 bg-[#0AC18E] rounded-full disabled:bg-gray-500 disabled:cursor-not-allowed hover:bg-[#0cd9a0]"
-                    >
-                      {txPending ? (
-                        <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white" />
-                      ) : (
-                        'Pledge'
-                      )}
-                    </button>
-                  </div>
-                </div>
-
-                {/* NFT Refund Section */}
-                <div className="space-y-4">
-                  <h3 className="text-lg font-semibold">Cancel your Pledge</h3>
-                  <div className="flex gap-4 items-center">
-                    <button 
-                      onClick={fetchReceiptNFTs}
-                      className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-full"
-                    >
-                      Refresh
-                    </button>
-                    <button
-                      disabled={!selectedNFT}
-                      onClick={() => handleRefund(campaignUTXO.token?.nft?.commitment.substring(70,80) ?? "0", selectedNFT!)}
-                      className="px-4 py-2 bg-[#0AC18E] rounded-full disabled:bg-gray-500 disabled:cursor-not-allowed hover:bg-[#0cd9a0]"
-                    >
-                      {refundPending ? (
-                        <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white" />
-                      ) : (
-                        'Refund'
-                      )}
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {nfts.map((utxo, index) => (
-                      <NFTItem key={index} utxo={utxo} />
-                    ))}
-                  </div>
-                </div>
-
-                {/* Navigation Tabs */}
-                <div className="flex border-b border-gray-700">
-                  <button
-                    className={`px-6 py-3 ${selectedTab === 'Overview' ? 'border-b-2 border-[#0AC18E] text-[#0AC18E]' : 'text-gray-400 hover:text-gray-200'}`}
-                    onClick={() => handleSelectTab('Overview')}
-                  >
-                    Overview
-                  </button>
-                  <button
-                    className={`px-6 py-3 ${selectedTab === 'Updates' ? 'border-b-2 border-[#0AC18E] text-[#0AC18E]' : 'text-gray-400 hover:text-gray-200'}`}
-                    onClick={() => handleSelectTab('Updates')}
-                  >
-                    Updates
-                  </button>
-                  {campaignInfo.ownersAddress == usersAddress ? (
-                    <button
-                      className={`px-6 py-3 ${selectedTab === 'Claim' ? 'border-b-2 border-[#0AC18E] text-[#0AC18E]' : 'text-gray-400 hover:text-gray-200'}`}
-                      onClick={() => handleSelectTab('Claim')}
-                    >
-                      Claim
-                    </button>
-                  ) : (
-                    <div className="flex-grow" />
-                  )}
-                </div>
-
-                {/* Content Sections */}
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
-                  {/* Description and Updates Tab Content */}
-                  <div className="lg:col-span-2 bg-gray-900 rounded-lg p-6">
-                    {selectedTab === 'Overview' && (
-                      <div 
-                        className="prose prose-invert max-w-none"
-                        dangerouslySetInnerHTML={{ __html: campaignInfo.description }} 
-                      />
-                    )}
-                    
-                    {selectedTab === 'Updates' && (
-                      <div className="space-y-6">
-                        {usersAddress == campaignInfo.ownersAddress && (
-                          <>
-                            {/*<RichTextEditor isUpdate={true} value={updateText} onChange={setUpdateText} />*/}
-                            RichText Editor here
-                            <button 
-                              onClick={handleSubmitUpdate}
-                              className="px-6 py-2 bg-[#0AC18E] rounded-full hover:bg-[#0cd9a0]"
-                            >
-                              Submit Update
-                            </button>
-                          </>
-                        )}
-                        
-                        {campaignInfo?.updates.length > 0 ? (
-                          campaignInfo?.updates.map((update: Update) => (
-                            <div key={update.number} className="bg-gray-800 rounded-lg p-4">
-                              <div className="font-semibold mb-2">Update #{update.number}</div>
-                              <div 
-                                className="prose prose-invert max-w-none"
-                                dangerouslySetInnerHTML={{ __html: update.text }} 
-                              />
-                            </div>
-                          ))
-                        ) : (
-                          <p className="text-gray-400">No updates have been posted by the creator yet.</p>
-                        )}
-                      </div>
-                    )}
-
-                  {selectedTab === 'Claim' && (
-                    <div className="space-y-6 text-center">
-                      <button
-                        disabled={(Number(campaignUTXO.satoshis)) < (hexToDecimal(campaignUTXO.token?.nft?.commitment.substring(0, 12) ?? "0"))}
-                        onClick={() => handleClaim(campaignUTXO.token?.nft?.commitment.substring(70,80) ?? "0")}
-                        className="px-6 py-2 bg-[#0AC18E] rounded-full disabled:bg-gray-500 disabled:cursor-not-allowed hover:bg-[#0cd9a0]"
-                      >
-                        {claimPending ? (
-                          <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white" />
-                        ) : (
-                          'Claim'
-                        )}
-                      </button>
-                      <p className="text-gray-400">
-                        Only the address that created the campaign can Claim the campaign.<br />
-                        The creator can claim the raised funds at any time when they are 100% or above the initial funding target.
-                      </p>
-                      
-                      <button
-                        disabled={campaignUTXO.token?.nft?.capability != 'minting'}
-                        onClick={() => handleCancel(campaignUTXO.token?.nft?.commitment.substring(70,80) ?? "0")}
-                        className="px-6 py-2 bg-red-500 rounded-full disabled:bg-gray-500 disabled:cursor-not-allowed hover:bg-red-600"
-                      >
-                        {cancelPending ? (
-                          <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white" />
-                        ) : (
-                          'Cancel'
-                        )}
-                      </button>
-                      <p className="text-gray-400">
-                        Cancel an active campaign, preventing new pledges.<br/>
-                        Only the address that created the campaign can Cancel the campaign.
-                      </p>
-                    </div>
-                  )}
-                </div>
-
-                {/* Pledges Sidebar */}
-                <div className="bg-gray-900 rounded-lg p-6">
-                  <h3 className="text-lg font-semibold mb-6">Pledges</h3>
-                  {!campaignInfo ? (
-                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#0AC18E] mx-auto" />
-                  ) : (
-                    <div className="space-y-4">
-                      {campaignInfo.pledges.map((pledge, index) => (
-                        <div key={index} className="bg-gray-800 rounded-lg p-4">
-                          <div className="flex justify-between items-center mb-2">
-                            <span className="font-medium truncate max-w-[200px]">{pledge.name}</span>
-                            <div className="flex items-center gap-2">
-                              <div 
-                                className="h-5 w-5 bg-cover bg-center"
-                                style={{ backgroundImage: `url(${BCHLogo})` }}
-                              />
-                              {pledge.amount}
-                            </div>
-                          </div>
-                          <p className="text-gray-400 italic mb-2">"{pledge.message}"</p>
-                          <div className="text-sm text-gray-500">#{pledge.pledgeID}</div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            </div>
-          </div>
-        )}
-
-        {/* Campaign does not have a UTXO but campaign data exists on server */}
-        {!campaignUTXO && campaignInfo && (
-          <div className="max-w-6xl mx-auto p-4">
-            {/* Banner and User Info */}
+      {/* Campaign Exists on server */}
+      {campaignUTXO && campaignInfo && (
+        <div className="max-w-6xl mx-auto p-4">
+          <div className="flex flex-col gap-6">
+            {/* Banner Section */}
             <div className="flex flex-col">
-              <div 
+              <div
                 className="w-full h-[200px] bg-cover bg-center rounded-t-lg"
                 style={{ backgroundImage: `url(${campaignInfo.banner})` }}
               />
@@ -1129,203 +1072,640 @@ const NFTItem: React.FC<{ utxo: Utxo }> = ({ utxo }) => {
                 {isLoading ? (
                   <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#0AC18E]" />
                 ) : (
-                  <div className="flex items-center gap-3">
-                    <div 
+                  <>
+                    <div
                       className="h-12 w-12 bg-cover bg-center rounded-full"
                       style={{ backgroundImage: `url(${campaignInfo.logo})` }}
                     />
-                    <span className="font-medium">{campaignInfo.owner}</span>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Campaign Title */}
-            <h1 className="text-2xl font-bold text-center my-6">{campaignInfo.name}</h1>
-
-            {/* Progress Bar */}
-            <div className="relative w-full h-8 bg-gray-800 rounded-full mb-6">
-              <div className="absolute inset-0 flex justify-center items-center">
-                {pledgeTotal}
-              </div>
-              <div className="absolute left-0 top-0 h-full bg-[#0AC18E] rounded-full w-full" />
-            </div>
-
-            {/* Pledge Bar */}
-            <div className="bg-gray-900 rounded-lg p-6 space-y-6">
-              {/* Campaign Details Row */}
-              <div className="relative flex justify-between items-center">
-                <div className="absolute inset-0 bg-black/50" />
-                <span className="relative z-10"><b>Campaign:</b>&nbsp;#{id}</span>
-                {!isLoading && (
-                  <>
-                    <span className="relative z-10">
-                      {campaignInfo.pledges.length > 0 && !isFailed ? 'Campaign Successful' : 'Campaign Failed'}
+                    <span className="ml-3 font-medium">
+                      {campaignInfo.owner}
                     </span>
-                    {endBlock != 0 && (
-                      <span className="relative z-10"><b>End Block:</b>&nbsp;{endBlock}</span>
-                    )}
                   </>
                 )}
               </div>
+            </div>
+
+            {/* Title */}
+            <h1 className="text-2xl font-bold text-center">
+              {campaignInfo.name}
+            </h1>
+
+            {/* Progress Bar */}
+            <div
+              className="relative w-full h-8 bg-gray-800 rounded-full cursor-pointer"
+              onClick={() => {
+                if (campaignUTXO) {
+                  const currentAmount =
+                    Number(campaignUTXO.satoshis) / 100000000;
+                  const targetAmount =
+                    hexToDecimal(
+                      campaignUTXO.token?.nft?.commitment.substring(0, 12) ??
+                        '0'
+                    ) / 100000000;
+                  const remainingAmount = (
+                    targetAmount - currentAmount
+                  ).toFixed(8);
+                  handleSetPledgeAmount(remainingAmount);
+                }
+              }}
+            >
+              <div
+                className="absolute left-0 top-0 h-full bg-[#0AC18E] rounded-full transition-all"
+                style={{
+                  width: `${(Number(campaignUTXO.satoshis) / hexToDecimal(campaignUTXO.token?.nft?.commitment.substring(0, 12) ?? '0')) * 100}%`,
+                }}
+              />
+              <div className="absolute inset-0 flex justify-center items-center">
+                {(
+                  (Number(campaignUTXO.satoshis) /
+                    hexToDecimal(
+                      campaignUTXO.token?.nft?.commitment.substring(0, 12) ??
+                        '0'
+                    )) *
+                  100
+                ).toFixed(2)}
+                %
+              </div>
+              <div className="absolute -bottom-6 w-full text-center text-sm">
+                {Number(campaignUTXO.satoshis) / 100000000} /{' '}
+                {hexToDecimal(
+                  campaignUTXO.token?.nft?.commitment.substring(0, 12) ?? '0'
+                ) / 100000000}
+              </div>
+              {!isFailed && !isClaimed && isExpired && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleStop(
+                      campaignUTXO.token?.nft?.commitment.substring(70, 80) ??
+                        '0'
+                    );
+                  }}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 px-4 py-1 bg-red-500 text-white rounded-full hover:bg-red-600"
+                >
+                  {addonT('module.stop', 'Stop')}
+                </button>
+              )}
+            </div>
+
+            {/* Campaign Details Section */}
+            <div className="bg-gray-900 rounded-lg p-6 space-y-6">
+              {/* Campaign ID and End Date Row */}
+              <div className="flex justify-between items-center">
+                <span>
+                  <b>{addonT('module.campaignLabel', 'Campaign')}:</b> #
+                  {hexToDecimal(
+                    campaignUTXO.token?.nft?.commitment.substring(70, 80) ?? '0'
+                  )}
+                </span>
+                {campaignUTXO.token?.nft?.capability == 'mutable' ? (
+                  <span className="text-red-500">
+                    {addonT('module.campaignStoppedLabel', 'Campaign stopped')}
+                  </span>
+                ) : (
+                  <span>
+                    <b>{addonT('module.ends', 'Ends')}:</b> {endDate}
+                  </span>
+                )}
+                <span>
+                  <b>{addonT('module.endBlock', 'End block')}:</b> {endBlock}
+                </span>
+              </div>
 
               {/* Pledge Input Section */}
-              <div className="relative space-y-4">
-                <div className="absolute inset-0 bg-black/50" />
-                <h3 className="relative z-10 text-lg font-semibold">Make a Pledge</h3>
-                <div className="h-[15px]" />
-                <div className="relative z-10 flex flex-col items-center gap-4">
-                  <div 
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold">
+                  {addonT('module.makePledge', 'Make a pledge')}
+                </h3>
+                <div className="flex items-center gap-4">
+                  <div
                     className="h-10 w-10 bg-cover bg-center"
                     style={{ backgroundImage: `url(${BCHLogo})` }}
                   />
                   <input
                     type="text"
-                    placeholder="Amount"
+                    placeholder="0.0001"
                     value={stringPledgeAmount}
                     onChange={(e) => handleSetPledgeAmount(e.target.value)}
-                    className="bg-white text-black px-4 py-2 rounded-lg w-full"
+                    className="bg-white text-black px-4 py-2 rounded-lg"
                   />
+                  <button
+                    disabled={isFailed || isClaimed}
+                    onClick={() => handlePledgeModal()}
+                    className="px-6 py-2 bg-[#0AC18E] rounded-full disabled:bg-gray-500 disabled:cursor-not-allowed hover:bg-[#0cd9a0]"
+                  >
+                    {txPending ? (
+                      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white" />
+                    ) : (
+                      addonT('module.pledge', 'Pledge')
+                    )}
+                  </button>
                 </div>
               </div>
 
-              {/* NFTs Section */}
-              <div className="relative space-y-4">
-                <div className="absolute inset-0 bg-black/50" />
-                <h3 className="relative z-10 text-lg font-semibold">See your Pledge</h3>
-                <div className="relative z-10 flex justify-between items-center">
-                  <button 
+              {/* NFT Refund Section */}
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold">
+                  {addonT('module.cancelPledge', 'Cancel your pledge')}
+                </h3>
+                <div className="flex gap-4 items-center">
+                  <button
                     onClick={fetchReceiptNFTs}
                     className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-full"
                   >
-                    Refresh
+                    {addonT('common.refresh', 'Refresh')}
+                  </button>
+                  <button
+                    disabled={!selectedNFT}
+                    onClick={() =>
+                      handleRefund(
+                        campaignUTXO.token?.nft?.commitment.substring(70, 80) ??
+                          '0',
+                        selectedNFT!
+                      )
+                    }
+                    className="px-4 py-2 bg-[#0AC18E] rounded-full disabled:bg-gray-500 disabled:cursor-not-allowed hover:bg-[#0cd9a0]"
+                  >
+                    {refundPending ? (
+                      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white" />
+                    ) : (
+                      addonT('module.refund', 'Refund')
+                    )}
                   </button>
                 </div>
-                <div className="relative z-10 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {nfts.map((utxo, index) => (
                     <NFTItem key={index} utxo={utxo} />
                   ))}
                 </div>
               </div>
-            </div>
 
-            {/* Navigation Tabs */}
-            <div className="flex border-b border-gray-700 mt-6">
-              <button
-                className={`px-6 py-3 ${selectedTab === 'Overview' ? 'border-b-2 border-[#0AC18E] text-[#0AC18E]' : 'text-gray-400 hover:text-gray-200'}`}
-                onClick={() => handleSelectTab('Overview')}
-              >
-                Overview
-              </button>
-              <button
-                className={`px-6 py-3 ${selectedTab === 'Updates' ? 'border-b-2 border-[#0AC18E] text-[#0AC18E]' : 'text-gray-400 hover:text-gray-200'}`}
-                onClick={() => handleSelectTab('Updates')}
-              >
-                Updates
-              </button>
-              <div className="flex-grow" />
-            </div>
-
-            {/* Description and Links Container */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
-              {/* Main Content */}
-              <div className="lg:col-span-2 bg-gray-900 rounded-lg p-6">
-                {selectedTab === 'Overview' && (
-                  <div 
-                    className="prose prose-invert max-w-none"
-                    dangerouslySetInnerHTML={{ __html: campaignInfo.description }} 
-                  />
+              {/* Navigation Tabs */}
+              <div className="flex border-b border-gray-700">
+                <button
+                  className={`px-6 py-3 ${selectedTab === 'Overview' ? 'border-b-2 border-[#0AC18E] text-[#0AC18E]' : 'text-gray-400 hover:text-gray-200'}`}
+                  onClick={() => handleSelectTab('Overview')}
+                >
+                  {addonT('module.overview', 'Overview')}
+                </button>
+                <button
+                  className={`px-6 py-3 ${selectedTab === 'Updates' ? 'border-b-2 border-[#0AC18E] text-[#0AC18E]' : 'text-gray-400 hover:text-gray-200'}`}
+                  onClick={() => handleSelectTab('Updates')}
+                >
+                  {addonT('module.updates', 'Updates')}
+                </button>
+                {campaignInfo.ownersAddress == usersAddress ? (
+                  <button
+                    className={`px-6 py-3 ${selectedTab === 'Claim' ? 'border-b-2 border-[#0AC18E] text-[#0AC18E]' : 'text-gray-400 hover:text-gray-200'}`}
+                    onClick={() => handleSelectTab('Claim')}
+                  >
+                    {addonT('module.claim', 'Claim')}
+                  </button>
+                ) : (
+                  <div className="flex-grow" />
                 )}
-                {selectedTab === 'Updates' && (
-                  <div className="space-y-6 text-center">
-                    {usersAddress == campaignInfo.ownersAddress && (
-                      <>
-                        {campaignInfo.isComplete != true && (
-                          <>
-                            <div className="flex items-center gap-2">
-                              <input 
-                                type="checkbox" 
-                                checked={isComplete}
-                                onChange={(e) => setIsComplete(e.target.checked)}
-                                className="form-checkbox"
-                              />
-                              <label>The campaign is complete</label>
+              </div>
+
+              {/* Content Sections */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
+                {/* Description and Updates Tab Content */}
+                <div className="lg:col-span-2 bg-gray-900 rounded-lg p-6">
+                  {selectedTab === 'Overview' && (
+                    <div
+                      className="prose prose-invert max-w-none"
+                      dangerouslySetInnerHTML={{
+                        __html: campaignInfo.description,
+                      }}
+                    />
+                  )}
+
+                  {selectedTab === 'Updates' && (
+                    <div className="space-y-6">
+                      {usersAddress == campaignInfo.ownersAddress && (
+                        <>
+                          {/*<RichTextEditor isUpdate={true} value={updateText} onChange={setUpdateText} />*/}
+                          {addonT(
+                            'module.richTextEditor',
+                            'Rich-text editor goes here'
+                          )}
+                          <button
+                            onClick={handleSubmitUpdate}
+                            className="px-6 py-2 bg-[#0AC18E] rounded-full hover:bg-[#0cd9a0]"
+                          >
+                            {addonT('module.submitUpdate', 'Submit update')}
+                          </button>
+                        </>
+                      )}
+
+                      {campaignInfo?.updates.length > 0 ? (
+                        campaignInfo?.updates.map((update: Update) => (
+                          <div
+                            key={update.number}
+                            className="bg-gray-800 rounded-lg p-4"
+                          >
+                            <div className="font-semibold mb-2">
+                              {addonT(
+                                'module.updateNumber',
+                                'Update #{number}',
+                                { number: update.number }
+                              )}
                             </div>
-                            <input 
-                              type="text"
-                              value={urlAddress}
-                              onChange={(e) => setUrlAddress(e.target.value)}
-                              placeholder="Enter URL address..."
-                              className="w-full px-4 py-2 bg-gray-800 rounded-lg"
+                            <div
+                              className="prose prose-invert max-w-none"
+                              dangerouslySetInnerHTML={{ __html: update.text }}
                             />
-                          </>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-gray-400">
+                          {addonT(
+                            'module.noUpdates',
+                            'No updates have been posted by the creator yet.'
+                          )}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {selectedTab === 'Claim' && (
+                    <div className="space-y-6 text-center">
+                      <button
+                        disabled={
+                          Number(campaignUTXO.satoshis) <
+                          hexToDecimal(
+                            campaignUTXO.token?.nft?.commitment.substring(
+                              0,
+                              12
+                            ) ?? '0'
+                          )
+                        }
+                        onClick={() =>
+                          handleClaim(
+                            campaignUTXO.token?.nft?.commitment.substring(
+                              70,
+                              80
+                            ) ?? '0'
+                          )
+                        }
+                        className="px-6 py-2 bg-[#0AC18E] rounded-full disabled:bg-gray-500 disabled:cursor-not-allowed hover:bg-[#0cd9a0]"
+                      >
+                        {claimPending ? (
+                          <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white" />
+                        ) : (
+                          addonT('module.claim', 'Claim')
                         )}
-                        RichTest Editor here
-                        {/*<RichTextEditor isUpdate={true} value={updateText} onChange={setUpdateText} />*/}
-                        <button 
-                          onClick={handleSubmitUpdate}
-                          className="px-6 py-2 bg-[#0AC18E] rounded-full hover:bg-[#0cd9a0]"
+                      </button>
+                      <p className="text-gray-400">
+                        {addonT(
+                          'module.claimEligibility',
+                          'Only the address that created the campaign can claim it.'
+                        )}
+                        <br />
+                        {addonT(
+                          'module.claimThreshold',
+                          'The creator can claim the raised funds once the campaign reaches 100% of its initial target.'
+                        )}
+                      </p>
+
+                      <button
+                        disabled={
+                          campaignUTXO.token?.nft?.capability != 'minting'
+                        }
+                        onClick={() =>
+                          handleCancel(
+                            campaignUTXO.token?.nft?.commitment.substring(
+                              70,
+                              80
+                            ) ?? '0'
+                          )
+                        }
+                        className="px-6 py-2 bg-red-500 rounded-full disabled:bg-gray-500 disabled:cursor-not-allowed hover:bg-red-600"
+                      >
+                        {cancelPending ? (
+                          <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white" />
+                        ) : (
+                          addonT('common.cancel', 'Cancel')
+                        )}
+                      </button>
+                      <p className="text-gray-400">
+                        {addonT(
+                          'module.cancelDescription',
+                          'Cancel an active campaign to prevent new pledges.'
+                        )}
+                        <br />
+                        {addonT(
+                          'module.cancelEligibility',
+                          'Only the address that created the campaign can cancel it.'
+                        )}
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Pledges Sidebar */}
+                <div className="bg-gray-900 rounded-lg p-6">
+                  <h3 className="text-lg font-semibold mb-6">
+                    {addonT('module.pledges', 'Pledges')}
+                  </h3>
+                  {!campaignInfo ? (
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#0AC18E] mx-auto" />
+                  ) : (
+                    <div className="space-y-4">
+                      {campaignInfo.pledges.map((pledge, index) => (
+                        <div key={index} className="bg-gray-800 rounded-lg p-4">
+                          <div className="flex justify-between items-center mb-2">
+                            <span className="font-medium truncate max-w-[200px]">
+                              {pledge.name}
+                            </span>
+                            <div className="flex items-center gap-2">
+                              <div
+                                className="h-5 w-5 bg-cover bg-center"
+                                style={{ backgroundImage: `url(${BCHLogo})` }}
+                              />
+                              {pledge.amount}
+                            </div>
+                          </div>
+                          <p className="text-gray-400 italic mb-2">
+                            "{pledge.message}"
+                          </p>
+                          <div className="text-sm text-gray-500">
+                            #{pledge.pledgeID}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Campaign does not have a UTXO but campaign data exists on server */}
+      {!campaignUTXO && campaignInfo && (
+        <div className="max-w-6xl mx-auto p-4">
+          {/* Banner and User Info */}
+          <div className="flex flex-col">
+            <div
+              className="w-full h-[200px] bg-cover bg-center rounded-t-lg"
+              style={{ backgroundImage: `url(${campaignInfo.banner})` }}
+            />
+            <div className="flex items-center p-4 bg-black/50">
+              {isLoading ? (
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#0AC18E]" />
+              ) : (
+                <div className="flex items-center gap-3">
+                  <div
+                    className="h-12 w-12 bg-cover bg-center rounded-full"
+                    style={{ backgroundImage: `url(${campaignInfo.logo})` }}
+                  />
+                  <span className="font-medium">{campaignInfo.owner}</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Campaign Title */}
+          <h1 className="text-2xl font-bold text-center my-6">
+            {campaignInfo.name}
+          </h1>
+
+          {/* Progress Bar */}
+          <div className="relative w-full h-8 bg-gray-800 rounded-full mb-6">
+            <div className="absolute inset-0 flex justify-center items-center">
+              {pledgeTotal}
+            </div>
+            <div className="absolute left-0 top-0 h-full bg-[#0AC18E] rounded-full w-full" />
+          </div>
+
+          {/* Pledge Bar */}
+          <div className="bg-gray-900 rounded-lg p-6 space-y-6">
+            {/* Campaign Details Row */}
+            <div className="relative flex justify-between items-center">
+              <div className="absolute inset-0 bg-black/50" />
+              <span className="relative z-10">
+                <b>{addonT('module.campaignLabel', 'Campaign')}:</b>&nbsp;#{id}
+              </span>
+              {!isLoading && (
+                <>
+                  <span className="relative z-10">
+                    {campaignInfo.pledges.length > 0 && !isFailed
+                      ? addonT(
+                          'module.campaignSuccessful',
+                          'Campaign successful'
+                        )
+                      : addonT('module.campaignFailed', 'Campaign failed')}
+                  </span>
+                  {endBlock != 0 && (
+                    <span className="relative z-10">
+                      <b>{addonT('module.endBlock', 'End block')}:</b>&nbsp;
+                      {endBlock}
+                    </span>
+                  )}
+                </>
+              )}
+            </div>
+
+            {/* Pledge Input Section */}
+            <div className="relative space-y-4">
+              <div className="absolute inset-0 bg-black/50" />
+              <h3 className="relative z-10 text-lg font-semibold">
+                {addonT('module.makePledge', 'Make a pledge')}
+              </h3>
+              <div className="h-[15px]" />
+              <div className="relative z-10 flex flex-col items-center gap-4">
+                <div
+                  className="h-10 w-10 bg-cover bg-center"
+                  style={{ backgroundImage: `url(${BCHLogo})` }}
+                />
+                <input
+                  type="text"
+                  placeholder={addonT('module.amount', 'Amount')}
+                  value={stringPledgeAmount}
+                  onChange={(e) => handleSetPledgeAmount(e.target.value)}
+                  className="bg-white text-black px-4 py-2 rounded-lg w-full"
+                />
+              </div>
+            </div>
+
+            {/* NFTs Section */}
+            <div className="relative space-y-4">
+              <div className="absolute inset-0 bg-black/50" />
+              <h3 className="relative z-10 text-lg font-semibold">
+                {addonT('module.seePledge', 'See your pledge')}
+              </h3>
+              <div className="relative z-10 flex justify-between items-center">
+                <button
+                  onClick={fetchReceiptNFTs}
+                  className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-full"
+                >
+                  {addonT('common.refresh', 'Refresh')}
+                </button>
+              </div>
+              <div className="relative z-10 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {nfts.map((utxo, index) => (
+                  <NFTItem key={index} utxo={utxo} />
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Navigation Tabs */}
+          <div className="flex border-b border-gray-700 mt-6">
+            <button
+              className={`px-6 py-3 ${selectedTab === 'Overview' ? 'border-b-2 border-[#0AC18E] text-[#0AC18E]' : 'text-gray-400 hover:text-gray-200'}`}
+              onClick={() => handleSelectTab('Overview')}
+            >
+              {addonT('module.overview', 'Overview')}
+            </button>
+            <button
+              className={`px-6 py-3 ${selectedTab === 'Updates' ? 'border-b-2 border-[#0AC18E] text-[#0AC18E]' : 'text-gray-400 hover:text-gray-200'}`}
+              onClick={() => handleSelectTab('Updates')}
+            >
+              {addonT('module.updates', 'Updates')}
+            </button>
+            <div className="flex-grow" />
+          </div>
+
+          {/* Description and Links Container */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
+            {/* Main Content */}
+            <div className="lg:col-span-2 bg-gray-900 rounded-lg p-6">
+              {selectedTab === 'Overview' && (
+                <div
+                  className="prose prose-invert max-w-none"
+                  dangerouslySetInnerHTML={{ __html: campaignInfo.description }}
+                />
+              )}
+              {selectedTab === 'Updates' && (
+                <div className="space-y-6 text-center">
+                  {usersAddress == campaignInfo.ownersAddress && (
+                    <>
+                      {campaignInfo.isComplete != true && (
+                        <>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={isComplete}
+                              onChange={(e) => setIsComplete(e.target.checked)}
+                              className="form-checkbox"
+                            />
+                            <label>
+                              {addonT(
+                                'module.campaignComplete',
+                                'The campaign is complete'
+                              )}
+                            </label>
+                          </div>
+                          <input
+                            type="text"
+                            value={urlAddress}
+                            onChange={(e) => setUrlAddress(e.target.value)}
+                            placeholder={addonT(
+                              'module.urlAddress',
+                              'Enter URL address…'
+                            )}
+                            className="w-full px-4 py-2 bg-gray-800 rounded-lg"
+                          />
+                        </>
+                      )}
+                      {addonT(
+                        'module.richTextEditor',
+                        'Rich-text editor goes here'
+                      )}
+                      {/*<RichTextEditor isUpdate={true} value={updateText} onChange={setUpdateText} />*/}
+                      <button
+                        onClick={handleSubmitUpdate}
+                        className="px-6 py-2 bg-[#0AC18E] rounded-full hover:bg-[#0cd9a0]"
+                      >
+                        {addonT('module.submitUpdate', 'Submit update')}
+                      </button>
+                    </>
+                  )}
+
+                  {campaignInfo?.updates.length > 0
+                    ? campaignInfo?.updates.map((update: Update) => (
+                        <div
+                          key={update.number}
+                          className="bg-gray-800 rounded-lg p-4 text-left"
                         >
-                          Submit Update
-                        </button>
-                      </>
-                    )}
-                    
-                    {campaignInfo?.updates.length > 0 ? (
-                      campaignInfo?.updates.map((update: Update) => (
-                        <div key={update.number} className="bg-gray-800 rounded-lg p-4 text-left">
-                          <div className="font-semibold mb-2">Update #{update.number}</div>
-                          <div 
+                          <div className="font-semibold mb-2">
+                            {addonT('module.updateNumber', 'Update #{number}', {
+                              number: update.number,
+                            })}
+                          </div>
+                          <div
                             className="prose prose-invert max-w-none"
-                            dangerouslySetInnerHTML={{ __html: update.text }} 
+                            dangerouslySetInnerHTML={{ __html: update.text }}
                           />
                         </div>
                       ))
-                    ) : (
-                      'No updates have been posted by the creator yet.'
-                    )}
-                  </div>
-                )}
-              </div>
+                    : addonT(
+                        'module.noUpdates',
+                        'No updates have been posted by the creator yet.'
+                      )}
+                </div>
+              )}
+            </div>
 
-              {/* Pledges Sidebar */}
-              <div className="bg-gray-900 rounded-lg p-6">
-                <h3 className="text-lg font-semibold mb-6">Pledges</h3>
-                {!campaignInfo ? (
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#0AC18E] mx-auto" />
-                ) : (
-                  <div className="space-y-4">
-                    {campaignInfo.pledges.map((pledge, index) => (
-                      <div key={index} className="bg-gray-800 rounded-lg p-4">
-                        <div className="font-medium mb-2 truncate">{pledge.name}</div>
-                        <p className="text-gray-400 italic mb-2">{pledge.message}</p>
-                        <div className="flex justify-between items-center">
-                          <div className="flex items-center gap-2">
-                            <div 
-                              className="h-5 w-5 bg-cover bg-center"
-                              style={{ backgroundImage: `url(${BCHLogo})` }}
-                            />
-                            {pledge.amount}
-                          </div>
-                          <span className="text-sm text-gray-500">#{pledge.pledgeID}</span>
-                        </div>
+            {/* Pledges Sidebar */}
+            <div className="bg-gray-900 rounded-lg p-6">
+              <h3 className="text-lg font-semibold mb-6">
+                {addonT('module.pledges', 'Pledges')}
+              </h3>
+              {!campaignInfo ? (
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#0AC18E] mx-auto" />
+              ) : (
+                <div className="space-y-4">
+                  {campaignInfo.pledges.map((pledge, index) => (
+                    <div key={index} className="bg-gray-800 rounded-lg p-4">
+                      <div className="font-medium mb-2 truncate">
+                        {pledge.name}
                       </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+                      <p className="text-gray-400 italic mb-2">
+                        {pledge.message}
+                      </p>
+                      <div className="flex justify-between items-center">
+                        <div className="flex items-center gap-2">
+                          <div
+                            className="h-5 w-5 bg-cover bg-center"
+                            style={{ backgroundImage: `url(${BCHLogo})` }}
+                          />
+                          {pledge.amount}
+                        </div>
+                        <span className="text-sm text-gray-500">
+                          #{pledge.pledgeID}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
-        )}
+        </div>
+      )}
 
-        {/* Error State */}
-        {fetchError && (
-          <div className="text-center text-red-500 mt-8">
-            Details for campaign #{id} were not found on the server
-          </div>
-        )}
-      </div>
+      {/* Error State */}
+      {fetchError && (
+        <div className="text-center text-red-500 mt-8">
+          {addonT(
+            'module.campaignNotFound',
+            'Details for campaign #{id} were not found on the server.',
+            { id: id ?? '' }
+          )}
+        </div>
+      )}
+    </div>
   );
-}
+};
+
+const CampaignDetail: React.FC = () => (
+  <AddonModuleI18nProvider moduleId="fundme">
+    <CampaignDetailScreen />
+  </AddonModuleI18nProvider>
+);
 
 export default CampaignDetail;

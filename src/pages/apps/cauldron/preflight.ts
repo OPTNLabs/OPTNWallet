@@ -1,12 +1,17 @@
 import { binToHex, hexToBin } from '@bitauth/libauth';
 
 import type { AddonSDK } from '../../../services/AddonsSDK';
-import type { CauldronActivePoolRow } from '../../../services/cauldron';
+import type { Network } from '../../../state/slices/networkSlice';
 import type {
+  CauldronActivePoolRow,
   CauldronPool,
   CauldronWalletPoolPosition,
 } from '../../../services/cauldron';
-import { tryParseCauldronPoolFromUtxo } from '../../../services/cauldron';
+import {
+  getCauldronSubscriptionService,
+  normalizeCauldronPoolRow,
+  tryParseCauldronPoolFromUtxo,
+} from '../../../services/cauldron';
 import type { UTXO } from '../../../types/types';
 import { parseSatoshis } from '../../../utils/binary';
 
@@ -34,13 +39,18 @@ export function getUtxoOutpointKey(utxo: UTXO): string {
 export function getPoolOutpointKey(
   pool: Pick<CauldronPool, 'txHash' | 'outputIndex'>
 ): string {
-  return `${pool.txHash}:${pool.outputIndex}`;
+  return `${stripChaingraphHexBytes(pool.txHash)}:${pool.outputIndex}`;
 }
 
 export function assertWalletInputsStillAvailable(
   currentWalletUtxos: UTXO[],
   selectedInputs: UTXO[],
-  operationLabel: string
+  operationLabel: string,
+  translate?: (
+    key: string,
+    fallback: string,
+    values?: Record<string, string | number>
+  ) => string
 ) {
   const currentOutpoints = new Set(currentWalletUtxos.map(getUtxoOutpointKey));
   const missingInputs = selectedInputs.filter(
@@ -48,7 +58,13 @@ export function assertWalletInputsStillAvailable(
   );
   if (missingInputs.length > 0) {
     throw new Error(
-      `${operationLabel} needs refreshed wallet inputs. One or more selected UTXOs are no longer spendable.`
+      translate
+        ? translate(
+            'module.staleWalletInputs',
+            '{operation} needs refreshed wallet inputs. One or more selected UTXOs are no longer spendable.',
+            { operation: operationLabel }
+          )
+        : `${operationLabel} needs refreshed wallet inputs. One or more selected UTXOs are no longer spendable.`
     );
   }
 }
@@ -241,6 +257,118 @@ export async function fetchCurrentQuotedPoolsFromChain(args: {
       return resolved ? [resolved] : [];
     }),
     missingQuotedPoolCount: missingCount,
+  };
+}
+
+/**
+ * Refresh the live liquidity behind a quoted route. A Cauldron pool may have
+ * rolled to a successor outpoint while retaining the same locking bytecode;
+ * merchant quoting can safely replan against that successor as long as the
+ * buyer later performs the strict exact-outpoint validation.
+ */
+export async function fetchCurrentLiquidityPoolsFromChain(args: {
+  sdk: CauldronChainPoolSdk;
+  quotedPools: CauldronPool[];
+}): Promise<{
+  currentPools: CauldronPool[];
+  missingQuotedPoolCount: number;
+}> {
+  const { sdk, quotedPools } = args;
+  const uniquePools = [
+    ...new Map(
+      quotedPools.map((pool) => [getPoolOutpointKey(pool), pool])
+    ).values(),
+  ];
+  const currentPoolsByOutpoint = new Map<string, CauldronPool>();
+  let missingQuotedPoolCount = 0;
+
+  const candidates = await Promise.all(
+    uniquePools.map(async (pool) => {
+      const rows = await queryPoolsForTokenId(
+        sdk,
+        binToHex(pool.output.lockingBytecode),
+        pool.output.tokenCategory
+      );
+      const exactRow = rows.find(
+        (row) => getChainRowOutpointKey(row) === getPoolOutpointKey(pool)
+      );
+      const rowsToRehydrate = exactRow ? [exactRow] : rows;
+      const currentPools = rowsToRehydrate.flatMap((row) => {
+        const refreshed = rehydratePoolFromChainRow(pool, row);
+        if (refreshed) return [refreshed];
+        return exactRow ? [pool] : [];
+      });
+      return { currentPools };
+    })
+  );
+
+  for (const candidate of candidates) {
+    if (candidate.currentPools.length === 0) {
+      missingQuotedPoolCount += 1;
+      continue;
+    }
+    for (const pool of candidate.currentPools) {
+      currentPoolsByOutpoint.set(getPoolOutpointKey(pool), pool);
+    }
+  }
+
+  return {
+    currentPools: [...currentPoolsByOutpoint.values()],
+    missingQuotedPoolCount,
+  };
+}
+
+export async function fetchCurrentCauldronPools(args: {
+  network: Network;
+  tokenId: string;
+}): Promise<CauldronPool[]> {
+  const service = getCauldronSubscriptionService(args.network);
+  let liveRows: CauldronActivePoolRow[] = [];
+  let unsubscribe: (() => Promise<void>) | undefined;
+
+  try {
+    unsubscribe = await service.subscribe(args.tokenId, (rows) => {
+      liveRows = rows;
+    });
+    return liveRows
+      .map((row) => normalizeCauldronPoolRow(row))
+      .filter((pool): pool is CauldronPool => pool !== null)
+      .filter((pool) => pool.output.tokenCategory === args.tokenId);
+  } finally {
+    if (unsubscribe) await unsubscribe();
+  }
+}
+
+export async function fetchCurrentQuotedPoolsFromCauldron(args: {
+  network: Network;
+  quotedPools: CauldronPool[];
+}): Promise<{
+  resolvedPools: CauldronPool[];
+  missingQuotedPoolCount: number;
+}> {
+  const tokenId = args.quotedPools[0]?.output.tokenCategory ?? '';
+  if (!tokenId) {
+    return {
+      resolvedPools: [],
+      missingQuotedPoolCount: args.quotedPools.length,
+    };
+  }
+
+  const currentPools = await fetchCurrentCauldronPools({
+    network: args.network,
+    tokenId,
+  });
+  const currentByOutpoint = new Map(
+    currentPools.map((pool) => [getPoolOutpointKey(pool), pool])
+  );
+  const resolvedPools = args.quotedPools.flatMap((pool) => {
+    const resolved = currentByOutpoint.get(getPoolOutpointKey(pool));
+    return resolved ? [resolved] : [];
+  });
+
+  return {
+    resolvedPools,
+    missingQuotedPoolCount: args.quotedPools.length - resolvedPools.length,
   };
 }
 

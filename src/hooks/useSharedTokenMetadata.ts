@@ -18,6 +18,7 @@ const metadataFailureCache = new Map<
 >();
 const inflightMetadata = new Map<string, Promise<SharedTokenMetadata | null>>();
 export const METADATA_FAILURE_TTL_MS = 5_000;
+export const METADATA_REFRESH_TTL_MS = 5 * 60_000;
 
 function isWebRuntime(): boolean {
   return Capacitor.getPlatform() === 'web';
@@ -305,6 +306,21 @@ export function getCachedTokenMetadata(
   return metadataCache.get(normalized) ?? metadataFailureCache.get(normalized)?.state;
 }
 
+export function isTokenMetadataRefreshDue(
+  metadata: SharedTokenMetadata | undefined,
+  now = Date.now()
+): boolean {
+  if (!metadata) return true;
+  if (metadata.status === 'error' && !metadata.snapshot) return false;
+
+  const lastFetch = metadata.lastFetch ?? metadata.snapshot?.lastFetch ?? null;
+  if (!lastFetch) return metadata.freshness !== 'fresh';
+
+  const lastFetchMs = Date.parse(lastFetch);
+  if (!Number.isFinite(lastFetchMs)) return metadata.freshness !== 'fresh';
+  return now - lastFetchMs >= METADATA_REFRESH_TTL_MS;
+}
+
 export async function preloadTokenMetadata(categories: string[]): Promise<void> {
   const unique = normalizeSharedTokenCategories(categories);
 
@@ -319,7 +335,11 @@ export async function preloadTokenMetadata(categories: string[]): Promise<void> 
 
   await Promise.all(
     unique.map(async (category) => {
-      await resolveTokenMetadata(category, { forceRefresh: true });
+      const cached = getCachedTokenMetadata(category);
+      const resolved = await resolveTokenMetadata(category);
+      if (isTokenMetadataRefreshDue(resolved ?? cached)) {
+        await resolveTokenMetadata(category, { forceRefresh: true });
+      }
     })
   );
 }
@@ -387,7 +407,7 @@ export default function useSharedTokenMetadata(categories: string[]) {
           const delay = getFailureRetryDelayMs(category);
           if (delay !== undefined) {
             retryAfterMs =
-              retryAfterMs === undefined ? delay : Math.min(retryAfterMs, delay);
+            retryAfterMs === undefined ? delay : Math.min(retryAfterMs, delay);
           }
         }
         continue;
@@ -406,7 +426,8 @@ export default function useSharedTokenMetadata(categories: string[]) {
           let resolved = getCachedTokenMetadata(category);
 
           if (!resolved) {
-            resolved = await resolveTokenMetadata(category);
+            const fetched = await resolveTokenMetadata(category);
+            resolved = fetched ?? undefined;
           }
 
           if (!resolved || cancelled) return;

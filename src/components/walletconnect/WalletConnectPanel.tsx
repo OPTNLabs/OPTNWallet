@@ -1,17 +1,17 @@
-
 // src/components/walletconnect/WalletConnectPanel.tsx
 import { useState, useCallback, useEffect } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { RootState, AppDispatch } from '../../state/store';
 
 import WcConnectionManager from '../WcConnectionManager';
-import SessionProposalModal from './SessionProposalModal';
 import { SessionList } from './SessionList';
 import SessionSettingsModal from './SessionSettingsModal';
 import { disconnectSession } from '../../state/slices/walletconnectSlice';
 import { SignMessageModal } from './SignMessageModal';
+import { useI18n } from '../../i18n/useI18n';
 
 export default function WalletConnectPanel() {
+  const { t } = useI18n();
   const dispatch = useDispatch<AppDispatch>();
   const sessions = useSelector(
     (s: RootState) => s.walletconnect.activeSessions
@@ -50,16 +50,13 @@ export default function WalletConnectPanel() {
       {/* <h2 className="text-3xl text-center font-bold mb-4">WalletConnect</h2> */}
       <WcConnectionManager />
 
-      {/* Incoming proposal */}
-      <SessionProposalModal />
-
       <div className="wallet-card p-4 space-y-3">
         {!sessions || Object.keys(sessions).length === 0 ? (
-          <p className="wallet-muted text-sm">No active WalletConnect sessions yet.</p>
+          <p className="wallet-muted text-sm">{t('wc.noActiveSessions')}</p>
         ) : (
           <>
             <h3 className="text-xl font-bold wallet-text-strong">
-              Active WalletConnect Sessions
+              {t('wc.activeSessions')}
             </h3>
             <SessionList
               activeSessions={sessions}

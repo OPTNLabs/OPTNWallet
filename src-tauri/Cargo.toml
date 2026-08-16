@@ -1,6 +1,6 @@
 [package]
 name = "optn-wallet-desktop"
-version = "1.6.2"
+version = "1.7.1"
 description = "OPTN Wallet Desktop"
 authors = ["OPTNLabs"]
 license = "GPL-3.0"
@@ -31,7 +31,7 @@ tauri-plugin-log = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "charset"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "charset", "json"] }
 tauri-plugin-keyring = "0.1"
 tauri-plugin-biometry = "0.2"
 # CashFusion: the protocol is raw TCP+TLS with protobuf framing, which a
@@ -39,7 +39,7 @@ tauri-plugin-biometry = "0.2"
 # already in the tree transitively via reqwest and tauri; naming them here
 # just makes the direct dependency explicit.
 prost = "0.13"
-tokio = { version = "1", features = ["net", "io-util", "time", "macros", "rt", "process"] }
+tokio = { version = "1", features = ["net", "io-util", "time", "macros", "rt", "process", "sync"] }
 tokio-rustls = { version = "0.26", features = ["ring"] }
 webpki-roots = "0.26"
 # Tor is reached as a SOCKS5 proxy (the same way Electron Cash does it) — we do
@@ -77,3 +77,10 @@ ripemd = "0.1"
 aes = "0.8"
 cbc = { version = "0.1", features = ["alloc"] }
 hmac = "0.12"
+# Hardware wallets (Ledger / Trezor One / OneKey HID): same model as Electron Cash
+# and Ledger Live — OS USB HID from the native process, never WebView WebHID.
+hidapi = "2.6"
+# Trezor Safe 5 / Model T: WebUSB via libusb (trezorlib WebUsbTransport).
+# Modern Suite uses node-usb the same way — Bridge on :21325 is optional/legacy.
+rusb = "0.9"
+hex = "0.4"

@@ -4,8 +4,11 @@
 // not a workaround (see docs/browser-extension-scope.md).
 import React, { useEffect, useState } from 'react';
 import ExtensionKeyManager from './ExtensionKeyManager';
+import { useI18n } from '../../i18n/useI18n';
 
-const ExtensionSecurityGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+const ExtensionSecurityGate: React.FC<{ children: React.ReactNode }> = ({
+  children,
+}) => {
   const [ready, setReady] = useState(false);
   const [needsSetup, setNeedsSetup] = useState(false);
   const [unlocked, setUnlocked] = useState(false);
@@ -13,6 +16,7 @@ const ExtensionSecurityGate: React.FC<{ children: React.ReactNode }> = ({ childr
   const [confirmPassphrase, setConfirmPassphrase] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const { t } = useI18n();
 
   useEffect(() => {
     setNeedsSetup(!ExtensionKeyManager.hasSetup());
@@ -30,7 +34,7 @@ const ExtensionSecurityGate: React.FC<{ children: React.ReactNode }> = ({ childr
       return;
     }
     if (passphrase !== confirmPassphrase) {
-      setError('Passwords do not match.');
+      setError(t('desktopSecurity.mismatch'));
       return;
     }
     setBusy(true);
@@ -49,7 +53,7 @@ const ExtensionSecurityGate: React.FC<{ children: React.ReactNode }> = ({ childr
     try {
       const ok = await ExtensionKeyManager.unlock(passphrase);
       if (ok) setUnlocked(true);
-      else setError('Incorrect password.');
+      else setError(t('desktopSecurity.incorrect'));
     } finally {
       setBusy(false);
     }
@@ -59,21 +63,25 @@ const ExtensionSecurityGate: React.FC<{ children: React.ReactNode }> = ({ childr
     <div className="flex h-full min-h-[560px] w-full flex-col items-center justify-center gap-4 bg-[#101828] p-6 text-white">
       <div className="text-lg font-semibold">OPTN Wallet</div>
       {needsSetup ? (
-        <form onSubmit={handleSetup} className="flex w-full max-w-xs flex-col gap-3">
+        <form
+          onSubmit={handleSetup}
+          className="flex w-full max-w-xs flex-col gap-3"
+        >
           <p className="text-center text-sm text-white/70">
-            Set a password to protect this wallet. It re-locks every time you close this popup.
+            Set a password to protect this wallet. It re-locks every time you
+            close this popup.
           </p>
           <input
             type="password"
             autoFocus
-            placeholder="New password"
+            placeholder={t('desktopSecurity.password')}
             value={passphrase}
             onChange={(e) => setPassphrase(e.target.value)}
             className="rounded-md border border-white/20 bg-white/5 px-3 py-2 text-sm outline-none"
           />
           <input
             type="password"
-            placeholder="Confirm password"
+            placeholder={t('desktopSecurity.confirmPassword')}
             value={confirmPassphrase}
             onChange={(e) => setConfirmPassphrase(e.target.value)}
             className="rounded-md border border-white/20 bg-white/5 px-3 py-2 text-sm outline-none"
@@ -84,15 +92,20 @@ const ExtensionSecurityGate: React.FC<{ children: React.ReactNode }> = ({ childr
             disabled={busy}
             className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium disabled:opacity-50"
           >
-            {busy ? 'Setting up…' : 'Set password'}
+            {busy
+              ? t('desktopSecurity.securing')
+              : t('desktopSecurity.continue')}
           </button>
         </form>
       ) : (
-        <form onSubmit={handleUnlock} className="flex w-full max-w-xs flex-col gap-3">
+        <form
+          onSubmit={handleUnlock}
+          className="flex w-full max-w-xs flex-col gap-3"
+        >
           <input
             type="password"
             autoFocus
-            placeholder="Password"
+            placeholder={t('desktopSecurity.password')}
             value={passphrase}
             onChange={(e) => setPassphrase(e.target.value)}
             className="rounded-md border border-white/20 bg-white/5 px-3 py-2 text-sm outline-none"
@@ -103,7 +116,9 @@ const ExtensionSecurityGate: React.FC<{ children: React.ReactNode }> = ({ childr
             disabled={busy}
             className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium disabled:opacity-50"
           >
-            {busy ? 'Unlocking…' : 'Unlock'}
+            {busy
+              ? t('desktopSecurity.unlocking')
+              : t('desktopSecurity.unlock')}
           </button>
         </form>
       )}

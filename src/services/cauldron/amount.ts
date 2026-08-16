@@ -4,9 +4,9 @@ export function parseDecimalToAtomic(
 ): bigint | null {
   const normalized = value.trim();
   if (!normalized) return null;
-  const pattern = new RegExp(`^\\d+(\\.\\d{0,${Math.max(0, decimals)}})?$`);
-  if (!pattern.test(normalized)) return null;
+  if (!/^\d+(?:\.\d*)?$/.test(normalized)) return null;
   const [whole, frac = ''] = normalized.split('.');
+  if (frac.length > Math.max(0, decimals)) return null;
   return (
     BigInt(whole) * 10n ** BigInt(decimals) +
     BigInt((frac + '0'.repeat(decimals)).slice(0, decimals) || '0')

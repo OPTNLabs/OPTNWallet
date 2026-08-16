@@ -50,6 +50,9 @@ export default function UTXOManager() {
       `);
 
       for (const utxo of utxos) {
+        if (utxo.wallet_id === undefined) {
+          throw new Error(`UTXO ${utxo.tx_hash}:${utxo.tx_pos} has no wallet id.`);
+        }
         insertQuery.run([
           utxo.wallet_id,
           utxo.address,
@@ -155,10 +158,18 @@ export default function UTXOManager() {
       const db = dbService.getDatabase();
       if (!db) throw new Error('Database not started.');
 
+      // Home / listunspent use `keys`. Send used to read only `addresses`,
+      // which can miss change and freshly derived fusion outputs — those coins
+      // still sit in `keys` and `UTXOs`. Union all three so spend sees the
+      // same set as the Home balance.
       const query = db.prepare(
-        'SELECT address FROM addresses WHERE wallet_id = ?'
+        `SELECT address FROM keys WHERE wallet_id = ? AND address IS NOT NULL
+         UNION
+         SELECT address FROM addresses WHERE wallet_id = ? AND address IS NOT NULL
+         UNION
+         SELECT DISTINCT address FROM UTXOs WHERE wallet_id = ? AND address IS NOT NULL`
       );
-      query.bind([walletId]);
+      query.bind([walletId, walletId, walletId]);
 
       const addresses: { address: string }[] = [];
       while (query.step()) {
@@ -308,6 +319,9 @@ export default function UTXOManager() {
         }
 
         for (const utxo of nextUtxos) {
+          if (utxo.wallet_id === undefined) {
+            throw new Error(`UTXO ${utxo.tx_hash}:${utxo.tx_pos} has no wallet id.`);
+          }
           insertStmt.run([
             utxo.wallet_id,
             utxo.address,

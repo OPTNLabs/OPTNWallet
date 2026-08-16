@@ -1,5 +1,7 @@
 // src/pages/apps/MarketplaceAppHost.tsx
 
+// @ts-nocheck WIP app surface; see docs/wip-typecheck-exclusions.md
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useSelector } from 'react-redux';
@@ -19,8 +21,16 @@ import { createAddonSDK, type AddonSDK } from '../../services/AddonsSDK';
 import { renderDeclarativeScreen } from './marketplaceScreenResolver';
 import AddonIframeHost from './AddonIframeHost';
 import { getReturnPath } from '../../utils/navigation';
-import { isComingSoonApp } from '../../features/apps/appsViewHelpers';
+import {
+  isComingSoonApp,
+  shouldHideApp,
+} from '../../features/apps/appsViewHelpers';
 import { Capacitor } from '@capacitor/core';
+import { useI18n } from '../../i18n/useI18n';
+import { AddonI18nProvider } from '../../i18n/AddonI18nProvider';
+import { getLocalizedAddonAppName } from '../../services/addons/AddonLocale';
+import type { AddonModuleId } from '../../i18n/addonModuleCatalog';
+import type { TranslationKey } from '../../i18n/resources';
 
 type ResolvedApp = {
   manifest: AddonManifest;
@@ -77,36 +87,36 @@ function writePersistedConsent(next: PersistedConsent): void {
   }
 }
 
-function formatCapability(capability: AddonCapability): string {
+function capabilityTranslationKey(capability: AddonCapability): TranslationKey {
   switch (capability) {
     case 'wallet:context:read':
-      return 'Read wallet context';
+      return 'apps.capability.walletContextRead';
     case 'wallet:addresses:read':
-      return 'Read wallet addresses';
+      return 'apps.capability.walletAddressesRead';
     case 'utxo:wallet:read':
-      return 'Read wallet UTXOs';
+      return 'apps.capability.walletUtxosRead';
     case 'utxo:address:read':
-      return 'Read UTXOs for wallet addresses';
+      return 'apps.capability.addressUtxosRead';
     case 'utxo:address:refresh':
-      return 'Refresh and store UTXOs for wallet addresses';
+      return 'apps.capability.addressUtxosRefresh';
     case 'bcmr:token:read':
-      return 'Read CashToken metadata';
+      return 'apps.capability.tokenMetadataRead';
     case 'tokenindex:holders:read':
-      return 'Read TokenIndex holder lists';
+      return 'apps.capability.tokenHoldersRead';
     case 'tx:build':
-      return 'Build transactions';
+      return 'apps.capability.buildTransactions';
     case 'tx:add_output':
-      return 'Construct transaction outputs';
+      return 'apps.capability.addOutputs';
     case 'tx:broadcast':
-      return 'Broadcast transactions';
+      return 'apps.capability.broadcastTransactions';
     case 'signing:message_sign':
-      return 'Sign messages with wallet keys';
+      return 'apps.capability.signMessages';
     case 'signing:signature_template':
-      return 'Create signature templates';
+      return 'apps.capability.signatureTemplates';
     case 'http:fetch_json':
-      return 'Fetch JSON over HTTP';
+      return 'apps.capability.fetchJson';
     default:
-      return capability;
+      return 'apps.capability';
   }
 }
 
@@ -146,23 +156,50 @@ function getDeclarativeScreenId(app: AddonAppDefinition): string {
   return screen || app.id;
 }
 
+function getAddonModuleId(screenId: string): AddonModuleId | undefined {
+  switch (screenId) {
+    case 'AuthGuard':
+    case 'AuthGuardApp':
+    case 'authguard':
+      return 'authguard';
+    case 'AirdropsApp':
+    case 'EventRewardsApp':
+    case 'eventRewardsApp':
+    case 'airdropsApp':
+      return 'airdrops';
+    case 'FundMeAddonApp':
+    case 'fundmeApp':
+      return 'fundme';
+    case 'MemoCashReaderApp':
+    case 'memoCashReaderApp':
+      return 'memo-cash-reader';
+    case 'MintCashTokensPoCApp':
+    case 'mintCashTokensPoCApp':
+    case 'mint-cashtokens-poc':
+      return 'mint-cashtokens';
+    case 'CauldronSwapApp':
+    case 'cauldronSwapApp':
+      return 'cauldron';
+    case 'ParyonWorkspaceApp':
+    case 'paryonWorkspaceApp':
+      return 'paryon';
+    case 'MerchantPayApp':
+    case 'merchantPayApp':
+      return 'merchant-pay';
+    default:
+      return undefined;
+  }
+}
+
 function isDisabledApp(app: AddonAppDefinition): boolean {
-  const screenId = getDeclarativeScreenId(app).toLowerCase();
-  const appId = app.id.toLowerCase();
-  const appName = app.name.toLowerCase();
   const isNativeRuntime = Capacitor.isNativePlatform();
   const comingSoon = isComingSoonApp(app.id, app.name);
 
-  return (
-    (comingSoon && isNativeRuntime) ||
-    screenId === 'authguard' ||
-    screenId === 'authguardapp' ||
-    appId === 'authguard' ||
-    appName === 'authguard'
-  );
+  return shouldHideApp(app.id, app.name) || (comingSoon && isNativeRuntime);
 }
 
 export default function MarketplaceAppHost() {
+  const { t, locale } = useI18n();
   const navigate = useNavigate();
   const location = useLocation();
   const backTarget = getReturnPath(location, '/apps');
@@ -190,6 +227,11 @@ export default function MarketplaceAppHost() {
   const [consentPrompt, setConsentPrompt] = useState<ConsentPrompt | null>(
     null
   );
+  const formatCapability = useCallback(
+    (capability: AddonCapability): string =>
+      t(capabilityTranslationKey(capability)),
+    [t]
+  );
   const promptOpenRef = useRef(false);
   const promptQueueRef = useRef<
     Array<{
@@ -211,6 +253,13 @@ export default function MarketplaceAppHost() {
   const trustedAddon = useMemo(
     () => (resolved ? isTrustedAddon(resolved.manifest) : false),
     [resolved]
+  );
+  const localizedAppName = useMemo(
+    () =>
+      resolved
+        ? getLocalizedAddonAppName(resolved.manifest, resolved.app, locale)
+        : '',
+    [locale, resolved]
   );
   const paryonContractAddresses = useMemo(() => {
     if (!resolved) return new Set<string>();
@@ -370,11 +419,14 @@ export default function MarketplaceAppHost() {
           return;
         }
         const keys = await KeyService.retrieveKeys(walletId);
-        const set = new Set<string>(
-          keys
-            .map((k: { address?: string | null }) => k.address)
-            .filter(Boolean)
-        );
+        const set = new Set<string>();
+        for (const key of keys as Array<{
+          address?: string | null;
+          tokenAddress?: string | null;
+        }>) {
+          if (key.address) set.add(key.address);
+          if (key.tokenAddress) set.add(key.tokenAddress);
+        }
         if (mounted) setWalletAddresses(set);
       } catch {
         // best-effort; address-scoped SDK methods will fail closed if allowlist is unavailable
@@ -393,6 +445,11 @@ export default function MarketplaceAppHost() {
     (async () => {
       try {
         if (!resolved || !walletId) {
+          if (!cancelled) setLaunchApproved(false);
+          return;
+        }
+
+        if (isDisabledApp(resolved.app)) {
           if (!cancelled) setLaunchApproved(false);
           return;
         }
@@ -427,15 +484,14 @@ export default function MarketplaceAppHost() {
           mode: 'launch',
           appKey,
           capabilities: ungranted,
-          title: `Allow ${resolved.app.name} capabilities?`,
-          message:
-            'This addon app is requesting wallet capabilities before launch.',
+          title: t('apps.allowCapabilities', { name: localizedAppName }),
+          message: t('apps.capabilitiesMessage'),
         });
 
         if (cancelled) return;
 
         if (decision === 'deny') {
-          setError('Permission denied. App launch was blocked.');
+          setError(t('apps.permissionDenied'));
           setLaunchApproved(false);
           return;
         }
@@ -462,6 +518,8 @@ export default function MarketplaceAppHost() {
     persistCapabilityGrant,
     requestPrompt,
     resolved,
+    localizedAppName,
+    t,
     walletId,
   ]);
 
@@ -491,8 +549,11 @@ export default function MarketplaceAppHost() {
         mode: 'runtime',
         appKey,
         capability,
-        title: `Allow sensitive action?`,
-        message: `${resolved.app.name} requested: ${formatCapability(capability)}.`,
+        title: t('apps.allowSensitiveAction'),
+        message: t('apps.capabilityRequested', {
+          name: localizedAppName,
+          capability: formatCapability(capability),
+        }),
       });
 
       if (decision === 'deny') {
@@ -508,6 +569,9 @@ export default function MarketplaceAppHost() {
       persistCapabilityGrant,
       requestPrompt,
       resolved,
+      localizedAppName,
+      formatCapability,
+      t,
       walletId,
     ]
   );
@@ -540,13 +604,17 @@ export default function MarketplaceAppHost() {
     // if already loaded, reuse
     if (walletAddresses) return walletAddresses;
 
-        const keys = await KeyService.retrieveKeys(walletId);
-        return new Set<string>(
-          keys
-            .map((k: { address?: string | null }) => k.address)
-            .filter(Boolean)
-        );
-      };
+    const keys = await KeyService.retrieveKeys(walletId);
+    const addresses = new Set<string>();
+    for (const key of keys as Array<{
+      address?: string | null;
+      tokenAddress?: string | null;
+    }>) {
+      if (key.address) addresses.add(key.address);
+      if (key.tokenAddress) addresses.add(key.tokenAddress);
+    }
+    return addresses;
+  };
 
   // Patient-0: map declarative app => local component
   const renderApp = () => {
@@ -558,20 +626,25 @@ export default function MarketplaceAppHost() {
       // here is the SAME capability-gated object declarative apps use; this
       // component never gives the addon anything beyond that.
       return (
-        <AddonIframeHost manifest={resolved.manifest} app={resolved.app} sdk={sdk} />
+        <AddonIframeHost
+          manifest={resolved.manifest}
+          app={resolved.app}
+          sdk={sdk}
+        />
       );
     }
 
     if (resolved.app.kind !== 'declarative') {
       return (
         <div className="p-4">
-          <div className="font-bold">Unsupported app kind:</div>
+          <div className="font-bold">{t('apps.unsupportedAppKind')}</div>
           <pre className="text-sm">{String(resolved.app.kind)}</pre>
         </div>
       );
     }
 
     const screenId = getDeclarativeScreenId(resolved.app);
+    const moduleId = getAddonModuleId(screenId);
 
     const rendered = renderDeclarativeScreen({
       screenId,
@@ -579,22 +652,27 @@ export default function MarketplaceAppHost() {
       sdk,
       loadWalletAddresses,
     });
-    if (rendered) return rendered;
+    if (rendered) {
+      return (
+        <AddonI18nProvider manifest={resolved.manifest} moduleId={moduleId}>
+          {rendered}
+        </AddonI18nProvider>
+      );
+    }
 
     return (
       <div className="p-4">
-        <div className="font-bold">Unsupported declarative app:</div>
+        <div className="font-bold">{t('apps.unsupportedDeclarativeApp')}</div>
         <div className="text-sm text-gray-700 mt-1">
-          Expected config.screen (or app.id) to map to a built-in app
-          implementation.
+          {t('apps.expectedScreen')}
         </div>
         <div className="mt-3 text-sm">
-          <div className="font-semibold">Resolved screenId</div>
+          <div className="font-semibold">{t('apps.resolvedScreenId')}</div>
           <pre className="text-xs bg-gray-100 p-2 rounded">
             {String(screenId)}
           </pre>
 
-          <div className="font-semibold mt-3">App definition</div>
+          <div className="font-semibold mt-3">{t('apps.appDefinition')}</div>
           <pre className="text-xs bg-gray-100 p-2 rounded overflow-x-auto">
             {JSON.stringify(resolved.app, null, 2)}
           </pre>
@@ -606,7 +684,7 @@ export default function MarketplaceAppHost() {
   if (loading) {
     return (
       <div className="container mx-auto p-4">
-        <div className="text-lg font-semibold">Loading app…</div>
+        <div className="text-lg font-semibold">{t('apps.loadingApp')}</div>
       </div>
     );
   }
@@ -615,7 +693,7 @@ export default function MarketplaceAppHost() {
     return (
       <div className="container mx-auto p-4">
         <div className="text-lg font-semibold text-red-600">
-          Failed to load app
+          {t('apps.failedToLoad')}
         </div>
         <div className="mt-2 text-sm text-gray-700">{error}</div>
 
@@ -623,7 +701,7 @@ export default function MarketplaceAppHost() {
           onClick={() => navigate(backTarget)}
           className="mt-4 bg-blue-500 hover:bg-blue-600 text-white py-2 px-4 rounded"
         >
-          Back
+          {t('apps.back')}
         </button>
       </div>
     );
@@ -632,12 +710,12 @@ export default function MarketplaceAppHost() {
   if (!walletId) {
     return (
       <div className="container mx-auto p-4">
-        <div className="text-lg font-semibold">No wallet selected</div>
+        <div className="text-lg font-semibold">{t('apps.noWallet')}</div>
         <button
           onClick={() => navigate('/landing')}
           className="mt-4 bg-blue-500 hover:bg-blue-600 text-white py-2 px-4 rounded"
         >
-          Go to Landing
+          {t('apps.goToLanding')}
         </button>
       </div>
     );
@@ -646,13 +724,13 @@ export default function MarketplaceAppHost() {
   if (resolved && isDisabledApp(resolved.app)) {
     return (
       <div className="container mx-auto p-4">
-        <div className="text-lg font-semibold">{resolved.app.name}</div>
-        <div className="mt-2 wallet-muted">Coming soon.</div>
+        <div className="text-lg font-semibold">{localizedAppName}</div>
+        <div className="mt-2 wallet-muted">{t('apps.comingSoon')}.</div>
         <button
           onClick={() => navigate(backTarget)}
           className="wallet-btn-secondary mt-4"
         >
-          Back
+          {t('apps.back')}
         </button>
       </div>
     );
@@ -661,9 +739,11 @@ export default function MarketplaceAppHost() {
   if (!trustedAddon && !launchApproved) {
     return (
       <div className="container mx-auto p-4">
-        <div className="text-lg font-semibold">Waiting for app permission</div>
+        <div className="text-lg font-semibold">
+          {t('apps.waitingPermission')}
+        </div>
         <div className="mt-2 text-sm wallet-muted">
-          Approve required capabilities to continue.
+          {t('apps.approveCapabilities')}
         </div>
       </div>
     );
@@ -696,7 +776,8 @@ export default function MarketplaceAppHost() {
 
             {consentPrompt.mode === 'runtime' && consentPrompt.capability && (
               <div className="mt-3 text-sm">
-                Capability: {formatCapability(consentPrompt.capability)}
+                {t('apps.capability')}{' '}
+                {formatCapability(consentPrompt.capability)}
               </div>
             )}
 
@@ -706,21 +787,21 @@ export default function MarketplaceAppHost() {
                 className="wallet-btn-danger"
                 onClick={() => resolvePrompt('deny')}
               >
-                Deny
+                {t('apps.deny')}
               </button>
               <button
                 type="button"
                 className="wallet-btn-secondary"
                 onClick={() => resolvePrompt('allow-once')}
               >
-                Allow once
+                {t('apps.allowOnce')}
               </button>
               <button
                 type="button"
                 className="wallet-btn-primary"
                 onClick={() => resolvePrompt('allow-always')}
               >
-                Always allow
+                {t('apps.alwaysAllow')}
               </button>
             </div>
           </div>

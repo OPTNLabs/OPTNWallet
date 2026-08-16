@@ -13,6 +13,8 @@ const listActiveMock = vi.fn();
 const listReservedOutpointsMock = vi.fn();
 const cashAddressToLockingBytecodeMock = vi.fn();
 const decodeTransactionMock = vi.fn();
+const getStateMock = vi.fn();
+const dispatchMock = vi.fn();
 
 vi.mock('../WalletDiscoveryService', () => ({
   default: {
@@ -47,6 +49,7 @@ vi.mock('../ElectrumService', () => ({
   default: {
     getUTXOsMany: getUTXOsManyMock,
   },
+  invalidateUTXOCache: vi.fn(),
 }));
 
 vi.mock('../BcmrService', () => ({
@@ -84,16 +87,18 @@ vi.mock('../../apis/AddressManager/AddressManager', () => ({
 
 vi.mock('../../state/store', () => ({
   store: {
-    getState: vi.fn(() => ({
-      network: { currentNetwork: 'mainnet' },
-      wallet_id: { currentWalletId: 11 },
-    })),
+    getState: getStateMock,
+    dispatch: dispatchMock,
   },
 }));
 
 describe('UTXOService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getStateMock.mockReturnValue({
+      network: { currentNetwork: 'mainnet' },
+      wallet_id: { currentWalletId: 11, networkType: 'mainnet' },
+    });
     ensureInitialAddressBatchesMock.mockResolvedValue([]);
     getUTXOsManyMock.mockResolvedValue({});
     fetchTransactionHistoriesMock.mockResolvedValue({});
@@ -131,17 +136,97 @@ describe('UTXOService', () => {
     expect(flushDatabaseToFileMock).toHaveBeenCalledTimes(1);
   });
 
+  it('uses the active wallet network when global network state is stale', async () => {
+    getStateMock.mockReturnValue({
+      network: { currentNetwork: 'mainnet' },
+      wallet_id: { currentWalletId: 11, networkType: 'chipnet' },
+    });
+    getUTXOsManyMock.mockResolvedValueOnce({
+      'bchtest:q1': [
+        {
+          tx_hash: 'a'.repeat(64),
+          tx_pos: 0,
+          value: 1000,
+          height: 1,
+        },
+      ],
+    });
+
+    const { default: UTXOService } = await import('../UTXOService');
+
+    await UTXOService.fetchAndStoreUTXOsMany(11, ['bchtest:q1']);
+
+    expect(ensureInitialAddressBatchesMock).toHaveBeenCalledWith(
+      11,
+      'chipnet',
+      expect.any(Function)
+    );
+    expect(replaceWalletAddressUTXOsMock).toHaveBeenCalledWith(
+      11,
+      expect.objectContaining({
+        'bchtest:q1': [expect.objectContaining({ prefix: 'bchtest' })],
+      })
+    );
+  });
+
+  it('publishes address discovery progress while scanning HD windows', async () => {
+    let releaseDiscovery!: (addresses: string[]) => void;
+    ensureInitialAddressBatchesMock.mockReturnValueOnce(
+      new Promise<string[]>((resolve) => {
+        releaseDiscovery = resolve;
+      })
+    );
+    const { default: UTXOService } = await import('../UTXOService');
+
+    const refresh = UTXOService.fetchAndStoreUTXOsMany(11, ['bitcoincash:q1']);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'utxos/setAddressDiscoveryInProgress',
+        payload: true,
+      })
+    );
+
+    releaseDiscovery([]);
+    await refresh;
+
+    expect(dispatchMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        type: 'utxos/setAddressDiscoveryInProgress',
+        payload: false,
+      })
+    );
+  });
+
   it('can refresh known addresses without starting account discovery', async () => {
     const { default: UTXOService } = await import('../UTXOService');
 
-    await UTXOService.fetchAndStoreUTXOsMany(
-      11,
-      ['bitcoincash:q1'],
-      { discover: false }
-    );
+    await UTXOService.fetchAndStoreUTXOsMany(11, ['bitcoincash:q1'], {
+      discover: false,
+    });
 
     expect(ensureInitialAddressBatchesMock).not.toHaveBeenCalled();
-    expect(getUTXOsManyMock).toHaveBeenCalledWith(['bitcoincash:q1']);
+    expect(getUTXOsManyMock).toHaveBeenCalledWith(
+      ['bitcoincash:q1'],
+      undefined
+    );
+  });
+
+  it('still refreshes known addresses when discovery is unavailable', async () => {
+    ensureInitialAddressBatchesMock.mockRejectedValueOnce(
+      new Error('discovery endpoint unavailable')
+    );
+
+    const { default: UTXOService } = await import('../UTXOService');
+
+    await UTXOService.fetchAndStoreUTXOsMany(11, ['bitcoincash:q1']);
+
+    expect(getUTXOsManyMock).toHaveBeenCalledWith(
+      ['bitcoincash:q1'],
+      undefined
+    );
+    expect(flushDatabaseToFileMock).toHaveBeenCalledTimes(1);
   });
 
   it('uses one history batch for discovery before the wallet UTXO fetch', async () => {
@@ -153,8 +238,7 @@ describe('UTXOService', () => {
           walletId: number,
           batch: { address: string }[]
         ) => Promise<string[]>
-      ) =>
-        await checkUsage(11, [{ address: 'bitcoincash:q1' }])
+      ) => await checkUsage(11, [{ address: 'bitcoincash:q1' }])
     );
     fetchTransactionHistoriesMock.mockResolvedValue({
       'bitcoincash:q1': [],
@@ -184,10 +268,10 @@ describe('UTXOService', () => {
 
     await UTXOService.fetchAndStoreUTXOsMany(11, ['bitcoincash:q1']);
 
-    expect(getUTXOsManyMock).toHaveBeenCalledWith([
-      'bitcoincash:q1',
-      'bitcoincash:q2',
-    ]);
+    expect(getUTXOsManyMock).toHaveBeenCalledWith(
+      ['bitcoincash:q1', 'bitcoincash:q2'],
+      undefined
+    );
   });
 
   it('keeps a broadcast Fusion BCH output visible until Electrum indexes it', async () => {
@@ -539,4 +623,38 @@ describe('UTXOService', () => {
     expect(result.allUtxos).toEqual([]);
     expect(decodeTransactionMock).toHaveBeenCalledWith(expect.any(Uint8Array));
   });
+});
+
+it('soft-fails transport loss — returns last SQL snapshot, does not wipe', async () => {
+  getUTXOsManyMock.mockRejectedValue(new Error('Connection lost'));
+  fetchUTXOsFromDatabaseMock.mockResolvedValue({
+    utxosMap: {
+      'bitcoincash:q1': [
+        {
+          wallet_id: 11,
+          address: 'bitcoincash:q1',
+          height: 1,
+          tx_hash: 'aa'.repeat(32),
+          tx_pos: 0,
+          value: 5000,
+          amount: 5000,
+          prefix: 'bitcoincash',
+        },
+      ],
+    },
+    cashTokenUtxosMap: {},
+  });
+  const { default: UTXOService } = await import('../UTXOService');
+
+  const result = await UTXOService.fetchAndStoreUTXOsMany(11, [
+    'bitcoincash:q1',
+  ]);
+
+  expect(result['bitcoincash:q1']).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ tx_hash: 'aa'.repeat(32), value: 5000 }),
+    ])
+  );
+  // Soft-fail path must not replace the wallet with an empty network result.
+  expect(replaceWalletAddressUTXOsMock).not.toHaveBeenCalled();
 });

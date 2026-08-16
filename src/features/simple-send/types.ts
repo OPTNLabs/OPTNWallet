@@ -21,6 +21,7 @@ export type ReviewState = {
     category: string;
     amount: bigint;
   };
+  rpaStealthAddress?: string;
 };
 
 export type InputTableRow = {

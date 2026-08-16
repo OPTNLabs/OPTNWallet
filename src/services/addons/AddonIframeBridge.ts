@@ -4,6 +4,7 @@
 // logic — which SDK call an addon is actually allowed to make — is covered
 // by a real unit test rather than only by manual iframe testing.
 import type { AddonSDK } from '../AddonsSDK';
+import type { AddonLocale } from '../../types/addons';
 
 const SANDBOX_URL = '/addon-sandbox.html';
 
@@ -22,14 +23,19 @@ export async function dispatchAddonSdkCall(
   methodName: string,
   args: unknown[]
 ): Promise<unknown> {
-  const sdkRecord = sdk as unknown as Record<string, Record<string, unknown> | undefined>;
+  const sdkRecord = sdk as unknown as Record<
+    string,
+    Record<string, unknown> | undefined
+  >;
   const mod = sdkRecord[moduleName];
   if (!mod || typeof mod !== 'object') {
     throw new Error(`Addon requested unknown SDK module: ${moduleName}`);
   }
   const fn = mod[methodName];
   if (typeof fn !== 'function') {
-    throw new Error(`Addon requested unknown SDK method: ${moduleName}.${methodName}`);
+    throw new Error(
+      `Addon requested unknown SDK method: ${moduleName}.${methodName}`
+    );
   }
   return (fn as (...a: unknown[]) => unknown).apply(mod, args);
 }
@@ -37,13 +43,37 @@ export async function dispatchAddonSdkCall(
 type SandboxMessage =
   | { type: 'optn-addon-ready' }
   | { type: 'optn-addon-init-ack'; ok: boolean; error?: string }
-  | { type: 'optn-addon-sdk-call'; requestId: string; module: string; method: string; args: unknown[] };
+  | {
+      type: 'optn-addon-sdk-call';
+      requestId: string;
+      module: string;
+      method: string;
+      args: unknown[];
+    };
+
+function postSandboxMessage(iframe: HTMLIFrameElement, message: unknown): void {
+  // The sandbox intentionally omits allow-same-origin, so its origin is opaque.
+  // event.source is checked against this exact iframe before any message is
+  // handled; '*' is required for delivery but does not authorize a caller.
+  // nosemgrep: javascript.browser.security.wildcard-postmessage-configuration.wildcard-postmessage-configuration
+  iframe.contentWindow?.postMessage(message, '*');
+}
 
 export type MountAddonIframeOptions = {
   container: HTMLElement;
   bundleSource: string;
   sdk: AddonSDK;
+  locale: AddonLocale;
+  localeMessages: Readonly<Record<string, string>>;
   onInitError?: (message: string) => void;
+};
+
+export type MountedAddonIframe = {
+  destroy: () => void;
+  setLocale: (
+    locale: AddonLocale,
+    messages: Readonly<Record<string, string>>
+  ) => void;
 };
 
 /**
@@ -61,8 +91,11 @@ export type MountAddonIframeOptions = {
  *   iframe itself (connect-src 'none' in the sandbox page's CSP blocks it
  *   from making network requests of its own regardless).
  */
-export function mountAddonIframe(options: MountAddonIframeOptions): { destroy: () => void } {
-  const { container, bundleSource, sdk, onInitError } = options;
+export function mountAddonIframe(
+  options: MountAddonIframeOptions
+): MountedAddonIframe {
+  const { container, bundleSource, sdk, locale, localeMessages, onInitError } =
+    options;
 
   const iframe = document.createElement('iframe');
   iframe.setAttribute('sandbox', 'allow-scripts');
@@ -73,6 +106,21 @@ export function mountAddonIframe(options: MountAddonIframeOptions): { destroy: (
   container.appendChild(iframe);
 
   let destroyed = false;
+  let currentLocale = locale;
+  let currentLocaleMessages = localeMessages;
+
+  const postLocale = (
+    nextLocale: AddonLocale,
+    nextMessages: Readonly<Record<string, string>>
+  ) => {
+    currentLocale = nextLocale;
+    currentLocaleMessages = nextMessages;
+    postSandboxMessage(iframe, {
+      type: 'optn-addon-locale',
+      locale: nextLocale,
+      messages: nextMessages,
+    });
+  };
 
   const handleMessage = (event: MessageEvent<SandboxMessage>) => {
     if (destroyed) return;
@@ -81,10 +129,12 @@ export function mountAddonIframe(options: MountAddonIframeOptions): { destroy: (
     if (!data || typeof data !== 'object') return;
 
     if (data.type === 'optn-addon-ready') {
-      iframe.contentWindow?.postMessage(
-        { type: 'optn-addon-init', bundleSource },
-        '*'
-      );
+      postSandboxMessage(iframe, {
+        type: 'optn-addon-init',
+        bundleSource,
+        locale: currentLocale,
+        localeMessages: currentLocaleMessages,
+      });
       return;
     }
 
@@ -97,21 +147,20 @@ export function mountAddonIframe(options: MountAddonIframeOptions): { destroy: (
       const { requestId, module: moduleName, method: methodName, args } = data;
       void dispatchAddonSdkCall(sdk, moduleName, methodName, args ?? [])
         .then((result) => {
-          iframe.contentWindow?.postMessage(
-            { type: 'optn-addon-sdk-result', requestId, ok: true, result },
-            '*'
-          );
+          postSandboxMessage(iframe, {
+            type: 'optn-addon-sdk-result',
+            requestId,
+            ok: true,
+            result,
+          });
         })
         .catch((err: unknown) => {
-          iframe.contentWindow?.postMessage(
-            {
-              type: 'optn-addon-sdk-result',
-              requestId,
-              ok: false,
-              error: err instanceof Error ? err.message : String(err),
-            },
-            '*'
-          );
+          postSandboxMessage(iframe, {
+            type: 'optn-addon-sdk-result',
+            requestId,
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
         });
     }
   };
@@ -119,6 +168,10 @@ export function mountAddonIframe(options: MountAddonIframeOptions): { destroy: (
   window.addEventListener('message', handleMessage);
 
   return {
+    setLocale(nextLocale, nextMessages) {
+      if (destroyed) return;
+      postLocale(nextLocale, nextMessages);
+    },
     destroy() {
       destroyed = true;
       window.removeEventListener('message', handleMessage);

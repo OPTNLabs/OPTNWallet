@@ -7,6 +7,7 @@ const listActiveMock = vi.fn();
 const removeMock = vi.fn();
 const retrieveKeysMock = vi.fn();
 const requestRefreshMock = vi.fn();
+const reservedFusionOutpointsMock = vi.fn();
 
 vi.mock('../../apis/TransactionManager/TransactionManager', () => ({
   default: () => ({
@@ -44,6 +45,11 @@ vi.mock('../WalletBackendSyncService', () => ({
   default: { observeTransaction: vi.fn() },
 }));
 
+vi.mock('../../platform/desktop/fusionRoundState', () => ({
+  reservedOutpoints: (...args: unknown[]) =>
+    reservedFusionOutpointsMock(...args),
+}));
+
 vi.mock('../../state/store', () => ({
   store: {
     getState: vi.fn(() => ({ wallet_id: { currentWalletId: 11 } })),
@@ -51,10 +57,18 @@ vi.mock('../../state/store', () => ({
 }));
 
 describe('TransactionService.sendTransaction', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    // sendTransaction kicks off tracker and refresh work without awaiting it, so
+    // the previous test's calls can still be in flight. Clearing the mocks first
+    // lets a stray call land inside THIS test, and the assertions here are
+    // negative — not.toHaveBeenCalled() — so a late arrival fails a test that
+    // never triggered it. Red only under parallel load, green in isolation.
+    // Let the detached work settle before resetting the counters.
+    await new Promise((resolve) => setTimeout(resolve, 0));
     vi.clearAllMocks();
     listActiveMock.mockResolvedValue([]);
     retrieveKeysMock.mockResolvedValue([]);
+    reservedFusionOutpointsMock.mockReturnValue(new Set());
   });
 
   it('clears any pending outbound record when broadcast returns an error', async () => {
@@ -125,6 +139,28 @@ describe('TransactionService.sendTransaction', () => {
     );
 
     expect(result.errorMessage).toContain('already using one of these UTXOs');
+    expect(sendTransactionMock).not.toHaveBeenCalled();
+  });
+
+  it('does not broadcast an input reserved by an in-flight Fusion round', async () => {
+    reservedFusionOutpointsMock.mockReturnValue(
+      new Set(['fusion-input:3'])
+    );
+
+    const { default: TransactionService } = await import('../TransactionService');
+    const result = await TransactionService.sendTransaction(
+      '00dd',
+      [
+        {
+          tx_hash: 'fusion-input',
+          tx_pos: 3,
+          address: 'bchtest:qfusion',
+          value: 50_000,
+        } as never,
+      ]
+    );
+
+    expect(result.errorMessage).toContain('Fusion round');
     expect(sendTransactionMock).not.toHaveBeenCalled();
   });
 });

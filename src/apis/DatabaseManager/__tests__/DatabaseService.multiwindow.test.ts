@@ -169,6 +169,82 @@ describe('DatabaseService multi-window persistence', () => {
     result.close();
   });
 
+  it('lets a locked window recover instead of refusing every save forever', async () => {
+    // The balance-disappears bug. A window loads the database once at startup;
+    // locking a wallet leaves that copy and its save baselines untouched. Another
+    // window writes, and from then on EVERY save from the first window is refused
+    // — including the UTXO write — so the wallet reports a good sync and shows
+    // nothing. Before the resync there was no way out but restarting the app.
+    const SQL = await initSqlJs();
+    const seed = new SQL.Database();
+    createTables(seed);
+    seed.run('ALTER TABLE wallets ADD COLUMN kdf_salt TEXT');
+    seed.run('ALTER TABLE wallets ADD COLUMN birth_height INT');
+    seed.run('PRAGMA user_version = 7');
+    seed.run(
+      `INSERT INTO wallets
+        (id, wallet_name, mnemonic, passphrase, networkType, walletType, balance)
+       VALUES (1, 'wallet5', '', '', 'chipnet', 'standard', 0)`
+    );
+    let persisted = seed.export();
+    seed.close();
+
+    vi.doMock('idb-keyval', () => ({
+      get: vi.fn(async () => new Uint8Array(persisted)),
+      set: vi.fn(async (_key: string, value: Uint8Array) => {
+        persisted = new Uint8Array(value);
+      }),
+    }));
+    vi.doMock('sql.js', () => ({
+      default: vi.fn(async () => SQL),
+    }));
+
+    const lockedWindow = (await import('../DatabaseService')).default();
+    await lockedWindow.startDatabase();
+    vi.resetModules();
+    const otherWindow = (await import('../DatabaseService')).default();
+    await otherWindow.startDatabase();
+
+    // While this window sits locked, another one writes the same wallet.
+    otherWindow.getDatabase()!.run(
+      `INSERT INTO keys
+        (wallet_id, address, token_address, account_index, change_index, address_index)
+       VALUES (1, 'bchtest:other-window', 'bchtest:z-other-window', 0, 0, 1)`
+    );
+    await otherWindow.flushDatabaseToFile(1);
+
+    // Reopening the wallet and syncing stores a coin. This is the save the user
+    // never sees succeed.
+    const storeSyncedCoin = () =>
+      lockedWindow.getDatabase()!.run(
+        `INSERT INTO UTXOs
+          (wallet_id, address, height, tx_hash, tx_pos, amount, prefix)
+         VALUES (1, 'bchtest:mine', 5, 'restored-utxo', 0, 4200, 'bchtest')`
+      );
+
+    storeSyncedCoin();
+    await expect(lockedWindow.flushDatabaseToFile(1)).rejects.toThrow(
+      'changed in another window'
+    );
+
+    // What locking now does. Rebasing drops our stale rows too, which is why it
+    // is only safe with no wallet open — the coins come back from the chain.
+    await lockedWindow.resyncDatabaseFromDisk();
+    storeSyncedCoin();
+    await lockedWindow.flushDatabaseToFile(1);
+
+    const result = new SQL.Database(persisted);
+    expect(
+      result.exec("SELECT amount FROM UTXOs WHERE tx_hash = 'restored-utxo'")[0]
+        .values
+    ).toEqual([[4200]]);
+    // and the other window's work was not trampled on the way out.
+    expect(
+      result.exec('SELECT address FROM keys WHERE wallet_id = 1')[0].values
+    ).toEqual([['bchtest:other-window']]);
+    result.close();
+  });
+
   it('rejects a stale second window before it can replace the same wallet', async () => {
     const SQL = await initSqlJs();
     const seed = new SQL.Database();

@@ -34,6 +34,7 @@ describe('per-wallet fusion policy', () => {
 
   it('returns defaults for a wallet that has never been configured', () => {
     expect(readWalletFusionPolicy(5)).toEqual(DEFAULT_WALLET_FUSION_POLICY);
+    expect(readWalletFusionPolicy(5).autoFuseEnabled).toBe(false);
   });
 
   it('follows the WALLET, not the window that set it', () => {
@@ -102,5 +103,20 @@ describe('per-wallet fusion policy', () => {
     writeWalletFusionPolicy(6, policy({ cashFusionEnabled: true }));
     clearWalletFusionPolicy(5);
     expect(readWalletFusionPolicy(6).cashFusionEnabled).toBe(true);
+  });
+
+  it('ignores leftover protocol knobs stored by an older build', () => {
+    (globalThis as { localStorage: MemoryStorage }).localStorage.setItem(
+      'optn-wallet-fusion-policy',
+      JSON.stringify({
+        '5': {
+          cashFusionEnabled: true,
+          p2pKnobs: { minPlayers: 4, minSafePlayers: 3, maxPlayers: 8 },
+        },
+      })
+    );
+    const loaded = readWalletFusionPolicy(5);
+    expect(loaded.cashFusionEnabled).toBe(true);
+    expect(loaded).not.toHaveProperty('p2pKnobs');
   });
 });

@@ -1,5 +1,6 @@
 // src/components/UTXOCard.tsx
-import React from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
+import { useSelector } from 'react-redux';
 import { shortenTxHash } from '../utils/shortenHash';
 import { UTXO } from '../types/types';
 import { SATSINBITCOIN } from '../utils/constants';
@@ -9,6 +10,15 @@ import {
   formatAtomicTokenAmount,
   resolveTokenPresentation,
 } from '../utils/tokenPresentation';
+import { coinDepth } from '../platform/desktop/fusionCoinDepth';
+import {
+  getCoinLabel,
+  outpointKey,
+  setCoinLabel,
+} from '../platform/desktop/CoinLabelService';
+import { selectWalletId } from '../state/slices/walletSlice';
+import { FusionBadge } from './FusionBadge';
+import { useI18n } from '../i18n/useI18n';
 
 interface UTXOCardProps {
   utxos: UTXO[];
@@ -41,10 +51,56 @@ function formatBchFromSats(
 }
 
 const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
+  const { t } = useI18n();
+  const walletId = useSelector(selectWalletId);
+  const [labels, setLabels] = useState<Record<string, string>>({});
   const tokenMetadata = useSharedTokenMetadata(
     utxos
       .map((u) => u.token?.category)
       .filter((category): category is string => Boolean(category))
+  );
+
+  useEffect(() => {
+    if (walletId <= 0 || utxos.length === 0) {
+      setLabels({});
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const next: Record<string, string> = {};
+      await Promise.all(
+        utxos.map(async (u) => {
+          const key = outpointKey(u.tx_hash, u.tx_pos);
+          const label = await getCoinLabel(walletId, 'outpoint', key);
+          if (label) next[key] = label;
+        })
+      );
+      if (!cancelled) setLabels(next);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [walletId, utxos]);
+
+  const editLabel = useCallback(
+    async (txHash: string, txPos: number, current: string | undefined) => {
+      if (walletId <= 0) return;
+      const key = outpointKey(txHash, txPos);
+      const next = window.prompt(
+        'Label this coin (empty to clear). Personal note only — not used for balance.',
+        current ?? ''
+      );
+      if (next === null) return;
+      await setCoinLabel(walletId, 'outpoint', key, next);
+      setLabels((prev) => {
+        const copy = { ...prev };
+        const cleaned = next.trim();
+        if (cleaned) copy[key] = cleaned.slice(0, 200);
+        else delete copy[key];
+        return copy;
+      });
+    },
+    [walletId]
   );
 
   if (loading) {
@@ -65,7 +121,7 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
             d="M4 12a8 8 0 018-8v8H4z"
           />
         </svg>
-        <span>Loading UTXOs…</span>
+        <span>{t('utxo.loading')}</span>
       </div>
     );
   }
@@ -78,12 +134,16 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
         const metadata = tokenData?.BcmrTokenMetadata || null;
         const category = tokenData?.category || null;
         const sharedMeta = category ? tokenMetadata[category] : null;
-        const presentation = resolveTokenPresentation(category ?? '', sharedMeta, {
-          name: metadata?.name ?? null,
-          symbol: metadata?.token.symbol ?? null,
-          decimals: metadata?.token.decimals ?? null,
-          iconUri: metadata?.uris?.icon ?? null,
-        });
+        const presentation = resolveTokenPresentation(
+          category ?? '',
+          sharedMeta,
+          {
+            name: metadata?.name ?? null,
+            symbol: metadata?.token.symbol ?? null,
+            decimals: metadata?.token.decimals ?? null,
+            iconUri: metadata?.uris?.icon ?? null,
+          }
+        );
 
         // ✅ Contract UTXOs may not have `value`, but do have `amount`
         const sats = (utxo.value ?? utxo.amount) as
@@ -91,6 +151,9 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
           | string
           | bigint
           | undefined;
+        const okey = outpointKey(utxo.tx_hash, utxo.tx_pos);
+        const depth = walletId > 0 ? coinDepth(walletId, okey) : 0;
+        const coinLabel = labels[okey];
 
         return (
           <div
@@ -101,15 +164,16 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
               {isToken ? (
                 <>
                   <p>
-                    <strong>Amount:</strong>{' '}
+                    <strong>{t('utxo.amount')}:</strong>{' '}
                     {formatAtomicTokenAmount(
                       tokenData!.amount,
                       presentation.decimals
                     )}{' '}
-                    {presentation.symbol || 'tokens'}
+                    {presentation.symbol || t('utxo.tokens')}
                   </p>
                   <p>
-                    <strong>Name:</strong> {presentation.primaryLabel}
+                    <strong>{t('utxo.name')}:</strong>{' '}
+                    {presentation.primaryLabel}
                   </p>
                   <p>
                     {formatBchFromSats(sats)} <strong>BCH</strong>
@@ -119,17 +183,40 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
                 <>
                   <p>
                     {formatBchFromSats(sats)} <strong>BCH</strong>
+                    {depth > 0 && (
+                      <FusionBadge depth={depth} className="ml-2" />
+                    )}
                   </p>
                   <p>
-                    <strong>Tx Hash:</strong> {shortenTxHash(utxo.tx_hash)}
+                    <strong>{t('utxo.txHash')}:</strong>{' '}
+                    {shortenTxHash(utxo.tx_hash)}
                   </p>
                   <p>
-                    <strong>Pos:</strong> {utxo.tx_pos}
+                    <strong>{t('utxo.pos')}:</strong> {utxo.tx_pos}
                   </p>
                   <p>
-                    <strong>Height:</strong> {utxo.height}
+                    <strong>{t('utxo.height')}:</strong> {utxo.height}
                   </p>
                 </>
+              )}
+              {walletId > 0 && (
+                <p className="flex flex-wrap items-center gap-2">
+                  <strong>Label:</strong>{' '}
+                  <span className="wallet-text-strong">
+                    {coinLabel || (
+                      <span className="wallet-muted italic">none</span>
+                    )}
+                  </span>
+                  <button
+                    type="button"
+                    className="text-xs underline wallet-muted hover:wallet-text-strong"
+                    onClick={() =>
+                      void editLabel(utxo.tx_hash, utxo.tx_pos, coinLabel)
+                    }
+                  >
+                    Edit
+                  </button>
+                </p>
               )}
             </div>
 
@@ -144,14 +231,14 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
                   showStatus={false}
                   detail={
                     <span className="text-xs wallet-muted">
-                      {utxo.token?.nft ? 'NFT' : 'FT'}
+                      {utxo.token?.nft ? t('utxo.nft') : t('utxo.ft')}
                     </span>
                   }
                 />
               ) : (
                 <div className="text-center">
                   <div className="text-base font-semibold wallet-text-strong">
-                    Bitcoin Cash
+                    {t('utxo.bitcoinCash')}
                   </div>
                 </div>
               )}
@@ -160,7 +247,7 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
         );
       })}
 
-      {!utxos.length && <p className="wallet-muted">No UTXOs to display.</p>}
+      {!utxos.length && <p className="wallet-muted">{t('utxo.none')}</p>}
     </div>
   );
 };

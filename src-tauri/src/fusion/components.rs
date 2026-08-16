@@ -20,9 +20,9 @@
 use prost::Message;
 use sha2::{Digest, Sha256};
 
+use super::pb;
 use super::pedersen;
 use super::schnorr::{self, BlindSignatureRequest};
-use super::pb;
 
 /// Electron Cash util.py fee/size formulas — must match exactly or the server
 /// rejects the player's declared excess_fee.
@@ -62,11 +62,15 @@ pub struct FusionOutput {
 /// submitting components covertly, and building blame proofs).
 pub struct RoundCommit {
     pub player_commit: pb::PlayerCommit,
+    /// The phase-9 routing seed; its SHA256 is committed in `player_commit`.
+    pub random_number: [u8; 32],
     /// Per sorted component, in the same order as `player_commit.initial_commitments`.
     pub requests: Vec<BlindSignatureRequest>,
     pub components_sorted: Vec<Vec<u8>>,
     /// (salt, pedersen_nonce) per sorted component — for the blame `Proof`.
     pub proofs: Vec<([u8; 32], [u8; 32])>,
+    /// Canonical big-endian communication private scalar per sorted component.
+    pub communication_private_keys: Vec<[u8; 32]>,
     pub excess_fee: u64,
 }
 
@@ -119,7 +123,10 @@ pub fn build_round_commit(
                 amount: inp.value,
             })),
         };
-        built.push((encode_component_placeholder(comp), inp.value as i64 - fee as i64));
+        built.push((
+            encode_component_placeholder(comp),
+            inp.value as i64 - fee as i64,
+        ));
     }
 
     for out in outputs {
@@ -131,7 +138,10 @@ pub fn build_round_commit(
                 amount: out.value,
             })),
         };
-        built.push((encode_component_placeholder(comp), -(out.value as i64) - fee as i64));
+        built.push((
+            encode_component_placeholder(comp),
+            -(out.value as i64) - fee as i64,
+        ));
     }
 
     for _ in 0..num_blanks {
@@ -146,11 +156,12 @@ pub fn build_round_commit(
     // set, serialize that (this is the exact bytes signed + hashed), commit to
     // its amount, and generate its communication key.
     struct Row {
-        commit_ser: Vec<u8>,   // serialized InitialCommitment (sort key)
-        comp_ser: Vec<u8>,     // serialized Component (with salt_commitment)
+        commit_ser: Vec<u8>, // serialized InitialCommitment (sort key)
+        comp_ser: Vec<u8>,   // serialized Component (with salt_commitment)
         salt: [u8; 32],
         nonce: [u8; 32],
         nonce_scalar: k256::Scalar,
+        communication_private_key: [u8; 32],
     }
     let mut rows: Vec<Row> = Vec::with_capacity(num_components);
     let mut excess: i64 = 0;
@@ -166,7 +177,7 @@ pub fn build_round_commit(
         let commitment = pedersen::commit(commit_amount);
         excess += commit_amount;
 
-        let (_comm_privkey, comm_pub) = schnorr::gen_keypair();
+        let (comm_privkey, comm_pub) = schnorr::gen_keypair();
 
         let init = pb::InitialCommitment {
             salted_component_hash: {
@@ -185,6 +196,7 @@ pub fn build_round_commit(
             salt,
             nonce: commitment.nonce.to_bytes().into(),
             nonce_scalar: commitment.nonce,
+            communication_private_key: comm_privkey.to_bytes().into(),
         });
     }
 
@@ -227,9 +239,11 @@ pub fn build_round_commit(
 
     Ok(RoundCommit {
         player_commit,
+        random_number,
         requests,
         components_sorted: rows.iter().map(|r| r.comp_ser.clone()).collect(),
         proofs: rows.iter().map(|r| (r.salt, r.nonce)).collect(),
+        communication_private_keys: rows.iter().map(|r| r.communication_private_key).collect(),
         excess_fee,
     })
 }
@@ -250,7 +264,9 @@ mod tests {
 
     fn parse_uncompressed(b: &[u8]) -> ProjectivePoint {
         let ep = EncodedPoint::from_bytes(b).unwrap();
-        ProjectivePoint::from(Option::<AffinePoint>::from(AffinePoint::from_encoded_point(&ep)).unwrap())
+        ProjectivePoint::from(
+            Option::<AffinePoint>::from(AffinePoint::from_encoded_point(&ep)).unwrap(),
+        )
     }
 
     // A stub round signer: round key x, and one nonce k per component.
@@ -260,13 +276,19 @@ mod tests {
     }
     impl RoundSigner {
         fn new(n: usize) -> Self {
-            Self { x: pedersen::random_nonce(), ks: (0..n).map(|_| pedersen::random_nonce()).collect() }
+            Self {
+                x: pedersen::random_nonce(),
+                ks: (0..n).map(|_| pedersen::random_nonce()).collect(),
+            }
         }
         fn pubkey(&self) -> Vec<u8> {
             schnorr::compressed(&(ProjectivePoint::GENERATOR * self.x)).to_vec()
         }
         fn nonce_points(&self) -> Vec<Vec<u8>> {
-            self.ks.iter().map(|k| schnorr::compressed(&(ProjectivePoint::GENERATOR * k)).to_vec()).collect()
+            self.ks
+                .iter()
+                .map(|k| schnorr::compressed(&(ProjectivePoint::GENERATOR * k)).to_vec())
+                .collect()
         }
         fn sign(&self, i: usize, ebytes: &[u8; 32]) -> [u8; 32] {
             let e = schnorr::scalar_reduce(*ebytes);
@@ -283,6 +305,34 @@ mod tests {
     }
 
     #[test]
+    fn canonical_input_component_matches_electron_cash_protobuf_wire_vector() {
+        // fusion.proto is vendored from Electron Cash. Lock the exact proto2
+        // field order, integer encoding, and wire-order txid so a future model
+        // or serializer change cannot silently fork component credentials.
+        let component = pb::Component {
+            salt_commitment: vec![0x11; 32],
+            component: Some(pb::component::Component::Input(pb::InputComponent {
+                prev_txid: vec![0xaa; 32],
+                prev_index: 3,
+                pubkey: vec![0x02; 33],
+                amount: 200_000,
+            })),
+        };
+        assert_eq!(
+            hex::encode(component.encode_to_vec()),
+            concat!(
+                "0a20",
+                "1111111111111111111111111111111111111111111111111111111111111111",
+                "124b0a20",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "10031a21",
+                "020202020202020202020202020202020202020202020202020202020202020202",
+                "20c09a0c"
+            )
+        );
+    }
+
+    #[test]
     fn commitments_sum_to_excess_fee_the_servers_balance_check() {
         let feerate = 1000u64;
         let inputs = vec![FusionInput {
@@ -291,18 +341,25 @@ mod tests {
             pubkey: vec![0x02; 33],
             value: 100_000,
         }];
-        let outputs = vec![FusionOutput { scriptpubkey: p2pkh(1), value: 50_000 }];
+        let outputs = vec![FusionOutput {
+            scriptpubkey: p2pkh(1),
+            value: 50_000,
+        }];
         let num_components = 6;
         let signer = RoundSigner::new(num_components);
 
         let rc = build_round_commit(
-            &inputs, &outputs, num_components, feerate,
-            &signer.pubkey(), &signer.nonce_points(),
+            &inputs,
+            &outputs,
+            num_components,
+            feerate,
+            &signer.pubkey(),
+            &signer.nonce_points(),
         )
         .unwrap();
 
         // Expected excess: (100000 - 50000) - input_fee - output_fee.
-        let in_fee = (size_of_input(33) * feerate).div_ceil(1000);   // size 141
+        let in_fee = (size_of_input(33) * feerate).div_ceil(1000); // size 141
         let out_fee = (size_of_output(25) * feerate).div_ceil(1000); // size 34
         assert_eq!(rc.excess_fee, 100_000 - 50_000 - in_fee - out_fee);
 
@@ -317,25 +374,44 @@ mod tests {
             })
             .fold(ProjectivePoint::IDENTITY, |acc, p| acc + p);
 
-        let nonce_bytes: [u8; 32] = rc.player_commit.pedersen_total_nonce.clone().try_into().unwrap();
+        let nonce_bytes: [u8; 32] = rc
+            .player_commit
+            .pedersen_total_nonce
+            .clone()
+            .try_into()
+            .unwrap();
         let total_nonce = Option::<Scalar>::from(Scalar::from_repr(nonce_bytes.into())).unwrap();
         let expected = pedersen::h_point() * Scalar::from(rc.excess_fee)
             + ProjectivePoint::GENERATOR * total_nonce;
-        assert_eq!(sum, expected, "Pedersen sum must equal excess_fee*H + Σnonce*G");
+        assert_eq!(
+            sum, expected,
+            "Pedersen sum must equal excess_fee*H + Σnonce*G"
+        );
     }
 
     #[test]
     fn blind_requests_finalize_to_valid_component_signatures() {
         let feerate = 1000u64;
         let inputs = vec![FusionInput {
-            prev_txid: "bb".repeat(32), prev_index: 3, pubkey: vec![0x03; 33], value: 200_000,
+            prev_txid: "bb".repeat(32),
+            prev_index: 3,
+            pubkey: vec![0x03; 33],
+            value: 200_000,
         }];
-        let outputs = vec![FusionOutput { scriptpubkey: p2pkh(9), value: 120_000 }];
+        let outputs = vec![FusionOutput {
+            scriptpubkey: p2pkh(9),
+            value: 120_000,
+        }];
         let num_components = 5;
         let signer = RoundSigner::new(num_components);
 
         let rc = build_round_commit(
-            &inputs, &outputs, num_components, feerate, &signer.pubkey(), &signer.nonce_points(),
+            &inputs,
+            &outputs,
+            num_components,
+            feerate,
+            &signer.pubkey(),
+            &signer.nonce_points(),
         )
         .unwrap();
 
@@ -353,9 +429,20 @@ mod tests {
     fn commitments_are_sorted_and_counts_line_up() {
         let signer = RoundSigner::new(4);
         let rc = build_round_commit(
-            &[FusionInput { prev_txid: "cc".repeat(32), prev_index: 0, pubkey: vec![0x02; 33], value: 500_000 }],
-            &[FusionOutput { scriptpubkey: p2pkh(2), value: 100_000 }],
-            4, 1000, &signer.pubkey(), &signer.nonce_points(),
+            &[FusionInput {
+                prev_txid: "cc".repeat(32),
+                prev_index: 0,
+                pubkey: vec![0x02; 33],
+                value: 500_000,
+            }],
+            &[FusionOutput {
+                scriptpubkey: p2pkh(2),
+                value: 100_000,
+            }],
+            4,
+            1000,
+            &signer.pubkey(),
+            &signer.nonce_points(),
         )
         .unwrap();
 
@@ -364,8 +451,16 @@ mod tests {
         assert_eq!(rc.components_sorted.len(), 4);
         let mut sorted = rc.player_commit.initial_commitments.clone();
         sorted.sort();
-        assert_eq!(sorted, rc.player_commit.initial_commitments, "must be sorted");
+        assert_eq!(
+            sorted, rc.player_commit.initial_commitments,
+            "must be sorted"
+        );
         assert_eq!(rc.player_commit.random_number_commitment.len(), 32);
+        assert_eq!(
+            rc.player_commit.random_number_commitment,
+            sha256(&rc.random_number)
+        );
+        assert_eq!(rc.communication_private_keys.len(), 4);
         assert_eq!(rc.player_commit.pedersen_total_nonce.len(), 32);
     }
 
@@ -373,9 +468,20 @@ mod tests {
     fn rejects_too_many_components() {
         let signer = RoundSigner::new(1);
         let r = build_round_commit(
-            &[FusionInput { prev_txid: "dd".repeat(32), prev_index: 0, pubkey: vec![0x02; 33], value: 10 }],
-            &[FusionOutput { scriptpubkey: p2pkh(1), value: 5 }],
-            1, 1000, &signer.pubkey(), &signer.nonce_points(),
+            &[FusionInput {
+                prev_txid: "dd".repeat(32),
+                prev_index: 0,
+                pubkey: vec![0x02; 33],
+                value: 10,
+            }],
+            &[FusionOutput {
+                scriptpubkey: p2pkh(1),
+                value: 5,
+            }],
+            1,
+            1000,
+            &signer.pubkey(),
+            &signer.nonce_points(),
         );
         assert!(r.is_err());
     }

@@ -2,13 +2,16 @@ import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 import type { RootState } from '../store';
 
 type AppLockState = {
-  autoLockMinutes: number; // 0 = never, 1, 5, 15, 30
-  hasPassphraseSet: boolean; // true once EcKeyManager.setup() completes
+  // 0 = Never (default). Offered UI options: 15, 30, 60, 120, 240 — not 1/5.
+  autoLockMinutes: number;
+  hasPassphraseSet: boolean; // true once OptnKeyManager.setup() completes
   isLocked: boolean; // runtime signal — set by inactivity timer; DesktopSecurityGate also guards startup
 };
 
 const initialState: AppLockState = {
-  autoLockMinutes: 5,
+  // Never: inactivity does not wipe the session; spend re-auth + 10 min cache
+  // in DeviceIntegrityService covers the "no timer" case.
+  autoLockMinutes: 0,
   hasPassphraseSet: false,
   isLocked: false,
 };

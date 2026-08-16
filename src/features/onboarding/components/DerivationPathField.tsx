@@ -3,6 +3,7 @@ import { Network } from '../../../state/slices/networkSlice';
 import { getBchAccountPath } from '../../../services/HdWalletService';
 import Bip44AccountPathFields from '../../../components/Bip44AccountPathFields';
 import NetworkSelector from './NetworkSelector';
+import { useI18n } from '../../../i18n/useI18n';
 
 type DerivationPathFieldProps = {
   network: Network;
@@ -17,6 +18,7 @@ export const DerivationPathField: React.FC<DerivationPathFieldProps> = ({
   custom,
   onChange,
 }) => {
+  const { t } = useI18n();
   const defaultPath = getBchAccountPath(network);
 
   const handleCustomToggle = (enabled: boolean) => {
@@ -30,26 +32,33 @@ export const DerivationPathField: React.FC<DerivationPathFieldProps> = ({
   return (
     <div className="w-full space-y-2 rounded-xl border border-[var(--wallet-border)] wallet-surface-strong p-3">
       <div className="border-b border-[var(--wallet-border)] pb-3">
-        <p className="text-sm font-semibold wallet-text-strong">Wallet network</p>
+        <p className="text-sm font-semibold wallet-text-strong">
+          {t('derivation.walletNetwork')}
+        </p>
         <p className="text-xs wallet-muted mb-2">
-          Choose whether this wallet connects to live funds on Mainnet or test funds on Chipnet.
+          {t('derivation.walletNetworkDescription')}
         </p>
         <NetworkSelector networkType={network} centered />
       </div>
       <div className="flex items-center justify-between gap-3">
         <div>
-          <p className="text-sm font-semibold wallet-text-strong">Address derivation</p>
+          <p className="text-sm font-semibold wallet-text-strong">
+            {t('derivation.addressDerivation')}
+          </p>
           <p className="text-xs wallet-muted">
-            BIP44 account path used to derive this wallet.
+            {t('derivation.addressDerivationDescription')}
           </p>
         </div>
-        <label className="flex items-center gap-2 text-xs wallet-muted">
+        <label
+          className="wallet-customize-toggle"
+          data-active={custom}
+        >
           <input
             type="checkbox"
             checked={custom}
             onChange={(event) => handleCustomToggle(event.target.checked)}
           />
-          Customize
+          <span>{t('derivation.customize')}</span>
         </label>
       </div>
       {custom ? (

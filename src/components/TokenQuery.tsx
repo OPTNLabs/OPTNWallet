@@ -11,9 +11,8 @@ import useSharedTokenMetadata from '../hooks/useSharedTokenMetadata';
 import { normalizeExternalUrl } from '../utils/externalUrl';
 import TokenIdentityBadge from './ui/TokenIdentityBadge';
 import { resolveTokenPresentation } from '../utils/tokenPresentation';
-import {
-  type BcmrSnapshot,
-} from '../types/bcmr';
+import { type BcmrSnapshot } from '../types/bcmr';
+import { useI18n } from '../i18n/useI18n';
 
 interface TokenQueryProps {
   tokenId: string;
@@ -26,11 +25,14 @@ const TokenQuery: React.FC<TokenQueryProps> = ({
   prefetchedSnapshot = null,
   prefetchedIconDataUri = null,
 }) => {
+  const { t } = useI18n();
   const [totalSupply, setTotalSupply] = useState<number | null>(null);
   const [activeMinting, setActiveMinting] = useState<boolean | null>(null);
   const [nftSupply, setNftSupply] = useState<number | null>(null);
   const [authHead, setAuthHead] = useState<string | null>(null);
-  const [snapshot, setSnapshot] = useState<BcmrSnapshot | null>(prefetchedSnapshot);
+  const [snapshot, setSnapshot] = useState<BcmrSnapshot | null>(
+    prefetchedSnapshot
+  );
   const [iconDataUri, setIconDataUri] = useState<string | null>(
     prefetchedIconDataUri
   );
@@ -62,31 +64,35 @@ const TokenQuery: React.FC<TokenQueryProps> = ({
           sharedTokenMetadata?.status === 'loading'
             ? ('ready' as const)
             : sharedTokenMetadata?.status ?? ('ready' as const),
-        freshness:
-          sharedTokenMetadata?.snapshot
-            ? sharedTokenMetadata.freshness
-            : sharedTokenMetadata?.status === 'loading'
-              ? ('refreshing' as const)
-              : sharedTokenMetadata?.status === 'error'
-                ? ('cached' as const)
-                : (sharedTokenMetadata?.freshness ?? ('cached' as const)),
+        freshness: sharedTokenMetadata?.snapshot
+          ? sharedTokenMetadata.freshness
+          : sharedTokenMetadata?.status === 'loading'
+            ? ('refreshing' as const)
+            : sharedTokenMetadata?.status === 'error'
+              ? ('cached' as const)
+              : sharedTokenMetadata?.freshness ?? ('cached' as const),
         name: displaySnapshot.name || tokenId,
         symbol: displaySnapshot.token?.symbol || '',
         decimals: displaySnapshot.token?.decimals ?? 0,
         iconUri: displayIconDataUri,
         snapshot: displaySnapshot,
         error: sharedTokenMetadata?.error,
-        lastFetch: sharedTokenMetadata?.lastFetch ?? displaySnapshot.lastFetch ?? null,
+        lastFetch:
+          sharedTokenMetadata?.lastFetch ?? displaySnapshot.lastFetch ?? null,
         registryUri:
-          sharedTokenMetadata?.registryUri ?? displaySnapshot.registryUri ?? null,
+          sharedTokenMetadata?.registryUri ??
+          displaySnapshot.registryUri ??
+          null,
         registryHash:
-          sharedTokenMetadata?.registryHash ?? displaySnapshot.registryHash ?? null,
+          sharedTokenMetadata?.registryHash ??
+          displaySnapshot.registryHash ??
+          null,
         isRefreshing:
           sharedTokenMetadata?.isRefreshing ||
           sharedTokenMetadata?.status === 'loading' ||
           false,
       }
-      : sharedTokenMetadata;
+    : sharedTokenMetadata;
   const presentation = resolveTokenPresentation(tokenId, displayTokenMetadata, {
     name: displaySnapshot?.name ?? null,
     symbol: displaySnapshot?.token?.symbol ?? null,
@@ -110,12 +116,22 @@ const TokenQuery: React.FC<TokenQueryProps> = ({
       try {
         // 1) Total supply (non-fatal if this specific query fails)
         const totalData = await queryTotalSupplyFT(tokenId);
-        const total =
-          totalData?.data?.transaction?.[0]?.outputs?.reduce(
-            (sum: number, o: { fungible_token_amount?: string | number }) =>
-              sum + parseInt(String(o.fungible_token_amount ?? 0), 10),
-            0
-          ) ?? 0;
+        const totalTransactions = (
+          totalData as {
+            data?: { transaction?: Array<{ outputs?: unknown }> };
+          }
+        )?.data?.transaction;
+        const totalOutputs = totalTransactions?.[0]?.outputs;
+        const total = Array.isArray(totalOutputs)
+          ? totalOutputs.reduce((sum: number, output: unknown) => {
+              const amount =
+                output && typeof output === 'object'
+                  ? (output as { fungible_token_amount?: string | number })
+                      .fungible_token_amount
+                  : undefined;
+              return sum + parseInt(String(amount ?? 0), 10);
+            }, 0)
+          : 0;
         setTotalSupply(total);
       } catch {
         failedCoreQueries += 1;
@@ -142,9 +158,20 @@ const TokenQuery: React.FC<TokenQueryProps> = ({
       try {
         // 4) Auth head (non-fatal if this specific query fails)
         const ahData = await queryAuthHead(tokenId);
-        const ahRaw =
-          ahData?.data?.transaction?.[0]?.authchains?.[0]?.authhead
-            ?.identity_output?.[0]?.transaction_hash;
+        const ahRaw = (
+          ahData as {
+            data?: {
+              transaction?: Array<{
+                authchains?: Array<{
+                  authhead?: {
+                    identity_output?: Array<{ transaction_hash?: unknown }>;
+                  };
+                }>;
+              }>;
+            };
+          }
+        )?.data?.transaction?.[0]?.authchains?.[0]?.authhead
+          ?.identity_output?.[0]?.transaction_hash;
         const ahTx = stripChaingraphHexBytes(ahRaw) || null;
         setAuthHead(ahTx);
       } catch {
@@ -152,23 +179,29 @@ const TokenQuery: React.FC<TokenQueryProps> = ({
       }
 
       try {
-        if (!displaySnapshot && (!sharedTokenMetadata || sharedTokenMetadata.status === 'loading')) {
+        if (
+          !displaySnapshot &&
+          (!sharedTokenMetadata || sharedTokenMetadata.status === 'loading')
+        ) {
           // Shared metadata is still loading; avoid flashing an error state.
-        } else if (!displaySnapshot && sharedTokenMetadata?.status === 'error') {
-          throw new Error(sharedTokenMetadata.error || 'Failed to fetch BCMR metadata.');
+        } else if (
+          !displaySnapshot &&
+          sharedTokenMetadata?.status === 'error'
+        ) {
+          throw new Error(
+            sharedTokenMetadata.error || t('token.bcmrUnavailable')
+          );
         } else if (!displaySnapshot) {
-          throw new Error('Failed to fetch token data.');
+          throw new Error(t('token.loading'));
         }
       } catch (err: unknown) {
         if (!displaySnapshot) {
-          setBcmrError(
-            err instanceof Error ? err.message : 'Failed to fetch token data.'
-          );
+          setBcmrError(err instanceof Error ? err.message : t('token.loading'));
         }
       }
 
       if (failedCoreQueries >= 4) {
-        setError('Unable to load token chain statistics right now.');
+        setError(t('token.chainStatsError'));
       }
 
       setLoading(false);
@@ -182,16 +215,18 @@ const TokenQuery: React.FC<TokenQueryProps> = ({
     sharedTokenMetadata,
     displaySnapshot,
     displayIconDataUri,
+    t,
   ]);
 
-  if (loading && !snapshot) return <p className="wallet-muted">Loading token data…</p>;
+  if (loading && !snapshot)
+    return <p className="wallet-muted">{t('token.loading')}</p>;
 
   return (
     <div className="token-query space-y-4">
       <div className="space-y-2">
         <div className="flex items-center justify-between gap-3">
           <h3 className="font-semibold wallet-text-strong">
-            Token ID: {shortenTxHash(tokenId)}
+            {t('token.id')}: {shortenTxHash(tokenId)}
           </h3>
         </div>
         <TokenIdentityBadge
@@ -201,19 +236,33 @@ const TokenQuery: React.FC<TokenQueryProps> = ({
         />
       </div>
       {error && <p className="wallet-danger-text">{error}</p>}
-      <p>Total Supply: {totalSupply ?? 'Unavailable'}</p>
-      <p>Active Minting: {activeMinting === null ? 'Unavailable' : activeMinting ? 'Yes' : 'No'}</p>
-      <p>Total NFTs: {nftSupply ?? 'Unavailable'}</p>
-      <p>Auth Head: {authHead ? shortenTxHash(authHead) : 'Unavailable'}</p>
-      {loading && <p className="wallet-muted">Loading token data…</p>}
+      <p>
+        {t('token.totalSupply')}: {totalSupply ?? t('token.unavailable')}
+      </p>
+      <p>
+        {t('token.activeMinting')}:{' '}
+        {activeMinting === null
+          ? t('token.unavailable')
+          : activeMinting
+            ? t('token.yes')
+            : t('token.no')}
+      </p>
+      <p>
+        {t('token.totalNfts')}: {nftSupply ?? t('token.unavailable')}
+      </p>
+      <p>
+        {t('token.authHead')}:{' '}
+        {authHead ? shortenTxHash(authHead) : t('token.unavailable')}
+      </p>
+      {loading && <p className="wallet-muted">{t('token.loading')}</p>}
       {bcmrError && (
         <p className="wallet-danger-text">
-          BCMR metadata unavailable: {bcmrError}
+          {t('token.bcmrUnavailable')}: {bcmrError}
         </p>
       )}
       {presentation.statusLabel ? (
         <p className="text-xs font-medium wallet-muted">
-          BCMR: {presentation.statusLabel}
+          {t('token.bcmr')}: {presentation.statusLabel}
         </p>
       ) : null}
 
@@ -229,10 +278,18 @@ const TokenQuery: React.FC<TokenQueryProps> = ({
           <h4 className="text-lg font-semibold">{snapshot.name}</h4>
           {snapshot.description && <p>{snapshot.description}</p>}
           <div className="mt-2 space-y-1 text-sm wallet-muted break-all">
-            <p>Category: {snapshot.token?.category || tokenId}</p>
-            {snapshot.token?.symbol && <p>Symbol: {snapshot.token.symbol}</p>}
+            <p>
+              {t('token.category')}: {snapshot.token?.category || tokenId}
+            </p>
+            {snapshot.token?.symbol && (
+              <p>
+                {t('token.symbol')}: {snapshot.token.symbol}
+              </p>
+            )}
             {typeof snapshot.token?.decimals === 'number' && (
-              <p>Decimals: {snapshot.token.decimals}</p>
+              <p>
+                {t('token.decimals')}: {snapshot.token.decimals}
+              </p>
             )}
           </div>
           {officialSiteUrl && (

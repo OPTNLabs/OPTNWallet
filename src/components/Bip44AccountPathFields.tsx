@@ -1,4 +1,6 @@
 import React, { useEffect, useState } from 'react';
+import { formatNumber } from '../i18n/format';
+import { useI18n } from '../i18n/useI18n';
 import { Network } from '../state/slices/networkSlice';
 import {
   buildBchAccountPath,
@@ -24,7 +26,7 @@ function initialParts(value: string, network: Network) {
   } catch {
     return {
       parts: parseBchAccountPath(getBchAccountPath(network)),
-      error: 'The active derivation path is invalid.',
+      error: 'derivation.invalidActive',
     };
   }
 }
@@ -36,6 +38,7 @@ const Bip44AccountPathFields: React.FC<Bip44AccountPathFieldsProps> = ({
   onValidityChange,
   disabled = false,
 }) => {
+  const { t, locale } = useI18n();
   const initial = initialParts(value, network);
   const [coinType, setCoinType] = useState(String(initial.parts.coinType));
   const [accountIndex, setAccountIndex] = useState(
@@ -54,7 +57,7 @@ const Bip44AccountPathFields: React.FC<Bip44AccountPathFieldsProps> = ({
       const fallback = parseBchAccountPath(getBchAccountPath(network));
       setCoinType(String(fallback.coinType));
       setAccountIndex(String(fallback.accountIndex));
-      setError('The active derivation path is invalid.');
+      setError('derivation.invalidActive');
       onValidityChange?.(false);
     }
   }, [network, onValidityChange, value]);
@@ -70,7 +73,13 @@ const Bip44AccountPathFields: React.FC<Bip44AccountPathFieldsProps> = ({
 
     if (!nextValue) {
       setError(
-        `${field === 'coinType' ? 'Coin type' : 'Account index'} is required.`
+        t('derivation.required', {
+          field: t(
+            field === 'coinType'
+              ? 'derivation.coinType'
+              : 'derivation.accountIndex'
+          ),
+        })
       );
       onValidityChange?.(false);
       return;
@@ -93,7 +102,7 @@ const Bip44AccountPathFields: React.FC<Bip44AccountPathFieldsProps> = ({
       setError(
         validationError instanceof Error
           ? validationError.message
-          : 'Invalid BIP44 path values.'
+          : t('derivation.invalidValues')
       );
       onValidityChange?.(false);
     }
@@ -106,21 +115,21 @@ const Bip44AccountPathFields: React.FC<Bip44AccountPathFieldsProps> = ({
       <div className="rounded-xl border border-[var(--wallet-border)] wallet-surface-strong px-3 py-2.5">
         <div className="flex items-center justify-between gap-3">
           <span className="text-[11px] font-semibold uppercase tracking-wide wallet-muted">
-            Path preview
+            {t('derivation.pathPreview')}
           </span>
           <code className="text-sm font-semibold wallet-text-strong">
             m/44&apos;/{coinType || '—'}&apos;/{accountIndex || '—'}&apos;
           </code>
         </div>
         <p className="mt-1 text-[11px] wallet-muted">
-          The fixed BIP44 account path used by this wallet.
+          {t('derivation.pathDescription')}
         </p>
       </div>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <label className="flex flex-col gap-1.5">
           <span className="text-sm font-semibold wallet-text-strong">
-            Coin type
+            {t('derivation.coinType')}
           </span>
           <input
             type="text"
@@ -129,16 +138,16 @@ const Bip44AccountPathFields: React.FC<Bip44AccountPathFieldsProps> = ({
             value={coinType}
             onChange={(event) => updateField('coinType', event.target.value)}
             className="wallet-input w-full rounded-lg px-3 py-2.5 text-base wallet-text-strong"
-            aria-label="BIP44 coin type"
+            aria-label={t('derivation.bip44CoinType')}
             disabled={disabled}
           />
           <span className="text-[11px] wallet-muted">
-            Network default: {defaultCoinType}
+            {t('derivation.networkDefault', { value: defaultCoinType })}
           </span>
         </label>
         <label className="flex flex-col gap-1.5">
           <span className="text-sm font-semibold wallet-text-strong">
-            Account index
+            {t('derivation.accountIndex')}
           </span>
           <input
             type="text"
@@ -149,21 +158,29 @@ const Bip44AccountPathFields: React.FC<Bip44AccountPathFieldsProps> = ({
               updateField('accountIndex', event.target.value)
             }
             className="wallet-input w-full rounded-lg px-3 py-2.5 text-base wallet-text-strong"
-            aria-label="BIP44 account index"
+            aria-label={t('derivation.bip44AccountIndex')}
             disabled={disabled}
           />
-          <span className="text-[11px] wallet-muted">Usually 0</span>
+          <span className="text-[11px] wallet-muted">
+            {t('derivation.usuallyZero')}
+          </span>
         </label>
       </div>
 
       <p className="text-xs leading-relaxed wallet-muted">
-        Hardened markers are fixed. Receive and change addresses are derived
-        automatically from the <code>/0/index</code> and <code>/1/index</code>{' '}
-        branches.
+        {t('derivation.branchDescription')}
       </p>
-      {error && <p className="text-xs text-red-400">{error}</p>}
+      {error && (
+        <p className="text-xs text-red-400">
+          {error === 'derivation.invalidActive'
+            ? t('derivation.invalidActive')
+            : error}
+        </p>
+      )}
       <p className="text-[11px] wallet-muted">
-        Enter whole numbers from 0 to {MAX_BIP44_INDEX.toLocaleString()}.
+        {t('derivation.range', {
+          max: formatNumber(MAX_BIP44_INDEX, locale),
+        })}
       </p>
     </div>
   );

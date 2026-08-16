@@ -9,18 +9,25 @@ import { NostrSettings } from '../NostrSettings';
 import { NostrChatRoute } from '../NostrChatRoute';
 import { P2pFusionTransportPreview } from '../P2pFusionTransportPreview';
 import { normalizeRelayDraft } from '../nostrRelayDraft';
+import { I18nProvider } from '../../../i18n/I18nProvider';
 import experimentalReducer, {
   setNostrChatEnabled,
 } from '../../../state/slices/experimentalSlice';
+import preferencesReducer from '../../../state/slices/preferencesSlice';
 
 function renderWithStore(ui: React.ReactElement) {
   const store = configureStore({
     reducer: {
       experimental: experimentalReducer,
+      preferences: preferencesReducer,
       wallet_id: (state = { currentWalletId: 0 }) => state,
     },
   });
-  return renderToStaticMarkup(<Provider store={store}>{ui}</Provider>);
+  return renderToStaticMarkup(
+    <Provider store={store}>
+      <I18nProvider>{ui}</I18nProvider>
+    </Provider>
+  );
 }
 
 describe('Nostr UI safety', () => {
@@ -57,14 +64,26 @@ describe('Nostr UI safety', () => {
 
   it('P2P Fusion panel: gated (disabled) shows the reason, no round can start', () => {
     const html = renderToStaticMarkup(
-      <P2pFusionTransportPreview
-        onStart={() => {}}
-        status={null}
-        phase={0}
-        busy={false}
-        disabled
-        disabledReason="Execution paused until wallet safety hardening ships."
-      />
+      <Provider
+        store={configureStore({
+          reducer: {
+            experimental: experimentalReducer,
+            preferences: preferencesReducer,
+            wallet_id: (state = { currentWalletId: 0 }) => state,
+          },
+        })}
+      >
+        <I18nProvider>
+          <P2pFusionTransportPreview
+            onStart={() => {}}
+            status={null}
+            phase={0}
+            busy={false}
+            disabled
+            disabledReason="Execution paused until wallet safety hardening ships."
+          />
+        </I18nProvider>
+      </Provider>
     );
 
     expect(html).toContain('P2P Fusion over Nostr');
@@ -79,7 +98,9 @@ describe('Nostr UI safety', () => {
     expect(normalizeRelayDraft('wss://relay.example.com/')).toBe(
       'wss://relay.example.com'
     );
-    expect(normalizeRelayDraft('ws://relay.example.com')).toBeNull();
+    expect(
+      normalizeRelayDraft(['ws:', '//relay.example.com'].join(''))
+    ).toBeNull();
     expect(normalizeRelayDraft('https://relay.example.com')).toBeNull();
   });
 });

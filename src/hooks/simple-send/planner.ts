@@ -5,6 +5,11 @@ import { toErrorMessage } from '../../utils/errorHandling';
 import { toTokenAwareCashAddress } from '../../utils/cashAddress';
 import { BuildResult, BchBuildResult } from './types';
 import { isConfirmed, sortLargestFirst, sumInputsSats } from './helpers';
+import {
+  estimateMaxStandardTransactionBytes,
+  requiredFeeForBytes,
+  type FeePreferences,
+} from '../../apis/TransactionManager/feePolicy';
 
 type PlannerParams = {
   recipient: string;
@@ -13,6 +18,12 @@ type PlannerParams = {
   tokenChangeAddress: string;
   selectedChangeAddress: string;
   dbUtxos: UTXO[];
+  feePreferences?: FeePreferences;
+  /**
+   * Hardware wallets (EC model): cannot software-sign. Plan fees by size
+   * estimate; rawTx is left empty and filled by device sign at send time.
+   */
+  hardwareWallet?: boolean;
 };
 
 export function createSimpleSendPlanner({
@@ -22,6 +33,8 @@ export function createSimpleSendPlanner({
   tokenChangeAddress,
   selectedChangeAddress,
   dbUtxos,
+  hardwareWallet = false,
+  feePreferences = {},
 }: PlannerParams) {
   function sortFeeUtxosPreferred(pool: UTXO[]) {
     return [...pool].sort((a, b) => {
@@ -57,6 +70,50 @@ export function createSimpleSendPlanner({
     inputs: UTXO[],
     outputs: TransactionOutput[]
   ): Promise<BuildResult> {
+    // Electron Cash hardware path: plan outputs/fees without software keys;
+    // device produces the signed serialization (ledger/trezor sign_transaction).
+    if (hardwareWallet) {
+      try {
+        // sumInputsSats returns number; keep arithmetic in bigint (EC fee plan).
+        const inputSum = BigInt(sumInputsSats(inputs));
+        // EC-style size estimate: ~10 + 148*nIn + 34*nOut (non-segwit P2PKH).
+        const nOut = outputs.length + 1; // allow room for auto-change
+        const bytes = 10 + inputs.length * 148 + nOut * 34;
+        const feeSats = BigInt(Math.ceil(bytes * 1.1));
+        const outTotal = sumOutputSats(outputs);
+        let finalOutputs = [...outputs];
+        const remainder = inputSum - outTotal - feeSats;
+        if (remainder >= BigInt(DUST) && selectedChangeAddress) {
+          finalOutputs = [
+            ...outputs,
+            {
+              recipientAddress: selectedChangeAddress,
+              amount: Number(remainder),
+            },
+          ];
+        }
+        const finalOutTotal = sumOutputSats(finalOutputs);
+        const fee = inputSum - finalOutTotal;
+        if (fee < 0n) {
+          return {
+            ok: false,
+            err: 'Insufficient funds for fee (hardware plan).',
+          };
+        }
+        return {
+          ok: true,
+          feeSats: Number(fee),
+          totalSats: Number(outTotal + fee),
+          rawTx: '', // filled by hardwareSignTransaction at Send
+          finalOutputs,
+          changeSats: Number(inputSum - outTotal - fee),
+          inputSum: Number(inputSum),
+        };
+      } catch (error: unknown) {
+        return { ok: false, err: toErrorMessage(error, 'hardware plan failed') };
+      }
+    }
+
     try {
       const r = await TransactionService.buildTransaction(
         outputs,
@@ -199,7 +256,7 @@ export function createSimpleSendPlanner({
       const inputs = confirmedPool.slice(0, k);
       const res = await tryBuild(inputs, outputs);
       if (res.ok && res.changeSats >= 0) {
-        return { ok: true, inputs, ...res };
+        return { ...res, inputs };
       }
       if (!res.ok && 'err' in res) lastErr = res.err;
     }
@@ -209,7 +266,7 @@ export function createSimpleSendPlanner({
       const inputs = combined.slice(0, k);
       const res = await tryBuild(inputs, outputs);
       if (res.ok && res.changeSats >= 0) {
-        return { ok: true, inputs, ...res };
+        return { ...res, inputs };
       }
       if (!res.ok && 'err' in res) lastErr = res.err;
     }
@@ -281,12 +338,60 @@ export function createSimpleSendPlanner({
     };
   }
 
+  /**
+   * Fast Max preview for ordinary wallet coins. This deliberately uses an
+   * upper-bound serialized size instead of constructing/signing a draft
+   * transaction. Review still performs the authoritative build immediately
+   * before sending. Contract inputs fall back to the existing full builder.
+   */
+  function estimateSweepAllBch(maxInputs = 50): BchBuildResult | null {
+    const feeUtxoPool = dbUtxos.filter((u) => !u.token);
+    if (feeUtxoPool.length === 0) {
+      return { ok: false, err: 'No spendable BCH UTXOs.' };
+    }
+
+    const confirmedPool = sortFeeUtxosPreferred(
+      feeUtxoPool.filter(isConfirmed)
+    );
+    const unconfirmedPool = sortFeeUtxosPreferred(
+      feeUtxoPool.filter((u) => !isConfirmed(u))
+    );
+    const inputs = sortLargestFirst([
+      ...confirmedPool,
+      ...unconfirmedPool,
+    ]).slice(0, maxInputs);
+
+    if (inputs.some((utxo) => Boolean(utxo.contractName || utxo.abi))) {
+      return null;
+    }
+
+    const availableSats = sumInputsSats(inputs);
+    const feeSats = requiredFeeForBytes(
+      estimateMaxStandardTransactionBytes(inputs.length, 1),
+      feePreferences
+    );
+    const maxSats = availableSats - Number(feeSats);
+    if (maxSats < DUST) {
+      return { ok: false, err: 'Not enough funds to cover the network fee.' };
+    }
+
+    return {
+      ok: true,
+      inputs,
+      feeSats: Number(feeSats),
+      totalSats: availableSats,
+      rawTx: '',
+      finalOutputs: [{ recipientAddress: recipient, amount: maxSats }],
+    };
+  }
+
   return {
     makeTokenOutputForRecipientFT,
     makeTokenChangeOutputFT,
     makeTokenOutputForRecipientNFT,
     addBchInputsUntilBuild,
     addBchOnlyUntilBuild,
+    estimateSweepAllBch,
     sweepAllBchUntilBuild,
   };
 }

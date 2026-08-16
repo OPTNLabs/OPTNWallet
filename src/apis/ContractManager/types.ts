@@ -55,6 +55,7 @@ export type ContractInstanceRow = {
   token_address: string;
   abi: AbiFunction[];
   artifact: ContractArtifact;
+  balance: bigint;
   utxos: ContractInstanceUtxo[];
   unlock: Record<string, unknown> | null;
   [key: string]: unknown;
@@ -70,7 +71,7 @@ export type ContractManagerApi = {
   getContractArtifact: (contractName: string) => Promise<ContractArtifact | null>;
   listAvailableArtifacts: () => Promise<AvailableContractEntry[]>;
   deleteContractInstance: (contractId: number) => Promise<void>;
-  fetchContractInstances: () => Promise<ContractInstanceRow[]>;
+  fetchContractInstances: (walletId?: number) => Promise<ContractInstanceRow[]>;
   getContractInstanceByAddress: (
     address: string
   ) => Promise<ContractInstanceRow | null>;

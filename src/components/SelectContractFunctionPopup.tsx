@@ -12,9 +12,7 @@ import { RootState, AppDispatch } from '../state/store';
 import { hexString } from '../utils/hex';
 import KeyService from '../services/KeyService';
 import { shortenTxHash } from '../utils/shortenHash';
-import {
-  CapacitorBarcodeScannerTypeHint,
-} from '@capacitor/barcode-scanner';
+import { CapacitorBarcodeScannerTypeHint } from '@capacitor/barcode-scanner';
 import { FaCamera } from 'react-icons/fa';
 import { Toast } from '@capacitor/toast';
 import { DataSigner } from '../utils/dataSigner';
@@ -23,13 +21,14 @@ import {
   getBarcodeScannerErrorMessage,
   scanBarcodeSafely,
 } from '../utils/barcodeScanner';
+import { useI18n } from '../i18n/useI18n';
 
 interface AbiInput {
   name: string;
   type: string;
 }
 
-interface ContractAbiItem {
+export interface ContractAbiItem {
   name?: string;
   type?: string;
   inputs?: AbiInput[];
@@ -37,7 +36,7 @@ interface ContractAbiItem {
 
 interface SelectContractFunctionPopupProps {
   currentContractSource: string;
-  contractABI: ContractAbiItem[];
+  contractABI: unknown[];
   onClose: () => void;
   onFunctionSelect: (
     selectedFunction: string,
@@ -49,6 +48,7 @@ interface SelectContractFunctionPopupProps {
 const SelectContractFunctionPopup: React.FC<
   SelectContractFunctionPopupProps
 > = ({ currentContractSource, contractABI, onClose, onFunctionSelect }) => {
+  const { t } = useI18n();
   const [functions, setFunctions] = useState<ContractAbiItem[]>([]);
   const [selectedFunction, setSelectedFunctionState] = useState<string>('');
   const [inputs, setInputsState] = useState<AbiInput[]>([]);
@@ -108,11 +108,9 @@ const SelectContractFunctionPopup: React.FC<
           setBytesParamName(null);
         }
       } catch (error) {
-        logError(
-          'SelectContractFunctionPopup.parseContractSource',
-          error,
-          { selectedFunction }
-        );
+        logError('SelectContractFunctionPopup.parseContractSource', error, {
+          selectedFunction,
+        });
         setUsesCheckDataSig(false);
         setBytesParamName(null);
       }
@@ -130,6 +128,10 @@ const SelectContractFunctionPopup: React.FC<
     }
 
     const allFunctionNames = contractABI
+      .filter(
+        (item): item is ContractAbiItem =>
+          Boolean(item) && typeof item === 'object'
+      )
       .filter((item) => item.type === 'function' || item.type === undefined)
       .map((item) => ({ name: item.name, inputs: item.inputs }))
       .filter(
@@ -166,7 +168,7 @@ const SelectContractFunctionPopup: React.FC<
     const data = messageInput[argName];
     if (!data) {
       await Toast.show({
-        text: 'Please enter data to generate the message.',
+        text: t('contractPopup.enterData'),
       });
       return;
     }
@@ -176,12 +178,12 @@ const SelectContractFunctionPopup: React.FC<
       const message = signer.createMessage(data);
       const messageHex = Buffer.from(message).toString('hex');
       setInputValuesState((prev) => ({ ...prev, [argName]: messageHex }));
-      await Toast.show({ text: 'Message generated successfully!' });
+      await Toast.show({ text: t('contractPopup.generated') });
     } catch (error) {
       logError('SelectContractFunctionPopup.generateMessage', error, {
         argName,
       });
-      await Toast.show({ text: 'Failed to generate message.' });
+      await Toast.show({ text: t('contractPopup.generationFailed') });
     }
   };
 
@@ -208,7 +210,7 @@ const SelectContractFunctionPopup: React.FC<
       } else {
         logError('SelectContractFunctionPopup.addressKeyMissing', address);
         await Toast.show({
-          text: `No keys found for address: ${address}`,
+          text: t('contractPopup.noKeys', { address }),
         });
       }
     } catch (error) {
@@ -216,7 +218,7 @@ const SelectContractFunctionPopup: React.FC<
         address,
       });
       await Toast.show({
-        text: 'Failed to fetch keys.',
+        text: t('contractPopup.fetchFailed'),
       });
     }
 
@@ -255,7 +257,7 @@ const SelectContractFunctionPopup: React.FC<
         if (argType === 'pubkey' || argType === 'bytes20') {
           if (!isValidHex(scannedValue)) {
             await Toast.show({
-              text: `Invalid ${argType} format. Please scan a valid QR code.`,
+              text: t('contractPopup.invalidFormat', { type: argType }),
             });
           } else {
             setInputValuesState((prev) => ({
@@ -277,7 +279,7 @@ const SelectContractFunctionPopup: React.FC<
         }
       } else {
         await Toast.show({
-          text: 'No QR code detected. Please try again.',
+          text: t('contractPopup.noQr'),
         });
       }
     } catch (error) {
@@ -326,13 +328,15 @@ const SelectContractFunctionPopup: React.FC<
   return (
     <div className="wallet-popup-backdrop">
       <div className="wallet-popup-panel w-96 max-h-screen overflow-y-auto">
-        <h2 className="text-xl font-semibold mb-4">Select a Function</h2>
+        <h2 className="text-xl font-semibold mb-4">
+          {t('contractPopup.title')}
+        </h2>
         <select
           className="wallet-input w-full mb-4"
           value={selectedFunction}
           onChange={handleFunctionSelect}
         >
-          <option value="">Select a function</option>
+          <option value="">{t('contractPopup.chooseFunction')}</option>
           {functions.map((func, index) => (
             <option key={index} value={func.name}>
               {func.name}
@@ -353,7 +357,7 @@ const SelectContractFunctionPopup: React.FC<
                 return (
                   <div key={index} className="mb-4">
                     <label className="block text-sm font-bold wallet-muted mb-1">
-                      {input.name} (message for checkdatasig)
+                      {input.name} ({t('contractPopup.messageForCheck')})
                     </label>
                     <input
                       type="text"
@@ -366,7 +370,9 @@ const SelectContractFunctionPopup: React.FC<
                         })
                       }
                       className="wallet-input w-full mb-2"
-                      placeholder={`Enter message for ${input.name}`}
+                      placeholder={t('contractPopup.enterMessage', {
+                        name: input.name,
+                      })}
                     />
                     {/* <div className="flex items-center mb-2">
                       <button
@@ -391,11 +397,12 @@ const SelectContractFunctionPopup: React.FC<
                       }`}
                       disabled={!messageInput[input.name]}
                     >
-                      Generate Message
+                      {t('contractPopup.generateMessage')}
                     </button>
                     {inputValuesState[input.name] && (
                       <div className="mt-2 text-sm wallet-muted">
-                        Message: {shortenTxHash(inputValuesState[input.name])}
+                        {t('contractPopup.message')}:{' '}
+                        {shortenTxHash(inputValuesState[input.name])}
                       </div>
                     )}
                   </div>
@@ -415,9 +422,9 @@ const SelectContractFunctionPopup: React.FC<
                           onClick={() => openAddressPopup(input)}
                           className="wallet-btn-primary min-w-fit mr-2"
                           disabled={isScanning}
-                          aria-label={`Select Address for ${input.name}`}
+                          aria-label={`${t('contractPopup.selectAddress')} ${input.name}`}
                         >
-                          Select Address
+                          {t('contractPopup.selectAddress')}
                         </button>
                         <button
                           type="button"
@@ -426,14 +433,16 @@ const SelectContractFunctionPopup: React.FC<
                             isScanning ? 'opacity-50 cursor-not-allowed' : ''
                           }`}
                           disabled={isScanning}
-                          aria-label={`Scan QR Code for ${input.name}`}
+                          aria-label={t('contractPopup.scanFor', {
+                            name: input.name,
+                          })}
                         >
                           <FaCamera className="text-lg" />
                         </button>
                       </div>
                       {inputValuesState[input.name] && (
                         <div className="mt-2 text-sm wallet-muted">
-                          Selected {input.type}:{' '}
+                          {t('contractPopup.selected', { type: input.type })}:{' '}
                           {shortenTxHash(inputValuesState[input.name])}
                         </div>
                       )}
@@ -445,7 +454,9 @@ const SelectContractFunctionPopup: React.FC<
                       value={inputValuesState[input.name] || ''}
                       onChange={handleInputChange}
                       className="wallet-input w-full"
-                      placeholder={`Enter ${input.name}`}
+                      placeholder={t('contractPopup.enterValue', {
+                        name: input.name,
+                      })}
                     />
                   )}
                 </div>
@@ -462,13 +473,10 @@ const SelectContractFunctionPopup: React.FC<
             onClick={handleSelect}
             disabled={!selectedFunction || !allInputsFilled}
           >
-            Select
+            {t('contractPopup.select')}
           </button>
-          <button
-            className="wallet-btn-danger"
-            onClick={onClose}
-          >
-            Back
+          <button className="wallet-btn-danger" onClick={onClose}>
+            {t('contractPopup.back')}
           </button>
         </div>
         {showAddressPopup && selectedInput && (

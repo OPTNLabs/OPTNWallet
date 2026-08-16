@@ -18,8 +18,9 @@
 // isn't overpaying fees. Signing, Nostr transport, and broadcast are injected /
 // added on top — none of them can weaken this check.
 
-/** Kinds/labels for the gift-wrapped round messages (transport in fusion.ts). */
-export const ROUND_MSG_VERSION = 1;
+/** Kinds/labels for the gift-wrapped round messages (transport in fusion.ts).
+ *  v4: blind credentials cover sha256(EC Component) — Electron Cash binding. */
+export const ROUND_MSG_VERSION = 4;
 
 /** An input a peer contributes: the outpoint, its value, and the pubkey. */
 export interface FusionInputRef {
@@ -65,7 +66,9 @@ const outputKey = (o: FusionOutputRef) => `${o.value}:${o.script}`;
  * the identical transaction — so nobody has to trust the coordinator's copy.
  * Throws on a duplicate outpoint (a peer trying to register another's coin).
  */
-export function assembleFusionTx(contributions: PeerContribution[]): AssembledFusionTx {
+export function assembleFusionTx(
+  contributions: PeerContribution[]
+): AssembledFusionTx {
   const inputs: FusionInputRef[] = [];
   const outputs: FusionOutputRef[] = [];
   const seen = new Set<string>();
@@ -78,17 +81,31 @@ export function assembleFusionTx(contributions: PeerContribution[]): AssembledFu
     }
     outputs.push(...c.outputs);
   }
-  inputs.sort((a, b) => (inputKey(a) < inputKey(b) ? -1 : inputKey(a) > inputKey(b) ? 1 : 0));
+  inputs.sort((a, b) =>
+    inputKey(a) < inputKey(b) ? -1 : inputKey(a) > inputKey(b) ? 1 : 0
+  );
   outputs.sort((a, b) =>
-    a.value !== b.value ? a.value - b.value : a.script < b.script ? -1 : a.script > b.script ? 1 : 0
+    a.value !== b.value
+      ? a.value - b.value
+      : a.script < b.script
+        ? -1
+        : a.script > b.script
+          ? 1
+          : 0
   );
   return { inputs, outputs };
 }
 
 /** Estimated serialized size (bytes) of the assembled tx, EC-fusion formulas. */
 export function estimateTxSize(tx: AssembledFusionTx): number {
-  const inBytes = tx.inputs.reduce((s, i) => s + sizeOfInput(i.pubkey.length), 0);
-  const outBytes = tx.outputs.reduce((s, o) => s + sizeOfOutput(o.script.length), 0);
+  const inBytes = tx.inputs.reduce(
+    (s, i) => s + sizeOfInput(i.pubkey.length),
+    0
+  );
+  const outBytes = tx.outputs.reduce(
+    (s, o) => s + sizeOfOutput(o.script.length),
+    0
+  );
   return TX_OVERHEAD + inBytes + outBytes;
 }
 
@@ -129,23 +146,40 @@ export function verifyFusionSafety(
   // Every one of my inputs must be in the tx (else I'd sign a tx I don't fund).
   const inputKeys = new Set(tx.inputs.map(inputKey));
   for (const i of mine.inputs) {
-    if (!inputKeys.has(inputKey(i))) return { ok: false, reason: `my input ${inputKey(i)} missing`, ...base };
+    if (!inputKeys.has(inputKey(i)))
+      return { ok: false, reason: `my input ${inputKey(i)} missing`, ...base };
   }
 
   // Every one of my outputs must be present at its exact value (multiset).
   const available = new Map<string, number>();
-  for (const o of tx.outputs) available.set(outputKey(o), (available.get(outputKey(o)) ?? 0) + 1);
+  for (const o of tx.outputs)
+    available.set(outputKey(o), (available.get(outputKey(o)) ?? 0) + 1);
   for (const o of mine.outputs) {
     const k = outputKey(o);
     const n = available.get(k) ?? 0;
-    if (n < 1) return { ok: false, reason: `my output ${o.value} sats to ${o.script.slice(0, 12)}… missing`, ...base };
+    if (n < 1)
+      return {
+        ok: false,
+        reason: `my output ${o.value} sats to ${o.script.slice(0, 12)}… missing`,
+        ...base,
+      };
     available.set(k, n - 1);
   }
 
-  if (totalOut > totalIn) return { ok: false, reason: 'inflation: outputs exceed inputs', ...base };
-  if (fee < requiredFee) return { ok: false, reason: `fee ${fee} underpays (need ${requiredFee})`, ...base };
+  if (totalOut > totalIn)
+    return { ok: false, reason: 'inflation: outputs exceed inputs', ...base };
+  if (fee < requiredFee)
+    return {
+      ok: false,
+      reason: `fee ${fee} underpays (need ${requiredFee})`,
+      ...base,
+    };
   if (fee > requiredFee * MAX_FEE_FACTOR)
-    return { ok: false, reason: `fee ${fee} too high (max ${requiredFee * MAX_FEE_FACTOR})`, ...base };
+    return {
+      ok: false,
+      reason: `fee ${fee} too high (max ${requiredFee * MAX_FEE_FACTOR})`,
+      ...base,
+    };
 
   return { ok: true, ...base };
 }

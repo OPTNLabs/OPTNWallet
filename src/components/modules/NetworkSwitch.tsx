@@ -1,6 +1,16 @@
 import { Network } from '../../state/slices/networkSlice';
+import { useI18n } from '../../i18n/useI18n';
 
-const NetworkSwitch = ({ networkType, setNetworkType }) => {
+type NetworkSwitchProps = {
+  networkType: Network;
+  setNetworkType: (network: Network) => void;
+};
+
+const NetworkSwitch = ({
+  networkType,
+  setNetworkType,
+}: NetworkSwitchProps) => {
+  const { t } = useI18n();
   const handleToggle = () => {
     setNetworkType(
       networkType === Network.CHIPNET ? Network.MAINNET : Network.CHIPNET
@@ -9,7 +19,7 @@ const NetworkSwitch = ({ networkType, setNetworkType }) => {
 
   return (
     <div className="flex flex-row gap-2 items-center wallet-text-strong font-medium">
-      <span className="text-base">Chipnet</span>
+      <span className="text-base">{t('network.chipnet')}</span>
       <button
         type="button"
         onClick={handleToggle}
@@ -18,7 +28,12 @@ const NetworkSwitch = ({ networkType, setNetworkType }) => {
             ? 'bg-[var(--wallet-accent)]'
             : 'wallet-surface-strong'
         }`}
-        aria-label={`Switch network. Current: ${networkType === Network.MAINNET ? 'Mainnet' : 'Chipnet'}`}
+        aria-label={t('network.switch', {
+          network:
+            networkType === Network.MAINNET
+              ? t('network.mainnet')
+              : t('network.chipnet'),
+        })}
       >
         <div
           className={`w-6 h-6 rounded-full shadow-md transform transition-transform ${
@@ -27,7 +42,7 @@ const NetworkSwitch = ({ networkType, setNetworkType }) => {
           style={{ backgroundColor: 'var(--wallet-card-bg)' }}
         />
       </button>
-      <span className="text-base">Mainnet</span>
+      <span className="text-base">{t('network.mainnet')}</span>
     </div>
   );
 };

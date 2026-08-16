@@ -13,6 +13,7 @@ import { store } from '../../state/store';
 import ElectrumService from '../../services/ElectrumService';
 import KeyService from '../../services/KeyService';
 import { UTXO } from '../../types/types';
+import type { Database } from 'sql.js';
 import AddonsRegistry from '../../services/AddonsRegistry';
 import {
   findAddonContract,
@@ -36,6 +37,13 @@ import type {
   StoredContractUtxo,
 } from './types';
 type ContractCtorArtifact = ConstructorParameters<typeof Contract>[0];
+
+function requireDatabase(database: Database | null): Database {
+  if (!database) {
+    throw new Error('Database is not initialized.');
+  }
+  return database;
+}
 
 export type {
   AvailableContractEntry,
@@ -82,7 +90,7 @@ export default function ContractManager(): ContractManagerApi {
 
   async function fetchConstructorArgs(address: string) {
     await dbService.ensureDatabaseStarted();
-    const db = dbService.getDatabase();
+    const db = requireDatabase(dbService.getDatabase());
 
     const query =
       'SELECT constructor_args FROM cashscript_addresses WHERE address = ?';
@@ -183,7 +191,7 @@ export default function ContractManager(): ContractManagerApi {
     balance: bigint
   ) {
     await dbService.ensureDatabaseStarted();
-    const db = dbService.getDatabase();
+    const db = requireDatabase(dbService.getDatabase());
 
     const insertQuery = `
       INSERT INTO cashscript_addresses 
@@ -216,7 +224,7 @@ export default function ContractManager(): ContractManagerApi {
     artifact: unknown
   ) {
     await dbService.ensureDatabaseStarted();
-    const db = dbService.getDatabase();
+    const db = requireDatabase(dbService.getDatabase());
 
     const insertQuery = `
       INSERT INTO instantiated_contracts 
@@ -260,7 +268,7 @@ export default function ContractManager(): ContractManagerApi {
   async function deleteContractInstance(contractId: number) {
     try {
       await dbService.ensureDatabaseStarted();
-      const db = dbService.getDatabase();
+      const db = requireDatabase(dbService.getDatabase());
 
       const deleteQuery = 'DELETE FROM instantiated_contracts WHERE id = ?';
       const statement = db.prepare(deleteQuery);
@@ -273,13 +281,23 @@ export default function ContractManager(): ContractManagerApi {
     }
   }
 
-  async function fetchContractInstances() {
+  async function fetchContractInstances(walletId?: number) {
     try {
       await dbService.ensureDatabaseStarted();
-      const db = dbService.getDatabase();
+      const db = requireDatabase(dbService.getDatabase());
 
-      const query = 'SELECT * FROM instantiated_contracts';
+      const query =
+        Number.isSafeInteger(walletId) && Number(walletId) > 0
+          ? `SELECT instance.*
+               FROM instantiated_contracts AS instance
+               JOIN cashscript_addresses AS owned
+                 ON owned.address = instance.address
+              WHERE owned.wallet_id = ?`
+          : 'SELECT * FROM instantiated_contracts';
       const statement = db.prepare(query);
+      if (Number.isSafeInteger(walletId) && Number(walletId) > 0) {
+        statement.bind([Number(walletId)]);
+      }
 
       const instances: ContractInstanceRow[] = [];
       while (statement.step()) {
@@ -297,7 +315,7 @@ export default function ContractManager(): ContractManagerApi {
   async function getContractInstanceByAddress(address: string) {
     try {
       await dbService.ensureDatabaseStarted();
-      const db = dbService.getDatabase();
+      const db = requireDatabase(dbService.getDatabase());
 
       const query = 'SELECT * FROM instantiated_contracts WHERE address = ?';
       const statement = db.prepare(query);
@@ -390,7 +408,7 @@ export default function ContractManager(): ContractManagerApi {
   async function saveContractArtifact(artifact: ContractArtifact) {
     try {
       await dbService.ensureDatabaseStarted();
-      const db = dbService.getDatabase();
+      const db = requireDatabase(dbService.getDatabase());
 
       const insertQuery = `
         INSERT INTO cashscript_artifacts 
@@ -410,7 +428,7 @@ export default function ContractManager(): ContractManagerApi {
         artifact.contractName,
         JSON.stringify(artifact.constructorInputs || []),
         JSON.stringify(artifact.abi || []),
-        artifact.bytecode,
+        artifact.bytecode ?? '',
         artifact.source ?? 'unknown',
         artifact.compiler?.name ?? 'unknown',
         artifact.compiler?.version ?? 'unknown',
@@ -431,7 +449,7 @@ export default function ContractManager(): ContractManagerApi {
   ): Promise<ContractArtifact | null> {
     try {
       await dbService.ensureDatabaseStarted();
-      const db = dbService.getDatabase();
+      const db = requireDatabase(dbService.getDatabase());
 
       const query =
         'SELECT * FROM cashscript_artifacts WHERE contract_name = ?';
@@ -482,7 +500,7 @@ export default function ContractManager(): ContractManagerApi {
       );
 
       await dbService.ensureDatabaseStarted();
-      const db = dbService.getDatabase();
+      const db = requireDatabase(dbService.getDatabase());
 
       const contractInstance = await getContractInstanceByAddress(address);
       if (!contractInstance) {
@@ -721,7 +739,7 @@ export default function ContractManager(): ContractManagerApi {
             const addr = v.slice('sigaddr:'.length).trim();
             if (!addr) throw new Error(`Invalid sigaddr for '${input.name}'.`);
 
-            const pk = await KeyService.fetchAddressPrivateKey(addr);
+            const pk = await KeyService.fetchAddressPrivateKey(addr, 'spend');
             if (!pk || pk.length === 0) {
               throw new Error(`Private key not found for sigaddr '${addr}'.`);
             }

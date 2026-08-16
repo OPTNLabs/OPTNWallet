@@ -1,4 +1,5 @@
 import { decodePrivateKeyWif } from '@bitauth/libauth';
+import { isCashConnectUri } from '../services/cashconnect/cashconnectInvite';
 import { Network } from '../state/slices/networkSlice';
 import { parseBip21Uri } from './bip21';
 
@@ -8,6 +9,10 @@ const BASE58_WIF_CANDIDATE_PATTERN =
   /[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]{50,52}/g;
 
 export type ScannedQrPayload =
+  | {
+      kind: 'merchant-proposal-stream';
+      initialQrPayload: string;
+    }
   | {
       kind: 'paper-wallet';
       scannedValue: string;
@@ -21,9 +26,23 @@ export type ScannedQrPayload =
       isBip21Uri: boolean;
     }
   | {
+      kind: 'cashconnect';
+      scannedValue: string;
+      uri: string;
+    }
+  | {
+      kind: 'walletconnect';
+      scannedValue: string;
+      uri: string;
+    }
+  | {
       kind: 'unknown';
       scannedValue: string;
     };
+
+export function isWalletConnectUri(value: string): boolean {
+  return value.trim().toLowerCase().startsWith('wc:');
+}
 
 export function extractWifCandidates(value: string): string[] {
   const trimmed = value.trim();
@@ -57,6 +76,21 @@ export function classifyScannedQrPayload(
   const scannedValue = input.trim();
   if (!scannedValue) {
     return { kind: 'unknown', scannedValue: '' };
+  }
+
+  if (isCashConnectUri(scannedValue)) {
+    return { kind: 'cashconnect', scannedValue, uri: scannedValue };
+  }
+
+  if (isWalletConnectUri(scannedValue)) {
+    return { kind: 'walletconnect', scannedValue, uri: scannedValue };
+  }
+
+  if (/^qrstream\/1\/[A-Za-z0-9+/=_-]+$/i.test(scannedValue)) {
+    return {
+      kind: 'merchant-proposal-stream',
+      initialQrPayload: scannedValue,
+    };
   }
 
   for (const candidate of extractWifCandidates(scannedValue)) {

@@ -5,17 +5,16 @@
 //
 // Rebuilt whenever the wallet list or the open wallet changes, so Open Wallet
 // stays current and wallet-scoped items grey out on the picker.
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { flushSync } from 'react-dom';
 import { useNavigate, type NavigateFunction } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { Menu, Submenu, MenuItem, PredefinedMenuItem } from '@tauri-apps/api/menu';
 import { listen as listenToEvent } from '@tauri-apps/api/event';
+import { resyncAfterWalletClosed } from './walletSessionRelease';
 import {
   getAllWebviewWindows,
 } from '@tauri-apps/api/webviewWindow';
-import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
-import { invoke } from '@tauri-apps/api/core';
 import { appDataDir, join } from '@tauri-apps/api/path';
 import { AppDispatch, RootState, store } from '../../state/store';
 import { selectWalletId, resetWallet } from '../../state/slices/walletSlice';
@@ -24,10 +23,8 @@ import { reconcileActiveWalletUtxos } from '../../services/WalletUtxoRefreshServ
 import { requestWalletUTXORefresh } from '../../workers/UTXOWorkerService';
 import { useTheme } from '../../app/theme/useTheme';
 import { ROUTE_PATHS, transactionsRoute } from '../../navigation/routes';
-import { EcKeyManager } from './EcKeyManager';
+import { OptnKeyManager } from './OptnKeyManager';
 import WalletManager from '../../apis/WalletManager/WalletManager';
-import { buildWalletFileContents } from './DesktopWalletManager';
-import { parseWalletFile, defaultWalletFileName } from './walletFile';
 import { openWalletPickerWindow } from './walletWindow';
 import {
   refreshWalletOpenClaim,
@@ -236,20 +233,38 @@ export async function refreshWalletFromMenu(
   return false;
 }
 
+export function walletClaimToRelease(
+  previousWalletId: number,
+  currentWalletId: number
+): number | null {
+  return previousWalletId > 0 && previousWalletId !== currentWalletId
+    ? previousWalletId
+    : null;
+}
+
 /**
  * Leave the currently open wallet before showing another wallet's password
  * prompt. AppShell only exposes the picker routes while walletId is reset, and
  * the old wallet key must not survive a same-window switch.
  */
-export function openSavedWalletFromMenu(
+export async function openSavedWalletFromMenu(
   walletId: number,
   navigate: NavigateFunction,
   dispatch: AppDispatch,
-  lock: () => void = EcKeyManager.lock,
-  flush: (callback: () => void) => void = flushSync
-): void {
+  lock: () => void = OptnKeyManager.lock,
+  flush: (callback: () => void) => void = flushSync,
+  currentWalletId = 0,
+  windowLabel = currentWebviewLabel(),
+  release: typeof releaseWalletOpen = releaseWalletOpen
+): Promise<void> {
+  if (currentWalletId > 0) {
+    await release(currentWalletId, windowLabel);
+  }
   lock();
   flush(() => dispatch(resetWallet()));
+  // Switching wallets in place leaves the same stale database behind that a
+  // lock would, so the wallet being opened next must not inherit it.
+  resyncAfterWalletClosed('MenuBar.openSavedWallet');
   navigate(ROUTE_PATHS.landing, { state: { openWalletId: walletId } });
 }
 
@@ -276,66 +291,112 @@ async function openPicker(navigate: (p: string) => void) {
 }
 
 async function handleOpenWalletFile(
-  navigate: (p: string) => void,
-  leaveCurrentWallet: () => void = () => undefined
+  navigate: NavigateFunction,
+  leaveCurrentWallet: () => void | Promise<void> = () => undefined,
+  openWalletId = 0
 ) {
-  const picked = await openDialog({
-    multiple: false,
-    directory: false,
-    title: 'Open Wallet File',
-    defaultPath: await walletsDir(),
-    filters: [{ name: 'OPTN Wallet', extensions: ['optn'] }],
-  });
-  if (typeof picked !== 'string') return; // cancelled
   try {
-    const text = await invoke<string>('read_wallet_file', { path: picked });
-    const file = parseWalletFile(text);
-    leaveCurrentWallet();
-    navigate(ROUTE_PATHS.landing);
-    setTimeout(() => {
-      window.dispatchEvent(new CustomEvent(IMPORT_FILE_EVENT, { detail: { file } }));
-    }, 50);
+    const { pickWalletPackFiles, importColdDataIntoOpenWallet } = await import(
+      './WalletPackService'
+    );
+    const pack = await pickWalletPackFiles((await walletsDir()) ?? null);
+    if (!pack) return;
+
+    // Data-only: apply into the currently open wallet.
+    if (!pack.keystore && pack.coldText) {
+      if (openWalletId <= 0) {
+        window.dispatchEvent(
+          new CustomEvent('optn:toast', {
+            detail: {
+              message:
+                'Open a wallet first, or select the .optn keystore (data file auto-loads if it sits next to it).',
+            },
+          })
+        );
+        return;
+      }
+      const { resolveWalletPassword } = await import(
+        './WalletColdExportService'
+      );
+      const password = await resolveWalletPassword(
+        openWalletId,
+        'Password for the encrypted wallet data file (.optn-cold):'
+      );
+      if (password === null) return;
+      const stats = await importColdDataIntoOpenWallet(
+        openWalletId,
+        pack.coldText,
+        password
+      );
+      window.dispatchEvent(
+        new CustomEvent('optn:toast', {
+          detail: {
+            message: `Imported data: ${stats.labels} labels, ${stats.fusionCoins} fusion depths.`,
+          },
+        })
+      );
+      return;
+    }
+
+    if (!pack.keystore) {
+      window.dispatchEvent(
+        new CustomEvent('optn:toast', {
+          detail: { message: 'No .optn keystore file in the selection.' },
+        })
+      );
+      return;
+    }
+
+    await leaveCurrentWallet();
+    navigate(ROUTE_PATHS.landing, {
+      state: {
+        importWalletFile: pack.keystore,
+        importColdText: pack.coldText ?? null,
+      },
+    });
   } catch (err) {
     console.error('[menu] Open Wallet File failed:', err);
     window.dispatchEvent(
-      new CustomEvent('optn:toast', { detail: { message: 'That is not a valid OPTN wallet file.' } })
+      new CustomEvent('optn:toast', {
+        detail: {
+          message:
+            err instanceof Error
+              ? err.message
+              : 'That is not a valid OPTN wallet pack.',
+        },
+      })
     );
   }
 }
 
+/**
+ * Export Wallet = two files:
+ *   1) .optn keystore (encrypted seed)
+ *   2) .optn-cold data (encrypted history/labels/fusion/UTXO snapshot)
+ * written side-by-side after one Save dialog for the keystore.
+ */
 async function handleExportWallet(walletId: number) {
   if (!walletId) return;
-  const contents = await buildWalletFileContents(walletId);
-  if (!contents) {
-    window.dispatchEvent(
-      new CustomEvent('optn:toast', { detail: { message: 'This wallet cannot be exported.' } })
-    );
-    return;
-  }
-  const name = (() => {
-    try {
-      return (JSON.parse(contents) as { name?: string }).name ?? 'wallet';
-    } catch {
-      return 'wallet';
-    }
-  })();
-  const dir = await walletsDir();
-  const suggested = defaultWalletFileName(walletId, name);
-  const dest = await saveDialog({
-    title: 'Export Wallet',
-    defaultPath: dir ? await join(dir, suggested) : suggested,
-    filters: [{ name: 'OPTN Wallet', extensions: ['optn'] }],
-  });
-  if (typeof dest !== 'string') return; // cancelled
   try {
-    await invoke('write_wallet_file', { path: dest, contents });
+    // Password resolved from unlock session / empty-password wallets / prompt.
+    const { exportWalletPack } = await import('./WalletPackService');
+    const result = await exportWalletPack(walletId, (await walletsDir()) ?? null);
+    const dataMsg = result.coldPath
+      ? `Data: ${result.coldPath}`
+      : `Data file skipped: ${result.coldSkippedReason ?? 'unknown'}`;
     window.dispatchEvent(
-      new CustomEvent('optn:toast', { detail: { message: 'Wallet exported.' } })
+      new CustomEvent('optn:toast', {
+        detail: {
+          message: `Exported wallet pack.\nKeys: ${result.keystorePath}\n${dataMsg}`,
+        },
+      })
     );
   } catch (err) {
+    const text = err instanceof Error ? err.message : 'Could not export wallet.';
+    if (text.includes('cancelled')) return;
     console.error('[menu] Export Wallet failed:', err);
     window.dispatchEvent(
-      new CustomEvent('optn:toast', { detail: { message: 'Could not export the wallet.' } })
+      new CustomEvent('optn:toast', { detail: { message: text } })
     );
   }
 }
@@ -344,6 +405,7 @@ export function useMenuBar(): void {
   const navigate = useNavigate();
   const dispatch = useDispatch<AppDispatch>();
   const walletId = useSelector((s: RootState) => selectWalletId(s));
+  const previousWalletId = useRef(0);
   const { toggleMode } = useTheme();
 
   useEffect(() => {
@@ -360,22 +422,49 @@ export function useMenuBar(): void {
     const handlers: DesktopMenuActionHandlers = {
       openPicker: () => openPicker(navigate),
       openWalletFile: () =>
-        handleOpenWalletFile(navigate, () => {
-          EcKeyManager.lock();
-          flushSync(() => dispatch(resetWallet()));
-        }),
+        handleOpenWalletFile(
+          navigate,
+          async () => {
+            if (walletId > 0) {
+              await releaseWalletOpen(walletId, currentWindow.label);
+            }
+            OptnKeyManager.lock();
+            flushSync(() => dispatch(resetWallet()));
+            resyncAfterWalletClosed('MenuBar.openWalletFile');
+          },
+          walletId
+        ),
       openSavedWallet: (savedWalletId) =>
-        openSavedWalletFromMenu(savedWalletId, navigate, dispatch),
-      lockWallet: () => {
+        openSavedWalletFromMenu(
+          savedWalletId,
+          navigate,
+          dispatch,
+          OptnKeyManager.lock,
+          flushSync,
+          walletId,
+          currentWindow.label
+        ),
+      lockWallet: async () => {
         if (!walletId) return;
         // Hand the wallet back before leaving it, so another window can open it
         // immediately rather than waiting out the claim's TTL.
-        void releaseWalletOpen(walletId, currentWindow.label).catch(
+        await releaseWalletOpen(walletId, currentWindow.label).catch(
           () => undefined
         );
-        EcKeyManager.lock();
+        OptnKeyManager.lock();
         dispatch(resetWallet());
+        // Drop Electrum so the next wallet cannot reuse this network's socket
+        // (chipnet open after mainnet lock → permanent 0 balance otherwise).
+        try {
+          const { default: getElectrumAdapter } = await import(
+            '../../services/ElectrumAdapter'
+          );
+          await getElectrumAdapter().disconnect();
+        } catch {
+          /* best-effort */
+        }
         navigate(ROUTE_PATHS.landing);
+        resyncAfterWalletClosed('MenuBar.lockWallet');
       },
       receive: () => {
         if (walletId) navigate(ROUTE_PATHS.receive);
@@ -401,7 +490,7 @@ export function useMenuBar(): void {
 
     const dispatchMenuAction = (id: string) => {
       void dispatchDesktopMenuAction(id, handlers).catch((err) => {
-        console.error(`[menu] ${id} failed:`, err);
+        console.error('[menu] action failed', { id, error: err });
       });
     };
 
@@ -474,7 +563,7 @@ export function useMenuBar(): void {
     };
     const menuAction = (id: string) => () => {
       void routeAction(id).catch((err) => {
-        console.error(`[menu] could not route ${id}:`, err);
+        console.error('[menu] could not route action', { id, error: err });
       });
     };
 
@@ -502,7 +591,7 @@ export function useMenuBar(): void {
         // Browse the disk for a .optn wallet file (Windows Explorer / native picker).
         await MenuItem.new({
           id: 'open_wallet_file',
-          text: 'Open Wallet File…',
+          text: 'Open Wallet Pack…',
           action: menuAction('open_wallet_file'),
         }),
         await PredefinedMenuItem.new({ item: 'Separator' }),
@@ -521,7 +610,7 @@ export function useMenuBar(): void {
           // wallet, or pick an existing one — isolated from this window.
           await MenuItem.new({
             id: 'new_wallet',
-            text: 'Import New Wallet',
+            text: 'Open New Wallet',
             accelerator: 'CmdOrCtrl+N',
             action: menuAction('new_wallet'),
           }),
@@ -608,7 +697,11 @@ export function useMenuBar(): void {
 
       const menu = await Menu.new({ items: [fileMenu, walletMenu, viewMenu, helpMenu] });
       if (disposed) return;
-      await attachDesktopMenu(menu, currentWindow, requiresAppMenu);
+      await attachDesktopMenu(
+        menu as unknown as DesktopMenuLike<typeof currentWindow>,
+        currentWindow,
+        requiresAppMenu
+      );
     };
 
     void buildMenu();
@@ -624,4 +717,18 @@ export function useMenuBar(): void {
       window.removeEventListener('beforeunload', releaseOnClose);
     };
   }, [navigate, dispatch, walletId, toggleMode]);
+
+  // Release only on an actual wallet-id transition. Effect cleanup is unsafe:
+  // React StrictMode deliberately replays mount effects and would release a
+  // claim while the wallet was still open.
+  useEffect(() => {
+    const walletToRelease = walletClaimToRelease(
+      previousWalletId.current,
+      walletId
+    );
+    previousWalletId.current = walletId;
+    if (walletToRelease === null) return;
+    const windowLabel = currentWebviewLabel();
+    void releaseWalletOpen(walletToRelease, windowLabel).catch(() => undefined);
+  }, [walletId]);
 }

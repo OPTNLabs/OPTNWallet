@@ -2,6 +2,13 @@ name: Publish Release
 
 on:
   push:
+    # Merging is the release trigger. Nothing here creates a tag by hand any
+    # more: main publishes a stable release, dev publishes a prerelease so every
+    # merge still produces downloadable binaries without filling the stable
+    # release list.
+    branches:
+      - main
+      - dev
     tags:
       - 'v*.*.*'
   workflow_dispatch:
@@ -11,26 +18,120 @@ on:
         required: true
         default: v1.7.0
 
-env:
-  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-
 concurrency:
   group: publish-release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
+  # Decide what is being released, and create the tag when a merge is what
+  # triggered us.
+  #
+  # The tag has to be created inside this run rather than by a separate
+  # "tag on merge" workflow: GitHub deliberately does not start a workflow from
+  # a ref pushed with GITHUB_TOKEN, so a tag created elsewhere would sit there
+  # with nothing ever building it. That restriction is also what keeps this
+  # workflow from re-triggering itself when it pushes the tag below.
+  resolve:
+    name: Resolve release tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      # The package version WITHOUT any prerelease suffix. Kept separate from
+      # the tag because the extension job checks manifest.json against it, and
+      # manifest.json says 1.6.2 while a dev tag says v1.6.2-dev.481.
+      version: ${{ steps.tag.outputs.version }}
+      prerelease: ${{ steps.tag.outputs.prerelease }}
+      publish: ${{ steps.tag.outputs.publish }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Decide the tag
+        id: tag
+        env:
+          DISPATCH_TAG: ${{ inputs.tag }}
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          publish=true
+
+          if [ "$GITHUB_EVENT_NAME" = 'workflow_dispatch' ]; then
+            tag="$DISPATCH_TAG"
+          elif [ "$GITHUB_REF_TYPE" = 'tag' ]; then
+            tag="$GITHUB_REF_NAME"
+          elif [ "$GITHUB_REF_NAME" = 'main' ]; then
+            tag="v${version}"
+          else
+            # Run number, not the SHA: it sorts, and it keeps every dev merge on
+            # its own tag so a merge never collides with the one before it.
+            tag="v${version}-${GITHUB_REF_NAME}.${GITHUB_RUN_NUMBER}"
+          fi
+
+          # Anything carrying a suffix is a prerelease. Derived from the tag so a
+          # hand-typed workflow_dispatch tag like v1.7.0-rc.1 is classified the
+          # same way an automatic one is.
+          case "$tag" in
+            *-*) prerelease=true ;;
+            *)   prerelease=false ;;
+          esac
+
+          # A stable tag that already exists means this merge carried no version
+          # bump. Re-releasing it would either fail on the existing tag or
+          # quietly replace published binaries, so stop instead — and say why,
+          # because a silently skipped release is its own bug report.
+          if [ "$GITHUB_REF_TYPE" != 'tag' ] && [ "$GITHUB_EVENT_NAME" != 'workflow_dispatch' ]; then
+            if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+              publish=false
+              echo "::notice::${tag} already exists — bump the version in package.json to publish a new release."
+            fi
+          fi
+
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "prerelease=$prerelease"
+            echo "publish=$publish"
+          } >> "$GITHUB_OUTPUT"
+          echo "Releasing $tag (prerelease=$prerelease, publish=$publish)"
+
+      - name: Create the tag
+        if: >-
+          steps.tag.outputs.publish == 'true' &&
+          github.ref_type != 'tag' &&
+          github.event_name != 'workflow_dispatch'
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          # Tag the exact commit that was merged, not whatever the branch tip
+          # has moved on to while this run was queued.
+          git tag -a "$TAG" -m "Release $TAG" "$GITHUB_SHA"
+          git push origin "refs/tags/${TAG}"
+
   quality:
     name: Release quality gate
+    needs: resolve
+    if: needs.resolve.outputs.publish == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ needs.resolve.outputs.tag }}
           fetch-depth: 0
+          persist-credentials: false
 
+      # Only stable releases must come from main. A dev prerelease exists
+      # precisely to ship binaries from a branch that has not reached main yet,
+      # so applying this to it would reject every prerelease by definition.
       - name: Verify release commit is on main
+        if: needs.resolve.outputs.prerelease != 'true'
         run: |
           git fetch origin "refs/heads/main:refs/remotes/origin/main"
           git fetch origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
@@ -41,7 +142,7 @@ jobs:
           }
 
       - name: Setup Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: '20'
           cache: npm
@@ -54,7 +155,7 @@ jobs:
 
   android:
     name: Build Android release
-    needs: quality
+    needs: [resolve, quality]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: production
@@ -64,14 +165,17 @@ jobs:
       attestations: write
     outputs:
       signed: ${{ steps.signing.outputs.available }}
+    env:
+      RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ needs.resolve.outputs.tag }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Setup Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: '20'
           cache: npm
@@ -80,16 +184,16 @@ jobs:
         run: npm ci
 
       - name: Setup Java (JDK 21)
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
         with:
           distribution: temurin
           java-version: '21'
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
 
       - name: Enable Gradle cache
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6
 
       - name: Detect signing credentials
         id: signing
@@ -140,7 +244,7 @@ jobs:
           EOF
 
       - name: Upload Android release files
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: steps.signing.outputs.available == 'true'
         with:
           name: android-release
@@ -150,16 +254,76 @@ jobs:
           retention-days: 30
 
       - name: Upload Android signing status
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: steps.signing.outputs.available != 'true'
         with:
           name: android-release-status
           path: android-release-status.txt
           retention-days: 30
 
+  extension:
+    name: Build browser extensions
+    needs: [resolve, quality]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+      RELEASE_VERSION: ${{ needs.resolve.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Chrome extension
+        run: npm run build:extension:chrome
+
+      - name: Build Firefox extension
+        run: npm run build:extension:firefox
+
+      - name: Package and verify extension archives
+        run: |
+          (
+            cd dist-extension-chrome
+            zip -X -q -r "../OPTNWallet-${RELEASE_TAG}-chrome.zip" .
+          )
+          (
+            cd dist-extension-firefox
+            zip -X -q -r "../OPTNWallet-${RELEASE_TAG}-firefox.zip" .
+          )
+          unzip -t "OPTNWallet-${RELEASE_TAG}-chrome.zip"
+          unzip -t "OPTNWallet-${RELEASE_TAG}-firefox.zip"
+          # Against the package version, not the tag: a prerelease tag carries a
+          # suffix (v1.6.2-dev.481) that manifest.json will never contain, so
+          # comparing with the tag would fail every prerelease.
+          test "$(unzip -p "OPTNWallet-${RELEASE_TAG}-chrome.zip" manifest.json | jq -r .version)" = "${RELEASE_VERSION}"
+          test "$(unzip -p "OPTNWallet-${RELEASE_TAG}-firefox.zip" manifest.json | jq -r .version)" = "${RELEASE_VERSION}"
+
+      - name: Upload extension release files
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: browser-extensions
+          path: |
+            OPTNWallet-${{ env.RELEASE_TAG }}-chrome.zip
+            OPTNWallet-${{ env.RELEASE_TAG }}-firefox.zip
+          retention-days: 30
+          if-no-files-found: error
+
   desktop:
     name: Build desktop (${{ matrix.platform }})
-    needs: quality
+    needs: [resolve, quality]
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -167,49 +331,70 @@ jobs:
         include:
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
+            tor-target: windows-x86_64
             artifact-name: desktop-windows
-            bundle-args: ''
           - platform: macos-latest
             target: aarch64-apple-darwin
+            tor-target: macos-aarch64
+            expected-arch: arm64
             artifact-name: desktop-macos-arm
-            bundle-args: ''
+          - platform: macos-15-intel
+            target: x86_64-apple-darwin
+            tor-target: macos-x86_64
+            expected-arch: x86_64
+            artifact-name: desktop-macos-intel
           - platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
+            tor-target: linux-x86_64
             artifact-name: desktop-linux
-            bundle-args: '--bundles deb,rpm'
+          # Native ARM runner. AppImage is the portable ship for every Linux distro
+          # (Ubuntu, Fedora, Arch, …) on aarch64 — same role as x64 AppImage.
+          - platform: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            tor-target: linux-aarch64
+            artifact-name: desktop-linux-arm
     runs-on: ${{ matrix.platform }}
+    environment: production
     permissions:
       contents: read
     env:
       NODE_OPTIONS: --max-old-space-size=4096
-      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ needs.resolve.outputs.tag }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Setup Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: '20'
           cache: npm
 
       - name: Install Linux system dependencies
-        if: matrix.platform == 'ubuntu-22.04'
+        if: startsWith(matrix.platform, 'ubuntu')
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
-            patchelf libssl-dev libgtk-3-dev libfuse2
+            patchelf libssl-dev libgtk-3-dev libfuse2 libevent-2.1-7 \
+            libudev-dev libusb-1.0-0-dev pkg-config
+          # hidapi (Ledger/Trezor native USB) needs libudev; rusb needs libusb.
+          # linux-aarch64: build a checksum-pinned Tor source release instead
+          # of trusting a distro Tor binary (see fetch-tor.mts).
+          if [ "${{ matrix.tor-target }}" = 'linux-aarch64' ]; then
+            sudo apt-get install -y build-essential libevent-dev zlib1g-dev
+          fi
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           targets: ${{ matrix.target }}
 
       - name: Rust cache
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: './src-tauri -> target'
 
@@ -217,10 +402,46 @@ jobs:
         run: npm ci
 
       - name: Fetch bundled Tor
-        run: node scripts/fetch-tor.mjs
+        run: npx --no-install tsx scripts/fetch-tor.mts ${{ matrix.tor-target }}
+
+      - name: Detect optional macOS signing credentials
+        if: startsWith(matrix.platform, 'macos')
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          present=0
+          missing=()
+          for name in \
+            APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD KEYCHAIN_PASSWORD \
+            APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
+          do
+            if [ -z "${!name}" ]; then
+              missing+=("$name")
+            else
+              present=$((present + 1))
+            fi
+          done
+
+          if [ "$present" -eq 0 ]; then
+            echo "MACOS_SIGNING_AVAILABLE=false" >> "$GITHUB_ENV"
+            echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
+            echo "::notice::Building an ad-hoc-signed, non-notarized macOS artifact without an Apple account."
+          elif [ "${#missing[@]}" -ne 0 ]; then
+            printf '::error::Partial macOS signing configuration; missing: %s\n' "${missing[@]}"
+            exit 1
+          else
+            echo "MACOS_SIGNING_AVAILABLE=true" >> "$GITHUB_ENV"
+          fi
 
       - name: Import macOS signing certificate
-        if: startsWith(matrix.platform, 'macos') && env.APPLE_CERTIFICATE != ''
+        if: startsWith(matrix.platform, 'macos') && env.MACOS_SIGNING_AVAILABLE == 'true'
+        shell: bash
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -232,22 +453,93 @@ jobs:
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security import "$CERTIFICATE_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          security default-keychain -s "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+          APPLE_SIGNING_IDENTITY="$(
+            security find-identity -v -p codesigning "$KEYCHAIN_PATH" |
+              awk -F'"' '/Developer ID Application/ { print $2; exit }'
+          )"
+          if [ -z "$APPLE_SIGNING_IDENTITY" ]; then
+            echo "::error::The imported certificate has no Developer ID Application identity."
+            security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+            exit 1
+          fi
+          echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY" >> "$GITHUB_ENV"
 
-      - name: Build desktop bundles
+      - name: Build non-macOS desktop bundles
+        if: "!startsWith(matrix.platform, 'macos')"
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+          NO_STRIP: 'true'
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npx tauri build --target ${{ matrix.target }}
+
+      - name: Build signed and notarized macOS bundles
+        if: startsWith(matrix.platform, 'macos') && env.MACOS_SIGNING_AVAILABLE == 'true'
         env:
           APPIMAGE_EXTRACT_AND_RUN: '1'
           NO_STRIP: 'true'
           APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npx tauri build --target ${{ matrix.target }} ${{ matrix.bundle-args }}
+        run: npx tauri build --target ${{ matrix.target }}
+
+      - name: Build ad-hoc-signed macOS bundles without an Apple account
+        if: startsWith(matrix.platform, 'macos') && env.MACOS_SIGNING_AVAILABLE == 'false'
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+          NO_STRIP: 'true'
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npx tauri build --target ${{ matrix.target }}
+
+      - name: Verify macOS bundle
+        if: startsWith(matrix.platform, 'macos')
+        shell: bash
+        run: |
+          BUNDLE_ROOT="src-tauri/target/${{ matrix.target }}/release/bundle"
+          APP_PATH="$(find "$BUNDLE_ROOT/macos" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          DMG_PATH="$(find "$BUNDLE_ROOT/dmg" -maxdepth 1 -type f -name '*.dmg' -print -quit)"
+          test -n "$APP_PATH"
+          test -n "$DMG_PATH"
+
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          hdiutil verify "$DMG_PATH"
+
+          if [ "$MACOS_SIGNING_AVAILABLE" = 'true' ]; then
+            spctl --assess --type execute --verbose=4 "$APP_PATH"
+            spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG_PATH"
+            xcrun stapler validate "$APP_PATH"
+            xcrun stapler validate "$DMG_PATH"
+          else
+            codesign -dv --verbose=4 "$APP_PATH" 2>&1 | grep -Fq 'Signature=adhoc'
+            ADHOC_DMG_PATH="${DMG_PATH%.dmg}-adhoc-not-notarized.dmg"
+            mv "$DMG_PATH" "$ADHOC_DMG_PATH"
+            DMG_PATH="$ADHOC_DMG_PATH"
+          fi
+
+          APP_EXECUTABLE="$(find "$APP_PATH/Contents/MacOS" -maxdepth 1 -type f -perm -111 -print -quit)"
+          TOR_EXECUTABLE="$(find "$APP_PATH/Contents/Resources" -type f -name tor -print -quit)"
+          test -n "$APP_EXECUTABLE"
+          test -n "$TOR_EXECUTABLE"
+          test "$(lipo -archs "$APP_EXECUTABLE")" = "${{ matrix.expected-arch }}"
+          test "$(lipo -archs "$TOR_EXECUTABLE")" = "${{ matrix.expected-arch }}"
+
+      - name: Smoke-test packaged Linux Tor
+        if: startsWith(matrix.platform, 'ubuntu')
+        shell: bash
+        run: |
+          APPIMAGE_PATH="$(find "src-tauri/target/${{ matrix.target }}/release/bundle" -type f -name '*.AppImage' -print -quit)"
+          test -n "$APPIMAGE_PATH"
+          npx --no-install tsx scripts/smoke-tor-artifact.mts "$APPIMAGE_PATH" "${{ matrix.tor-target }}"
 
       - name: Upload desktop release files
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ matrix.artifact-name }}
           path: src-tauri/target/${{ matrix.target }}/release/bundle/**
@@ -256,20 +548,57 @@ jobs:
 
   publish:
     name: Publish GitHub release
-    needs: [android, desktop]
+    needs: [resolve, android, desktop, extension]
     runs-on: ubuntu-latest
     permissions:
       contents: write
       id-token: write
       attestations: write
+    env:
+      RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
     steps:
       - name: Download release files
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: artifacts
 
       - name: List release files
         run: find artifacts -type f -print | sort
+
+      - name: Verify expected release files
+        run: |
+          require_asset() {
+            local directory="$1"
+            local pattern="$2"
+            local label="$3"
+            if [ ! -d "$directory" ] ||
+              ! find "$directory" -type f -name "$pattern" -print -quit | grep -q .
+            then
+              echo "::error::Missing expected release file: $label"
+              exit 1
+            fi
+          }
+
+          require_asset artifacts/desktop-windows '*.exe' 'Windows EXE installer'
+          require_asset artifacts/desktop-windows '*.msi' 'Windows MSI installer'
+          require_asset artifacts/desktop-macos-arm '*.dmg' 'macOS Apple Silicon DMG'
+          require_asset artifacts/desktop-macos-intel '*.dmg' 'macOS Intel DMG'
+          # AppImage = distro-portable Linux ship (works across Ubuntu/Debian/Fedora/Arch/…).
+          # deb/rpm are convenience packages for those package managers only.
+          require_asset artifacts/desktop-linux '*.AppImage' 'Linux x64 AppImage (portable, all distros)'
+          require_asset artifacts/desktop-linux-arm '*.AppImage' 'Linux ARM64 AppImage (portable, all distros)'
+          require_asset artifacts/desktop-linux '*.deb' 'Linux x64 DEB package'
+          require_asset artifacts/desktop-linux '*.rpm' 'Linux x64 RPM package'
+          require_asset artifacts/browser-extensions '*.zip' 'browser extension archive'
+          test -f "artifacts/browser-extensions/OPTNWallet-${RELEASE_TAG}-chrome.zip"
+          test -f "artifacts/browser-extensions/OPTNWallet-${RELEASE_TAG}-firefox.zip"
+
+          if [ "${{ needs.android.outputs.signed }}" = 'true' ]; then
+            require_asset artifacts/android-release '*.apk' 'signed Android APK'
+            require_asset artifacts/android-release '*.aab' 'signed Android AAB'
+          else
+            test -f artifacts/android-release-status/android-release-status.txt
+          fi
 
       - name: Assemble release files
         run: |
@@ -277,6 +606,7 @@ jobs:
           find artifacts -type f \( \
             -name '*.apk' -o -name '*.aab' -o -name '*.exe' -o -name '*.msi' \
             -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \
+            -o -name '*.zip' \
           \) -exec cp {} release-files/ \;
           if [ -f artifacts/android-release-status/android-release-status.txt ]; then
             cp artifacts/android-release-status/android-release-status.txt release-files/
@@ -290,13 +620,14 @@ jobs:
             find . -maxdepth 1 -type f \( \
               -name '*.apk' -o -name '*.aab' -o -name '*.exe' -o -name '*.msi' \
               -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \
+              -o -name '*.zip' \
             \) -print0 | sed -z 's#^\./##' | sort -z | xargs -0 sha256sum
           ) > release-sha256.txt
           test -s release-sha256.txt
           cat release-sha256.txt
 
       - name: Attest release files
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-path: |
             release-files/*.apk
@@ -307,6 +638,7 @@ jobs:
             release-files/*.AppImage
             release-files/*.deb
             release-files/*.rpm
+            release-files/*.zip
 
       - name: Remove stale Android status asset
         if: needs.android.outputs.signed == 'true'
@@ -320,7 +652,7 @@ jobs:
           fi
 
       - name: Publish GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           name: OPTN Wallet ${{ env.RELEASE_TAG }}
@@ -329,9 +661,17 @@ jobs:
 
             ### Downloads
             - Windows x64: `.exe` and `.msi` installers
-            - macOS Apple Silicon: `.dmg`
-            - Linux x64: native `.deb` and `.rpm` packages
+            - macOS Apple Silicon (M1 and later): `.dmg`
+            - macOS Intel: `.dmg`
+            - **Linux (all distros): portable `.AppImage`** — x64 and ARM64. One file runs on Ubuntu, Debian, Fedora, Arch, and most other desktop Linux without a distro-specific package.
+            - Linux x64 also ships native `.deb` and `.rpm` for users who prefer package managers
+            - Chrome/Chromium and Firefox extension bundles: `.zip`
             ${{ needs.android.outputs.signed == 'true' && '- Android: signed `.apk` for direct installation and `.aab` for Play distribution' || '- Android: not included yet; configure the permanent production keystore and rerun the release workflow' }}
+
+            macOS artifacts whose filenames end in `-adhoc-not-notarized.dmg` were
+            built without an Apple account. They are integrity-checked and covered
+            by the attached checksums and provenance, but Gatekeeper may require the
+            user to explicitly approve the app because Apple has not notarized it.
 
             iOS is not included in this release. Build-from-source instructions are in [docs/build-and-release.md](https://github.com/${{ github.repository }}/blob/${{ env.RELEASE_TAG }}/docs/build-and-release.md).
 
@@ -340,4 +680,4 @@ jobs:
             release-files/*
             release-sha256.txt
           fail_on_unmatched_files: true
-          prerelease: false
+          prerelease: ${{ needs.resolve.outputs.prerelease == 'true' }}
