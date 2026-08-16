@@ -362,9 +362,8 @@ describe('watch-only import verification', () => {
     // that verifies and that libauth's BCH VM executes. Blocking the send on a
     // missing fingerprint was therefore refusing a transaction that works.
     //
-    // What it costs is the device's review screen: SeedCash claims an input
-    // via `v[:4] == wallet_fingerprint`, so the user is approving something the
-    // device cannot confirm is theirs. Hence a flag rather than silence.
+    // Current SeedCash signs from the path alone. The flag stays so callers
+    // that still persist a fingerprint can tell whether it was stamped.
     const input = makeInput();
     const built = buildWatchOnlyPsbt({
       inputs: [input],

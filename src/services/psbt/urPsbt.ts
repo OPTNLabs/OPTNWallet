@@ -1,20 +1,24 @@
 // UR (crypto-psbt) transport — the animated-QR channel to an air-gapped signer.
 //
-// Both devices we target speak the same thing, so one layer serves both:
-//   SeedCash  encode_qr.py:280  UR("crypto-psbt", self.psbt) + fountain encoder
-//             qr_type.py        PSBT__UR2
-//   Keystone  CryptoPSBT from @keystonehq/bc-ur-registry-btc
+// SeedCash and Keystone both use type `crypto-psbt`, but they do not put the
+// same bytes in the UR CBOR field:
 //
-// A PSBT rarely fits one QR frame, so UR splits it into fragments a device
-// scans in sequence. Decoding is the mirror: frames arrive out of order and
-// possibly repeated (the fountain encoder loops), and the decoder accumulates
-// until it has enough.
+//   SeedCash  encode_qr.py:280  UR("crypto-psbt", raw_psbt_bytes)
+//             decode_qr.py:141  parse_psbt(decoder.result_message().cbor)
+//   Keystone  CryptoPSBT        CBOR byte-string wrap (BCR-2020-006)
+//
+// Stock SeedCash never unwraps that byte string. A spec-wrapped QR therefore
+// arrives as `59 01 90 70 73 62 74 ff …` and `parse_psbt` dies with
+// "invalid PSBT magic". Issue #8 is the SeedCash air-gap, so we emit the
+// device's native payload (raw PSBT as the UR CBOR) and accept both shapes
+// on the way back.
 
+import { UR, UREncoder } from '@ngraveio/bc-ur';
 import { CryptoPSBT } from '@keystonehq/bc-ur-registry-btc';
 import { URRegistryDecoder } from '@keystonehq/bc-ur-registry';
 
 /**
- * Fragment size, in characters of the encoded UR.
+ * Fragment size, in bytes of the UR payload.
  *
  * Small enough that each frame stays readable by a phone-grade camera at the
  * size a desktop window can show, which matters more than frame count: a dense
@@ -23,11 +27,35 @@ import { URRegistryDecoder } from '@keystonehq/bc-ur-registry';
  */
 export const DEFAULT_UR_FRAGMENT_LENGTH = 200;
 
+const PSBT_MAGIC = Uint8Array.of(0x70, 0x73, 0x62, 0x74, 0xff);
+
+export function startsWithPsbtMagic(bytes: Uint8Array): boolean {
+  if (bytes.length < PSBT_MAGIC.length) return false;
+  return PSBT_MAGIC.every((value, index) => bytes[index] === value);
+}
+
+/**
+ * Recover PSBT bytes from a decoded `crypto-psbt` UR CBOR field.
+ *
+ * SeedCash puts the raw PSBT there. BCR-2020-006 / Keystone wrap it in a
+ * CBOR byte string. Accept both so a signed return from either device works.
+ */
+export function extractPsbtFromUrCbor(cbor: Uint8Array): Uint8Array {
+  if (startsWithPsbtMagic(cbor)) {
+    return Uint8Array.from(cbor);
+  }
+  return Uint8Array.from(CryptoPSBT.fromCBOR(Buffer.from(cbor)).getPSBT());
+}
+
 export interface UrFrames {
   /** Next frame to display; loops forever, so drive it from a timer. */
   next(): string;
   /** Frames in one full pass — for "1 of N" style progress. */
   count: number;
+}
+
+function toSeedCashUr(psbt: Uint8Array): UR {
+  return new UR(Buffer.from(psbt), 'crypto-psbt');
 }
 
 /** Split a PSBT into UR frames for display as an animated QR. */
@@ -36,7 +64,7 @@ export function encodePsbtToUrFrames(
   fragmentLength: number = DEFAULT_UR_FRAGMENT_LENGTH
 ): UrFrames {
   if (psbt.length === 0) throw new Error('Cannot encode an empty PSBT.');
-  const encoder = new CryptoPSBT(Buffer.from(psbt)).toUREncoder(fragmentLength);
+  const encoder = new UREncoder(toSeedCashUr(psbt), fragmentLength);
   return {
     next: () => encoder.nextPart().toUpperCase(),
     count: encoder.fragmentsLength,
@@ -46,13 +74,7 @@ export function encodePsbtToUrFrames(
 /** A single-frame UR, for the rare PSBT small enough to need no animation. */
 export function encodePsbtToSingleUr(psbt: Uint8Array): string {
   if (psbt.length === 0) throw new Error('Cannot encode an empty PSBT.');
-  // Produced through the same encoder with a fragment large enough to hold the
-  // whole payload, rather than a separate code path that could drift from the
-  // animated one.
-  return new CryptoPSBT(Buffer.from(psbt))
-    .toUREncoder(Math.max(psbt.length * 3, 1024))
-    .nextPart()
-    .toUpperCase();
+  return UREncoder.encodeSinglePart(toSeedCashUr(psbt)).toUpperCase();
 }
 
 export interface UrScanProgress {
@@ -109,7 +131,7 @@ export class UrPsbtScanner {
     return {
       complete: true,
       progress: 1,
-      psbt: Uint8Array.from(CryptoPSBT.fromCBOR(result.cbor).getPSBT()),
+      psbt: extractPsbtFromUrCbor(Uint8Array.from(result.cbor)),
     };
   }
 

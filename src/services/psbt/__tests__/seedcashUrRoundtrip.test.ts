@@ -6,21 +6,12 @@
 // `seedcash/helpers/ur2/ur_decoder.py`, the one `decode_qr.py` feeds from the
 // camera — reconstructs the exact PSBT bytes we meant to send.
 //
-// FOUND A DEVICE-SIDE BUG, recorded here because it is not ours to fix:
-//
-// `ur:crypto-psbt` carries the PSBT inside a CBOR byte string (BCR-2020-006),
-// so `URDecoder.result_message().cbor` is the WRAPPER, not the payload — for a
-// 200-byte PSBT it begins `58 c8` (major type 2, one-byte length 200) and only
-// then `70736274ff`. SeedCash's `decode_qr.py:get_data_psbt()` returns `.cbor`
-// straight through to `parse_psbt`, which rejects it:
-//
-//     parse_psbt REJECTS it: ValueError invalid PSBT magic
-//
-// So stock SeedCash cannot import ANY standards-compliant crypto-psbt QR, from
-// this wallet or any other. The fix belongs in SeedCash — CBOR-decode the byte
-// string in `get_data_psbt` — and these tests unwrap it on SeedCash's behalf so
-// they assert what is really on the wire. If they ever fail, the encoder here
-// has drifted; the device bug is separate and lives upstream.
+// Stock SeedCash feeds `decoder.result_message().cbor` straight to parse_psbt.
+// That only works when the UR CBOR field IS the PSBT (`70736274ff…`), which is
+// what SeedCash itself emits (`UR("crypto-psbt", self.psbt)`). We encode that
+// same payload. These tests run SeedCash's decoder and assert the recovered
+// bytes start with PSBT magic — if they ever need a CBOR unwrap, the encoder
+// has drifted back to the Keystone wrap that SeedCash rejects.
 //
 // Opt-in, because it shells out to Python:
 //   RUN_SEEDCASH_LIVE=1 npx vitest run src/services/psbt/__tests__/seedcashUrRoundtrip.test.ts

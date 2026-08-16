@@ -244,29 +244,13 @@ export function buildWatchOnlyPsbt(
     throw new Error('Amount must be greater than 0.');
   }
   // The master fingerprint is NOT required to produce a signable, valid
-  // transaction, and it is not derivable from the account xPub — measured, not
-  // assumed. For the BIP39 vector the three candidates all differ:
-  //
-  //   SeedCash's own value      73c5da0a  = hash160(master pubkey)[:4], at m
-  //   the xPub's parent fp      2b72f5b7  = m/44'/145'
-  //   the account key's own fp  cba3794d
-  //
-  // and a watch-only wallet never sees the master key. What matters is that
-  // SeedCash's `sign_psbt_with_xpriv` reads only the *path* out of the 0x06
-  // record (`_, derivation_path = parse_bip32_derivation_value(v)`) and
-  // discards the fingerprint entirely. Signing a PSBT stamped with a
-  // deliberately wrong fingerprint was verified to produce a signature that
-  // this codec accepts and that libauth's BCH VM executes.
-  //
-  // What the fingerprint does buy is the device's REVIEW screen: SeedCash
-  // claims an input as its own via `v[:4] == wallet_fingerprint`, so without a
-  // match it displays a transaction it does not recognise and the user is
-  // blind-signing. So it is optional, not free — the caller is told which case
-  // it is via `signerRecognisesInputs` and warns accordingly.
-  //
-  // Zeros rather than omission: dropping the 0x06 record entirely would leave
-  // SeedCash with no derivation path at all and it would refuse to sign
-  // ("xpriv signing requires a PSBT derivation path").
+  // transaction, and it is not derivable from the account xPub. SeedCash's
+  // `sign_psbt_with_xpriv` reads only the *path* out of the 0x06 record
+  // (`_, derivation_path = parse_bip32_derivation_value(v)`) and discards the
+  // fingerprint. Current SeedCash stores wallet_fingerprint on PSBTParser but
+  // does not use it to accept or reject a sign. If a wallet already saved one
+  // we stamp it; otherwise zeros. Do not omit the 0x06 record — without a
+  // path SeedCash refuses ("xpriv signing requires a PSBT derivation path").
   const fingerprintKnown =
     !!params.masterFingerprint && params.masterFingerprint.length === 4;
   const masterFingerprint = fingerprintKnown
