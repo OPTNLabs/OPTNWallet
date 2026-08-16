@@ -1,6 +1,6 @@
 [package]
 name = "optn-wallet-desktop"
-version = "1.7.1"
+version = "1.7.3"
 description = "OPTN Wallet Desktop"
 authors = ["OPTNLabs"]
 license = "GPL-3.0"
