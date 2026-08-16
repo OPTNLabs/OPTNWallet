@@ -37,6 +37,7 @@ import {
   readTransactionDetailsFromDb,
   resolveInputParticipants,
 } from './electrum/transaction';
+import { isDesktopPlatform } from '../utils/platform';
 import {
   clearBlockHeaderListeners,
   registerAddressSubscription,
@@ -118,6 +119,24 @@ type ElectrumBatchCall = {
   params?: RequestResponse[];
 };
 
+function preferredAddressQuery(
+  address: string,
+  addressMethod: string,
+  scripthashMethod: string
+): { method: string; params: RequestResponse[] } {
+  if (!isDesktopPlatform()) {
+    // WSS gateways used by web/Capacitor can implement the address methods
+    // without returning useful results for scripthash requests. Desktop TCP
+    // keeps the scripthash path because it supports the raw batch transport.
+    return { method: addressMethod, params: [address] };
+  }
+
+  return {
+    method: scripthashMethod,
+    params: [addressToElectrumScripthash(address)],
+  };
+}
+
 export function primeUTXOCache(address: string, utxos: UTXO[]) {
   evictStale(cacheByAddr, UTXO_TTL_MS);
   cacheByAddr.set(address, { ts: Date.now(), data: utxos });
@@ -165,7 +184,7 @@ function shouldUseAlternateElectrumMethod(error: unknown): boolean {
   const message = String(
     error instanceof Error ? error.message : error
   ).toLowerCase();
-  return /method not found|unknown method|not implemented|unsupported method|invalid method/.test(
+  return /method not found|unknown method|not implemented|unsupported method|invalid method|invalid param/.test(
     message
   );
 }
@@ -347,11 +366,6 @@ const ElectrumService = {
       [];
     const now = Date.now();
 
-    // Prefer scripthash.* directly: `blockchain.address.*` is not implemented by
-    // many ElectrumX/Fulcrum nodes (verified live: it returns {} or "Invalid
-    // address"), which forced a serial fallback per address. Converting to
-    // scripthash upfront is valid on every server and batches cleanly.
-    //
     for (const address of uniqueAddresses) {
       const cached = cacheByAddr.get(address);
       if (cached && now - cached.ts < UTXO_TTL_MS) {
@@ -365,21 +379,25 @@ const ElectrumService = {
         continue;
       }
 
-      let scriptHash: string | null = null;
       try {
-        scriptHash = addressToElectrumScripthash(address);
+        pending.push(address);
+        pendingCalls.push(
+          preferredAddressQuery(
+            address,
+            'blockchain.address.listunspent',
+            'blockchain.scripthash.listunspent'
+          )
+        );
       } catch {
-        scriptHash = null;
+        // A runtime-specific libauth failure must not silently turn a funded
+        // address into an unqueried address. Keep the CashAddr request as a
+        // compatibility fallback for webviews/native builds.
+        pending.push(address);
+        pendingCalls.push({
+          method: 'blockchain.address.listunspent',
+          params: [address],
+        });
       }
-      if (!scriptHash) {
-        continue;
-      }
-
-      pending.push(address);
-      pendingCalls.push({
-        method: 'blockchain.scripthash.listunspent',
-        params: [scriptHash],
-      });
     }
 
     const cachedCount =
@@ -417,39 +435,49 @@ const ElectrumService = {
         await Promise.all(
           batchResults.map(async (response, index) => {
             const address = pending[index];
+            const tryAddressFallback = async (): Promise<boolean> => {
+              try {
+                const fallbackResponse = isDesktopPlatform()
+                  ? await requestWithAddressFallback(
+                      server,
+                      'blockchain.address.listunspent',
+                      'blockchain.scripthash.listunspent',
+                      address
+                    )
+                  : await server.request(
+                      'blockchain.scripthash.listunspent',
+                      addressToElectrumScripthash(address)
+                    );
+                if (!Array.isArray(fallbackResponse)) return false;
+
+                const utxos = mapUtxoRows(
+                  address,
+                  fallbackResponse as Array<Record<string, unknown>>
+                );
+                evictStale(cacheByAddr, UTXO_TTL_MS);
+                cacheByAddr.set(address, { ts: Date.now(), data: utxos });
+                results[address] = utxos;
+                return true;
+              } catch (fallbackError) {
+                logError(
+                  'ElectrumService.getUTXOsMany.fallback',
+                  fallbackError,
+                  { address }
+                );
+                return false;
+              }
+            };
+
             if (response instanceof Error) {
               // Some Electrum-compatible servers expose only one of the
-              // address/scripthash variants. Keep scripthash as the fast path,
-              // but retry the legacy address method on protocol-level errors so
-              // an API mismatch cannot be mistaken for an empty wallet.
-              if (shouldUseAlternateElectrumMethod(response)) {
-                try {
-                  const fallbackResponse = await requestWithAddressFallback(
-                    server,
-                    'blockchain.address.listunspent',
-                    'blockchain.scripthash.listunspent',
-                    address
-                  );
-                  if (Array.isArray(fallbackResponse)) {
-                    const utxos = mapUtxoRows(
-                      address,
-                      fallbackResponse as Array<Record<string, unknown>>
-                    );
-                    evictStale(cacheByAddr, UTXO_TTL_MS);
-                    cacheByAddr.set(address, { ts: Date.now(), data: utxos });
-                    results[address] = utxos;
-                    return;
-                  }
-                } catch (fallbackError) {
-                  logError(
-                    'ElectrumService.getUTXOsMany.fallback',
-                    fallbackError,
-                    {
-                      address,
-                    }
-                  );
-                }
-              }
+              // address/scripthash variants. Retry the alternate method on
+              // protocol-level errors so an API mismatch cannot be mistaken
+              // for an empty wallet.
+              if (
+                shouldUseAlternateElectrumMethod(response) &&
+                (await tryAddressFallback())
+              )
+                return;
               logError('ElectrumService.getUTXOsMany', response, { address });
               // Do NOT write results[address] = [] — empty means "server said
               // zero coins". Missing key means "RPC failed; keep prior coins".
@@ -467,6 +495,12 @@ const ElectrumService = {
               return;
             }
 
+            // A few web-facing Electrum gateways return a JSON-RPC error
+            // object instead of an Error in a batch response. Treat that as a
+            // protocol mismatch and try the address form before dropping the
+            // address from the wallet snapshot.
+            if (await tryAddressFallback()) return;
+
             logError(
               'ElectrumService.getUTXOsMany.nonArrayResponse',
               new Error('Non-array Electrum response'),
@@ -476,6 +510,21 @@ const ElectrumService = {
         );
       } finally {
         pending.forEach((address) => inflightByAddr.delete(address));
+      }
+      if (import.meta.env.DEV) {
+        const returnedUtxos = Object.values(results).flat();
+        console.info('[ElectrumService] UTXO response summary', {
+          requestedAddressCount: uniqueAddresses.length,
+          returnedAddressCount: Object.keys(results).length,
+          method: isDesktopPlatform()
+            ? 'blockchain.scripthash.listunspent'
+            : 'blockchain.address.listunspent',
+          coinCount: returnedUtxos.length,
+          totalSats: returnedUtxos.reduce(
+            (total, utxo) => total + (utxo.value ?? utxo.amount ?? 0),
+            0
+          ),
+        });
       }
       return results;
     })();
@@ -667,19 +716,18 @@ const ElectrumService = {
         continue;
       }
 
-      let scriptHash: string | null = null;
       try {
-        scriptHash = addressToElectrumScripthash(address);
+        pending.push(address);
+        pendingCalls.push(
+          preferredAddressQuery(
+            address,
+            'blockchain.address.get_history',
+            'blockchain.scripthash.get_history'
+          )
+        );
       } catch {
-        scriptHash = null;
+        continue;
       }
-      if (!scriptHash) continue;
-
-      pending.push(address);
-      pendingCalls.push({
-        method: 'blockchain.scripthash.get_history',
-        params: [scriptHash],
-      });
     }
 
     const cachedCount = uniqueAddresses.length - pending.length;
@@ -707,12 +755,17 @@ const ElectrumService = {
             if (response instanceof Error) {
               if (shouldUseAlternateElectrumMethod(response)) {
                 try {
-                  const fallbackResponse = await requestWithAddressFallback(
-                    server,
-                    'blockchain.address.get_history',
-                    'blockchain.scripthash.get_history',
-                    address
-                  );
+                  const fallbackResponse = isDesktopPlatform()
+                    ? await requestWithAddressFallback(
+                        server,
+                        'blockchain.address.get_history',
+                        'blockchain.scripthash.get_history',
+                        address
+                      )
+                    : await server.request(
+                        'blockchain.scripthash.get_history',
+                        addressToElectrumScripthash(address)
+                      );
                   if (isTransactionHistoryArray(fallbackResponse)) {
                     evictStale(historyCacheByAddr, HISTORY_TTL_MS);
                     historyCacheByAddr.set(address, {
@@ -752,6 +805,19 @@ const ElectrumService = {
         );
       } finally {
         pending.forEach((address) => inflightHistoryByAddr.delete(address));
+      }
+      if (import.meta.env.DEV) {
+        const histories = Object.values(results);
+        console.info('[ElectrumService] history response summary', {
+          requestedAddressCount: uniqueAddresses.length,
+          returnedAddressCount: Object.keys(results).length,
+          method: isDesktopPlatform()
+            ? 'blockchain.scripthash.get_history'
+            : 'blockchain.address.get_history',
+          usedAddressCount: histories.filter(
+            (history) => Array.isArray(history) && history.length > 0
+          ).length,
+        });
       }
       return results;
     })();

@@ -28,9 +28,14 @@ function makeMockClient(): MockClient {
     }),
     connection: {
       send: vi.fn((message: string) => {
-        const parsed = JSON.parse(message) as Array<{ id: number }> | { id: number };
+        const parsed = JSON.parse(message) as
+          | Array<{ id: number }>
+          | { id: number };
         const responses = Array.isArray(parsed)
-          ? parsed.map((item) => ({ id: item.id, result: `batched-${item.id}` }))
+          ? parsed.map((item) => ({
+              id: item.id,
+              result: `batched-${item.id}`,
+            }))
           : [{ id: parsed.id, result: `batched-${parsed.id}` }];
         queueMicrotask(() => {
           for (const response of responses) {
@@ -54,7 +59,9 @@ function makeMockClient(): MockClient {
 
 async function loadServerWithMocks(
   clients: MockClient[],
-  servers: string[] = ['wss://electrum.example:50004']
+  servers: string[] = ['wss://electrum.example:50004'],
+  desktop = true,
+  networkRef: { currentNetwork: string } = { currentNetwork: 'mainnet' }
 ) {
   vi.resetModules();
 
@@ -73,12 +80,19 @@ async function loadServerWithMocks(
 
   vi.doMock('../../../state/store', () => ({
     store: {
-      getState: vi.fn(() => ({ network: { currentNetwork: 'mainnet' } })),
+      getState: vi.fn(() => ({ network: networkRef })),
     },
   }));
 
   vi.doMock('../../../state/selectors/networkSelectors', () => ({
-    selectCurrentNetwork: vi.fn(() => 'mainnet'),
+    selectCurrentNetwork: vi.fn(
+      (state: { network: { currentNetwork: string } }) =>
+        state.network.currentNetwork
+    ),
+  }));
+
+  vi.doMock('../../../utils/platform', () => ({
+    isDesktopPlatform: vi.fn(() => desktop),
   }));
 
   vi.doMock('../../../utils/servers/ElectrumServers', () => ({
@@ -91,7 +105,8 @@ async function loadServerWithMocks(
 
 async function loadServerWithMocksAndSpies(
   clients: MockClient[],
-  servers: string[]
+  servers: string[],
+  desktop = true
 ) {
   vi.resetModules();
 
@@ -118,6 +133,10 @@ async function loadServerWithMocksAndSpies(
 
   vi.doMock('../../../state/selectors/networkSelectors', () => ({
     selectCurrentNetwork: vi.fn(() => 'mainnet'),
+  }));
+
+  vi.doMock('../../../utils/platform', () => ({
+    isDesktopPlatform: vi.fn(() => desktop),
   }));
 
   vi.doMock('../../../utils/servers/ElectrumServers', () => ({
@@ -156,6 +175,54 @@ describe('ElectrumServer', () => {
 
     expect(client.connection.send).toHaveBeenCalledTimes(1);
     expect(results).toEqual(['batched-1', 'batched-2']);
+  });
+
+  it('uses individual requests for WebSocket gateways instead of JSON-RPC arrays', async () => {
+    const client = makeMockClient();
+    client.request
+      .mockResolvedValueOnce('single-1')
+      .mockResolvedValueOnce('single-2');
+    const server = await loadServerWithMocks(
+      [client],
+      ['wss://electrum.example:50004'],
+      false
+    );
+
+    const results = await server.requestMany([
+      { method: 'blockchain.scripthash.listunspent', params: ['hash-1'] },
+      { method: 'blockchain.scripthash.listunspent', params: ['hash-2'] },
+    ]);
+
+    expect(results).toEqual(['single-1', 'single-2']);
+    expect(client.request).toHaveBeenCalledWith(
+      'blockchain.scripthash.listunspent',
+      'hash-1'
+    );
+    expect(client.request).toHaveBeenCalledWith(
+      'blockchain.scripthash.listunspent',
+      'hash-2'
+    );
+    expect(client.connection.send).not.toHaveBeenCalled();
+  });
+
+  it('reconnects when the active wallet network changes', async () => {
+    const first = makeMockClient();
+    const second = makeMockClient();
+    const networkRef = { currentNetwork: 'mainnet' };
+    const server = await loadServerWithMocks(
+      [first, second],
+      ['wss://electrum.example:50004'],
+      false,
+      networkRef
+    );
+
+    await expect(server.request('server.ping')).resolves.toBe('ok');
+
+    networkRef.currentNetwork = 'chipnet';
+    await expect(server.request('server.ping')).resolves.toBe('ok');
+
+    expect(first.disconnect).toHaveBeenCalledWith(true);
+    expect(second.request).toHaveBeenCalledWith('server.ping');
   });
 
   it('scales requestMany timeout with batch size (evidence: requestMany(250) @ 12s)', async () => {
@@ -221,7 +288,9 @@ describe('ElectrumServer', () => {
     expect(results).toEqual([['first-ok'], 'batched-1']);
     expect(first.disconnect).toHaveBeenCalledWith(true);
     expect(second.connection.send).toHaveBeenCalledTimes(1);
-    const retried = JSON.parse(second.connection.send.mock.calls[0][0]) as Array<{
+    const retried = JSON.parse(
+      second.connection.send.mock.calls[0][0]
+    ) as Array<{
       params: string[];
     }>;
     expect(retried).toHaveLength(1);
@@ -259,7 +328,9 @@ describe('ElectrumServer', () => {
     const server = await loadServerWithMocks([client]);
 
     await server.subscribe('blockchain.address.subscribe', ['bitcoincash:q1']);
-    await server.unsubscribe('blockchain.address.subscribe', ['bitcoincash:q1']);
+    await server.unsubscribe('blockchain.address.subscribe', [
+      'bitcoincash:q1',
+    ]);
 
     expect(client.subscribe).toHaveBeenCalledWith(
       'blockchain.address.subscribe',
@@ -315,7 +386,9 @@ describe('ElectrumServer', () => {
       ['wss://bad.example:50004', 'wss://good.example:50004']
     );
 
-    await expect(server.request('blockchain.headers.get_tip')).resolves.toBe('ok');
+    await expect(server.request('blockchain.headers.get_tip')).resolves.toBe(
+      'ok'
+    );
     expect(first.connect).toHaveBeenCalledTimes(1);
     expect(second.connect).toHaveBeenCalledTimes(1);
     expect(second.request).toHaveBeenCalledWith('blockchain.headers.get_tip');

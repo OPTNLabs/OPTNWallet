@@ -320,6 +320,97 @@ describe('WalletManager', () => {
     expect(insertStmt.run).toHaveBeenCalledTimes(1);
   });
 
+  it('allows the same mnemonic and network on a different derivation path', async () => {
+    const existsStmt = makeStmt([
+      {
+        mnemonic: 'enc:mnemonic',
+        passphrase: 'enc:pass',
+        networkType: Network.MAINNET,
+        walletType: WalletType.STANDARD,
+        derivation_path: "m/44'/145'/0'",
+      },
+    ]);
+    const insertStmt = makeStmt();
+
+    const db = {
+      prepare: vi
+        .fn()
+        .mockReturnValueOnce(existsStmt)
+        .mockReturnValueOnce(insertStmt),
+      exec: vi.fn(() => [{ values: [[10]] }]),
+    };
+
+    const dbService = {
+      ensureDatabaseStarted: vi.fn(async () => {}),
+      getDatabase: vi.fn(() => db),
+      persistNewWalletToFile: vi.fn(async (walletId: number) => walletId),
+    };
+
+    mockedDatabaseService.mockImplementation(() => dbService as never);
+
+    const created = await WalletManager().createWallet(
+      'name',
+      'mnemonic',
+      'pass',
+      Network.MAINNET,
+      WalletType.STANDARD,
+      "m/44'/145'/1'",
+      'custom'
+    );
+
+    expect(created).toBe(true);
+    expect(insertStmt.run).toHaveBeenCalledWith([
+      'name',
+      'enc:mnemonic',
+      'enc:pass',
+      Network.MAINNET,
+      WalletType.STANDARD,
+      0,
+      "m/44'/145'/1'",
+      'custom',
+    ]);
+  });
+
+  it('resolves the matching wallet by derivation path', async () => {
+    const selectStmt = makeStmt([
+      {
+        id: '21',
+        mnemonic: 'enc:mnemonic',
+        passphrase: 'enc:pass',
+        networkType: Network.MAINNET,
+        walletType: WalletType.STANDARD,
+        derivation_path: "m/44'/145'/0'",
+      },
+      {
+        id: '42',
+        mnemonic: 'enc:mnemonic',
+        passphrase: 'enc:pass',
+        networkType: Network.MAINNET,
+        walletType: WalletType.STANDARD,
+        derivation_path: "m/44'/145'/1'",
+      },
+    ]);
+    const db = {
+      prepare: vi.fn(() => selectStmt),
+    };
+
+    mockedDatabaseService.mockImplementation(
+      () =>
+        ({
+          ensureDatabaseStarted: vi.fn(async () => {}),
+          getDatabase: vi.fn(() => db),
+        }) as never
+    );
+
+    const walletId = await WalletManager().setWalletId('mnemonic', 'pass', {
+      networkType: Network.MAINNET,
+      walletType: WalletType.STANDARD,
+      derivationPath: "m/44'/145'/1'",
+    });
+
+    expect(walletId).toBe(42);
+  });
+
   it('allows the same mnemonic and network for a different wallet type', async () => {
     const existsStmt = makeStmt([
       {

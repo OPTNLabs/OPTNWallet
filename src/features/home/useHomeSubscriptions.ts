@@ -6,6 +6,7 @@ import { AppDispatch } from '../../state/store';
 import { UTXO } from '../../types/types';
 import { logError } from '../../utils/errorHandling';
 import { refreshWalletTransactionHistory } from '../../services/WalletHistoryRefreshService';
+import { updateCachedWalletUtxoAddress } from '../../services/WalletUtxoSnapshotCache';
 
 type WalletKey = { address: string; addressIndex: number };
 
@@ -51,6 +52,9 @@ export function useHomeSubscriptions({
           addrs.map(async (addr) => {
             const utxos = await ElectrumService.getUTXOs(addr);
             dispatch(updateUTXOsForAddress({ address: addr, utxos }));
+            if (currentWalletId !== null) {
+              updateCachedWalletUtxoAddress(currentWalletId, addr, utxos);
+            }
           })
         );
         for (let i = 0; i < refreshResults.length; i++) {
@@ -132,6 +136,9 @@ export function useHomeSubscriptions({
               if (utxos.length === 0 && current.length > 0) return;
 
               dispatch(updateUTXOsForAddress({ address: addr, utxos }));
+              if (currentWalletId !== null) {
+                updateCachedWalletUtxoAddress(currentWalletId, addr, utxos);
+              }
               try {
                 DatabaseService().scheduleDatabaseSave(currentWalletId);
               } catch (error) {

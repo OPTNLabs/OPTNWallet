@@ -2,7 +2,11 @@
 // data first, then re-runs bootstrap + history. Keeps keys/seed.
 
 import { store } from '../../state/store';
-import { replaceAllUTXOs, setFetchingUTXOs, setSyncingProgress } from '../../state/slices/utxoSlice';
+import {
+  replaceAllUTXOs,
+  setFetchingUTXOs,
+  setSyncingProgress,
+} from '../../state/slices/utxoSlice';
 import { setTransactions } from '../../state/slices/transactionSlice';
 import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
 import ElectrumService from '../../services/ElectrumService';
@@ -14,6 +18,7 @@ import {
 } from '../../workers/UTXOWorkerService';
 import { clearWalletChainData } from './WalletLedgerService';
 import { ensureDesktopLedgerTables } from './desktopSchema';
+import { clearCachedWalletUtxoSnapshot } from '../../services/WalletUtxoSnapshotCache';
 
 export type RebuildProgress = (message: string, percent?: number) => void;
 
@@ -66,6 +71,7 @@ export async function rebuildActiveWallet(
     await ensureDesktopLedgerTables();
     if (!isCurrentSession()) return staleResult();
     await clearWalletChainData(walletId);
+    clearCachedWalletUtxoSnapshot(walletId);
   } catch (error) {
     if (!isCurrentSession()) return staleResult();
     logError('WalletRebuildService.clear', error, { walletId });
@@ -101,10 +107,7 @@ export async function rebuildActiveWallet(
       onProgress: (pct) => {
         if (!isCurrentSession()) return;
         store.dispatch(setSyncingProgress(70 + Math.round(0.28 * pct)));
-        report(
-          'Rebuilding transaction history…',
-          70 + Math.round(0.28 * pct)
-        );
+        report('Rebuilding transaction history…', 70 + Math.round(0.28 * pct));
       },
     });
 
@@ -117,7 +120,10 @@ export async function rebuildActiveWallet(
     logError('WalletRebuildService.resync', error, { walletId });
     return {
       ok: false,
-      error: error instanceof Error ? error.message : 'Rebuild failed during network resync.',
+      error:
+        error instanceof Error
+          ? error.message
+          : 'Rebuild failed during network resync.',
     };
   } finally {
     if (isCurrentSession()) {

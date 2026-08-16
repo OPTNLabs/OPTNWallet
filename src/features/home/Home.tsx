@@ -1,4 +1,10 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { FaArrowDown, FaArrowUp, FaBitcoin, FaQrcode } from 'react-icons/fa';
@@ -15,7 +21,7 @@ import WalletScreen from '../../components/ui/WalletScreen';
 import PriceFeed from '../../components/PriceFeed';
 import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
 import ElectrumService from '../../services/ElectrumService';
-import { runWalletUtxoRefresh } from '../../services/RefreshCoordinator';
+import { runWalletUtxoRefreshExclusive } from '../../services/RefreshCoordinator';
 import {
   captureActiveWalletSession,
   fetchActiveWalletUtxos,
@@ -83,6 +89,9 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
   const fetchingUTXOsRedux = useSelector(
     (state: RootState) => state.utxos.fetchingUTXOs
   );
+  const addressDiscoveryInProgress = useSelector(
+    (state: RootState) => state.utxos.addressDiscoveryInProgress
+  );
   const totalBalance = useSelector(
     (state: RootState) => state.utxos.totalBalance
   );
@@ -97,6 +106,7 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
     (state: RootState) => state.priceFeed['BCH-USD']?.price
   );
   const [displayMode, setDisplayMode] = useState<'BCH' | 'USD'>('BCH');
+  const autoSyncWalletRef = useRef<number | null>(null);
   const homeConnect = useHomeConnect();
   const totalBch = (totalBalance + stealthSats) / SATSINBITCOIN;
   const totalUsd =
@@ -114,26 +124,77 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
     dispatch(setFetchingUTXOs(true));
 
     try {
-      await runWalletUtxoRefresh(currentWalletId, async () => {
-        await ElectrumService.ensureFreshConnection();
-        if (!isActiveWalletSession(walletSession)) return;
-        const walletUtxos = await fetchActiveWalletUtxos(walletSession);
-        if (!walletUtxos) return;
-        dispatch(replaceAllUTXOs({ utxosByAddress: walletUtxos }));
+      await ElectrumService.ensureFreshConnection();
+      if (!isActiveWalletSession(walletSession)) return;
+
+      // Fetch materialized addresses first. Account discovery can scan several
+      // HD windows and must not hide a current balance behind a slow search.
+      const walletUtxos = await fetchActiveWalletUtxos(
+        walletSession,
+        undefined,
+        { discover: false, force: true }
+      );
+      if (!walletUtxos) return;
+      if (import.meta.env.DEV) {
+        const coins = Object.values(walletUtxos).flat();
+        console.info('[WalletSync] Home known-address publish', {
+          walletId: currentWalletId,
+          addressCount: Object.keys(walletUtxos).length,
+          coinCount: coins.length,
+          totalSats: coins.reduce(
+            (total, utxo) => total + (utxo.value ?? utxo.amount ?? 0),
+            0
+          ),
+        });
+      }
+      dispatch(replaceAllUTXOs({ utxosByAddress: walletUtxos }));
+      dbService.scheduleDatabaseSave(currentWalletId);
+      dispatch(setInitialized(true));
+      const refreshedCategories = Array.from(
+        new Set(
+          Object.values(walletUtxos)
+            .flat()
+            .map((utxo) => utxo.token?.category)
+            .filter((category): category is string => Boolean(category))
+        )
+      );
+      if (refreshedCategories.length > 0) {
+        void preloadTokenMetadata(refreshedCategories);
+      }
+      await refreshUTXOWorkerSubscriptions();
+
+      // Continue the full HD address scan after the known-address balance is
+      // visible. UTXOService exposes its discovery state to the UI while this
+      // follow-up work runs.
+      void runWalletUtxoRefreshExclusive(currentWalletId, async () => {
+        const discoveredWalletUtxos = await fetchActiveWalletUtxos(
+          walletSession,
+          undefined,
+          { discover: true, force: true }
+        );
+        if (!discoveredWalletUtxos || !isActiveWalletSession(walletSession)) {
+          return;
+        }
+        if (import.meta.env.DEV) {
+          const coins = Object.values(discoveredWalletUtxos).flat();
+          console.info('[WalletSync] Home discovered-address publish', {
+            walletId: currentWalletId,
+            addressCount: Object.keys(discoveredWalletUtxos).length,
+            coinCount: coins.length,
+            totalSats: coins.reduce(
+              (total, utxo) => total + (utxo.value ?? utxo.amount ?? 0),
+              0
+            ),
+          });
+        }
+        dispatch(replaceAllUTXOs({ utxosByAddress: discoveredWalletUtxos }));
         dbService.scheduleDatabaseSave(currentWalletId);
         dispatch(setInitialized(true));
-        const refreshedCategories = Array.from(
-          new Set(
-            Object.values(walletUtxos)
-              .flat()
-              .map((utxo) => utxo.token?.category)
-              .filter((category): category is string => Boolean(category))
-          )
-        );
-        if (refreshedCategories.length > 0) {
-          void preloadTokenMetadata(refreshedCategories);
-        }
         await refreshUTXOWorkerSubscriptions();
+      }).catch((error) => {
+        logError('Home.backgroundAddressDiscovery', error, {
+          walletId: currentWalletId,
+        });
       });
     } catch (error) {
       logError('Home.handleRefresh', error, { walletId: currentWalletId });
@@ -142,6 +203,24 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
       dispatch(setFetchingUTXOs(false));
     }
   }, [currentWalletId, dbService, dispatch, fetchingUTXOsRedux]);
+
+  useEffect(() => {
+    if (viewerOnly || !currentWalletId || fetchingUTXOsRedux) return;
+    if (autoSyncWalletRef.current === currentWalletId) return;
+
+    // Let the worker lifecycle finish its current state transition first. If
+    // it is already syncing, this effect runs again when fetchingUTXOsRedux
+    // becomes false and performs a Home-owned refresh that always publishes
+    // into the visible Redux snapshot.
+    const timer = window.setTimeout(() => {
+      if (fetchingUTXOsRedux || autoSyncWalletRef.current === currentWalletId)
+        return;
+      autoSyncWalletRef.current = currentWalletId;
+      void handleRefresh();
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, [currentWalletId, fetchingUTXOsRedux, handleRefresh, viewerOnly]);
 
   return (
     <WalletScreen maxWidthClassName="max-w-md" scrollable={false}>
@@ -171,14 +250,26 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
               subtitle={t('home.walletOverview')}
               compact
               action={
-                <button
-                  type="button"
-                  onClick={handleRefresh}
-                  className="wallet-btn-secondary px-3 py-1.5 text-sm"
-                  disabled={fetchingUTXOsRedux}
-                >
-                  {fetchingUTXOsRedux ? t('home.syncing') : t('home.sync')}
-                </button>
+                <div className="flex items-center gap-2">
+                  {addressDiscoveryInProgress && (
+                    <div
+                      className="flex items-center gap-1.5 text-xs wallet-muted"
+                      role="status"
+                      aria-live="polite"
+                    >
+                      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--wallet-accent-strong)]" />
+                      <span>{t('home.syncing')}</span>
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleRefresh}
+                    className="wallet-btn-secondary px-3 py-1.5 text-sm"
+                    disabled={fetchingUTXOsRedux}
+                  >
+                    {fetchingUTXOsRedux ? t('home.syncing') : t('home.sync')}
+                  </button>
+                </div>
               }
             />
             <div className="flex items-center justify-between gap-3">

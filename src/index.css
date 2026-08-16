@@ -744,6 +744,22 @@
     color: var(--wallet-text-strong);
   }
 
+  /* Native select menus otherwise fall back to platform colors, which can
+   make the phrase-length value/options low-contrast in either theme. */
+  .wallet-phrase-length-select {
+    color: var(--wallet-text-strong);
+    background-color: var(--wallet-surface-strong);
+    border-color: var(--wallet-accent);
+    color-scheme: light;
+  }
+  .wallet-phrase-length-select option {
+    color: var(--wallet-text-strong);
+    background-color: var(--wallet-surface-strong);
+  }
+  html.dark .wallet-phrase-length-select {
+    color-scheme: dark;
+  }
+
   .wallet-page {
     animation: wallet-fade-up 180ms ease-out;
   }

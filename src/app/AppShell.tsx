@@ -1,4 +1,4 @@
-import { Suspense, lazy } from 'react';
+import { Suspense, lazy, useEffect, useState } from 'react';
 import Home from '../features/home/Home';
 import Assets from '../pages/Assets';
 import Actions from '../features/actions/Actions';
@@ -18,12 +18,13 @@ import { useDispatch, useSelector } from 'react-redux';
 import Layout from '../components/Layout';
 import RootHandler from '../pages/RootHandler';
 import AppsView from '../features/apps/AppsView';
-import { AppDispatch, RootState } from '../state/store';
+import { AppDispatch, RootState, persistor } from '../state/store';
 import {
   selectHasWallet,
   selectWalletId,
   selectWalletType,
-} from '../state/slices/walletSlice';import CampaignDetail from '../pages/apps/fundme/CampaignDetail';
+} from '../state/slices/walletSlice';
+import CampaignDetail from '../pages/apps/fundme/CampaignDetail';
 import { usePrices } from '../hooks/usePrices';
 import { SignTransactionModal } from '../components/walletconnect/SignTransactionModal';
 import { SignMessageModal } from '../components/walletconnect/SignMessageModal';
@@ -66,7 +67,9 @@ import {
 import { NostrChatRoute } from '../features/nostr/NostrChatRoute';
 
 const SimpleSend = lazy(() => import('../features/simple-send/SimpleSend'));
-const WatchOnlySend = lazy(() => import('../features/watch-only-send/WatchOnlySend'));
+const WatchOnlySend = lazy(
+  () => import('../features/watch-only-send/WatchOnlySend')
+);
 const NostrChat = lazy(() => import('../features/nostr/NostrChat'));
 
 /**
@@ -84,7 +87,7 @@ type AppShellProps = {
   viewerOnly?: boolean;
 };
 
-function App({ viewerOnly = false }: AppShellProps) {
+function AppContent({ viewerOnly = false }: AppShellProps) {
   usePrices();
   const dispatch = useDispatch<AppDispatch>();
   const walletId = useSelector(selectWalletId);
@@ -265,4 +268,38 @@ function App({ viewerOnly = false }: AppShellProps) {
   );
 }
 
-export default App;
+function AppShell({ viewerOnly = false }: AppShellProps) {
+  const [rehydrated, setRehydrated] = useState(
+    () => persistor.getState().bootstrapped
+  );
+
+  useEffect(() => {
+    if (rehydrated) return;
+
+    const markReady = () => setRehydrated(true);
+    const unsubscribe = persistor.subscribe(() => {
+      if (persistor.getState().bootstrapped) markReady();
+    });
+
+    // Close the small race between the initial bootstrapped read and the
+    // subscription being installed, including React StrictMode remounts.
+    if (persistor.getState().bootstrapped) markReady();
+    return unsubscribe;
+  }, [rehydrated]);
+
+  if (!rehydrated) {
+    return (
+      <main
+        className="main-flex-1 flex items-center justify-center wallet-surface"
+        aria-busy="true"
+        aria-live="polite"
+      >
+        <span className="wallet-muted">Loading wallet…</span>
+      </main>
+    );
+  }
+
+  return <AppContent viewerOnly={viewerOnly} />;
+}
+
+export default AppShell;

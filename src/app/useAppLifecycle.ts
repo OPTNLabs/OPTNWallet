@@ -60,7 +60,6 @@ import {
 } from '../services/WalletHistoryRefreshService';
 import { loadStoredWalletSpecialActivities } from '../services/WalletSpecialActivityService';
 
-let utxoWorkerStarted = false;
 let bcmrWarmupStarted = false;
 
 export function useWalletConnectInitialization(
@@ -311,9 +310,7 @@ export async function bootstrapWalletNetwork(
       setWalletDerivationPath({
         path: walletInfo.derivation_path,
         source:
-          walletInfo.derivation_path_source === 'custom'
-            ? 'custom'
-            : 'default',
+          walletInfo.derivation_path_source === 'custom' ? 'custom' : 'default',
       })
     );
   }
@@ -358,27 +355,27 @@ export function useWalletNetworkBootstrap(
   walletId: number | null,
   dispatch: AppDispatch
 ) {
-  const [ready, setReady] = useState(false);
+  const [readyForWalletId, setReadyForWalletId] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
 
     const syncWalletNetwork = async () => {
       if (!walletId || walletId <= 0) {
-        if (!cancelled) setReady(true);
+        if (!cancelled) setReadyForWalletId(null);
         return;
       }
 
+      setReadyForWalletId(null);
       try {
         await bootstrapWalletNetwork(walletId, dispatch, () => cancelled);
       } catch (error) {
         console.warn('Wallet network bootstrap failed:', error);
       } finally {
-        if (!cancelled) setReady(true);
+        if (!cancelled) setReadyForWalletId(walletId);
       }
     };
 
-    setReady(false);
     void syncWalletNetwork();
 
     return () => {
@@ -386,7 +383,7 @@ export function useWalletNetworkBootstrap(
     };
   }, [dispatch, walletId]);
 
-  return ready;
+  return !walletId || walletId <= 0 || readyForWalletId === walletId;
 }
 
 export function useNativeBcmrWarmup(walletId: number | null) {
@@ -534,31 +531,20 @@ export function useNotificationQueueReset(
 }
 
 export function useWorkerLifecycle(walletId: number | null) {
-  const location = useLocation();
   const hasWallet = Boolean(walletId && walletId > 0);
 
   useEffect(() => {
-    if (hasWallet) {
-      if (!utxoWorkerStarted) {
-        startUTXOWorker();
-        utxoWorkerStarted = true;
-      }
-    } else {
-      if (utxoWorkerStarted) {
-        stopUTXOWorker();
-        utxoWorkerStarted = false;
-      }
+    if (!hasWallet) {
+      void stopUTXOWorker();
+      return;
     }
 
+    void startUTXOWorker();
+
     return () => {
-      if (!hasWallet) {
-        if (utxoWorkerStarted) {
-          stopUTXOWorker();
-          utxoWorkerStarted = false;
-        }
-      }
+      void stopUTXOWorker();
     };
-  }, [hasWallet, location.pathname]);
+  }, [hasWallet, walletId]);
 }
 
 export function useOptionalPlayUpdateCheck() {

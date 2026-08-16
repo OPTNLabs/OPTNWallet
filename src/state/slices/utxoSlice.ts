@@ -9,6 +9,8 @@ interface UTXOState {
   initialized: boolean;
   /** 0-100 sync progress, or null when no sync is in flight. */
   syncingProgress: number | null;
+  /** True while the wallet is scanning additional HD address windows. */
+  addressDiscoveryInProgress: boolean;
   /**
    * Wall-clock start of the current Syncing session (ms since epoch).
    * Survives Home remount so the elapsed-seconds counter does not restart
@@ -23,6 +25,7 @@ const initialState: UTXOState = {
   fetchingUTXOs: false,
   initialized: false,
   syncingProgress: null,
+  addressDiscoveryInProgress: false,
   syncingStartedAtMs: null,
 };
 
@@ -81,6 +84,9 @@ const utxoSlice = createSlice({
           ? null
           : Math.max(0, Math.min(100, action.payload));
     },
+    setAddressDiscoveryInProgress: (state, action: PayloadAction<boolean>) => {
+      state.addressDiscoveryInProgress = action.payload;
+    },
     setInitialized: (state, action: PayloadAction<boolean>) => {
       state.initialized = action.payload;
     },
@@ -118,6 +124,7 @@ export const {
   removeUTXOs,
   setFetchingUTXOs,
   setSyncingProgress,
+  setAddressDiscoveryInProgress,
   setInitialized,
 } = utxoSlice.actions;
 

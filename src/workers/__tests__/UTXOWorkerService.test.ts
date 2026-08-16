@@ -5,6 +5,10 @@ import {
   setFetchingUTXOs,
 } from '../../state/slices/utxoSlice';
 import { WalletType } from '../../types/wallet';
+import {
+  cacheWalletUtxoSnapshot,
+  clearCachedWalletUtxoSnapshot,
+} from '../../services/WalletUtxoSnapshotCache';
 
 vi.mock('@capacitor/core', () => ({
   Capacitor: {
@@ -161,6 +165,7 @@ function deferred<T>() {
 describe('UTXOWorkerService.bootstrapAllUTXOs', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearCachedWalletUtxoSnapshot();
     getStateMock.mockReturnValue({
       wallet_id: {
         currentWalletId: 42,
@@ -261,6 +266,44 @@ describe('UTXOWorkerService.bootstrapAllUTXOs', () => {
     expect(dispatchMock).toHaveBeenCalledWith(setInitialized(true));
 
     gate.resolve();
+  });
+
+  it('publishes wallet UTXOs before optional contract scanning completes', async () => {
+    const contractGate = deferred<never[]>();
+    fetchContractInstancesMock.mockReturnValueOnce(contractGate.promise);
+    fetchAndStoreUTXOsManyMock.mockResolvedValueOnce({
+      'bitcoincash:qaddr1': [
+        {
+          address: 'bitcoincash:qaddr1',
+          tx_hash: 'balance-tx',
+          tx_pos: 0,
+          value: 1234,
+          height: 1,
+        },
+      ],
+    });
+
+    const { bootstrapAllUTXOs } = await import('../UTXOWorkerService');
+    const bootstrap = bootstrapAllUTXOs();
+
+    for (
+      let i = 0;
+      i < 20 && fetchContractInstancesMock.mock.calls.length === 0;
+      i += 1
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(fetchContractInstancesMock).toHaveBeenCalledWith(42);
+    expect(dispatchMock).toHaveBeenCalledWith(
+      replaceAllUTXOs({
+        utxosByAddress: expect.objectContaining({
+          'bitcoincash:qaddr1': [expect.objectContaining({ value: 1234 })],
+        }),
+      })
+    );
+
+    contractGate.resolve([]);
+    await bootstrap;
   });
 
   it('paints durable SQL balance before the network listunspent pass', async () => {
@@ -397,6 +440,42 @@ describe('UTXOWorkerService.bootstrapAllUTXOs', () => {
         }),
       })
     );
+  });
+
+  it('preserves cached UTXOs outside a narrower bootstrap inventory', async () => {
+    cacheWalletUtxoSnapshot(42, {
+      'bitcoincash:qcached': [
+        {
+          address: 'bitcoincash:qcached',
+          tx_hash: 'c'.repeat(64),
+          tx_pos: 0,
+          height: 1,
+          value: 75_000,
+        },
+      ],
+    });
+    fetchAndStoreUTXOsManyMock.mockResolvedValue({
+      'bitcoincash:qaddr1': [],
+    });
+
+    const { bootstrapAllUTXOs } = await import('../UTXOWorkerService');
+
+    await bootstrapAllUTXOs();
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      replaceAllUTXOs({
+        utxosByAddress: expect.objectContaining({
+          'bitcoincash:qcached': expect.any(Array),
+        }),
+      })
+    );
+    expect(
+      dispatchMock.mock.calls.some(
+        ([action]) =>
+          action.type === replaceAllUTXOs.type &&
+          action.payload.utxosByAddress['bitcoincash:qcached']?.length === 1
+      )
+    ).toBe(true);
   });
 
   it('clears the syncing state without erasing balances when the wallet batch fails', async () => {
@@ -599,6 +678,11 @@ describe('UTXOWorkerService.bootstrapAllUTXOs', () => {
   it('subscribes without a trailing wallet-wide catch-up (avoids right→wrong flip)', async () => {
     vi.useFakeTimers();
     try {
+      retrieveKeysMock.mockResolvedValue(
+        Array.from({ length: 40 }, (_, index) => ({
+          address: `bitcoincash:qaddr${index}`,
+        }))
+      );
       subscribeBlockHeadersMock.mockImplementation(
         async (
           callback: (header: unknown) => void,
@@ -619,6 +703,30 @@ describe('UTXOWorkerService.bootstrapAllUTXOs', () => {
         expect.any(Function),
         { emitCurrent: false }
       );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('queues a trailing wallet refresh after starting with a partial address window', async () => {
+    vi.useFakeTimers();
+    try {
+      retrieveKeysMock.mockResolvedValue([
+        { address: 'bitcoincash:qaddr1' },
+        { address: 'bitcoincash:qaddr2' },
+      ]);
+      fetchAndStoreUTXOsManyMock.mockResolvedValue({
+        'bitcoincash:qaddr1': [],
+        'bitcoincash:qaddr2': [],
+      });
+
+      const { startUTXOWorker } = await import('../UTXOWorkerService');
+      await startUTXOWorker();
+
+      expect(reconcileActiveWalletUtxosMock).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(600);
+
+      expect(reconcileActiveWalletUtxosMock).toHaveBeenCalledWith(42);
     } finally {
       vi.useRealTimers();
     }

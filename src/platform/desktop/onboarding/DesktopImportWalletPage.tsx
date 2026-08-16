@@ -28,7 +28,10 @@ import {
   DEFAULT_BIP39_WORD_COUNT,
   type Bip39WordCount,
 } from '../../../services/Bip39Service';
-import { createWalletWithPassword } from '../DesktopWalletManager';
+import {
+  createWalletWithPassword,
+  rollbackCreatedWallet,
+} from '../DesktopWalletManager';
 import { defaultDesktopAccountPath } from '../desktopDerivationDefaults';
 import { validateNewWalletPassword } from '../passwordPolicy';
 import { useI18n } from '../../../i18n/useI18n';
@@ -199,9 +202,10 @@ const DesktopImportWalletPage = () => {
     }
     setNameError('');
     setIsSubmitting(true);
+    let walletId: number | null = null;
     try {
       const normalizedDerivationPath = normalizeBchAccountPath(derivationPath);
-      const walletId = await createWalletWithPassword({
+      walletId = await createWalletWithPassword({
         name: walletName.trim(),
         mnemonic: recoveryPhrase,
         passphrase: '',
@@ -209,6 +213,7 @@ const DesktopImportWalletPage = () => {
         walletType: WalletType.STANDARD,
         derivationPath: normalizedDerivationPath,
         derivationPathSource: customDerivationPath ? 'custom' : 'default',
+        checkExistingDerivedAddress: true,
         password,
       });
       if (walletId == null) {
@@ -216,9 +221,10 @@ const DesktopImportWalletPage = () => {
         return;
       }
 
-      // Materialize the same initial receive/change window used by desktop
-      // network switching before opening Settings or Home.
-      await KeyService.bootstrapInitialAddressBatch(walletId, 0, 20);
+      // One pair is enough to make the wallet usable. The desktop worker runs
+      // the bounded discovery/top-up pass after navigation; waiting for all
+      // 40 encrypted rows here makes import unnecessarily slow and fragile.
+      await KeyService.bootstrapInitialAddressBatch(walletId, 0, 1);
 
       dispatch(setWalletId(walletId));
       dispatch(setWalletNetwork(currentNetwork));
@@ -232,7 +238,26 @@ const DesktopImportWalletPage = () => {
       dispatch(setNetwork(currentNetwork));
       window.dispatchEvent(new CustomEvent('optn:wallets-changed'));
       navigate(`/home/${walletId}`);
+
+      void KeyService.bootstrapInitialAddressBatch(walletId, 0, 20).catch(
+        (error) => {
+          console.error('[DesktopImportWalletPage] Address bootstrap failed', {
+            walletId,
+            error,
+          });
+        }
+      );
     } catch (error) {
+      if (walletId !== null) {
+        try {
+          await rollbackCreatedWallet(walletId);
+        } catch (rollbackError) {
+          console.error(
+            '[DesktopImportWalletPage] Failed to roll back incomplete wallet',
+            { walletId, rollbackError }
+          );
+        }
+      }
       console.error('[DesktopImportWalletPage] Error importing wallet:', error);
       setNameError(t('onboarding.importFailed'));
     } finally {
@@ -259,7 +284,7 @@ const DesktopImportWalletPage = () => {
               />
             </div>
             <div className="w-full px-2">
-              <label className="mb-3 flex items-center justify-center gap-2 text-sm wallet-muted">
+              <label className="mb-3 flex items-center justify-center gap-2 text-sm wallet-text-strong font-semibold">
                 <span>{t('onboarding.wordCountLabel')}</span>
                 <select
                   value={wordCount}
@@ -268,7 +293,7 @@ const DesktopImportWalletPage = () => {
                       Number(event.target.value) as Bip39WordCount
                     )
                   }
-                  className="wallet-input wallet-surface-strong rounded-md px-2 py-1 wallet-text-strong"
+                  className="wallet-input wallet-phrase-length-select rounded-md px-2 py-1"
                   aria-label={t('onboarding.wordCountLabel')}
                 >
                   {BIP39_WORD_COUNTS.map((count) => (

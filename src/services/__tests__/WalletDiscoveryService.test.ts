@@ -4,6 +4,7 @@ const retrieveKeysMock = vi.fn();
 const getWalletXpubsMock = vi.fn();
 const createKeysMock = vi.fn();
 const deriveBchAddressFromHdPublicKeyMock = vi.fn();
+const isDesktopPlatformMock = vi.fn(() => true);
 
 let storedDiscoveryState: string | null = null;
 
@@ -34,9 +35,14 @@ vi.mock('../../utils/browserStorage', () => ({
   }),
 }));
 
+vi.mock('../../utils/platform', () => ({
+  isDesktopPlatform: isDesktopPlatformMock,
+}));
+
 describe('WalletDiscoveryService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    isDesktopPlatformMock.mockReturnValue(true);
     storedDiscoveryState = null;
     retrieveKeysMock.mockResolvedValue([
       {
@@ -61,6 +67,29 @@ describe('WalletDiscoveryService', () => {
         publicKeyHash: new Uint8Array([2]),
       })
     );
+  });
+
+  it('limits mobile restore discovery to standard wallet branches', async () => {
+    isDesktopPlatformMock.mockReturnValue(false);
+    const batchHasUsage = vi.fn(async () => []);
+    const { default: WalletDiscoveryService } = await import(
+      '../WalletDiscoveryService'
+    );
+
+    await WalletDiscoveryService.ensureInitialAddressBatches(
+      5,
+      'chipnet' as never,
+      batchHasUsage
+    );
+
+    expect(batchHasUsage.mock.calls[0][1]).toHaveLength(40);
+    expect(
+      new Set(
+        batchHasUsage.mock.calls[0][1].map(
+          (candidate: { changeIndex: number }) => candidate.changeIndex
+        )
+      )
+    ).toEqual(new Set([0, 1]));
   });
 
   it('restores used HD addresses found beyond persisted keys', async () => {

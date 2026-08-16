@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ElectrumServer from '../../apis/ElectrumServer/ElectrumServer';
+import { isDesktopPlatform } from '../../utils/platform';
 import ElectrumService, {
   invalidateUTXOCache,
   primeUTXOCache,
@@ -13,6 +14,10 @@ vi.mock('../../apis/ElectrumServer/ElectrumServer', () => ({
 
 vi.mock('../../apis/DatabaseManager/DatabaseService', () => ({
   default: vi.fn(),
+}));
+
+vi.mock('../../utils/platform', () => ({
+  isDesktopPlatform: vi.fn(() => true),
 }));
 
 vi.mock('../../state/store', () => ({
@@ -38,10 +43,12 @@ vi.mock('../../services/electrum/helpers', async (importOriginal) => {
 describe('ElectrumService', () => {
   const mockedElectrumServer = vi.mocked(ElectrumServer);
   const mockedDatabaseService = vi.mocked(DatabaseService);
+  const mockedIsDesktopPlatform = vi.mocked(isDesktopPlatform);
   let dbRow: Record<string, unknown> | null;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockedIsDesktopPlatform.mockReturnValue(true);
     invalidateUTXOCache();
     dbRow = null;
 
@@ -134,6 +141,83 @@ describe('ElectrumService', () => {
     );
   });
 
+  it('uses address listunspent requests for mobile wallet-wide scans', async () => {
+    mockedIsDesktopPlatform.mockReturnValue(false);
+    const server = {
+      requestMany: vi.fn(async (calls: Array<{ method: string }>) =>
+        calls.map((call) =>
+          call.method === 'blockchain.address.listunspent'
+            ? [
+                {
+                  tx_hash: 'm'.repeat(64),
+                  tx_pos: 0,
+                  value: 777,
+                  height: 44,
+                },
+              ]
+            : []
+        )
+      ),
+      request: vi.fn(),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+
+    mockedElectrumServer.mockReturnValue(server as never);
+
+    const address = 'bchtest:qqqsmobilefunded';
+    const result = await ElectrumService.getUTXOsMany([address]);
+
+    expect(result[address]).toEqual([
+      expect.objectContaining({
+        address,
+        tx_hash: 'm'.repeat(64),
+        value: 777,
+      }),
+    ]);
+    expect(server.requestMany.mock.calls[0][0][0]).toEqual({
+      method: 'blockchain.address.listunspent',
+      params: [address],
+    });
+    expect(server.request).not.toHaveBeenCalled();
+  });
+
+  it('falls back to mobile scripthash listunspent on an address-method error', async () => {
+    mockedIsDesktopPlatform.mockReturnValue(false);
+    const server = {
+      requestMany: vi.fn(async () => [new Error('Method not found')]),
+      request: vi.fn(async () => [
+        {
+          tx_hash: 'n'.repeat(64),
+          tx_pos: 1,
+          value: 888,
+          height: 45,
+        },
+      ]),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+
+    mockedElectrumServer.mockReturnValue(server as never);
+
+    const address = 'bchtest:qqqsmobilefallback';
+    const result = await ElectrumService.getUTXOsMany([address]);
+
+    expect(result[address]).toEqual([
+      expect.objectContaining({
+        address,
+        tx_hash: 'n'.repeat(64),
+        value: 888,
+      }),
+    ]);
+    expect(server.request).toHaveBeenCalledWith(
+      'blockchain.scripthash.listunspent',
+      expect.stringContaining('scripthash')
+    );
+  });
+
   it('getUTXOsMany omits addresses that fail without a usable response', async () => {
     const server = {
       requestMany: vi.fn(async () => [new Error('temporary failure')]),
@@ -177,6 +261,43 @@ describe('ElectrumService', () => {
         address,
         tx_hash: 'f'.repeat(64),
         value: 321,
+      }),
+    ]);
+    expect(server.request).toHaveBeenCalledWith(
+      'blockchain.address.listunspent',
+      address
+    );
+  });
+
+  it('falls back when a web gateway returns a non-array batch response', async () => {
+    const server = {
+      requestMany: vi.fn(async () => [
+        { error: { message: 'Invalid params' } },
+      ]),
+      request: vi.fn(async () => [
+        {
+          tx_hash: 'e'.repeat(64),
+          tx_pos: 2,
+          value: 654,
+          height: 9,
+        },
+      ]),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+
+    mockedElectrumServer.mockReturnValue(server as never);
+
+    const address = 'bitcoincash:qgatewayfallback';
+    const result = await ElectrumService.getUTXOsMany([address]);
+
+    expect(result[address]).toEqual([
+      expect.objectContaining({
+        address,
+        tx_hash: 'e'.repeat(64),
+        tx_pos: 2,
+        value: 654,
       }),
     ]);
     expect(server.request).toHaveBeenCalledWith(
@@ -475,6 +596,37 @@ describe('ElectrumService', () => {
     );
     expect(result['bitcoincash:q1']).toEqual([{ tx_hash: 'abc', height: 10 }]);
     expect(result['bitcoincash:q2']).toEqual([{ tx_hash: 'def', height: 12 }]);
+  });
+
+  it('uses address history requests for mobile discovery scans', async () => {
+    mockedIsDesktopPlatform.mockReturnValue(false);
+    const server = {
+      requestMany: vi.fn(async (calls: Array<{ method: string }>) =>
+        calls.map((call) =>
+          call.method === 'blockchain.address.get_history'
+            ? [{ tx_hash: 'mobile-history', height: 12 }]
+            : []
+        )
+      ),
+      request: vi.fn(),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+
+    mockedElectrumServer.mockReturnValue(server as never);
+
+    const address = 'bchtest:qqqsmobilehistory';
+    const result = await ElectrumService.getTransactionHistoryMany([address]);
+
+    expect(result[address]).toEqual([
+      { tx_hash: 'mobile-history', height: 12 },
+    ]);
+    expect(server.requestMany.mock.calls[0][0][0]).toEqual({
+      method: 'blockchain.address.get_history',
+      params: [address],
+    });
+    expect(server.request).not.toHaveBeenCalled();
   });
 
   it('falls back to the address history method when scripthash is unavailable', async () => {

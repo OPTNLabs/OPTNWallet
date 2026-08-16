@@ -22,6 +22,11 @@ import { UTXO } from '../types/types';
 import { WalletType } from '../types/wallet';
 import { runWalletUtxoRefresh } from '../services/RefreshCoordinator';
 import { reconcileActiveWalletUtxos } from '../services/WalletUtxoRefreshService';
+import {
+  cacheWalletUtxoSnapshot,
+  getCachedWalletUtxoSnapshot,
+  updateCachedWalletUtxoAddress,
+} from '../services/WalletUtxoSnapshotCache';
 import QuantumrootTrackingService from '../services/QuantumrootTrackingService';
 import { preloadTokenMetadata } from '../hooks/useSharedTokenMetadata';
 import { syncWalletSpecialActivities } from '../services/WalletSpecialActivityService';
@@ -58,6 +63,12 @@ const queuedRefreshes = new Set<string>();
 const walletRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const inFlightWalletRefreshes = new Map<string, Promise<void>>();
 const queuedWalletRefreshes = new Set<string>();
+// Fresh standard wallets are opened with one receive/change pair on desktop
+// and may have no rows yet on mobile. The onboarding flow then materializes
+// the first 20 receive/change pairs in the background. A smaller inventory at
+// worker start therefore needs one trailing wallet pass after that window has
+// had time to finish.
+const INITIAL_ADDRESS_KEY_COUNT = 20 * 2;
 
 function collectTokenCategories(
   utxosByAddress: Record<string, UTXO[]>
@@ -191,6 +202,11 @@ export function optimisticRemoveSpentByOutpoints(
     store.dispatch(
       removeUTXOs({ address: addr, utxosToRemove: toRemoveByAddr[addr] })
     );
+    updateCachedWalletUtxoAddress(
+      state.wallet_id.currentWalletId,
+      addr,
+      store.getState().utxos.utxos[addr] ?? []
+    );
     invalidateUTXOCache(addr);
   }
   requestUTXORefreshForMany(touched, 0);
@@ -239,6 +255,7 @@ async function refreshWalletAddress(address: string, session: WorkerSession) {
   // addresses; empty here means dirty+listunspent=[] (real spend) or ledger
   // has no unspents — publish it. Failed listunspent throws / keeps prior.
   store.dispatch(updateUTXOsForAddress({ address, utxos }));
+  updateCachedWalletUtxoAddress(currentWalletId, address, utxos);
 
   for (const u of utxos) {
     const key = `${u.tx_hash}:${u.tx_pos}`;
@@ -406,7 +423,6 @@ export async function bootstrapAllUTXOs(
 
   try {
     report(5);
-    const allUTXOs: Record<string, UTXO[]> = {};
 
     try {
       const { ensureDesktopLedgerTables } = await import(
@@ -444,6 +460,14 @@ export async function bootstrapAllUTXOs(
     const trackedAddresses = Array.from(
       new Set([...walletAddresses, ...quantumrootAddresses].filter(Boolean))
     );
+    const cachedSnapshot = getCachedWalletUtxoSnapshot(currentWalletId);
+    const allUTXOs: Record<string, UTXO[]> = cachedSnapshot ?? {};
+    if (cachedSnapshot) {
+      if (Object.keys(allUTXOs).length > 0) {
+        store.dispatch(replaceAllUTXOs({ utxosByAddress: allUTXOs }));
+        store.dispatch(setInitialized(true));
+      }
+    }
 
     // ── Provisional paint (safe) ────────────────────────────────────────
     // Show last durable SQL balance immediately while Syncing… stays on.
@@ -467,6 +491,9 @@ export async function bootstrapAllUTXOs(
           provisional[address] = merged;
           provisionalCoins += merged.length;
         }
+      }
+      for (const [address, utxos] of Object.entries(allUTXOs)) {
+        if (!provisional[address]) provisional[address] = utxos;
       }
       if (provisionalCoins > 0) {
         store.dispatch(replaceAllUTXOs({ utxosByAddress: provisional }));
@@ -526,7 +553,40 @@ export async function bootstrapAllUTXOs(
       allUTXOs[address] = utxos;
     }
 
-    // Contract instances (optional; do not block balance paint)
+    cacheWalletUtxoSnapshot(currentWalletId, allUTXOs);
+
+    // Publish the authoritative wallet balance before optional contract work.
+    // Contract discovery can be slow or unavailable on mobile; it must never
+    // keep ordinary BCH UTXOs out of Redux after listunspent has succeeded.
+    store.dispatch(replaceAllUTXOs({ utxosByAddress: allUTXOs }));
+    if (import.meta.env.DEV) {
+      const publishedUtxos = Object.values(allUTXOs).flat();
+      console.info('[UTXOWorker] published wallet UTXOs', {
+        walletId: currentWalletId,
+        addressCount: Object.keys(allUTXOs).length,
+        coinCount: publishedUtxos.length,
+        totalSats: publishedUtxos.reduce(
+          (total, utxo) => total + (utxo.value ?? utxo.amount ?? 0),
+          0
+        ),
+      });
+    }
+    dbService.scheduleDatabaseSave(currentWalletId);
+    store.dispatch(setInitialized(true));
+    report(85);
+
+    // Token icons never block balance/sync completion (web or native).
+    const tokenCategories = collectTokenCategories(allUTXOs);
+    if (tokenCategories.length > 0) {
+      void preloadTokenMetadata(tokenCategories).catch((error) => {
+        logError('UTXOWorker.bootstrapAllUTXOs.preloadTokenMetadata', error, {
+          walletId: currentWalletId,
+          categoryCount: tokenCategories.length,
+        });
+      });
+    }
+
+    // Contract instances (optional; balance was already painted above).
     try {
       // The contract cache is global, but this worker owns exactly one wallet.
       // Scanning every wallet's contracts in every window caused cross-wallet
@@ -555,24 +615,6 @@ export async function bootstrapAllUTXOs(
       logError('UTXOWorker.bootstrapAllUTXOs.contractInit', e);
     }
     if (!bootstrapIsCurrent()) return;
-    report(85);
-
-    store.dispatch(replaceAllUTXOs({ utxosByAddress: allUTXOs }));
-
-    // Token icons never block balance/sync completion (web or native).
-    const tokenCategories = collectTokenCategories(allUTXOs);
-    if (tokenCategories.length > 0) {
-      void preloadTokenMetadata(tokenCategories).catch((error) => {
-        logError('UTXOWorker.bootstrapAllUTXOs.preloadTokenMetadata', error, {
-          walletId: currentWalletId,
-          categoryCount: tokenCategories.length,
-        });
-      });
-    }
-    if (!bootstrapIsCurrent()) return;
-
-    dbService.scheduleDatabaseSave(currentWalletId);
-    store.dispatch(setInitialized(true));
   } finally {
     // A failed Electrum batch is not an empty wallet. Clear Syncing when this
     // attempt still owns the flag — including cancelled/HMR runs that never got
@@ -724,6 +766,10 @@ function startUTXOWorker(): Promise<void> {
       if (!isCurrentWorkerContext(session)) return;
       let keys = await KeyService.retrieveKeys(session.walletId);
       if (!isCurrentWorkerContext(session)) return;
+      const startedWithPartialAddressWindow =
+        store.getState().wallet_id.walletType === WalletType.STANDARD &&
+        (keys?.length ?? 0) > 0 &&
+        (keys?.length ?? 0) < INITIAL_ADDRESS_KEY_COUNT;
 
       // Existing wallets can have a valid encrypted seed but no materialized
       // key rows (for example after a restore or an interrupted import). The
@@ -775,6 +821,15 @@ function startUTXOWorker(): Promise<void> {
         await establishSubscriptions(session);
       } catch (e) {
         logError('UTXOWorker.start.subscriptions', e);
+      }
+
+      if (startedWithPartialAddressWindow) {
+        // Desktop/mobile onboarding may still be finishing its background
+        // key materialization. Re-read the keys and run the normal wallet
+        // refresh (which includes discovery) after the initial pass, rather
+        // than leaving UTXOs on addresses created after the first snapshot
+        // invisible until the user presses Sync.
+        refreshWalletSoon(600, session);
       }
 
       // The base receive/change UTXO snapshot is authoritative for ordinary

@@ -12,10 +12,11 @@ import {
   readStorageItem,
   writeStorageItem,
 } from '../utils/browserStorage';
+import { isDesktopPlatform } from '../utils/platform';
 
 // BIP44's gap limit is measured in address indexes. Keep the network request
-// at that same size while checking every ordinary BCH branch, so one discovery
-// batch covers receive, change, and DeFi/Cauldron addresses at each index.
+// at that same size while checking the wallet branches selected for the
+// current transport.
 const ADDRESS_BATCH_SIZE = 20;
 const MAX_BATCHES_PER_PASS = 4;
 // CashFusion reserves fresh receive indexes before a round is known to have
@@ -30,6 +31,23 @@ const DISCOVERY_BRANCHES = BCH_WALLET_SCAN_BRANCH_NAMES.map((name) => ({
   name,
   branchIndex: BCH_STANDARD_BRANCH_INDEX[name],
 }));
+const PRIMARY_WALLET_BRANCHES = ['receive', 'change'] as const;
+
+function getDiscoveryBranches(): ReadonlyArray<{
+  name: BchStandardBranchName;
+  branchIndex: number;
+}> {
+  // Desktop uses a raw Electrum TCP connection and can send the full batch
+  // shape. Web/Capacitor uses WSS and sends individual JSON-RPC frames, so the
+  // initial mobile restore only scans the standard wallet branches. CashFusion
+  // is desktop-only until its mobile transport is available.
+  return isDesktopPlatform()
+    ? DISCOVERY_BRANCHES
+    : PRIMARY_WALLET_BRANCHES.map((name) => ({
+        name,
+        branchIndex: BCH_STANDARD_BRANCH_INDEX[name],
+      }));
+}
 
 export type WalletDerivedAddressCandidate = {
   address: string;
@@ -102,7 +120,11 @@ function keyInventory(keys: Array<{ addressIndex: number }>): {
 async function getCandidateBatch(
   network: Network,
   startIndex: number,
-  xpubs: Awaited<ReturnType<typeof KeyService.getWalletXpubs>>
+  xpubs: Awaited<ReturnType<typeof KeyService.getWalletXpubs>>,
+  branches: ReadonlyArray<{
+    name: BchStandardBranchName;
+    branchIndex: number;
+  }>
 ): Promise<
   {
     address: string;
@@ -120,7 +142,7 @@ async function getCandidateBatch(
 
   for (let offset = 0; offset < ADDRESS_BATCH_SIZE; offset += 1) {
     const addressIndex = startIndex + offset;
-    for (const branch of DISCOVERY_BRANCHES) {
+    for (const branch of branches) {
       const xpub = xpubs[branch.name];
       if (!xpub) continue;
 
@@ -222,6 +244,7 @@ async function expandDiscovery(
   const xpubs = await KeyService.getWalletXpubs(walletId, 0);
   const state = readState();
   const inventory = keyInventory(keys);
+  const initialHighestKnownIndex = inventory.highestKnownIndex;
   const savedState = state[stateKey(walletId)];
   const stateMatchesInventory =
     savedState?.knownKeyCount === inventory.knownKeyCount &&
@@ -251,12 +274,13 @@ async function expandDiscovery(
       ? savedState.consecutiveUnusedBatches
       : 0;
   let batchesProcessed = 0;
+  const branches = getDiscoveryBranches();
 
   while (
     batchesProcessed < MAX_BATCHES_PER_PASS &&
     consecutiveUnusedBatches < MAX_EMPTY_BATCHES
   ) {
-    const batch = await getCandidateBatch(network, batchStart, xpubs);
+    const batch = await getCandidateBatch(network, batchStart, xpubs, branches);
     if (batch.length === 0) {
       break;
     }
@@ -265,8 +289,18 @@ async function expandDiscovery(
     const used = new Set(usedAddresses);
     batchesProcessed += 1;
     batchStart += ADDRESS_BATCH_SIZE;
+    if (import.meta.env.DEV) {
+      console.info('[WalletDiscovery] history window', {
+        walletId,
+        transport: isDesktopPlatform() ? 'desktop-tcp' : 'mobile-wss',
+        startIndex: batchStart - ADDRESS_BATCH_SIZE,
+        candidateCount: batch.length,
+        usedCount: used.size,
+      });
+    }
 
     if (used.size > 0) {
+      let recoveredInBatch = false;
       for (const candidate of batch) {
         if (!used.has(candidate.address)) {
           continue;
@@ -281,6 +315,9 @@ async function expandDiscovery(
           );
           knownAddresses.add(candidate.address);
           recoveredAddresses.push(candidate.address);
+          recoveredInBatch =
+            recoveredInBatch ||
+            candidate.addressIndex > initialHighestKnownIndex;
         }
 
         if (
@@ -290,9 +327,16 @@ async function expandDiscovery(
           await KeyService.createKeys(walletId, 0, 1, candidate.addressIndex);
           knownAddresses.add(candidate.pairedChangeAddress);
           recoveredAddresses.push(candidate.pairedChangeAddress);
+          recoveredInBatch =
+            recoveredInBatch ||
+            candidate.addressIndex > initialHighestKnownIndex;
         }
       }
       consecutiveUnusedBatches = 0;
+      // Query recovered addresses as soon as their first used window is
+      // materialized. Continuing through later windows before returning made a
+      // funded imported wallet appear empty for the entire discovery pass.
+      if (recoveredInBatch) break;
       continue;
     }
 

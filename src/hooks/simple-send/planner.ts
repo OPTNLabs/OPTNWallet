@@ -5,6 +5,11 @@ import { toErrorMessage } from '../../utils/errorHandling';
 import { toTokenAwareCashAddress } from '../../utils/cashAddress';
 import { BuildResult, BchBuildResult } from './types';
 import { isConfirmed, sortLargestFirst, sumInputsSats } from './helpers';
+import {
+  estimateMaxStandardTransactionBytes,
+  requiredFeeForBytes,
+  type FeePreferences,
+} from '../../apis/TransactionManager/feePolicy';
 
 type PlannerParams = {
   recipient: string;
@@ -13,6 +18,7 @@ type PlannerParams = {
   tokenChangeAddress: string;
   selectedChangeAddress: string;
   dbUtxos: UTXO[];
+  feePreferences?: FeePreferences;
   /**
    * Hardware wallets (EC model): cannot software-sign. Plan fees by size
    * estimate; rawTx is left empty and filled by device sign at send time.
@@ -28,6 +34,7 @@ export function createSimpleSendPlanner({
   selectedChangeAddress,
   dbUtxos,
   hardwareWallet = false,
+  feePreferences = {},
 }: PlannerParams) {
   function sortFeeUtxosPreferred(pool: UTXO[]) {
     return [...pool].sort((a, b) => {
@@ -331,12 +338,60 @@ export function createSimpleSendPlanner({
     };
   }
 
+  /**
+   * Fast Max preview for ordinary wallet coins. This deliberately uses an
+   * upper-bound serialized size instead of constructing/signing a draft
+   * transaction. Review still performs the authoritative build immediately
+   * before sending. Contract inputs fall back to the existing full builder.
+   */
+  function estimateSweepAllBch(maxInputs = 50): BchBuildResult | null {
+    const feeUtxoPool = dbUtxos.filter((u) => !u.token);
+    if (feeUtxoPool.length === 0) {
+      return { ok: false, err: 'No spendable BCH UTXOs.' };
+    }
+
+    const confirmedPool = sortFeeUtxosPreferred(
+      feeUtxoPool.filter(isConfirmed)
+    );
+    const unconfirmedPool = sortFeeUtxosPreferred(
+      feeUtxoPool.filter((u) => !isConfirmed(u))
+    );
+    const inputs = sortLargestFirst([
+      ...confirmedPool,
+      ...unconfirmedPool,
+    ]).slice(0, maxInputs);
+
+    if (inputs.some((utxo) => Boolean(utxo.contractName || utxo.abi))) {
+      return null;
+    }
+
+    const availableSats = sumInputsSats(inputs);
+    const feeSats = requiredFeeForBytes(
+      estimateMaxStandardTransactionBytes(inputs.length, 1),
+      feePreferences
+    );
+    const maxSats = availableSats - Number(feeSats);
+    if (maxSats < DUST) {
+      return { ok: false, err: 'Not enough funds to cover the network fee.' };
+    }
+
+    return {
+      ok: true,
+      inputs,
+      feeSats: Number(feeSats),
+      totalSats: availableSats,
+      rawTx: '',
+      finalOutputs: [{ recipientAddress: recipient, amount: maxSats }],
+    };
+  }
+
   return {
     makeTokenOutputForRecipientFT,
     makeTokenChangeOutputFT,
     makeTokenOutputForRecipientNFT,
     addBchInputsUntilBuild,
     addBchOnlyUntilBuild,
+    estimateSweepAllBch,
     sweepAllBchUntilBuild,
   };
 }
