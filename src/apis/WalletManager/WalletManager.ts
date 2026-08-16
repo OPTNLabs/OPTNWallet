@@ -16,6 +16,8 @@ import {
   getBchAccountPath,
   normalizeBchAccountPath,
 } from '../../services/HdWalletService';
+import { deleteWalletScope } from '../DatabaseManager/DatabaseMerge';
+import { clearCachedWalletUtxoSnapshot } from '../../services/WalletUtxoSnapshotCache';
 
 // Helper function to safely cast SQL values to number
 function toNumber(value: unknown): number {
@@ -34,6 +36,40 @@ function normalizeWalletType(raw: unknown): ExtendedWalletType {
   // Desktop USB hardware keystore (Ledger etc.) — public keys on disk, signs on device.
   if (raw === 'hardware') return 'hardware';
   return WalletType.STANDARD;
+}
+
+type WalletLookupFilters = Pick<
+  WalletLookup,
+  'networkType' | 'walletType' | 'derivationPath'
+>;
+
+function derivationPathMatches(
+  rawPath: unknown,
+  networkType: Network | null,
+  expectedPath: string | undefined
+): boolean {
+  if (expectedPath === undefined) return true;
+
+  let normalizedExpectedPath: string;
+  try {
+    normalizedExpectedPath = normalizeBchAccountPath(expectedPath);
+  } catch {
+    return false;
+  }
+
+  let storedPath: string | null = null;
+  if (typeof rawPath === 'string' && rawPath.trim()) {
+    try {
+      storedPath = normalizeBchAccountPath(rawPath);
+    } catch {
+      storedPath = null;
+    }
+  } else if (networkType !== null) {
+    // Legacy rows had no stored path; recover the path used for their network.
+    storedPath = getBchAccountPath(networkType);
+  }
+
+  return storedPath === normalizedExpectedPath;
 }
 
 export default function WalletManager() {
@@ -174,6 +210,7 @@ export default function WalletManager() {
   async function clearAllData(): Promise<void> {
     const dbService = DatabaseService();
     await dbService.clearDatabase(); // Call clearDatabase function
+    clearCachedWalletUtxoSnapshot();
     // await dbService.saveDatabaseToFile();
   }
 
@@ -186,56 +223,14 @@ export default function WalletManager() {
     createTables(db);
 
     try {
-      let query = db.prepare(`DELETE FROM wallets WHERE id = :walletid`);
-      query.bind({ ':walletid': wallet_id });
-      query.run();
-
-      query = db.prepare(`DELETE FROM keys WHERE wallet_id = :walletid`);
-      query.bind({ ':walletid': wallet_id });
-      query.run();
-
-      query = db.prepare(`DELETE FROM addresses WHERE wallet_id = :walletid`);
-      query.bind({ ':walletid': wallet_id });
-      query.run();
-
-      query = db.prepare(`DELETE FROM UTXOs WHERE wallet_id = :walletid`);
-      query.bind({ ':walletid': wallet_id });
-      query.run();
-
-      query = db.prepare(
-        `DELETE FROM wallet_special_activities WHERE wallet_id = :walletid`
-      );
-      query.bind({ ':walletid': wallet_id });
-      query.run();
-
-      query = db.prepare(
-        `DELETE FROM quantumroot_vaults WHERE wallet_id = :walletid`
-      );
-      query.bind({ ':walletid': wallet_id });
-      query.run();
+      // Delete wallet-owned rows before the parent wallet row, in one
+      // transaction. The old implementation deleted the parent first and
+      // could leave a partial wallet behind when SQLite enforced foreign
+      // keys or when one of the later cleanup statements failed.
+      deleteWalletScope(db, wallet_id);
       QuantumrootVaultCacheService.clear(wallet_id);
       WalletDiscoveryService.clear(wallet_id);
-
-      // Also delete from other tables as needed
-      query = db.prepare(
-        `DELETE FROM cashscript_artifacts WHERE id IN (SELECT artifact_id FROM cashscript_addresses WHERE wallet_id = :walletid)`
-      );
-      query.bind({ ':walletid': wallet_id });
-      query.run();
-
-      query = db.prepare(
-        `DELETE FROM cashscript_addresses WHERE wallet_id = :walletid`
-      );
-      query.bind({ ':walletid': wallet_id });
-      query.run();
-
-      query = db.prepare(
-        `DELETE FROM instantiated_contracts WHERE address IN (SELECT address FROM cashscript_addresses WHERE wallet_id = :walletid)`
-      );
-      query.bind({ ':walletid': wallet_id });
-      query.run();
-
-      // await dbService.saveDatabaseToFile();
+      clearCachedWalletUtxoSnapshot(wallet_id);
       return true;
     } catch (e) {
       console.error(e);
@@ -276,7 +271,7 @@ export default function WalletManager() {
   async function setWalletId(
     mnemonic: string,
     passphrase: string,
-    lookup?: Pick<WalletLookup, 'networkType' | 'walletType'>
+    lookup?: WalletLookupFilters
   ): Promise<number | null> {
     const dbService = DatabaseService();
     await dbService.ensureDatabaseStarted();
@@ -287,7 +282,9 @@ export default function WalletManager() {
     createTables(db);
     try {
       const query = db.prepare(
-        `SELECT id, mnemonic, passphrase, networkType, walletType FROM wallets`
+        `SELECT id, mnemonic, passphrase, networkType, walletType,
+                derivation_path
+           FROM wallets`
       );
       let walletId: number | null = null;
       while (query.step()) {
@@ -326,12 +323,18 @@ export default function WalletManager() {
         const walletTypeMatches =
           lookup?.walletType === undefined ||
           rowWalletType === lookup.walletType;
+        const pathMatches = derivationPathMatches(
+          row.derivation_path,
+          rowNetwork,
+          lookup?.derivationPath
+        );
 
         if (
           rowMnemonic === mnemonic &&
           rowPassphrase === passphrase &&
           networkMatches &&
-          walletTypeMatches
+          walletTypeMatches &&
+          pathMatches
         ) {
           walletId = toNumber(row.id);
           break;
@@ -348,7 +351,7 @@ export default function WalletManager() {
   async function checkAccount(
     mnemonic: string,
     passphrase: string,
-    lookup?: Pick<WalletLookup, 'networkType' | 'walletType'>
+    lookup?: WalletLookupFilters
   ): Promise<boolean> {
     const dbService = DatabaseService();
     await dbService.ensureDatabaseStarted();
@@ -360,7 +363,9 @@ export default function WalletManager() {
     createTables(db);
     try {
       const query = db.prepare(
-        `SELECT mnemonic, passphrase, networkType, walletType FROM wallets`
+        `SELECT mnemonic, passphrase, networkType, walletType,
+                derivation_path
+           FROM wallets`
       );
       let accountExists = false;
 
@@ -401,11 +406,17 @@ export default function WalletManager() {
         const walletTypeMatches =
           lookup?.walletType === undefined ||
           rowWalletType === lookup.walletType;
+        const pathMatches = derivationPathMatches(
+          row.derivation_path,
+          rowNetwork,
+          lookup?.derivationPath
+        );
         if (
           rowMnemonic === mnemonic &&
           rowPassphrase === passphrase &&
           networkMatches &&
-          walletTypeMatches
+          walletTypeMatches &&
+          pathMatches
         ) {
           accountExists = true;
           break;
@@ -437,15 +448,15 @@ export default function WalletManager() {
     }
 
     createTables(db);
+    const normalizedDerivationPath = normalizeBchAccountPath(derivationPath);
     const accountExists = await checkAccount(mnemonic, passphrase, {
       networkType,
       walletType,
+      derivationPath: normalizedDerivationPath,
     });
     if (accountExists) {
       return false;
     }
-
-    const normalizedDerivationPath = normalizeBchAccountPath(derivationPath);
 
     const encryptedMnemonic = await SecretCryptoService.encryptText(mnemonic);
     const encryptedPassphrase =

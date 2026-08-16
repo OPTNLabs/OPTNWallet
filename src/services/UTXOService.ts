@@ -18,17 +18,25 @@ import { normalizeTokenField } from '../utils/tokenNormalization';
 import { logError } from '../utils/errorHandling';
 import { isWebPlatform } from '../utils/platform';
 import { binToHex, hexToBin } from '../utils/hex';
+import { selectCurrentNetwork } from '../state/selectors/networkSelectors';
+import { setAddressDiscoveryInProgress } from '../state/slices/utxoSlice';
 
 const bcmrCache = new Map<
   string,
   { ts: number; data: Awaited<ReturnType<BcmrService['getSnapshot']>> | null }
 >();
 const BCMR_CACHE_TTL_MS = 300_000;
+let activeAddressDiscoveryRuns = 0;
+
+function setAddressDiscoveryState(inProgress: boolean): void {
+  if (typeof store.dispatch !== 'function') return;
+  store.dispatch(setAddressDiscoveryInProgress(inProgress));
+}
 
 function getPrefix(): string {
   try {
     const state = store.getState();
-    return state.network.currentNetwork === Network.MAINNET
+    return selectCurrentNetwork(state) === Network.MAINNET
       ? 'bitcoincash'
       : 'bchtest';
   } catch {
@@ -293,9 +301,11 @@ const UTXOService = {
     options: UTXOFetchOptions = {}
   ): Promise<Record<string, UTXO[]>> {
     try {
-      const currentNetwork = store.getState().network.currentNetwork;
+      const currentNetwork = selectCurrentNetwork(store.getState());
       let discoveredAddresses: string[] = [];
       if (options.discover !== false) {
+        activeAddressDiscoveryRuns += 1;
+        setAddressDiscoveryState(true);
         const tDiscovery = performance.now();
         try {
           discoveredAddresses =
@@ -315,6 +325,12 @@ const UTXOService = {
           logError('UTXOService.fetchAndStoreUTXOsMany.discovery', error, {
             walletId,
           });
+        } finally {
+          activeAddressDiscoveryRuns = Math.max(
+            0,
+            activeAddressDiscoveryRuns - 1
+          );
+          setAddressDiscoveryState(activeAddressDiscoveryRuns > 0);
         }
       }
       const manager = await UTXOManager();

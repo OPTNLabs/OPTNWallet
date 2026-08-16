@@ -120,6 +120,25 @@ describe('mergeWalletScope', () => {
   });
 });
 
+describe('deleteWalletScope', () => {
+  it('deletes wallet children before the wallet and preserves other wallets', async () => {
+    const SQL = await initSqlJs();
+    const db = createDatabase(SQL);
+    const { deleteWalletScope } = await import('../DatabaseMerge');
+
+    deleteWalletScope(db, 1);
+
+    expect(columnValues(db, 'SELECT id FROM wallets ORDER BY id')).toEqual([
+      [4],
+    ]);
+    expect(columnValues(db, 'SELECT wallet_id FROM keys')).toEqual([[4]]);
+    expect(columnValues(db, 'SELECT wallet_id FROM addresses')).toEqual([[4]]);
+    expect(columnValues(db, 'SELECT wallet_id FROM UTXOs')).toEqual([[4]]);
+
+    db.close();
+  });
+});
+
 describe('mergeGlobalChanges', () => {
   it('applies local-only metadata changes without overwriting concurrent rows', async () => {
     const SQL = await initSqlJs();

@@ -41,7 +41,12 @@ import { markSpendAuthFromUnlock } from './DeviceIntegrityService';
 import { SECRET_ENC_PREFIX } from './SecretCryptoService';
 import { WATCH_ONLY_WALLET_TYPE } from './onboarding/watchOnlyWallet';
 import { HARDWARE_WALLET_TYPE } from './onboarding/hardwareWallet';
-import { getBchAccountPath } from '../../services/HdWalletService';
+import {
+  deriveBchChild,
+  deriveBchStandardXpubs,
+  getBchAccountPath,
+  normalizeBchAccountPath,
+} from '../../services/HdWalletService';
 import {
   autoSaveWalletFile,
   parseWalletFile,
@@ -121,6 +126,81 @@ async function writeKdfSalt(walletId: number, salt: Uint8Array): Promise<void> {
   await dbService.flushDatabaseToFile(walletId);
 }
 
+/**
+ * Desktop wallets use independent passwords, so the shared mnemonic duplicate
+ * check cannot decrypt another wallet's row. Check the public address space
+ * instead, while retaining network, wallet type, and account-path identity.
+ * This permits the same mnemonic to be imported at a different derivation
+ * path, but avoids creating a second broken wallet at the same path.
+ */
+async function findWalletForDerivedAddress(args: {
+  mnemonic: string;
+  passphrase: string;
+  network: Network;
+  walletType: WalletType;
+  derivationPath: string;
+}): Promise<number | null> {
+  const xpubs = await deriveBchStandardXpubs(
+    args.network,
+    args.mnemonic,
+    args.passphrase,
+    0,
+    args.derivationPath
+  );
+  const candidate = await deriveBchChild(
+    args.network,
+    { kind: 'xpub', hdPublicKey: xpubs.receive },
+    0
+  );
+  if (!candidate || 'privateKey' in candidate) return null;
+
+  const dbService = DatabaseService();
+  await dbService.ensureDatabaseStarted();
+  const db = dbService.getDatabase();
+  if (!db) return null;
+
+  const query = db.prepare(
+    `SELECT wallets.id, wallets.networkType, wallets.walletType,
+            wallets.derivation_path
+       FROM keys
+       JOIN wallets ON wallets.id = keys.wallet_id
+      WHERE keys.address = ? OR keys.token_address = ?`
+  );
+  query.bind([candidate.address, candidate.tokenAddress]);
+
+  let matchingWalletId: number | null = null;
+  while (query.step()) {
+    const row = query.getAsObject() as Record<string, unknown>;
+    const rowNetwork =
+      row.networkType === Network.MAINNET
+        ? Network.MAINNET
+        : row.networkType === Network.CHIPNET
+          ? Network.CHIPNET
+          : null;
+    if (rowNetwork !== args.network || row.walletType !== args.walletType) {
+      continue;
+    }
+
+    let rowPath = getBchAccountPath(args.network);
+    if (typeof row.derivation_path === 'string') {
+      try {
+        rowPath = normalizeBchAccountPath(row.derivation_path);
+      } catch {
+        // Keep the network default for a legacy/malformed row.
+      }
+    }
+    if (rowPath !== args.derivationPath) continue;
+
+    const id = Number(row.id);
+    if (Number.isSafeInteger(id) && id > 0) {
+      matchingWalletId = id;
+      break;
+    }
+  }
+  query.free();
+  return matchingWalletId;
+}
+
 export interface CreateWalletWithPasswordArgs {
   name: string;
   mnemonic: string;
@@ -129,6 +209,8 @@ export interface CreateWalletWithPasswordArgs {
   walletType?: WalletType;
   derivationPath?: string;
   derivationPathSource?: DerivationPathSource;
+  /** Import-only collision check for wallets encrypted under another password. */
+  checkExistingDerivedAddress?: boolean;
   password: string;
 }
 
@@ -158,6 +240,19 @@ export async function createWalletWithPassword(
   const resolvedDerivationPathSource = derivationPathSource ?? 'default';
   const manager = WalletManager();
 
+  if (args.checkExistingDerivedAddress) {
+    const existingWalletId = await findWalletForDerivedAddress({
+      mnemonic,
+      passphrase,
+      network,
+      walletType,
+      derivationPath: normalizeBchAccountPath(resolvedDerivationPath),
+    });
+    if (existingWalletId !== null) {
+      return null;
+    }
+  }
+
   const salt = randomSalt(32);
 
   // Activate this wallet's credentials BEFORE createWallet's internal
@@ -178,7 +273,7 @@ export async function createWalletWithPassword(
   };
   setCachedPassword(password, salt);
 
-  let walletId: number | null;
+  let walletId: number | null = null;
   try {
     const created = await manager.createWallet(
       name,
@@ -202,6 +297,16 @@ export async function createWalletWithPassword(
   } catch (error) {
     // `createWallet` and the ID lookup are both allowed to throw. Never leave
     // their provisional, unowned credentials active in either case.
+    if (walletId !== null) {
+      try {
+        await rollbackCreatedWallet(walletId);
+      } catch (rollbackError) {
+        console.error(
+          '[DesktopWalletManager] failed to roll back wallet creation',
+          { walletId, rollbackError }
+        );
+      }
+    }
     restorePrevious();
     throw error;
   }
@@ -216,6 +321,14 @@ export async function createWalletWithPassword(
       '[DesktopWalletManager] CRITICAL: wallet kdf_salt could not be written',
       { walletId, error: err }
     );
+    try {
+      await rollbackCreatedWallet(walletId);
+    } catch (rollbackError) {
+      console.error(
+        '[DesktopWalletManager] failed to roll back wallet without kdf_salt',
+        { walletId, rollbackError }
+      );
+    }
     restorePrevious();
     return null;
   }
@@ -256,6 +369,24 @@ export async function createWalletWithPassword(
   }
 
   return walletId;
+}
+
+/**
+ * Remove a wallet that was created locally but could not materialize its first
+ * address pair. The database row is not usable without keys, and leaving it
+ * behind makes a retry look like a duplicate import. The auto-saved .optn
+ * mirror remains recoverable; only the live database scope is removed.
+ */
+export async function rollbackCreatedWallet(walletId: number): Promise<void> {
+  // Remove the persisted snapshot first. If the renderer is interrupted
+  // between these two operations, a restart still cannot resurrect the
+  // failed import on the landing page.
+  await DatabaseService().deleteWalletFromFile(walletId);
+  const deleted = await WalletManager().deleteWallet(walletId);
+  if (deleted !== true) {
+    throw new Error(`Failed to remove incomplete wallet ${walletId}.`);
+  }
+  clearCachedPassword();
 }
 
 /**
@@ -645,7 +776,7 @@ export async function openWalletWithPassword(
   // derivation here.
   if (info.walletType === WalletType.STANDARD && net) {
     const { default: KeyService } = await import('../../services/KeyService');
-    await KeyService.bootstrapInitialAddressBatch(walletId, 0, 20);
+    await KeyService.bootstrapInitialAddressBatch(walletId, 0, 1);
   }
   return info;
 }

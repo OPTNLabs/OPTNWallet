@@ -24,7 +24,7 @@ import {
   estimateAddP2PKHOutputBytes,
   formatMinRelayError,
   hasExplicitManualChangeOutput,
-  relayFeeForBytes,
+  requiredFeeForBytes as requiredFeeForBytesWithPreferences,
   txBytesFromHex,
 } from './feePolicy';
 import OutboundTransactionTracker from '../../services/OutboundTransactionTracker';
@@ -54,16 +54,10 @@ function isCurrentWalletSession(
 // user's sat/byte (never below the relay minimum). Read live from preferences so
 // changing the setting takes effect on the next transaction immediately.
 function requiredFeeForBytes(bytes: number): bigint {
-  const min = relayFeeForBytes(bytes);
-  const prefs = store.getState().preferences;
-  if (prefs?.feeMode === 'custom') {
-    const rate = Number(prefs.customFeeSatPerByte);
-    if (Number.isFinite(rate) && rate > 0) {
-      const custom = BigInt(Math.ceil(rate * bytes));
-      return custom > min ? custom : min;
-    }
-  }
-  return min;
+  return requiredFeeForBytesWithPreferences(
+    bytes,
+    store.getState().preferences
+  );
 }
 
 export default function TransactionManager() {

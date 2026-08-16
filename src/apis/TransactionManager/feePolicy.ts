@@ -1,5 +1,10 @@
 import { TransactionOutput } from '../../types/types';
 
+export type FeePreferences = {
+  feeMode?: 'auto' | 'custom';
+  customFeeSatPerByte?: number;
+};
+
 // A small buffer over the usual 1 sat/byte floor prevents otherwise-valid
 // transactions from being rejected when a backend's rolling mempool minimum
 // rises slightly above its configured relay floor.
@@ -10,6 +15,54 @@ export function relayFeeForBytes(bytes: number): bigint {
     throw new Error('Transaction byte size must be a non-negative safe integer.');
   }
   return (BigInt(bytes) * RELAY_FEE_MILLISATS_PER_BYTE + 999n) / 1_000n;
+}
+
+export function requiredFeeForBytes(
+  bytes: number,
+  preferences: FeePreferences = {}
+): bigint {
+  const minimum = relayFeeForBytes(bytes);
+  if (preferences.feeMode !== 'custom') return minimum;
+
+  const rate = Number(preferences.customFeeSatPerByte);
+  if (!Number.isFinite(rate) || rate <= 0) return minimum;
+
+  const custom = BigInt(Math.ceil(rate * bytes));
+  return custom > minimum ? custom : minimum;
+}
+
+/**
+ * Upper-bound size for a standard BCH transaction with P2PKH inputs and one
+ * or more standard cash-address outputs. The 149-byte input bound covers a
+ * maximum-length DER signature; 44 bytes covers the largest standard P2SH32
+ * output. Max uses this bound so its preview cannot overstate spendable funds.
+ */
+export function estimateMaxStandardTransactionBytes(
+  inputCount: number,
+  outputCount: number
+): number {
+  if (
+    !Number.isSafeInteger(inputCount) ||
+    inputCount < 0 ||
+    !Number.isSafeInteger(outputCount) ||
+    outputCount < 0
+  ) {
+    throw new Error(
+      'Transaction input/output counts must be non-negative integers.'
+    );
+  }
+
+  const varintSize = (count: number) =>
+    count < 0xfd ? 1 : count <= 0xffff ? 3 : count <= 0xffffffff ? 5 : 9;
+
+  return (
+    4 +
+    varintSize(inputCount) +
+    inputCount * 149 +
+    varintSize(outputCount) +
+    outputCount * 44 +
+    4
+  );
 }
 
 export function estimateAddP2PKHOutputBytes(

@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  cacheWalletUtxoSnapshot,
+  clearCachedWalletUtxoSnapshot,
+} from '../WalletUtxoSnapshotCache';
 
 const getStateMock = vi.fn();
 const retrieveKeysMock = vi.fn();
@@ -51,6 +55,7 @@ function deferred<T>() {
 describe('fetchActiveWalletUtxos', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearCachedWalletUtxoSnapshot();
     getStateMock.mockReturnValue({
       wallet_id: {
         currentWalletId: 6,
@@ -167,6 +172,67 @@ describe('fetchActiveWalletUtxos', () => {
       'bchtest:qrecovered',
       expect.any(Array)
     );
+  });
+
+  it('preserves cached UTXOs for addresses omitted by a partial refresh', async () => {
+    const cachedUtxo = {
+      address: 'bchtest:qomitted',
+      tx_hash: 'b'.repeat(64),
+      tx_pos: 0,
+      height: 1,
+      value: 250_000,
+    };
+    cacheWalletUtxoSnapshot(6, {
+      'bchtest:qomitted': [cachedUtxo],
+    });
+    fetchAndStoreUTXOsManyMock.mockResolvedValue({
+      'bchtest:qwallet6': [],
+    });
+
+    const { captureActiveWalletSession, fetchActiveWalletUtxos } = await import(
+      '../WalletUtxoRefreshService'
+    );
+
+    await expect(
+      fetchActiveWalletUtxos(captureActiveWalletSession(6)!, undefined, {
+        discover: false,
+      })
+    ).resolves.toEqual({
+      'bchtest:qomitted': [cachedUtxo],
+      'bchtest:qwallet6': [],
+      'bchtest:pwallet6qr': [],
+    });
+  });
+
+  it('does not overwrite overlapping cached UTXOs during a narrower refresh', async () => {
+    const cachedUtxo = {
+      address: 'bchtest:qwallet6',
+      tx_hash: 'd'.repeat(64),
+      tx_pos: 0,
+      height: 1,
+      value: 300_000,
+    };
+    cacheWalletUtxoSnapshot(6, {
+      'bchtest:qwallet6': [cachedUtxo],
+      'bchtest:qomitted': [],
+      'bchtest:qthird': [],
+    });
+    fetchAndStoreUTXOsManyMock.mockResolvedValue({
+      'bchtest:qwallet6': [],
+      'bchtest:pwallet6qr': [],
+    });
+
+    const { captureActiveWalletSession, fetchActiveWalletUtxos } = await import(
+      '../WalletUtxoRefreshService'
+    );
+
+    await expect(
+      fetchActiveWalletUtxos(captureActiveWalletSession(6)!, undefined, {
+        discover: false,
+      })
+    ).resolves.toMatchObject({
+      'bchtest:qwallet6': [cachedUtxo],
+    });
   });
 
   it('discards a result after closing and reopening the same wallet', async () => {

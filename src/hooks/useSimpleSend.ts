@@ -16,6 +16,10 @@ import TransactionService, {
   type BroadcastState,
 } from '../services/TransactionService';
 import { selectCurrentNetwork } from '../state/selectors/networkSelectors';
+import {
+  selectCustomFeeSatPerByte,
+  selectFeeMode,
+} from '../state/slices/preferencesSlice';
 import { SATSINBITCOIN } from '../utils/constants';
 import UTXOService from '../services/UTXOService';
 import { outpointKey } from '../platform/desktop/CoinLabelService';
@@ -57,6 +61,8 @@ export default function useSimpleSend() {
   const walletType = useSelector(selectWalletType);
   const isHardwareWallet = walletType === 'hardware';
   const currentNetwork = useSelector((s: RootState) => selectCurrentNetwork(s));
+  const feeMode = useSelector(selectFeeMode);
+  const customFeeSatPerByte = useSelector(selectCustomFeeSatPerByte);
   const spendOnlyFusedCoins = useSelector(selectSpendOnlyFusedCoins);
   const reduxUtxosByAddress = useSelector(
     (s: RootState) => s.utxos.utxos
@@ -98,6 +104,7 @@ export default function useSimpleSend() {
 
   // DB-backed UTXOs across whole wallet
   const [dbUtxos, setDbUtxos] = useState<UTXO[]>([]);
+  const [walletUtxosLoaded, setWalletUtxosLoaded] = useState(false);
   const [tokenUtxos, setTokenUtxos] = useState<UTXO[]>([]);
   /** Global coin control on Simple Send: restrict spend pool to checked coins. */
   const [coinControlEnabled, setCoinControlEnabled] = useState(false);
@@ -156,6 +163,7 @@ export default function useSimpleSend() {
   useEffect(() => {
     if (!hydrated) return;
     let cancelled = false;
+    setWalletUtxosLoaded(false);
     (async () => {
       if (!walletId) return;
       // Paint the same coins Home already shows, then overlay SQL so Send
@@ -172,6 +180,7 @@ export default function useSimpleSend() {
           mergeSpendableBchUtxos(allUtxos || [], homeBchUtxos)
         );
         setTokenUtxos(tokenUtxos || []);
+        setWalletUtxosLoaded(true);
       }
     })();
     return () => {
@@ -207,6 +216,7 @@ export default function useSimpleSend() {
     const { allUtxos } = await UTXOService.fetchAllWalletUtxos(walletId);
     const refreshed = mergeSpendableBchUtxos(allUtxos ?? [], homeBchUtxos);
     setDbUtxos(refreshed);
+    setWalletUtxosLoaded(true);
     return refreshed;
   }, [walletId, addresses, homeBchUtxos, mergeSpendableBchUtxos]);
 
@@ -214,15 +224,16 @@ export default function useSimpleSend() {
    * Spendable BCH pool for Review/Max-style builds.
    * Prefer the already-loaded snapshot so the button feels instant; kick a
    * background network refresh so the next action sees fresher coins without
-   * freezing this click. Only await the network path when the pool is empty.
+   * freezing this click. Await the known-address refresh until the wallet-wide
+   * snapshot has finished loading or when the pool is empty.
    */
   const loadSpendableBchUtxos = useCallback(async (): Promise<UTXO[]> => {
-    if (dbUtxos.length > 0) {
+    if (walletUtxosLoaded && dbUtxos.length > 0) {
       void refreshBchUtxos().catch(() => undefined);
       return dbUtxos;
     }
     return await refreshBchUtxos();
-  }, [dbUtxos, refreshBchUtxos]);
+  }, [dbUtxos, refreshBchUtxos, walletUtxosLoaded]);
 
   // BCH change address (P2PKH cashaddr as selected)
   const [selectedChangeAddress, setSelectedChangeAddressState] =
@@ -859,8 +870,7 @@ export default function useSimpleSend() {
       // The amount field is a preview. Use the already-loaded wallet snapshot
       // so Max is responsive; doReview performs the authoritative refresh
       // immediately before transaction construction.
-      const freshDbUtxos =
-        dbUtxos.length > 0 ? dbUtxos : await refreshBchUtxos();
+      const freshDbUtxos = await loadSpendableBchUtxos();
       const controlled = applyCoinControl(freshDbUtxos);
       if ('error' in controlled) {
         setError(controlled.error);
@@ -876,8 +886,11 @@ export default function useSimpleSend() {
         tokenChangeAddress,
         selectedChangeAddress,
         dbUtxos: controlled,
+        feePreferences: { feeMode, customFeeSatPerByte },
+        hardwareWallet: isHardwareWallet,
       });
-      const result = await freshPlanner.sweepAllBchUntilBuild(50);
+      const estimated = freshPlanner.estimateSweepAllBch(50);
+      const result = estimated ?? (await freshPlanner.sweepAllBchUntilBuild(50));
       if (!result.ok) {
         setError(
           'err' in result ? result.err : 'Unable to compute max amount.'
@@ -912,10 +925,11 @@ export default function useSimpleSend() {
     selectedCategory,
     tokenChangeAddress,
     selectedChangeAddress,
-    dbUtxos,
-    refreshBchUtxos,
+    loadSpendableBchUtxos,
     setAmountBch,
     applyCoinControl,
+    feeMode,
+    customFeeSatPerByte,
   ]);
 
   const doSend = useCallback(async () => {

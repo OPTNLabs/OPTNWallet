@@ -6,9 +6,7 @@ import {
   ElectrumClientEvents,
 } from '@electrum-cash/network';
 import { ElectrumWebSocket } from '@electrum-cash/web-socket';
-import {
-  getElectrumServers,
-} from '../../utils/servers/ElectrumServers';
+import { getElectrumServers } from '../../utils/servers/ElectrumServers';
 import {
   getPreferredStorage,
   readStorageItem,
@@ -23,6 +21,7 @@ import {
   recordServerFailure,
   recordServerSuccess,
 } from '../../services/electrum/fulcrumReliability';
+import { isDesktopPlatform } from '../../utils/platform';
 
 // ---------- Config ----------
 // Keep connect attempts short: walking a long server list at 8s each made cold
@@ -45,6 +44,7 @@ const WSS_PORT = 50004;
 const IDLE_RECONNECT_AFTER_MS = 5 * 60 * 1000;
 const SERVER_FAILURE_COOLDOWN_MS = 15 * 60 * 1000;
 const LAST_HEALTHY_SERVER_STORAGE_KEY = 'optn.electrum.last-healthy-server';
+const INDIVIDUAL_REQUEST_CONCURRENCY = 8;
 
 // Convenience alias for a typed Electrum client
 type ECClient = ElectrumClient<ElectrumClientEvents>;
@@ -62,6 +62,8 @@ let backoffMs = BACKOFF_BASE_MS;
 let nextAllowedConnectTs = 0;
 let lastSuccessfulActivityTs = 0;
 let currentServer: string | null = null;
+let currentConnectionNetwork: Network | null = null;
+let connectPromiseNetwork: Network | null = null;
 
 // Make sure we only wire 'notification' once per client instance
 let notificationsWired = false;
@@ -85,11 +87,18 @@ function getNetworkAndServers(): { network: Network; servers: string[] } {
 }
 
 function getLastHealthyServer(): string | null {
-  return readStorageItem(getPreferredStorage(), LAST_HEALTHY_SERVER_STORAGE_KEY);
+  return readStorageItem(
+    getPreferredStorage(),
+    LAST_HEALTHY_SERVER_STORAGE_KEY
+  );
 }
 
 function setLastHealthyServer(server: string): void {
-  writeStorageItem(getPreferredStorage(), LAST_HEALTHY_SERVER_STORAGE_KEY, server);
+  writeStorageItem(
+    getPreferredStorage(),
+    LAST_HEALTHY_SERVER_STORAGE_KEY,
+    server
+  );
 }
 
 function getBlockedUntil(server: string): number | undefined {
@@ -178,7 +187,9 @@ function parseServerEntry(entry: string, defaultPort = WSS_PORT) {
       throw new Error('Electrum server must use a WebSocket URL');
     }
     if (u.protocol === 'ws:' && !isLoopbackHost(u.hostname)) {
-      throw new Error('Unencrypted Electrum WebSocket requires a loopback host');
+      throw new Error(
+        'Unencrypted Electrum WebSocket requires a loopback host'
+      );
     }
     const host = u.hostname;
     const port = u.port
@@ -196,17 +207,23 @@ function parseServerEntry(entry: string, defaultPort = WSS_PORT) {
   return { host: entry, port: defaultPort, encrypted: true }; // default to WSS
 }
 
-function getNextServer(servers: string[], currentIdx: number): string | undefined {
+function getNextServer(
+  servers: string[],
+  currentIdx: number
+): string | undefined {
   if (servers.length < 2) return undefined;
-  const idx =
-    currentIdx >= 0 && currentIdx < servers.length ? currentIdx : 0;
+  const idx = currentIdx >= 0 && currentIdx < servers.length ? currentIdx : 0;
   return servers[(idx + 1) % servers.length];
 }
 
 function getPreferredServer(servers: string[]): string | undefined {
   if (servers.length === 0) return undefined;
   const lastHealthy = getLastHealthyServer();
-  if (lastHealthy && servers.includes(lastHealthy) && !isServerBlocked(lastHealthy)) {
+  if (
+    lastHealthy &&
+    servers.includes(lastHealthy) &&
+    !isServerBlocked(lastHealthy)
+  ) {
     return lastHealthy;
   }
   const firstAvailable = servers.find((server) => !isServerBlocked(server));
@@ -279,17 +296,32 @@ async function sendBatch(
   client: ECClient,
   calls: BatchRequest[]
 ): Promise<Array<RequestResponse | Error>> {
-  if (!canUseRawBatch(client)) {
-    return await Promise.all(
-      calls.map(async ({ method, params = [] }) => {
+  // The native desktop transport is a raw Electrum TCP socket, where the
+  // server batch format is reliable. WebSocket gateways are less consistent:
+  // some accept a JSON-RPC array, while others only forward one request per
+  // frame. A gateway that drops an array makes every fresh mobile wallet look
+  // empty even though the same address works over desktop TCP. Keep batching
+  // for desktop performance, but use the protocol client's ordinary request
+  // path on web/Capacitor with a small concurrency limit.
+  if (!isDesktopPlatform() || !canUseRawBatch(client)) {
+    const results: Array<RequestResponse | Error> = new Array(calls.length);
+    let nextIndex = 0;
+
+    const runWorker = async () => {
+      for (let index = nextIndex++; index < calls.length; index = nextIndex++) {
+        const { method, params = [] } = calls[index];
         try {
-          const result = await client.request(method, ...params);
-          return result;
+          results[index] = await client.request(method, ...params);
         } catch (error) {
-          return error instanceof Error ? error : new Error(String(error));
+          results[index] =
+            error instanceof Error ? error : new Error(String(error));
         }
-      })
-    );
+      }
+    };
+
+    const workers = Math.min(INDIVIDUAL_REQUEST_CONCURRENCY, calls.length);
+    await Promise.all(Array.from({ length: workers }, () => runWorker()));
+    return results;
   }
 
   const batchCalls = calls.map(({ method, params = [] }) => {
@@ -304,7 +336,10 @@ async function sendBatch(
   const resolvers = batchCalls.map(
     ({ id }) =>
       new Promise<RequestResponse | Error>((resolve) => {
-        client.requestResolvers[id] = (error?: Error, data?: RequestResponse) => {
+        client.requestResolvers[id] = (
+          error?: Error,
+          data?: RequestResponse
+        ) => {
           if (error) {
             resolve(error);
             return;
@@ -381,6 +416,7 @@ function markSocketStale(client: ECClient) {
     if (electrum === client) {
       electrum = null;
       currentServer = null;
+      currentConnectionNetwork = null;
     }
   });
 }
@@ -434,6 +470,16 @@ async function resubscribeAll() {
 // ---------- API ----------
 export default function ElectrumServer() {
   async function electrumConnect(customServer?: string): Promise<ECClient> {
+    const { network, servers } = getNetworkAndServers();
+
+    // A healthy socket can still be wrong for the active wallet. This occurs
+    // during import when the onboarding screen warms the default network
+    // before wallet metadata switches the app to chipnet (or vice versa).
+    // Both networks return valid empty arrays for the other network's
+    // addresses, so freshness alone is not sufficient here.
+    if (electrum && currentConnectionNetwork !== network) {
+      await electrumDisconnect();
+    }
     if (electrum) return electrum;
 
     const now = Date.now();
@@ -444,9 +490,23 @@ export default function ElectrumServer() {
       );
     }
 
-    if (connectPromise) return connectPromise;
+    if (connectPromise) {
+      const inFlight = connectPromise;
+      if (connectPromiseNetwork === network) return inFlight;
 
-    const { servers } = getNetworkAndServers();
+      // A previous network's warm-up may still be connecting. Let it finish,
+      // then discard that socket before opening one for the active wallet.
+      try {
+        await inFlight;
+      } catch {
+        // The failed connection must not block the newly selected network.
+      }
+      resetBackoff();
+      if (electrum && currentConnectionNetwork !== network) {
+        await electrumDisconnect();
+      }
+      if (electrum) return electrum;
+    }
 
     // Build try order
     let startIdx = serverIndex;
@@ -466,9 +526,13 @@ export default function ElectrumServer() {
     ];
     const orderedServers = orderServersForConnection(tryOrder, 0);
 
+    connectPromiseNetwork = network;
     connectPromise = (async () => {
       try {
-        const hostsThisRound = orderedServers.slice(0, MAX_CONNECT_HOSTS_PER_ROUND);
+        const hostsThisRound = orderedServers.slice(
+          0,
+          MAX_CONNECT_HOSTS_PER_ROUND
+        );
         for (let i = 0; i < hostsThisRound.length; i++) {
           const host = hostsThisRound[i];
           const { host: h, port, encrypted } = parseServerEntry(host, WSS_PORT);
@@ -493,10 +557,18 @@ export default function ElectrumServer() {
             );
             electrum = client;
             currentServer = host;
+            currentConnectionNetwork = network;
             serverIndex = servers.indexOf(host);
             markServerOk(host, Date.now() - t0);
             resetBackoff();
             markSuccessfulActivity();
+            if (import.meta.env.DEV) {
+              console.info('[ElectrumServer] connected', {
+                network,
+                transport: isDesktopPlatform() ? 'desktop-tcp' : 'mobile-wss',
+                server: host,
+              });
+            }
 
             // Ensure notifications are wired and replay subs
             notificationsWired = false;
@@ -528,6 +600,7 @@ export default function ElectrumServer() {
         throw new Error('All Electrum servers failed to connect this round');
       } finally {
         connectPromise = null;
+        connectPromiseNetwork = null;
       }
     })();
 
@@ -543,6 +616,7 @@ export default function ElectrumServer() {
       }
       electrum = null;
       currentServer = null;
+      currentConnectionNetwork = null;
       notificationsWired = false;
       return true;
     }
@@ -550,7 +624,14 @@ export default function ElectrumServer() {
   }
 
   async function ensureFreshConnection(): Promise<void> {
+    const { network } = getNetworkAndServers();
     if (!electrum) {
+      await electrumConnect();
+      return;
+    }
+
+    if (currentConnectionNetwork !== network) {
+      await electrumDisconnect();
       await electrumConnect();
       return;
     }
@@ -769,7 +850,10 @@ export default function ElectrumServer() {
    *   subscribe('blockchain.scripthash.subscribe', scripthash)         // script activity
    *   subscribe('blockchain.address.subscribe', 'bitcoincash:qq...')   // address activity (Electrum Cash)
    */
-  async function subscribe(method: string, params?: ElectrumParams): Promise<void> {
+  async function subscribe(
+    method: string,
+    params?: ElectrumParams
+  ): Promise<void> {
     await electrumConnect();
     const key = subKey(method, params);
 
@@ -817,7 +901,10 @@ export default function ElectrumServer() {
    * - For scripthash & headers, servers typically don't expose a generic unsubscribe.
    *   We remove from local registry so we won't resubscribe on reconnect.
    */
-  async function unsubscribe(method: string, params?: ElectrumParams): Promise<void> {
+  async function unsubscribe(
+    method: string,
+    params?: ElectrumParams
+  ): Promise<void> {
     await electrumConnect();
     const client = electrum;
     if (!client) throw new Error('Electrum client is not connected.');

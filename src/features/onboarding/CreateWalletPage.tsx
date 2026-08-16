@@ -102,7 +102,11 @@ const CreateWalletPage = () => {
       const accountExists = await walletManager.checkAccount(
         mnemonicPhrase,
         passphrase,
-        { networkType: currentNetwork, walletType: WalletType.STANDARD }
+        {
+          networkType: currentNetwork,
+          walletType: WalletType.STANDARD,
+          derivationPath: normalizedDerivationPath,
+        }
       );
       if (accountExists) {
         console.error('Account already exists.');
@@ -126,7 +130,11 @@ const CreateWalletPage = () => {
       const walletID = await walletManager.setWalletId(
         mnemonicPhrase,
         passphrase,
-        { networkType: currentNetwork, walletType: WalletType.STANDARD }
+        {
+          networkType: currentNetwork,
+          walletType: WalletType.STANDARD,
+          derivationPath: normalizedDerivationPath,
+        }
       );
       if (walletID == null)
         throw new Error('Failed to resolve created wallet ID.');
@@ -139,6 +147,12 @@ const CreateWalletPage = () => {
       if (!resolvedNetwork) {
         throw new Error('Failed to resolve wallet network.');
       }
+
+      // Make the first receive/change pair available before activating the
+      // wallet. The mobile worker starts syncing as soon as the wallet ID is
+      // dispatched, so navigating first can make it query an empty inventory
+      // and publish a zero balance.
+      await KeyService.bootstrapInitialAddressBatch(walletID, 0, 1);
 
       dispatch(setWalletId(walletID));
       dispatch(setWalletNetwork(resolvedNetwork));

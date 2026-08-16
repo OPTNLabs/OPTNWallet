@@ -189,7 +189,11 @@ const ImportWalletPage = () => {
       const accountExists = await walletManager.checkAccount(
         recoveryPhrase,
         passphrase,
-        { networkType: currentNetwork, walletType: WalletType.STANDARD }
+        {
+          networkType: currentNetwork,
+          walletType: WalletType.STANDARD,
+          derivationPath: normalizedDerivationPath,
+        }
       );
 
       if (!accountExists) {
@@ -216,7 +220,11 @@ const ImportWalletPage = () => {
       const walletID = await walletManager.setWalletId(
         recoveryPhrase,
         passphrase,
-        { networkType: currentNetwork, walletType: WalletType.STANDARD }
+        {
+          networkType: currentNetwork,
+          walletType: WalletType.STANDARD,
+          derivationPath: normalizedDerivationPath,
+        }
       );
       if (walletID == null) {
         console.error('Failed to set wallet ID.');
@@ -236,6 +244,13 @@ const ImportWalletPage = () => {
           : walletInfo?.networkType === Network.CHIPNET
             ? Network.CHIPNET
             : currentNetwork;
+
+      // Make the first receive/change pair available before activating the
+      // wallet. The mobile worker starts syncing as soon as the wallet ID is
+      // dispatched, so navigating first can make it query an empty inventory
+      // and publish a zero balance.
+      importStage = 'deriving initial address';
+      await KeyService.bootstrapInitialAddressBatch(walletID, 0, 1);
 
       importStage = 'opening wallet';
       dispatch(setWalletId(walletID));

@@ -10,6 +10,10 @@ import {
   runWalletUtxoRefreshExclusive,
 } from './RefreshCoordinator';
 import UTXOService from './UTXOService';
+import {
+  cacheWalletUtxoSnapshot,
+  getCachedWalletUtxoSnapshot,
+} from './WalletUtxoSnapshotCache';
 
 export type WalletUtxoSnapshot = Readonly<Record<string, readonly UTXO[]>>;
 type WalletUtxoRefreshListener = (
@@ -125,6 +129,15 @@ export async function fetchActiveWalletUtxos(
       ].filter(Boolean)
     )
   );
+  if (import.meta.env.DEV) {
+    console.info('[WalletSync] address inventory', {
+      walletId,
+      discover,
+      keyCount: keyPairs?.length ?? 0,
+      trackedQuantumrootCount: quantumrootAddresses.length,
+      addressCount: addresses.length,
+    });
+  }
   // A wallet-wide reconciliation is triggered by new history, a block, or a
   // completed broadcast. Reusing the short Electrum UTXO cache here could
   // publish the exact stale snapshot that triggered the refresh.
@@ -141,17 +154,51 @@ export async function fetchActiveWalletUtxos(
       onProgress: options.onProgress,
     }
   );
+  if (import.meta.env.DEV) {
+    const fetchedUtxos = Object.values(fetched).flat();
+    console.info('[WalletSync] UTXO snapshot', {
+      walletId,
+      discover,
+      returnedAddressCount: Object.keys(fetched).length,
+      coinCount: fetchedUtxos.length,
+      totalSats: fetchedUtxos.reduce(
+        (total, utxo) => total + (utxo.value ?? utxo.amount ?? 0),
+        0
+      ),
+    });
+  }
   if (signal?.aborted || !isActiveWalletSession(session)) return null;
 
-  const snapshot: Record<string, UTXO[]> = {};
+  // A known-address refresh is not proof that addresses omitted from the
+  // current inventory are empty. This matters while onboarding is still
+  // materializing key rows: a narrower pass must not erase a balance found by
+  // the worker's fuller pass. Addresses included in this fetch overwrite the
+  // cached values, including authoritative empty arrays.
+  const cachedSnapshot = getCachedWalletUtxoSnapshot(walletId);
+  const reduxSnapshot = store.getState().utxos?.utxos;
+  const snapshot: Record<string, UTXO[]> = cachedSnapshot
+    ? cachedSnapshot
+    : reduxSnapshot
+      ? { ...reduxSnapshot }
+      : {};
+  const previousAddressCount = Object.keys(snapshot).length;
+  const partialInventory =
+    previousAddressCount > 0 && addresses.length < previousAddressCount;
   const snapshotAddresses = Array.from(
     new Set([...addresses, ...Object.keys(fetched)])
   );
   for (const address of snapshotAddresses) {
     const utxos = fetched[address] ?? [];
+    if (
+      partialInventory &&
+      Object.prototype.hasOwnProperty.call(snapshot, address)
+    ) {
+      continue;
+    }
     snapshot[address] = utxos;
     primeUTXOCache(address, utxos);
   }
+  cacheWalletUtxoSnapshot(walletId, snapshot);
   return snapshot;
 }
 

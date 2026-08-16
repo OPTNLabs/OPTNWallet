@@ -13,6 +13,8 @@ const listActiveMock = vi.fn();
 const listReservedOutpointsMock = vi.fn();
 const cashAddressToLockingBytecodeMock = vi.fn();
 const decodeTransactionMock = vi.fn();
+const getStateMock = vi.fn();
+const dispatchMock = vi.fn();
 
 vi.mock('../WalletDiscoveryService', () => ({
   default: {
@@ -85,16 +87,18 @@ vi.mock('../../apis/AddressManager/AddressManager', () => ({
 
 vi.mock('../../state/store', () => ({
   store: {
-    getState: vi.fn(() => ({
-      network: { currentNetwork: 'mainnet' },
-      wallet_id: { currentWalletId: 11 },
-    })),
+    getState: getStateMock,
+    dispatch: dispatchMock,
   },
 }));
 
 describe('UTXOService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getStateMock.mockReturnValue({
+      network: { currentNetwork: 'mainnet' },
+      wallet_id: { currentWalletId: 11, networkType: 'mainnet' },
+    });
     ensureInitialAddressBatchesMock.mockResolvedValue([]);
     getUTXOsManyMock.mockResolvedValue({});
     fetchTransactionHistoriesMock.mockResolvedValue({});
@@ -130,6 +134,69 @@ describe('UTXOService', () => {
       expect.any(Function)
     );
     expect(flushDatabaseToFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the active wallet network when global network state is stale', async () => {
+    getStateMock.mockReturnValue({
+      network: { currentNetwork: 'mainnet' },
+      wallet_id: { currentWalletId: 11, networkType: 'chipnet' },
+    });
+    getUTXOsManyMock.mockResolvedValueOnce({
+      'bchtest:q1': [
+        {
+          tx_hash: 'a'.repeat(64),
+          tx_pos: 0,
+          value: 1000,
+          height: 1,
+        },
+      ],
+    });
+
+    const { default: UTXOService } = await import('../UTXOService');
+
+    await UTXOService.fetchAndStoreUTXOsMany(11, ['bchtest:q1']);
+
+    expect(ensureInitialAddressBatchesMock).toHaveBeenCalledWith(
+      11,
+      'chipnet',
+      expect.any(Function)
+    );
+    expect(replaceWalletAddressUTXOsMock).toHaveBeenCalledWith(
+      11,
+      expect.objectContaining({
+        'bchtest:q1': [expect.objectContaining({ prefix: 'bchtest' })],
+      })
+    );
+  });
+
+  it('publishes address discovery progress while scanning HD windows', async () => {
+    let releaseDiscovery!: (addresses: string[]) => void;
+    ensureInitialAddressBatchesMock.mockReturnValueOnce(
+      new Promise<string[]>((resolve) => {
+        releaseDiscovery = resolve;
+      })
+    );
+    const { default: UTXOService } = await import('../UTXOService');
+
+    const refresh = UTXOService.fetchAndStoreUTXOsMany(11, ['bitcoincash:q1']);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'utxos/setAddressDiscoveryInProgress',
+        payload: true,
+      })
+    );
+
+    releaseDiscovery([]);
+    await refresh;
+
+    expect(dispatchMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        type: 'utxos/setAddressDiscoveryInProgress',
+        payload: false,
+      })
+    );
   });
 
   it('can refresh known addresses without starting account discovery', async () => {

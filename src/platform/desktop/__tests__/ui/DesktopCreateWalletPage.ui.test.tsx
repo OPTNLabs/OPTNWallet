@@ -153,7 +153,18 @@ describe('DesktopCreateWalletPage UI', () => {
         derivationPath: "m/44'/145'/0'",
       })
     );
-    expect(mocks.bootstrapInitialAddressBatch).toHaveBeenCalledWith(42, 0, 20);
+    expect(mocks.bootstrapInitialAddressBatch).toHaveBeenNthCalledWith(
+      1,
+      42,
+      0,
+      1
+    );
+    expect(mocks.bootstrapInitialAddressBatch).toHaveBeenNthCalledWith(
+      2,
+      42,
+      0,
+      20
+    );
     expect(mocks.navigate).toHaveBeenCalledWith('/home/42');
   });
 });

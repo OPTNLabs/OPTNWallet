@@ -90,6 +90,19 @@ describe('simple-send planner', () => {
     if (result.ok) expect(result.inputs[0].height).toBe(0);
   });
 
+  it('estimates Max locally for standard BCH UTXOs', () => {
+    const result = createPlanner([makeUtxo(10_000, 100)]).estimateSweepAllBch();
+
+    expect(result).toMatchObject({
+      ok: true,
+      inputs: [expect.objectContaining({ tx_hash: 'a'.repeat(64), tx_pos: 1 })],
+      feeSats: 224,
+      totalSats: 10_000,
+      finalOutputs: [{ recipientAddress: 'bchtest:qrecipient', amount: 9_776 }],
+    });
+    expect(buildTransactionMock).not.toHaveBeenCalled();
+  });
+
   it('uses unconfirmed BCH UTXOs for Max when no confirmed UTXO exists', async () => {
     buildTransactionMock.mockImplementation(
       async (outputs: TransactionOutput[]) => {

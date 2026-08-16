@@ -21,7 +21,10 @@ import { WalletType } from '../../../types/wallet';
 import OnboardingCard from '../../../features/onboarding/components/OnboardingCard';
 import OnboardingScreen from '../../../features/onboarding/components/OnboardingScreen';
 import DerivationPathField from '../../../features/onboarding/components/DerivationPathField';
-import { createWalletWithPassword } from '../DesktopWalletManager';
+import {
+  createWalletWithPassword,
+  rollbackCreatedWallet,
+} from '../DesktopWalletManager';
 import { validateNewWalletPassword } from '../passwordPolicy';
 import { defaultDesktopAccountPath } from '../desktopDerivationDefaults';
 import { useI18n } from '../../../i18n/useI18n';
@@ -136,9 +139,10 @@ const DesktopCreateWalletPage = () => {
     }
     setNameError('');
     setIsSubmitting(true);
+    let walletId: number | null = null;
     try {
       const normalizedDerivationPath = normalizeBchAccountPath(derivationPath);
-      const walletId = await createWalletWithPassword({
+      walletId = await createWalletWithPassword({
         name: walletName.trim(),
         mnemonic,
         passphrase: '',
@@ -153,9 +157,10 @@ const DesktopCreateWalletPage = () => {
         return;
       }
 
-      // Materialize the same initial receive/change window used by desktop
-      // network switching before opening Settings or Home.
-      await KeyService.bootstrapInitialAddressBatch(walletId, 0, 20);
+      // One pair is enough to make the wallet usable. The desktop worker runs
+      // the bounded discovery/top-up pass after navigation; waiting for all
+      // 40 encrypted rows here makes creation unnecessarily slow and fragile.
+      await KeyService.bootstrapInitialAddressBatch(walletId, 0, 1);
 
       dispatch(setWalletId(walletId));
       dispatch(setWalletNetwork(currentNetwork));
@@ -169,7 +174,26 @@ const DesktopCreateWalletPage = () => {
       dispatch(setNetwork(currentNetwork));
       window.dispatchEvent(new CustomEvent('optn:wallets-changed'));
       navigate(`/home/${walletId}`);
+
+      void KeyService.bootstrapInitialAddressBatch(walletId, 0, 20).catch(
+        (error) => {
+          console.error('[DesktopCreateWalletPage] Address bootstrap failed', {
+            walletId,
+            error,
+          });
+        }
+      );
     } catch (error) {
+      if (walletId !== null) {
+        try {
+          await rollbackCreatedWallet(walletId);
+        } catch (rollbackError) {
+          console.error(
+            '[DesktopCreateWalletPage] Failed to roll back incomplete wallet',
+            { walletId, rollbackError }
+          );
+        }
+      }
       console.error('[DesktopCreateWalletPage] Error creating wallet:', error);
       setNameError(t('onboarding.creationFailed'));
     } finally {
