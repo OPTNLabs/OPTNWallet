@@ -1,0 +1,89 @@
+import { uint32Decoder, uint32Encoder } from "./codec/number.js"
+import { Decoder, mapDecoders } from "./codec/tlsDecoder.js"
+import { contramapBufferEncoders, Encoder, encode } from "./codec/tlsEncoder.js"
+import { varLenDataDecoder, varLenTypeDecoder, varLenDataEncoder, varLenTypeEncoder } from "./codec/variableLength.js"
+import { CiphersuiteImpl } from "./crypto/ciphersuite.js"
+import { deriveSecret, Kdf } from "./crypto/kdf.js"
+import { Signature, signWithLabel, verifyWithLabel } from "./crypto/signature.js"
+import { extensionEncoder, ExtensionRatchetTree, GroupInfoExtension, groupInfoExtensionDecoder } from "./extension.js"
+import { groupContextDecoder, groupContextEncoder, extractEpochSecret, GroupContext } from "./groupContext.js"
+import { ratchetTreeDecoder, RatchetTree } from "./ratchetTree.js"
+import { defaultExtensionTypes } from "./defaultExtensionType.js"
+import { CodecError } from "./mlsError.js"
+
+/** @public */
+export interface GroupInfoTBS {
+  groupContext: GroupContext
+  extensions: GroupInfoExtension[]
+  confirmationTag: Uint8Array
+  signer: number
+}
+
+export const groupInfoTBSEncoder: Encoder<GroupInfoTBS> = contramapBufferEncoders(
+  [groupContextEncoder, varLenTypeEncoder(extensionEncoder), varLenDataEncoder, uint32Encoder],
+  (g) => [g.groupContext, g.extensions, g.confirmationTag, g.signer] as const,
+)
+
+export const groupInfoTBSDecoder: Decoder<GroupInfoTBS> = mapDecoders(
+  [groupContextDecoder, varLenTypeDecoder(groupInfoExtensionDecoder), varLenDataDecoder, uint32Decoder],
+  (groupContext, extensions, confirmationTag, signer) => ({
+    groupContext,
+    extensions,
+    confirmationTag,
+    signer,
+  }),
+)
+
+/** @public */
+export type GroupInfo = GroupInfoTBS & {
+  signature: Uint8Array
+}
+
+export const groupInfoEncoder: Encoder<GroupInfo> = contramapBufferEncoders(
+  [groupInfoTBSEncoder, varLenDataEncoder],
+  (g) => [g, g.signature] as const,
+)
+
+export const groupInfoDecoder: Decoder<GroupInfo> = mapDecoders(
+  [groupInfoTBSDecoder, varLenDataDecoder],
+  (tbs, signature) => ({
+    ...tbs,
+    signature,
+  }),
+)
+
+export function ratchetTreeFromExtension(info: GroupInfo): RatchetTree | undefined {
+  const treeExtension = info.extensions.find(
+    (ex): ex is ExtensionRatchetTree => ex.extensionType === defaultExtensionTypes.ratchet_tree,
+  )
+
+  if (treeExtension !== undefined) {
+    const tree = ratchetTreeDecoder(treeExtension.extensionData, 0)
+    if (tree === undefined) throw new CodecError("Could not decode RatchetTree")
+    return tree[0]
+  }
+}
+
+export async function signGroupInfo(tbs: GroupInfoTBS, privateKey: Uint8Array, s: Signature): Promise<GroupInfo> {
+  const signature = await signWithLabel(privateKey, "GroupInfoTBS", encode(groupInfoTBSEncoder, tbs), s)
+  return { ...tbs, signature }
+}
+
+export function verifyGroupInfoSignature(gi: GroupInfo, publicKey: Uint8Array, s: Signature): Promise<boolean> {
+  return verifyWithLabel(publicKey, "GroupInfoTBS", encode(groupInfoTBSEncoder, gi), gi.signature, s)
+}
+
+export async function verifyGroupInfoConfirmationTag(
+  gi: GroupInfo,
+  joinerSecret: Uint8Array,
+  pskSecret: Uint8Array,
+  cs: CiphersuiteImpl,
+): Promise<boolean> {
+  const epochSecret = await extractEpochSecret(gi.groupContext, joinerSecret, cs.kdf, pskSecret)
+  const key = await deriveSecret(epochSecret, "confirm", cs.kdf)
+  return cs.hash.verifyMac(key, gi.confirmationTag, gi.groupContext.confirmedTranscriptHash)
+}
+
+export async function extractWelcomeSecret(joinerSecret: Uint8Array, pskSecret: Uint8Array, kdf: Kdf) {
+  return deriveSecret(await kdf.extract(joinerSecret, pskSecret), "welcome", kdf)
+}

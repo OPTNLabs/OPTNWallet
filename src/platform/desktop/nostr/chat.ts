@@ -7,15 +7,20 @@
 // self-addressed copy so the sender sees their own sent messages.
 //
 // Relays are plain WSS, which the Tauri WebView opens directly — no Rust. The
-// wallet's NIP-06 identity (identity.ts) signs/decrypts. The secret key is
-// derived once per wallet and cached in memory only.
+// wallet Nostr account seed (identity.ts, NIP-06 today) signs/decrypts. The
+// secret key is derived once per wallet and cached in memory only.
 
 import { SimplePool, finalizeEvent, nip19, type Event } from 'nostr-tools';
-import { wrapManyEvents, unwrapEvent } from 'nostr-tools/nip17';
+import { unwrapEvent } from 'nostr-tools/nip17';
 import { wrapManyEvents as wrapRumor } from 'nostr-tools/nip59';
+import { sha256 } from '@noble/hashes/sha2';
+import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
-import WalletManager from '../../../apis/WalletManager/WalletManager';
-import { deriveNostrIdentity, type NostrIdentity } from './identity';
+import {
+  deriveNostrIdentityFromSeed,
+  loadNostrAccountSeed,
+  type NostrIdentity,
+} from './identity';
 
 // Built-in bootstrap list — single source: defaultRelays.ts (also used by Redux).
 export { DEFAULT_RELAYS, DISCOVERY_RELAYS, isDefaultNostrRelay } from './defaultRelays';
@@ -29,6 +34,8 @@ const DELETION = 5;
 const KIND_30078 = 30078; // NIP-78 parameterized replaceable (Paytaca profile)
 const PAYTACA_AVATAR = 'paytaca:avatar';
 const PAYTACA_DISPLAY_NAME = 'paytaca:display-name';
+const PAYTACA_BCH_ADDRESS = 'paytaca:bch-address';
+const PAYTACA_GROUP = 'paytaca:group:';
 
 let pool: SimplePool | null = null;
 const getPool = () => (pool ??= new SimplePool());
@@ -38,11 +45,8 @@ const identityCache = new Map<number, NostrIdentity>();
 async function getIdentity(walletId: number): Promise<NostrIdentity> {
   const cached = identityCache.get(walletId);
   if (cached) return cached;
-  const info = await WalletManager().getWalletInfo(walletId);
-  const mnemonic = typeof info?.mnemonic === 'string' ? info.mnemonic : '';
-  if (!mnemonic) throw new Error('Wallet mnemonic unavailable — unlock the wallet first.');
-  const passphrase = typeof info?.passphrase === 'string' ? info.passphrase : '';
-  const id = await deriveNostrIdentity(mnemonic, passphrase);
+  const seed = await loadNostrAccountSeed(walletId);
+  const id = await deriveNostrIdentityFromSeed(seed);
   identityCache.set(walletId, id);
   return id;
 }
@@ -60,7 +64,15 @@ export interface ChatMessage {
   targetIds?: string[];
   emoji?: string;
   isReadReceipt?: boolean;
+  subject?: string;
+  roomId?: string;
 }
+
+export type ChatTip = {
+  asset: 'bch' | 'ft';
+  amount: string;
+  category?: string;
+};
 
 export interface NostrProfile {
   pubkey: string;
@@ -80,6 +92,68 @@ export function toPubkeyHex(npubOrHex: string): string {
   }
   if (!/^[0-9a-f]{64}$/i.test(s)) throw new Error('invalid pubkey');
   return s.toLowerCase();
+}
+
+export function computeRoomId(pubkeys: string[]): string {
+  const sorted = pubkeys.map((p) => p.toLowerCase()).sort();
+  return bytesToHex(sha256(utf8ToBytes(sorted.join(','))));
+}
+
+export function createUnsignedKind14({
+  content,
+  senderPubKey,
+  members,
+  subject,
+  replyTo,
+  editOf,
+}: {
+  content: string;
+  senderPubKey: string;
+  members: string[];
+  subject?: string | null;
+  replyTo?: string;
+  editOf?: string;
+}): {
+  kind: number;
+  pubkey: string;
+  created_at: number;
+  content: string;
+  tags: string[][];
+} {
+  const tags: string[][] = [];
+  for (const member of members) {
+    if (member !== senderPubKey) tags.push(['p', member]);
+  }
+  if (subject !== undefined && subject !== null) tags.push(['subject', subject]);
+  if (replyTo) tags.push(['e', replyTo]);
+  if (editOf) tags.push(['edit', editOf]);
+  return {
+    kind: 14,
+    pubkey: senderPubKey,
+    created_at: Math.floor(Date.now() / 1000),
+    content,
+    tags,
+  };
+}
+
+export function encodeChatTip(tip: ChatTip): string {
+  if (tip.asset === 'ft' && tip.category) {
+    return `/send ${tip.amount} token:${tip.category}`;
+  }
+  return `/send ${tip.amount} BCH`;
+}
+
+export function parseChatTip(text: string): ChatTip | null {
+  const trimmed = text.trim();
+  const token = trimmed.match(
+    /^\/send\s+(\d+(?:\.\d+)?)\s+token:([0-9a-f]{64})$/i
+  );
+  if (token) {
+    return { asset: 'ft', amount: token[1], category: token[2].toLowerCase() };
+  }
+  const bch = trimmed.match(/^\/send\s+(\d+(?:\.\d+)?)(?:\s+BCH)?$/i);
+  if (bch) return { asset: 'bch', amount: bch[1] };
+  return null;
 }
 
 export async function myIdentity(walletId: number): Promise<{ pubkey: string; npub: string }> {
@@ -113,30 +187,103 @@ export function createKind10050(relays: string[], secretKey: Uint8Array): Event 
   );
 }
 
+async function publishWraps(targets: string[], wraps: Event[]): Promise<void> {
+  const results = await Promise.allSettled(
+    wraps.flatMap((w) => getPool().publish(targets, w))
+  );
+  if (results.length > 0 && !results.some((r) => r.status === 'fulfilled')) {
+    const reason = results.find(
+      (r): r is PromiseRejectedResult => r.status === 'rejected'
+    );
+    throw new Error(
+      `No relay accepted the message${reason ? `: ${String(reason.reason)}` : ''}. Check your connection or relays.`
+    );
+  }
+}
+
+async function publishKind14(
+  walletId: number,
+  members: string[],
+  text: string,
+  relays: string[],
+  extra?: { replyTo?: string; editOf?: string; subject?: string }
+): Promise<void> {
+  const id = await getIdentity(walletId);
+  const memberHex = members.map(toPubkeyHex);
+  const others = memberHex.filter((p) => p !== id.pubkey);
+  const rumor = createUnsignedKind14({
+    content: text,
+    senderPubKey: id.pubkey,
+    members: memberHex,
+    subject: extra?.subject,
+    replyTo: extra?.replyTo,
+    editOf: extra?.editOf,
+  });
+  const dmRelays = (
+    await Promise.all(others.map((p) => fetchKind10050(relays, p)))
+  ).flat();
+  const targets = Array.from(
+    new Set([...DISCOVERY_RELAYS, ...relays, ...dmRelays])
+  );
+  const wraps = wrapRumor(rumor, id.secretKey, others) as Event[];
+  await publishWraps(targets, wraps);
+}
+
 /** Send a NIP-17 DM to `recipient` (npub or hex). Publishes to our relays AND the
  *  recipient's own DM relays (kind 10050) so it actually reaches them. */
 export async function sendDirectMessage(
   walletId: number,
   recipient: string,
   text: string,
+  relays: string[] = DEFAULT_RELAYS,
+  extra?: { replyTo?: string; editOf?: string; subject?: string }
+): Promise<void> {
+  const id = await getIdentity(walletId);
+  await publishKind14(
+    walletId,
+    [id.pubkey, toPubkeyHex(recipient)],
+    text,
+    relays,
+    extra
+  );
+}
+
+export async function sendGroupMessage(
+  walletId: number,
+  members: string[],
+  text: string,
+  relays: string[] = DEFAULT_RELAYS,
+  extra?: { replyTo?: string; editOf?: string; subject?: string }
+): Promise<string> {
+  const id = await getIdentity(walletId);
+  const memberHex = Array.from(
+    new Set([id.pubkey, ...members.map(toPubkeyHex)])
+  );
+  await publishKind14(walletId, memberHex, text, relays, extra);
+  return computeRoomId(memberHex);
+}
+
+export async function publishGroupMetadata(
+  walletId: number,
+  roomId: string,
+  name: string,
   relays: string[] = DEFAULT_RELAYS
 ): Promise<void> {
   const id = await getIdentity(walletId);
-  const recipientHex = toPubkeyHex(recipient);
-  const dmRelays = await fetchKind10050(relays, recipientHex);
-  const targets = Array.from(new Set([...DISCOVERY_RELAYS, ...relays, ...dmRelays]));
-  // wrapManyEvents prepends a self-addressed copy, so the sender's own messages
-  // show up on their relays too.
-  const wraps = wrapManyEvents(id.secretKey, [{ publicKey: recipientHex }], text);
-  const results = await Promise.allSettled(wraps.flatMap((w) => getPool().publish(targets, w as Event)));
-  // Surface total failure (offline / all relays refused) instead of silently
-  // "sending" nothing — the usual cause of a message that never appears.
-  if (results.length > 0 && !results.some((r) => r.status === 'fulfilled')) {
-    const reason = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
-    throw new Error(
-      `No relay accepted the message${reason ? `: ${String(reason.reason)}` : ''}. Check your connection or relays.`
-    );
-  }
+  const evt = finalizeEvent(
+    {
+      kind: KIND_30078,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [['d', `${PAYTACA_GROUP}${roomId}`]],
+      content: JSON.stringify({
+        name: name || null,
+        data: { roomId, name: name || null },
+      }),
+    },
+    id.secretKey
+  );
+  const targets = Array.from(new Set([...DISCOVERY_RELAYS, ...relays]));
+  await Promise.allSettled(getPool().publish(targets, evt));
 }
 
 export async function publishKind10050(
@@ -184,6 +331,7 @@ function rumorToChatMessage(
     targetIds: targetIds.length ? targetIds : undefined,
     emoji: kind === REACTION ? rumor.content : undefined,
     isReadReceipt,
+    subject: rumor.tags.find((t) => t[0] === 'subject')?.[1],
   };
 }
 
@@ -331,6 +479,8 @@ export function subscribeMessages(
       onevent(evt: Event) {
         try {
           const rumor = unwrapEvent(evt, id.secretKey);
+          const kind = rumor.kind ?? 14;
+          if (kind !== 14 && kind !== REACTION && kind !== DELETION) return;
           onMessage(rumorToChatMessage(rumor, rumor.pubkey === id.pubkey));
         } catch {
           /* not addressed to us, or undecryptable — ignore */
@@ -425,6 +575,59 @@ export async function fetchPublishedDisplayName(
   const evt = await fetchKind30078(relays, pubKey, PAYTACA_DISPLAY_NAME);
   const name = parseKind30078Data(evt?.content ?? '')?.displayName?.trim();
   return name || null;
+}
+
+export async function fetchPublishedBchAddress(
+  relays: string[],
+  pubKey: string
+): Promise<string | null> {
+  const evt = await fetchKind30078(relays, pubKey, PAYTACA_BCH_ADDRESS);
+  const address = parseKind30078Data(evt?.content ?? '')?.address?.trim();
+  return address || null;
+}
+
+export async function publishBchAddress(
+  walletId: number,
+  address: string,
+  relays: string[] = DEFAULT_RELAYS
+): Promise<void> {
+  const id = await getIdentity(walletId);
+  const evt = finalizeEvent(
+    {
+      kind: KIND_30078,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [
+        ['d', PAYTACA_BCH_ADDRESS],
+        ['p', id.pubkey],
+      ],
+      content: JSON.stringify({
+        name: 'Paytaca BCH Address',
+        data: { address },
+      }),
+    },
+    id.secretKey
+  );
+  const targets = Array.from(new Set([...DISCOVERY_RELAYS, ...relays]));
+  await Promise.allSettled(getPool().publish(targets, evt));
+}
+
+const AVATAR_STORE = (pubkey: string) => `nostr-chat-avatar:${pubkey}`;
+
+export async function storeLocalAvatar(pubkey: string, dataUrl: string) {
+  try {
+    await idbSet(AVATAR_STORE(pubkey), dataUrl);
+  } catch {
+    /* best-effort */
+  }
+}
+
+export async function loadLocalAvatar(pubkey: string): Promise<string | null> {
+  try {
+    const v = await idbGet(AVATAR_STORE(pubkey));
+    return typeof v === 'string' ? v : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function publishAvatar(

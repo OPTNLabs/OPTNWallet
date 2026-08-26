@@ -1,5 +1,9 @@
 # Paytaca Nostr chat parity plan
 
+How OPTN chat is split (DM vs private MLS vs open MLS) is documented in
+[nostr-chat-tiers.md](./nostr-chat-tiers.md). This file is only the leftover
+Paytaca-app UX checklist, not the protocol map.
+
 Comparison baseline:
 [Paytaca `src/wallet/nostr.js` at c036cb65](https://github.com/paytaca/paytaca-app/blob/c036cb65a8f40a32a823d8eb0daff5ce2b5c5e3d/src/wallet/nostr.js)
 and its chat UI at the same revision.

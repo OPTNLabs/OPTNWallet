@@ -42,6 +42,8 @@ Technical documentation for contributors and third-party integrators.
   - How to integrate a third-party product with OPTN Wallet.
 - [CashConnect](./cashconnect.md)
   - Nostr contract-system connector (Connections & features).
+- [Nostr chat tiers](./nostr-chat-tiers.md)
+  - DM (NIP-17) vs private MLS group vs open MLS group — comparison table and wire.
 - [CashScript Contract Systems](./cashscript-contract-systems.md)
   - BCH covenant design patterns, state-machine rules, and testing checklist.
 - [Custody Vault Design Notes](./custody-vault-design-notes.md)
@@ -61,6 +63,8 @@ Technical documentation for contributors and third-party integrators.
 - If you are integrating a dApp: `Integration Guide` -> `WalletConnect` section.
 - If you are embedding custom wallet app logic: `Integration Guide` -> `Addon Development Guide` -> `Addon SDK Reference`.
 - If you are contributing to core wallet internals: `Wallet Architecture` first.
+- If you are working on Nostr chat: [Nostr chat tiers](./nostr-chat-tiers.md)
+  first, then [Paytaca parity notes](./paytaca-nostr-chat-parity-plan.md).
 - If you are working on CashFusion: status → knobs → protocol → component
   plane → privacy layers → [FAQ](./p2p-cashfusion-faq.md) →
   [blame](./proposed-blame-p2p-cashfusion.md).
@@ -70,4 +74,6 @@ Technical documentation for contributors and third-party integrators.
 - [Keystone hardware wallet](./keystone-hardware-wallet-scope.md) — UI disabled (“Coming soon”).
 - [UX improvement plan](./UX_IMPROVEMENT_PLAN.md) — product hierarchy, not done.
 - [Airdrops addon plan](./OPTN_WALLET_AIRDROPS_ADDON_PLAN.md) — backend + wallet MVP.
-- [Paytaca Nostr chat parity](./paytaca-nostr-chat-parity-plan.md) — groups, receipts, attachments still missing.
+- [Paytaca Nostr chat parity](./paytaca-nostr-chat-parity-plan.md) — leftover
+  Paytaca UX (Blossom, Watchtower, typing). Tiers themselves:
+  [nostr-chat-tiers.md](./nostr-chat-tiers.md).

@@ -28,7 +28,7 @@ const FORBIDDEN_IMPORT_RE =
 
 /** Named imports that only exist on the social/chat path. */
 const FORBIDDEN_SYMBOL_RE =
-  /\b(myIdentity|deriveNostrIdentity|NOSTR_DERIVATION_PATH)\b/;
+  /\b(myIdentity|deriveNostrIdentity|NOSTR_DERIVATION_PATH|loadNostrAccountSeed|nip06AccountSeed)\b/;
 
 function isFusionSourceFile(name: string): boolean {
   if (!name.endsWith('.ts') && !name.endsWith('.tsx')) return false;

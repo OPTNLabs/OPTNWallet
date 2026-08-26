@@ -37,19 +37,34 @@ import {
   fetchProfile,
   fetchPublishedAvatar,
   fetchPublishedDisplayName,
+  fetchPublishedBchAddress,
   publishMyProfile,
-  publishAvatar,
   publishDisplayName,
+  storeLocalAvatar,
+  loadLocalAvatar,
   publishKind10050,
   loadStoredMessages,
   storeMessages,
   loadLastRead,
   storeLastRead,
   toPubkeyHex,
+  parseChatTip,
+  encodeChatTip,
   type ChatMessage,
   type NostrProfile,
 } from '../../platform/desktop/nostr/chat';
 import { copyToClipboard } from '../../utils/clipboard';
+import {
+  addMlsMember,
+  claimExtraMlsDeviceSlot,
+  createMlsGroup,
+  linkOwnDevice,
+  loadMlsDeviceIndex,
+  publishMlsKeyPackage,
+  sendMlsMessage,
+  subscribeMls,
+} from '../../platform/desktop/nostr/mls';
+import { useWalletConfirm } from '../../components/WalletConfirmDialog';
 
 const short = (s: string) =>
   s.length > 16 ? `${s.slice(0, 10)}…${s.slice(-6)}` : s;
@@ -83,7 +98,7 @@ const Avatar: React.FC<{ url?: string; fallback: string; size?: number }> = ({
     className="grid shrink-0 place-items-center overflow-hidden rounded-full border border-[var(--wallet-border)] bg-[var(--wallet-accent)]/15 text-xs font-bold text-[var(--wallet-accent)]"
     style={{ height: size, width: size }}
   >
-    {url ? (
+    {url && !/^https?:/i.test(url) ? (
       <img src={url} alt="" className="h-full w-full object-cover" />
     ) : (
       fallback.slice(0, 2).toUpperCase()
@@ -121,6 +136,7 @@ function fileToAvatarDataUrl(file: File): Promise<string> {
 
 const NostrChat: React.FC = () => {
   const navigate = useNavigate();
+  const confirm = useWalletConfirm();
   const { t } = useI18n();
   const walletId = useSelector((s: RootState) => s.wallet_id.currentWalletId);
   const relays = useSelector(selectNostrRelays);
@@ -142,6 +158,15 @@ const NostrChat: React.FC = () => {
   const [myPicture, setMyPicture] = useState('');
   const [profileMsg, setProfileMsg] = useState<string | null>(null);
   const [lastRead, setLastRead] = useState<Record<string, number>>({});
+  const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
+  const [editOf, setEditOf] = useState<ChatMessage | null>(null);
+  const [activeMembers, setActiveMembers] = useState<string[] | null>(null);
+  const [mlsGroupId, setMlsGroupId] = useState<string | null>(null);
+  const [mlsDeviceIndex, setMlsDeviceIndex] = useState(0);
+  const [groupName, setGroupName] = useState('');
+  const [showTip, setShowTip] = useState(false);
+  const [tipAmount, setTipAmount] = useState('');
+  const [tipCategory, setTipCategory] = useState('');
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -152,6 +177,9 @@ const NostrChat: React.FC = () => {
       .then(async (id) => {
         setMe(id);
         void publishKind10050(walletId, relays);
+        const slot = await loadMlsDeviceIndex(id.pubkey);
+        setMlsDeviceIndex(slot);
+        void publishMlsKeyPackage(walletId, relays);
         // Hydrate saved history (contacts survive restarts) + my own profile so
         // the name/picture I published are shown instead of an empty editor.
         const stored = await loadStoredMessages(id.pubkey);
@@ -164,7 +192,11 @@ const NostrChat: React.FC = () => {
           fetchPublishedDisplayName(relays, id.pubkey),
         ]);
         if (displayName || mine.name) setMyName(displayName || mine.name || '');
-        if (avatar || mine.picture) setMyPicture(avatar || mine.picture || '');
+        const localPic = await loadLocalAvatar(id.pubkey);
+        const pic = localPic || '';
+        if (pic) setMyPicture(pic);
+        void avatar;
+        void mine.picture;
       })
       .catch((e) => setErr(e instanceof Error ? e.message : String(e)));
   }, [walletId, relays]);
@@ -178,31 +210,32 @@ const NostrChat: React.FC = () => {
     if (me) void storeLastRead(me.pubkey, lastRead);
   }, [me, lastRead]);
 
-  // One subscription for all my DMs; the thread view filters to the open peer.
+  // NIP-17 DMs (1059) plus NIP-EE MLS (444/445) and Paytaca 30078 MLS.
   useEffect(() => {
     if (walletId <= 0) return;
-    return subscribeMessages(
-      walletId,
-      (m) =>
-        setMessages((prev) => {
-          if (prev.some((x) => x.id === m.id)) return prev;
-          // Drop a self-copy that echoes an optimistic send we already show.
-          if (
-            m.mine &&
-            prev.some(
-              (x) =>
-                x.mine &&
-                x.text === m.text &&
-                x.to.join() === m.to.join() &&
-                Math.abs(x.at - m.at) < 300
-            )
-          ) {
-            return prev;
-          }
-          return [...prev, m].sort((a, b) => a.at - b.at);
-        }),
-      relays
-    );
+    const onMessage = (m: ChatMessage) =>
+      setMessages((prev) => {
+        if (prev.some((x) => x.id === m.id)) return prev;
+        if (
+          m.mine &&
+          prev.some(
+            (x) =>
+              x.mine &&
+              x.text === m.text &&
+              x.to.join() === m.to.join() &&
+              Math.abs(x.at - m.at) < 300
+          )
+        ) {
+          return prev;
+        }
+        return [...prev, m].sort((a, b) => a.at - b.at);
+      });
+    const unsubDm = subscribeMessages(walletId, onMessage, relays);
+    const unsubMls = subscribeMls(walletId, onMessage, relays);
+    return () => {
+      unsubDm();
+      unsubMls();
+    };
   }, [walletId, relays]);
 
   // Conversations = messages grouped by the other party, newest first.
@@ -210,7 +243,7 @@ const NostrChat: React.FC = () => {
     const map = new Map<string, { peer: string; last: ChatMessage | null }>();
     for (const m of messages) {
       if (!isChatText(m)) continue;
-      const peer = m.mine ? m.to[0] ?? '' : m.from;
+      const peer = m.roomId || (m.mine ? m.to[0] ?? '' : m.from);
       if (!peer || peer === me?.pubkey) continue;
       const cur = map.get(peer);
       if (!cur || !cur.last || m.at > cur.last.at)
@@ -261,7 +294,9 @@ const NostrChat: React.FC = () => {
         ? messages.filter(
             (m) =>
               isChatText(m) &&
-              (m.from === activePeer || (m.mine && m.to.includes(activePeer)))
+              (m.roomId === activePeer ||
+                m.from === activePeer ||
+                (m.mine && m.to.includes(activePeer)))
           )
         : [],
     [messages, activePeer]
@@ -316,8 +351,41 @@ const NostrChat: React.FC = () => {
   const openConversation = useCallback(async () => {
     setErr(null);
     try {
+      const parts = recipient
+        .split(/[\s,]+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (parts.length > 1 && me) {
+        const hexes = parts.map(toPubkeyHex);
+        const members = Array.from(new Set([me.pubkey, ...hexes]));
+        const created = await createMlsGroup(
+          walletId,
+          groupName.trim() || 'MLS Group',
+          me.pubkey,
+          { visibility: 'private', relays }
+        );
+        setActivePeer(created.roomId);
+        setActiveMembers(members);
+        setMlsGroupId(created.nostrGroupIdHex);
+        const inviteErrors: string[] = [];
+        for (const hex of hexes) {
+          try {
+            await addMlsMember(walletId, created.nostrGroupIdHex, hex, relays);
+          } catch (e) {
+            inviteErrors.push(
+              `${hex.slice(0, 8)}…: ${e instanceof Error ? e.message : String(e)}`
+            );
+          }
+        }
+        if (inviteErrors.length) setErr(inviteErrors.join(' '));
+        setShowNewChat(false);
+        setRecipient('');
+        return;
+      }
       const hex = toPubkeyHex(recipient);
       setActivePeer(hex);
+      setActiveMembers(null);
+      setMlsGroupId(null);
       setShowNewChat(false);
       setRecipient('');
       if (!profiles[hex]) {
@@ -338,7 +406,7 @@ const NostrChat: React.FC = () => {
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     }
-  }, [recipient, relays, profiles]);
+  }, [recipient, relays, profiles, me, groupName, walletId]);
 
   const send = useCallback(async () => {
     if (!activePeer || !draft.trim() || walletId <= 0 || !me) return;
@@ -346,25 +414,48 @@ const NostrChat: React.FC = () => {
     setSending(true);
     setErr(null);
     try {
-      await sendDirectMessage(walletId, activePeer, text, relays);
+      const extra = {
+        replyTo: replyTo?.id,
+        editOf: editOf?.id,
+      };
+      if (mlsGroupId) {
+        await sendMlsMessage(walletId, mlsGroupId, activePeer, text, relays);
+      } else {
+        await sendDirectMessage(walletId, activePeer, text, relays, extra);
+      }
       // Show + persist my message immediately — don't wait for it to round-trip
       // through a relay (which may not even echo a self-copy back).
       const mine: ChatMessage = {
         id: `local-${Date.now()}-${Math.random().toString(36).slice(2)}`,
         from: me.pubkey,
-        to: [activePeer],
+        to: activeMembers ?? [activePeer],
         text,
         at: Math.floor(Date.now() / 1000),
         mine: true,
+        replyTo: extra.replyTo,
+        editOf: extra.editOf,
+        roomId: mlsGroupId ? activePeer : undefined,
       };
       setMessages((prev) => mergeById(prev, [mine]));
       setDraft('');
+      setReplyTo(null);
+      setEditOf(null);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
       setSending(false);
     }
-  }, [activePeer, draft, walletId, relays, me]);
+  }, [
+    activePeer,
+    draft,
+    walletId,
+    relays,
+    me,
+    replyTo,
+    editOf,
+    mlsGroupId,
+    activeMembers,
+  ]);
 
   const onPickImage = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -380,17 +471,19 @@ const NostrChat: React.FC = () => {
       await Promise.all([
         publishMyProfile(
           walletId,
-          { name: myName || undefined, picture: myPicture || undefined },
+          { name: myName || undefined },
           relays
         ),
         myName ? publishDisplayName(walletId, myName, relays) : Promise.resolve(),
-        myPicture ? publishAvatar(walletId, myPicture, relays) : Promise.resolve(),
+        myPicture && me
+          ? storeLocalAvatar(me.pubkey, myPicture)
+          : Promise.resolve(),
       ]);
       setProfileMsg(t('chat.profilePublished'));
     } catch (e) {
       setProfileMsg(e instanceof Error ? e.message : String(e));
     }
-  }, [walletId, myName, myPicture, relays, t]);
+  }, [walletId, myName, myPicture, relays, t, me]);
 
   const nameOf = (peer: string) => profiles[peer]?.name || short(peer);
   const unreadOf = (peer: string) =>
@@ -460,6 +553,34 @@ const NostrChat: React.FC = () => {
               >
                 {t('chat.profile')}
               </button>
+              {mlsDeviceIndex === 0 ? (
+                <button
+                  type="button"
+                  className="rounded-lg border border-[var(--wallet-border)] px-2 py-1 text-[10px] font-semibold wallet-text-strong"
+                  onClick={() => {
+                    if (!me) return;
+                    void (async () => {
+                      const ok = await confirm(
+                        'Only on the new install. This device becomes a separate MLS leaf (slot 1). Do not tap this on your first device.'
+                      );
+                      if (!ok) return;
+                      try {
+                        const slot = await claimExtraMlsDeviceSlot(me.pubkey);
+                        setMlsDeviceIndex(slot);
+                        await publishMlsKeyPackage(walletId, relays);
+                      } catch (e) {
+                        setErr(e instanceof Error ? e.message : String(e));
+                      }
+                    })();
+                  }}
+                >
+                  Extra device
+                </button>
+              ) : (
+                <span className="text-[10px] wallet-muted">
+                  Device {mlsDeviceIndex}
+                </span>
+              )}
             </div>
             {showProfile && (
               <div className="mt-2 space-y-1.5 border-t border-[var(--wallet-border)] pt-2">
@@ -545,22 +666,57 @@ const NostrChat: React.FC = () => {
                 </button>
               </div>
               {showNewChat && (
-                <div className="flex items-center gap-2">
+                <div className="space-y-2">
                   <input
                     value={recipient}
                     onChange={(e) => setRecipient(e.target.value)}
-                    placeholder={t('chat.recipient')}
-                    className="wallet-input min-w-0 flex-1 font-mono text-xs"
+                    placeholder="npub… (comma-separate for a group)"
+                    className="wallet-input w-full font-mono text-xs"
                     onKeyDown={(e) =>
                       e.key === 'Enter' && void openConversation()
                     }
                   />
-                  <button
-                    onClick={() => void openConversation()}
-                    className="wallet-btn-primary px-3 py-2 text-xs"
-                  >
-                    {t('chat.open')}
-                  </button>
+                  <input
+                    value={groupName}
+                    onChange={(e) => setGroupName(e.target.value)}
+                    placeholder="Group name (optional)"
+                    className="wallet-input w-full text-xs"
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => void openConversation()}
+                      className="wallet-btn-primary px-3 py-2 text-xs"
+                    >
+                      {t('chat.open')}
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded-lg border border-[var(--wallet-border)] px-3 py-2 text-xs font-semibold wallet-text-strong"
+                      onClick={() => {
+                        void (async () => {
+                          if (!me || walletId <= 0) return;
+                          try {
+                            const created = await createMlsGroup(
+                              walletId,
+                              groupName || 'MLS Group',
+                              me.pubkey,
+                              { visibility: 'open', relays }
+                            );
+                            setActivePeer(created.roomId);
+                            setActiveMembers([me.pubkey]);
+                            setMlsGroupId(created.nostrGroupIdHex);
+                            setShowNewChat(false);
+                          } catch (e) {
+                            setErr(
+                              e instanceof Error ? e.message : String(e)
+                            );
+                          }
+                        })();
+                      }}
+                    >
+                      New MLS group
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -647,6 +803,34 @@ const NostrChat: React.FC = () => {
                       {profiles[activePeer]?.nip05 ?? t('chat.encrypted')}
                     </p>
                   </div>
+                  {mlsGroupId && mlsDeviceIndex === 0 && (
+                    <button
+                      type="button"
+                      className="shrink-0 rounded-lg border border-[var(--wallet-border)] px-2 py-1 text-[10px] font-semibold wallet-text-strong"
+                      onClick={() => {
+                        void (async () => {
+                          const ok = await confirm(
+                            'Add your extra device (slot 1) to this group as another MLS leaf?'
+                          );
+                          if (!ok) return;
+                          try {
+                            await linkOwnDevice(
+                              walletId,
+                              mlsGroupId,
+                              1,
+                              relays
+                            );
+                          } catch (e) {
+                            setErr(
+                              e instanceof Error ? e.message : String(e)
+                            );
+                          }
+                        })();
+                      }}
+                    >
+                      Add extra device
+                    </button>
+                  )}
                 </header>
 
                 <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-4">
@@ -676,7 +860,37 @@ const NostrChat: React.FC = () => {
                                   Deleted
                                 </span>
                               ) : (
-                                m.text
+                                <>
+                                  {m.replyTo && (
+                                    <p className="mb-1 text-[10px] wallet-muted">
+                                      Reply
+                                    </p>
+                                  )}
+                                  {m.editOf && (
+                                    <p className="mb-1 text-[10px] wallet-muted">
+                                      Edited
+                                    </p>
+                                  )}
+                                  {(() => {
+                                    const tip = parseChatTip(m.text);
+                                    if (!tip) return m.text;
+                                    return (
+                                      <div>
+                                        <p className="font-semibold">
+                                          Tip {tip.amount}{' '}
+                                          {tip.asset === 'bch'
+                                            ? 'BCH'
+                                            : 'CashToken'}
+                                        </p>
+                                        {tip.category && (
+                                          <p className="break-all font-mono text-[10px] wallet-muted">
+                                            {tip.category}
+                                          </p>
+                                        )}
+                                      </div>
+                                    );
+                                  })()}
+                                </>
                               )}
                             </div>
                             {!gone && (
@@ -685,6 +899,31 @@ const NostrChat: React.FC = () => {
                                   m.mine ? 'justify-end' : 'justify-start'
                                 }`}
                               >
+                                <button
+                                  type="button"
+                                  className="text-[10px] wallet-muted"
+                                  onClick={() => {
+                                    setReplyTo(m);
+                                    setEditOf(null);
+                                  }}
+                                >
+                                  Reply
+                                </button>
+                                {m.mine &&
+                                  Math.floor(Date.now() / 1000) - m.at <
+                                    60 && (
+                                    <button
+                                      type="button"
+                                      className="text-[10px] wallet-muted"
+                                      onClick={() => {
+                                        setEditOf(m);
+                                        setReplyTo(null);
+                                        setDraft(m.text);
+                                      }}
+                                    >
+                                      Edit
+                                    </button>
+                                  )}
                                 {reactions.map((r) => (
                                   <span
                                     key={r.id}
@@ -714,7 +953,94 @@ const NostrChat: React.FC = () => {
                   <div ref={bottomRef} />
                 </div>
 
-                <footer className="flex items-center gap-2 border-t border-[var(--wallet-border)] p-3">
+                <footer className="space-y-2 border-t border-[var(--wallet-border)] p-3">
+                  {(replyTo || editOf) && (
+                    <div className="flex items-center justify-between text-[10px] wallet-muted">
+                      <span>
+                        {editOf ? 'Editing' : 'Replying'}:{' '}
+                        {(editOf ?? replyTo)?.text.slice(0, 80)}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setReplyTo(null);
+                          setEditOf(null);
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  )}
+                  {showTip && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <input
+                        value={tipAmount}
+                        onChange={(e) => setTipAmount(e.target.value)}
+                        placeholder="Amount"
+                        className="wallet-input w-24 text-xs"
+                      />
+                      <input
+                        value={tipCategory}
+                        onChange={(e) => setTipCategory(e.target.value)}
+                        placeholder="CashToken category (blank = BCH)"
+                        className="wallet-input min-w-0 flex-1 font-mono text-[10px]"
+                      />
+                      <button
+                        type="button"
+                        className="wallet-btn-primary px-3 py-1 text-xs"
+                        onClick={() => {
+                          void (async () => {
+                            if (!activePeer || !tipAmount.trim()) return;
+                            const tip = tipCategory.trim()
+                              ? {
+                                  asset: 'ft' as const,
+                                  amount: tipAmount.trim(),
+                                  category: tipCategory.trim().toLowerCase(),
+                                }
+                              : {
+                                  asset: 'bch' as const,
+                                  amount: tipAmount.trim(),
+                                };
+                            const ok = await confirm(
+                              `Send ${tip.amount} ${
+                                tip.asset === 'bch' ? 'BCH' : 'CashToken'
+                              }? This opens the send screen — chat cannot spend by itself.`
+                            );
+                            if (!ok) return;
+                            const to =
+                              (await fetchPublishedBchAddress(
+                                relays,
+                                activeMembers?.[1] ?? activePeer
+                              )) || '';
+                            navigate('/send', {
+                              state: {
+                                returnTo: '/chat',
+                                recipient: to,
+                                amountBch:
+                                  tip.asset === 'bch' ? tip.amount : undefined,
+                                amountToken:
+                                  tip.asset === 'ft' ? tip.amount : undefined,
+                                assetType: tip.asset,
+                                selectedCategory: tip.category,
+                              },
+                            });
+                            setDraft(encodeChatTip(tip));
+                            setShowTip(false);
+                          })();
+                        }}
+                      >
+                        Confirm tip
+                      </button>
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    className="rounded-lg border border-[var(--wallet-border)] px-2 py-2 text-[10px] font-semibold wallet-text-strong"
+                    onClick={() => setShowTip((v) => !v)}
+                  >
+                    Tip
+                  </button>
                   <input
                     value={draft}
                     onChange={(e) => setDraft(e.target.value)}
@@ -731,6 +1057,7 @@ const NostrChat: React.FC = () => {
                   >
                     <MdSend />
                   </button>
+                  </div>
                 </footer>
               </section>
             ) : (

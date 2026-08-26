@@ -5,8 +5,13 @@ import {
   createKind10050,
   createReactionGiftWraps,
   createKind5DeletionGiftWraps,
+  createUnsignedKind14,
+  computeRoomId,
+  parseChatTip,
+  encodeChatTip,
   toPubkeyHex,
 } from '../chat';
+import { wrapManyEvents as wrapRumor } from 'nostr-tools/nip59';
 import { DEFAULT_RELAYS, DISCOVERY_RELAYS, isDefaultNostrRelay } from '../defaultRelays';
 import { deriveNostrIdentity } from '../identity';
 
@@ -155,6 +160,56 @@ describe('nostr chat DM (NIP-17)', () => {
         ['k', '14'],
       ])
     );
+  });
+
+  it('createUnsignedKind14 tags reply, edit, and members', () => {
+    const aPk = getPublicKey(generateSecretKey());
+    const bPk = getPublicKey(generateSecretKey());
+    const rumor = createUnsignedKind14({
+      content: 'hi',
+      senderPubKey: aPk,
+      members: [aPk, bPk],
+      replyTo: 'c'.repeat(64),
+      editOf: 'd'.repeat(64),
+      subject: 'hello',
+    });
+    expect(rumor.kind).toBe(14);
+    expect(rumor.tags).toEqual(
+      expect.arrayContaining([
+        ['p', bPk],
+        ['e', 'c'.repeat(64)],
+        ['edit', 'd'.repeat(64)],
+        ['subject', 'hello'],
+      ])
+    );
+    const wraps = wrapRumor(rumor, generateSecretKey(), [bPk]);
+    expect(wraps[0].kind).toBe(1059);
+  });
+
+  it('computeRoomId is order-independent', () => {
+    const a = 'aa'.repeat(32);
+    const b = 'bb'.repeat(32);
+    expect(computeRoomId([a, b])).toBe(computeRoomId([b, a]));
+    expect(computeRoomId([a, b])).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('parseChatTip and encodeChatTip round-trip BCH and CashTokens', () => {
+    expect(parseChatTip('/send 0.01')).toEqual({ asset: 'bch', amount: '0.01' });
+    expect(parseChatTip('/send 0.01 BCH')).toEqual({
+      asset: 'bch',
+      amount: '0.01',
+    });
+    const cat = 'ab'.repeat(32);
+    expect(parseChatTip(`/send 10 token:${cat}`)).toEqual({
+      asset: 'ft',
+      amount: '10',
+      category: cat,
+    });
+    expect(parseChatTip(encodeChatTip({ asset: 'bch', amount: '1' }))).toEqual({
+      asset: 'bch',
+      amount: '1',
+    });
+    expect(parseChatTip('hello')).toBeNull();
   });
 
   it('toPubkeyHex accepts npub and hex, rejects junk', () => {

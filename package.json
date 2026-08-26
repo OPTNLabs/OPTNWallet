@@ -140,7 +140,8 @@
     "redux-thunk": "^3.1.0",
     "sql.js": "^1.10.3",
     "tauri-plugin-keyring-api": "^0.1.1",
-    "tiny-secp256k1": "^2.2.3"
+    "tiny-secp256k1": "^2.2.3",
+    "ts-mls": "file:vendor/ts-mls"
   },
   "overrides": {
     "@cashscript/utils": "0.13.0-next.3",
@@ -156,10 +157,10 @@
   },
   "devDependencies": {
     "@capacitor/cli": "^7.6.8",
+    "@tauri-apps/cli": "^2.11.3",
     "@testing-library/jest-dom": "^7.0.0",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
-    "@tauri-apps/cli": "^2.11.3",
     "@types/luxon": "^3.6.2",
     "@types/react": "^18.2.66",
     "@types/react-dom": "^18.2.22",
