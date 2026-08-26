@@ -205,13 +205,20 @@ HTTPS gateway still sees the GET.
 | Private group | MLS application blob, still inside the 1059 wrap |
 | Open MLS | MLS application blob on 445 — still E2EE, no public URL |
 
-No `https://` in that payload. Relays already see wraps; we do not add an
-image host. Strip EXIF before send. Keep it small (relay size limits).
+Photos, **voice**, **PDF**, short **video**, and other files use the same
+path: `data:<mime>;base64,…` in kind 15. Public [NIP-A0](https://nips.nostr.com/a0)
+voice (`kind 1222` + audio URL) is **not** used — that URL is a CDN leak.
 
-In-chat send uses kind **15** (DM wrap) or MLS inner kind 15 with a
-`data:image/jpeg;base64,…` body. Profile publish writes **kind 0** and Paytaca
-kind **30078** (`paytaca:avatar` / `paytaca:display-name`) with the same inline
-bytes. Refetch on the chat screen replays 1059s and MLS backups from relays.
+No `https://` in that payload. Relays already see wraps; we do not add an
+image host. Strip EXIF before send. Keep it small (relay size limits,
+~70KB). Longer video usually will not fit; the send fails instead of
+uploading.
+
+In-chat send uses kind **15** (DM wrap) or MLS inner kind 15 with
+`data:<mime>;base64,…` (photo, voice, PDF, short video, files). Profile
+publish writes **kind 0** and Paytaca kind **30078** (`paytaca:avatar` /
+`paytaca:display-name`) with inline avatar bytes. Refetch on the chat
+screen replays 1059s and MLS backups from relays.
 
 ---
 

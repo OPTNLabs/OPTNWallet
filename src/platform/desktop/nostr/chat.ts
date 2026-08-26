@@ -67,6 +67,7 @@ export interface ChatMessage {
   isReadReceipt?: boolean;
   subject?: string;
   roomId?: string;
+  fileName?: string;
 }
 
 export type ChatTip = {
@@ -137,22 +138,54 @@ export function createUnsignedKind14({
   };
 }
 
-/** In-wrap photo: data URL in content. Never an http(s) file host. */
+/** Relay-safe cap for in-wrap files (base64 data URL). Bigger files need a future private path. */
+export const MAX_INLINE_CHAT_DATA_URL = 100_000;
+
+export type InlineChatFile = { mime: string; dataUrl: string };
+
+/** Bytes in the rumor — never http(s). */
+export function parseInlineChatFile(content: string): InlineChatFile | null {
+  const raw = content.trim();
+  if (/^https?:/i.test(raw)) return null;
+  const m = raw.match(
+    /^data:([^;,]+)(?:;[^,]*)?;base64,[A-Za-z0-9+/]+=*$/i
+  );
+  if (!m) return null;
+  return { mime: m[1].toLowerCase(), dataUrl: raw };
+}
+
+export function isInlineChatMedia(content: string): boolean {
+  return parseInlineChatFile(content) !== null;
+}
+
 export function isInlineChatImage(content: string): boolean {
-  return /^data:image\/(jpeg|jpg|png|webp|gif);base64,/i.test(content.trim());
+  const f = parseInlineChatFile(content);
+  return !!f && f.mime.startsWith('image/');
+}
+
+export function inlineChatLabel(content: string): string {
+  const f = parseInlineChatFile(content);
+  if (!f) return 'File';
+  if (f.mime.startsWith('image/')) return 'Photo';
+  if (f.mime.startsWith('audio/')) return 'Voice';
+  if (f.mime.startsWith('video/')) return 'Video';
+  if (f.mime === 'application/pdf') return 'PDF';
+  return 'File';
 }
 
 export function createUnsignedKind15({
   dataUrl,
   senderPubKey,
   members,
-  mimeType = 'image/jpeg',
+  mimeType,
+  fileName,
   replyTo,
 }: {
   dataUrl: string;
   senderPubKey: string;
   members: string[];
   mimeType?: string;
+  fileName?: string;
   replyTo?: string;
 }): {
   kind: number;
@@ -161,10 +194,16 @@ export function createUnsignedKind15({
   content: string;
   tags: string[][];
 } {
-  if (!isInlineChatImage(dataUrl)) {
-    throw new Error('Chat photos must be inline image data, not a URL');
+  const parsed = parseInlineChatFile(dataUrl);
+  if (!parsed) {
+    throw new Error('Chat files must be inline data, not a URL');
   }
-  const tags: string[][] = [['file-type', mimeType]];
+  if (parsed.dataUrl.length > MAX_INLINE_CHAT_DATA_URL) {
+    throw new Error('File too large for a private wrap — keep it under ~70KB');
+  }
+  const mime = mimeType || parsed.mime;
+  const tags: string[][] = [['file-type', mime]];
+  if (fileName) tags.push(['filename', fileName]);
   for (const member of members) {
     if (member !== senderPubKey) tags.push(['p', member]);
   }
@@ -173,7 +212,7 @@ export function createUnsignedKind15({
     kind: KIND_FILE_MESSAGE,
     pubkey: senderPubKey,
     created_at: Math.floor(Date.now() / 1000),
-    content: dataUrl.trim(),
+    content: parsed.dataUrl,
     tags,
   };
 }
@@ -295,7 +334,17 @@ export async function sendDirectPhoto(
   recipient: string,
   dataUrl: string,
   relays: string[] = DEFAULT_RELAYS,
-  extra?: { replyTo?: string }
+  extra?: { replyTo?: string; fileName?: string; mimeType?: string }
+): Promise<void> {
+  return sendDirectFile(walletId, recipient, dataUrl, relays, extra);
+}
+
+export async function sendDirectFile(
+  walletId: number,
+  recipient: string,
+  dataUrl: string,
+  relays: string[] = DEFAULT_RELAYS,
+  extra?: { replyTo?: string; fileName?: string; mimeType?: string }
 ): Promise<void> {
   const id = await getIdentity(walletId);
   const memberHex = [id.pubkey, toPubkeyHex(recipient)];
@@ -304,6 +353,8 @@ export async function sendDirectPhoto(
     dataUrl,
     senderPubKey: id.pubkey,
     members: memberHex,
+    mimeType: extra?.mimeType,
+    fileName: extra?.fileName,
     replyTo: extra?.replyTo,
   });
   const dmRelays = (
@@ -400,6 +451,7 @@ function rumorToChatMessage(
     emoji: kind === REACTION ? rumor.content : undefined,
     isReadReceipt,
     subject: rumor.tags.find((t) => t[0] === 'subject')?.[1],
+    fileName: rumor.tags.find((t) => t[0] === 'filename')?.[1],
   };
 }
 

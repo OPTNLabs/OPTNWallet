@@ -228,7 +228,7 @@ describe('nostr chat DM (NIP-17)', () => {
         senderPubKey: aPk,
         members: [aPk, bPk],
       })
-    ).toThrow(/inline/);
+    ).toThrow(/inline data/);
     const rumor = createUnsignedKind15({
       dataUrl,
       senderPubKey: aPk,
@@ -245,6 +245,44 @@ describe('nostr chat DM (NIP-17)', () => {
     const inner = unwrapEvent(forB, bSk);
     expect(inner.kind).toBe(15);
     expect(inner.content).toBe(dataUrl);
+  });
+
+  it('kind 15 wraps voice and PDF inline; NIP-A0 style https audio is rejected', () => {
+    const aPk = getPublicKey(generateSecretKey());
+    const bPk = getPublicKey(generateSecretKey());
+    const voice = 'data:audio/webm;base64,AAAA';
+    const pdf = 'data:application/pdf;base64,AAAA';
+    const voiceRumor = createUnsignedKind15({
+      dataUrl: voice,
+      senderPubKey: aPk,
+      members: [aPk, bPk],
+      mimeType: 'audio/webm',
+      fileName: 'voice.webm',
+    });
+    expect(voiceRumor.kind).toBe(15);
+    expect(voiceRumor.tags).toEqual(
+      expect.arrayContaining([
+        ['file-type', 'audio/webm'],
+        ['filename', 'voice.webm'],
+        ['p', bPk],
+      ])
+    );
+    const pdfRumor = createUnsignedKind15({
+      dataUrl: pdf,
+      senderPubKey: aPk,
+      members: [aPk, bPk],
+      fileName: 'doc.pdf',
+    });
+    expect(pdfRumor.tags).toEqual(
+      expect.arrayContaining([['file-type', 'application/pdf']])
+    );
+    expect(() =>
+      createUnsignedKind15({
+        dataUrl: 'https://blossom.example/voice.m4a',
+        senderPubKey: aPk,
+        members: [bPk],
+      })
+    ).toThrow(/inline data/);
   });
 
   it('toPubkeyHex accepts npub and hex, rejects junk', () => {

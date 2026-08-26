@@ -17,11 +17,14 @@ import {
   MdArrowBack,
   MdChatBubbleOutline,
   MdContentCopy,
+  MdAttachFile,
   MdImage,
+  MdMic,
   MdRefresh,
   MdSearch,
   MdSend,
   MdSettings,
+  MdStop,
 } from 'react-icons/md';
 
 import PageHeader from '../../components/ui/PageHeader';
@@ -32,7 +35,7 @@ import { useI18n } from '../../i18n/useI18n';
 import {
   myIdentity,
   sendDirectMessage,
-  sendDirectPhoto,
+  sendDirectFile,
   sendReaction,
   sendReadReceipt,
   subscribeMessages,
@@ -45,7 +48,10 @@ import {
   publishAvatar,
   storeLocalAvatar,
   loadLocalAvatar,
-  isInlineChatImage,
+  inlineChatLabel,
+  isInlineChatMedia,
+  MAX_INLINE_CHAT_DATA_URL,
+  parseInlineChatFile,
   refetchChatInbox,
   publishKind10050,
   loadStoredMessages,
@@ -68,7 +74,7 @@ import {
   publishMlsKeyPackage,
   refetchMlsInbox,
   sendMlsMessage,
-  sendMlsPhoto,
+  sendMlsFile,
   subscribeMls,
 } from '../../platform/desktop/nostr/mls';
 import { useWalletConfirm } from '../../components/WalletConfirmDialog';
@@ -85,7 +91,7 @@ const mergeById = (a: ChatMessage[], b: ChatMessage[]): ChatMessage[] => {
 };
 
 const isChatText = (m: ChatMessage) =>
-  (m.kind ?? 14) === 14 || m.kind === 15 || isInlineChatImage(m.text);
+  (m.kind ?? 14) === 14 || m.kind === 15 || isInlineChatMedia(m.text);
 
 const relativeTime = (at: number): string => {
   const s = Math.max(0, Math.floor(Date.now() / 1000) - at);
@@ -132,7 +138,7 @@ function fileToJpegDataUrl(file: File, size: number, quality: number): Promise<s
         if (!ctx) return reject(new Error('canvas unavailable'));
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         const dataUrl = canvas.toDataURL('image/jpeg', quality);
-        if (dataUrl.length > 120_000) {
+        if (dataUrl.length > MAX_INLINE_CHAT_DATA_URL) {
           return reject(new Error('Photo too large for relays — pick a smaller image'));
         }
         resolve(dataUrl);
@@ -149,6 +155,36 @@ function fileToAvatarDataUrl(file: File): Promise<string> {
 
 function fileToChatPhotoDataUrl(file: File): Promise<string> {
   return fileToJpegDataUrl(file, 512, 0.72);
+}
+
+function fileToInlineDataUrl(file: File): Promise<string> {
+  if (file.size > 72_000) {
+    return Promise.reject(
+      new Error('File too large for a private wrap — keep it under ~70KB')
+    );
+  }
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('could not read file'));
+    reader.onload = () => {
+      const dataUrl =
+        typeof reader.result === 'string' ? reader.result : '';
+      if (!dataUrl.startsWith('data:') || dataUrl.length > MAX_INLINE_CHAT_DATA_URL) {
+        reject(new Error('File too large for a private wrap — keep it under ~70KB'));
+        return;
+      }
+      resolve(dataUrl);
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function downloadInlineFile(dataUrl: string, name: string) {
+  const a = document.createElement('a');
+  a.href = dataUrl;
+  a.download = name;
+  a.rel = 'noopener';
+  a.click();
 }
 
 const NostrChat: React.FC = () => {
@@ -185,10 +221,14 @@ const NostrChat: React.FC = () => {
   const [tipAmount, setTipAmount] = useState('');
   const [tipCategory, setTipCategory] = useState('');
   const [refetching, setRefetching] = useState(false);
+  const [recording, setRecording] = useState(false);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const chatPhotoRef = useRef<HTMLInputElement>(null);
+  const chatFileRef = useRef<HTMLInputElement>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const recordTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (walletId <= 0) return;
@@ -529,25 +569,32 @@ const NostrChat: React.FC = () => {
     }
   }, [walletId, relays]);
 
-  const sendChatPhoto = useCallback(
+  const sendChatFile = useCallback(
     async (file: File) => {
       if (!activePeer || walletId <= 0 || !me) return;
       setSending(true);
       setErr(null);
       try {
-        const dataUrl = await fileToChatPhotoDataUrl(file);
+        const dataUrl = file.type.startsWith('image/')
+          ? await fileToChatPhotoDataUrl(file)
+          : await fileToInlineDataUrl(file);
+        const parsed = parseInlineChatFile(dataUrl);
+        const extra = {
+          replyTo: replyTo?.id,
+          fileName: file.name,
+          mimeType: parsed?.mime || file.type || 'application/octet-stream',
+        };
         if (mlsGroupId) {
-          await sendMlsPhoto(
+          await sendMlsFile(
             walletId,
             mlsGroupId,
             activePeer,
             dataUrl,
-            relays
+            relays,
+            extra
           );
         } else {
-          await sendDirectPhoto(walletId, activePeer, dataUrl, relays, {
-            replyTo: replyTo?.id,
-          });
+          await sendDirectFile(walletId, activePeer, dataUrl, relays, extra);
         }
         const mine: ChatMessage = {
           id: `local-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -559,6 +606,7 @@ const NostrChat: React.FC = () => {
           kind: 15,
           replyTo: replyTo?.id,
           roomId: mlsGroupId ? activePeer : undefined,
+          fileName: file.name,
         };
         setMessages((prev) => mergeById(prev, [mine]));
         setReplyTo(null);
@@ -578,6 +626,51 @@ const NostrChat: React.FC = () => {
       activeMembers,
     ]
   );
+
+  const stopVoice = useCallback(() => {
+    if (recordTimerRef.current) {
+      clearTimeout(recordTimerRef.current);
+      recordTimerRef.current = null;
+    }
+    const rec = recorderRef.current;
+    recorderRef.current = null;
+    setRecording(false);
+    if (rec && rec.state !== 'inactive') rec.stop();
+  }, []);
+
+  const startVoice = useCallback(async () => {
+    if (!activePeer || recording) return;
+    setErr(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : 'audio/webm';
+      const rec = new MediaRecorder(stream, { mimeType: mime });
+      const chunks: Blob[] = [];
+      rec.ondataavailable = (e) => {
+        if (e.data.size) chunks.push(e.data);
+      };
+      rec.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(chunks, { type: rec.mimeType || 'audio/webm' });
+        const file = new File([blob], 'voice.webm', {
+          type: blob.type || 'audio/webm',
+        });
+        void sendChatFile(file);
+      };
+      recorderRef.current = rec;
+      rec.start();
+      setRecording(true);
+      recordTimerRef.current = setTimeout(() => stopVoice(), 20_000);
+    } catch (e) {
+      setErr(
+        e instanceof Error
+          ? e.message
+          : 'Microphone unavailable'
+      );
+    }
+  }, [activePeer, recording, sendChatFile, stopVoice]);
 
   const nameOf = (peer: string) => profiles[peer]?.name || short(peer);
   const unreadOf = (peer: string) =>
@@ -866,8 +959,8 @@ const NostrChat: React.FC = () => {
                         <p className="truncate text-[11px] wallet-muted">
                           {c.last
                             ? `${c.last.mine ? t('chat.youPrefix') : ''}${
-                                isInlineChatImage(c.last.text)
-                                  ? 'Photo'
+                                isInlineChatMedia(c.last.text)
+                                  ? inlineChatLabel(c.last.text)
                                   : c.last.text
                               }`
                             : t('chat.newConversation')}
@@ -982,13 +1075,55 @@ const NostrChat: React.FC = () => {
                                     </p>
                                   )}
                                   {(() => {
-                                    if (isInlineChatImage(m.text)) {
+                                    const inline = parseInlineChatFile(m.text);
+                                    if (inline) {
+                                      if (inline.mime.startsWith('image/')) {
+                                        return (
+                                          <img
+                                            src={inline.dataUrl}
+                                            alt=""
+                                            className="max-h-48 max-w-full rounded-lg"
+                                          />
+                                        );
+                                      }
+                                      if (inline.mime.startsWith('audio/')) {
+                                        return (
+                                          <audio
+                                            controls
+                                            src={inline.dataUrl}
+                                            className="w-56"
+                                          />
+                                        );
+                                      }
+                                      if (inline.mime.startsWith('video/')) {
+                                        return (
+                                          <video
+                                            controls
+                                            src={inline.dataUrl}
+                                            className="max-h-48 max-w-full rounded-lg"
+                                          />
+                                        );
+                                      }
+                                      const name =
+                                        m.fileName ||
+                                        (inline.mime === 'application/pdf'
+                                          ? 'file.pdf'
+                                          : 'file');
                                       return (
-                                        <img
-                                          src={m.text}
-                                          alt=""
-                                          className="max-h-48 max-w-full rounded-lg"
-                                        />
+                                        <button
+                                          type="button"
+                                          className="text-left text-[11px] underline"
+                                          onClick={() =>
+                                            downloadInlineFile(
+                                              inline.dataUrl,
+                                              name
+                                            )
+                                          }
+                                        >
+                                          {inline.mime === 'application/pdf'
+                                            ? 'PDF — tap to save'
+                                            : `${name} — tap to save`}
+                                        </button>
                                       );
                                     }
                                     const tip = parseChatTip(m.text);
@@ -1178,9 +1313,49 @@ const NostrChat: React.FC = () => {
                     onChange={(e) => {
                       const file = e.target.files?.[0];
                       e.target.value = '';
-                      if (file) void sendChatPhoto(file);
+                      if (file) void sendChatFile(file);
                     }}
                   />
+                  <button
+                    type="button"
+                    className="rounded-lg border border-[var(--wallet-border)] px-2 py-2 text-[10px] font-semibold wallet-text-strong disabled:opacity-50"
+                    disabled={sending || !activePeer}
+                    onClick={() => chatFileRef.current?.click()}
+                    title="Send PDF or file in this chat (inside the wrap, no CDN)"
+                    aria-label="Send file"
+                  >
+                    <MdAttachFile aria-hidden="true" />
+                  </button>
+                  <input
+                    ref={chatFileRef}
+                    type="file"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      e.target.value = '';
+                      if (file) void sendChatFile(file);
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className={`rounded-lg border px-2 py-2 text-[10px] font-semibold disabled:opacity-50 ${
+                      recording
+                        ? 'border-red-400 text-red-400'
+                        : 'border-[var(--wallet-border)] wallet-text-strong'
+                    }`}
+                    disabled={sending || !activePeer}
+                    onClick={() =>
+                      recording ? stopVoice() : void startVoice()
+                    }
+                    title="Voice note, max 20s, inside the wrap (not NIP-A0 URL)"
+                    aria-label={recording ? 'Stop recording' : 'Record voice'}
+                  >
+                    {recording ? (
+                      <MdStop aria-hidden="true" />
+                    ) : (
+                      <MdMic aria-hidden="true" />
+                    )}
+                  </button>
                   <input
                     value={draft}
                     onChange={(e) => setDraft(e.target.value)}

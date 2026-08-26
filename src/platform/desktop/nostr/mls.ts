@@ -102,7 +102,7 @@ export {
 import { deriveNostrIdentity, loadNostrAccountSeed } from './identity';
 import { DISCOVERY_RELAYS, DEFAULT_RELAYS } from './defaultRelays';
 import { SimplePool } from 'nostr-tools';
-import { isInlineChatImage, type ChatMessage } from './chat';
+import { isInlineChatMedia, type ChatMessage } from './chat';
 import {
   encodeNostrGroupData,
   MARMOT_GROUP_DATA_EXT,
@@ -366,13 +366,20 @@ export function innerKind9(pubkey: string, text: string) {
   };
 }
 
-export function innerKind15(pubkey: string, dataUrl: string) {
+export function innerKind15(
+  pubkey: string,
+  dataUrl: string,
+  mime = 'image/jpeg',
+  fileName?: string
+) {
+  const tags: string[][] = [['file-type', mime]];
+  if (fileName) tags.push(['filename', fileName]);
   return {
     kind: 15,
     pubkey,
     created_at: Math.floor(Date.now() / 1000),
     content: dataUrl,
-    tags: [['file-type', 'image/jpeg']] as string[][],
+    tags,
   };
 }
 
@@ -977,8 +984,19 @@ export async function sendMlsPhoto(
   dataUrl: string,
   relays: string[] = DEFAULT_RELAYS
 ): Promise<{ id: string; at: number }> {
-  if (!isInlineChatImage(dataUrl)) {
-    throw new Error('Chat photos must be inline image data, not a URL');
+  return sendMlsFile(walletId, nostrGroupIdHex, roomId, dataUrl, relays);
+}
+
+export async function sendMlsFile(
+  walletId: number,
+  nostrGroupIdHex: string,
+  roomId: string,
+  dataUrl: string,
+  relays: string[] = DEFAULT_RELAYS,
+  extra?: { mimeType?: string; fileName?: string }
+): Promise<{ id: string; at: number }> {
+  if (!isInlineChatMedia(dataUrl)) {
+    throw new Error('Chat files must be inline data, not a URL');
   }
   const { mnemonic, passphrase } = await walletMnemonic(walletId);
   const nostr = await deriveNostrIdentity(mnemonic, passphrase);
@@ -986,7 +1004,14 @@ export async function sendMlsPhoto(
     walletId,
     nostrGroupIdHex,
     roomId,
-    JSON.stringify(innerKind15(nostr.pubkey, dataUrl)),
+    JSON.stringify(
+      innerKind15(
+        nostr.pubkey,
+        dataUrl,
+        extra?.mimeType,
+        extra?.fileName
+      )
+    ),
     relays
   );
 }
