@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { generateSecretKey, getPublicKey } from 'nostr-tools';
 import { wrapManyEvents, unwrapEvent } from 'nostr-tools/nip17';
-import { chatRelays, toPubkeyHex } from '../chat';
-import { PAYTACA_DISCOVERY_RELAYS } from '../defaultRelays';
+import { createKind10050, toPubkeyHex } from '../chat';
+import { DEFAULT_RELAYS, DISCOVERY_RELAYS, isDefaultNostrRelay } from '../defaultRelays';
 import { deriveNostrIdentity } from '../identity';
 
 // Exercises the NIP-17 DM crypto the chat service uses, offline (no relays):
@@ -78,14 +78,16 @@ describe('nostr chat DM (NIP-17)', () => {
     });
   });
 
-  it('always talks to Paytaca discovery so DMs are not OPTN-only', () => {
-    const merged = chatRelays(['wss://relay.damus.io']);
-    expect(merged[0]).toBe(PAYTACA_DISCOVERY_RELAYS[0]);
-    expect(merged).toContain('wss://relay.damus.io');
-    expect(chatRelays(['wss://relay.paytaca.com/', 'wss://relay.damus.io'])).toEqual([
-      'wss://relay.paytaca.com',
-      'wss://relay.damus.io',
-    ]);
+  it('uses DISCOVERY_RELAYS and createKind10050', () => {
+    expect(DISCOVERY_RELAYS).toEqual(['wss://relay.paytaca.com']);
+    expect(DEFAULT_RELAYS.slice(0, 8)).not.toContain('wss://relay.paytaca.com');
+    expect(DEFAULT_RELAYS).toContain('wss://relay.paytaca.com');
+    expect(isDefaultNostrRelay('wss://relay.paytaca.com/')).toBe(true);
+
+    const sk = generateSecretKey();
+    const evt = createKind10050([...DISCOVERY_RELAYS], sk);
+    expect(evt.kind).toBe(10050);
+    expect(evt.tags).toEqual([['relay', 'wss://relay.paytaca.com']]);
   });
 
   it('toPubkeyHex accepts npub and hex, rejects junk', () => {

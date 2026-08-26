@@ -34,7 +34,7 @@ import {
   subscribeMessages,
   fetchProfile,
   publishMyProfile,
-  publishMyDmRelays,
+  publishKind10050,
   loadStoredMessages,
   storeMessages,
   toPubkeyHex,
@@ -130,7 +130,7 @@ const NostrChat: React.FC = () => {
     myIdentity(walletId)
       .then(async (id) => {
         setMe(id);
-        void publishMyDmRelays(walletId, relays); // so peers' DMs reach us
+        void publishKind10050(walletId, relays);
         // Hydrate saved history (contacts survive restarts) + my own profile so
         // the name/picture I published are shown instead of an empty editor.
         const stored = await loadStoredMessages(id.pubkey);

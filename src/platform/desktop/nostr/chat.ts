@@ -17,13 +17,8 @@ import WalletManager from '../../../apis/WalletManager/WalletManager';
 import { deriveNostrIdentity, type NostrIdentity } from './identity';
 
 // Built-in bootstrap list — single source: defaultRelays.ts (also used by Redux).
-export {
-  DEFAULT_RELAYS,
-  PAYTACA_DISCOVERY_RELAYS,
-  chatRelays,
-  isDefaultNostrRelay,
-} from './defaultRelays';
-import { DEFAULT_RELAYS, chatRelays } from './defaultRelays';
+export { DEFAULT_RELAYS, DISCOVERY_RELAYS, isDefaultNostrRelay } from './defaultRelays';
+import { DEFAULT_RELAYS, DISCOVERY_RELAYS } from './defaultRelays';
 
 const GIFT_WRAP = 1059;
 const METADATA = 0;
@@ -80,18 +75,10 @@ export async function myIdentity(walletId: number): Promise<{ pubkey: string; np
   return { pubkey: id.pubkey, npub: id.npub };
 }
 
-/**
- * The recipient's NIP-17 DM relays (kind 10050) — where they actually read DMs.
- * Publishing a gift-wrap only to our own relays is the usual reason a DM never
- * arrives: the recipient isn't listening there. Falls back to empty (caller unions
- * with its own relays).
- */
-async function recipientDmRelays(pubkeyHex: string, lookupRelays: string[]): Promise<string[]> {
+async function fetchKind10050(relays: string[], pubKey: string): Promise<string[]> {
+  const lookup = Array.from(new Set([...DISCOVERY_RELAYS, ...relays]));
   try {
-    const evt = await getPool().get(chatRelays(lookupRelays), {
-      kinds: [DM_RELAY_LIST],
-      authors: [pubkeyHex],
-    });
+    const evt = await getPool().get(lookup, { kinds: [DM_RELAY_LIST], authors: [pubKey] });
     if (evt) {
       const urls = evt.tags.filter((t) => t[0] === 'relay' && t[1]).map((t) => t[1]);
       if (urls.length) return urls;
@@ -100,6 +87,18 @@ async function recipientDmRelays(pubkeyHex: string, lookupRelays: string[]): Pro
     /* not found / unreachable — fall back to caller relays */
   }
   return [];
+}
+
+export function createKind10050(relays: string[], secretKey: Uint8Array): Event {
+  return finalizeEvent(
+    {
+      kind: DM_RELAY_LIST,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: relays.map((url) => ['relay', url]),
+      content: '',
+    },
+    secretKey
+  );
 }
 
 /** Send a NIP-17 DM to `recipient` (npub or hex). Publishes to our relays AND the
@@ -112,8 +111,8 @@ export async function sendDirectMessage(
 ): Promise<void> {
   const id = await getIdentity(walletId);
   const recipientHex = toPubkeyHex(recipient);
-  const dmRelays = await recipientDmRelays(recipientHex, relays);
-  const targets = chatRelays([...relays, ...dmRelays]);
+  const dmRelays = await fetchKind10050(relays, recipientHex);
+  const targets = Array.from(new Set([...DISCOVERY_RELAYS, ...relays, ...dmRelays]));
   // wrapManyEvents prepends a self-addressed copy, so the sender's own messages
   // show up on their relays too.
   const wraps = wrapManyEvents(id.secretKey, [{ publicKey: recipientHex }], text);
@@ -128,24 +127,17 @@ export async function sendDirectMessage(
   }
 }
 
-/** Advertise where WE read DMs (kind 10050), so peers' sends reach us. */
-export async function publishMyDmRelays(
+export async function publishKind10050(
   walletId: number,
   relays: string[] = DEFAULT_RELAYS
 ): Promise<void> {
   const id = await getIdentity(walletId);
-  const advertised = chatRelays(relays);
-  const evt = finalizeEvent(
-    {
-      kind: DM_RELAY_LIST,
-      created_at: Math.floor(Date.now() / 1000),
-      tags: advertised.map((url) => ['relay', url]),
-      content: '',
-    },
-    id.secretKey
-  );
+  const advertised = Array.from(new Set([...DISCOVERY_RELAYS, ...relays]));
+  const evt = createKind10050(advertised, id.secretKey);
   await Promise.allSettled(getPool().publish(advertised, evt));
 }
+
+export const publishMyDmRelays = publishKind10050;
 
 /** Subscribe to incoming DMs for this wallet. Returns an unsubscribe fn. */
 export function subscribeMessages(
@@ -158,7 +150,7 @@ export function subscribeMessages(
   void (async () => {
     const id = await getIdentity(walletId);
     if (closed) return;
-    sub = getPool().subscribeMany(chatRelays(relays), { kinds: [GIFT_WRAP], '#p': [id.pubkey] }, {
+    sub = getPool().subscribeMany(Array.from(new Set([...DISCOVERY_RELAYS, ...relays])), { kinds: [GIFT_WRAP], '#p': [id.pubkey] }, {
       onevent(evt: Event) {
         try {
           const rumor = unwrapEvent(evt, id.secretKey);
