@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { generateSecretKey, getPublicKey } from 'nostr-tools';
 import { wrapManyEvents, unwrapEvent } from 'nostr-tools/nip17';
-import { toPubkeyHex } from '../chat';
+import { chatRelays, toPubkeyHex } from '../chat';
+import { PAYTACA_DISCOVERY_RELAYS } from '../defaultRelays';
 import { deriveNostrIdentity } from '../identity';
 
 // Exercises the NIP-17 DM crypto the chat service uses, offline (no relays):
@@ -75,6 +76,16 @@ describe('nostr chat DM (NIP-17)', () => {
       content: 'hello from desktop',
       pubkey: desktop.pubkey,
     });
+  });
+
+  it('always talks to Paytaca discovery so DMs are not OPTN-only', () => {
+    const merged = chatRelays(['wss://relay.damus.io']);
+    expect(merged[0]).toBe(PAYTACA_DISCOVERY_RELAYS[0]);
+    expect(merged).toContain('wss://relay.damus.io');
+    expect(chatRelays(['wss://relay.paytaca.com/', 'wss://relay.damus.io'])).toEqual([
+      'wss://relay.paytaca.com',
+      'wss://relay.damus.io',
+    ]);
   });
 
   it('toPubkeyHex accepts npub and hex, rejects junk', () => {

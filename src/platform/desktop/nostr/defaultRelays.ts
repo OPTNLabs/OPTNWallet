@@ -50,6 +50,8 @@ export const DEFAULT_RELAYS: string[] = [
   // Replacements for dead prior entries (alive this probe)
   'wss://yabu.me',
   'wss://pyramid.fiatjaf.com',
+  // Paytaca inbox discovery — last so fusion still uses the first ~8 prefix
+  'wss://relay.paytaca.com',
 ];
 
 /** Normalize for comparison (case, trailing slash). */
@@ -65,6 +67,30 @@ export const RETIRED_RELAYS: readonly string[] = [
   'wss://nostrue.com',
   'wss://relay.0xchat.com',
 ];
+
+/**
+ * Paytaca publishes kind-10050 and gift-wraps on this relay. OPTN was only
+ * talking to the general pool, so Paytaca never saw our inbox list and we
+ * never saw theirs. Kept off the fusion prefix (first ~8 of DEFAULT_RELAYS).
+ */
+export const PAYTACA_DISCOVERY_RELAYS: readonly string[] = [
+  'wss://relay.paytaca.com',
+];
+
+/** Relays used for NIP-17 DMs: user/bootstrap list plus Paytaca discovery. */
+export function chatRelays(relays: string[] | undefined | null): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const url of [...PAYTACA_DISCOVERY_RELAYS, ...(relays ?? [])]) {
+    const trimmed = url.trim();
+    if (!trimmed) continue;
+    const key = normalizeRelayUrl(trimmed);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(trimmed);
+  }
+  return out;
+}
 
 const RETIRED_SET = () =>
   new Set(RETIRED_RELAYS.map((r) => normalizeRelayUrl(r)));
