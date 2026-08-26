@@ -51,6 +51,7 @@ import {
   inlineChatLabel,
   isInlineChatMedia,
   MAX_INLINE_CHAT_DATA_URL,
+  inlineChatTooLargeMessage,
   parseInlineChatFile,
   refetchChatInbox,
   publishKind10050,
@@ -139,7 +140,7 @@ function fileToJpegDataUrl(file: File, size: number, quality: number): Promise<s
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         const dataUrl = canvas.toDataURL('image/jpeg', quality);
         if (dataUrl.length > MAX_INLINE_CHAT_DATA_URL) {
-          return reject(new Error('Photo too large for relays — pick a smaller image'));
+          return reject(new Error(inlineChatTooLargeMessage('image/jpeg')));
         }
         resolve(dataUrl);
       };
@@ -158,10 +159,9 @@ function fileToChatPhotoDataUrl(file: File): Promise<string> {
 }
 
 function fileToInlineDataUrl(file: File): Promise<string> {
+  const tooBig = inlineChatTooLargeMessage(file.type, file.name);
   if (file.size > 72_000) {
-    return Promise.reject(
-      new Error('File too large for a private wrap — keep it under ~70KB')
-    );
+    return Promise.reject(new Error(tooBig));
   }
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -170,7 +170,7 @@ function fileToInlineDataUrl(file: File): Promise<string> {
       const dataUrl =
         typeof reader.result === 'string' ? reader.result : '';
       if (!dataUrl.startsWith('data:') || dataUrl.length > MAX_INLINE_CHAT_DATA_URL) {
-        reject(new Error('File too large for a private wrap — keep it under ~70KB'));
+        reject(new Error(tooBig));
         return;
       }
       resolve(dataUrl);

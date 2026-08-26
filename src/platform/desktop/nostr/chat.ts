@@ -173,6 +173,24 @@ export function inlineChatLabel(content: string): string {
   return 'File';
 }
 
+export function inlineChatTooLargeMessage(mime = '', fileName = ''): string {
+  const m = mime.toLowerCase();
+  const n = fileName.toLowerCase();
+  if (m.startsWith('audio/') || n.includes('voice')) {
+    return 'Voice note is too long for a private wrap (keep under ~20 seconds). We do not upload voice to a host.';
+  }
+  if (m.startsWith('video/')) {
+    return 'This video is too big for a private wrap (~70KB). Short clips only — we do not upload to a CDN.';
+  }
+  if (m === 'application/pdf' || n.endsWith('.pdf')) {
+    return 'This PDF is too big for a private wrap (~70KB). Split it — we do not upload to a host.';
+  }
+  if (m.startsWith('image/')) {
+    return 'This photo is still too big for relays after shrinking. Pick a smaller image.';
+  }
+  return 'This file is too big for a private wrap (~70KB). We do not upload it to a CDN.';
+}
+
 export function createUnsignedKind15({
   dataUrl,
   senderPubKey,
@@ -199,7 +217,7 @@ export function createUnsignedKind15({
     throw new Error('Chat files must be inline data, not a URL');
   }
   if (parsed.dataUrl.length > MAX_INLINE_CHAT_DATA_URL) {
-    throw new Error('File too large for a private wrap — keep it under ~70KB');
+    throw new Error(inlineChatTooLargeMessage(mimeType || parsed.mime, fileName));
   }
   const mime = mimeType || parsed.mime;
   const tags: string[][] = [['file-type', mime]];
@@ -277,7 +295,7 @@ async function publishWraps(targets: string[], wraps: Event[]): Promise<void> {
       (r): r is PromiseRejectedResult => r.status === 'rejected'
     );
     throw new Error(
-      `No relay accepted the message${reason ? `: ${String(reason.reason)}` : ''}. Check your connection or relays.`
+      `No relay accepted the message${reason ? `: ${String(reason.reason)}` : ''}. If this was a photo, voice, or file, it may still be over the relay size limit.`
     );
   }
 }

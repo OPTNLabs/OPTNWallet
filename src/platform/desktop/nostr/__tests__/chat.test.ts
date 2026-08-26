@@ -10,6 +10,7 @@ import {
   computeRoomId,
   parseChatTip,
   encodeChatTip,
+  inlineChatTooLargeMessage,
   isInlineChatImage,
   toPubkeyHex,
 } from '../chat';
@@ -283,6 +284,13 @@ describe('nostr chat DM (NIP-17)', () => {
         members: [bPk],
       })
     ).toThrow(/inline data/);
+    expect(inlineChatTooLargeMessage('audio/webm', 'voice.webm')).toMatch(
+      /Voice note/
+    );
+    expect(inlineChatTooLargeMessage('application/pdf', 'doc.pdf')).toMatch(
+      /PDF/
+    );
+    expect(inlineChatTooLargeMessage('video/webm')).toMatch(/video/i);
   });
 
   it('toPubkeyHex accepts npub and hex, rejects junk', () => {
