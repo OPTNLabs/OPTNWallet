@@ -611,6 +611,7 @@ export async function publishBchAddress(
   await Promise.allSettled(getPool().publish(targets, evt));
 }
 
+/** Local-only face. Do not publish as kind-0 picture — docs/nostr-chat-tiers.md avatars. */
 const AVATAR_STORE = (pubkey: string) => `nostr-chat-avatar:${pubkey}`;
 
 export async function storeLocalAvatar(pubkey: string, dataUrl: string) {

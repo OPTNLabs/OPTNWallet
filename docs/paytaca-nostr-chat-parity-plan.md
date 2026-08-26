@@ -43,6 +43,8 @@ and its chat UI at the same revision.
 - Contact save/rename/block, archive/unarchive, delete/reset, and relay-history
   reconstruction.
 - Attachments, image/PDF handling, and upload/download safety limits.
+  Avatars stay local on purpose (no kind-0 `picture` / no `https` fetch) until
+  a private media path exists — [nostr-chat-tiers.md](./nostr-chat-tiers.md#avatars-until-a-private-media-path).
 - Send-BCH/tip flow with wallet/network-aware confirmation.
 - Conversation-info and group-info screens, message context actions, unread
   counts, date separators, pagination, and scroll restoration.
