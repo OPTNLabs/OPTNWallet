@@ -31,12 +31,20 @@ import { useI18n } from '../../i18n/useI18n';
 import {
   myIdentity,
   sendDirectMessage,
+  sendReaction,
+  sendReadReceipt,
   subscribeMessages,
   fetchProfile,
+  fetchPublishedAvatar,
+  fetchPublishedDisplayName,
   publishMyProfile,
+  publishAvatar,
+  publishDisplayName,
   publishKind10050,
   loadStoredMessages,
   storeMessages,
+  loadLastRead,
+  storeLastRead,
   toPubkeyHex,
   type ChatMessage,
   type NostrProfile,
@@ -54,10 +62,22 @@ const mergeById = (a: ChatMessage[], b: ChatMessage[]): ChatMessage[] => {
   );
 };
 
+const isChatText = (m: ChatMessage) => (m.kind ?? 14) === 14;
+
+const relativeTime = (at: number): string => {
+  const s = Math.max(0, Math.floor(Date.now() / 1000) - at);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86400)}d`;
+};
+
+const REACTION_EMOJIS = ['👍', '❤️', '😂', '🔥'] as const;
+
 const Avatar: React.FC<{ url?: string; fallback: string; size?: number }> = ({
   url,
   fallback,
-  size = 44,
+  size = 52,
 }) => (
   <div
     className="grid shrink-0 place-items-center overflow-hidden rounded-full border border-[var(--wallet-border)] bg-[var(--wallet-accent)]/15 text-xs font-bold text-[var(--wallet-accent)]"
@@ -121,6 +141,7 @@ const NostrChat: React.FC = () => {
   const [myName, setMyName] = useState('');
   const [myPicture, setMyPicture] = useState('');
   const [profileMsg, setProfileMsg] = useState<string | null>(null);
+  const [lastRead, setLastRead] = useState<Record<string, number>>({});
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -135,9 +156,15 @@ const NostrChat: React.FC = () => {
         // the name/picture I published are shown instead of an empty editor.
         const stored = await loadStoredMessages(id.pubkey);
         if (stored.length) setMessages((prev) => mergeById(prev, stored));
-        const mine = await fetchProfile(id.pubkey, relays);
-        if (mine.name) setMyName(mine.name);
-        if (mine.picture) setMyPicture(mine.picture);
+        const read = await loadLastRead(id.pubkey);
+        setLastRead(read);
+        const [mine, avatar, displayName] = await Promise.all([
+          fetchProfile(id.pubkey, relays),
+          fetchPublishedAvatar(relays, id.pubkey),
+          fetchPublishedDisplayName(relays, id.pubkey),
+        ]);
+        if (displayName || mine.name) setMyName(displayName || mine.name || '');
+        if (avatar || mine.picture) setMyPicture(avatar || mine.picture || '');
       })
       .catch((e) => setErr(e instanceof Error ? e.message : String(e)));
   }, [walletId, relays]);
@@ -146,6 +173,10 @@ const NostrChat: React.FC = () => {
   useEffect(() => {
     if (me && messages.length) void storeMessages(me.pubkey, messages);
   }, [me, messages]);
+
+  useEffect(() => {
+    if (me) void storeLastRead(me.pubkey, lastRead);
+  }, [me, lastRead]);
 
   // One subscription for all my DMs; the thread view filters to the open peer.
   useEffect(() => {
@@ -178,6 +209,7 @@ const NostrChat: React.FC = () => {
   const conversations = useMemo(() => {
     const map = new Map<string, { peer: string; last: ChatMessage | null }>();
     for (const m of messages) {
+      if (!isChatText(m)) continue;
       const peer = m.mine ? m.to[0] ?? '' : m.from;
       if (!peer || peer === me?.pubkey) continue;
       const cur = map.get(peer);
@@ -200,10 +232,23 @@ const NostrChat: React.FC = () => {
   useEffect(() => {
     for (const c of conversations) {
       if (profiles[c.peer]) continue;
-      fetchProfile(c.peer, relays)
-        .then((p) =>
+      Promise.all([
+        fetchProfile(c.peer, relays),
+        fetchPublishedAvatar(relays, c.peer),
+        fetchPublishedDisplayName(relays, c.peer),
+      ])
+        .then(([p, avatar, displayName]) =>
           setProfiles((prev) =>
-            prev[c.peer] ? prev : { ...prev, [c.peer]: p }
+            prev[c.peer]
+              ? prev
+              : {
+                  ...prev,
+                  [c.peer]: {
+                    ...p,
+                    name: displayName || p.name,
+                    picture: avatar || p.picture,
+                  },
+                }
           )
         )
         .catch(() => {});
@@ -215,14 +260,58 @@ const NostrChat: React.FC = () => {
       activePeer
         ? messages.filter(
             (m) =>
-              m.from === activePeer || (m.mine && m.to.includes(activePeer))
+              isChatText(m) &&
+              (m.from === activePeer || (m.mine && m.to.includes(activePeer)))
           )
         : [],
     [messages, activePeer]
   );
+  const reactionsByTarget = useMemo(() => {
+    const map = new Map<string, ChatMessage[]>();
+    for (const m of messages) {
+      if ((m.kind ?? 14) !== 7 || m.isReadReceipt) continue;
+      for (const target of m.targetIds ?? []) {
+        const list = map.get(target) ?? [];
+        list.push(m);
+        map.set(target, list);
+      }
+    }
+    return map;
+  }, [messages]);
+  const deletedIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const m of messages) {
+      if ((m.kind ?? 14) === 5) {
+        for (const target of m.targetIds ?? []) ids.add(target);
+      }
+    }
+    return ids;
+  }, [messages]);
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [thread.length]);
+
+  useEffect(() => {
+    if (!activePeer || !me || walletId <= 0) return;
+    const previouslyRead = lastRead[activePeer];
+    const unread = previouslyRead
+      ? thread.filter((m) => !m.mine && m.at > previouslyRead)
+      : [];
+    setLastRead((prev) => ({
+      ...prev,
+      [activePeer]: Math.floor(Date.now() / 1000),
+    }));
+    if (unread.length) {
+      void sendReadReceipt(
+        walletId,
+        activePeer,
+        unread.map((m) => m.id),
+        relays
+      );
+    }
+    // Marking read is intentional on open; lastRead is updated after.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activePeer]);
 
   const openConversation = useCallback(async () => {
     setErr(null);
@@ -232,8 +321,19 @@ const NostrChat: React.FC = () => {
       setShowNewChat(false);
       setRecipient('');
       if (!profiles[hex]) {
-        const p = await fetchProfile(hex, relays);
-        setProfiles((prev) => ({ ...prev, [hex]: p }));
+        const [p, avatar, displayName] = await Promise.all([
+          fetchProfile(hex, relays),
+          fetchPublishedAvatar(relays, hex),
+          fetchPublishedDisplayName(relays, hex),
+        ]);
+        setProfiles((prev) => ({
+          ...prev,
+          [hex]: {
+            ...p,
+            name: displayName || p.name,
+            picture: avatar || p.picture,
+          },
+        }));
       }
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -277,11 +377,15 @@ const NostrChat: React.FC = () => {
   const saveProfile = useCallback(async () => {
     setProfileMsg(null);
     try {
-      await publishMyProfile(
-        walletId,
-        { name: myName || undefined, picture: myPicture || undefined },
-        relays
-      );
+      await Promise.all([
+        publishMyProfile(
+          walletId,
+          { name: myName || undefined, picture: myPicture || undefined },
+          relays
+        ),
+        myName ? publishDisplayName(walletId, myName, relays) : Promise.resolve(),
+        myPicture ? publishAvatar(walletId, myPicture, relays) : Promise.resolve(),
+      ]);
       setProfileMsg(t('chat.profilePublished'));
     } catch (e) {
       setProfileMsg(e instanceof Error ? e.message : String(e));
@@ -289,6 +393,22 @@ const NostrChat: React.FC = () => {
   }, [walletId, myName, myPicture, relays, t]);
 
   const nameOf = (peer: string) => profiles[peer]?.name || short(peer);
+  const unreadOf = (peer: string) =>
+    messages.filter(
+      (m) =>
+        isChatText(m) &&
+        !m.mine &&
+        m.from === peer &&
+        m.at > (lastRead[peer] ?? 0)
+    ).length;
+  const reactTo = async (m: ChatMessage, emoji: string) => {
+    if (!activePeer || walletId <= 0) return;
+    try {
+      await sendReaction(walletId, activePeer, m.id, m.from, emoji, relays);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  };
   const showThread = activePeer !== null;
 
   return (
@@ -467,16 +587,31 @@ const NostrChat: React.FC = () => {
                     <Avatar
                       url={profiles[c.peer]?.picture}
                       fallback={nameOf(c.peer)}
+                      size={52}
                     />
                     <div className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-semibold wallet-text-strong">
-                        {nameOf(c.peer)}
-                      </span>
-                      <p className="truncate text-[11px] wallet-muted">
-                        {c.last
-                          ? `${c.last.mine ? t('chat.youPrefix') : ''}${c.last.text}`
-                          : t('chat.newConversation')}
-                      </p>
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span className="block truncate text-sm font-semibold wallet-text-strong">
+                          {nameOf(c.peer)}
+                        </span>
+                        {c.last && (
+                          <span className="shrink-0 text-[10px] wallet-muted">
+                            {relativeTime(c.last.at)}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="truncate text-[11px] wallet-muted">
+                          {c.last
+                            ? `${c.last.mine ? t('chat.youPrefix') : ''}${c.last.text}`
+                            : t('chat.newConversation')}
+                        </p>
+                        {unreadOf(c.peer) > 0 && (
+                          <span className="grid h-5 min-w-5 place-items-center rounded-full bg-[var(--wallet-accent)] px-1.5 text-[10px] font-bold text-white">
+                            {unreadOf(c.peer)}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </button>
                 ))
@@ -520,22 +655,61 @@ const NostrChat: React.FC = () => {
                       {t('chat.noMessages')}
                     </p>
                   ) : (
-                    thread.map((m) => (
-                      <div
-                        key={m.id}
-                        className={`flex ${m.mine ? 'justify-end' : 'justify-start'}`}
-                      >
+                    thread.map((m) => {
+                      const gone = deletedIds.has(m.id);
+                      const reactions = reactionsByTarget.get(m.id) ?? [];
+                      return (
                         <div
-                          className={`max-w-[80%] rounded-2xl px-3 py-2 text-xs leading-relaxed ${
-                            m.mine
-                              ? 'rounded-tr-md border border-[var(--wallet-accent)]/30 bg-[var(--wallet-accent)]/10 wallet-text-strong'
-                              : 'rounded-tl-md border border-[var(--wallet-border)] bg-[var(--wallet-surface-strong)] wallet-text-strong'
-                          }`}
+                          key={m.id}
+                          className={`flex ${m.mine ? 'justify-end' : 'justify-start'}`}
                         >
-                          {m.text}
+                          <div className="max-w-[80%] space-y-1">
+                            <div
+                              className={`rounded-2xl px-3 py-2 text-xs leading-relaxed ${
+                                m.mine
+                                  ? 'rounded-tr-md border border-[var(--wallet-accent)]/30 bg-[var(--wallet-accent)]/10 wallet-text-strong'
+                                  : 'rounded-tl-md border border-[var(--wallet-border)] bg-[var(--wallet-surface-strong)] wallet-text-strong'
+                              }`}
+                            >
+                              {gone ? (
+                                <span className="italic wallet-muted">
+                                  Deleted
+                                </span>
+                              ) : (
+                                m.text
+                              )}
+                            </div>
+                            {!gone && (
+                              <div
+                                className={`flex flex-wrap items-center gap-1 ${
+                                  m.mine ? 'justify-end' : 'justify-start'
+                                }`}
+                              >
+                                {reactions.map((r) => (
+                                  <span
+                                    key={r.id}
+                                    className="rounded-full border border-[var(--wallet-border)] px-1.5 py-0.5 text-[11px]"
+                                  >
+                                    {r.emoji}
+                                  </span>
+                                ))}
+                                {REACTION_EMOJIS.map((emoji) => (
+                                  <button
+                                    key={emoji}
+                                    type="button"
+                                    className="rounded-full px-1 text-[11px] opacity-50 hover:opacity-100"
+                                    aria-label={emoji}
+                                    onClick={() => void reactTo(m, emoji)}
+                                  >
+                                    {emoji}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    ))
+                      );
+                    })
                   )}
                   <div ref={bottomRef} />
                 </div>

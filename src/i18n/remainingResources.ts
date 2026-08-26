@@ -56,8 +56,8 @@ export const remainingTranslations = {
     'wc.scanQr': 'Scan QR',
     'wc.connect': 'Connect',
     'homeConnect.description':
-      'Paste or scan a CashConnect invite, WalletConnect URI, or payment address. Approve requests stay on Home.',
-    'homeConnect.placeholder': 'bch-cc-v1:… or wc:…',
+      'Paste or scan a CashConnect invite, WalletConnect URI, Wizard URI, or payment address. Approve requests stay on Home.',
+    'homeConnect.placeholder': 'bch-cc-v1:… or wc:… or wiz://…',
     'homeConnect.pasteUri':
       'Paste or scan a connection URI or payment address.',
     'wc.noQr': 'No QR code detected. Try again.',

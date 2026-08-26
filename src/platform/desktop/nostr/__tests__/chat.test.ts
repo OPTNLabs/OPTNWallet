@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { generateSecretKey, getPublicKey } from 'nostr-tools';
 import { wrapManyEvents, unwrapEvent } from 'nostr-tools/nip17';
-import { createKind10050, toPubkeyHex } from '../chat';
+import {
+  createKind10050,
+  createReactionGiftWraps,
+  createKind5DeletionGiftWraps,
+  toPubkeyHex,
+} from '../chat';
 import { DEFAULT_RELAYS, DISCOVERY_RELAYS, isDefaultNostrRelay } from '../defaultRelays';
 import { deriveNostrIdentity } from '../identity';
 
@@ -88,6 +93,68 @@ describe('nostr chat DM (NIP-17)', () => {
     const evt = createKind10050([...DISCOVERY_RELAYS], sk);
     expect(evt.kind).toBe(10050);
     expect(evt.tags).toEqual([['relay', 'wss://relay.paytaca.com']]);
+  });
+
+  it('createReactionGiftWraps gift-wraps a NIP-25 kind 7', async () => {
+    const aSk = generateSecretKey();
+    const aPk = getPublicKey(aSk);
+    const bSk = generateSecretKey();
+    const bPk = getPublicKey(bSk);
+    const messageId = 'a'.repeat(64);
+
+    const wraps = await createReactionGiftWraps({
+      messageId,
+      senderPubKey: aPk,
+      recipientPubKeys: [aPk],
+      emoji: '👍',
+      reactorPubKey: bPk,
+      reactorPrivKey: bSk,
+    });
+    expect(wraps.length).toBeGreaterThanOrEqual(2);
+    for (const w of wraps) {
+      expect(w.kind).toBe(1059);
+      expect(JSON.stringify(w)).not.toContain('👍');
+    }
+
+    const forA = wraps.find((w) =>
+      w.tags.some((t) => t[0] === 'p' && t[1] === aPk)
+    )!;
+    const rumor = unwrapEvent(forA, aSk);
+    expect(rumor.kind).toBe(7);
+    expect(rumor.content).toBe('👍');
+    expect(rumor.tags).toEqual(
+      expect.arrayContaining([
+        ['e', messageId, '', aPk],
+        ['p', aPk, ''],
+        ['k', '14'],
+      ])
+    );
+  });
+
+  it('createKind5DeletionGiftWraps gift-wraps a kind 5', async () => {
+    const aSk = generateSecretKey();
+    const aPk = getPublicKey(aSk);
+    const bSk = generateSecretKey();
+    const bPk = getPublicKey(bSk);
+    const messageId = 'b'.repeat(64);
+
+    const wraps = await createKind5DeletionGiftWraps({
+      messageId,
+      senderPubKey: aPk,
+      members: [bPk],
+      senderPrivKey: aSk,
+    });
+    const forB = wraps.find((w) =>
+      w.tags.some((t) => t[0] === 'p' && t[1] === bPk)
+    )!;
+    const rumor = unwrapEvent(forB, bSk);
+    expect(rumor.kind).toBe(5);
+    expect(rumor.tags).toEqual(
+      expect.arrayContaining([
+        ['e', messageId],
+        ['k', '14'],
+      ])
+    );
   });
 
   it('toPubkeyHex accepts npub and hex, rejects junk', () => {

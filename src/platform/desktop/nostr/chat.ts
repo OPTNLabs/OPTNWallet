@@ -10,8 +10,15 @@
 // wallet's NIP-06 identity (identity.ts) signs/decrypts. The secret key is
 // derived once per wallet and cached in memory only.
 
-import { SimplePool, finalizeEvent, nip19, type Event } from 'nostr-tools';
+import {
+  SimplePool,
+  finalizeEvent,
+  getEventHash,
+  nip19,
+  type Event,
+} from 'nostr-tools';
 import { wrapManyEvents, unwrapEvent } from 'nostr-tools/nip17';
+import { wrapManyEvents as wrapRumor } from 'nostr-tools/nip59';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
 import WalletManager from '../../../apis/WalletManager/WalletManager';
 import { deriveNostrIdentity, type NostrIdentity } from './identity';
@@ -23,6 +30,11 @@ import { DEFAULT_RELAYS, DISCOVERY_RELAYS } from './defaultRelays';
 const GIFT_WRAP = 1059;
 const METADATA = 0;
 const DM_RELAY_LIST = 10050; // NIP-17: where a user reads their private DMs
+const REACTION = 7; // NIP-25
+const DELETION = 5;
+const KIND_30078 = 30078; // NIP-78 parameterized replaceable (Paytaca profile)
+const PAYTACA_AVATAR = 'paytaca:avatar';
+const PAYTACA_DISPLAY_NAME = 'paytaca:display-name';
 
 let pool: SimplePool | null = null;
 const getPool = () => (pool ??= new SimplePool());
@@ -48,6 +60,12 @@ export interface ChatMessage {
   text: string;
   at: number; // unix seconds
   mine: boolean;
+  kind?: number; // 14 DM, 7 NIP-25, 5 delete
+  replyTo?: string;
+  editOf?: string;
+  targetIds?: string[];
+  emoji?: string;
+  isReadReceipt?: boolean;
 }
 
 export interface NostrProfile {
@@ -139,6 +157,174 @@ export async function publishKind10050(
 
 export const publishMyDmRelays = publishKind10050;
 
+function rumorToChatMessage(
+  rumor: {
+    id: string;
+    pubkey: string;
+    content: string;
+    created_at: number;
+    kind?: number;
+    tags: string[][];
+  },
+  mine: boolean
+): ChatMessage {
+  const kind = rumor.kind ?? 14;
+  const to = rumor.tags.filter((t) => t[0] === 'p').map((t) => t[1]);
+  const targetIds = rumor.tags.filter((t) => t[0] === 'e' && t[1]).map((t) => t[1]);
+  const replyTo = rumor.tags.find((t) => t[0] === 'e')?.[1];
+  const editOf = rumor.tags.find((t) => t[0] === 'edit')?.[1];
+  const isReadReceipt =
+    kind === REACTION &&
+    (rumor.content === '👀' ||
+      rumor.tags.some((t) => t[0] === 'nonotif' && t[1] === 'read-receipt'));
+  return {
+    id: rumor.id,
+    from: rumor.pubkey,
+    to,
+    text: rumor.content,
+    at: rumor.created_at,
+    mine,
+    kind,
+    replyTo,
+    editOf,
+    targetIds: targetIds.length ? targetIds : undefined,
+    emoji: kind === REACTION ? rumor.content : undefined,
+    isReadReceipt,
+  };
+}
+
+export async function createReactionGiftWraps({
+  messageId,
+  senderPubKey,
+  recipientPubKeys,
+  emoji,
+  reactorPubKey,
+  reactorPrivKey,
+  relayHint = '',
+}: {
+  messageId: string;
+  senderPubKey: string;
+  recipientPubKeys: string[];
+  emoji: string;
+  reactorPubKey: string;
+  reactorPrivKey: Uint8Array;
+  relayHint?: string;
+}): Promise<Event[]> {
+  const kind7 = {
+    kind: REACTION,
+    pubkey: reactorPubKey,
+    created_at: Math.floor(Date.now() / 1000),
+    content: emoji,
+    tags: [
+      ['e', messageId, relayHint, senderPubKey],
+      ['p', senderPubKey, relayHint],
+      ['k', '14'],
+    ],
+  };
+  (kind7 as { id: string }).id = getEventHash(kind7);
+  return wrapRumor(kind7, reactorPrivKey, recipientPubKeys) as Event[];
+}
+
+export async function createReadReceiptGiftWrap({
+  messageIds,
+  messageId,
+  senderPubKey,
+  receiverPubKey,
+  receiverPrivKey,
+  relayHint = '',
+}: {
+  messageIds?: string[];
+  messageId?: string;
+  senderPubKey: string;
+  receiverPubKey: string;
+  receiverPrivKey: Uint8Array;
+  relayHint?: string;
+}): Promise<Event> {
+  const ids = messageIds ?? (messageId ? [messageId] : []);
+  const kind7 = {
+    kind: REACTION,
+    pubkey: receiverPubKey,
+    created_at: Math.floor(Date.now() / 1000),
+    content: '👀',
+    tags: [
+      ...ids.map((id) => ['e', id, relayHint, senderPubKey]),
+      ['p', senderPubKey, relayHint],
+      ['k', '14'],
+      ['nonotif', 'read-receipt'],
+    ],
+  };
+  (kind7 as { id: string }).id = getEventHash(kind7);
+  const wraps = wrapRumor(kind7, receiverPrivKey, [senderPubKey]) as Event[];
+  return wraps[1] ?? wraps[0];
+}
+
+export async function createKind5DeletionGiftWraps({
+  messageId,
+  senderPubKey,
+  members,
+  senderPrivKey,
+}: {
+  messageId: string;
+  senderPubKey: string;
+  members: string[];
+  senderPrivKey: Uint8Array;
+}): Promise<Event[]> {
+  const kind5 = {
+    kind: DELETION,
+    pubkey: senderPubKey,
+    created_at: Math.floor(Date.now() / 1000),
+    content: '',
+    tags: [
+      ['e', messageId],
+      ['k', '14'],
+    ],
+  };
+  (kind5 as { id: string }).id = getEventHash(kind5);
+  return wrapRumor(kind5, senderPrivKey, members) as Event[];
+}
+
+export async function sendReaction(
+  walletId: number,
+  recipient: string,
+  messageId: string,
+  messageSenderPubKey: string,
+  emoji: string,
+  relays: string[] = DEFAULT_RELAYS
+): Promise<void> {
+  const id = await getIdentity(walletId);
+  const recipientHex = toPubkeyHex(recipient);
+  const dmRelays = await fetchKind10050(relays, recipientHex);
+  const targets = Array.from(new Set([...DISCOVERY_RELAYS, ...relays, ...dmRelays]));
+  const wraps = await createReactionGiftWraps({
+    messageId,
+    senderPubKey: messageSenderPubKey,
+    recipientPubKeys: [recipientHex],
+    emoji,
+    reactorPubKey: id.pubkey,
+    reactorPrivKey: id.secretKey,
+  });
+  await Promise.allSettled(wraps.flatMap((w) => getPool().publish(targets, w)));
+}
+
+export async function sendReadReceipt(
+  walletId: number,
+  senderPubKey: string,
+  messageIds: string[],
+  relays: string[] = DEFAULT_RELAYS
+): Promise<void> {
+  if (!messageIds.length) return;
+  const id = await getIdentity(walletId);
+  const wrap = await createReadReceiptGiftWrap({
+    messageIds,
+    senderPubKey,
+    receiverPubKey: id.pubkey,
+    receiverPrivKey: id.secretKey,
+  });
+  const dmRelays = await fetchKind10050(relays, senderPubKey);
+  const targets = Array.from(new Set([...DISCOVERY_RELAYS, ...relays, ...dmRelays]));
+  await Promise.allSettled(getPool().publish(targets, wrap));
+}
+
 /** Subscribe to incoming DMs for this wallet. Returns an unsubscribe fn. */
 export function subscribeMessages(
   walletId: number,
@@ -154,14 +340,7 @@ export function subscribeMessages(
       onevent(evt: Event) {
         try {
           const rumor = unwrapEvent(evt, id.secretKey);
-          onMessage({
-            id: rumor.id,
-            from: rumor.pubkey,
-            to: rumor.tags.filter((t) => t[0] === 'p').map((t) => t[1]),
-            text: rumor.content,
-            at: rumor.created_at,
-            mine: rumor.pubkey === id.pubkey,
-          });
+          onMessage(rumorToChatMessage(rumor, rumor.pubkey === id.pubkey));
         } catch {
           /* not addressed to us, or undecryptable — ignore */
         }
@@ -207,6 +386,130 @@ export async function publishMyProfile(
     id.secretKey
   );
   await Promise.allSettled(getPool().publish(relays, evt));
+}
+
+async function fetchKind30078(
+  relays: string[],
+  pubKey: string,
+  dTag: string
+): Promise<Event | null> {
+  const lookup = Array.from(new Set([...DISCOVERY_RELAYS, ...relays]));
+  try {
+    return (
+      (await getPool().get(lookup, {
+        kinds: [KIND_30078],
+        authors: [pubKey],
+        '#d': [dTag],
+      })) ?? null
+    );
+  } catch {
+    return null;
+  }
+}
+
+function parseKind30078Data(content: string): Record<string, string> | null {
+  try {
+    const parsed = JSON.parse(content || '{}') as {
+      data?: Record<string, string>;
+    };
+    return parsed?.data ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchPublishedAvatar(
+  relays: string[],
+  pubKey: string
+): Promise<string | null> {
+  const evt = await fetchKind30078(relays, pubKey, PAYTACA_AVATAR);
+  const avatar = parseKind30078Data(evt?.content ?? '')?.avatar?.trim();
+  return avatar || null;
+}
+
+export async function fetchPublishedDisplayName(
+  relays: string[],
+  pubKey: string
+): Promise<string | null> {
+  const evt = await fetchKind30078(relays, pubKey, PAYTACA_DISPLAY_NAME);
+  const name = parseKind30078Data(evt?.content ?? '')?.displayName?.trim();
+  return name || null;
+}
+
+export async function publishAvatar(
+  walletId: number,
+  avatarDataUrl: string,
+  relays: string[] = DEFAULT_RELAYS
+): Promise<void> {
+  const id = await getIdentity(walletId);
+  const evt = finalizeEvent(
+    {
+      kind: KIND_30078,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [
+        ['d', PAYTACA_AVATAR],
+        ['p', id.pubkey],
+      ],
+      content: JSON.stringify({
+        name: 'Paytaca Avatar',
+        data: { avatar: avatarDataUrl },
+      }),
+    },
+    id.secretKey
+  );
+  const targets = Array.from(new Set([...DISCOVERY_RELAYS, ...relays]));
+  await Promise.allSettled(getPool().publish(targets, evt));
+}
+
+export async function publishDisplayName(
+  walletId: number,
+  displayName: string,
+  relays: string[] = DEFAULT_RELAYS
+): Promise<void> {
+  const id = await getIdentity(walletId);
+  const evt = finalizeEvent(
+    {
+      kind: KIND_30078,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [
+        ['d', PAYTACA_DISPLAY_NAME],
+        ['p', id.pubkey],
+      ],
+      content: JSON.stringify({
+        name: 'Paytaca Display Name',
+        data: { displayName },
+      }),
+    },
+    id.secretKey
+  );
+  const targets = Array.from(new Set([...DISCOVERY_RELAYS, ...relays]));
+  await Promise.allSettled(getPool().publish(targets, evt));
+}
+
+const READ_STORE_KEY = (pubkey: string) => `nostr-chat-read:${pubkey}`;
+
+export async function loadLastRead(
+  pubkey: string
+): Promise<Record<string, number>> {
+  try {
+    const stored = await idbGet(READ_STORE_KEY(pubkey));
+    return stored && typeof stored === 'object'
+      ? (stored as Record<string, number>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+export async function storeLastRead(
+  pubkey: string,
+  lastRead: Record<string, number>
+): Promise<void> {
+  try {
+    await idbSet(READ_STORE_KEY(pubkey), lastRead);
+  } catch {
+    /* best-effort */
+  }
 }
 
 // --- Local persistence (chat history saved in the wallet, Paytaca-style) ---
