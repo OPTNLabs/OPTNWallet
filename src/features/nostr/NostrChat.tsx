@@ -98,7 +98,6 @@ const Avatar: React.FC<{ url?: string; fallback: string; size?: number }> = ({
     className="grid shrink-0 place-items-center overflow-hidden rounded-full border border-[var(--wallet-border)] bg-[var(--wallet-accent)]/15 text-xs font-bold text-[var(--wallet-accent)]"
     style={{ height: size, width: size }}
   >
-    {/* Local/data URLs only — see docs/nostr-chat-tiers.md#avatars-until-a-private-media-path */}
     {url && !/^https?:/i.test(url) ? (
       <img src={url} alt="" className="h-full w-full object-cover" />
     ) : (

@@ -180,60 +180,48 @@ from nsec alone. Do not log it. Do not put `privateKeyHex` on MLS key types.
   or `/send 10 token:<64hex>`) plus the existing send-confirm screen.
 - Publish the RFC 9420 MLS group id on relays.
 - Publish a private-group member list in kind 30078 metadata.
-- Publish the user's face as kind-0 `picture` or public `paytaca:avatar`. See
-  [Avatars](#avatars-until-a-private-media-path).
 - Dual-write kind 14 for an MLS room.
+- Put a private-chat photo on a CDN / Blossom / `https` URL. See
+  [Private chat photos](#private-chat-photos).
 
 ---
 
-## Avatars (until a private media path)
+## Private chat photos
 
-**Choice, until we have a fetch we control:** keep photos **local**. Do not put
-a face on kind 0. Do not `GET` arbitrary `http(s)` picture URLs.
+**The leak we care about** is a picture sent **in a DM or MLS room** that
+someone else fetches over HTTP. That host sees the viewer’s IP, which file,
+and when. Kind 0 profile (name / bio / avatar) is a public phone book — not
+this rule.
 
-Everyone else uses [NIP-01](https://nips.nostr.com/01) kind 0
-`{ name, about, picture }` where `picture` is a URL. Damus, Amethyst, Primal,
-Paytaca all read that. Kind 0 is public JSON on a relay — that part is not the
-IP leak. The leak is **loading the URL**: the image host sees the viewer’s IP,
-which npub’s photo they opened, and when. Uploading to NIP-96 / [Blossom
-(NIP-B7)](https://nips.nostr.com/b7) shows the **upload** server the uploader’s
-IP; phone photos often still have GPS in EXIF unless stripped.
+Do **not** upload an in-chat photo to nostr.build, IPFS gateways, or Blossom
+and paste the URL in the message. A CDN is not anonymous; an IPFS/Blossom
+HTTPS gateway still sees the GET.
 
-What other clients do (they do **not** make kind 0 private):
+**When we send in-chat images:** put the **bytes in the encrypted payload**.
 
-| Client | Typical mitigation |
-| ------ | ------------------ |
-| Amethyst | Optional “don’t load media from people you don’t follow”; Blossom + local cache; tiny **NIP-95** inline blobs. Relays still see IP — VPN/Tor. |
-| Primal | Kind 0 URL still; app loads media from **Primal’s cache**, not nostr.build. “Enhanced privacy” = IP to the cache, not every CDN. Blossom `/media` (BUD-05) strips EXIF on upload. |
-| Paytaca | Kind 0 plus kind 30078 `paytaca:avatar`. A data URL in the event avoids a CDN fetch; an `https://` URL does not. |
+| Tier | Where the bytes go |
+| ---- | ------------------ |
+| DM | NIP-17 gift wrap (kind **15** file message, or equivalent inside the wrap) |
+| Private group | MLS application blob, still inside the 1059 wrap |
+| Open MLS | MLS application blob on 445 — still E2EE, no public URL |
 
-There is no interop “private avatar” other wallets will show. A face in kind 0
-is public and sticky.
+No `https://` in that payload. Relays already see wraps; we do not add an
+image host. Strip EXIF before send. Keep it small (relay size limits).
 
-**This wallet**
+We do **not** have in-chat photo send yet. When it lands, this is the wire.
+Profile avatars may use kind 0 / 30078 however product wants; that is not
+private chat.
 
-| | |
-| --- | --- |
-| Our photo | IndexedDB `nostr-chat-avatar:${npub}` only (`storeLocalAvatar` / `loadLocalAvatar`) |
-| Kind 0 | Name (and similar text) is fine. Do **not** set `picture` to a hosted URL or a data URL of a face |
-| Kind 30078 `paytaca:avatar` | Do not publish our face there |
-| Rendering | `NostrChat` `Avatar` only renders non-`http(s)` sources (data URLs / local). Otherwise initials |
-| Peer photos | We may *read* their kind 0 / 30078 for a name. We must not fetch their `https` picture |
+---
 
-Code: `src/features/nostr/NostrChat.tsx` (`Avatar`, `saveProfile`),
-`src/platform/desktop/nostr/chat.ts` (`storeLocalAvatar`, `publishMyProfile`).
+## Avatars (profile, not private chat)
 
-**Lift this rule when** all of these exist:
-
-1. Image bytes are fetched only through a path **we** run or the user opted
-   into (own cache, Tor, or a documented proxy) — never a raw GET to a URL
-   from kind 0.
-2. Uploads strip EXIF (Blossom `/media` / BUD-05 or equivalent).
-3. Product explicitly accepts a **public** kind-0 picture (interop with Damus /
-   Paytaca faces) **or** a private-media NIP exists that other clients
-   actually speak.
-
-Until then, keep the local-only path. Names interoperate; faces do not leak.
+Kind 0 `{ name, about, picture }` is [NIP-01](https://nips.nostr.com/01).
+Damus, Amethyst, Primal, Paytaca read it. That card is **public**. A `picture`
+URL has the extra CDN GET; inline bytes in the event do not. This wallet
+currently stores *our* chat-header photo in IndexedDB and does not `GET`
+`http(s)` for avatars (`NostrChat` `Avatar`). That is UI, not the private-chat
+photo rule above.
 
 ---
 

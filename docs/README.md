@@ -43,8 +43,7 @@ Technical documentation for contributors and third-party integrators.
 - [CashConnect](./cashconnect.md)
   - Nostr contract-system connector (Connections & features).
 - [Nostr chat tiers](./nostr-chat-tiers.md)
-  - DM (NIP-17) vs private MLS group vs open MLS group; avatars stay local
-    until a private media path exists.
+  - DM vs private/open MLS; in-chat photos stay inside the wrap (no CDN URL).
 - [CashScript Contract Systems](./cashscript-contract-systems.md)
   - BCH covenant design patterns, state-machine rules, and testing checklist.
 - [Custody Vault Design Notes](./custody-vault-design-notes.md)
