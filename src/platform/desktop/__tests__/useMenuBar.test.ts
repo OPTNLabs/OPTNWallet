@@ -400,4 +400,13 @@ describe('keyboard accelerators', () => {
     expect(chord({ key: 'n', altKey: true })).toBeNull();
     expect(chord({ key: 'q' })).toBeNull();
   });
+
+  it('does not steal Cut Copy Paste Select All or Undo', () => {
+    // macOS routes these through Edit in the app menu. Claiming them here
+    // made Cmd+V a no-op in WalletConnect / Wizard / CashConnect URI fields.
+    for (const key of ['c', 'v', 'x', 'a', 'z', 'y']) {
+      expect(chord({ key, ctrlKey: false, metaKey: true })).toBeNull();
+      expect(chord({ key })).toBeNull();
+    }
+  });
 });

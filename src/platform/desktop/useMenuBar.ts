@@ -156,7 +156,13 @@ export async function routeMenuActionToFocusedWindow(
  *
  * Modifier-exact on purpose: Ctrl+Shift+R and Ctrl+Alt+N are different chords and
  * must fall through rather than be silently swallowed.
+ *
+ * Cut/Copy/Paste/Select All/Undo/Redo stay native. On macOS the WebView only
+ * honours those chords when the app menu has a real Edit menu; claiming them
+ * here would swallow Cmd+V in WalletConnect / Wizard / CashConnect URI fields.
  */
+export const NATIVE_EDIT_KEYS = new Set(['c', 'v', 'x', 'a', 'z', 'y']);
+
 export function menuActionForKeyboardEvent(event: {
   key: string;
   ctrlKey: boolean;
@@ -166,10 +172,10 @@ export function menuActionForKeyboardEvent(event: {
 }): string | null {
   if (!(event.ctrlKey || event.metaKey)) return null;
   if (event.altKey || event.shiftKey) return null;
+  const key = event.key.toLowerCase();
+  if (NATIVE_EDIT_KEYS.has(key)) return null;
   return (
-    { n: 'new_wallet', l: 'lock_wallet', r: 'refresh_wallet' }[
-      event.key.toLowerCase()
-    ] ?? null
+    { n: 'new_wallet', l: 'lock_wallet', r: 'refresh_wallet' }[key] ?? null
   );
 }
 
@@ -673,6 +679,19 @@ export function useMenuBar(): void {
         ],
       });
 
+      const editMenu = await Submenu.new({
+        text: 'Edit',
+        items: [
+          await PredefinedMenuItem.new({ item: 'Undo' }),
+          await PredefinedMenuItem.new({ item: 'Redo' }),
+          await PredefinedMenuItem.new({ item: 'Separator' }),
+          await PredefinedMenuItem.new({ item: 'Cut' }),
+          await PredefinedMenuItem.new({ item: 'Copy' }),
+          await PredefinedMenuItem.new({ item: 'Paste' }),
+          await PredefinedMenuItem.new({ item: 'SelectAll' }),
+        ],
+      });
+
       const viewMenu = await Submenu.new({
         text: 'View',
         items: [
@@ -695,7 +714,9 @@ export function useMenuBar(): void {
         ],
       });
 
-      const menu = await Menu.new({ items: [fileMenu, walletMenu, viewMenu, helpMenu] });
+      const menu = await Menu.new({
+        items: [fileMenu, editMenu, walletMenu, viewMenu, helpMenu],
+      });
       if (disposed) return;
       await attachDesktopMenu(
         menu as unknown as DesktopMenuLike<typeof currentWindow>,
