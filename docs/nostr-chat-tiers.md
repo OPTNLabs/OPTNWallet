@@ -214,6 +214,26 @@ image host. Strip EXIF before send. Keep it small (relay size limits,
 ~70KB). Longer video usually will not fit; the send fails instead of
 uploading.
 
+### Spec kind 15 / NIP-A0 vs this wallet
+
+[NIP-17](https://nips.nostr.com/17) kind 15 says `content` is a **file URL**,
+with extra AES-GCM on the blob and keys in tags inside the wrap. [NIP-A0](https://nips.nostr.com/a0)
+voice is `kind 1222` with an audio URL. The wrap hides plaintext from the
+relay; the **host still sees** a GET (viewer IP, which file, when).
+
+| | Spec NIP-17 / A0 URL | Our inline wrap (DM) | Our **MLS** room |
+| --- | --- | --- | --- |
+| CDN / IP of viewers | Leaks to the file host | **No** | **No** |
+| Relay sees plaintext | No | No | No |
+| Steal nsec later | Reads the wrap + can fetch the URL | Reads the wrap (**no FS** on DMs) | **FS** — old epochs stay dark without the ratchet |
+| 10MB video / fat PDF | Possible | **No** (~70KB) | Same cap |
+| Paytaca / other kind-15 clients | They expect a URL | They likely **won’t** show our file | N/A |
+
+**Tradeoff:** we are stricter than those NIPs on “don’t leak the file to a
+host.” MLS is stronger than NIP-17 DMs for the same inline bytes (forward
+secrecy). We are weaker at huge media and at looking like stock kind 15.
+That is intentional.
+
 In-chat send uses kind **15** (DM wrap) or MLS inner kind 15 with
 `data:<mime>;base64,…` (photo, voice, PDF, short video, files). Profile
 publish writes **kind 0** and Paytaca kind **30078** (`paytaca:avatar` /
