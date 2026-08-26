@@ -208,9 +208,10 @@ HTTPS gateway still sees the GET.
 No `https://` in that payload. Relays already see wraps; we do not add an
 image host. Strip EXIF before send. Keep it small (relay size limits).
 
-We do **not** have in-chat photo send yet. When it lands, this is the wire.
-Profile avatars may use kind 0 / 30078 however product wants; that is not
-private chat.
+In-chat send uses kind **15** (DM wrap) or MLS inner kind 15 with a
+`data:image/jpeg;base64,…` body. Profile publish writes **kind 0** and Paytaca
+kind **30078** (`paytaca:avatar` / `paytaca:display-name`) with the same inline
+bytes. Refetch on the chat screen replays 1059s and MLS backups from relays.
 
 ---
 

@@ -18,6 +18,7 @@ import {
   MdChatBubbleOutline,
   MdContentCopy,
   MdImage,
+  MdRefresh,
   MdSearch,
   MdSend,
   MdSettings,
@@ -31,6 +32,7 @@ import { useI18n } from '../../i18n/useI18n';
 import {
   myIdentity,
   sendDirectMessage,
+  sendDirectPhoto,
   sendReaction,
   sendReadReceipt,
   subscribeMessages,
@@ -40,8 +42,11 @@ import {
   fetchPublishedBchAddress,
   publishMyProfile,
   publishDisplayName,
+  publishAvatar,
   storeLocalAvatar,
   loadLocalAvatar,
+  isInlineChatImage,
+  refetchChatInbox,
   publishKind10050,
   loadStoredMessages,
   storeMessages,
@@ -61,7 +66,9 @@ import {
   linkOwnDevice,
   loadMlsDeviceIndex,
   publishMlsKeyPackage,
+  refetchMlsInbox,
   sendMlsMessage,
+  sendMlsPhoto,
   subscribeMls,
 } from '../../platform/desktop/nostr/mls';
 import { useWalletConfirm } from '../../components/WalletConfirmDialog';
@@ -77,7 +84,8 @@ const mergeById = (a: ChatMessage[], b: ChatMessage[]): ChatMessage[] => {
   );
 };
 
-const isChatText = (m: ChatMessage) => (m.kind ?? 14) === 14;
+const isChatText = (m: ChatMessage) =>
+  (m.kind ?? 14) === 14 || m.kind === 15 || isInlineChatImage(m.text);
 
 const relativeTime = (at: number): string => {
   const s = Math.max(0, Math.floor(Date.now() / 1000) - at);
@@ -108,7 +116,7 @@ const Avatar: React.FC<{ url?: string; fallback: string; size?: number }> = ({
 
 /** Read a device image and downscale to a small square JPEG data URL, so the
  *  kind-0 profile stays small enough for relays to accept. */
-function fileToAvatarDataUrl(file: File): Promise<string> {
+function fileToJpegDataUrl(file: File, size: number, quality: number): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = () => reject(new Error('could not read image'));
@@ -116,22 +124,31 @@ function fileToAvatarDataUrl(file: File): Promise<string> {
       const img = new Image();
       img.onerror = () => reject(new Error('unsupported image'));
       img.onload = () => {
-        const S = 128;
         const canvas = document.createElement('canvas');
-        canvas.width = S;
-        canvas.height = S;
+        const scale = Math.min(1, size / Math.max(img.width, img.height));
+        canvas.width = Math.max(1, Math.round(img.width * scale));
+        canvas.height = Math.max(1, Math.round(img.height * scale));
         const ctx = canvas.getContext('2d');
         if (!ctx) return reject(new Error('canvas unavailable'));
-        const scale = Math.max(S / img.width, S / img.height);
-        const w = img.width * scale;
-        const h = img.height * scale;
-        ctx.drawImage(img, (S - w) / 2, (S - h) / 2, w, h);
-        resolve(canvas.toDataURL('image/jpeg', 0.8));
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL('image/jpeg', quality);
+        if (dataUrl.length > 120_000) {
+          return reject(new Error('Photo too large for relays — pick a smaller image'));
+        }
+        resolve(dataUrl);
       };
       img.src = typeof reader.result === 'string' ? reader.result : '';
     };
     reader.readAsDataURL(file);
   });
+}
+
+function fileToAvatarDataUrl(file: File): Promise<string> {
+  return fileToJpegDataUrl(file, 128, 0.8);
+}
+
+function fileToChatPhotoDataUrl(file: File): Promise<string> {
+  return fileToJpegDataUrl(file, 512, 0.72);
 }
 
 const NostrChat: React.FC = () => {
@@ -167,9 +184,11 @@ const NostrChat: React.FC = () => {
   const [showTip, setShowTip] = useState(false);
   const [tipAmount, setTipAmount] = useState('');
   const [tipCategory, setTipCategory] = useState('');
+  const [refetching, setRefetching] = useState(false);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const chatPhotoRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (walletId <= 0) return;
@@ -193,10 +212,13 @@ const NostrChat: React.FC = () => {
         ]);
         if (displayName || mine.name) setMyName(displayName || mine.name || '');
         const localPic = await loadLocalAvatar(id.pubkey);
-        const pic = localPic || '';
+        const pic =
+          localPic ||
+          (avatar && !/^https?:/i.test(avatar) ? avatar : '') ||
+          (mine.picture && !/^https?:/i.test(mine.picture)
+            ? mine.picture
+            : '');
         if (pic) setMyPicture(pic);
-        void avatar;
-        void mine.picture;
       })
       .catch((e) => setErr(e instanceof Error ? e.message : String(e)));
   }, [walletId, relays]);
@@ -471,10 +493,16 @@ const NostrChat: React.FC = () => {
       await Promise.all([
         publishMyProfile(
           walletId,
-          { name: myName || undefined },
+          {
+            name: myName || undefined,
+            picture: myPicture || undefined,
+          },
           relays
         ),
         myName ? publishDisplayName(walletId, myName, relays) : Promise.resolve(),
+        myPicture
+          ? publishAvatar(walletId, myPicture, relays)
+          : Promise.resolve(),
         myPicture && me
           ? storeLocalAvatar(me.pubkey, myPicture)
           : Promise.resolve(),
@@ -484,6 +512,72 @@ const NostrChat: React.FC = () => {
       setProfileMsg(e instanceof Error ? e.message : String(e));
     }
   }, [walletId, myName, myPicture, relays, t, me]);
+
+  const refetchHistory = useCallback(async () => {
+    if (walletId <= 0) return;
+    setRefetching(true);
+    setErr(null);
+    try {
+      const onMessage = (m: ChatMessage) =>
+        setMessages((prev) => mergeById(prev, [m]));
+      await refetchChatInbox(walletId, onMessage, relays);
+      await refetchMlsInbox(walletId, onMessage, relays);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRefetching(false);
+    }
+  }, [walletId, relays]);
+
+  const sendChatPhoto = useCallback(
+    async (file: File) => {
+      if (!activePeer || walletId <= 0 || !me) return;
+      setSending(true);
+      setErr(null);
+      try {
+        const dataUrl = await fileToChatPhotoDataUrl(file);
+        if (mlsGroupId) {
+          await sendMlsPhoto(
+            walletId,
+            mlsGroupId,
+            activePeer,
+            dataUrl,
+            relays
+          );
+        } else {
+          await sendDirectPhoto(walletId, activePeer, dataUrl, relays, {
+            replyTo: replyTo?.id,
+          });
+        }
+        const mine: ChatMessage = {
+          id: `local-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          from: me.pubkey,
+          to: activeMembers ?? [activePeer],
+          text: dataUrl,
+          at: Math.floor(Date.now() / 1000),
+          mine: true,
+          kind: 15,
+          replyTo: replyTo?.id,
+          roomId: mlsGroupId ? activePeer : undefined,
+        };
+        setMessages((prev) => mergeById(prev, [mine]));
+        setReplyTo(null);
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : String(e));
+      } finally {
+        setSending(false);
+      }
+    },
+    [
+      activePeer,
+      walletId,
+      me,
+      mlsGroupId,
+      relays,
+      replyTo,
+      activeMembers,
+    ]
+  );
 
   const nameOf = (peer: string) => profiles[peer]?.name || short(peer);
   const unreadOf = (peer: string) =>
@@ -515,14 +609,26 @@ const NostrChat: React.FC = () => {
             </h1>
             <p className="text-xs wallet-muted">{t('chat.privateMessaging')}</p>
           </div>
-          <button
-            type="button"
-            onClick={() => navigate('/settings?panel=nostr')}
-            className="flex items-center gap-2 rounded-xl border border-[var(--wallet-border)] px-3 py-2 text-xs font-semibold wallet-text-strong"
-          >
-            <MdSettings aria-hidden="true" />
-            {t('chat.setup')}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void refetchHistory()}
+              disabled={refetching || walletId <= 0}
+              className="flex items-center gap-2 rounded-xl border border-[var(--wallet-border)] px-3 py-2 text-xs font-semibold wallet-text-strong disabled:opacity-50"
+              title="Reload DMs and MLS backups from relays"
+            >
+              <MdRefresh aria-hidden="true" />
+              {refetching ? '…' : 'Refetch'}
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/settings?panel=nostr')}
+              className="flex items-center gap-2 rounded-xl border border-[var(--wallet-border)] px-3 py-2 text-xs font-semibold wallet-text-strong"
+            >
+              <MdSettings aria-hidden="true" />
+              {t('chat.setup')}
+            </button>
+          </div>
         </div>
 
         {/* My identity + profile (with device-picked avatar) */}
@@ -759,7 +865,11 @@ const NostrChat: React.FC = () => {
                       <div className="flex items-center justify-between gap-2">
                         <p className="truncate text-[11px] wallet-muted">
                           {c.last
-                            ? `${c.last.mine ? t('chat.youPrefix') : ''}${c.last.text}`
+                            ? `${c.last.mine ? t('chat.youPrefix') : ''}${
+                                isInlineChatImage(c.last.text)
+                                  ? 'Photo'
+                                  : c.last.text
+                              }`
                             : t('chat.newConversation')}
                         </p>
                         {unreadOf(c.peer) > 0 && (
@@ -872,6 +982,15 @@ const NostrChat: React.FC = () => {
                                     </p>
                                   )}
                                   {(() => {
+                                    if (isInlineChatImage(m.text)) {
+                                      return (
+                                        <img
+                                          src={m.text}
+                                          alt=""
+                                          className="max-h-48 max-w-full rounded-lg"
+                                        />
+                                      );
+                                    }
                                     const tip = parseChatTip(m.text);
                                     if (!tip) return m.text;
                                     return (
@@ -1041,6 +1160,27 @@ const NostrChat: React.FC = () => {
                   >
                     Tip
                   </button>
+                  <button
+                    type="button"
+                    className="rounded-lg border border-[var(--wallet-border)] px-2 py-2 text-[10px] font-semibold wallet-text-strong disabled:opacity-50"
+                    disabled={sending || !activePeer}
+                    onClick={() => chatPhotoRef.current?.click()}
+                    title="Send photo in this chat (inside the wrap, no CDN)"
+                    aria-label="Send photo"
+                  >
+                    <MdImage aria-hidden="true" />
+                  </button>
+                  <input
+                    ref={chatPhotoRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      e.target.value = '';
+                      if (file) void sendChatPhoto(file);
+                    }}
+                  />
                   <input
                     value={draft}
                     onChange={(e) => setDraft(e.target.value)}

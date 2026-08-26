@@ -6,9 +6,11 @@ import {
   createReactionGiftWraps,
   createKind5DeletionGiftWraps,
   createUnsignedKind14,
+  createUnsignedKind15,
   computeRoomId,
   parseChatTip,
   encodeChatTip,
+  isInlineChatImage,
   toPubkeyHex,
 } from '../chat';
 import { wrapManyEvents as wrapRumor } from 'nostr-tools/nip59';
@@ -210,6 +212,39 @@ describe('nostr chat DM (NIP-17)', () => {
       amount: '1',
     });
     expect(parseChatTip('hello')).toBeNull();
+  });
+
+  it('kind 15 photo rumor is wrapped; content is inline data not a CDN URL', () => {
+    const aSk = generateSecretKey();
+    const aPk = getPublicKey(aSk);
+    const bSk = generateSecretKey();
+    const bPk = getPublicKey(bSk);
+    const dataUrl = 'data:image/jpeg;base64,AAAA';
+    expect(isInlineChatImage(dataUrl)).toBe(true);
+    expect(isInlineChatImage('https://cdn.example/me.jpg')).toBe(false);
+    expect(() =>
+      createUnsignedKind15({
+        dataUrl: 'https://cdn.example/me.jpg',
+        senderPubKey: aPk,
+        members: [aPk, bPk],
+      })
+    ).toThrow(/inline/);
+    const rumor = createUnsignedKind15({
+      dataUrl,
+      senderPubKey: aPk,
+      members: [aPk, bPk],
+    });
+    expect(rumor.kind).toBe(15);
+    expect(rumor.content.startsWith('data:image/')).toBe(true);
+    const wraps = wrapRumor(rumor, aSk, [bPk]);
+    const forB = wraps.find((w) =>
+      w.tags.some((t) => t[0] === 'p' && t[1] === bPk)
+    )!;
+    expect(forB.kind).toBe(1059);
+    expect(JSON.stringify(forB)).not.toContain('data:image/jpeg;base64,AAAA');
+    const inner = unwrapEvent(forB, bSk);
+    expect(inner.kind).toBe(15);
+    expect(inner.content).toBe(dataUrl);
   });
 
   it('toPubkeyHex accepts npub and hex, rejects junk', () => {

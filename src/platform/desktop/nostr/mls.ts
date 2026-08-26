@@ -102,7 +102,7 @@ export {
 import { deriveNostrIdentity, loadNostrAccountSeed } from './identity';
 import { DISCOVERY_RELAYS, DEFAULT_RELAYS } from './defaultRelays';
 import { SimplePool } from 'nostr-tools';
-import type { ChatMessage } from './chat';
+import { isInlineChatImage, type ChatMessage } from './chat';
 import {
   encodeNostrGroupData,
   MARMOT_GROUP_DATA_EXT,
@@ -366,10 +366,21 @@ export function innerKind9(pubkey: string, text: string) {
   };
 }
 
+export function innerKind15(pubkey: string, dataUrl: string) {
+  return {
+    kind: 15,
+    pubkey,
+    created_at: Math.floor(Date.now() / 1000),
+    content: dataUrl,
+    tags: [['file-type', 'image/jpeg']] as string[][],
+  };
+}
+
 export function parseApplicationPayload(bytes: Uint8Array): {
   text: string;
   from?: string;
   at?: number;
+  kind?: number;
 } {
   const raw = new TextDecoder().decode(bytes);
   try {
@@ -380,13 +391,14 @@ export function parseApplicationPayload(bytes: Uint8Array): {
       created_at?: number;
     };
     if (
-      (parsed.kind === 9 || parsed.kind === 14) &&
+      (parsed.kind === 9 || parsed.kind === 14 || parsed.kind === 15) &&
       typeof parsed.content === 'string'
     ) {
       return {
         text: parsed.content,
         from: parsed.pubkey,
         at: parsed.created_at,
+        kind: parsed.kind,
       };
     }
   } catch {
@@ -949,13 +961,52 @@ export async function sendMlsMessage(
 ): Promise<{ id: string; at: number }> {
   const { mnemonic, passphrase } = await walletMnemonic(walletId);
   const nostr = await deriveNostrIdentity(mnemonic, passphrase);
+  return sendMlsPayload(
+    walletId,
+    nostrGroupIdHex,
+    roomId,
+    JSON.stringify(innerKind9(nostr.pubkey, text)),
+    relays
+  );
+}
+
+export async function sendMlsPhoto(
+  walletId: number,
+  nostrGroupIdHex: string,
+  roomId: string,
+  dataUrl: string,
+  relays: string[] = DEFAULT_RELAYS
+): Promise<{ id: string; at: number }> {
+  if (!isInlineChatImage(dataUrl)) {
+    throw new Error('Chat photos must be inline image data, not a URL');
+  }
+  const { mnemonic, passphrase } = await walletMnemonic(walletId);
+  const nostr = await deriveNostrIdentity(mnemonic, passphrase);
+  return sendMlsPayload(
+    walletId,
+    nostrGroupIdHex,
+    roomId,
+    JSON.stringify(innerKind15(nostr.pubkey, dataUrl)),
+    relays
+  );
+}
+
+async function sendMlsPayload(
+  walletId: number,
+  nostrGroupIdHex: string,
+  roomId: string,
+  payloadJson: string,
+  relays: string[]
+): Promise<{ id: string; at: number }> {
+  const { mnemonic, passphrase } = await walletMnemonic(walletId);
+  const nostr = await deriveNostrIdentity(mnemonic, passphrase);
   const loaded = await loadMlsState(nostrGroupIdHex);
   if (!loaded) throw new Error('MLS group state not found');
   const record = getMlsRecord(nostrGroupIdHex);
-  const payload = innerKind9(nostr.pubkey, text);
+  const payload = payloadJson;
   const { message: wrapped, newState } = await encryptMlsMessage(
     loaded,
-    JSON.stringify(payload)
+    typeof payload === 'string' ? payload : JSON.stringify(payload)
   );
   const targets = Array.from(new Set([...DISCOVERY_RELAYS, ...relays]));
   const published: Event[] = [];
@@ -1147,7 +1198,7 @@ export async function joinMlsGroupFromWelcome(
 export async function processMlsMessage(
   nostrGroupIdHex: string,
   bytes: Uint8Array
-): Promise<{ plaintext?: string; from?: string; at?: number }> {
+): Promise<{ plaintext?: string; from?: string; at?: number; kind?: number }> {
   const { impl } = await ensureMlsCrypto();
   const loaded = await loadMlsState(nostrGroupIdHex);
   if (!loaded) return {};
@@ -1198,6 +1249,7 @@ async function handleGroupEvent(
     text: out.plaintext,
     at: out.at || evt.created_at,
     mine: (out.from || '') === myPubkey,
+    kind: out.kind,
     roomId: getMlsRecord(h)?.roomId,
   });
 }
@@ -1235,8 +1287,115 @@ async function handlePaytacaEnvelope(
     text: out.plaintext,
     at: out.at || evt.created_at,
     mine: (out.from || evt.pubkey) === myPubkey,
+    kind: out.kind,
     roomId: getMlsRecord(h)?.roomId,
   });
+}
+
+export async function ingestMlsGiftWrap(
+  walletId: number,
+  evt: Event,
+  onMessage: (m: ChatMessage) => void,
+  myPubkey: string,
+  secretKey: Uint8Array
+): Promise<void> {
+  if (evt.kind !== GIFT_WRAP) return;
+  const rumor = unwrapEvent(evt, secretKey);
+  if (rumor.kind === KIND_30078) {
+    const d = rumor.tags.find((t) => t[0] === 'd')?.[1] ?? '';
+    if (d.startsWith('optn:mls-backup:')) {
+      const gid = d.slice('optn:mls-backup:'.length);
+      const decoded = decode(clientStateDecoder, b64ToBytes(rumor.content));
+      if (decoded) {
+        const state = {
+          ...decoded,
+          clientConfig: restoredClientConfig,
+        } as ClientState;
+        mlsStates.set(gid, state);
+        await idbSet(RATCHET_KEY(myPubkey, gid), rumor.content);
+      }
+    }
+    return;
+  }
+  if (rumor.kind === KIND_WELCOME) {
+    const bytes = hexToBytes(rumor.content);
+    const h = rumor.tags.find((t) => t[0] === 'h')?.[1];
+    const handle = await joinMlsGroupFromWelcome(
+      walletId,
+      myPubkey,
+      bytes,
+      '',
+      h,
+      'nip-ee'
+    );
+    const joined = getMlsRecord(handle);
+    if (joined) {
+      joined.visibility = 'private';
+      rememberGroup(joined);
+      await persistIndex(myPubkey);
+    }
+    return;
+  }
+  if (rumor.kind === KIND_GROUP) {
+    const h = rumor.tags.find((t) => t[0] === 'h')?.[1];
+    if (!h) return;
+    const bytes = hexToBytes(rumor.content);
+    const out = await processMlsMessage(h, bytes);
+    if (!out.plaintext) return;
+    onMessage({
+      id: evt.id,
+      from: out.from || rumor.pubkey,
+      to: [],
+      text: out.plaintext,
+      at: out.at || rumor.created_at,
+      mine: (out.from || rumor.pubkey) === myPubkey,
+      kind: out.kind,
+      roomId: getMlsRecord(h)?.roomId,
+    });
+  }
+}
+
+export async function refetchMlsInbox(
+  walletId: number,
+  onMessage: (m: ChatMessage) => void,
+  relays: string[] = DEFAULT_RELAYS
+): Promise<void> {
+  const { mnemonic, passphrase } = await walletMnemonic(walletId);
+  const nostr = await deriveNostrIdentity(mnemonic, passphrase);
+  await loadMlsIndex(nostr.pubkey);
+  const targets = Array.from(new Set([...DISCOVERY_RELAYS, ...relays]));
+  const evts = await getPool().querySync(
+    targets,
+    { kinds: [GIFT_WRAP], '#p': [nostr.pubkey] },
+    { maxWait: 8000 }
+  );
+  for (const evt of evts) {
+    try {
+      await ingestMlsGiftWrap(
+        walletId,
+        evt,
+        onMessage,
+        nostr.pubkey,
+        nostr.secretKey
+      );
+    } catch {
+      /* not MLS for us */
+    }
+  }
+  const hTags = listMlsGroups().map((g) => g.nostrGroupIdHex);
+  if (!hTags.length) return;
+  const groups = await getPool().querySync(
+    targets,
+    { kinds: [KIND_GROUP], '#h': hTags },
+    { maxWait: 8000 }
+  );
+  for (const evt of groups) {
+    try {
+      await handleGroupEvent(evt, onMessage, nostr.pubkey);
+    } catch {
+      /* skip */
+    }
+  }
 }
 
 export function subscribeMls(
@@ -1257,58 +1416,13 @@ export function subscribeMls(
       void (async () => {
         try {
           if (evt.kind === GIFT_WRAP) {
-            const rumor = unwrapEvent(evt, nostr.secretKey);
-            if (rumor.kind === KIND_30078) {
-              const d = rumor.tags.find((t) => t[0] === 'd')?.[1] ?? '';
-              if (d.startsWith('optn:mls-backup:')) {
-                const gid = d.slice('optn:mls-backup:'.length);
-                const decoded = decode(clientStateDecoder, b64ToBytes(rumor.content));
-                if (decoded) {
-                  const state = {
-                    ...decoded,
-                    clientConfig: restoredClientConfig,
-                  } as ClientState;
-                  mlsStates.set(gid, state);
-                  await idbSet(RATCHET_KEY(nostr.pubkey, gid), rumor.content);
-                }
-                return;
-              }
-            }
-            if (rumor.kind === KIND_WELCOME) {
-              const bytes = hexToBytes(rumor.content);
-              const h = rumor.tags.find((t) => t[0] === 'h')?.[1];
-              const handle = await joinMlsGroupFromWelcome(
-                walletId,
-                nostr.pubkey,
-                bytes,
-                '',
-                h,
-                'nip-ee'
-              );
-              const joined = getMlsRecord(handle);
-              if (joined) {
-                joined.visibility = 'private';
-                rememberGroup(joined);
-                await persistIndex(nostr.pubkey);
-              }
-              return;
-            }
-            if (rumor.kind === KIND_GROUP) {
-              const h = rumor.tags.find((t) => t[0] === 'h')?.[1];
-              if (!h) return;
-              const bytes = hexToBytes(rumor.content);
-              const out = await processMlsMessage(h, bytes);
-              if (!out.plaintext) return;
-              onMessage({
-                id: evt.id,
-                from: out.from || rumor.pubkey,
-                to: [],
-                text: out.plaintext,
-                at: out.at || rumor.created_at,
-                mine: (out.from || rumor.pubkey) === nostr.pubkey,
-                roomId: getMlsRecord(h)?.roomId,
-              });
-            }
+            await ingestMlsGiftWrap(
+              walletId,
+              evt,
+              onMessage,
+              nostr.pubkey,
+              nostr.secretKey
+            );
             return;
           }
           if (evt.kind === KIND_GROUP) {

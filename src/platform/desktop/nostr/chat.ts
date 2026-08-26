@@ -31,6 +31,7 @@ const METADATA = 0;
 const DM_RELAY_LIST = 10050; // NIP-17: where a user reads their private DMs
 const REACTION = 7; // NIP-25
 const DELETION = 5;
+export const KIND_FILE_MESSAGE = 15;
 const KIND_30078 = 30078; // NIP-78 parameterized replaceable (Paytaca profile)
 const PAYTACA_AVATAR = 'paytaca:avatar';
 const PAYTACA_DISPLAY_NAME = 'paytaca:display-name';
@@ -58,7 +59,7 @@ export interface ChatMessage {
   text: string;
   at: number; // unix seconds
   mine: boolean;
-  kind?: number; // 14 DM, 7 NIP-25, 5 delete
+  kind?: number; // 14 DM, 15 file, 7 NIP-25, 5 delete
   replyTo?: string;
   editOf?: string;
   targetIds?: string[];
@@ -132,6 +133,47 @@ export function createUnsignedKind14({
     pubkey: senderPubKey,
     created_at: Math.floor(Date.now() / 1000),
     content,
+    tags,
+  };
+}
+
+/** In-wrap photo: data URL in content. Never an http(s) file host. */
+export function isInlineChatImage(content: string): boolean {
+  return /^data:image\/(jpeg|jpg|png|webp|gif);base64,/i.test(content.trim());
+}
+
+export function createUnsignedKind15({
+  dataUrl,
+  senderPubKey,
+  members,
+  mimeType = 'image/jpeg',
+  replyTo,
+}: {
+  dataUrl: string;
+  senderPubKey: string;
+  members: string[];
+  mimeType?: string;
+  replyTo?: string;
+}): {
+  kind: number;
+  pubkey: string;
+  created_at: number;
+  content: string;
+  tags: string[][];
+} {
+  if (!isInlineChatImage(dataUrl)) {
+    throw new Error('Chat photos must be inline image data, not a URL');
+  }
+  const tags: string[][] = [['file-type', mimeType]];
+  for (const member of members) {
+    if (member !== senderPubKey) tags.push(['p', member]);
+  }
+  if (replyTo) tags.push(['e', replyTo, '', 'reply']);
+  return {
+    kind: KIND_FILE_MESSAGE,
+    pubkey: senderPubKey,
+    created_at: Math.floor(Date.now() / 1000),
+    content: dataUrl.trim(),
     tags,
   };
 }
@@ -246,6 +288,32 @@ export async function sendDirectMessage(
     relays,
     extra
   );
+}
+
+export async function sendDirectPhoto(
+  walletId: number,
+  recipient: string,
+  dataUrl: string,
+  relays: string[] = DEFAULT_RELAYS,
+  extra?: { replyTo?: string }
+): Promise<void> {
+  const id = await getIdentity(walletId);
+  const memberHex = [id.pubkey, toPubkeyHex(recipient)];
+  const others = memberHex.filter((p) => p !== id.pubkey);
+  const rumor = createUnsignedKind15({
+    dataUrl,
+    senderPubKey: id.pubkey,
+    members: memberHex,
+    replyTo: extra?.replyTo,
+  });
+  const dmRelays = (
+    await Promise.all(others.map((p) => fetchKind10050(relays, p)))
+  ).flat();
+  const targets = Array.from(
+    new Set([...DISCOVERY_RELAYS, ...relays, ...dmRelays])
+  );
+  const wraps = wrapRumor(rumor, id.secretKey, others) as Event[];
+  await publishWraps(targets, wraps);
 }
 
 export async function sendGroupMessage(
@@ -480,7 +548,14 @@ export function subscribeMessages(
         try {
           const rumor = unwrapEvent(evt, id.secretKey);
           const kind = rumor.kind ?? 14;
-          if (kind !== 14 && kind !== REACTION && kind !== DELETION) return;
+          if (
+            kind !== 14 &&
+            kind !== KIND_FILE_MESSAGE &&
+            kind !== REACTION &&
+            kind !== DELETION
+          ) {
+            return;
+          }
           onMessage(rumorToChatMessage(rumor, rumor.pubkey === id.pubkey));
         } catch {
           /* not addressed to us, or undecryptable — ignore */
@@ -517,16 +592,62 @@ export async function publishMyProfile(
   relays: string[] = DEFAULT_RELAYS
 ): Promise<void> {
   const id = await getIdentity(walletId);
+  const picture =
+    profile.picture && isInlineChatImage(profile.picture)
+      ? profile.picture
+      : profile.picture && /^https?:/i.test(profile.picture)
+        ? undefined
+        : profile.picture;
   const evt = finalizeEvent(
     {
       kind: METADATA,
       created_at: Math.floor(Date.now() / 1000),
       tags: [],
-      content: JSON.stringify(profile),
+      content: JSON.stringify({
+        name: profile.name,
+        about: profile.about,
+        picture,
+      }),
     },
     id.secretKey
   );
-  await Promise.allSettled(getPool().publish(relays, evt));
+  const targets = Array.from(new Set([...DISCOVERY_RELAYS, ...relays]));
+  await Promise.allSettled(getPool().publish(targets, evt));
+}
+
+/** Pull stored 1059s for this npub (DMs + kind 15). MLS wraps are ignored here. */
+export async function refetchChatInbox(
+  walletId: number,
+  onMessage: (m: ChatMessage) => void,
+  relays: string[] = DEFAULT_RELAYS
+): Promise<number> {
+  const id = await getIdentity(walletId);
+  const targets = Array.from(new Set([...DISCOVERY_RELAYS, ...relays]));
+  const evts = await getPool().querySync(
+    targets,
+    { kinds: [GIFT_WRAP], '#p': [id.pubkey] },
+    { maxWait: 8000 }
+  );
+  let n = 0;
+  for (const evt of evts) {
+    try {
+      const rumor = unwrapEvent(evt, id.secretKey);
+      const kind = rumor.kind ?? 14;
+      if (
+        kind !== 14 &&
+        kind !== KIND_FILE_MESSAGE &&
+        kind !== REACTION &&
+        kind !== DELETION
+      ) {
+        continue;
+      }
+      onMessage(rumorToChatMessage(rumor, rumor.pubkey === id.pubkey));
+      n += 1;
+    } catch {
+      /* MLS or not for us */
+    }
+  }
+  return n;
 }
 
 async function fetchKind30078(
@@ -636,6 +757,9 @@ export async function publishAvatar(
   avatarDataUrl: string,
   relays: string[] = DEFAULT_RELAYS
 ): Promise<void> {
+  if (!isInlineChatImage(avatarDataUrl)) {
+    throw new Error('Avatar must be inline image data, not a URL');
+  }
   const id = await getIdentity(walletId);
   const evt = finalizeEvent(
     {
