@@ -642,11 +642,17 @@ const NostrChat: React.FC = () => {
     if (!activePeer || recording) return;
     setErr(null);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+      });
       const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
         ? 'audio/webm;codecs=opus'
         : 'audio/webm';
-      const rec = new MediaRecorder(stream, { mimeType: mime });
+      // ~16 kbit/s × 20s ≈ 40KB before base64 — usually under the wrap cap.
+      const rec = new MediaRecorder(stream, {
+        mimeType: mime,
+        audioBitsPerSecond: 16_000,
+      });
       const chunks: Blob[] = [];
       rec.ondataavailable = (e) => {
         if (e.data.size) chunks.push(e.data);
