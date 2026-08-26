@@ -10,13 +10,7 @@
 // wallet's NIP-06 identity (identity.ts) signs/decrypts. The secret key is
 // derived once per wallet and cached in memory only.
 
-import {
-  SimplePool,
-  finalizeEvent,
-  getEventHash,
-  nip19,
-  type Event,
-} from 'nostr-tools';
+import { SimplePool, finalizeEvent, nip19, type Event } from 'nostr-tools';
 import { wrapManyEvents, unwrapEvent } from 'nostr-tools/nip17';
 import { wrapManyEvents as wrapRumor } from 'nostr-tools/nip59';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
@@ -221,7 +215,6 @@ export async function createReactionGiftWraps({
       ['k', '14'],
     ],
   };
-  (kind7 as { id: string }).id = getEventHash(kind7);
   return wrapRumor(kind7, reactorPrivKey, recipientPubKeys) as Event[];
 }
 
@@ -253,7 +246,6 @@ export async function createReadReceiptGiftWrap({
       ['nonotif', 'read-receipt'],
     ],
   };
-  (kind7 as { id: string }).id = getEventHash(kind7);
   const wraps = wrapRumor(kind7, receiverPrivKey, [senderPubKey]) as Event[];
   return wraps[1] ?? wraps[0];
 }
@@ -279,7 +271,6 @@ export async function createKind5DeletionGiftWraps({
       ['k', '14'],
     ],
   };
-  (kind5 as { id: string }).id = getEventHash(kind5);
   return wrapRumor(kind5, senderPrivKey, members) as Event[];
 }
 
