@@ -20,6 +20,7 @@ import WalletScreen from '../components/ui/WalletScreen';
 import { useI18n } from '../i18n/useI18n';
 import { formatDate } from '../i18n/format';
 import type { SupportedLocale } from '../i18n/types';
+import { copyToClipboard } from '../utils/clipboard';
 
 function formatBch(sats: number) {
   return `${(sats / SATSINBITCOIN).toFixed(8).replace(/\.?0+$/, '') || '0'} BCH`;
@@ -59,7 +60,7 @@ const Quantumroot: React.FC = () => {
   const handleCopy = useCallback(
     async (text: string) => {
       try {
-        await navigator.clipboard.writeText(text);
+        if (!(await copyToClipboard(text))) throw new Error('clipboard write failed');
         await Toast.show({ text: t('receive.copied') });
       } catch (error) {
         console.error('Failed to copy Quantumroot value:', error);

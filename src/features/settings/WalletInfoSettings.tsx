@@ -26,6 +26,7 @@ import DeviceIntegrityService from '../../services/DeviceIntegrityService';
 import { WATCH_ONLY_WALLET_TYPE } from '../../platform/desktop/onboarding/watchOnlyWallet';
 import { HARDWARE_WALLET_TYPE } from '../../platform/desktop/onboarding/hardwareWallet';
 import type { ExtendedWalletType } from '../../types/wallet';
+import { copyToClipboard } from '../../utils/clipboard';
 
 type WalletInfoSnapshot = {
   name: string;
@@ -262,7 +263,7 @@ function CopyRow({
   const onCopy = async () => {
     if (!canCopy || !value) return;
     try {
-      await navigator.clipboard.writeText(value);
+      if (!(await copyToClipboard(value))) throw new Error('clipboard write failed');
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
@@ -480,9 +481,7 @@ export const WalletInfoSettings: React.FC = () => {
                   className="inline-flex items-center gap-1 text-xs wallet-link"
                   title="Copy path"
                   onClick={() => {
-                    void navigator.clipboard.writeText(
-                      info.walletFilePath ?? ''
-                    );
+                    void copyToClipboard(info.walletFilePath ?? '');
                   }}
                 >
                   <MdContentCopy className="text-sm" />

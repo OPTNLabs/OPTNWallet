@@ -1,6 +1,7 @@
 #[allow(dead_code)] // menu bar is built on the JS side now; kept for reference
 mod menu;
 
+pub mod clipboard;
 pub mod electrum_tcp;
 pub mod fusion;
 pub mod hw;
@@ -1020,7 +1021,10 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_keyring::init())
         .plugin(tauri_plugin_biometry::init())
+        .manage(clipboard::ClipboardState::new())
         .invoke_handler(tauri::generate_handler![
+            clipboard::clipboard_write_text,
+            clipboard::clipboard_read_text,
             optn_price_fetch,
             open_external,
             read_wallet_file,

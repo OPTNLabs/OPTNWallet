@@ -34,6 +34,7 @@ import { RpaReceiveCard } from '../features/rpa/RpaReceiveCard';
 import { isDesktopPlatform } from '../utils/platform';
 import { WalletType } from '../types/wallet';
 import { useI18n } from '../i18n/useI18n';
+import { copyToClipboard } from '../utils/clipboard';
 
 type QRCodeType = 'address' | 'pubKey' | 'pkh' | 'privkey';
 const PRIVKEY_UNLOCK_TAPS = 10;
@@ -474,7 +475,7 @@ const Receive: React.FC = () => {
 
   const handleCopy = async (text: string) => {
     try {
-      await navigator.clipboard.writeText(text);
+      if (!(await copyToClipboard(text))) throw new Error('clipboard write failed');
       await Toast.show({ text: t('receive.copied') });
     } catch (error) {
       console.error('Failed to copy:', error);

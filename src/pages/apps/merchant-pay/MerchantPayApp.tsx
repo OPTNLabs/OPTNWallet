@@ -36,6 +36,7 @@ import {
   type MerchantPaymentMonitorStatus,
   type MerchantPaymentObservation,
 } from './merchantPaymentMonitoring';
+import { copyToClipboard } from '../../../utils/clipboard';
 
 type MerchantPayAppProps = {
   sdk: AddonSDK;
@@ -147,10 +148,7 @@ function localizeMerchantPayError(
 }
 
 async function copyTextToClipboard(text: string): Promise<void> {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
-  }
+  if (await copyToClipboard(text)) return;
 
   const textarea = document.createElement('textarea');
   textarea.value = text;

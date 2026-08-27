@@ -39,6 +39,7 @@ import {
   resolveTokenPresentation,
 } from '../../../../utils/tokenPresentation';
 import { useAddonI18n } from '../../../../i18n/useAddonI18n';
+import { readFromClipboard } from '../../../../utils/clipboard';
 
 type FlowStep = 'recipients' | 'asset' | 'send';
 
@@ -349,10 +350,7 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
   );
 
   const pasteFromClipboard = async () => {
-    if (typeof navigator === 'undefined' || !navigator.clipboard?.readText) {
-      throw new Error('Clipboard paste is not available in this environment.');
-    }
-    const text = await navigator.clipboard.readText();
+    const text = await readFromClipboard();
     setImportText(text);
   };
 

@@ -37,6 +37,7 @@ import {
 } from '../../utils/barcodeScanner';
 import WalletScreen from '../../components/ui/WalletScreen';
 import { useI18n } from '../../i18n/useI18n';
+import { copyToClipboard } from '../../utils/clipboard';
 
 interface ContractArg {
   name: string;
@@ -229,7 +230,7 @@ const ContractView = () => {
 
   const handleCopyAddress = async (address: string) => {
     try {
-      await navigator.clipboard.writeText(address);
+      if (!(await copyToClipboard(address))) throw new Error('clipboard write failed');
       await Toast.show({ text: t('contractView.addressCopied') });
     } catch (error) {
       logError('ContractView.copyAddress', error, { address });

@@ -17,6 +17,7 @@ import WalletManager from '../../apis/WalletManager/WalletManager';
 import { Network } from '../../state/slices/networkSlice';
 import { selectWalletDerivationPath } from '../../state/slices/walletSlice';
 import { useI18n } from '../../i18n/useI18n';
+import { copyToClipboard } from '../../utils/clipboard';
 
 type RpaReceiveCardProps = {
   walletId: number;
@@ -71,7 +72,7 @@ export const RpaReceiveCard: React.FC<RpaReceiveCardProps> = ({ walletId }) => {
 
   const handleCopy = async (text: string) => {
     try {
-      await navigator.clipboard.writeText(text);
+      if (!(await copyToClipboard(text))) throw new Error('clipboard write failed');
       await Toast.show({ text: t('rpa.copySuccess') });
     } catch {
       await Toast.show({ text: t('rpa.copyFailed') });
