@@ -5,6 +5,7 @@ import { resetWallet } from '../../../state/slices/walletSlice';
 import {
   MENU_ACTION_EVENT,
   menuActionForKeyboardEvent,
+  menuBarSections,
   attachDesktopMenu,
   dispatchDesktopMenuAction,
   openSavedWalletFromMenu,
@@ -408,5 +409,77 @@ describe('keyboard accelerators', () => {
       expect(chord({ key, ctrlKey: false, metaKey: true })).toBeNull();
       expect(chord({ key })).toBeNull();
     }
+  });
+});
+
+describe('menu bar composition', () => {
+  const sections = {
+    file: 'File',
+    edit: 'Edit',
+    wallet: 'Wallet',
+    view: 'View',
+    window: 'Window',
+    help: 'Help',
+  };
+
+  it('carries Edit on macOS, between File and Wallet', () => {
+    // Regression guard for the real bug: this app replaces Tauri's
+    // Menu::default() — which ships an Edit submenu — with a hand-built menu.
+    // The first version dropped Edit, and AppKit then had no path to route
+    // Cmd+V into the WebView, so pasting a URI silently did nothing.
+    expect(menuBarSections(true, sections)).toEqual([
+      'File',
+      'Edit',
+      'Wallet',
+      'View',
+      'Window',
+      'Help',
+    ]);
+  });
+
+  it('omits Edit off macOS', () => {
+    // WebView2 and WebKitGTK handle the edit chords themselves, and muda's GTK
+    // backend has no Undo/Redo at all — it renders them permanently greyed out.
+    expect(menuBarSections(false, sections)).toEqual([
+      'File',
+      'Wallet',
+      'View',
+      'Help',
+    ]);
+  });
+
+  it('carries Window before Help on macOS', () => {
+    // Cmd+M and Cmd+W are menu-item-backed on macOS exactly like the edit
+    // chords, so a menu bar without a Window submenu leaves them dead.
+    const built = menuBarSections(true, sections);
+    expect(built).toContain('Window');
+    expect(built.indexOf('Window')).toBe(built.indexOf('Help') - 1);
+  });
+
+  it('omits Window off macOS', () => {
+    // muda's GTK backend supports none of Minimize/Maximize/CloseWindow, so on
+    // Linux they would render permanently greyed out.
+    expect(menuBarSections(false, sections)).not.toContain('Window');
+  });
+
+  it('refuses to build a macOS menu with no Window submenu', () => {
+    expect(() => menuBarSections(true, { ...sections, window: null })).toThrow(
+      /must include Window/
+    );
+  });
+
+  it('refuses to build a macOS menu with no Edit submenu', () => {
+    expect(() => menuBarSections(true, { ...sections, edit: null })).toThrow(
+      /must include Edit/
+    );
+  });
+
+  it('still builds off macOS when Edit was never created', () => {
+    expect(menuBarSections(false, { ...sections, edit: null })).toEqual([
+      'File',
+      'Wallet',
+      'View',
+      'Help',
+    ]);
   });
 });

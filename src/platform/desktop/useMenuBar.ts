@@ -9,12 +9,15 @@ import { useEffect, useRef } from 'react';
 import { flushSync } from 'react-dom';
 import { useNavigate, type NavigateFunction } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
-import { Menu, Submenu, MenuItem, PredefinedMenuItem } from '@tauri-apps/api/menu';
+import {
+  Menu,
+  Submenu,
+  MenuItem,
+  PredefinedMenuItem,
+} from '@tauri-apps/api/menu';
 import { listen as listenToEvent } from '@tauri-apps/api/event';
 import { resyncAfterWalletClosed } from './walletSessionRelease';
-import {
-  getAllWebviewWindows,
-} from '@tauri-apps/api/webviewWindow';
+import { getAllWebviewWindows } from '@tauri-apps/api/webviewWindow';
 import { appDataDir, join } from '@tauri-apps/api/path';
 import { AppDispatch, RootState, store } from '../../state/store';
 import { selectWalletId, resetWallet } from '../../state/slices/walletSlice';
@@ -157,9 +160,10 @@ export async function routeMenuActionToFocusedWindow(
  * Modifier-exact on purpose: Ctrl+Shift+R and Ctrl+Alt+N are different chords and
  * must fall through rather than be silently swallowed.
  *
- * Cut/Copy/Paste/Select All/Undo/Redo stay native. On macOS the WebView only
- * honours those chords when the app menu has a real Edit menu; claiming them
- * here would swallow Cmd+V in WalletConnect / Wizard / CashConnect URI fields.
+ * Cut/Copy/Paste/Select All/Undo/Redo must stay native. The map below does not
+ * claim them today, so this guard is a no-op as written. It exists so that
+ * adding, say, Cmd+A for "select all wallets" later cannot silently kill
+ * pasting into a URI field — which is exactly how this bug would come back.
  */
 export const NATIVE_EDIT_KEYS = new Set(['c', 'v', 'x', 'a', 'z', 'y']);
 
@@ -177,6 +181,54 @@ export function menuActionForKeyboardEvent(event: {
   return (
     { n: 'new_wallet', l: 'lock_wallet', r: 'refresh_wallet' }[key] ?? null
   );
+}
+
+/**
+ * The submenus the menu bar carries, in order.
+ *
+ * Edit is macOS-only, and on macOS it is mandatory: AppKit routes Cmd+X/C/V/A
+ * into the WebView only through a real Edit menu. Tauri's own Menu::default()
+ * ships one; this app replaces that default with a hand-built menu, and
+ * omitting Edit from it is exactly how pasting into the WalletConnect,
+ * WizardConnect and CashConnect URI fields broke.
+ *
+ * Missing Edit on macOS throws rather than quietly building a menu that looks
+ * fine and silently kills paste — the failure mode that made the original bug
+ * so hard to spot.
+ */
+export function menuBarSections<T>(
+  requiresAppMenu: boolean,
+  sections: {
+    file: T;
+    edit: T | null;
+    wallet: T;
+    view: T;
+    window: T | null;
+    help: T;
+  }
+): T[] {
+  if (!requiresAppMenu) {
+    return [sections.file, sections.wallet, sections.view, sections.help];
+  }
+  if (!sections.edit) {
+    throw new Error(
+      'macOS menu bar must include Edit: Cmd+X/C/V/A reach the WebView only through it.'
+    );
+  }
+  if (!sections.window) {
+    throw new Error(
+      'macOS menu bar must include Window: Cmd+M and Cmd+W reach the window only through it.'
+    );
+  }
+  // Window sits before Help, which is where macOS users expect it.
+  return [
+    sections.file,
+    sections.edit,
+    sections.wallet,
+    sections.view,
+    sections.window,
+    sections.help,
+  ];
 }
 
 export async function dispatchDesktopMenuAction(
@@ -386,7 +438,10 @@ async function handleExportWallet(walletId: number) {
   try {
     // Password resolved from unlock session / empty-password wallets / prompt.
     const { exportWalletPack } = await import('./WalletPackService');
-    const result = await exportWalletPack(walletId, (await walletsDir()) ?? null);
+    const result = await exportWalletPack(
+      walletId,
+      (await walletsDir()) ?? null
+    );
     const dataMsg = result.coldPath
       ? `Data: ${result.coldPath}`
       : `Data file skipped: ${result.coldSkippedReason ?? 'unknown'}`;
@@ -398,7 +453,8 @@ async function handleExportWallet(walletId: number) {
       })
     );
   } catch (err) {
-    const text = err instanceof Error ? err.message : 'Could not export wallet.';
+    const text =
+      err instanceof Error ? err.message : 'Could not export wallet.';
     if (text.includes('cancelled')) return;
     console.error('[menu] Export Wallet failed:', err);
     window.dispatchEvent(
@@ -603,10 +659,19 @@ export function useMenuBar(): void {
         await PredefinedMenuItem.new({ item: 'Separator' }),
         ...(quickOpenItems.length > 0
           ? quickOpenItems
-          : [await MenuItem.new({ id: 'open_wallet_none', text: 'No saved wallets', enabled: false })]),
+          : [
+              await MenuItem.new({
+                id: 'open_wallet_none',
+                text: 'No saved wallets',
+                enabled: false,
+              }),
+            ]),
       ];
 
-      const openWalletSubmenu = await Submenu.new({ text: 'Open Wallet', items: openWalletChildren });
+      const openWalletSubmenu = await Submenu.new({
+        text: 'Open Wallet',
+        items: openWalletChildren,
+      });
 
       const fileMenu = await Submenu.new({
         text: 'File',
@@ -679,18 +744,27 @@ export function useMenuBar(): void {
         ],
       });
 
-      const editMenu = await Submenu.new({
-        text: 'Edit',
-        items: [
-          await PredefinedMenuItem.new({ item: 'Undo' }),
-          await PredefinedMenuItem.new({ item: 'Redo' }),
-          await PredefinedMenuItem.new({ item: 'Separator' }),
-          await PredefinedMenuItem.new({ item: 'Cut' }),
-          await PredefinedMenuItem.new({ item: 'Copy' }),
-          await PredefinedMenuItem.new({ item: 'Paste' }),
-          await PredefinedMenuItem.new({ item: 'SelectAll' }),
-        ],
-      });
+      // macOS only. There the menu is load-bearing: AppKit routes Cmd+X/C/V/A
+      // into the WebView only when the app menu carries these items, and
+      // Tauri's own Menu::default() ships exactly this submenu — building a
+      // custom menu without it is what broke pasting. WebView2 and WebKitGTK
+      // handle those chords themselves, and muda's GTK backend has no Undo or
+      // Redo implementation at all, so on Linux both would render permanently
+      // greyed out.
+      const editMenu = requiresAppMenu
+        ? await Submenu.new({
+            text: 'Edit',
+            items: [
+              await PredefinedMenuItem.new({ item: 'Undo' }),
+              await PredefinedMenuItem.new({ item: 'Redo' }),
+              await PredefinedMenuItem.new({ item: 'Separator' }),
+              await PredefinedMenuItem.new({ item: 'Cut' }),
+              await PredefinedMenuItem.new({ item: 'Copy' }),
+              await PredefinedMenuItem.new({ item: 'Paste' }),
+              await PredefinedMenuItem.new({ item: 'SelectAll' }),
+            ],
+          })
+        : null;
 
       const viewMenu = await Submenu.new({
         text: 'View',
@@ -700,8 +774,33 @@ export function useMenuBar(): void {
             text: 'Toggle Theme',
             action: menuAction('toggle_theme'),
           }),
+          // Ctrl+Cmd+F. macOS-only for the same reason as Edit and Window, and
+          // muda marks Fullscreen unsupported on Windows and Linux besides.
+          ...(requiresAppMenu
+            ? [await PredefinedMenuItem.new({ item: 'Fullscreen' })]
+            : []),
         ],
       });
+
+      // Cmd+M and Cmd+W, the other half of what the hand-built menu dropped
+      // from Tauri's Menu::default(). Same mechanism as Edit: AppKit only
+      // delivers these chords when a menu item claims them, so without this
+      // submenu minimise and close-window are simply dead on macOS.
+      //
+      // macOS-only. muda's GTK backend supports none of these three, so on
+      // Linux they would render permanently greyed out; Windows already closes
+      // and minimises through its own window chrome.
+      const windowMenu = requiresAppMenu
+        ? await Submenu.new({
+            text: 'Window',
+            items: [
+              await PredefinedMenuItem.new({ item: 'Minimize' }),
+              await PredefinedMenuItem.new({ item: 'Maximize' }),
+              await PredefinedMenuItem.new({ item: 'Separator' }),
+              await PredefinedMenuItem.new({ item: 'CloseWindow' }),
+            ],
+          })
+        : null;
 
       const helpMenu = await Submenu.new({
         text: 'Help',
@@ -715,7 +814,14 @@ export function useMenuBar(): void {
       });
 
       const menu = await Menu.new({
-        items: [fileMenu, editMenu, walletMenu, viewMenu, helpMenu],
+        items: menuBarSections(requiresAppMenu, {
+          file: fileMenu,
+          edit: editMenu,
+          wallet: walletMenu,
+          view: viewMenu,
+          window: windowMenu,
+          help: helpMenu,
+        }),
       });
       if (disposed) return;
       await attachDesktopMenu(
