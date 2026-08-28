@@ -1,0 +1,90 @@
+# Flatpak manifest for OPTN Wallet.
+#
+# Tauri has no Flatpak bundler target, so this is authored by hand and built
+# from the .deb the desktop job already produces — the route the Tauri
+# documentation describes. Nothing is compiled here; the deb is unpacked and
+# its tree is moved from /usr to Flatpak's /app prefix.
+#
+# The GNOME runtime is what supplies webkit2gtk, which is why a Tauri app uses
+# it rather than the freedesktop one. Branch 50 is current: 48 reached end of
+# life on 24 March 2026, and an EOL runtime stops receiving security fixes
+# while still building perfectly well, so the version is pinned and checked in
+# CI rather than left to resolve.
+id: com.optilabs.wallet
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+command: OPTNWallet
+separate-locales: false
+
+finish-args:
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  - --device=dri
+  # The wallet talks to Electrum servers and, through the bundled Tor, to the
+  # network. Without this it starts and can do nothing.
+  - --share=network
+  # Saving a transaction, a recovery sheet or a PSBT goes through the portal,
+  # so no blanket filesystem access is granted.
+  - --talk-name=org.freedesktop.portal.Desktop
+
+modules:
+  - name: optn-wallet
+    buildsystem: simple
+    build-commands:
+      - ar x optn-wallet.deb
+      # Tauri has shipped data.tar.gz and data.tar.xz across versions; match
+      # whichever is there rather than assuming one.
+      - mkdir -p unpacked && tar -xf data.tar.* -C unpacked
+
+      # Fail loudly and say what was actually in the package. A missing binary
+      # would otherwise produce a Flatpak that installs cleanly and does
+      # nothing when launched, which is far harder to diagnose than a build
+      # that stops here.
+      - |
+        if [ ! -x unpacked/usr/bin/OPTNWallet ]; then
+          echo "the deb has no executable usr/bin/OPTNWallet; it contains:"
+          find unpacked/usr/bin -maxdepth 1 -type f
+          exit 1
+        fi
+
+      - install -Dm755 unpacked/usr/bin/OPTNWallet /app/bin/OPTNWallet
+
+      # Bundled resources — the Tor binary among them — live in
+      # /usr/lib/<productName>/ in the deb, and Tauri resolves them relative to
+      # the prefix, so they land correctly under /app/lib.
+      - |
+        if [ -d unpacked/usr/lib ]; then
+          mkdir -p /app/lib
+          cp -a unpacked/usr/lib/. /app/lib/
+        fi
+
+      # Flatpak requires the desktop file and icons to be named for the
+      # application id. Tauri names them after the product instead, and a
+      # mismatch means no icon and no menu entry.
+      - |
+        src="$(find unpacked/usr/share/applications -name '*.desktop' -print -quit)"
+        test -n "$src" || { echo 'the deb has no .desktop file'; exit 1; }
+        install -Dm644 "$src" /app/share/applications/com.optilabs.wallet.desktop
+        desktop-file-edit --set-icon=com.optilabs.wallet \
+          /app/share/applications/com.optilabs.wallet.desktop
+      - |
+        found=0
+        for icon in $(find unpacked/usr/share/icons -name '*.png' -o -name '*.svg'); do
+          rel="${icon#unpacked/usr/share/icons/}"
+          dir="$(dirname "$rel")"
+          ext="${icon##*.}"
+          install -Dm644 "$icon" "/app/share/icons/$dir/com.optilabs.wallet.$ext"
+          found=1
+        done
+        test "$found" -eq 1 || { echo 'the deb shipped no icons'; exit 1; }
+
+      - install -Dm644 com.optilabs.wallet.metainfo.xml
+          /app/share/metainfo/com.optilabs.wallet.metainfo.xml
+
+    sources:
+      - type: file
+        path: optn-wallet.deb
+      - type: file
+        path: com.optilabs.wallet.metainfo.xml
