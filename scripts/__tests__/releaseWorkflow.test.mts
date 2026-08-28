@@ -117,9 +117,12 @@ describe('release workflow', () => {
     expect(desktopPreviewWorkflow).toContain(
       'npx --no-install tsx scripts/fetch-tor.mts ${{ matrix.tor-target }}'
     );
-    expect(desktopPreviewWorkflow).toContain(
-      'npx tauri build --debug --target ${{ matrix.target }}'
-    );
+    // The target reaches tauri through a shell variable now, because the
+    // build is wrapped in a retry for the hdiutil "Resource busy" flake on
+    // macOS. Assert the invocation and the wiring separately rather than
+    // pinning the exact string, which broke the moment a retry was added.
+    expect(desktopPreviewWorkflow).toContain('npx tauri build --debug --target');
+    expect(desktopPreviewWorkflow).toContain('${{ matrix.target }}');
     // One artifact per format, not a catch-all over bundle/**. A single glob
     // uploaded whatever happened to exist, so a bundler that quietly stopped
     // emitting a format still produced a green artifact holding the others.
