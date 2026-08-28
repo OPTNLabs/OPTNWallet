@@ -24,6 +24,11 @@ concurrency:
 jobs:
   build-desktop-preview:
     name: Preview (${{ matrix.label }})
+    # Stated on the job as well as at the top of the file. The workflow default
+    # already restricts this, but a job that later needs a write scope gets it
+    # added here, and an explicit line is what makes that visible in review.
+    permissions:
+      contents: read
     # Uncached Linux AppImage packaging can take slightly over 40 minutes.
     timeout-minutes: 60
     env:
