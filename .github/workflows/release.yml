@@ -890,6 +890,11 @@ jobs:
           require_asset artifacts/desktop-linux-riscv64 'OPTNWallet-*-linux-riscv64-unbundled' 'Linux riscv64 unbundled ELF'
 
           require_asset artifacts/android-release '*.apk' 'signed Android APK'
+          # Named individually: a single *.apk check passes when only one
+          # flavour built, which is exactly how the F-Droid build would go
+          # missing without anything failing.
+          require_asset artifacts/android-release '*-fdroid-release.apk' 'F-Droid APK'
+          require_asset artifacts/android-release '*-play-release.apk' 'Play APK'
           require_asset artifacts/android-release '*.aab' 'signed Android AAB'
 
       # Assets were previously copied out under whatever name their bundler
@@ -926,6 +931,9 @@ jobs:
             local src="$1" dst="$2" base
             base="$(basename "$src")"
             case "$base" in
+              # Gradle's pre-flavour output carries no version to check. The
+              # flavoured names do (optn-wallet-<version>-<flavour>-release.apk)
+              # and are validated like everything else.
               app-release.apk|app-release.aab) ;;
               *"$VERSION_CORE"*) ;;
               *)
@@ -978,7 +986,20 @@ jobs:
                 esac
                 ;;
               *.deb|*.rpm)       place "$src" "$base" ;;
-              *.apk)             place "$src" "OPTNWallet-${VERSION}-android.apk" ;;
+              # Two APKs are produced now, one per store flavour. A single
+              # *.apk rule sent both to the same destination, which the
+              # duplicate guard would have caught as a release failure — the
+              # F-Droid build would never have shipped. They are named apart.
+              *-fdroid-release.apk) place "$src" "OPTNWallet-${VERSION}-android-fdroid.apk" ;;
+              *-play-release.apk)   place "$src" "OPTNWallet-${VERSION}-android-play.apk" ;;
+              # Gradle output from before the flavours existed.
+              app-release.apk)      place "$src" "OPTNWallet-${VERSION}-android.apk" ;;
+              *.apk)
+                echo "::error::no store flavour in $base; add a rule rather than \
+                  letting it collide with another APK"
+                exit 1
+                ;;
+              # Only the Play flavour produces a bundle; F-Droid ships APKs.
               *.aab)             place "$src" "OPTNWallet-${VERSION}-android.aab" ;;
               *-chrome.zip)      place "$src" "OPTNWallet-${VERSION}-chrome.zip" ;;
               *-firefox.zip)     place "$src" "OPTNWallet-${VERSION}-firefox.zip" ;;
