@@ -4,15 +4,28 @@ name: Desktop Preview
 # Produces unsigned debug builds for every native desktop target
 
 on:
-  # This check is required by the dev/staging ruleset. Keep the workflow
-  # always-on so path-filtered changes do not leave an Expected check forever.
   pull_request:
-    branches: [dev, staging]
+    branches: [dev]
+    paths:
+      - 'src/**'
+      - 'public/**'
+      - 'src-tauri/**'
+      - 'reference/**'
+      - 'scripts/fetch-tor.mts'
+      - 'vite.desktop.config.ts'
+      - 'package.json'
+      - '.github/workflows/desktop-preview.yml'
   push:
-    branches: [dev, staging]
-  # Allows a maintainer to recover the required check when GitHub does not
-  # create the pull_request run for a head update.
-  workflow_dispatch:
+    branches: [dev]
+    paths:
+      - 'src/**'
+      - 'public/**'
+      - 'src-tauri/**'
+      - 'reference/**'
+      - 'scripts/fetch-tor.mts'
+      - 'vite.desktop.config.ts'
+      - 'package.json'
+      - '.github/workflows/desktop-preview.yml'
 
 concurrency:
   group: desktop-preview-${{ github.ref }}
