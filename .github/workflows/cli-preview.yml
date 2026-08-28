@@ -1,0 +1,217 @@
+name: CLI Preview
+
+# The `optn` CLI is a plain Rust binary with no Tauri dependency, so unlike the
+# desktop app it cross-compiles. That is why this matrix reaches architectures
+# the desktop matrix cannot: riscv64 and armv7 are cross-built from x86_64
+# runners, with no hardware and no emulation.
+#
+# Always-on rather than path-filtered, and with a completeness gate, for the
+# same reason as every other preview here: a job that only runs when someone
+# touches the right directory is a job that silently stops covering everything
+# else, and a required check that never runs stays "Expected" forever.
+#
+# The crate itself arrives in a separate pull request. This probes for it, so
+# branches without it report that plainly and pass, and the builds arm
+# themselves the moment it lands.
+
+on:
+  pull_request:
+    branches: [dev, staging]
+  push:
+    branches: [dev, staging]
+  workflow_dispatch:
+
+concurrency:
+  group: cli-preview-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Is the CLI in this tree
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      present: ${{ steps.probe.outputs.present }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - id: probe
+        run: |
+          if [ -f crates/optn-cli/Cargo.toml ]; then
+            echo 'present=true' >> "$GITHUB_OUTPUT"
+            echo 'The optn CLI is in this tree; every target is required.'
+          else
+            echo 'present=false' >> "$GITHUB_OUTPUT"
+            echo '::notice::crates/optn-cli is not in this tree; nothing to build.'
+          fi
+
+  build:
+    name: CLI (${{ matrix.label }})
+    needs: probe
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      CLI_PRESENT: ${{ needs.probe.outputs.present }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            label: linux-x64
+            target: x86_64-unknown-linux-gnu
+          - platform: ubuntu-24.04-arm
+            label: linux-arm64
+            target: aarch64-unknown-linux-gnu
+          # Cross-compiled from x86_64. No riscv64 runner exists and none is
+          # needed: without webkit2gtk in the dependency tree there is nothing
+          # to link against a sysroot.
+          - platform: ubuntu-22.04
+            label: linux-riscv64
+            target: riscv64gc-unknown-linux-gnu
+            cross-package: gcc-riscv64-linux-gnu
+            linker: riscv64-linux-gnu-gcc
+          - platform: ubuntu-22.04
+            label: linux-armv7
+            target: armv7-unknown-linux-gnueabihf
+            cross-package: gcc-arm-linux-gnueabihf
+            linker: arm-linux-gnueabihf-gcc
+          - platform: windows-latest
+            label: windows-x64
+            target: x86_64-pc-windows-msvc
+          - platform: macos-latest
+            label: macos-arm64
+            target: aarch64-apple-darwin
+          - platform: macos-15-intel
+            label: macos-x64
+            target: x86_64-apple-darwin
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install cross toolchain
+        if: env.CLI_PRESENT == 'true' && matrix.cross-package != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ${{ matrix.cross-package }}
+
+      - name: Install Rust stable
+        if: env.CLI_PRESENT == 'true'
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          targets: ${{ matrix.target }}
+          components: clippy, rustfmt
+
+      - name: Rust cache
+        if: env.CLI_PRESENT == 'true'
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: './crates/optn-cli -> target'
+          key: ${{ matrix.target }}
+
+      - name: Format
+        if: env.CLI_PRESENT == 'true'
+        working-directory: crates/optn-cli
+        run: cargo fmt --check
+
+      - name: Clippy
+        if: env.CLI_PRESENT == 'true'
+        working-directory: crates/optn-cli
+        env:
+          CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker }}
+          CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: ${{ matrix.linker }}
+        run: cargo clippy --target ${{ matrix.target }} --all-targets -- -D warnings
+
+      - name: Test
+        # Only where the runner can execute what it built. A cross-built binary
+        # cannot run here, and pretending otherwise would skip the tests while
+        # reporting success.
+        if: env.CLI_PRESENT == 'true' && matrix.cross-package == ''
+        working-directory: crates/optn-cli
+        run: cargo test --target ${{ matrix.target }}
+
+      - name: Build
+        if: env.CLI_PRESENT == 'true'
+        working-directory: crates/optn-cli
+        env:
+          CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker }}
+          CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: ${{ matrix.linker }}
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Verify the binary is the architecture we asked for
+        # A misconfigured linker silently produces a host binary. It would ship
+        # labelled riscv64 and fail to start on the only machines that need it.
+        if: env.CLI_PRESENT == 'true' && runner.os == 'Linux'
+        working-directory: crates/optn-cli
+        run: |
+          BIN="target/${{ matrix.target }}/release/optn"
+          file "$BIN"
+          case "${{ matrix.target }}" in
+            riscv64gc-*) file "$BIN" | grep -q 'RISC-V' || { echo "::error::not a RISC-V binary"; exit 1; } ;;
+            aarch64-*)   file "$BIN" | grep -q 'aarch64' || { echo "::error::not an aarch64 binary"; exit 1; } ;;
+            armv7-*)     file "$BIN" | grep -q 'ARM'     || { echo "::error::not an ARM binary"; exit 1; } ;;
+            x86_64-*)    file "$BIN" | grep -q 'x86-64'  || { echo "::error::not an x86-64 binary"; exit 1; } ;;
+          esac
+
+      - name: Upload CLI binary
+        if: env.CLI_PRESENT == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: optn-cli-${{ matrix.label }}
+          path: |
+            crates/optn-cli/target/${{ matrix.target }}/release/optn
+            crates/optn-cli/target/${{ matrix.target }}/release/optn.exe
+          retention-days: 14
+          if-no-files-found: error
+
+  complete:
+    name: CLI preview set is complete
+    needs: [probe, build]
+    # always(), so a target that failed to build is still reported as missing
+    # rather than this being skipped along with it.
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Nothing to check
+        if: needs.probe.outputs.present != 'true'
+        run: echo 'The optn CLI is not in this tree; no binaries expected.'
+
+      - name: Download every CLI artifact
+        if: needs.probe.outputs.present == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          path: artifacts
+          pattern: optn-cli-*
+
+      - name: Verify no target dropped
+        if: needs.probe.outputs.present == 'true'
+        run: |
+          missing=0
+          for label in linux-x64 linux-arm64 linux-riscv64 linux-armv7 \
+            windows-x64 macos-arm64 macos-x64; do
+            if find "artifacts/optn-cli-$label" -type f -name 'optn*' -print -quit \
+              2>/dev/null | grep -q .
+            then
+              printf '  ok       %s\n' "$label"
+            else
+              echo "::error::the CLI did not build for $label"
+              missing=1
+            fi
+          done
+
+          if [ "$missing" -ne 0 ]; then
+            echo '::error::a CLI target dropped out of the preview'
+            exit 1
+          fi
+          echo 'Every CLI target built.'
