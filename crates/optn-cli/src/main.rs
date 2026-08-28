@@ -19,6 +19,7 @@ mod keychain;
 mod lmots;
 mod msgsign;
 mod network;
+mod rpa;
 mod serve;
 mod skills;
 mod token;
