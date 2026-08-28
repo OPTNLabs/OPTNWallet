@@ -3,10 +3,11 @@
 // Reference: Electron Cash electroncash/rpa/paycode.py.
 //
 // Protocol summary:
-//   - Recipient shares a static "paycode" (scan_pubkey + spend_pubkey, CashAddr encoded)
+//   - Recipient shares a static "cashcode" (scan_pubkey + spend_pubkey, CashAddr
+//     encoded). Legacy "paycode" strings are still accepted as send targets.
 //   - Sender derives a unique one-time address via ECDH(sender_privkey, scan_pubkey) + outpoint hash
 //   - Sender grinds signature nonce until input hash prefix matches scan_pubkey prefix
-//   - Recipient queries an RPA-capable Electrum server (Fulcrum-RPA) using their paycode prefix
+//   - Recipient queries an RPA-capable Electrum server (Fulcrum-RPA) using their cashcode prefix
 //   - For each matching tx, recipient checks if any output belongs to them via ECDH + CKD_pub
 //
 // Key paths — RPA rides on the wallet's normal BIP44 account as a third
@@ -16,9 +17,14 @@
 //   Scan  private/public: m/44'/coinType'/0'/3/0
 //   Spend private/public: m/44'/coinType'/0'/3/1
 //
-// Keys are compressed pubkeys.
+// Keys are compressed pubkeys throughout, including the CKD_pub child that
+// becomes the one-time P2PKH. The spec is explicit — "Addresses should always
+// be generated from compressed pubkeys" — and Selene's bch-rpa hashes the
+// compressed child. Electron Cash's paycode.py sets `use_uncompressed = True`
+// two lines under a comment saying it uses compressed keys; that is an EC bug,
+// not the protocol, and we do not reproduce it.
 //
-// Paycode encoding is NOT standard CashAddr: standard cashaddr's version byte
+// Cashcode encoding is NOT standard CashAddr: standard cashaddr's version byte
 // packs size into 3 bits, capping payloads at 64 bytes — RPA's payload
 // (version+prefixBits+scanPubkey(33)+spendPubkey(33)+expiry ≈ 72+ bytes)
 // exceeds that. Electron Cash's cashaddr.py added encode_rpa/decode_rpa: same
@@ -90,9 +96,19 @@ export function rpaGrindString(
 const VERSION_MAINNET = 0x01; // mainnet P2PKH
 const VERSION_TESTNET = 0x05; // testnet P2PKH
 
-// Paycode CashAddr prefixes
-const PAYCODE_PREFIX_MAINNET = 'paycode';
-const PAYCODE_PREFIX_TESTNET = 'paycodetest';
+// CashAddr prefixes.
+//
+// `cashcode:` / `cashcodetest:` are what this wallet EMITS. The legacy
+// `paycode:` / `paycodetest:` prefixes (Electron Cash networks.py RPA_PREFIX)
+// stay ACCEPTED on input, so codes people already handed out keep working —
+// we simply never generate one.
+export const CASHCODE_PREFIX_MAINNET = 'cashcode';
+export const CASHCODE_PREFIX_TESTNET = 'cashcodetest';
+export const LEGACY_PAYCODE_PREFIX_MAINNET = 'paycode';
+export const LEGACY_PAYCODE_PREFIX_TESTNET = 'paycodetest';
+
+const MAINNET_PREFIXES = [CASHCODE_PREFIX_MAINNET, LEGACY_PAYCODE_PREFIX_MAINNET];
+const TESTNET_PREFIXES = [CASHCODE_PREFIX_TESTNET, LEGACY_PAYCODE_PREFIX_TESTNET];
 
 // ─── CashAddr encoding (raw, supports non-standard payload sizes) ─────────────
 
@@ -248,6 +264,10 @@ export type DecodedPaycode = {
   scanPubkey: Uint8Array;
   spendPubkey: Uint8Array;
   expiry: number;
+  /** The CashAddr prefix the string actually carried. */
+  prefix: string;
+  /** True when decoded from a legacy `paycode:` / `paycodetest:` string. */
+  legacy: boolean;
 };
 
 // Derive all four RPA key materials from a mnemonic.
@@ -275,13 +295,23 @@ export async function deriveRpaKeys(
   };
 }
 
-// Encode scan_pubkey + spend_pubkey as a CashAddr paycode string.
+/**
+ * Which prefix family to stamp on an encoded code.
+ *
+ * The wallet only ever emits `cashcode`. `legacy-paycode` exists so tests and
+ * migration tooling can construct the old form we must keep accepting; no
+ * production call site passes it.
+ */
+export type RpaPrefixFamily = 'cashcode' | 'legacy-paycode';
+
+// Encode scan_pubkey + spend_pubkey as a CashAddr cashcode string.
 // prefixBits: how many bits of scan_pubkey to use as Electrum filter (8 = 1/256 bandwidth).
 export function encodePaycode(
   scanPubkey: Uint8Array,
   spendPubkey: Uint8Array,
   network: Network,
   prefixBits = RPA_PREFIX_BITS,
+  prefixFamily: RpaPrefixFamily = 'cashcode',
 ): string {
   const version = network === Network.MAINNET ? VERSION_MAINNET : VERSION_TESTNET;
   const payload = new Uint8Array(72);
@@ -291,7 +321,11 @@ export function encodePaycode(
   payload.set(spendPubkey.slice(0, 33), 35); // bytes 35-67
   // bytes 68-71: expiry = 0 (no expiry)
 
-  const prefix = network === Network.MAINNET ? PAYCODE_PREFIX_MAINNET : PAYCODE_PREFIX_TESTNET;
+  const [mainnetPrefix, testnetPrefix] =
+    prefixFamily === 'cashcode'
+      ? [CASHCODE_PREFIX_MAINNET, CASHCODE_PREFIX_TESTNET]
+      : [LEGACY_PAYCODE_PREFIX_MAINNET, LEGACY_PAYCODE_PREFIX_TESTNET];
+  const prefix = network === Network.MAINNET ? mainnetPrefix : testnetPrefix;
   return cashAddrEncode(prefix, 0x00, payload);
 }
 
@@ -306,10 +340,12 @@ export function decodePaycode(paycodeStr: string): DecodedPaycode | null {
     const p = decoded.payload;
     const isMainnetVersion = p[0] === 0x01 || p[0] === 0x02;
     const isTestnetVersion = p[0] === 0x05 || p[0] === 0x06;
+    const prefixIsMainnet = MAINNET_PREFIXES.includes(decoded.prefix);
+    const prefixIsTestnet = TESTNET_PREFIXES.includes(decoded.prefix);
     if (
       !(
-        (decoded.prefix === PAYCODE_PREFIX_MAINNET && isMainnetVersion) ||
-        (decoded.prefix === PAYCODE_PREFIX_TESTNET && isTestnetVersion)
+        (prefixIsMainnet && isMainnetVersion) ||
+        (prefixIsTestnet && isTestnetVersion)
       )
     ) {
       return null;
@@ -326,6 +362,10 @@ export function decodePaycode(paycodeStr: string): DecodedPaycode | null {
       scanPubkey,
       spendPubkey,
       expiry: (p[68] | (p[69] << 8) | (p[70] << 16) | (p[71] << 24)) >>> 0,
+      prefix: decoded.prefix,
+      legacy:
+        decoded.prefix === LEGACY_PAYCODE_PREFIX_MAINNET ||
+        decoded.prefix === LEGACY_PAYCODE_PREFIX_TESTNET,
     };
   } catch {
     return null;
@@ -334,9 +374,8 @@ export function decodePaycode(paycodeStr: string): DecodedPaycode | null {
 
 export function looksLikeRpaPaycode(recipient: string): boolean {
   const bare = recipient.trim().split('?')[0].toLowerCase();
-  return (
-    bare.startsWith(`${PAYCODE_PREFIX_MAINNET}:`) ||
-    bare.startsWith(`${PAYCODE_PREFIX_TESTNET}:`)
+  return [...MAINNET_PREFIXES, ...TESTNET_PREFIXES].some((prefix) =>
+    bare.startsWith(`${prefix}:`)
   );
 }
 
@@ -446,15 +485,8 @@ export function derivePaymentAddress(
   const child = deriveHdPublicNodeChild(parentNode, index);
   if (typeof child === 'string') throw new Error(`CKD_pub failed: ${child}`);
 
-  // Electron Cash hashes the *uncompressed* child pubkey (paycode.py
-  // use_uncompressed = True). Compressed hash160 would not match EC.
-  const uncompressed = secp256k1.uncompressPublicKey(
-    Uint8Array.from(child.publicKey)
-  );
-  if (typeof uncompressed === 'string') {
-    throw new Error(`Uncompress payment pubkey failed: ${uncompressed}`);
-  }
-  const pkh = hash160(uncompressed);
+  // Hash the compressed child, per spec. Same for cashcode: and paycode:.
+  const pkh = hash160(Uint8Array.from(child.publicKey));
   const prefix = network === Network.MAINNET ? 'bitcoincash' : 'bchtest';
   const result = encodeCashAddress({ prefix, type: 'p2pkh', payload: pkh });
   if (typeof result === 'string') throw new Error(`Address encoding failed: ${result}`);

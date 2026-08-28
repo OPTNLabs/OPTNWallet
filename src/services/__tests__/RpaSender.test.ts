@@ -99,6 +99,8 @@ describe('RpaSender', () => {
         scanPubkey: recipient.scanPubkey,
         spendPubkey: recipient.spendPubkey,
         expiry: 0,
+        prefix: 'cashcodetest',
+        legacy: false,
       },
       utxos: [
         {
@@ -135,7 +137,7 @@ describe('RpaSender', () => {
     expect(result.finalOutputs.some((o) => o.recipientAddress === expectedDest)).toBe(
       true
     );
-    expect(paycode.startsWith('paycodetest:')).toBe(true);
+    expect(paycode.startsWith('cashcodetest:')).toBe(true);
     expect(decoded.inputs[0].sequenceNumber).toBeGreaterThanOrEqual(
       RPA_SEQUENCE_DISABLE_LOCKTIME
     );
