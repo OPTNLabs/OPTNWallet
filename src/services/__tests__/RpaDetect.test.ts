@@ -128,6 +128,7 @@ describe('RpaDetect', () => {
       recipient.spendPubkey,
       Network.CHIPNET,
       8
-    ).startsWith('paycodetest:')).toBe(true);
+    ).startsWith('cashcodetest:')).toBe(true);
   });
+
 });

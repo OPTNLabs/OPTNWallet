@@ -10,6 +10,7 @@ import {
   computeSharedSecret,
   getRpaSendBlockReason,
   getRpaKeyPaths,
+  looksLikeRpaPaycode,
   rpaGrindString,
   RPA_PREFIX_BITS,
 } from '../RpaService';
@@ -99,43 +100,111 @@ describe('RpaService', () => {
     );
   });
 
-  it('matches Electron Cash grind string and uncompressed stealth address', async () => {
+  it('matches the Electron Cash grind string', async () => {
     const keys = await deriveRpaKeys(TEST_MNEMONIC, PASSPHRASE, Network.CHIPNET);
     expect(RPA_PREFIX_BITS).toBe(16);
     expect(rpaGrindString(keys.scanPubkey, 16)).toHaveLength(4);
     expect(rpaGrindString(keys.scanPubkey, 16)).toMatch(/^[0-9A-F]{4}$/);
+  });
 
+  it('pays the hash160 of the compressed child, per spec', async () => {
+    const keys = await deriveRpaKeys(TEST_MNEMONIC, PASSPHRASE, Network.CHIPNET);
     const shared = computeSharedSecret(
       keys.scanPrivkey,
       keys.scanPubkey,
       '11'.repeat(32),
       0
     );
-    const uncompressedDest = derivePaymentAddress(
-      keys.spendPubkey,
-      shared,
-      Network.CHIPNET,
+    const child = deriveHdPublicNodeChild(
+      {
+        publicKey: Uint8Array.from(keys.spendPubkey),
+        chainCode: Uint8Array.from(shared),
+        depth: 0,
+        childIndex: 0,
+        parentFingerprint: new Uint8Array(4),
+      },
       0
     );
-    const parentNode = {
-      publicKey: Uint8Array.from(keys.spendPubkey),
-      chainCode: Uint8Array.from(shared),
-      depth: 0,
-      childIndex: 0,
-      parentFingerprint: new Uint8Array(4),
-    };
-    const child = deriveHdPublicNodeChild(parentNode, 0);
     if (typeof child === 'string') throw new Error(child);
+    expect(child.publicKey.length).toBe(33);
+
     const compressed = encodeCashAddress({
       prefix: 'bchtest',
       type: 'p2pkh',
       payload: hash160(Uint8Array.from(child.publicKey)),
     });
     if (typeof compressed === 'string') throw new Error(compressed);
-    expect(uncompressedDest).not.toBe(compressed.address);
-    expect(secp256k1.uncompressPublicKey(child.publicKey)).not.toBeInstanceOf(
-      String
+
+    expect(derivePaymentAddress(keys.spendPubkey, shared, Network.CHIPNET, 0)).toBe(
+      compressed.address
     );
+
+    // Electron Cash's paycode.py sets `use_uncompressed = True`, contradicting
+    // both the spec ("Addresses should always be generated from compressed
+    // pubkeys") and Selene's bch-rpa. Guard against drifting back to it.
+    const uncompressedPubkey = secp256k1.uncompressPublicKey(child.publicKey);
+    if (typeof uncompressedPubkey === 'string') throw new Error(uncompressedPubkey);
+    const ecAddress = encodeCashAddress({
+      prefix: 'bchtest',
+      type: 'p2pkh',
+      payload: hash160(Uint8Array.from(uncompressedPubkey)),
+    });
+    if (typeof ecAddress === 'string') throw new Error(ecAddress);
+    expect(derivePaymentAddress(keys.spendPubkey, shared, Network.CHIPNET, 0)).not.toBe(
+      ecAddress.address
+    );
+  });
+
+  it('emits cashcode and never paycode', async () => {
+    const keys = await deriveRpaKeys(TEST_MNEMONIC, PASSPHRASE, Network.MAINNET);
+    const mainnet = encodePaycode(keys.scanPubkey, keys.spendPubkey, Network.MAINNET);
+    const chipnet = encodePaycode(keys.scanPubkey, keys.spendPubkey, Network.CHIPNET);
+
+    expect(mainnet.startsWith('cashcode:')).toBe(true);
+    expect(chipnet.startsWith('cashcodetest:')).toBe(true);
+    expect(mainnet.startsWith('paycode')).toBe(false);
+    expect(chipnet.startsWith('paycode')).toBe(false);
+  });
+
+  it('still accepts legacy paycode strings so old codes keep working', async () => {
+    const keys = await deriveRpaKeys(TEST_MNEMONIC, PASSPHRASE, Network.MAINNET);
+    const legacyMainnet = encodePaycode(
+      keys.scanPubkey,
+      keys.spendPubkey,
+      Network.MAINNET,
+      RPA_PREFIX_BITS,
+      'legacy-paycode'
+    );
+    const legacyChipnet = encodePaycode(
+      keys.scanPubkey,
+      keys.spendPubkey,
+      Network.CHIPNET,
+      RPA_PREFIX_BITS,
+      'legacy-paycode'
+    );
+    expect(legacyMainnet.startsWith('paycode:')).toBe(true);
+    expect(legacyChipnet.startsWith('paycodetest:')).toBe(true);
+
+    for (const code of [legacyMainnet, legacyChipnet]) {
+      expect(looksLikeRpaPaycode(code)).toBe(true);
+      const decoded = decodePaycode(code);
+      expect(decoded).not.toBeNull();
+      expect(decoded!.legacy).toBe(true);
+      expect(Buffer.from(decoded!.scanPubkey).toString('hex')).toBe(
+        Buffer.from(keys.scanPubkey).toString('hex')
+      );
+      expect(Buffer.from(decoded!.spendPubkey).toString('hex')).toBe(
+        Buffer.from(keys.spendPubkey).toString('hex')
+      );
+    }
+
+    // A legacy code is a valid send target, not something we refuse.
+    expect(getRpaSendBlockReason(legacyMainnet, Network.MAINNET)).toBeNull();
+    expect(getRpaSendBlockReason(legacyChipnet, Network.CHIPNET)).toBeNull();
+
+    const cashcode = encodePaycode(keys.scanPubkey, keys.spendPubkey, Network.MAINNET);
+    expect(looksLikeRpaPaycode(cashcode)).toBe(true);
+    expect(decodePaycode(cashcode)!.legacy).toBe(false);
   });
 
   it('uses network-specific coin-type key paths for mainnet and chipnet', async () => {
