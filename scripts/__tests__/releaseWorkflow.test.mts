@@ -20,6 +20,14 @@ const extensionShell = readFileSync(
   resolve(repoRoot, 'src', 'platform', 'extension', 'ExtensionAppShell.tsx'),
   'utf8'
 );
+const flatpakManifest = readFileSync(
+  resolve(repoRoot, 'packaging', 'flatpak', 'com.optilabs.wallet.yml'),
+  'utf8'
+);
+const flatpakMetainfo = readFileSync(
+  resolve(repoRoot, 'packaging', 'flatpak', 'com.optilabs.wallet.metainfo.xml'),
+  'utf8'
+);
 
 describe('release workflow', () => {
   it('pins every external action to an immutable full commit SHA', () => {
@@ -172,5 +180,92 @@ describe('release workflow', () => {
     );
     expect(desktopPreviewWorkflow).toContain('ubuntu-24.04-arm');
     expect(desktopPreviewWorkflow).toContain('linux-aarch64');
+  });
+  it('builds a Flatpak for both Linux architectures and blocks a release without one', () => {
+    // Tauri has no Flatpak bundler target, so nothing else in the build would
+    // notice if this job disappeared.
+    expect(workflow).toMatch(/^\s{2}flatpak:\s*$/m);
+    expect(workflow).toContain('deb-artifact: desktop-linux');
+    expect(workflow).toContain('deb-artifact: desktop-linux-arm');
+
+    // publish must wait for it, or a release is cut with the Flatpak missing.
+    expect(workflow).toMatch(
+      /publish:[\s\S]*?needs: \[[^\]]*\bflatpak\b[^\]]*\]/
+    );
+    expect(workflow).toContain(
+      "require_asset artifacts/flatpak-linux-x64 '*.flatpak'"
+    );
+    expect(workflow).toContain(
+      "require_asset artifacts/flatpak-linux-arm64 '*.flatpak'"
+    );
+    expect(workflow).toContain(
+      'expect "OPTNWallet-${VERSION}-linux-x64.flatpak"'
+    );
+    expect(workflow).toContain(
+      'expect "OPTNWallet-${VERSION}-linux-arm64.flatpak"'
+    );
+
+    // Preview builds it too: a manifest that stops working should fail on the
+    // pull request, not at release time.
+    expect(desktopPreviewWorkflow).toMatch(/^\s{2}flatpak-preview:\s*$/m);
+    expect(desktopPreviewWorkflow).toContain('preview-linux-x64-flatpak');
+    expect(desktopPreviewWorkflow).toContain('preview-linux-arm64-flatpak');
+  });
+
+  it('pins a GNOME runtime that is still supported', () => {
+    const pinned = flatpakManifest.match(/^runtime-version: *'?(\d+)'?/m);
+    expect(pinned, 'the manifest must pin a runtime version').not.toBeNull();
+
+    // GNOME 48 reached end of life on 24 March 2026. An EOL runtime still
+    // builds and still runs; it just stops getting security fixes, which is
+    // precisely why nothing else catches it.
+    expect(Number(pinned![1])).toBeGreaterThanOrEqual(49);
+  });
+
+  it('names the Flatpak metadata for the application id', () => {
+    // Flatpak resolves the desktop file, the icons and the AppStream data by
+    // application id. Tauri names them after the product instead, so a
+    // mismatch ships an application with no icon and no name in a software
+    // centre — visible only after installing it.
+    const id = 'com.optilabs.wallet';
+    expect(flatpakManifest).toContain(`id: ${id}`);
+    expect(flatpakMetainfo).toContain(`<id>${id}</id>`);
+    expect(flatpakMetainfo).toContain(
+      `<launchable type="desktop-id">${id}.desktop</launchable>`
+    );
+    expect(flatpakManifest).toContain(`/app/share/applications/${id}.desktop`);
+    expect(flatpakManifest).toContain(`/app/share/metainfo/${id}.metainfo.xml`);
+
+    // The command has to be the binary the deb actually installs.
+    expect(flatpakManifest).toMatch(/^command: OPTNWallet$/m);
+    expect(flatpakManifest).toContain('/app/bin/OPTNWallet');
+  });
+
+  it('asserts the desktop preview produced every artifact', () => {
+    // if-no-files-found catches a bundler that made nothing. It cannot catch a
+    // job that never ran, which is how a platform stops being built quietly.
+    expect(desktopPreviewWorkflow).toMatch(/^\s{2}preview-complete:\s*$/m);
+    for (const artifact of [
+      'preview-windows-x64-nsis',
+      'preview-windows-x64-msi',
+      'preview-macos-arm64-dmg',
+      'preview-macos-x64-dmg',
+      'preview-linux-x64-appimage',
+      'preview-linux-arm64-appimage',
+      'preview-linux-x64-deb',
+      'preview-linux-arm64-deb',
+      'preview-linux-x64-rpm',
+      'preview-linux-arm64-rpm',
+      'preview-linux-x64-flatpak',
+      'preview-linux-arm64-flatpak',
+    ]) {
+      expect(desktopPreviewWorkflow, `${artifact} must be asserted`).toContain(
+        `expect ${artifact}`
+      );
+    }
+    // always(), or a failed build skips the check and hides what is missing.
+    expect(desktopPreviewWorkflow).toMatch(
+      /preview-complete:[\s\S]*?if: always\(\)/
+    );
   });
 });

@@ -330,3 +330,179 @@ jobs:
           path: src-tauri/target/${{ matrix.target }}/debug/bundle/rpm/*.rpm
           retention-days: 14
           if-no-files-found: error
+
+  # Preview builds the Flatpak too. It is assembled from the deb by a
+  # hand-written manifest rather than by a Tauri bundler, so nothing else in
+  # the build would notice if it broke — and the first sign would be a release
+  # that ships without one.
+  flatpak-preview:
+    name: Preview Flatpak (${{ matrix.label }})
+    needs: build-desktop-preview
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-24.04
+            label: linux-x64
+          # flatpak-builder repackages a native deb; there is no cross path.
+          - platform: ubuntu-24.04-arm
+            label: linux-arm64
+    runs-on: ${{ matrix.platform }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Download the ${{ matrix.label }} DEB
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: preview-${{ matrix.label }}-deb
+          path: linux-deb
+
+      - name: Install flatpak-builder
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            flatpak flatpak-builder desktop-file-utils
+          sudo flatpak remote-add --if-not-exists flathub \
+            https://flathub.org/repo/flathub.flatpakrepo
+
+      - name: Install the GNOME runtime
+        run: |
+          set -euo pipefail
+          RUNTIME_VERSION="$(sed -nE "s/^runtime-version: *'?([^']+)'?/\\1/p" \
+            packaging/flatpak/com.optilabs.wallet.yml)"
+          test -n "$RUNTIME_VERSION"
+          echo "Manifest pins org.gnome.Platform//${RUNTIME_VERSION}"
+
+          # An end-of-life runtime still builds; it only stops receiving
+          # security fixes. Catching that here is the point of pinning it.
+          if ! sudo flatpak remote-info flathub \
+            "org.gnome.Platform//${RUNTIME_VERSION}" >/dev/null 2>&1; then
+            echo "::error::org.gnome.Platform//${RUNTIME_VERSION} is not on flathub"
+            echo 'Available branches:'
+            sudo flatpak remote-ls flathub --columns=ref |
+              grep '^org\.gnome\.Platform/' || true
+            exit 1
+          fi
+
+          sudo flatpak install -y --noninteractive flathub \
+            "org.gnome.Platform//${RUNTIME_VERSION}" \
+            "org.gnome.Sdk//${RUNTIME_VERSION}"
+
+      - name: Build the Flatpak
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          cp packaging/flatpak/com.optilabs.wallet.yml build/
+          cp packaging/flatpak/com.optilabs.wallet.metainfo.xml build/
+
+          DEB="$(find linux-deb -type f -name '*.deb' -print -quit)"
+          if [ -z "$DEB" ]; then
+            echo '::error::no .deb to build a Flatpak from'
+            find linux-deb -type f | sort
+            exit 1
+          fi
+          echo "Building from $(basename "$DEB")"
+          cp "$DEB" build/optn-wallet.deb
+
+          cd build
+          sudo flatpak-builder --disable-rofiles-fuse --force-clean \
+            --repo=repo build-dir com.optilabs.wallet.yml
+          sudo flatpak build-bundle repo \
+            "OPTNWallet-preview-${{ matrix.label }}.flatpak" com.optilabs.wallet
+          sudo chown "$(id -u):$(id -g)" ./*.flatpak
+
+      - name: Verify the bundle installs a complete application
+        working-directory: build
+        run: |
+          set -euo pipefail
+          BUNDLE="$(find . -maxdepth 1 -name '*.flatpak' -print -quit)"
+          test -s "$BUNDLE"
+          ls -lh "$BUNDLE"
+
+          sudo flatpak install -y --noninteractive --bundle "$BUNDLE"
+          LOCATION="$(sudo flatpak info --show-location com.optilabs.wallet)"
+          for required in \
+            files/bin/OPTNWallet \
+            files/share/applications/com.optilabs.wallet.desktop \
+            files/share/metainfo/com.optilabs.wallet.metainfo.xml
+          do
+            if ! sudo test -e "$LOCATION/$required"; then
+              echo "::error::the Flatpak installs no $required"
+              sudo find "$LOCATION/files" -maxdepth 3 | head -50
+              exit 1
+            fi
+            echo "  ok       $required"
+          done
+          sudo test -x "$LOCATION/files/bin/OPTNWallet"
+          sudo flatpak uninstall -y com.optilabs.wallet
+
+      - name: Upload the Flatpak
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: preview-${{ matrix.label }}-flatpak
+          path: build/*.flatpak
+          retention-days: 14
+          if-no-files-found: error
+
+  # Every upload above uses if-no-files-found: error, which catches a bundler
+  # that produced nothing. It does not catch a job that never ran — a matrix
+  # entry removed, a condition that stopped matching, a runner label that no
+  # longer exists. Those leave the preview green with an artifact missing,
+  # which is exactly how a platform stops being built without anyone noticing.
+  # This asserts the finished set.
+  preview-complete:
+    name: Preview set is complete
+    needs: [build-desktop-preview, flatpak-preview]
+    # `always()` so a missing artifact is still reported when a build failed;
+    # otherwise this is skipped and the only red is the build itself.
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Download every preview artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          path: artifacts
+
+      - name: List what arrived
+        run: find artifacts -type f -print | sort
+
+      - name: Verify nothing dropped
+        run: |
+          missing=0
+          expect() {
+            if find "artifacts/$1" -type f -name "$2" -print -quit 2>/dev/null |
+              grep -q .
+            then
+              printf '  ok       %s\n' "$3"
+            else
+              echo "::error::missing from the preview: $3 (expected $2 in $1)"
+              missing=1
+            fi
+          }
+
+          expect preview-windows-x64-nsis     '*.exe'      'Windows NSIS installer'
+          expect preview-windows-x64-msi      '*.msi'      'Windows MSI installer'
+          expect preview-macos-arm64-dmg      '*.dmg'      'macOS Apple Silicon disk image'
+          expect preview-macos-x64-dmg        '*.dmg'      'macOS Intel disk image'
+          expect preview-linux-x64-appimage   '*.AppImage' 'Linux x64 AppImage'
+          expect preview-linux-arm64-appimage '*.AppImage' 'Linux ARM64 AppImage'
+          expect preview-linux-x64-deb        '*.deb'      'Linux x64 DEB'
+          expect preview-linux-arm64-deb      '*.deb'      'Linux ARM64 DEB'
+          expect preview-linux-x64-rpm        '*.rpm'      'Linux x64 RPM'
+          expect preview-linux-arm64-rpm      '*.rpm'      'Linux ARM64 RPM'
+          expect preview-linux-x64-flatpak    '*.flatpak'  'Linux x64 Flatpak'
+          expect preview-linux-arm64-flatpak  '*.flatpak'  'Linux ARM64 Flatpak'
+
+          if [ "$missing" -ne 0 ]; then
+            echo '::error::the desktop preview did not produce every artifact'
+            exit 1
+          fi
+          echo 'Every expected desktop preview artifact is present.'

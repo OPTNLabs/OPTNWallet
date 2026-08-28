@@ -835,9 +835,167 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
+  # Flatpak is how a large share of Linux desktop users install anything, and
+  # Tauri has no bundler target for it — so it is built here, by hand, from the
+  # deb the desktop job already produced. Without this job the release simply
+  # has no Flatpak, which is the kind of silent gap the rest of this workflow
+  # exists to prevent.
+  flatpak:
+    name: Build Flatpak (${{ matrix.label }})
+    needs: [resolve, desktop]
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-24.04
+            label: linux-x64
+            deb-artifact: desktop-linux
+          # flatpak-builder repackages a native deb, so aarch64 has to be built
+          # on an aarch64 runner. There is no cross path here.
+          - platform: ubuntu-24.04-arm
+            label: linux-arm64
+            deb-artifact: desktop-linux-arm
+    runs-on: ${{ matrix.platform }}
+    permissions:
+      contents: read
+    env:
+      RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+          persist-credentials: false
+
+      - name: Download the Linux bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: ${{ matrix.deb-artifact }}
+          path: linux-bundle
+
+      - name: Install flatpak-builder
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            flatpak flatpak-builder desktop-file-utils
+          sudo flatpak remote-add --if-not-exists flathub \
+            https://flathub.org/repo/flathub.flatpakrepo
+
+      - name: Install the GNOME runtime
+        run: |
+          set -euo pipefail
+          RUNTIME_VERSION="$(sed -nE "s/^runtime-version: *'?([^']+)'?/\\1/p" \
+            packaging/flatpak/com.optilabs.wallet.yml)"
+          test -n "$RUNTIME_VERSION"
+          echo "Manifest pins org.gnome.Platform//${RUNTIME_VERSION}"
+
+          # An end-of-life runtime still builds; it just stops receiving
+          # security fixes. Checking availability here turns a silent downgrade
+          # in the app's platform into a build failure that names the versions
+          # that do exist.
+          if ! sudo flatpak remote-info flathub \
+            "org.gnome.Platform//${RUNTIME_VERSION}" >/dev/null 2>&1; then
+            echo "::error::org.gnome.Platform//${RUNTIME_VERSION} is not on flathub"
+            echo 'Available branches:'
+            sudo flatpak remote-ls flathub --columns=ref |
+              grep '^org\.gnome\.Platform/' || true
+            exit 1
+          fi
+
+          sudo flatpak install -y --noninteractive flathub \
+            "org.gnome.Platform//${RUNTIME_VERSION}" \
+            "org.gnome.Sdk//${RUNTIME_VERSION}"
+
+      - name: Stage the deb and stamp the release
+        run: |
+          set -euo pipefail
+          VERSION="${RELEASE_TAG#v}"
+          mkdir -p build
+          cp packaging/flatpak/com.optilabs.wallet.yml build/
+          cp packaging/flatpak/com.optilabs.wallet.metainfo.xml build/
+
+          DEB="$(find linux-bundle -type f -name '*.deb' -print -quit)"
+          if [ -z "$DEB" ]; then
+            echo '::error::no .deb in the Linux bundle to build a Flatpak from'
+            find linux-bundle -type f | sort
+            exit 1
+          fi
+          echo "Building from $(basename "$DEB")"
+          cp "$DEB" build/optn-wallet.deb
+
+          # The release entry in the AppStream file is stamped from the tag, so
+          # it cannot drift from what is actually being shipped.
+          python3 - "$VERSION" <<'PY'
+          import re, sys, datetime, io
+          version = sys.argv[1]
+          path = 'build/com.optilabs.wallet.metainfo.xml'
+          text = io.open(path, encoding='utf-8').read()
+          date = datetime.date.today().isoformat()
+          text = re.sub(
+              r'<release version="[^"]*" date="[^"]*"/>',
+              f'<release version="{version}" date="{date}"/>',
+              text,
+              count=1,
+          )
+          io.open(path, 'w', encoding='utf-8').write(text)
+          print(f'metainfo stamped {version} {date}')
+          PY
+
+      - name: Build the Flatpak
+        working-directory: build
+        run: |
+          set -euo pipefail
+          sudo flatpak-builder --disable-rofiles-fuse --force-clean \
+            --repo=repo build-dir com.optilabs.wallet.yml
+          sudo flatpak build-bundle repo \
+            "OPTNWallet-${RELEASE_TAG#v}-${{ matrix.label }}.flatpak" \
+            com.optilabs.wallet
+          sudo chown "$(id -u):$(id -g)" ./*.flatpak
+
+      - name: Verify the bundle contains a runnable application
+        working-directory: build
+        run: |
+          set -euo pipefail
+          BUNDLE="$(find . -maxdepth 1 -name '*.flatpak' -print -quit)"
+          test -s "$BUNDLE"
+          ls -lh "$BUNDLE"
+
+          # A Flatpak that installs but has no binary is the failure mode
+          # worth catching: it looks like a successful build all the way to a
+          # user launching it.
+          sudo flatpak install -y --noninteractive --bundle "$BUNDLE"
+          sudo flatpak info com.optilabs.wallet
+          # Checked on disk rather than by launching it: the runner has no
+          # display or session bus, and what matters here is that the tree
+          # the bundle installs is complete.
+          LOCATION="$(sudo flatpak info --show-location com.optilabs.wallet)"
+          for required in \
+            files/bin/OPTNWallet \
+            files/share/applications/com.optilabs.wallet.desktop \
+            files/share/metainfo/com.optilabs.wallet.metainfo.xml
+          do
+            if ! sudo test -e "$LOCATION/$required"; then
+              echo "::error::the Flatpak installs no $required"
+              sudo find "$LOCATION/files" -maxdepth 3 | head -50
+              exit 1
+            fi
+            echo "  ok       $required"
+          done
+          sudo test -x "$LOCATION/files/bin/OPTNWallet"
+          sudo flatpak uninstall -y com.optilabs.wallet
+
+      - name: Upload the Flatpak
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: flatpak-${{ matrix.label }}
+          path: build/*.flatpak
+          retention-days: 30
+          if-no-files-found: error
+
   publish:
     name: Publish GitHub release
-    needs: [resolve, android, desktop, extension, ios, riscv64]
+    needs: [resolve, android, desktop, extension, flatpak, ios, riscv64]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -888,6 +1046,8 @@ jobs:
           require_asset artifacts/ios-release '*.zip' 'iOS simulator zip'
           test -f "artifacts/ios-release/OPTNWallet-${RELEASE_TAG#v}-ios-simulator.zip"
           require_asset artifacts/desktop-linux-riscv64 'OPTNWallet-*-linux-riscv64-unbundled' 'Linux riscv64 unbundled ELF'
+          require_asset artifacts/flatpak-linux-x64 '*.flatpak' 'Linux x64 Flatpak'
+          require_asset artifacts/flatpak-linux-arm64 '*.flatpak' 'Linux ARM64 Flatpak'
 
           require_asset artifacts/android-release '*.apk' 'signed Android APK'
           # Named individually: a single *.apk check passes when only one
@@ -1001,6 +1161,9 @@ jobs:
                 ;;
               # Only the Play flavour produces a bundle; F-Droid ships APKs.
               *.aab)             place "$src" "OPTNWallet-${VERSION}-android.aab" ;;
+              # Already named by the flatpak job, which knows its own arch;
+              # matching on the filename here would only re-derive it.
+              *.flatpak)         place "$src" "$base" ;;
               *-chrome.zip)      place "$src" "OPTNWallet-${VERSION}-chrome.zip" ;;
               *-firefox.zip)     place "$src" "OPTNWallet-${VERSION}-firefox.zip" ;;
               *-ios-simulator.zip) place "$src" "OPTNWallet-${VERSION}-ios-simulator.zip" ;;
@@ -1097,6 +1260,8 @@ jobs:
           expect "OPTNWallet-${VERSION}-linux-x64.AppImage"    'Linux x64 AppImage'
           expect "OPTNWallet-${VERSION}-linux-arm64.AppImage"  'Linux ARM64 AppImage'
           expect "OPTNWallet-${VERSION}-linux-riscv64-unbundled" 'Linux riscv64 binary'
+          expect "OPTNWallet-${VERSION}-linux-x64.flatpak"     'Linux x64 Flatpak'
+          expect "OPTNWallet-${VERSION}-linux-arm64.flatpak"   'Linux ARM64 Flatpak'
           # deb and rpm keep their native names, which encode the architecture
           # differently from everything else.
           expect "*_amd64.deb"                                 'Linux x64 DEB'
