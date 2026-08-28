@@ -630,14 +630,68 @@ jobs:
             test -f artifacts/android-release-status/android-release-status.txt
           fi
 
+      # Assets were previously copied out under whatever name their bundler
+      # chose, which left five separators, four architecture vocabularies and
+      # two version styles in one release: OPTNWallet_1.7.1_amd64.deb,
+      # OPTNWallet-1.7.1-1.x86_64.rpm, OPTNWallet-v1.7.3-chrome.zip, and
+      # app-release.apk naming neither product nor version.
+      #
+      # Everything becomes OPTNWallet-<version>-<os>-<arch>.<ext> except .deb
+      # and .rpm. Those filenames are load-bearing: createrepo, dnf, apt and
+      # reprepro parse <name>_<ver>-<rev>_<arch>.deb and
+      # <name>-<ver>-<rel>.<arch>.rpm, so normalising them would buy cosmetic
+      # consistency at the cost of interoperability.
+      #
+      # A pre-release keeps its full identifier here (1.7.3-alpha.4), unlike
+      # the manifests, which stay numeric because WiX rejects pre-release
+      # identifiers.
       - name: Assemble release files
         run: |
           mkdir -p release-files
-          find artifacts -type f \( \
+          VERSION="${RELEASE_TAG#v}"
+
+          place() {
+            if [ -e "release-files/$2" ]; then
+              echo "::error::two artifacts both map to $2 (second was $1)"
+              exit 1
+            fi
+            cp "$1" "release-files/$2"
+            echo "  $(basename "$1")  ->  $2"
+          }
+
+          while IFS= read -r -d "" src; do
+            base="$(basename "$src")"
+            case "$base" in
+              *-setup.exe) place "$src" "OPTNWallet-${VERSION}-windows-x64-setup.exe" ;;
+              *.msi)       place "$src" "OPTNWallet-${VERSION}-windows-x64.msi" ;;
+              *.dmg)
+                # Preserve the ad-hoc marker: it warns that Gatekeeper will ask
+                # the user to approve the app because Apple never notarized it.
+                suffix=""
+                case "$base" in *adhoc-not-notarized*) suffix="-adhoc-not-notarized" ;; esac
+                case "$base" in
+                  *aarch64*) place "$src" "OPTNWallet-${VERSION}-macos-arm64${suffix}.dmg" ;;
+                  *)         place "$src" "OPTNWallet-${VERSION}-macos-x64${suffix}.dmg" ;;
+                esac
+                ;;
+              *aarch64.AppImage) place "$src" "OPTNWallet-${VERSION}-linux-arm64.AppImage" ;;
+              *.AppImage)        place "$src" "OPTNWallet-${VERSION}-linux-x64.AppImage" ;;
+              *.deb|*.rpm)       place "$src" "$base" ;;
+              *.apk)             place "$src" "OPTNWallet-${VERSION}-android.apk" ;;
+              *.aab)             place "$src" "OPTNWallet-${VERSION}-android.aab" ;;
+              *-chrome.zip)      place "$src" "OPTNWallet-${VERSION}-chrome.zip" ;;
+              *-firefox.zip)     place "$src" "OPTNWallet-${VERSION}-firefox.zip" ;;
+              *)
+                echo "::error::no naming rule for $base"
+                exit 1
+                ;;
+            esac
+          done < <(find artifacts -type f \( \
             -name '*.apk' -o -name '*.aab' -o -name '*.exe' -o -name '*.msi' \
             -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \
             -o -name '*.zip' \
-          \) -exec cp {} release-files/ \;
+          \) -print0)
+
           if [ -f artifacts/android-release-status/android-release-status.txt ]; then
             cp artifacts/android-release-status/android-release-status.txt release-files/
           fi
@@ -660,10 +714,9 @@ jobs:
             [ -e "$path" ] || continue
             file="$(basename "$path")"
             case "$file" in
-              # Android bundles are named by Gradle, not by us; the asset rename
-              # gives them a version and these two lines then come out.
-              app-release.apk|app-release.aab) continue ;;
-              android-release-status.txt|release-sha256.txt) continue ;;
+              # The only asset with no version: a plain-text note saying whether
+              # the Android build was signed.
+              android-release-status.txt) continue ;;
             esac
             case "$file" in
               *"$TAG_CORE"*) ;;
@@ -687,9 +740,9 @@ jobs:
               -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \
               -o -name '*.zip' \
             \) -print0 | sed -z 's#^\./##' | sort -z | xargs -0 sha256sum
-          ) > release-sha256.txt
-          test -s release-sha256.txt
-          cat release-sha256.txt
+          ) > "OPTNWallet-${RELEASE_TAG#v}-sha256.txt"
+          test -s "OPTNWallet-${RELEASE_TAG#v}-sha256.txt"
+          cat "OPTNWallet-${RELEASE_TAG#v}-sha256.txt"
 
       - name: Attest release files
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
@@ -743,6 +796,6 @@ jobs:
             SHA256 checksums and build provenance attestations are attached.
           files: |
             release-files/*
-            release-sha256.txt
+            OPTNWallet-*-sha256.txt
           fail_on_unmatched_files: true
           prerelease: ${{ needs.resolve.outputs.prerelease == 'true' }}
