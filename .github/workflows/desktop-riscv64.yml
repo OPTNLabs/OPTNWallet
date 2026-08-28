@@ -75,7 +75,14 @@ jobs:
           # These are the packages the desktop app links against. webkit2gtk is
           # the one that made this hard: without the riscv64 build of it there
           # is nothing for the linker to resolve against.
-          packages: >-
+          #
+          # The input is `package`, singular. Actions does not fail on an input
+          # it does not know, it only warns, so a plural spelling here reads as
+          # an empty list and the job gets a cross-compiler with no target
+          # libraries behind it. The action appends `:riscv64` to each name,
+          # adds the dpkg architecture, and points apt at ports.ubuntu.com,
+          # which is where the riscv64 builds actually live.
+          package: >-
             libwebkit2gtk-4.1-dev
             libgtk-3-dev
             librsvg2-dev
