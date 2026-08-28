@@ -41,6 +41,13 @@ tokio = { version = "1", features = ["net", "io-util", "time", "macros", "rt", "
 # ring is pure-ish Rust with a small asm surface and cross-compiles cleanly.
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging", "tls12"] }
 webpki-roots = "0.26"
+# The RPC endpoint. hyper is already in the tree as reqwest's client; this
+# turns on the server half of the same crate rather than adding another.
+rand = "0.8"
+hyper = { version = "1", default-features = false, features = ["server", "http1"] }
+hyper-util = { version = "0.1", default-features = false, features = ["tokio", "server"] }
+http-body-util = "0.1"
+
 # HTTP for x402. rustls rather than native-tls, and the same feature set
 # src-tauri pins, so no OpenSSL enters the tree and the cross-builds hold.
 # OS keychain. Native backends only: the Secret Service backends pull in dbus
