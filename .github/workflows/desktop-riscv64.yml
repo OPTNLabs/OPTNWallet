@@ -19,7 +19,10 @@ name: Desktop riscv64
 on:
   workflow_dispatch:
   pull_request:
-    branches: [dev]
+    # Was [dev] alone, so neither staging nor main got a riscv64 build at
+    # all. riscv64 is a published asset like any other; the same reasoning
+    # that put main on the previews applies here.
+    branches: [dev, staging, main]
     paths:
       - 'src-tauri/**'
       - '.github/workflows/desktop-riscv64.yml'
