@@ -670,12 +670,30 @@ jobs:
                 suffix=""
                 case "$base" in *adhoc-not-notarized*) suffix="-adhoc-not-notarized" ;; esac
                 case "$base" in
-                  *aarch64*) place "$src" "OPTNWallet-${VERSION}-macos-arm64${suffix}.dmg" ;;
-                  *)         place "$src" "OPTNWallet-${VERSION}-macos-x64${suffix}.dmg" ;;
+                  *aarch64*|*arm64*) place "$src" "OPTNWallet-${VERSION}-macos-arm64${suffix}.dmg" ;;
+                  *x64*|*x86_64*)    place "$src" "OPTNWallet-${VERSION}-macos-x64${suffix}.dmg" ;;
+                  *)
+                    echo "::error::unrecognised architecture in $base; add it to the rename map"
+                    exit 1
+                    ;;
                 esac
                 ;;
-              *aarch64.AppImage) place "$src" "OPTNWallet-${VERSION}-linux-arm64.AppImage" ;;
-              *.AppImage)        place "$src" "OPTNWallet-${VERSION}-linux-x64.AppImage" ;;
+              *.AppImage)
+                # Arch is matched explicitly and an unknown one is an error.
+                # A catch-all default silently renamed any future architecture
+                # (riscv64, armv7) to linux-x64, which is worse than failing:
+                # the release would look complete and ship a mislabelled file.
+                case "$base" in
+                  *aarch64*|*arm64*) place "$src" "OPTNWallet-${VERSION}-linux-arm64.AppImage" ;;
+                  *amd64*|*x86_64*)  place "$src" "OPTNWallet-${VERSION}-linux-x64.AppImage" ;;
+                  *riscv64*)         place "$src" "OPTNWallet-${VERSION}-linux-riscv64.AppImage" ;;
+                  *armv7*|*armhf*)   place "$src" "OPTNWallet-${VERSION}-linux-armv7.AppImage" ;;
+                  *)
+                    echo "::error::unrecognised architecture in $base; add it to the rename map"
+                    exit 1
+                    ;;
+                esac
+                ;;
               *.deb|*.rpm)       place "$src" "$base" ;;
               *.apk)             place "$src" "OPTNWallet-${VERSION}-android.apk" ;;
               *.aab)             place "$src" "OPTNWallet-${VERSION}-android.aab" ;;
