@@ -38,8 +38,6 @@ Suggested registry: **GHCR** (`ghcr.io/<owner>/optn-docker-dev`).
 Suggested tags:
 
 - `v1.7.0` / `1.7.0` — matches release
-- `latest` — latest **released** dev image; supported as a compatibility fallback,
-  but contributor documentation prefers explicit version tags
 
 ## Workflow split
 

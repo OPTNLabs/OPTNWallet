@@ -20,6 +20,30 @@ const extensionShell = readFileSync(
   resolve(repoRoot, 'src', 'platform', 'extension', 'ExtensionAppShell.tsx'),
   'utf8'
 );
+const flatpakManifest = readFileSync(
+  resolve(repoRoot, 'packaging', 'flatpak', 'com.optilabs.wallet.yml'),
+  'utf8'
+);
+const cargoToml = readFileSync(
+  resolve(repoRoot, 'src-tauri', 'Cargo.toml'),
+  'utf8'
+);
+const flatpakMetainfo = readFileSync(
+  resolve(repoRoot, 'packaging', 'flatpak', 'com.optilabs.wallet.metainfo.xml'),
+  'utf8'
+);
+
+/**
+ * The jobs `publish` waits for.
+ *
+ * Extracted rather than matched inline: `publish:` also names an output of
+ * the resolve job, so an unanchored pattern reads the wrong part of the file.
+ */
+function publishNeeds(): string {
+  return (
+    workflow.match(/^ {2}publish:[\s\S]*?needs:\s*\[([^\]]+)\]/m)?.[1] ?? ''
+  );
+}
 
 describe('release workflow', () => {
   it('pins every external action to an immutable full commit SHA', () => {
@@ -117,12 +141,31 @@ describe('release workflow', () => {
     expect(desktopPreviewWorkflow).toContain(
       'npx --no-install tsx scripts/fetch-tor.mts ${{ matrix.tor-target }}'
     );
+    // The target reaches tauri through a shell variable now, because the
+    // build is wrapped in a retry for the hdiutil "Resource busy" flake on
+    // macOS. Assert the invocation and the wiring separately rather than
+    // pinning the exact string, which broke the moment a retry was added.
+    expect(desktopPreviewWorkflow).toContain('npx tauri build --debug --target');
+    expect(desktopPreviewWorkflow).toContain('${{ matrix.target }}');
+    // One artifact per format, not a catch-all over bundle/**. A single glob
+    // uploaded whatever happened to exist, so a bundler that quietly stopped
+    // emitting a format still produced a green artifact holding the others.
+    for (const [dir, pattern] of [
+      ['nsis', '*.exe'],
+      ['msi', '*.msi'],
+      ['dmg', '*.dmg'],
+      ['appimage', '*.AppImage'],
+      ['deb', '*.deb'],
+      ['rpm', '*.rpm'],
+    ] as const) {
+      expect(desktopPreviewWorkflow).toContain(
+        `src-tauri/target/\${{ matrix.target }}/debug/bundle/${dir}/${pattern}`
+      );
+    }
     expect(desktopPreviewWorkflow).toContain(
-      'npx tauri build --debug --target ${{ matrix.target }}'
+      'Verify every expected bundle was produced'
     );
-    expect(desktopPreviewWorkflow).toContain(
-      'src-tauri/target/${{ matrix.target }}/debug/bundle/**'
-    );
+    expect(desktopPreviewWorkflow).toContain('if-no-files-found: error');
   });
 
   it('allows Linux AppImage packaging to finish on uncached preview runners', () => {
@@ -153,5 +196,135 @@ describe('release workflow', () => {
     );
     expect(desktopPreviewWorkflow).toContain('ubuntu-24.04-arm');
     expect(desktopPreviewWorkflow).toContain('linux-aarch64');
+  });
+  it('builds a Flatpak for both Linux architectures and blocks a release without one', () => {
+    // Tauri has no Flatpak bundler target, so nothing else in the build would
+    // notice if this job disappeared.
+    expect(workflow).toMatch(/^\s{2}flatpak:\s*$/m);
+    expect(workflow).toContain('deb-artifact: desktop-linux');
+    expect(workflow).toContain('deb-artifact: desktop-linux-arm');
+
+    // publish must wait for it, or a release is cut with the Flatpak missing.
+    expect(publishNeeds(), 'publish job needs').toContain('flatpak');
+    expect(workflow).toContain(
+      "require_asset artifacts/flatpak-linux-x64 '*.flatpak'"
+    );
+    expect(workflow).toContain(
+      "require_asset artifacts/flatpak-linux-arm64 '*.flatpak'"
+    );
+    expect(workflow).toContain(
+      'expect "OPTNWallet-${VERSION}-linux-x64.flatpak"'
+    );
+    expect(workflow).toContain(
+      'expect "OPTNWallet-${VERSION}-linux-arm64.flatpak"'
+    );
+
+    // Preview builds it too: a manifest that stops working should fail on the
+    // pull request, not at release time.
+    expect(desktopPreviewWorkflow).toMatch(/^\s{2}flatpak-preview:\s*$/m);
+    expect(desktopPreviewWorkflow).toContain('preview-linux-x64-flatpak');
+    expect(desktopPreviewWorkflow).toContain('preview-linux-arm64-flatpak');
+  });
+
+  it('pins a GNOME runtime that is still supported', () => {
+    const pinned = flatpakManifest.match(/^runtime-version: *'?(\d+)'?/m);
+    expect(pinned, 'the manifest must pin a runtime version').not.toBeNull();
+
+    // GNOME 48 reached end of life on 24 March 2026. An EOL runtime still
+    // builds and still runs; it just stops getting security fixes, which is
+    // precisely why nothing else catches it.
+    expect(Number(pinned![1])).toBeGreaterThanOrEqual(49);
+  });
+
+  it('names the Flatpak metadata for the application id', () => {
+    // Flatpak resolves the desktop file, the icons and the AppStream data by
+    // application id. Tauri names them after the product instead, so a
+    // mismatch ships an application with no icon and no name in a software
+    // centre — visible only after installing it.
+    const id = 'com.optilabs.wallet';
+    expect(flatpakManifest).toContain(`id: ${id}`);
+    expect(flatpakMetainfo).toContain(`<id>${id}</id>`);
+    expect(flatpakMetainfo).toContain(
+      `<launchable type="desktop-id">${id}.desktop</launchable>`
+    );
+    expect(flatpakManifest).toContain(`/app/share/applications/${id}.desktop`);
+    expect(flatpakManifest).toContain(`/app/share/metainfo/${id}.metainfo.xml`);
+
+    // The command has to be the binary the deb actually installs. Tauri's
+    // deb bundler names the binary after the Cargo package and the package
+    // after productName; those differ here, and a manifest following the
+    // product name produces a Flatpak that installs and cannot launch.
+    expect(flatpakManifest).toMatch(/^command: optn-wallet-desktop$/m);
+    expect(flatpakManifest).toContain('/app/bin/optn-wallet-desktop');
+    const cargoBinary = cargoToml.match(/^name = "([^"]+)"/m);
+    expect(cargoBinary, 'src-tauri/Cargo.toml package name').not.toBeNull();
+    expect(flatpakManifest).toContain(`command: ${cargoBinary![1]}`);
+  });
+
+  it('asserts the desktop preview produced every artifact', () => {
+    // if-no-files-found catches a bundler that made nothing. It cannot catch a
+    // job that never ran, which is how a platform stops being built quietly.
+    expect(desktopPreviewWorkflow).toMatch(/^\s{2}preview-complete:\s*$/m);
+    for (const artifact of [
+      'preview-windows-x64-nsis',
+      'preview-windows-x64-msi',
+      'preview-macos-arm64-dmg',
+      'preview-macos-x64-dmg',
+      'preview-linux-x64-appimage',
+      'preview-linux-arm64-appimage',
+      'preview-linux-x64-deb',
+      'preview-linux-arm64-deb',
+      'preview-linux-x64-rpm',
+      'preview-linux-arm64-rpm',
+      'preview-linux-x64-flatpak',
+      'preview-linux-arm64-flatpak',
+    ]) {
+      expect(desktopPreviewWorkflow, `${artifact} must be asserted`).toContain(
+        `expect ${artifact}`
+      );
+    }
+    // always(), or a failed build skips the check and hides what is missing.
+    expect(desktopPreviewWorkflow).toMatch(
+      /preview-complete:[\s\S]*?if: always\(\)/
+    );
+  });
+  it('ships the optn CLI for every target it supports', () => {
+    // The CLI had a preview workflow and no release job at all, so it built on
+    // every pull request and shipped to nobody.
+    expect(workflow).toMatch(/^\s{2}cli:\s*$/m);
+    for (const target of [
+      'x86_64-unknown-linux-gnu',
+      'aarch64-unknown-linux-gnu',
+      'riscv64gc-unknown-linux-gnu',
+      'armv7-unknown-linux-gnueabihf',
+      'x86_64-pc-windows-msvc',
+      'aarch64-apple-darwin',
+      'x86_64-apple-darwin',
+    ]) {
+      expect(workflow, `CLI target ${target}`).toContain(`target: ${target}`);
+    }
+    // publish must wait for it, or a release is cut without the CLI.
+    expect(publishNeeds(), 'publish job needs').toContain('cli');
+  });
+
+  it('arms the CLI requirement from a probe rather than from the artifacts', () => {
+    // The crate lands in a separate pull request. Requiring binaries no branch
+    // can build breaks one merge order; building binaries nothing requires
+    // breaks the other. The probe makes both work — and keeps "no CLI in this
+    // tree" distinguishable from "the CLI failed to build", which is the whole
+    // point of the no-drop check.
+    expect(workflow).toMatch(/^\s{2}cli-probe:\s*$/m);
+    expect(workflow).toContain('if [ -f crates/optn-cli/Cargo.toml ]; then');
+    expect(workflow).toContain(
+      'needs.cli-probe.outputs.present }}" = \'true\''
+    );
+    expect(workflow).toContain("require_asset \"artifacts/cli-$label\"");
+  });
+
+  it('verifies each cross-built CLI binary is the architecture it claims', () => {
+    // A misconfigured linker silently emits a host binary, which would ship
+    // labelled riscv64 and fail to start on the only machines that need it.
+    expect(workflow).toContain("riscv64gc-*) file \"$SRC\" | grep -q 'RISC-V'");
+    expect(workflow).toContain("armv7-*)     file \"$SRC\" | grep -q 'ARM'");
   });
 });

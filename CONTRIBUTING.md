@@ -59,7 +59,7 @@ a pull request.
 Use a published versioned image when you want a consistent Linux environment:
 
 ```bash
-export OPTN_DOCKER_TAG=sha-abcdef1  # or a release tag such as v1.7.0
+export OPTN_DOCKER_TAG=v1.7.3   # required; the image publishes version tags only
 npm --prefix packages/docker-dev run pull:release
 npm --prefix packages/docker-dev run up:release
 docker compose -f packages/docker-dev/docker-compose.release.yml exec --user 1000:1000 dev bash
@@ -68,6 +68,10 @@ docker compose -f packages/docker-dev/docker-compose.release.yml exec --user 100
 After the pilot publish, the GHCR contributor image will be public, so pulling
 a versioned image will not require credentials. Set `OPTN_DOCKER_IMAGE` when
 using a fork’s registry.
+
+`OPTN_DOCKER_TAG` has no default. The image publishes `vX.Y.Z` and `X.Y.Z`
+only, so compose stops with an explanatory error rather than resolving to a
+mutable tag whose contents change between pulls.
 
 ### Local Docker build workflow
 
@@ -96,7 +100,8 @@ npm run typecheck
 npm run test
 npm run addons:validate
 npm run build
-npm run security:ci            # dependency audit and security-focused tests
+npm run security:ci            # npm dependency audit and security-focused tests
+cargo audit --manifest-path src-tauri/Cargo.toml  # Rust advisories (CI runs this too)
 npm run test:e2e:lifecycle     # real desktop create/lock/reopen test
 npm run android:apk:dev        # debug Android APK
 npm run tauri:build            # desktop bundles for the current OS

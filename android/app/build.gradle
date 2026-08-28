@@ -1,7 +1,7 @@
 // android/app/build.gradle
 
 apply plugin: 'com.android.application'
-apply plugin: 'kotlin-android' 
+apply plugin: 'kotlin-android'
 
 def readSigningValue = { String primaryName, String legacyName ->
     for (String name : [primaryName, legacyName]) {
@@ -72,6 +72,23 @@ android {
         }
     }
 
+    flavorDimensions += "store"
+    productFlavors {
+        play {
+            dimension "store"
+            isDefault true
+        }
+        fdroid {
+            dimension "store"
+        }
+    }
+
+    applicationVariants.configureEach { variant ->
+        variant.outputs.configureEach { output ->
+            output.outputFileName = "optn-wallet-${variant.versionName}-${variant.flavorName}-${variant.buildType.name}.apk"
+        }
+    }
+
     buildFeatures {
         buildConfig = true
     }
@@ -86,12 +103,29 @@ android {
     }
 }
 
+// The barcode plugin declares both scanning backends. We only ever call ZXing
+// (see src/utils/barcodeScanner.ts), so ML Kit is removed from the build
+// rather than shipped unused.
+//
+// This is what makes an F-Droid build possible: their inclusion policy requires
+// every dependency to be free software, and com.google.mlkit:barcode-scanning
+// is proprietary. It also pulls play-services-mlkit-barcode-scanning, a
+// libbarhopper native library of roughly 5 MB per ABI, and bundled TensorFlow
+// Lite models — about 20 MB of closed binaries across four ABIs.
+//
+// Applied to every flavour, not just fdroid. Excluding it from one flavour
+// alone would leave F-Droid users on an Android code path nobody else runs.
+configurations.configureEach {
+    exclude group: 'com.google.mlkit'
+    exclude group: 'com.google.android.gms', module: 'play-services-mlkit-barcode-scanning'
+}
+
 dependencies {
     implementation fileTree(include: ['*.jar'], dir: 'libs')
     implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
     implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
-    implementation "com.google.android.play:app-update:2.1.0"
+    playImplementation "com.google.android.play:app-update:2.1.0"
     implementation "com.google.code.gson:gson:2.10.1"
     implementation project(':capacitor-android')
     implementation "org.jetbrains.kotlin:kotlin-stdlib:2.0.0"
@@ -104,11 +138,27 @@ dependencies {
 
 apply from: 'capacitor.build.gradle'
 
-try {
-    def servicesJSON = file('google-services.json')
-    if (servicesJSON.text) {
-        apply plugin: 'com.google.gms.google-services'
+// google-services is Play-only. Skip it for fdroid-only Gradle invocations, and
+// disable any fdroid process*GoogleServices tasks if the plugin is applied
+// because a combined assemble also built the play variant.
+def requestedTaskNames = gradle.startParameter.taskNames.collect { it.toLowerCase() }
+def requestsFdroid = requestedTaskNames.any { it.contains('fdroid') }
+def requestsPlay = requestedTaskNames.any { it.contains('play') }
+def applyGoogleServices = !requestsFdroid || requestsPlay
+
+if (applyGoogleServices) {
+    try {
+        def servicesJSON = file('google-services.json')
+        if (servicesJSON.text) {
+            apply plugin: 'com.google.gms.google-services'
+        }
+    } catch(Exception e) {
+        logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
     }
-} catch(Exception e) {
-    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}
+
+afterEvaluate {
+    tasks.matching { it.name ==~ /process.*Fdroid.*GoogleServices/ }.configureEach {
+        enabled = false
+    }
 }
