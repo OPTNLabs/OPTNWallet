@@ -120,9 +120,25 @@ describe('release workflow', () => {
     expect(desktopPreviewWorkflow).toContain(
       'npx tauri build --debug --target ${{ matrix.target }}'
     );
+    // One artifact per format, not a catch-all over bundle/**. A single glob
+    // uploaded whatever happened to exist, so a bundler that quietly stopped
+    // emitting a format still produced a green artifact holding the others.
+    for (const [dir, pattern] of [
+      ['nsis', '*.exe'],
+      ['msi', '*.msi'],
+      ['dmg', '*.dmg'],
+      ['appimage', '*.AppImage'],
+      ['deb', '*.deb'],
+      ['rpm', '*.rpm'],
+    ] as const) {
+      expect(desktopPreviewWorkflow).toContain(
+        `src-tauri/target/\${{ matrix.target }}/debug/bundle/${dir}/${pattern}`
+      );
+    }
     expect(desktopPreviewWorkflow).toContain(
-      'src-tauri/target/${{ matrix.target }}/debug/bundle/**'
+      'Verify every expected bundle was produced'
     );
+    expect(desktopPreviewWorkflow).toContain('if-no-files-found: error');
   });
 
   it('allows Linux AppImage packaging to finish on uncached preview runners', () => {
