@@ -14,6 +14,7 @@ mod electrum;
 mod error;
 mod hd;
 mod network;
+mod tx;
 
 use clap::{Parser, Subcommand};
 use serde_json::{json, Value};
@@ -103,6 +104,29 @@ enum Command {
         /// SLIP-44 coin type. Defaults to the network's own.
         #[arg(long)]
         coin_type: Option<u32>,
+    },
+    /// Send BCH to an address.
+    ///
+    /// Scans the wallet's own addresses for spendable outputs, builds and signs
+    /// the transaction, and broadcasts it. Requires --yes: this binary is meant
+    /// to be run by automation, so spending is never reachable by accident.
+    Send {
+        /// Destination CashAddr.
+        to: String,
+        /// Amount in satoshis.
+        sats: u64,
+        /// Satoshis per byte.
+        #[arg(long, default_value_t = 1)]
+        fee_rate: u64,
+        /// Addresses per chain to scan for spendable outputs.
+        #[arg(long, default_value_t = 20)]
+        gap: u32,
+        /// Build and sign, print the raw transaction, but do not broadcast.
+        #[arg(long)]
+        dry_run: bool,
+        /// Required to actually broadcast.
+        #[arg(long)]
+        yes: bool,
     },
     /// Find which derivation paths a phrase actually has history on.
     ///
@@ -257,6 +281,116 @@ async fn run(cli: &Cli) -> Result<Value> {
                 "scripthash": address.electrum_scripthash(),
             }))
         }
+        Command::Send {
+            to,
+            sats,
+            fee_rate,
+            gap,
+            dry_run,
+            yes,
+        } => {
+            if !*yes && !*dry_run {
+                return Err(CliError::Usage(
+                    "refusing to spend without --yes (use --dry-run to preview)".to_string(),
+                ));
+            }
+            let destination = parse_address(to, cli.network)?;
+            let wallet = read_wallet()?;
+            let coin = match cli.network {
+                Network::Mainnet => 145,
+                Network::Chipnet => 1,
+            };
+
+            // Collect spendable outputs together with the path that controls
+            // each, so the right key signs the right input.
+            let mut spendable: Vec<(tx::Utxo, String)> = Vec::new();
+            for change in [false, true] {
+                for index in 0..*gap {
+                    let path = hd::address_path(coin, 0, change, index);
+                    let address = wallet.address(cli.network, &path)?;
+                    for u in client.utxos(&address.electrum_scripthash()).await? {
+                        let mut txid = decode_hex32(&u.tx_hash)?;
+                        // Electrum reports txids big-endian; the wire format is
+                        // little-endian. Skipping this reversal produces a
+                        // transaction that spends nothing and is simply rejected.
+                        txid.reverse();
+                        spendable.push((
+                            tx::Utxo {
+                                txid,
+                                vout: u.tx_pos,
+                                value: u.value,
+                                script_pubkey: address.script_pubkey(),
+                            },
+                            path.clone(),
+                        ));
+                    }
+                }
+            }
+            if spendable.is_empty() {
+                return Err(CliError::Usage(
+                    "no spendable outputs found — check the network and the gap limit".to_string(),
+                ));
+            }
+
+            let pool: Vec<tx::Utxo> = spendable.iter().map(|(u, _)| u.clone()).collect();
+            let (chosen, fee) = tx::select_coins(&pool, *sats, *fee_rate, 2)?;
+            let input_total: u64 = chosen.iter().map(|u| u.value).sum();
+            let change_value = input_total - sats - fee;
+
+            let mut outputs = vec![tx::Output {
+                value: *sats,
+                script_pubkey: destination.script_pubkey(),
+            }];
+            // Below the dust limit a change output cannot be spent, so it goes
+            // to the miner as extra fee instead of being created unspendable.
+            const DUST: u64 = 546;
+            let change_path = hd::address_path(coin, 0, true, 0);
+            if change_value >= DUST {
+                outputs.push(tx::Output {
+                    value: change_value,
+                    script_pubkey: wallet.address(cli.network, &change_path)?.script_pubkey(),
+                });
+            }
+
+            let transaction = tx::Transaction::new(chosen.clone(), outputs);
+            let mut keys = Vec::with_capacity(chosen.len());
+            for input in &chosen {
+                let path = spendable
+                    .iter()
+                    .find(|(u, _)| u.txid == input.txid && u.vout == input.vout)
+                    .map(|(_, p)| p.clone())
+                    .ok_or_else(|| CliError::Internal("selected an unknown utxo".into()))?;
+                keys.push(wallet.signing_key(&path)?);
+            }
+            let raw = transaction.sign(&keys)?;
+            let raw_hex = hex(&raw);
+
+            if *dry_run {
+                return Ok(json!({
+                    "ok": true,
+                    "dry_run": true,
+                    "network": cli.network.to_string(),
+                    "to": to,
+                    "sats": sats,
+                    "fee": fee,
+                    "change": if change_value >= DUST { change_value } else { 0 },
+                    "inputs": chosen.len(),
+                    "size_bytes": raw.len(),
+                    "raw": raw_hex,
+                }));
+            }
+
+            let txid = client.broadcast(&raw_hex).await?;
+            Ok(json!({
+                "ok": true,
+                "network": cli.network.to_string(),
+                "txid": txid,
+                "to": to,
+                "sats": sats,
+                "fee": fee,
+                "inputs": chosen.len(),
+            }))
+        }
         Command::Discover { gap } => {
             let wallet = read_wallet()?;
             let mut found = Vec::new();
@@ -348,6 +482,21 @@ fn read_wallet() -> Result<Wallet> {
     };
     let passphrase = std::env::var("OPTN_PASSPHRASE").unwrap_or_default();
     Wallet::from_mnemonic(phrase.trim(), &passphrase)
+}
+
+/// Decode a 64-character hex string into 32 bytes.
+fn decode_hex32(s: &str) -> Result<[u8; 32]> {
+    if s.len() != 64 || !s.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(CliError::Protocol(format!(
+            "'{s}' is not a 32-byte hex hash"
+        )));
+    }
+    let mut out = [0u8; 32];
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16)
+            .map_err(|e| CliError::Protocol(format!("bad hex: {e}")))?;
+    }
+    Ok(out)
 }
 
 fn hex(bytes: &[u8]) -> String {

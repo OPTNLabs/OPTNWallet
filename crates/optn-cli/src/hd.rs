@@ -85,6 +85,19 @@ impl Wallet {
         Ok(xprv.public_key().to_bytes())
     }
 
+    /// Derive the signing key at a path.
+    ///
+    /// Returned by value and never stored: the caller signs and drops it.
+    pub fn signing_key(&self, path: &str) -> Result<k256::ecdsa::SigningKey> {
+        let parsed: DerivationPath = path
+            .parse()
+            .map_err(|_| CliError::Usage(format!("'{path}' is not a valid derivation path")))?;
+        let xprv = XPrv::derive_from_path(self.seed, &parsed)
+            .map_err(|e| CliError::Internal(format!("derivation failed: {e}")))?;
+        k256::ecdsa::SigningKey::from_slice(&xprv.private_key().to_bytes())
+            .map_err(|e| CliError::Internal(format!("invalid derived key: {e}")))
+    }
+
     /// Derive the P2PKH address at a path for a network.
     pub fn address(&self, network: Network, path: &str) -> Result<Address> {
         let pubkey = self.public_key(path)?;
