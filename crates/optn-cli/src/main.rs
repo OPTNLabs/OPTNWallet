@@ -13,8 +13,10 @@ mod cashaddr;
 mod electrum;
 mod error;
 mod hd;
+mod keychain;
 mod msgsign;
 mod network;
+mod skills;
 mod token;
 mod tx;
 mod x402;
@@ -52,6 +54,13 @@ struct Cli {
     /// Connect without TLS. Only useful against a local server.
     #[arg(long, global = true)]
     no_tls: bool,
+
+    /// Which stored wallet to use, when more than one is in the keychain.
+    ///
+    /// Keyed with the network, so a mainnet and a chipnet wallet may share a
+    /// profile name without one overwriting the other.
+    #[arg(long, global = true, default_value = "default")]
+    profile: String,
 
     /// Seconds to wait for the server before giving up.
     #[arg(long, global = true, default_value_t = 30)]
@@ -226,6 +235,21 @@ enum Command {
         #[arg(long, default_value_t = 20)]
         gap: u32,
     },
+    /// Describe every command, what it may do, and the active policy.
+    ///
+    /// Meant to be read by an agent harness rather than a person. `--help` is
+    /// prose, and parsing prose to decide whether a command spends money is
+    /// not a safety mechanism.
+    Skills,
+    /// Keep a recovery phrase in the operating system's keychain.
+    ///
+    /// The alternatives are worse: an argument lands in shell history and in
+    /// `ps` output, and an environment variable is inherited by every child
+    /// process and readable from /proc. This is the platform's own answer.
+    Keychain {
+        #[command(subcommand)]
+        action: KeychainCommand,
+    },
     /// Pay for an HTTP resource with x402.
     ///
     /// x402 turns HTTP 402 into a working status code: the server answers with
@@ -237,6 +261,24 @@ enum Command {
         #[command(subcommand)]
         action: X402Command,
     },
+}
+
+#[derive(Subcommand)]
+enum KeychainCommand {
+    /// Store a phrase, read from OPTN_MNEMONIC or stdin.
+    ///
+    /// Never from an argument: this is the one secret whose exposure loses the
+    /// whole wallet, and an argument is visible to every other user on the
+    /// machine.
+    Store {
+        /// Replace an existing entry rather than refusing.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Report whether a phrase is stored, without revealing it.
+    Status,
+    /// Delete the stored phrase.
+    Remove,
 }
 
 #[derive(Subcommand)]
@@ -333,7 +375,36 @@ async fn main() {
     }
 }
 
+/// The command as it appears in the skill manifest.
+fn command_name(command: &Command) -> &'static str {
+    match command {
+        Command::Ping => "ping",
+        Command::Balance { .. } => "balance",
+        Command::Utxos { .. } => "utxos",
+        Command::Inspect { .. } => "inspect",
+        Command::Tx { .. } => "tx",
+        Command::Broadcast { .. } => "broadcast",
+        Command::New { .. } => "new",
+        Command::Address { .. } => "address",
+        Command::Tokens { .. } => "tokens",
+        Command::Decode { .. } => "decode",
+        Command::SendNft { .. } => "send-nft",
+        Command::TokenSend { .. } => "token-send",
+        Command::Send { .. } => "send",
+        Command::Rescan { .. } => "rescan",
+        Command::History { .. } => "history",
+        Command::Discover { .. } => "discover",
+        Command::Skills => "skills",
+        Command::Keychain { .. } => "keychain",
+        Command::X402 { .. } => "x402",
+    }
+}
+
 async fn run(cli: &Cli) -> Result<Value> {
+    // Before anything else, including opening a connection. A refusal should
+    // cost nothing and reveal nothing about the wallet.
+    skills::enforce(skills::Policy::from_env()?, command_name(&cli.command))?;
+
     let host = cli
         .host
         .clone()
@@ -430,7 +501,7 @@ async fn run(cli: &Cli) -> Result<Value> {
             coin_type,
             token,
         } => {
-            let wallet = read_wallet()?;
+            let wallet = read_wallet(cli)?;
             let coin = coin_type.unwrap_or(default_coin_type(cli.network));
             let path = hd::address_path(coin, *account, *change, *index);
             let mut address = wallet.address(cli.network, &path)?;
@@ -463,7 +534,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 ));
             }
             let destination = parse_address(to, cli.network)?;
-            let wallet = read_wallet()?;
+            let wallet = read_wallet(cli)?;
             let spend = spend_to(
                 &client,
                 cli.network,
@@ -551,7 +622,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 )));
             }
             let wanted = token::parse_category(category)?;
-            let wallet = read_wallet()?;
+            let wallet = read_wallet(cli)?;
             let coin = default_coin_type(cli.network);
             const TOKEN_DUST: u64 = 1000;
 
@@ -730,7 +801,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 )));
             }
             let wanted = token::parse_category(category)?;
-            let wallet = read_wallet()?;
+            let wallet = read_wallet(cli)?;
             let coin = default_coin_type(cli.network);
 
             // A token output still carries BCH. 1000 sats clears the dust
@@ -875,7 +946,7 @@ async fn run(cli: &Cli) -> Result<Value> {
             }))
         }
         Command::Tokens { gap } => {
-            let wallet = read_wallet()?;
+            let wallet = read_wallet(cli)?;
             let coin = default_coin_type(cli.network);
             // category -> (fungible total, nft count)
             let mut fungible: std::collections::BTreeMap<String, u128> = Default::default();
@@ -927,7 +998,7 @@ async fn run(cli: &Cli) -> Result<Value> {
             }))
         }
         Command::Rescan { gap, all } => {
-            let wallet = read_wallet()?;
+            let wallet = read_wallet(cli)?;
             let coin = default_coin_type(cli.network);
             let mut addresses = Vec::new();
             let mut confirmed_total: i64 = 0;
@@ -973,7 +1044,7 @@ async fn run(cli: &Cli) -> Result<Value> {
             }))
         }
         Command::History { gap, limit } => {
-            let wallet = read_wallet()?;
+            let wallet = read_wallet(cli)?;
             let coin = default_coin_type(cli.network);
             let mut entries: Vec<(i64, String, String, Option<u64>)> = Vec::new();
 
@@ -1018,7 +1089,7 @@ async fn run(cli: &Cli) -> Result<Value> {
             }))
         }
         Command::Discover { gap } => {
-            let wallet = read_wallet()?;
+            let wallet = read_wallet(cli)?;
             let mut found = Vec::new();
             for &coin in hd::scan_coin_types(cli.network) {
                 for &account in hd::SCAN_ACCOUNTS {
@@ -1062,6 +1133,56 @@ async fn run(cli: &Cli) -> Result<Value> {
             }
             let txid = client.broadcast(raw).await?;
             Ok(json!({ "ok": true, "network": cli.network.to_string(), "txid": txid }))
+        }
+        Command::Skills => Ok(skills::manifest(skills::Policy::from_env()?)),
+        Command::Keychain { action } => {
+            let (label, persists) = keychain::backend();
+            match action {
+                KeychainCommand::Store { force } => {
+                    if !*force && keychain::load(cli.network, &cli.profile)?.is_some() {
+                        return Err(CliError::Usage(format!(
+                            "a phrase is already stored for {} profile '{}'; \
+                             pass --force to replace it",
+                            cli.network, cli.profile
+                        )));
+                    }
+                    // Validated before storing. An unusable phrase written to
+                    // the keychain fails later, at the point someone is trying
+                    // to spend, with nothing to say it was wrong when stored.
+                    let phrase = read_phrase()?;
+                    Wallet::from_mnemonic(phrase.trim(), "")?;
+                    keychain::store(cli.network, &cli.profile, &phrase)?;
+                    Ok(json!({
+                        "ok": true,
+                        "stored": true,
+                        "network": cli.network.to_string(),
+                        "profile": cli.profile,
+                        "backend": label,
+                        "survives_reboot": persists,
+                    }))
+                }
+                KeychainCommand::Status => {
+                    // Presence only. Printing the phrase would put it in a
+                    // terminal scrollback and in any log capturing stdout.
+                    let stored = keychain::load(cli.network, &cli.profile)?;
+                    Ok(json!({
+                        "ok": true,
+                        "stored": stored.is_some(),
+                        "network": cli.network.to_string(),
+                        "profile": cli.profile,
+                        "backend": label,
+                        "survives_reboot": persists,
+                        "words": stored.map(|p| p.split_whitespace().count()),
+                    }))
+                }
+                KeychainCommand::Remove => Ok(json!({
+                    "ok": true,
+                    "removed": keychain::remove(cli.network, &cli.profile)?,
+                    "network": cli.network.to_string(),
+                    "profile": cli.profile,
+                    "backend": label,
+                })),
+            }
         }
         Command::X402 { action } => match action {
             X402Command::Check {
@@ -1163,7 +1284,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                     )));
                 }
 
-                let wallet = read_wallet()?;
+                let wallet = read_wallet(cli)?;
                 let coin = default_coin_type(cli.network);
                 // The address whose key signs the authorisation. The
                 // Facilitator recovers it from the signature and credits the
@@ -1434,26 +1555,50 @@ fn parse_address(input: &str, network: Network) -> Result<Address> {
 /// Deliberately not a command-line argument. Arguments are visible in shell
 /// history and in `ps` output to every other user on the machine, and a
 /// recovery phrase is the whole wallet.
-fn read_wallet() -> Result<Wallet> {
-    let phrase = match std::env::var("OPTN_MNEMONIC") {
-        Ok(v) if !v.trim().is_empty() => v,
-        _ => {
-            use std::io::Read;
-            let mut buf = String::new();
-            std::io::stdin().read_to_string(&mut buf).map_err(|e| {
-                CliError::Usage(format!("could not read the phrase from stdin: {e}"))
-            })?;
-            if buf.trim().is_empty() {
-                return Err(CliError::Usage(
-                    "no recovery phrase supplied — set OPTN_MNEMONIC or pipe the phrase on stdin"
-                        .to_string(),
-                ));
-            }
-            buf
+/// A recovery phrase from the environment or stdin.
+///
+/// Never from an argument. Arguments appear in shell history and in `ps`
+/// output to every other user on the machine, and a recovery phrase is the
+/// whole wallet.
+fn read_phrase() -> Result<String> {
+    if let Ok(v) = std::env::var("OPTN_MNEMONIC") {
+        if !v.trim().is_empty() {
+            return Ok(v);
         }
-    };
+    }
+    use std::io::Read;
+    let mut buf = String::new();
+    std::io::stdin()
+        .read_to_string(&mut buf)
+        .map_err(|e| CliError::Usage(format!("could not read the phrase from stdin: {e}")))?;
+    if buf.trim().is_empty() {
+        return Err(CliError::Usage(
+            "no recovery phrase supplied — set OPTN_MNEMONIC or pipe the phrase on stdin"
+                .to_string(),
+        ));
+    }
+    Ok(buf)
+}
+
+/// The wallet for this invocation.
+///
+/// Sources in order: `OPTN_MNEMONIC`, then the keychain, then stdin. The
+/// environment wins so a scripted run can override without clearing a stored
+/// phrase, and stdin comes last because reaching it means blocking on input —
+/// which for a binary designed to be driven by automation is a hang, not a
+/// prompt.
+fn read_wallet(cli: &Cli) -> Result<Wallet> {
     let passphrase = std::env::var("OPTN_PASSPHRASE").unwrap_or_default();
-    Wallet::from_mnemonic(phrase.trim(), &passphrase)
+
+    if let Ok(v) = std::env::var("OPTN_MNEMONIC") {
+        if !v.trim().is_empty() {
+            return Wallet::from_mnemonic(v.trim(), &passphrase);
+        }
+    }
+    if let Some(stored) = keychain::load(cli.network, &cli.profile)? {
+        return Wallet::from_mnemonic(stored.trim(), &passphrase);
+    }
+    Wallet::from_mnemonic(read_phrase()?.trim(), &passphrase)
 }
 
 /// Decode a 64-character hex string into 32 bytes.
@@ -1569,5 +1714,82 @@ fn print_human(command: &Command, v: &Value) {
             }
         },
         _ => println!("{}", serde_json::to_string_pretty(v).unwrap_or_default()),
+    }
+}
+
+#[cfg(test)]
+mod manifest_tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    /// Every subcommand clap knows about, as the user types it.
+    fn clap_subcommands() -> Vec<String> {
+        Cli::command()
+            .get_subcommands()
+            .map(|c| c.get_name().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn every_command_is_classified_in_the_skill_manifest() {
+        // The gate refuses anything it cannot classify, so a command missing
+        // here does not silently become permitted — it becomes unusable. Both
+        // are bugs, and this is where they are cheap to find.
+        let missing: Vec<String> = clap_subcommands()
+            .into_iter()
+            .filter(|name| name != "help" && skills::find(name).is_none())
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "not in the skill manifest: {}",
+            missing.join(", ")
+        );
+    }
+
+    #[test]
+    fn the_manifest_lists_no_command_that_does_not_exist() {
+        // The other direction. A stale entry tells an agent it can invoke
+        // something that was renamed or removed.
+        let known = clap_subcommands();
+        let stale: Vec<&str> = skills::SKILLS
+            .iter()
+            .map(|s| s.name)
+            .filter(|name| !known.iter().any(|k| k == name))
+            .collect();
+        assert!(
+            stale.is_empty(),
+            "in the manifest but not a command: {}",
+            stale.join(", ")
+        );
+    }
+
+    #[test]
+    fn command_name_agrees_with_clap_for_every_command() {
+        // command_name() is what the gate looks up. If it returned a name clap
+        // does not use, the lookup would miss and the command would be refused
+        // as unknown — or worse, match a different skill's capability.
+        let known = clap_subcommands();
+        for skill in skills::SKILLS {
+            assert!(
+                known.iter().any(|k| k == skill.name),
+                "{} is not a clap subcommand",
+                skill.name
+            );
+        }
+    }
+
+    #[test]
+    fn commands_that_need_a_wallet_are_never_merely_read() {
+        // Reading the phrase is not a read-only act. A command marked
+        // needs_wallet but classified Read would be reachable under a
+        // read-only policy and would still derive keys.
+        for skill in skills::SKILLS.iter().filter(|s| s.needs_wallet) {
+            assert_ne!(
+                skill.capability,
+                skills::Capability::Read,
+                "{} needs the wallet but is classified read-only",
+                skill.name
+            );
+        }
     }
 }
