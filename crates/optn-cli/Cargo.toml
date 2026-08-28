@@ -41,3 +41,6 @@ tokio = { version = "1", features = ["net", "io-util", "time", "macros", "rt", "
 # ring is pure-ish Rust with a small asm surface and cross-compiles cleanly.
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging", "tls12"] }
 webpki-roots = "0.26"
+# HTTP for x402. rustls rather than native-tls, and the same feature set
+# src-tauri pins, so no OpenSSL enters the tree and the cross-builds hold.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "charset", "json"] }

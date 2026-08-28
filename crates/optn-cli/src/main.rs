@@ -13,9 +13,11 @@ mod cashaddr;
 mod electrum;
 mod error;
 mod hd;
+mod msgsign;
 mod network;
 mod token;
 mod tx;
+mod x402;
 
 use clap::{Parser, Subcommand};
 use serde_json::{json, Value};
@@ -224,6 +226,81 @@ enum Command {
         #[arg(long, default_value_t = 20)]
         gap: u32,
     },
+    /// Pay for an HTTP resource with x402.
+    ///
+    /// x402 turns HTTP 402 into a working status code: the server answers with
+    /// what it charges, the client pays on-chain, and the request is repeated
+    /// carrying proof. Payment is batched — one funding transaction covers many
+    /// later calls — which is what makes it usable by an agent that makes
+    /// hundreds of requests.
+    X402 {
+        #[command(subcommand)]
+        action: X402Command,
+    },
+}
+
+#[derive(Subcommand)]
+enum X402Command {
+    /// Ask what a resource costs. Reads only; never spends.
+    Check {
+        url: String,
+        /// Extra request header, as `Name: value`. Repeatable.
+        #[arg(long = "header", short = 'H')]
+        headers: Vec<String>,
+        #[arg(long, short = 'X', default_value = "GET")]
+        method: String,
+        /// Request body.
+        #[arg(long)]
+        data: Option<String>,
+    },
+    /// Fetch a paid resource, authorising payment for it.
+    ///
+    /// Without --fund this debits an existing funding output and spends
+    /// nothing on-chain, which is the normal case once a server is funded.
+    /// --fund broadcasts a funding transaction first and needs --yes.
+    Pay {
+        url: String,
+        /// Fund the server with this many satoshis before authorising.
+        ///
+        /// Pay more than the request costs: the surplus stays as credit and
+        /// later calls debit it without touching the chain.
+        #[arg(long)]
+        fund: Option<u64>,
+        /// Debit this funding output rather than letting the server find one.
+        #[arg(long)]
+        txid: Option<String>,
+        #[arg(long)]
+        vout: Option<u32>,
+        /// Satoshis the named output holds.
+        #[arg(long)]
+        funded: Option<u64>,
+        /// Satoshis to authorise. Defaults to what the server asks for.
+        #[arg(long)]
+        value: Option<u64>,
+        /// Receiving address index whose key signs the authorisation.
+        ///
+        /// The Facilitator credits the debit against the address it recovers
+        /// from the signature, so a server funded under one index must be paid
+        /// under the same one.
+        #[arg(long, default_value_t = 0)]
+        from_index: u32,
+        #[arg(long = "header", short = 'H')]
+        headers: Vec<String>,
+        #[arg(long, short = 'X', default_value = "GET")]
+        method: String,
+        #[arg(long)]
+        data: Option<String>,
+        #[arg(long, default_value_t = 1)]
+        fee_rate: u64,
+        #[arg(long, default_value_t = 20)]
+        gap: u32,
+        /// Show the payment that would be sent without funding or requesting.
+        #[arg(long)]
+        dry_run: bool,
+        /// Required before any on-chain funding.
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[tokio::main]
@@ -387,68 +464,17 @@ async fn run(cli: &Cli) -> Result<Value> {
             }
             let destination = parse_address(to, cli.network)?;
             let wallet = read_wallet()?;
-            let coin = default_coin_type(cli.network);
-
-            // Collect spendable outputs together with the path that controls
-            // each, so the right key signs the right input.
-            let mut spendable: Vec<(tx::Utxo, String)> = Vec::new();
-            for change in [false, true] {
-                for index in 0..*gap {
-                    let path = hd::address_path(coin, 0, change, index);
-                    let address = wallet.address(cli.network, &path)?;
-                    for u in client.utxos(&address.electrum_scripthash()).await? {
-                        let mut txid = decode_hex32(&u.tx_hash)?;
-                        // Electrum reports txids big-endian; the wire format is
-                        // little-endian. Skipping this reversal produces a
-                        // transaction that spends nothing and is simply rejected.
-                        txid.reverse();
-                        spendable.push((
-                            tx::Utxo {
-                                txid,
-                                vout: u.tx_pos,
-                                value: u.value,
-                                script_pubkey: address.script_pubkey(),
-                            },
-                            path.clone(),
-                        ));
-                    }
-                }
-            }
-            if spendable.is_empty() {
-                return Err(CliError::Usage(
-                    "no spendable outputs found — check the network and the gap limit".to_string(),
-                ));
-            }
-
-            let pool: Vec<tx::Utxo> = spendable.iter().map(|(u, _)| u.clone()).collect();
-            let (chosen, fee) = tx::select_coins(&pool, *sats, *fee_rate, 2)?;
-            let input_total: u64 = chosen.iter().map(|u| u.value).sum();
-            let change_value = input_total - sats - fee;
-
-            let mut outputs = vec![tx::Output::new(*sats, destination.script_pubkey())];
-            // Below the dust limit a change output cannot be spent, so it goes
-            // to the miner as extra fee instead of being created unspendable.
-            const DUST: u64 = 546;
-            let change_path = hd::address_path(coin, 0, true, 0);
-            if change_value >= DUST {
-                outputs.push(tx::Output::new(
-                    change_value,
-                    wallet.address(cli.network, &change_path)?.script_pubkey(),
-                ));
-            }
-
-            let transaction = tx::Transaction::new(chosen.clone(), outputs);
-            let mut keys = Vec::with_capacity(chosen.len());
-            for input in &chosen {
-                let path = spendable
-                    .iter()
-                    .find(|(u, _)| u.txid == input.txid && u.vout == input.vout)
-                    .map(|(_, p)| p.clone())
-                    .ok_or_else(|| CliError::Internal("selected an unknown utxo".into()))?;
-                keys.push(wallet.signing_key(&path)?);
-            }
-            let raw = transaction.sign(&keys)?;
-            let raw_hex = hex(&raw);
+            let spend = spend_to(
+                &client,
+                cli.network,
+                &wallet,
+                destination.script_pubkey(),
+                *sats,
+                *fee_rate,
+                *gap,
+                !*dry_run,
+            )
+            .await?;
 
             if *dry_run {
                 return Ok(json!({
@@ -457,23 +483,22 @@ async fn run(cli: &Cli) -> Result<Value> {
                     "network": cli.network.to_string(),
                     "to": to,
                     "sats": sats,
-                    "fee": fee,
-                    "change": if change_value >= DUST { change_value } else { 0 },
-                    "inputs": chosen.len(),
-                    "size_bytes": raw.len(),
-                    "raw": raw_hex,
+                    "fee": spend.fee,
+                    "change": spend.change,
+                    "inputs": spend.inputs,
+                    "size_bytes": spend.size_bytes,
+                    "raw": spend.raw_hex,
                 }));
             }
 
-            let txid = client.broadcast(&raw_hex).await?;
             Ok(json!({
                 "ok": true,
                 "network": cli.network.to_string(),
-                "txid": txid,
+                "txid": spend.txid,
                 "to": to,
                 "sats": sats,
-                "fee": fee,
-                "inputs": chosen.len(),
+                "fee": spend.fee,
+                "inputs": spend.inputs,
             }))
         }
         Command::Decode { hex: raw } => {
@@ -1038,7 +1063,353 @@ async fn run(cli: &Cli) -> Result<Value> {
             let txid = client.broadcast(raw).await?;
             Ok(json!({ "ok": true, "network": cli.network.to_string(), "txid": txid }))
         }
+        Command::X402 { action } => match action {
+            X402Command::Check {
+                url,
+                headers,
+                method,
+                data,
+            } => {
+                let spec = request_spec(url, method, data, headers)?;
+                let attempt = x402::Http::new(cli.timeout)?.send(&spec, None).await?;
+                if !attempt.is_payment_required() {
+                    // Not every resource charges. Reporting the body rather
+                    // than an error is what lets a caller use this to probe.
+                    return Ok(json!({
+                        "ok": true,
+                        "url": url,
+                        "status": attempt.status,
+                        "payment_required": false,
+                        "body": attempt.json_or_text(),
+                    }));
+                }
+
+                let required = x402::PaymentRequired::parse(&attempt.body)?;
+                let chosen = x402::choose_bch(&required)?;
+                // Decoding under our own network rejects a server quoting the
+                // other chain, which would otherwise be paid for real and
+                // never credited.
+                parse_address(&chosen.pay_to, cli.network)?;
+                Ok(json!({
+                    "ok": true,
+                    "url": url,
+                    "status": attempt.status,
+                    "payment_required": true,
+                    "x402_version": required.version,
+                    "scheme": chosen.scheme,
+                    "chain": chosen.network,
+                    "pay_to": chosen.pay_to,
+                    "sats": chosen.satoshis()?,
+                    "asset": chosen.asset,
+                    "timeout_seconds": chosen.max_timeout_seconds,
+                    "options_offered": required.accepts.len(),
+                }))
+            }
+            X402Command::Pay {
+                url,
+                fund,
+                txid,
+                vout,
+                funded,
+                value,
+                from_index,
+                headers,
+                method,
+                data,
+                fee_rate,
+                gap,
+                dry_run,
+                yes,
+            } => {
+                if fund.is_some() && !*yes && !*dry_run {
+                    return Err(CliError::Usage(
+                        "refusing to fund without --yes (use --dry-run to preview)".to_string(),
+                    ));
+                }
+                // Either name a funding output completely or leave it to the
+                // server. A half-named one would be signed with a null vout
+                // against a real txid, which the Facilitator rejects without
+                // saying which half was missing.
+                let named = [txid.is_some(), vout.is_some(), funded.is_some()];
+                if named.iter().any(|n| *n) && !named.iter().all(|n| *n) {
+                    return Err(CliError::Usage(
+                        "--txid, --vout and --funded name one funding output and go together"
+                            .to_string(),
+                    ));
+                }
+
+                let spec = request_spec(url, method, data, headers)?;
+                let http = x402::Http::new(cli.timeout)?;
+                let first = http.send(&spec, None).await?;
+                if !first.is_payment_required() {
+                    return Ok(json!({
+                        "ok": true,
+                        "url": url,
+                        "status": first.status,
+                        "paid": false,
+                        "reason": "the server did not ask for payment",
+                        "body": first.json_or_text(),
+                    }));
+                }
+
+                let required = x402::PaymentRequired::parse(&first.body)?;
+                let chosen = x402::choose_bch(&required)?;
+                let destination = parse_address(&chosen.pay_to, cli.network)?;
+                let asked = chosen.satoshis()?;
+                let debit = value.unwrap_or(asked);
+                if debit < asked {
+                    return Err(CliError::Usage(format!(
+                        "the server asks for {asked} satoshis; --value {debit} is short"
+                    )));
+                }
+
+                let wallet = read_wallet()?;
+                let coin = default_coin_type(cli.network);
+                // The address whose key signs the authorisation. The
+                // Facilitator recovers it from the signature and credits the
+                // debit against that payer, so it is stated rather than
+                // inferred from whichever coins funded the transaction.
+                let payer_path = hd::address_path(coin, 0, false, *from_index);
+                let payer = wallet.address(cli.network, &payer_path)?;
+
+                let mut funding = json!(null);
+                let authorization = if let Some(sats) = fund {
+                    if *sats < asked {
+                        return Err(CliError::Usage(format!(
+                            "--fund {sats} is below the {asked} satoshis this call costs"
+                        )));
+                    }
+                    let spend = spend_to(
+                        &client,
+                        cli.network,
+                        &wallet,
+                        destination.script_pubkey(),
+                        *sats,
+                        *fee_rate,
+                        *gap,
+                        !*dry_run,
+                    )
+                    .await?;
+                    funding = json!({
+                        "txid": spend.txid,
+                        "vout": 0,
+                        "sats": sats,
+                        "fee": spend.fee,
+                        "inputs": spend.inputs,
+                        "broadcast": !*dry_run,
+                    });
+                    // The funding output is built first, so it is vout 0.
+                    x402::Authorization::against(
+                        payer.encode(),
+                        chosen.pay_to.clone(),
+                        debit,
+                        spend.txid.clone().unwrap_or_default(),
+                        0,
+                        *sats,
+                    )
+                } else if let (Some(txid), Some(vout), Some(funded)) = (txid, vout, funded) {
+                    x402::Authorization::against(
+                        payer.encode(),
+                        chosen.pay_to.clone(),
+                        debit,
+                        txid.clone(),
+                        *vout,
+                        *funded,
+                    )
+                } else {
+                    // No funding named: debit whatever credit the server
+                    // already holds for us. Nothing is spent on-chain, which
+                    // is the ordinary case after the first call.
+                    x402::Authorization::tab(payer.encode(), chosen.pay_to.clone(), debit)
+                };
+
+                let key = wallet.signing_key(&payer_path)?;
+                let signature = msgsign::sign_message(&key, &authorization.signing_bytes()?)?;
+                let payload = x402::PaymentPayload {
+                    version: required.version,
+                    resource: required.resource.clone(),
+                    accepted: chosen.clone(),
+                    payload: x402::Inner {
+                        signature,
+                        authorization,
+                    },
+                    extensions: json!({}),
+                };
+                let header = x402::header_value(&payload)?;
+
+                if *dry_run {
+                    return Ok(json!({
+                        "ok": true,
+                        "dry_run": true,
+                        "url": url,
+                        "pay_to": chosen.pay_to,
+                        "from": payer.encode(),
+                        "sats": debit,
+                        "funding": funding,
+                        "header_name": x402::PAYMENT_HEADER,
+                        "header": header,
+                    }));
+                }
+
+                let paid = http.send(&spec, Some(&header)).await?;
+                Ok(json!({
+                    "ok": paid.status < 400,
+                    "url": url,
+                    "status": paid.status,
+                    "paid": paid.status < 400,
+                    "pay_to": chosen.pay_to,
+                    "from": payer.encode(),
+                    "sats": debit,
+                    "funding": funding,
+                    "payment_response": paid.payment_response,
+                    "body": paid.json_or_text(),
+                }))
+            }
+        },
     }
+}
+
+/// A payment that has been built and signed, and broadcast unless previewed.
+struct Spend {
+    /// Set once broadcast; absent on a preview.
+    txid: Option<String>,
+    raw_hex: String,
+    fee: u64,
+    change: u64,
+    inputs: usize,
+    size_bytes: usize,
+}
+
+/// Build, sign, and broadcast a payment out of the wallet's own coins.
+///
+/// Shared by `send` and by x402 funding. Both need the same coin selection,
+/// dust handling, and per-input key lookup, and a second copy of that would be
+/// a second place for the change arithmetic to be wrong.
+#[allow(clippy::too_many_arguments)]
+async fn spend_to(
+    client: &Client,
+    network: Network,
+    wallet: &Wallet,
+    script_pubkey: Vec<u8>,
+    sats: u64,
+    fee_rate: u64,
+    gap: u32,
+    broadcast: bool,
+) -> Result<Spend> {
+    let coin = default_coin_type(network);
+
+    // Collect spendable outputs together with the path that controls each, so
+    // the right key signs the right input.
+    let mut spendable: Vec<(tx::Utxo, String)> = Vec::new();
+    for change in [false, true] {
+        for index in 0..gap {
+            let path = hd::address_path(coin, 0, change, index);
+            let address = wallet.address(network, &path)?;
+            for u in client.utxos(&address.electrum_scripthash()).await? {
+                let mut txid = decode_hex32(&u.tx_hash)?;
+                // Electrum reports txids big-endian; the wire format is
+                // little-endian. Skipping this reversal produces a transaction
+                // that spends nothing and is simply rejected.
+                txid.reverse();
+                spendable.push((
+                    tx::Utxo {
+                        txid,
+                        vout: u.tx_pos,
+                        value: u.value,
+                        script_pubkey: address.script_pubkey(),
+                    },
+                    path.clone(),
+                ));
+            }
+        }
+    }
+    if spendable.is_empty() {
+        return Err(CliError::Usage(
+            "no spendable outputs found — check the network and the gap limit".to_string(),
+        ));
+    }
+
+    let pool: Vec<tx::Utxo> = spendable.iter().map(|(u, _)| u.clone()).collect();
+    let (chosen, fee) = tx::select_coins(&pool, sats, fee_rate, 2)?;
+    let input_total: u64 = chosen.iter().map(|u| u.value).sum();
+    let change_value = input_total - sats - fee;
+
+    let mut outputs = vec![tx::Output::new(sats, script_pubkey)];
+    // Below the dust limit a change output cannot be spent, so it goes to the
+    // miner as extra fee instead of being created unspendable.
+    const DUST: u64 = 546;
+    let change_path = hd::address_path(coin, 0, true, 0);
+    if change_value >= DUST {
+        outputs.push(tx::Output::new(
+            change_value,
+            wallet.address(network, &change_path)?.script_pubkey(),
+        ));
+    }
+
+    let transaction = tx::Transaction::new(chosen.clone(), outputs);
+    let mut keys = Vec::with_capacity(chosen.len());
+    for input in &chosen {
+        let path = spendable
+            .iter()
+            .find(|(u, _)| u.txid == input.txid && u.vout == input.vout)
+            .map(|(_, p)| p.clone())
+            .ok_or_else(|| CliError::Internal("selected an unknown utxo".into()))?;
+        keys.push(wallet.signing_key(&path)?);
+    }
+    let raw = transaction.sign(&keys)?;
+    let raw_hex = hex(&raw);
+
+    let txid = if broadcast {
+        Some(client.broadcast(&raw_hex).await?)
+    } else {
+        None
+    };
+
+    Ok(Spend {
+        txid,
+        raw_hex,
+        fee,
+        change: if change_value >= DUST {
+            change_value
+        } else {
+            0
+        },
+        inputs: chosen.len(),
+        size_bytes: raw.len(),
+    })
+}
+
+/// Assemble an HTTP request from the command-line pieces.
+///
+/// Plain HTTP is refused off localhost. The payment header carries a signed
+/// authorisation to debit our funded credit, so anyone able to read it in
+/// transit can spend that credit on their own requests.
+fn request_spec(
+    url: &str,
+    method: &str,
+    data: &Option<String>,
+    headers: &[String],
+) -> Result<x402::RequestSpec> {
+    let insecure = url.strip_prefix("http://");
+    if let Some(rest) = insecure {
+        let host = rest.split(['/', ':', '?']).next().unwrap_or("");
+        if !matches!(host, "localhost" | "127.0.0.1" | "[::1]") {
+            return Err(CliError::Usage(format!(
+                "refusing plain HTTP to {host}: the payment header authorises a debit \
+                 and can be replayed by anyone who reads it — use https"
+            )));
+        }
+    } else if !url.starts_with("https://") {
+        return Err(CliError::Usage(format!("'{url}' is not an http(s) URL")));
+    }
+
+    let mut spec = x402::RequestSpec::get(url);
+    spec.method = method.to_ascii_uppercase();
+    spec.body = data.clone();
+    for raw in headers {
+        spec.headers.push(x402::parse_header(raw)?);
+    }
+    Ok(spec)
 }
 
 /// Decode an address and refuse it if it belongs to the other chain.
@@ -1164,6 +1535,39 @@ fn print_human(command: &Command, v: &Value) {
             println!("script      {}", s("script"));
             println!("scripthash  {}", s("scripthash"));
         }
+        Command::X402 { action } => match action {
+            X402Command::Check { .. } => {
+                if v.get("payment_required").and_then(Value::as_bool) != Some(true) {
+                    println!("status    {}  no payment required", n("status"));
+                } else {
+                    println!("status    {}  payment required", n("status"));
+                    println!("price     {} sats", n("sats"));
+                    println!("pay to    {}", s("pay_to"));
+                    println!("chain     {}", s("chain"));
+                    println!("scheme    {}", s("scheme"));
+                }
+            }
+            X402Command::Pay { .. } => {
+                if v.get("dry_run").and_then(Value::as_bool) == Some(true) {
+                    println!("would pay {} sats to {}", n("sats"), s("pay_to"));
+                    println!("as        {}", s("from"));
+                    println!("{}: {}", s("header_name"), s("header"));
+                    return;
+                }
+                println!("status    {}", n("status"));
+                if v.get("paid").and_then(Value::as_bool) == Some(true) {
+                    println!("paid      {} sats to {}", n("sats"), s("pay_to"));
+                }
+                if let Some(funding) = v.get("funding").filter(|f| !f.is_null()) {
+                    println!("funded    {}", funding);
+                }
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(v.get("body").unwrap_or(&Value::Null))
+                        .unwrap_or_default()
+                );
+            }
+        },
         _ => println!("{}", serde_json::to_string_pretty(v).unwrap_or_default()),
     }
 }
