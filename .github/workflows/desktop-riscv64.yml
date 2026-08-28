@@ -1,11 +1,10 @@
-name: Desktop riscv64 (experimental)
+name: Desktop riscv64
 
 # Cross-compiles the desktop app for riscv64 from an x86_64 runner.
 #
-# Runs on pull requests, but cannot fail one: the job is continue-on-error while
-# the target is being proven, so a red build here reports as success and blocks
-# nobody. That is the point — a target nobody ever runs is a target nobody knows
-# is broken.
+# Runs on pull requests but cannot fail one: the job is continue-on-error, so a
+# red build reports as success and blocks nobody. That is deliberate — a target
+# nobody ever runs is a target nobody knows is broken.
 #
 # The obstacle was never the Rust target — riscv64gc-unknown-linux-gnu is tier 2
 # with std. It is webkit2gtk: the desktop app links it, so a cross-build needs
@@ -39,11 +38,11 @@ permissions:
 
 jobs:
   build:
-    name: Desktop riscv64 (experimental)
+    name: Desktop riscv64
     runs-on: ubuntu-24.04
     timeout-minutes: 90
-    # Informational while the target is being proven. Remove once it has been
-    # green for a few runs and the produced binary has been checked on hardware.
+    # Informational for now: drop this once a produced binary has been checked
+    # on riscv64 hardware, at which point a failure here should block.
     continue-on-error: true
 
     steps:
