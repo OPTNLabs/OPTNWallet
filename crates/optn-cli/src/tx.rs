@@ -236,7 +236,7 @@ pub fn select_coins(
     output_count: usize,
 ) -> Result<(Vec<Utxo>, u64)> {
     let mut sorted = available.to_vec();
-    sorted.sort_by(|a, b| b.value.cmp(&a.value));
+    sorted.sort_by_key(|a| std::cmp::Reverse(a.value));
 
     let mut chosen: Vec<Utxo> = Vec::new();
     let mut total: u64 = 0;
