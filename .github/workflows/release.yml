@@ -1404,7 +1404,14 @@ jobs:
           VERSION="${RELEASE_TAG#v}"
           missing=0
 
+          # Every pattern `expect` is given, so the unexpected-asset pass below
+          # can be checked against exactly the same set. Two hand-maintained
+          # lists would drift, and the direction that drifts silently is the
+          # one that stops rejecting things.
+          EXPECTED=()
+
           expect() {
+            EXPECTED+=("$1")
             if find release-files -maxdepth 1 -name "$1" -print -quit | grep -q .; then
               printf '  ok       %s\n' "$2"
             else
@@ -1447,19 +1454,36 @@ jobs:
           expect "OPTNWallet-${VERSION}-chrome.zip"            'Chrome extension'
           expect "OPTNWallet-${VERSION}-firefox.zip"           'Firefox extension'
 
-          # Anything present that no rule above claimed.
+          # Anything present that no `expect` above claimed.
+          #
+          # Matched against the same patterns, not against a prefix. A prefix
+          # arm like OPTNWallet-* accepts anything carrying the product name —
+          # a stray tarball, a debug build, a file from a half-finished rename —
+          # which makes the check read as "nothing extra" while allowing most
+          # of what it was written to stop.
           unexpected=0
           for path in release-files/*; do
             [ -e "$path" ] || continue
             file="$(basename "$path")"
-            case "$file" in
-              OPTNWallet-*|optn-*|*_amd64.deb|*_arm64.deb|*.x86_64.rpm|*.aarch64.rpm) ;;
-              android-release-status.txt) ;;
-              *)
-                echo "::error::unexpected asset in the release: $file"
-                unexpected=1
-                ;;
-            esac
+
+            # Not an asset: the Android job writes it to explain a skipped
+            # store upload, and it is published deliberately.
+            [ "$file" = 'android-release-status.txt' ] && continue
+
+            claimed=0
+            for pattern in "${EXPECTED[@]}"; do
+              # shellcheck disable=SC2254  # the pattern is a glob on purpose
+              case "$file" in
+                $pattern) claimed=1; break ;;
+              esac
+            done
+
+            if [ "$claimed" -eq 0 ]; then
+              echo "::error::unexpected asset in the release: $file"
+              echo "  nothing in the expected set matches it. Either it should"
+              echo "  not be published, or it needs an expect rule of its own."
+              unexpected=1
+            fi
           done
 
           if [ "$missing" -ne 0 ] || [ "$unexpected" -ne 0 ]; then
