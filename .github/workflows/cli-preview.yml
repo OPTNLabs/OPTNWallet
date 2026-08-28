@@ -16,7 +16,9 @@ name: CLI Preview
 
 on:
   pull_request:
-    branches: [dev, staging]
+    # main included: a pull request straight to main is exactly the path
+    # that would otherwise reach a release without these asset checks.
+    branches: [dev, staging, main]
   push:
     branches: [dev, staging]
   workflow_dispatch:

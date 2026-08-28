@@ -20,6 +20,18 @@ const extensionShell = readFileSync(
   resolve(repoRoot, 'src', 'platform', 'extension', 'ExtensionAppShell.tsx'),
   'utf8'
 );
+const assetWorkflows = [
+  'android-preview.yml',
+  'cli-preview.yml',
+  'desktop-preview.yml',
+  'extension-preview.yml',
+  'ios-preview.yml',
+  'desktop-riscv64.yml',
+].map((name) => ({
+  name,
+  contents: readFileSync(resolve(repoRoot, '.github', 'workflows', name), 'utf8'),
+}));
+
 const cliPreviewWorkflow = readFileSync(
   resolve(repoRoot, '.github', 'workflows', 'cli-preview.yml'),
   'utf8'
@@ -377,5 +389,21 @@ describe('release workflow', () => {
       expect(cliPreviewWorkflow, `${label} must be asserted`).toContain(label);
     }
     expect(cliPreviewWorkflow).toMatch(/complete:[\s\S]*?if: always\(\)/);
+  });
+  it('runs every asset check on pull requests to main as well', () => {
+    // main is where releases are cut from. A pull request straight to it was
+    // the one path that reached a release without any of these checks: the
+    // previews listened on dev and staging only, and riscv64 on dev alone.
+    for (const { name, contents } of assetWorkflows) {
+      const trigger = contents.match(
+        /pull_request:[\s\S]*?branches: \[([^\]]+)\]/
+      );
+      expect(trigger, `${name} should filter pull_request branches`).not.toBeNull();
+
+      const branches = trigger![1].split(',').map((b) => b.trim());
+      for (const branch of ['dev', 'staging', 'main']) {
+        expect(branches, `${name} must run for ${branch}`).toContain(branch);
+      }
+    }
   });
 });
