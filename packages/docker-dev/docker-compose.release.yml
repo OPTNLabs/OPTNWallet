@@ -2,7 +2,7 @@
 # Docker updates FROM our tags — see docs/docker-release-model.md
 #
 # Usage (repo root, after v1.2.3 is published):
-#   export OPTN_DOCKER_TAG=v1.2.3   # explicit tags are recommended; latest remains supported
+#   export OPTN_DOCKER_TAG=v1.2.3   # required: the image publishes version tags only
 #   docker compose -f packages/docker-dev/docker-compose.release.yml pull
 #   docker compose -f packages/docker-dev/docker-compose.release.yml up -d
 #   docker compose -f packages/docker-dev/docker-compose.release.yml exec dev bash
@@ -14,7 +14,7 @@ name: optn-docker-dev-release
 
 services:
   dev:
-    image: ${OPTN_DOCKER_IMAGE:-ghcr.io/optnlabs/optn-docker-dev}:${OPTN_DOCKER_TAG:-latest}
+    image: ${OPTN_DOCKER_IMAGE:-ghcr.io/optnlabs/optn-docker-dev}:${OPTN_DOCKER_TAG:?set OPTN_DOCKER_TAG to a published version, e.g. v1.7.3; the image publishes version tags only}
     working_dir: /optn
     user: "1000:1000"
     volumes:
@@ -47,7 +47,7 @@ services:
 
   fusion-lab:
     profiles: ["fusion-lab"]
-    image: ${OPTN_DOCKER_IMAGE:-ghcr.io/optnlabs/optn-docker-dev}:${OPTN_DOCKER_TAG:-latest}
+    image: ${OPTN_DOCKER_IMAGE:-ghcr.io/optnlabs/optn-docker-dev}:${OPTN_DOCKER_TAG:?set OPTN_DOCKER_TAG to a published version, e.g. v1.7.3; the image publishes version tags only}
     working_dir: /optn
     user: "1000:1000"
     depends_on:
