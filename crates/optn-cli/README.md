@@ -167,6 +167,87 @@ The authorisation is signed as a Bitcoin Signed Message — the same constructio
 wallets have used for years, whose magic prefix is what stops a message
 signature being replayed as a signature over a transaction.
 
+## Keeping the phrase in the OS keychain
+
+The phrase has to reach the process somehow, and the obvious ways are both bad.
+An argument lands in shell history and in `ps` output, where any other user on
+the machine can read it. An environment variable is inherited by every child
+process and is readable from `/proc/<pid>/environ`. Stdin is safe, but it
+cannot be automated without putting the phrase in a file.
+
+The keychain is the platform's own answer:
+
+```bash
+echo "$PHRASE" | optn --network chipnet keychain store
+optn --network chipnet keychain status     # presence only, never the phrase
+optn --network chipnet keychain remove
+```
+
+After that, commands needing the wallet find it themselves:
+
+```bash
+optn --network chipnet balance             # no OPTN_MNEMONIC, no stdin
+```
+
+Entries are keyed by network *and* `--profile`, so a mainnet and a chipnet
+wallet may share a profile name without one overwriting the other. `store`
+refuses to replace an existing entry without `--force`, and validates the
+phrase before writing it — an unusable phrase stored now fails later, at the
+moment someone is trying to spend.
+
+Sources are consulted in order: `OPTN_MNEMONIC`, then the keychain, then stdin.
+The environment wins so a scripted run can override without clearing what is
+stored. Stdin is last because reaching it means blocking on input, which for a
+binary driven by automation is a hang rather than a prompt.
+
+| Platform | Store | Survives a reboot |
+| --- | --- | --- |
+| Windows | Credential Manager | yes |
+| macOS | Keychain | yes |
+| Linux | kernel keyring | **no** |
+
+Linux uses the kernel keyring rather than Secret Service, because Secret
+Service means dbus, dbus means C, and C means the cross-builds to riscv64 and
+armv7 stop working. The consequence is that a stored phrase there lives in
+kernel memory for the session and is gone after a reboot. `keychain status`
+reports this rather than leaving it to be discovered.
+
+## Driving it from an agent
+
+`--help` is prose, and parsing prose to decide whether a command spends money
+is not a safety mechanism. `optn skills` publishes the same table the binary
+enforces:
+
+```bash
+optn --json skills
+```
+
+Every command comes with a capability — `read`, `secret`, `sign` or `spend` —
+along with whether it needs the wallet, whether it touches the network, and
+whether it demands `--yes`.
+
+The second half is a policy, so whoever runs the agent can say what it may do
+and have the binary enforce it rather than trusting the agent's restraint:
+
+```bash
+OPTN_POLICY=read optn --json balance "$ADDR"   # fine
+OPTN_POLICY=read optn --json send "$ADDR" 1000 --yes
+# error: policy 'read' does not permit 'send' (moves funds, or authorises a
+# debit). Raise OPTN_POLICY to 'spend' to allow it.
+```
+
+Each level admits everything below it: `read` ⊂ `secret` ⊂ `sign` ⊂ `spend`.
+Note that `read` does not include `address` or `history` — those derive keys
+from the recovery phrase, and reading a secret is not a read-only act.
+
+The check runs before the command does anything, so a refusal opens no
+connection and reveals nothing. A command the manifest does not classify is
+refused rather than allowed: a missing entry is a hole in the manifest, and
+failing closed is what makes it visible. The default policy is `spend`, because
+spending is already gated behind `--yes` and a default that broke every
+existing invocation would be switched off rather than used — the policy is the
+second lock, not the first.
+
 ## Using it from a script or an agent
 
 - `--json` on any command emits a stable object on **stdout**. Errors are also
@@ -226,7 +307,8 @@ tends to land here rather than at exit 3.
 Covered today: Electrum-backed queries and broadcast, recovery-phrase
 generation, address derivation and derivation-path discovery, rescan and
 history, transaction construction and signing, CashTokens — fungible and NFT —
-and x402 payments.
+x402 payments, OS-keychain storage, and the agent skill manifest with its
+policy gate.
 
 Spending always requires `--yes`. This binary is meant to be run by automation,
 so a spend is never reachable by accident, and `--dry-run` exists so a caller
