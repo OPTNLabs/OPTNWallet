@@ -10,6 +10,7 @@
 //! for riscv64 and anything else Rust targets.
 
 mod cashaddr;
+mod contract;
 mod electrum;
 mod error;
 mod hd;
@@ -235,6 +236,15 @@ enum Command {
         #[arg(long, default_value_t = 20)]
         gap: u32,
     },
+    /// CashScript covenants: the contracts this wallet ships.
+    ///
+    /// Nothing here compiles CashScript. The artifacts are already compiled and
+    /// built into this binary; the work is deriving the same redeem script, and
+    /// so the same address, that the desktop wallet does.
+    Contract {
+        #[command(subcommand)]
+        action: ContractCommand,
+    },
     /// Describe every command, what it may do, and the active policy.
     ///
     /// Meant to be read by an agent harness rather than a person. `--help` is
@@ -260,6 +270,27 @@ enum Command {
     X402 {
         #[command(subcommand)]
         action: X402Command,
+    },
+}
+
+#[derive(Subcommand)]
+enum ContractCommand {
+    /// The contracts built into this binary.
+    List,
+    /// A contract's constructor parameters and spendable functions.
+    Info {
+        /// Contract or artifact name, e.g. `TransferWithTimeout` or `escrow`.
+        name: String,
+    },
+    /// Derive a contract's address from its constructor arguments.
+    ///
+    /// Arguments are given in declaration order and parsed against the type the
+    /// artifact declares, not guessed from how they look.
+    Address {
+        name: String,
+        /// One constructor argument, repeated in order.
+        #[arg(long = "arg")]
+        args: Vec<String>,
     },
 }
 
@@ -394,6 +425,7 @@ fn command_name(command: &Command) -> &'static str {
         Command::Rescan { .. } => "rescan",
         Command::History { .. } => "history",
         Command::Discover { .. } => "discover",
+        Command::Contract { .. } => "contract",
         Command::Skills => "skills",
         Command::Keychain { .. } => "keychain",
         Command::X402 { .. } => "x402",
@@ -1134,6 +1166,101 @@ async fn run(cli: &Cli) -> Result<Value> {
             let txid = client.broadcast(raw).await?;
             Ok(json!({ "ok": true, "network": cli.network.to_string(), "txid": txid }))
         }
+        Command::Contract { action } => match action {
+            ContractCommand::List => {
+                let mut contracts = Vec::new();
+                for (file, source) in contract::BUNDLED {
+                    let name = file.trim_end_matches(".json");
+                    match serde_json::from_str::<contract::Artifact>(source) {
+                        Ok(artifact) => {
+                            // Assembling here rather than only when someone
+                            // tries to use it: an artifact that cannot be
+                            // assembled is broken now, and finding that out
+                            // while trying to move funds is far worse.
+                            let assembled = contract::assemble(&artifact.bytecode);
+                            contracts.push(json!({
+                                "name": artifact.contract_name,
+                                "artifact": name,
+                                "constructor_inputs": artifact.constructor_inputs.len(),
+                                "functions": artifact.abi.len(),
+                                "compiler": artifact.compiler.as_ref()
+                                    .map(|c| format!("{} {}", c.name, c.version)),
+                                "assembles": assembled.is_ok(),
+                                "bytes": assembled.as_ref().map(|b| b.len()).unwrap_or(0),
+                                "error": assembled.err().map(|e| e.to_string()),
+                            }));
+                        }
+                        Err(e) => contracts.push(json!({
+                            "name": name,
+                            "artifact": name,
+                            "assembles": false,
+                            "error": e.to_string(),
+                        })),
+                    }
+                }
+                Ok(json!({ "ok": true, "contracts": contracts }))
+            }
+            ContractCommand::Info { name } => {
+                let artifact = contract::bundled(name)?;
+                let script = contract::assemble(&artifact.bytecode)?;
+                Ok(json!({
+                    "ok": true,
+                    "name": artifact.contract_name,
+                    "compiler": artifact.compiler.as_ref()
+                        .map(|c| format!("{} {}", c.name, c.version)),
+                    "bytes": script.len(),
+                    "constructor": artifact.constructor_inputs.iter().map(|p| json!({
+                        "name": p.name,
+                        "type": p.kind,
+                    })).collect::<Vec<_>>(),
+                    "functions": artifact.abi.iter().map(|f| json!({
+                        "name": f.name,
+                        "inputs": f.inputs.iter().map(|p| json!({
+                            "name": p.name,
+                            "type": p.kind,
+                        })).collect::<Vec<_>>(),
+                    })).collect::<Vec<_>>(),
+                }))
+            }
+            ContractCommand::Address { name, args } => {
+                let artifact = contract::bundled(name)?;
+                if args.len() != artifact.constructor_inputs.len() {
+                    // Named before parsing, because "wrong count" is a clearer
+                    // answer than a type error on whichever argument happens to
+                    // line up with the wrong parameter.
+                    return Err(CliError::Usage(format!(
+                        "{} takes {} constructor argument(s), got {}: expected {}",
+                        artifact.contract_name,
+                        artifact.constructor_inputs.len(),
+                        args.len(),
+                        artifact
+                            .constructor_inputs
+                            .iter()
+                            .map(|p| format!("{} ({})", p.name, p.kind))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    )));
+                }
+
+                let mut parsed = Vec::with_capacity(args.len());
+                for (parameter, raw) in artifact.constructor_inputs.iter().zip(args) {
+                    parsed.push(contract::parse_argument(parameter, raw)?);
+                }
+
+                let script = contract::redeem_script(&artifact, &parsed)?;
+                let locking = contract::p2sh32_script_pubkey(&script);
+                Ok(json!({
+                    "ok": true,
+                    "name": artifact.contract_name,
+                    "network": cli.network.to_string(),
+                    "address": contract::p2sh32_address(&script, cli.network, false),
+                    "token_address": contract::p2sh32_address(&script, cli.network, true),
+                    "redeem_script": hex(&script),
+                    "locking_script": hex(&locking),
+                    "bytes": script.len(),
+                }))
+            }
+        },
         Command::Skills => Ok(skills::manifest(skills::Policy::from_env()?)),
         Command::Keychain { action } => {
             let (label, persists) = keychain::backend();

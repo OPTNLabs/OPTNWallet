@@ -175,6 +175,16 @@ pub const SKILLS: &[Skill] = &[
         requires_confirmation: false,
     },
     Skill {
+        // Derives addresses and reads bundled artifacts. No key material, no
+        // network, nothing spent.
+        name: "contract",
+        capability: Capability::Read,
+        summary: "List CashScript covenants, inspect one, or derive its address.",
+        needs_wallet: false,
+        needs_network: false,
+        requires_confirmation: false,
+    },
+    Skill {
         name: "skills",
         capability: Capability::Read,
         summary: "This manifest: every command, what it may do, and the active policy.",

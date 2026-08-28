@@ -56,6 +56,63 @@ pub struct Address {
     pub prefix: String,
 }
 
+/// CashAddr-encode a version byte followed by its hash.
+///
+/// Split out from `Address::encode` because P2SH32 carries a 32-byte hash and
+/// a different version byte, and duplicating the checksum would be a second
+/// place for it to be wrong.
+pub fn encode_payload(prefix: &str, payload8: &[u8]) -> String {
+    let payload5 = convert_bits(payload8, 8, 5, true).expect("byte input always converts");
+
+    let mut checksum_input: Vec<u8> = prefix
+        .bytes()
+        .map(|b| b & 0x1f)
+        .chain(std::iter::once(0))
+        .chain(payload5.iter().copied())
+        .collect();
+    checksum_input.extend_from_slice(&[0u8; 8]);
+    let poly = polymod(&checksum_input);
+
+    let mut out = String::with_capacity(prefix.len() + 1 + payload5.len() + 8);
+    out.push_str(prefix);
+    out.push(':');
+    for v in payload5 {
+        out.push(CHARSET[v as usize] as char);
+    }
+    for i in 0..8 {
+        let idx = ((poly >> (5 * (7 - i))) & 0x1f) as usize;
+        out.push(CHARSET[idx] as char);
+    }
+    out
+}
+
+/// The version byte and hash from a CashAddr, without interpreting either.
+///
+/// Used by the contract module's tests, which check 32-byte payloads that
+/// `Address` — fixed at 20 — cannot represent. Test-only: the binary has no
+/// caller, and an unused public function is dead weight rather than API.
+#[cfg(test)]
+pub fn decode_payload(address: &str) -> Result<Vec<u8>, String> {
+    let (_, payload) = address
+        .split_once(':')
+        .ok_or_else(|| format!("'{address}' has no prefix"))?;
+    let values: Vec<u8> = payload
+        .chars()
+        .map(|c| {
+            CHARSET
+                .iter()
+                .position(|&x| x == c as u8)
+                .map(|i| i as u8)
+                .ok_or_else(|| format!("'{c}' is not a CashAddr character"))
+        })
+        .collect::<Result<_, _>>()?;
+    if values.len() < 8 {
+        return Err("payload is too short to carry a checksum".to_string());
+    }
+    convert_bits(&values[..values.len() - 8], 5, 8, false)
+        .ok_or_else(|| "payload does not convert to bytes".to_string())
+}
+
 fn polymod(values: &[u8]) -> u64 {
     let mut c: u64 = 1;
     for &d in values {
@@ -200,33 +257,10 @@ impl Address {
     }
 
     pub fn encode(&self) -> String {
-        let version = self.kind.version_byte();
         let mut payload8 = Vec::with_capacity(21);
-        payload8.push(version);
+        payload8.push(self.kind.version_byte());
         payload8.extend_from_slice(&self.hash);
-        let payload5 = convert_bits(&payload8, 8, 5, true).expect("21 bytes always converts");
-
-        let mut checksum_input: Vec<u8> = self
-            .prefix
-            .bytes()
-            .map(|b| b & 0x1f)
-            .chain(std::iter::once(0))
-            .chain(payload5.iter().copied())
-            .collect();
-        checksum_input.extend_from_slice(&[0u8; 8]);
-        let poly = polymod(&checksum_input);
-
-        let mut out = String::with_capacity(self.prefix.len() + 1 + payload5.len() + 8);
-        out.push_str(&self.prefix);
-        out.push(':');
-        for v in payload5 {
-            out.push(CHARSET[v as usize] as char);
-        }
-        for i in 0..8 {
-            let idx = ((poly >> (5 * (7 - i))) & 0x1f) as usize;
-            out.push(CHARSET[idx] as char);
-        }
-        out
+        encode_payload(&self.prefix, &payload8)
     }
 
     /// Electrum's index key: SHA-256 of the script, byte-reversed, hex.
