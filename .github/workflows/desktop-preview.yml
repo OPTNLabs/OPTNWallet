@@ -33,7 +33,7 @@ concurrency:
 
 jobs:
   build-desktop-preview:
-    name: Preview (${{ matrix.platform }})
+    name: Preview (${{ matrix.label }})
     # Uncached Linux AppImage packaging can take slightly over 40 minutes.
     timeout-minutes: 60
     env:
@@ -45,22 +45,27 @@ jobs:
       matrix:
         include:
           - platform: windows-latest
+            label: windows-x64
             target: x86_64-pc-windows-msvc
             tor-target: windows-x86_64
             artifact-name: preview-windows
           - platform: macos-latest
+            label: macos-arm64
             target: aarch64-apple-darwin
             tor-target: macos-aarch64
             artifact-name: preview-macos-arm
           - platform: macos-15-intel
+            label: macos-x64
             target: x86_64-apple-darwin
             tor-target: macos-x86_64
             artifact-name: preview-macos-intel
           - platform: ubuntu-22.04
+            label: linux-x64
             target: x86_64-unknown-linux-gnu
             tor-target: linux-x86_64
             artifact-name: preview-linux
           - platform: ubuntu-24.04-arm
+            label: linux-arm64
             target: aarch64-unknown-linux-gnu
             tor-target: linux-aarch64
             artifact-name: preview-linux-arm
@@ -209,11 +214,95 @@ jobs:
           test -n "$APPIMAGE_PATH"
           npx --no-install tsx scripts/smoke-tor-artifact.mts "$APPIMAGE_PATH" "${{ matrix.tor-target }}"
 
-      - name: Upload preview artifact
+      # if-no-files-found only catches an empty bundle directory. It cannot see
+      # that the RPM is missing while the deb and AppImage are present, because
+      # the old catch-all glob uploaded whatever happened to exist. release.yml
+      # has require_asset for exactly this reason; preview had no equivalent, so
+      # a bundler that quietly stopped emitting a format kept every preview green
+      # until release day.
+      - name: Verify every expected bundle was produced
+        shell: bash
+        run: |
+          BUNDLE="src-tauri/target/${{ matrix.target }}/debug/bundle"
+          missing=0
+          require() {
+            if find "$BUNDLE/$1" -maxdepth 1 -name "$2" -print -quit 2>/dev/null | grep -q .; then
+              echo "ok: $3"
+            else
+              echo "::error::missing $3 (expected $BUNDLE/$1/$2)"
+              missing=1
+            fi
+          }
+          case "${{ runner.os }}" in
+            Windows)
+              require nsis '*.exe' 'NSIS installer'
+              require msi '*.msi' 'MSI installer'
+              ;;
+            macOS)
+              require dmg '*.dmg' 'disk image'
+              ;;
+            Linux)
+              require appimage '*.AppImage' 'AppImage'
+              require deb '*.deb' 'DEB package'
+              require rpm '*.rpm' 'RPM package'
+              ;;
+          esac
+          exit "$missing"
+
+      # One artifact per format rather than one per platform. The catch-all put
+      # three Linux installers in a single 701 MB zip, so reviewing the AppImage
+      # meant downloading the deb and rpm too, and no format was individually
+      # assertable.
+      - name: Upload NSIS installer
+        if: runner.os == 'Windows'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: ${{ matrix.artifact-name }}
-          path: |
-            src-tauri/target/${{ matrix.target }}/debug/bundle/**
+          name: preview-${{ matrix.label }}-nsis
+          path: src-tauri/target/${{ matrix.target }}/debug/bundle/nsis/*.exe
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload MSI installer
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: preview-${{ matrix.label }}-msi
+          path: src-tauri/target/${{ matrix.target }}/debug/bundle/msi/*.msi
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload disk image
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: preview-${{ matrix.label }}-dmg
+          path: src-tauri/target/${{ matrix.target }}/debug/bundle/dmg/*.dmg
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload AppImage
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: preview-${{ matrix.label }}-appimage
+          path: src-tauri/target/${{ matrix.target }}/debug/bundle/appimage/*.AppImage
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload DEB package
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: preview-${{ matrix.label }}-deb
+          path: src-tauri/target/${{ matrix.target }}/debug/bundle/deb/*.deb
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload RPM package
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: preview-${{ matrix.label }}-rpm
+          path: src-tauri/target/${{ matrix.target }}/debug/bundle/rpm/*.rpm
           retention-days: 14
           if-no-files-found: error

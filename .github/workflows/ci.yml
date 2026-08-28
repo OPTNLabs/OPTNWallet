@@ -20,12 +20,23 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
+      # Probe the dependency graph itself rather than the settings field.
+      # `security_and_analysis.dependency_graph` is only returned for repos where
+      # the graph is configurable — on a public repo it is always on and the field
+      # is absent, so the old `// "disabled"` fallback made this job skip on every
+      # PR while still reporting success. The SBOM endpoint answers the question
+      # that actually matters: can dependency-review read a graph or not.
       - name: Check dependency-graph availability
         id: dependency-graph
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          status="$(gh api repos/${{ github.repository }} --jq '.security_and_analysis.dependency_graph.status // "disabled"')"
+          if gh api "repos/${{ github.repository }}/dependency-graph/sbom" >/dev/null 2>&1; then
+            status=enabled
+          else
+            status=disabled
+          fi
+          echo "Dependency graph: $status"
           echo "status=$status" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Dependency review
