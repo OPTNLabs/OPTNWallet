@@ -1,0 +1,61 @@
+# Build recipe for F-Droid.
+#
+# This file is not read by anything in this repository. It is the recipe that
+# has to be submitted as a merge request against F-Droid's own fdroiddata
+# repository, kept here so it is version-controlled alongside the build it
+# describes and reviewed when that build changes.
+#
+# Submitting it: fork https://gitlab.com/fdroid/fdroiddata, copy this to
+# metadata/com.optilabs.wallet.yml, and open a merge request. See
+# packaging/fdroid/README.md for what to check before doing so.
+
+Categories:
+  - Money
+License: GPL-3.0-or-later
+AuthorName: OPTN Labs
+SourceCode: https://github.com/OPTNLabs/OPTNWallet
+IssueTracker: https://github.com/OPTNLabs/OPTNWallet/issues
+
+RepoType: git
+Repo: https://github.com/OPTNLabs/OPTNWallet.git
+
+Builds:
+  - versionName: 1.7.3
+    versionCode: 19
+    commit: v1.7.3
+    subdir: android/app
+    # The fdroid flavour, not the default. `play` links Play In-App Updates;
+    # this one does not, which is the entire reason the flavour exists.
+    # Case-sensitive: it forms part of the output path.
+    gradle:
+      - fdroid
+
+    # This is a Capacitor application: the Android project is a shell around a
+    # web bundle that has to be built first. F-Droid's build image does not
+    # carry Node, so it is installed here.
+    sudo:
+      - apt-get update
+      - apt-get install -y --no-install-recommends curl ca-certificates
+      - curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+      - apt-get install -y --no-install-recommends nodejs
+
+    # `npm ci` from the committed lockfile, so the dependency set is exactly
+    # what was reviewed rather than whatever resolves on the build day.
+    prebuild:
+      - pushd ../..
+      - npm ci
+      - npm run build:web
+      - npx cap sync android
+      - popd
+
+    output: build/outputs/apk/fdroid/release/optn-wallet-$$VERSION$$-fdroid-release.apk
+
+    # Nothing prebuilt is committed to this repository; these exist so a future
+    # stray artifact is deleted rather than shipped.
+    scandelete:
+      - node_modules
+
+AutoUpdateMode: Version
+UpdateCheckMode: Tags ^v[0-9]
+CurrentVersion: 1.7.3
+CurrentVersionCode: 19

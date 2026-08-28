@@ -54,6 +54,55 @@ jobs:
           --exclude 'src/pages/apps/FundMe.tsx'
           --exclude 'android/app/src/main/AndroidManifest.xml'
 
+  cargo-audit:
+    name: Rust dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      # Built from source rather than pulled as a prebuilt action: this is the
+      # job that guards the dependency tree, so it should not add a new trusted
+      # third party to do it.
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      # The npm graph is covered by "Supply-chain policy and SBOM"; nothing
+      # audited the Rust graph at all until now, which is 6k lines of Rust and
+      # a large transitive tree.
+      #
+      # The ignore list is a baseline, not a dismissal: these four already exist
+      # on dev, so failing on them would only make this job permanently red and
+      # teach everyone to ignore it. New advisories still fail the build. Drop
+      # each entry as its fix lands.
+      #
+      #   RUSTSEC-2026-0194  quick-xml <0.41   quadratic parse on duplicate attrs
+      #   RUSTSEC-2026-0195  quick-xml <0.41   unbounded namespace allocation
+      #   RUSTSEC-2026-0185  quinn-proto 0.11.14  out-of-order reassembly DoS
+      #   RUSTSEC-2026-0235  rkyv 0.7.46       OOB read on Rc/Arc archives
+      #
+      # quick-xml and quinn-proto are availability-only. RUSTSEC-2026-0235 is
+      # not: an out-of-bounds read can disclose adjacent memory, so it is a
+      # confidentiality issue and the more urgent of the four to clear.
+      # quinn-proto is already handled by the open bump to 0.11.17.
+      - name: Audit Rust dependencies
+        working-directory: src-tauri
+        run: |
+          cargo audit \
+            --ignore RUSTSEC-2026-0194 \
+            --ignore RUSTSEC-2026-0195 \
+            --ignore RUSTSEC-2026-0185 \
+            --ignore RUSTSEC-2026-0235
+
   supply-chain:
     name: Supply-chain policy and SBOM
     runs-on: ubuntu-latest

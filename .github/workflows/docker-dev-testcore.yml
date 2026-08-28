@@ -7,7 +7,7 @@ on:
       image:
         description: 'Full image ref to pull'
         required: true
-        default: 'ghcr.io/optnlabs/optn-docker-dev:latest'
+        default: 'ghcr.io/optnlabs/optn-docker-dev:v1.7.3'
 
 permissions:
   contents: read
