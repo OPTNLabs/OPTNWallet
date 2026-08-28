@@ -1062,6 +1062,75 @@ jobs:
           fi
           exit "$foreign"
 
+      # The per-artifact checks above run before renaming and confirm each
+      # producer uploaded something. This confirms the finished set: every
+      # asset that should reach users is present under its published name, and
+      # nothing unexpected rode along.
+      #
+      # Two separate failures are possible and both matter. A missing asset
+      # means a platform silently did not ship — the F-Droid APK and the iOS
+      # zip are the ones most likely to go unnoticed, because nobody testing on
+      # desktop would see either. An unexpected asset means something reached
+      # the release that no rule accounted for.
+      - name: Verify the published set is complete
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+          missing=0
+
+          expect() {
+            if find release-files -maxdepth 1 -name "$1" -print -quit | grep -q .; then
+              printf '  ok       %s\n' "$2"
+            else
+              echo "::error::missing from the release: $2 (expected $1)"
+              missing=1
+            fi
+          }
+
+          expect "OPTNWallet-${VERSION}-windows-x64-setup.exe" 'Windows NSIS installer'
+          expect "OPTNWallet-${VERSION}-windows-x64.msi"       'Windows MSI installer'
+          # The ad-hoc suffix is part of the name when Apple credentials were
+          # absent, so these are matched by pattern rather than exact name.
+          expect "OPTNWallet-${VERSION}-macos-arm64*.dmg"      'macOS Apple Silicon disk image'
+          expect "OPTNWallet-${VERSION}-macos-x64*.dmg"        'macOS Intel disk image'
+          expect "OPTNWallet-${VERSION}-macos-arm64*.app.zip"  'macOS Apple Silicon app bundle'
+          expect "OPTNWallet-${VERSION}-macos-x64*.app.zip"    'macOS Intel app bundle'
+          expect "OPTNWallet-${VERSION}-linux-x64.AppImage"    'Linux x64 AppImage'
+          expect "OPTNWallet-${VERSION}-linux-arm64.AppImage"  'Linux ARM64 AppImage'
+          expect "OPTNWallet-${VERSION}-linux-riscv64-unbundled" 'Linux riscv64 binary'
+          # deb and rpm keep their native names, which encode the architecture
+          # differently from everything else.
+          expect "*_amd64.deb"                                 'Linux x64 DEB'
+          expect "*_arm64.deb"                                 'Linux ARM64 DEB'
+          expect "*.x86_64.rpm"                                'Linux x64 RPM'
+          expect "*.aarch64.rpm"                               'Linux ARM64 RPM'
+          expect "OPTNWallet-${VERSION}-android-fdroid.apk"    'Android F-Droid APK'
+          expect "OPTNWallet-${VERSION}-android-play.apk"      'Android Play APK'
+          expect "OPTNWallet-${VERSION}-android.aab"           'Android App Bundle'
+          expect "OPTNWallet-${VERSION}-ios-simulator.zip"     'iOS simulator build'
+          expect "OPTNWallet-${VERSION}-chrome.zip"            'Chrome extension'
+          expect "OPTNWallet-${VERSION}-firefox.zip"           'Firefox extension'
+
+          # Anything present that no rule above claimed.
+          unexpected=0
+          for path in release-files/*; do
+            [ -e "$path" ] || continue
+            file="$(basename "$path")"
+            case "$file" in
+              OPTNWallet-*|*_amd64.deb|*_arm64.deb|*.x86_64.rpm|*.aarch64.rpm) ;;
+              android-release-status.txt) ;;
+              *)
+                echo "::error::unexpected asset in the release: $file"
+                unexpected=1
+                ;;
+            esac
+          done
+
+          if [ "$missing" -ne 0 ] || [ "$unexpected" -ne 0 ]; then
+            echo "::error::the release set is not what it should be; refusing to publish"
+            exit 1
+          fi
+          echo "All expected assets present, nothing extra."
+
       - name: Generate SHA256 checksums
         run: |
           (
