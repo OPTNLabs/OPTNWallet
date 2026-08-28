@@ -1,0 +1,32 @@
+[package]
+name = "optn-cli"
+version = "1.7.3"
+description = "OPTN Wallet command-line interface"
+authors = ["OPTNLabs"]
+license = "GPL-3.0"
+repository = "https://github.com/OPTNLabs/OPTNWallet"
+edition = "2021"
+rust-version = "1.77.2"
+
+[[bin]]
+name = "optn"
+path = "src/main.rs"
+
+# Deliberately does not depend on the desktop crate. src-tauri pulls in tauri,
+# which pulls in webkit2gtk on Linux, and that is what makes the desktop app
+# impossible to cross-compile. Keeping this crate Tauri-free is the entire
+# reason `optn` can be built for riscv64, armv7 and anything else Rust targets.
+#
+# Versions are pinned to match src-tauri/Cargo.toml so the two trees resolve to
+# the same dependency versions and the audit baseline stays meaningful.
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+tokio = { version = "1", features = ["net", "io-util", "time", "macros", "rt", "rt-multi-thread"] }
+# default-features = false is load-bearing for cross-compilation: the default
+# pulls aws-lc-sys, which builds C and CMake and does not cross to riscv64.
+# ring is pure-ish Rust with a small asm surface and cross-compiles cleanly.
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging", "tls12"] }
+webpki-roots = "0.26"
