@@ -912,13 +912,34 @@ jobs:
           mkdir -p release-files
           VERSION="${RELEASE_TAG#v}"
 
+          VERSION_CORE="${VERSION%%-*}"
+
+          # Renaming destroys the evidence the later foreign-version check
+          # relies on: every destination carries the current version by
+          # construction, so a stale source would be laundered into looking
+          # correct. The source is therefore validated first.
+          #
+          # Android's Gradle output is exempt because it genuinely has no
+          # version in its name; it cannot be checked this way and is instead
+          # covered by coming from this run's own android job.
           place() {
-            if [ -e "release-files/$2" ]; then
-              echo "::error::two artifacts both map to $2 (second was $1)"
+            local src="$1" dst="$2" base
+            base="$(basename "$src")"
+            case "$base" in
+              app-release.apk|app-release.aab) ;;
+              *"$VERSION_CORE"*) ;;
+              *)
+                echo "::error::$base does not carry version $VERSION_CORE; \
+                  refusing to publish it as $dst"
+                exit 1
+                ;;
+            esac
+            if [ -e "release-files/$dst" ]; then
+              echo "::error::two artifacts both map to $dst (second was $src)"
               exit 1
             fi
-            cp "$1" "release-files/$2"
-            echo "  $(basename "$1")  ->  $2"
+            cp "$src" "release-files/$dst"
+            echo "  $base  ->  $dst"
           }
 
           while IFS= read -r -d "" src; do

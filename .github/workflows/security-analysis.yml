@@ -90,8 +90,10 @@ jobs:
       #   RUSTSEC-2026-0185  quinn-proto 0.11.14  out-of-order reassembly DoS
       #   RUSTSEC-2026-0235  rkyv 0.7.46       OOB read on Rc/Arc archives
       #
-      # All six findings are availability-only (no confidentiality or integrity
-      # impact). quinn-proto is already handled by the open bump to 0.11.17.
+      # quick-xml and quinn-proto are availability-only. RUSTSEC-2026-0235 is
+      # not: an out-of-bounds read can disclose adjacent memory, so it is a
+      # confidentiality issue and the more urgent of the four to clear.
+      # quinn-proto is already handled by the open bump to 0.11.17.
       - name: Audit Rust dependencies
         working-directory: src-tauri
         run: |
