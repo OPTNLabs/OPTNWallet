@@ -17,6 +17,7 @@ mod hd;
 mod keychain;
 mod msgsign;
 mod network;
+mod serve;
 mod skills;
 mod token;
 mod tx;
@@ -236,6 +237,28 @@ enum Command {
         #[arg(long, default_value_t = 20)]
         gap: u32,
     },
+    /// Serve the same commands over local JSON-RPC.
+    ///
+    /// An agent that shells out pays process startup on every call. This
+    /// answers the same commands over HTTP, parsed by the same parser and
+    /// gated by the same policy — a second implementation of what `balance`
+    /// means would be a second place for it to be wrong.
+    Serve {
+        #[arg(long, default_value_t = 8787)]
+        port: u16,
+        /// Address to bind. Loopback unless --allow-remote is also given.
+        #[arg(long, default_value = "127.0.0.1")]
+        bind: String,
+        /// Bearer token. Generated and printed once when not supplied.
+        #[arg(long)]
+        token: Option<String>,
+        /// Permit commands that move funds. Off by default.
+        #[arg(long)]
+        allow_spend: bool,
+        /// Bind somewhere other than loopback. Read the refusal first.
+        #[arg(long)]
+        allow_remote: bool,
+    },
     /// CashScript covenants: the contracts this wallet ships.
     ///
     /// Nothing here compiles CashScript. The artifacts are already compiled and
@@ -426,6 +449,7 @@ fn command_name(command: &Command) -> &'static str {
         Command::History { .. } => "history",
         Command::Discover { .. } => "discover",
         Command::Contract { .. } => "contract",
+        Command::Serve { .. } => "serve",
         Command::Skills => "skills",
         Command::Keychain { .. } => "keychain",
         Command::X402 { .. } => "x402",
@@ -1166,6 +1190,67 @@ async fn run(cli: &Cli) -> Result<Value> {
             let txid = client.broadcast(raw).await?;
             Ok(json!({ "ok": true, "network": cli.network.to_string(), "txid": txid }))
         }
+        Command::Serve {
+            port,
+            bind,
+            token,
+            allow_spend,
+            allow_remote,
+        } => {
+            let address = serve::resolve_bind(bind, *port, *allow_remote)?;
+            if *allow_remote && token.is_none() {
+                return Err(CliError::Usage(
+                    "--allow-remote needs --token: a generated token printed to \
+                     a terminal is not a credential anyone off this machine has"
+                        .to_string(),
+                ));
+            }
+
+            let generated = token.is_none();
+            let token = token.clone().unwrap_or_else(serve::generate_token);
+            let mut base_args = vec!["--network".to_string(), cli.network.to_string()];
+            if cli.profile != "default" {
+                base_args.push("--profile".to_string());
+                base_args.push(cli.profile.clone());
+            }
+
+            let config = std::sync::Arc::new(serve::Config {
+                address,
+                token: token.clone(),
+                allow_spend: *allow_spend,
+                policy: skills::Policy::from_env()?,
+                base_args,
+            });
+
+            // Reaching stdin here would block forever rather than prompt —
+            // there is nobody at the other end of a server's stdin.
+            SERVING.store(true, std::sync::atomic::Ordering::SeqCst);
+
+            // To stderr, so `optn serve >log` still shows the token to the
+            // person who started it and does not bury it in a log file.
+            eprintln!("optn serving on http://{address}");
+            eprintln!(
+                "  token      {}{}",
+                token,
+                if generated { "  (generated)" } else { "" }
+            );
+            eprintln!(
+                "  spending   {}",
+                if *allow_spend { "enabled" } else { "refused" }
+            );
+            eprintln!("  policy     {}", config.policy.ceiling());
+            eprintln!(
+                "  try        curl -H 'Authorization: Bearer {token}' http://{address}/skills"
+            );
+
+            // A LocalSet rather than tokio::spawn: `listen` dispatches back
+            // into `run`, and that cycle cannot be proved Send. Connections
+            // are still handled concurrently, just on this thread — which is
+            // ample for a loopback endpoint serving one agent.
+            let local = tokio::task::LocalSet::new();
+            local.run_until(listen(config)).await?;
+            Ok(json!({ "ok": true, "served": address.to_string() }))
+        }
         Command::Contract { action } => match action {
             ContractCommand::List => {
                 let mut contracts = Vec::new();
@@ -1660,6 +1745,133 @@ fn request_spec(
     Ok(spec)
 }
 
+/// Set while `serve` is running, so a command cannot block on stdin.
+static SERVING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Accept connections and answer them until the process is stopped.
+async fn listen(config: serve::Shared) -> Result<()> {
+    use http_body_util::{BodyExt, Full};
+    use hyper::body::Bytes;
+    use hyper::service::service_fn;
+    use hyper::{Method, Request as HyperRequest, Response, StatusCode};
+    use hyper_util::rt::TokioIo;
+
+    let listener = tokio::net::TcpListener::bind(config.address)
+        .await
+        .map_err(|e| CliError::Usage(format!("could not bind {}: {e}", config.address)))?;
+
+    loop {
+        let (stream, _) = listener
+            .accept()
+            .await
+            .map_err(|e| CliError::Network(format!("could not accept a connection: {e}")))?;
+        let config = config.clone();
+
+        tokio::task::spawn_local(async move {
+            let service = service_fn(move |request: HyperRequest<hyper::body::Incoming>| {
+                let config = config.clone();
+                async move {
+                    let reply = |status: StatusCode, body: Value| {
+                        Response::builder()
+                            .status(status)
+                            .header("content-type", "application/json")
+                            // No browser origin may read this. A page on any
+                            // site can already POST to localhost; without this
+                            // it could also read the answer.
+                            .header("access-control-allow-origin", "null")
+                            .body(Full::new(Bytes::from(body.to_string())))
+                            .expect("a JSON response always builds")
+                    };
+
+                    let presented = request
+                        .headers()
+                        .get("authorization")
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|v| v.strip_prefix("Bearer "))
+                        .unwrap_or("");
+                    if !serve::token_matches(&config.token, presented) {
+                        return Ok::<_, std::convert::Infallible>(reply(
+                            StatusCode::UNAUTHORIZED,
+                            serve::rpc_error(None, -32001, "a bearer token is required"),
+                        ));
+                    }
+
+                    if request.method() == Method::GET && request.uri().path() == "/skills" {
+                        return Ok(reply(StatusCode::OK, serve::manifest(&config)));
+                    }
+                    if request.method() != Method::POST {
+                        return Ok(reply(
+                            StatusCode::METHOD_NOT_ALLOWED,
+                            serve::rpc_error(None, -32600, "POST / or GET /skills"),
+                        ));
+                    }
+
+                    // Bounded before it is read: an unbounded body from a
+                    // local caller is still a way to exhaust this process.
+                    let collected = match request.into_body().collect().await {
+                        Ok(body) => body.to_bytes(),
+                        Err(e) => {
+                            return Ok(reply(
+                                StatusCode::BAD_REQUEST,
+                                serve::rpc_error(None, -32700, &format!("unreadable body: {e}")),
+                            ))
+                        }
+                    };
+                    if collected.len() > 256 * 1024 {
+                        return Ok(reply(
+                            StatusCode::PAYLOAD_TOO_LARGE,
+                            serve::rpc_error(None, -32600, "request body is too large"),
+                        ));
+                    }
+
+                    let parsed: serve::Request = match serde_json::from_slice(&collected) {
+                        Ok(request) => request,
+                        Err(e) => {
+                            return Ok(reply(
+                                StatusCode::BAD_REQUEST,
+                                serve::rpc_error(None, -32700, &format!("bad JSON: {e}")),
+                            ))
+                        }
+                    };
+                    let id = parsed.id.clone();
+
+                    if let Err(error) = serve::admits(&config, &parsed) {
+                        return Ok(reply(
+                            StatusCode::FORBIDDEN,
+                            serve::rpc_error(id, -32601, &error.to_string()),
+                        ));
+                    }
+
+                    let argv = serve::argv(&config, &parsed);
+                    let parsed_cli = match Cli::try_parse_from(&argv) {
+                        Ok(cli) => cli,
+                        Err(e) => {
+                            return Ok(reply(
+                                StatusCode::BAD_REQUEST,
+                                serve::rpc_error(id, -32602, &e.to_string()),
+                            ))
+                        }
+                    };
+
+                    // Boxed to break the recursion: `run` reaches `listen`
+                    // reaches `run`, and the future type would be infinite.
+                    match Box::pin(run(&parsed_cli)).await {
+                        Ok(value) => Ok(reply(StatusCode::OK, serve::rpc_result(id, value))),
+                        Err(error) => Ok(reply(
+                            StatusCode::OK,
+                            serve::rpc_error(id, -32000, &error.to_string()),
+                        )),
+                    }
+                }
+            });
+
+            let _ = hyper::server::conn::http1::Builder::new()
+                .serve_connection(TokioIo::new(stream), service)
+                .await;
+        });
+    }
+}
+
 /// Decode an address and refuse it if it belongs to the other chain.
 ///
 /// Without this check the command still succeeds: the server simply reports no
@@ -1692,6 +1904,15 @@ fn read_phrase() -> Result<String> {
         if !v.trim().is_empty() {
             return Ok(v);
         }
+    }
+    if SERVING.load(std::sync::atomic::Ordering::SeqCst) {
+        // Nobody is at the other end of a server's stdin, so reading it would
+        // hang the request rather than prompt anyone.
+        return Err(CliError::Usage(
+            "no recovery phrase available — store one with `optn keychain store` \
+             or set OPTN_MNEMONIC before starting the server"
+                .to_string(),
+        ));
     }
     use std::io::Read;
     let mut buf = String::new();
