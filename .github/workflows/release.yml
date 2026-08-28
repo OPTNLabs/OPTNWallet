@@ -357,7 +357,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-    matrix:
+      matrix:
         include:
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
