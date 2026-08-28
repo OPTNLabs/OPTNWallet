@@ -25,6 +25,9 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
 ripemd = "0.1"
+# HMAC-SHA512 for the RPA CKD steps. Pure Rust (RustCrypto), so it crosses
+# to riscv64 and armv7 like the rest of the tree.
+hmac = "0.12"
 # Same version src-tauri pins. ECDSA over secp256k1 in pure Rust, so it crosses.
 k256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
 # BIP32 with the pure-Rust k256 backend — the same curve crate src-tauri

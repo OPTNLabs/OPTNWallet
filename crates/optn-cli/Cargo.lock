@@ -862,6 +862,7 @@ dependencies = [
  "bip32",
  "bip39",
  "clap",
+ "hmac",
  "http-body-util",
  "hyper",
  "hyper-util",

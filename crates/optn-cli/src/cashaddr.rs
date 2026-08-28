@@ -8,7 +8,7 @@
 
 use sha2::{Digest, Sha256};
 
-const CHARSET: &[u8] = b"qpzry9x8gf2tvdw0s3jn54khce6mua7l";
+pub(crate) const CHARSET: &[u8] = b"qpzry9x8gf2tvdw0s3jn54khce6mua7l";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AddressKind {
@@ -113,7 +113,7 @@ pub fn decode_payload(address: &str) -> Result<Vec<u8>, String> {
         .ok_or_else(|| "payload does not convert to bytes".to_string())
 }
 
-fn polymod(values: &[u8]) -> u64 {
+pub(crate) fn polymod(values: &[u8]) -> u64 {
     let mut c: u64 = 1;
     for &d in values {
         let c0 = (c >> 35) as u8;
@@ -137,7 +137,7 @@ fn polymod(values: &[u8]) -> u64 {
     c ^ 1
 }
 
-fn convert_bits(data: &[u8], from: u32, to: u32, pad: bool) -> Option<Vec<u8>> {
+pub(crate) fn convert_bits(data: &[u8], from: u32, to: u32, pad: bool) -> Option<Vec<u8>> {
     let mut acc: u32 = 0;
     let mut bits: u32 = 0;
     let mut out = Vec::new();
