@@ -43,6 +43,22 @@ optn tx <txid> --verbose                      # fetch a transaction
 optn broadcast <signed-hex>                   # publish a signed transaction
 ```
 
+With a recovery phrase in `OPTN_MNEMONIC`, the wallet commands work on your own
+addresses rather than one you name:
+
+```bash
+optn rescan                                   # rebuild the view from the chain
+optn history --limit 25                       # transactions across your addresses
+optn tokens                                   # CashToken balances
+optn send <address> <sats> --yes              # spend BCH
+optn token-send <token-address> <amount> --category <id> --yes
+optn send-nft <token-address> --category <id> --commitment <hex> --yes
+optn decode <raw-hex>                         # inspect a transaction, tokens included
+```
+
+Every spending command refuses to run without `--yes`, and `--dry-run` builds
+and signs without broadcasting so you can inspect the result first.
+
 ## Networks
 
 `--network mainnet` (default) or `--network chipnet`. The network selects the
@@ -92,6 +108,64 @@ other BCH tooling may sit under a coin type this wallet would not pick:
 each across accounts `0` and `1`. That set comes from
 `docs/bch-derivation-paths.md`, not from guesswork. `--gap` controls how many
 addresses per chain are checked before an account is considered empty.
+
+## Paying for HTTP with x402
+
+x402 makes HTTP 402 a working status code. A server answers a request with what
+it charges, the client pays on-chain, and the request is repeated carrying
+proof of payment. The x402-bch variant settles on Bitcoin Cash and, unlike the
+original, the Facilitator holds no wallet — clients pay servers directly and
+the Facilitator only verifies.
+
+Ask what something costs. This reads only; it never spends:
+
+```bash
+optn x402 check https://api.example.com/forecast
+```
+
+```
+status    402  payment required
+price     1000 sats
+pay to    bitcoincash:qqlrzp23w08434twmvr4fxw672whkjy0py26r63g3d
+chain     bip122:000000000019d6689c085ae1
+scheme    utxo
+```
+
+Payment is **batched**, which is what makes this usable by an agent. You fund a
+server once and every later call debits that credit without touching the chain,
+so a few hundred API calls cost one transaction rather than a few hundred:
+
+```bash
+optn x402 pay https://api.example.com/forecast --fund 100000 --yes   # once
+optn x402 pay https://api.example.com/forecast                       # and after
+```
+
+The first form broadcasts a funding transaction and authorises against it. The
+second signs an authorisation against the credit the server already holds and
+spends nothing, which is why only the first needs `--yes`.
+
+`--dry-run` prints the exact header that would be sent without funding or
+requesting anything. To debit a funding output you created elsewhere, name it
+in full with `--txid`, `--vout` and `--funded`.
+
+A few things the command will refuse, and why:
+
+- **Plain HTTP anywhere but localhost.** The payment header carries a signed
+  authorisation to debit your credit; anyone who reads it in transit can spend
+  that credit on their own requests.
+- **A server with no BCH option.** Servers may advertise several chains. Paying
+  an EVM requirement with a BCH signature fails at the Facilitator with an
+  error that says nothing about the real cause, so the option is picked by
+  scheme rather than by position.
+- **A `payTo` on the other chain.** It is decoded under `--network` first, so a
+  mainnet address is never paid while you believe you are on chipnet.
+- **`PAYMENT-SIGNATURE` passed as `--header`.** That header is built from your
+  key; supplying it by hand would send an authorisation this wallet did not
+  sign.
+
+The authorisation is signed as a Bitcoin Signed Message — the same construction
+wallets have used for years, whose magic prefix is what stops a message
+signature being replayed as a signature over a transaction.
 
 ## Using it from a script or an agent
 
@@ -149,10 +223,14 @@ tends to land here rather than at exit 3.
 
 ## Scope
 
-Today this covers Electrum-backed queries, broadcast, recovery-phrase
-generation, address derivation and derivation-path discovery. Transaction
-construction and signing are not implemented yet; see the tracking issue.
+Covered today: Electrum-backed queries and broadcast, recovery-phrase
+generation, address derivation and derivation-path discovery, rescan and
+history, transaction construction and signing, CashTokens — fungible and NFT —
+and x402 payments.
 
-Signing commands, when they land, will require an explicit opt-in rather than
-being reachable by default, because this binary is designed to be run by
-automation.
+Spending always requires `--yes`. This binary is meant to be run by automation,
+so a spend is never reachable by accident, and `--dry-run` exists so a caller
+can inspect a signed transaction before committing to it.
+
+Not here yet: covenant spending, the local RPC server and console, and
+Quantumroot. See the tracking issue.
