@@ -55,12 +55,18 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
-      # Host-side build tooling only. The target's own libraries come from the
-      # cross-toolchain step below, installed for the riscv64 dpkg architecture.
+      # Host-side only; the target's own libraries come from the cross-toolchain
+      # step below, installed for the riscv64 dpkg architecture.
+      #
+      # libevent is here because fetch-tor.mts runs the staged Tor binary with
+      # --version as a smoke check. That binary is x86_64 and needs the host's
+      # libevent to start, so without it the step fails on a Tor problem that
+      # has nothing to do with cross-compiling. desktop-preview.yml installs it
+      # for the same reason.
       - name: Host build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config
+          sudo apt-get install -y pkg-config libevent-2.1-7
 
       - name: Setup riscv64 cross toolchain
         uses: taiki-e/setup-cross-toolchain-action@12b7ad4acfa95a1476779d6c06699b96ec1691f8 # v1
