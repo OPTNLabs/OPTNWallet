@@ -24,6 +24,7 @@ import {
 
 import {
   decodePsbt,
+  psbtTokenToTransactionToken,
   sighashTypeOf,
   verifyBchSignature,
   SCHNORR_SIGNATURE_LENGTH,
@@ -89,7 +90,9 @@ function verifyPartialSignature(
     sourceOutputs: proposal.inputs.map((candidate) => ({
       lockingBytecode: hexToBin(candidate.lockingBytecodeHex),
       valueSatoshis: candidate.satoshis,
-      token: noTokens,
+      token: candidate.token
+        ? psbtTokenToTransactionToken(candidate.token)
+        : noTokens,
     })),
   };
   const serialization = generateSigningSerializationBch(context, {
@@ -355,6 +358,9 @@ export function mergeImportedSignatures(
     outputs: proposal.outputs.map((output) => ({
       lockingBytecode: hexToBin(output.lockingBytecodeHex),
       valueSatoshis: output.satoshis,
+      ...(output.token
+        ? { token: psbtTokenToTransactionToken(output.token) }
+        : {}),
     })),
     locktime: 0,
   });

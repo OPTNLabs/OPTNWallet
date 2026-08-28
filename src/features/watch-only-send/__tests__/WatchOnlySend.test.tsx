@@ -5,13 +5,16 @@ import { describe, expect, it } from 'vitest';
 
 import WatchOnlySend from '../WatchOnlySend';
 import { store } from '../../../state/store';
+import { I18nProvider } from '../../../i18n/I18nProvider';
 describe('WatchOnlySend workspace', () => {
   it('renders the workspace shell (loading state on first paint)', () => {
     const html = renderToStaticMarkup(
       <Provider store={store}>
-        <StaticRouter location="/send">
-          <WatchOnlySend />
-        </StaticRouter>
+        <I18nProvider>
+          <StaticRouter location="/send">
+            <WatchOnlySend />
+          </StaticRouter>
+        </I18nProvider>
       </Provider>
     );
 
@@ -26,15 +29,17 @@ describe('WatchOnlySend workspace', () => {
     // stage is named up front and only the current stage's controls are shown.
     const html = renderToStaticMarkup(
       <Provider store={store}>
-        <StaticRouter location="/send">
-          <WatchOnlySend />
-        </StaticRouter>
+        <I18nProvider>
+          <StaticRouter location="/send">
+            <WatchOnlySend />
+          </StaticRouter>
+        </I18nProvider>
       </Provider>
     );
 
     expect(html).toContain('Prepare');
-    expect(html).toContain('Sign');
-    expect(html).toContain('Broadcast');
+    expect(html).toContain('Collect signatures');
+    expect(html).toContain('Ready to broadcast');
     // The first stage is the current one before anything is built.
     expect(html).toContain('aria-current="step"');
   });
@@ -44,9 +49,11 @@ describe('WatchOnlySend workspace', () => {
     // the fingerprint. Asking for it on this screen implied it was required.
     const html = renderToStaticMarkup(
       <Provider store={store}>
-        <StaticRouter location="/send">
-          <WatchOnlySend />
-        </StaticRouter>
+        <I18nProvider>
+          <StaticRouter location="/send">
+            <WatchOnlySend />
+          </StaticRouter>
+        </I18nProvider>
       </Provider>
     );
 

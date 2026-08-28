@@ -2,6 +2,109 @@ type DatabaseRunner = {
   run: (query: string) => void;
 };
 
+/** Shared multisig policy, address inventory, and durable PSBT session tables. */
+export const createMultisigTables = (db: DatabaseRunner) => {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS multisig_policies (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      wallet_id INT NOT NULL UNIQUE,
+      schema_version INT NOT NULL DEFAULT 1,
+      policy_id TEXT NOT NULL UNIQUE,
+      policy_revision INT NOT NULL DEFAULT 0,
+      network_type TEXT NOT NULL,
+      threshold INT NOT NULL,
+      account_path TEXT NOT NULL,
+      policy_name TEXT NOT NULL,
+      receive_descriptor TEXT,
+      change_descriptor TEXT,
+      receive_cursor INT NOT NULL DEFAULT 0,
+      change_cursor INT NOT NULL DEFAULT 0,
+      gap_limit INT NOT NULL DEFAULT 20,
+      setup_status TEXT NOT NULL DEFAULT 'ready',
+      legacy_policy_json TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(wallet_id) REFERENCES wallets(id)
+    );
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS multisig_cosigners (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      wallet_id INT NOT NULL,
+      policy_revision INT NOT NULL,
+      cosigner_id TEXT NOT NULL,
+      label TEXT NOT NULL,
+      xpub TEXT NOT NULL,
+      master_fingerprint TEXT NOT NULL,
+      account_path TEXT NOT NULL,
+      FOREIGN KEY(wallet_id) REFERENCES wallets(id),
+      UNIQUE(wallet_id, policy_revision, cosigner_id),
+      UNIQUE(wallet_id, policy_revision, xpub)
+    );
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS multisig_addresses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      wallet_id INT NOT NULL,
+      policy_revision INT NOT NULL,
+      branch_index INT NOT NULL,
+      address_index INT NOT NULL,
+      address TEXT NOT NULL,
+      token_address TEXT NOT NULL,
+      locking_bytecode TEXT NOT NULL,
+      redeem_script TEXT NOT NULL,
+      reservation_status TEXT NOT NULL DEFAULT 'available',
+      reserved_at TEXT,
+      used_at TEXT,
+      FOREIGN KEY(wallet_id) REFERENCES wallets(id),
+      UNIQUE(wallet_id, policy_revision, branch_index, address_index),
+      UNIQUE(wallet_id, address)
+    );
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS multisig_address_keys (
+      wallet_id INT NOT NULL,
+      address_id INT NOT NULL,
+      cosigner_id TEXT NOT NULL,
+      public_key TEXT NOT NULL,
+      sorted_position INT NOT NULL,
+      derivation_path TEXT NOT NULL,
+      FOREIGN KEY(wallet_id) REFERENCES wallets(id),
+      FOREIGN KEY(address_id) REFERENCES multisig_addresses(id),
+      PRIMARY KEY(wallet_id, address_id, cosigner_id),
+      UNIQUE(address_id, sorted_position)
+    );
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS multisig_spend_sessions (
+      session_id TEXT PRIMARY KEY,
+      wallet_id INT NOT NULL,
+      policy_id TEXT NOT NULL,
+      unsigned_tx_hash TEXT NOT NULL,
+      psbt_bytes BLOB NOT NULL,
+      stage TEXT NOT NULL,
+      signatures_json TEXT NOT NULL DEFAULT '[]',
+      raw_tx_hex TEXT,
+      retry_count INT NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(wallet_id) REFERENCES wallets(id),
+      UNIQUE(wallet_id, unsigned_tx_hash)
+    );
+  `);
+
+  db.run(
+    'CREATE INDEX IF NOT EXISTS idx_multisig_addresses_wallet ON multisig_addresses(wallet_id, branch_index, address_index);'
+  );
+  db.run(
+    'CREATE INDEX IF NOT EXISTS idx_multisig_sessions_wallet ON multisig_spend_sessions(wallet_id, updated_at);'
+  );
+};
+
 export const createTransactionDetailsTable = (db: DatabaseRunner) => {
   db.run(`
     CREATE TABLE IF NOT EXISTS transaction_details (
@@ -185,6 +288,8 @@ export const createTables = (db: DatabaseRunner) => {
       UNIQUE(wallet_id, activity_type)
     );
   `);
+
+  createMultisigTables(db);
 
   db.run(`
       CREATE TABLE IF NOT EXISTS bcmr (

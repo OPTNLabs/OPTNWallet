@@ -39,6 +39,11 @@ vi.mock('../../utils/platform', () => ({
   isDesktopPlatform: isDesktopPlatformMock,
 }));
 
+vi.mock('../multisig/MultisigStorageService', () => ({
+  loadMultisigPolicy: vi.fn(async () => null),
+  ensureMultisigAddressInventory: vi.fn(async () => undefined),
+}));
+
 describe('WalletDiscoveryService', () => {
   beforeEach(() => {
     vi.clearAllMocks();

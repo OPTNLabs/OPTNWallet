@@ -349,6 +349,22 @@ describe('Paytaca v145 fields', () => {
       commitment,
     });
   });
+
+  it('keeps NFT state distinct from a zero-amount fungible token', () => {
+    const category = new Uint8Array(32).fill(0x99);
+    const commitment = Uint8Array.from([0xaa, 0xbb]);
+    const psbt = encodeUnsignedPsbt(
+      [input()],
+      [output({ token: { category, capability: 2, commitment } })]
+    );
+    const parsed = decodePsbt(psbt);
+    expect(parsed.outputs[0].token).toEqual({
+      category,
+      capability: 2,
+      commitment,
+    });
+    expect(parsed.outputs[0].token?.amount).toBeUndefined();
+  });
 });
 
 describe('BCH PSBT decoding', () => {

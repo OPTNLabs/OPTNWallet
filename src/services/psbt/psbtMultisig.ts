@@ -31,6 +31,7 @@ import {
 import {
   decodePsbt,
   encodeUnsignedPsbt,
+  psbtTokenToTransactionToken,
   sighashTypeOf,
   verifyBchSignature,
   SIGHASH_ALL_FORKID,
@@ -91,6 +92,11 @@ export function buildMultisigRedeemScript(
   if (publicKeys.length === 0) {
     throw new Error('A multisig redeem script needs at least one public key.');
   }
+  if (publicKeys.length > 15) {
+    throw new Error(
+      "P2SH multisig supports at most 15 compressed public keys under BCH's 520-byte push limit."
+    );
+  }
   if (requiredSignatures < 1 || requiredSignatures > publicKeys.length) {
     throw new Error(
       `Required signatures must be between 1 and ${publicKeys.length}.`
@@ -108,6 +114,11 @@ export function buildMultisigRedeemScript(
     ])
   );
   const total = parts.reduce((sum, part) => sum + part.length, 0);
+  if (total > 520) {
+    throw new Error(
+      "The multisig redeem script exceeds BCH's 520-byte push limit."
+    );
+  }
   const out = new Uint8Array(total);
   let offset = 0;
   for (const part of parts) {
@@ -309,15 +320,13 @@ function verifySignatureForPsbt(
   const decoded = decodeTransaction(parsed.unsignedTransaction);
   if (typeof decoded === 'string') return false;
 
-  // Token-carrying inputs are outside the air-gapped multisig scope; the
-  // spent output is treated as token-free, exactly like the import verifier.
   const context: CompilationContextBch = {
     transaction: decoded as CompilationContextBch['transaction'],
     inputIndex: signature.inputIndex,
     sourceOutputs: parsed.inputs.map((input) => ({
       lockingBytecode: input.spentLockingBytecode ?? new Uint8Array(),
       valueSatoshis: input.spentSatoshis ?? 0n,
-      token: NO_TOKENS,
+      token: input.token ? psbtTokenToTransactionToken(input.token) : NO_TOKENS,
     })),
   };
   const serialization = generateSigningSerializationBch(context, {
@@ -368,6 +377,8 @@ function encodeFromParsed(
       vout: input.outpointIndex,
       satoshis: input.spentSatoshis,
       lockingBytecode: input.spentLockingBytecode,
+      previousTransaction: input.nonWitnessUtxo ?? undefined,
+      token: input.token ?? undefined,
       redeemScript: input.redeemScript ?? undefined,
       derivations: input.derivations.length > 0 ? input.derivations : undefined,
       sequence: input.sequence ?? 0xffffffff,

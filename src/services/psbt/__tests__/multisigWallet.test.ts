@@ -4,6 +4,7 @@
 // than shape-only.
 
 import { describe, expect, it } from 'vitest';
+import { Network } from '../../../state/slices/networkSlice';
 import {
   binToHex,
   deriveHdPath,
@@ -13,23 +14,32 @@ import {
 } from '@bitauth/libauth';
 
 import {
+  addDescriptorChecksum,
   cosignersMissingFingerprint,
+  createBchnScanDescriptor,
+  createMultisigDescriptorSet,
   deriveMultisigAddress,
   describePolicy,
   multisigWalletUuid,
   parsePmwif,
   pmwifFilename,
+  parseMultisigManifest,
+  serializeMultisigManifest,
   serializePmwif,
   validateMultisigPolicy,
+  verifyDescriptorChecksum,
   type MultisigPolicy,
 } from '../multisigWallet';
 import { parseMultisigRedeemScript } from '../psbtMultisig';
 
 /** An account xPub at m/44'/145'/0' from a deterministic seed. */
 function accountXpub(seedByte: number): string {
-  const master = deriveHdPrivateNodeFromSeed(new Uint8Array(32).fill(seedByte), {
-    assumeValidity: true,
-  });
+  const master = deriveHdPrivateNodeFromSeed(
+    new Uint8Array(32).fill(seedByte),
+    {
+      assumeValidity: true,
+    }
+  );
   const account = deriveHdPath(master, "m/44'/145'/0'");
   if (typeof account === 'string') throw new Error(account);
   const encoded = encodeHdPublicKey({
@@ -55,15 +65,91 @@ const POLICY: MultisigPolicy = {
 };
 
 describe('multisig policy validation', () => {
+  it('matches the BIP-380 checksum vector', () => {
+    const descriptor = addDescriptorChecksum('raw(deadbeef)');
+    expect(descriptor).toBe('raw(deadbeef)#89f8spxm');
+    expect(verifyDescriptorChecksum(descriptor)).toBe(true);
+    expect(verifyDescriptorChecksum('raw(deedbeef)#89f8spxm')).toBe(false);
+  });
+
+  it('creates canonical sortedmulti descriptors and BCHN concrete scans', () => {
+    const policy: MultisigPolicy = {
+      ...POLICY,
+      network: Network.MAINNET,
+      accountPath: "m/44'/145'/0'",
+      policyRevision: 0,
+      signers: POLICY.signers.map((signer, index) => ({
+        ...signer,
+        masterFingerprintHex:
+          signer.masterFingerprintHex ?? `0000000${index + 1}`,
+      })),
+    };
+    const descriptors = createMultisigDescriptorSet(policy);
+    expect(verifyDescriptorChecksum(descriptors.receive)).toBe(true);
+    expect(descriptors.receive).toContain('sh(sortedmulti(2,');
+    expect(descriptors.receive).toContain('/0/*))#');
+    const concrete = createBchnScanDescriptor(policy, 0, 0);
+    expect(concrete).toMatch(
+      /^sh\(multi\(2,(02|03)[0-9a-f]{64},(02|03)[0-9a-f]{64},(02|03)[0-9a-f]{64}\)\)$/
+    );
+    expect(concrete).not.toContain('#');
+  });
+
+  it('keeps the descriptor policy ID stable across cosigner input order', () => {
+    const policy: MultisigPolicy = {
+      ...POLICY,
+      network: Network.MAINNET,
+      accountPath: "m/44'/145'/0'",
+      policyRevision: 0,
+      signers: POLICY.signers.map((signer, index) => ({
+        ...signer,
+        masterFingerprintHex:
+          signer.masterFingerprintHex ?? `0000000${index + 1}`,
+      })),
+    };
+    const reordered = { ...policy, signers: [...policy.signers].reverse() };
+    expect(createMultisigDescriptorSet(reordered).policyId).toBe(
+      createMultisigDescriptorSet(policy).policyId
+    );
+  });
+
+  it('round-trips a complete descriptor manifest and rejects tampering', () => {
+    const policy: MultisigPolicy = {
+      ...POLICY,
+      network: Network.MAINNET,
+      accountPath: "m/44'/145'/0'",
+      policyRevision: 0,
+      signers: POLICY.signers.map((signer, index) => ({
+        ...signer,
+        masterFingerprintHex:
+          signer.masterFingerprintHex ?? `0000000${index + 1}`,
+      })),
+    };
+    const restored = parseMultisigManifest(
+      serializeMultisigManifest(policy),
+      Network.MAINNET
+    );
+    expect(createMultisigDescriptorSet(restored).policyId).toBe(
+      createMultisigDescriptorSet(policy).policyId
+    );
+    const manifest = JSON.parse(serializeMultisigManifest(policy)) as {
+      descriptors: { policyId: string };
+    };
+    manifest.descriptors.policyId = '00'.repeat(32);
+    expect(() => parseMultisigManifest(JSON.stringify(manifest))).toThrow(
+      /do not agree/
+    );
+  });
+
   it('accepts a 2-of-3', () => {
     expect(() => validateMultisigPolicy(POLICY)).not.toThrow();
     expect(describePolicy(POLICY)).toBe('2-of-3');
   });
 
   it('rejects a threshold above the cosigner count', () => {
-    expect(() =>
-      validateMultisigPolicy({ ...POLICY, m: 4 })
-    ).toThrow(/between 1 and 3/);
+    expect(() => validateMultisigPolicy({ ...POLICY, m: 4 })).toThrow(
+      /between 1 and 3/
+    );
   });
 
   it('rejects a duplicated cosigner key', () => {
@@ -161,8 +247,11 @@ describe('Paytaca .pmwif interop', () => {
     );
   });
 
-  it('writes Paytaca\'s wallet shape', () => {
-    const parsed = JSON.parse(serializePmwif(POLICY)) as Record<string, unknown>;
+  it("writes Paytaca's wallet shape", () => {
+    const parsed = JSON.parse(serializePmwif(POLICY)) as Record<
+      string,
+      unknown
+    >;
     expect(parsed.name).toBe('Treasury');
     expect(parsed.m).toBe(2);
     expect(parsed.signers).toEqual([
@@ -175,9 +264,9 @@ describe('Paytaca .pmwif interop', () => {
   it('round-trips a wallet without losing fingerprints', () => {
     const restored = parsePmwif(serializePmwif(POLICY));
     expect(restored.m).toBe(2);
-    expect(restored.signers.map((signer) => signer.masterFingerprintHex)).toEqual(
-      ['aabbccdd', '11223344', undefined]
-    );
+    expect(
+      restored.signers.map((signer) => signer.masterFingerprintHex)
+    ).toEqual(['aabbccdd', '11223344', undefined]);
     expect(multisigWalletUuid(restored)).toBe(multisigWalletUuid(POLICY));
   });
 
@@ -200,7 +289,10 @@ describe('Paytaca .pmwif interop', () => {
   });
 
   it('survives a reordered signer list without misassigning fingerprints', () => {
-    const written = JSON.parse(serializePmwif(POLICY)) as Record<string, unknown>;
+    const written = JSON.parse(serializePmwif(POLICY)) as Record<
+      string,
+      unknown
+    >;
     written.signers = (written.signers as unknown[]).slice().reverse();
     const policy = parsePmwif(JSON.stringify(written));
     const byName = new Map(

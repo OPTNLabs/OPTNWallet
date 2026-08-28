@@ -27,11 +27,11 @@ import {
   lockingBytecodeToCashAddress,
 } from '@bitauth/libauth';
 
-import { buildWatchOnlyPsbt } from '../watchOnlySend';
 import {
-  inspectImportedPsbt,
-  mergeImportedSignatures,
-} from '../watchOnlyImport';
+  buildWatchOnlyPsbt,
+  multisigCosignerDerivations,
+} from '../watchOnlySend';
+import { inspectImportedPsbt, mergeImportedSignatures } from '../watchOnlyImport';
 import { mergePsbts } from '../psbtMultisig';
 import { deriveMultisigAddress, type MultisigPolicy } from '../multisigWallet';
 
@@ -107,11 +107,13 @@ describeLive('SeedCash 2-of-3 round trip', () => {
         previousTransactionHex: binToHex(parent),
         redeemScriptHex: binToHex(spent.redeemScript),
         requiredSignatures: 2,
-        cosignerDerivations: policy.signers.map((signer, index) => ({
-          publicKeyHex: binToHex(spent.sortedPublicKeys[index]),
-          masterFingerprintHex: signer.masterFingerprintHex!,
-          derivationPath: `${ACCOUNT_PATH}/0/0`,
-        })),
+        cosignerDerivations: multisigCosignerDerivations(
+          policy,
+          spent.derivedCosigners,
+          0,
+          0,
+          ACCOUNT_PATH
+        ),
       },
     ];
 
@@ -127,11 +129,13 @@ describeLive('SeedCash 2-of-3 round trip', () => {
       accountPath: ACCOUNT_PATH,
       masterFingerprint: hexToBin(keys[0].fingerprint),
       changeRedeemScriptHex: binToHex(change.redeemScript),
-      changeDerivations: policy.signers.map((signer, index) => ({
-        publicKeyHex: binToHex(change.sortedPublicKeys[index]),
-        masterFingerprintHex: signer.masterFingerprintHex!,
-        derivationPath: `${ACCOUNT_PATH}/1/0`,
-      })),
+      changeDerivations: multisigCosignerDerivations(
+        policy,
+        change.derivedCosigners,
+        1,
+        0,
+        ACCOUNT_PATH
+      ),
     });
 
     // Two independent devices sign the SAME unsigned transaction, each

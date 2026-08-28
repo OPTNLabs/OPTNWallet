@@ -1,6 +1,6 @@
 import type { Database } from 'sql.js';
 
-const WALLET_CHILD_TABLES = [
+export const WALLET_CHILD_TABLES = [
   'keys',
   'addresses',
   'UTXOs',
@@ -8,6 +8,11 @@ const WALLET_CHILD_TABLES = [
   'transaction_details',
   'cashscript_addresses',
   'quantumroot_vaults',
+  'multisig_policies',
+  'multisig_cosigners',
+  'multisig_addresses',
+  'multisig_address_keys',
+  'multisig_spend_sessions',
 ] as const;
 
 type SqlValue = string | number | null | Uint8Array;
@@ -136,9 +141,7 @@ function rowEquals(
   columns: string[]
 ): boolean {
   if (!left || !right) return left === right;
-  return columns.every((column) =>
-    valueEquals(left[column], right[column])
-  );
+  return columns.every((column) => valueEquals(left[column], right[column]));
 }
 
 function readRowsByKey(
@@ -172,9 +175,7 @@ function readRowsByKey(
   return rows;
 }
 
-export function snapshotGlobalTables(
-  database: Database
-): GlobalTableSnapshot {
+export function snapshotGlobalTables(database: Database): GlobalTableSnapshot {
   const snapshot: GlobalTableSnapshot = {};
   for (const [table, keyColumn] of Object.entries(GLOBAL_TABLE_KEYS) as Array<
     [GlobalTableName, string]
@@ -224,15 +225,11 @@ export function walletScopeFingerprint(
       .filter((column) => column !== 'id')
       .sort();
     if (!columns.includes('wallet_id')) continue;
-    const rows = readRows(
-      database,
-      table,
-      columns,
-      'wallet_id',
-      walletId
-    )
+    const rows = readRows(database, table, columns, 'wallet_id', walletId)
       .map((row) => row.map(valueFingerprint))
-      .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+      .sort((left, right) =>
+        JSON.stringify(left).localeCompare(JSON.stringify(right))
+      );
     tables.push([table, columns, rows]);
   }
   return JSON.stringify(tables);
@@ -310,11 +307,7 @@ export function mergeGlobalChanges(
     [GlobalTableName, string]
   >) {
     const base = baseline[table];
-    if (
-      !base ||
-      !tableExists(latest, table) ||
-      !tableExists(local, table)
-    ) {
+    if (!base || !tableExists(latest, table) || !tableExists(local, table)) {
       continue;
     }
     const latestColumns = new Set(tableColumns(latest, table));
@@ -380,6 +373,37 @@ export function deleteWalletScope(database: Database, walletId: number): void {
     }
     throw error;
   }
+}
+
+/**
+ * Remap a newly-created wallet and all of its child rows after a concurrent
+ * window has already claimed the same SQLite id.
+ */
+export function remapWalletScopeId(
+  database: Database,
+  fromWalletId: number,
+  toWalletId: number
+): void {
+  if (
+    !Number.isSafeInteger(fromWalletId) ||
+    fromWalletId <= 0 ||
+    !Number.isSafeInteger(toWalletId) ||
+    toWalletId <= 0
+  ) {
+    throw new Error('Invalid wallet id remap.');
+  }
+  for (const table of WALLET_CHILD_TABLES) {
+    if (!tableExists(database, table)) continue;
+    database.run(
+      `UPDATE ${quoted(table)} SET ${quoted('wallet_id')} = ?
+       WHERE ${quoted('wallet_id')} = ?`,
+      [toWalletId, fromWalletId]
+    );
+  }
+  database.run('UPDATE wallets SET id = ? WHERE id = ?', [
+    toWalletId,
+    fromWalletId,
+  ]);
 }
 
 /**

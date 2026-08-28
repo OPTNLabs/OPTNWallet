@@ -59,17 +59,28 @@ import MarketplaceAppHost from '../pages/apps/MarketplaceAppHost';
 import CreateWalletPage from '../pages/onboarding/CreateWalletPage';
 import ImportWalletPage from '../pages/onboarding/ImportWalletPage';
 import LandingPage from '../pages/onboarding/LandingPage';
+import MultisigReceive from '../features/multisig/MultisigReceive';
+import MultisigHome from '../features/multisig/MultisigHome';
+import MultisigLayout from '../features/multisig/MultisigLayout';
+import MultisigPolicy from '../features/multisig/MultisigPolicy';
+import MultisigCosignerWorkspace from '../features/multisig/MultisigCosignerWorkspace';
+import { sendSurfaceForWalletType } from './walletRouting';
 import {
   ROUTE_PATHS,
   homeRoute,
   transactionsRoute,
 } from '../navigation/routes';
 import { NostrChatRoute } from '../features/nostr/NostrChatRoute';
+import { isDesktopPlatform } from '../utils/platform';
 
 const SimpleSend = lazy(() => import('../features/simple-send/SimpleSend'));
 const WatchOnlySend = lazy(
   () => import('../features/watch-only-send/WatchOnlySend')
 );
+const MultisigSendWorkspace = lazy(
+  () => import('../features/multisig/MultisigSendWorkspace')
+);
+const MultisigSetup = lazy(() => import('../features/multisig/MultisigSetup'));
 const NostrChat = lazy(() => import('../features/nostr/NostrChat'));
 
 /**
@@ -78,9 +89,17 @@ const NostrChat = lazy(() => import('../features/nostr/NostrChat'));
  */
 function SendRoute() {
   const walletType = useSelector(selectWalletType);
-  // Watch-only = air-gap PSBT. Hardware = live USB device (SimpleSend until
-  // Ledger sign is fully wired into the send path — not the QR workspace).
-  return walletType === 'watch-only' ? <WatchOnlySend /> : <SimpleSend />;
+  // Hardware = live device (including existing SeedSigner-style integrations),
+  // never the BCH multisig PSBT coordinator.
+  const surface = sendSurfaceForWalletType(walletType);
+  if (surface === 'multisig') {
+    return isDesktopPlatform() ? (
+      <Navigate to={ROUTE_PATHS.root} replace />
+    ) : (
+      <MultisigSendWorkspace />
+    );
+  }
+  return surface === 'watch-only' ? <WatchOnlySend /> : <SimpleSend />;
 }
 
 type AppShellProps = {
@@ -90,6 +109,7 @@ type AppShellProps = {
 function AppContent({ viewerOnly = false }: AppShellProps) {
   usePrices();
   const dispatch = useDispatch<AppDispatch>();
+  const desktop = isDesktopPlatform();
   const walletId = useSelector(selectWalletId);
   const utxoQueue = useSelector((s: RootState) => s.notifications.queue);
   const hasWallet = useSelector(selectHasWallet);
@@ -127,8 +147,34 @@ function AppContent({ viewerOnly = false }: AppShellProps) {
         <Suspense fallback={<div className="main-flex-1" />}>
           <Routes>
             <Route path={ROUTE_PATHS.root} element={<RootHandler />} />
+            {!desktop && (
+              /*
+               * The internal multisig wallet is a mobile/common feature. The
+               * desktop build keeps its existing watch-only/air-gap multisig
+               * wizard and must not enter this route family.
+               */
+              <Route
+                path={ROUTE_PATHS.multisigSetup}
+                element={<MultisigSetup />}
+              />
+            )}
             {hasWallet ? (
               <>
+                {!desktop && (
+                  <Route
+                    path={ROUTE_PATHS.multisigWorkspace}
+                    element={<MultisigLayout />}
+                  >
+                    <Route index element={<MultisigHome />} />
+                    <Route path="receive" element={<MultisigReceive />} />
+                    <Route path="send" element={<MultisigSendWorkspace />} />
+                    <Route
+                      path="sign"
+                      element={<MultisigCosignerWorkspace />}
+                    />
+                    <Route path="policy" element={<MultisigPolicy />} />
+                  </Route>
+                )}
                 <Route element={<Layout viewerOnly={viewerOnly} />}>
                   <Route
                     path={ROUTE_PATHS.home}

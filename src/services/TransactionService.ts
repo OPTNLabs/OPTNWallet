@@ -13,6 +13,7 @@ import type { ContractInstanceRow } from '../apis/ContractManager/ContractManage
 import TransactionManager from '../apis/TransactionManager/TransactionManager';
 import { store } from '../state/store';
 import { logError } from '../utils/errorHandling';
+import { isDeterministicBroadcastError } from '../utils/broadcastErrors';
 import { reservedOutpoints as reservedFusionOutpoints } from '../platform/desktop/fusionRoundState';
 import OutboundTransactionTracker, {
   deriveTrackedTxid,
@@ -39,14 +40,88 @@ async function getUTXOWorkerService(): Promise<UTXOWorkerServiceApi> {
   return utxoWorkerServicePromise;
 }
 
+async function clearRejectedBroadcastTracking(
+  txid: string,
+  routeWalletId: number | null
+): Promise<void> {
+  // TransactionManager historically used the Redux-active wallet while
+  // route-scoped workflows used their own wallet id. Clear both scopes so a
+  // deterministic node rejection cannot reserve the same multisig input (or
+  // project a rejected change output) on one of the two stores.
+  const activeWalletId = store.getState().wallet_id.currentWalletId ?? null;
+  const walletIds = Array.from(new Set([routeWalletId, activeWalletId]));
+  await Promise.all(
+    walletIds.map((walletId) =>
+      OutboundTransactionTracker.remove(txid, walletId)
+    )
+  );
+}
+
+async function refreshRejectedMultisigWallet(
+  walletId: number | null
+): Promise<void> {
+  if (!walletId || walletId <= 0) return;
+  try {
+    const { refreshMultisigWalletUtxos } = await import(
+      './WalletUtxoRefreshService'
+    );
+    await refreshMultisigWalletUtxos(walletId);
+  } catch (error) {
+    // The rejected transaction is still never treated as spent. A later
+    // explicit refresh can recover the last chain-authoritative snapshot.
+    logError('TransactionService.multisigRejectedBroadcastRefresh', error, {
+      walletId,
+    });
+  }
+}
+
 export type BroadcastState = 'broadcasted' | 'submitted';
 export type BroadcastResult = {
   txid: string | null;
   errorMessage: string | null;
   broadcastState?: BroadcastState;
+  /** Outbound records that blocked this send by reserving one of its inputs. */
+  conflictingTxids?: string[];
 };
 
+/**
+ * Explicit recovery for an isolated multisig retry.
+ *
+ * An unresolved outbound record may represent a transaction that reached the
+ * network even when the UI did not observe the response. The caller must
+ * therefore identify the exact record and ask the user to confirm that it was
+ * rejected or is absent before releasing it. This helper never clears the
+ * standard wallet's tracker implicitly.
+ */
+export async function releaseMultisigOutboundLocks(
+  walletId: number,
+  txids: string[]
+): Promise<string[]> {
+  if (!Number.isSafeInteger(walletId) || walletId <= 0) return [];
+  const wanted = new Set(
+    txids
+      .map((txid) => txid.trim().toLowerCase())
+      .filter((txid) => txid.length > 0)
+  );
+  if (wanted.size === 0) return [];
+
+  const active = await OutboundTransactionTracker.listActive(walletId);
+  const matches = active.filter((record) =>
+    wanted.has(record.txid.toLowerCase())
+  );
+  await Promise.all(
+    matches.map((record) =>
+      OutboundTransactionTracker.remove(record.txid, walletId)
+    )
+  );
+  return matches.map((record) => record.txid);
+}
+
 export type SendTransactionOptions = {
+  /** Wallet scope for route-owned workflows such as mobile multisig. */
+  walletId?: number;
+  /** Keep multisig broadcast bookkeeping out of the standard wallet worker. */
+  multisig?: boolean;
   source?: string;
   sourceLabel?: string | null;
   recipientSummary?: string | null;
@@ -367,10 +442,13 @@ class TransactionService {
     spentInputs?: UTXO[],
     options?: SendTransactionOptions
   ): Promise<BroadcastResult> {
-    const currentWalletId = store.getState().wallet_id.currentWalletId ?? null;
+    const currentWalletId =
+      options?.walletId ?? store.getState().wallet_id.currentWalletId ?? null;
     const currentTxid = deriveTrackedTxid(rawTX);
     const activeOutbound = currentWalletId
-      ? await OutboundTransactionTracker.listActive(currentWalletId)
+      ? (await OutboundTransactionTracker.listActive(currentWalletId)).filter(
+          (record) => !isDeterministicBroadcastError(record.lastError)
+        )
       : [];
     const requestedOutpoints = new Set(
       (spentInputs ?? []).map((input) => `${input.tx_hash}:${input.tx_pos}`)
@@ -410,6 +488,7 @@ class TransactionService {
           requestedOutpoints.size > 0
             ? 'Another outgoing transaction is already using one of these UTXOs.'
             : 'Another outgoing transaction is still syncing. Wait for it to appear in history before sending a new one.',
+        conflictingTxids: [conflictingPending.txid],
       };
     }
 
@@ -434,17 +513,22 @@ class TransactionService {
       }
     }
 
-    const res: BroadcastResult = await this.getTransactionManager().sendTransaction(
-      rawTX
-    );
+    const transactionManager = this.getTransactionManager();
+    const res: BroadcastResult = options?.multisig
+      ? await transactionManager.sendTransaction(rawTX, currentWalletId)
+      : await transactionManager.sendTransaction(rawTX);
     const trackedTxid = deriveTrackedTxid(rawTX);
 
     if (res?.errorMessage || !res?.txid) {
       if (trackedTxid) {
-        await OutboundTransactionTracker.remove(
-          trackedTxid,
-          currentWalletId
-        );
+        if (options?.multisig) {
+          await clearRejectedBroadcastTracking(trackedTxid, currentWalletId);
+        } else {
+          await OutboundTransactionTracker.remove(trackedTxid, currentWalletId);
+        }
+      }
+      if (options?.multisig && res?.errorMessage) {
+        await refreshRejectedMultisigWallet(currentWalletId);
       }
       return res;
     }
@@ -460,7 +544,17 @@ class TransactionService {
 
     // Refresh wallet addresses after any successful hand-off, but only
     // remove spendable UTXOs optimistically when broadcast was definite.
-    if (res?.txid) {
+    if (res?.txid && options?.multisig) {
+      void import('./WalletUtxoRefreshService')
+        .then(({ refreshMultisigWalletUtxos }) =>
+          refreshMultisigWalletUtxos(currentWalletId ?? 0)
+        )
+        .catch((error) => {
+          logError('TransactionService.multisigPostBroadcastRefresh', error, {
+            walletId: currentWalletId,
+          });
+        });
+    } else if (res?.txid) {
       const { optimisticRemoveSpentByOutpoints, requestUTXORefreshForMany } =
         await getUTXOWorkerService();
 
@@ -474,7 +568,7 @@ class TransactionService {
 
       schedulePostBroadcastRefresh(
         requestUTXORefreshForMany,
-        await collectRefreshAddresses(spentInputs)
+        await collectRefreshAddresses(spentInputs, currentWalletId)
       );
     }
 
