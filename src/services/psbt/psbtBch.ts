@@ -325,8 +325,10 @@ function unsignedTransaction(
 /**
  * Encode an unsigned PSBT for an air-gapped signer.
  *
- * `sighashType` is written into every input as PSBT_IN_SIGHASH_TYPE so the
- * signer is told which commitment to make, rather than being left to guess.
+ * Every input carries PSBT_IN_SIGHASH_TYPE = 0xc1
+ * (SIGHASH_ALL|FORKID|ANYONECANPAY). Omitting the field or using 0x41 is
+ * not allowed: SeedCash falls back to 0x41 when the field is missing, and
+ * those signatures fail import.
  */
 export function encodeUnsignedPsbt(
   inputs: PsbtInputSpec[],
@@ -341,6 +343,12 @@ export function encodeUnsignedPsbt(
     // failure would only appear at broadcast, after the user has already walked
     // the transaction through a hardware device.
     throw new Error('BCH sighash types must include SIGHASH_FORKID (0x40).');
+  }
+  if (sighashType !== SIGHASH_ALL_FORKID_ANYONECANPAY) {
+    throw new Error(
+      'PSBT_IN_SIGHASH_TYPE must be SIGHASH_ALL|FORKID|ANYONECANPAY (0xc1); ' +
+        'omitting it or using 0x41 is not allowed.'
+    );
   }
 
   const globalFields: Uint8Array[] = [
@@ -426,7 +434,10 @@ export function encodeUnsignedPsbt(
               input.lockingBytecode,
             ])
           ),
-      record(Uint8Array.from([PSBT_IN_SIGHASH_TYPE]), uint32LE(sighashType)),
+      record(
+        Uint8Array.from([PSBT_IN_SIGHASH_TYPE]),
+        uint32LE(SIGHASH_ALL_FORKID_ANYONECANPAY)
+      ),
       ...(input.redeemScript
         ? [record(Uint8Array.from([PSBT_IN_REDEEM_SCRIPT]), input.redeemScript)]
         : []),

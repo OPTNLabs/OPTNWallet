@@ -59,6 +59,9 @@ import {
 import {
   encodePsbtToUrFrames,
   UrPsbtScanner,
+  PSBT_UR_QR_DISPLAY_SIZE,
+  PSBT_UR_QR_ERROR_LEVEL,
+  PSBT_UR_QR_MARGIN_MODULES,
 } from '../../services/psbt/urPsbt';
 import {
   masterFingerprintBytes,
@@ -692,7 +695,7 @@ export const WatchOnlySend: FC = () => {
   };
 
   return (
-    <WalletScreen maxWidthClassName="max-w-md" scrollable={false}>
+    <WalletScreen maxWidthClassName={frames ? 'max-w-2xl' : 'max-w-md'} scrollable={false}>
       <div className="flex h-full min-h-0 flex-col gap-4">
         <div className="flex items-center gap-2">
           <button
@@ -881,8 +884,14 @@ export const WatchOnlySend: FC = () => {
                   <p className="text-sm font-semibold wallet-text-strong">
                     Scan this with SeedCash (air-gapped)
                   </p>
-                  <div className="flex items-center justify-center rounded-md bg-white p-3">
-                    <QRCodeSVG value={qrUri} size={220} includeMargin />
+                  <div className="mx-auto w-full max-w-[min(100%,70svh)] rounded-md bg-white p-2">
+                    <QRCodeSVG
+                      value={qrUri}
+                      size={PSBT_UR_QR_DISPLAY_SIZE}
+                      marginSize={PSBT_UR_QR_MARGIN_MODULES}
+                      level={PSBT_UR_QR_ERROR_LEVEL}
+                      className="h-auto w-full max-w-full"
+                    />
                   </div>
                   <p className="text-center text-xs wallet-muted">
                     Frame {frameNumber} / {frameCountRef.current} · hold the

@@ -78,6 +78,28 @@ describe('BCH PSBT encoding', () => {
     );
   });
 
+  it('refuses SIGHASH_ALL|FORKID without ANYONECANPAY (0x41)', () => {
+    expect(() =>
+      encodeUnsignedPsbt([input()], [output()], SIGHASH_ALL_FORKID)
+    ).toThrow(/0xc1/);
+  });
+
+  it('writes PSBT_IN_SIGHASH_TYPE 0xc1 on every input and never 0x41', () => {
+    const psbt = encodeUnsignedPsbt(
+      [input(), input({ vout: 2 })],
+      [output()]
+    );
+    const fieldC1 = Uint8Array.from([0x01, 0x03, 0x04, 0xc1, 0x00, 0x00, 0x00]);
+    const field41 = Uint8Array.from([0x01, 0x03, 0x04, 0x41, 0x00, 0x00, 0x00]);
+    expect(indexOfBytes(psbt, fieldC1)).toBeGreaterThan(-1);
+    expect(indexOfBytes(psbt, field41)).toBe(-1);
+    const parsed = decodePsbt(psbt);
+    expect(parsed.requestedSighashTypes.slice(0, 2)).toEqual([0xc1, 0xc1]);
+    expect(
+      parsed.inputs.every((input) => input.requestedSighashType === 0xc1)
+    ).toBe(true);
+  });
+
   it('carries the input amount where SeedCash reads it', () => {
     const psbt = encodeUnsignedPsbt([input({ satoshis: 100_000n })], [output()]);
     // 100000 = 0x0186a0, little-endian over 8 bytes, right after key 0x01.
