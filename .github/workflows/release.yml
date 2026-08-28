@@ -141,6 +141,36 @@ jobs:
             exit 1
           }
 
+      # v1.7.3 shipped desktop bundles named 1.7.1: the tag and the manifests
+      # are independent, so nothing forced them to agree. Bundle filenames come
+      # from these manifests, not from the tag, which is why the mismatch was
+      # invisible until the assets were on the release page.
+      #
+      # Only the numeric core is compared. The manifests must stay numeric
+      # because WiX rejects pre-release identifiers outright, so a channel lives
+      # in the tag and never in package.json: v1.7.3-alpha.4 -> 1.7.3.
+      - name: Verify manifest version matches the tag
+        run: |
+          TAG_CORE="${RELEASE_TAG#v}"
+          TAG_CORE="${TAG_CORE%%-*}"
+          read_version() { python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['version'])" "$1"; }
+          PKG_VERSION="$(read_version package.json)"
+          TAURI_VERSION="$(read_version src-tauri/tauri.conf.json)"
+
+          fail=0
+          if [ "$PKG_VERSION" != "$TAG_CORE" ]; then
+            echo "::error::package.json is $PKG_VERSION but ${RELEASE_TAG} expects $TAG_CORE"
+            fail=1
+          fi
+          if [ "$TAURI_VERSION" != "$TAG_CORE" ]; then
+            echo "::error::src-tauri/tauri.conf.json is $TAURI_VERSION but ${RELEASE_TAG} expects $TAG_CORE"
+            fail=1
+          fi
+          if [ "$fail" -eq 0 ]; then
+            echo "package.json, tauri.conf.json and ${RELEASE_TAG} all agree on $TAG_CORE"
+          fi
+          exit "$fail"
+
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
@@ -612,6 +642,41 @@ jobs:
             cp artifacts/android-release-status/android-release-status.txt release-files/
           fi
           find release-files -type f -print | sort
+
+      # The published v1.7.3 release carried desktop bundles named 1.7.1, and
+      # both OPTNWallet-v1.7.1-dev.27-chrome.zip and the v1.7.3 one: two runs'
+      # assets in a single release. "Verify expected release files" only checks
+      # that what is required is present, never that nothing extra arrived, so
+      # neither was caught.
+      #
+      # Every asset must carry this release's version. Exemptions are files that
+      # legitimately have no version in the name today.
+      - name: Verify no foreign-version assets
+        run: |
+          TAG_CORE="${RELEASE_TAG#v}"
+          TAG_CORE="${TAG_CORE%%-*}"
+          foreign=0
+          for path in release-files/*; do
+            [ -e "$path" ] || continue
+            file="$(basename "$path")"
+            case "$file" in
+              # Android bundles are named by Gradle, not by us; the asset rename
+              # gives them a version and these two lines then come out.
+              app-release.apk|app-release.aab) continue ;;
+              android-release-status.txt|release-sha256.txt) continue ;;
+            esac
+            case "$file" in
+              *"$TAG_CORE"*) ;;
+              *)
+                echo "::error::$file does not carry release version $TAG_CORE"
+                foreign=1
+                ;;
+            esac
+          done
+          if [ "$foreign" -eq 0 ]; then
+            echo "All assets carry $TAG_CORE"
+          fi
+          exit "$foreign"
 
       - name: Generate SHA256 checksums
         run: |
