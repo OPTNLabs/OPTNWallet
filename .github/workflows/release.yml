@@ -697,6 +697,7 @@ jobs:
               *.deb|*.rpm)       place "$src" "$base" ;;
               *.apk)             place "$src" "OPTNWallet-${VERSION}-android.apk" ;;
               *.aab)             place "$src" "OPTNWallet-${VERSION}-android.aab" ;;
+              *.ipa)             place "$src" "OPTNWallet-${VERSION}-ios.ipa" ;;
               *-chrome.zip)      place "$src" "OPTNWallet-${VERSION}-chrome.zip" ;;
               *-firefox.zip)     place "$src" "OPTNWallet-${VERSION}-firefox.zip" ;;
               *)
@@ -705,7 +706,7 @@ jobs:
                 ;;
             esac
           done < <(find artifacts -type f \( \
-            -name '*.apk' -o -name '*.aab' -o -name '*.exe' -o -name '*.msi' \
+            -name '*.apk' -o -name '*.aab' -o -name '*.ipa' -o -name '*.exe' -o -name '*.msi' \
             -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \
             -o -name '*.zip' \
           \) -print0)
