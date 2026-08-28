@@ -30,13 +30,32 @@ export type CapacitorBarcodeScannerOptions = {
   scanText?: string;
   cameraDirection?: number;
   scanOrientation?: number;
-  android?: object;
+  android?: {
+    scanningLibrary?: CapacitorBarcodeScannerAndroidScanningLibrary;
+  };
   web?: object;
 };
 
 export type CapacitorBarcodeScannerScanResult = {
   ScanResult: string;
 };
+
+/**
+ * Mirrors the plugin enum so the shared caller compiles for desktop too.
+ *
+ * Desktop decodes a picked image with jsQR and never reaches an Android
+ * backend, so this is inert here. It exists because src/utils/barcodeScanner.ts
+ * is one code path across every platform, and the desktop build aliases
+ * `@capacitor/barcode-scanner` to this file — a symbol the real plugin exports
+ * and this one does not fails the frontend bundle, not just the Android build.
+ */
+export const CapacitorBarcodeScannerAndroidScanningLibrary = {
+  ZXING: 'zxing',
+  MLKIT: 'mlkit',
+} as const;
+
+export type CapacitorBarcodeScannerAndroidScanningLibrary =
+  (typeof CapacitorBarcodeScannerAndroidScanningLibrary)[keyof typeof CapacitorBarcodeScannerAndroidScanningLibrary];
 
 function scanQRFromFile(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
