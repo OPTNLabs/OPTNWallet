@@ -1005,9 +1005,148 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
+  # The `optn` CLI ships as a release asset like everything else.
+  #
+  # The crate arrives in a separate pull request, so this probes for it rather
+  # than assuming. Both merge orders then behave: with the crate absent nothing
+  # is built and nothing is required, and the moment it lands the binaries
+  # become mandatory without anyone remembering to come back here. The
+  # alternative — requiring assets no branch can build, or building assets
+  # nothing requires — is broken in one order or the other.
+  cli-probe:
+    name: Is the CLI in this tree
+    needs: resolve
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      present: ${{ steps.probe.outputs.present }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+          persist-credentials: false
+      - id: probe
+        run: |
+          if [ -f crates/optn-cli/Cargo.toml ]; then
+            echo 'present=true' >> "$GITHUB_OUTPUT"
+            echo 'The optn CLI is in this tree; its binaries are required.'
+          else
+            echo 'present=false' >> "$GITHUB_OUTPUT"
+            echo '::notice::crates/optn-cli is not in this tree; the CLI is not part of this release.'
+          fi
+
+  cli:
+    name: Build CLI (${{ matrix.label }})
+    needs: [resolve, quality, cli-probe]
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            label: linux-x64
+            target: x86_64-unknown-linux-gnu
+          - platform: ubuntu-24.04-arm
+            label: linux-arm64
+            target: aarch64-unknown-linux-gnu
+          # Cross-compiled from x86_64 with only a linker. This is possible
+          # precisely because the CLI does not depend on src-tauri, and so
+          # never pulls in webkit2gtk.
+          - platform: ubuntu-22.04
+            label: linux-riscv64
+            target: riscv64gc-unknown-linux-gnu
+            cross-package: gcc-riscv64-linux-gnu
+            linker: riscv64-linux-gnu-gcc
+          - platform: ubuntu-22.04
+            label: linux-armv7
+            target: armv7-unknown-linux-gnueabihf
+            cross-package: gcc-arm-linux-gnueabihf
+            linker: arm-linux-gnueabihf-gcc
+          - platform: windows-latest
+            label: windows-x64
+            target: x86_64-pc-windows-msvc
+          - platform: macos-latest
+            label: macos-arm64
+            target: aarch64-apple-darwin
+          - platform: macos-15-intel
+            label: macos-x64
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.platform }}
+    permissions:
+      contents: read
+    env:
+      RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+      CLI_PRESENT: ${{ needs.cli-probe.outputs.present }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+          persist-credentials: false
+
+      - name: Install cross toolchain
+        if: env.CLI_PRESENT == 'true' && matrix.cross-package != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ${{ matrix.cross-package }}
+
+      - name: Install Rust stable
+        if: env.CLI_PRESENT == 'true'
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Build
+        if: env.CLI_PRESENT == 'true'
+        working-directory: crates/optn-cli
+        env:
+          CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker }}
+          CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: ${{ matrix.linker }}
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Name the binary and check its architecture
+        if: env.CLI_PRESENT == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${RELEASE_TAG#v}"
+          SRC="crates/optn-cli/target/${{ matrix.target }}/release/optn"
+          EXT=""
+          if [ -f "${SRC}.exe" ]; then
+            SRC="${SRC}.exe"
+            EXT=".exe"
+          fi
+          test -f "$SRC"
+
+          mkdir -p cli-release
+          cp "$SRC" "cli-release/optn-${VERSION}-${{ matrix.label }}${EXT}"
+
+          # A misconfigured linker silently emits a host binary. It would ship
+          # labelled riscv64 and fail to start on the only machines that need
+          # it, which is not something to find out from a user.
+          if command -v file >/dev/null 2>&1; then
+            file "$SRC"
+            case "${{ matrix.target }}" in
+              riscv64gc-*) file "$SRC" | grep -q 'RISC-V'  || { echo '::error::not a RISC-V binary'; exit 1; } ;;
+              aarch64-*)   file "$SRC" | grep -q 'aarch64' || { echo '::error::not an aarch64 binary'; exit 1; } ;;
+              armv7-*)     file "$SRC" | grep -q 'ARM'     || { echo '::error::not an ARM binary'; exit 1; } ;;
+              x86_64-unknown-linux-gnu) file "$SRC" | grep -q 'x86-64' || { echo '::error::not an x86-64 binary'; exit 1; } ;;
+            esac
+          fi
+
+      - name: Upload the CLI binary
+        if: env.CLI_PRESENT == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cli-${{ matrix.label }}
+          path: cli-release/*
+          retention-days: 30
+          if-no-files-found: error
+
   publish:
     name: Publish GitHub release
-    needs: [resolve, android, desktop, extension, flatpak, ios, riscv64]
+    needs: [resolve, android, cli, cli-probe, desktop, extension, flatpak, ios, riscv64]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -1060,6 +1199,17 @@ jobs:
           require_asset artifacts/desktop-linux-riscv64 'OPTNWallet-*-linux-riscv64-unbundled' 'Linux riscv64 unbundled ELF'
           require_asset artifacts/flatpak-linux-x64 '*.flatpak' 'Linux x64 Flatpak'
           require_asset artifacts/flatpak-linux-arm64 '*.flatpak' 'Linux ARM64 Flatpak'
+
+          # Gated on the probe, not on the artifacts being there: "no CLI in
+          # this tree" and "the CLI failed to build" must not look alike.
+          if [ "${{ needs.cli-probe.outputs.present }}" = 'true' ]; then
+            for label in linux-x64 linux-arm64 linux-riscv64 linux-armv7 \
+              macos-arm64 macos-x64 windows-x64; do
+              require_asset "artifacts/cli-$label" 'optn-*' "optn CLI $label"
+            done
+          else
+            echo '::notice::the optn CLI is not in this tree; not requiring its binaries'
+          fi
 
           require_asset artifacts/android-release '*.apk' 'signed Android APK'
           # Named individually: a single *.apk check passes when only one
@@ -1176,6 +1326,8 @@ jobs:
               # Already named by the flatpak job, which knows its own arch;
               # matching on the filename here would only re-derive it.
               *.flatpak)         place "$src" "$base" ;;
+              # Already named by the cli job, which knows its own target.
+              optn-*)            place "$src" "$base" ;;
               *-chrome.zip)      place "$src" "OPTNWallet-${VERSION}-chrome.zip" ;;
               *-firefox.zip)     place "$src" "OPTNWallet-${VERSION}-firefox.zip" ;;
               *-ios-simulator.zip) place "$src" "OPTNWallet-${VERSION}-ios-simulator.zip" ;;
@@ -1274,6 +1426,14 @@ jobs:
           expect "OPTNWallet-${VERSION}-linux-riscv64-unbundled" 'Linux riscv64 binary'
           expect "OPTNWallet-${VERSION}-linux-x64.flatpak"     'Linux x64 Flatpak'
           expect "OPTNWallet-${VERSION}-linux-arm64.flatpak"   'Linux ARM64 Flatpak'
+
+          if [ "${{ needs.cli-probe.outputs.present }}" = 'true' ]; then
+            for label in linux-x64 linux-arm64 linux-riscv64 linux-armv7 \
+              macos-arm64 macos-x64; do
+              expect "optn-${VERSION}-${label}" "optn CLI ${label}"
+            done
+            expect "optn-${VERSION}-windows-x64.exe" 'optn CLI windows-x64'
+          fi
           # deb and rpm keep their native names, which encode the architecture
           # differently from everything else.
           expect "*_amd64.deb"                                 'Linux x64 DEB'
@@ -1293,7 +1453,7 @@ jobs:
             [ -e "$path" ] || continue
             file="$(basename "$path")"
             case "$file" in
-              OPTNWallet-*|*_amd64.deb|*_arm64.deb|*.x86_64.rpm|*.aarch64.rpm) ;;
+              OPTNWallet-*|optn-*|*_amd64.deb|*_arm64.deb|*.x86_64.rpm|*.aarch64.rpm) ;;
               android-release-status.txt) ;;
               *)
                 echo "::error::unexpected asset in the release: $file"

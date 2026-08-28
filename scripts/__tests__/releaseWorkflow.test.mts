@@ -33,6 +33,18 @@ const flatpakMetainfo = readFileSync(
   'utf8'
 );
 
+/**
+ * The jobs `publish` waits for.
+ *
+ * Extracted rather than matched inline: `publish:` also names an output of
+ * the resolve job, so an unanchored pattern reads the wrong part of the file.
+ */
+function publishNeeds(): string {
+  return (
+    workflow.match(/^ {2}publish:[\s\S]*?needs:\s*\[([^\]]+)\]/m)?.[1] ?? ''
+  );
+}
+
 describe('release workflow', () => {
   it('pins every external action to an immutable full commit SHA', () => {
     for (const [name, contents] of [
@@ -193,9 +205,7 @@ describe('release workflow', () => {
     expect(workflow).toContain('deb-artifact: desktop-linux-arm');
 
     // publish must wait for it, or a release is cut with the Flatpak missing.
-    expect(workflow).toMatch(
-      /publish:[\s\S]*?needs: \[[^\]]*\bflatpak\b[^\]]*\]/
-    );
+    expect(publishNeeds(), 'publish job needs').toContain('flatpak');
     expect(workflow).toContain(
       "require_asset artifacts/flatpak-linux-x64 '*.flatpak'"
     );
@@ -277,5 +287,44 @@ describe('release workflow', () => {
     expect(desktopPreviewWorkflow).toMatch(
       /preview-complete:[\s\S]*?if: always\(\)/
     );
+  });
+  it('ships the optn CLI for every target it supports', () => {
+    // The CLI had a preview workflow and no release job at all, so it built on
+    // every pull request and shipped to nobody.
+    expect(workflow).toMatch(/^\s{2}cli:\s*$/m);
+    for (const target of [
+      'x86_64-unknown-linux-gnu',
+      'aarch64-unknown-linux-gnu',
+      'riscv64gc-unknown-linux-gnu',
+      'armv7-unknown-linux-gnueabihf',
+      'x86_64-pc-windows-msvc',
+      'aarch64-apple-darwin',
+      'x86_64-apple-darwin',
+    ]) {
+      expect(workflow, `CLI target ${target}`).toContain(`target: ${target}`);
+    }
+    // publish must wait for it, or a release is cut without the CLI.
+    expect(publishNeeds(), 'publish job needs').toContain('cli');
+  });
+
+  it('arms the CLI requirement from a probe rather than from the artifacts', () => {
+    // The crate lands in a separate pull request. Requiring binaries no branch
+    // can build breaks one merge order; building binaries nothing requires
+    // breaks the other. The probe makes both work — and keeps "no CLI in this
+    // tree" distinguishable from "the CLI failed to build", which is the whole
+    // point of the no-drop check.
+    expect(workflow).toMatch(/^\s{2}cli-probe:\s*$/m);
+    expect(workflow).toContain('if [ -f crates/optn-cli/Cargo.toml ]; then');
+    expect(workflow).toContain(
+      'needs.cli-probe.outputs.present }}" = \'true\''
+    );
+    expect(workflow).toContain("require_asset \"artifacts/cli-$label\"");
+  });
+
+  it('verifies each cross-built CLI binary is the architecture it claims', () => {
+    // A misconfigured linker silently emits a host binary, which would ship
+    // labelled riscv64 and fail to start on the only machines that need it.
+    expect(workflow).toContain("riscv64gc-*) file \"$SRC\" | grep -q 'RISC-V'");
+    expect(workflow).toContain("armv7-*)     file \"$SRC\" | grep -q 'ARM'");
   });
 });
