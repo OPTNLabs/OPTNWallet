@@ -15,7 +15,9 @@ on:
   # Widened from [dev] to [dev, staging] to match Android Preview so staging
   # PRs are not a hole.
   pull_request:
-    branches: [dev, staging]
+    # main included: a pull request straight to main is exactly the path
+    # that would otherwise reach a release without these asset checks.
+    branches: [dev, staging, main]
   push:
     branches: [dev, staging]
   # Allows a maintainer to recover the required check when GitHub does not
