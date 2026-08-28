@@ -128,6 +128,28 @@ enum Command {
         #[arg(long)]
         yes: bool,
     },
+    /// Rebuild the wallet view from the chain.
+    ///
+    /// The desktop app keeps a local UTXO and history cache; this has none, so
+    /// every run reads the chain fresh. That is slower but it is also the
+    /// answer when a cached balance has drifted — there is no stale state here
+    /// to be wrong.
+    Rescan {
+        /// Addresses per chain to scan.
+        #[arg(long, default_value_t = 20)]
+        gap: u32,
+        /// Include addresses with no balance in the output.
+        #[arg(long)]
+        all: bool,
+    },
+    /// Transaction history across the wallet's own addresses.
+    History {
+        #[arg(long, default_value_t = 20)]
+        gap: u32,
+        /// Most recent entries to show.
+        #[arg(long, default_value_t = 25)]
+        limit: usize,
+    },
     /// Find which derivation paths a phrase actually has history on.
     ///
     /// Scans the coin types and accounts documented in
@@ -267,10 +289,7 @@ async fn run(cli: &Cli) -> Result<Value> {
             coin_type,
         } => {
             let wallet = read_wallet()?;
-            let coin = coin_type.unwrap_or(match cli.network {
-                Network::Mainnet => 145,
-                Network::Chipnet => 1,
-            });
+            let coin = coin_type.unwrap_or(default_coin_type(cli.network));
             let path = hd::address_path(coin, *account, *change, *index);
             let address = wallet.address(cli.network, &path)?;
             Ok(json!({
@@ -296,10 +315,7 @@ async fn run(cli: &Cli) -> Result<Value> {
             }
             let destination = parse_address(to, cli.network)?;
             let wallet = read_wallet()?;
-            let coin = match cli.network {
-                Network::Mainnet => 145,
-                Network::Chipnet => 1,
-            };
+            let coin = default_coin_type(cli.network);
 
             // Collect spendable outputs together with the path that controls
             // each, so the right key signs the right input.
@@ -389,6 +405,97 @@ async fn run(cli: &Cli) -> Result<Value> {
                 "sats": sats,
                 "fee": fee,
                 "inputs": chosen.len(),
+            }))
+        }
+        Command::Rescan { gap, all } => {
+            let wallet = read_wallet()?;
+            let coin = default_coin_type(cli.network);
+            let mut addresses = Vec::new();
+            let mut confirmed_total: i64 = 0;
+            let mut unconfirmed_total: i64 = 0;
+            let mut utxo_count = 0usize;
+
+            for change in [false, true] {
+                for index in 0..*gap {
+                    let path = hd::address_path(coin, 0, change, index);
+                    let address = wallet.address(cli.network, &path)?;
+                    let scripthash = address.electrum_scripthash();
+                    let balance = client.balance(&scripthash).await?;
+                    let utxos = client.utxos(&scripthash).await?;
+                    let has_funds = balance.confirmed != 0 || balance.unconfirmed != 0;
+                    if has_funds {
+                        confirmed_total += balance.confirmed;
+                        unconfirmed_total += balance.unconfirmed;
+                        utxo_count += utxos.len();
+                    }
+                    if has_funds || *all {
+                        addresses.push(json!({
+                            "path": path,
+                            "address": address.encode(),
+                            "chain": if change { "change" } else { "receiving" },
+                            "index": index,
+                            "confirmed": balance.confirmed,
+                            "unconfirmed": balance.unconfirmed,
+                            "utxos": utxos.len(),
+                        }));
+                    }
+                }
+            }
+            Ok(json!({
+                "ok": true,
+                "network": cli.network.to_string(),
+                "account_path": hd::account_path(coin, 0),
+                "gap": gap,
+                "confirmed": confirmed_total,
+                "unconfirmed": unconfirmed_total,
+                "total": confirmed_total + unconfirmed_total,
+                "utxos": utxo_count,
+                "addresses": addresses,
+            }))
+        }
+        Command::History { gap, limit } => {
+            let wallet = read_wallet()?;
+            let coin = default_coin_type(cli.network);
+            let mut entries: Vec<(i64, String, String, Option<u64>)> = Vec::new();
+
+            for change in [false, true] {
+                for index in 0..*gap {
+                    let path = hd::address_path(coin, 0, change, index);
+                    let address = wallet.address(cli.network, &path)?;
+                    for e in client.history(&address.electrum_scripthash()).await? {
+                        entries.push((e.height, e.tx_hash, path.clone(), e.fee));
+                    }
+                }
+            }
+
+            // An unconfirmed entry has height 0, and a negative height means it
+            // has unconfirmed parents. Both belong at the top, not sorted as if
+            // they were ancient blocks.
+            entries.sort_by_key(|(height, ..)| if *height <= 0 { i64::MAX } else { *height });
+            entries.reverse();
+            entries.dedup_by(|a, b| a.1 == b.1);
+
+            let shown: Vec<Value> = entries
+                .iter()
+                .take(*limit)
+                .map(|(height, txid, path, fee)| {
+                    json!({
+                        "txid": txid,
+                        "height": height,
+                        "status": if *height > 0 { "confirmed" } else { "unconfirmed" },
+                        "path": path,
+                        // Servers report a fee only for mempool entries.
+                        "fee": fee,
+                    })
+                })
+                .collect();
+
+            Ok(json!({
+                "ok": true,
+                "network": cli.network.to_string(),
+                "count": entries.len(),
+                "shown": shown.len(),
+                "transactions": shown,
             }))
         }
         Command::Discover { gap } => {
@@ -497,6 +604,14 @@ fn decode_hex32(s: &str) -> Result<[u8; 32]> {
             .map_err(|e| CliError::Protocol(format!("bad hex: {e}")))?;
     }
     Ok(out)
+}
+
+/// SLIP-44 coin type this wallet uses by default on a network.
+fn default_coin_type(network: Network) -> u32 {
+    match network {
+        Network::Mainnet => 145,
+        Network::Chipnet => 1,
+    }
 }
 
 fn hex(bytes: &[u8]) -> String {
