@@ -3,11 +3,13 @@ name: Publish Release
 on:
   push:
     # Merging is the release trigger. Nothing here creates a tag by hand any
-    # more: main publishes a stable release, dev publishes a prerelease so every
-    # merge still produces downloadable binaries without filling the stable
-    # release list.
+    # more: main publishes a stable release, staging publishes a beta
+    # prerelease, and dev publishes an alpha prerelease, so every merge still
+    # produces downloadable binaries without filling the stable release list.
+    # Channel names live in the tag (alpha/beta), never as -dev.N or -staging.N.
     branches:
       - main
+      - staging
       - dev
     tags:
       - 'v*.*.*'
@@ -40,7 +42,7 @@ jobs:
       tag: ${{ steps.tag.outputs.tag }}
       # The package version WITHOUT any prerelease suffix. Kept separate from
       # the tag because the extension job checks manifest.json against it, and
-      # manifest.json says 1.6.2 while a dev tag says v1.6.2-dev.481.
+      # manifest.json says 1.6.2 while a dev tag says v1.6.2-alpha.481.
       version: ${{ steps.tag.outputs.version }}
       prerelease: ${{ steps.tag.outputs.prerelease }}
       publish: ${{ steps.tag.outputs.publish }}
@@ -63,10 +65,19 @@ jobs:
             tag="$GITHUB_REF_NAME"
           elif [ "$GITHUB_REF_NAME" = 'main' ]; then
             tag="v${version}"
+          elif [ "$GITHUB_REF_NAME" = 'staging' ]; then
+            # Run number, not the SHA: it sorts, and it keeps every staging
+            # merge on its own tag so a merge never collides with the one
+            # before it. Channel is beta, never the branch name, so we never
+            # publish v${version}-staging.N.
+            tag="v${version}-beta.${GITHUB_RUN_NUMBER}"
+          elif [ "$GITHUB_REF_NAME" = 'dev' ]; then
+            # Same uniqueness as staging. Channel is alpha, never the branch
+            # name, so we never publish v${version}-dev.N.
+            tag="v${version}-alpha.${GITHUB_RUN_NUMBER}"
           else
-            # Run number, not the SHA: it sorts, and it keeps every dev merge on
-            # its own tag so a merge never collides with the one before it.
-            tag="v${version}-${GITHUB_REF_NAME}.${GITHUB_RUN_NUMBER}"
+            echo "::error::unsupported release branch ${GITHUB_REF_NAME}; expected main, staging, or dev"
+            exit 1
           fi
 
           # Anything carrying a suffix is a prerelease. Derived from the tag so a
@@ -141,6 +152,36 @@ jobs:
             exit 1
           }
 
+      # v1.7.3 shipped desktop bundles named 1.7.1: the tag and the manifests
+      # are independent, so nothing forced them to agree. Bundle filenames come
+      # from these manifests, not from the tag, which is why the mismatch was
+      # invisible until the assets were on the release page.
+      #
+      # Only the numeric core is compared. The manifests must stay numeric
+      # because WiX rejects pre-release identifiers outright, so a channel lives
+      # in the tag and never in package.json: v1.7.3-alpha.4 -> 1.7.3.
+      - name: Verify manifest version matches the tag
+        run: |
+          TAG_CORE="${RELEASE_TAG#v}"
+          TAG_CORE="${TAG_CORE%%-*}"
+          read_version() { python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['version'])" "$1"; }
+          PKG_VERSION="$(read_version package.json)"
+          TAURI_VERSION="$(read_version src-tauri/tauri.conf.json)"
+
+          fail=0
+          if [ "$PKG_VERSION" != "$TAG_CORE" ]; then
+            echo "::error::package.json is $PKG_VERSION but ${RELEASE_TAG} expects $TAG_CORE"
+            fail=1
+          fi
+          if [ "$TAURI_VERSION" != "$TAG_CORE" ]; then
+            echo "::error::src-tauri/tauri.conf.json is $TAURI_VERSION but ${RELEASE_TAG} expects $TAG_CORE"
+            fail=1
+          fi
+          if [ "$fail" -eq 0 ]; then
+            echo "package.json, tauri.conf.json and ${RELEASE_TAG} all agree on $TAG_CORE"
+          fi
+          exit "$fail"
+
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
@@ -163,8 +204,6 @@ jobs:
       contents: read
       id-token: write
       attestations: write
-    outputs:
-      signed: ${{ steps.signing.outputs.available }}
     env:
       RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
     steps:
@@ -207,6 +246,8 @@ jobs:
             echo "available=true" >> "$GITHUB_OUTPUT"
           else
             echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::error::Android release keystore is not configured in the production environment. Configure ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, and ANDROID_KEY_PASSWORD."
+            exit 1
           fi
 
       - name: Prepare keystore file
@@ -233,33 +274,27 @@ jobs:
         if: always() && steps.signing.outputs.available == 'true'
         run: rm -f "${{ runner.temp }}/optn-wallet-upload.keystore"
 
-      - name: Explain missing Android signing
-        if: steps.signing.outputs.available != 'true'
+      # Same gate the preview applies, on the signed release APKs. An F-Droid
+      # build that ships ML Kit is not eligible for the store at all, and that
+      # is not something to discover after publishing.
+      - name: Verify no proprietary barcode scanner is bundled
         run: |
-          cat > android-release-status.txt <<'EOF'
-          Android binaries were not published for v1.7.0 because the permanent
-          Android release keystore is not configured in the GitHub production
-          environment. Configure ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD,
-          ANDROID_KEY_ALIAS, and ANDROID_KEY_PASSWORD, then rerun this workflow.
-          EOF
+          mapfile -t apks < <(find android -type f -name '*.apk' | sort)
+          if [ "${#apks[@]}" -eq 0 ]; then
+            echo '::error::no APKs to inspect'
+            exit 1
+          fi
+          bash scripts/assert-no-proprietary-scanner.sh "${apks[@]}"
 
       - name: Upload Android release files
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        if: steps.signing.outputs.available == 'true'
         with:
           name: android-release
           path: |
             android/**/outputs/apk/release/*.apk
             android/**/outputs/bundle/release/*.aab
           retention-days: 30
-
-      - name: Upload Android signing status
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        if: steps.signing.outputs.available != 'true'
-        with:
-          name: android-release-status
-          path: android-release-status.txt
-          retention-days: 30
+          if-no-files-found: error
 
   extension:
     name: Build browser extensions
@@ -459,7 +494,7 @@ jobs:
           security list-keychains -d user -s "$KEYCHAIN_PATH"
           APPLE_SIGNING_IDENTITY="$(
             security find-identity -v -p codesigning "$KEYCHAIN_PATH" |
-              awk -F'"' '/Developer ID Application/ { print $2; exit }'
+              awk -F'\"' '/Developer ID Application/ { print $2; exit }'
           )"
           if [ -z "$APPLE_SIGNING_IDENTITY" ]; then
             echo "::error::The imported certificate has no Developer ID Application identity."
@@ -487,7 +522,33 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npx tauri build --target ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # hdiutil create often fails with "Resource busy" after the .app is
+          # already built (actions/runner-images#7522). Retry the bundle. Do
+          # not drop the dmg and do not rename it.
+          target='${{ matrix.target }}'
+          attempt=1
+          max=3
+          while true; do
+            if npx tauri build --target "$target"; then
+              exit 0
+            fi
+            if [ "$attempt" -ge "$max" ]; then
+              echo "::error::macOS dmg bundle failed after ${max} attempts (hdiutil resource busy)"
+              exit 1
+            fi
+            echo "::warning::hdiutil/bundle_dmg failed (attempt ${attempt}/${max}); detaching leftover volumes"
+            for vol in /Volumes/OPTNWallet /Volumes/OPTNWallet*; do
+              [ -e "$vol" ] || continue
+              hdiutil detach "$vol" -force || true
+            done
+            rm -f "src-tauri/target/${target}/release/bundle/dmg/"*.dmg || true
+            sync || true
+            sleep $((attempt * 8))
+            attempt=$((attempt + 1))
+          done
 
       - name: Build ad-hoc-signed macOS bundles without an Apple account
         if: startsWith(matrix.platform, 'macos') && env.MACOS_SIGNING_AVAILABLE == 'false'
@@ -496,7 +557,33 @@ jobs:
           NO_STRIP: 'true'
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npx tauri build --target ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # hdiutil create often fails with "Resource busy" after the .app is
+          # already built (actions/runner-images#7522). Retry the bundle. Do
+          # not drop the dmg and do not rename it.
+          target='${{ matrix.target }}'
+          attempt=1
+          max=3
+          while true; do
+            if npx tauri build --target "$target"; then
+              exit 0
+            fi
+            if [ "$attempt" -ge "$max" ]; then
+              echo "::error::macOS dmg bundle failed after ${max} attempts (hdiutil resource busy)"
+              exit 1
+            fi
+            echo "::warning::hdiutil/bundle_dmg failed (attempt ${attempt}/${max}); detaching leftover volumes"
+            for vol in /Volumes/OPTNWallet /Volumes/OPTNWallet*; do
+              [ -e "$vol" ] || continue
+              hdiutil detach "$vol" -force || true
+            done
+            rm -f "src-tauri/target/${target}/release/bundle/dmg/"*.dmg || true
+            sync || true
+            sleep $((attempt * 8))
+            attempt=$((attempt + 1))
+          done
 
       - name: Verify macOS bundle
         if: startsWith(matrix.platform, 'macos')
@@ -530,6 +617,47 @@ jobs:
           test "$(lipo -archs "$APP_EXECUTABLE")" = "${{ matrix.expected-arch }}"
           test "$(lipo -archs "$TOR_EXECUTABLE")" = "${{ matrix.expected-arch }}"
 
+      - name: Zip macOS .app for the Release
+        if: startsWith(matrix.platform, 'macos')
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUNDLE_ROOT="src-tauri/target/${{ matrix.target }}/release/bundle"
+          APP_PATH="$(find "$BUNDLE_ROOT/macos" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          test -n "$APP_PATH"
+          test -d "$APP_PATH"
+
+          case "${{ matrix.expected-arch }}" in
+            arm64) arch=arm64 ;;
+            x86_64) arch=x64 ;;
+            *)
+              echo "::error::unrecognised macOS arch ${{ matrix.expected-arch }}"
+              exit 1
+              ;;
+          esac
+
+          # Same ad-hoc marker the dmg already uses. Do not invent a new one.
+          suffix=""
+          if [ "${MACOS_SIGNING_AVAILABLE}" != 'true' ]; then
+            suffix="-adhoc-not-notarized"
+          fi
+
+          mkdir -p macos-app-zips
+          ZIP_PATH="macos-app-zips/OPTNWallet-macos-${arch}${suffix}.app.zip"
+          ditto -c -k --keepParent "$APP_PATH" "$ZIP_PATH"
+          unzip -t "$ZIP_PATH"
+          test -s "$ZIP_PATH"
+          ls -lh "$ZIP_PATH"
+
+      - name: Upload macOS .app zip
+        if: startsWith(matrix.platform, 'macos')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ matrix.artifact-name }}-app
+          path: macos-app-zips/*.app.zip
+          retention-days: 30
+          if-no-files-found: error
+
       - name: Smoke-test packaged Linux Tor
         if: startsWith(matrix.platform, 'ubuntu')
         shell: bash
@@ -546,9 +674,479 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
+  ios:
+    name: Build iOS simulator
+    needs: [resolve, quality]
+    runs-on: macos-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      # Prefer build:web + cap sync over android:prepare dotenv -e .env.
+      # Do not invent dotenv / Apple secrets. Vite reads missing .env as empty.
+      - name: Build web and sync Capacitor iOS
+        run: npm run ios:prepare
+
+      # cap sync usually runs pod install; do it here so a skipped
+      # CocoaPods step cannot leave App.xcworkspace without Pods.
+      - name: Install CocoaPods
+        working-directory: ios/App
+        run: pod install
+
+      # Unsigned simulator compile only. Do not invent Apple certs.
+      # CODE_SIGNING_ALLOWED=NO / CODE_SIGNING_REQUIRED=NO — no provisioning.
+      - name: Build iOS Simulator app
+        run: npm run ios:sim:dev
+
+      - name: Verify and zip simulator .app
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find ios/App/build -type d -name '*.app' -print -quit)"
+          if [ -z "$APP_PATH" ] || [ ! -d "$APP_PATH" ]; then
+            echo '::error::iOS simulator .app missing after compile (fail-closed).'
+            echo 'Searched ios/App/build for *.app'
+            find ios/App/build -maxdepth 5 -print | head -n 80 || true
+            exit 1
+          fi
+          echo "Found simulator app: $APP_PATH"
+          # .app is a directory bundle; zip it for the artifact upload.
+          VERSION="${RELEASE_TAG#v}"
+          ZIP_NAME="OPTNWallet-${VERSION}-ios-simulator.zip"
+          ditto -c -k --keepParent "$APP_PATH" "$ZIP_NAME"
+          unzip -t "$ZIP_NAME"
+          ls -lh "$ZIP_NAME"
+
+      - name: Upload iOS simulator release
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ios-release
+          path: OPTNWallet-*-ios-simulator.zip
+          retention-days: 30
+          if-no-files-found: error
+
+  riscv64:
+    name: Build desktop (linux-riscv64)
+    needs: [resolve, quality]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    env:
+      RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # Host-side only; the target's own libraries come from the cross-toolchain
+      # step below, installed for the riscv64 dpkg architecture.
+      #
+      # libevent is here because fetch-tor.mts runs the staged Tor binary with
+      # --version as a smoke check. That binary is x86_64 and needs the host's
+      # libevent to start, so without it the step fails on a Tor problem that
+      # has nothing to do with cross-compiling. desktop-preview.yml installs it
+      # for the same reason.
+      - name: Host build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libevent-2.1-7
+
+      - name: Setup riscv64 cross toolchain
+        uses: taiki-e/setup-cross-toolchain-action@12b7ad4acfa95a1476779d6c06699b96ec1691f8 # v1
+        with:
+          target: riscv64gc-unknown-linux-gnu
+          # These are the packages the desktop app links against. webkit2gtk is
+          # the one that made this hard: without the riscv64 build of it there
+          # is nothing for the linker to resolve against.
+          #
+          # The input is `package`, singular. Actions does not fail on an input
+          # it does not know, it only warns, so a plural spelling here reads as
+          # an empty list and the job gets a cross-compiler with no target
+          # libraries behind it. The action appends `:riscv64` to each name,
+          # adds the dpkg architecture, and points apt at ports.ubuntu.com,
+          # which is where the riscv64 builds actually live.
+          package: >-
+            libwebkit2gtk-4.1-dev
+            libgtk-3-dev
+            librsvg2-dev
+            libssl-dev
+            libudev-dev
+            libusb-1.0-0-dev
+            libayatana-appindicator3-dev
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Fetch bundled Tor
+        # Tor publishes no riscv64 Expert Bundle. The x86_64 archive carries the
+        # architecture-neutral GeoIP data, which is all the frontend build needs;
+        # a riscv64 Tor daemon is a separate problem and is why this job builds
+        # the binary rather than a shippable bundle.
+        run: npx --no-install tsx scripts/fetch-tor.mts linux-x86_64
+
+      - name: Build the frontend
+        run: npx vite build --config vite.desktop.config.ts
+
+      # No bundling. The Tauri bundler shells out to linuxdeploy and
+      # appimagetool, neither of which cross-targets, so a bundle attempt would
+      # fail for a reason unrelated to whether the code compiles for riscv64.
+      # Proving the binary links is the question this job exists to answer.
+      - name: Cross-compile the desktop binary
+        working-directory: src-tauri
+        env:
+          PKG_CONFIG_ALLOW_CROSS: '1'
+        run: cargo build --release --target riscv64gc-unknown-linux-gnu
+
+      - name: Verify the binary is really RISC-V
+        working-directory: src-tauri
+        run: |
+          BIN="target/riscv64gc-unknown-linux-gnu/release/optn-wallet-desktop"
+          file "$BIN"
+          # A misconfigured linker silently emits a host binary. That would look
+          # like success and then fail to start on riscv64 hardware.
+          file "$BIN" | grep -q 'RISC-V' || {
+            echo "::error::linked a non-RISC-V binary"
+            exit 1
+          }
+          VERSION="${RELEASE_TAG#v}"
+          DEST="${GITHUB_WORKSPACE}/OPTNWallet-${VERSION}-linux-riscv64-unbundled"
+          cp "$BIN" "$DEST"
+          file "$DEST" | grep -q 'RISC-V'
+          test -s "$DEST"
+
+      - name: Upload the unbundled riscv64 ELF
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: desktop-linux-riscv64
+          path: OPTNWallet-*-linux-riscv64-unbundled
+          retention-days: 30
+          if-no-files-found: error
+
+  # Flatpak is how a large share of Linux desktop users install anything, and
+  # Tauri has no bundler target for it — so it is built here, by hand, from the
+  # deb the desktop job already produced. Without this job the release simply
+  # has no Flatpak, which is the kind of silent gap the rest of this workflow
+  # exists to prevent.
+  flatpak:
+    name: Build Flatpak (${{ matrix.label }})
+    needs: [resolve, desktop]
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-24.04
+            label: linux-x64
+            deb-artifact: desktop-linux
+          # flatpak-builder repackages a native deb, so aarch64 has to be built
+          # on an aarch64 runner. There is no cross path here.
+          - platform: ubuntu-24.04-arm
+            label: linux-arm64
+            deb-artifact: desktop-linux-arm
+    runs-on: ${{ matrix.platform }}
+    permissions:
+      contents: read
+    env:
+      RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+          persist-credentials: false
+
+      - name: Download the Linux bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: ${{ matrix.deb-artifact }}
+          path: linux-bundle
+
+      - name: Install flatpak-builder
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            flatpak flatpak-builder desktop-file-utils
+          sudo flatpak remote-add --if-not-exists flathub \
+            https://flathub.org/repo/flathub.flatpakrepo
+
+      - name: Install the GNOME runtime
+        run: |
+          set -euo pipefail
+          RUNTIME_VERSION="$(sed -nE "s/^runtime-version: *'?([^']+)'?/\\1/p" \
+            packaging/flatpak/com.optilabs.wallet.yml)"
+          test -n "$RUNTIME_VERSION"
+          echo "Manifest pins org.gnome.Platform//${RUNTIME_VERSION}"
+
+          # An end-of-life runtime still builds; it just stops receiving
+          # security fixes. Checking availability here turns a silent downgrade
+          # in the app's platform into a build failure that names the versions
+          # that do exist.
+          if ! sudo flatpak remote-info flathub \
+            "org.gnome.Platform//${RUNTIME_VERSION}" >/dev/null 2>&1; then
+            echo "::error::org.gnome.Platform//${RUNTIME_VERSION} is not on flathub"
+            echo 'Available branches:'
+            sudo flatpak remote-ls flathub --columns=ref |
+              grep '^org\.gnome\.Platform/' || true
+            exit 1
+          fi
+
+          sudo flatpak install -y --noninteractive flathub \
+            "org.gnome.Platform//${RUNTIME_VERSION}" \
+            "org.gnome.Sdk//${RUNTIME_VERSION}"
+
+      - name: Stage the deb and stamp the release
+        run: |
+          set -euo pipefail
+          VERSION="${RELEASE_TAG#v}"
+          mkdir -p build
+          cp packaging/flatpak/com.optilabs.wallet.yml build/
+          cp packaging/flatpak/com.optilabs.wallet.metainfo.xml build/
+
+          DEB="$(find linux-bundle -type f -name '*.deb' -print -quit)"
+          if [ -z "$DEB" ]; then
+            echo '::error::no .deb in the Linux bundle to build a Flatpak from'
+            find linux-bundle -type f | sort
+            exit 1
+          fi
+          echo "Building from $(basename "$DEB")"
+          cp "$DEB" build/optn-wallet.deb
+
+          # The release entry in the AppStream file is stamped from the tag, so
+          # it cannot drift from what is actually being shipped.
+          python3 - "$VERSION" <<'PY'
+          import re, sys, datetime, io
+          version = sys.argv[1]
+          path = 'build/com.optilabs.wallet.metainfo.xml'
+          text = io.open(path, encoding='utf-8').read()
+          date = datetime.date.today().isoformat()
+          text = re.sub(
+              r'<release version="[^"]*" date="[^"]*"/>',
+              f'<release version="{version}" date="{date}"/>',
+              text,
+              count=1,
+          )
+          io.open(path, 'w', encoding='utf-8').write(text)
+          print(f'metainfo stamped {version} {date}')
+          PY
+
+      - name: Build the Flatpak
+        working-directory: build
+        run: |
+          set -euo pipefail
+          sudo flatpak-builder --disable-rofiles-fuse --force-clean \
+            --repo=repo build-dir com.optilabs.wallet.yml
+          sudo flatpak build-bundle repo \
+            "OPTNWallet-${RELEASE_TAG#v}-${{ matrix.label }}.flatpak" \
+            com.optilabs.wallet
+          sudo chown "$(id -u):$(id -g)" ./*.flatpak
+
+      - name: Verify the bundle contains a runnable application
+        working-directory: build
+        run: |
+          set -euo pipefail
+          BUNDLE="$(find . -maxdepth 1 -name '*.flatpak' -print -quit)"
+          test -s "$BUNDLE"
+          ls -lh "$BUNDLE"
+
+          # A Flatpak that installs but has no binary is the failure mode
+          # worth catching: it looks like a successful build all the way to a
+          # user launching it.
+          sudo flatpak install -y --noninteractive --bundle "$BUNDLE"
+          sudo flatpak info com.optilabs.wallet
+          # Checked on disk rather than by launching it: the runner has no
+          # display or session bus, and what matters here is that the tree
+          # the bundle installs is complete.
+          LOCATION="$(sudo flatpak info --show-location com.optilabs.wallet)"
+          for required in \
+            files/bin/optn-wallet-desktop \
+            files/share/applications/com.optilabs.wallet.desktop \
+            files/share/metainfo/com.optilabs.wallet.metainfo.xml
+          do
+            if ! sudo test -e "$LOCATION/$required"; then
+              echo "::error::the Flatpak installs no $required"
+              sudo find "$LOCATION/files" -maxdepth 3 | head -50
+              exit 1
+            fi
+            echo "  ok       $required"
+          done
+          sudo test -x "$LOCATION/files/bin/optn-wallet-desktop"
+          sudo flatpak uninstall -y com.optilabs.wallet
+
+      - name: Upload the Flatpak
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: flatpak-${{ matrix.label }}
+          path: build/*.flatpak
+          retention-days: 30
+          if-no-files-found: error
+
+  # The `optn` CLI ships as a release asset like everything else.
+  #
+  # The crate arrives in a separate pull request, so this probes for it rather
+  # than assuming. Both merge orders then behave: with the crate absent nothing
+  # is built and nothing is required, and the moment it lands the binaries
+  # become mandatory without anyone remembering to come back here. The
+  # alternative — requiring assets no branch can build, or building assets
+  # nothing requires — is broken in one order or the other.
+  cli-probe:
+    name: Is the CLI in this tree
+    needs: resolve
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      present: ${{ steps.probe.outputs.present }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+          persist-credentials: false
+      - id: probe
+        run: |
+          if [ -f crates/optn-cli/Cargo.toml ]; then
+            echo 'present=true' >> "$GITHUB_OUTPUT"
+            echo 'The optn CLI is in this tree; its binaries are required.'
+          else
+            echo 'present=false' >> "$GITHUB_OUTPUT"
+            echo '::notice::crates/optn-cli is not in this tree; the CLI is not part of this release.'
+          fi
+
+  cli:
+    name: Build CLI (${{ matrix.label }})
+    needs: [resolve, quality, cli-probe]
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            label: linux-x64
+            target: x86_64-unknown-linux-gnu
+          - platform: ubuntu-24.04-arm
+            label: linux-arm64
+            target: aarch64-unknown-linux-gnu
+          # Cross-compiled from x86_64 with only a linker. This is possible
+          # precisely because the CLI does not depend on src-tauri, and so
+          # never pulls in webkit2gtk.
+          - platform: ubuntu-22.04
+            label: linux-riscv64
+            target: riscv64gc-unknown-linux-gnu
+            cross-package: gcc-riscv64-linux-gnu
+            linker: riscv64-linux-gnu-gcc
+          - platform: ubuntu-22.04
+            label: linux-armv7
+            target: armv7-unknown-linux-gnueabihf
+            cross-package: gcc-arm-linux-gnueabihf
+            linker: arm-linux-gnueabihf-gcc
+          - platform: windows-latest
+            label: windows-x64
+            target: x86_64-pc-windows-msvc
+          - platform: macos-latest
+            label: macos-arm64
+            target: aarch64-apple-darwin
+          - platform: macos-15-intel
+            label: macos-x64
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.platform }}
+    permissions:
+      contents: read
+    env:
+      RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+      CLI_PRESENT: ${{ needs.cli-probe.outputs.present }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+          persist-credentials: false
+
+      - name: Install cross toolchain
+        if: env.CLI_PRESENT == 'true' && matrix.cross-package != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ${{ matrix.cross-package }}
+
+      - name: Install Rust stable
+        if: env.CLI_PRESENT == 'true'
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Build
+        if: env.CLI_PRESENT == 'true'
+        working-directory: crates/optn-cli
+        env:
+          CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker }}
+          CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: ${{ matrix.linker }}
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Name the binary and check its architecture
+        if: env.CLI_PRESENT == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${RELEASE_TAG#v}"
+          SRC="crates/optn-cli/target/${{ matrix.target }}/release/optn"
+          EXT=""
+          if [ -f "${SRC}.exe" ]; then
+            SRC="${SRC}.exe"
+            EXT=".exe"
+          fi
+          test -f "$SRC"
+
+          mkdir -p cli-release
+          cp "$SRC" "cli-release/optn-${VERSION}-${{ matrix.label }}${EXT}"
+
+          # A misconfigured linker silently emits a host binary. It would ship
+          # labelled riscv64 and fail to start on the only machines that need
+          # it, which is not something to find out from a user.
+          if command -v file >/dev/null 2>&1; then
+            file "$SRC"
+            case "${{ matrix.target }}" in
+              riscv64gc-*) file "$SRC" | grep -q 'RISC-V'  || { echo '::error::not a RISC-V binary'; exit 1; } ;;
+              aarch64-*)   file "$SRC" | grep -q 'aarch64' || { echo '::error::not an aarch64 binary'; exit 1; } ;;
+              armv7-*)     file "$SRC" | grep -q 'ARM'     || { echo '::error::not an ARM binary'; exit 1; } ;;
+              x86_64-unknown-linux-gnu) file "$SRC" | grep -q 'x86-64' || { echo '::error::not an x86-64 binary'; exit 1; } ;;
+            esac
+          fi
+
+      - name: Upload the CLI binary
+        if: env.CLI_PRESENT == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cli-${{ matrix.label }}
+          path: cli-release/*
+          retention-days: 30
+          if-no-files-found: error
+
   publish:
     name: Publish GitHub release
-    needs: [resolve, android, desktop, extension]
+    needs: [resolve, android, cli, cli-probe, desktop, extension, flatpak, ios, riscv64]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -583,35 +1181,292 @@ jobs:
           require_asset artifacts/desktop-windows '*.msi' 'Windows MSI installer'
           require_asset artifacts/desktop-macos-arm '*.dmg' 'macOS Apple Silicon DMG'
           require_asset artifacts/desktop-macos-intel '*.dmg' 'macOS Intel DMG'
+          require_asset artifacts/desktop-macos-arm-app '*.app.zip' 'macOS Apple Silicon .app zip'
+          require_asset artifacts/desktop-macos-intel-app '*.app.zip' 'macOS Intel .app zip'
           # AppImage = distro-portable Linux ship (works across Ubuntu/Debian/Fedora/Arch/…).
           # deb/rpm are convenience packages for those package managers only.
           require_asset artifacts/desktop-linux '*.AppImage' 'Linux x64 AppImage (portable, all distros)'
           require_asset artifacts/desktop-linux-arm '*.AppImage' 'Linux ARM64 AppImage (portable, all distros)'
           require_asset artifacts/desktop-linux '*.deb' 'Linux x64 DEB package'
           require_asset artifacts/desktop-linux '*.rpm' 'Linux x64 RPM package'
+          require_asset artifacts/desktop-linux-arm '*.deb' 'Linux ARM64 DEB package'
+          require_asset artifacts/desktop-linux-arm '*.rpm' 'Linux ARM64 RPM package'
           require_asset artifacts/browser-extensions '*.zip' 'browser extension archive'
           test -f "artifacts/browser-extensions/OPTNWallet-${RELEASE_TAG}-chrome.zip"
           test -f "artifacts/browser-extensions/OPTNWallet-${RELEASE_TAG}-firefox.zip"
+          require_asset artifacts/ios-release '*.zip' 'iOS simulator zip'
+          test -f "artifacts/ios-release/OPTNWallet-${RELEASE_TAG#v}-ios-simulator.zip"
+          require_asset artifacts/desktop-linux-riscv64 'OPTNWallet-*-linux-riscv64-unbundled' 'Linux riscv64 unbundled ELF'
+          require_asset artifacts/flatpak-linux-x64 '*.flatpak' 'Linux x64 Flatpak'
+          require_asset artifacts/flatpak-linux-arm64 '*.flatpak' 'Linux ARM64 Flatpak'
 
-          if [ "${{ needs.android.outputs.signed }}" = 'true' ]; then
-            require_asset artifacts/android-release '*.apk' 'signed Android APK'
-            require_asset artifacts/android-release '*.aab' 'signed Android AAB'
+          # Gated on the probe, not on the artifacts being there: "no CLI in
+          # this tree" and "the CLI failed to build" must not look alike.
+          if [ "${{ needs.cli-probe.outputs.present }}" = 'true' ]; then
+            for label in linux-x64 linux-arm64 linux-riscv64 linux-armv7 \
+              macos-arm64 macos-x64 windows-x64; do
+              require_asset "artifacts/cli-$label" 'optn-*' "optn CLI $label"
+            done
           else
-            test -f artifacts/android-release-status/android-release-status.txt
+            echo '::notice::the optn CLI is not in this tree; not requiring its binaries'
           fi
 
+          require_asset artifacts/android-release '*.apk' 'signed Android APK'
+          # Named individually: a single *.apk check passes when only one
+          # flavour built, which is exactly how the F-Droid build would go
+          # missing without anything failing.
+          require_asset artifacts/android-release '*-fdroid-release.apk' 'F-Droid APK'
+          require_asset artifacts/android-release '*-play-release.apk' 'Play APK'
+          require_asset artifacts/android-release '*.aab' 'signed Android AAB'
+
+      # Assets were previously copied out under whatever name their bundler
+      # chose, which left five separators, four architecture vocabularies and
+      # two version styles in one release: OPTNWallet_1.7.1_amd64.deb,
+      # OPTNWallet-1.7.1-1.x86_64.rpm, OPTNWallet-v1.7.3-chrome.zip, and
+      # app-release.apk naming neither product nor version.
+      #
+      # Everything becomes OPTNWallet-<version>-<os>-<arch>.<ext> except .deb
+      # and .rpm. Those filenames are load-bearing: createrepo, dnf, apt and
+      # reprepro parse <name>_<ver>-<rev>_<arch>.deb and
+      # <name>-<ver>-<rel>.<arch>.rpm, so normalising them would buy cosmetic
+      # consistency at the cost of interoperability.
+      #
+      # A pre-release keeps its full identifier here (1.7.3-alpha.4), unlike
+      # the manifests, which stay numeric because WiX rejects pre-release
+      # identifiers.
       - name: Assemble release files
         run: |
           mkdir -p release-files
-          find artifacts -type f \( \
+          VERSION="${RELEASE_TAG#v}"
+
+          VERSION_CORE="${VERSION%%-*}"
+
+          # Renaming destroys the evidence the later foreign-version check
+          # relies on: every destination carries the current version by
+          # construction, so a stale source would be laundered into looking
+          # correct. The source is therefore validated first.
+          #
+          # Android's Gradle output is exempt because it genuinely has no
+          # version in its name; it cannot be checked this way and is instead
+          # covered by coming from this run's own android job.
+          place() {
+            local src="$1" dst="$2" base
+            base="$(basename "$src")"
+            case "$base" in
+              # Gradle's pre-flavour output carries no version to check. The
+              # flavoured names do (optn-wallet-<version>-<flavour>-release.apk)
+              # and are validated like everything else.
+              app-release.apk|app-release.aab) ;;
+              *"$VERSION_CORE"*) ;;
+              *)
+                echo "::error::$base does not carry version $VERSION_CORE; \
+                  refusing to publish it as $dst"
+                exit 1
+                ;;
+            esac
+            if [ -e "release-files/$dst" ]; then
+              echo "::error::two artifacts both map to $dst (second was $src)"
+              exit 1
+            fi
+            cp "$src" "release-files/$dst"
+            echo "  $base  ->  $dst"
+          }
+
+          while IFS= read -r -d "" src; do
+            base="$(basename "$src")"
+            case "$base" in
+              *-setup.exe) place "$src" "OPTNWallet-${VERSION}-windows-x64-setup.exe" ;;
+              *.msi)       place "$src" "OPTNWallet-${VERSION}-windows-x64.msi" ;;
+              *.dmg)
+                # Preserve the ad-hoc marker: it warns that Gatekeeper will ask
+                # the user to approve the app because Apple never notarized it.
+                suffix=""
+                case "$base" in *adhoc-not-notarized*) suffix="-adhoc-not-notarized" ;; esac
+                case "$base" in
+                  *aarch64*|*arm64*) place "$src" "OPTNWallet-${VERSION}-macos-arm64${suffix}.dmg" ;;
+                  *x64*|*x86_64*)    place "$src" "OPTNWallet-${VERSION}-macos-x64${suffix}.dmg" ;;
+                  *)
+                    echo "::error::unrecognised architecture in $base; add it to the rename map"
+                    exit 1
+                    ;;
+                esac
+                ;;
+              *.AppImage)
+                # Arch is matched explicitly and an unknown one is an error.
+                # A catch-all default silently renamed any future architecture
+                # (riscv64, armv7) to linux-x64, which is worse than failing:
+                # the release would look complete and ship a mislabelled file.
+                case "$base" in
+                  *aarch64*|*arm64*) place "$src" "OPTNWallet-${VERSION}-linux-arm64.AppImage" ;;
+                  *amd64*|*x86_64*)  place "$src" "OPTNWallet-${VERSION}-linux-x64.AppImage" ;;
+                  *riscv64*)         place "$src" "OPTNWallet-${VERSION}-linux-riscv64.AppImage" ;;
+                  *armv7*|*armhf*)   place "$src" "OPTNWallet-${VERSION}-linux-armv7.AppImage" ;;
+                  *)
+                    echo "::error::unrecognised architecture in $base; add it to the rename map"
+                    exit 1
+                    ;;
+                esac
+                ;;
+              *.deb|*.rpm)       place "$src" "$base" ;;
+              # Two APKs are produced now, one per store flavour. A single
+              # *.apk rule sent both to the same destination, which the
+              # duplicate guard would have caught as a release failure — the
+              # F-Droid build would never have shipped. They are named apart.
+              *-fdroid-release.apk) place "$src" "OPTNWallet-${VERSION}-android-fdroid.apk" ;;
+              *-play-release.apk)   place "$src" "OPTNWallet-${VERSION}-android-play.apk" ;;
+              # Gradle output from before the flavours existed.
+              app-release.apk)      place "$src" "OPTNWallet-${VERSION}-android.apk" ;;
+              *.apk)
+                echo "::error::no store flavour in $base; add a rule rather than \
+                  letting it collide with another APK"
+                exit 1
+                ;;
+              # Only the Play flavour produces a bundle; F-Droid ships APKs.
+              *.aab)             place "$src" "OPTNWallet-${VERSION}-android.aab" ;;
+              # Already named by the flatpak job, which knows its own arch;
+              # matching on the filename here would only re-derive it.
+              *.flatpak)         place "$src" "$base" ;;
+              # Already named by the cli job, which knows its own target.
+              optn-*)            place "$src" "$base" ;;
+              *-chrome.zip)      place "$src" "OPTNWallet-${VERSION}-chrome.zip" ;;
+              *-firefox.zip)     place "$src" "OPTNWallet-${VERSION}-firefox.zip" ;;
+              *-ios-simulator.zip) place "$src" "OPTNWallet-${VERSION}-ios-simulator.zip" ;;
+              OPTNWallet-*-linux-riscv64-unbundled|optn-wallet-desktop)
+                place "$src" "OPTNWallet-${VERSION}-linux-riscv64-unbundled" ;;
+              # *.app.zip after chrome/firefox so those rules cannot steal it.
+              *.app.zip)
+                suffix=""
+                case "$base" in *adhoc-not-notarized*) suffix="-adhoc-not-notarized" ;; esac
+                case "$base" in
+                  *arm64*) place "$src" "OPTNWallet-${VERSION}-macos-arm64${suffix}.app.zip" ;;
+                  *x64*|*x86_64*) place "$src" "OPTNWallet-${VERSION}-macos-x64${suffix}.app.zip" ;;
+                  *)
+                    echo "::error::unrecognised architecture in $base; add it to the rename map"
+                    exit 1
+                    ;;
+                esac
+                ;;
+              *)
+                echo "::error::no naming rule for $base"
+                exit 1
+                ;;
+            esac
+          done < <(find artifacts -type f \( \
             -name '*.apk' -o -name '*.aab' -o -name '*.exe' -o -name '*.msi' \
             -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \
             -o -name '*.zip' \
-          \) -exec cp {} release-files/ \;
-          if [ -f artifacts/android-release-status/android-release-status.txt ]; then
-            cp artifacts/android-release-status/android-release-status.txt release-files/
-          fi
+            -o -name 'OPTNWallet-*-linux-riscv64-unbundled' -o -name 'optn-wallet-desktop' \
+          \) -print0)
+
           find release-files -type f -print | sort
+
+      # The published v1.7.3 release carried desktop bundles named 1.7.1, and
+      # both OPTNWallet-v1.7.1-dev.27-chrome.zip and the v1.7.3 one: two runs'
+      # assets in a single release. "Verify expected release files" only checks
+      # that what is required is present, never that nothing extra arrived, so
+      # neither was caught.
+      #
+      # Every asset must carry this release's version. Exemptions are files that
+      # legitimately have no version in the name today.
+      - name: Verify no foreign-version assets
+        run: |
+          TAG_CORE="${RELEASE_TAG#v}"
+          TAG_CORE="${TAG_CORE%%-*}"
+          foreign=0
+          for path in release-files/*; do
+            [ -e "$path" ] || continue
+            file="$(basename "$path")"
+            case "$file" in
+              *"$TAG_CORE"*) ;;
+              *)
+                echo "::error::$file does not carry release version $TAG_CORE"
+                foreign=1
+                ;;
+            esac
+          done
+          if [ "$foreign" -eq 0 ]; then
+            echo "All assets carry $TAG_CORE"
+          fi
+          exit "$foreign"
+
+      # The per-artifact checks above run before renaming and confirm each
+      # producer uploaded something. This confirms the finished set: every
+      # asset that should reach users is present under its published name, and
+      # nothing unexpected rode along.
+      #
+      # Two separate failures are possible and both matter. A missing asset
+      # means a platform silently did not ship — the F-Droid APK and the iOS
+      # zip are the ones most likely to go unnoticed, because nobody testing on
+      # desktop would see either. An unexpected asset means something reached
+      # the release that no rule accounted for.
+      - name: Verify the published set is complete
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+          missing=0
+
+          expect() {
+            if find release-files -maxdepth 1 -name "$1" -print -quit | grep -q .; then
+              printf '  ok       %s\n' "$2"
+            else
+              echo "::error::missing from the release: $2 (expected $1)"
+              missing=1
+            fi
+          }
+
+          expect "OPTNWallet-${VERSION}-windows-x64-setup.exe" 'Windows NSIS installer'
+          expect "OPTNWallet-${VERSION}-windows-x64.msi"       'Windows MSI installer'
+          # The ad-hoc suffix is part of the name when Apple credentials were
+          # absent, so these are matched by pattern rather than exact name.
+          expect "OPTNWallet-${VERSION}-macos-arm64*.dmg"      'macOS Apple Silicon disk image'
+          expect "OPTNWallet-${VERSION}-macos-x64*.dmg"        'macOS Intel disk image'
+          expect "OPTNWallet-${VERSION}-macos-arm64*.app.zip"  'macOS Apple Silicon app bundle'
+          expect "OPTNWallet-${VERSION}-macos-x64*.app.zip"    'macOS Intel app bundle'
+          expect "OPTNWallet-${VERSION}-linux-x64.AppImage"    'Linux x64 AppImage'
+          expect "OPTNWallet-${VERSION}-linux-arm64.AppImage"  'Linux ARM64 AppImage'
+          expect "OPTNWallet-${VERSION}-linux-riscv64-unbundled" 'Linux riscv64 binary'
+          expect "OPTNWallet-${VERSION}-linux-x64.flatpak"     'Linux x64 Flatpak'
+          expect "OPTNWallet-${VERSION}-linux-arm64.flatpak"   'Linux ARM64 Flatpak'
+
+          if [ "${{ needs.cli-probe.outputs.present }}" = 'true' ]; then
+            for label in linux-x64 linux-arm64 linux-riscv64 linux-armv7 \
+              macos-arm64 macos-x64; do
+              expect "optn-${VERSION}-${label}" "optn CLI ${label}"
+            done
+            expect "optn-${VERSION}-windows-x64.exe" 'optn CLI windows-x64'
+          fi
+          # deb and rpm keep their native names, which encode the architecture
+          # differently from everything else.
+          expect "*_amd64.deb"                                 'Linux x64 DEB'
+          expect "*_arm64.deb"                                 'Linux ARM64 DEB'
+          expect "*.x86_64.rpm"                                'Linux x64 RPM'
+          expect "*.aarch64.rpm"                               'Linux ARM64 RPM'
+          expect "OPTNWallet-${VERSION}-android-fdroid.apk"    'Android F-Droid APK'
+          expect "OPTNWallet-${VERSION}-android-play.apk"      'Android Play APK'
+          expect "OPTNWallet-${VERSION}-android.aab"           'Android App Bundle'
+          expect "OPTNWallet-${VERSION}-ios-simulator.zip"     'iOS simulator build'
+          expect "OPTNWallet-${VERSION}-chrome.zip"            'Chrome extension'
+          expect "OPTNWallet-${VERSION}-firefox.zip"           'Firefox extension'
+
+          # Anything present that no rule above claimed.
+          unexpected=0
+          for path in release-files/*; do
+            [ -e "$path" ] || continue
+            file="$(basename "$path")"
+            case "$file" in
+              OPTNWallet-*|optn-*|*_amd64.deb|*_arm64.deb|*.x86_64.rpm|*.aarch64.rpm) ;;
+              android-release-status.txt) ;;
+              *)
+                echo "::error::unexpected asset in the release: $file"
+                unexpected=1
+                ;;
+            esac
+          done
+
+          if [ "$missing" -ne 0 ] || [ "$unexpected" -ne 0 ]; then
+            echo "::error::the release set is not what it should be; refusing to publish"
+            exit 1
+          fi
+          echo "All expected assets present, nothing extra."
 
       - name: Generate SHA256 checksums
         run: |
@@ -621,10 +1476,11 @@ jobs:
               -name '*.apk' -o -name '*.aab' -o -name '*.exe' -o -name '*.msi' \
               -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \
               -o -name '*.zip' \
+              -o -name 'OPTNWallet-*-linux-riscv64-unbundled' \
             \) -print0 | sed -z 's#^\./##' | sort -z | xargs -0 sha256sum
-          ) > release-sha256.txt
-          test -s release-sha256.txt
-          cat release-sha256.txt
+          ) > "OPTNWallet-${RELEASE_TAG#v}-sha256.txt"
+          test -s "OPTNWallet-${RELEASE_TAG#v}-sha256.txt"
+          cat "OPTNWallet-${RELEASE_TAG#v}-sha256.txt"
 
       - name: Attest release files
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
@@ -639,17 +1495,7 @@ jobs:
             release-files/*.deb
             release-files/*.rpm
             release-files/*.zip
-
-      - name: Remove stale Android status asset
-        if: needs.android.outputs.signed == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if asset_names="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>/dev/null)"; then
-            if printf '%s\n' "$asset_names" | grep -Fxq 'android-release-status.txt'; then
-              gh release delete-asset "$RELEASE_TAG" android-release-status.txt --repo "$GITHUB_REPOSITORY" --yes
-            fi
-          fi
+            release-files/OPTNWallet-*-linux-riscv64-unbundled
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
@@ -661,23 +1507,27 @@ jobs:
 
             ### Downloads
             - Windows x64: `.exe` and `.msi` installers
-            - macOS Apple Silicon (M1 and later): `.dmg`
-            - macOS Intel: `.dmg`
+            - macOS Apple Silicon (M1 and later): `.dmg` and `.app.zip`
+            - macOS Intel: `.dmg` and `.app.zip`
             - **Linux (all distros): portable `.AppImage`** — x64 and ARM64. One file runs on Ubuntu, Debian, Fedora, Arch, and most other desktop Linux without a distro-specific package.
-            - Linux x64 also ships native `.deb` and `.rpm` for users who prefer package managers
+            - Linux x64 and ARM64 also ship native `.deb` and `.rpm` for users who prefer package managers
+            - Linux riscv64: unbundled ELF (`-linux-riscv64-unbundled`). No AppImage, deb, or rpm — linuxdeploy cannot cross-compile those formats.
             - Chrome/Chromium and Firefox extension bundles: `.zip`
-            ${{ needs.android.outputs.signed == 'true' && '- Android: signed `.apk` for direct installation and `.aab` for Play distribution' || '- Android: not included yet; configure the permanent production keystore and rerun the release workflow' }}
+            - Android: signed `.apk` for direct installation and `.aab` for Play distribution
+            - iOS: unsigned simulator `.zip` attached; not a signed IPA
 
-            macOS artifacts whose filenames end in `-adhoc-not-notarized.dmg` were
-            built without an Apple account. They are integrity-checked and covered
-            by the attached checksums and provenance, but Gatekeeper may require the
-            user to explicitly approve the app because Apple has not notarized it.
+            macOS artifacts whose filenames end in `-adhoc-not-notarized.dmg` or
+            `-adhoc-not-notarized.app.zip` were built without an Apple account.
+            They are integrity-checked and covered by the attached checksums and
+            provenance, but Gatekeeper may require the user to explicitly approve
+            the app because Apple has not notarized it.
 
-            iOS is not included in this release. Build-from-source instructions are in [docs/build-and-release.md](https://github.com/${{ github.repository }}/blob/${{ env.RELEASE_TAG }}/docs/build-and-release.md).
+            The iOS simulator zip is an unsigned `.app` for the iOS Simulator. It is
+            not a signed App Store IPA.
 
             SHA256 checksums and build provenance attestations are attached.
           files: |
             release-files/*
-            release-sha256.txt
+            OPTNWallet-*-sha256.txt
           fail_on_unmatched_files: true
           prerelease: ${{ needs.resolve.outputs.prerelease == 'true' }}

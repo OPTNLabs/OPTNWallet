@@ -1,7 +1,5 @@
 package optn.wallet.app.update;
 
-import android.app.Activity;
-import android.content.Intent;
 import android.content.IntentSender.SendIntentException;
 
 import androidx.annotation.NonNull;
