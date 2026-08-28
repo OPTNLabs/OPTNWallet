@@ -29,6 +29,14 @@ pub struct Utxo {
     pub value: u64,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct HistoryEntry {
+    pub tx_hash: String,
+    pub height: i64,
+    #[serde(default)]
+    pub fee: Option<u64>,
+}
+
 pub struct Client {
     host: String,
     port: u16,
@@ -154,6 +162,17 @@ impl Client {
     pub async fn utxos(&self, scripthash: &str) -> Result<Vec<Utxo>> {
         let v = self
             .call("blockchain.scripthash.listunspent", json!([scripthash]))
+            .await?;
+        serde_json::from_value(v).map_err(|e| CliError::Protocol(e.to_string()))
+    }
+
+    /// Confirmed and mempool history for a scripthash, oldest first.
+    ///
+    /// `height` is 0 for an unconfirmed entry and negative when the entry has
+    /// unconfirmed parents, so it is signed rather than unsigned.
+    pub async fn history(&self, scripthash: &str) -> Result<Vec<HistoryEntry>> {
+        let v = self
+            .call("blockchain.scripthash.get_history", json!([scripthash]))
             .await?;
         serde_json::from_value(v).map_err(|e| CliError::Protocol(e.to_string()))
     }
