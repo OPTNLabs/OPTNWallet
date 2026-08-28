@@ -20,6 +20,10 @@ const extensionShell = readFileSync(
   resolve(repoRoot, 'src', 'platform', 'extension', 'ExtensionAppShell.tsx'),
   'utf8'
 );
+const cliPreviewWorkflow = readFileSync(
+  resolve(repoRoot, '.github', 'workflows', 'cli-preview.yml'),
+  'utf8'
+);
 const flatpakManifest = readFileSync(
   resolve(repoRoot, 'packaging', 'flatpak', 'com.optilabs.wallet.yml'),
   'utf8'
@@ -326,5 +330,52 @@ describe('release workflow', () => {
     // labelled riscv64 and fail to start on the only machines that need it.
     expect(workflow).toContain("riscv64gc-*) file \"$SRC\" | grep -q 'RISC-V'");
     expect(workflow).toContain("armv7-*)     file \"$SRC\" | grep -q 'ARM'");
+  });
+  it('builds the CLI in preview for every target the release ships', () => {
+    // The release matrix and the preview matrix must agree, or a target is
+    // published without ever having been built on a pull request.
+    for (const target of [
+      'x86_64-unknown-linux-gnu',
+      'aarch64-unknown-linux-gnu',
+      'riscv64gc-unknown-linux-gnu',
+      'armv7-unknown-linux-gnueabihf',
+      'x86_64-pc-windows-msvc',
+      'aarch64-apple-darwin',
+      'x86_64-apple-darwin',
+    ]) {
+      expect(cliPreviewWorkflow, `preview target ${target}`).toContain(
+        `target: ${target}`
+      );
+      expect(workflow, `release target ${target}`).toContain(
+        `target: ${target}`
+      );
+    }
+  });
+
+  it('runs the CLI preview always, not only when the crate is touched', () => {
+    // A path-filtered required check never runs on a branch that does not
+    // touch that path, and stays "Expected" forever. The probe is what makes
+    // always-on cheap.
+    expect(cliPreviewWorkflow).toMatch(/^\s{2}probe:\s*$/m);
+    expect(cliPreviewWorkflow).toContain('if [ -f crates/optn-cli/Cargo.toml ]; then');
+    // No path filter at all: a path-filtered required check never runs on a
+    // branch that does not touch that path, and stays "Expected" forever.
+    expect(cliPreviewWorkflow).not.toContain('paths:');
+  });
+
+  it('asserts the CLI preview produced every target', () => {
+    expect(cliPreviewWorkflow).toMatch(/^\s{2}complete:\s*$/m);
+    for (const label of [
+      'linux-x64',
+      'linux-arm64',
+      'linux-riscv64',
+      'linux-armv7',
+      'windows-x64',
+      'macos-arm64',
+      'macos-x64',
+    ]) {
+      expect(cliPreviewWorkflow, `${label} must be asserted`).toContain(label);
+    }
+    expect(cliPreviewWorkflow).toMatch(/complete:[\s\S]*?if: always\(\)/);
   });
 });
