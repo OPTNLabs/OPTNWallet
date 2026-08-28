@@ -106,10 +106,16 @@ jobs:
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051
         with:
           images: ghcr.io/${{ steps.meta.outputs.owner_lc }}/${{ env.IMAGE_NAME }}
+          # Version tags only. `latest` is a mutable pointer with no identity:
+          # it cannot say which version or which channel it holds, so a pull of
+          # it is not reproducible and, once alpha and beta tags become routine,
+          # would silently hand contributors a pre-release image. Every other
+          # artifact in this repo now states exactly what it is; this one does
+          # too. A bare `docker pull` without a tag will fail by design — name
+          # the version you want.
           tags: |
             type=raw,value=${{ steps.meta.outputs.version_tag }}
             type=raw,value=${{ steps.meta.outputs.version_stripped }}
-            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
           labels: |
             org.opencontainers.image.title=optn-docker-dev
             org.opencontainers.image.description=OPTN Wallet contributor/lab image
