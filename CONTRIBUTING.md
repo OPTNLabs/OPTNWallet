@@ -21,6 +21,36 @@ Open pull requests into `dev` for normal work. Promote tested changes from
 Hotfixes start from `main` and must be merged back into all active integration
 branches.
 
+## Filing an issue
+
+**Never open a public issue for a security problem.** If a defect could expose
+funds, recovery phrases, private keys, signing credentials, or release secrets,
+follow [SECURITY.md](./SECURITY.md) and report it privately. Public disclosure
+of a wallet vulnerability puts funds at risk before a fix can ship.
+
+Search open and closed issues first. If you find a matching one, add your
+details there rather than opening a second.
+
+A bug report needs enough for someone else to reproduce it without asking:
+
+- the version (`Help > About`, or the release tag) and how it was installed —
+  AppImage, deb, rpm, msi, exe, dmg, apk, or built from source;
+- platform and architecture, since several defects are specific to one
+  (`macOS arm64` and `macOS x64` are different builds, as are the two Linux
+  architectures);
+- what you did, what you expected, and what happened instead;
+- anything from the logs. Desktop logs are written by the app's log plugin;
+  the Troubleshooting section below covers where to look.
+
+A proposal needs the problem before the solution. Describe what you cannot do
+today and why it matters; a specific implementation is welcome but should not
+be the whole issue. Proposals that only describe a solution are hard to
+evaluate, because the reader cannot tell which parts are essential.
+
+State what you verified yourself and what you are inferring. "The RPM is
+missing from the release" and "I think the RPM bundler is broken" call for
+different responses, and conflating them costs a maintainer time.
+
 ## Prerequisites
 
 - Git
@@ -134,6 +164,48 @@ Also:
 - Docker PR validation runs untrusted code with read-only repository access; it
   must not use `pull_request_target` or publish artifacts.
 - The Docker contributor image is not an end-user wallet distribution.
+
+### Commit messages
+
+Use the conventional prefixes already in the history: `feat`, `fix`, `docs`,
+`ci`, `chore`, `test`, `refactor`, with an optional scope —
+`fix(desktop): restore the macOS Edit menu`.
+
+Write the body for someone reading it in a year with no memory of the
+discussion. State what was broken and why the change is the fix, not a summary
+of the diff; the diff is already in the commit. If a decision has a
+non-obvious reason — a workaround for an upstream bug, a convention that
+cannot be changed — record it there, because that is where the next person
+will look.
+
+Keep a commit to one concern. A change that touches release naming and adds a
+new CI job is two commits, so either can be reverted alone.
+
+### Labels
+
+- `bug`, `enhancement`, `documentation` — what kind of change it is.
+- `dependencies`, `javascript`, `rust` — what it touches.
+- `Suggestion`, `Nice to have` — proposals, and proposals that are not
+  priorities.
+- `UI Improvement` — user-interface defects and improvements.
+- `In Progress` — actively being worked on.
+- `good first issue`, `help wanted` — applied by maintainers, not by the
+  author of the issue.
+
+### Versions and releases
+
+Release channels come from the tag, not from a branch name or a manifest:
+`v1.7.3-alpha.4` from `dev`, `v1.7.3-beta.1` from `staging`, `v1.7.3` from
+`main`.
+
+`package.json` and `src-tauri/tauri.conf.json` stay numeric on every channel —
+`1.7.3`, never `1.7.3-alpha.4`. The Windows MSI bundler rejects pre-release
+identifiers, so a pre-release manifest fails the build outright. The release
+quality gate compares the tag's numeric core against both manifests and fails
+if they disagree.
+
+Do not bump versions in a feature pull request. Version changes belong to the
+release preparation commit.
 
 ## Troubleshooting
 
