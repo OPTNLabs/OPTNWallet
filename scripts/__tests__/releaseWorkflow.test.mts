@@ -24,6 +24,10 @@ const flatpakManifest = readFileSync(
   resolve(repoRoot, 'packaging', 'flatpak', 'com.optilabs.wallet.yml'),
   'utf8'
 );
+const cargoToml = readFileSync(
+  resolve(repoRoot, 'src-tauri', 'Cargo.toml'),
+  'utf8'
+);
 const flatpakMetainfo = readFileSync(
   resolve(repoRoot, 'packaging', 'flatpak', 'com.optilabs.wallet.metainfo.xml'),
   'utf8'
@@ -236,9 +240,15 @@ describe('release workflow', () => {
     expect(flatpakManifest).toContain(`/app/share/applications/${id}.desktop`);
     expect(flatpakManifest).toContain(`/app/share/metainfo/${id}.metainfo.xml`);
 
-    // The command has to be the binary the deb actually installs.
-    expect(flatpakManifest).toMatch(/^command: OPTNWallet$/m);
-    expect(flatpakManifest).toContain('/app/bin/OPTNWallet');
+    // The command has to be the binary the deb actually installs. Tauri's
+    // deb bundler names the binary after the Cargo package and the package
+    // after productName; those differ here, and a manifest following the
+    // product name produces a Flatpak that installs and cannot launch.
+    expect(flatpakManifest).toMatch(/^command: optn-wallet-desktop$/m);
+    expect(flatpakManifest).toContain('/app/bin/optn-wallet-desktop');
+    const cargoBinary = cargoToml.match(/^name = "([^"]+)"/m);
+    expect(cargoBinary, 'src-tauri/Cargo.toml package name').not.toBeNull();
+    expect(flatpakManifest).toContain(`command: ${cargoBinary![1]}`);
   });
 
   it('asserts the desktop preview produced every artifact', () => {

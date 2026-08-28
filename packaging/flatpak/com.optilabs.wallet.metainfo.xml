@@ -41,7 +41,7 @@
   </developer>
 
   <provides>
-    <binary>OPTNWallet</binary>
+    <binary>optn-wallet-desktop</binary>
   </provides>
 
   <categories>
