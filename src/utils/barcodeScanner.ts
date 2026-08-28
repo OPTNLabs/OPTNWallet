@@ -1,5 +1,6 @@
 import {
   CapacitorBarcodeScanner,
+  CapacitorBarcodeScannerAndroidScanningLibrary,
   CapacitorBarcodeScannerOptions,
   CapacitorBarcodeScannerScanResult,
 } from '@capacitor/barcode-scanner';
@@ -49,12 +50,39 @@ export function getBarcodeScannerErrorMessage(error: unknown): string {
   return 'Failed to scan QR code. Please ensure camera permissions are granted and try again.';
 }
 
+/**
+ * Android scans through ZXing rather than the plugin's ML Kit default.
+ *
+ * ML Kit is proprietary. It also drags Google Play Services into the build:
+ * play-services-mlkit-barcode-scanning, a ~5 MB libbarhopper native library
+ * per ABI, and bundled TensorFlow Lite models. That makes an F-Droid build
+ * ineligible under their inclusion policy, which requires every dependency to
+ * be free software — not merely the application.
+ *
+ * ZXing is the reference QR implementation and what the wallets this one sits
+ * beside use — Electrum, Sparrow, Monero. The plugin's own documentation notes
+ * ZXing covers every format it supports and several ML Kit does not. This
+ * wallet scans QR codes, so nothing is given up.
+ *
+ * Set here, at the single point every scan passes through, rather than per
+ * flavour: one Android code path is tested by everyone rather than leaving
+ * F-Droid users on a path Play users never exercise.
+ */
+export const ANDROID_SCANNING_LIBRARY =
+  CapacitorBarcodeScannerAndroidScanningLibrary.ZXING;
+
 export async function scanBarcodeSafely(
   options: CapacitorBarcodeScannerOptions
 ): Promise<CapacitorBarcodeScannerScanResult | null> {
   try {
     await ensureCameraAvailableForWeb();
-    return await CapacitorBarcodeScanner.scanBarcode(options);
+    return await CapacitorBarcodeScanner.scanBarcode({
+      ...options,
+      android: {
+        ...options.android,
+        scanningLibrary: ANDROID_SCANNING_LIBRARY,
+      },
+    });
   } catch (error) {
     if (isIgnorableBarcodeScannerError(error)) {
       return null;

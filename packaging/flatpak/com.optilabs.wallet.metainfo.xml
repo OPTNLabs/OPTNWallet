@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AppStream metadata for the Flatpak build.
+
+  Software centres read this to show the application at all: without it the
+  Flatpak installs and runs, but appears nameless and without a description in
+  GNOME Software, KDE Discover and the rest.
+-->
+<component type="desktop-application">
+  <id>com.optilabs.wallet</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <name>OPTN Wallet</name>
+  <summary>Bitcoin Cash wallet with CashTokens and covenants</summary>
+
+  <description>
+    <p>
+      OPTN Wallet is a non-custodial Bitcoin Cash wallet. Keys are generated and
+      held on your own machine and never leave it.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Send and receive BCH, with fee control and address discovery</li>
+      <li>CashTokens: fungible tokens and NFTs</li>
+      <li>Covenant contracts built with CashScript</li>
+      <li>WalletConnect and CashConnect for connecting to applications</li>
+      <li>Connections routed over the bundled Tor daemon</li>
+      <li>Watch-only accounts and PSBT export to hardware signers</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">com.optilabs.wallet.desktop</launchable>
+
+  <url type="homepage">https://github.com/OPTNLabs/OPTNWallet</url>
+  <url type="bugtracker">https://github.com/OPTNLabs/OPTNWallet/issues</url>
+  <url type="vcs-browser">https://github.com/OPTNLabs/OPTNWallet</url>
+
+  <developer id="com.optilabs">
+    <name>OPTN Labs</name>
+  </developer>
+
+  <provides>
+    <binary>optn-wallet-desktop</binary>
+  </provides>
+
+  <categories>
+    <category>Office</category>
+    <category>Finance</category>
+  </categories>
+
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+
+  <!--
+    Required by AppStream. A wallet holds real funds and can transact, which is
+    what "moderate" money reflects; nothing else here applies.
+  -->
+  <content_rating type="oars-1.1">
+    <content_attribute id="money-purchasing">moderate</content_attribute>
+  </content_rating>
+
+  <releases>
+    <release version="1.7.3" date="2026-08-28"/>
+  </releases>
+</component>

@@ -20,12 +20,39 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
+      # Probe the dependency graph itself rather than the settings field.
+      # `security_and_analysis.dependency_graph` is only returned for repos where
+      # the graph is configurable — on a public repo it is always on and the field
+      # is absent, so the old `// "disabled"` fallback made this job skip on every
+      # PR while still reporting success. The SBOM endpoint answers the question
+      # that actually matters: can dependency-review read a graph or not.
       - name: Check dependency-graph availability
         id: dependency-graph
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          status="$(gh api repos/${{ github.repository }} --jq '.security_and_analysis.dependency_graph.status // "disabled"')"
+          # Distinguish "the graph is off" from "the probe itself failed".
+          # Treating every non-zero exit as disabled would silently skip
+          # dependency review on a transient network error or an auth problem,
+          # which is the same green-but-checking-nothing failure this job was
+          # fixed to stop.
+          code="$(gh api "repos/${{ github.repository }}/dependency-graph/sbom" \
+            --silent --include 2>/dev/null | head -1 | grep -oE '[0-9]{3}' || true)"
+          case "$code" in
+            200)
+              status=enabled
+              ;;
+            403|404)
+              # Not enabled, or not visible to this token: a real answer.
+              status=disabled
+              ;;
+            *)
+              echo "::error::dependency-graph probe returned '${code:-no status}'; \
+                refusing to guess whether the graph is available"
+              exit 1
+              ;;
+          esac
+          echo "Dependency graph: $status (HTTP ${code})"
           echo "status=$status" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Dependency review
