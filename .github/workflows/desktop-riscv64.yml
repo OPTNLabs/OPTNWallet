@@ -1,0 +1,118 @@
+name: Desktop riscv64 (experimental)
+
+# Cross-compiles the desktop app for riscv64 from an x86_64 runner.
+#
+# Deliberately not attached to pull requests. Nothing here has shipped yet, and
+# a target still being proven must not be able to block a review. It runs on
+# demand and on pushes to dev, so a regression is visible without ever gating
+# anyone's PR.
+#
+# The obstacle was never the Rust target — riscv64gc-unknown-linux-gnu is tier 2
+# with std. It is webkit2gtk: the desktop app links it, so a cross-build needs
+# the riscv64 library and headers present at link time.
+# taiki-e/setup-cross-toolchain-action installs packages for the target
+# architecture (`apt-get install <pkg>:<target dpkg arch>`), which is what makes
+# this reachable without a sysroot built by hand or a self-hosted board.
+#
+# Reference: tauri-apps/tauri#9599, where a cross-compiled riscv64 Tauri binary
+# was confirmed to run on real hardware.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [dev]
+    paths:
+      - 'src-tauri/**'
+      - '.github/workflows/desktop-riscv64.yml'
+
+concurrency:
+  group: desktop-riscv64-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Desktop riscv64 (experimental)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    # Informational while the target is being proven. Remove once it has been
+    # green for a few runs and the produced binary has been checked on hardware.
+    continue-on-error: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # Host-side build tooling only. The target's own libraries come from the
+      # cross-toolchain step below, installed for the riscv64 dpkg architecture.
+      - name: Host build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config
+
+      - name: Setup riscv64 cross toolchain
+        uses: taiki-e/setup-cross-toolchain-action@12b7ad4acfa95a1476779d6c06699b96ec1691f8 # v1
+        with:
+          target: riscv64gc-unknown-linux-gnu
+          # These are the packages the desktop app links against. webkit2gtk is
+          # the one that made this hard: without the riscv64 build of it there
+          # is nothing for the linker to resolve against.
+          packages: >-
+            libwebkit2gtk-4.1-dev
+            libgtk-3-dev
+            librsvg2-dev
+            libssl-dev
+            libudev-dev
+            libusb-1.0-0-dev
+            libayatana-appindicator3-dev
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Fetch bundled Tor
+        # Tor publishes no riscv64 Expert Bundle. The x86_64 archive carries the
+        # architecture-neutral GeoIP data, which is all the frontend build needs;
+        # a riscv64 Tor daemon is a separate problem and is why this job builds
+        # the binary rather than a shippable bundle.
+        run: npx --no-install tsx scripts/fetch-tor.mts linux-x86_64
+
+      - name: Build the frontend
+        run: npx vite build --config vite.desktop.config.ts
+
+      # No bundling. The Tauri bundler shells out to linuxdeploy and
+      # appimagetool, neither of which cross-targets, so a bundle attempt would
+      # fail for a reason unrelated to whether the code compiles for riscv64.
+      # Proving the binary links is the question this job exists to answer.
+      - name: Cross-compile the desktop binary
+        working-directory: src-tauri
+        env:
+          PKG_CONFIG_ALLOW_CROSS: '1'
+        run: cargo build --release --target riscv64gc-unknown-linux-gnu
+
+      - name: Verify the binary is really RISC-V
+        working-directory: src-tauri
+        run: |
+          BIN="target/riscv64gc-unknown-linux-gnu/release/optn-wallet-desktop"
+          file "$BIN"
+          # A misconfigured linker silently emits a host binary. That would look
+          # like success and then fail to start on riscv64 hardware.
+          file "$BIN" | grep -q 'RISC-V' || {
+            echo "::error::linked a non-RISC-V binary"
+            exit 1
+          }
+
+      - name: Upload the binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: desktop-linux-riscv64-unbundled
+          path: src-tauri/target/riscv64gc-unknown-linux-gnu/release/optn-wallet-desktop
+          retention-days: 14
+          if-no-files-found: error
