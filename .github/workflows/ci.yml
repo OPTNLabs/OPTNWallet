@@ -136,3 +136,23 @@ jobs:
           name: web-dist
           path: dist/
           retention-days: 7
+
+  release-completeness:
+    name: The release cannot drop an asset
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --quiet pyyaml
+      # The release asserts its own asset set, but nothing asserted the
+      # assertion. A pattern with a typo, or a guard broad enough to accept
+      # anything, looks correct in review and removes the protection entirely.
+      # This runs the workflow's own shell against a synthetic release and
+      # removes one asset at a time, requiring every removal to be caught.
+      - run: bash scripts/verify-release-completeness.sh
