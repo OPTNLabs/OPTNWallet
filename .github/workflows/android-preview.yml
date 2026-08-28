@@ -297,9 +297,36 @@ jobs:
           fi
           test "$instrumentation_exit" -eq 0
 
-      - name: Upload Debug APK
+      # assembleDebug builds every flavour, so both APKs should exist. Nothing
+      # checked that: the upload was one artifact over a glob with no
+      # if-no-files-found, so an F-Droid variant that stopped building would
+      # have left the preview green with the Play APK alone in the artifact.
+      # That is the same shape of hole the release had.
+      - name: Verify both store flavours built
+        run: |
+          missing=0
+          for flavour in play fdroid; do
+            if find android -type f -path "*/outputs/apk/${flavour}/debug/*.apk" -print -quit \
+              | grep -q .; then
+              echo "  ok       ${flavour} debug APK"
+            else
+              echo "::error::${flavour} debug APK was not produced"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: Upload Play debug APK
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: app-debug
-          path: android/**/outputs/apk/debug/*.apk
+          name: app-debug-play
+          path: android/**/outputs/apk/play/debug/*.apk
+          if-no-files-found: error
+
+      - name: Upload F-Droid debug APK
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: app-debug-fdroid
+          path: android/**/outputs/apk/fdroid/debug/*.apk
+          if-no-files-found: error
           retention-days: 14
