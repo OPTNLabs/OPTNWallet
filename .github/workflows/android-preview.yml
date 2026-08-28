@@ -23,77 +23,38 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          fetch-depth: 0
-
-      - name: Detect Android-relevant changes
-        id: changes
-        shell: bash
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          run_android=false
-
-          if [ "$EVENT_NAME" != 'pull_request' ]; then
-            run_android=true
-          else
-            while IFS= read -r path; do
-              case "$path" in
-                src/platform/desktop/*|src-tauri/*)
-                  ;;
-                src/*|android/*|public/*|scripts/*|capacitor.config.ts|vite.config.ts|reference/*|.github/workflows/android-preview.yml)
-                  run_android=true
-                  ;;
-              esac
-            done < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
-          fi
-
-          echo "run_android=$run_android" >> "$GITHUB_OUTPUT"
-          echo "Android preview required: $run_android"
 
       - name: Setup Node
-        if: steps.changes.outputs.run_android == 'true'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 20
           cache: npm
 
       - name: Install deps
-        if: steps.changes.outputs.run_android == 'true'
         run: npm ci
 
       - name: Setup Java (JDK 21)
-        if: steps.changes.outputs.run_android == 'true'
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
         with:
           distribution: 'temurin'
           java-version: '21'
 
       - name: Setup Android SDK
-        if: steps.changes.outputs.run_android == 'true'
         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699
 
       - name: Enable Gradle cache
-        if: steps.changes.outputs.run_android == 'true'
         uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb
 
       - name: Build Debug APK
-        if: steps.changes.outputs.run_android == 'true'
         run: npm run android:apk:dev
 
       - name: Android JVM tests
-        if: steps.changes.outputs.run_android == 'true'
         run: npm run android:test
 
       - name: Prepare Android instrumentation tests
-        if: steps.changes.outputs.run_android == 'true'
         run: cd android && ./gradlew assembleDebugAndroidTest
 
       - name: Configure Android emulator acceleration
-        if: steps.changes.outputs.run_android == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -111,7 +72,6 @@ jobs:
           fi
 
       - name: Android emulator smoke tests
-        if: steps.changes.outputs.run_android == 'true'
         run: |
           set -eu
 
@@ -338,7 +298,6 @@ jobs:
           test "$instrumentation_exit" -eq 0
 
       - name: Upload Debug APK
-        if: steps.changes.outputs.run_android == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: app-debug
