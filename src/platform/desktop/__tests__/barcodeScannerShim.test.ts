@@ -70,11 +70,14 @@ describe('desktop barcode-scanner shim', () => {
 
 /** Type-only exports are erased at runtime, so check the source for them. */
 function sourceDeclaresType(name: string): boolean {
+  // A plain scan rather than a built regular expression: the pattern here is
+  // simple enough that constructing one only invites the escaping bug this
+  // originally had, where a template literal turned \s into "s".
   const source = readFileSync(
     resolve(repoRoot, 'src', 'platform', 'desktop', 'barcode-scanner.ts'),
     'utf8'
   );
-  // String.raw: in a plain template literal \s is just "s" and \b is a
-  // backspace, so the pattern silently matches nothing.
-  return new RegExp(String.raw`export\s+type\s+${name}\b`).test(source);
+  return source
+    .split('\n')
+    .some((line) => line.trimStart().startsWith(`export type ${name} `));
 }
