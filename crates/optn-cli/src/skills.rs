@@ -185,6 +185,17 @@ pub const SKILLS: &[Skill] = &[
         requires_confirmation: false,
     },
     Skill {
+        // Serves other commands rather than doing anything itself, and each
+        // request is gated again on arrival. Classified by what starting it
+        // costs: it opens a listening socket, nothing more.
+        name: "serve",
+        capability: Capability::Read,
+        summary: "Serve the same commands over local JSON-RPC, token-gated.",
+        needs_wallet: false,
+        needs_network: true,
+        requires_confirmation: false,
+    },
+    Skill {
         name: "skills",
         capability: Capability::Read,
         summary: "This manifest: every command, what it may do, and the active policy.",
