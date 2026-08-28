@@ -433,7 +433,7 @@ jobs:
           sudo flatpak install -y --noninteractive --bundle "$BUNDLE"
           LOCATION="$(sudo flatpak info --show-location com.optilabs.wallet)"
           for required in \
-            files/bin/OPTNWallet \
+            files/bin/optn-wallet-desktop \
             files/share/applications/com.optilabs.wallet.desktop \
             files/share/metainfo/com.optilabs.wallet.metainfo.xml
           do
@@ -444,7 +444,7 @@ jobs:
             fi
             echo "  ok       $required"
           done
-          sudo test -x "$LOCATION/files/bin/OPTNWallet"
+          sudo test -x "$LOCATION/files/bin/optn-wallet-desktop"
           sudo flatpak uninstall -y com.optilabs.wallet
 
       - name: Upload the Flatpak

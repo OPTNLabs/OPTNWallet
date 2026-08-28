@@ -14,7 +14,7 @@ id: com.optilabs.wallet
 runtime: org.gnome.Platform
 runtime-version: '50'
 sdk: org.gnome.Sdk
-command: OPTNWallet
+command: optn-wallet-desktop
 separate-locales: false
 
 finish-args:
@@ -43,13 +43,17 @@ modules:
       # nothing when launched, which is far harder to diagnose than a build
       # that stops here.
       - |
-        if [ ! -x unpacked/usr/bin/OPTNWallet ]; then
-          echo "the deb has no executable usr/bin/OPTNWallet; it contains:"
+        if [ ! -x unpacked/usr/bin/optn-wallet-desktop ]; then
+          echo "the deb has no executable usr/bin/optn-wallet-desktop; it contains:"
           find unpacked/usr/bin -maxdepth 1 -type f
           exit 1
         fi
 
-      - install -Dm755 unpacked/usr/bin/OPTNWallet /app/bin/OPTNWallet
+      # Named for the Cargo package, not the product: Tauri's deb bundler uses
+      # the crate name for the binary while naming the package after
+      # productName. They differ here, and the manifest has to follow the
+      # binary.
+      - install -Dm755 unpacked/usr/bin/optn-wallet-desktop /app/bin/optn-wallet-desktop
 
       # Bundled resources — the Tor binary among them — live in
       # /usr/lib/<productName>/ in the deb, and Tauri resolves them relative to
