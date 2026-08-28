@@ -103,6 +103,23 @@ android {
     }
 }
 
+// The barcode plugin declares both scanning backends. We only ever call ZXing
+// (see src/utils/barcodeScanner.ts), so ML Kit is removed from the build
+// rather than shipped unused.
+//
+// This is what makes an F-Droid build possible: their inclusion policy requires
+// every dependency to be free software, and com.google.mlkit:barcode-scanning
+// is proprietary. It also pulls play-services-mlkit-barcode-scanning, a
+// libbarhopper native library of roughly 5 MB per ABI, and bundled TensorFlow
+// Lite models — about 20 MB of closed binaries across four ABIs.
+//
+// Applied to every flavour, not just fdroid. Excluding it from one flavour
+// alone would leave F-Droid users on an Android code path nobody else runs.
+configurations.configureEach {
+    exclude group: 'com.google.mlkit'
+    exclude group: 'com.google.android.gms', module: 'play-services-mlkit-barcode-scanning'
+}
+
 dependencies {
     implementation fileTree(include: ['*.jar'], dir: 'libs')
     implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"

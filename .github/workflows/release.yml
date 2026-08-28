@@ -274,6 +274,18 @@ jobs:
         if: always() && steps.signing.outputs.available == 'true'
         run: rm -f "${{ runner.temp }}/optn-wallet-upload.keystore"
 
+      # Same gate the preview applies, on the signed release APKs. An F-Droid
+      # build that ships ML Kit is not eligible for the store at all, and that
+      # is not something to discover after publishing.
+      - name: Verify no proprietary barcode scanner is bundled
+        run: |
+          mapfile -t apks < <(find android -type f -name '*.apk' | sort)
+          if [ "${#apks[@]}" -eq 0 ]; then
+            echo '::error::no APKs to inspect'
+            exit 1
+          fi
+          bash scripts/assert-no-proprietary-scanner.sh "${apks[@]}"
+
       - name: Upload Android release files
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:

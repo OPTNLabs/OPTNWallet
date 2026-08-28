@@ -350,6 +350,21 @@ jobs:
           done
           exit "$missing"
 
+      # F-Droid's inclusion policy covers dependencies, not just the
+      # application. ML Kit is proprietary and arrives with Play Services, a
+      # native barcode engine and TensorFlow Lite models — roughly 20 MB of
+      # closed binaries. android/app/build.gradle excludes it and every scan
+      # goes through ZXing instead; nothing else would notice if that
+      # exclusion were dropped, because the app would keep working.
+      - name: Verify no proprietary barcode scanner is bundled
+        run: |
+          mapfile -t apks < <(find android -type f -path '*/outputs/apk/*/debug/*.apk' | sort)
+          if [ "${#apks[@]}" -eq 0 ]; then
+            echo '::error::no debug APKs to inspect'
+            exit 1
+          fi
+          bash scripts/assert-no-proprietary-scanner.sh "${apks[@]}"
+
       - name: Upload Play debug APK
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
