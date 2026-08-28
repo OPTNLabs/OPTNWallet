@@ -1,13 +1,1 @@
-name: Publish Release
-
-on:
-  push:
-    # Merging is the release trigger. Nothing here creates a tag by hand any
-    # more: main publishes a stable release, staging publishes a beta
-    # prerelease, and dev publishes an alpha prerelease, so every merge still
-    # produces downloadable binaries without filling the stable release list.
-    # Channel names live in the tag (alpha/beta), never as -dev.N or -staging.N.
-    branches:
-      - main
-      - staging
-      - dev
+FILE_PATH:/workspace/optn-ci/commits/07-release.yml
