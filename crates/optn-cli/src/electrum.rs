@@ -27,6 +27,30 @@ pub struct Utxo {
     pub tx_pos: u32,
     pub height: i64,
     pub value: u64,
+    /// Present only on servers that index CashTokens. A server without token
+    /// support omits it entirely, which is why this is an Option rather than a
+    /// default — an absent field and a token-free output must not look alike.
+    #[serde(default)]
+    pub token_data: Option<TokenUtxo>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct TokenUtxo {
+    pub category: String,
+    /// Servers send the amount as a decimal string, since it does not fit a
+    /// JSON number safely at the top of the range.
+    #[serde(default)]
+    pub amount: Option<String>,
+    #[serde(default)]
+    pub nft: Option<TokenNft>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct TokenNft {
+    #[serde(default)]
+    pub capability: Option<String>,
+    #[serde(default)]
+    pub commitment: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

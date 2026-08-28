@@ -29,6 +29,44 @@ pub struct Utxo {
 pub struct Output {
     pub value: u64,
     pub script_pubkey: Vec<u8>,
+    /// CashTokens prefix, when this output carries tokens.
+    ///
+    /// The prefix precedes the locking script on the wire and is length-counted
+    /// with it, so it must be included wherever the script is serialised — the
+    /// output itself and the sighash's hashOutputs alike. Committing to one but
+    /// not the other produces a signature the network rejects.
+    pub token_prefix: Option<Vec<u8>>,
+}
+
+impl Output {
+    pub fn new(value: u64, script_pubkey: Vec<u8>) -> Self {
+        Output {
+            value,
+            script_pubkey,
+            token_prefix: None,
+        }
+    }
+
+    pub fn with_tokens(value: u64, script_pubkey: Vec<u8>, token_prefix: Vec<u8>) -> Self {
+        Output {
+            value,
+            script_pubkey,
+            token_prefix: Some(token_prefix),
+        }
+    }
+
+    /// Prefix and locking script as one length-counted field.
+    fn locking_field(&self) -> Vec<u8> {
+        match &self.token_prefix {
+            Some(prefix) => {
+                let mut v = Vec::with_capacity(prefix.len() + self.script_pubkey.len());
+                v.extend_from_slice(prefix);
+                v.extend_from_slice(&self.script_pubkey);
+                v
+            }
+            None => self.script_pubkey.clone(),
+        }
+    }
 }
 
 pub fn double_sha256(bytes: &[u8]) -> [u8; 32] {
@@ -120,9 +158,10 @@ impl Transaction {
     fn hash_outputs(&self) -> [u8; 32] {
         let mut buf = Vec::new();
         for o in &self.outputs {
+            let field = o.locking_field();
             buf.extend_from_slice(&o.value.to_le_bytes());
-            buf.extend_from_slice(&varint(o.script_pubkey.len() as u64));
-            buf.extend_from_slice(&o.script_pubkey);
+            buf.extend_from_slice(&varint(field.len() as u64));
+            buf.extend_from_slice(&field);
         }
         double_sha256(&buf)
     }
@@ -205,9 +244,10 @@ impl Transaction {
         }
         out.extend_from_slice(&varint(self.outputs.len() as u64));
         for o in &self.outputs {
+            let field = o.locking_field();
             out.extend_from_slice(&o.value.to_le_bytes());
-            out.extend_from_slice(&varint(o.script_pubkey.len() as u64));
-            out.extend_from_slice(&o.script_pubkey);
+            out.extend_from_slice(&varint(field.len() as u64));
+            out.extend_from_slice(&field);
         }
         out.extend_from_slice(&self.locktime.to_le_bytes());
         out
@@ -236,7 +276,7 @@ pub fn select_coins(
     output_count: usize,
 ) -> Result<(Vec<Utxo>, u64)> {
     let mut sorted = available.to_vec();
-    sorted.sort_by_key(|a| std::cmp::Reverse(a.value));
+    sorted.sort_by_key(|u| std::cmp::Reverse(u.value));
 
     let mut chosen: Vec<Utxo> = Vec::new();
     let mut total: u64 = 0;
@@ -261,6 +301,123 @@ pub fn select_coins(
     )))
 }
 
+/// One decoded output.
+#[derive(Debug, Clone)]
+pub struct DecodedOutput {
+    pub value: u64,
+    pub script_pubkey: Vec<u8>,
+    pub token: Option<crate::token::TokenData>,
+}
+
+/// A decoded transaction.
+#[derive(Debug, Clone)]
+pub struct Decoded {
+    pub version: u32,
+    pub inputs: Vec<([u8; 32], u32, u32)>,
+    pub outputs: Vec<DecodedOutput>,
+    pub locktime: u32,
+}
+
+fn take_varint(b: &[u8], i: &mut usize) -> Result<u64> {
+    let first = *b
+        .get(*i)
+        .ok_or_else(|| CliError::Protocol("transaction ends mid-varint".into()))?;
+    *i += 1;
+    let mut read = |n: usize| -> Result<u64> {
+        if b.len() < *i + n {
+            return Err(CliError::Protocol("transaction ends mid-varint".into()));
+        }
+        let mut buf = [0u8; 8];
+        buf[..n].copy_from_slice(&b[*i..*i + n]);
+        *i += n;
+        Ok(u64::from_le_bytes(buf))
+    };
+    match first {
+        0..=0xfc => Ok(u64::from(first)),
+        0xfd => read(2),
+        0xfe => read(4),
+        _ => read(8),
+    }
+}
+
+fn take(b: &[u8], i: &mut usize, n: usize) -> Result<Vec<u8>> {
+    if b.len() < *i + n {
+        return Err(CliError::Protocol("transaction is truncated".into()));
+    }
+    let v = b[*i..*i + n].to_vec();
+    *i += n;
+    Ok(v)
+}
+
+/// Decode a raw transaction.
+///
+/// Outputs are checked for a CashTokens prefix. The prefix is not part of the
+/// locking script but shares its length field, so a decoder that ignores it
+/// reports the script as unparseable rather than reporting a token.
+pub fn decode(bytes: &[u8]) -> Result<Decoded> {
+    let mut i = 0usize;
+    let version = u32::from_le_bytes(
+        take(bytes, &mut i, 4)?
+            .try_into()
+            .map_err(|_| CliError::Protocol("bad version".into()))?,
+    );
+
+    let input_count = take_varint(bytes, &mut i)?;
+    let mut inputs = Vec::new();
+    for _ in 0..input_count {
+        let txid: [u8; 32] = take(bytes, &mut i, 32)?
+            .try_into()
+            .map_err(|_| CliError::Protocol("bad outpoint".into()))?;
+        let vout = u32::from_le_bytes(
+            take(bytes, &mut i, 4)?
+                .try_into()
+                .map_err(|_| CliError::Protocol("bad vout".into()))?,
+        );
+        let script_len = take_varint(bytes, &mut i)? as usize;
+        take(bytes, &mut i, script_len)?;
+        let sequence = u32::from_le_bytes(
+            take(bytes, &mut i, 4)?
+                .try_into()
+                .map_err(|_| CliError::Protocol("bad sequence".into()))?,
+        );
+        inputs.push((txid, vout, sequence));
+    }
+
+    let output_count = take_varint(bytes, &mut i)?;
+    let mut outputs = Vec::new();
+    for _ in 0..output_count {
+        let value = u64::from_le_bytes(
+            take(bytes, &mut i, 8)?
+                .try_into()
+                .map_err(|_| CliError::Protocol("bad value".into()))?,
+        );
+        let field_len = take_varint(bytes, &mut i)? as usize;
+        let field = take(bytes, &mut i, field_len)?;
+        let (token, script_pubkey) = match crate::token::TokenData::decode_prefix(&field) {
+            Ok((data, used)) => (Some(data), field[used..].to_vec()),
+            // No prefix is the ordinary case, not an error.
+            Err(_) => (None, field),
+        };
+        outputs.push(DecodedOutput {
+            value,
+            script_pubkey,
+            token,
+        });
+    }
+
+    let locktime = u32::from_le_bytes(
+        take(bytes, &mut i, 4)?
+            .try_into()
+            .map_err(|_| CliError::Protocol("bad locktime".into()))?,
+    );
+    Ok(Decoded {
+        version,
+        inputs,
+        outputs,
+        locktime,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,6 +432,50 @@ mod tests {
                 .chain([9u8; 20])
                 .chain([0x88, 0xac])
                 .collect(),
+        }
+    }
+
+    #[test]
+    fn a_signed_transaction_decodes_back() {
+        let key = SigningKey::from_slice(&[0x22u8; 32]).unwrap();
+        let tx = Transaction::new(vec![utxo(100_000)], vec![Output::new(90_000, vec![0x51])]);
+        let raw = tx.sign(&[key]).unwrap();
+        let back = decode(&raw).expect("our own output must decode");
+        assert_eq!(back.version, 2);
+        assert_eq!(back.inputs.len(), 1);
+        assert_eq!(back.outputs.len(), 1);
+        assert_eq!(back.outputs[0].value, 90_000);
+        assert!(back.outputs[0].token.is_none());
+    }
+
+    #[test]
+    fn a_token_output_decodes_with_its_prefix() {
+        // The prefix shares the locking script's length field, so a decoder
+        // that ignores it reports an unparseable script instead of a token.
+        let key = SigningKey::from_slice(&[0x33u8; 32]).unwrap();
+        let category = [9u8; 32];
+        let prefix = crate::token::TokenData::fungible(category, 4242)
+            .encode_prefix()
+            .unwrap();
+        let tx = Transaction::new(
+            vec![utxo(100_000)],
+            vec![Output::with_tokens(1000, vec![0x51], prefix)],
+        );
+        let raw = tx.sign(&[key]).unwrap();
+        let back = decode(&raw).unwrap();
+        let token = back.outputs[0].token.as_ref().expect("token must be found");
+        assert_eq!(token.amount, 4242);
+        assert_eq!(token.category, category);
+        assert_eq!(back.outputs[0].script_pubkey, vec![0x51]);
+    }
+
+    #[test]
+    fn a_truncated_transaction_errors_rather_than_panicking() {
+        let key = SigningKey::from_slice(&[0x44u8; 32]).unwrap();
+        let tx = Transaction::new(vec![utxo(100_000)], vec![Output::new(90_000, vec![0x51])]);
+        let raw = tx.sign(&[key]).unwrap();
+        for cut in 1..raw.len() {
+            let _ = decode(&raw[..cut]);
         }
     }
 
@@ -294,10 +495,7 @@ mod tests {
         // + 32 hashOutputs + 4 locktime + 4 sighash type = 182
         let tx = Transaction::new(
             vec![utxo(100_000)],
-            vec![Output {
-                value: 90_000,
-                script_pubkey: utxo(0).script_pubkey,
-            }],
+            vec![Output::new(90_000, utxo(0).script_pubkey)],
         );
         let p = tx.sighash_preimage(0).unwrap();
         assert_eq!(p.len(), 182, "unexpected preimage length");
@@ -313,20 +511,8 @@ mod tests {
     fn the_preimage_commits_to_the_input_value() {
         // This is what FORKID adds and what stops a signature being replayed
         // against an output of a different amount.
-        let a = Transaction::new(
-            vec![utxo(100_000)],
-            vec![Output {
-                value: 1,
-                script_pubkey: vec![0x51],
-            }],
-        );
-        let b = Transaction::new(
-            vec![utxo(200_000)],
-            vec![Output {
-                value: 1,
-                script_pubkey: vec![0x51],
-            }],
-        );
+        let a = Transaction::new(vec![utxo(100_000)], vec![Output::new(1, vec![0x51])]);
+        let b = Transaction::new(vec![utxo(200_000)], vec![Output::new(1, vec![0x51])]);
         assert_ne!(a.sighash(0).unwrap(), b.sighash(0).unwrap());
     }
 
@@ -334,10 +520,7 @@ mod tests {
     fn changing_an_output_changes_every_sighash() {
         let base = Transaction::new(
             vec![utxo(100_000), utxo(50_000)],
-            vec![Output {
-                value: 90_000,
-                script_pubkey: vec![0x51],
-            }],
+            vec![Output::new(90_000, vec![0x51])],
         );
         let mut altered = base.clone();
         altered.outputs[0].value = 89_999;
@@ -353,13 +536,7 @@ mod tests {
     #[test]
     fn signing_produces_a_parseable_script_sig() {
         let key = SigningKey::from_slice(&[0x11u8; 32]).unwrap();
-        let tx = Transaction::new(
-            vec![utxo(100_000)],
-            vec![Output {
-                value: 90_000,
-                script_pubkey: vec![0x51],
-            }],
-        );
+        let tx = Transaction::new(vec![utxo(100_000)], vec![Output::new(90_000, vec![0x51])]);
         let raw = tx.sign(&[key]).unwrap();
         // version(4) + in count(1) + outpoint(36) + scriptSig len(1) + ...
         assert_eq!(&raw[0..4], &2u32.to_le_bytes());

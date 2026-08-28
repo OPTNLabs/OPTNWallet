@@ -14,6 +14,39 @@ const CHARSET: &[u8] = b"qpzry9x8gf2tvdw0s3jn54khce6mua7l";
 pub enum AddressKind {
     P2pkh,
     P2sh,
+    /// Token-aware P2PKH. Same hash160, different CashAddr type, and the
+    /// encoding renders with a `z` rather than a `q`.
+    P2pkhToken,
+    /// Token-aware P2SH.
+    P2shToken,
+}
+
+impl AddressKind {
+    /// CashAddr version byte. The type occupies bits 3-7.
+    fn version_byte(self) -> u8 {
+        match self {
+            AddressKind::P2pkh => 0x00,
+            AddressKind::P2sh => 0x08,
+            AddressKind::P2pkhToken => 0x10,
+            AddressKind::P2shToken => 0x18,
+        }
+    }
+
+    /// Whether this address advertises that it accepts CashTokens.
+    ///
+    /// Sending tokens to a non-token address is how tokens get destroyed, so
+    /// the distinction is enforced rather than assumed.
+    pub fn accepts_tokens(self) -> bool {
+        matches!(self, AddressKind::P2pkhToken | AddressKind::P2shToken)
+    }
+
+    /// The same key or script, expressed as its token-aware form.
+    pub fn token_aware(self) -> Self {
+        match self {
+            AddressKind::P2pkh | AddressKind::P2pkhToken => AddressKind::P2pkhToken,
+            AddressKind::P2sh | AddressKind::P2shToken => AddressKind::P2shToken,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -120,6 +153,8 @@ impl Address {
         let kind = match version >> 3 {
             0 => AddressKind::P2pkh,
             1 => AddressKind::P2sh,
+            2 => AddressKind::P2pkhToken,
+            3 => AddressKind::P2shToken,
             other => return Err(format!("unsupported address type {other}")),
         };
         let mut hash = [0u8; 20];
@@ -129,9 +164,11 @@ impl Address {
 
     /// The output script this address pays to.
     pub fn script_pubkey(&self) -> Vec<u8> {
+        // Token-aware and plain addresses lock to the same script. The token
+        // flag lives in the address encoding, not on the chain.
         match self.kind {
             // OP_DUP OP_HASH160 <20> ... OP_EQUALVERIFY OP_CHECKSIG
-            AddressKind::P2pkh => {
+            AddressKind::P2pkh | AddressKind::P2pkhToken => {
                 let mut s = Vec::with_capacity(25);
                 s.extend_from_slice(&[0x76, 0xa9, 0x14]);
                 s.extend_from_slice(&self.hash);
@@ -139,7 +176,7 @@ impl Address {
                 s
             }
             // OP_HASH160 <20> ... OP_EQUAL
-            AddressKind::P2sh => {
+            AddressKind::P2sh | AddressKind::P2shToken => {
                 let mut s = Vec::with_capacity(23);
                 s.extend_from_slice(&[0xa9, 0x14]);
                 s.extend_from_slice(&self.hash);
@@ -163,10 +200,7 @@ impl Address {
     }
 
     pub fn encode(&self) -> String {
-        let version: u8 = match self.kind {
-            AddressKind::P2pkh => 0x00,
-            AddressKind::P2sh => 0x08,
-        };
+        let version = self.kind.version_byte();
         let mut payload8 = Vec::with_capacity(21);
         payload8.push(version);
         payload8.extend_from_slice(&self.hash);
