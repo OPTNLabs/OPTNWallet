@@ -56,7 +56,7 @@
     "serve": "npx serve -s dist",
     "android:prepare": "dotenv -e .env -- npm run build:web && npm run capacitor:sync:android",
     "android:apk:dev": "VITE_ENABLE_PRIVATE_KEY_VIEW=true npm run android:prepare && cd android && ./gradlew assembleDebug",
-    "android:apk:dev:install": "npm run android:apk:dev && adb install -r android/app/build/outputs/apk/debug/app-debug.apk",
+    "android:apk:dev:install": "npm run android:apk:dev && adb install -r $(find android/app/build/outputs/apk/play/debug -name '*.apk' | head -n 1)",
     "android:test": "cd android && ./gradlew test",
     "android:test:instrumented": "cd android && ./gradlew connectedAndroidTest",
     "android:apk:prod": "dotenv -e .env -- bash -lc 'npm run android:prepare && cd android && ./gradlew assembleRelease'",

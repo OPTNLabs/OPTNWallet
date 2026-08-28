@@ -52,7 +52,8 @@ jobs:
         run: npm run android:test
 
       - name: Prepare Android instrumentation tests
-        run: cd android && ./gradlew assembleDebugAndroidTest
+        # Every flavour, because both are installed and tested below.
+        run: cd android && ./gradlew assemblePlayDebugAndroidTest assembleFdroidDebugAndroidTest
 
       - name: Configure Android emulator acceleration
         shell: bash
@@ -235,11 +236,24 @@ jobs:
           }
           wait_for_package_manager 300
 
-          app_apk="android/app/build/outputs/apk/debug/app-debug.apk"
-          test_apk="android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk"
+          # Flavoured builds put each APK under its own store directory and
+          # rename it, so these are discovered rather than named. Hardcoding
+          # the old app-debug.apk path made this step exit 1 with no output at
+          # all, because `test -f` under `set -e` says nothing about what it
+          # was looking for.
+          find_apk() {
+            found="$(find "$1" -type f -name "$2" -print -quit 2>/dev/null)"
+            if [ -z "$found" ]; then
+              # To stderr: this runs inside a command substitution, so on
+              # stdout the message would be captured instead of printed —
+              # reproducing the silent failure this replaces.
+              echo "::error::no APK matching $2 under $1" >&2
+              find "$1" -type f -name '*.apk' >&2 2>/dev/null || true
+              return 1
+            fi
+            printf '%s' "$found"
+          }
           instrumentation_log="$RUNNER_TEMP/android-instrumentation.log"
-          test -f "$app_apk"
-          test -f "$test_apk"
           install_timeout_seconds=900
           install_apk() {
             apk_path="$1"
@@ -277,25 +291,45 @@ jobs:
             echo "Package $package_name was not installed after 3 attempts."
             return 1
           }
-          install_apk "$app_apk" optn.wallet.app
-          install_apk "$test_apk" optn.wallet.app.test -t
+          # Both flavours are exercised, not just the default. They differ in
+          # their dependencies — fdroid drops Play In-App Updates — and a
+          # missing class only shows up when the app actually runs. Booting the
+          # emulator is what costs time here; a second install and test run on
+          # the same instance is cheap next to shipping a broken F-Droid APK.
+          for flavour in play fdroid; do
+            echo "::group::instrumentation on the $flavour flavour"
+            app_apk="$(find_apk "android/app/build/outputs/apk/$flavour/debug" '*.apk')"
+            # Searched by name across the whole androidTest tree rather than
+            # at a fixed depth: the test APK carries the flavour in its
+            # filename, so this holds whichever directory layout AGP uses.
+            test_apk="$(find_apk 'android/app/build/outputs/apk/androidTest' "*${flavour}*.apk")"
 
-          set +e
-          timeout 300s adb -s "$emulator_serial" shell am instrument -w -r \
-            optn.wallet.app.test/androidx.test.runner.AndroidJUnitRunner \
-            | tee "$instrumentation_log"
-          instrumentation_exit=${PIPESTATUS[0]}
-          set -e
-          if grep -q '^INSTRUMENTATION_FAILED:' "$instrumentation_log" ||
-            ! grep -q '^INSTRUMENTATION_CODE: -1$' "$instrumentation_log"; then
-            echo 'Android instrumentation tests failed.'
-            echo 'Android instrumentation output:'
-            cat "$instrumentation_log" || true
-            echo 'Android logcat:'
-            adb_with_timeout -s "$emulator_serial" logcat -d -t 400 || true
-            exit 1
-          fi
-          test "$instrumentation_exit" -eq 0
+            # Both flavours carry the same applicationId, so the previous one
+            # has to go before the next is installed.
+            adb_with_timeout -s "$emulator_serial" uninstall optn.wallet.app >/dev/null 2>&1 || true
+            adb_with_timeout -s "$emulator_serial" uninstall optn.wallet.app.test >/dev/null 2>&1 || true
+
+            install_apk "$app_apk" optn.wallet.app
+            install_apk "$test_apk" optn.wallet.app.test -t
+
+            set +e
+            timeout 300s adb -s "$emulator_serial" shell am instrument -w -r \
+              optn.wallet.app.test/androidx.test.runner.AndroidJUnitRunner \
+              | tee "$instrumentation_log"
+            instrumentation_exit=${PIPESTATUS[0]}
+            set -e
+            if grep -q '^INSTRUMENTATION_FAILED:' "$instrumentation_log" ||
+              ! grep -q '^INSTRUMENTATION_CODE: -1$' "$instrumentation_log"; then
+              echo "::error::instrumentation tests failed on the $flavour flavour"
+              echo 'Android instrumentation output:'
+              cat "$instrumentation_log" || true
+              echo 'Android logcat:'
+              adb_with_timeout -s "$emulator_serial" logcat -d -t 400 || true
+              exit 1
+            fi
+            test "$instrumentation_exit" -eq 0
+            echo "::endgroup::"
+          done
 
       # assembleDebug builds every flavour, so both APKs should exist. Nothing
       # checked that: the upload was one artifact over a glob with no
