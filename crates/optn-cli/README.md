@@ -59,6 +59,40 @@ error: 'bitcoincash:qpm2qsz...' is a bitcoincash address but --network is
 chipnet; querying the wrong chain returns an empty result, not an error
 ```
 
+## Recovery phrases and addresses
+
+```bash
+optn new --words 12                    # 12, 15, 18, 21 or 24
+echo "$PHRASE" | optn address          # m/44'/145'/0'/0/0 on mainnet
+echo "$PHRASE" | optn address --account 1 --index 5 --change
+echo "$PHRASE" | optn discover         # which paths actually have history
+```
+
+**The phrase is never a command-line argument.** It is read from
+`OPTN_MNEMONIC`, or from stdin if that is unset. Arguments appear in shell
+history and in `ps` output to every other user on the machine, and a recovery
+phrase is the whole wallet. `OPTN_PASSPHRASE` supplies BIP39's optional 25th
+word.
+
+All five BIP39 lengths are accepted on import — 12, 15, 18, 21 and 24 words.
+
+### Derivation paths
+
+| Network | Account path          | Prefix         |
+| ------- | --------------------- | -------------- |
+| mainnet | `m/44'/145'/account'` | `bitcoincash:` |
+| chipnet | `m/44'/1'/account'`   | `bchtest:`     |
+
+`optn discover` scans wider than the default, because a seed restored from
+other BCH tooling may sit under a coin type this wallet would not pick:
+
+- mainnet — coin types `145`, `0`
+- chipnet — coin types `1`, `145`, `0`
+
+each across accounts `0` and `1`. That set comes from
+`docs/bch-derivation-paths.md`, not from guesswork. `--gap` controls how many
+addresses per chain are checked before an account is considered empty.
+
 ## Using it from a script or an agent
 
 - `--json` on any command emits a stable object on **stdout**. Errors are also
@@ -115,9 +149,9 @@ tends to land here rather than at exit 3.
 
 ## Scope
 
-Today this covers Electrum-backed queries and broadcast. Key management,
-derivation-path discovery and transaction construction are not implemented yet;
-see the tracking issue for the planned surface.
+Today this covers Electrum-backed queries, broadcast, recovery-phrase
+generation, address derivation and derivation-path discovery. Transaction
+construction and signing are not implemented yet; see the tracking issue.
 
 Signing commands, when they land, will require an explicit opt-in rather than
 being reachable by default, because this binary is designed to be run by

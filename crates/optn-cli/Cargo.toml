@@ -24,6 +24,15 @@ clap = { version = "4", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
+ripemd = "0.1"
+# BIP32 with the pure-Rust k256 backend — the same curve crate src-tauri
+# already uses. A C-backed secp256k1 would not cross-compile to riscv64.
+bip32 = { version = "0.5", default-features = false, features = ["alloc", "secp256k1", "std"] }
+# Mnemonics come from rust-bitcoin's bip39, not bip32's built-in one. bip32
+# checks `entropy.len() != KEY_SIZE + 1`, which accepts 24-word phrases and
+# rejects everything shorter — but this wallet imports 12-, 15-, 18-, 21- and
+# 24-word phrases, so bip32's would have silently refused most real seeds.
+bip39 = { version = "2", default-features = false, features = ["std", "rand"] }
 tokio = { version = "1", features = ["net", "io-util", "time", "macros", "rt", "rt-multi-thread"] }
 # default-features = false is load-bearing for cross-compilation: the default
 # pulls aws-lc-sys, which builds C and CMake and does not cross to riscv64.

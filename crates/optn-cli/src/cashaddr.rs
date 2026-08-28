@@ -149,6 +149,52 @@ impl Address {
         }
     }
 
+    /// Build a CashAddr from a hash160 and a network prefix.
+    ///
+    /// The checksum covers the prefix, which is what makes a mainnet address
+    /// fail to decode under a testnet prefix rather than silently becoming a
+    /// different valid address.
+    pub fn from_hash(prefix: &str, kind: AddressKind, hash: [u8; 20]) -> Self {
+        Address {
+            kind,
+            hash,
+            prefix: prefix.to_string(),
+        }
+    }
+
+    pub fn encode(&self) -> String {
+        let version: u8 = match self.kind {
+            AddressKind::P2pkh => 0x00,
+            AddressKind::P2sh => 0x08,
+        };
+        let mut payload8 = Vec::with_capacity(21);
+        payload8.push(version);
+        payload8.extend_from_slice(&self.hash);
+        let payload5 = convert_bits(&payload8, 8, 5, true).expect("21 bytes always converts");
+
+        let mut checksum_input: Vec<u8> = self
+            .prefix
+            .bytes()
+            .map(|b| b & 0x1f)
+            .chain(std::iter::once(0))
+            .chain(payload5.iter().copied())
+            .collect();
+        checksum_input.extend_from_slice(&[0u8; 8]);
+        let poly = polymod(&checksum_input);
+
+        let mut out = String::with_capacity(self.prefix.len() + 1 + payload5.len() + 8);
+        out.push_str(&self.prefix);
+        out.push(':');
+        for v in payload5 {
+            out.push(CHARSET[v as usize] as char);
+        }
+        for i in 0..8 {
+            let idx = ((poly >> (5 * (7 - i))) & 0x1f) as usize;
+            out.push(CHARSET[idx] as char);
+        }
+        out
+    }
+
     /// Electrum's index key: SHA-256 of the script, byte-reversed, hex.
     pub fn electrum_scripthash(&self) -> String {
         let digest = Sha256::digest(self.script_pubkey());
@@ -216,6 +262,26 @@ mod tests {
         let a = Address::decode(bare).expect("bare address must decode");
         assert_eq!(a.prefix, "bitcoincash");
         assert_eq!(hex(&a.hash), SPEC_HASH160);
+    }
+
+    #[test]
+    fn encode_round_trips_with_decode() {
+        let a = Address::decode(SPEC_P2PKH).unwrap();
+        let re = Address::from_hash(&a.prefix, a.kind, a.hash).encode();
+        assert_eq!(
+            re, SPEC_P2PKH,
+            "re-encoding must reproduce the input exactly"
+        );
+    }
+
+    #[test]
+    fn the_same_hash_encodes_differently_per_network() {
+        let a = Address::decode(SPEC_P2PKH).unwrap();
+        let main = Address::from_hash("bitcoincash", a.kind, a.hash).encode();
+        let chip = Address::from_hash("bchtest", a.kind, a.hash).encode();
+        assert_ne!(main, chip);
+        // and each only decodes under its own prefix
+        assert!(Address::decode(&chip).unwrap().prefix == "bchtest");
     }
 
     #[test]
