@@ -181,6 +181,16 @@ export const WatchOnlySend: FC = () => {
 
   const [importText, setImportText] = useState('');
   const [scannerOpen, setScannerOpen] = useState(false);
+  // The QR is bounded by the card it sits in, and a signer reads it faster
+  // the larger it is. Testers asked for the whole window, so this gives it.
+  const [qrFullscreen, setQrFullscreen] = useState(false);
+  // One decoder for the whole scan, not one per frame. An animated UR spans
+  // dozens of frames, so a decoder rebuilt on each arrival discards every part
+  // it has already seen and can never complete a multi-part signed PSBT --
+  // which is why scanning a signed result never finished.
+  const urScannerRef = useRef<UrPsbtScanner | null>(null);
+  const [scanProgress, setScanProgress] = useState(0);
+  const [scanFrames, setScanFrames] = useState(0);
   /**
    * The accumulated PSBT: the base proposal merged with every verified return
    * from the signer. Multisig flows walk it around the room until each input
@@ -622,22 +632,37 @@ export const WatchOnlySend: FC = () => {
     }
   };
 
+  const openScanner = () => {
+    urScannerRef.current = new UrPsbtScanner();
+    setScanProgress(0);
+    setScanFrames(0);
+    setScannerOpen(true);
+  };
+
+  const closeScanner = () => {
+    setScannerOpen(false);
+    urScannerRef.current = null;
+  };
+
   const handleScanFrame = (text: string) => {
     if (!proposalState) {
       setError('Build the unsigned transaction first.');
       return;
     }
     try {
-      const scanner = new UrPsbtScanner();
+      const scanner = (urScannerRef.current ??= new UrPsbtScanner());
       const progress = scanner.receive(text);
+      setScanProgress(progress.progress);
+      setScanFrames((count) => count + 1);
       if (progress.complete && progress.psbt) {
         importAndMerge(progress.psbt);
-        setScannerOpen(false);
-      } else {
-        setImportText((prev) => (prev ? `${prev}\n` : '') + text.trim());
+        closeScanner();
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not read the signed transaction.');
+      // A frame that poisons the decoder leaves it unusable, so the next scan
+      // starts from a clean one rather than inheriting the failure.
+      closeScanner();
     }
   };
 
@@ -899,7 +924,35 @@ export const WatchOnlySend: FC = () => {
                   </p>
                   <button
                     type="button"
-                    onClick={() => setScannerOpen(true)}
+                    onClick={() => setQrFullscreen(true)}
+                    className="wallet-btn-secondary w-full py-2 text-sm"
+                  >
+                    Show full screen
+                  </button>
+                  {qrFullscreen && (
+                    <div
+                      role="dialog"
+                      aria-modal="true"
+                      aria-label="Animated QR code, full screen"
+                      onClick={() => setQrFullscreen(false)}
+                      className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-4 bg-white p-3"
+                    >
+                      <QRCodeSVG
+                        value={qrUri}
+                        size={PSBT_UR_QR_DISPLAY_SIZE}
+                        marginSize={PSBT_UR_QR_MARGIN_MODULES}
+                        level={PSBT_UR_QR_ERROR_LEVEL}
+                        className="h-auto w-[min(96vw,88svh)] max-w-none"
+                      />
+                      <p className="text-center text-sm text-black">
+                        Frame {frameNumber} / {frameCountRef.current} · tap
+                        anywhere to close
+                      </p>
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={openScanner}
                     className="wallet-btn-secondary w-full py-2 text-sm"
                   >
                     Scan the signed result
@@ -927,7 +980,14 @@ export const WatchOnlySend: FC = () => {
                   {scannerOpen && (
                     <CameraQrScanner
                       onResult={handleScanFrame}
-                      onClose={() => setScannerOpen(false)}
+                      onClose={closeScanner}
+                      continuous
+                      progress={scanProgress}
+                      statusText={
+                        scanFrames === 0
+                          ? 'Point the camera at the signed QR on the signer.'
+                          : `${scanFrames} frames read - ${Math.round(scanProgress * 100)}% recovered`
+                      }
                     />
                   )}
                 </section>
