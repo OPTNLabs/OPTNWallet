@@ -891,6 +891,7 @@ dependencies = [
  "k256",
  "ripemd",
  "sha2",
+ "wasm-bindgen",
 ]
 
 [[package]]
