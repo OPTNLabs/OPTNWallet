@@ -410,6 +410,29 @@ export function getRpaSendBlockReason(
     }
   }
 
+  // Versions 2 and 6 mean "force offline-communication only" (spec: "1 and 2
+  // for p2pkh (mainnet), 5 and 6 for p2pkh (testnet), among them 2 and 6 to
+  // force offline-communication only"). The recipient is telling senders to
+  // deliver payment details out of band -- the spec calls an offchain relay
+  // "a necessity for version 2, 4, 6 and 8" -- so they are not scanning the
+  // chain for this code and an on-chain payment may sit unnoticed. The coin
+  // would still be theirs to spend; they just would not know to look.
+  //
+  // Electron Cash parses the version byte and never reads it, so it pays these
+  // on-chain regardless. That is not a behaviour worth matching.
+  if (decoded.version === 0x02 || decoded.version === 0x06) {
+    return 'This code is marked offline-only: the recipient expects payment details out of band, not on-chain. No transaction was created.';
+  }
+
+  // prefix_size 0 is "no-filter for full-node or offline-communications". The
+  // recipient has asked for no prefix, so there is nothing for a sender to
+  // grind and no filter for them to query. Refusing here also keeps a decoded
+  // code from reaching the grind, where rpaGrindString and rpaPrefixTargetHex
+  // both throw on 0 -- a raw Error mid-send rather than a declined payment.
+  if (decoded.prefixBits === 0) {
+    return 'This code carries no scan prefix, so the recipient is not watching the chain for it. No transaction was created.';
+  }
+
   return null;
 }
 

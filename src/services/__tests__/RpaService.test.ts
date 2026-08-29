@@ -155,6 +155,93 @@ describe('RpaService', () => {
     );
   });
 
+  // Nothing in the wallet emits an offline-only code, so a test has to build
+  // one. Same charset and checksum as the encoder, with the version byte left
+  // free.
+  function craftCode(version: number, prefixBits: number, scan: Uint8Array, spend: Uint8Array): string {
+    const CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
+    const GEN = [0x98f2bc8e61n, 0x79b76d99e2n, 0xf33e5fb3c4n, 0xae2eabe2a8n, 0x1e4f43e470n];
+    const polymod = (values: number[]): bigint => {
+      let c = 1n;
+      for (const d of values) {
+        const high = c >> 35n;
+        c = ((c & 0x7ffffffffn) << 5n) ^ BigInt(d);
+        for (let i = 0; i < 5; i++) if (((high >> BigInt(i)) & 1n) === 1n) c ^= GEN[i];
+      }
+      return c ^ 1n;
+    };
+    const toFive = (data: Uint8Array): number[] => {
+      const out: number[] = [];
+      let bits = 0;
+      let val = 0;
+      for (const b of data) {
+        val = ((val << 8) | b) >>> 0;
+        bits += 8;
+        while (bits >= 5) {
+          bits -= 5;
+          out.push((val >>> bits) & 0x1f);
+        }
+        val &= (1 << bits) - 1;
+      }
+      if (bits > 0) out.push((val << (5 - bits)) & 0x1f);
+      return out;
+    };
+    const prefix = version === 0x01 || version === 0x02 ? 'cashcode' : 'cashcodetest';
+    const payload = new Uint8Array(72);
+    payload[0] = version;
+    payload[1] = prefixBits;
+    payload.set(scan, 2);
+    payload.set(spend, 35);
+    const data5 = toFive(new Uint8Array([0x00, ...payload]));
+    const expanded = [...prefix].map((c) => c.charCodeAt(0) & 0x1f).concat(0);
+    const mod = polymod([...expanded, ...data5, 0, 0, 0, 0, 0, 0, 0, 0]);
+    const checksum: number[] = [];
+    for (let i = 7; i >= 0; i--) checksum.push(Number((mod >> BigInt(5 * i)) & 31n));
+    return `${prefix}:${[...data5, ...checksum].map((c) => CHARSET[c]).join('')}`;
+  }
+
+  it('refuses an offline-only code rather than paying it on-chain', async () => {
+    const keys = await deriveRpaKeys(TEST_MNEMONIC, PASSPHRASE, Network.CHIPNET);
+
+    // Spec: "1 and 2 for p2pkh (mainnet), 5 and 6 for p2pkh (testnet), among
+    // them 2 and 6 to force offline-communication only", and an offchain relay
+    // is "a necessity for version 2, 4, 6 and 8". Such a recipient is not
+    // scanning the chain, so an on-chain payment could sit unnoticed.
+    const offlineChipnet = craftCode(0x06, RPA_PREFIX_BITS, keys.scanPubkey, keys.spendPubkey);
+    expect(decodePaycode(offlineChipnet)).not.toBeNull();
+    expect(getRpaSendBlockReason(offlineChipnet, Network.CHIPNET)).toMatch(/offline-only/i);
+
+    const offlineMainnet = craftCode(0x02, RPA_PREFIX_BITS, keys.scanPubkey, keys.spendPubkey);
+    expect(getRpaSendBlockReason(offlineMainnet, Network.MAINNET)).toMatch(/offline-only/i);
+
+    // The on-chain versions are unaffected.
+    expect(
+      getRpaSendBlockReason(
+        craftCode(0x05, RPA_PREFIX_BITS, keys.scanPubkey, keys.spendPubkey),
+        Network.CHIPNET
+      )
+    ).toBeNull();
+    expect(
+      getRpaSendBlockReason(
+        craftCode(0x01, RPA_PREFIX_BITS, keys.scanPubkey, keys.spendPubkey),
+        Network.MAINNET
+      )
+    ).toBeNull();
+  });
+
+  it('refuses a code with no scan prefix instead of throwing mid-send', async () => {
+    const keys = await deriveRpaKeys(TEST_MNEMONIC, PASSPHRASE, Network.CHIPNET);
+
+    // prefix_size 0 is "no-filter for full-node or offline-communications".
+    // decodePaycode accepts it, but rpaGrindString and rpaPrefixTargetHex both
+    // throw on 0 — so without this check a decoded code reaches the grind and
+    // raises a raw Error instead of declining the payment.
+    const noPrefix = encodePaycode(keys.scanPubkey, keys.spendPubkey, Network.CHIPNET, 0);
+    expect(decodePaycode(noPrefix)?.prefixBits).toBe(0);
+    expect(() => rpaGrindString(keys.scanPubkey, 0)).toThrow(/prefix size/i);
+    expect(getRpaSendBlockReason(noPrefix, Network.CHIPNET)).toMatch(/no scan prefix/i);
+  });
+
   it('emits cashcode and never paycode', async () => {
     const keys = await deriveRpaKeys(TEST_MNEMONIC, PASSPHRASE, Network.MAINNET);
     const mainnet = encodePaycode(keys.scanPubkey, keys.spendPubkey, Network.MAINNET);
