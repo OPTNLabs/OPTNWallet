@@ -72,7 +72,8 @@ export const RpaReceiveCard: React.FC<RpaReceiveCardProps> = ({ walletId }) => {
 
   const handleCopy = async (text: string) => {
     try {
-      if (!(await copyToClipboard(text))) throw new Error('clipboard write failed');
+      if (!(await copyToClipboard(text)))
+        throw new Error('clipboard write failed');
       await Toast.show({ text: t('rpa.copySuccess') });
     } catch {
       await Toast.show({ text: t('rpa.copyFailed') });

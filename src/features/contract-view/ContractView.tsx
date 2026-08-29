@@ -230,7 +230,8 @@ const ContractView = () => {
 
   const handleCopyAddress = async (address: string) => {
     try {
-      if (!(await copyToClipboard(address))) throw new Error('clipboard write failed');
+      if (!(await copyToClipboard(address)))
+        throw new Error('clipboard write failed');
       await Toast.show({ text: t('contractView.addressCopied') });
     } catch (error) {
       logError('ContractView.copyAddress', error, { address });

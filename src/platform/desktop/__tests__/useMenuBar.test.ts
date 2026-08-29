@@ -93,7 +93,8 @@ describe('desktop menu window isolation', () => {
   });
 
   it('routes an app-menu action to the focused wallet window', async () => {
-    const emitted: Array<{ label: string; event: string; payload: unknown }> = [];
+    const emitted: Array<{ label: string; event: string; payload: unknown }> =
+      [];
     const windows = [
       {
         label: 'wallet-5',
@@ -259,10 +260,7 @@ describe('desktop menu action dispatch', () => {
   it('opens the selected saved wallet in the focused window', async () => {
     const handlers = actions();
 
-    const handled = await dispatchDesktopMenuAction(
-      'open_wallet_7',
-      handlers
-    );
+    const handled = await dispatchDesktopMenuAction('open_wallet_7', handlers);
 
     expect(handled).toBe(true);
     expect(handlers.openSavedWallet).toHaveBeenCalledWith(7);
@@ -271,10 +269,7 @@ describe('desktop menu action dispatch', () => {
   it('maps Refresh Wallet to a real wallet sync action', async () => {
     const handlers = actions();
 
-    const handled = await dispatchDesktopMenuAction(
-      'refresh_wallet',
-      handlers
-    );
+    const handled = await dispatchDesktopMenuAction('refresh_wallet', handlers);
 
     expect(handled).toBe(true);
     expect(handlers.refreshWallet).toHaveBeenCalledOnce();
@@ -363,7 +358,9 @@ describe('refreshWalletFromMenu', () => {
 });
 
 describe('keyboard accelerators', () => {
-  const chord = (over: Partial<Parameters<typeof menuActionForKeyboardEvent>[0]>) =>
+  const chord = (
+    over: Partial<Parameters<typeof menuActionForKeyboardEvent>[0]>
+  ) =>
     menuActionForKeyboardEvent({
       key: 'r',
       ctrlKey: true,
@@ -383,7 +380,9 @@ describe('keyboard accelerators', () => {
   });
 
   it('accepts Cmd on macOS as well as Ctrl', () => {
-    expect(chord({ key: 'r', ctrlKey: false, metaKey: true })).toBe('refresh_wallet');
+    expect(chord({ key: 'r', ctrlKey: false, metaKey: true })).toBe(
+      'refresh_wallet'
+    );
   });
 
   it('is case-insensitive, so caps lock does not break it', () => {

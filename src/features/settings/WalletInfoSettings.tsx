@@ -169,18 +169,13 @@ async function loadSnapshot(
   let walletFileMissing = true;
   if (isDesktopPlatform()) {
     try {
-      const {
-        findWalletFileRelForSourceId,
-        resolveWalletFileDisplayPath,
-      } = await import('../../platform/desktop/walletFile');
+      const { findWalletFileRelForSourceId, resolveWalletFileDisplayPath } =
+        await import('../../platform/desktop/walletFile');
       const existingRel = await findWalletFileRelForSourceId(walletId);
       walletFileMissing = !existingRel;
       const resolved = await resolveWalletFileDisplayPath(walletId, name);
       walletFilePath =
-        resolved.absolute ??
-        existingRel ??
-        resolved.relative ??
-        null;
+        resolved.absolute ?? existingRel ?? resolved.relative ?? null;
     } catch {
       /* non-tauri / no fs */
     }
@@ -208,7 +203,10 @@ async function renameWallet(walletId: number, name: string): Promise<void> {
   await dbService.ensureDatabaseStarted();
   const db = dbService.getDatabase();
   if (!db) throw new Error('Wallet database is unavailable.');
-  db.run('UPDATE wallets SET wallet_name = ? WHERE id = ?', [trimmed, walletId]);
+  db.run('UPDATE wallets SET wallet_name = ? WHERE id = ?', [
+    trimmed,
+    walletId,
+  ]);
   try {
     await dbService.flushDatabaseToFile(walletId);
   } catch {
@@ -220,13 +218,13 @@ async function renameWallet(walletId: number, name: string): Promise<void> {
 async function tryBiometricReveal(walletId: number): Promise<boolean> {
   if (!isDesktopPlatform()) return false;
   try {
-    const {
-      verifyWalletPassword,
-      hasWalletBiometric,
-      isBiometricAvailable,
-    } = await import('../../platform/desktop/DesktopWalletManager');
+    const { verifyWalletPassword, hasWalletBiometric, isBiometricAvailable } =
+      await import('../../platform/desktop/DesktopWalletManager');
 
-    if (!(await isBiometricAvailable()) || !(await hasWalletBiometric(walletId))) {
+    if (
+      !(await isBiometricAvailable()) ||
+      !(await hasWalletBiometric(walletId))
+    ) {
       return false;
     }
     const { getData: bioGetData } = await import(
@@ -263,7 +261,8 @@ function CopyRow({
   const onCopy = async () => {
     if (!canCopy || !value) return;
     try {
-      if (!(await copyToClipboard(value))) throw new Error('clipboard write failed');
+      if (!(await copyToClipboard(value)))
+        throw new Error('clipboard write failed');
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
@@ -322,16 +321,13 @@ export const WalletInfoSettings: React.FC = () => {
     setBusy(true);
     setError('');
     try {
-      const snap = await loadSnapshot(
-        walletId,
-        network,
-        reduxPath,
-        walletType
-      );
+      const snap = await loadSnapshot(walletId, network, reduxPath, walletType);
       setInfo(snap);
       setNameDraft(snap.name);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not load wallet info.');
+      setError(
+        err instanceof Error ? err.message : 'Could not load wallet info.'
+      );
     } finally {
       setBusy(false);
     }
@@ -366,7 +362,8 @@ export const WalletInfoSettings: React.FC = () => {
       await reload();
       setRevealed(true);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Could not reveal details.';
+      const msg =
+        err instanceof Error ? err.message : 'Could not reveal details.';
       if (/cancelled|canceled|timed out/i.test(msg)) return;
       setError(msg);
     } finally {
@@ -391,7 +388,9 @@ export const WalletInfoSettings: React.FC = () => {
 
   if (!walletId || walletId <= 0) {
     return (
-      <p className="text-sm wallet-muted">Open a wallet to view its identity.</p>
+      <p className="text-sm wallet-muted">
+        Open a wallet to view its identity.
+      </p>
     );
   }
 
@@ -463,9 +462,7 @@ export const WalletInfoSettings: React.FC = () => {
                 </button>
               </div>
             )}
-            {nameMsg && (
-              <p className="text-xs wallet-muted">{nameMsg}</p>
-            )}
+            {nameMsg && <p className="text-xs wallet-muted">{nameMsg}</p>}
           </div>
 
           <CopyRow label="Type" value={info.walletType} />

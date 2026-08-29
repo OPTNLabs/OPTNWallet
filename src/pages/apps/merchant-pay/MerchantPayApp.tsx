@@ -136,15 +136,20 @@ function localizeMerchantPayError(
       'module.noLiquidity',
       'No liquidity.',
     ],
-    'The requested amount is no longer available from the current Cauldron liquidity.': [
-      'module.notEnoughLiquidity',
-      'Not enough liquidity. Try a smaller amount.',
-    ],
+    'The requested amount is no longer available from the current Cauldron liquidity.':
+      [
+        'module.notEnoughLiquidity',
+        'Not enough liquidity. Try a smaller amount.',
+      ],
   };
   const localized = message ? knownErrors[message] : undefined;
   return localized
     ? translate(localized[0], localized[1])
-    : message || translate('module.createRequestError', 'Unable to create the payment request.');
+    : message ||
+        translate(
+          'module.createRequestError',
+          'Unable to create the payment request.'
+        );
 }
 
 async function copyTextToClipboard(text: string): Promise<void> {
@@ -349,7 +354,8 @@ export default function MerchantPayApp({
       setQuoteMessage({
         tone: 'danger',
         key: 'module.poolLoadError',
-        fallback: 'Unable to load merchant pools right now. Try again in a moment.',
+        fallback:
+          'Unable to load merchant pools right now. Try again in a moment.',
       });
       return;
     }
@@ -668,21 +674,30 @@ export default function MerchantPayApp({
       setNotice(null);
 
       if (!selectedStablecoin) {
-        throw new Error(addonT('module.chooseStablecoinFirst', 'Choose a stablecoin first.'));
+        throw new Error(
+          addonT('module.chooseStablecoinFirst', 'Choose a stablecoin first.')
+        );
       }
 
       if (!draftQuote) {
-        throw new Error(addonT('module.enterAmountFirst', 'Enter an amount first.'));
+        throw new Error(
+          addonT('module.enterAmountFirst', 'Enter an amount first.')
+        );
       }
 
       if (draftQuoteExpired) {
         throw new Error(
-          addonT('module.quoteExpired', 'This quote expired. Enter the amount again.')
+          addonT(
+            'module.quoteExpired',
+            'This quote expired. Enter the amount again.'
+          )
         );
       }
 
       if (selectedAmountAtomic == null || selectedAmountAtomic <= 0n) {
-        throw new Error(addonT('module.invalidAmount', 'Enter a valid amount.'));
+        throw new Error(
+          addonT('module.invalidAmount', 'Enter a valid amount.')
+        );
       }
 
       const createdRequest = await buildMerchantPaymentRequest({
@@ -713,7 +728,10 @@ export default function MerchantPayApp({
       await copyTextToClipboard(paymentRequest.detailsText);
       setNotice({
         kind: 'success',
-        message: addonT('module.paymentDetailsCopied', 'Payment details copied.'),
+        message: addonT(
+          'module.paymentDetailsCopied',
+          'Payment details copied.'
+        ),
       });
     } catch {
       setNotice({
@@ -918,9 +936,15 @@ export default function MerchantPayApp({
                   <div className="flex items-center justify-between gap-3 text-xs">
                     <span className="wallet-muted">
                       {draftQuote
-                        ? addonT('module.quoteReady', 'Quote ready · Expires {expires}', {
-                            expires: stageExpiresIn ?? addonT('module.expired', 'Expired'),
-                          })
+                        ? addonT(
+                            'module.quoteReady',
+                            'Quote ready · Expires {expires}',
+                            {
+                              expires:
+                                stageExpiresIn ??
+                                addonT('module.expired', 'Expired'),
+                            }
+                          )
                         : quoteMessage
                           ? addonT(
                               quoteMessage.key,

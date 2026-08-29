@@ -7,7 +7,11 @@
 import { copyToClipboard, readFromClipboard } from '../../utils/clipboard';
 
 export const Clipboard = {
-  write: async ({ string, url, label }: {
+  write: async ({
+    string,
+    url,
+    label,
+  }: {
     string?: string;
     image?: string;
     url?: string;

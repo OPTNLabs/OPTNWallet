@@ -60,7 +60,8 @@ const Quantumroot: React.FC = () => {
   const handleCopy = useCallback(
     async (text: string) => {
       try {
-        if (!(await copyToClipboard(text))) throw new Error('clipboard write failed');
+        if (!(await copyToClipboard(text)))
+          throw new Error('clipboard write failed');
         await Toast.show({ text: t('receive.copied') });
       } catch (error) {
         console.error('Failed to copy Quantumroot value:', error);

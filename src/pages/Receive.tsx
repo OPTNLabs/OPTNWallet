@@ -475,7 +475,8 @@ const Receive: React.FC = () => {
 
   const handleCopy = async (text: string) => {
     try {
-      if (!(await copyToClipboard(text))) throw new Error('clipboard write failed');
+      if (!(await copyToClipboard(text)))
+        throw new Error('clipboard write failed');
       await Toast.show({ text: t('receive.copied') });
     } catch (error) {
       console.error('Failed to copy:', error);
