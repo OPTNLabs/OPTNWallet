@@ -82,5 +82,25 @@ hmac = "0.12"
 hidapi = "2.6"
 # Trezor Safe 5 / Model T: WebUSB via libusb (trezorlib WebUsbTransport).
 # Modern Suite uses node-usb the same way — Bridge on :21325 is optional/legacy.
+#
+# On macOS this is built vendored (see the macOS target table below), so the
+# dylib is not resolved from the build machine. Left dynamic elsewhere:
+# vendoring compiles libusb's C, and the riscv64 and armv7 cross builds are
+# deliberately kept free of anything that needs a C toolchain they do not have.
 rusb = "0.9"
 hex = "0.4"
+
+# libusb, statically linked, for macOS only.
+#
+# A dynamically linked rusb records the build machine's own libusb path —
+# /opt/homebrew/opt/libusb/lib/libusb-1.0.0.dylib — into the binary, so the app
+# cannot launch on any machine without Homebrew's libusb at that exact path.
+# Installing it does not help either: the bundle is signed with Hardened
+# Runtime, which enforces Library Validation, and a Homebrew dylib can never
+# share a Team ID with the app. That combination is unrunnable as shipped.
+#
+# `vendored` builds libusb 1.0.27 from source and links it statically, so there
+# is no external dylib to resolve and nothing for Library Validation to reject.
+# Fixes both halves of the launch failure rather than only the missing file.
+[target.'cfg(target_os = "macos")'.dependencies]
+rusb = { version = "0.9", features = ["vendored"] }
