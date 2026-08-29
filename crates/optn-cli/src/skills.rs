@@ -325,6 +325,17 @@ pub const SKILLS: &[Skill] = &[
         needs_network: true,
         requires_confirmation: true,
     },
+    Skill {
+        // Classified by its most dangerous member, like x402: `code`, `decode`
+        // and `scan` only read, but a gate that admitted the group would admit
+        // `rpa pay` with them.
+        name: "rpa",
+        capability: Capability::Spend,
+        summary: "Reusable payment addresses. `code`, `decode` and `scan` read; `pay` spends.",
+        needs_wallet: true,
+        needs_network: true,
+        requires_confirmation: true,
+    },
 ];
 
 pub fn find(name: &str) -> Option<&'static Skill> {

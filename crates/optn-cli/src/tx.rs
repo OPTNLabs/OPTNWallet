@@ -199,6 +199,15 @@ impl Transaction {
     ///
     /// `keys[i]` must be the key controlling `inputs[i]`.
     pub fn sign(&self, keys: &[SigningKey]) -> Result<Vec<u8>> {
+        Ok(self.sign_detailed(keys)?.0)
+    }
+
+    /// Sign, returning the raw transaction *and* each input's scriptSig.
+    ///
+    /// RPA grinds `hash256` of input 0's wire serialization until it matches
+    /// the recipient's scan prefix, so the sender needs the scriptSig back
+    /// rather than only the assembled transaction.
+    pub fn sign_detailed(&self, keys: &[SigningKey]) -> Result<(Vec<u8>, Vec<Vec<u8>>)> {
         if keys.len() != self.inputs.len() {
             return Err(CliError::Internal(format!(
                 "{} inputs but {} keys",
@@ -226,7 +235,23 @@ impl Transaction {
             script_sigs.push(script_sig);
         }
 
-        Ok(self.serialize(&script_sigs))
+        Ok((self.serialize(&script_sigs), script_sigs))
+    }
+
+    /// One input's wire serialization: outpoint, scriptSig, sequence — the
+    /// same bytes `serialize` writes for it, and what RPA hashes.
+    pub fn serialize_input(&self, index: usize, script_sig: &[u8]) -> Result<Vec<u8>> {
+        let input = self
+            .inputs
+            .get(index)
+            .ok_or_else(|| CliError::Internal(format!("no input at index {index}")))?;
+        let mut out = Vec::with_capacity(32 + 4 + 1 + script_sig.len() + 4);
+        out.extend_from_slice(&input.txid);
+        out.extend_from_slice(&input.vout.to_le_bytes());
+        out.extend_from_slice(&varint(script_sig.len() as u64));
+        out.extend_from_slice(script_sig);
+        out.extend_from_slice(&self.sequence.to_le_bytes());
+        Ok(out)
     }
 
     fn serialize(&self, script_sigs: &[Vec<u8>]) -> Vec<u8> {

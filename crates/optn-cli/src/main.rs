@@ -319,6 +319,58 @@ enum Command {
         #[command(subcommand)]
         action: X402Command,
     },
+    /// Reusable payment addresses — cashcodes.
+    ///
+    /// One published code, a fresh on-chain address per payment. The sender
+    /// derives it by ECDH against the code's scan key plus the first input's
+    /// outpoint, so nothing on chain links two payments to the same code.
+    Rpa {
+        #[command(subcommand)]
+        action: RpaCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum RpaCommand {
+    /// Print this wallet's cashcode.
+    Code {
+        /// BIP44 account index.
+        #[arg(long, default_value_t = 0)]
+        account: u32,
+    },
+    /// Inspect a cashcode or a legacy paycode without spending anything.
+    Decode {
+        /// The code to read.
+        code: String,
+    },
+    /// Scan one transaction for payments to this wallet's cashcode.
+    ///
+    /// Public chipnet servers do not implement Fulcrum's `blockchain.reusable.*`,
+    /// so the txid has to come from somewhere else — a sender telling you, or a
+    /// server that does index it.
+    Scan {
+        /// Transaction to examine.
+        txid: String,
+        #[arg(long, default_value_t = 0)]
+        account: u32,
+    },
+    /// Pay a cashcode.
+    Pay {
+        /// Recipient's cashcode (a legacy paycode is accepted too).
+        code: String,
+        /// Amount in satoshis.
+        sats: u64,
+        #[arg(long, default_value_t = 1)]
+        fee_rate: u64,
+        #[arg(long, default_value_t = 20)]
+        gap: u32,
+        /// Build, grind and sign, print the raw transaction, but do not broadcast.
+        #[arg(long)]
+        dry_run: bool,
+        /// Required to actually broadcast.
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -529,6 +581,7 @@ fn command_name(command: &Command) -> &'static str {
         Command::Skills => "skills",
         Command::Keychain { .. } => "keychain",
         Command::X402 { .. } => "x402",
+        Command::Rpa { .. } => "rpa",
     }
 }
 
@@ -1674,6 +1727,135 @@ async fn run(cli: &Cli) -> Result<Value> {
             }
         },
         Command::Skills => Ok(skills::manifest(skills::Policy::from_env()?)),
+        Command::Rpa { action } => match action {
+            RpaCommand::Code { account } => {
+                let wallet = read_wallet(cli)?;
+                let coin = default_coin_type(cli.network);
+                let scan_path = rpa::scan_path(coin, *account);
+                let spend_path = rpa::spend_path(coin, *account);
+                let scan = wallet.public_key(&scan_path)?;
+                let spend = wallet.public_key(&spend_path)?;
+                Ok(json!({
+                    "ok": true,
+                    "network": cli.network.to_string(),
+                    "cashcode": rpa::encode(&scan, &spend, cli.network, rpa::RPA_PREFIX_BITS),
+                    "prefix_bits": rpa::RPA_PREFIX_BITS,
+                    "grind_string": rpa::grind_string(&scan, rpa::RPA_PREFIX_BITS)?,
+                    "scan_path": scan_path,
+                    "spend_path": spend_path,
+                }))
+            }
+            RpaCommand::Decode { code } => {
+                let d = rpa::decode(code)?;
+                Ok(json!({
+                    "ok": true,
+                    "prefix": d.prefix,
+                    "legacy": d.legacy,
+                    "network": d.network().to_string(),
+                    "version": d.version,
+                    "prefix_bits": d.prefix_bits,
+                    "scan_pubkey": hex(&d.scan_pubkey),
+                    "spend_pubkey": hex(&d.spend_pubkey),
+                    "expiry": d.expiry,
+                }))
+            }
+            RpaCommand::Scan { txid, account } => {
+                let wallet = read_wallet(cli)?;
+                let coin = default_coin_type(cli.network);
+                let scan_priv: [u8; 32] = wallet
+                    .signing_key(&rpa::scan_path(coin, *account))?
+                    .to_bytes()
+                    .into();
+                let spend_pub = wallet.public_key(&rpa::spend_path(coin, *account))?;
+                let raw_hex = client.transaction(txid, false).await?;
+                let raw_hex = raw_hex.as_str().ok_or_else(|| {
+                    CliError::Protocol("server did not return raw transaction hex".into())
+                })?;
+                let raw = decode_hex(raw_hex)?;
+                let found = rpa::scan_transaction(&raw, &scan_priv, &spend_pub, cli.network)?;
+
+                // Detection alone does not mean the coin can be moved. Derive
+                // the spending key for each match and check it really controls
+                // the address that was paid.
+                let spend_priv: [u8; 32] = wallet
+                    .signing_key(&rpa::spend_path(coin, *account))?
+                    .to_bytes()
+                    .into();
+                let mut spendable = Vec::with_capacity(found.len());
+                for m in &found {
+                    let controlled =
+                        rpa::spending_key_address(&spend_priv, &m.secret, 0, cli.network)?;
+                    spendable.push(controlled.encode() == m.address);
+                }
+
+                Ok(json!({
+                    "ok": true,
+                    "network": cli.network.to_string(),
+                    "txid": txid,
+                    "matches": found.iter().zip(&spendable).map(|(m, ok)| json!({
+                        "output_index": m.output_index,
+                        "address": m.address,
+                        "sats": m.value,
+                        "spendable": ok,
+                        "derived_from": { "txid": m.prevout_txid, "vout": m.prevout_index },
+                    })).collect::<Vec<_>>(),
+                    "total": found.iter().map(|m| m.value).sum::<u64>(),
+                }))
+            }
+            RpaCommand::Pay {
+                code,
+                sats,
+                fee_rate,
+                gap,
+                dry_run,
+                yes,
+            } => {
+                if !*yes && !*dry_run {
+                    return Err(CliError::Usage(
+                        "refusing to spend without --yes (use --dry-run to preview)".to_string(),
+                    ));
+                }
+                if !rpa::looks_like_rpa(code) {
+                    return Err(CliError::Usage(format!(
+                        "'{code}' is not a reusable payment code — expected a                          cashcode: or cashcodetest: string (a legacy paycode: is                          accepted too). To send to an ordinary address, use `send`."
+                    )));
+                }
+                let decoded = rpa::decode(code)?;
+                if decoded.network() != cli.network {
+                    return Err(CliError::Usage(format!(
+                        "that code is for {}, but this is {}",
+                        decoded.network(),
+                        cli.network
+                    )));
+                }
+                let wallet = read_wallet(cli)?;
+                let paid = rpa_pay(
+                    &client,
+                    cli.network,
+                    &wallet,
+                    &decoded,
+                    *sats,
+                    *fee_rate,
+                    *gap,
+                    !*dry_run,
+                )
+                .await?;
+                Ok(json!({
+                    "ok": true,
+                    "dry_run": *dry_run,
+                    "network": cli.network.to_string(),
+                    "txid": paid.txid,
+                    "legacy_code": decoded.legacy,
+                    "stealth_address": paid.stealth_address,
+                    "sats": sats,
+                    "fee": paid.fee,
+                    "change": paid.change,
+                    "grind_tries": paid.grind_tries,
+                    "sequence": paid.sequence,
+                    "raw": if *dry_run { Some(paid.raw_hex) } else { None },
+                }))
+            }
+        },
         Command::Keychain { action } => {
             let (label, persists) = keychain::backend();
             match action {
@@ -1938,6 +2120,147 @@ struct Spend {
     change: u64,
     inputs: usize,
     size_bytes: usize,
+}
+
+struct RpaSpend {
+    txid: Option<String>,
+    stealth_address: String,
+    fee: u64,
+    change: u64,
+    grind_tries: u32,
+    sequence: u32,
+    raw_hex: String,
+}
+
+/// Build, grind and optionally broadcast a payment to a cashcode.
+///
+/// Two things make this different from an ordinary send. The destination is
+/// not known until the coins are chosen — it is derived from input 0's
+/// outpoint — and the transaction then has to be ground so the recipient's
+/// prefix filter will surface it.
+#[allow(clippy::too_many_arguments)]
+async fn rpa_pay(
+    client: &Client,
+    network: Network,
+    wallet: &Wallet,
+    code: &rpa::Cashcode,
+    sats: u64,
+    fee_rate: u64,
+    gap: u32,
+    broadcast: bool,
+) -> Result<RpaSpend> {
+    let coin = default_coin_type(network);
+
+    // Keep the display txid alongside each coin. The shared secret hashes the
+    // outpoint as Electrum reports it, while tx::Utxo stores the reversed wire
+    // form — using the wrong one derives an address the recipient never scans.
+    let mut spendable: Vec<(tx::Utxo, String, String)> = Vec::new();
+    for change in [false, true] {
+        for index in 0..gap {
+            let path = hd::address_path(coin, 0, change, index);
+            let address = wallet.address(network, &path)?;
+            for u in client.utxos(&address.electrum_scripthash()).await? {
+                let mut txid = decode_hex32(&u.tx_hash)?;
+                txid.reverse();
+                spendable.push((
+                    tx::Utxo {
+                        txid,
+                        vout: u.tx_pos,
+                        value: u.value,
+                        script_pubkey: address.script_pubkey(),
+                    },
+                    path.clone(),
+                    u.tx_hash.clone(),
+                ));
+            }
+        }
+    }
+    if spendable.is_empty() {
+        return Err(CliError::Usage(
+            "no spendable outputs found - check the network and the gap limit".to_string(),
+        ));
+    }
+
+    let pool: Vec<tx::Utxo> = spendable.iter().map(|(u, _, _)| u.clone()).collect();
+    let (chosen, fee) = tx::select_coins(&pool, sats, fee_rate, 2)?;
+    let input_total: u64 = chosen.iter().map(|u| u.value).sum();
+    let change_value = input_total - sats - fee;
+
+    let lookup = |input: &tx::Utxo| -> Result<(String, String)> {
+        spendable
+            .iter()
+            .find(|(u, _, _)| u.txid == input.txid && u.vout == input.vout)
+            .map(|(_, path, display)| (path.clone(), display.clone()))
+            .ok_or_else(|| CliError::Internal("selected an unknown utxo".into()))
+    };
+
+    // The destination depends on input 0, so coin selection has to happen first.
+    let first = &chosen[0];
+    let (first_path, first_display) = lookup(first)?;
+    let first_priv: [u8; 32] = wallet.signing_key(&first_path)?.to_bytes().into();
+    let secret = rpa::shared_secret(&first_priv, &code.scan_pubkey, &first_display, first.vout)?;
+    let stealth = rpa::payment_address(&code.spend_pubkey, &secret, network, 0)?;
+
+    let mut outputs = vec![tx::Output::new(sats, stealth.script_pubkey())];
+    const DUST: u64 = 546;
+    if change_value >= DUST {
+        outputs.push(tx::Output::new(
+            change_value,
+            wallet
+                .address(network, &hd::address_path(coin, 0, true, 0))?
+                .script_pubkey(),
+        ));
+    }
+
+    let mut transaction = tx::Transaction::new(chosen.clone(), outputs);
+    let mut keys = Vec::with_capacity(chosen.len());
+    for input in &chosen {
+        keys.push(wallet.signing_key(&lookup(input)?.0)?);
+    }
+
+    // Grind. The recipient asks their server for transactions whose input hash
+    // starts with their scan prefix, so without this the payment is on chain
+    // but invisible to them.
+    //
+    // Every input's sequence moves together here, where the desktop wallet
+    // varies only input 0's. Only input 0 is hashed for the prefix, and
+    // locktime is 0, so the result is equivalent; it is simply what this
+    // Transaction shape can express.
+    let target = rpa::grind_string(&code.scan_pubkey, code.prefix_bits)?.to_lowercase();
+    const MAX_GRIND_TRIES: u32 = 100_000;
+    let mut ground = None;
+    for offset in 0..MAX_GRIND_TRIES {
+        transaction.sequence = 0xffff_ffff - offset;
+        let (raw, script_sigs) = transaction.sign_detailed(&keys)?;
+        let serialized = transaction.serialize_input(0, &script_sigs[0])?;
+        if hex(&tx::double_sha256(&serialized)).starts_with(&target) {
+            ground = Some((raw, offset + 1, transaction.sequence));
+            break;
+        }
+    }
+    let (raw, grind_tries, sequence) = ground.ok_or_else(|| {
+        CliError::Usage(
+            "could not find a matching input prefix for this code - try again with a              different coin"
+                .to_string(),
+        )
+    })?;
+
+    let raw_hex = hex(&raw);
+    let txid = if broadcast {
+        Some(client.broadcast(&raw_hex).await?)
+    } else {
+        None
+    };
+
+    Ok(RpaSpend {
+        txid,
+        stealth_address: stealth.encode(),
+        fee,
+        change: change_value,
+        grind_tries,
+        sequence,
+        raw_hex,
+    })
 }
 
 /// Build, sign, and broadcast a payment out of the wallet's own coins.
