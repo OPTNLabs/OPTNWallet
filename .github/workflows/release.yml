@@ -46,10 +46,32 @@ jobs:
       version: ${{ steps.tag.outputs.version }}
       prerelease: ${{ steps.tag.outputs.prerelease }}
       publish: ${{ steps.tag.outputs.publish }}
+      # Whether crates/optn-cli is in this tree. Decided here rather than in a
+      # job of its own because three jobs need it, the earliest of them is the
+      # CLI build, and a build cannot depend on a job that runs after it. This
+      # job already runs first and already checks out, so the probe is free.
+      cli_present: ${{ steps.cli.outputs.present }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
+
+      # crates/optn-cli arrives in its own pull request, so a release can be cut
+      # from a tree that does not have it yet. The seven CLI entries in
+      # packaging/release-assets.json are marked `when: "cli"`, and this is what
+      # makes that condition decidable: without it they are either always
+      # required, which breaks any release cut before the CLI lands, or never
+      # required, which would let a real CLI drop through unnoticed.
+      - name: Detect OPTN CLI
+        id: cli
+        run: |
+          if [ -f crates/optn-cli/Cargo.toml ]; then
+            echo 'present=true' >> "$GITHUB_OUTPUT"
+            echo 'The optn CLI is in this tree; every target is required.'
+          else
+            echo 'present=false' >> "$GITHUB_OUTPUT"
+            echo '::notice::crates/optn-cli is not in this tree; nothing to build.'
+          fi
 
       - name: Decide the tag
         id: tag
@@ -1054,32 +1076,9 @@ jobs:
   # become mandatory without anyone remembering to come back here. The
   # alternative — requiring assets no branch can build, or building assets
   # nothing requires — is broken in one order or the other.
-  cli-probe:
-    name: Is the CLI in this tree
-    needs: resolve
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    outputs:
-      present: ${{ steps.probe.outputs.present }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          ref: ${{ needs.resolve.outputs.tag }}
-          persist-credentials: false
-      - id: probe
-        run: |
-          if [ -f crates/optn-cli/Cargo.toml ]; then
-            echo 'present=true' >> "$GITHUB_OUTPUT"
-            echo 'The optn CLI is in this tree; its binaries are required.'
-          else
-            echo 'present=false' >> "$GITHUB_OUTPUT"
-            echo '::notice::crates/optn-cli is not in this tree; the CLI is not part of this release.'
-          fi
-
   cli:
     name: Build CLI (${{ matrix.label }})
-    needs: [resolve, quality, cli-probe]
+    needs: [resolve, quality]
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -1118,7 +1117,7 @@ jobs:
       contents: read
     env:
       RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
-      CLI_PRESENT: ${{ needs.cli-probe.outputs.present }}
+      CLI_PRESENT: ${{ needs.resolve.outputs.cli_present }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -1192,7 +1191,7 @@ jobs:
 
   publish:
     name: Publish GitHub release
-    needs: [resolve, android, cli, cli-probe, desktop, extension, flatpak, ios, riscv64]
+    needs: [resolve, android, cli, desktop, extension, flatpak, ios, riscv64]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -1248,7 +1247,7 @@ jobs:
 
           # Gated on the probe, not on the artifacts being there: "no CLI in
           # this tree" and "the CLI failed to build" must not look alike.
-          if [ "${{ needs.cli-probe.outputs.present }}" = 'true' ]; then
+          if [ "${{ needs.resolve.outputs.cli_present }}" = 'true' ]; then
             for label in linux-x64 linux-arm64 linux-riscv64 linux-armv7 \
               macos-arm64 macos-x64 windows-x64; do
               require_asset "artifacts/cli-$label" 'optn-*' "optn CLI $label"
@@ -1455,7 +1454,7 @@ jobs:
       - name: Assets completeness
         run: |
           VERSION="${RELEASE_TAG#v}"
-          CLI_PRESENT='${{ needs.cli-probe.outputs.present }}'
+          CLI_PRESENT='${{ needs.resolve.outputs.cli_present }}'
 
           # Expand the config into `required<TAB>pattern<TAB>label` lines.
           # json rather than yaml so this needs nothing installed.
