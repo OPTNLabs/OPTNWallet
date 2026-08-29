@@ -185,6 +185,17 @@ pub const SKILLS: &[Skill] = &[
         requires_confirmation: false,
     },
     Skill {
+        // Handles the vault seed and produces signatures. It broadcasts
+        // nothing, but an LM-OTS key that signs twice can be forged against,
+        // so this sits above a plain read.
+        name: "quantumroot",
+        capability: Capability::Sign,
+        summary: "Quantumroot post-quantum keys and one-time signatures (LM-OTS).",
+        needs_wallet: true,
+        needs_network: false,
+        requires_confirmation: true,
+    },
+    Skill {
         // Runs other commands rather than doing anything itself, and each line
         // is gated again when it runs. Starting it costs nothing.
         name: "console",

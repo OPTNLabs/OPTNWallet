@@ -167,6 +167,99 @@ The authorisation is signed as a Bitcoin Signed Message — the same constructio
 wallets have used for years, whose magic prefix is what stops a message
 signature being replayed as a signature over a transaction.
 
+## Covenants
+
+The wallet ships nine compiled CashScript artifacts, built into this binary, so
+a contract address can be derived on a machine with no checkout:
+
+```bash
+optn contract list
+optn contract info TransferWithTimeout
+optn contract address TransferWithTimeout --arg <pubkey> --arg <pubkey> --arg 1000
+```
+
+Addresses are pinned to eighteen vectors generated with the `cashscript`
+library itself, across both networks. That is not ceremony: an address from a
+plausible-looking reimplementation is worse than none, because funds sent to it
+are locked under a script for which nobody holds a spending path, and nothing
+about the address looks wrong. The vectors caught exactly that — the CashAddr
+size bits index 160/192/224/256, so 256 bits is `3` and not `4`, and the wrong
+value produced a well-formed address with a valid checksum that was not the
+contract's.
+
+Constructor arguments are parsed against the type the artifact declares rather
+than guessed from how they look, and pushed in reverse declaration order,
+because that is what puts them on the stack in the order the compiled code
+expects.
+
+## Quantumroot
+
+[Quantumroot](https://github.com/bitjson/quantumroot) is a post-quantum vault
+implemented in CashAssembly. Its signing scheme is Leighton-Micali One-Time
+Signatures — RFC 8554, parameter set `LMOTS_SHA256_N32_W4` — resting on SHA-256
+alone, with no lattices and nothing whose security estimate moves year to year.
+
+```bash
+echo "$SEED" | optn quantumroot keygen --id <16-byte-hex>
+echo "$SEED" | optn quantumroot sign <message-hex> --id <16-byte-hex> --yes
+optn quantumroot verify <message-hex> --signature <C||elements> \
+  --public-key <hex> --id <16-byte-hex>
+```
+
+**One-time is the security model, not a caveat.** A key signs exactly one
+message; signing twice exposes enough hash-chain points that a third party can
+forge a signature on a message neither party chose. So `sign` requires `--yes`
+the way spending does, and in the library the signing method consumes the key
+rather than leaving that to a caller to remember.
+
+The implementation is pinned to Quantumroot's own reference implementation and
+its published vector, not to a reading of the RFC — private chains, public key
+and signature all match byte for byte. The two agree here, but a signature
+scheme that is merely plausible is worthless, and the difference would not
+surface until a real vault refused to open.
+
+## A local RPC endpoint
+
+An agent that shells out pays process startup on every call:
+
+```bash
+optn serve --port 8787
+# optn serving on http://127.0.0.1:8787
+#   token      3f9a...        (generated)
+#   spending   refused
+```
+
+Requests name a command and give its arguments exactly as the command line
+takes them, so the same parser, policy and output apply. What it refuses:
+
+- **Off-loopback binds**, unless asked for in as many words — and
+  `--allow-remote` additionally requires `--token`, because a token printed to
+  a terminal is not a credential anyone remote has.
+- **Requests without the bearer token.** Localhost is not a boundary: every
+  process on the machine can reach it, and so can any web page that can make a
+  cross-origin request. Responses carry `access-control-allow-origin: null` so
+  such a page cannot read the answer.
+- **Anything that moves funds**, unless `--allow-spend`. An HTTP endpoint that
+  can spend outlives the decision to start it in a way a single command does
+  not, and `GET /skills` reports the restriction so an agent sees `send` marked
+  unavailable rather than discovering it.
+
+## The console
+
+```bash
+optn --network chipnet console
+optn> balance bchtest:qq...
+optn> contract info TransferWithTimeout
+optn> quit
+```
+
+The same commands, keeping the phrase and the connection between them. `help`
+is generated from the skill manifest, so it cannot list a command the gate
+would refuse or omit one it allows — refused ones are marked rather than
+hidden. Quoted arguments survive, a backslash is literal inside single quotes
+as in a shell, and an unterminated quote is refused rather than closed for you:
+silently completing it would run a command with an argument nobody typed.
+
 ## Keeping the phrase in the OS keychain
 
 The phrase has to reach the process somehow, and the obvious ways are both bad.
@@ -307,12 +400,15 @@ tends to land here rather than at exit 3.
 Covered today: Electrum-backed queries and broadcast, recovery-phrase
 generation, address derivation and derivation-path discovery, rescan and
 history, transaction construction and signing, CashTokens — fungible and NFT —
-x402 payments, OS-keychain storage, and the agent skill manifest with its
-policy gate.
+x402 payments, OS-keychain storage, the agent skill manifest with its policy
+gate, CashScript covenant addresses, Quantumroot LM-OTS signatures, a local
+JSON-RPC endpoint and an interactive console.
 
 Spending always requires `--yes`. This binary is meant to be run by automation,
 so a spend is never reachable by accident, and `--dry-run` exists so a caller
 can inspect a signed transaction before committing to it.
 
-Not here yet: covenant spending, the local RPC server and console, and
-Quantumroot. See the tracking issue.
+Not here yet: spending *from* a covenant. Addresses derive and contracts are
+inspectable, but building and signing a spend against one needs the unlocking
+script and the scriptCode substitution in the sighash, which is the next piece.
+See the tracking issue.
