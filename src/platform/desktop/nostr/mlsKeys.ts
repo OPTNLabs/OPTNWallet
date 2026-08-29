@@ -54,7 +54,10 @@ export async function deriveMlsKeys(
   passphrase = '',
   deviceIndex = 0
 ): Promise<MlsKeys> {
-  return deriveMlsKeysFromSeed(nip06AccountSeed(mnemonic, passphrase), deviceIndex);
+  return deriveMlsKeysFromSeed(
+    nip06AccountSeed(mnemonic, passphrase),
+    deviceIndex
+  );
 }
 
 export async function deriveMlsHpkeIkms(mnemonic: string, passphrase = '') {

@@ -63,7 +63,10 @@ function hexTo32(hex: string): Uint8Array {
   return b;
 }
 
-export function encodeGroupProfile(name: string, description: string): Uint8Array {
+export function encodeGroupProfile(
+  name: string,
+  description: string
+): Uint8Array {
   const utf8 = new TextEncoder();
   return concat([
     marmotOpaque(utf8.encode(name)),
@@ -103,7 +106,9 @@ function dictionaryEntry(id: number, data: Uint8Array): Uint8Array {
   return concat([u16(id), u16(data.length), data]);
 }
 
-export function encodeAppDataDictionary(entries: { id: number; data: Uint8Array }[]): Uint8Array {
+export function encodeAppDataDictionary(
+  entries: { id: number; data: Uint8Array }[]
+): Uint8Array {
   const sorted = [...entries].sort((a, b) => a.id - b.id);
   const body = concat(sorted.map((e) => dictionaryEntry(e.id, e.data)));
   return concat([u16(body.length), body]);
@@ -125,8 +130,14 @@ export function marmotAppDataEntries(opts: {
   ];
   return [
     { componentId: COMP_APP_COMPONENTS, data: encodeAppComponents(required) },
-    { componentId: COMP_PROFILE, data: encodeGroupProfile(opts.name, opts.description) },
-    { componentId: COMP_ADMIN_POLICY, data: encodeAdminPolicy([opts.adminPubKey]) },
+    {
+      componentId: COMP_PROFILE,
+      data: encodeGroupProfile(opts.name, opts.description),
+    },
+    {
+      componentId: COMP_ADMIN_POLICY,
+      data: encodeAdminPolicy([opts.adminPubKey]),
+    },
     {
       componentId: COMP_NOSTR_ROUTING,
       data: encodeNostrRouting(opts.nostrGroupId, opts.relays),

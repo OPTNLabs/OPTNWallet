@@ -18,8 +18,10 @@ import {
 const VALID_MNEMONIC =
   'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
 // Expected values, cross-checked against nostr-tools' own NIP-06 implementation.
-const EXPECTED_PUBKEY = 'e8bcf3823669444d0b49ad45d65088635d9fd8500a75b5f20b59abefa56a144f';
-const EXPECTED_NPUB = 'npub1az708q3kd9zy6z6f44zav5ygvdwelkzspf6mtusttx47lft2z38sghk0w7';
+const EXPECTED_PUBKEY =
+  'e8bcf3823669444d0b49ad45d65088635d9fd8500a75b5f20b59abefa56a144f';
+const EXPECTED_NPUB =
+  'npub1az708q3kd9zy6z6f44zav5ygvdwelkzspf6mtusttx47lft2z38sghk0w7';
 
 describe('nostr identity (NIP-06)', () => {
   it('uses the NIP-06 derivation path', () => {
@@ -48,7 +50,9 @@ describe('nostr identity (NIP-06)', () => {
     const seed = nip06AccountSeed(VALID_MNEMONIC, '');
     expect(seed.scheme).toBe(NOSTR_ACCOUNT_SCHEME_NIP06);
     expect(seed.account).toBe(0);
-    expect(nip06DerivationPath(0, NIP06_IDENTITY_INDEX)).toBe(NOSTR_DERIVATION_PATH);
+    expect(nip06DerivationPath(0, NIP06_IDENTITY_INDEX)).toBe(
+      NOSTR_DERIVATION_PATH
+    );
     expect(nostrDerivationPath(seed, 0)).toBe(NOSTR_DERIVATION_PATH);
     expect(nostrDerivationPath(seed, 1)).toBe("m/44'/1237'/0'/0/1");
     expect(nostrAccountDescriptor(seed)).toBe("nip06-bip39:m/44'/1237'/0'/0");

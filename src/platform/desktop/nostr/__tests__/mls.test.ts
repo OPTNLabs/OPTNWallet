@@ -18,7 +18,11 @@ import {
   MARMOT_GROUP_DATA_EXT,
 } from '../mlsGroupData';
 import { deriveNostrIdentity } from '../identity';
-import { deriveMlsKeys, MLS_DERIVATION_PATH, mlsDerivationPath } from '../mlsKeys';
+import {
+  deriveMlsKeys,
+  MLS_DERIVATION_PATH,
+  mlsDerivationPath,
+} from '../mlsKeys';
 import {
   claimExtraMlsDeviceSlot,
   loadMlsDeviceIndex,
@@ -58,7 +62,6 @@ import {
   unsignedMlsRumor,
   verifyLeafAccountIdentityProof,
 } from '../mls';
-
 
 const MNEMONIC_A =
   'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
@@ -194,11 +197,9 @@ describe('MLS keys and NIP-EE wire', () => {
       privateKeyPackage: aKp.privatePackage,
     });
     const committed = await commitAddMember(aState, bKp.publicPackage);
-    const rumor = unsignedKind444(
-      a.pubkey,
-      committed.welcome!,
-      ['wss://relay.paytaca.com']
-    );
+    const rumor = unsignedKind444(a.pubkey, committed.welcome!, [
+      'wss://relay.paytaca.com',
+    ]);
     expect(rumor.kind).toBe(KIND_WELCOME);
     expect('sig' in rumor).toBe(false);
     const wraps = wrapRumor(rumor, a.secretKey, [b.pubkey]);
@@ -359,9 +360,7 @@ describe('MLS keys and NIP-EE wire', () => {
       ...kp.publicPackage.leafNode,
       extensions: [{ ...ext!, extensionData: bad }],
     };
-    expect(() =>
-      verifyLeafAccountIdentityProof(tampered, impl.id)
-    ).toThrow();
+    expect(() => verifyLeafAccountIdentityProof(tampered, impl.id)).toThrow();
   });
 
   it('Adds a same-npub extra device as a second leaf (RFC 9420, not External Commit)', async () => {
@@ -396,14 +395,8 @@ describe('MLS keys and NIP-EE wire', () => {
     expect(leafCountForPubkey(committed.newState, a.pubkey)).toBe(2);
     expect(coalescedMemberPubKeys(committed.newState)).toEqual([a.pubkey]);
     expect(getMlsGroupMembers(desktopState)).toEqual([a.pubkey]);
-    verifyLeafAccountIdentityProof(
-      phone.publicPackage.leafNode,
-      impl.id
-    );
-    verifyLeafAccountIdentityProof(
-      desktop.publicPackage.leafNode,
-      impl.id
-    );
+    verifyLeafAccountIdentityProof(phone.publicPackage.leafNode, impl.id);
+    verifyLeafAccountIdentityProof(desktop.publicPackage.leafNode, impl.id);
     const payload = innerKind9(a.pubkey, 'from phone');
     const sent = await encryptMlsMessage(
       committed.newState,
@@ -416,7 +409,9 @@ describe('MLS keys and NIP-EE wire', () => {
     });
     expect(processed.kind).toBe('applicationMessage');
     if (processed.kind === 'applicationMessage') {
-      expect(parseApplicationPayload(processed.message).text).toBe('from phone');
+      expect(parseApplicationPayload(processed.message).text).toBe(
+        'from phone'
+      );
     }
   });
 });

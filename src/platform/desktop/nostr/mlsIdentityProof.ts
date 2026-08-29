@@ -33,7 +33,9 @@ const MLS_SIGNATURE_SCHEME_BY_CIPHERSUITE: Record<number, number> = {
 export function mlsSignatureScheme(ciphersuite: number): number {
   const scheme = MLS_SIGNATURE_SCHEME_BY_CIPHERSUITE[ciphersuite];
   if (scheme === undefined) {
-    throw new Error(`Unknown MLS signature scheme for ciphersuite ${ciphersuite}`);
+    throw new Error(
+      `Unknown MLS signature scheme for ciphersuite ${ciphersuite}`
+    );
   }
   return scheme;
 }
@@ -97,7 +99,8 @@ class BinaryReader {
   }
 
   end(): void {
-    if (this.offset !== this.data.length) throw new Error('proof trailing bytes');
+    if (this.offset !== this.data.length)
+      throw new Error('proof trailing bytes');
   }
 }
 
@@ -129,7 +132,9 @@ export function signAccountIdentityProof(
   return schnorr.sign(accountIdentityProofSigningDigest(request), secretKey);
 }
 
-export function encodeAccountIdentityProof(proof: AccountIdentityProof): Uint8Array {
+export function encodeAccountIdentityProof(
+  proof: AccountIdentityProof
+): Uint8Array {
   if (proof.request.accountIdentity.length !== ACCOUNT_IDENTITY_LEN) {
     throw new Error('account identity must be exactly 32 bytes');
   }
@@ -147,7 +152,9 @@ export function encodeAccountIdentityProof(proof: AccountIdentityProof): Uint8Ar
     .build();
 }
 
-export function decodeAccountIdentityProof(data: Uint8Array): AccountIdentityProof {
+export function decodeAccountIdentityProof(
+  data: Uint8Array
+): AccountIdentityProof {
   const reader = new BinaryReader(data);
   const version = reader.uint8();
   if (version !== ACCOUNT_IDENTITY_PROOF_VERSION) {
@@ -207,7 +214,8 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
 function hexToBytes32(hex: string): Uint8Array {
   const raw = hex.toLowerCase();
   const out = new Uint8Array(32);
-  for (let i = 0; i < 32; i++) out[i] = parseInt(raw.slice(i * 2, i * 2 + 2), 16);
+  for (let i = 0; i < 32; i++)
+    out[i] = parseInt(raw.slice(i * 2, i * 2 + 2), 16);
   return out;
 }
 
@@ -234,14 +242,22 @@ export function verifyLeafAccountIdentityProof(
     (e): e is CustomExtension => e.extensionType === ACCOUNT_IDENTITY_PROOF_EXT
   );
   if (!extension) {
-    throw new Error('missing marmot.account-identity-proof.v1 LeafNode extension');
+    throw new Error(
+      'missing marmot.account-identity-proof.v1 LeafNode extension'
+    );
   }
   const proof = decodeAccountIdentityProof(extension.extensionData);
   if (!bytesEqual(proof.request.accountIdentity, accountIdentityBytes)) {
-    throw new Error('proof account identity does not match credential identity');
+    throw new Error(
+      'proof account identity does not match credential identity'
+    );
   }
-  if (!bytesEqual(proof.request.mlsSignaturePublicKey, leaf.signaturePublicKey)) {
-    throw new Error('proof MLS signature key does not match leaf signature key');
+  if (
+    !bytesEqual(proof.request.mlsSignaturePublicKey, leaf.signaturePublicKey)
+  ) {
+    throw new Error(
+      'proof MLS signature key does not match leaf signature key'
+    );
   }
   if (proof.request.ciphersuite !== ciphersuite) {
     throw new Error('proof ciphersuite does not match expected ciphersuite');

@@ -100,7 +100,9 @@ describe('CashFusion identity isolation', () => {
   it('finds fusion source files to audit', () => {
     // Guard against an empty walk (wrong root) silently passing the suite.
     expect(files.length).toBeGreaterThanOrEqual(15);
-    const rel = files.map((f) => relative(DESKTOP_ROOT, f).split(sep).join('/'));
+    const rel = files.map((f) =>
+      relative(DESKTOP_ROOT, f).split(sep).join('/')
+    );
     expect(rel.some((p) => p.endsWith('FusionP2pService.ts'))).toBe(true);
     expect(rel.some((p) => p.includes('nostr/fusionTransport.ts'))).toBe(true);
     expect(rel.some((p) => p.includes('nostr/fusion.ts'))).toBe(true);

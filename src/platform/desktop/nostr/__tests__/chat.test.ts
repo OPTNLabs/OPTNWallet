@@ -15,7 +15,11 @@ import {
   toPubkeyHex,
 } from '../chat';
 import { wrapManyEvents as wrapRumor } from 'nostr-tools/nip59';
-import { DEFAULT_RELAYS, DISCOVERY_RELAYS, isDefaultNostrRelay } from '../defaultRelays';
+import {
+  DEFAULT_RELAYS,
+  DISCOVERY_RELAYS,
+  isDefaultNostrRelay,
+} from '../defaultRelays';
 import { deriveNostrIdentity } from '../identity';
 
 // Exercises the NIP-17 DM crypto the chat service uses, offline (no relays):
@@ -39,13 +43,17 @@ describe('nostr chat DM (NIP-17)', () => {
     }
 
     // B's copy is the one tagged to B; unwrap it.
-    const forB = wraps.find((w) => w.tags.some((t) => t[0] === 'p' && t[1] === bPk))!;
+    const forB = wraps.find((w) =>
+      w.tags.some((t) => t[0] === 'p' && t[1] === bPk)
+    )!;
     const rumor = unwrapEvent(forB, bSk);
     expect(rumor.content).toBe('gm on chipnet');
     expect(rumor.pubkey).toBe(aPk); // real sender revealed only after decryption
 
     // A's self-copy round-trips under A's key too.
-    const forA = wraps.find((w) => w.tags.some((t) => t[0] === 'p' && t[1] === aPk))!;
+    const forA = wraps.find((w) =>
+      w.tags.some((t) => t[0] === 'p' && t[1] === aPk)
+    )!;
     expect(unwrapEvent(forA, aSk).content).toBe('gm on chipnet');
   });
 
@@ -197,7 +205,10 @@ describe('nostr chat DM (NIP-17)', () => {
   });
 
   it('parseChatTip and encodeChatTip round-trip BCH and CashTokens', () => {
-    expect(parseChatTip('/send 0.01')).toEqual({ asset: 'bch', amount: '0.01' });
+    expect(parseChatTip('/send 0.01')).toEqual({
+      asset: 'bch',
+      amount: '0.01',
+    });
     expect(parseChatTip('/send 0.01 BCH')).toEqual({
       asset: 'bch',
       amount: '0.01',
@@ -298,9 +309,11 @@ describe('nostr chat DM (NIP-17)', () => {
     const pk = getPublicKey(sk);
     expect(toPubkeyHex(pk)).toBe(pk);
     // The tip target from the user: a real npub decodes to 64-hex.
-    expect(toPubkeyHex('npub10gp4r5svjlwphe8rz3tt0w6t8z042md3adtreyx8wgpdxyj8vxgqfhl65t')).toMatch(
-      /^[0-9a-f]{64}$/
-    );
+    expect(
+      toPubkeyHex(
+        'npub10gp4r5svjlwphe8rz3tt0w6t8z042md3adtreyx8wgpdxyj8vxgqfhl65t'
+      )
+    ).toMatch(/^[0-9a-f]{64}$/);
     expect(() => toPubkeyHex('not-a-key')).toThrow();
   });
 });

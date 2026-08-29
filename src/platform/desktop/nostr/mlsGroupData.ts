@@ -43,9 +43,11 @@ export function encodeNostrGroupData(data: NostrGroupData): Uint8Array {
   const utf8 = new TextEncoder();
   const admins = data.adminPubKeys.map((hex) => {
     const raw = hex.toLowerCase();
-    if (!/^[0-9a-f]{64}$/.test(raw)) throw new Error('admin pubkey must be 32-byte hex');
+    if (!/^[0-9a-f]{64}$/.test(raw))
+      throw new Error('admin pubkey must be 32-byte hex');
     const b = new Uint8Array(32);
-    for (let i = 0; i < 32; i++) b[i] = parseInt(raw.slice(i * 2, i * 2 + 2), 16);
+    for (let i = 0; i < 32; i++)
+      b[i] = parseInt(raw.slice(i * 2, i * 2 + 2), 16);
     return opaque16(b);
   });
   const relays = data.relays.map((url) => opaque16(utf8.encode(url)));

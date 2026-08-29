@@ -99,10 +99,15 @@ export async function saveMlsKeyPackage(
   publicPackage: KeyPackage,
   privatePackage: PrivateKeyPackage
 ): Promise<void> {
-  kpMemory.set(kpMemKey(pubkey, deviceIndex), { publicPackage, privatePackage });
+  kpMemory.set(kpMemKey(pubkey, deviceIndex), {
+    publicPackage,
+    privatePackage,
+  });
   try {
     await idbSet(KP_KEY(pubkey, deviceIndex), {
-      publicB64: bytesToB64(encode(mlsMessageEncoder, wrapKeyPackage(publicPackage))),
+      publicB64: bytesToB64(
+        encode(mlsMessageEncoder, wrapKeyPackage(publicPackage))
+      ),
       privateB64: bytesToB64(encode(privateKeyPackageEncoder, privatePackage)),
     });
   } catch {
@@ -113,7 +118,10 @@ export async function saveMlsKeyPackage(
 export async function loadMlsKeyPackage(
   pubkey: string,
   deviceIndex: number
-): Promise<{ publicPackage: KeyPackage; privatePackage: PrivateKeyPackage } | null> {
+): Promise<{
+  publicPackage: KeyPackage;
+  privatePackage: PrivateKeyPackage;
+} | null> {
   const mem = kpMemory.get(kpMemKey(pubkey, deviceIndex));
   if (mem) return mem;
   try {
@@ -123,10 +131,18 @@ export async function loadMlsKeyPackage(
       publicB64?: string;
       privateB64?: string;
     };
-    if (typeof publicB64 !== 'string' || typeof privateB64 !== 'string') return null;
+    if (typeof publicB64 !== 'string' || typeof privateB64 !== 'string')
+      return null;
     const msg = decode(mlsMessageDecoder, b64ToBytes(publicB64));
-    const privatePackage = decode(privateKeyPackageDecoder, b64ToBytes(privateB64));
-    if (!msg || msg.wireformat !== wireformats.mls_key_package || !privatePackage) {
+    const privatePackage = decode(
+      privateKeyPackageDecoder,
+      b64ToBytes(privateB64)
+    );
+    if (
+      !msg ||
+      msg.wireformat !== wireformats.mls_key_package ||
+      !privatePackage
+    ) {
       return null;
     }
     const packed = { publicPackage: msg.keyPackage, privatePackage };

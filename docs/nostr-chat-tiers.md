@@ -11,18 +11,18 @@ flow.
 
 **Normative code**
 
-| Path | Role |
-| ---- | ---- |
-| `src/features/nostr/NostrChat.tsx` | Two-pane UI; picks the tier |
-| `src/platform/desktop/nostr/chat.ts` | NIP-17 DMs, reactions, deletes, profiles |
-| `src/platform/desktop/nostr/mls.ts` | MLS engine + private/open transport |
-| `src/platform/desktop/nostr/mlsKeys.ts` | Ed25519 MLS keys (not the npub) |
-| `src/platform/desktop/nostr/mlsDevice.ts` | Device slot, stored KeyPackage, coalesce by npub |
-| `src/platform/desktop/nostr/mlsIdentityProof.ts` | Marmot `0xF2F1` account-identity-proof |
-| `src/platform/desktop/nostr/mlsGroupData.ts` | Marmot `0xF2EE` group-data bytes |
-| `src/platform/desktop/nostr/identity.ts` | Account seed (NIP-06 today) → npub |
-| `src/platform/desktop/nostr/__tests__/chat.test.ts` | DM wrap/unwrap, tips, 10050 |
-| `src/platform/desktop/nostr/__tests__/mls.test.ts` | MLS ratchet, 443/444/445, private wrap |
+| Path                                                | Role                                             |
+| --------------------------------------------------- | ------------------------------------------------ |
+| `src/features/nostr/NostrChat.tsx`                  | Two-pane UI; picks the tier                      |
+| `src/platform/desktop/nostr/chat.ts`                | NIP-17 DMs, reactions, deletes, profiles         |
+| `src/platform/desktop/nostr/mls.ts`                 | MLS engine + private/open transport              |
+| `src/platform/desktop/nostr/mlsKeys.ts`             | Ed25519 MLS keys (not the npub)                  |
+| `src/platform/desktop/nostr/mlsDevice.ts`           | Device slot, stored KeyPackage, coalesce by npub |
+| `src/platform/desktop/nostr/mlsIdentityProof.ts`    | Marmot `0xF2F1` account-identity-proof           |
+| `src/platform/desktop/nostr/mlsGroupData.ts`        | Marmot `0xF2EE` group-data bytes                 |
+| `src/platform/desktop/nostr/identity.ts`            | Account seed (NIP-06 today) → npub               |
+| `src/platform/desktop/nostr/__tests__/chat.test.ts` | DM wrap/unwrap, tips, 10050                      |
+| `src/platform/desktop/nostr/__tests__/mls.test.ts`  | MLS ratchet, 443/444/445, private wrap           |
 
 Public specs: [NIP-17](https://nips.nostr.com/17),
 [NIP-44](https://nips.nostr.com/44),
@@ -36,15 +36,15 @@ Paytaca’s published DM stack is NIP-17 (see
 
 ## The one-sentence rule
 
-| Tier | What it is |
-| ---- | ---------- |
-| **DM** | 1:1 NIP-17 gift-wrap. Paytaca speaks this. No forward secrecy. |
-| **Private group** | MLS crypto, NIP-17 *transport*. Gift-wrap the MLS blob to each member. Capped at **8**. Relays do not see a group id. |
-| **Open group** | MLS crypto, NIP-ee *transport*. One kind-**445** event with an `h` tag. Still E2EE. “Open” means the *group exists* on relays, not that the text is public. |
+| Tier              | What it is                                                                                                                                                  |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **DM**            | 1:1 NIP-17 gift-wrap. Paytaca speaks this. No forward secrecy.                                                                                              |
+| **Private group** | MLS crypto, NIP-17 _transport_. Gift-wrap the MLS blob to each member. Capped at **8**. Relays do not see a group id.                                       |
+| **Open group**    | MLS crypto, NIP-ee _transport_. One kind-**445** event with an `h` tag. Still E2EE. “Open” means the _group exists_ on relays, not that the text is public. |
 
 You cannot bolt MLS forward secrecy onto a kind-14 rumor. Kind 14 always uses a
 static NIP-44 conversation key from the two nsecs. Private groups keep gift-wrap
-for metadata and put MLS *inside* the wrap.
+for metadata and put MLS _inside_ the wrap.
 
 NIP-17 itself says rooms with more than about 10 people should use another
 scheme. The cap is `PRIVATE_MLS_MAX_MEMBERS = 8` in `mls.ts`.
@@ -53,27 +53,27 @@ scheme. The cap is `PRIVATE_MLS_MAX_MEMBERS = 8` in `mls.ts`.
 
 ## Comparison
 
-| | DM | Private group | Open group |
-| --- | --- | --- | --- |
-| How the user starts it | One npub / hex | Comma-separated npubs (2–8) | **New MLS group** |
-| Members | 2 | 2–8 | Uncapped (MLS tree) |
-| Crypto | NIP-44 from identity keys | MLS (RFC 9420) | MLS (RFC 9420) |
-| Transport | Kind 14 sealed, kind **1059** wrap | Same 1059 wrap; inner rumor is unsigned kind **445** carrying MLS bytes | Kind **445** published on relays |
-| Relay-visible group id | None | None (outer 1059 has only `p`) | `h` = `nostr_group_id` (not the MLS group id) |
-| Forward secrecy | No | Yes | Yes |
-| Post-compromise security | No | Yes (later epochs) | Yes |
-| Steal nsec later | Decrypts this DM history | Unwraps 1059s; still cannot read MLS without the ratchet | Cannot read MLS without the ratchet |
-| Signing key ≠ npub | No | Yes — Ed25519 `m/44'/1237'/0'/0/(1+n)` | Same |
-| 445 author | — | Throwaway wrap key (outer) | Fresh ephemeral secp256k1 per event |
-| Recover from nsec only | Yes, refetch 1059s | No — need persisted `ClientState` | No — need persisted `ClientState` |
-| Second device, same nsec | Works | Extra leaf, same npub (Add + Welcome). UI coalesces members | Same |
-| Need peer KeyPackage first | No | Yes (kind 443 or Paytaca 30078) | Yes |
-| Paytaca 1:1 | Yes | No | No |
-| Paytaca NIP-17 “groups” | Their comma-rooms are still kind 14 | We do **not** dual-write kind 14 (that would drop FS) | No |
-| Paytaca MLS 30078 | — | Dual-publish only if the invitee had a Paytaca KeyPackage | Dual-publish if `paytacaDual` |
-| White Noise / Marmot | No | Welcome is 444-in-1059 (NIP-ee). App messages stay wrapped, so they will not see 445 traffic | Kind 443 / 444 / 445. Create-time `0x0006` dictionary + `0x0008` AppDataUpdate. Private rooms still wrap, so they will not see public 445 |
-| Cost per message | 2 wraps (self + peer) | One MLS encrypt + N wraps | One MLS encrypt + one 445 |
-| UI code path | `sendDirectMessage` | `createMlsGroup({ visibility: 'private' })` + `sendMlsMessage` | `createMlsGroup({ visibility: 'open' })` + `sendMlsMessage` |
+|                            | DM                                  | Private group                                                                                | Open group                                                                                                                                |
+| -------------------------- | ----------------------------------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| How the user starts it     | One npub / hex                      | Comma-separated npubs (2–8)                                                                  | **New MLS group**                                                                                                                         |
+| Members                    | 2                                   | 2–8                                                                                          | Uncapped (MLS tree)                                                                                                                       |
+| Crypto                     | NIP-44 from identity keys           | MLS (RFC 9420)                                                                               | MLS (RFC 9420)                                                                                                                            |
+| Transport                  | Kind 14 sealed, kind **1059** wrap  | Same 1059 wrap; inner rumor is unsigned kind **445** carrying MLS bytes                      | Kind **445** published on relays                                                                                                          |
+| Relay-visible group id     | None                                | None (outer 1059 has only `p`)                                                               | `h` = `nostr_group_id` (not the MLS group id)                                                                                             |
+| Forward secrecy            | No                                  | Yes                                                                                          | Yes                                                                                                                                       |
+| Post-compromise security   | No                                  | Yes (later epochs)                                                                           | Yes                                                                                                                                       |
+| Steal nsec later           | Decrypts this DM history            | Unwraps 1059s; still cannot read MLS without the ratchet                                     | Cannot read MLS without the ratchet                                                                                                       |
+| Signing key ≠ npub         | No                                  | Yes — Ed25519 `m/44'/1237'/0'/0/(1+n)`                                                       | Same                                                                                                                                      |
+| 445 author                 | —                                   | Throwaway wrap key (outer)                                                                   | Fresh ephemeral secp256k1 per event                                                                                                       |
+| Recover from nsec only     | Yes, refetch 1059s                  | No — need persisted `ClientState`                                                            | No — need persisted `ClientState`                                                                                                         |
+| Second device, same nsec   | Works                               | Extra leaf, same npub (Add + Welcome). UI coalesces members                                  | Same                                                                                                                                      |
+| Need peer KeyPackage first | No                                  | Yes (kind 443 or Paytaca 30078)                                                              | Yes                                                                                                                                       |
+| Paytaca 1:1                | Yes                                 | No                                                                                           | No                                                                                                                                        |
+| Paytaca NIP-17 “groups”    | Their comma-rooms are still kind 14 | We do **not** dual-write kind 14 (that would drop FS)                                        | No                                                                                                                                        |
+| Paytaca MLS 30078          | —                                   | Dual-publish only if the invitee had a Paytaca KeyPackage                                    | Dual-publish if `paytacaDual`                                                                                                             |
+| White Noise / Marmot       | No                                  | Welcome is 444-in-1059 (NIP-ee). App messages stay wrapped, so they will not see 445 traffic | Kind 443 / 444 / 445. Create-time `0x0006` dictionary + `0x0008` AppDataUpdate. Private rooms still wrap, so they will not see public 445 |
+| Cost per message           | 2 wraps (self + peer)               | One MLS encrypt + N wraps                                                                    | One MLS encrypt + one 445                                                                                                                 |
+| UI code path               | `sendDirectMessage`                 | `createMlsGroup({ visibility: 'private' })` + `sendMlsMessage`                               | `createMlsGroup({ visibility: 'open' })` + `sendMlsMessage`                                                                               |
 
 ---
 
@@ -102,7 +102,7 @@ branch draft and is **not** implemented
 ([`features/multi-device.md`](https://github.com/marmot-protocol/marmot/blob/master/features/multi-device.md)).
 
 The MLS sign key is never the Nostr identity. Kind 443 KeyPackages are still
-*signed as Nostr events* by the identity key (NIP-ee requires that). Kind 445
+_signed as Nostr events_ by the identity key (NIP-ee requires that). Kind 445
 open-group events are signed by a **new ephemeral secp256k1 key every time**.
 
 ### DM (NIP-17)
@@ -161,13 +161,13 @@ to it.
 
 ## Persistence
 
-| Store | Key | Contents |
-| ----- | --- | -------- |
-| IndexedDB | `nostr-chat:${npub}` | Decrypted DM/group transcript (local UX) |
-| IndexedDB | `nostr-mls-index:${npub}` | `MlsGroupRecord` list (ids, visibility, members) |
-| IndexedDB | `nostr-mls-ratchet:${npub}:${nostrGroupId}` | `encodeGroupState` blob |
-| IndexedDB | `nostr-mls-device:${npub}` | MLS device slot (0 = primary) |
-| IndexedDB | `nostr-mls-kp:${npub}:${slot}` | Published KeyPackage + private init keys |
+| Store     | Key                                         | Contents                                         |
+| --------- | ------------------------------------------- | ------------------------------------------------ |
+| IndexedDB | `nostr-chat:${npub}`                        | Decrypted DM/group transcript (local UX)         |
+| IndexedDB | `nostr-mls-index:${npub}`                   | `MlsGroupRecord` list (ids, visibility, members) |
+| IndexedDB | `nostr-mls-ratchet:${npub}:${nostrGroupId}` | `encodeGroupState` blob                          |
+| IndexedDB | `nostr-mls-device:${npub}`                  | MLS device slot (0 = primary)                    |
+| IndexedDB | `nostr-mls-kp:${npub}:${slot}`              | Published KeyPackage + private init keys         |
 
 MLS forward secrecy is only as good as this ratchet blob. It is not recoverable
 from nsec alone. Do not log it. Do not put `privateKeyHex` on MLS key types.
@@ -199,11 +199,11 @@ HTTPS gateway still sees the GET.
 
 **When we send in-chat images:** put the **bytes in the encrypted payload**.
 
-| Tier | Where the bytes go |
-| ---- | ------------------ |
-| DM | NIP-17 gift wrap (kind **15** file message, or equivalent inside the wrap) |
-| Private group | MLS application blob, still inside the 1059 wrap |
-| Open MLS | MLS application blob on 445 — still E2EE, no public URL |
+| Tier          | Where the bytes go                                                         |
+| ------------- | -------------------------------------------------------------------------- |
+| DM            | NIP-17 gift wrap (kind **15** file message, or equivalent inside the wrap) |
+| Private group | MLS application blob, still inside the 1059 wrap                           |
+| Open MLS      | MLS application blob on 445 — still E2EE, no public URL                    |
 
 Photos, **voice**, **PDF**, short **video**, and other files use the same
 path: `data:<mime>;base64,…` in kind 15. Public [NIP-A0](https://nips.nostr.com/a0)
@@ -221,13 +221,13 @@ with extra AES-GCM on the blob and keys in tags inside the wrap. [NIP-A0](https:
 voice is `kind 1222` with an audio URL. The wrap hides plaintext from the
 relay; the **host still sees** a GET (viewer IP, which file, when).
 
-| | Spec NIP-17 / A0 URL | Our inline wrap (DM) | Our **MLS** room |
-| --- | --- | --- | --- |
-| CDN / IP of viewers | Leaks to the file host | **No** | **No** |
-| Relay sees plaintext | No | No | No |
-| Steal nsec later | Reads the wrap + can fetch the URL | Reads the wrap (**no FS** on DMs) | **FS** — old epochs stay dark without the ratchet |
-| 10MB video / fat PDF | Possible | **No** (~70KB) | Same cap |
-| Paytaca / other kind-15 clients | They expect a URL | They likely **won’t** show our file | N/A |
+|                                 | Spec NIP-17 / A0 URL               | Our inline wrap (DM)                | Our **MLS** room                                  |
+| ------------------------------- | ---------------------------------- | ----------------------------------- | ------------------------------------------------- |
+| CDN / IP of viewers             | Leaks to the file host             | **No**                              | **No**                                            |
+| Relay sees plaintext            | No                                 | No                                  | No                                                |
+| Steal nsec later                | Reads the wrap + can fetch the URL | Reads the wrap (**no FS** on DMs)   | **FS** — old epochs stay dark without the ratchet |
+| 10MB video / fat PDF            | Possible                           | **No** (~70KB)                      | Same cap                                          |
+| Paytaca / other kind-15 clients | They expect a URL                  | They likely **won’t** show our file | N/A                                               |
 
 **Tradeoff:** we are stricter than those NIPs on “don’t leak the file to a
 host.” MLS is stronger than NIP-17 DMs for the same inline bytes (forward
@@ -247,7 +247,7 @@ screen replays 1059s and MLS backups from relays.
 Kind 0 `{ name, about, picture }` is [NIP-01](https://nips.nostr.com/01).
 Damus, Amethyst, Primal, Paytaca read it. That card is **public**. A `picture`
 URL has the extra CDN GET; inline bytes in the event do not. This wallet
-currently stores *our* chat-header photo in IndexedDB and does not `GET`
+currently stores _our_ chat-header photo in IndexedDB and does not `GET`
 `http(s)` for avatars (`NostrChat` `Avatar`). That is UI, not the private-chat
 photo rule above.
 

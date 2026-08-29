@@ -62,7 +62,10 @@ export function nip06AccountSeed(
   };
 }
 
-export function nostrDerivationPath(seed: NostrAccountSeed, index: number): string {
+export function nostrDerivationPath(
+  seed: NostrAccountSeed,
+  index: number
+): string {
   switch (seed.scheme) {
     case NOSTR_ACCOUNT_SCHEME_NIP06:
       return nip06DerivationPath(seed.account, index);
@@ -128,7 +131,8 @@ export async function loadNostrAccountSeed(
   if (!mnemonic) {
     throw new Error('Wallet mnemonic unavailable — unlock the wallet first.');
   }
-  const passphrase = typeof info?.passphrase === 'string' ? info.passphrase : '';
+  const passphrase =
+    typeof info?.passphrase === 'string' ? info.passphrase : '';
   return nip06AccountSeed(mnemonic, passphrase);
 }
 

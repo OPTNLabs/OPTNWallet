@@ -103,10 +103,7 @@ import { deriveNostrIdentity, loadNostrAccountSeed } from './identity';
 import { DISCOVERY_RELAYS, DEFAULT_RELAYS } from './defaultRelays';
 import { SimplePool } from 'nostr-tools';
 import { isInlineChatMedia, type ChatMessage } from './chat';
-import {
-  encodeNostrGroupData,
-  MARMOT_GROUP_DATA_EXT,
-} from './mlsGroupData';
+import { encodeNostrGroupData, MARMOT_GROUP_DATA_EXT } from './mlsGroupData';
 
 export const MLS_KIND_APP = 30117;
 export const MLS_KIND_COMMIT = 30118;
@@ -131,7 +128,10 @@ function sameSigKey(a: Uint8Array, b: Uint8Array): boolean {
  *  matches credentials, which would reject an extra-device Add. */
 const extraDeviceKeyPackageEquality: KeyPackageEqualityConfig = {
   compareKeyPackages(a, b) {
-    return sameSigKey(a.leafNode.signaturePublicKey, b.leafNode.signaturePublicKey);
+    return sameSigKey(
+      a.leafNode.signaturePublicKey,
+      b.leafNode.signaturePublicKey
+    );
   },
   compareKeyPackageToLeafNode(a, b) {
     return sameSigKey(a.leafNode.signaturePublicKey, b.signaturePublicKey);
@@ -208,7 +208,8 @@ export async function generateMlsKeyPackage(
   const mlsKeys = await deriveMlsKeys(mnemonic, passphrase, deviceIndex);
   const accountIdentity = hexToBytes(nostrPubkeyHex);
   const identitySecret =
-    opts?.identitySecret ?? (await deriveNostrIdentity(mnemonic, passphrase)).secretKey;
+    opts?.identitySecret ??
+    (await deriveNostrIdentity(mnemonic, passphrase)).secretKey;
   const credential = {
     credentialType: defaultCredentialTypes.basic,
     identity: accountIdentity,
@@ -324,7 +325,9 @@ function wrapKeyPackage(keyPackage: KeyPackage): MlsMessage {
   };
 }
 
-export async function nostrExporterKey(state: ClientState): Promise<Uint8Array> {
+export async function nostrExporterKey(
+  state: ClientState
+): Promise<Uint8Array> {
   const { impl } = await ensureMlsCrypto();
   return mlsExporter(
     state.keySchedule.exporterSecret,
@@ -335,7 +338,9 @@ export async function nostrExporterKey(state: ClientState): Promise<Uint8Array> 
   );
 }
 
-export async function marmotGroupEventKey(state: ClientState): Promise<Uint8Array> {
+export async function marmotGroupEventKey(
+  state: ClientState
+): Promise<Uint8Array> {
   const { impl } = await ensureMlsCrypto();
   return mlsExporter(
     state.keySchedule.exporterSecret,
@@ -346,12 +351,18 @@ export async function marmotGroupEventKey(state: ClientState): Promise<Uint8Arra
   );
 }
 
-export function nip44EncryptWithExporter(exporter: Uint8Array, plaintext: string): string {
+export function nip44EncryptWithExporter(
+  exporter: Uint8Array,
+  plaintext: string
+): string {
   const pub = getPublicKey(exporter);
   return nip44Encrypt(plaintext, getConversationKey(exporter, pub));
 }
 
-export function nip44DecryptWithExporter(exporter: Uint8Array, payload: string): string {
+export function nip44DecryptWithExporter(
+  exporter: Uint8Array,
+  payload: string
+): string {
   const pub = getPublicKey(exporter);
   return nip44Decrypt(payload, getConversationKey(exporter, pub));
 }
@@ -460,7 +471,10 @@ export async function loadMlsState(
     if (typeof b64 !== 'string') return null;
     const groupState = decode(clientStateDecoder, b64ToBytes(b64));
     if (!groupState) return null;
-    const state = { ...groupState, clientConfig: restoredClientConfig } as ClientState;
+    const state = {
+      ...groupState,
+      clientConfig: restoredClientConfig,
+    } as ClientState;
     mlsStates.set(nostrGroupIdHex, state);
     return state;
   } catch {
@@ -677,7 +691,10 @@ export function buildKind30443(
   );
 }
 
-export function buildKind10051(relays: string[], identitySecret: Uint8Array): Event {
+export function buildKind10051(
+  relays: string[],
+  identitySecret: Uint8Array
+): Event {
   return finalizeEvent(
     {
       kind: KIND_KP_RELAYS,
@@ -776,7 +793,9 @@ export async function publishMlsKeyPackage(
       tags: [['d', MLS_KEY_PACKAGE_D]],
       content: JSON.stringify({
         name: 'Paytaca MLS',
-        data: { mlsMessage: bytesToB64(encodeMlsBytes(wrapKeyPackage(publicPackage))) },
+        data: {
+          mlsMessage: bytesToB64(encodeMlsBytes(wrapKeyPackage(publicPackage))),
+        },
       }),
     },
     nostr.secretKey
@@ -802,7 +821,11 @@ export async function fetchPeerKeyPackage(
   pubKey: string,
   relays: string[] = DEFAULT_RELAYS,
   opts?: { deviceIndex?: number }
-): Promise<{ keyPackage: KeyPackage; source: MlsWire; eventId?: string } | null> {
+): Promise<{
+  keyPackage: KeyPackage;
+  source: MlsWire;
+  eventId?: string;
+} | null> {
   const lookup = Array.from(new Set([...DISCOVERY_RELAYS, ...relays]));
   const dFilter =
     typeof opts?.deviceIndex === 'number'
@@ -853,9 +876,7 @@ export async function createMlsGroup(
   );
   const mlsGroupId = crypto.getRandomValues(new Uint8Array(32));
   const nostrGroupId = crypto.getRandomValues(new Uint8Array(32));
-  const relays = opts?.relays?.length
-    ? opts.relays
-    : [...DISCOVERY_RELAYS];
+  const relays = opts?.relays?.length ? opts.relays : [...DISCOVERY_RELAYS];
   const groupData = encodeNostrGroupData({
     nostrGroupId,
     name: name || 'MLS Group',
@@ -905,7 +926,12 @@ export async function createMlsGroup(
     ownerPubKey: myPubkey,
   };
   rememberGroup(record);
-  await saveMlsState(record.nostrGroupIdHex, clientState, myPubkey, nostr.secretKey);
+  await saveMlsState(
+    record.nostrGroupIdHex,
+    clientState,
+    myPubkey,
+    nostr.secretKey
+  );
   await persistIndex(myPubkey);
   return record;
 }
@@ -1005,12 +1031,7 @@ export async function sendMlsFile(
     nostrGroupIdHex,
     roomId,
     JSON.stringify(
-      innerKind15(
-        nostr.pubkey,
-        dataUrl,
-        extra?.mimeType,
-        extra?.fileName
-      )
+      innerKind15(nostr.pubkey, dataUrl, extra?.mimeType, extra?.fileName)
     ),
     relays
   );
@@ -1037,9 +1058,13 @@ async function sendMlsPayload(
   const published: Event[] = [];
   if (record?.visibility === 'private') {
     const rumor = unsignedMlsRumor(nostr.pubkey, nostrGroupIdHex, wrapped);
-    const members = (record.memberPubKeys || []).filter((p) => p !== nostr.pubkey);
+    const members = (record.memberPubKeys || []).filter(
+      (p) => p !== nostr.pubkey
+    );
     if (members.length) {
-      published.push(...(wrapRumor(rumor, nostr.secretKey, members) as Event[]));
+      published.push(
+        ...(wrapRumor(rumor, nostr.secretKey, members) as Event[])
+      );
     }
   } else {
     published.push(await buildKind445(newState, wrapped, nostrGroupIdHex));
@@ -1056,7 +1081,10 @@ async function sendMlsPayload(
   await saveMlsState(nostrGroupIdHex, newState, nostr.pubkey, nostr.secretKey);
   await publish(targets, published);
   const first = published[0];
-  return { id: first?.id ?? bytesToHex(crypto.getRandomValues(new Uint8Array(16))), at: Math.floor(Date.now() / 1000) };
+  return {
+    id: first?.id ?? bytesToHex(crypto.getRandomValues(new Uint8Array(16))),
+    at: Math.floor(Date.now() / 1000),
+  };
 }
 
 export async function addMlsMember(
@@ -1076,11 +1104,15 @@ export async function addMlsMember(
       'Peer has no MLS KeyPackage yet. They need to open chat once (kind 443).'
     );
   }
-  const kpIdentity = credentialPubkeyHex(fetched.keyPackage.leafNode.credential);
+  const kpIdentity = credentialPubkeyHex(
+    fetched.keyPackage.leafNode.credential
+  );
   if (kpIdentity && kpIdentity !== inviteePubKey.toLowerCase()) {
     throw new Error('KeyPackage credential does not match invitee npub');
   }
-  if (leafHasSignatureKey(loaded, fetched.keyPackage.leafNode.signaturePublicKey)) {
+  if (
+    leafHasSignatureKey(loaded, fetched.keyPackage.leafNode.signaturePublicKey)
+  ) {
     return;
   }
   const record = getMlsRecord(nostrGroupIdHex);
@@ -1106,13 +1138,23 @@ export async function addMlsMember(
   const targets = Array.from(new Set([...DISCOVERY_RELAYS, ...relays]));
   const published: Event[] = [];
   if (record?.visibility === 'private') {
-    const rumor = unsignedMlsRumor(nostr.pubkey, nostrGroupIdHex, result.commit);
-    const members = (record.memberPubKeys || []).filter((p) => p !== nostr.pubkey);
+    const rumor = unsignedMlsRumor(
+      nostr.pubkey,
+      nostrGroupIdHex,
+      result.commit
+    );
+    const members = (record.memberPubKeys || []).filter(
+      (p) => p !== nostr.pubkey
+    );
     if (members.length) {
-      published.push(...(wrapRumor(rumor, nostr.secretKey, members) as Event[]));
+      published.push(
+        ...(wrapRumor(rumor, nostr.secretKey, members) as Event[])
+      );
     }
   } else {
-    published.push(await buildKind445(result.newState, result.commit, nostrGroupIdHex));
+    published.push(
+      await buildKind445(result.newState, result.commit, nostrGroupIdHex)
+    );
   }
   if (result.welcome) {
     const welcomeMsg = result.welcome;
@@ -1141,7 +1183,12 @@ export async function addMlsMember(
       published.push(finalizeEvent(commitUnsigned, nostr.secretKey));
     }
   }
-  await saveMlsState(nostrGroupIdHex, result.newState, nostr.pubkey, nostr.secretKey);
+  await saveMlsState(
+    nostrGroupIdHex,
+    result.newState,
+    nostr.pubkey,
+    nostr.secretKey
+  );
   if (record) {
     record.memberPubKeys = coalescedMemberPubKeys(result.newState);
     rememberGroup(record);
@@ -1194,11 +1241,18 @@ export async function joinMlsGroupFromWelcome(
     privateKeys: privatePackage,
   });
   const mlsGroupIdHex = bytesToHex(clientState.groupContext.groupId);
-  const existing = listMlsGroups().find((r) => r.mlsGroupIdHex === mlsGroupIdHex);
+  const existing = listMlsGroups().find(
+    (r) => r.mlsGroupIdHex === mlsGroupIdHex
+  );
   if (existing) {
     existing.memberPubKeys = coalescedMemberPubKeys(clientState);
     rememberGroup(existing);
-    await saveMlsState(existing.nostrGroupIdHex, clientState, myPubkey, ident.secretKey);
+    await saveMlsState(
+      existing.nostrGroupIdHex,
+      clientState,
+      myPubkey,
+      ident.secretKey
+    );
     await persistIndex(myPubkey);
     return existing.nostrGroupIdHex;
   }

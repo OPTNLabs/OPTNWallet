@@ -123,7 +123,11 @@ const Avatar: React.FC<{ url?: string; fallback: string; size?: number }> = ({
 
 /** Read a device image and downscale to a small square JPEG data URL, so the
  *  kind-0 profile stays small enough for relays to accept. */
-function fileToJpegDataUrl(file: File, size: number, quality: number): Promise<string> {
+function fileToJpegDataUrl(
+  file: File,
+  size: number,
+  quality: number
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = () => reject(new Error('could not read image'));
@@ -167,9 +171,11 @@ function fileToInlineDataUrl(file: File): Promise<string> {
     const reader = new FileReader();
     reader.onerror = () => reject(new Error('could not read file'));
     reader.onload = () => {
-      const dataUrl =
-        typeof reader.result === 'string' ? reader.result : '';
-      if (!dataUrl.startsWith('data:') || dataUrl.length > MAX_INLINE_CHAT_DATA_URL) {
+      const dataUrl = typeof reader.result === 'string' ? reader.result : '';
+      if (
+        !dataUrl.startsWith('data:') ||
+        dataUrl.length > MAX_INLINE_CHAT_DATA_URL
+      ) {
         reject(new Error(tooBig));
         return;
       }
@@ -255,9 +261,7 @@ const NostrChat: React.FC = () => {
         const pic =
           localPic ||
           (avatar && !/^https?:/i.test(avatar) ? avatar : '') ||
-          (mine.picture && !/^https?:/i.test(mine.picture)
-            ? mine.picture
-            : '');
+          (mine.picture && !/^https?:/i.test(mine.picture) ? mine.picture : '');
         if (pic) setMyPicture(pic);
       })
       .catch((e) => setErr(e instanceof Error ? e.message : String(e)));
@@ -539,7 +543,9 @@ const NostrChat: React.FC = () => {
           },
           relays
         ),
-        myName ? publishDisplayName(walletId, myName, relays) : Promise.resolve(),
+        myName
+          ? publishDisplayName(walletId, myName, relays)
+          : Promise.resolve(),
         myPicture
           ? publishAvatar(walletId, myPicture, relays)
           : Promise.resolve(),
@@ -616,15 +622,7 @@ const NostrChat: React.FC = () => {
         setSending(false);
       }
     },
-    [
-      activePeer,
-      walletId,
-      me,
-      mlsGroupId,
-      relays,
-      replyTo,
-      activeMembers,
-    ]
+    [activePeer, walletId, me, mlsGroupId, relays, replyTo, activeMembers]
   );
 
   const stopVoice = useCallback(() => {
@@ -643,7 +641,11 @@ const NostrChat: React.FC = () => {
     setErr(null);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+        audio: {
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+        },
       });
       const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
         ? 'audio/webm;codecs=opus'
@@ -670,11 +672,7 @@ const NostrChat: React.FC = () => {
       setRecording(true);
       recordTimerRef.current = setTimeout(() => stopVoice(), 20_000);
     } catch (e) {
-      setErr(
-        e instanceof Error
-          ? e.message
-          : 'Microphone unavailable'
-      );
+      setErr(e instanceof Error ? e.message : 'Microphone unavailable');
     }
   }, [activePeer, recording, sendChatFile, stopVoice]);
 
@@ -912,9 +910,7 @@ const NostrChat: React.FC = () => {
                             setMlsGroupId(created.nostrGroupIdHex);
                             setShowNewChat(false);
                           } catch (e) {
-                            setErr(
-                              e instanceof Error ? e.message : String(e)
-                            );
+                            setErr(e instanceof Error ? e.message : String(e));
                           }
                         })();
                       }}
@@ -1030,9 +1026,7 @@ const NostrChat: React.FC = () => {
                               relays
                             );
                           } catch (e) {
-                            setErr(
-                              e instanceof Error ? e.message : String(e)
-                            );
+                            setErr(e instanceof Error ? e.message : String(e));
                           }
                         })();
                       }}
@@ -1170,8 +1164,7 @@ const NostrChat: React.FC = () => {
                                   Reply
                                 </button>
                                 {m.mine &&
-                                  Math.floor(Date.now() / 1000) - m.at <
-                                    60 && (
+                                  Math.floor(Date.now() / 1000) - m.at < 60 && (
                                     <button
                                       type="button"
                                       className="text-[10px] wallet-muted"
@@ -1294,90 +1287,90 @@ const NostrChat: React.FC = () => {
                     </div>
                   )}
                   <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    className="rounded-lg border border-[var(--wallet-border)] px-2 py-2 text-[10px] font-semibold wallet-text-strong"
-                    onClick={() => setShowTip((v) => !v)}
-                  >
-                    Tip
-                  </button>
-                  <button
-                    type="button"
-                    className="rounded-lg border border-[var(--wallet-border)] px-2 py-2 text-[10px] font-semibold wallet-text-strong disabled:opacity-50"
-                    disabled={sending || !activePeer}
-                    onClick={() => chatPhotoRef.current?.click()}
-                    title="Send photo in this chat (inside the wrap, no CDN)"
-                    aria-label="Send photo"
-                  >
-                    <MdImage aria-hidden="true" />
-                  </button>
-                  <input
-                    ref={chatPhotoRef}
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      e.target.value = '';
-                      if (file) void sendChatFile(file);
-                    }}
-                  />
-                  <button
-                    type="button"
-                    className="rounded-lg border border-[var(--wallet-border)] px-2 py-2 text-[10px] font-semibold wallet-text-strong disabled:opacity-50"
-                    disabled={sending || !activePeer}
-                    onClick={() => chatFileRef.current?.click()}
-                    title="Send PDF or file in this chat (inside the wrap, no CDN)"
-                    aria-label="Send file"
-                  >
-                    <MdAttachFile aria-hidden="true" />
-                  </button>
-                  <input
-                    ref={chatFileRef}
-                    type="file"
-                    className="hidden"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      e.target.value = '';
-                      if (file) void sendChatFile(file);
-                    }}
-                  />
-                  <button
-                    type="button"
-                    className={`rounded-lg border px-2 py-2 text-[10px] font-semibold disabled:opacity-50 ${
-                      recording
-                        ? 'border-red-400 text-red-400'
-                        : 'border-[var(--wallet-border)] wallet-text-strong'
-                    }`}
-                    disabled={sending || !activePeer}
-                    onClick={() =>
-                      recording ? stopVoice() : void startVoice()
-                    }
-                    title="Voice note, max 20s, inside the wrap (not NIP-A0 URL)"
-                    aria-label={recording ? 'Stop recording' : 'Record voice'}
-                  >
-                    {recording ? (
-                      <MdStop aria-hidden="true" />
-                    ) : (
-                      <MdMic aria-hidden="true" />
-                    )}
-                  </button>
-                  <input
-                    value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
-                    placeholder={t('chat.messagePlaceholder')}
-                    className="wallet-input min-w-0 flex-1 text-xs"
-                    onKeyDown={(e) => e.key === 'Enter' && void send()}
-                    disabled={sending}
-                  />
-                  <button
-                    onClick={() => void send()}
-                    disabled={sending || !draft.trim()}
-                    className="wallet-btn-primary grid h-10 w-10 place-items-center disabled:opacity-50"
-                    aria-label={t('chat.send')}
-                  >
-                    <MdSend />
-                  </button>
+                    <button
+                      type="button"
+                      className="rounded-lg border border-[var(--wallet-border)] px-2 py-2 text-[10px] font-semibold wallet-text-strong"
+                      onClick={() => setShowTip((v) => !v)}
+                    >
+                      Tip
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded-lg border border-[var(--wallet-border)] px-2 py-2 text-[10px] font-semibold wallet-text-strong disabled:opacity-50"
+                      disabled={sending || !activePeer}
+                      onClick={() => chatPhotoRef.current?.click()}
+                      title="Send photo in this chat (inside the wrap, no CDN)"
+                      aria-label="Send photo"
+                    >
+                      <MdImage aria-hidden="true" />
+                    </button>
+                    <input
+                      ref={chatPhotoRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        e.target.value = '';
+                        if (file) void sendChatFile(file);
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="rounded-lg border border-[var(--wallet-border)] px-2 py-2 text-[10px] font-semibold wallet-text-strong disabled:opacity-50"
+                      disabled={sending || !activePeer}
+                      onClick={() => chatFileRef.current?.click()}
+                      title="Send PDF or file in this chat (inside the wrap, no CDN)"
+                      aria-label="Send file"
+                    >
+                      <MdAttachFile aria-hidden="true" />
+                    </button>
+                    <input
+                      ref={chatFileRef}
+                      type="file"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        e.target.value = '';
+                        if (file) void sendChatFile(file);
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className={`rounded-lg border px-2 py-2 text-[10px] font-semibold disabled:opacity-50 ${
+                        recording
+                          ? 'border-red-400 text-red-400'
+                          : 'border-[var(--wallet-border)] wallet-text-strong'
+                      }`}
+                      disabled={sending || !activePeer}
+                      onClick={() =>
+                        recording ? stopVoice() : void startVoice()
+                      }
+                      title="Voice note, max 20s, inside the wrap (not NIP-A0 URL)"
+                      aria-label={recording ? 'Stop recording' : 'Record voice'}
+                    >
+                      {recording ? (
+                        <MdStop aria-hidden="true" />
+                      ) : (
+                        <MdMic aria-hidden="true" />
+                      )}
+                    </button>
+                    <input
+                      value={draft}
+                      onChange={(e) => setDraft(e.target.value)}
+                      placeholder={t('chat.messagePlaceholder')}
+                      className="wallet-input min-w-0 flex-1 text-xs"
+                      onKeyDown={(e) => e.key === 'Enter' && void send()}
+                      disabled={sending}
+                    />
+                    <button
+                      onClick={() => void send()}
+                      disabled={sending || !draft.trim()}
+                      className="wallet-btn-primary grid h-10 w-10 place-items-center disabled:opacity-50"
+                      aria-label={t('chat.send')}
+                    >
+                      <MdSend />
+                    </button>
                   </div>
                 </footer>
               </section>
