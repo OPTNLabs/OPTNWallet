@@ -157,10 +157,10 @@
   },
   "devDependencies": {
     "@capacitor/cli": "^7.6.8",
-    "@tauri-apps/cli": "^2.11.3",
     "@testing-library/jest-dom": "^7.0.0",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
+    "@tauri-apps/cli": "^2.11.3",
     "@types/luxon": "^3.6.2",
     "@types/react": "^18.2.66",
     "@types/react-dom": "^18.2.22",
