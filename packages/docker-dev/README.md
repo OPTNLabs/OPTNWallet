@@ -35,7 +35,7 @@ npm --prefix packages/docker-dev run test:core
 ## After a release (pull published image)
 
 ```bash
-export OPTN_DOCKER_TAG=v1.2.3   # explicit tags are recommended; latest remains supported
+export OPTN_DOCKER_TAG=v1.2.3   # required: the image publishes version tags only
 # forks: export OPTN_DOCKER_IMAGE=ghcr.io/<you>/optn-docker-dev
 npm --prefix packages/docker-dev run pull:release
 npm --prefix packages/docker-dev run up:release

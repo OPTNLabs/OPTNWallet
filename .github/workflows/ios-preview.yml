@@ -1,0 +1,99 @@
+name: iOS Preview
+
+# Required always-on so a CI-only PR still compiles the Capacitor iOS app.
+# There was no iOS workflow on dev — ios/App (App.xcworkspace, App.xcodeproj,
+# Podfile) existed with no CI. Keep this workflow in its own YAML file so
+# required checks can match the name "iOS Preview".
+#
+# Signed device IPA is release.yml once Apple/provisioning secrets exist;
+# preview is compile + simulator .app, fail-closed if missing. This is not
+# a signed App Store IPA.
+
+on:
+  # Mirror Android Preview: always-on, no path filters, [dev, staging].
+  pull_request:
+    # main included: a pull request straight to main is exactly the path
+    # that would otherwise reach a release without these asset checks.
+    branches: [dev, staging, main]
+  push:
+    branches: [dev, staging]
+  # Allows a maintainer to recover the required check when GitHub does not
+  # create the pull_request run for a head update.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-preview-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-ios-preview:
+    name: iOS Preview
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      # Prefer build:web + cap sync over android:prepare dotenv -e .env.
+      # Do not invent dotenv / Apple secrets. Vite reads missing .env as empty.
+      - name: Build web and sync Capacitor iOS
+        run: npm run build:web && npx cap sync ios
+
+      # cap sync usually runs pod install; do it here so a skipped
+      # CocoaPods step cannot leave App.xcworkspace without Pods.
+      - name: Install CocoaPods
+        working-directory: ios/App
+        run: pod install
+
+      # Unsigned simulator compile only. Do not invent Apple certs.
+      # CODE_SIGNING_ALLOWED=NO / CODE_SIGNING_REQUIRED=NO — no provisioning.
+      - name: Build iOS Simulator app
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -workspace ios/App/App.xcworkspace \
+            -scheme App \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath ios/App/build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY= \
+            build
+
+      - name: Verify and zip simulator .app
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find ios/App/build -type d -name '*.app' -print -quit)"
+          if [ -z "$APP_PATH" ] || [ ! -d "$APP_PATH" ]; then
+            echo '::error::iOS simulator .app missing after compile (fail-closed).'
+            echo 'Searched ios/App/build for *.app'
+            find ios/App/build -maxdepth 5 -print | head -n 80 || true
+            exit 1
+          fi
+          echo "Found simulator app: $APP_PATH"
+          # .app is a directory bundle; zip it for the artifact upload.
+          ditto -c -k --keepParent "$APP_PATH" preview-ios-simulator.zip
+          unzip -t preview-ios-simulator.zip
+          ls -lh preview-ios-simulator.zip
+
+      - name: Upload iOS simulator preview
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: preview-ios-simulator
+          path: preview-ios-simulator.zip
+          retention-days: 14
+          if-no-files-found: error

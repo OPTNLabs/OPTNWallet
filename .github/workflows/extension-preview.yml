@@ -1,30 +1,31 @@
 name: Extension Preview
 
+# Required always-on so a CI-only PR still builds Chrome and Firefox.
+# Path filters previously skipped this job on PRs that only touched CI
+# (for example OPTNLabs/OPTNWallet#53). Keep this workflow name so
+# required checks still match.
+
 # Mirrors desktop-preview.yml — builds the Chrome/Firefox extension MVP on
-# every push/PR to dev and uploads the unpacked build output as an artifact,
+# every push/PR and uploads the unpacked build output as an artifact,
 # so a reviewer can download it and load it directly without building locally.
 
 on:
+  # This check is required by the dev/staging ruleset. Keep the workflow
+  # always-on so path-filtered changes do not leave an Expected check forever.
+  # Widened from [dev] to [dev, staging] to match Android Preview so staging
+  # PRs are not a hole.
   pull_request:
-    branches: [dev]
-    paths:
-      - 'src/**'
-      - 'public/**'
-      - 'extension/**'
-      - 'popup.html'
-      - 'vite.extension.config.ts'
-      - 'package.json'
-      - '.github/workflows/extension-preview.yml'
+    # main included: a pull request straight to main is exactly the path
+    # that would otherwise reach a release without these asset checks.
+    branches: [dev, staging, main]
   push:
-    branches: [dev]
-    paths:
-      - 'src/**'
-      - 'public/**'
-      - 'extension/**'
-      - 'popup.html'
-      - 'vite.extension.config.ts'
-      - 'package.json'
-      - '.github/workflows/extension-preview.yml'
+    branches: [dev, staging]
+  # Allows a maintainer to recover the required check when GitHub does not
+  # create the pull_request run for a head update.
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: extension-preview-${{ github.ref }}

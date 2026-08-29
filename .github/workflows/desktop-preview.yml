@@ -4,28 +4,20 @@ name: Desktop Preview
 # Produces unsigned debug builds for every native desktop target
 
 on:
+  # This check is required by the dev/staging ruleset. Keep the workflow
+  # always-on so path-filtered changes do not leave an Expected check forever.
   pull_request:
-    branches: [dev]
-    paths:
-      - 'src/**'
-      - 'public/**'
-      - 'src-tauri/**'
-      - 'reference/**'
-      - 'scripts/fetch-tor.mts'
-      - 'vite.desktop.config.ts'
-      - 'package.json'
-      - '.github/workflows/desktop-preview.yml'
+    # main included: a pull request straight to main is exactly the path
+    # that would otherwise reach a release without these asset checks.
+    branches: [dev, staging, main]
   push:
-    branches: [dev]
-    paths:
-      - 'src/**'
-      - 'public/**'
-      - 'src-tauri/**'
-      - 'reference/**'
-      - 'scripts/fetch-tor.mts'
-      - 'vite.desktop.config.ts'
-      - 'package.json'
-      - '.github/workflows/desktop-preview.yml'
+    branches: [dev, staging]
+  # Allows a maintainer to recover the required check when GitHub does not
+  # create the pull_request run for a head update.
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: desktop-preview-${{ github.ref }}
@@ -33,7 +25,12 @@ concurrency:
 
 jobs:
   build-desktop-preview:
-    name: Preview (${{ matrix.platform }})
+    name: Preview (${{ matrix.label }})
+    # Stated on the job as well as at the top of the file. The workflow default
+    # already restricts this, but a job that later needs a write scope gets it
+    # added here, and an explicit line is what makes that visible in review.
+    permissions:
+      contents: read
     # Uncached Linux AppImage packaging can take slightly over 40 minutes.
     timeout-minutes: 60
     env:
@@ -45,22 +42,27 @@ jobs:
       matrix:
         include:
           - platform: windows-latest
+            label: windows-x64
             target: x86_64-pc-windows-msvc
             tor-target: windows-x86_64
             artifact-name: preview-windows
           - platform: macos-latest
+            label: macos-arm64
             target: aarch64-apple-darwin
             tor-target: macos-aarch64
             artifact-name: preview-macos-arm
           - platform: macos-15-intel
+            label: macos-x64
             target: x86_64-apple-darwin
             tor-target: macos-x86_64
             artifact-name: preview-macos-intel
           - platform: ubuntu-22.04
+            label: linux-x64
             target: x86_64-unknown-linux-gnu
             tor-target: linux-x86_64
             artifact-name: preview-linux
           - platform: ubuntu-24.04-arm
+            label: linux-arm64
             target: aarch64-unknown-linux-gnu
             tor-target: linux-aarch64
             artifact-name: preview-linux-arm
@@ -196,10 +198,44 @@ jobs:
         # --verbose because the AppImage bundler swallows linuxdeploy's stderr:
         # a failure prints `failed to run linuxdeploy` and nothing else, which
         # is not enough to fix anything. Drop it once the AppImage builds green.
+        #
+        # macOS: hdiutil create often fails with "Resource busy" after the .app
+        # is already built (actions/runner-images#7522). Retry the bundle. Do
+        # not drop the dmg and do not rename it.
         env:
           APPIMAGE_EXTRACT_AND_RUN: '1'
           NO_STRIP: 'true'
-        run: npx tauri build --debug --target ${{ matrix.target }} --verbose
+        shell: bash
+        run: |
+          set -euo pipefail
+          target='${{ matrix.target }}'
+          build() {
+            npx tauri build --debug --target "$target" --verbose
+          }
+          if [ "${{ runner.os }}" != 'macOS' ]; then
+            build
+            exit 0
+          fi
+          attempt=1
+          max=3
+          while true; do
+            if build; then
+              exit 0
+            fi
+            if [ "$attempt" -ge "$max" ]; then
+              echo "::error::macOS dmg bundle failed after ${max} attempts (hdiutil resource busy)"
+              exit 1
+            fi
+            echo "::warning::hdiutil/bundle_dmg failed (attempt ${attempt}/${max}); detaching leftover volumes"
+            for vol in /Volumes/OPTNWallet /Volumes/OPTNWallet*; do
+              [ -e "$vol" ] || continue
+              hdiutil detach "$vol" -force || true
+            done
+            rm -f "src-tauri/target/${target}/debug/bundle/dmg/"*.dmg || true
+            sync || true
+            sleep $((attempt * 8))
+            attempt=$((attempt + 1))
+          done
 
       - name: Smoke-test packaged Linux Tor
         if: startsWith(matrix.platform, 'ubuntu')
@@ -209,11 +245,274 @@ jobs:
           test -n "$APPIMAGE_PATH"
           npx --no-install tsx scripts/smoke-tor-artifact.mts "$APPIMAGE_PATH" "${{ matrix.tor-target }}"
 
-      - name: Upload preview artifact
+      # if-no-files-found only catches an empty bundle directory. It cannot see
+      # that the RPM is missing while the deb and AppImage are present, because
+      # the old catch-all glob uploaded whatever happened to exist. release.yml
+      # has require_asset for exactly this reason; preview had no equivalent, so
+      # a bundler that quietly stopped emitting a format kept every preview green
+      # until release day.
+      - name: Verify every expected bundle was produced
+        shell: bash
+        run: |
+          BUNDLE="src-tauri/target/${{ matrix.target }}/debug/bundle"
+          missing=0
+          require() {
+            if find "$BUNDLE/$1" -maxdepth 1 -name "$2" -print -quit 2>/dev/null | grep -q .; then
+              echo "ok: $3"
+            else
+              echo "::error::missing $3 (expected $BUNDLE/$1/$2)"
+              missing=1
+            fi
+          }
+          case "${{ runner.os }}" in
+            Windows)
+              require nsis '*.exe' 'NSIS installer'
+              require msi '*.msi' 'MSI installer'
+              ;;
+            macOS)
+              require dmg '*.dmg' 'disk image'
+              ;;
+            Linux)
+              require appimage '*.AppImage' 'AppImage'
+              require deb '*.deb' 'DEB package'
+              require rpm '*.rpm' 'RPM package'
+              ;;
+          esac
+          exit "$missing"
+
+      # One artifact per format rather than one per platform. The catch-all put
+      # three Linux installers in a single 701 MB zip, so reviewing the AppImage
+      # meant downloading the deb and rpm too, and no format was individually
+      # assertable.
+      - name: Upload NSIS installer
+        if: runner.os == 'Windows'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: ${{ matrix.artifact-name }}
-          path: |
-            src-tauri/target/${{ matrix.target }}/debug/bundle/**
+          name: preview-${{ matrix.label }}-nsis
+          path: src-tauri/target/${{ matrix.target }}/debug/bundle/nsis/*.exe
           retention-days: 14
           if-no-files-found: error
+
+      - name: Upload MSI installer
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: preview-${{ matrix.label }}-msi
+          path: src-tauri/target/${{ matrix.target }}/debug/bundle/msi/*.msi
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload disk image
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: preview-${{ matrix.label }}-dmg
+          path: src-tauri/target/${{ matrix.target }}/debug/bundle/dmg/*.dmg
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload AppImage
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: preview-${{ matrix.label }}-appimage
+          path: src-tauri/target/${{ matrix.target }}/debug/bundle/appimage/*.AppImage
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload DEB package
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: preview-${{ matrix.label }}-deb
+          path: src-tauri/target/${{ matrix.target }}/debug/bundle/deb/*.deb
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload RPM package
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: preview-${{ matrix.label }}-rpm
+          path: src-tauri/target/${{ matrix.target }}/debug/bundle/rpm/*.rpm
+          retention-days: 14
+          if-no-files-found: error
+
+  # Preview builds the Flatpak too. It is assembled from the deb by a
+  # hand-written manifest rather than by a Tauri bundler, so nothing else in
+  # the build would notice if it broke — and the first sign would be a release
+  # that ships without one.
+  flatpak-preview:
+    name: Preview Flatpak (${{ matrix.label }})
+    needs: build-desktop-preview
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-24.04
+            label: linux-x64
+          # flatpak-builder repackages a native deb; there is no cross path.
+          - platform: ubuntu-24.04-arm
+            label: linux-arm64
+    runs-on: ${{ matrix.platform }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Download the ${{ matrix.label }} DEB
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: preview-${{ matrix.label }}-deb
+          path: linux-deb
+
+      - name: Install flatpak-builder
+        run: |
+          set -euo pipefail
+          # elfutils supplies eu-strip. build-options should stop
+          # flatpak-builder reaching for it at all, but a missing tool has
+          # already failed this twice and is not worth a third round trip.
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            flatpak flatpak-builder desktop-file-utils elfutils
+          sudo flatpak remote-add --if-not-exists flathub \
+            https://flathub.org/repo/flathub.flatpakrepo
+
+      - name: Install the GNOME runtime
+        run: |
+          set -euo pipefail
+          RUNTIME_VERSION="$(sed -nE "s/^runtime-version: *'?([^']+)'?/\\1/p" \
+            packaging/flatpak/com.optilabs.wallet.yml)"
+          test -n "$RUNTIME_VERSION"
+          echo "Manifest pins org.gnome.Platform//${RUNTIME_VERSION}"
+
+          # An end-of-life runtime still builds; it only stops receiving
+          # security fixes. Catching that here is the point of pinning it.
+          if ! sudo flatpak remote-info flathub \
+            "org.gnome.Platform//${RUNTIME_VERSION}" >/dev/null 2>&1; then
+            echo "::error::org.gnome.Platform//${RUNTIME_VERSION} is not on flathub"
+            echo 'Available branches:'
+            sudo flatpak remote-ls flathub --columns=ref |
+              grep '^org\.gnome\.Platform/' || true
+            exit 1
+          fi
+
+          sudo flatpak install -y --noninteractive flathub \
+            "org.gnome.Platform//${RUNTIME_VERSION}" \
+            "org.gnome.Sdk//${RUNTIME_VERSION}"
+
+      - name: Build the Flatpak
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          cp packaging/flatpak/com.optilabs.wallet.yml build/
+          cp packaging/flatpak/com.optilabs.wallet.metainfo.xml build/
+
+          DEB="$(find linux-deb -type f -name '*.deb' -print -quit)"
+          if [ -z "$DEB" ]; then
+            echo '::error::no .deb to build a Flatpak from'
+            find linux-deb -type f | sort
+            exit 1
+          fi
+          echo "Building from $(basename "$DEB")"
+          cp "$DEB" build/optn-wallet.deb
+
+          cd build
+          sudo flatpak-builder --disable-rofiles-fuse --force-clean \
+            --repo=repo build-dir com.optilabs.wallet.yml
+          sudo flatpak build-bundle repo \
+            "OPTNWallet-preview-${{ matrix.label }}.flatpak" com.optilabs.wallet
+          sudo chown "$(id -u):$(id -g)" ./*.flatpak
+
+      - name: Verify the bundle installs a complete application
+        working-directory: build
+        run: |
+          set -euo pipefail
+          BUNDLE="$(find . -maxdepth 1 -name '*.flatpak' -print -quit)"
+          test -s "$BUNDLE"
+          ls -lh "$BUNDLE"
+
+          sudo flatpak install -y --noninteractive --bundle "$BUNDLE"
+          LOCATION="$(sudo flatpak info --show-location com.optilabs.wallet)"
+          for required in \
+            files/bin/optn-wallet-desktop \
+            files/share/applications/com.optilabs.wallet.desktop \
+            files/share/metainfo/com.optilabs.wallet.metainfo.xml
+          do
+            if ! sudo test -e "$LOCATION/$required"; then
+              echo "::error::the Flatpak installs no $required"
+              sudo find "$LOCATION/files" -maxdepth 3 | head -50
+              exit 1
+            fi
+            echo "  ok       $required"
+          done
+          sudo test -x "$LOCATION/files/bin/optn-wallet-desktop"
+          sudo flatpak uninstall -y com.optilabs.wallet
+
+      - name: Upload the Flatpak
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: preview-${{ matrix.label }}-flatpak
+          path: build/*.flatpak
+          retention-days: 14
+          if-no-files-found: error
+
+  # Every upload above uses if-no-files-found: error, which catches a bundler
+  # that produced nothing. It does not catch a job that never ran — a matrix
+  # entry removed, a condition that stopped matching, a runner label that no
+  # longer exists. Those leave the preview green with an artifact missing,
+  # which is exactly how a platform stops being built without anyone noticing.
+  # This asserts the finished set.
+  preview-complete:
+    name: Preview set is complete
+    needs: [build-desktop-preview, flatpak-preview]
+    # `always()` so a missing artifact is still reported when a build failed;
+    # otherwise this is skipped and the only red is the build itself.
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Download every preview artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          path: artifacts
+
+      - name: List what arrived
+        run: find artifacts -type f -print | sort
+
+      - name: Verify nothing dropped
+        run: |
+          missing=0
+          expect() {
+            if find "artifacts/$1" -type f -name "$2" -print -quit 2>/dev/null |
+              grep -q .
+            then
+              printf '  ok       %s\n' "$3"
+            else
+              echo "::error::missing from the preview: $3 (expected $2 in $1)"
+              missing=1
+            fi
+          }
+
+          expect preview-windows-x64-nsis     '*.exe'      'Windows NSIS installer'
+          expect preview-windows-x64-msi      '*.msi'      'Windows MSI installer'
+          expect preview-macos-arm64-dmg      '*.dmg'      'macOS Apple Silicon disk image'
+          expect preview-macos-x64-dmg        '*.dmg'      'macOS Intel disk image'
+          expect preview-linux-x64-appimage   '*.AppImage' 'Linux x64 AppImage'
+          expect preview-linux-arm64-appimage '*.AppImage' 'Linux ARM64 AppImage'
+          expect preview-linux-x64-deb        '*.deb'      'Linux x64 DEB'
+          expect preview-linux-arm64-deb      '*.deb'      'Linux ARM64 DEB'
+          expect preview-linux-x64-rpm        '*.rpm'      'Linux x64 RPM'
+          expect preview-linux-arm64-rpm      '*.rpm'      'Linux ARM64 RPM'
+          expect preview-linux-x64-flatpak    '*.flatpak'  'Linux x64 Flatpak'
+          expect preview-linux-arm64-flatpak  '*.flatpak'  'Linux ARM64 Flatpak'
+
+          if [ "$missing" -ne 0 ]; then
+            echo '::error::the desktop preview did not produce every artifact'
+            exit 1
+          fi
+          echo 'Every expected desktop preview artifact is present.'

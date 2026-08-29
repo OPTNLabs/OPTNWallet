@@ -20,17 +20,82 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
+      # Probe the dependency graph itself rather than the settings field.
+      # `security_and_analysis.dependency_graph` is only returned for repos where
+      # the graph is configurable — on a public repo it is always on and the field
+      # is absent, so the old `// "disabled"` fallback made this job skip on every
+      # PR while still reporting success. The SBOM endpoint answers the question
+      # that actually matters: can dependency-review read a graph or not.
       - name: Check dependency-graph availability
         id: dependency-graph
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          status="$(gh api repos/${{ github.repository }} --jq '.security_and_analysis.dependency_graph.status // "disabled"')"
+          # Distinguish "the graph is off" from "the probe itself failed".
+          # Treating every non-zero exit as disabled would silently skip
+          # dependency review on a transient network error or an auth problem,
+          # which is the same green-but-checking-nothing failure this job was
+          # fixed to stop.
+          # 200/403/404 are answers and are taken immediately. A 5xx or an empty
+          # reply is not an answer, it is the API having a bad moment, so retry
+          # before deciding. Failing closed on the first blip turns a transient
+          # outage into a red pull request someone has to re-run by hand -- #56
+          # was blocked by exactly one 500.
+          status=''
+          attempt=1
+          max=3
+          while true; do
+            code="$(gh api "repos/${{ github.repository }}/dependency-graph/sbom" \
+              --silent --include 2>/dev/null | head -1 | grep -oE '[0-9]{3}' || true)"
+            case "$code" in
+              200)
+                status=enabled
+                break
+                ;;
+              403|404)
+                # Not enabled, or not visible to this token: a real answer.
+                status=disabled
+                break
+                ;;
+            esac
+            if [ "$attempt" -ge "$max" ]; then
+              echo "::error::dependency-graph probe returned '${code:-no status}' on ${max} attempts; refusing to guess whether the graph is available"
+              exit 1
+            fi
+            echo "::warning::dependency-graph probe returned '${code:-no status}' (attempt ${attempt}/${max}); retrying"
+            sleep $((attempt * 5))
+            attempt=$((attempt + 1))
+          done
+          echo "Dependency graph: $status (HTTP ${code})"
           echo "status=$status" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Dependency review
         if: steps.dependency-graph.outputs.status == 'enabled'
         uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48
+        with:
+          # Two react-router advisories, both moderate, both fixed only in
+          # 7.18.0 - the ranges are >= 6.4.0 and >= 6.0.0, so no 6.x release
+          # clears either and the bump in #51 cannot either. Waived because
+          # neither is reachable here, checked rather than assumed:
+          #
+          # GHSA-337j-9hxr-rhxg - arbitrary constructor injection via
+          #   deserializeErrors() during SSR hydration. This ships as a
+          #   Tauri/Capacitor SPA with no server renderer. StaticRouter appears
+          #   in one file, src/features/nostr/__tests__/nostrSkeleton.test.tsx,
+          #   and react-dom/server only under __tests__.
+          #
+          # GHSA-wrjc-x8rr-h8h6 - open redirect via a backslash in a <Link> or
+          #   navigate() target. Exploiting it needs an attacker-controlled
+          #   destination; every call site here is a string literal or a member
+          #   of the static ROUTE_PATHS map in src/navigation/routes.ts, and no
+          #   <Link to={...}> takes an expression.
+          #
+          # Both entries go together: 6.x is effectively closed for security
+          # fixes, so this list will keep growing. Treat a third advisory as
+          # the signal to upgrade to 7.x rather than to add another line.
+          # Drop these if SSR is introduced, or if any navigation target stops
+          # being a literal.
+          allow-ghsas: GHSA-337j-9hxr-rhxg, GHSA-wrjc-x8rr-h8h6
       - name: Skip dependency review
         if: steps.dependency-graph.outputs.status != 'enabled'
         run: echo "Dependency graph is disabled; skipping dependency review."
@@ -109,3 +174,23 @@ jobs:
           name: web-dist
           path: dist/
           retention-days: 7
+
+  release-completeness:
+    name: Assets completeness
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --quiet pyyaml
+      # The release asserts its own asset set, but nothing asserted the
+      # assertion. A pattern with a typo, or a guard broad enough to accept
+      # anything, looks correct in review and removes the protection entirely.
+      # This runs the workflow's own shell against a synthetic release and
+      # removes one asset at a time, requiring every removal to be caught.
+      - run: bash scripts/verify-release-completeness.sh

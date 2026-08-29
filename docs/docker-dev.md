@@ -32,8 +32,9 @@ npm --prefix packages/docker-dev run pull:release
 npm --prefix packages/docker-dev run up:release
 ```
 
-The compose fallback to `latest` remains available for existing users, but
-explicit tags are preferred for reproducibility.
+`OPTN_DOCKER_TAG` is required. The image publishes version tags only, so
+compose fails with an explanatory error rather than resolving to a mutable
+tag whose contents change underneath you.
 
 ```bash
 # Local build (dev shell — no fusion)
