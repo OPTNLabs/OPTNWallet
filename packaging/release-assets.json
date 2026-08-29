@@ -1,0 +1,178 @@
+{
+  "$comment": [
+    "Every asset a release publishes, and whether it is required.",
+    "",
+    "One source of truth. The release workflow generates its checks from this,",
+    "and scripts/verify-release-completeness.sh builds its synthetic release",
+    "from it, so the list and the check cannot drift apart.",
+    "",
+    "The general rule is that nothing drops: every entry is required:true and",
+    "a release refuses to publish without it. required:false exists for the",
+    "niche case where a platform genuinely has to be skipped for one release —",
+    "a signing certificate expired, a store SDK broken upstream. It is",
+    "deliberately loud: the run prints a warning naming what was waived, and",
+    "the entry needs a `reason` explaining why, so a temporary waiver that was",
+    "never reverted is visible in review rather than silent.",
+    "",
+    "`when: cli` marks assets that only exist once crates/optn-cli is in the",
+    "tree. A probe job decides, so either merge order behaves."
+  ],
+  "assets": [
+    {
+      "label": "Windows NSIS installer",
+      "pattern": "OPTNWallet-${VERSION}-windows-x64-setup.exe",
+      "required": true
+    },
+    {
+      "label": "Windows MSI installer",
+      "pattern": "OPTNWallet-${VERSION}-windows-x64.msi",
+      "required": true
+    },
+    {
+      "label": "macOS Apple Silicon disk image",
+      "pattern": "OPTNWallet-${VERSION}-macos-arm64*.dmg",
+      "required": true,
+      "note": "the * absorbs -adhoc-not-notarized when Apple credentials are absent"
+    },
+    {
+      "label": "macOS Intel disk image",
+      "pattern": "OPTNWallet-${VERSION}-macos-x64*.dmg",
+      "required": true
+    },
+    {
+      "label": "macOS Apple Silicon app bundle",
+      "pattern": "OPTNWallet-${VERSION}-macos-arm64*.app.zip",
+      "required": true
+    },
+    {
+      "label": "macOS Intel app bundle",
+      "pattern": "OPTNWallet-${VERSION}-macos-x64*.app.zip",
+      "required": true
+    },
+    {
+      "label": "Linux x64 AppImage",
+      "pattern": "OPTNWallet-${VERSION}-linux-x64.AppImage",
+      "required": true
+    },
+    {
+      "label": "Linux ARM64 AppImage",
+      "pattern": "OPTNWallet-${VERSION}-linux-arm64.AppImage",
+      "required": true
+    },
+    {
+      "label": "Linux riscv64 binary",
+      "pattern": "OPTNWallet-${VERSION}-linux-riscv64-unbundled",
+      "required": true
+    },
+    {
+      "label": "Linux x64 Flatpak",
+      "pattern": "OPTNWallet-${VERSION}-linux-x64.flatpak",
+      "required": true
+    },
+    {
+      "label": "Linux ARM64 Flatpak",
+      "pattern": "OPTNWallet-${VERSION}-linux-arm64.flatpak",
+      "required": true
+    },
+    {
+      "label": "Linux x64 DEB",
+      "pattern": "*_amd64.deb",
+      "required": true,
+      "note": "deb and rpm keep their native names, which encode the arch differently"
+    },
+    {
+      "label": "Linux ARM64 DEB",
+      "pattern": "*_arm64.deb",
+      "required": true
+    },
+    {
+      "label": "Linux x64 RPM",
+      "pattern": "*.x86_64.rpm",
+      "required": true
+    },
+    {
+      "label": "Linux ARM64 RPM",
+      "pattern": "*.aarch64.rpm",
+      "required": true
+    },
+    {
+      "label": "Android F-Droid APK",
+      "pattern": "OPTNWallet-${VERSION}-android-fdroid.apk",
+      "required": true
+    },
+    {
+      "label": "Android Play APK",
+      "pattern": "OPTNWallet-${VERSION}-android-play.apk",
+      "required": true
+    },
+    {
+      "label": "Android App Bundle",
+      "pattern": "OPTNWallet-${VERSION}-android.aab",
+      "required": true
+    },
+    {
+      "label": "iOS simulator build",
+      "pattern": "OPTNWallet-${VERSION}-ios-simulator.zip",
+      "required": true
+    },
+    {
+      "label": "Chrome extension",
+      "pattern": "OPTNWallet-${VERSION}-chrome.zip",
+      "required": true
+    },
+    {
+      "label": "Firefox extension",
+      "pattern": "OPTNWallet-${VERSION}-firefox.zip",
+      "required": true
+    },
+    {
+      "label": "optn CLI linux-x64",
+      "pattern": "optn-${VERSION}-linux-x64",
+      "required": true,
+      "when": "cli"
+    },
+    {
+      "label": "optn CLI linux-arm64",
+      "pattern": "optn-${VERSION}-linux-arm64",
+      "required": true,
+      "when": "cli"
+    },
+    {
+      "label": "optn CLI linux-riscv64",
+      "pattern": "optn-${VERSION}-linux-riscv64",
+      "required": true,
+      "when": "cli"
+    },
+    {
+      "label": "optn CLI linux-armv7",
+      "pattern": "optn-${VERSION}-linux-armv7",
+      "required": true,
+      "when": "cli"
+    },
+    {
+      "label": "optn CLI macos-arm64",
+      "pattern": "optn-${VERSION}-macos-arm64",
+      "required": true,
+      "when": "cli"
+    },
+    {
+      "label": "optn CLI macos-x64",
+      "pattern": "optn-${VERSION}-macos-x64",
+      "required": true,
+      "when": "cli"
+    },
+    {
+      "label": "optn CLI windows-x64",
+      "pattern": "optn-${VERSION}-windows-x64.exe",
+      "required": true,
+      "when": "cli"
+    }
+  ],
+  "alsoPublished": [
+    {
+      "label": "Android release status",
+      "pattern": "android-release-status.txt",
+      "note": "written by the Android job to explain a skipped store upload; published deliberately, not an asset"
+    }
+  ]
+}
