@@ -32,6 +32,8 @@ pub mod covert;
 pub mod electrum_input;
 pub mod encrypt;
 pub mod p2p_component;
+#[cfg(test)]
+mod component_vectors;
 pub mod p2p_sign;
 pub mod pedersen;
 pub mod round;
