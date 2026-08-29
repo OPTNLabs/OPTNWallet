@@ -73,23 +73,29 @@ jobs:
         if: steps.dependency-graph.outputs.status == 'enabled'
         uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48
         with:
-          # GHSA-337j-9hxr-rhxg (moderate) - arbitrary constructor injection via
-          # deserializeErrors() during React Router SSR hydration.
+          # Two react-router advisories, both moderate, both fixed only in
+          # 7.18.0 - the ranges are >= 6.4.0 and >= 6.0.0, so no 6.x release
+          # clears either and the bump in #51 cannot either. Waived because
+          # neither is reachable here, checked rather than assumed:
           #
-          # Waived, not fixed, because it cannot be fixed by a bump: the range is
-          # >= 6.4.0, < 7.18.0, so every 6.x release is affected and only 7.x
-          # clears it. Upgrading a wallet's router across a major version to
-          # settle an advisory it is not exposed to is the larger risk.
+          # GHSA-337j-9hxr-rhxg - arbitrary constructor injection via
+          #   deserializeErrors() during SSR hydration. This ships as a
+          #   Tauri/Capacitor SPA with no server renderer. StaticRouter appears
+          #   in one file, src/features/nostr/__tests__/nostrSkeleton.test.tsx,
+          #   and react-dom/server only under __tests__.
           #
-          # Not exposed: the vulnerable path is SSR hydration. This app ships as
-          # a Tauri/Capacitor SPA with no server renderer. `StaticRouter` appears
-          # in exactly one file, src/features/nostr/__tests__/nostrSkeleton.test.tsx,
-          # and `react-dom/server` only under __tests__ - never in app code.
+          # GHSA-wrjc-x8rr-h8h6 - open redirect via a backslash in a <Link> or
+          #   navigate() target. Exploiting it needs an attacker-controlled
+          #   destination; every call site here is a string literal or a member
+          #   of the static ROUTE_PATHS map in src/navigation/routes.ts, and no
+          #   <Link to={...}> takes an expression.
           #
-          # Revisit if any of that changes: if SSR is introduced, if StaticRouter
-          # reaches src/ outside a test, or when react-router 7 is on the table
-          # for its own reasons. Drop this line then rather than widening it.
-          allow-ghsas: GHSA-337j-9hxr-rhxg
+          # Both entries go together: 6.x is effectively closed for security
+          # fixes, so this list will keep growing. Treat a third advisory as
+          # the signal to upgrade to 7.x rather than to add another line.
+          # Drop these if SSR is introduced, or if any navigation target stops
+          # being a literal.
+          allow-ghsas: GHSA-337j-9hxr-rhxg, GHSA-wrjc-x8rr-h8h6
       - name: Skip dependency review
         if: steps.dependency-graph.outputs.status != 'enabled'
         run: echo "Dependency graph is disabled; skipping dependency review."
