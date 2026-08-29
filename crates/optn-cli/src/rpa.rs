@@ -20,7 +20,6 @@
 //! handed out keep working; nothing here ever emits one.
 
 use hmac::{Hmac, Mac};
-use k256::elliptic_curve::group::Curve as _;
 use k256::elliptic_curve::sec1::ToEncodedPoint;
 use k256::elliptic_curve::PrimeField;
 use k256::{AffinePoint, ProjectivePoint, PublicKey, Scalar};
@@ -358,6 +357,196 @@ pub fn spending_key(
     Ok(child.to_bytes().into())
 }
 
+/// The address the derived spending key actually controls.
+///
+/// Detecting a payment is not the same as being able to move it. Comparing
+/// this against the address that was paid turns "we think this is ours" into
+/// proof, and it is the check that would have failed had the compressed /
+/// uncompressed question been decided wrongly.
+pub fn spending_key_address(
+    spend_privkey: &[u8; 32],
+    secret: &[u8; 32],
+    index: u32,
+    network: Network,
+) -> Result<Address> {
+    let key = spending_key(spend_privkey, secret, index)?;
+    let pubkey = k256::SecretKey::from_slice(&key)
+        .map_err(|e| CliError::Internal(format!("derived key rejected: {e}")))?
+        .public_key()
+        .to_encoded_point(true);
+    Ok(Address::from_hash(
+        network.prefix(),
+        AddressKind::P2pkh,
+        hash160(pubkey.as_bytes()),
+    ))
+}
+
+/// One payment to this wallet found inside a transaction.
+#[derive(Debug, Clone)]
+pub struct RpaMatch {
+    pub output_index: u32,
+    pub address: String,
+    pub value: u64,
+    /// Display-order txid of the input the secret was derived from.
+    pub prevout_txid: String,
+    pub prevout_index: u32,
+    /// The ECDH secret this match came from, so the caller can derive the
+    /// spending key without recomputing it. Never serialise this.
+    pub secret: [u8; 32],
+}
+
+/// The compressed pubkey a P2PKH scriptSig reveals: `<sig> <pubkey>`.
+///
+/// Only compressed keys are accepted. Every key in this protocol is
+/// compressed, and a 65-byte push here would be a pre-2012 coin whose owner is
+/// not sending reusable payments.
+fn p2pkh_input_pubkey(script_sig: &[u8]) -> Option<[u8; 33]> {
+    let mut pushes: Vec<&[u8]> = Vec::new();
+    let mut i = 0usize;
+    while i < script_sig.len() {
+        let op = script_sig[i];
+        i += 1;
+        let n = match op {
+            1..=75 => op as usize,
+            0x4c => {
+                let v = *script_sig.get(i)? as usize;
+                i += 1;
+                v
+            }
+            0x4d => {
+                let v = u16::from_le_bytes([*script_sig.get(i)?, *script_sig.get(i + 1)?]) as usize;
+                i += 2;
+                v
+            }
+            _ => return None,
+        };
+        if i + n > script_sig.len() {
+            return None;
+        }
+        pushes.push(&script_sig[i..i + n]);
+        i += n;
+    }
+    let last = pushes.last()?;
+    if last.len() != 33 || (last[0] != 0x02 && last[0] != 0x03) {
+        return None;
+    }
+    let mut out = [0u8; 33];
+    out.copy_from_slice(last);
+    Some(out)
+}
+
+/// Find payments to this wallet inside one raw transaction.
+///
+/// Fulcrum's `blockchain.reusable.*` is how Electron Cash *finds* candidate
+/// txids; once a transaction is in hand, matching is plain ECDH against each
+/// P2PKH input, which any ordinary Electrum server can supply. Public chipnet
+/// servers do not implement reusable.*, so this path is what actually works
+/// there.
+pub fn scan_transaction(
+    raw: &[u8],
+    scan_privkey: &[u8; 32],
+    spend_pubkey: &[u8; 33],
+    network: Network,
+) -> Result<Vec<RpaMatch>> {
+    let (inputs, outputs) = parse_transaction(raw)?;
+    let mut matches = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for (txid_display, vout, script_sig) in &inputs {
+        let Some(sender_pubkey) = p2pkh_input_pubkey(script_sig) else {
+            continue;
+        };
+        let Ok(secret) = shared_secret(scan_privkey, &sender_pubkey, txid_display, *vout) else {
+            continue;
+        };
+        let expected = payment_address(spend_pubkey, &secret, network, 0)?;
+        let expected_script = expected.script_pubkey();
+
+        for (index, (value, script)) in outputs.iter().enumerate() {
+            if script != &expected_script || !seen.insert(index) {
+                continue;
+            }
+            matches.push(RpaMatch {
+                output_index: index as u32,
+                address: expected.encode(),
+                value: *value,
+                prevout_txid: txid_display.clone(),
+                prevout_index: *vout,
+                secret,
+            });
+        }
+    }
+    Ok(matches)
+}
+
+type ParsedInput = (String, u32, Vec<u8>);
+type ParsedOutput = (u64, Vec<u8>);
+type ParsedTransaction = (Vec<ParsedInput>, Vec<ParsedOutput>);
+
+/// Inputs as (display txid, vout, scriptSig) and outputs as (value, script).
+fn parse_transaction(raw: &[u8]) -> Result<ParsedTransaction> {
+    let mut i = 0usize;
+    let need = |i: usize, n: usize| -> Result<()> {
+        if raw.len() < i + n {
+            Err(CliError::Protocol("transaction is truncated".into()))
+        } else {
+            Ok(())
+        }
+    };
+    let varint = |i: &mut usize| -> Result<u64> {
+        need(*i, 1)?;
+        let first = raw[*i];
+        *i += 1;
+        let n = match first {
+            0..=0xfc => return Ok(u64::from(first)),
+            0xfd => 2,
+            0xfe => 4,
+            _ => 8,
+        };
+        need(*i, n)?;
+        let mut buf = [0u8; 8];
+        buf[..n].copy_from_slice(&raw[*i..*i + n]);
+        *i += n;
+        Ok(u64::from_le_bytes(buf))
+    };
+
+    need(i, 4)?;
+    i += 4; // version
+
+    let input_count = varint(&mut i)?;
+    let mut inputs = Vec::new();
+    for _ in 0..input_count {
+        need(i, 36)?;
+        // On the wire the outpoint is little-endian; the display txid the
+        // shared secret hashes is its reverse.
+        let mut txid = raw[i..i + 32].to_vec();
+        txid.reverse();
+        let txid_display: String = txid.iter().map(|b| format!("{b:02x}")).collect();
+        let vout = u32::from_le_bytes([raw[i + 32], raw[i + 33], raw[i + 34], raw[i + 35]]);
+        i += 36;
+        let len = varint(&mut i)? as usize;
+        need(i, len)?;
+        let script_sig = raw[i..i + len].to_vec();
+        i += len + 4; // scriptSig then sequence
+        need(i, 0)?;
+        inputs.push((txid_display, vout, script_sig));
+    }
+
+    let output_count = varint(&mut i)?;
+    let mut outputs: Vec<ParsedOutput> = Vec::new();
+    for _ in 0..output_count {
+        need(i, 8)?;
+        let mut v = [0u8; 8];
+        v.copy_from_slice(&raw[i..i + 8]);
+        i += 8;
+        let len = varint(&mut i)? as usize;
+        need(i, len)?;
+        outputs.push((u64::from_le_bytes(v), raw[i..i + len].to_vec()));
+        i += len;
+    }
+    Ok((inputs, outputs))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -537,13 +726,9 @@ mod tests {
         let secret = shared_secret(&small_key(37), &spend_pub, REF_TXID, 3).unwrap();
 
         let paid_to = payment_address(&spend_pub, &secret, Network::Chipnet, 0).unwrap();
-        let key = spending_key(&spend_priv, &secret, 0).unwrap();
-        let derived_pub = pubkey_of(&key);
-        let controlled = Address::from_hash(
-            Network::Chipnet.prefix(),
-            AddressKind::P2pkh,
-            hash160(&derived_pub),
-        );
+        // Through the same function `rpa scan` uses to report `spendable`.
+        let controlled =
+            spending_key_address(&spend_priv, &secret, 0, Network::Chipnet).unwrap();
         assert_eq!(paid_to.encode(), controlled.encode());
     }
 
