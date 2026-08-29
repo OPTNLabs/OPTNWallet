@@ -499,4 +499,54 @@ mod tests {
         s[0] ^= 0xff;
         assert!(req.finalize(&s, true).is_err());
     }
+
+    fn hex32(text: &str) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        for (i, slot) in out.iter_mut().enumerate() {
+            *slot = u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).expect("hex");
+        }
+        out
+    }
+
+    fn hex_of(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    #[test]
+    fn transaction_signature_matches_electron_cash_golden_vector() {
+        // The one anchor here that is not us agreeing with ourselves: Electron
+        // Cash electroncash/tests/test_schnorr.py, itself copied from Bitcoin
+        // ABC src/test/key_tests.cpp.
+        //
+        // It pins the deterministic nonce derivation end to end. Without it,
+        // `sign` is only ever checked against its own output, and a change to
+        // the RFC6979 domain string would look perfectly self-consistent while
+        // producing signatures no other implementation reproduces.
+        let privkey = Option::<Scalar>::from(Scalar::from_repr(
+            hex32("12b004fff7f4b69ef8650e767f18f11ede158148b425660723b9f9a66e61f747").into(),
+        ))
+        .expect("test key is canonical");
+        let msg = hex32("5255683da567900bfd3e786ed8836a4e7763c221bf1ac20ece2a5171b9199e8a");
+        assert_eq!(
+            hex_of(&sign(privkey, &msg)),
+            "2c56731ac2f7a7e7f11518fc7722a166b02438924ca9d8b4d111347b81d0717571846de67ad3d913a8fdf9d8f3f73161a4c48ae81cb183b214765feb86e255ce"
+        );
+    }
+
+    #[test]
+    fn known_generator_sanity() {
+        // G compressed must be the standard secp256k1 generator encoding. Cheap,
+        // and it fails loudly if a curve dependency is ever swapped for one with
+        // different conventions.
+        use k256::elliptic_curve::group::GroupEncoding;
+        let g = compressed(&ProjectivePoint::GENERATOR);
+        assert_eq!(
+            hex_of(&g),
+            "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+        );
+        assert_eq!(
+            ProjectivePoint::GENERATOR.to_affine().to_bytes().as_slice(),
+            &g
+        );
+    }
 }
