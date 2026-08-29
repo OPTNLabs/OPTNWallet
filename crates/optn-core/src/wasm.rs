@@ -197,3 +197,125 @@ pub fn scan_transaction(
         .collect();
     Ok(format!("[{}]", items.join(",")))
 }
+
+// ---------------------------------------------------------------------------
+// CashFusion primitives.
+//
+// The browser-side P2P round keeps its own hand-written copies of this math in
+// src/platform/desktop/nostr. These exports are the path off them: same code as
+// the desktop backend runs, pinned by test-vectors/fusion.json.
+//
+// Randomness stays on the JS side. The core takes nonces and blinding factors
+// as parameters, so callers pass values from crypto.getRandomValues rather than
+// this crate pulling in a getrandom shim for wasm32.
+// ---------------------------------------------------------------------------
+
+fn scalar_from(bytes: &[u8], what: &str) -> Result<k256::Scalar, JsValue> {
+    use k256::elliptic_curve::PrimeField;
+    let array = array32(bytes, what)?;
+    Option::<k256::Scalar>::from(k256::Scalar::from_repr(array.into())).ok_or_else(|| {
+        JsValue::from_str(&format!("{what} is not a canonical scalar (must be < n)"))
+    })
+}
+
+/// Verify a 64-byte BCH Schnorr signature. False on any malformed input.
+#[wasm_bindgen(js_name = fusionVerifySchnorr)]
+pub fn fusion_verify_schnorr(
+    pubkey: &[u8],
+    signature: &[u8],
+    message: &[u8],
+) -> Result<bool, JsValue> {
+    let sig = <[u8; 64]>::try_from(signature).map_err(|_| {
+        JsValue::from_str(&format!(
+            "signature must be 64 bytes, got {}",
+            signature.len()
+        ))
+    })?;
+    let msg = array32(message, "message")?;
+    Ok(crate::fusion::schnorr::verify(pubkey, &sig, &msg))
+}
+
+/// The 65-byte uncompressed Pedersen commitment `amount*H + nonce*G`.
+#[wasm_bindgen(js_name = fusionPedersenCommit)]
+pub fn fusion_pedersen_commit(amount: u64, nonce: &[u8]) -> Result<Vec<u8>, JsValue> {
+    let nonce = scalar_from(nonce, "pedersen nonce")?;
+    Ok(crate::fusion::pedersen::commit_bytes(amount, &nonce).to_vec())
+}
+
+/// The commitment for a signed amount: an input commits `+value-fee`, an output
+/// `-value-fee`, a blank `0`.
+#[wasm_bindgen(js_name = fusionPedersenCommitSigned)]
+pub fn fusion_pedersen_commit_signed(amount: i64, nonce: &[u8]) -> Result<Vec<u8>, JsValue> {
+    let nonce = scalar_from(nonce, "pedersen nonce")?;
+    Ok(
+        crate::fusion::pedersen::encode_uncompressed(
+            &crate::fusion::pedersen::commit_point_signed(amount, &nonce),
+        )
+        .to_vec(),
+    )
+}
+
+/// The compressed nothing-up-my-sleeve generator H, for callers that check it.
+#[wasm_bindgen(js_name = fusionPedersenH)]
+pub fn fusion_pedersen_h() -> Vec<u8> {
+    use k256::elliptic_curve::group::GroupEncoding;
+    crate::fusion::pedersen::h_point()
+        .to_affine()
+        .to_bytes()
+        .to_vec()
+}
+
+/// The 32-byte blinded challenge to send to the issuer. `a` and `b` must be
+/// fresh uniform scalars from the caller's CSPRNG and must never be reused.
+///
+/// There is no handle to keep: `fusionFinalizeBlindSignature` takes the same
+/// five inputs again and rebuilds the request, so nothing on the JS side owns
+/// Rust memory it would have to free.
+#[wasm_bindgen(js_name = fusionBlindRequest)]
+pub fn fusion_blind_request(
+    round_pubkey: &[u8],
+    r_point: &[u8],
+    message: &[u8],
+    a: &[u8],
+    b: &[u8],
+) -> Result<Vec<u8>, JsValue> {
+    let msg = array32(message, "message")?;
+    let request = crate::fusion::schnorr::BlindSignatureRequest::new_with_blinding(
+        round_pubkey,
+        r_point,
+        msg,
+        scalar_from(a, "blinding factor a")?,
+        scalar_from(b, "blinding factor b")?,
+    )
+    .map_err(|e| JsValue::from_str(&e))?;
+    Ok(request.request().to_vec())
+}
+
+/// Complete a blinded signature. Takes the same inputs the request was built
+/// from plus the issuer's 32-byte response, and returns the 64-byte signature.
+/// Always verifies before returning, so a cheating issuer is an error here
+/// rather than a rejected signature later in the round.
+#[wasm_bindgen(js_name = fusionFinalizeBlindSignature)]
+pub fn fusion_finalize_blind_signature(
+    round_pubkey: &[u8],
+    r_point: &[u8],
+    message: &[u8],
+    a: &[u8],
+    b: &[u8],
+    issuer_response: &[u8],
+) -> Result<Vec<u8>, JsValue> {
+    let msg = array32(message, "message")?;
+    let request = crate::fusion::schnorr::BlindSignatureRequest::new_with_blinding(
+        round_pubkey,
+        r_point,
+        msg,
+        scalar_from(a, "blinding factor a")?,
+        scalar_from(b, "blinding factor b")?,
+    )
+    .map_err(|e| JsValue::from_str(&e))?;
+    let response = array32(issuer_response, "issuer response")?;
+    request
+        .finalize(&response, true)
+        .map(|sig| sig.to_vec())
+        .map_err(|e| JsValue::from_str(&e))
+}

@@ -11,6 +11,7 @@
 
 pub mod cashaddr;
 pub mod error;
+pub mod fusion;
 pub mod hd;
 pub mod network;
 pub mod rpa;
