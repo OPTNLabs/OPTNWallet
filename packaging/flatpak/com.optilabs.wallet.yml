@@ -32,6 +32,12 @@ finish-args:
 modules:
   - name: optn-wallet
     buildsystem: simple
+    # Nothing is compiled here — the binary is lifted out of a deb Tauri
+    # already built in release mode. flatpak-builder would otherwise reach for
+    # eu-strip to split debug symbols into a .Debug extension we never publish,
+    # which needs elfutils on the host and produces nothing useful.
+    no-debuginfo: true
+    strip: false
     build-commands:
       - ar x optn-wallet.deb
       # Tauri has shipped data.tar.gz and data.tar.xz across versions; match
