@@ -868,6 +868,7 @@ dependencies = [
  "hyper-util",
  "k256",
  "keyring",
+ "optn-core",
  "rand 0.8.8",
  "reqwest",
  "ripemd",
@@ -877,6 +878,19 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "webpki-roots 0.26.11",
+]
+
+[[package]]
+name = "optn-core"
+version = "1.7.3"
+dependencies = [
+ "bip32",
+ "bip39",
+ "getrandom 0.2.17",
+ "hmac",
+ "k256",
+ "ripemd",
+ "sha2",
 ]
 
 [[package]]

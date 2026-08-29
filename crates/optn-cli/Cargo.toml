@@ -20,6 +20,7 @@ path = "src/main.rs"
 # Versions are pinned to match src-tauri/Cargo.toml so the two trees resolve to
 # the same dependency versions and the audit baseline stays meaningful.
 [dependencies]
+optn-core = { path = "../optn-core" }
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

@@ -89,9 +89,9 @@ pub fn encode_payload(prefix: &str, payload8: &[u8]) -> String {
 /// The version byte and hash from a CashAddr, without interpreting either.
 ///
 /// Used by the contract module's tests, which check 32-byte payloads that
-/// `Address` — fixed at 20 — cannot represent. Test-only: the binary has no
-/// caller, and an unused public function is dead weight rather than API.
-#[cfg(test)]
+/// `Address` — fixed at 20 — cannot represent. Public rather than `#[cfg(test)]`
+/// now that cashaddr lives in its own crate: a `#[cfg(test)]` item is compiled
+/// only for this crate's own tests, so a dependent's tests cannot see it.
 pub fn decode_payload(address: &str) -> Result<Vec<u8>, String> {
     let (_, payload) = address
         .split_once(':')
