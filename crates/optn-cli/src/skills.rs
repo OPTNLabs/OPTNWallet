@@ -185,6 +185,16 @@ pub const SKILLS: &[Skill] = &[
         requires_confirmation: false,
     },
     Skill {
+        // Runs other commands rather than doing anything itself, and each line
+        // is gated again when it runs. Starting it costs nothing.
+        name: "console",
+        capability: Capability::Read,
+        summary: "Interactive prompt over the same commands, same policy.",
+        needs_wallet: false,
+        needs_network: false,
+        requires_confirmation: false,
+    },
+    Skill {
         // Serves other commands rather than doing anything itself, and each
         // request is gated again on arrival. Classified by what starting it
         // costs: it opens a listening socket, nothing more.
