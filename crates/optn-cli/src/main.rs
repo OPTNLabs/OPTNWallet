@@ -16,6 +16,7 @@ mod electrum;
 mod error;
 mod hd;
 mod keychain;
+mod lmots;
 mod msgsign;
 mod network;
 mod serve;
@@ -238,6 +239,18 @@ enum Command {
         #[arg(long, default_value_t = 20)]
         gap: u32,
     },
+    /// Quantumroot's post-quantum signatures (LM-OTS).
+    ///
+    /// Quantumroot is a vault implemented in CashAssembly whose signing scheme
+    /// is Leighton-Micali One-Time Signatures — RFC 8554, parameter set
+    /// LMOTS_SHA256_N32_W4, resting on SHA-256 alone.
+    ///
+    /// One-time is the security model, not a caveat: a key that signs twice
+    /// can be forged against.
+    Quantumroot {
+        #[command(subcommand)]
+        action: QuantumrootCommand,
+    },
     /// An interactive console over the same commands.
     ///
     /// The command line is fine for one question and tiresome for ten: each
@@ -304,6 +317,55 @@ enum Command {
     X402 {
         #[command(subcommand)]
         action: X402Command,
+    },
+}
+
+#[derive(Subcommand)]
+enum QuantumrootCommand {
+    /// Derive a one-time public key from a seed.
+    ///
+    /// Deterministic, so a vault is restored from its seed rather than from a
+    /// backup of 67 separate values.
+    Keygen {
+        /// 16-byte vault identifier, hex. `I` in RFC 8554.
+        #[arg(long)]
+        id: String,
+        /// Leaf number within the vault. `q` in RFC 8554.
+        #[arg(long, default_value_t = 0)]
+        leaf: u32,
+        /// Also print the private chains. They are the key; treat them so.
+        #[arg(long)]
+        reveal_private: bool,
+    },
+    /// Sign a message hash with a one-time key.
+    Sign {
+        /// The message to sign, hex.
+        message: String,
+        #[arg(long)]
+        id: String,
+        #[arg(long, default_value_t = 0)]
+        leaf: u32,
+        /// 32-byte randomiser, hex. `C` in RFC 8554; generated when absent.
+        #[arg(long)]
+        c: Option<String>,
+        /// Required: this key can only ever sign once.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Check a signature against a public key.
+    Verify {
+        /// The message, hex.
+        message: String,
+        /// The signature: C followed by 67 elements, hex.
+        #[arg(long)]
+        signature: String,
+        /// The 32-byte public key, hex.
+        #[arg(long)]
+        public_key: String,
+        #[arg(long)]
+        id: String,
+        #[arg(long, default_value_t = 0)]
+        leaf: u32,
     },
 }
 
@@ -461,6 +523,7 @@ fn command_name(command: &Command) -> &'static str {
         Command::Discover { .. } => "discover",
         Command::Contract { .. } => "contract",
         Command::Console { .. } => "console",
+        Command::Quantumroot { .. } => "quantumroot",
         Command::Serve { .. } => "serve",
         Command::Skills => "skills",
         Command::Keychain { .. } => "keychain",
@@ -1201,6 +1264,169 @@ async fn run(cli: &Cli) -> Result<Value> {
             }
             let txid = client.broadcast(raw).await?;
             Ok(json!({ "ok": true, "network": cli.network.to_string(), "txid": txid }))
+        }
+        Command::Quantumroot { action } => {
+            let vault_id = |raw: &str| -> Result<[u8; 16]> {
+                let bytes = decode_hex(raw)?;
+                if bytes.len() != 16 {
+                    return Err(CliError::Usage(format!(
+                        "--id is the 16-byte vault identifier, got {} bytes",
+                        bytes.len()
+                    )));
+                }
+                let mut id = [0u8; 16];
+                id.copy_from_slice(&bytes);
+                Ok(id)
+            };
+
+            match action {
+                QuantumrootCommand::Keygen {
+                    id,
+                    leaf,
+                    reveal_private,
+                } => {
+                    let seed = read_phrase()?;
+                    let key =
+                        lmots::PrivateKey::from_seed(seed.trim().as_bytes(), vault_id(id)?, *leaf);
+                    let public = key.public_key();
+                    let mut out = json!({
+                        "ok": true,
+                        "scheme": "LMOTS_SHA256_N32_W4",
+                        "id": id,
+                        "leaf": leaf,
+                        "public_key": hex(&public),
+                        "chains": lmots::P,
+                    });
+                    if *reveal_private {
+                        // Behind a flag, because this is the whole key and
+                        // stdout is not a safe place for it by default.
+                        out["private_chains"] =
+                            json!(key.chains().iter().map(|c| hex(c)).collect::<Vec<_>>());
+                    }
+                    Ok(out)
+                }
+
+                QuantumrootCommand::Sign {
+                    message,
+                    id,
+                    leaf,
+                    c,
+                    yes,
+                } => {
+                    if !*yes {
+                        // Not a spend, but as irreversible: this key may never
+                        // sign again, and nothing on the chain will stop it.
+                        return Err(CliError::Usage(
+                            "refusing to sign without --yes: an LM-OTS key signs once, \
+                             and signing a second time lets anyone forge a third message"
+                                .to_string(),
+                        ));
+                    }
+                    let randomiser = match c {
+                        Some(given) => {
+                            let bytes = decode_hex(given)?;
+                            if bytes.len() != lmots::N {
+                                return Err(CliError::Usage(format!(
+                                    "--c is {} bytes, got {}",
+                                    lmots::N,
+                                    bytes.len()
+                                )));
+                            }
+                            let mut out = [0u8; lmots::N];
+                            out.copy_from_slice(&bytes);
+                            out
+                        }
+                        None => {
+                            use rand::RngCore;
+                            let mut out = [0u8; lmots::N];
+                            rand::rngs::OsRng.fill_bytes(&mut out);
+                            out
+                        }
+                    };
+
+                    let seed = read_phrase()?;
+                    let id_bytes = vault_id(id)?;
+                    let key = lmots::PrivateKey::from_seed(seed.trim().as_bytes(), id_bytes, *leaf);
+                    let public = key.public_key();
+                    let signature = key.sign(&decode_hex(message)?, &randomiser);
+
+                    Ok(json!({
+                        "ok": true,
+                        "scheme": "LMOTS_SHA256_N32_W4",
+                        "id": id,
+                        "leaf": leaf,
+                        "public_key": hex(&public),
+                        "c": hex(&signature.c),
+                        "signature": signature.elements.iter().map(|e| hex(e))
+                            .collect::<Vec<_>>().join(""),
+                        "elements": signature.elements.len(),
+                        "warning": "this key has now signed; it must never sign again",
+                    }))
+                }
+
+                QuantumrootCommand::Verify {
+                    message,
+                    signature,
+                    public_key,
+                    id,
+                    leaf,
+                } => {
+                    let raw = decode_hex(signature)?;
+                    // C followed by the elements, which is how sign emits it.
+                    let expected = lmots::N * (lmots::P + 1);
+                    if raw.len() != expected {
+                        return Err(CliError::Usage(format!(
+                            "a signature is {expected} bytes (C plus {} elements), got {}",
+                            lmots::P,
+                            raw.len()
+                        )));
+                    }
+                    let mut c = [0u8; lmots::N];
+                    c.copy_from_slice(&raw[..lmots::N]);
+                    let elements: Vec<[u8; lmots::N]> = raw[lmots::N..]
+                        .chunks(lmots::N)
+                        .map(|chunk| {
+                            let mut out = [0u8; lmots::N];
+                            out.copy_from_slice(chunk);
+                            out
+                        })
+                        .collect();
+
+                    let key_bytes = decode_hex(public_key)?;
+                    if key_bytes.len() != lmots::N {
+                        return Err(CliError::Usage(format!(
+                            "--public-key is {} bytes, got {}",
+                            lmots::N,
+                            key_bytes.len()
+                        )));
+                    }
+                    let mut expected_key = [0u8; lmots::N];
+                    expected_key.copy_from_slice(&key_bytes);
+
+                    let parsed = lmots::Signature {
+                        id: vault_id(id)?,
+                        q: *leaf,
+                        c,
+                        elements,
+                    };
+                    let bytes = decode_hex(message)?;
+                    let valid = parsed.verify(&bytes, &expected_key);
+                    Ok(json!({
+                        "ok": true,
+                        "valid": valid,
+                        "scheme": "LMOTS_SHA256_N32_W4",
+                        "expected_public_key": hex(&expected_key),
+                        // Only when it fails: on success it is the expected key
+                        // and repeating it says nothing, but on failure it is
+                        // the one piece of evidence about what went wrong.
+                        "recovered_public_key": if valid {
+                            Value::Null
+                        } else {
+                            json!(hex(&parsed.recover(&bytes)?))
+                        },
+                    }))
+                }
+            }
         }
         Command::Console { json } => {
             use std::io::{BufRead, Write};
