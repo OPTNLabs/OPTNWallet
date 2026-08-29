@@ -53,18 +53,29 @@ pub fn rpa_key_paths(coin_type: u32, account: u32) -> String {
 }
 
 /// Encode a scan/spend pair as a `cashcode:` string.
+///
+/// `legacy` stamps the old `paycode:` prefix instead. Nothing in the wallet
+/// passes it: it exists so tests and migration tooling can build the form that
+/// must keep being accepted on input.
 #[wasm_bindgen(js_name = encodeCashcode)]
 pub fn encode_cashcode(
     scan_pubkey: &[u8],
     spend_pubkey: &[u8],
     network: &str,
     prefix_bits: u8,
+    legacy: Option<bool>,
 ) -> Result<String, JsValue> {
-    Ok(rpa::encode(
+    let family = if legacy.unwrap_or(false) {
+        rpa::PrefixFamily::LegacyPaycode
+    } else {
+        rpa::PrefixFamily::Cashcode
+    };
+    Ok(rpa::encode_with_family(
         &array33(scan_pubkey, "scan pubkey")?,
         &array33(spend_pubkey, "spend pubkey")?,
         network_from(network)?,
         prefix_bits,
+        family,
     ))
 }
 

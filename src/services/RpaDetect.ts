@@ -5,18 +5,17 @@
 // input 0 (and any other P2PKH input) — ordinary Electrum can fetch the hex.
 // That is what Chipnet users need: public servers do not implement reusable.*.
 
-import {
-  binToHex,
-  cashAddressToLockingBytecode,
-  decodeTransaction,
-  hexToBin,
-} from '@bitauth/libauth';
+import { hexToBin } from '@bitauth/libauth';
 import { Network } from '../state/slices/networkSlice';
-import {
-  computeSharedSecret,
-  derivePaymentAddress,
-  type RpaKeys,
-} from './RpaService';
+import { type RpaKeys } from './RpaService';
+// Detection runs in the shared Rust core, so the CLI and the wallet cannot
+// disagree about which outputs belong to a wallet.
+import { ensureOptnCore, scanTransaction as coreScanTransaction } from '../wasm/optn-core';
+
+/** The core takes the network as a string; this is the only mapping needed. */
+function coreNetwork(network: Network): string {
+  return network === Network.MAINNET ? 'mainnet' : 'chipnet';
+}
 
 export type RpaMatchedOutput = {
   outputIndex: number;
@@ -64,96 +63,29 @@ function readMinimalPushes(script: Uint8Array): Uint8Array[] | null {
   return pushes;
 }
 
-function lockingOf(address: string): Uint8Array | null {
-  const locking = cashAddressToLockingBytecode(address);
-  if (typeof locking === 'string') return null;
-  return locking.bytecode;
-}
-
-function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
-  return true;
-}
-
 export function matchRpaPaymentsInRawTx(
   rawTxHex: string,
   keys: Pick<RpaKeys, 'scanPrivkey' | 'spendPubkey'>,
   network: Network
 ): RpaMatchedOutput[] {
+  ensureOptnCore();
   let bin: Uint8Array;
   try {
     bin = hexToBin(rawTxHex.trim());
   } catch {
     return [];
   }
-  const decoded = decodeTransaction(bin);
-  if (typeof decoded === 'string') return [];
-
-  const matches: RpaMatchedOutput[] = [];
-  const seen = new Set<string>();
-
-  for (const input of decoded.inputs) {
-    const pubkey = p2pkhUnlockingPubkey(input.unlockingBytecode);
-    if (!pubkey) continue;
-    const prevoutIndex = input.outpointIndex >>> 0;
-    // The shared secret hashes the Electrum display txid, and that is exactly
-    // what libauth hands back here: `Input.outpointTransactionHash` is in
-    // display (big-endian) order, and encode/decode do the little-endian wire
-    // reversal internally. Verified at the byte level rather than assumed --
-    // encoding a transaction whose outpoint is 0123..ef writes efcd..01 to the
-    // wire, and decoding returns 0123..ef again.
-    //
-    // This used to try the byte-reversed form as well, "in case" libauth
-    // returned wire order. It never does, so that branch could not match and
-    // only doubled the ECDH work per input. Do not reintroduce it: a wrong
-    // txid yields a wrong secret and a wrong address, so it fails silently
-    // rather than loudly.
-    //
-    // The CLI's Rust scanner (crates/optn-cli/src/rpa.rs, parse_transaction)
-    // DOES reverse, and is also correct -- it walks raw wire bytes itself
-    // rather than going through libauth. Different layers, not an
-    // inconsistency; do not harmonise the two.
-    const prevoutHashes = [binToHex(input.outpointTransactionHash)];
-
-    for (const prevoutHash of prevoutHashes) {
-      let shared: Uint8Array;
-      try {
-        shared = computeSharedSecret(
-          keys.scanPrivkey,
-          pubkey,
-          prevoutHash,
-          prevoutIndex
-        );
-      } catch {
-        continue;
-      }
-      const expected = derivePaymentAddress(
-        keys.spendPubkey,
-        shared,
-        network,
-        0
-      );
-      const expectedLock = lockingOf(expected);
-      if (!expectedLock) continue;
-
-      decoded.outputs.forEach((output, outputIndex) => {
-        if (!bytesEqual(output.lockingBytecode, expectedLock)) return;
-        const key = String(outputIndex);
-        if (seen.has(key)) return;
-        seen.add(key);
-        matches.push({
-          outputIndex,
-          address: expected,
-          valueSats: Number(output.valueSatoshis),
-          prevoutHash,
-          prevoutIndex,
-        });
-      });
-    }
+  try {
+    // scanPrivkey and spendPubkey only. The core's signature enforces the same
+    // thing, so a hot scanner can watch a wallet whose spending key never
+    // leaves cold storage -- the split the spec asks for in REQ-5.
+    return JSON.parse(
+      coreScanTransaction(bin, keys.scanPrivkey, keys.spendPubkey, coreNetwork(network))
+    ) as RpaMatchedOutput[];
+  } catch {
+    // A transaction that will not parse is not a match, and never was.
+    return [];
   }
-
-  return matches;
 }
 
 export function normalizeRpaTxid(value: string): string | null {

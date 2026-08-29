@@ -29,13 +29,18 @@ export function decodeCashcode(code) {
 
 /**
  * Encode a scan/spend pair as a `cashcode:` string.
+ *
+ * `legacy` stamps the old `paycode:` prefix instead. Nothing in the wallet
+ * passes it: it exists so tests and migration tooling can build the form that
+ * must keep being accepted on input.
  * @param {Uint8Array} scan_pubkey
  * @param {Uint8Array} spend_pubkey
  * @param {string} network
  * @param {number} prefix_bits
+ * @param {boolean | null} [legacy]
  * @returns {string}
  */
-export function encodeCashcode(scan_pubkey, spend_pubkey, network, prefix_bits) {
+export function encodeCashcode(scan_pubkey, spend_pubkey, network, prefix_bits, legacy) {
     let deferred5_0;
     let deferred5_1;
     try {
@@ -45,7 +50,7 @@ export function encodeCashcode(scan_pubkey, spend_pubkey, network, prefix_bits) 
         const len1 = WASM_VECTOR_LEN;
         const ptr2 = passStringToWasm0(network, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len2 = WASM_VECTOR_LEN;
-        const ret = wasm.encodeCashcode(ptr0, len0, ptr1, len1, ptr2, len2, prefix_bits);
+        const ret = wasm.encodeCashcode(ptr0, len0, ptr1, len1, ptr2, len2, prefix_bits, isLikeNone(legacy) ? 0xFFFFFF : legacy ? 1 : 0);
         var ptr4 = ret[0];
         var len4 = ret[1];
         if (ret[3]) {
@@ -298,6 +303,10 @@ function getUint8ArrayMemory0() {
         cachedUint8ArrayMemory0 = new Uint8Array(wasm.memory.buffer);
     }
     return cachedUint8ArrayMemory0;
+}
+
+function isLikeNone(x) {
+    return x === undefined || x === null;
 }
 
 function passArray8ToWasm0(arg, malloc) {
