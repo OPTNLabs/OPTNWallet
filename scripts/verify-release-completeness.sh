@@ -40,7 +40,7 @@ fi
 
 # Extract the "Assets completeness" step body verbatim.
 "$PY_BIN" - "$WF" "$WORK/check.sh" <<'PY'
-import io, sys, yaml
+import io, re, sys, yaml
 workflow = yaml.safe_load(io.open(sys.argv[1], encoding='utf-8'))
 step = next(
     s for s in workflow['jobs']['publish']['steps']
@@ -49,7 +49,23 @@ step = next(
 body = step['run']
 # The CLI block is gated on a job output that does not exist outside Actions;
 # substitute the "crate present" case, which is the stricter one.
-body = body.replace("${{ needs.cli-probe.outputs.present }}", 'true')
+#
+# Matched by shape rather than by the exact expression. Pinning the literal
+# text meant that moving the probe from its own job into `resolve` silently
+# stopped the substitution, so CLI_PRESENT kept the unexpanded ${{ ... }},
+# the seven CLI binaries dropped out of the expected set, and a complete
+# release was reported as having seven unexpected files.
+body, substitutions = re.subn(
+    r'\$\{\{\s*needs\.[A-Za-z0-9_-]+\.outputs\.(?:present|cli_present)\s*\}\}',
+    'true',
+    body,
+)
+if substitutions == 0:
+    sys.exit(
+        'verify-release-completeness: found no CLI-presence expression to '
+        'substitute in the "Assets completeness" step. If that gate was '
+        'renamed or removed, update this script with it.'
+    )
 io.open(sys.argv[2], 'w', encoding='utf-8', newline='\n').write(body)
 PY
 
