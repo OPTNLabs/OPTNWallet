@@ -26,11 +26,6 @@ export type RpaMatchedOutput = {
   prevoutIndex: number;
 };
 
-/** Electrum / wallet txids are display-order (byte-reversed vs the raw outpoint). */
-export function electrumTxidFromOutpointHash(hash: Uint8Array): string {
-  return binToHex(Uint8Array.from(hash).reverse());
-}
-
 export function p2pkhUnlockingPubkey(
   unlocking: Uint8Array
 ): Uint8Array | null {
@@ -102,14 +97,19 @@ export function matchRpaPaymentsInRawTx(
     const pubkey = p2pkhUnlockingPubkey(input.unlockingBytecode);
     if (!pubkey) continue;
     const prevoutIndex = input.outpointIndex >>> 0;
-    // Sender hashes the Electrum display txid. libauth decode may leave the
-    // outpoint as display bytes or as wire (byte-reversed) bytes — try both.
-    const prevoutHashes = Array.from(
-      new Set([
-        electrumTxidFromOutpointHash(input.outpointTransactionHash),
-        binToHex(input.outpointTransactionHash),
-      ])
-    );
+    // The shared secret hashes the Electrum display txid, and that is exactly
+    // what libauth hands back here: `Input.outpointTransactionHash` is in
+    // display (big-endian) order, and encode/decode do the little-endian wire
+    // reversal internally. Verified at the byte level rather than assumed --
+    // encoding a transaction whose outpoint is 0123..ef writes efcd..01 to the
+    // wire, and decoding returns 0123..ef again.
+    //
+    // This used to try the byte-reversed form as well, "in case" libauth
+    // returned wire order. It never does, so that branch could not match and
+    // only doubled the ECDH work per input. Do not reintroduce it: a wrong
+    // txid yields a wrong secret and a wrong address, so it fails silently
+    // rather than loudly.
+    const prevoutHashes = [binToHex(input.outpointTransactionHash)];
 
     for (const prevoutHash of prevoutHashes) {
       let shared: Uint8Array;
