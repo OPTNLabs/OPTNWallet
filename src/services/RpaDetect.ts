@@ -109,6 +109,11 @@ export function matchRpaPaymentsInRawTx(
     // only doubled the ECDH work per input. Do not reintroduce it: a wrong
     // txid yields a wrong secret and a wrong address, so it fails silently
     // rather than loudly.
+    //
+    // The CLI's Rust scanner (crates/optn-cli/src/rpa.rs, parse_transaction)
+    // DOES reverse, and is also correct -- it walks raw wire bytes itself
+    // rather than going through libauth. Different layers, not an
+    // inconsistency; do not harmonise the two.
     const prevoutHashes = [binToHex(input.outpointTransactionHash)];
 
     for (const prevoutHash of prevoutHashes) {
