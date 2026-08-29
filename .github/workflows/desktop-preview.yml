@@ -372,9 +372,12 @@ jobs:
       - name: Install flatpak-builder
         run: |
           set -euo pipefail
+          # elfutils supplies eu-strip. build-options should stop
+          # flatpak-builder reaching for it at all, but a missing tool has
+          # already failed this twice and is not worth a third round trip.
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            flatpak flatpak-builder desktop-file-utils
+            flatpak flatpak-builder desktop-file-utils elfutils
           sudo flatpak remote-add --if-not-exists flathub \
             https://flathub.org/repo/flathub.flatpakrepo
 
