@@ -14,3 +14,7 @@ pub mod error;
 pub mod hd;
 pub mod network;
 pub mod rpa;
+
+/// The wallet's binding surface. wasm32 only, so no other target pays for it.
+#[cfg(target_arch = "wasm32")]
+pub mod wasm;

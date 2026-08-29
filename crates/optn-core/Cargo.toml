@@ -9,6 +9,9 @@ description = "Protocol core shared by the OPTN CLI and, via wasm32, the wallet.
 # host, for the riscv64 and armv7 cross targets, and for wasm32 -- a C-backed
 # crate would break at least one of those, and the whole point of the crate is
 # that one implementation serves all of them.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
 sha2 = "0.10"
 ripemd = "0.1"
@@ -33,3 +36,6 @@ serde_json = "1.0"
 # keep resolving getrandom the way they always did.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }
+# The binding surface the wallet calls. wasm32 only: no native, riscv64 or
+# armv7 build links wasm-bindgen.
+wasm-bindgen = "0.2"
