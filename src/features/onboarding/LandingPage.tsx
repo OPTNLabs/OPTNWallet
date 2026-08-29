@@ -7,7 +7,49 @@ import { MdSunny, MdModeNight } from 'react-icons/md';
 import { useI18n } from '../../i18n/useI18n';
 import LanguagePicker from '../../components/LanguagePicker';
 import WalletSetupOptions from './WalletSetupOptions';
-import { isDesktopPlatform } from '../../utils/platform';
+import type { WalletSetupOption } from './WalletSetupOptions';
+import { capabilityAbsence, type Capability } from '../../platform/capabilities';
+import type { TranslationKey } from '../../i18n/resources';
+
+type SetupPath = {
+  id: string;
+  labelKey: TranslationKey;
+  descriptionKey: TranslationKey;
+  to?: string;
+  primary?: boolean;
+  /** Omitted for paths every build supports. */
+  capability?: Capability;
+};
+
+// The ways into a wallet, in the order a first-time user should consider them.
+// Data rather than markup so the list has one definition across every surface.
+const SETUP_PATHS: readonly SetupPath[] = [
+  {
+    id: 'create',
+    labelKey: 'onboarding.createWallet',
+    descriptionKey: 'onboarding.optionCreateDescription',
+    to: '/createwallet',
+    primary: true,
+  },
+  {
+    id: 'import',
+    labelKey: 'onboarding.importWallet',
+    descriptionKey: 'onboarding.optionImportDescription',
+    to: '/importwallet',
+  },
+  {
+    id: 'watch-only',
+    labelKey: 'onboarding.optionWatchOnly',
+    descriptionKey: 'onboarding.optionWatchOnlyDescription',
+    capability: 'watchOnlyWallet',
+  },
+  {
+    id: 'hardware',
+    labelKey: 'onboarding.optionHardware',
+    descriptionKey: 'onboarding.optionHardwareDescription',
+    capability: 'hardwareWallet',
+  },
+];
 
 const ThemeModeSwitch = () => {
   const { mode, toggleMode } = useTheme();
@@ -44,6 +86,28 @@ const LandingPage = () => {
   const [showHelp, setShowHelp] = useState(false);
   const { t } = useI18n();
 
+  // Availability is read from the capability matrix rather than decided here,
+  // so a feature that gains a surface is one edit in src/platform/capabilities
+  // and not a hunt through the screens that happened to gate it.
+  const setupOptions = SETUP_PATHS.flatMap((path): WalletSetupOption[] => {
+    const option: WalletSetupOption = {
+      id: path.id,
+      label: t(path.labelKey),
+      description: t(path.descriptionKey),
+      to: path.to,
+      primary: path.primary,
+    };
+    if (!path.capability) return [option];
+    const absence = capabilityAbsence(path.capability);
+    if (!absence) return [option];
+    if (absence.policy === 'hide') return [];
+    // The destination goes with the availability. A disabled row that still
+    // carries `to` is a link to a route this build does not serve.
+    return [
+      { ...option, to: undefined, unavailableReason: t(absence.reasonKey) },
+    ];
+  });
+
   return (
     <section className="min-h-[100dvh] wallet-surface flex flex-col justify-center items-center px-4 relative">
       <div className="safe-area-top" />
@@ -79,38 +143,7 @@ const LandingPage = () => {
           </h1>
 
           <div className="mt-12 w-full max-w-md">
-            <WalletSetupOptions
-              options={[
-                {
-                  id: 'create',
-                  label: t('onboarding.createWallet'),
-                  description: t('onboarding.optionCreateDescription'),
-                  to: '/createwallet',
-                  primary: true,
-                },
-                {
-                  id: 'import',
-                  label: t('onboarding.importWallet'),
-                  description: t('onboarding.optionImportDescription'),
-                  to: '/importwallet',
-                },
-                {
-                  id: 'watch-only',
-                  label: t('onboarding.optionWatchOnly'),
-                  description: t('onboarding.optionWatchOnlyDescription'),
-                  unavailableReason: isDesktopPlatform()
-                    ? undefined
-                    : t('onboarding.optionDesktopOnly'),
-                  onSelect: undefined,
-                },
-                {
-                  id: 'hardware',
-                  label: t('onboarding.optionHardware'),
-                  description: t('onboarding.optionHardwareDescription'),
-                  unavailableReason: t('onboarding.optionDesktopOnly'),
-                },
-              ]}
-            />
+            <WalletSetupOptions options={setupOptions} />
           </div>
         </div>
       </main>
