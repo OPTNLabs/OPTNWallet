@@ -10,6 +10,7 @@
 //! for riscv64 and anything else Rust targets.
 
 mod cashaddr;
+mod console;
 mod contract;
 mod electrum;
 mod error;
@@ -237,6 +238,16 @@ enum Command {
         #[arg(long, default_value_t = 20)]
         gap: u32,
     },
+    /// An interactive console over the same commands.
+    ///
+    /// The command line is fine for one question and tiresome for ten: each
+    /// invocation re-reads the phrase, reconnects, and re-parses the same
+    /// flags. This keeps them and takes commands as you would type them.
+    Console {
+        /// Print JSON rather than the human-readable form.
+        #[arg(long)]
+        json: bool,
+    },
     /// Serve the same commands over local JSON-RPC.
     ///
     /// An agent that shells out pays process startup on every call. This
@@ -449,6 +460,7 @@ fn command_name(command: &Command) -> &'static str {
         Command::History { .. } => "history",
         Command::Discover { .. } => "discover",
         Command::Contract { .. } => "contract",
+        Command::Console { .. } => "console",
         Command::Serve { .. } => "serve",
         Command::Skills => "skills",
         Command::Keychain { .. } => "keychain",
@@ -1189,6 +1201,94 @@ async fn run(cli: &Cli) -> Result<Value> {
             }
             let txid = client.broadcast(raw).await?;
             Ok(json!({ "ok": true, "network": cli.network.to_string(), "txid": txid }))
+        }
+        Command::Console { json } => {
+            use std::io::{BufRead, Write};
+
+            let mut base = vec!["--network".to_string(), cli.network.to_string()];
+            if cli.profile != "default" {
+                base.push("--profile".to_string());
+                base.push(cli.profile.clone());
+            }
+            let policy = skills::Policy::from_env()?;
+
+            eprintln!("optn console — {} ({})", cli.network, policy.ceiling());
+            eprintln!("`help` lists commands, `quit` leaves.");
+
+            let stdin = std::io::stdin();
+            let mut lines = stdin.lock().lines();
+            loop {
+                eprint!("optn> ");
+                let _ = std::io::stderr().flush();
+
+                let Some(line) = lines.next() else { break };
+                let line =
+                    line.map_err(|e| CliError::Usage(format!("could not read input: {e}")))?;
+
+                let parsed = match console::parse(&line) {
+                    Ok(parsed) => parsed,
+                    Err(error) => {
+                        eprintln!("error: {error}");
+                        continue;
+                    }
+                };
+
+                match parsed {
+                    console::Line::Empty => continue,
+                    console::Line::Quit => break,
+                    console::Line::Help => {
+                        // From the manifest, so it cannot list a command the
+                        // gate would refuse or omit one it allows.
+                        for skill in skills::SKILLS {
+                            let mark = if policy.admits(skill.capability) {
+                                ' '
+                            } else {
+                                'x'
+                            };
+                            eprintln!(
+                                "  {mark} {:<12} {:<7} {}",
+                                skill.name,
+                                skill.capability.as_str(),
+                                skill.summary
+                            );
+                        }
+                        eprintln!("  (x = refused by the current policy)");
+                        continue;
+                    }
+                    console::Line::Command(args) => {
+                        let argv = console::argv(&base, &args, *json);
+                        let parsed_cli = match Cli::try_parse_from(&argv) {
+                            Ok(parsed) => parsed,
+                            Err(error) => {
+                                // clap already formats this well; printing it
+                                // whole is better than paraphrasing it.
+                                eprintln!("{error}");
+                                continue;
+                            }
+                        };
+
+                        // Boxed for the same reason as serve: the console is
+                        // reached from run, and reaches it back.
+                        match Box::pin(run(&parsed_cli)).await {
+                            Ok(value) => {
+                                if *json {
+                                    println!(
+                                        "{}",
+                                        serde_json::to_string_pretty(&value).unwrap_or_default()
+                                    );
+                                } else {
+                                    print_human(&parsed_cli.command, &value);
+                                }
+                            }
+                            // Printed, not returned: one bad command should not
+                            // end the session.
+                            Err(error) => eprintln!("error: {error}"),
+                        }
+                    }
+                }
+            }
+
+            Ok(json!({ "ok": true, "console": "closed" }))
         }
         Command::Serve {
             port,
@@ -2061,6 +2161,10 @@ fn print_human(command: &Command, v: &Value) {
                 );
             }
         },
+        // The console has already printed each command's result. Its own
+        // return value is bookkeeping, and echoing it at exit reads like one
+        // last command ran.
+        Command::Console { .. } => {}
         _ => println!("{}", serde_json::to_string_pretty(v).unwrap_or_default()),
     }
 }
