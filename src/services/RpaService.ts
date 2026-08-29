@@ -32,8 +32,7 @@
 // no payload-length cap. The encode/decode below independently implements the
 // same no-version-byte, uncapped-length approach.
 
-import { secp256k1 } from '@bitauth/libauth';
-import * as ecc from 'tiny-secp256k1';
+import { hexToBin, secp256k1 } from '@bitauth/libauth';
 import { Network } from '../state/slices/networkSlice';
 // The shared Rust core. These four primitives are the ones where a second
 // implementation is most dangerous -- get any of them wrong and funds land at
@@ -41,9 +40,13 @@ import { Network } from '../state/slices/networkSlice';
 // reimplemented. test-vectors/rpa.json is read by this file's tests, by the
 // Rust crate, and by the wasm binding, so all three must agree.
 import {
+  decodeCashcode as coreDecodeCashcode,
+  encodeCashcode as coreEncodeCashcode,
   ensureOptnCore,
   grindString as coreGrindString,
+  looksLikeRpa as coreLooksLikeRpa,
   paymentAddress as corePaymentAddress,
+  sendBlockReason as coreSendBlockReason,
   sharedSecret as coreSharedSecret,
   spendingKey as coreSpendingKey,
 } from '../wasm/optn-core';
@@ -96,10 +99,6 @@ export function rpaGrindString(
   return coreGrindString(scanPubkey, prefixBits);
 }
 
-// Paycode version bytes
-const VERSION_MAINNET = 0x01; // mainnet P2PKH
-const VERSION_TESTNET = 0x05; // testnet P2PKH
-
 // CashAddr prefixes.
 //
 // `cashcode:` / `cashcodetest:` are what this wallet EMITS. The legacy
@@ -110,132 +109,6 @@ export const CASHCODE_PREFIX_MAINNET = 'cashcode';
 export const CASHCODE_PREFIX_TESTNET = 'cashcodetest';
 export const LEGACY_PAYCODE_PREFIX_MAINNET = 'paycode';
 export const LEGACY_PAYCODE_PREFIX_TESTNET = 'paycodetest';
-
-const MAINNET_PREFIXES = [CASHCODE_PREFIX_MAINNET, LEGACY_PAYCODE_PREFIX_MAINNET];
-const TESTNET_PREFIXES = [CASHCODE_PREFIX_TESTNET, LEGACY_PAYCODE_PREFIX_TESTNET];
-
-// ─── CashAddr encoding (raw, supports non-standard payload sizes) ─────────────
-
-const CASHADDR_CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
-const CASHADDR_CHARSET_REV: Record<string, number> = {};
-for (let i = 0; i < CASHADDR_CHARSET.length; i++) {
-  CASHADDR_CHARSET_REV[CASHADDR_CHARSET[i]] = i;
-}
-
-function cashAddrPolymod(values: number[]): bigint {
-  // CashAddr uses a 40-bit checksum. JavaScript's bitwise operators truncate
-  // to 32 bits, so this must stay in BigInt arithmetic throughout. The former
-  // Number implementation produced intermittently invalid paycodes depending
-  // on the payload's high checksum bits.
-  const GEN = [
-    0x98f2bc8e61n,
-    0x79b76d99e2n,
-    0xf33e5fb3c4n,
-    0xae2eabe2a8n,
-    0x1e4f43e470n,
-  ];
-  let c = 1n;
-  for (const d of values) {
-    const high = c >> 35n; // top 5 bits of the 40-bit value
-    c = ((c & 0x7ffffffffn) << 5n) ^ BigInt(d);
-    for (let i = 0; i < 5; i++) {
-      if (((high >> BigInt(i)) & 1n) === 1n) c ^= GEN[i];
-    }
-  }
-  return c ^ 1n;
-}
-
-function prefixExpand(prefix: string): number[] {
-  const result: number[] = [];
-  for (const c of prefix.toLowerCase()) result.push(c.charCodeAt(0) & 0x1f);
-  result.push(0);
-  return result;
-}
-
-function bytesToFiveBit(data: Uint8Array): number[] {
-  const out: number[] = [];
-  let bits = 0, val = 0;
-  for (const b of data) {
-    val = ((val << 8) | b) >>> 0; // keep unsigned 32-bit to avoid sign issues
-    bits += 8;
-    while (bits >= 5) {
-      bits -= 5;
-      out.push((val >>> bits) & 0x1f);
-    }
-    val = val & ((1 << bits) - 1); // discard already-extracted high bits
-  }
-  if (bits > 0) out.push((val << (5 - bits)) & 0x1f);
-  return out;
-}
-
-function fiveBitToBytes(data: number[]): Uint8Array {
-  const out: number[] = [];
-  let bits = 0, val = 0;
-  for (const d of data) {
-    val = ((val << 5) | d) >>> 0;
-    bits += 5;
-    while (bits >= 8) {
-      bits -= 8;
-      out.push((val >>> bits) & 0xff);
-    }
-    val = val & ((1 << bits) - 1);
-  }
-  return new Uint8Array(out);
-}
-
-function cashAddrEncode(prefix: string, kindByte: number, payload: Uint8Array): string {
-  const data5 = bytesToFiveBit(new Uint8Array([kindByte, ...payload]));
-  const checksumInput = [...prefixExpand(prefix), ...data5, 0, 0, 0, 0, 0, 0, 0, 0];
-  const mod = cashAddrPolymod(checksumInput);
-  const checksum5: number[] = [];
-  for (let i = 7; i >= 0; i--) {
-    checksum5.push(Number((mod >> BigInt(5 * i)) & 31n));
-  }
-
-  let body = '';
-  for (const c of [...data5, ...checksum5]) body += CASHADDR_CHARSET[c];
-  return `${prefix}:${body}`;
-}
-
-function cashAddrDecode(addr: string): { prefix: string; kindByte: number; payload: Uint8Array } | null {
-  const bareAddress = addr.trim().split('?')[0];
-  const hasLower = bareAddress !== bareAddress.toUpperCase();
-  const hasUpper = bareAddress !== bareAddress.toLowerCase();
-  if (hasLower && hasUpper) return null;
-
-  const normalized = bareAddress.toLowerCase();
-  const colon = normalized.indexOf(':');
-  if (colon < 0) return null;
-  const prefix = normalized.slice(0, colon);
-  const body = normalized.slice(colon + 1);
-  if (!prefix || body.length <= 8) return null;
-
-  const data5: number[] = [];
-  for (const c of body) {
-    const v = CASHADDR_CHARSET_REV[c];
-    if (v === undefined) return null;
-    data5.push(v);
-  }
-
-  // A paycode is not a normal CashAddress payload, but it uses the same
-  // prefix-expanded polymod checksum. Never accept a merely shape-correct
-  // string: one changed character must fail before any sender-side work.
-  if (cashAddrPolymod([...prefixExpand(prefix), ...data5]) !== 0n) return null;
-
-  // Last 8 five-bit values are the checksum
-  const payload5 = data5.slice(0, -8);
-  const allBytes = fiveBitToBytes(payload5);
-  if (allBytes.length < 1) return null;
-  const canonicalPayload5 = bytesToFiveBit(allBytes);
-  if (
-    canonicalPayload5.length !== payload5.length ||
-    canonicalPayload5.some((value, index) => value !== payload5[index])
-  ) {
-    return null;
-  }
-
-  return { prefix, kindByte: allBytes[0], payload: allBytes.slice(1) };
-}
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
@@ -299,61 +172,43 @@ export function encodePaycode(
   spendPubkey: Uint8Array,
   network: Network,
   prefixBits = RPA_PREFIX_BITS,
-  prefixFamily: RpaPrefixFamily = 'cashcode',
+  prefixFamily: RpaPrefixFamily = 'cashcode'
 ): string {
-  const version = network === Network.MAINNET ? VERSION_MAINNET : VERSION_TESTNET;
-  const payload = new Uint8Array(72);
-  payload[0] = version;
-  payload[1] = prefixBits;
-  payload.set(scanPubkey.slice(0, 33), 2);   // bytes 2-34
-  payload.set(spendPubkey.slice(0, 33), 35); // bytes 35-67
-  // bytes 68-71: expiry = 0 (no expiry)
-
-  const [mainnetPrefix, testnetPrefix] =
-    prefixFamily === 'cashcode'
-      ? [CASHCODE_PREFIX_MAINNET, CASHCODE_PREFIX_TESTNET]
-      : [LEGACY_PAYCODE_PREFIX_MAINNET, LEGACY_PAYCODE_PREFIX_TESTNET];
-  const prefix = network === Network.MAINNET ? mainnetPrefix : testnetPrefix;
-  return cashAddrEncode(prefix, 0x00, payload);
+  ensureOptnCore();
+  return coreEncodeCashcode(
+    scanPubkey,
+    spendPubkey,
+    coreNetwork(network),
+    prefixBits,
+    prefixFamily === 'legacy-paycode'
+  );
 }
 
 // Parse a paycode string back to its components.
 export function decodePaycode(paycodeStr: string): DecodedPaycode | null {
+  ensureOptnCore();
   try {
-    const decoded = cashAddrDecode(paycodeStr);
-    if (!decoded) return null;
-    if (decoded.payload.length !== 72) return null;
-    if (decoded.kindByte !== 0x00) return null;
-
-    const p = decoded.payload;
-    const isMainnetVersion = p[0] === 0x01 || p[0] === 0x02;
-    const isTestnetVersion = p[0] === 0x05 || p[0] === 0x06;
-    const prefixIsMainnet = MAINNET_PREFIXES.includes(decoded.prefix);
-    const prefixIsTestnet = TESTNET_PREFIXES.includes(decoded.prefix);
-    if (
-      !(
-        (prefixIsMainnet && isMainnetVersion) ||
-        (prefixIsTestnet && isTestnetVersion)
-      )
-    ) {
-      return null;
-    }
-    if (![0, 4, 8, 12, 16].includes(p[1])) return null;
-
-    const scanPubkey = new Uint8Array(p.slice(2, 35));
-    const spendPubkey = new Uint8Array(p.slice(35, 68));
-    if (!ecc.isPoint(scanPubkey) || !ecc.isPoint(spendPubkey)) return null;
-
+    // The core throws with the reason a code was rejected. This function's
+    // contract is null-or-value, and every caller already treats null as
+    // "not a usable code", so the reason is dropped here --
+    // getRpaSendBlockReason is where a user-facing reason comes from.
+    const decoded = JSON.parse(coreDecodeCashcode(paycodeStr)) as {
+      version: number;
+      prefixBits: number;
+      scanPubkey: string;
+      spendPubkey: string;
+      expiry: number;
+      prefix: string;
+      legacy: boolean;
+    };
     return {
-      version:    p[0],
-      prefixBits: p[1],
-      scanPubkey,
-      spendPubkey,
-      expiry: (p[68] | (p[69] << 8) | (p[70] << 16) | (p[71] << 24)) >>> 0,
+      version: decoded.version,
+      prefixBits: decoded.prefixBits,
+      scanPubkey: hexToBin(decoded.scanPubkey),
+      spendPubkey: hexToBin(decoded.spendPubkey),
+      expiry: decoded.expiry,
       prefix: decoded.prefix,
-      legacy:
-        decoded.prefix === LEGACY_PAYCODE_PREFIX_MAINNET ||
-        decoded.prefix === LEGACY_PAYCODE_PREFIX_TESTNET,
+      legacy: decoded.legacy,
     };
   } catch {
     return null;
@@ -361,10 +216,8 @@ export function decodePaycode(paycodeStr: string): DecodedPaycode | null {
 }
 
 export function looksLikeRpaPaycode(recipient: string): boolean {
-  const bare = recipient.trim().split('?')[0].toLowerCase();
-  return [...MAINNET_PREFIXES, ...TESTNET_PREFIXES].some((prefix) =>
-    bare.startsWith(`${prefix}:`)
-  );
+  ensureOptnCore();
+  return coreLooksLikeRpa(recipient);
 }
 
 /**
@@ -391,6 +244,8 @@ export function getRpaSendBlockReason(
     return `This RPA paycode is for ${label}, not the wallet's active network. No transaction was created.`;
   }
 
+  // Expiry stays here rather than in the core: it depends on the current time,
+  // and the core is pure.
   if (decoded.expiry !== 0) {
     const oneWeek = Math.floor(Date.now() / 1000) + 604_800;
     if (decoded.expiry < oneWeek) {
@@ -398,28 +253,10 @@ export function getRpaSendBlockReason(
     }
   }
 
-  // Versions 2 and 6 mean "force offline-communication only" (spec: "1 and 2
-  // for p2pkh (mainnet), 5 and 6 for p2pkh (testnet), among them 2 and 6 to
-  // force offline-communication only"). The recipient is telling senders to
-  // deliver payment details out of band -- the spec calls an offchain relay
-  // "a necessity for version 2, 4, 6 and 8" -- so they are not scanning the
-  // chain for this code and an on-chain payment may sit unnoticed. The coin
-  // would still be theirs to spend; they just would not know to look.
-  //
-  // Electron Cash parses the version byte and never reads it, so it pays these
-  // on-chain regardless. That is not a behaviour worth matching.
-  if (decoded.version === 0x02 || decoded.version === 0x06) {
-    return 'This code is marked offline-only: the recipient expects payment details out of band, not on-chain. No transaction was created.';
-  }
-
-  // prefix_size 0 is "no-filter for full-node or offline-communications". The
-  // recipient has asked for no prefix, so there is nothing for a sender to
-  // grind and no filter for them to query. Refusing here also keeps a decoded
-  // code from reaching the grind, where rpaGrindString and rpaPrefixTargetHex
-  // both throw on 0 -- a raw Error mid-send rather than a declined payment.
-  if (decoded.prefixBits === 0) {
-    return 'This code carries no scan prefix, so the recipient is not watching the chain for it. No transaction was created.';
-  }
+  // Offline-only versions and prefix-0 codes: one rule, decided in the core so
+  // the CLI cannot drift from it.
+  const coreReason = coreSendBlockReason(recipient);
+  if (coreReason) return `${coreReason}. No transaction was created.`;
 
   return null;
 }

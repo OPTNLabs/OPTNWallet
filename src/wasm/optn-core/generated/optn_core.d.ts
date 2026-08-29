@@ -9,8 +9,12 @@ export function decodeCashcode(code: string): string;
 
 /**
  * Encode a scan/spend pair as a `cashcode:` string.
+ *
+ * `legacy` stamps the old `paycode:` prefix instead. Nothing in the wallet
+ * passes it: it exists so tests and migration tooling can build the form that
+ * must keep being accepted on input.
  */
-export function encodeCashcode(scan_pubkey: Uint8Array, spend_pubkey: Uint8Array, network: string, prefix_bits: number): string;
+export function encodeCashcode(scan_pubkey: Uint8Array, spend_pubkey: Uint8Array, network: string, prefix_bits: number, legacy?: boolean | null): string;
 
 /**
  * The hex a sender grinds the input hash to match.
@@ -63,7 +67,7 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly decodeCashcode: (a: number, b: number) => [number, number, number, number];
-    readonly encodeCashcode: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
+    readonly encodeCashcode: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
     readonly grindString: (a: number, b: number, c: number) => [number, number, number, number];
     readonly looksLikeRpa: (a: number, b: number) => number;
     readonly paymentAddress: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];

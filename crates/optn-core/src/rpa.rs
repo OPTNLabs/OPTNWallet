@@ -93,11 +93,38 @@ impl Cashcode {
 /// three bits and caps it at 64 bytes, and this payload is 73 with the kind
 /// byte. Electron Cash's `cashaddr.py` added encode_rpa/decode_rpa for the
 /// same reason — same charset and checksum, no version byte, no length cap.
+/// Which prefix family to stamp on an encoded code.
+///
+/// The wallet and the CLI only ever emit `Cashcode`. `LegacyPaycode` exists so
+/// tests and migration tooling can build the old form that must keep being
+/// accepted; no production caller passes it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrefixFamily {
+    Cashcode,
+    LegacyPaycode,
+}
+
 pub fn encode(
     scan_pubkey: &[u8; 33],
     spend_pubkey: &[u8; 33],
     network: Network,
     prefix_bits: u8,
+) -> String {
+    encode_with_family(
+        scan_pubkey,
+        spend_pubkey,
+        network,
+        prefix_bits,
+        PrefixFamily::Cashcode,
+    )
+}
+
+pub fn encode_with_family(
+    scan_pubkey: &[u8; 33],
+    spend_pubkey: &[u8; 33],
+    network: Network,
+    prefix_bits: u8,
+    family: PrefixFamily,
 ) -> String {
     let mut payload = [0u8; PAYLOAD_LEN];
     payload[0] = match network {
@@ -109,9 +136,11 @@ pub fn encode(
     payload[35..68].copy_from_slice(spend_pubkey);
     // 68..72 stay zero: no expiry.
 
-    let prefix = match network {
-        Network::Mainnet => CASHCODE_MAINNET,
-        Network::Chipnet => CASHCODE_TESTNET,
+    let prefix = match (family, network) {
+        (PrefixFamily::Cashcode, Network::Mainnet) => CASHCODE_MAINNET,
+        (PrefixFamily::Cashcode, Network::Chipnet) => CASHCODE_TESTNET,
+        (PrefixFamily::LegacyPaycode, Network::Mainnet) => LEGACY_MAINNET,
+        (PrefixFamily::LegacyPaycode, Network::Chipnet) => LEGACY_TESTNET,
     };
 
     // Leading kind byte, as the desktop wallet and Electron Cash both write.
