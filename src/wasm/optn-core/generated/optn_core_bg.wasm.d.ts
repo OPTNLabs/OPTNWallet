@@ -1,0 +1,19 @@
+/* tslint:disable */
+/* eslint-disable */
+export const memory: WebAssembly.Memory;
+export const decodeCashcode: (a: number, b: number) => [number, number, number, number];
+export const encodeCashcode: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
+export const grindString: (a: number, b: number, c: number) => [number, number, number, number];
+export const looksLikeRpa: (a: number, b: number) => number;
+export const paymentAddress: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
+export const rpaKeyPaths: (a: number, b: number) => [number, number];
+export const scanTransaction: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
+export const sendBlockReason: (a: number, b: number) => [number, number, number, number];
+export const sharedSecret: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
+export const spendingKey: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+export const __wbindgen_externrefs: WebAssembly.Table;
+export const __wbindgen_malloc: (a: number, b: number) => number;
+export const __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
+export const __externref_table_dealloc: (a: number) => void;
+export const __wbindgen_free: (a: number, b: number, c: number) => void;
+export const __wbindgen_start: () => void;
