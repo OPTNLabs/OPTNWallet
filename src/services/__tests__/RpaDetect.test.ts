@@ -53,7 +53,14 @@ describe('RpaDetect', () => {
     if (typeof dummyPub === 'string') throw new Error(dummyPub);
     const dummyAddress = addressOf(dummyPub, Network.CHIPNET);
 
-    // Non-palindromic display txid; encode the outpoint as wire (reversed) bytes.
+    // Non-palindromic, so a byte-order mistake cannot pass unnoticed.
+    //
+    // No reversal here: libauth's `outpointTransactionHash` is the display
+    // (big-endian) txid, and encodeTransaction writes the little-endian wire
+    // form itself. Pre-reversing produces a transaction whose wire outpoint is
+    // display order, which a node rejects with "Missing inputs" -- and it was
+    // this fixture that the scanner's old try-both-byte-orders branch existed
+    // to accommodate.
     const prevTxid =
       '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
     const tx: TransactionCommon = {
@@ -61,7 +68,7 @@ describe('RpaDetect', () => {
       locktime: 0,
       inputs: [
         {
-          outpointTransactionHash: hexToBin(prevTxid).reverse(),
+          outpointTransactionHash: hexToBin(prevTxid),
           outpointIndex: 0,
           sequenceNumber: 0xfffffffe,
           unlockingBytecode: Uint8Array.of(),
@@ -128,6 +135,7 @@ describe('RpaDetect', () => {
       recipient.spendPubkey,
       Network.CHIPNET,
       8
-    ).startsWith('paycodetest:')).toBe(true);
+    ).startsWith('cashcodetest:')).toBe(true);
   });
+
 });
