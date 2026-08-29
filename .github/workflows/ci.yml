@@ -36,22 +36,36 @@ jobs:
           # dependency review on a transient network error or an auth problem,
           # which is the same green-but-checking-nothing failure this job was
           # fixed to stop.
-          code="$(gh api "repos/${{ github.repository }}/dependency-graph/sbom" \
-            --silent --include 2>/dev/null | head -1 | grep -oE '[0-9]{3}' || true)"
-          case "$code" in
-            200)
-              status=enabled
-              ;;
-            403|404)
-              # Not enabled, or not visible to this token: a real answer.
-              status=disabled
-              ;;
-            *)
-              echo "::error::dependency-graph probe returned '${code:-no status}'; \
-                refusing to guess whether the graph is available"
+          # 200/403/404 are answers and are taken immediately. A 5xx or an empty
+          # reply is not an answer, it is the API having a bad moment, so retry
+          # before deciding. Failing closed on the first blip turns a transient
+          # outage into a red pull request someone has to re-run by hand -- #56
+          # was blocked by exactly one 500.
+          status=''
+          attempt=1
+          max=3
+          while true; do
+            code="$(gh api "repos/${{ github.repository }}/dependency-graph/sbom" \
+              --silent --include 2>/dev/null | head -1 | grep -oE '[0-9]{3}' || true)"
+            case "$code" in
+              200)
+                status=enabled
+                break
+                ;;
+              403|404)
+                # Not enabled, or not visible to this token: a real answer.
+                status=disabled
+                break
+                ;;
+            esac
+            if [ "$attempt" -ge "$max" ]; then
+              echo "::error::dependency-graph probe returned '${code:-no status}' on ${max} attempts; refusing to guess whether the graph is available"
               exit 1
-              ;;
-          esac
+            fi
+            echo "::warning::dependency-graph probe returned '${code:-no status}' (attempt ${attempt}/${max}); retrying"
+            sleep $((attempt * 5))
+            attempt=$((attempt + 1))
+          done
           echo "Dependency graph: $status (HTTP ${code})"
           echo "status=$status" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
