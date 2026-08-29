@@ -15,7 +15,12 @@ import { DEFAULT_UR_FRAGMENT_LENGTH, UrPsbtScanner } from '../urPsbt';
 const PUBKEY = Uint8Array.from([0x02, ...new Array(32).fill(0x11)]);
 const FINGERPRINT = Uint8Array.from([0xde, 0xad, 0xbe, 0xef]);
 const P2PKH = Uint8Array.from([
-  0x76, 0xa9, 0x14, ...new Array(20).fill(0x22), 0x88, 0xac,
+  0x76,
+  0xa9,
+  0x14,
+  ...new Array(20).fill(0x22),
+  0x88,
+  0xac,
 ]);
 
 const input = (over: Partial<PsbtInputSpec> = {}): PsbtInputSpec => ({

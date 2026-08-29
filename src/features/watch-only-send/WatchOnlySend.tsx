@@ -174,9 +174,13 @@ export const WatchOnlySend: FC = () => {
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState('');
 
-  const [proposalState, setProposalState] = useState<ProposalState | null>(null);
+  const [proposalState, setProposalState] = useState<ProposalState | null>(
+    null
+  );
 
-  const [frames, setFrames] = useState<ReturnType<typeof encodePsbtToUrFrames> | null>(null);
+  const [frames, setFrames] = useState<ReturnType<
+    typeof encodePsbtToUrFrames
+  > | null>(null);
   const [qrUri, setQrUri] = useState('');
 
   const [importText, setImportText] = useState('');
@@ -303,10 +307,13 @@ export const WatchOnlySend: FC = () => {
       setError('');
       try {
         if (!currentWalletId) {
-          setError('No wallet is open. Go back and open the watch-only wallet first.');
+          setError(
+            'No wallet is open. Go back and open the watch-only wallet first.'
+          );
           return;
         }
-        const metadata = await WalletManager().getWalletMetadata(currentWalletId);
+        const metadata =
+          await WalletManager().getWalletMetadata(currentWalletId);
         setAccountPath(
           metadata?.derivation_path ?? getBchAccountPath(currentNetwork)
         );
@@ -405,7 +412,11 @@ export const WatchOnlySend: FC = () => {
         }
       } catch (err) {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : 'Could not load the wallet coins.');
+          setError(
+            err instanceof Error
+              ? err.message
+              : 'Could not load the wallet coins.'
+          );
         }
       } finally {
         if (!cancelled) setBusy(false);
@@ -497,7 +508,9 @@ export const WatchOnlySend: FC = () => {
       return;
     }
     if (!changeAddress) {
-      setError('No change address available. Add more change addresses to the wallet.');
+      setError(
+        'No change address available. Add more change addresses to the wallet.'
+      );
       return;
     }
     try {
@@ -518,7 +531,11 @@ export const WatchOnlySend: FC = () => {
       // to the others' wallets.
       const changeBranch = 1 as const;
       const changeMultisig = multisigPolicy
-        ? deriveMultisigAddress(multisigPolicy, changeBranch, changeAddressIndex)
+        ? deriveMultisigAddress(
+            multisigPolicy,
+            changeBranch,
+            changeAddressIndex
+          )
         : null;
 
       const result = buildWatchOnlyPsbt({
@@ -527,7 +544,9 @@ export const WatchOnlySend: FC = () => {
         amountSats,
         changeAddress,
         accountPath,
-        masterFingerprint: fingerprint ? masterFingerprintBytes(fingerprint) : null,
+        masterFingerprint: fingerprint
+          ? masterFingerprintBytes(fingerprint)
+          : null,
         ...(changeMultisig && multisigPolicy
           ? {
               changeRedeemScriptHex: toHex(changeMultisig.redeemScript),
@@ -562,7 +581,11 @@ export const WatchOnlySend: FC = () => {
       setFrames(frameSource);
       setQrUri(frameSource.next());
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not build the unsigned transaction.');
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Could not build the unsigned transaction.'
+      );
     } finally {
       setBusy(false);
     }
@@ -600,7 +623,11 @@ export const WatchOnlySend: FC = () => {
         );
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not merge the signed transaction.');
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Could not merge the signed transaction.'
+      );
     }
   };
 
@@ -628,7 +655,11 @@ export const WatchOnlySend: FC = () => {
       }
       importAndMerge(psbt);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not read the signed transaction.');
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Could not read the signed transaction.'
+      );
     }
   };
 
@@ -659,7 +690,11 @@ export const WatchOnlySend: FC = () => {
         closeScanner();
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not read the signed transaction.');
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Could not read the signed transaction.'
+      );
       // A frame that poisons the decoder leaves it unusable, so the next scan
       // starts from a clean one rather than inheriting the failure.
       closeScanner();
@@ -667,7 +702,12 @@ export const WatchOnlySend: FC = () => {
   };
 
   const handleBroadcast = async () => {
-    if (!proposalState || !verdict || verdict.state !== 'complete' || !verdict.rawTxHex) {
+    if (
+      !proposalState ||
+      !verdict ||
+      verdict.state !== 'complete' ||
+      !verdict.rawTxHex
+    ) {
       return;
     }
     setBusy(true);
@@ -675,7 +715,9 @@ export const WatchOnlySend: FC = () => {
     try {
       const res = await TransactionService.sendTransaction(
         verdict.rawTxHex,
-        proposalState.proposal.inputs.map((input) => (input as SpendableInput).utxo),
+        proposalState.proposal.inputs.map(
+          (input) => (input as SpendableInput).utxo
+        ),
         {
           source: 'watch-only',
           sourceLabel: 'Watch-only send (air-gapped)',
@@ -720,7 +762,10 @@ export const WatchOnlySend: FC = () => {
   };
 
   return (
-    <WalletScreen maxWidthClassName={frames ? 'max-w-2xl' : 'max-w-md'} scrollable={false}>
+    <WalletScreen
+      maxWidthClassName={frames ? 'max-w-2xl' : 'max-w-md'}
+      scrollable={false}
+    >
       <div className="flex h-full min-h-0 flex-col gap-4">
         <div className="flex items-center gap-2">
           <button
@@ -730,7 +775,9 @@ export const WatchOnlySend: FC = () => {
           >
             Back
           </button>
-          <h1 className="text-lg font-bold wallet-text-strong">Watch-only Send</h1>
+          <h1 className="text-lg font-bold wallet-text-strong">
+            Watch-only Send
+          </h1>
         </div>
 
         <StepBar current={step} />
@@ -1001,12 +1048,15 @@ export const WatchOnlySend: FC = () => {
                   </p>
                   {multisigInputs.map((summary) => {
                     const statuses = cosignerStatus[summary.index] ?? [];
-                    const signed = statuses.filter((status) => status.signed).length;
+                    const signed = statuses.filter(
+                      (status) => status.signed
+                    ).length;
                     return (
                       <div key={summary.index} className="space-y-1.5">
                         <p className="text-xs wallet-muted">
                           Input {summary.index}: {signed} of {summary.required}{' '}
-                          collected · policy {summary.required} of {summary.total}
+                          collected · policy {summary.required} of{' '}
+                          {summary.total}
                         </p>
                         <div className="flex flex-wrap gap-1.5">
                           {statuses.map((status) => (
@@ -1043,7 +1093,8 @@ export const WatchOnlySend: FC = () => {
                   className={`wallet-card space-y-2 p-4 ${
                     verdict.state === 'complete'
                       ? 'border-emerald-500/50'
-                      : verdict.state === 'rejected' || verdict.state === 'invalid'
+                      : verdict.state === 'rejected' ||
+                          verdict.state === 'invalid'
                         ? 'border-red-500/50'
                         : ''
                   }`}

@@ -46,7 +46,11 @@ describe('watch-only UR test vectors', () => {
       it('round-trips those frames back to the same PSBT', () => {
         const scanner = new UrPsbtScanner();
         let progress = scanner.receive(vector.frames[0]);
-        for (let i = 1; i < vector.frames.length && !progress.complete; i += 1) {
+        for (
+          let i = 1;
+          i < vector.frames.length && !progress.complete;
+          i += 1
+        ) {
           progress = scanner.receive(vector.frames[i]);
         }
         expect(progress.complete).toBe(true);
@@ -68,9 +72,9 @@ describe('watch-only UR test vectors', () => {
 
       it('is accepted from hex and base64, as the CLI reads it', () => {
         expect(hex(parsePsbtBytes(vector.psbtHex))).toBe(vector.psbtHex);
-        expect(
-          hex(parsePsbtBytes(Buffer.from(psbt).toString('base64')))
-        ).toBe(vector.psbtHex);
+        expect(hex(parsePsbtBytes(Buffer.from(psbt).toString('base64')))).toBe(
+          vector.psbtHex
+        );
         expect(hex(parsePsbtBytes(psbt))).toBe(vector.psbtHex);
       });
     });

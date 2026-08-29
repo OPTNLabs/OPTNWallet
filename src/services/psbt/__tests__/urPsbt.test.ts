@@ -16,7 +16,12 @@ import { encodeUnsignedPsbt } from '../psbtBch';
 
 const PUBKEY = Uint8Array.from([0x02, ...new Array(32).fill(0x11)]);
 const P2PKH = Uint8Array.from([
-  0x76, 0xa9, 0x14, ...new Array(20).fill(0x22), 0x88, 0xac,
+  0x76,
+  0xa9,
+  0x14,
+  ...new Array(20).fill(0x22),
+  0x88,
+  0xac,
 ]);
 
 const psbt = () =>
@@ -77,7 +82,9 @@ describe('UR crypto-psbt transport', () => {
   it('extracts both raw and CBOR-wrapped payloads', () => {
     const original = psbt();
     expect([...extractPsbtFromUrCbor(original)]).toEqual([...original]);
-    const wrapped = Uint8Array.from(new CryptoPSBT(Buffer.from(original)).toCBOR());
+    const wrapped = Uint8Array.from(
+      new CryptoPSBT(Buffer.from(original)).toCBOR()
+    );
     expect(startsWithPsbtMagic(wrapped)).toBe(false);
     expect([...extractPsbtFromUrCbor(wrapped)]).toEqual([...original]);
   });

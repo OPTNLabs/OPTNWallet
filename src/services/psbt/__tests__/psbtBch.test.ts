@@ -25,7 +25,12 @@ import {
 const PUBKEY = Uint8Array.from([0x02, ...new Array(32).fill(0x11)]);
 const FINGERPRINT = Uint8Array.from([0xde, 0xad, 0xbe, 0xef]);
 const P2PKH = Uint8Array.from([
-  0x76, 0xa9, 0x14, ...new Array(20).fill(0x22), 0x88, 0xac,
+  0x76,
+  0xa9,
+  0x14,
+  ...new Array(20).fill(0x22),
+  0x88,
+  0xac,
 ]);
 
 const input = (over: Partial<PsbtInputSpec> = {}): PsbtInputSpec => ({
@@ -85,10 +90,7 @@ describe('BCH PSBT encoding', () => {
   });
 
   it('writes PSBT_IN_SIGHASH_TYPE 0xc1 on every input and never 0x41', () => {
-    const psbt = encodeUnsignedPsbt(
-      [input(), input({ vout: 2 })],
-      [output()]
-    );
+    const psbt = encodeUnsignedPsbt([input(), input({ vout: 2 })], [output()]);
     const fieldC1 = Uint8Array.from([0x01, 0x03, 0x04, 0xc1, 0x00, 0x00, 0x00]);
     const field41 = Uint8Array.from([0x01, 0x03, 0x04, 0x41, 0x00, 0x00, 0x00]);
     expect(indexOfBytes(psbt, fieldC1)).toBeGreaterThan(-1);
@@ -101,7 +103,10 @@ describe('BCH PSBT encoding', () => {
   });
 
   it('carries the input amount where SeedCash reads it', () => {
-    const psbt = encodeUnsignedPsbt([input({ satoshis: 100_000n })], [output()]);
+    const psbt = encodeUnsignedPsbt(
+      [input({ satoshis: 100_000n })],
+      [output()]
+    );
     // 100000 = 0x0186a0, little-endian over 8 bytes, right after key 0x01.
     const amountLE = Uint8Array.from([0xa0, 0x86, 0x01, 0, 0, 0, 0, 0]);
     const at = indexOfBytes(psbt, amountLE);
@@ -127,7 +132,9 @@ describe('BCH PSBT encoding', () => {
   it('encodes derivation levels as little-endian uint32, hardened bit intact', () => {
     const psbt = encodeUnsignedPsbt([input()], [output()]);
     // 0x8000002c little-endian.
-    expect(indexOfBytes(psbt, Uint8Array.from([0x2c, 0x00, 0x00, 0x80]))).toBeGreaterThan(-1);
+    expect(
+      indexOfBytes(psbt, Uint8Array.from([0x2c, 0x00, 0x00, 0x80]))
+    ).toBeGreaterThan(-1);
   });
 
   it('rejects an uncompressed public key rather than emitting an unsignable input', () => {
@@ -138,10 +145,7 @@ describe('BCH PSBT encoding', () => {
 
   it('rejects a partial single-key derivation instead of encoding misleading ownership data', () => {
     expect(() =>
-      encodeUnsignedPsbt(
-        [input({ masterFingerprint: undefined })],
-        [output()]
-      )
+      encodeUnsignedPsbt([input({ masterFingerprint: undefined })], [output()])
     ).toThrow(/requires public key, master fingerprint, and derivation path/i);
   });
 
@@ -164,7 +168,9 @@ describe('BCH PSBT encoding', () => {
     );
     // PSBT_OUT_BIP32_DERIVATION shares key byte 0x02 with PSBT_IN_PARTIAL_SIG;
     // it is the output maps that make it a change marker.
-    expect(indexOfBytes(psbt, Uint8Array.from([0x02, ...PUBKEY]))).toBeGreaterThan(-1);
+    expect(
+      indexOfBytes(psbt, Uint8Array.from([0x02, ...PUBKEY]))
+    ).toBeGreaterThan(-1);
   });
 });
 
@@ -177,33 +183,56 @@ describe('Paytaca v145 fields', () => {
   });
 
   it('writes explicit section counts that match the maps', () => {
-    const psbt = encodeUnsignedPsbt(
-      [input(), input({ vout: 2 })],
-      [output()]
-    );
+    const psbt = encodeUnsignedPsbt([input(), input({ vout: 2 })], [output()]);
     // Global records: key 0x04 = 2 inputs, key 0x05 = 1 output.
-    expect(indexOfBytes(psbt, Uint8Array.from([0x01, 0x04, 0x01, 0x02]))).toBeGreaterThan(-1);
-    expect(indexOfBytes(psbt, Uint8Array.from([0x01, 0x05, 0x01, 0x01]))).toBeGreaterThan(-1);
+    expect(
+      indexOfBytes(psbt, Uint8Array.from([0x01, 0x04, 0x01, 0x02]))
+    ).toBeGreaterThan(-1);
+    expect(
+      indexOfBytes(psbt, Uint8Array.from([0x01, 0x05, 0x01, 0x01]))
+    ).toBeGreaterThan(-1);
   });
 
   it('identifies each input by outpoint and sequence', () => {
     const psbt = encodeUnsignedPsbt([input({ vout: 1 })], [output()]);
     // Previous txid (0x0e): the 32 display-order bytes of 'a'*64 (hex digit a
     // is 0x0a per nibble, so each byte is 0xaa).
-    const txid = Uint8Array.from([0x01, 0x0e, 0x20, ...new Array(32).fill(0xaa)]);
+    const txid = Uint8Array.from([
+      0x01,
+      0x0e,
+      0x20,
+      ...new Array(32).fill(0xaa),
+    ]);
     expect(indexOfBytes(psbt, txid)).toBeGreaterThan(-1);
     // Output index (0x0f): uint32 LE of vout 1.
-    expect(indexOfBytes(psbt, Uint8Array.from([0x01, 0x0f, 0x04, 0x01, 0x00, 0x00, 0x00]))).toBeGreaterThan(-1);
+    expect(
+      indexOfBytes(
+        psbt,
+        Uint8Array.from([0x01, 0x0f, 0x04, 0x01, 0x00, 0x00, 0x00])
+      )
+    ).toBeGreaterThan(-1);
     // Sequence (0x10): the default 0xffffffff.
-    expect(indexOfBytes(psbt, Uint8Array.from([0x01, 0x10, 0x04, 0xff, 0xff, 0xff, 0xff]))).toBeGreaterThan(-1);
+    expect(
+      indexOfBytes(
+        psbt,
+        Uint8Array.from([0x01, 0x10, 0x04, 0xff, 0xff, 0xff, 0xff])
+      )
+    ).toBeGreaterThan(-1);
   });
 
   it('carries amount and script per output', () => {
     const psbt = encodeUnsignedPsbt([input()], [output({ satoshis: 90_000n })]);
     // PSBT_OUT_AMOUNT: key 0x03, 8-byte LE 90000 = 0x00015f90.
-    expect(indexOfBytes(psbt, Uint8Array.from([0x01, 0x03, 0x08, 0x90, 0x5f, 0x01, 0, 0, 0, 0, 0]))).toBeGreaterThan(-1);
+    expect(
+      indexOfBytes(
+        psbt,
+        Uint8Array.from([0x01, 0x03, 0x08, 0x90, 0x5f, 0x01, 0, 0, 0, 0, 0])
+      )
+    ).toBeGreaterThan(-1);
     // PSBT_OUT_SCRIPT: key 0x04, then the 25-byte P2PKH.
-    expect(indexOfBytes(psbt, Uint8Array.from([0x01, 0x04, 0x19, ...P2PKH]))).toBeGreaterThan(-1);
+    expect(
+      indexOfBytes(psbt, Uint8Array.from([0x01, 0x04, 0x19, ...P2PKH]))
+    ).toBeGreaterThan(-1);
   });
 
   it('round-trips the v145 structure through decode', () => {
@@ -215,7 +244,9 @@ describe('Paytaca v145 fields', () => {
     expect(parsed.version).toBe(145);
     expect(parsed.inputCount).toBe(2);
     expect(parsed.outputCount).toBe(1);
-    expect(parsed.inputs[0].previousTxid).toEqual(new Uint8Array(32).fill(0xaa));
+    expect(parsed.inputs[0].previousTxid).toEqual(
+      new Uint8Array(32).fill(0xaa)
+    );
     expect(parsed.inputs[0].outpointIndex).toBe(1);
     expect(parsed.inputs[0].sequence).toBe(0xffffffff);
     expect(parsed.inputs[1].outpointIndex).toBe(2);
@@ -262,7 +293,22 @@ describe('Paytaca v145 fields', () => {
     expect(
       indexOfBytes(
         psbt,
-        Uint8Array.from([0x01, 0x36, 0x29, ...category, 0x00, 0xf4, 0x01, 0, 0, 0, 0, 0, 0, 0])
+        Uint8Array.from([
+          0x01,
+          0x36,
+          0x29,
+          ...category,
+          0x00,
+          0xf4,
+          0x01,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+        ])
       )
     ).toBeGreaterThan(-1);
     const parsed = decodePsbt(psbt);
@@ -285,7 +331,11 @@ describe('Paytaca v145 fields', () => {
       )
     ).toBeGreaterThan(-1);
     const parsed = decodePsbt(psbt);
-    expect(parsed.outputs[0].token).toEqual({ category, capability: 1, commitment });
+    expect(parsed.outputs[0].token).toEqual({
+      category,
+      capability: 1,
+      commitment,
+    });
   });
 });
 
@@ -308,9 +358,18 @@ describe('BCH PSBT decoding', () => {
     });
     const v0Psbt = Uint8Array.from([
       ...PSBT_MAGIC,
-      0x01, 0x00, tx.length, ...tx,
+      0x01,
       0x00,
-      0x01, 0x03, 0x04, 0xc1, 0x00, 0x00, 0x00,
+      tx.length,
+      ...tx,
+      0x00,
+      0x01,
+      0x03,
+      0x04,
+      0xc1,
+      0x00,
+      0x00,
+      0x00,
       0x00,
       0x00,
     ]);
@@ -366,7 +425,13 @@ describe('sighash verification on returned signatures', () => {
     // by which point the user has put the device away and has no idea which
     // step failed.
     const result = verifySignatureSighashTypes(
-      [{ inputIndex: 0, publicKey: PUBKEY, signature: sig(SIGHASH_ALL_FORKID) }],
+      [
+        {
+          inputIndex: 0,
+          publicKey: PUBKEY,
+          signature: sig(SIGHASH_ALL_FORKID),
+        },
+      ],
       SIGHASH_ALL_FORKID_ANYONECANPAY
     );
     expect(result.ok).toBe(false);

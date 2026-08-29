@@ -1,11 +1,5 @@
-import {
-  SIGHASH_ALL_FORKID_ANYONECANPAY,
-  decodePsbt,
-} from './psbtBch';
-import {
-  DEFAULT_UR_FRAGMENT_LENGTH,
-  encodePsbtToUrFrames,
-} from './urPsbt';
+import { SIGHASH_ALL_FORKID_ANYONECANPAY, decodePsbt } from './psbtBch';
+import { DEFAULT_UR_FRAGMENT_LENGTH, encodePsbtToUrFrames } from './urPsbt';
 
 /** CLI and GUI share this. File/stdout UR is Chipnet-only. */
 export const WATCH_ONLY_UR_NETWORK = 'chipnet' as const;

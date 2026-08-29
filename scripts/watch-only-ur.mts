@@ -250,7 +250,9 @@ function vectors(argv: string[], out: NodeJS.WritableStream): void {
         `produced ${report.producedFrames}\n`
     );
     if (report.firstDifference !== -1) {
-      out.write(`    first difference at frame ${report.firstDifference + 1}\n`);
+      out.write(
+        `    first difference at frame ${report.firstDifference + 1}\n`
+      );
     }
   }
 

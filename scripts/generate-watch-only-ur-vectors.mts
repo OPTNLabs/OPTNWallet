@@ -11,22 +11,47 @@ import { DEFAULT_UR_FRAGMENT_LENGTH } from '../src/services/psbt/urPsbt';
 
 const PUBKEY = Uint8Array.from([0x02, ...new Array(32).fill(0x11)]);
 const FINGERPRINT = Uint8Array.from([0xde, 0xad, 0xbe, 0xef]);
-const P2PKH = Uint8Array.from([0x76, 0xa9, 0x14, ...new Array(20).fill(0x22), 0x88, 0xac]);
+const P2PKH = Uint8Array.from([
+  0x76,
+  0xa9,
+  0x14,
+  ...new Array(20).fill(0x22),
+  0x88,
+  0xac,
+]);
 
 const mk = (
-  txid: string, vout: number, sats: bigint, path: number[]
+  txid: string,
+  vout: number,
+  sats: bigint,
+  path: number[]
 ): PsbtInputSpec => ({
-  txid, vout, satoshis: sats, lockingBytecode: P2PKH, publicKey: PUBKEY,
-  masterFingerprint: FINGERPRINT, derivationPath: path,
+  txid,
+  vout,
+  satoshis: sats,
+  lockingBytecode: P2PKH,
+  publicKey: PUBKEY,
+  masterFingerprint: FINGERPRINT,
+  derivationPath: path,
 });
-const out = (sats: bigint): PsbtOutputSpec => ({ lockingBytecode: P2PKH, satoshis: sats });
+const out = (sats: bigint): PsbtOutputSpec => ({
+  lockingBytecode: P2PKH,
+  satoshis: sats,
+});
 
 const cases = [
   {
     name: 'single-input-single-output',
     description:
       'The smallest shape a watch-only send produces: one input, one output.',
-    inputs: [mk('a'.repeat(64), 1, 100_000n, [0x8000002c, 0x80000091, 0x80000000, 0, 5])],
+    inputs: [
+      mk(
+        'a'.repeat(64),
+        1,
+        100_000n,
+        [0x8000002c, 0x80000091, 0x80000000, 0, 5]
+      ),
+    ],
     outputs: [out(90_000n)],
   },
   {
@@ -34,8 +59,18 @@ const cases = [
     description:
       'Two inputs and a change output — the common case, and long enough to span many UR frames.',
     inputs: [
-      mk('a'.repeat(64), 1, 100_000n, [0x8000002c, 0x80000091, 0x80000000, 0, 5]),
-      mk('b'.repeat(64), 0, 250_000n, [0x8000002c, 0x80000091, 0x80000000, 1, 2]),
+      mk(
+        'a'.repeat(64),
+        1,
+        100_000n,
+        [0x8000002c, 0x80000091, 0x80000000, 0, 5]
+      ),
+      mk(
+        'b'.repeat(64),
+        0,
+        250_000n,
+        [0x8000002c, 0x80000091, 0x80000000, 1, 2]
+      ),
     ],
     outputs: [out(300_000n), out(49_000n)],
   },
@@ -71,4 +106,7 @@ const document = {
 const path = 'src/services/psbt/__tests__/vectors/watchOnlyUr.vectors.json';
 writeFileSync(path, `${JSON.stringify(document, null, 2)}\n`, 'utf8');
 console.log(`wrote ${vectors.length} vectors to ${path}`);
-for (const v of vectors) console.log(`  ${v.name}: ${v.frameCount} frames, ${v.psbtHex.length / 2} PSBT bytes`);
+for (const v of vectors)
+  console.log(
+    `  ${v.name}: ${v.frameCount} frames, ${v.psbtHex.length / 2} PSBT bytes`
+  );
