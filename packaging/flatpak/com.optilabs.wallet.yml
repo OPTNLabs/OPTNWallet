@@ -29,15 +29,21 @@ finish-args:
   # so no blanket filesystem access is granted.
   - --talk-name=org.freedesktop.portal.Desktop
 
+# Nothing is compiled here — the binary is lifted out of a deb Tauri already
+# built in release mode. Without this, flatpak-builder extracts debug symbols
+# into a .Debug extension we never publish, which needs eu-strip on the host and
+# produces nothing useful.
+#
+# These belong to build-options, not to the module: set on a module directly
+# they are silently ignored, which is how the first attempt at this still
+# called eu-strip.
+build-options:
+  strip: false
+  no-debuginfo: true
+
 modules:
   - name: optn-wallet
     buildsystem: simple
-    # Nothing is compiled here — the binary is lifted out of a deb Tauri
-    # already built in release mode. flatpak-builder would otherwise reach for
-    # eu-strip to split debug symbols into a .Debug extension we never publish,
-    # which needs elfutils on the host and produces nothing useful.
-    no-debuginfo: true
-    strip: false
     build-commands:
       - ar x optn-wallet.deb
       # Tauri has shipped data.tar.gz and data.tar.xz across versions; match
