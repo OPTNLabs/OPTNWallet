@@ -246,11 +246,17 @@ function encodeTokenPrefix(token: PsbtTokenSpec): Uint8Array {
   }
   if (token.amount !== undefined && token.amount !== null) {
     if (token.amount < 0n) throw new Error('Token amounts cannot be negative.');
-    return concat([token.category, Uint8Array.from([0x00]), uint64LE(token.amount)]);
+    return concat([
+      token.category,
+      Uint8Array.from([0x00]),
+      uint64LE(token.amount),
+    ]);
   }
   const capability = token.capability ?? 0;
   if (!Number.isInteger(capability) || capability < 0 || capability > 2) {
-    throw new Error('NFT capability must be 0 (none), 1 (mutable), or 2 (minting).');
+    throw new Error(
+      'NFT capability must be 0 (none), 1 (mutable), or 2 (minting).'
+    );
   }
   const commitment = token.commitment ?? Uint8Array.of();
   return concat([
@@ -266,7 +272,8 @@ function decodeTokenPrefix(bytes: Uint8Array): PsbtTokenSpec {
   const category = bytes.subarray(0, 32);
   const marker = bytes[32];
   if (marker === 0x00) {
-    if (bytes.length !== 41) throw new Error('FT token prefix must be 41 bytes.');
+    if (bytes.length !== 41)
+      throw new Error('FT token prefix must be 41 bytes.');
     return { category, amount: readUint64LE(bytes.subarray(33, 41)) };
   }
   if ((marker & 0x80) === 0 || (marker & 0x7f) > 2) {
@@ -275,7 +282,8 @@ function decodeTokenPrefix(bytes: Uint8Array): PsbtTokenSpec {
   const commitmentReader = new Reader(bytes.subarray(33));
   const length = commitmentReader.varInt();
   const commitment = commitmentReader.take(length);
-  if (!commitmentReader.done) throw new Error('Token prefix has trailing bytes.');
+  if (!commitmentReader.done)
+    throw new Error('Token prefix has trailing bytes.');
   return { category, capability: marker & 0x7f, commitment };
 }
 
@@ -325,8 +333,10 @@ function unsignedTransaction(
 /**
  * Encode an unsigned PSBT for an air-gapped signer.
  *
- * `sighashType` is written into every input as PSBT_IN_SIGHASH_TYPE so the
- * signer is told which commitment to make, rather than being left to guess.
+ * Every input carries PSBT_IN_SIGHASH_TYPE = 0xc1
+ * (SIGHASH_ALL|FORKID|ANYONECANPAY). Omitting the field or using 0x41 is
+ * not allowed: SeedCash falls back to 0x41 when the field is missing, and
+ * those signatures fail import.
  */
 export function encodeUnsignedPsbt(
   inputs: PsbtInputSpec[],
@@ -335,12 +345,19 @@ export function encodeUnsignedPsbt(
   options: PsbtEncodeOptions = {}
 ): Uint8Array {
   if (inputs.length === 0) throw new Error('A PSBT needs at least one input.');
-  if (outputs.length === 0) throw new Error('A PSBT needs at least one output.');
+  if (outputs.length === 0)
+    throw new Error('A PSBT needs at least one output.');
   if ((sighashType & SIGHASH_FORKID_BIT) === 0) {
     // Without FORKID the signature is not valid on Bitcoin Cash at all, and the
     // failure would only appear at broadcast, after the user has already walked
     // the transaction through a hardware device.
     throw new Error('BCH sighash types must include SIGHASH_FORKID (0x40).');
+  }
+  if (sighashType !== SIGHASH_ALL_FORKID_ANYONECANPAY) {
+    throw new Error(
+      'PSBT_IN_SIGHASH_TYPE must be SIGHASH_ALL|FORKID|ANYONECANPAY (0xc1); ' +
+        'omitting it or using 0x41 is not allowed.'
+    );
   }
 
   const globalFields: Uint8Array[] = [
@@ -426,13 +443,18 @@ export function encodeUnsignedPsbt(
               input.lockingBytecode,
             ])
           ),
-      record(Uint8Array.from([PSBT_IN_SIGHASH_TYPE]), uint32LE(sighashType)),
+      record(
+        Uint8Array.from([PSBT_IN_SIGHASH_TYPE]),
+        uint32LE(SIGHASH_ALL_FORKID_ANYONECANPAY)
+      ),
       ...(input.redeemScript
         ? [record(Uint8Array.from([PSBT_IN_REDEEM_SCRIPT]), input.redeemScript)]
         : []),
       ...(input.partialSignatures ?? []).map((signature) => {
         if (signature.publicKey.length !== 33) {
-          throw new Error('Partial signature public keys must be compressed (33 bytes).');
+          throw new Error(
+            'Partial signature public keys must be compressed (33 bytes).'
+          );
         }
         return record(
           concat([Uint8Array.from([PSBT_IN_PARTIAL_SIG]), signature.publicKey]),
@@ -441,7 +463,10 @@ export function encodeUnsignedPsbt(
       }),
       ...derivations.map((derivation) =>
         record(
-          concat([Uint8Array.from([PSBT_IN_BIP32_DERIVATION]), derivation.publicKey]),
+          concat([
+            Uint8Array.from([PSBT_IN_BIP32_DERIVATION]),
+            derivation.publicKey,
+          ]),
           bip32DerivationValue(
             derivation.masterFingerprint,
             derivation.derivationPath
@@ -463,17 +488,21 @@ export function encodeUnsignedPsbt(
   const outputMaps = outputs.map((output) => {
     const fields: Uint8Array[] = [];
     if (output.redeemScript) {
-      fields.push(record(Uint8Array.from([PSBT_OUT_REDEEM_SCRIPT]), output.redeemScript));
+      fields.push(
+        record(Uint8Array.from([PSBT_OUT_REDEEM_SCRIPT]), output.redeemScript)
+      );
     }
-    const outputDerivations = output.derivations ?? (output.publicKey
-      ? [
-          {
-            publicKey: output.publicKey,
-            masterFingerprint: output.masterFingerprint!,
-            derivationPath: output.derivationPath!,
-          },
-        ]
-      : []);
+    const outputDerivations =
+      output.derivations ??
+      (output.publicKey
+        ? [
+            {
+              publicKey: output.publicKey,
+              masterFingerprint: output.masterFingerprint!,
+              derivationPath: output.derivationPath!,
+            },
+          ]
+        : []);
     for (const derivation of outputDerivations) {
       // Lets the signing device show "change" instead of treating the wallet's
       // own address as an unknown third party.
@@ -490,11 +519,18 @@ export function encodeUnsignedPsbt(
         )
       );
     }
-    fields.push(record(Uint8Array.from([PSBT_OUT_AMOUNT]), uint64LE(output.satoshis)));
-    fields.push(record(Uint8Array.from([PSBT_OUT_SCRIPT]), output.lockingBytecode));
+    fields.push(
+      record(Uint8Array.from([PSBT_OUT_AMOUNT]), uint64LE(output.satoshis))
+    );
+    fields.push(
+      record(Uint8Array.from([PSBT_OUT_SCRIPT]), output.lockingBytecode)
+    );
     if (output.token) {
       fields.push(
-        record(Uint8Array.from([PSBT_OUT_CASHTOKEN]), encodeTokenPrefix(output.token))
+        record(
+          Uint8Array.from([PSBT_OUT_CASHTOKEN]),
+          encodeTokenPrefix(output.token)
+        )
       );
     }
     fields.push(Uint8Array.from([0x00]));
@@ -647,7 +683,10 @@ function parseInputMap(
           const length = new Reader(value.subarray(8)).varInt();
           const scriptStart = 8 + varIntSize(length);
           if (scriptStart + length <= value.length) {
-            parsed.spentLockingBytecode = value.subarray(scriptStart, scriptStart + length);
+            parsed.spentLockingBytecode = value.subarray(
+              scriptStart,
+              scriptStart + length
+            );
           }
         }
         break;
@@ -668,7 +707,8 @@ function parseInputMap(
         break;
       }
       case PSBT_IN_SIGHASH_TYPE:
-        if (value.length === 4) parsed.requestedSighashType = readUint32LE(value);
+        if (value.length === 4)
+          parsed.requestedSighashType = readUint32LE(value);
         break;
       case PSBT_IN_REDEEM_SCRIPT:
         parsed.redeemScript = value;
@@ -711,7 +751,8 @@ function parseOutputMap(
         break;
       case PSBT_OUT_BIP32_DERIVATION: {
         const decoded = decodeBip32Value(value);
-        if (decoded) parsed.derivations.push({ publicKey: key.subarray(1), ...decoded });
+        if (decoded)
+          parsed.derivations.push({ publicKey: key.subarray(1), ...decoded });
         break;
       }
       case PSBT_OUT_AMOUNT:
@@ -763,7 +804,8 @@ export function decodePsbt(bytes: Uint8Array): ParsedPsbt {
       outputCount = new Reader(value).varInt();
     } else if (key[0] === PSBT_GLOBAL_XPUB && key.length === 79) {
       const decoded = decodeBip32Value(value);
-      if (decoded) globalXpubs.push({ xpubPayload: key.subarray(1), ...decoded });
+      if (decoded)
+        globalXpubs.push({ xpubPayload: key.subarray(1), ...decoded });
     }
   }
 
@@ -772,11 +814,13 @@ export function decodePsbt(bytes: Uint8Array): ParsedPsbt {
 
   if (inputCount !== null && outputCount !== null) {
     for (let i = 0; i < inputCount; i += 1) {
-      if (reader.done) throw new Error('PSBT input count does not match its maps.');
+      if (reader.done)
+        throw new Error('PSBT input count does not match its maps.');
       inputs.push(parseInputMap(readMap(reader), i));
     }
     for (let o = 0; o < outputCount; o += 1) {
-      if (reader.done) throw new Error('PSBT output count does not match its maps.');
+      if (reader.done)
+        throw new Error('PSBT output count does not match its maps.');
       outputs.push(parseOutputMap(readMap(reader)));
     }
     if (!reader.done) {
@@ -811,7 +855,9 @@ export function decodePsbt(bytes: Uint8Array): ParsedPsbt {
   const signatures = inputs.flatMap((input, inputIndex) =>
     input.partialSignatures.map((signature) => ({ ...signature, inputIndex }))
   );
-  const requestedSighashTypes = inputs.map((input) => input.requestedSighashType);
+  const requestedSighashTypes = inputs.map(
+    (input) => input.requestedSighashType
+  );
 
   return {
     unsignedTransaction: unsigned.value,
@@ -860,7 +906,9 @@ function resolveNonWitnessUtxos(
     // encode/decodeTransaction, so `outpointTransactionHash` is already in
     // display order. Compare in display order, which is also what the error
     // message has to show for it to be checkable against an explorer.
-    const parentTxid = binToHex(hash256(input.nonWitnessUtxo).slice().reverse());
+    const parentTxid = binToHex(
+      hash256(input.nonWitnessUtxo).slice().reverse()
+    );
     const spentTxid = binToHex(outpoint.outpointTransactionHash);
     if (parentTxid !== spentTxid) {
       throw new Error(

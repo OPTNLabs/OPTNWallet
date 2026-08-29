@@ -59,6 +59,9 @@ import {
 import {
   encodePsbtToUrFrames,
   UrPsbtScanner,
+  PSBT_UR_QR_DISPLAY_SIZE,
+  PSBT_UR_QR_ERROR_LEVEL,
+  PSBT_UR_QR_MARGIN_MODULES,
 } from '../../services/psbt/urPsbt';
 import {
   masterFingerprintBytes,
@@ -171,13 +174,27 @@ export const WatchOnlySend: FC = () => {
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState('');
 
-  const [proposalState, setProposalState] = useState<ProposalState | null>(null);
+  const [proposalState, setProposalState] = useState<ProposalState | null>(
+    null
+  );
 
-  const [frames, setFrames] = useState<ReturnType<typeof encodePsbtToUrFrames> | null>(null);
+  const [frames, setFrames] = useState<ReturnType<
+    typeof encodePsbtToUrFrames
+  > | null>(null);
   const [qrUri, setQrUri] = useState('');
 
   const [importText, setImportText] = useState('');
   const [scannerOpen, setScannerOpen] = useState(false);
+  // The QR is bounded by the card it sits in, and a signer reads it faster
+  // the larger it is. Testers asked for the whole window, so this gives it.
+  const [qrFullscreen, setQrFullscreen] = useState(false);
+  // One decoder for the whole scan, not one per frame. An animated UR spans
+  // dozens of frames, so a decoder rebuilt on each arrival discards every part
+  // it has already seen and can never complete a multi-part signed PSBT --
+  // which is why scanning a signed result never finished.
+  const urScannerRef = useRef<UrPsbtScanner | null>(null);
+  const [scanProgress, setScanProgress] = useState(0);
+  const [scanFrames, setScanFrames] = useState(0);
   /**
    * The accumulated PSBT: the base proposal merged with every verified return
    * from the signer. Multisig flows walk it around the room until each input
@@ -290,10 +307,13 @@ export const WatchOnlySend: FC = () => {
       setError('');
       try {
         if (!currentWalletId) {
-          setError('No wallet is open. Go back and open the watch-only wallet first.');
+          setError(
+            'No wallet is open. Go back and open the watch-only wallet first.'
+          );
           return;
         }
-        const metadata = await WalletManager().getWalletMetadata(currentWalletId);
+        const metadata =
+          await WalletManager().getWalletMetadata(currentWalletId);
         setAccountPath(
           metadata?.derivation_path ?? getBchAccountPath(currentNetwork)
         );
@@ -392,7 +412,11 @@ export const WatchOnlySend: FC = () => {
         }
       } catch (err) {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : 'Could not load the wallet coins.');
+          setError(
+            err instanceof Error
+              ? err.message
+              : 'Could not load the wallet coins.'
+          );
         }
       } finally {
         if (!cancelled) setBusy(false);
@@ -484,7 +508,9 @@ export const WatchOnlySend: FC = () => {
       return;
     }
     if (!changeAddress) {
-      setError('No change address available. Add more change addresses to the wallet.');
+      setError(
+        'No change address available. Add more change addresses to the wallet.'
+      );
       return;
     }
     try {
@@ -505,7 +531,11 @@ export const WatchOnlySend: FC = () => {
       // to the others' wallets.
       const changeBranch = 1 as const;
       const changeMultisig = multisigPolicy
-        ? deriveMultisigAddress(multisigPolicy, changeBranch, changeAddressIndex)
+        ? deriveMultisigAddress(
+            multisigPolicy,
+            changeBranch,
+            changeAddressIndex
+          )
         : null;
 
       const result = buildWatchOnlyPsbt({
@@ -514,7 +544,9 @@ export const WatchOnlySend: FC = () => {
         amountSats,
         changeAddress,
         accountPath,
-        masterFingerprint: fingerprint ? masterFingerprintBytes(fingerprint) : null,
+        masterFingerprint: fingerprint
+          ? masterFingerprintBytes(fingerprint)
+          : null,
         ...(changeMultisig && multisigPolicy
           ? {
               changeRedeemScriptHex: toHex(changeMultisig.redeemScript),
@@ -549,7 +581,11 @@ export const WatchOnlySend: FC = () => {
       setFrames(frameSource);
       setQrUri(frameSource.next());
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not build the unsigned transaction.');
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Could not build the unsigned transaction.'
+      );
     } finally {
       setBusy(false);
     }
@@ -587,7 +623,11 @@ export const WatchOnlySend: FC = () => {
         );
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not merge the signed transaction.');
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Could not merge the signed transaction.'
+      );
     }
   };
 
@@ -615,8 +655,24 @@ export const WatchOnlySend: FC = () => {
       }
       importAndMerge(psbt);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not read the signed transaction.');
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Could not read the signed transaction.'
+      );
     }
+  };
+
+  const openScanner = () => {
+    urScannerRef.current = new UrPsbtScanner();
+    setScanProgress(0);
+    setScanFrames(0);
+    setScannerOpen(true);
+  };
+
+  const closeScanner = () => {
+    setScannerOpen(false);
+    urScannerRef.current = null;
   };
 
   const handleScanFrame = (text: string) => {
@@ -625,21 +681,33 @@ export const WatchOnlySend: FC = () => {
       return;
     }
     try {
-      const scanner = new UrPsbtScanner();
+      const scanner = (urScannerRef.current ??= new UrPsbtScanner());
       const progress = scanner.receive(text);
+      setScanProgress(progress.progress);
+      setScanFrames((count) => count + 1);
       if (progress.complete && progress.psbt) {
         importAndMerge(progress.psbt);
-        setScannerOpen(false);
-      } else {
-        setImportText((prev) => (prev ? `${prev}\n` : '') + text.trim());
+        closeScanner();
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not read the signed transaction.');
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Could not read the signed transaction.'
+      );
+      // A frame that poisons the decoder leaves it unusable, so the next scan
+      // starts from a clean one rather than inheriting the failure.
+      closeScanner();
     }
   };
 
   const handleBroadcast = async () => {
-    if (!proposalState || !verdict || verdict.state !== 'complete' || !verdict.rawTxHex) {
+    if (
+      !proposalState ||
+      !verdict ||
+      verdict.state !== 'complete' ||
+      !verdict.rawTxHex
+    ) {
       return;
     }
     setBusy(true);
@@ -647,7 +715,9 @@ export const WatchOnlySend: FC = () => {
     try {
       const res = await TransactionService.sendTransaction(
         verdict.rawTxHex,
-        proposalState.proposal.inputs.map((input) => (input as SpendableInput).utxo),
+        proposalState.proposal.inputs.map(
+          (input) => (input as SpendableInput).utxo
+        ),
         {
           source: 'watch-only',
           sourceLabel: 'Watch-only send (air-gapped)',
@@ -692,7 +762,10 @@ export const WatchOnlySend: FC = () => {
   };
 
   return (
-    <WalletScreen maxWidthClassName="max-w-md" scrollable={false}>
+    <WalletScreen
+      maxWidthClassName={frames ? 'max-w-2xl' : 'max-w-md'}
+      scrollable={false}
+    >
       <div className="flex h-full min-h-0 flex-col gap-4">
         <div className="flex items-center gap-2">
           <button
@@ -702,7 +775,9 @@ export const WatchOnlySend: FC = () => {
           >
             Back
           </button>
-          <h1 className="text-lg font-bold wallet-text-strong">Watch-only Send</h1>
+          <h1 className="text-lg font-bold wallet-text-strong">
+            Watch-only Send
+          </h1>
         </div>
 
         <StepBar current={step} />
@@ -881,8 +956,14 @@ export const WatchOnlySend: FC = () => {
                   <p className="text-sm font-semibold wallet-text-strong">
                     Scan this with SeedCash (air-gapped)
                   </p>
-                  <div className="flex items-center justify-center rounded-md bg-white p-3">
-                    <QRCodeSVG value={qrUri} size={220} includeMargin />
+                  <div className="mx-auto w-full max-w-[min(100%,70svh)] rounded-md bg-white p-2">
+                    <QRCodeSVG
+                      value={qrUri}
+                      size={PSBT_UR_QR_DISPLAY_SIZE}
+                      marginSize={PSBT_UR_QR_MARGIN_MODULES}
+                      level={PSBT_UR_QR_ERROR_LEVEL}
+                      className="h-auto w-full max-w-full"
+                    />
                   </div>
                   <p className="text-center text-xs wallet-muted">
                     Frame {frameNumber} / {frameCountRef.current} · hold the
@@ -890,7 +971,35 @@ export const WatchOnlySend: FC = () => {
                   </p>
                   <button
                     type="button"
-                    onClick={() => setScannerOpen(true)}
+                    onClick={() => setQrFullscreen(true)}
+                    className="wallet-btn-secondary w-full py-2 text-sm"
+                  >
+                    Show full screen
+                  </button>
+                  {qrFullscreen && (
+                    <div
+                      role="dialog"
+                      aria-modal="true"
+                      aria-label="Animated QR code, full screen"
+                      onClick={() => setQrFullscreen(false)}
+                      className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-4 bg-white p-3"
+                    >
+                      <QRCodeSVG
+                        value={qrUri}
+                        size={PSBT_UR_QR_DISPLAY_SIZE}
+                        marginSize={PSBT_UR_QR_MARGIN_MODULES}
+                        level={PSBT_UR_QR_ERROR_LEVEL}
+                        className="h-auto w-[min(96vw,88svh)] max-w-none"
+                      />
+                      <p className="text-center text-sm text-black">
+                        Frame {frameNumber} / {frameCountRef.current} · tap
+                        anywhere to close
+                      </p>
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={openScanner}
                     className="wallet-btn-secondary w-full py-2 text-sm"
                   >
                     Scan the signed result
@@ -918,7 +1027,14 @@ export const WatchOnlySend: FC = () => {
                   {scannerOpen && (
                     <CameraQrScanner
                       onResult={handleScanFrame}
-                      onClose={() => setScannerOpen(false)}
+                      onClose={closeScanner}
+                      continuous
+                      progress={scanProgress}
+                      statusText={
+                        scanFrames === 0
+                          ? 'Point the camera at the signed QR on the signer.'
+                          : `${scanFrames} frames read - ${Math.round(scanProgress * 100)}% recovered`
+                      }
                     />
                   )}
                 </section>
@@ -932,12 +1048,15 @@ export const WatchOnlySend: FC = () => {
                   </p>
                   {multisigInputs.map((summary) => {
                     const statuses = cosignerStatus[summary.index] ?? [];
-                    const signed = statuses.filter((status) => status.signed).length;
+                    const signed = statuses.filter(
+                      (status) => status.signed
+                    ).length;
                     return (
                       <div key={summary.index} className="space-y-1.5">
                         <p className="text-xs wallet-muted">
                           Input {summary.index}: {signed} of {summary.required}{' '}
-                          collected · policy {summary.required} of {summary.total}
+                          collected · policy {summary.required} of{' '}
+                          {summary.total}
                         </p>
                         <div className="flex flex-wrap gap-1.5">
                           {statuses.map((status) => (
@@ -974,7 +1093,8 @@ export const WatchOnlySend: FC = () => {
                   className={`wallet-card space-y-2 p-4 ${
                     verdict.state === 'complete'
                       ? 'border-emerald-500/50'
-                      : verdict.state === 'rejected' || verdict.state === 'invalid'
+                      : verdict.state === 'rejected' ||
+                          verdict.state === 'invalid'
                         ? 'border-red-500/50'
                         : ''
                   }`}

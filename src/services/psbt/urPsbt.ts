@@ -20,12 +20,29 @@ import { URRegistryDecoder } from '@keystonehq/bc-ur-registry';
 /**
  * Fragment size, in bytes of the UR payload.
  *
- * Small enough that each frame stays readable by a phone-grade camera at the
- * size a desktop window can show, which matters more than frame count: a dense
- * QR that will not scan makes the whole flow fail, while a few extra frames
- * only cost seconds.
+ * Paytaca PstQrDialog e66cafa9d-era used chunkSize=50 (padding=8). SeedCash
+ * cameras could read that density. Later Paytaca densified to 200/4 (and a
+ * 150/4 attempt); phone cameras fail those. Extra frames only cost seconds;
+ * a dense QR that will not scan fails the whole air-gap.
  */
-export const DEFAULT_UR_FRAGMENT_LENGTH = 200;
+export const DEFAULT_UR_FRAGMENT_LENGTH = 50;
+
+/**
+ * Quiet-zone modules around the displayed QR (qrcode.react `marginSize`).
+ * Paytaca PstQrDialog e66cafa9d-era used padding=8; later densified to 4.
+ * More padding, not denser modules: SeedCash cameras need the extra border.
+ */
+export const PSBT_UR_QR_MARGIN_MODULES = 8;
+
+/**
+ * CSS pixel size of the PSBT UR QR. Shared by Android webview and desktop.
+ * Pair with `w-full` so the box fills the send card. Do not shrink this to
+ * cram more bytes on screen — lower density via fragment length, not pixels.
+ */
+export const PSBT_UR_QR_DISPLAY_SIZE = 640;
+
+/** Keep L. Q/H add modules and densify the same UR payload. */
+export const PSBT_UR_QR_ERROR_LEVEL = 'L' as const;
 
 const PSBT_MAGIC = Uint8Array.of(0x70, 0x73, 0x62, 0x74, 0xff);
 

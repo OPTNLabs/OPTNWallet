@@ -62,7 +62,10 @@
     "android:apk:prod": "dotenv -e .env -- bash -lc 'npm run android:prepare && cd android && ./gradlew assembleRelease'",
     "android:aab:prod": "dotenv -e .env -- bash -lc 'npm run android:prepare && cd android && ./gradlew bundleRelease'",
     "build:aab": "npm run android:aab:prod",
-    "build:apk": "npm run android:apk:prod"
+    "build:apk": "npm run android:apk:prod",
+    "watch-only-ur": "tsx scripts/watch-only-ur.mts",
+    "watch-only-ur:vectors": "tsx scripts/watch-only-ur.mts vectors",
+    "watch-only-ur:regenerate": "tsx scripts/generate-watch-only-ur-vectors.mts"
   },
   "dependencies": {
     "@bitauth/libauth": "3.1.0-next.8",

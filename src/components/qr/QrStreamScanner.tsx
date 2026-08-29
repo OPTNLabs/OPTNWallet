@@ -118,13 +118,26 @@ export const QrStreamScanner: React.FC<Props> = ({
       try {
         if (!navigator.mediaDevices?.getUserMedia)
           throw new Error(t('qr.cameraUnavailable'));
-        stream = await navigator.mediaDevices.getUserMedia({
+        const opened = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: { ideal: 'environment' } },
           audio: false,
         });
-        if (cancelled || !videoRef.current) return;
+        // Stopped explicitly rather than left to the cleanup below: a cleanup
+        // that runs while this await is pending sees no stream yet and stops
+        // nothing, orphaning the device. The next open then finds the camera
+        // busy and fails with "The operation was aborted".
+        if (cancelled || !videoRef.current) {
+          opened.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        stream = opened;
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
+        if (cancelled) {
+          stream.getTracks().forEach((track) => track.stop());
+          stream = null;
+          return;
+        }
         animationFrame = requestAnimationFrame(scan);
       } catch (cameraError) {
         setError(
