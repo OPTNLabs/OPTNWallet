@@ -331,10 +331,17 @@ describe('release workflow', () => {
     // breaks the other. The probe makes both work — and keeps "no CLI in this
     // tree" distinguishable from "the CLI failed to build", which is the whole
     // point of the no-drop check.
-    expect(workflow).toMatch(/^\s{2}cli-probe:\s*$/m);
+    //
+    // Asserted as a property rather than as a job name: the probe used to be
+    // a job of its own and now lives in `resolve`, which already runs first
+    // and already checks out, so it costs nothing there. What must stay true
+    // is that the requirement is armed by looking for the crate, and never by
+    // looking at which artifacts happen to have been produced -- an artifact
+    // listing cannot tell a failed build from a crate that was never here.
     expect(workflow).toContain('if [ -f crates/optn-cli/Cargo.toml ]; then');
+    expect(workflow).toMatch(/cli_present: \x24\x7b\x7b steps\.\w+\.outputs\.present \x7d\x7d/);
     expect(workflow).toContain(
-      'needs.cli-probe.outputs.present }}" = \'true\''
+      'needs.resolve.outputs.cli_present }}" = \'true\''
     );
     expect(workflow).toContain("require_asset \"artifacts/cli-$label\"");
   });
