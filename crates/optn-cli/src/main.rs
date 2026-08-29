@@ -1817,7 +1817,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 }
                 if !rpa::looks_like_rpa(code) {
                     return Err(CliError::Usage(format!(
-                        "'{code}' is not a reusable payment code — expected a                          cashcode: or cashcodetest: string (a legacy paycode: is                          accepted too). To send to an ordinary address, use `send`."
+                        "'{code}' is not a reusable payment code — expected a cashcode: or cashcodetest: string (a legacy paycode: is accepted too). To send to an ordinary address, use `send`."
                     )));
                 }
                 let decoded = rpa::decode(code)?;
@@ -1827,6 +1827,9 @@ async fn run(cli: &Cli) -> Result<Value> {
                         decoded.network(),
                         cli.network
                     )));
+                }
+                if let Some(reason) = rpa::send_block_reason(&decoded) {
+                    return Err(CliError::Usage(reason));
                 }
                 let wallet = read_wallet(cli)?;
                 let paid = rpa_pay(
