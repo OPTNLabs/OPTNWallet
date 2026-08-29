@@ -20,18 +20,34 @@ To build from source you need Rust 1.77.2 or newer:
 cargo build --release --manifest-path crates/optn-cli/Cargo.toml
 ```
 
-RISC-V and 32-bit ARM are cross-compiled from x86_64 and need only a linker:
+RISC-V and 32-bit ARM are cross-compiled from x86_64:
 
 ```bash
-sudo apt-get install -y gcc-riscv64-linux-gnu
+sudo apt-get install -y gcc-riscv64-linux-gnu libc6-dev-riscv64-cross
 rustup target add riscv64gc-unknown-linux-gnu
 CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_LINKER=riscv64-linux-gnu-gcc \
   cargo build --release --target riscv64gc-unknown-linux-gnu
 ```
 
+Both packages, not just the compiler. `ring` — reached through rustls, which is
+how Electrum TLS and x402 both talk HTTPS — compiles C for curve25519, and
+`gcc-*-cross` ships no target headers. Without `libc6-dev-riscv64-cross` the
+build falls back to the host `/usr/include` and fails on a missing
+`bits/libc-header-start.h`: an error naming a host header, which points away
+from the actual cause. 32-bit ARM needs `libc6-dev-armhf-cross` for the same
+reason.
+
 This works because the CLI has no Tauri dependency. The desktop app links
 webkit2gtk and therefore has to be built on the target architecture; the CLI
-does not, so any target Rust supports is reachable from any host.
+does not, so any target Rust supports is reachable from any host given a cross
+toolchain.
+
+The property that matters is not "no C" — `ring` has some — but that nothing in
+the graph needs a build system that will not cross: no CMake, no OpenSSL, no
+pkg-config hunting for a host library. `tokio-rustls` is pinned to `ring`
+rather than the default `aws-lc-sys` for exactly that reason, and the keychain
+uses the Linux kernel keyring rather than Secret Service so no dbus enters the
+tree.
 
 ## First commands
 
