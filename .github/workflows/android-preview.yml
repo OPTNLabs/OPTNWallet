@@ -314,6 +314,38 @@ jobs:
             install_apk "$app_apk" optn.wallet.app
             install_apk "$test_apk" optn.wallet.app.test -t
 
+            # A freshly installed APK has not been dex-compiled and has no
+            # WebView data directory yet. Leaving both to happen inside the
+            # instrumentation run puts them under the 5s input-dispatch clock,
+            # and the second flavour installed on an instance ANRs while still
+            # starting up:
+            #
+            #   optn.wallet.app/.MainActivity is not responding.
+            #   Waited 5000ms for FocusEvent(hasFocus=false)
+            #
+            # logcat carried no exception and the VM exited 0 for that run --
+            # the app was not broken, it was not finished launching. Compiling
+            # ahead of time and doing one throwaway launch moves that cost
+            # outside the measurement so the test measures what it claims to.
+            adb_with_timeout -s "$emulator_serial" shell cmd package compile \
+              -m speed -f optn.wallet.app >/dev/null 2>&1 || true
+            warm_output="$(timeout 180s adb -s "$emulator_serial" shell am start -W -n \
+              optn.wallet.app/.MainActivity 2>&1 | tr -d '\r')" || true
+            printf 'Warm-up launch on the %s flavour:\n%s\n' "$flavour" "$warm_output"
+            # Asserted, not merely logged: a flavour whose main activity cannot
+            # start is exactly what this job exists to catch, and saying so here
+            # names the flavour instead of surfacing later as a bare ANR.
+            if ! printf '%s' "$warm_output" | grep -q '^Status: ok'; then
+              echo "::error::MainActivity did not start on the $flavour flavour"
+              adb_with_timeout -s "$emulator_serial" logcat -d -t 200 || true
+              exit 1
+            fi
+            adb_with_timeout -s "$emulator_serial" shell am force-stop optn.wallet.app || true
+            # Let the activity teardown finish before instrumentation starts its
+            # own launch; overlapping the two is what produced the focus-event
+            # timeout above.
+            sleep 5
+
             set +e
             timeout 300s adb -s "$emulator_serial" shell am instrument -w -r \
               optn.wallet.app.test/androidx.test.runner.AndroidJUnitRunner \
