@@ -17,6 +17,45 @@ export function decodeCashcode(code: string): string;
 export function encodeCashcode(scan_pubkey: Uint8Array, spend_pubkey: Uint8Array, network: string, prefix_bits: number, legacy?: boolean | null): string;
 
 /**
+ * The 32-byte blinded challenge to send to the issuer. `a` and `b` must be
+ * fresh uniform scalars from the caller's CSPRNG and must never be reused.
+ *
+ * There is no handle to keep: `fusionFinalizeBlindSignature` takes the same
+ * five inputs again and rebuilds the request, so nothing on the JS side owns
+ * Rust memory it would have to free.
+ */
+export function fusionBlindRequest(round_pubkey: Uint8Array, r_point: Uint8Array, message: Uint8Array, a: Uint8Array, b: Uint8Array): Uint8Array;
+
+/**
+ * Complete a blinded signature. Takes the same inputs the request was built
+ * from plus the issuer's 32-byte response, and returns the 64-byte signature.
+ * Always verifies before returning, so a cheating issuer is an error here
+ * rather than a rejected signature later in the round.
+ */
+export function fusionFinalizeBlindSignature(round_pubkey: Uint8Array, r_point: Uint8Array, message: Uint8Array, a: Uint8Array, b: Uint8Array, issuer_response: Uint8Array): Uint8Array;
+
+/**
+ * The 65-byte uncompressed Pedersen commitment `amount*H + nonce*G`.
+ */
+export function fusionPedersenCommit(amount: bigint, nonce: Uint8Array): Uint8Array;
+
+/**
+ * The commitment for a signed amount: an input commits `+value-fee`, an output
+ * `-value-fee`, a blank `0`.
+ */
+export function fusionPedersenCommitSigned(amount: bigint, nonce: Uint8Array): Uint8Array;
+
+/**
+ * The compressed nothing-up-my-sleeve generator H, for callers that check it.
+ */
+export function fusionPedersenH(): Uint8Array;
+
+/**
+ * Verify a 64-byte BCH Schnorr signature. False on any malformed input.
+ */
+export function fusionVerifySchnorr(pubkey: Uint8Array, signature: Uint8Array, message: Uint8Array): boolean;
+
+/**
  * The hex a sender grinds the input hash to match.
  */
 export function grindString(scan_pubkey: Uint8Array, prefix_bits: number): string;
@@ -68,6 +107,12 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly decodeCashcode: (a: number, b: number) => [number, number, number, number];
     readonly encodeCashcode: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
+    readonly fusionBlindRequest: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
+    readonly fusionFinalizeBlindSignature: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
+    readonly fusionPedersenCommit: (a: bigint, b: number, c: number) => [number, number, number, number];
+    readonly fusionPedersenCommitSigned: (a: bigint, b: number, c: number) => [number, number, number, number];
+    readonly fusionPedersenH: () => [number, number];
+    readonly fusionVerifySchnorr: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
     readonly grindString: (a: number, b: number, c: number) => [number, number, number, number];
     readonly looksLikeRpa: (a: number, b: number) => number;
     readonly paymentAddress: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
