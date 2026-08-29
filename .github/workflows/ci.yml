@@ -138,7 +138,7 @@ jobs:
           retention-days: 7
 
   release-completeness:
-    name: The release cannot drop an asset
+    name: Assets completeness
     runs-on: ubuntu-latest
     permissions:
       contents: read
