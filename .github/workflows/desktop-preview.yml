@@ -189,6 +189,30 @@ jobs:
             "$cache/linuxdeploy-plugin-gstreamer.sh" \
             'c107b49d84edbffc6ab226ed1007e0626a4f7aa2c3a36b7782bef62351d49e94'
 
+      - name: Sign bundled Tor before it is packaged
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # See release.yml for the full reasoning. Short version: Tauri copies
+          # these in verbatim, `codesign --deep` never reaches a loose
+          # executable in Resources, and Apple Silicon SIGKILLs an unsigned
+          # Mach-O — so an unsigned Tor here means CashFusion cannot start.
+          # Preview has no signing credentials, and does not need them: ad-hoc
+          # satisfies AMFI, which is what is actually failing.
+          count=0
+          for f in src-tauri/resources/tor/*; do
+            [ -f "$f" ] || continue
+            file -b "$f" | grep -q 'Mach-O' || continue
+            codesign --force --timestamp=none --sign - "$f"
+            count=$((count + 1))
+          done
+          if [ "$count" -eq 0 ]; then
+            echo "::error::no Mach-O found under src-tauri/resources/tor"
+            exit 1
+          fi
+          echo "signed $count bundled Tor binaries"
+
       - name: Build Tauri (debug)
         # No --bundles: tauri.conf.json already says targets "all", and a preview
         # that skipped a format would stop being a preview of what ships. Linux
@@ -251,6 +275,18 @@ jobs:
       # has require_asset for exactly this reason; preview had no equivalent, so
       # a bundler that quietly stopped emitting a format kept every preview green
       # until release day.
+      - name: Verify the macOS bundle can actually launch
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find "src-tauri/target/${{ matrix.target }}/debug/bundle/macos"             -maxdepth 1 -type d -name '*.app' -print -quit)"
+          test -n "$APP_PATH"
+          # Catches an unsigned nested binary and a dependency resolved from the
+          # build machine — the two faults behind #46, both of which a green
+          # build reported as success.
+          bash scripts/verify-macos-bundle.sh "$APP_PATH"
+
       - name: Verify every expected bundle was produced
         shell: bash
         run: |

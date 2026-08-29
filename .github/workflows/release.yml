@@ -503,6 +503,37 @@ jobs:
           fi
           echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY" >> "$GITHUB_ENV"
 
+      - name: Sign bundled Tor before it is packaged
+        if: startsWith(matrix.platform, 'macos')
+        shell: bash
+        run: |
+          set -euo pipefail
+          # fetch-tor.mts drops tor and its dylibs into src-tauri/resources/tor
+          # as plain files with no signature, and Tauri copies them into
+          # Contents/Resources verbatim. `codesign --deep` on the finished app
+          # does not reach a loose executable there, which is how v1.7.3 shipped
+          # an unsigned Tor (#46). On Apple Silicon AMFI refuses to execute an
+          # unsigned Mach-O and SIGKILLs it, so CashFusion reported only "tor
+          # exited before finishing bootstrap" — the process never started.
+          #
+          # Signing here, before the bundle is assembled, means the app
+          # signature seals binaries that are already valid. Re-signing
+          # afterwards would not work: the dmg is produced by the same build
+          # step, so it would carry the unsigned copies.
+          count=0
+          for f in src-tauri/resources/tor/*; do
+            [ -f "$f" ] || continue
+            file -b "$f" | grep -q 'Mach-O' || continue
+            echo "  signing $(basename "$f")"
+            codesign --force --timestamp=none --sign "${APPLE_SIGNING_IDENTITY:--}" "$f"
+            count=$((count + 1))
+          done
+          if [ "$count" -eq 0 ]; then
+            echo "::error::no Mach-O found under src-tauri/resources/tor"
+            exit 1
+          fi
+          echo "signed $count bundled Tor binaries"
+
       - name: Build non-macOS desktop bundles
         if: "!startsWith(matrix.platform, 'macos')"
         env:
@@ -616,6 +647,13 @@ jobs:
           test -n "$TOR_EXECUTABLE"
           test "$(lipo -archs "$APP_EXECUTABLE")" = "${{ matrix.expected-arch }}"
           test "$(lipo -archs "$TOR_EXECUTABLE")" = "${{ matrix.expected-arch }}"
+
+          # `codesign --verify --deep --strict` above passes on a bundle whose
+          # loose Resources binaries are unsigned — it walks nested bundles, not
+          # stray executables — which is exactly how #46 shipped green. This
+          # checks every Mach-O in the bundle for a signature and for load paths
+          # that only exist on a build machine.
+          bash scripts/verify-macos-bundle.sh "$APP_PATH"
 
       - name: Zip macOS .app for the Release
         if: startsWith(matrix.platform, 'macos')
