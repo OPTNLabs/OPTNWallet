@@ -8,7 +8,6 @@ import Transaction from '../features/transaction/Transaction';
 import TransactionHistory from '../features/transaction-history/TransactionHistory';
 import Receive from '../pages/Receive';
 import Quantumroot from '../pages/Quantumroot';
-import CashFusionApp from '../pages/CashFusionApp';
 import Paryon from '../pages/Paryon';
 import Outbox from '../pages/Outbox';
 import PaperWalletSweep from '../pages/PaperWalletSweep';
@@ -64,6 +63,7 @@ import {
   homeRoute,
   transactionsRoute,
 } from '../navigation/routes';
+import { hasCapability } from '../platform/capabilities';
 import { NostrChatRoute } from '../features/nostr/NostrChatRoute';
 
 const SimpleSend = lazy(() => import('../features/simple-send/SimpleSend'));
@@ -71,6 +71,9 @@ const WatchOnlySend = lazy(
   () => import('../features/watch-only-send/WatchOnlySend')
 );
 const NostrChat = lazy(() => import('../features/nostr/NostrChat'));
+// Lazy and capability-gated: on a surface without CashFusion the route is
+// not mounted, so this chunk is never requested rather than merely hidden.
+const CashFusionApp = lazy(() => import('../pages/CashFusionApp'));
 
 /**
  * /send routes to the air-gapped watch-only workspace when the open wallet is
@@ -193,10 +196,12 @@ function AppContent({ viewerOnly = false }: AppShellProps) {
                         path={ROUTE_PATHS.quantumroot}
                         element={<Quantumroot />}
                       />
-                      <Route
-                        path={ROUTE_PATHS.cashfusion}
-                        element={<CashFusionApp />}
-                      />
+                      {hasCapability('cashFusion') && (
+                        <Route
+                          path={ROUTE_PATHS.cashfusion}
+                          element={<CashFusionApp />}
+                        />
+                      )}
                       <Route path={ROUTE_PATHS.send} element={<SendRoute />} />
                       <Route path={ROUTE_PATHS.outbox} element={<Outbox />} />
                       <Route
