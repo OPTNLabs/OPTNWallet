@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
 import { useTheme } from '../../app/theme/useTheme';
 import { ONBOARDING_WELCOME_IMAGE } from './constants';
 import WalkthroughPanel from '../../components/ui/WalkthroughPanel';
@@ -7,6 +6,8 @@ import Popup from '../../components/transaction/Popup';
 import { MdSunny, MdModeNight } from 'react-icons/md';
 import { useI18n } from '../../i18n/useI18n';
 import LanguagePicker from '../../components/LanguagePicker';
+import WalletSetupOptions from './WalletSetupOptions';
+import { isDesktopPlatform } from '../../utils/platform';
 
 const ThemeModeSwitch = () => {
   const { mode, toggleMode } = useTheme();
@@ -77,19 +78,39 @@ const LandingPage = () => {
             {t('onboarding.poweredBy')}
           </h1>
 
-          <div className="flex flex-col sm:flex-row gap-4 mt-20">
-            <Link
-              to="/createwallet"
-              className="wallet-btn-primary py-3 px-10 rounded-lg mx-2 my-2 shadow-md"
-            >
-              {t('onboarding.createWallet')}
-            </Link>
-            <Link
-              to="/importwallet"
-              className="wallet-btn-secondary py-3 px-10 rounded-lg mx-2 my-2 shadow-md"
-            >
-              {t('onboarding.importWallet')}
-            </Link>
+          <div className="mt-12 w-full max-w-md">
+            <WalletSetupOptions
+              options={[
+                {
+                  id: 'create',
+                  label: t('onboarding.createWallet'),
+                  description: t('onboarding.optionCreateDescription'),
+                  to: '/createwallet',
+                  primary: true,
+                },
+                {
+                  id: 'import',
+                  label: t('onboarding.importWallet'),
+                  description: t('onboarding.optionImportDescription'),
+                  to: '/importwallet',
+                },
+                {
+                  id: 'watch-only',
+                  label: t('onboarding.optionWatchOnly'),
+                  description: t('onboarding.optionWatchOnlyDescription'),
+                  unavailableReason: isDesktopPlatform()
+                    ? undefined
+                    : t('onboarding.optionDesktopOnly'),
+                  onSelect: undefined,
+                },
+                {
+                  id: 'hardware',
+                  label: t('onboarding.optionHardware'),
+                  description: t('onboarding.optionHardwareDescription'),
+                  unavailableReason: t('onboarding.optionDesktopOnly'),
+                },
+              ]}
+            />
           </div>
         </div>
       </main>
