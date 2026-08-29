@@ -77,12 +77,12 @@ jobs:
           - platform: ubuntu-22.04
             label: linux-riscv64
             target: riscv64gc-unknown-linux-gnu
-            cross-package: gcc-riscv64-linux-gnu
+            cross-package: gcc-riscv64-linux-gnu libc6-dev-riscv64-cross
             linker: riscv64-linux-gnu-gcc
           - platform: ubuntu-22.04
             label: linux-armv7
             target: armv7-unknown-linux-gnueabihf
-            cross-package: gcc-arm-linux-gnueabihf
+            cross-package: gcc-arm-linux-gnueabihf libc6-dev-armhf-cross
             linker: arm-linux-gnueabihf-gcc
           - platform: windows-latest
             label: windows-x64
@@ -104,6 +104,11 @@ jobs:
         if: env.CLI_PRESENT == 'true' && matrix.cross-package != ''
         run: |
           sudo apt-get update
+          # Both the compiler and the target libc headers. gcc-*-cross alone
+          # provides no headers, so a crate that compiles C — ring does, for
+          # curve25519 — falls back to the host's /usr/include and fails on a
+          # missing bits/libc-header-start.h. The error names the host header,
+          # which points away from the actual cause.
           sudo apt-get install -y --no-install-recommends ${{ matrix.cross-package }}
 
       - name: Install Rust stable
