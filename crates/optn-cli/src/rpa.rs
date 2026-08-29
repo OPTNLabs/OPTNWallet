@@ -123,7 +123,12 @@ pub fn encode(
 
 /// True if the string carries any RPA prefix, cashcode or legacy paycode.
 pub fn looks_like_rpa(candidate: &str) -> bool {
-    let bare = candidate.trim().split('?').next().unwrap_or("").to_lowercase();
+    let bare = candidate
+        .trim()
+        .split('?')
+        .next()
+        .unwrap_or("")
+        .to_lowercase();
     MAINNET_PREFIXES
         .iter()
         .chain(TESTNET_PREFIXES.iter())
@@ -206,7 +211,9 @@ pub fn decode(code: &str) -> Result<Cashcode> {
     scan_pubkey.copy_from_slice(&p[2..35]);
     spend_pubkey.copy_from_slice(&p[35..68]);
     if PublicKey::from_sec1_bytes(&scan_pubkey).is_err() {
-        return Err(CliError::Usage("scan pubkey is not a curve point".to_string()));
+        return Err(CliError::Usage(
+            "scan pubkey is not a curve point".to_string(),
+        ));
     }
     if PublicKey::from_sec1_bytes(&spend_pubkey).is_err() {
         return Err(CliError::Usage(
@@ -368,11 +375,7 @@ pub fn payment_address(
 }
 
 /// The private key for a payment at `index`: `(spend_privkey + tweak) mod n`.
-pub fn spending_key(
-    spend_privkey: &[u8; 32],
-    secret: &[u8; 32],
-    index: u32,
-) -> Result<[u8; 32]> {
+pub fn spending_key(spend_privkey: &[u8; 32], secret: &[u8; 32], index: u32) -> Result<[u8; 32]> {
     let parent = scalar_from_bytes(spend_privkey)?;
     let pubkey = k256::SecretKey::from_slice(spend_privkey)
         .map_err(|e| CliError::Usage(format!("invalid spend private key: {e}")))?
@@ -772,8 +775,7 @@ mod tests {
 
         let paid_to = payment_address(&spend_pub, &secret, Network::Chipnet, 0).unwrap();
         // Through the same function `rpa scan` uses to report `spendable`.
-        let controlled =
-            spending_key_address(&spend_priv, &secret, 0, Network::Chipnet).unwrap();
+        let controlled = spending_key_address(&spend_priv, &secret, 0, Network::Chipnet).unwrap();
         assert_eq!(paid_to.encode(), controlled.encode());
     }
 
