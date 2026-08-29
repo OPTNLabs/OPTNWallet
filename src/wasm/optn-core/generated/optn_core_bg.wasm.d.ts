@@ -3,6 +3,12 @@
 export const memory: WebAssembly.Memory;
 export const decodeCashcode: (a: number, b: number) => [number, number, number, number];
 export const encodeCashcode: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
+export const fusionBlindRequest: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
+export const fusionFinalizeBlindSignature: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
+export const fusionPedersenCommit: (a: bigint, b: number, c: number) => [number, number, number, number];
+export const fusionPedersenCommitSigned: (a: bigint, b: number, c: number) => [number, number, number, number];
+export const fusionPedersenH: () => [number, number];
+export const fusionVerifySchnorr: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
 export const grindString: (a: number, b: number, c: number) => [number, number, number, number];
 export const looksLikeRpa: (a: number, b: number) => number;
 export const paymentAddress: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];

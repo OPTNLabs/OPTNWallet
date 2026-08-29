@@ -44,15 +44,43 @@ function requiredBindgenVersion(): string {
 
 const version = requiredBindgenVersion();
 
-try {
-  run('wasm-bindgen', ['--version']);
-} catch {
+/**
+ * Where the CLI actually is.
+ *
+ * `cargo install` puts binaries in `$CARGO_HOME/bin`, and this repo points
+ * CARGO_HOME away from the default — so a correctly installed CLI need not be
+ * on PATH, and reporting "not found" for it sends you off to reinstall
+ * something you already have.
+ */
+function bindgenCommand(): string {
+  const candidates = [
+    process.env.CARGO_HOME
+      ? resolve(process.env.CARGO_HOME, 'bin', 'wasm-bindgen')
+      : null,
+    'wasm-bindgen',
+  ].filter((candidate): candidate is string => candidate !== null);
+
+  for (const candidate of candidates) {
+    try {
+      run(candidate, ['--version']);
+      return candidate;
+    } catch {
+      // Try the next candidate; exhausting them is reported below.
+    }
+  }
+
+  const looked = process.env.CARGO_HOME
+    ? `$CARGO_HOME/bin (${process.env.CARGO_HOME}) and PATH`
+    : 'PATH';
   console.error(
-    `wasm-bindgen CLI not found. It must match the crate exactly:\n` +
-      `  cargo install wasm-bindgen-cli --version ${version} --locked`
+    'wasm-bindgen CLI not found. It must match the crate exactly:\n' +
+      `  cargo install wasm-bindgen-cli --version ${version} --locked\n` +
+      `Looked in ${looked}.`
   );
   process.exit(2);
 }
+
+const bindgen = bindgenCommand();
 
 if (!run('rustup', ['target', 'list', '--installed']).includes('wasm32-unknown-unknown')) {
   console.log('Adding the wasm32 target');
@@ -75,7 +103,7 @@ if (!existsSync(wasmPath)) throw new Error(`No wasm produced at ${wasmPath}`);
 console.log('Generating bindings');
 rmSync(outDir, { recursive: true, force: true });
 mkdirSync(outDir, { recursive: true });
-run('wasm-bindgen', [
+run(bindgen, [
   '--target',
   'web',
   '--out-dir',
