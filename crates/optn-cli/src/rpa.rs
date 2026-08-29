@@ -850,3 +850,181 @@ mod tests {
         assert_eq!(spend_path(1, 0), "m/44'/1'/0'/3/1");
     }
 }
+
+/// The Rust half of the shared RPA vectors.
+///
+/// `test-vectors/rpa.json` is read by BOTH implementations -- this module and
+/// the wallet's `src/services/__tests__/RpaSharedVectors.test.ts`. The CLI and
+/// the wallet are separate codebases with no shared code, so nothing else stops
+/// them drifting: a change to one is not a change to the other, and the
+/// difference surfaces as payments one side can see and the other cannot.
+///
+/// The `reference` block is anchored outside this repository, to Selene's
+/// bch-rpa interop fixtures.
+///
+/// If a vector fails, the protocol changed or an implementation broke. Fix the
+/// code. Regenerating the file to make a test pass throws away the only thing
+/// keeping the two sides honest.
+#[cfg(test)]
+mod shared_vectors {
+    use super::*;
+    use crate::hd::Wallet;
+    use serde_json::Value;
+
+    fn vectors() -> Value {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../test-vectors/rpa.json");
+        let raw =
+            std::fs::read_to_string(path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
+        serde_json::from_str(&raw).expect("test-vectors/rpa.json is not valid JSON")
+    }
+
+    fn hex_of(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    fn decode_hex(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("bad hex"))
+            .collect()
+    }
+
+    fn small(n: u8) -> [u8; 32] {
+        let mut k = [0u8; 32];
+        k[31] = n;
+        k
+    }
+
+    fn pubkey_hex(privkey: &[u8; 32]) -> String {
+        let sk = k256::SecretKey::from_slice(privkey).unwrap();
+        hex_of(sk.public_key().to_encoded_point(true).as_bytes())
+    }
+
+    #[test]
+    fn matches_the_external_bch_rpa_reference_values() {
+        let v = vectors();
+        let r = &v["reference"];
+        assert_eq!(pubkey_hex(&small(7)), r["scanPrivkey7"].as_str().unwrap());
+        assert_eq!(
+            pubkey_hex(&small(13)),
+            r["spendPrivkey13"].as_str().unwrap()
+        );
+        assert_eq!(
+            pubkey_hex(&small(37)),
+            r["senderPrivkey37"].as_str().unwrap()
+        );
+
+        let txid = v["sender"]["outpointTxid"].as_str().unwrap();
+
+        let mut spend_pub = [0u8; 33];
+        spend_pub.copy_from_slice(&decode_hex(r["spendPrivkey13"].as_str().unwrap()));
+        assert_eq!(
+            hex_of(&shared_secret(&small(7), &spend_pub, txid, 0).unwrap()),
+            r["sharedSecret_7_x_13G"].as_str().unwrap()
+        );
+
+        // The grand sum here overflows 32 bytes, which is where a fixed-width
+        // addition silently produces a different digest.
+        let mut scan_pub = [0u8; 33];
+        scan_pub.copy_from_slice(&decode_hex(r["scanPrivkey7"].as_str().unwrap()));
+        assert_eq!(
+            hex_of(&shared_secret(&small(37), &scan_pub, txid, 0).unwrap()),
+            r["sharedSecret_37_x_7G_257bit"].as_str().unwrap()
+        );
+    }
+
+    #[test]
+    fn derives_every_wallet_vector_from_the_shared_mnemonic() {
+        let v = vectors();
+        let mnemonic = v["mnemonic"].as_str().unwrap();
+        let passphrase = v["passphrase"].as_str().unwrap();
+        let wallet = Wallet::from_mnemonic(mnemonic, passphrase).unwrap();
+
+        let sender_privkey: [u8; 32] = decode_hex(v["sender"]["privkey"].as_str().unwrap())
+            .try_into()
+            .unwrap();
+        let outpoint_txid = v["sender"]["outpointTxid"].as_str().unwrap();
+        let outpoint_index = v["sender"]["outpointIndex"].as_u64().unwrap() as u32;
+
+        for w in v["wallets"].as_array().unwrap() {
+            let name = w["network"].as_str().unwrap();
+            let (network, coin) = match name {
+                "mainnet" => (Network::Mainnet, 145),
+                "chipnet" => (Network::Chipnet, 1),
+                other => panic!("unknown network in vectors: {other}"),
+            };
+
+            let scan_path = scan_path(coin, 0);
+            let spend_path = spend_path(coin, 0);
+            assert_eq!(
+                scan_path,
+                w["scanPath"].as_str().unwrap(),
+                "{name} scan path"
+            );
+            assert_eq!(
+                spend_path,
+                w["spendPath"].as_str().unwrap(),
+                "{name} spend path"
+            );
+
+            let scan_pubkey = wallet.public_key(&scan_path).unwrap();
+            let spend_pubkey = wallet.public_key(&spend_path).unwrap();
+            assert_eq!(
+                hex_of(&scan_pubkey),
+                w["scanPubkey"].as_str().unwrap(),
+                "{name} scan pubkey"
+            );
+            assert_eq!(
+                hex_of(&spend_pubkey),
+                w["spendPubkey"].as_str().unwrap(),
+                "{name} spend pubkey"
+            );
+            assert_eq!(
+                grind_string(&scan_pubkey, RPA_PREFIX_BITS).unwrap(),
+                w["grindString16"].as_str().unwrap(),
+                "{name} grind string"
+            );
+
+            assert_eq!(
+                encode(&scan_pubkey, &spend_pubkey, network, RPA_PREFIX_BITS),
+                w["cashcode"].as_str().unwrap(),
+                "{name} cashcode"
+            );
+
+            // The legacy form must still decode, and be flagged as legacy.
+            let legacy = decode(w["legacyPaycode"].as_str().unwrap()).unwrap();
+            assert!(legacy.legacy, "{name} legacy flag");
+            assert_eq!(
+                hex_of(&legacy.scan_pubkey),
+                w["scanPubkey"].as_str().unwrap()
+            );
+            assert!(!decode(w["cashcode"].as_str().unwrap()).unwrap().legacy);
+
+            let secret =
+                shared_secret(&sender_privkey, &scan_pubkey, outpoint_txid, outpoint_index)
+                    .unwrap();
+            assert_eq!(
+                hex_of(&secret),
+                w["sharedSecret"].as_str().unwrap(),
+                "{name} shared secret"
+            );
+            assert_eq!(
+                payment_address(&spend_pubkey, &secret, network, 0)
+                    .unwrap()
+                    .encode(),
+                w["paymentAddress"].as_str().unwrap(),
+                "{name} payment address"
+            );
+
+            // And the recipient controls what the sender paid.
+            let spend_privkey: [u8; 32] =
+                wallet.signing_key(&spend_path).unwrap().to_bytes().into();
+            let spending_key = spending_key(&spend_privkey, &secret, 0).unwrap();
+            assert_eq!(
+                pubkey_hex(&spending_key),
+                w["spendingPubkey"].as_str().unwrap(),
+                "{name} spending pubkey"
+            );
+        }
+    }
+}
