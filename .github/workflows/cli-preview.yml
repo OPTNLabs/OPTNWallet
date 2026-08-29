@@ -32,7 +32,7 @@ permissions:
 
 jobs:
   probe:
-    name: Is the CLI in this tree
+    name: Detect optn CLI
     runs-on: ubuntu-latest
     permissions:
       contents: read

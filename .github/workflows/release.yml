@@ -1017,7 +1017,7 @@ jobs:
   # alternative — requiring assets no branch can build, or building assets
   # nothing requires — is broken in one order or the other.
   cli-probe:
-    name: Is the CLI in this tree
+    name: Detect optn CLI
     needs: resolve
     runs-on: ubuntu-latest
     permissions:
