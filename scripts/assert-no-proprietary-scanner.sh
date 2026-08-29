@@ -48,10 +48,20 @@ PATTERNS
 
   # Compiled references. A dependency can arrive without any of the files
   # above if only its Java classes are merged in.
-  dex_refs="$(unzip -p "$apk" 'classes*.dex' |
-    grep -c 'com/google/mlkit\|gms/internal/mlkit' || true)"
+  #
+  # Reported with the names it matched, not just a count. "6 references" says
+  # nothing about whether a library shipped or a single import is dangling,
+  # and the two need opposite responses.
+  # grep -a rather than strings: binutils is not guaranteed on every runner,
+  # and grep reads the dex as text perfectly well for this.
+  dex_names="$(unzip -p "$apk" 'classes*.dex' |
+    grep -aoE '(com/google/mlkit|com/google/android/gms/internal/mlkit)[A-Za-z0-9/_$]*' |
+    sort -u || true)"
+  dex_refs="$(printf '%s' "$dex_names" | grep -c . || true)"
   if [ "$dex_refs" -ne 0 ]; then
-    echo "::error::$name has $dex_refs ML Kit references in its dex"
+    echo "::error::$name has $dex_refs distinct ML Kit symbol(s) in its dex"
+    printf '%s
+' "$dex_names" | sed 's/^/    /' | head -40
     found=1
   fi
 
