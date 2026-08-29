@@ -551,8 +551,19 @@ fn parse_transaction(raw: &[u8]) -> Result<ParsedTransaction> {
     let mut inputs = Vec::new();
     for _ in 0..input_count {
         need(i, 36)?;
-        // On the wire the outpoint is little-endian; the display txid the
-        // shared secret hashes is its reverse.
+        // The shared secret hashes the DISPLAY txid, and the wire stores the
+        // outpoint little-endian, so this reversal is required here.
+        //
+        // The desktop wallet's RpaDetect.ts does NOT reverse, and that is also
+        // correct -- it reads the outpoint from libauth's decodeTransaction,
+        // which has already converted to display order. Different layers, not
+        // an inconsistency: this function parses raw wire bytes itself.
+        //
+        // Do not "harmonise" the two. Reversing on the libauth side yields a
+        // transaction whose wire outpoint is display order, which nodes reject
+        // with "Missing inputs"; dropping the reversal here yields a secret
+        // derived from a byte-reversed txid, so no payment is ever detected --
+        // silently, because a wrong secret just produces a wrong address.
         let mut txid = raw[i..i + 32].to_vec();
         txid.reverse();
         let txid_display: String = txid.iter().map(|b| format!("{b:02x}")).collect();
