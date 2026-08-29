@@ -1407,98 +1407,100 @@ jobs:
       # zip are the ones most likely to go unnoticed, because nobody testing on
       # desktop would see either. An unexpected asset means something reached
       # the release that no rule accounted for.
-      - name: Verify the published set is complete
+      # The per-artifact checks above run before renaming and confirm each
+      # producer uploaded something. This confirms the finished set, in both
+      # directions: every asset that should reach users is present under its
+      # published name, and nothing unexpected rode along.
+      #
+      # Both halves are generated from packaging/release-assets.json, so the
+      # list of what ships and the check that it shipped cannot drift apart.
+      - name: Assets completeness
         run: |
           VERSION="${RELEASE_TAG#v}"
+          CLI_PRESENT='${{ needs.cli-probe.outputs.present }}'
+
+          # Expand the config into `required<TAB>pattern<TAB>label` lines.
+          # json rather than yaml so this needs nothing installed.
+          python3 - "$VERSION" "$CLI_PRESENT" > expected.tsv <<'PY'
+          import json, sys
+          version, cli_present = sys.argv[1], sys.argv[2] == 'true'
+          config = json.load(open('packaging/release-assets.json'))
+          for asset in config['assets']:
+              if asset.get('when') == 'cli' and not cli_present:
+                  continue
+              pattern = asset['pattern'].replace('${VERSION}', version)
+              required = 'yes' if asset.get('required', True) else 'no'
+              if required == 'no' and not asset.get('reason'):
+                  print(
+                      f"::error::{asset['label']} is required:false with no "
+                      "reason; a waiver without one is indistinguishable from "
+                      "a mistake",
+                      file=sys.stderr,
+                  )
+                  raise SystemExit(1)
+              print(f"{required}\t{pattern}\t{asset['label']}")
+          for extra in config.get('alsoPublished', []):
+              print(f"extra\t{extra['pattern']}\t{extra['label']}")
+          PY
+
           missing=0
+          waived=0
+          patterns=()
 
-          # Every pattern `expect` is given, so the unexpected-asset pass below
-          # can be checked against exactly the same set. Two hand-maintained
-          # lists would drift, and the direction that drifts silently is the
-          # one that stops rejecting things.
-          EXPECTED=()
+          while IFS="$(printf '\t')" read -r required pattern label; do
+            [ -n "$pattern" ] || continue
+            patterns+=("$pattern")
 
-          expect() {
-            EXPECTED+=("$1")
-            if find release-files -maxdepth 1 -name "$1" -print -quit | grep -q .; then
-              printf '  ok       %s\n' "$2"
+            if [ "$required" = 'extra' ]; then
+              continue
+            fi
+            if [ "$required" = 'no' ]; then
+              # Loud on purpose: a waiver that was never reverted should be
+              # visible in the run, not only in a file nobody rereads.
+              echo "::warning::$label is waived in packaging/release-assets.json and is NOT required"
+              waived=$((waived + 1))
+              continue
+            fi
+            if find release-files -maxdepth 1 -name "$pattern" -print -quit | grep -q .; then
+              printf '  ok       %s\n' "$label"
             else
-              echo "::error::missing from the release: $2 (expected $1)"
+              echo "::error::missing from the release: $label (expected $pattern)"
               missing=1
             fi
-          }
+          done < expected.tsv
 
-          expect "OPTNWallet-${VERSION}-windows-x64-setup.exe" 'Windows NSIS installer'
-          expect "OPTNWallet-${VERSION}-windows-x64.msi"       'Windows MSI installer'
-          # The ad-hoc suffix is part of the name when Apple credentials were
-          # absent, so these are matched by pattern rather than exact name.
-          expect "OPTNWallet-${VERSION}-macos-arm64*.dmg"      'macOS Apple Silicon disk image'
-          expect "OPTNWallet-${VERSION}-macos-x64*.dmg"        'macOS Intel disk image'
-          expect "OPTNWallet-${VERSION}-macos-arm64*.app.zip"  'macOS Apple Silicon app bundle'
-          expect "OPTNWallet-${VERSION}-macos-x64*.app.zip"    'macOS Intel app bundle'
-          expect "OPTNWallet-${VERSION}-linux-x64.AppImage"    'Linux x64 AppImage'
-          expect "OPTNWallet-${VERSION}-linux-arm64.AppImage"  'Linux ARM64 AppImage'
-          expect "OPTNWallet-${VERSION}-linux-riscv64-unbundled" 'Linux riscv64 binary'
-          expect "OPTNWallet-${VERSION}-linux-x64.flatpak"     'Linux x64 Flatpak'
-          expect "OPTNWallet-${VERSION}-linux-arm64.flatpak"   'Linux ARM64 Flatpak'
-
-          if [ "${{ needs.cli-probe.outputs.present }}" = 'true' ]; then
-            for label in linux-x64 linux-arm64 linux-riscv64 linux-armv7 \
-              macos-arm64 macos-x64; do
-              expect "optn-${VERSION}-${label}" "optn CLI ${label}"
-            done
-            expect "optn-${VERSION}-windows-x64.exe" 'optn CLI windows-x64'
-          fi
-          # deb and rpm keep their native names, which encode the architecture
-          # differently from everything else.
-          expect "*_amd64.deb"                                 'Linux x64 DEB'
-          expect "*_arm64.deb"                                 'Linux ARM64 DEB'
-          expect "*.x86_64.rpm"                                'Linux x64 RPM'
-          expect "*.aarch64.rpm"                               'Linux ARM64 RPM'
-          expect "OPTNWallet-${VERSION}-android-fdroid.apk"    'Android F-Droid APK'
-          expect "OPTNWallet-${VERSION}-android-play.apk"      'Android Play APK'
-          expect "OPTNWallet-${VERSION}-android.aab"           'Android App Bundle'
-          expect "OPTNWallet-${VERSION}-ios-simulator.zip"     'iOS simulator build'
-          expect "OPTNWallet-${VERSION}-chrome.zip"            'Chrome extension'
-          expect "OPTNWallet-${VERSION}-firefox.zip"           'Firefox extension'
-
-          # Anything present that no `expect` above claimed.
-          #
-          # Matched against the same patterns, not against a prefix. A prefix
-          # arm like OPTNWallet-* accepts anything carrying the product name —
-          # a stray tarball, a debug build, a file from a half-finished rename —
-          # which makes the check read as "nothing extra" while allowing most
-          # of what it was written to stop.
+          # Anything present that no pattern above claimed. Matched against the
+          # same patterns, not a prefix: a prefix arm accepts anything carrying
+          # the product name, which reads as "nothing extra" while allowing
+          # most of what it was written to stop.
           unexpected=0
           for path in release-files/*; do
             [ -e "$path" ] || continue
             file="$(basename "$path")"
-
-            # Not an asset: the Android job writes it to explain a skipped
-            # store upload, and it is published deliberately.
-            [ "$file" = 'android-release-status.txt' ] && continue
-
             claimed=0
-            for pattern in "${EXPECTED[@]}"; do
+            for pattern in "${patterns[@]}"; do
               # shellcheck disable=SC2254  # the pattern is a glob on purpose
               case "$file" in
                 $pattern) claimed=1; break ;;
               esac
             done
-
             if [ "$claimed" -eq 0 ]; then
               echo "::error::unexpected asset in the release: $file"
-              echo "  nothing in the expected set matches it. Either it should"
-              echo "  not be published, or it needs an expect rule of its own."
+              echo "  nothing in packaging/release-assets.json matches it. Either"
+              echo "  it should not be published, or it needs an entry."
               unexpected=1
             fi
           done
 
           if [ "$missing" -ne 0 ] || [ "$unexpected" -ne 0 ]; then
-            echo "::error::the release set is not what it should be; refusing to publish"
+            echo '::error::the release set is not what it should be; refusing to publish'
             exit 1
           fi
-          echo "All expected assets present, nothing extra."
+          if [ "$waived" -ne 0 ]; then
+            echo "Complete, with $waived asset(s) waived by configuration."
+          else
+            echo 'Every expected asset present, nothing extra.'
+          fi
 
       - name: Generate SHA256 checksums
         run: |

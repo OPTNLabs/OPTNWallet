@@ -32,6 +32,10 @@ const assetWorkflows = [
   contents: readFileSync(resolve(repoRoot, '.github', 'workflows', name), 'utf8'),
 }));
 
+const releaseAssets = readFileSync(
+  resolve(repoRoot, 'packaging', 'release-assets.json'),
+  'utf8'
+);
 const cliPreviewWorkflow = readFileSync(
   resolve(repoRoot, '.github', 'workflows', 'cli-preview.yml'),
   'utf8'
@@ -228,12 +232,10 @@ describe('release workflow', () => {
     expect(workflow).toContain(
       "require_asset artifacts/flatpak-linux-arm64 '*.flatpak'"
     );
-    expect(workflow).toContain(
-      'expect "OPTNWallet-${VERSION}-linux-x64.flatpak"'
-    );
-    expect(workflow).toContain(
-      'expect "OPTNWallet-${VERSION}-linux-arm64.flatpak"'
-    );
+    // Now declared in packaging/release-assets.json, which the workflow
+    // generates its checks from.
+    expect(releaseAssets).toContain('OPTNWallet-${VERSION}-linux-x64.flatpak');
+    expect(releaseAssets).toContain('OPTNWallet-${VERSION}-linux-arm64.flatpak');
 
     // Preview builds it too: a manifest that stops working should fail on the
     // pull request, not at release time.
@@ -405,5 +407,28 @@ describe('release workflow', () => {
         expect(branches, `${name} must run for ${branch}`).toContain(branch);
       }
     }
+  });
+  it('drives the asset checks from one config, with a loud opt-out', () => {
+    // The list of what ships and the check that it shipped are generated from
+    // the same file, so they cannot drift. Two hand-maintained lists would,
+    // and the half that drifts silently is the one that stops rejecting.
+    const config = JSON.parse(releaseAssets) as {
+      assets: { label: string; pattern: string; required?: boolean; reason?: string }[];
+    };
+    expect(config.assets.length).toBeGreaterThan(20);
+
+    // The general rule: everything ships. required:false is the niche case and
+    // must carry a reason, so a waiver nobody reverted is visible in review
+    // rather than silent.
+    for (const asset of config.assets) {
+      if (asset.required === false) {
+        expect(asset.reason, `${asset.label} is waived with no reason`).toBeTruthy();
+      }
+    }
+
+    expect(workflow).toContain('packaging/release-assets.json');
+    expect(workflow).toMatch(/name: Assets completeness/);
+    // A waiver has to announce itself in the run.
+    expect(workflow).toContain('is waived in packaging/release-assets.json');
   });
 });
