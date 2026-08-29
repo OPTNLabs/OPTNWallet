@@ -46,22 +46,47 @@ mlkit_barcode_models
 play-services-mlkit-barcode-scanning.properties
 PATTERNS
 
-  # Compiled references. A dependency can arrive without any of the files
-  # above if only its Java classes are merged in.
+  # Compiled references, which is the case the file checks above miss: a
+  # dependency can arrive with only its Java classes merged in.
   #
-  # Reported with the names it matched, not just a count. "6 references" says
-  # nothing about whether a library shipped or a single import is dangling,
-  # and the two need opposite responses.
-  # grep -a rather than strings: binutils is not guaranteed on every runner,
-  # and grep reads the dex as text perfectly well for this.
+  # Six ML Kit names legitimately remain after the exclusion. They are type
+  # references inside io.ionic.libs:ionbarcode-android, the barcode plugin's
+  # own jar, naming the classes it would call if the MLKIT backend were
+  # selected. This wallet always selects ZXing, so they are never loaded, and
+  # none of ML Kit's own code is in the APK. Confirmed by reading that jar,
+  # not inferred from the count.
+  #
+  # Anything beyond these six means ML Kit itself arrived. Listed exactly
+  # rather than allowed as a number, because the difference between "a few
+  # dangling imports" and "the library is here" is the whole question — the
+  # pre-fix APK carried 2,037.
+  #
+  # grep -a rather than strings: binutils is not guaranteed on a runner, and
+  # grep reads the dex as text perfectly well for this.
+  expected_refs="$(mktemp)"
+  cat > "$expected_refs" <<'EXPECTED'
+com/google/mlkit/vision/barcode/BarcodeScanner
+com/google/mlkit/vision/barcode/BarcodeScannerOptions
+com/google/mlkit/vision/barcode/BarcodeScannerOptions$Builder
+com/google/mlkit/vision/barcode/BarcodeScanning
+com/google/mlkit/vision/barcode/common/Barcode
+com/google/mlkit/vision/common/InputImage
+EXPECTED
+
   dex_names="$(unzip -p "$apk" 'classes*.dex' |
     grep -aoE '(com/google/mlkit|com/google/android/gms/internal/mlkit)[A-Za-z0-9/_$]*' |
     sort -u || true)"
-  dex_refs="$(printf '%s' "$dex_names" | grep -c . || true)"
-  if [ "$dex_refs" -ne 0 ]; then
-    echo "::error::$name has $dex_refs distinct ML Kit symbol(s) in its dex"
-    printf '%s
-' "$dex_names" | sed 's/^/    /' | head -40
+  unexpected="$(printf '%s\n' "$dex_names" | grep -v '^$' |
+    grep -Fxv -f "$expected_refs" || true)"
+  rm -f "$expected_refs"
+
+  if [ -n "$unexpected" ]; then
+    count="$(printf '%s\n' "$unexpected" | grep -c .)"
+    echo "::error::$name has $count ML Kit symbol(s) beyond the plugin's own"
+    printf '%s\n' "$unexpected" | sed 's/^/    /' | head -30
+    if [ "$count" -gt 30 ]; then
+      echo "    ... and $((count - 30)) more"
+    fi
     found=1
   fi
 
