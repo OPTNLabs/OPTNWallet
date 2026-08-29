@@ -229,6 +229,12 @@ jobs:
         env:
           APPIMAGE_EXTRACT_AND_RUN: '1'
           NO_STRIP: 'true'
+          # Ad-hoc sign the bundle, the same way release.yml does when no Apple
+          # credentials are present. Without this Tauri leaves the macOS app
+          # unsigned, and an unsigned Mach-O is SIGKILLed by AMFI on Apple
+          # Silicon -- so the preview .app simply would not launch. Ignored on
+          # every non-macOS target.
+          APPLE_SIGNING_IDENTITY: '-'
         shell: bash
         run: |
           set -euo pipefail
