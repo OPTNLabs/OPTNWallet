@@ -226,6 +226,40 @@ pub fn decode(code: &str) -> Result<Cashcode> {
     })
 }
 
+/// Why this code must not be paid on-chain, if it must not be.
+///
+/// Mirrors `getRpaSendBlockReason` in the desktop wallet's RpaService.ts. Both
+/// refusals are about a recipient who is not watching the chain, so a payment
+/// would be theirs to spend and yet never looked for.
+///
+/// Electron Cash does neither check: `paycode.py` assigns
+/// `paycode_field_version` and never reads it again, so it pays these on-chain
+/// regardless.
+pub fn send_block_reason(code: &Cashcode) -> Option<String> {
+    // Spec: "1 and 2 for p2pkh (mainnet), 5 and 6 for p2pkh (testnet), among
+    // them 2 and 6 to force offline-communication only", and an offchain relay
+    // is "a necessity for version 2, 4, 6 and 8".
+    if code.version == 0x02 || code.version == 0x06 {
+        return Some(
+            "this code is marked offline-only: the recipient expects payment \
+             details out of band, not on-chain"
+                .to_string(),
+        );
+    }
+    // Spec: prefix_size 0 is "no-filter for full-node or offline-communications".
+    // decode() accepts it, but grind_string rejects it, and grinding only
+    // happens after coin selection - so without this the refusal arrives late
+    // and reads as an internal error rather than a declined code.
+    if code.prefix_bits == 0 {
+        return Some(
+            "this code carries no scan prefix, so the recipient is not watching \
+             the chain for it"
+                .to_string(),
+        );
+    }
+    None
+}
+
 /// The hex a sender grinds the input hash to match: the scan pubkey's hex
 /// after the 02/03 byte, truncated to `prefix_bits`.
 pub fn grind_string(scan_pubkey: &[u8; 33], prefix_bits: u8) -> Result<String> {
@@ -730,6 +764,61 @@ mod tests {
         let controlled =
             spending_key_address(&spend_priv, &secret, 0, Network::Chipnet).unwrap();
         assert_eq!(paid_to.encode(), controlled.encode());
+    }
+
+    #[test]
+    fn offline_only_versions_are_refused() {
+        let scan = pubkey_of(&small_key(7));
+        let spend = pubkey_of(&small_key(13));
+        for (version, network) in [(0x02u8, Network::Mainnet), (0x06u8, Network::Chipnet)] {
+            let code = Cashcode {
+                version,
+                prefix_bits: RPA_PREFIX_BITS,
+                scan_pubkey: scan,
+                spend_pubkey: spend,
+                expiry: 0,
+                prefix: String::new(),
+                legacy: false,
+            };
+            assert_eq!(code.network(), network);
+            let reason = send_block_reason(&code).expect("offline-only must be refused");
+            assert!(reason.contains("offline-only"), "{reason}");
+        }
+    }
+
+    #[test]
+    fn on_chain_versions_are_allowed() {
+        let scan = pubkey_of(&small_key(7));
+        let spend = pubkey_of(&small_key(13));
+        for version in [0x01u8, 0x05u8] {
+            let code = Cashcode {
+                version,
+                prefix_bits: RPA_PREFIX_BITS,
+                scan_pubkey: scan,
+                spend_pubkey: spend,
+                expiry: 0,
+                prefix: String::new(),
+                legacy: false,
+            };
+            assert!(send_block_reason(&code).is_none());
+        }
+    }
+
+    #[test]
+    fn a_code_with_no_scan_prefix_is_refused_before_the_grind() {
+        let code = Cashcode {
+            version: 0x05,
+            prefix_bits: 0,
+            scan_pubkey: pubkey_of(&small_key(7)),
+            spend_pubkey: pubkey_of(&small_key(13)),
+            expiry: 0,
+            prefix: String::new(),
+            legacy: false,
+        };
+        // grind_string is where this would otherwise surface, late.
+        assert!(grind_string(&code.scan_pubkey, 0).is_err());
+        let reason = send_block_reason(&code).expect("prefix 0 must be refused");
+        assert!(reason.contains("no scan prefix"), "{reason}");
     }
 
     #[test]
