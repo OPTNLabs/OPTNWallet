@@ -32,7 +32,7 @@ permissions:
 
 jobs:
   probe:
-    name: Detect optn CLI
+    name: Detect OPTN CLI
     runs-on: ubuntu-latest
     permissions:
       contents: read
