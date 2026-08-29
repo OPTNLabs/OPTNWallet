@@ -32,15 +32,26 @@
 // no payload-length cap. The encode/decode below independently implements the
 // same no-version-byte, uncapped-length approach.
 
-import {
-  deriveHdPublicNodeChild,
-  encodeCashAddress,
-  sha256,
-  secp256k1,
-} from '@bitauth/libauth';
-import { hash160 } from '@cashscript/utils';
+import { secp256k1 } from '@bitauth/libauth';
 import * as ecc from 'tiny-secp256k1';
 import { Network } from '../state/slices/networkSlice';
+// The shared Rust core. These four primitives are the ones where a second
+// implementation is most dangerous -- get any of them wrong and funds land at
+// an address nobody holds a key to -- so they are delegated rather than
+// reimplemented. test-vectors/rpa.json is read by this file's tests, by the
+// Rust crate, and by the wasm binding, so all three must agree.
+import {
+  ensureOptnCore,
+  grindString as coreGrindString,
+  paymentAddress as corePaymentAddress,
+  sharedSecret as coreSharedSecret,
+  spendingKey as coreSpendingKey,
+} from '../wasm/optn-core';
+
+/** The core takes the network as a string; this is the only mapping needed. */
+function coreNetwork(network: Network): string {
+  return network === Network.MAINNET ? 'mainnet' : 'chipnet';
+}
 import {
   derivePrivateKeyAtPath,
   deriveHdPublicKeyAtPath,
@@ -81,15 +92,8 @@ export function rpaGrindString(
   scanPubkey: Uint8Array,
   prefixBits = RPA_PREFIX_BITS
 ): string {
-  const chars = prefixBits / 4;
-  if (!Number.isInteger(chars) || chars < 1 || chars > 4) {
-    throw new Error(`Unsupported RPA prefix size: ${prefixBits} bits`);
-  }
-  return Array.from(scanPubkey)
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('')
-    .slice(2, 2 + chars)
-    .toUpperCase();
+  ensureOptnCore();
+  return coreGrindString(scanPubkey, prefixBits);
 }
 
 // Paycode version bytes
@@ -231,22 +235,6 @@ function cashAddrDecode(addr: string): { prefix: string; kindByte: number; paylo
   }
 
   return { prefix, kindByte: allBytes[0], payload: allBytes.slice(1) };
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function bytesToHex(b: Uint8Array): string {
-  return Array.from(b).map(x => x.toString(16).padStart(2, '0')).join('');
-}
-
-function bigIntToBeBytes(n: bigint): Uint8Array {
-  let hex = n.toString(16);
-  if (hex.length % 2) hex = '0' + hex;
-  const out = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < out.length; i++) {
-    out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-  }
-  return out;
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -463,27 +451,11 @@ export function computeSharedSecret(
   privkey: Uint8Array,
   counterpartPubkey: Uint8Array,
   txid: string,
-  vout: number,
+  vout: number
 ): Uint8Array {
-  // ECDH: privkey × counterpartPubkey = shared point
-  const ecdhPoint = ecc.pointMultiply(counterpartPubkey, privkey);
-  if (!ecdhPoint) throw new Error('ECDH point multiplication failed');
-
-  // Extract x-coordinate as 33-byte big-endian (prepend 0x00)
-  const ecdhX = new Uint8Array(33);
-  ecdhX[0] = 0x00;
-  ecdhX.set(ecdhPoint.slice(1, 33), 1);
-  const shaEcdh = sha256.hash(ecdhX);
-
-  // Hash the outpoint (txid string + vout string, no separator)
-  const encoder = new TextEncoder();
-  const hashOutpoint = sha256.hash(encoder.encode(`${txid}${vout}`));
-
-  // Grand sum: SHA256((int(sha_ecdh) + int(hash_outpoint)).to_bytes())
-  const shaEcdhInt = BigInt('0x' + bytesToHex(shaEcdh));
-  const hashOutpointInt = BigInt('0x' + bytesToHex(hashOutpoint));
-  const grandSum = shaEcdhInt + hashOutpointInt;
-  return sha256.hash(bigIntToBeBytes(grandSum));
+  ensureOptnCore();
+  // `txid` is the display (big-endian) form, as Electrum reports it.
+  return coreSharedSecret(privkey, counterpartPubkey, txid, vout);
 }
 
 // ─── Payment address derivation (sender side) ─────────────────────────────────
@@ -496,24 +468,10 @@ export function derivePaymentAddress(
   spendPubkey: Uint8Array,
   sharedSecret: Uint8Array,
   network: Network,
-  index = 0,
+  index = 0
 ): string {
-  const parentNode = {
-    publicKey: Uint8Array.from(spendPubkey),
-    chainCode: Uint8Array.from(sharedSecret),
-    depth: 0,
-    childIndex: 0,
-    parentFingerprint: new Uint8Array(4),
-  };
-  const child = deriveHdPublicNodeChild(parentNode, index);
-  if (typeof child === 'string') throw new Error(`CKD_pub failed: ${child}`);
-
-  // Hash the compressed child, per spec. Same for cashcode: and paycode:.
-  const pkh = hash160(Uint8Array.from(child.publicKey));
-  const prefix = network === Network.MAINNET ? 'bitcoincash' : 'bchtest';
-  const result = encodeCashAddress({ prefix, type: 'p2pkh', payload: pkh });
-  if (typeof result === 'string') throw new Error(`Address encoding failed: ${result}`);
-  return result.address;
+  ensureOptnCore();
+  return corePaymentAddress(spendPubkey, sharedSecret, coreNetwork(network), index);
 }
 
 // ─── Spending key derivation (recipient side) ─────────────────────────────────
@@ -526,25 +484,10 @@ export function derivePaymentAddress(
 export async function deriveSpendingKey(
   spendPrivkey: Uint8Array,
   sharedSecret: Uint8Array,
-  index = 0,
+  index = 0
 ): Promise<Uint8Array> {
-  const spendPub = secp256k1.derivePublicKeyCompressed(spendPrivkey);
-  if (typeof spendPub === 'string') throw new Error('Invalid spend private key');
-
-  const indexBytes = new Uint8Array(4);
-  new DataView(indexBytes.buffer).setUint32(0, index, false);
-  const data = new Uint8Array([...Uint8Array.from(spendPub), ...indexBytes]);
-
-  // HMAC-SHA512 via Web Crypto (available in all modern WebViews)
-  // Cast needed: TS strict mode doesn't accept Uint8Array<ArrayBufferLike> for BufferSource
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const key = await crypto.subtle.importKey('raw', sharedSecret as any, { name: 'HMAC', hash: 'SHA-512' }, false, ['sign']);
-  const mac = new Uint8Array(await crypto.subtle.sign('HMAC', key, data));
-  const tweak = mac.slice(0, 32);
-
-  const childKey = ecc.privateAdd(Uint8Array.from(spendPrivkey), tweak);
-  if (!childKey) throw new Error('Private key derivation overflowed — extremely unlikely');
-  return childKey;
+  ensureOptnCore();
+  return coreSpendingKey(spendPrivkey, sharedSecret, index);
 }
 
 // ─── XPub gate derivation (for WizardConnect extension advertisement) ─────────
