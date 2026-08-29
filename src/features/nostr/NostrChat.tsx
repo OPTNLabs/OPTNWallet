@@ -41,6 +41,7 @@ import {
   type ChatMessage,
   type NostrProfile,
 } from '../../platform/desktop/nostr/chat';
+import { copyToClipboard } from '../../utils/clipboard';
 
 const short = (s: string) =>
   s.length > 16 ? `${s.slice(0, 10)}…${s.slice(-6)}` : s;
@@ -327,7 +328,7 @@ const NostrChat: React.FC = () => {
                 </p>
               </div>
               <button
-                onClick={() => void navigator.clipboard.writeText(me.npub)}
+                onClick={() => void copyToClipboard(me.npub)}
                 className="wallet-icon-btn"
                 aria-label={t('chat.copyNpub')}
               >

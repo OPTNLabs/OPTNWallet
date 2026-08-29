@@ -11,6 +11,7 @@ import {
 import WalletScreen from '../components/ui/WalletScreen';
 import { useI18n } from '../i18n/useI18n';
 import type { TranslationKey } from '../i18n/resources';
+import { copyToClipboard } from '../utils/clipboard';
 
 type Translate = (
   key: TranslationKey,
@@ -164,7 +165,7 @@ export default function Outbox() {
                 <div className="mt-4 flex items-center justify-between gap-3">
                   <button
                     type="button"
-                    onClick={() => navigator.clipboard.writeText(record.txid)}
+                    onClick={() => void copyToClipboard(record.txid)}
                     className="wallet-btn-secondary px-3 py-2 text-sm"
                   >
                     {t('outbox.copyTxid')}

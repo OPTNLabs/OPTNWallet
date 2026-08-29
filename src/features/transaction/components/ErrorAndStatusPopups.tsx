@@ -21,6 +21,7 @@ import { shortenTxHash } from '../../../utils/shortenHash';
 import { ensureUint8Array } from '../../../utils/binary';
 import { type BroadcastState } from '../../../services/TransactionService';
 import { useI18n } from '../../../i18n/useI18n';
+import { copyToClipboard } from '../../../utils/clipboard';
 
 interface ErrorAndStatusPopupsProps {
   showRawTxPopup: boolean;
@@ -261,7 +262,7 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
               <strong className="mr-2">{t('builder.txId')}:</strong>
               <span className="font-mono">{shortenTxHash(transactionId)}</span>
               <button
-                onClick={() => navigator.clipboard.writeText(transactionId)}
+                onClick={() => void copyToClipboard(transactionId)}
                 className="wallet-btn-secondary ml-2 px-2 py-1"
                 title={t('builder.copyToClipboard')}
               >

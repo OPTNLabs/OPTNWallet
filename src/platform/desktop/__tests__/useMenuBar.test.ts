@@ -5,6 +5,7 @@ import { resetWallet } from '../../../state/slices/walletSlice';
 import {
   MENU_ACTION_EVENT,
   menuActionForKeyboardEvent,
+  menuBarSections,
   attachDesktopMenu,
   dispatchDesktopMenuAction,
   openSavedWalletFromMenu,
@@ -92,7 +93,8 @@ describe('desktop menu window isolation', () => {
   });
 
   it('routes an app-menu action to the focused wallet window', async () => {
-    const emitted: Array<{ label: string; event: string; payload: unknown }> = [];
+    const emitted: Array<{ label: string; event: string; payload: unknown }> =
+      [];
     const windows = [
       {
         label: 'wallet-5',
@@ -258,10 +260,7 @@ describe('desktop menu action dispatch', () => {
   it('opens the selected saved wallet in the focused window', async () => {
     const handlers = actions();
 
-    const handled = await dispatchDesktopMenuAction(
-      'open_wallet_7',
-      handlers
-    );
+    const handled = await dispatchDesktopMenuAction('open_wallet_7', handlers);
 
     expect(handled).toBe(true);
     expect(handlers.openSavedWallet).toHaveBeenCalledWith(7);
@@ -270,10 +269,7 @@ describe('desktop menu action dispatch', () => {
   it('maps Refresh Wallet to a real wallet sync action', async () => {
     const handlers = actions();
 
-    const handled = await dispatchDesktopMenuAction(
-      'refresh_wallet',
-      handlers
-    );
+    const handled = await dispatchDesktopMenuAction('refresh_wallet', handlers);
 
     expect(handled).toBe(true);
     expect(handlers.refreshWallet).toHaveBeenCalledOnce();
@@ -362,7 +358,9 @@ describe('refreshWalletFromMenu', () => {
 });
 
 describe('keyboard accelerators', () => {
-  const chord = (over: Partial<Parameters<typeof menuActionForKeyboardEvent>[0]>) =>
+  const chord = (
+    over: Partial<Parameters<typeof menuActionForKeyboardEvent>[0]>
+  ) =>
     menuActionForKeyboardEvent({
       key: 'r',
       ctrlKey: true,
@@ -382,7 +380,9 @@ describe('keyboard accelerators', () => {
   });
 
   it('accepts Cmd on macOS as well as Ctrl', () => {
-    expect(chord({ key: 'r', ctrlKey: false, metaKey: true })).toBe('refresh_wallet');
+    expect(chord({ key: 'r', ctrlKey: false, metaKey: true })).toBe(
+      'refresh_wallet'
+    );
   });
 
   it('is case-insensitive, so caps lock does not break it', () => {
@@ -399,5 +399,86 @@ describe('keyboard accelerators', () => {
     expect(chord({ key: 'r', shiftKey: true })).toBeNull();
     expect(chord({ key: 'n', altKey: true })).toBeNull();
     expect(chord({ key: 'q' })).toBeNull();
+  });
+
+  it('does not steal Cut Copy Paste Select All or Undo', () => {
+    // macOS routes these through Edit in the app menu. Claiming them here
+    // made Cmd+V a no-op in WalletConnect / Wizard / CashConnect URI fields.
+    for (const key of ['c', 'v', 'x', 'a', 'z', 'y']) {
+      expect(chord({ key, ctrlKey: false, metaKey: true })).toBeNull();
+      expect(chord({ key })).toBeNull();
+    }
+  });
+});
+
+describe('menu bar composition', () => {
+  const sections = {
+    file: 'File',
+    edit: 'Edit',
+    wallet: 'Wallet',
+    view: 'View',
+    window: 'Window',
+    help: 'Help',
+  };
+
+  it('carries Edit on macOS, between File and Wallet', () => {
+    // Regression guard for the real bug: this app replaces Tauri's
+    // Menu::default() — which ships an Edit submenu — with a hand-built menu.
+    // The first version dropped Edit, and AppKit then had no path to route
+    // Cmd+V into the WebView, so pasting a URI silently did nothing.
+    expect(menuBarSections(true, sections)).toEqual([
+      'File',
+      'Edit',
+      'Wallet',
+      'View',
+      'Window',
+      'Help',
+    ]);
+  });
+
+  it('omits Edit off macOS', () => {
+    // WebView2 and WebKitGTK handle the edit chords themselves, and muda's GTK
+    // backend has no Undo/Redo at all — it renders them permanently greyed out.
+    expect(menuBarSections(false, sections)).toEqual([
+      'File',
+      'Wallet',
+      'View',
+      'Help',
+    ]);
+  });
+
+  it('carries Window before Help on macOS', () => {
+    // Cmd+M and Cmd+W are menu-item-backed on macOS exactly like the edit
+    // chords, so a menu bar without a Window submenu leaves them dead.
+    const built = menuBarSections(true, sections);
+    expect(built).toContain('Window');
+    expect(built.indexOf('Window')).toBe(built.indexOf('Help') - 1);
+  });
+
+  it('omits Window off macOS', () => {
+    // muda's GTK backend supports none of Minimize/Maximize/CloseWindow, so on
+    // Linux they would render permanently greyed out.
+    expect(menuBarSections(false, sections)).not.toContain('Window');
+  });
+
+  it('refuses to build a macOS menu with no Window submenu', () => {
+    expect(() => menuBarSections(true, { ...sections, window: null })).toThrow(
+      /must include Window/
+    );
+  });
+
+  it('refuses to build a macOS menu with no Edit submenu', () => {
+    expect(() => menuBarSections(true, { ...sections, edit: null })).toThrow(
+      /must include Edit/
+    );
+  });
+
+  it('still builds off macOS when Edit was never created', () => {
+    expect(menuBarSections(false, { ...sections, edit: null })).toEqual([
+      'File',
+      'Wallet',
+      'View',
+      'Help',
+    ]);
   });
 });

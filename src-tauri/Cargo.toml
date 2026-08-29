@@ -34,6 +34,13 @@ tauri-plugin-dialog = "2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "charset", "json"] }
 tauri-plugin-keyring = "0.1"
 tauri-plugin-biometry = "0.2"
+# Clipboard. The WebView clipboard is not dependable: WKWebView resolves
+# navigator.clipboard.writeText() and silently drops the write, and readText()
+# is permission-gated. arboard talks to NSPasteboard / Win32 / X11 / Wayland
+# directly. default-features = false drops image-data (and with it the image,
+# core-graphics and windows-sys pulls) since only text is copied;
+# wayland-data-control is NOT default and the Linux AppImage needs it.
+arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 # CashFusion: the protocol is raw TCP+TLS with protobuf framing, which a
 # WebView cannot speak at all — hence a Rust-side client. rustls/tokio are
 # already in the tree transitively via reqwest and tauri; naming them here
