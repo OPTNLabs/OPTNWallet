@@ -7,8 +7,7 @@
 // restored wallet publishes the same KeyPackage.
 
 import { mnemonicToSeed } from 'bip39';
-// noble v2 exports `./ed25519.js` only; TypeScript still loads ed25519.d.ts.
-import { ed25519 } from '@noble/curves/ed25519.js';
+import { ed25519 } from '@noble/curves/ed25519';
 import { hkdf } from '@noble/hashes/hkdf';
 import { sha256 } from '@noble/hashes/sha2';
 import { bytesToHex } from '@noble/hashes/utils';

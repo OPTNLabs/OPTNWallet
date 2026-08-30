@@ -2,7 +2,7 @@
 // Wire matches marmot-ts / darkmatter: BIP-340 over SHA-256(canonical message).
 // https://github.com/marmot-protocol/marmot-ts/blob/master/src/core/account-identity-proof.ts
 
-import { schnorr } from '@noble/curves/secp256k1.js';
+import { schnorr } from '@noble/curves/secp256k1';
 import { sha256 } from '@noble/hashes/sha2';
 import { bytesToHex } from '@noble/hashes/utils';
 import {
