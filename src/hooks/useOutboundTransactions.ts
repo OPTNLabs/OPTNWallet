@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import OutboundTransactionTracker, {
   OUTBOUND_RELEASE_DELAY_MS,
   type OutboundTransactionRecord,
@@ -16,13 +16,15 @@ export default function useOutboundTransactions(
 ) {
   const [records, setRecords] = useState<OutboundTransactionRecord[]>([]);
   const [reconciling, setReconciling] = useState(false);
+  const refreshInFlightRef = useRef(false);
 
   const load = useCallback(async () => {
     setRecords(await OutboundTransactionTracker.listActive(walletId));
   }, [walletId]);
 
   const refresh = useCallback(async () => {
-    if (!walletId || walletId <= 0 || reconciling) return;
+    if (!walletId || walletId <= 0 || refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
     setReconciling(true);
     try {
       await runOutboundReconcile(walletId, () =>
@@ -30,9 +32,10 @@ export default function useOutboundTransactions(
       );
       await load();
     } finally {
+      refreshInFlightRef.current = false;
       setReconciling(false);
     }
-  }, [load, reconciling, walletId]);
+  }, [load, walletId]);
 
   const release = useCallback(
     async (txid: string) => {
@@ -40,10 +43,7 @@ export default function useOutboundTransactions(
       await runOutboundReconcile(walletId, () =>
         reconcileOutboundTransactions(walletId)
       );
-      const record = await OutboundTransactionTracker.getByTxid(
-        txid,
-        walletId
-      );
+      const record = await OutboundTransactionTracker.getByTxid(txid, walletId);
       if (!record) {
         await load();
         return true;
