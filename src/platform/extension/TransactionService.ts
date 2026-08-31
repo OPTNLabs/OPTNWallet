@@ -8,6 +8,8 @@ export type {
   SendTransactionOptions,
 } from '../../services/TransactionService';
 
+export { releaseMultisigOutboundLocks } from '../../services/TransactionService';
+
 export const EXTENSION_VIEWER_BROADCAST_ERROR =
   'Sending is unavailable in the browser viewer. Use the desktop or mobile wallet to sign and broadcast.';
 
