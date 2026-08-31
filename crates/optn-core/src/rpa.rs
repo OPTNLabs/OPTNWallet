@@ -24,10 +24,11 @@ use k256::elliptic_curve::sec1::ToEncodedPoint;
 use k256::elliptic_curve::PrimeField;
 use k256::{AffinePoint, ProjectivePoint, PublicKey, Scalar};
 use sha2::{Digest, Sha256, Sha512};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::cashaddr::{encode_payload, Address, AddressKind, CHARSET};
 use crate::error::{CliError, Result};
-use crate::hd::hash160;
+use crate::hd::{hash160, Wallet};
 use crate::network::Network;
 
 /// RPA rides the wallet's BIP44 account as a third unhardened chain, sibling
@@ -63,6 +64,32 @@ pub fn spend_path(coin_type: u32, account: u32) -> String {
     format!("m/44'/{coin_type}'/{account}'/{RPA_BRANCH}/1")
 }
 
+/// RPA key material derived once in the shared core for CLI and app surfaces.
+///
+/// Deliberately has no `Debug` implementation: it contains private keys.
+#[derive(Zeroize, ZeroizeOnDrop)]
+pub struct RpaKeys {
+    pub scan_privkey: [u8; 32],
+    pub scan_pubkey: [u8; 33],
+    pub spend_privkey: [u8; 32],
+    pub spend_pubkey: [u8; 33],
+}
+
+pub fn derive_keys_from_paths(
+    mnemonic: &str,
+    passphrase: &str,
+    scan_path: &str,
+    spend_path: &str,
+) -> Result<RpaKeys> {
+    let wallet = Wallet::from_mnemonic(mnemonic, passphrase)?;
+    Ok(RpaKeys {
+        scan_privkey: wallet.signing_key(scan_path)?.to_bytes().into(),
+        scan_pubkey: wallet.public_key(scan_path)?,
+        spend_privkey: wallet.signing_key(spend_path)?.to_bytes().into(),
+        spend_pubkey: wallet.public_key(spend_path)?,
+    })
+}
+
 /// A decoded cashcode (or legacy paycode).
 #[derive(Debug, Clone)]
 pub struct Cashcode {
@@ -93,11 +120,38 @@ impl Cashcode {
 /// three bits and caps it at 64 bytes, and this payload is 73 with the kind
 /// byte. Electron Cash's `cashaddr.py` added encode_rpa/decode_rpa for the
 /// same reason — same charset and checksum, no version byte, no length cap.
+/// Which prefix family to stamp on an encoded code.
+///
+/// The wallet and the CLI only ever emit `Cashcode`. `LegacyPaycode` exists so
+/// tests and migration tooling can build the old form that must keep being
+/// accepted; no production caller passes it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrefixFamily {
+    Cashcode,
+    LegacyPaycode,
+}
+
 pub fn encode(
     scan_pubkey: &[u8; 33],
     spend_pubkey: &[u8; 33],
     network: Network,
     prefix_bits: u8,
+) -> String {
+    encode_with_family(
+        scan_pubkey,
+        spend_pubkey,
+        network,
+        prefix_bits,
+        PrefixFamily::Cashcode,
+    )
+}
+
+pub fn encode_with_family(
+    scan_pubkey: &[u8; 33],
+    spend_pubkey: &[u8; 33],
+    network: Network,
+    prefix_bits: u8,
+    family: PrefixFamily,
 ) -> String {
     let mut payload = [0u8; PAYLOAD_LEN];
     payload[0] = match network {
@@ -109,9 +163,11 @@ pub fn encode(
     payload[35..68].copy_from_slice(spend_pubkey);
     // 68..72 stay zero: no expiry.
 
-    let prefix = match network {
-        Network::Mainnet => CASHCODE_MAINNET,
-        Network::Chipnet => CASHCODE_TESTNET,
+    let prefix = match (family, network) {
+        (PrefixFamily::Cashcode, Network::Mainnet) => CASHCODE_MAINNET,
+        (PrefixFamily::Cashcode, Network::Chipnet) => CASHCODE_TESTNET,
+        (PrefixFamily::LegacyPaycode, Network::Mainnet) => LEGACY_MAINNET,
+        (PrefixFamily::LegacyPaycode, Network::Chipnet) => LEGACY_TESTNET,
     };
 
     // Leading kind byte, as the desktop wallet and Electron Cash both write.
@@ -524,10 +580,9 @@ type ParsedTransaction = (Vec<ParsedInput>, Vec<ParsedOutput>);
 fn parse_transaction(raw: &[u8]) -> Result<ParsedTransaction> {
     let mut i = 0usize;
     let need = |i: usize, n: usize| -> Result<()> {
-        if raw.len() < i + n {
-            Err(CliError::Protocol("transaction is truncated".into()))
-        } else {
-            Ok(())
+        match i.checked_add(n) {
+            Some(end) if end <= raw.len() => Ok(()),
+            _ => Err(CliError::Protocol("transaction is truncated".into())),
         }
     };
     let varint = |i: &mut usize| -> Result<u64> {
@@ -572,11 +627,13 @@ fn parse_transaction(raw: &[u8]) -> Result<ParsedTransaction> {
         let txid_display: String = txid.iter().map(|b| format!("{b:02x}")).collect();
         let vout = u32::from_le_bytes([raw[i + 32], raw[i + 33], raw[i + 34], raw[i + 35]]);
         i += 36;
-        let len = varint(&mut i)? as usize;
+        let len = usize::try_from(varint(&mut i)?)
+            .map_err(|_| CliError::Protocol("script length exceeds this platform".into()))?;
         need(i, len)?;
-        let script_sig = raw[i..i + len].to_vec();
-        i += len + 4; // scriptSig then sequence
-        need(i, 0)?;
+        let script_end = i + len;
+        let script_sig = raw[i..script_end].to_vec();
+        need(script_end, 4)?;
+        i = script_end + 4; // sequence
         inputs.push((txid_display, vout, script_sig));
     }
 
@@ -587,10 +644,12 @@ fn parse_transaction(raw: &[u8]) -> Result<ParsedTransaction> {
         let mut v = [0u8; 8];
         v.copy_from_slice(&raw[i..i + 8]);
         i += 8;
-        let len = varint(&mut i)? as usize;
+        let len = usize::try_from(varint(&mut i)?)
+            .map_err(|_| CliError::Protocol("script length exceeds this platform".into()))?;
         need(i, len)?;
-        outputs.push((u64::from_le_bytes(v), raw[i..i + len].to_vec()));
-        i += len;
+        let script_end = i + len;
+        outputs.push((u64::from_le_bytes(v), raw[i..script_end].to_vec()));
+        i = script_end;
     }
     Ok((inputs, outputs))
 }
@@ -848,5 +907,229 @@ mod tests {
         assert_eq!(spend_path(145, 0), "m/44'/145'/0'/3/1");
         assert_eq!(scan_path(1, 0), "m/44'/1'/0'/3/0");
         assert_eq!(spend_path(1, 0), "m/44'/1'/0'/3/1");
+    }
+
+    #[test]
+    fn derived_key_material_can_be_zeroized_before_drop() {
+        let mut keys = RpaKeys {
+            scan_privkey: [1; 32],
+            scan_pubkey: [2; 33],
+            spend_privkey: [3; 32],
+            spend_pubkey: [4; 33],
+        };
+
+        keys.zeroize();
+
+        assert_eq!(keys.scan_privkey, [0; 32]);
+        assert_eq!(keys.scan_pubkey, [0; 33]);
+        assert_eq!(keys.spend_privkey, [0; 32]);
+        assert_eq!(keys.spend_pubkey, [0; 33]);
+    }
+
+    #[test]
+    fn rejects_overflowing_script_lengths_without_panicking() {
+        let mut raw = Vec::new();
+        raw.extend_from_slice(&1_u32.to_le_bytes());
+        raw.push(1); // one input
+        raw.extend_from_slice(&[0_u8; 36]); // outpoint
+        raw.push(0xff); // eight-byte CompactSize follows
+        raw.extend_from_slice(&u64::MAX.to_le_bytes());
+
+        assert!(parse_transaction(&raw).is_err());
+    }
+}
+
+/// The Rust half of the shared RPA vectors.
+///
+/// `test-vectors/rpa.json` is read by the shared core and by the wallet's WASM
+/// adapter tests. This guards the cross-language boundary and keeps every app
+/// surface anchored to the same externally sourced protocol fixtures.
+///
+/// The `reference` block is anchored outside this repository, to Selene's
+/// bch-rpa interop fixtures.
+///
+/// If a vector fails, the protocol changed or an implementation broke. Fix the
+/// code. Regenerating the file to make a test pass throws away the only thing
+/// keeping the two sides honest.
+#[cfg(test)]
+mod shared_vectors {
+    use super::*;
+    use crate::hd::Wallet;
+    use serde_json::Value;
+
+    fn vectors() -> Value {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../test-vectors/rpa.json");
+        let raw =
+            std::fs::read_to_string(path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
+        serde_json::from_str(&raw).expect("test-vectors/rpa.json is not valid JSON")
+    }
+
+    fn hex_of(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    fn decode_hex(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("bad hex"))
+            .collect()
+    }
+
+    fn small(n: u8) -> [u8; 32] {
+        let mut k = [0u8; 32];
+        k[31] = n;
+        k
+    }
+
+    fn pubkey_hex(privkey: &[u8; 32]) -> String {
+        let sk = k256::SecretKey::from_slice(privkey).unwrap();
+        hex_of(sk.public_key().to_encoded_point(true).as_bytes())
+    }
+
+    #[test]
+    fn matches_the_external_bch_rpa_reference_values() {
+        let v = vectors();
+        let r = &v["reference"];
+        assert_eq!(pubkey_hex(&small(7)), r["scanPrivkey7"].as_str().unwrap());
+        assert_eq!(
+            pubkey_hex(&small(13)),
+            r["spendPrivkey13"].as_str().unwrap()
+        );
+        assert_eq!(
+            pubkey_hex(&small(37)),
+            r["senderPrivkey37"].as_str().unwrap()
+        );
+
+        let txid = v["sender"]["outpointTxid"].as_str().unwrap();
+
+        let mut spend_pub = [0u8; 33];
+        spend_pub.copy_from_slice(&decode_hex(r["spendPrivkey13"].as_str().unwrap()));
+        assert_eq!(
+            hex_of(&shared_secret(&small(7), &spend_pub, txid, 0).unwrap()),
+            r["sharedSecret_7_x_13G"].as_str().unwrap()
+        );
+
+        // The grand sum here overflows 32 bytes, which is where a fixed-width
+        // addition silently produces a different digest.
+        let mut scan_pub = [0u8; 33];
+        scan_pub.copy_from_slice(&decode_hex(r["scanPrivkey7"].as_str().unwrap()));
+        assert_eq!(
+            hex_of(&shared_secret(&small(37), &scan_pub, txid, 0).unwrap()),
+            r["sharedSecret_37_x_7G_257bit"].as_str().unwrap()
+        );
+    }
+
+    #[test]
+    fn derives_every_wallet_vector_from_the_shared_mnemonic() {
+        let v = vectors();
+        let mnemonic = v["mnemonic"].as_str().unwrap();
+        let passphrase = v["passphrase"].as_str().unwrap();
+        let wallet = Wallet::from_mnemonic(mnemonic, passphrase).unwrap();
+
+        let sender_privkey: [u8; 32] = decode_hex(v["sender"]["privkey"].as_str().unwrap())
+            .try_into()
+            .unwrap();
+        let outpoint_txid = v["sender"]["outpointTxid"].as_str().unwrap();
+        let outpoint_index = v["sender"]["outpointIndex"].as_u64().unwrap() as u32;
+
+        for w in v["wallets"].as_array().unwrap() {
+            let name = w["network"].as_str().unwrap();
+            let (network, coin) = match name {
+                "mainnet" => (Network::Mainnet, 145),
+                "chipnet" => (Network::Chipnet, 1),
+                other => panic!("unknown network in vectors: {other}"),
+            };
+
+            let scan_path = scan_path(coin, 0);
+            let spend_path = spend_path(coin, 0);
+            assert_eq!(
+                scan_path,
+                w["scanPath"].as_str().unwrap(),
+                "{name} scan path"
+            );
+            assert_eq!(
+                spend_path,
+                w["spendPath"].as_str().unwrap(),
+                "{name} spend path"
+            );
+
+            let scan_pubkey = wallet.public_key(&scan_path).unwrap();
+            let spend_pubkey = wallet.public_key(&spend_path).unwrap();
+            let derived =
+                derive_keys_from_paths(mnemonic, passphrase, &scan_path, &spend_path).unwrap();
+            let expected_scan_privkey: [u8; 32] =
+                wallet.signing_key(&scan_path).unwrap().to_bytes().into();
+            let expected_spend_privkey: [u8; 32] =
+                wallet.signing_key(&spend_path).unwrap().to_bytes().into();
+            assert_eq!(derived.scan_pubkey, scan_pubkey, "{name} Rust scan pubkey");
+            assert_eq!(
+                derived.spend_pubkey, spend_pubkey,
+                "{name} Rust spend pubkey"
+            );
+            assert_eq!(
+                derived.scan_privkey, expected_scan_privkey,
+                "{name} Rust scan private key"
+            );
+            assert_eq!(
+                derived.spend_privkey, expected_spend_privkey,
+                "{name} Rust spend private key"
+            );
+            assert_eq!(
+                hex_of(&scan_pubkey),
+                w["scanPubkey"].as_str().unwrap(),
+                "{name} scan pubkey"
+            );
+            assert_eq!(
+                hex_of(&spend_pubkey),
+                w["spendPubkey"].as_str().unwrap(),
+                "{name} spend pubkey"
+            );
+            assert_eq!(
+                grind_string(&scan_pubkey, RPA_PREFIX_BITS).unwrap(),
+                w["grindString16"].as_str().unwrap(),
+                "{name} grind string"
+            );
+
+            assert_eq!(
+                encode(&scan_pubkey, &spend_pubkey, network, RPA_PREFIX_BITS),
+                w["cashcode"].as_str().unwrap(),
+                "{name} cashcode"
+            );
+
+            // The legacy form must still decode, and be flagged as legacy.
+            let legacy = decode(w["legacyPaycode"].as_str().unwrap()).unwrap();
+            assert!(legacy.legacy, "{name} legacy flag");
+            assert_eq!(
+                hex_of(&legacy.scan_pubkey),
+                w["scanPubkey"].as_str().unwrap()
+            );
+            assert!(!decode(w["cashcode"].as_str().unwrap()).unwrap().legacy);
+
+            let secret =
+                shared_secret(&sender_privkey, &scan_pubkey, outpoint_txid, outpoint_index)
+                    .unwrap();
+            assert_eq!(
+                hex_of(&secret),
+                w["sharedSecret"].as_str().unwrap(),
+                "{name} shared secret"
+            );
+            assert_eq!(
+                payment_address(&spend_pubkey, &secret, network, 0)
+                    .unwrap()
+                    .encode(),
+                w["paymentAddress"].as_str().unwrap(),
+                "{name} payment address"
+            );
+
+            // And the recipient controls what the sender paid.
+            let spend_privkey: [u8; 32] =
+                wallet.signing_key(&spend_path).unwrap().to_bytes().into();
+            let spending_key = spending_key(&spend_privkey, &secret, 0).unwrap();
+            assert_eq!(
+                pubkey_hex(&spending_key),
+                w["spendingPubkey"].as_str().unwrap(),
+                "{name} spending pubkey"
+            );
+        }
     }
 }

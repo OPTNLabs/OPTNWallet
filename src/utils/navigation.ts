@@ -4,19 +4,32 @@ type NavigationState = {
   returnTo?: string;
 };
 
+function safeInternalRoute(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const route = value.trim();
+  if (!route.startsWith('/') || route.startsWith('//')) return null;
+  // Browsers and routers can normalize backslashes into path separators.
+  // Reject literal and percent-encoded forms before handing the value to
+  // React Router so a query-string return path can never become an origin.
+  if (route.includes('\\') || /%5c/i.test(route)) return null;
+  const first = route.charCodeAt(0);
+  if (first <= 0x1f || first === 0x7f) return null;
+  return route;
+}
+
 export function getReturnPath(
   location: Pick<Location, 'state' | 'search'> | null | undefined,
   fallback: string
 ): string {
   const state = (location?.state as NavigationState | null | undefined) ?? null;
-  const fromState = typeof state?.returnTo === 'string' ? state.returnTo.trim() : '';
+  const fromState = safeInternalRoute(state?.returnTo);
   if (fromState) return fromState;
 
   const search = location?.search ?? '';
   if (search) {
     try {
       const params = new URLSearchParams(search);
-      const fromSearch = params.get('returnTo')?.trim() ?? '';
+      const fromSearch = safeInternalRoute(params.get('returnTo'));
       if (fromSearch) return fromSearch;
     } catch {
       // fall through to fallback

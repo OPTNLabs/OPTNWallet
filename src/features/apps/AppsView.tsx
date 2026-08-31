@@ -17,12 +17,11 @@ import {
   getAppCategory,
   getAppDescription,
   getAppIconFrame,
-  isDesktopOnlyApp,
   isComingSoonApp,
   shouldHideApp,
 } from './appsViewHelpers';
 import { Capacitor } from '@capacitor/core';
-import { isDesktopPlatform } from '../../utils/platform';
+import { hasCapability } from '../../platform/capabilities';
 import { selectNostrChatEnabled } from '../../state/slices/experimentalSlice';
 import { useI18n } from '../../i18n/useI18n';
 import {
@@ -51,7 +50,7 @@ const AppsView = () => {
   const { t, locale } = useI18n();
   const devMode = import.meta.env.DEV;
   const isNativeRuntime = Capacitor.isNativePlatform();
-  const isDesktopRuntime = isDesktopPlatform();
+  const cashFusionEnabled = hasCapability('cashFusion');
   const chatEnabled = useSelector(selectNostrChatEnabled);
   const [cards, setCards] = useState<AppCard[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -114,7 +113,7 @@ const AppsView = () => {
           description: t('apps.cashFusionDescription'),
           category: 'Wallet',
         };
-        if (isDesktopRuntime || !isDesktopOnlyApp(cashFusionApp.id)) {
+        if (cashFusionEnabled) {
           out.push(cashFusionApp);
         }
 
@@ -145,7 +144,7 @@ const AppsView = () => {
     return () => {
       mounted = false;
     };
-  }, [chatEnabled, devMode, isDesktopRuntime, locale, t]);
+  }, [cashFusionEnabled, chatEnabled, devMode, locale, t]);
 
   const filteredCards = useMemo(
     () =>

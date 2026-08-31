@@ -6,7 +6,12 @@ module.exports = {
     'plugin:@typescript-eslint/recommended',
     'plugin:react-hooks/recommended',
   ],
-  ignorePatterns: ['dist', '.eslintrc.cjs'],
+  ignorePatterns: [
+    'dist',
+    '.eslintrc.cjs',
+    // wasm-bindgen owns this directory; lint the hand-written loader instead.
+    'src/wasm/optn-core/generated',
+  ],
   parser: '@typescript-eslint/parser',
   plugins: ['react-refresh'],
   overrides: [

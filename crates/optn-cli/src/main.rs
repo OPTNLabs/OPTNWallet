@@ -9,22 +9,22 @@
 //! app cannot be cross-compiled. Staying Tauri-free is what lets `optn` build
 //! for riscv64 and anything else Rust targets.
 
-mod cashaddr;
 mod console;
 mod contract;
 mod electrum;
-mod error;
-mod hd;
 mod keychain;
 mod lmots;
 mod msgsign;
-mod network;
-mod rpa;
 mod serve;
 mod skills;
 mod token;
 mod tx;
 mod x402;
+
+// These modules live in optn-core so the wallet can reach the same code
+// through wasm32. Re-exported under their old paths so every `crate::rpa::...`
+// in this binary keeps resolving.
+pub(crate) use optn_core::{cashaddr, error, hd, network, rpa};
 
 use clap::{Parser, Subcommand};
 use serde_json::{json, Value};
