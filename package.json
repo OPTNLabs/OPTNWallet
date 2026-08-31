@@ -65,7 +65,8 @@
     "build:apk": "npm run android:apk:prod",
     "watch-only-ur": "tsx scripts/watch-only-ur.mts",
     "watch-only-ur:vectors": "tsx scripts/watch-only-ur.mts vectors",
-    "watch-only-ur:regenerate": "tsx scripts/generate-watch-only-ur-vectors.mts"
+    "watch-only-ur:regenerate": "tsx scripts/generate-watch-only-ur-vectors.mts",
+    "wasm:optn-core": "tsx scripts/build-optn-core-wasm.mts"
   },
   "dependencies": {
     "@bitauth/libauth": "3.1.0-next.8",

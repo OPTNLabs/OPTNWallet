@@ -1,0 +1,46 @@
+{
+  "$comment": "Shared RPA vectors. Consumed by BOTH implementations: the TypeScript wallet (src/services/__tests__/RpaSharedVectors.test.ts) and the Rust CLI (crates/optn-cli/tests/shared_vectors.rs). They exist so the two cannot drift silently. Regenerate only when the protocol itself changes, never to make a failing test pass.",
+  "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+  "passphrase": "",
+  "sender": {
+    "privkey": "0000000000000000000000000000000000000000000000000000000000000025",
+    "outpointTxid": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+    "outpointIndex": 0
+  },
+  "reference": {
+    "$comment": "From Selene bch-rpa test/fixtures.ts and test/interop.test.ts, which in turn derive from the Electron Cash reference. Anchors these vectors to a third implementation rather than only to ourselves.",
+    "scanPrivkey7": "025cbdf0646e5db4eaa398f365f2ea7a0e3d419b7e0330e39ce92bddedcac4f9bc",
+    "spendPrivkey13": "03f28773c2d975288bc7d1d205c3748651b075fbc6610e58cddeeddf8f19405aa8",
+    "senderPrivkey37": "0362d14dab4150bf497402fdc45a215e10dcb01c354959b10cfe31c7e9d87ff33d",
+    "sharedSecret_7_x_13G": "ec38e0aca40c240ef0eb506765e780ec78279c630e124186f828144e0875ad26",
+    "sharedSecret_37_x_7G_257bit": "e4597ed066ca88ad4abb72f290251acaa5b680e574dad641b6bc4e38fbfa34b1"
+  },
+  "wallets": [
+    {
+      "network": "mainnet",
+      "scanPath": "m/44'/145'/0'/3/0",
+      "spendPath": "m/44'/145'/0'/3/1",
+      "scanPubkey": "03f5e7a037867bfb284672a5c4abb301bc080baa5a8e5e8bb5f7bce55214f55094",
+      "spendPubkey": "0250bdb5857caa00c5acbda346336b8e71f09421b93f245412df909a461a297b22",
+      "grindString16": "F5E7",
+      "cashcode": "cashcode:qqq3qql4u7sr0pnmlv5yvu49cj4mxqdupq965k5wt69mtaauu4fpfa2sjsp9p0d4s4725qx94j76x33ndw88ruy5yxun7fz5zt0epxjxrg5hkgsqqqqqqkxe3dkt6",
+      "legacyPaycode": "paycode:qqq3qql4u7sr0pnmlv5yvu49cj4mxqdupq965k5wt69mtaauu4fpfa2sjsp9p0d4s4725qx94j76x33ndw88ruy5yxun7fz5zt0epxjxrg5hkgsqqqqqqjl7alqx5",
+      "sharedSecret": "51512cd9af14f45b6d94766801d98302a0b473c19744659e08951f89c5b5f3b3",
+      "paymentAddress": "bitcoincash:qqxdqcrmst8mcktn3lg2unjjraj4g0u2xugmnxqkh6",
+      "spendingPubkey": "03d45aa507e0abd5b27dc73744f54f8e9b2483122b01580c64b97a5693c74a2a81"
+    },
+    {
+      "network": "chipnet",
+      "scanPath": "m/44'/1'/0'/3/0",
+      "spendPath": "m/44'/1'/0'/3/1",
+      "scanPubkey": "039e928ca727ba9574dca072a9e6c2d695e5c04d9433d74f4a73549d86da983cb0",
+      "spendPubkey": "03cbe2a59136faca2e5c6a35442c3eeda7824bdf6c09816f00cf21fbc6160de908",
+      "grindString16": "9E92",
+      "cashcode": "cashcodetest:qqz3qqu7j2x2wfa6j46degrj48nv9454uhqym9pn6a855u65nkrd4xpukqpuhc49jym04j3wt34r23pv8mk60qjtmakqnqt0qr8jr77xzcx7jzqqqqqqqwn75g9c4",
+      "legacyPaycode": "paycodetest:qqz3qqu7j2x2wfa6j46degrj48nv9454uhqym9pn6a855u65nkrd4xpukqpuhc49jym04j3wt34r23pv8mk60qjtmakqnqt0qr8jr77xzcx7jzqqqqqqqhpvc6fef",
+      "sharedSecret": "6b9dc4dec0dbfce18b40dfae22d76ab37c5f03798616393921c83919b1fd677e",
+      "paymentAddress": "bchtest:qqaff6m4rk86w5q5glqgd7va2amtyh84dgg72uaf77",
+      "spendingPubkey": "02bbfa162ff1fca7c8ccb2282653934104b50da2684d70568fabccdb0fe9bb5495"
+    }
+  ]
+}

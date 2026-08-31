@@ -142,7 +142,7 @@ function makePeers(count = 4) {
     const contribution: PeerContribution = {
       inputs: [
         {
-          prevTxid: `${n}${'a'.repeat(63)}`,
+          prevTxid: n.toString(16).padStart(64, 'a'),
           prevIndex: n,
           value: 100_000,
           pubkey: inKey.pubHex,
@@ -179,7 +179,7 @@ function deferred<T>(): {
   return { promise, resolve, reject };
 }
 
-describe('P2P fusion round choreography (4 peers, in-memory)', () => {
+describe('P2P fusion round choreography (in-memory)', () => {
   it('all peers converge on a single broadcast, VM-valid CoinJoin', async () => {
     // Four peers, each fusing one 100k coin into one fresh 99.6k output (fee 400 each).
     const peers = [1, 2, 3, 4].map((n) => {
@@ -260,6 +260,58 @@ describe('P2P fusion round choreography (4 peers, in-memory)', () => {
     // Sanity: 4 inputs + 4 outputs actually got fused together.
     expect(decoded.inputs).toHaveLength(4);
     expect(decoded.outputs).toHaveLength(4);
+    expect(hub.activeHandlerCount()).toBe(0);
+  });
+
+  it('converges ten peers on one VM-valid CoinJoin without a live network', async () => {
+    // This catches accidental four-peer assumptions in the coordinator,
+    // anonymous component collection, signature merge, and cleanup paths.
+    const peers = makePeers(10);
+    const participants = peers.map((peer) => peer.round.pubHex);
+    const hub = new Hub();
+    let broadcasts = 0;
+
+    const results = await Promise.all(
+      peers.map((peer) =>
+        runFusionRound(
+          {
+            myPubkey: peer.round.pubHex,
+            participants,
+            network: 'chipnet',
+            tier: 100_000,
+            feerate: 1_000,
+            myContribution: peer.contribution,
+            keysByPubkey: peer.keys,
+            broadcast: async (txHex) => {
+              broadcasts += 1;
+              return txidOf(txHex);
+            },
+            timeoutMs: 10_000,
+            jitterMs: [0, 0],
+          },
+          hub.transportFor(peer.round.pubHex)
+        )
+      )
+    );
+
+    expect(new Set(results.map((result) => result.txid)).size).toBe(1);
+    expect(new Set(results.map((result) => result.txHex)).size).toBe(1);
+    expect(broadcasts).toBe(1);
+
+    const decoded = decodeTransaction(
+      hexToBin(results[0].txHex)
+    ) as TransactionCommon;
+    const { sourceOutputs } = toLibauthTx(
+      assembleFusionTx(peers.map((peer) => peer.contribution))
+    );
+    expect(
+      createVirtualMachineBCH2023().verify({
+        transaction: decoded,
+        sourceOutputs,
+      })
+    ).toBe(true);
+    expect(decoded.inputs).toHaveLength(10);
+    expect(decoded.outputs).toHaveLength(10);
     expect(hub.activeHandlerCount()).toBe(0);
   });
 
@@ -1032,7 +1084,12 @@ describe('P2P fusion round choreography (4 peers, in-memory)', () => {
   it('fails immediately when the authenticated coordinator sends a malformed message', async () => {
     const input = keypair(81);
     const output = keypair(82);
-    const quartet = ['0'.repeat(64), 'a'.repeat(64), 'b'.repeat(64), 'f'.repeat(64)];
+    const quartet = [
+      '0'.repeat(64),
+      'a'.repeat(64),
+      'b'.repeat(64),
+      'f'.repeat(64),
+    ];
     const coordinator = electCoordinator(quartet) as string;
     const participant = quartet.find((key) => key !== coordinator) as string;
     const contribution: PeerContribution = {

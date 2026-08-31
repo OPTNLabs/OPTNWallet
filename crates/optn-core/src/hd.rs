@@ -14,6 +14,7 @@ use bip32::{DerivationPath, XPrv};
 use bip39::{Language, Mnemonic};
 use ripemd::Ripemd160;
 use sha2::{Digest, Sha256};
+use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 use crate::cashaddr::{Address, AddressKind};
 use crate::error::{CliError, Result};
@@ -50,6 +51,7 @@ pub fn account_path(coin_type: u32, account: u32) -> String {
     format!("m/44'/{coin_type}'/{account}'")
 }
 
+#[derive(ZeroizeOnDrop)]
 pub struct Wallet {
     seed: [u8; 64],
 }
@@ -58,7 +60,7 @@ impl Wallet {
     /// Build from a BIP39 phrase. The passphrase is BIP39's optional 25th
     /// word; an empty string is the overwhelmingly common case.
     pub fn from_mnemonic(phrase: &str, passphrase: &str) -> Result<Self> {
-        let trimmed = phrase.split_whitespace().collect::<Vec<_>>().join(" ");
+        let trimmed = Zeroizing::new(phrase.split_whitespace().collect::<Vec<_>>().join(" "));
         // English-only, via the normalized entry points. The
         // unicode-normalization feature only matters for languages this wallet
         // does not offer, and leaving it off keeps the cross-compiled

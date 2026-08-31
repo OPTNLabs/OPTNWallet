@@ -68,6 +68,7 @@ import {
   watchOnlyMasterFingerprint,
 } from '../../platform/desktop/onboarding/watchOnlyWallet';
 import { CameraQrScanner } from '../../platform/desktop/CameraQrScanner';
+import { getReturnPath } from '../../utils/navigation';
 
 type WatchOnlySendLocationState = {
   returnTo?: string;
@@ -738,7 +739,7 @@ export const WatchOnlySend: FC = () => {
   };
 
   const handleBack = () => {
-    navigate(locationState?.returnTo ?? '/home');
+    navigate(getReturnPath(location, '/home'));
   };
 
   const frameNumber = (frameIndexRef.current % frameCountRef.current) + 1;

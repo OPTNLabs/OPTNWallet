@@ -68,6 +68,7 @@ sha2 = "0.10"
 # generator H, which the Bitcoin-Core secp256k1 bindings don't expose. k256
 # (RustCrypto, pure Rust) does, and matches Electron Cash's scheme byte-for-byte.
 k256 = "0.13"
+optn-core = { path = "../crates/optn-core" }
 # Secure randomness for one-time nonces/blinding factors (OsRng). NOT the
 # counter+clock token used for Tor circuit isolation — those must never be reused
 # for crypto secrets.

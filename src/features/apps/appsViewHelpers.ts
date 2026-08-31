@@ -167,7 +167,3 @@ export function shouldHideApp(appId: string, appName: string): boolean {
   const normalizedName = appName.toLowerCase();
   return normalizedId.endsWith(':authguard') || normalizedName === 'authguard';
 }
-
-export function isDesktopOnlyApp(appId: string): boolean {
-  return normalizeAppKey(appId) === 'optn.wallet.cashfusion';
-}
