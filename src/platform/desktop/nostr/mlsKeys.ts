@@ -61,19 +61,23 @@ export async function deriveMlsKeys(
 
 export async function deriveMlsHpkeIkms(mnemonic: string, passphrase = '') {
   const seed = new Uint8Array(await mnemonicToSeed(mnemonic, passphrase));
-  const initIkm = hkdf(
-    sha256,
-    seed,
-    undefined,
-    new TextEncoder().encode('paytaca-mls-init-key'),
-    32
-  );
-  const hpkeIkm = hkdf(
-    sha256,
-    seed,
-    undefined,
-    new TextEncoder().encode('paytaca-mls-hpke-key'),
-    32
-  );
-  return { initIkm, hpkeIkm };
+  try {
+    const initIkm = hkdf(
+      sha256,
+      seed,
+      undefined,
+      new TextEncoder().encode('paytaca-mls-init-key'),
+      32
+    );
+    const hpkeIkm = hkdf(
+      sha256,
+      seed,
+      undefined,
+      new TextEncoder().encode('paytaca-mls-hpke-key'),
+      32
+    );
+    return { initIkm, hpkeIkm };
+  } finally {
+    seed.fill(0);
+  }
 }

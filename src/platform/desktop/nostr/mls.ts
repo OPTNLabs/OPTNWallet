@@ -68,6 +68,7 @@ import { wrapManyEvents as wrapRumor } from 'nostr-tools/nip59';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
 import { chacha20poly1305 } from '@noble/ciphers/chacha.js';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
+import SecretCryptoService from '../../../services/SecretCryptoService';
 import { deriveMlsKeys } from './mlsKeys';
 import {
   APP_DATA_DICTIONARY_EXT,
@@ -180,6 +181,16 @@ const getPool = () => (pool ??= new SimplePool());
 
 const mlsStates = new Map<string, ClientState>();
 const groupIndex = new Map<string, MlsGroupRecord>();
+let activeMlsOwner: string | null = null;
+
+function activateMlsOwner(ownerPubKey: string): void {
+  if (activeMlsOwner === ownerPubKey) return;
+  // MLS state contains private ratchets. Never retain another wallet's state in
+  // the shared renderer when the active identity changes.
+  mlsStates.clear();
+  groupIndex.clear();
+  activeMlsOwner = ownerPubKey;
+}
 
 async function walletMnemonic(walletId: number) {
   const seed = await loadNostrAccountSeed(walletId);
@@ -435,13 +446,15 @@ export async function saveMlsState(
   ownerPubKey?: string,
   ownerSecret?: Uint8Array
 ) {
-  mlsStates.set(nostrGroupIdHex, state);
   const owner = ownerPubKey || getMlsRecord(nostrGroupIdHex)?.ownerPubKey;
+  if (owner) activateMlsOwner(owner);
+  mlsStates.set(nostrGroupIdHex, state);
   if (!owner) return;
   try {
     const bytes = encode(clientStateEncoder, state);
     const b64 = bytesToB64(bytes);
-    await idbSet(RATCHET_KEY(owner, nostrGroupIdHex), b64);
+    const ciphertext = await SecretCryptoService.encryptBytes(bytes);
+    await idbSet(RATCHET_KEY(owner, nostrGroupIdHex), ciphertext);
     if (ownerSecret) {
       const rumor = {
         kind: KIND_30078,
@@ -462,20 +475,28 @@ export async function loadMlsState(
   nostrGroupIdHex: string,
   ownerPubKey?: string
 ): Promise<ClientState | null> {
+  const owner =
+    ownerPubKey || getMlsRecord(nostrGroupIdHex)?.ownerPubKey || activeMlsOwner;
+  if (owner) activateMlsOwner(owner);
   const mem = mlsStates.get(nostrGroupIdHex);
   if (mem) return mem;
-  const owner = ownerPubKey || getMlsRecord(nostrGroupIdHex)?.ownerPubKey;
   if (!owner) return null;
   try {
     const b64 = await idbGet(RATCHET_KEY(owner, nostrGroupIdHex));
     if (typeof b64 !== 'string') return null;
-    const groupState = decode(clientStateDecoder, b64ToBytes(b64));
+    const bytes = await SecretCryptoService.decryptBytes(b64);
+    if (!bytes) return null;
+    const groupState = decode(clientStateDecoder, bytes);
     if (!groupState) return null;
     const state = {
       ...groupState,
       clientConfig: restoredClientConfig,
     } as ClientState;
     mlsStates.set(nostrGroupIdHex, state);
+    if (!b64.startsWith('enc:')) {
+      const ciphertext = await SecretCryptoService.encryptBytes(bytes);
+      await idbSet(RATCHET_KEY(owner, nostrGroupIdHex), ciphertext);
+    }
     return state;
   } catch {
     return null;
@@ -486,40 +507,60 @@ export function getMlsRecord(nostrGroupIdHex: string): MlsGroupRecord | null {
   return groupIndex.get(nostrGroupIdHex) ?? null;
 }
 
-export function listMlsGroups(): MlsGroupRecord[] {
-  return [...groupIndex.values()];
+export function listMlsGroups(ownerPubKey?: string): MlsGroupRecord[] {
+  const groups = [...groupIndex.values()];
+  return ownerPubKey
+    ? groups.filter((group) => group.ownerPubKey === ownerPubKey)
+    : groups;
 }
 
 function rememberGroup(record: MlsGroupRecord) {
+  activateMlsOwner(record.ownerPubKey);
   groupIndex.set(record.nostrGroupIdHex, record);
 }
 
 async function persistIndex(pubkey: string) {
   try {
-    await idbSet(INDEX_KEY(pubkey), listMlsGroups());
+    const ciphertext = await SecretCryptoService.encryptText(
+      JSON.stringify(listMlsGroups(pubkey))
+    );
+    await idbSet(INDEX_KEY(pubkey), ciphertext);
   } catch {
     /* best-effort */
   }
 }
 
 export async function loadMlsIndex(pubkey: string): Promise<MlsGroupRecord[]> {
+  activateMlsOwner(pubkey);
   try {
     const stored = await idbGet(INDEX_KEY(pubkey));
-    if (Array.isArray(stored)) {
-      for (const rec of stored as MlsGroupRecord[]) {
+    let records: MlsGroupRecord[] = [];
+    let legacyPlaintext = false;
+    if (typeof stored === 'string') {
+      const plaintext = await SecretCryptoService.decryptText(stored);
+      const parsed: unknown = JSON.parse(plaintext);
+      if (Array.isArray(parsed)) records = parsed as MlsGroupRecord[];
+    } else if (Array.isArray(stored)) {
+      records = stored as MlsGroupRecord[];
+      legacyPlaintext = true;
+    }
+    if (records.length) {
+      for (const rec of records) {
         if (rec?.nostrGroupIdHex) {
           rec.visibility = rec.visibility || 'open';
           rec.memberPubKeys = rec.memberPubKeys || [pubkey];
           rec.ownerPubKey = rec.ownerPubKey || pubkey;
+          if (rec.ownerPubKey !== pubkey) continue;
           rememberGroup(rec);
           await loadMlsState(rec.nostrGroupIdHex, pubkey);
         }
       }
     }
+    if (legacyPlaintext) await persistIndex(pubkey);
   } catch {
     /* ignore */
   }
-  return listMlsGroups();
+  return listMlsGroups(pubkey);
 }
 
 export function getMlsGroupMembers(state: ClientState): string[] {
@@ -1241,7 +1282,7 @@ export async function joinMlsGroupFromWelcome(
     privateKeys: privatePackage,
   });
   const mlsGroupIdHex = bytesToHex(clientState.groupContext.groupId);
-  const existing = listMlsGroups().find(
+  const existing = listMlsGroups(myPubkey).find(
     (r) => r.mlsGroupIdHex === mlsGroupIdHex
   );
   if (existing) {
@@ -1390,8 +1431,7 @@ export async function ingestMlsGiftWrap(
           ...decoded,
           clientConfig: restoredClientConfig,
         } as ClientState;
-        mlsStates.set(gid, state);
-        await idbSet(RATCHET_KEY(myPubkey, gid), rumor.content);
+        await saveMlsState(gid, state, myPubkey);
       }
     }
     return;
@@ -1461,7 +1501,7 @@ export async function refetchMlsInbox(
       /* not MLS for us */
     }
   }
-  const hTags = listMlsGroups().map((g) => g.nostrGroupIdHex);
+  const hTags = listMlsGroups(nostr.pubkey).map((g) => g.nostrGroupIdHex);
   if (!hTags.length) return;
   const groups = await getPool().querySync(
     targets,
@@ -1490,7 +1530,7 @@ export function subscribeMls(
     await loadMlsIndex(nostr.pubkey);
     if (closed) return;
     const targets = Array.from(new Set([...DISCOVERY_RELAYS, ...relays]));
-    const hTags = listMlsGroups().map((g) => g.nostrGroupIdHex);
+    const hTags = listMlsGroups(nostr.pubkey).map((g) => g.nostrGroupIdHex);
     const onEvent = (evt: Event) => {
       void (async () => {
         try {

@@ -16,6 +16,7 @@ import { wrapManyEvents as wrapRumor } from 'nostr-tools/nip59';
 import { sha256 } from '@noble/hashes/sha2';
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
+import SecretCryptoService from '../../../services/SecretCryptoService';
 import {
   deriveNostrIdentityFromSeed,
   loadNostrAccountSeed,
@@ -919,9 +920,20 @@ export async function loadLastRead(
 ): Promise<Record<string, number>> {
   try {
     const stored = await idbGet(READ_STORE_KEY(pubkey));
-    return stored && typeof stored === 'object'
-      ? (stored as Record<string, number>)
-      : {};
+    if (typeof stored === 'string') {
+      const plaintext = await SecretCryptoService.decryptText(stored);
+      const parsed: unknown = JSON.parse(plaintext);
+      return parsed && typeof parsed === 'object'
+        ? (parsed as Record<string, number>)
+        : {};
+    }
+    // One-time compatibility with the original plaintext IndexedDB shape.
+    if (stored && typeof stored === 'object') {
+      const legacy = stored as Record<string, number>;
+      await storeLastRead(pubkey, legacy);
+      return legacy;
+    }
+    return {};
   } catch {
     return {};
   }
@@ -932,7 +944,10 @@ export async function storeLastRead(
   lastRead: Record<string, number>
 ): Promise<void> {
   try {
-    await idbSet(READ_STORE_KEY(pubkey), lastRead);
+    const ciphertext = await SecretCryptoService.encryptText(
+      JSON.stringify(lastRead)
+    );
+    await idbSet(READ_STORE_KEY(pubkey), ciphertext);
   } catch {
     /* best-effort */
   }
@@ -998,7 +1013,18 @@ export async function loadStoredMessages(
 ): Promise<ChatMessage[]> {
   try {
     const stored = await idbGet(CHAT_STORE_KEY(pubkey));
-    return Array.isArray(stored) ? (stored as ChatMessage[]) : [];
+    if (typeof stored === 'string') {
+      const plaintext = await SecretCryptoService.decryptText(stored);
+      const parsed: unknown = JSON.parse(plaintext);
+      return Array.isArray(parsed) ? (parsed as ChatMessage[]) : [];
+    }
+    // One-time compatibility with the original plaintext IndexedDB shape.
+    if (Array.isArray(stored)) {
+      const legacy = stored as ChatMessage[];
+      await storeMessages(pubkey, legacy);
+      return legacy;
+    }
+    return [];
   } catch {
     return [];
   }
@@ -1010,7 +1036,10 @@ export async function storeMessages(
   messages: ChatMessage[]
 ): Promise<void> {
   try {
-    await idbSet(CHAT_STORE_KEY(pubkey), messages);
+    const ciphertext = await SecretCryptoService.encryptText(
+      JSON.stringify(messages)
+    );
+    await idbSet(CHAT_STORE_KEY(pubkey), ciphertext);
   } catch {
     /* best-effort — a storage failure shouldn't break chat */
   }

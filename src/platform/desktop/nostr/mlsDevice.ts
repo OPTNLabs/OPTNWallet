@@ -4,6 +4,7 @@
 
 import { bytesToHex } from '@noble/hashes/utils';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
+import SecretCryptoService from '../../../services/SecretCryptoService';
 import {
   decode,
   encode,
@@ -104,11 +105,14 @@ export async function saveMlsKeyPackage(
     privatePackage,
   });
   try {
+    const privateEnc = await SecretCryptoService.encryptBytes(
+      encode(privateKeyPackageEncoder, privatePackage)
+    );
     await idbSet(KP_KEY(pubkey, deviceIndex), {
       publicB64: bytesToB64(
         encode(mlsMessageEncoder, wrapKeyPackage(publicPackage))
       ),
-      privateB64: bytesToB64(encode(privateKeyPackageEncoder, privatePackage)),
+      privateEnc,
     });
   } catch {
     /* best-effort */
@@ -127,17 +131,19 @@ export async function loadMlsKeyPackage(
   try {
     const stored = await idbGet(KP_KEY(pubkey, deviceIndex));
     if (!stored || typeof stored !== 'object') return null;
-    const { publicB64, privateB64 } = stored as {
+    const { publicB64, privateEnc, privateB64 } = stored as {
       publicB64?: string;
+      privateEnc?: string;
+      /** Legacy plaintext shape, migrated after a successful decode. */
       privateB64?: string;
     };
-    if (typeof publicB64 !== 'string' || typeof privateB64 !== 'string')
+    const storedPrivate = privateEnc ?? privateB64;
+    if (typeof publicB64 !== 'string' || typeof storedPrivate !== 'string')
       return null;
     const msg = decode(mlsMessageDecoder, b64ToBytes(publicB64));
-    const privatePackage = decode(
-      privateKeyPackageDecoder,
-      b64ToBytes(privateB64)
-    );
+    const privateBytes = await SecretCryptoService.decryptBytes(storedPrivate);
+    if (!privateBytes) return null;
+    const privatePackage = decode(privateKeyPackageDecoder, privateBytes);
     if (
       !msg ||
       msg.wireformat !== wireformats.mls_key_package ||
@@ -147,6 +153,14 @@ export async function loadMlsKeyPackage(
     }
     const packed = { publicPackage: msg.keyPackage, privatePackage };
     kpMemory.set(kpMemKey(pubkey, deviceIndex), packed);
+    if (!privateEnc) {
+      await saveMlsKeyPackage(
+        pubkey,
+        deviceIndex,
+        packed.publicPackage,
+        packed.privatePackage
+      );
+    }
     return packed;
   } catch {
     return null;
