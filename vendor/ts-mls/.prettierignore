@@ -1,6 +1,0 @@
-# Ignore artifacts:
-build
-coverage
-pnpm-lock.yaml
-api/*
-docs/migration-guide.md

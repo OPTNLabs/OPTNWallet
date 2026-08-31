@@ -10,8 +10,12 @@ git submodule:
 - branch: `marmot-required-ext`
 - pin: `2ca5c43b77241245ef41a5dd834f151674877c2d`
 
-Rebuild:
+Only the external TypeScript source and generated declarations are retained.
+Compiled JavaScript and the fork's development toolchain are intentionally not
+checked in. Vite transpiles the pinned TypeScript source as part of the normal
+application build.
 
-```
-npx tsc -p vendor/ts-mls/tsconfig.optn.json
-```
+The official Rust MDK is not a compatible replacement here: Paytaca uses the
+legacy NIP-EE/ts-mls wire and state format, while MDK implements the current
+Marmot protocol and does not currently ship production web bindings. Revisit
+this exception when a compatible Rust/WASM boundary is available.

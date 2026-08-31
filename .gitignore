@@ -11,9 +11,6 @@ node_modules
 target/
 target-frozen/
 dist
-# Vendored Marmot ts-mls ships built JS (npm package has no dist in git).
-!vendor/ts-mls/dist/
-!vendor/ts-mls/dist/**
 dist-ssr
 dist-extension-chrome
 dist-extension-firefox

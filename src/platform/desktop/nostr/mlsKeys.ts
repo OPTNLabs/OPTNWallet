@@ -7,7 +7,7 @@
 // restored wallet publishes the same KeyPackage.
 
 import { mnemonicToSeed } from 'bip39';
-import { ed25519 } from '@noble/curves/ed25519';
+import { ed25519 } from '@noble/curves/ed25519.js';
 import { hkdf } from '@noble/hashes/hkdf';
 import { sha256 } from '@noble/hashes/sha2';
 import { bytesToHex } from '@noble/hashes/utils';
