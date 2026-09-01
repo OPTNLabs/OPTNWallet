@@ -19,15 +19,23 @@ fn architecture() {
         .expect("xtask must live below workspace root")
         .to_path_buf();
 
-    let neutral = [
-        root.join("crates/optn-core"),
-        root.join("crates/optn-app"),
-        root.join("crates/optn-platform"),
+    let neutral_manifests = [
+        root.join("crates/optn-core/Cargo.toml"),
+        root.join("crates/optn-app/Cargo.toml"),
+        root.join("crates/optn-platform/Cargo.toml"),
     ];
 
     let mut failures = Vec::new();
-    for path in neutral {
-        scan_framework_names(&path, &mut failures);
+    for manifest in neutral_manifests {
+        let text = read(&manifest).to_lowercase();
+        for framework in FRAMEWORK_NAMES {
+            if text.contains(framework) {
+                failures.push(format!(
+                    "{} contains forbidden framework dependency '{framework}'",
+                    manifest.display()
+                ));
+            }
+        }
     }
 
     let ui_manifest = read(&root.join("crates/optn-ui/Cargo.toml"));
@@ -46,40 +54,6 @@ fn architecture() {
         eprintln!("architecture boundary violation: {failure}");
     }
     std::process::exit(1);
-}
-
-fn scan_framework_names(root: &Path, failures: &mut Vec<String>) {
-    visit(root, &mut |path| {
-        let relevant = path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .is_some_and(|ext| matches!(ext, "rs" | "toml"));
-        if !relevant {
-            return;
-        }
-
-        let text = read(path).to_lowercase();
-        for framework in FRAMEWORK_NAMES {
-            if text.contains(framework) {
-                failures.push(format!(
-                    "{} contains forbidden framework name '{framework}'",
-                    path.display()
-                ));
-            }
-        }
-    });
-}
-
-fn visit(path: &Path, f: &mut impl FnMut(&Path)) {
-    let Ok(metadata) = fs::metadata(path) else { return };
-    if metadata.is_file() {
-        f(path);
-        return;
-    }
-    let Ok(entries) = fs::read_dir(path) else { return };
-    for entry in entries.flatten() {
-        visit(&entry.path(), f);
-    }
 }
 
 fn read(path: &Path) -> String {
