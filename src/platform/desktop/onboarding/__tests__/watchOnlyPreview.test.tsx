@@ -132,7 +132,7 @@ describe('desktop watch-only preview', () => {
     );
   });
 
-  it('does not ask for a master fingerprint on the main xPub form', () => {
+  it('offers an optional master fingerprint on the main xPub form', () => {
     const html = renderToStaticMarkup(
       <Provider store={store}>
         <I18nProvider>
@@ -144,8 +144,8 @@ describe('desktop watch-only preview', () => {
       </Provider>
     );
 
-    expect(html).not.toContain('Master fingerprint');
-    expect(html).not.toContain('8 hex chars');
+    expect(html).toContain('Master fingerprint (optional)');
+    expect(html).toContain('8 hex characters');
   });
 
   it('decodes a valid master fingerprint to its 4 bytes', () => {

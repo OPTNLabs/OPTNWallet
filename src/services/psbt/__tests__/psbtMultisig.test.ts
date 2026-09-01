@@ -49,11 +49,25 @@ const HARDENED = 0x80000000;
 const ACCOUNT_PATH = "m/44'/145'/0'";
 
 const privateKeys = [
-  Uint8Array.from([0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20]),
-  Uint8Array.from([0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f, 0x40]),
-  Uint8Array.from([0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f, 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f, 0x60]),
+  Uint8Array.from([
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c,
+    0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
+    0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
+  ]),
+  Uint8Array.from([
+    0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c,
+    0x2d, 0x2e, 0x2f, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38,
+    0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f, 0x40,
+  ]),
+  Uint8Array.from([
+    0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x4b, 0x4c,
+    0x4d, 0x4e, 0x4f, 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58,
+    0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f, 0x60,
+  ]),
 ];
-const publicKeys = privateKeys.map((key) => secp256k1.derivePublicKeyCompressed(key));
+const publicKeys = privateKeys.map((key) =>
+  secp256k1.derivePublicKeyCompressed(key)
+);
 const fingerprints = [
   Uint8Array.from([0xaa, 0xbb, 0xcc, 0x01]),
   Uint8Array.from([0xaa, 0xbb, 0xcc, 0x02]),
@@ -153,7 +167,7 @@ function signInput(
   inputIndex: number,
   keyIndex: number,
   coveredBytecode: Uint8Array,
-  sighashType = 0xc1,
+  sighashType = 0x41,
   algorithm: 'schnorr' | 'der' = 'schnorr'
 ): Uint8Array {
   const noTokens = {
@@ -216,7 +230,7 @@ function wrapWithSignatures(
       lockingBytecode: hexToBin(output.lockingBytecodeHex),
       satoshis: output.satoshis,
     })),
-    0xc1
+    proposal.sighashType
   );
 }
 
@@ -238,23 +252,31 @@ describe('multisig redeem script', () => {
     expect(() => buildMultisigRedeemScript(publicKeys, 0)).toThrow(/required/i);
     expect(() => buildMultisigRedeemScript(publicKeys, 4)).toThrow(/required/i);
     expect(() => buildMultisigRedeemScript([], 1)).toThrow(/at least one/i);
-    expect(() => buildMultisigRedeemScript([publicKeys[0].subarray(0, 32)], 1)).toThrow(/33/i);
+    expect(() =>
+      buildMultisigRedeemScript([publicKeys[0].subarray(0, 32)], 1)
+    ).toThrow(/33/i);
   });
 
   it('parses null for non-multisig scripts', () => {
     expect(parseMultisigRedeemScript(new Uint8Array())).toBeNull();
-    expect(isMultisigRedeemScript(new Uint8Array([0x76, 0xa9, 0x14]))).toBe(false);
+    expect(isMultisigRedeemScript(new Uint8Array([0x76, 0xa9, 0x14]))).toBe(
+      false
+    );
     expect(isMultisigRedeemScript(redeemScript)).toBe(true);
   });
 
   it('builds the P2SH20 locking script', () => {
-    expect(binToHex(p2shLocking)).toBe(`a914${binToHex(hash160(redeemScript))}87`);
+    expect(binToHex(p2shLocking)).toBe(
+      `a914${binToHex(hash160(redeemScript))}87`
+    );
   });
 });
 
 describe('cosignerStatuses', () => {
   it('reports every cosigner as unsigned on an empty PSBT', () => {
-    const parsed = decodePsbt(wrapWithSignatures(buildMultisigProposal(100_000n), []));
+    const parsed = decodePsbt(
+      wrapWithSignatures(buildMultisigProposal(100_000n), [])
+    );
     const statuses = cosignerStatuses(parsed);
     expect(statuses).toHaveLength(1);
     const input: CosignerStatus[] = statuses[0];
@@ -273,13 +295,22 @@ describe('cosignerStatuses', () => {
       1,
       redeemScript
     );
-    const parsed = decodePsbt(wrapWithSignatures(proposal, [{ keyIndex: 1, signature: sig }]));
-    expect(cosignerStatuses(parsed)[0].map((s) => s.signed)).toEqual([false, true, false]);
+    const parsed = decodePsbt(
+      wrapWithSignatures(proposal, [{ keyIndex: 1, signature: sig }])
+    );
+    expect(cosignerStatuses(parsed)[0].map((s) => s.signed)).toEqual([
+      false,
+      true,
+      false,
+    ]);
   });
 });
 
 describe('mergePsbts', () => {
-  function signerForKey(proposal: ReturnType<typeof buildWatchOnlyPsbt>, keyIndex: number) {
+  function signerForKey(
+    proposal: ReturnType<typeof buildWatchOnlyPsbt>,
+    keyIndex: number
+  ) {
     return signInput(
       proposal.rawUnsignedHex,
       SOURCE_OUTPUTS,
@@ -293,8 +324,12 @@ describe('mergePsbts', () => {
     const proposal = buildMultisigProposal(100_000n);
     const sigA = signerForKey(proposal, 0);
     const sigB = signerForKey(proposal, 2);
-    const psbtA = wrapWithSignatures(proposal, [{ keyIndex: 0, signature: sigA }]);
-    const psbtB = wrapWithSignatures(proposal, [{ keyIndex: 2, signature: sigB }]);
+    const psbtA = wrapWithSignatures(proposal, [
+      { keyIndex: 0, signature: sigA },
+    ]);
+    const psbtB = wrapWithSignatures(proposal, [
+      { keyIndex: 2, signature: sigB },
+    ]);
 
     const outcome = mergePsbts([psbtA, psbtB]);
     expect(outcome.results).toEqual([{ index: 1, combined: true }]);
@@ -309,8 +344,12 @@ describe('mergePsbts', () => {
     const proposal = buildMultisigProposal(100_000n);
     const sigA = signerForKey(proposal, 0);
     const sigB = signerForKey(proposal, 1);
-    const psbtA = wrapWithSignatures(proposal, [{ keyIndex: 0, signature: sigA }]);
-    const psbtB = wrapWithSignatures(proposal, [{ keyIndex: 1, signature: sigB }]);
+    const psbtA = wrapWithSignatures(proposal, [
+      { keyIndex: 0, signature: sigA },
+    ]);
+    const psbtB = wrapWithSignatures(proposal, [
+      { keyIndex: 1, signature: sigB },
+    ]);
 
     const forward = decodePsbt(mergePsbts([psbtA, psbtB]).merged);
     const reverse = decodePsbt(mergePsbts([psbtB, psbtA]).merged);
@@ -322,7 +361,9 @@ describe('mergePsbts', () => {
   it('does not require signatures on every candidate', () => {
     const proposal = buildMultisigProposal(100_000n);
     const sigA = signerForKey(proposal, 0);
-    const psbtA = wrapWithSignatures(proposal, [{ keyIndex: 0, signature: sigA }]);
+    const psbtA = wrapWithSignatures(proposal, [
+      { keyIndex: 0, signature: sigA },
+    ]);
     const empty = wrapWithSignatures(proposal, []);
 
     const outcome = mergePsbts([psbtA, empty]);
@@ -335,8 +376,12 @@ describe('mergePsbts', () => {
     const proposalB = buildMultisigProposal(150_000n);
     const sigA = signerForKey(proposalA, 0);
     const sigB = signerForKey(proposalB, 1);
-    const psbtA = wrapWithSignatures(proposalA, [{ keyIndex: 0, signature: sigA }]);
-    const psbtB = wrapWithSignatures(proposalB, [{ keyIndex: 1, signature: sigB }]);
+    const psbtA = wrapWithSignatures(proposalA, [
+      { keyIndex: 0, signature: sigA },
+    ]);
+    const psbtB = wrapWithSignatures(proposalB, [
+      { keyIndex: 1, signature: sigB },
+    ]);
 
     const outcome = mergePsbts([psbtA, psbtB]);
     expect(outcome.results).toHaveLength(1);
@@ -361,16 +406,24 @@ describe('mergePsbts', () => {
           derivations: publicKeys.map((publicKey, index) => ({
             publicKey,
             masterFingerprint: fingerprints[index],
-            derivationPath: [HARDENED | 44, HARDENED | 145, HARDENED | 0, 0, index],
+            derivationPath: [
+              HARDENED | 44,
+              HARDENED | 145,
+              HARDENED | 0,
+              0,
+              index,
+            ],
           })),
-          partialSignatures: [{ inputIndex: 0, publicKey: publicKeys[0], signature: sig }],
+          partialSignatures: [
+            { inputIndex: 0, publicKey: publicKeys[0], signature: sig },
+          ],
         },
       ],
       proposal.outputs.map((output) => ({
         lockingBytecode: hexToBin(output.lockingBytecodeHex),
         satoshis: output.satoshis,
       })),
-      0xc1
+      proposal.sighashType
     );
 
     const outcome = mergePsbts([wrapWithSignatures(proposal, []), wrapped]);
@@ -380,7 +433,10 @@ describe('mergePsbts', () => {
 
   it('rejects a signature from the wrong key', () => {
     const proposal = buildMultisigProposal(100_000n);
-    const foreignKey = Uint8Array.from([0xff, ...new Uint8Array(32).fill(0xee)]);
+    const foreignKey = Uint8Array.from([
+      0xff,
+      ...new Uint8Array(32).fill(0xee),
+    ]);
     const sig = signInput(
       proposal.rawUnsignedHex,
       SOURCE_OUTPUTS,
@@ -400,9 +456,17 @@ describe('mergePsbts', () => {
           derivations: publicKeys.map((publicKey, index) => ({
             publicKey,
             masterFingerprint: fingerprints[index],
-            derivationPath: [HARDENED | 44, HARDENED | 145, HARDENED | 0, 0, index],
+            derivationPath: [
+              HARDENED | 44,
+              HARDENED | 145,
+              HARDENED | 0,
+              0,
+              index,
+            ],
           })),
-          partialSignatures: [{ inputIndex: 0, publicKey: foreignKey, signature: sig }],
+          partialSignatures: [
+            { inputIndex: 0, publicKey: foreignKey, signature: sig },
+          ],
         },
       ],
       proposal.outputs.map((output) => ({
@@ -425,9 +489,11 @@ describe('mergePsbts', () => {
       0,
       0,
       redeemScript,
-      0x41
+      0xc1
     );
-    const wrapped = wrapWithSignatures(proposal, [{ keyIndex: 0, signature: sig }]);
+    const wrapped = wrapWithSignatures(proposal, [
+      { keyIndex: 0, signature: sig },
+    ]);
     const outcome = mergePsbts([wrapWithSignatures(proposal, []), wrapped]);
     expect(outcome.results[0].combined).toBe(false);
     expect(outcome.results[0].error).toMatch(/verification/i);
@@ -437,16 +503,26 @@ describe('mergePsbts', () => {
     const proposal = buildMultisigProposal(100_000n);
     const sigA = signerForKey(proposal, 0);
     const sigB = signerForKey(proposal, 1);
-    const good = wrapWithSignatures(proposal, [{ keyIndex: 0, signature: sigA }]);
-    const bad = wrapWithSignatures(proposal, [{ keyIndex: 1, signature: sigB }]);
+    const good = wrapWithSignatures(proposal, [
+      { keyIndex: 0, signature: sigA },
+    ]);
+    const bad = wrapWithSignatures(proposal, [
+      { keyIndex: 1, signature: sigB },
+    ]);
     const other = buildMultisigProposal(150_000n);
     const sigOther = signerForKey(other, 0);
-    const conflicting = wrapWithSignatures(other, [{ keyIndex: 0, signature: sigOther }]);
+    const conflicting = wrapWithSignatures(other, [
+      { keyIndex: 0, signature: sigOther },
+    ]);
 
     const outcome = mergePsbts([good, bad, conflicting]);
     expect(outcome.results).toEqual([
       { index: 1, combined: true },
-      { index: 2, combined: false, error: expect.stringMatching(/hash mismatch/i) },
+      {
+        index: 2,
+        combined: false,
+        error: expect.stringMatching(/hash mismatch/i),
+      },
     ]);
     expect(decodePsbt(outcome.merged).signatures).toHaveLength(2);
   });
@@ -458,11 +534,15 @@ describe('watch-only multisig send flow', () => {
     const parsed = decodePsbt(proposal.psbtBytes);
     expect(parsed.inputs).toHaveLength(1);
     expect(parsed.inputs[0].derivations).toHaveLength(3);
-    expect(binToHex(parsed.inputs[0].redeemScript!)).toBe(binToHex(redeemScript));
-    expect(binToHex(parsed.inputs[0].spentLockingBytecode!)).toBe(binToHex(p2shLocking));
-    expect(parsed.inputs[0].derivations.map((d) => binToHex(d.publicKey))).toEqual(
-      publicKeys.map(binToHex)
+    expect(binToHex(parsed.inputs[0].redeemScript!)).toBe(
+      binToHex(redeemScript)
     );
+    expect(binToHex(parsed.inputs[0].spentLockingBytecode!)).toBe(
+      binToHex(p2shLocking)
+    );
+    expect(
+      parsed.inputs[0].derivations.map((d) => binToHex(d.publicKey))
+    ).toEqual(publicKeys.map(binToHex));
   });
 
   it('writes the change output back to the same multisig policy', () => {
@@ -517,13 +597,22 @@ describe('watch-only multisig send flow', () => {
 
   it('reports partially-signed until the threshold is met', () => {
     const proposal = buildMultisigProposal(100_000n);
-    const sigA = signInput(proposal.rawUnsignedHex, SOURCE_OUTPUTS, 0, 0, redeemScript);
-    const oneOfTwo = wrapWithSignatures(proposal, [{ keyIndex: 0, signature: sigA }]);
+    const sigA = signInput(
+      proposal.rawUnsignedHex,
+      SOURCE_OUTPUTS,
+      0,
+      0,
+      redeemScript
+    );
+    const oneOfTwo = wrapWithSignatures(proposal, [
+      { keyIndex: 0, signature: sigA },
+    ]);
 
     const result = inspectImportedPsbt(oneOfTwo, {
       rawUnsignedHex: proposal.rawUnsignedHex,
       inputs: [MULTISIG_INPUT_SPEC],
       outputs: proposal.outputs,
+      sighashType: proposal.sighashType,
     });
     expect(result.state).toBe('partially-signed');
     expect(result.signedInputCount).toBe(0);
@@ -533,16 +622,33 @@ describe('watch-only multisig send flow', () => {
   it('completes only when the input has its required signatures', () => {
     const proposal = buildMultisigProposal(100_000n);
     const sourceOutputs = SOURCE_OUTPUTS;
-    const sigA = signInput(proposal.rawUnsignedHex, sourceOutputs, 0, 0, redeemScript);
-    const sigB = signInput(proposal.rawUnsignedHex, sourceOutputs, 0, 2, redeemScript);
-    const partialA = wrapWithSignatures(proposal, [{ keyIndex: 0, signature: sigA }]);
-    const partialB = wrapWithSignatures(proposal, [{ keyIndex: 2, signature: sigB }]);
+    const sigA = signInput(
+      proposal.rawUnsignedHex,
+      sourceOutputs,
+      0,
+      0,
+      redeemScript
+    );
+    const sigB = signInput(
+      proposal.rawUnsignedHex,
+      sourceOutputs,
+      0,
+      2,
+      redeemScript
+    );
+    const partialA = wrapWithSignatures(proposal, [
+      { keyIndex: 0, signature: sigA },
+    ]);
+    const partialB = wrapWithSignatures(proposal, [
+      { keyIndex: 2, signature: sigB },
+    ]);
     const merged = mergePsbts([partialA, partialB]).merged;
 
     const result = inspectImportedPsbt(merged, {
       rawUnsignedHex: proposal.rawUnsignedHex,
       inputs: [MULTISIG_INPUT_SPEC],
       outputs: proposal.outputs,
+      sighashType: proposal.sighashType,
     });
     expect(result.state).toBe('complete');
     expect(result.signedInputCount).toBe(1);
@@ -554,8 +660,20 @@ describe('watch-only multisig send flow', () => {
     // fail only here — which on chain means a transaction that is rejected at
     // broadcast after the hardware has been put away.
     const proposal = buildMultisigProposal(100_000n);
-    const sigA = signInput(proposal.rawUnsignedHex, SOURCE_OUTPUTS, 0, 0, redeemScript);
-    const sigB = signInput(proposal.rawUnsignedHex, SOURCE_OUTPUTS, 0, 2, redeemScript);
+    const sigA = signInput(
+      proposal.rawUnsignedHex,
+      SOURCE_OUTPUTS,
+      0,
+      0,
+      redeemScript
+    );
+    const sigB = signInput(
+      proposal.rawUnsignedHex,
+      SOURCE_OUTPUTS,
+      0,
+      2,
+      redeemScript
+    );
     const merged = mergePsbts([
       wrapWithSignatures(proposal, [{ keyIndex: 0, signature: sigA }]),
       wrapWithSignatures(proposal, [{ keyIndex: 2, signature: sigB }]),
@@ -565,6 +683,7 @@ describe('watch-only multisig send flow', () => {
       rawUnsignedHex: proposal.rawUnsignedHex,
       inputs: [MULTISIG_INPUT_SPEC],
       outputs: proposal.outputs,
+      sighashType: proposal.sighashType,
     });
     const transaction = decodeTransaction(hexToBin(rawTxHex));
     if (typeof transaction === 'string') throw new Error(transaction);
@@ -573,7 +692,10 @@ describe('watch-only multisig send flow', () => {
     expect(
       vm.verify({
         sourceOutputs: [
-          { lockingBytecode: p2shLocking, valueSatoshis: MULTISIG_INPUT.satoshis },
+          {
+            lockingBytecode: p2shLocking,
+            valueSatoshis: MULTISIG_INPUT.satoshis,
+          },
         ],
         transaction,
       })
@@ -585,7 +707,15 @@ describe('watch-only multisig send flow', () => {
     // that mode still takes the null dummy. The VM is the arbiter for both.
     const proposal = buildMultisigProposal(100_000n);
     const sign = (keyIndex: number) =>
-      signInput(proposal.rawUnsignedHex, SOURCE_OUTPUTS, 0, keyIndex, redeemScript, 0xc1, 'der');
+      signInput(
+        proposal.rawUnsignedHex,
+        SOURCE_OUTPUTS,
+        0,
+        keyIndex,
+        redeemScript,
+        proposal.sighashType,
+        'der'
+      );
     const sigA = sign(0);
     const sigB = sign(2);
     const merged = mergePsbts([
@@ -597,6 +727,7 @@ describe('watch-only multisig send flow', () => {
       rawUnsignedHex: proposal.rawUnsignedHex,
       inputs: [MULTISIG_INPUT_SPEC],
       outputs: proposal.outputs,
+      sighashType: proposal.sighashType,
     });
     const transaction = decodeTransaction(hexToBin(rawTxHex));
     if (typeof transaction === 'string') throw new Error(transaction);
@@ -606,7 +737,10 @@ describe('watch-only multisig send flow', () => {
     expect(
       vm.verify({
         sourceOutputs: [
-          { lockingBytecode: p2shLocking, valueSatoshis: MULTISIG_INPUT.satoshis },
+          {
+            lockingBytecode: p2shLocking,
+            valueSatoshis: MULTISIG_INPUT.satoshis,
+          },
         ],
         transaction,
       })
@@ -617,8 +751,22 @@ describe('watch-only multisig send flow', () => {
     // CHECKMULTISIG carries one dummy for the whole input, so a mixed set has
     // no correct encoding. Better to say so than to guess and fail at broadcast.
     const proposal = buildMultisigProposal(100_000n);
-    const schnorr = signInput(proposal.rawUnsignedHex, SOURCE_OUTPUTS, 0, 0, redeemScript);
-    const der = signInput(proposal.rawUnsignedHex, SOURCE_OUTPUTS, 0, 2, redeemScript, 0xc1, 'der');
+    const schnorr = signInput(
+      proposal.rawUnsignedHex,
+      SOURCE_OUTPUTS,
+      0,
+      0,
+      redeemScript
+    );
+    const der = signInput(
+      proposal.rawUnsignedHex,
+      SOURCE_OUTPUTS,
+      0,
+      2,
+      redeemScript,
+      proposal.sighashType,
+      'der'
+    );
     const merged = mergePsbts([
       wrapWithSignatures(proposal, [{ keyIndex: 0, signature: schnorr }]),
       wrapWithSignatures(proposal, [{ keyIndex: 2, signature: der }]),
@@ -629,6 +777,7 @@ describe('watch-only multisig send flow', () => {
         rawUnsignedHex: proposal.rawUnsignedHex,
         inputs: [MULTISIG_INPUT_SPEC],
         outputs: proposal.outputs,
+        sighashType: proposal.sighashType,
       })
     ).toThrow(/same algorithm/i);
   });
@@ -636,16 +785,33 @@ describe('watch-only multisig send flow', () => {
   it('merges into a broadcastable checkbits ... OP_CHECKMULTISIG unlock', () => {
     const proposal = buildMultisigProposal(100_000n);
     const sourceOutputs = SOURCE_OUTPUTS;
-    const sigA = signInput(proposal.rawUnsignedHex, sourceOutputs, 0, 0, redeemScript);
-    const sigB = signInput(proposal.rawUnsignedHex, sourceOutputs, 0, 2, redeemScript);
-    const partialA = wrapWithSignatures(proposal, [{ keyIndex: 0, signature: sigA }]);
-    const partialB = wrapWithSignatures(proposal, [{ keyIndex: 2, signature: sigB }]);
+    const sigA = signInput(
+      proposal.rawUnsignedHex,
+      sourceOutputs,
+      0,
+      0,
+      redeemScript
+    );
+    const sigB = signInput(
+      proposal.rawUnsignedHex,
+      sourceOutputs,
+      0,
+      2,
+      redeemScript
+    );
+    const partialA = wrapWithSignatures(proposal, [
+      { keyIndex: 0, signature: sigA },
+    ]);
+    const partialB = wrapWithSignatures(proposal, [
+      { keyIndex: 2, signature: sigB },
+    ]);
     const merged = mergePsbts([partialA, partialB]).merged;
 
     const rawTxHex = mergeImportedSignatures(merged, {
       rawUnsignedHex: proposal.rawUnsignedHex,
       inputs: [MULTISIG_INPUT_SPEC],
       outputs: proposal.outputs,
+      sighashType: proposal.sighashType,
     });
     const tx = decodeTransaction(hexToBin(rawTxHex));
     if (typeof tx === 'string') throw new Error(tx);
@@ -677,13 +843,22 @@ describe('watch-only multisig send flow', () => {
   it('rejects a 2-of-3 PSBT that only carries one valid signature', () => {
     const proposal = buildMultisigProposal(100_000n);
     const sourceOutputs = SOURCE_OUTPUTS;
-    const sigA = signInput(proposal.rawUnsignedHex, sourceOutputs, 0, 0, redeemScript);
-    const oneOfTwo = wrapWithSignatures(proposal, [{ keyIndex: 0, signature: sigA }]);
+    const sigA = signInput(
+      proposal.rawUnsignedHex,
+      sourceOutputs,
+      0,
+      0,
+      redeemScript
+    );
+    const oneOfTwo = wrapWithSignatures(proposal, [
+      { keyIndex: 0, signature: sigA },
+    ]);
     expect(() =>
       mergeImportedSignatures(oneOfTwo, {
         rawUnsignedHex: proposal.rawUnsignedHex,
         inputs: [MULTISIG_INPUT_SPEC],
         outputs: proposal.outputs,
+        sighashType: proposal.sighashType,
       })
     ).toThrow(/needs 2 verified multisig signatures/);
   });
