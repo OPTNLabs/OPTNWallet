@@ -1,4 +1,7 @@
-use std::{env, fs, path::{Path, PathBuf}};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+};
 
 const FRAMEWORK_NAMES: &[&str] = &["leptos", "tauri", "dioxus", "capacitor"];
 
@@ -40,9 +43,7 @@ fn architecture() {
 
     let ui_manifest = read(&root.join("crates/optn-ui/Cargo.toml"));
     if ui_manifest.contains("optn-core") {
-        failures.push(
-            "crates/optn-ui must depend on optn-app, not bypass it via optn-core".into(),
-        );
+        failures.push("crates/optn-ui must depend on optn-app, not bypass it via optn-core".into());
     }
 
     if failures.is_empty() {
