@@ -1077,6 +1077,8 @@ pub fn run() {
             hw::trezor_webusb::trezor_webusb_read,
         ])
         .setup(|app| {
+            use tauri::Manager;
+
             // The authoritative application runtime is framework-neutral.
             // Tauri only chooses the executor and stores the handle.
             let (app_runtime, app_driver) =
