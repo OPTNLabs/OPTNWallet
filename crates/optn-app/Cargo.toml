@@ -7,3 +7,6 @@ description = "Framework-neutral application state and use-case layer for OPTN W
 
 [dependencies]
 optn-core = { path = "../optn-core" }
+
+[dev-dependencies]
+proptest = "1.9.0"
