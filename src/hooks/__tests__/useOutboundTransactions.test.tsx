@@ -40,6 +40,16 @@ function Harness({ walletId = 7 }: { walletId?: number }) {
   return <output>{String(reconciling)}</output>;
 }
 
+function WalletStateHarness({ walletId }: { walletId: number }) {
+  const { unresolvedCount, reservedOutpointKeys } =
+    useOutboundTransactions(walletId);
+  return (
+    <output data-testid="wallet-state">
+      {`${unresolvedCount}:${Array.from(reservedOutpointKeys).join(',')}`}
+    </output>
+  );
+}
+
 describe('useOutboundTransactions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -71,6 +81,43 @@ describe('useOutboundTransactions', () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(runOutboundReconcileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears previous-wallet records before the next wallet load resolves', async () => {
+    let resolveWalletEight!: (records: unknown[]) => void;
+    const walletEightRecords = new Promise<unknown[]>((resolve) => {
+      resolveWalletEight = resolve;
+    });
+    const oldRecord = {
+      txid: 'old-wallet-tx',
+      spentOutpoints: [{ tx_hash: 'old-hash', tx_pos: 2 }],
+    };
+    const newRecord = {
+      txid: 'new-wallet-tx',
+      spentOutpoints: [{ tx_hash: 'new-hash', tx_pos: 3 }],
+    };
+
+    listActiveMock.mockImplementation((walletId: number) =>
+      walletId === 7 ? Promise.resolve([oldRecord]) : walletEightRecords
+    );
+    runOutboundReconcileMock.mockResolvedValue(undefined);
+
+    const rendered = render(<WalletStateHarness walletId={7} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('wallet-state').textContent).toBe(
+        '1:old-hash:2'
+      );
+    });
+
+    rendered.rerender(<WalletStateHarness walletId={8} />);
+    expect(screen.getByTestId('wallet-state').textContent).toBe('0:');
+
+    resolveWalletEight([newRecord]);
+    await waitFor(() => {
+      expect(screen.getByTestId('wallet-state').textContent).toBe(
+        '1:new-hash:3'
+      );
+    });
   });
 
   it('refreshes a new wallet while the previous wallet is reconciling', async () => {
