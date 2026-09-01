@@ -1030,8 +1030,7 @@ pub struct MultisigInspection {
     token_address: String,
 }
 
-#[tauri::command]
-pub fn multisig_inspect(
+pub fn inspect_multisig(
     network: String,
     threshold: u8,
     public_keys: Vec<String>,
@@ -1056,6 +1055,15 @@ pub fn multisig_inspect(
         address: inspection.address,
         token_address: inspection.token_address,
     })
+}
+
+#[tauri::command]
+fn multisig_inspect(
+    network: String,
+    threshold: u8,
+    public_keys: Vec<String>,
+) -> Result<MultisigInspection, String> {
+    inspect_multisig(network, threshold, public_keys)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
