@@ -1,0 +1,11 @@
+{
+  "build": {
+    "beforeDevCommand": "cd crates/optn-ui && trunk serve --config Trunk.toml",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "cd crates/optn-ui && trunk build --release --config Trunk.toml",
+    "frontendDist": "../crates/optn-ui/dist"
+  },
+  "app": {
+    "withGlobalTauri": true
+  }
+}
