@@ -8,8 +8,7 @@
 use std::{future::Future, pin::Pin};
 
 pub type PlatformResult<T> = Result<T, PlatformError>;
-pub type PlatformFuture<'a, T> =
-    Pin<Box<dyn Future<Output = PlatformResult<T>> + 'a>>;
+pub type PlatformFuture<'a, T> = Pin<Box<dyn Future<Output = PlatformResult<T>> + 'a>>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlatformError {
@@ -41,11 +40,7 @@ pub trait Clipboard {
 }
 
 pub trait Notifications {
-    fn notify<'a>(
-        &'a self,
-        title: &'a str,
-        body: &'a str,
-    ) -> PlatformFuture<'a, ()>;
+    fn notify<'a>(&'a self, title: &'a str, body: &'a str) -> PlatformFuture<'a, ()>;
 }
 
 pub trait FileSystem {
