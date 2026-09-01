@@ -60,11 +60,15 @@ pub(crate) fn with_clipboard<T>(
 /// occupying the main thread costs nothing observable.
 #[tauri::command]
 pub fn clipboard_write_text(app: tauri::AppHandle, text: String) -> Result<(), String> {
-    with_clipboard(&app, |clipboard| clipboard.set_text(text))
+    crate::platform::TauriClipboard::new(app)
+        .write_text_sync(&text)
+        .map_err(|error| format!("{error:?}"))
 }
 
 /// Synchronous for the same reason as `clipboard_write_text`.
 #[tauri::command]
 pub fn clipboard_read_text(app: tauri::AppHandle) -> Result<String, String> {
-    with_clipboard(&app, |clipboard| clipboard.get_text())
+    crate::platform::TauriClipboard::new(app)
+        .read_text_sync()
+        .map_err(|error| format!("{error:?}"))
 }
