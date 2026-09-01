@@ -481,6 +481,59 @@ describe('mergePsbts', () => {
     expect(outcome.results[0].error).toMatch(/verification/i);
   });
 
+  it('rejects a candidate that requests a different sighash type', () => {
+    const proposal = buildMultisigProposal(100_000n);
+    const candidateSignature = signInput(
+      proposal.rawUnsignedHex,
+      SOURCE_OUTPUTS,
+      0,
+      0,
+      redeemScript,
+      0xc1
+    );
+    const candidate = encodeUnsignedPsbt(
+      [
+        {
+          txid: MULTISIG_INPUT.txid,
+          vout: MULTISIG_INPUT.vout,
+          satoshis: MULTISIG_INPUT.satoshis,
+          lockingBytecode: p2shLocking,
+          redeemScript,
+          derivations: publicKeys.map((publicKey, index) => ({
+            publicKey,
+            masterFingerprint: fingerprints[index],
+            derivationPath: [
+              HARDENED | 44,
+              HARDENED | 145,
+              HARDENED | 0,
+              0,
+              index,
+            ],
+          })),
+          partialSignatures: [
+            {
+              inputIndex: 0,
+              publicKey: publicKeys[0],
+              signature: candidateSignature,
+            },
+          ],
+        },
+      ],
+      proposal.outputs.map((output) => ({
+        lockingBytecode: hexToBin(output.lockingBytecodeHex),
+        satoshis: output.satoshis,
+      })),
+      0xc1
+    );
+
+    const outcome = mergePsbts([
+      wrapWithSignatures(proposal, []),
+      candidate,
+    ]);
+    expect(outcome.results[0].combined).toBe(false);
+    expect(outcome.results[0].error).toMatch(/sighash type mismatch/i);
+  });
+
   it('rejects a signature with the wrong sighash type', () => {
     const proposal = buildMultisigProposal(100_000n);
     const sig = signInput(
