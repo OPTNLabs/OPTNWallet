@@ -23,20 +23,15 @@ hardware_shim.install()
 
 
 def _signer_imports():
-    """SeedCash moved signing out of psbt_parser; keep both layouts working."""
+    """Import the signing API exposed by the pinned SeedCash revision."""
     from seedcash.models.bip39 import Bip39  # noqa: E402
     from seedcash.models.psbt_parser import PSBTParser, parse_psbt  # noqa: E402
     from seedcash.models.wallet import Wallet  # noqa: E402
-
-    try:
-        from seedcash.models.psbt_parser import sign_psbt_with_xpriv  # noqa: E402
-    except ImportError:
-        from seedcash.models.psbt_signer import sign_psbt_with_xpriv  # noqa: E402
-    return Bip39, PSBTParser, parse_psbt, sign_psbt_with_xpriv, Wallet
+    return Bip39, PSBTParser, parse_psbt, Wallet
 
 
-Bip39, PSBTParser, parse_psbt, sign_psbt_with_xpriv, Wallet = (
-    (None, None, None, None, None)
+Bip39, PSBTParser, parse_psbt, Wallet = (
+    (None, None, None, None)
     if len(sys.argv) >= 2 and sys.argv[1] == "decode-ur"
     else _signer_imports()
 )
@@ -67,35 +62,28 @@ def emit_keys() -> None:
     )
 
 
+def _partial_signature_count(psbt_bytes: bytes | bytearray) -> int:
+    return sum(
+        1
+        for input_map in parse_psbt(bytes(psbt_bytes))["inputs"]
+        for key, _ in input_map
+        if key and key[0] == 0x02
+    )
+
+
 def sign(unsigned_path: str, signed_path: str) -> None:
     wallet = build_wallet()
     with open(unsigned_path, "r", encoding="utf-8") as handle:
         psbt_bytes = bytearray.fromhex(handle.read().strip())
 
-    # Parse first, exactly as the device does before showing the review screen.
-    # `_wallet_pubkeys_in_map` is the function that decides whether SeedCash
-    # claims an input as its own — if it returns nothing, the device shows the
-    # transaction as somebody else's and refuses to sign, which is the failure
-    # this check is here to surface loudly.
-    parser = PSBTParser(psbt_bytes, wallet_fingerprint=wallet._fingerprint)
-    fingerprint_bytes = bytes.fromhex(wallet._fingerprint)
-    claimed = [
-        index
-        for index, input_map in enumerate(parse_psbt(psbt_bytes)["inputs"])
-        if PSBTParser._wallet_pubkeys_in_map(input_map, fingerprint_bytes)
-    ]
-    if not claimed:
+    before = _partial_signature_count(psbt_bytes)
+    parser = PSBTParser(psbt_bytes)
+    signed = wallet.sign_psbt(parser)
+    after = _partial_signature_count(signed)
+    if after <= before:
         raise SystemExit(
-            "SeedCash did not recognise any input as its own. The PSBT is "
-            "missing or misencoding PSBT_IN_BIP32_DERIVATION (0x06) for "
-            f"fingerprint {wallet._fingerprint}."
-        )
-
-    signed = sign_psbt_with_xpriv(psbt_bytes, wallet._xpriv, account_path=ACCOUNT_PATH)
-    # sign_psbt_with_xpriv signs one input; the device loops every input.
-    for index in range(1, parser.num_inputs):
-        signed = sign_psbt_with_xpriv(
-            signed, wallet._xpriv, input_index=index, account_path=ACCOUNT_PATH
+            "SeedCash returned the PSBT without adding a partial signature. "
+            "Check BIP32 derivation metadata and signer ownership."
         )
 
     with open(signed_path, "w", encoding="utf-8") as handle:
@@ -122,21 +110,17 @@ def emit_cosigner_keys(count: int) -> None:
 
 
 def sign_as(index: int, unsigned_path: str, signed_path: str) -> None:
-    """Sign every input as one cosigner of a multisig wallet.
-
-    SeedCash reads the redeem script from PSBT_IN_REDEEM_SCRIPT (0x04) and uses
-    it as the scriptCode, which is what makes P2SH multisig work at all here.
-    It takes the derivation path from the 0x06 records — every cosigner shares
-    the same path, so it derives its own key at that path from its own xpriv.
-    """
+    """Sign every owned input as one deterministic multisig cosigner."""
     wallet = wallet_from(cosigner_mnemonic(index))
     with open(unsigned_path, "r", encoding="utf-8") as handle:
         psbt = bytearray.fromhex(handle.read().strip())
 
-    signed = psbt
-    for input_index in range(parse_psbt(psbt)["input_count"]):
-        signed = sign_psbt_with_xpriv(
-            signed, wallet._xpriv, input_index=input_index, account_path=ACCOUNT_PATH
+    before = _partial_signature_count(psbt)
+    signed = wallet.sign_psbt(PSBTParser(psbt))
+    after = _partial_signature_count(signed)
+    if after <= before:
+        raise SystemExit(
+            f"SeedCash cosigner {index} returned no new partial signature."
         )
 
     with open(signed_path, "w", encoding="utf-8") as handle:
