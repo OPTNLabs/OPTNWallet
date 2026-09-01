@@ -44,10 +44,10 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy framework-neutral crates
-        run: cargo clippy -p optn-app -p optn-platform -p xtask --all-targets -- -D warnings
+        run: cargo clippy -p optn-app -p optn-platform -p optn-runtime -p xtask --all-targets -- -D warnings
 
       - name: Test application and platform contracts
-        run: cargo test -p optn-app -p optn-platform -p xtask
+        run: cargo test -p optn-app -p optn-platform -p optn-runtime -p xtask
 
       - name: Compile Leptos UI to WASM
         run: cargo check -p optn-ui --target wasm32-unknown-unknown
