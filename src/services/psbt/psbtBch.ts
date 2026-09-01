@@ -224,7 +224,7 @@ function transactionTokenToPsbtToken(
   if (!token) return null;
   return {
     category: Uint8Array.from(token.category),
-    amount: token.amount,
+    ...(token.amount > 0n || !token.nft ? { amount: token.amount } : {}),
     ...(token.nft
       ? {
           capability: capabilityNumber(token.nft.capability),
