@@ -1398,7 +1398,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
         ),
         {
           walletId: currentWalletId ?? undefined,
-          multisig: mobile,
+          multisig: Boolean(multisigPolicy),
           source: mobile ? 'multisig' : 'watch-only',
           sourceLabel: mobile
             ? 'Mobile multisig send'

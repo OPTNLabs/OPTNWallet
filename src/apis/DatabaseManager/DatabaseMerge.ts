@@ -17,6 +17,19 @@ export const WALLET_CHILD_TABLES = [
 
 type SqlValue = string | number | null | Uint8Array;
 type SqlRow = Record<string, SqlValue>;
+type WalletChildCopy = {
+  table: string;
+  columns: string[];
+  rows: SqlValue[][];
+  sourceIds?: number[];
+};
+
+const WALLET_CHILD_TABLES_FOR_DELETION: readonly string[] = [
+  'multisig_address_keys',
+  ...WALLET_CHILD_TABLES.filter(
+    (table) => table !== 'multisig_address_keys'
+  ),
+];
 
 const GLOBAL_TABLE_KEYS = {
   cashscript_artifacts: 'contract_name',
@@ -113,6 +126,72 @@ function insertRows(
   );
   for (const row of rows) statement.run(row);
   statement.free();
+}
+
+function generatedRowId(database: Database): number {
+  const statement = database.prepare('SELECT last_insert_rowid() AS id');
+  try {
+    if (!statement.step()) {
+      throw new Error('Could not read generated SQLite row id.');
+    }
+    const id = statement.getAsObject().id;
+    if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0) {
+      throw new Error('SQLite generated an invalid row id.');
+    }
+    return id;
+  } finally {
+    statement.free();
+  }
+}
+
+function insertMultisigAddresses(
+  database: Database,
+  copy: WalletChildCopy,
+  addressIds: Map<number, number>
+): void {
+  if (!copy.sourceIds || copy.sourceIds.length !== copy.rows.length) {
+    throw new Error('Multisig address merge is missing source row ids.');
+  }
+  if (copy.rows.length === 0) return;
+  const statement = database.prepare(
+    `INSERT INTO ${quoted(copy.table)} (${copy.columns.map(quoted).join(', ')})
+     VALUES (${copy.columns.map(() => '?').join(', ')})`
+  );
+  try {
+    for (const [index, row] of copy.rows.entries()) {
+      statement.run(row);
+      addressIds.set(copy.sourceIds[index], generatedRowId(database));
+    }
+  } finally {
+    statement.free();
+  }
+}
+
+function remapMultisigAddressKeys(
+  copy: WalletChildCopy,
+  addressIds: Map<number, number>
+): SqlValue[][] {
+  const addressIdIndex = copy.columns.indexOf('address_id');
+  if (addressIdIndex === -1) return copy.rows;
+  return copy.rows.map((row) => {
+    const sourceAddressId = row[addressIdIndex];
+    if (
+      typeof sourceAddressId !== 'number' ||
+      !Number.isSafeInteger(sourceAddressId) ||
+      sourceAddressId <= 0
+    ) {
+      throw new Error('Multisig address key has an invalid address id.');
+    }
+    const addressId = addressIds.get(sourceAddressId);
+    if (addressId === undefined) {
+      throw new Error(
+        'Multisig address key refers to an address missing from this wallet merge.'
+      );
+    }
+    const remapped = [...row];
+    remapped[addressIdIndex] = addressId;
+    return remapped;
+  });
 }
 
 function valueEquals(left: SqlValue | undefined, right: SqlValue | undefined) {
@@ -355,7 +434,7 @@ export function deleteWalletScope(database: Database, walletId: number): void {
   }
   database.run('BEGIN IMMEDIATE');
   try {
-    for (const table of WALLET_CHILD_TABLES) {
+    for (const table of WALLET_CHILD_TABLES_FOR_DELETION) {
       if (tableExists(database, table)) {
         database.run(
           `DELETE FROM ${quoted(table)} WHERE ${quoted('wallet_id')} = ?`,
@@ -443,25 +522,51 @@ export function mergeWalletScope(
     throw new Error(`Wallet ${walletId} is missing from the local database.`);
   }
 
-  const childCopies = WALLET_CHILD_TABLES.flatMap((table) => {
-    if (!tableExists(latest, table) || !tableExists(local, table)) return [];
+  const childCopies: WalletChildCopy[] = [];
+  for (const table of WALLET_CHILD_TABLES) {
+    if (!tableExists(latest, table) || !tableExists(local, table)) continue;
     const latestColumns = new Set(tableColumns(latest, table));
     const columns = tableColumns(local, table).filter(
       (column) => column !== 'id' && latestColumns.has(column)
     );
-    if (!columns.includes('wallet_id')) return [];
-    return [
-      {
+    if (!columns.includes('wallet_id')) continue;
+    if (table === 'multisig_addresses') {
+      const rowsWithIds = readRows(
+        local,
+        table,
+        ['id', ...columns],
+        'wallet_id',
+        walletId
+      );
+      const sourceIds = rowsWithIds.map(([id]) => {
+        if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0) {
+          throw new Error('Multisig address has an invalid source row id.');
+        }
+        return id;
+      });
+      childCopies.push({
         table,
         columns,
-        rows: readRows(local, table, columns, 'wallet_id', walletId),
-      },
-    ];
-  });
+        rows: rowsWithIds.map((row) => row.slice(1)),
+        sourceIds,
+      });
+      continue;
+    }
+    childCopies.push({
+      table,
+      columns,
+      rows: readRows(local, table, columns, 'wallet_id', walletId),
+    });
+  }
 
   latest.run('BEGIN IMMEDIATE');
   try {
-    for (const copy of childCopies) {
+    const copiesForDeletion = [...childCopies].sort(
+      (left, right) =>
+        WALLET_CHILD_TABLES_FOR_DELETION.indexOf(left.table) -
+        WALLET_CHILD_TABLES_FOR_DELETION.indexOf(right.table)
+    );
+    for (const copy of copiesForDeletion) {
       latest.run(
         `DELETE FROM ${quoted(copy.table)} WHERE ${quoted('wallet_id')} = ?`,
         [walletId]
@@ -482,8 +587,20 @@ export function mergeWalletScope(
     walletInsert.run(walletRows[0]);
     walletInsert.free();
 
+    const addressIds = new Map<number, number>();
     for (const copy of childCopies) {
-      insertRows(latest, copy.table, copy.columns, copy.rows);
+      if (copy.table === 'multisig_addresses') {
+        insertMultisigAddresses(latest, copy, addressIds);
+      } else if (copy.table === 'multisig_address_keys') {
+        insertRows(
+          latest,
+          copy.table,
+          copy.columns,
+          remapMultisigAddressKeys(copy, addressIds)
+        );
+      } else {
+        insertRows(latest, copy.table, copy.columns, copy.rows);
+      }
     }
     latest.run('COMMIT');
   } catch (error) {
