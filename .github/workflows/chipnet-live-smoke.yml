@@ -8,6 +8,12 @@ on:
       - '.github/workflows/chipnet-live-smoke.yml'
       - 'scripts/seedcash/**'
       - 'src/services/psbt/**'
+      - 'src/services/RpaService.ts'
+      - 'src/services/RpaSender.ts'
+      - 'src/services/RpaDetect.ts'
+      - 'src/services/__tests__/rpaChipnet.live.test.ts'
+      - 'src/wasm/optn-core/**'
+      - 'crates/optn-core/src/rpa.rs'
       - 'test-support/chipnetElectrum.ts'
   workflow_dispatch:
   schedule:
@@ -72,6 +78,36 @@ jobs:
 
       - name: Live Chipnet watch-only self-send
         run: npx tsx scripts/seedcash/e2e_chipnet_watchonly.mts
+
+  rpa-chipnet:
+    name: RPA pay scan and sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RUN_RPA_LIVE: '1'
+      RPA_LIVE_MNEMONIC: 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
+      RPA_LIVE_SATS: '20000'
+      RPA_LIVE_GAP: '5'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify shipped Rust WASM vectors
+        run: npx vitest run src/wasm/optn-core/__tests__/optnCore.verify.test.ts --testTimeout=60000
+
+      - name: Live RPA payment, scan, key derivation and sweep
+        run: npx vitest run src/services/__tests__/rpaChipnet.live.test.ts --testTimeout=900000
 
   public-chipnet:
     name: Public Chipnet services
