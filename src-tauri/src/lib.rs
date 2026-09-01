@@ -6,6 +6,7 @@ pub mod electrum_tcp;
 pub mod fusion;
 pub mod hw;
 pub mod nostr_tor;
+pub mod platform;
 pub mod spv;
 
 async fn verified_fusion_proxy<'a>(
