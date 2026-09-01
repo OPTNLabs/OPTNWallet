@@ -3035,6 +3035,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
+name = "optn-app"
+version = "1.7.3"
+dependencies = [
+ "optn-core",
+]
+
+[[package]]
 name = "optn-core"
 version = "1.7.3"
 dependencies = [
@@ -3057,6 +3064,14 @@ name = "optn-platform"
 version = "1.7.3"
 
 [[package]]
+name = "optn-runtime"
+version = "1.7.3"
+dependencies = [
+ "optn-app",
+ "tokio",
+]
+
+[[package]]
 name = "optn-wallet-desktop"
 version = "1.7.3"
 dependencies = [
@@ -3072,6 +3087,8 @@ dependencies = [
  "num-bigint",
  "once_cell",
  "optn-core",
+ "optn-runtime",
+ "optn-app",
  "optn-platform",
  "prost",
  "prost-build",
