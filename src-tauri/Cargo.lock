@@ -3053,6 +3053,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "optn-platform"
+version = "1.7.3"
+
+[[package]]
 name = "optn-wallet-desktop"
 version = "1.7.3"
 dependencies = [
@@ -3068,6 +3072,7 @@ dependencies = [
  "num-bigint",
  "once_cell",
  "optn-core",
+ "optn-platform",
  "prost",
  "prost-build",
  "protox",
