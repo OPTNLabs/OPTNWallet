@@ -81,6 +81,7 @@ jobs:
 
   rpa-chipnet:
     name: RPA pay scan and sweep
+    needs: seedcash-chipnet
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
