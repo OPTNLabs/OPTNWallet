@@ -445,6 +445,13 @@ export function mergePsbts(psbts: Uint8Array[]): PsbtMergeOutcome {
             `Redeem script mismatch between base input and target input at index ${inputIndex}.`
           );
         }
+        if (
+          candidateInput.requestedSighashType !== baseInput.requestedSighashType
+        ) {
+          throw new Error(
+            `Sighash type mismatch between base input and target input at index ${inputIndex}.`
+          );
+        }
         for (const signature of candidateInput.partialSignatures) {
           if (!verifySignatureForPsbt(signature, candidate, candidateInput)) {
             throw new Error(
