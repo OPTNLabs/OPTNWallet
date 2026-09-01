@@ -11,5 +11,5 @@ path = "src/main.rs"
 
 [dependencies]
 leptos = { version = "0.8.20", features = ["csr"] }
-optn-core = { path = "../optn-core" }
+optn-app = { path = "../optn-app" }
 console_error_panic_hook = "0.1"
