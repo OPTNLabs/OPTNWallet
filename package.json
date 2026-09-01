@@ -66,7 +66,15 @@
     "watch-only-ur": "tsx scripts/watch-only-ur.mts",
     "watch-only-ur:vectors": "tsx scripts/watch-only-ur.mts vectors",
     "watch-only-ur:regenerate": "tsx scripts/generate-watch-only-ur-vectors.mts",
-    "wasm:optn-core": "tsx scripts/build-optn-core-wasm.mts"
+    "wasm:optn-core": "tsx scripts/build-optn-core-wasm.mts",
+    "rust:architecture": "cargo run -p xtask -- architecture",
+    "rust:ui:check": "cargo check -p optn-ui --target wasm32-unknown-unknown",
+    "tauri:leptos:dev": "npx tauri dev --config src-tauri/tauri.leptos.conf.json",
+    "tauri:leptos:build": "npx tauri build --config src-tauri/tauri.leptos.conf.json",
+    "tauri:leptos:android:dev": "npx tauri android dev --config src-tauri/tauri.leptos.conf.json",
+    "tauri:leptos:android:build": "npx tauri android build --config src-tauri/tauri.leptos.conf.json",
+    "tauri:leptos:ios:dev": "npx tauri ios dev --config src-tauri/tauri.leptos.conf.json",
+    "tauri:leptos:ios:build": "npx tauri ios build --config src-tauri/tauri.leptos.conf.json"
   },
   "dependencies": {
     "@bitauth/libauth": "3.1.0-next.8",
