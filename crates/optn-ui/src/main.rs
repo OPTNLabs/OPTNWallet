@@ -1,31 +1,40 @@
 #[cfg(target_arch = "wasm32")]
 use leptos::prelude::*;
+#[cfg(target_arch = "wasm32")]
+use optn_app::{onboarding_view_model, AppAction, AppState, ThemeMode};
 
 #[cfg(target_arch = "wasm32")]
 #[component]
 fn App() -> impl IntoView {
-    let dark = RwSignal::new(true);
-    let help_open = RwSignal::new(false);
-    let core_prefix = optn_core::network::Network::Mainnet.prefix();
+    let state = RwSignal::new(AppState::default());
 
     view! {
-        <main class:dark=move || dark.get() class="app-shell">
+        <main
+            class="app-shell"
+            class:dark=move || state.get().theme == ThemeMode::Dark
+        >
             <header class="topbar">
                 <div class="brand" aria-label="OPTN Wallet">"OPTN"</div>
 
                 <button
                     class="chip"
                     type="button"
-                    on:click=move |_| dark.update(|value| *value = !*value)
+                    on:click=move |_| state.update(|state| state.apply(AppAction::ToggleTheme))
                     aria-label="Toggle theme"
                 >
-                    {move || if dark.get() { "☀ Light" } else { "☾ Dark" }}
+                    {move || {
+                        if state.get().theme == ThemeMode::Dark {
+                            "☀ Light"
+                        } else {
+                            "☾ Dark"
+                        }
+                    }}
                 </button>
 
                 <button
                     class="chip"
                     type="button"
-                    on:click=move |_| help_open.set(true)
+                    on:click=move |_| state.update(|state| state.apply(AppAction::OpenHelp))
                 >
                     "Help"
                 </button>
@@ -42,28 +51,40 @@ fn App() -> impl IntoView {
                     <p class="eyebrow">"Bitcoin Cash, owned by you"</p>
                     <h1>"A Rust-first OPTN Wallet"</h1>
                     <p class="description">
-                        "The new frontend runs in Rust/WASM and links the same "
-                        <code>"optn-core"</code>
-                        " used by native targets."
+                        "Leptos renders the UI, but application state and routes live "
+                        <code>"optn-app"</code>
+                        ", so the UI framework remains replaceable."
                     </p>
 
                     <div class="core-proof">
                         <span>"Shared-core network prefix"</span>
-                        <strong>{core_prefix}</strong>
+                        <strong>
+                            {move || onboarding_view_model(&state.get()).network_prefix}
+                        </strong>
                     </div>
 
                     <nav class="actions" aria-label="Wallet onboarding">
-                        <a class="primary" href="#/createwallet">"Create wallet"</a>
-                        <a class="secondary" href="#/importwallet">"Import wallet"</a>
+                        <a
+                            class="primary"
+                            href={onboarding_view_model(&AppState::default()).create_wallet_href}
+                        >
+                            "Create wallet"
+                        </a>
+                        <a
+                            class="secondary"
+                            href={onboarding_view_model(&AppState::default()).import_wallet_href}
+                        >
+                            "Import wallet"
+                        </a>
                     </nav>
                 </section>
             </section>
 
-            <Show when=move || help_open.get()>
+            <Show when=move || onboarding_view_model(&state.get()).help_open>
                 <div
                     class="modal-backdrop"
                     role="presentation"
-                    on:click=move |_| help_open.set(false)
+                    on:click=move |_| state.update(|state| state.apply(AppAction::CloseHelp))
                 >
                     <section
                         class="modal"
@@ -75,12 +96,12 @@ fn App() -> impl IntoView {
                         <h2 id="help-title">"Getting started"</h2>
                         <p>
                             "Create a new wallet or import an existing one. "
-                            "This Leptos screen is the first Rust-authored UI slice."
+                            "This is the first Rust-authored UI slice over framework-neutral state."
                         </p>
                         <button
                             class="primary"
                             type="button"
-                            on:click=move |_| help_open.set(false)
+                            on:click=move |_| state.update(|state| state.apply(AppAction::CloseHelp))
                         >
                             "Close"
                         </button>
