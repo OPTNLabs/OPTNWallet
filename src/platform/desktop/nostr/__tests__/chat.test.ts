@@ -18,7 +18,9 @@ import { wrapManyEvents as wrapRumor } from 'nostr-tools/nip59';
 import {
   DEFAULT_RELAYS,
   DISCOVERY_RELAYS,
+  RETIRED_RELAYS,
   isDefaultNostrRelay,
+  mergeWithDefaultRelays,
 } from '../defaultRelays';
 import { deriveNostrIdentity } from '../identity';
 
@@ -109,6 +111,16 @@ describe('nostr chat DM (NIP-17)', () => {
     const evt = createKind10050([...DISCOVERY_RELAYS], sk);
     expect(evt.kind).toBe(10050);
     expect(evt.tags).toEqual([['relay', 'wss://relay.paytaca.com']]);
+  });
+
+  it('strips relays retired for invalid TLS from defaults and persisted extras', () => {
+    const expiredTlsRelay = 'wss://nostr.rocks';
+
+    expect(RETIRED_RELAYS).toContain(expiredTlsRelay);
+    expect(DEFAULT_RELAYS).not.toContain(expiredTlsRelay);
+    expect(mergeWithDefaultRelays([expiredTlsRelay])).not.toContain(
+      expiredTlsRelay
+    );
   });
 
   it('createReactionGiftWraps gift-wraps a NIP-25 kind 7', async () => {

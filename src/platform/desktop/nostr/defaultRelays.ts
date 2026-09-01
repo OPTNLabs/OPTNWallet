@@ -13,7 +13,8 @@
  *
  * Curated free generals only. Source candidates include community lists
  * (e.g. sesseor/nostr-relays-list); dead/paid/private IPs/NSFW junk excluded.
- * Alive filter: NIP-11 HTTPS probe 2026-08-06 (not a full WSS publish test).
+ * Alive filter: NIP-11 HTTPS probe 2026-08-06, followed by a live WSS probe
+ * 2026-09-01 (including a signed ephemeral publish through Paytaca).
  * Skip: nostr.wine / nostr.land fleets, relay.nostr.band (WSS hang history).
  */
 export const DEFAULT_RELAYS: string[] = [
@@ -33,7 +34,6 @@ export const DEFAULT_RELAYS: string[] = [
   // Alive free diversity (NIP-11 OK this probe)
   'wss://relay.orangepill.dev',
   'wss://nostr.einundzwanzig.space',
-  'wss://nostr.rocks',
   'wss://relay.shawnyeager.com',
   'wss://nostr.vulpem.com',
   'wss://nostr.l00p.org',
@@ -65,11 +65,11 @@ export function normalizeRelayUrl(url: string): string {
 export const RETIRED_RELAYS: readonly string[] = [
   'wss://nostrue.com',
   'wss://relay.0xchat.com',
+  // Live WSS probe 2026-09-01: TLS certificate expired.
+  'wss://nostr.rocks',
 ];
 
-export const DISCOVERY_RELAYS: readonly string[] = [
-  'wss://relay.paytaca.com',
-];
+export const DISCOVERY_RELAYS: readonly string[] = ['wss://relay.paytaca.com'];
 
 const RETIRED_SET = () =>
   new Set(RETIRED_RELAYS.map((r) => normalizeRelayUrl(r)));
