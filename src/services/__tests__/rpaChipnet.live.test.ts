@@ -23,6 +23,7 @@ import * as bip39 from 'bip39';
 import {
   binToHex,
   cashAddressToLockingBytecode,
+  createVirtualMachineBCH,
   decodeTransaction,
   encodeCashAddress,
   encodeTransaction,
@@ -32,6 +33,12 @@ import {
   type TransactionCommon,
 } from '@bitauth/libauth';
 import { hash160 } from '@cashscript/utils';
+import {
+  ElectrumNetworkProvider,
+  HashType,
+  SignatureTemplate,
+  TransactionBuilder,
+} from 'cashscript';
 import { Network } from '../../state/slices/networkSlice';
 import { derivePrivateKeyAtPath, getBchAddressPath } from '../HdWalletService';
 import {
@@ -46,6 +53,7 @@ import { matchRpaPaymentsInRawTx } from '../RpaDetect';
 import { anyServer } from '../../../test-support/chipnetElectrum';
 
 const FEE_SATS = 2_000;
+const SWEEP_FEE_SATS = 1_000;
 
 const senderMnemonic = process.env.RPA_LIVE_MNEMONIC ?? '';
 const recipientMnemonic =
@@ -240,10 +248,63 @@ describe.skipIf(!enabled)('RPA on chipnet', () => {
 
     const onChain = decodeTransaction(hexToBin(raw));
     if (typeof onChain === 'string') throw new Error(onChain);
+    const stealthSource = onChain.outputs[matches[0].outputIndex];
+    expect(binToHex(stealthSource.lockingBytecode)).toBe(
+      binToHex(p2pkhLock(Uint8Array.from(spendPubkey)))
+    );
+
+    // Actually move the received RPA coin back to the original test wallet.
+    // A script comparison proves the derived pubkey matches; this proves the
+    // derived PRIVATE key signs a BCH transaction accepted by consensus.
+    expect(paySats).toBeGreaterThan(SWEEP_FEE_SATS + 546);
+    const provider = new ElectrumNetworkProvider(Network.CHIPNET);
+    const sweep = new TransactionBuilder({ provider });
+    sweep.addInputs([
+      {
+        txid: txid as string,
+        vout: matches[0].outputIndex,
+        satoshis: BigInt(paySats),
+        unlocker: new SignatureTemplate(
+          spendPrivkey,
+          HashType.SIGHASH_ALL
+        ).unlockP2PKH(),
+      },
+    ]);
+    sweep.addOutputs([
+      {
+        to: sender.address,
+        amount: BigInt(paySats - SWEEP_FEE_SATS),
+      },
+    ]);
+    const sweepHex = await sweep.build();
+
+    const sweepTx = decodeTransaction(hexToBin(sweepHex));
+    if (typeof sweepTx === 'string') throw new Error(sweepTx);
+    const vm = createVirtualMachineBCH();
     expect(
-      binToHex(onChain.outputs[matches[0].outputIndex].lockingBytecode)
-    ).toBe(binToHex(p2pkhLock(Uint8Array.from(spendPubkey))));
-    console.log('spendable   : yes');
-    console.log(`explorer    : https://bchexplorer.cash/chipnet/tx/${txid}\n`);
+      vm.verify({
+        sourceOutputs: [stealthSource],
+        transaction: sweepTx,
+      })
+    ).toBe(true);
+
+    let sweepTxid: unknown = null;
+    for (let attempt = 1; attempt <= 6; attempt++) {
+      const sweepBroadcast = await anyServer([
+        [1, 'blockchain.transaction.broadcast', [sweepHex]],
+      ]);
+      sweepTxid = sweepBroadcast.results[1];
+      if (typeof sweepTxid === 'string') break;
+      if (attempt < 6) {
+        await new Promise((resolve) => setTimeout(resolve, attempt * 2_000));
+      }
+    }
+    expect(typeof sweepTxid).toBe('string');
+
+    console.log('spendable   : yes, swept on chipnet');
+    console.log(`payment     : https://bchexplorer.cash/chipnet/tx/${txid}`);
+    console.log(
+      `sweep       : https://bchexplorer.cash/chipnet/tx/${String(sweepTxid)}\n`
+    );
   }, 900_000);
 });
