@@ -47,3 +47,11 @@ target = "rust-wasm-ui"
 layer = "ui-adapter"
 status = "planned"
 security_weight = 5
+
+[[component]]
+name = "application-runtime"
+current = "mixed-react-hooks-typescript"
+target = "rust-actions-events-workers"
+layer = "runtime"
+status = "started"
+security_weight = 8
