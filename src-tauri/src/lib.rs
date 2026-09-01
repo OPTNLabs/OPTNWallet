@@ -1013,6 +1013,51 @@ async fn optn_cold_file_exists(path: String) -> Result<bool, String> {
     Ok(std::path::Path::new(&path).is_file())
 }
 
+/// Public, deterministic multisig material shared with the cross-compilable
+/// CLI. This command intentionally accepts no wallet, seed, private key,
+/// session, or network endpoint: callers provide already-derived public keys
+/// and receive only the BIP-67/P2SH20 result.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MultisigInspection {
+    network: String,
+    threshold: u8,
+    total_signatures: u8,
+    sorted_public_keys: Vec<String>,
+    redeem_script: String,
+    locking_script: String,
+    address: String,
+    token_address: String,
+}
+
+#[tauri::command]
+pub fn multisig_inspect(
+    network: String,
+    threshold: u8,
+    public_keys: Vec<String>,
+) -> Result<MultisigInspection, String> {
+    let core_network =
+        optn_multisig_core::Network::parse(&network).map_err(|error| error.to_string())?;
+    let public_key_refs = public_keys.iter().map(String::as_str).collect::<Vec<_>>();
+    let inspection = optn_multisig_core::inspect_p2sh20(core_network, threshold, &public_key_refs)
+        .map_err(|error| error.to_string())?;
+
+    Ok(MultisigInspection {
+        network: core_network.prefix().to_string(),
+        threshold: inspection.threshold,
+        total_signatures: inspection.total_signatures,
+        sorted_public_keys: inspection
+            .sorted_public_keys
+            .iter()
+            .map(hex::encode)
+            .collect(),
+        redeem_script: hex::encode(inspection.redeem_script),
+        locking_script: hex::encode(inspection.locking_script),
+        address: inspection.address,
+        token_address: inspection.token_address,
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1032,6 +1077,7 @@ pub fn run() {
             read_optn_cold_file,
             write_optn_cold_file,
             optn_cold_file_exists,
+            multisig_inspect,
             fusion_server_status,
             fusion_join_status,
             fusion_execution_status,
