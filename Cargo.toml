@@ -3,6 +3,7 @@ resolver = "2"
 members = [
   "crates/optn-app",
   "crates/optn-platform",
+  "crates/optn-runtime",
   "crates/optn-ui",
   "xtask",
 ]
@@ -14,6 +15,7 @@ exclude = [
 default-members = [
   "crates/optn-app",
   "crates/optn-platform",
+  "crates/optn-runtime",
   "crates/optn-ui",
   "xtask",
 ]
