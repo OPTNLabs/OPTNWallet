@@ -1,13 +1,19 @@
 [workspace]
 resolver = "2"
 members = [
-  "crates/optn-core",
+  "crates/optn-app",
+  "crates/optn-platform",
   "crates/optn-ui",
-  "src-tauri",
   "xtask",
 ]
-default-members = [
+exclude = [
+  "crates/optn-cli",
   "crates/optn-core",
+  "src-tauri",
+]
+default-members = [
+  "crates/optn-app",
+  "crates/optn-platform",
   "crates/optn-ui",
   "xtask",
 ]
