@@ -221,7 +221,11 @@ describe.skipIf(!enabled)('RPA on chipnet', () => {
       [1, 'blockchain.transaction.broadcast', [sent.txHex]],
     ]);
     const txid = broadcast.results[1];
-    expect(typeof txid).toBe('string');
+    if (typeof txid !== 'string') {
+      throw new Error(
+        `RPA broadcast rejected by ${broadcast.host}: ${JSON.stringify(txid)}`
+      );
+    }
     console.log(`txid        : ${txid}`);
 
     // Re-fetch from the network rather than trusting the local copy, then scan.
