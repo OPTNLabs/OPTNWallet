@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import OutboundTransactionTracker, {
   OUTBOUND_RELEASE_DELAY_MS,
   type OutboundTransactionRecord,
@@ -19,8 +26,9 @@ export default function useOutboundTransactions(
   const currentWalletIdRef = useRef(walletId);
   const refreshingWalletIdsRef = useRef(new Set<number>());
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     currentWalletIdRef.current = walletId;
+    setRecords([]);
   }, [walletId]);
 
   const load = useCallback(
