@@ -3,6 +3,9 @@
 //! Long-lived native work should live behind typed runtime/services rather than
 //! inside Leptos signals or Tauri commands. The runtime owns authoritative
 //! application state, receives typed actions, and publishes typed events.
+//!
+//! The runtime does not choose an executor for the host. `AppRuntime::new`
+//! returns a driver future which Tauri, tests, or another shell can spawn.
 
 use optn_app::{AppAction, AppEvent, AppState};
 use tokio::sync::{broadcast, mpsc, watch};
@@ -17,33 +20,40 @@ pub struct AppRuntime {
     event_tx: broadcast::Sender<AppEvent>,
 }
 
+pub struct AppRuntimeDriver {
+    action_rx: mpsc::Receiver<AppAction>,
+    state_tx: watch::Sender<AppState>,
+    event_tx: broadcast::Sender<AppEvent>,
+    state: AppState,
+}
+
 impl AppRuntime {
-    /// Spawn the runtime on the caller's Tokio executor.
-    pub fn spawn(initial_state: AppState) -> Self {
-        let (action_tx, mut action_rx) = mpsc::channel(ACTION_CAPACITY);
+    /// Construct the runtime plus its executor-agnostic driver.
+    pub fn new(initial_state: AppState) -> (Self, AppRuntimeDriver) {
+        let (action_tx, action_rx) = mpsc::channel(ACTION_CAPACITY);
         let (state_tx, state_rx) = watch::channel(initial_state.clone());
         let (event_tx, _) = broadcast::channel(EVENT_CAPACITY);
-        let runtime_event_tx = event_tx.clone();
 
-        tokio::spawn(async move {
-            let mut state = initial_state;
-            while let Some(action) = action_rx.recv().await {
-                let Some(event) = state.reduce(action) else {
-                    continue;
-                };
+        (
+            Self {
+                action_tx,
+                state_rx,
+                event_tx: event_tx.clone(),
+            },
+            AppRuntimeDriver {
+                action_rx,
+                state_tx,
+                event_tx,
+                state: initial_state,
+            },
+        )
+    }
 
-                // Publish the authoritative snapshot before the event so a
-                // subscriber reacting to the event can immediately read it.
-                state_tx.send_replace(state.clone());
-                let _ = runtime_event_tx.send(event);
-            }
-        });
-
-        Self {
-            action_tx,
-            state_rx,
-            event_tx,
-        }
+    /// Convenience for hosts already running inside Tokio.
+    pub fn spawn(initial_state: AppState) -> Self {
+        let (runtime, driver) = Self::new(initial_state);
+        tokio::spawn(driver.run());
+        runtime
     }
 
     pub async fn dispatch(
@@ -63,6 +73,21 @@ impl AppRuntime {
 
     pub fn subscribe_events(&self) -> broadcast::Receiver<AppEvent> {
         self.event_tx.subscribe()
+    }
+}
+
+impl AppRuntimeDriver {
+    pub async fn run(mut self) {
+        while let Some(action) = self.action_rx.recv().await {
+            let Some(event) = self.state.reduce(action) else {
+                continue;
+            };
+
+            // Publish the authoritative snapshot before the event so a
+            // subscriber reacting to the event can immediately read it.
+            self.state_tx.send_replace(self.state.clone());
+            let _ = self.event_tx.send(event);
+        }
     }
 }
 
@@ -97,5 +122,17 @@ mod tests {
 
         let event = events.recv().await.unwrap();
         assert_eq!(event, AppEvent::HelpVisibilityChanged(true));
+    }
+
+    #[tokio::test]
+    async fn driver_can_be_spawned_by_the_host_executor() {
+        let (runtime, driver) = AppRuntime::new(AppState::default());
+        tokio::spawn(driver.run());
+
+        runtime.dispatch(AppAction::ToggleTheme).await.unwrap();
+
+        let mut state_rx = runtime.subscribe_state();
+        state_rx.changed().await.unwrap();
+        assert_eq!(state_rx.borrow().theme, ThemeMode::Light);
     }
 }
