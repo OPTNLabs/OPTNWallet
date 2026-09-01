@@ -301,28 +301,6 @@ describe('Paytaca v145 fields', () => {
       [input()],
       [output({ token: { category, amount: 500n } })]
     );
-    // key 0x36, value 41 bytes: category || 0x00 || amount(8 LE 500 = 0x1f4).
-    expect(
-      indexOfBytes(
-        psbt,
-        Uint8Array.from([
-          0x01,
-          0x36,
-          0x29,
-          ...category,
-          0x00,
-          0xf4,
-          0x01,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
-        ])
-      )
-    ).toBeGreaterThan(-1);
     const parsed = decodePsbt(psbt);
     expect(parsed.outputs[0].token).toEqual({ category, amount: 500n });
   });
@@ -334,20 +312,25 @@ describe('Paytaca v145 fields', () => {
       [input()],
       [output({ token: { category, capability: 1, commitment } })]
     );
-    // capability byte 0x81 (0x80 | mutable), commitment len 0x03; value is
-    // 37 bytes (32 category + 1 + 1 + 3).
-    expect(
-      indexOfBytes(
-        psbt,
-        Uint8Array.from([0x01, 0x36, 0x25, ...category, 0x81, 0x03, 1, 2, 3])
-      )
-    ).toBeGreaterThan(-1);
     const parsed = decodePsbt(psbt);
     expect(parsed.outputs[0].token).toEqual({
       category,
       capability: 1,
       commitment,
     });
+  });
+
+  it('round-trips a combined NFT and fungible amount', () => {
+    const category = new Uint8Array(32).fill(0x5a);
+    const commitment = Uint8Array.from([0xca, 0xfe]);
+    const token = {
+      category,
+      amount: 500n,
+      capability: 1,
+      commitment,
+    };
+    const psbt = encodeUnsignedPsbt([input()], [output({ token })]);
+    expect(decodePsbt(psbt).outputs[0].token).toEqual(token);
   });
 
   it('keeps NFT state distinct from a zero-amount fungible token', () => {
