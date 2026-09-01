@@ -35,8 +35,8 @@ vi.mock('../../services/RefreshCoordinator', () => ({
 
 import useOutboundTransactions from '../useOutboundTransactions';
 
-function Harness() {
-  const { reconciling } = useOutboundTransactions(7);
+function Harness({ walletId = 7 }: { walletId?: number }) {
+  const { reconciling } = useOutboundTransactions(walletId);
   return <output>{String(reconciling)}</output>;
 }
 
@@ -71,5 +71,36 @@ describe('useOutboundTransactions', () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(runOutboundReconcileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes a new wallet while the previous wallet is reconciling', async () => {
+    let finishFirst!: () => void;
+    const firstReconciliation = new Promise<void>((resolve) => {
+      finishFirst = resolve;
+    });
+    runOutboundReconcileMock.mockImplementation((walletId: number) =>
+      walletId === 7 ? firstReconciliation : Promise.resolve()
+    );
+
+    const rendered = render(<Harness walletId={7} />);
+    await waitFor(() => {
+      expect(runOutboundReconcileMock).toHaveBeenCalledWith(
+        7,
+        expect.any(Function)
+      );
+    });
+
+    rendered.rerender(<Harness walletId={8} />);
+    await waitFor(() => {
+      expect(runOutboundReconcileMock).toHaveBeenCalledWith(
+        8,
+        expect.any(Function)
+      );
+    });
+
+    finishFirst();
+    await waitFor(() => {
+      expect(screen.getByText('false')).toBeTruthy();
+    });
   });
 });

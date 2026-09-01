@@ -72,6 +72,16 @@ describe('multisig policy validation', () => {
     expect(verifyDescriptorChecksum('raw(deedbeef)#89f8spxm')).toBe(false);
   });
 
+  it('checks a sortedmulti descriptor containing origins and separators', () => {
+    const key =
+      '0260b2003c386519fc9eadf2b5cf124dd8eea4c4e68d5e154050a9346ea98ce600';
+    const payload = `sh(sortedmulti(1,[deadbeef/0']${key},[cafebabe/1']${key}))`;
+    const descriptor = `${payload}#jwrfyhrr`;
+
+    expect(addDescriptorChecksum(payload)).toBe(descriptor);
+    expect(verifyDescriptorChecksum(descriptor)).toBe(true);
+  });
+
   it('creates canonical sortedmulti descriptors and BCHN concrete scans', () => {
     const policy: MultisigPolicy = {
       ...POLICY,

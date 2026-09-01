@@ -392,18 +392,29 @@ export function remapWalletScopeId(
   ) {
     throw new Error('Invalid wallet id remap.');
   }
-  for (const table of WALLET_CHILD_TABLES) {
-    if (!tableExists(database, table)) continue;
-    database.run(
-      `UPDATE ${quoted(table)} SET ${quoted('wallet_id')} = ?
-       WHERE ${quoted('wallet_id')} = ?`,
-      [toWalletId, fromWalletId]
-    );
+  database.run('BEGIN IMMEDIATE');
+  try {
+    for (const table of WALLET_CHILD_TABLES) {
+      if (!tableExists(database, table)) continue;
+      database.run(
+        `UPDATE ${quoted(table)} SET ${quoted('wallet_id')} = ?
+         WHERE ${quoted('wallet_id')} = ?`,
+        [toWalletId, fromWalletId]
+      );
+    }
+    database.run('UPDATE wallets SET id = ? WHERE id = ?', [
+      toWalletId,
+      fromWalletId,
+    ]);
+    database.run('COMMIT');
+  } catch (error) {
+    try {
+      database.run('ROLLBACK');
+    } catch {
+      // Preserve the original remap error.
+    }
+    throw error;
   }
-  database.run('UPDATE wallets SET id = ? WHERE id = ?', [
-    toWalletId,
-    fromWalletId,
-  ]);
 }
 
 /**

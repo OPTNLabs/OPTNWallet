@@ -1,10 +1,9 @@
 import KeyService from './KeyService';
 import {
   ensureMultisigAddressInventory,
+  listMultisigAddressInventory,
   loadMultisigPolicy,
 } from './multisig/MultisigStorageService';
-import { deriveMultisigAddress } from './psbt/multisigWallet';
-import { lockingBytecodeToCashAddress } from '@bitauth/libauth';
 import { logError } from '../utils/errorHandling';
 import { Network } from '../state/slices/networkSlice';
 import {
@@ -184,7 +183,6 @@ async function getCandidateBatch(
 
 async function getMultisigCandidateBatch(
   walletId: number,
-  network: Network,
   startIndex: number
 ): Promise<
   {
@@ -200,7 +198,10 @@ async function getMultisigCandidateBatch(
     walletId,
     startIndex + ADDRESS_BATCH_SIZE - 1
   );
-  const prefix = network === Network.MAINNET ? 'bitcoincash' : 'bchtest';
+  const inventory = await listMultisigAddressInventory(walletId);
+  const inventoryByPath = new Map(
+    inventory.map((entry) => [`${entry.branch}/${entry.index}`, entry] as const)
+  );
   const batch: {
     address: string;
     addressIndex: number;
@@ -209,30 +210,18 @@ async function getMultisigCandidateBatch(
   }[] = [];
   for (let offset = 0; offset < ADDRESS_BATCH_SIZE; offset += 1) {
     const addressIndex = startIndex + offset;
-    const receive = deriveMultisigAddress(policy, 0, addressIndex);
-    const change = deriveMultisigAddress(policy, 1, addressIndex);
-    const receiveAddress = lockingBytecodeToCashAddress({
-      bytecode: receive.lockingBytecode,
-      prefix,
-    });
-    const changeAddress = lockingBytecodeToCashAddress({
-      bytecode: change.lockingBytecode,
-      prefix,
-    });
-    if (
-      typeof receiveAddress === 'string' ||
-      typeof changeAddress === 'string'
-    ) {
-      throw new Error('Could not encode a multisig discovery address.');
-    }
+    const receive = inventoryByPath.get(`0/${addressIndex}`);
+    const change = inventoryByPath.get(`1/${addressIndex}`);
+    if (!receive || !change)
+      throw new Error('Multisig discovery inventory is incomplete.');
     batch.push({
-      address: receiveAddress.address,
+      address: receive.address,
       addressIndex,
       changeIndex: 0,
-      pairedChangeAddress: changeAddress.address,
+      pairedChangeAddress: change.address,
     });
     batch.push({
-      address: changeAddress.address,
+      address: change.address,
       addressIndex,
       changeIndex: 1,
       pairedChangeAddress: null,
@@ -270,7 +259,12 @@ export async function deriveWalletAddressCandidates(
   const multisigPolicy = await loadMultisigPolicy(walletId);
   if (multisigPolicy) {
     await ensureMultisigAddressInventory(walletId, startIndex + count - 1);
-    const prefix = network === Network.MAINNET ? 'bitcoincash' : 'bchtest';
+    const inventory = await listMultisigAddressInventory(walletId);
+    const inventoryByPath = new Map(
+      inventory.map(
+        (entry) => [`${entry.branch}/${entry.index}`, entry] as const
+      )
+    );
     const candidates: WalletDerivedAddressCandidate[] = [];
     for (let offset = 0; offset < count; offset += 1) {
       const addressIndex = startIndex + offset;
@@ -278,26 +272,12 @@ export async function deriveWalletAddressCandidates(
         ['receive', 0],
         ['change', 1],
       ] as const) {
-        const derived = deriveMultisigAddress(
-          multisigPolicy,
-          branchIndex,
-          addressIndex
-        );
-        const ordinary = lockingBytecodeToCashAddress({
-          bytecode: derived.lockingBytecode,
-          prefix,
-        });
-        const token = lockingBytecodeToCashAddress({
-          bytecode: derived.lockingBytecode,
-          prefix,
-          tokenSupport: true,
-        });
-        if (typeof ordinary === 'string' || typeof token === 'string') {
-          throw new Error('Could not encode a multisig address candidate.');
-        }
+        const address = inventoryByPath.get(`${branchIndex}/${addressIndex}`);
+        if (!address)
+          throw new Error('Multisig address inventory is incomplete.');
         candidates.push({
-          address: ordinary.address,
-          tokenAddress: token.address,
+          address: address.address,
+          tokenAddress: address.tokenAddress,
           addressIndex,
           changeIndex: branchIndex,
           branchName,
@@ -345,7 +325,7 @@ async function expandDiscovery(
 ): Promise<string[]> {
   const multisigPolicy = await loadMultisigPolicy(walletId);
   if (multisigPolicy) {
-    return expandMultisigDiscovery(walletId, network, batchHasUsage);
+    return expandMultisigDiscovery(walletId, batchHasUsage);
   }
   const keys = await KeyService.retrieveKeys(walletId);
   const knownAddresses = new Set(keys.map((key) => key.address));
@@ -456,9 +436,7 @@ async function expandDiscovery(
   }
 
   const persistedInventory = keyInventory(
-    recoveredAddresses.length > 0
-      ? await KeyService.retrieveKeys(walletId)
-      : keys
+    await KeyService.retrieveKeys(walletId)
   );
   state[stateKey(walletId)] = {
     nextBatchStart: batchStart,
@@ -472,7 +450,6 @@ async function expandDiscovery(
 
 async function expandMultisigDiscovery(
   walletId: number,
-  network: Network,
   batchHasUsage: WalletBatchUsageChecker
 ): Promise<string[]> {
   const keys = await KeyService.retrieveKeys(walletId);
@@ -504,11 +481,7 @@ async function expandMultisigDiscovery(
     batchesProcessed < MAX_BATCHES_PER_PASS &&
     consecutiveUnusedBatches < MAX_EMPTY_BATCHES
   ) {
-    const batch = await getMultisigCandidateBatch(
-      walletId,
-      network,
-      batchStart
-    );
+    const batch = await getMultisigCandidateBatch(walletId, batchStart);
     const used = new Set(await batchHasUsage(walletId, batch));
     batchesProcessed += 1;
     batchStart += ADDRESS_BATCH_SIZE;
@@ -540,9 +513,7 @@ async function expandMultisigDiscovery(
   }
 
   const persistedInventory = keyInventory(
-    recoveredAddresses.length > 0
-      ? await KeyService.retrieveKeys(walletId)
-      : keys
+    await KeyService.retrieveKeys(walletId)
   );
   state[stateKey(walletId)] = {
     nextBatchStart: batchStart,

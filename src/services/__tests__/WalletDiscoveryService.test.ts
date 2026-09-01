@@ -5,6 +5,9 @@ const getWalletXpubsMock = vi.fn();
 const createKeysMock = vi.fn();
 const deriveBchAddressFromHdPublicKeyMock = vi.fn();
 const isDesktopPlatformMock = vi.fn(() => true);
+const loadMultisigPolicyMock = vi.fn(async () => null);
+const ensureMultisigAddressInventoryMock = vi.fn(async () => undefined);
+const listMultisigAddressInventoryMock = vi.fn(async () => []);
 
 let storedDiscoveryState: string | null = null;
 
@@ -40,8 +43,9 @@ vi.mock('../../utils/platform', () => ({
 }));
 
 vi.mock('../multisig/MultisigStorageService', () => ({
-  loadMultisigPolicy: vi.fn(async () => null),
-  ensureMultisigAddressInventory: vi.fn(async () => undefined),
+  loadMultisigPolicy: loadMultisigPolicyMock,
+  ensureMultisigAddressInventory: ensureMultisigAddressInventoryMock,
+  listMultisigAddressInventory: listMultisigAddressInventoryMock,
 }));
 
 describe('WalletDiscoveryService', () => {
@@ -64,6 +68,8 @@ describe('WalletDiscoveryService', () => {
       rpa: 'rpa-xpub',
     });
     createKeysMock.mockResolvedValue(undefined);
+    loadMultisigPolicyMock.mockResolvedValue(null);
+    listMultisigAddressInventoryMock.mockResolvedValue([]);
     deriveBchAddressFromHdPublicKeyMock.mockImplementation(
       (_network, xpub: string, addressIndex: bigint) => ({
         address: `bchtest:${xpub.replace('-xpub', '')}${addressIndex}`,
@@ -95,6 +101,50 @@ describe('WalletDiscoveryService', () => {
         )
       )
     ).toEqual(new Set([0, 1]));
+  });
+
+  it('uses the persisted multisig inventory as address candidates', async () => {
+    loadMultisigPolicyMock.mockResolvedValue({ id: 'shared-policy' });
+    listMultisigAddressInventoryMock.mockResolvedValue([
+      {
+        address: 'bchtest:receive3',
+        tokenAddress: 'bchtest:token-receive3',
+        branch: 0,
+        index: 3,
+      },
+      {
+        address: 'bchtest:change3',
+        tokenAddress: 'bchtest:token-change3',
+        branch: 1,
+        index: 3,
+      },
+    ]);
+    const { deriveWalletAddressCandidates } = await import(
+      '../WalletDiscoveryService'
+    );
+
+    await expect(
+      deriveWalletAddressCandidates(5, 'chipnet' as never, {
+        startIndex: 3,
+        count: 1,
+      })
+    ).resolves.toEqual([
+      {
+        address: 'bchtest:receive3',
+        tokenAddress: 'bchtest:token-receive3',
+        addressIndex: 3,
+        changeIndex: 0,
+        branchName: 'receive',
+      },
+      {
+        address: 'bchtest:change3',
+        tokenAddress: 'bchtest:token-change3',
+        addressIndex: 3,
+        changeIndex: 1,
+        branchName: 'change',
+      },
+    ]);
+    expect(ensureMultisigAddressInventoryMock).toHaveBeenCalledWith(5, 3);
   });
 
   it('restores used HD addresses found beyond persisted keys', async () => {

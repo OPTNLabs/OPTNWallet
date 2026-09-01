@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import MockNetworkProvider from 'cashscript/dist/network/MockNetworkProvider.js';
+import { MockNetworkProvider } from 'cashscript';
 import {
   binToHex,
   createVirtualMachineBCH,
@@ -28,7 +28,7 @@ import {
   type MultisigPolicy,
 } from '../multisigWallet';
 import { mergePsbts } from '../psbtMultisig';
-import { buildWatchOnlyPsbt } from '../watchOnlySend';
+import { buildWatchOnlyPsbt, parseBip32PathString } from '../watchOnlySend';
 import {
   inspectImportedPsbt,
   mergeImportedSignatures,
@@ -249,13 +249,7 @@ describe('multisig descriptor to CashScript mocknet broadcast', () => {
               derivations: receive.derivedCosigners.map((entry) => ({
                 publicKey: entry.publicKey,
                 masterFingerprint: hexToBin(fingerprintFor(entry.cosignerId)),
-                derivationPath: [
-                  0x80000000 | 44,
-                  0x80000000 | 145,
-                  0x80000000,
-                  0,
-                  0,
-                ],
+                derivationPath: parseBip32PathString(entry.derivationPath),
               })),
               partialSignatures: [
                 {
@@ -277,13 +271,7 @@ describe('multisig descriptor to CashScript mocknet broadcast', () => {
                     masterFingerprint: hexToBin(
                       fingerprintFor(entry.cosignerId)
                     ),
-                    derivationPath: [
-                      0x80000000 | 44,
-                      0x80000000 | 145,
-                      0x80000000,
-                      1,
-                      0,
-                    ],
+                    derivationPath: parseBip32PathString(entry.derivationPath),
                   })),
                 }
               : {}),

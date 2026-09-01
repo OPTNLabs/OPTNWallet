@@ -16,24 +16,40 @@ export default function useOutboundTransactions(
 ) {
   const [records, setRecords] = useState<OutboundTransactionRecord[]>([]);
   const [reconciling, setReconciling] = useState(false);
-  const refreshInFlightRef = useRef(false);
+  const currentWalletIdRef = useRef(walletId);
+  const refreshingWalletIdsRef = useRef(new Set<number>());
 
-  const load = useCallback(async () => {
-    setRecords(await OutboundTransactionTracker.listActive(walletId));
+  useEffect(() => {
+    currentWalletIdRef.current = walletId;
   }, [walletId]);
 
+  const load = useCallback(
+    async (walletIdToLoad = walletId) => {
+      const active =
+        await OutboundTransactionTracker.listActive(walletIdToLoad);
+      if (currentWalletIdRef.current === walletIdToLoad) setRecords(active);
+    },
+    [walletId]
+  );
+
   const refresh = useCallback(async () => {
-    if (!walletId || walletId <= 0 || refreshInFlightRef.current) return;
-    refreshInFlightRef.current = true;
+    if (
+      !walletId ||
+      walletId <= 0 ||
+      refreshingWalletIdsRef.current.has(walletId)
+    ) {
+      return;
+    }
+    refreshingWalletIdsRef.current.add(walletId);
     setReconciling(true);
     try {
       await runOutboundReconcile(walletId, () =>
         reconcileOutboundTransactions(walletId)
       );
-      await load();
+      await load(walletId);
     } finally {
-      refreshInFlightRef.current = false;
-      setReconciling(false);
+      refreshingWalletIdsRef.current.delete(walletId);
+      setReconciling(refreshingWalletIdsRef.current.size > 0);
     }
   }, [load, walletId]);
 

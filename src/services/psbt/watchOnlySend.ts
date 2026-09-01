@@ -241,7 +241,7 @@ function validateTokenPlan(
       'Token-bearing inputs require an explicit recipient or change token output.'
     );
   }
-  assertTokenAddress(recipient, 'Token recipient');
+  if (recipientToken) assertTokenAddress(recipient, 'Token recipient');
   if (changeToken) assertTokenAddress(changeAddress, 'Token change');
 
   const inputFungible = new Map<string, bigint>();
@@ -316,7 +316,6 @@ function validateTokenPlan(
       inputTokens.length !== 1 ||
       outputTokens.length !== 1 ||
       inputTokens[0].capability !== 2 ||
-      ![0, 1, 2].includes(outputTokens[0].capability ?? 0) ||
       tokenKey(inputTokens[0]) !== tokenKey(outputTokens[0])
     ) {
       throw new Error(

@@ -57,9 +57,13 @@ function asBytes(value: unknown): Uint8Array {
 }
 
 function sessionId(): string {
-  const randomUuid = globalThis.crypto?.randomUUID;
-  if (randomUuid) return randomUuid.call(globalThis.crypto);
-  return `ms-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  const crypto = globalThis.crypto;
+  if (crypto?.randomUUID) return crypto.randomUUID();
+  if (!crypto?.getRandomValues) {
+    throw new Error('Secure randomness is unavailable for multisig sessions.');
+  }
+  const random = crypto.getRandomValues(new Uint8Array(16));
+  return `ms-${binToHex(random)}`;
 }
 
 async function database() {

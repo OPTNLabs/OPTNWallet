@@ -508,6 +508,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
     const fromReturnTo = locationState?.returnTo?.split('/').pop();
     return fromReturnTo ? Number(fromReturnTo) : null;
   }, [locationState, standardWalletId, walletIdOverride]);
+  const policyNetwork = multisigPolicy?.network ?? currentNetwork;
   const multisigPresentation = presentation === 'multisig';
 
   useEffect(() => {
@@ -519,7 +520,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
     const parsed = decodePsbt(psbtBytes);
     const policyId = createMultisigDescriptorSet(
       multisigPolicy,
-      multisigPolicy.network
+      policyNetwork
     ).policyId;
     const session = await createMultisigSpendSession({
       walletId: currentWalletId,
@@ -659,6 +660,10 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
         // cached and freshly refreshed UTXOs.
         const applyInventory = (allUtxos: UTXO[]) => {
           const spendable: SpendableInput[] = [];
+          const derivedCache = new Map<
+            string,
+            ReturnType<typeof deriveMultisigAddress>
+          >();
           for (const utxo of allUtxos) {
             const key = keyByAddress.get(utxo.address);
             if (!key) continue;
@@ -667,11 +672,11 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
             const branchIndex = key.changeIndex === 1 ? 1 : 0;
 
             if (policy) {
-              const derived = deriveMultisigAddress(
-                policy,
-                branchIndex,
-                key.addressIndex
-              );
+              const cacheKey = `${branchIndex}/${key.addressIndex}`;
+              const derived =
+                derivedCache.get(cacheKey) ??
+                deriveMultisigAddress(policy, branchIndex, key.addressIndex);
+              derivedCache.set(cacheKey, derived);
               spendable.push({
                 txid: utxo.tx_hash,
                 vout: utxo.tx_pos,
@@ -781,7 +786,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
       try {
         const policyId = createMultisigDescriptorSet(
           multisigPolicy,
-          multisigPolicy.network
+          policyNetwork
         ).policyId;
         const sessions = await listMultisigSpendSessions(currentWalletId);
         const pending = sessions.find(
@@ -805,7 +810,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
         const restored = restoreProposalFromPsbt(
           parsed,
           inputs,
-          multisigPolicy.network ?? currentNetwork ?? 'chipnet'
+          policyNetwork ?? 'chipnet'
         );
         if (cancelled) return;
         setCoordinatorSessionId(pending.sessionId);
@@ -1191,7 +1196,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
       const parsed = decodePsbt(activePsbt);
       const policyId = createMultisigDescriptorSet(
         multisigPolicy,
-        multisigPolicy.network
+        policyNetwork
       ).policyId;
       const session = await createMultisigSpendSession({
         walletId: currentWalletId,
@@ -2232,12 +2237,10 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
                     outputs={proposalState.proposal.outputs}
                     selectedInputs={selectedInputs.map((input) => input.utxo)}
                     rawTxHex={verdict.rawTxHex}
-                    network={multisigPolicy.network ?? currentNetwork}
+                    network={policyNetwork}
                     policyId={
-                      createMultisigDescriptorSet(
-                        multisigPolicy,
-                        multisigPolicy.network ?? currentNetwork
-                      ).policyId
+                      createMultisigDescriptorSet(multisigPolicy, policyNetwork)
+                        .policyId
                     }
                     threshold={multisigPolicy.threshold ?? multisigPolicy.m}
                     signerCount={multisigPolicy.signers.length}

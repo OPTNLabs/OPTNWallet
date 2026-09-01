@@ -248,7 +248,7 @@ function descriptorBody(
     .sort((a, b) => {
       const left = `${a.masterFingerprintHex}${a.xpub}`;
       const right = `${b.masterFingerprintHex}${b.xpub}`;
-      return left.localeCompare(right);
+      return left < right ? -1 : left > right ? 1 : 0;
     })
     .map((cosigner) => `${descriptorKeyOrigin(cosigner)}/${branch}/*`);
   return `sh(sortedmulti(${policy.threshold},${keys.join(',')}))`;
@@ -368,7 +368,7 @@ export interface MultisigManifest {
 }
 
 const DESCRIPTOR_INPUT_CHARSET =
-  `0123456789(),[]'/*abcdefgh@:$%{}IJKLMNOPQRSTUVWXYZ&+-.;<=>?!^_|~` +
+  `0123456789()[],'/*abcdefgh@:$%{}IJKLMNOPQRSTUVWXYZ&+-.;<=>?!^_|~` +
   'ijklmnopqrstuvwxyzABCDEFGH`#"\\ ';
 const DESCRIPTOR_CHECKSUM_CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
 const DESCRIPTOR_GENERATOR = [

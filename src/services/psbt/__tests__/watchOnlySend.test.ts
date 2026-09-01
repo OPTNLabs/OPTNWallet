@@ -87,6 +87,11 @@ const recipientAddress = encodeCashAddress({
   type: 'p2pkh',
 }).address;
 const changeAddress = addressFor(publicKey, 'bchtest');
+const tokenChangeAddress = encodeCashAddress({
+  payload: hash160(publicKey),
+  prefix: 'bchtest',
+  type: 'p2pkhWithTokens',
+}).address;
 
 function makeInput(
   overrides: Partial<{
@@ -228,6 +233,28 @@ function wrapSignedPsbt(
 }
 
 describe('buildWatchOnlyPsbt', () => {
+  it('allows a BCH recipient when only the change output carries tokens', () => {
+    const token: PsbtTokenSpec = {
+      category: new Uint8Array(32).fill(0x42),
+      amount: 7n,
+    };
+    const result = buildWatchOnlyPsbt({
+      inputs: [{ ...makeInput(), token }],
+      recipient: recipientAddress,
+      amountSats: 30_000n,
+      changeAddress: tokenChangeAddress,
+      accountPath: ACCOUNT_PATH,
+      masterFingerprint: FINGERPRINT,
+      changeToken: token,
+      tokenIntent: 'preserve',
+    });
+
+    expect(result.outputs[0].token).toBeUndefined();
+    expect(result.outputs.find((output) => output.isChange)?.token).toEqual(
+      token
+    );
+  });
+
   it('keeps fingerprints paired with cosigners after BIP-67 sorting', () => {
     const keyA = Uint8Array.from([2, ...new Uint8Array(32).fill(0x11)]);
     const keyB = Uint8Array.from([3, ...new Uint8Array(32).fill(0x22)]);
