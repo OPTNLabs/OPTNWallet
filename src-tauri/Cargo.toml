@@ -69,6 +69,7 @@ sha2 = "0.10"
 # (RustCrypto, pure Rust) does, and matches Electron Cash's scheme byte-for-byte.
 k256 = "0.13"
 optn-core = { path = "../crates/optn-core" }
+optn-platform = { path = "../crates/optn-platform" }
 # Secure randomness for one-time nonces/blinding factors (OsRng). NOT the
 # counter+clock token used for Tor circuit isolation — those must never be reused
 # for crypto secrets.
