@@ -1,0 +1,6 @@
+[package]
+name = "optn-platform"
+version = "1.7.3"
+edition = "2021"
+license = "GPL-3.0"
+description = "Framework-neutral platform capability contracts for OPTN Wallet."
