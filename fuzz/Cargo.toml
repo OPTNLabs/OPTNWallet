@@ -1,0 +1,29 @@
+[package]
+name = "optn-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+optn-core = { path = "../crates/optn-core" }
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "cashaddr_decode"
+path = "fuzz_targets/cashaddr_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rpa_decode"
+path = "fuzz_targets/rpa_decode.rs"
+test = false
+doc = false
+bench = false
