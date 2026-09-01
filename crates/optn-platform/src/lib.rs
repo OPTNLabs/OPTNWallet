@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Platform capability ports.
 //!
 //! Application/domain crates depend on these contracts rather than Tauri,
