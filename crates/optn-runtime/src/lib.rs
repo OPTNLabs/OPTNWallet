@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Framework-neutral runtime for OPTN application state.
 //!
 //! Long-lived native work should live behind typed runtime/services rather than
