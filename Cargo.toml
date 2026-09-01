@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/optn-core",
+  "crates/optn-ui",
+  "src-tauri",
+  "xtask",
+]
+default-members = [
+  "crates/optn-core",
+  "crates/optn-ui",
+  "xtask",
+]
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+incremental = false
+opt-level = "s"
+strip = true
