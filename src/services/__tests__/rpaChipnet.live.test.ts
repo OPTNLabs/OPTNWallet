@@ -60,6 +60,7 @@ const recipientMnemonic =
   process.env.RPA_LIVE_RECIPIENT_MNEMONIC || bip39.generateMnemonic();
 const gap = Number(process.env.RPA_LIVE_GAP ?? 5);
 const paySats = Number(process.env.RPA_LIVE_SATS ?? 50_000);
+const senderAccountPath = process.env.RPA_LIVE_ACCOUNT_PATH?.trim() || null;
 
 const enabled =
   process.env.RUN_RPA_LIVE === '1' && senderMnemonic.trim().length > 0;
@@ -86,6 +87,13 @@ function electrumScripthash(address: string): string {
 
 type Coin = { tx_hash: string; tx_pos: number; value: number };
 
+function senderPath(change: boolean, index: number): string {
+  if (senderAccountPath) {
+    return `${senderAccountPath}/${change ? 1 : 0}/${index}`;
+  }
+  return getBchAddressPath(Network.CHIPNET, 0, change ? 1 : 0, index);
+}
+
 /** The largest spendable coin in the wallet, and the key that unlocks it. */
 async function findLargestCoin(mnemonic: string): Promise<{
   coin: Coin;
@@ -98,7 +106,7 @@ async function findLargestCoin(mnemonic: string): Promise<{
 
   for (const change of [false, true]) {
     for (let index = 0; index < gap; index++) {
-      const path = getBchAddressPath(Network.CHIPNET, 0, change ? 1 : 0, index);
+      const path = senderPath(change, index);
       const privkey = await derivePrivateKeyAtPath(mnemonic, '', path);
       const pubkeyRaw = secp256k1.derivePublicKeyCompressed(privkey);
       if (typeof pubkeyRaw === 'string') throw new Error(pubkeyRaw);
@@ -153,7 +161,7 @@ describe.skipIf(!enabled)('RPA on chipnet', () => {
     // The dummy needs a key of its own: finalizeRpaPayment replaces the dummy
     // output and then asserts none survives, so sharing a script with the
     // change output makes that assertion fire on the change.
-    const dummyPath = getBchAddressPath(Network.CHIPNET, 0, 1, gap + 1);
+    const dummyPath = senderPath(true, gap + 1);
     const dummyPrivkey = await derivePrivateKeyAtPath(
       senderMnemonic,
       '',
