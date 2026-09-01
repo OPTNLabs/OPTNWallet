@@ -94,6 +94,9 @@ jobs:
             libusb-1.0-0-dev
             libayatana-appindicator3-dev
 
+      - name: Install pinned Rust target
+        run: rustup target add --toolchain 1.98.0 riscv64gc-unknown-linux-gnu
+
       - name: Install npm dependencies
         run: npm ci
 
