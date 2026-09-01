@@ -6,6 +6,23 @@ OPTN Wallet is security-sensitive BCH wallet software with CashTokens,
 CashScript, desktop, web, Android, and iOS surfaces. Preserve wallet security
 and transaction correctness above convenience.
 
+## Rustification architecture
+
+Before Rustification or UI-shell work, read `RUSTIFICATION.md` and
+`rustification/components.toml`.
+
+Framework boundary rules are architectural invariants:
+
+- `optn-core`, `optn-app`, and `optn-platform` must not depend on Leptos,
+  Tauri, Dioxus, Capacitor, or another UI/native framework.
+- `optn-ui` may depend on `optn-app`, but must not bypass it to reach
+  `optn-core` directly.
+- Tauri-specific code belongs in adapters. Do not move wallet/business logic
+  into Tauri commands or plugins.
+- Leptos-specific signals, routes, and lifecycle types must not leak into
+  `optn-app`.
+- Run `cargo run -p xtask -- architecture` after changing these layers.
+
 ## Working rules
 
 - Inspect the relevant code and tests before editing.
