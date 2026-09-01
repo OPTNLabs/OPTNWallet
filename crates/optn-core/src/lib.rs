@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Protocol core shared between the OPTN CLI and the wallet.
 //!
 //! RPA was implemented twice -- once in TypeScript for every GUI target, once
