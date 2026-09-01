@@ -51,3 +51,15 @@ jobs:
 
       - name: Compile Leptos UI to WASM
         run: cargo check -p optn-ui --target wasm32-unknown-unknown
+
+      - name: Install pinned Trunk
+        run: cargo install trunk --version 0.21.14 --locked
+
+      - name: Build production Leptos bundle
+        working-directory: crates/optn-ui
+        run: trunk build --release --config Trunk.toml
+
+      - name: Verify Leptos bundle
+        run: |
+          test -s crates/optn-ui/dist/index.html
+          find crates/optn-ui/dist -maxdepth 1 -type f -name '*.wasm' -size +0c -print -quit | grep -q .
