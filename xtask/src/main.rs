@@ -26,6 +26,7 @@ fn architecture() {
         root.join("crates/optn-core/Cargo.toml"),
         root.join("crates/optn-app/Cargo.toml"),
         root.join("crates/optn-platform/Cargo.toml"),
+        root.join("crates/optn-runtime/Cargo.toml"),
     ];
 
     let mut failures = Vec::new();
