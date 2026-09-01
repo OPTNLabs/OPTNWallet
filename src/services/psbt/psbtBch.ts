@@ -33,9 +33,11 @@
 import {
   binToHex,
   decodeTransaction,
+  encodeTokenPrefix as encodeCashTokenPrefix,
   encodeTransaction,
   hash256,
   hexToBin,
+  readTokenPrefix,
   secp256k1,
 } from '@bitauth/libauth';
 
@@ -157,7 +159,7 @@ export interface PsbtInputSpec {
 export interface PsbtTokenSpec {
   /** Token category id, 32 bytes. */
   category: Uint8Array;
-  /** Fungible token amount (8-byte little-endian). */
+  /** Fungible token amount. */
   amount?: bigint;
   /** NFT capability: 0 = none, 1 = mutable, 2 = minting. */
   capability?: number;
@@ -327,55 +329,52 @@ function readUint64LE(bytes: Uint8Array): bigint {
 }
 
 /**
- * CHIP-2022-02 token prefix, as written by Paytaca's `encodeTokenPrefix`:
- * fungible tokens are `category(32) || 0x00 || amount(8 LE)`, NFTs are
- * `category(32) || (0x80 | capability) || compactUint(length) || commitment`.
+ * Encode the CashTokens prefix used by Paytaca for PSBT_OUT_CASHTOKEN.
+ * Reuse libauth's consensus-compatible codec so the PSBT field and unsigned
+ * transaction cannot disagree for combined NFT + fungible-token outputs.
  */
 function encodeTokenPrefix(token: PsbtTokenSpec): Uint8Array {
   if (token.category.length !== 32) {
     throw new Error('Token category must be 32 bytes.');
   }
-  if (token.amount !== undefined && token.amount !== null) {
-    if (token.amount < 0n) throw new Error('Token amounts cannot be negative.');
-    return concat([
-      token.category,
-      Uint8Array.from([0x00]),
-      uint64LE(token.amount),
-    ]);
+  if (token.amount !== undefined && token.amount < 0n) {
+    throw new Error('Token amounts cannot be negative.');
   }
-  const capability = token.capability ?? 0;
-  if (!Number.isInteger(capability) || capability < 0 || capability > 2) {
+  if (
+    token.capability !== undefined &&
+    (!Number.isInteger(token.capability) ||
+      token.capability < 0 ||
+      token.capability > 2)
+  ) {
     throw new Error(
       'NFT capability must be 0 (none), 1 (mutable), or 2 (minting).'
     );
   }
-  const commitment = token.commitment ?? Uint8Array.of();
-  return concat([
-    token.category,
-    Uint8Array.from([0x80 | capability]),
-    varInt(commitment.length),
-    commitment,
-  ]);
+
+  const encoded = encodeCashTokenPrefix(psbtTokenToTransactionToken(token));
+  if (encoded.length === 0) {
+    throw new Error(
+      'Token prefix must encode an NFT or a positive fungible amount.'
+    );
+  }
+  return encoded;
 }
 
 function decodeTokenPrefix(bytes: Uint8Array): PsbtTokenSpec {
-  if (bytes.length < 33) throw new Error('Token prefix is too short.');
-  const category = bytes.subarray(0, 32);
-  const marker = bytes[32];
-  if (marker === 0x00) {
-    if (bytes.length !== 41)
-      throw new Error('FT token prefix must be 41 bytes.');
-    return { category, amount: readUint64LE(bytes.subarray(33, 41)) };
+  const decoded = readTokenPrefix({ bin: bytes, index: 0 });
+  if (typeof decoded === 'string') {
+    throw new Error(`Invalid CashToken prefix: ${decoded}`);
   }
-  if ((marker & 0x80) === 0 || (marker & 0x7f) > 2) {
-    throw new Error('Token prefix has an invalid capability byte.');
-  }
-  const commitmentReader = new Reader(bytes.subarray(33));
-  const length = commitmentReader.varInt();
-  const commitment = commitmentReader.take(length);
-  if (!commitmentReader.done)
+  if (decoded.position.index !== bytes.length) {
     throw new Error('Token prefix has trailing bytes.');
-  return { category, capability: marker & 0x7f, commitment };
+  }
+  const decodedToken = decoded.result.token;
+  if (!decodedToken) {
+    throw new Error('PSBT CashToken field does not contain a token prefix.');
+  }
+  const token = transactionTokenToPsbtToken(decodedToken);
+  if (!token) throw new Error('Could not decode CashToken prefix.');
+  return token;
 }
 
 /** One `<keylen><key><valuelen><value>` record. */
