@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 #[cfg(target_arch = "wasm32")]
 use leptos::prelude::*;
 #[cfg(target_arch = "wasm32")]
