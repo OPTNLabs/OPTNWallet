@@ -5,7 +5,6 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const cleanupScript = resolve(repoRoot, 'scripts', 'stop-child-process.sh');
 const bashExecutable =
   process.platform === 'win32'
     ? 'C:\\Program Files\\Git\\bin\\bash.exe'
@@ -22,15 +21,14 @@ describe('Android emulator cleanup', () => {
         bashExecutable,
         [
           '-c',
-          `source "$1"
+          `source scripts/stop-child-process.sh
 bash -c 'trap "" TERM; while :; do :; done' &
 child_pid=$!
 stop_child_process "$child_pid" 0.1 0.1
 ! kill -0 "$child_pid" 2>/dev/null`,
           'android-emulator-cleanup-test',
-          cleanupScript,
         ],
-        { stdio: 'pipe', timeout: 5_000 }
+        { cwd: repoRoot, stdio: 'pipe', timeout: 5_000 }
       )
     ).not.toThrow();
   });
