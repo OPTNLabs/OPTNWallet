@@ -1,0 +1,53 @@
+name: Rust architecture
+
+on:
+  pull_request:
+    branches: [dev, staging, main]
+  push:
+    branches: [dev, staging]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-architecture-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust-architecture:
+    name: Rust architecture and Leptos WASM
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: 1.98.0
+          targets: wasm32-unknown-unknown
+          components: clippy, rustfmt
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: '. -> target'
+
+      - name: Framework boundary
+        run: cargo run -p xtask -- architecture
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy framework-neutral crates
+        run: cargo clippy -p optn-app -p optn-platform -p xtask --all-targets -- -D warnings
+
+      - name: Test application and platform contracts
+        run: cargo test -p optn-app -p optn-platform -p xtask
+
+      - name: Compile Leptos UI to WASM
+        run: cargo check -p optn-ui --target wasm32-unknown-unknown
