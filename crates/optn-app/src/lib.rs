@@ -1,8 +1,8 @@
 //! Framework-neutral application layer.
 //!
-//! UI frameworks render this state and dispatch these actions. Native shells
-//! provide platform capabilities through `optn-platform`. Neither Leptos nor
-//! Tauri belongs in this crate.
+//! UI frameworks render this state and dispatch typed actions. Runtime/shell
+//! adapters may subscribe to typed events. No UI or native-shell framework
+//! belongs in this crate.
 
 use optn_core::network::Network;
 
@@ -59,20 +59,52 @@ pub enum AppAction {
     CloseHelp,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppEvent {
+    RouteChanged(AppRoute),
+    ThemeChanged(ThemeMode),
+    NetworkChanged(Network),
+    HelpVisibilityChanged(bool),
+}
+
 impl AppState {
-    pub fn apply(&mut self, action: AppAction) {
+    /// Apply one typed action and return the observable domain/application event
+    /// produced by the state transition. No event is emitted for a no-op.
+    pub fn reduce(&mut self, action: AppAction) -> Option<AppEvent> {
         match action {
-            AppAction::Navigate(route) => self.route = route,
+            AppAction::Navigate(route) if self.route != route => {
+                self.route = route;
+                Some(AppEvent::RouteChanged(route))
+            }
             AppAction::ToggleTheme => {
                 self.theme = match self.theme {
                     ThemeMode::Light => ThemeMode::Dark,
                     ThemeMode::Dark => ThemeMode::Light,
-                }
+                };
+                Some(AppEvent::ThemeChanged(self.theme))
             }
-            AppAction::SetNetwork(network) => self.network = network,
-            AppAction::OpenHelp => self.help_open = true,
-            AppAction::CloseHelp => self.help_open = false,
+            AppAction::SetNetwork(network) if self.network != network => {
+                self.network = network;
+                Some(AppEvent::NetworkChanged(network))
+            }
+            AppAction::OpenHelp if !self.help_open => {
+                self.help_open = true;
+                Some(AppEvent::HelpVisibilityChanged(true))
+            }
+            AppAction::CloseHelp if self.help_open => {
+                self.help_open = false;
+                Some(AppEvent::HelpVisibilityChanged(false))
+            }
+            AppAction::Navigate(_)
+            | AppAction::SetNetwork(_)
+            | AppAction::OpenHelp
+            | AppAction::CloseHelp => None,
         }
+    }
+
+    /// Convenience for callers that only care about the resulting state.
+    pub fn apply(&mut self, action: AppAction) {
+        let _ = self.reduce(action);
     }
 }
 
@@ -102,15 +134,35 @@ mod tests {
     #[test]
     fn actions_are_framework_independent_state_transitions() {
         let mut state = AppState::default();
-        state.apply(AppAction::ToggleTheme);
-        state.apply(AppAction::SetNetwork(Network::Chipnet));
-        state.apply(AppAction::OpenHelp);
-        state.apply(AppAction::Navigate(AppRoute::ImportWallet));
+        assert_eq!(
+            state.reduce(AppAction::ToggleTheme),
+            Some(AppEvent::ThemeChanged(ThemeMode::Light))
+        );
+        assert_eq!(
+            state.reduce(AppAction::SetNetwork(Network::Chipnet)),
+            Some(AppEvent::NetworkChanged(Network::Chipnet))
+        );
+        assert_eq!(
+            state.reduce(AppAction::OpenHelp),
+            Some(AppEvent::HelpVisibilityChanged(true))
+        );
+        assert_eq!(
+            state.reduce(AppAction::Navigate(AppRoute::ImportWallet)),
+            Some(AppEvent::RouteChanged(AppRoute::ImportWallet))
+        );
 
         assert_eq!(state.theme, ThemeMode::Light);
         assert_eq!(state.network, Network::Chipnet);
         assert!(state.help_open);
         assert_eq!(state.route, AppRoute::ImportWallet);
+    }
+
+    #[test]
+    fn no_op_actions_emit_no_events() {
+        let mut state = AppState::default();
+        assert_eq!(state.reduce(AppAction::SetNetwork(Network::Mainnet)), None);
+        assert_eq!(state.reduce(AppAction::CloseHelp), None);
+        assert_eq!(state.reduce(AppAction::Navigate(AppRoute::Landing)), None);
     }
 
     #[test]
