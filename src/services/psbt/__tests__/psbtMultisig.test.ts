@@ -473,7 +473,7 @@ describe('mergePsbts', () => {
         lockingBytecode: hexToBin(output.lockingBytecodeHex),
         satoshis: output.satoshis,
       })),
-      0xc1
+      proposal.sighashType
     );
 
     const outcome = mergePsbts([wrapWithSignatures(proposal, []), forged]);
