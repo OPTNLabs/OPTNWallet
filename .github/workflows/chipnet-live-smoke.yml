@@ -88,6 +88,7 @@ jobs:
       RPA_LIVE_MNEMONIC: 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
       RPA_LIVE_SATS: '20000'
       RPA_LIVE_GAP: '5'
+      RPA_LIVE_ACCOUNT_PATH: "m/44'/145'/0'"
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
