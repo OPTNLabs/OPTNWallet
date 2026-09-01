@@ -31,7 +31,7 @@ impl Default for ClipboardState {
 }
 
 /// Run `operation` against the shared handle, opening it on first use.
-fn with_clipboard<T>(
+pub(crate) fn with_clipboard<T>(
     app: &tauri::AppHandle,
     operation: impl FnOnce(&mut arboard::Clipboard) -> Result<T, arboard::Error>,
 ) -> Result<T, String> {
