@@ -165,6 +165,44 @@ mod tests {
         assert_eq!(state.reduce(AppAction::Navigate(AppRoute::Landing)), None);
     }
 
+    proptest::proptest! {
+        #[test]
+        fn arbitrary_action_sequences_keep_view_model_consistent(
+            actions in proptest::collection::vec(0u8..8, 0..256)
+        ) {
+            let mut state = AppState::default();
+
+            for action in actions {
+                let action = match action {
+                    0 => AppAction::Navigate(AppRoute::Landing),
+                    1 => AppAction::Navigate(AppRoute::CreateWallet),
+                    2 => AppAction::Navigate(AppRoute::ImportWallet),
+                    3 => AppAction::Navigate(AppRoute::WalletHome),
+                    4 => AppAction::ToggleTheme,
+                    5 => AppAction::SetNetwork(Network::Mainnet),
+                    6 => AppAction::SetNetwork(Network::Chipnet),
+                    _ => if state.help_open {
+                        AppAction::CloseHelp
+                    } else {
+                        AppAction::OpenHelp
+                    },
+                };
+                state.apply(action);
+
+                let vm = onboarding_view_model(&state);
+                proptest::prop_assert_eq!(
+                    vm.network_prefix,
+                    state.network.prefix()
+                );
+                proptest::prop_assert_eq!(
+                    vm.dark,
+                    state.theme == ThemeMode::Dark
+                );
+                proptest::prop_assert_eq!(vm.help_open, state.help_open);
+            }
+        }
+    }
+
     #[test]
     fn onboarding_view_model_comes_from_application_state() {
         let mut state = AppState::default();
