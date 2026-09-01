@@ -1,0 +1,49 @@
+schema = 1
+
+[[component]]
+name = "shared-protocol-core"
+current = "rust"
+target = "rust"
+layer = "core"
+status = "in_progress"
+security_weight = 10
+
+[[component]]
+name = "application-state"
+current = "typescript"
+target = "rust"
+layer = "app"
+status = "started"
+security_weight = 7
+
+[[component]]
+name = "platform-contracts"
+current = "mixed"
+target = "rust"
+layer = "platform"
+status = "started"
+security_weight = 8
+
+[[component]]
+name = "ui"
+current = "react-typescript"
+target = "leptos-rust"
+layer = "ui-adapter"
+status = "started"
+security_weight = 1
+
+[[component]]
+name = "native-shell"
+current = "tauri-desktop-capacitor-mobile"
+target = "tauri2"
+layer = "platform-adapter"
+status = "planned"
+security_weight = 6
+
+[[component]]
+name = "browser-extension"
+current = "react-typescript"
+target = "rust-wasm-ui"
+layer = "ui-adapter"
+status = "planned"
+security_weight = 5
