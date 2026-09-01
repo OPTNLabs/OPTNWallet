@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Framework-neutral application layer.
 //!
 //! UI frameworks render this state and dispatch typed actions. Runtime/shell
