@@ -9,7 +9,7 @@ import { useI18n } from '../../i18n/useI18n';
 import LanguagePicker from '../../components/LanguagePicker';
 import {
   currentSurface,
-  hasCapability,
+  offersWatchOnly,
   type Surface,
 } from '../../platform/capabilities';
 import { ROUTE_PATHS } from '../../navigation/routes';
@@ -102,7 +102,7 @@ const LandingPage = ({ surface }: LandingPageProps) => {
             >
               {t('onboarding.importWallet')}
             </Link>
-            {hasCapability('watchOnlyWallet', resolvedSurface) && (
+            {offersWatchOnly(resolvedSurface) && (
               <Link
                 to={ROUTE_PATHS.watchOnlyWallet}
                 data-testid="watch-only-landing-action"
