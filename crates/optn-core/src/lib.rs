@@ -18,6 +18,7 @@ pub mod flipstarter;
 pub mod fundme;
 pub mod fusion;
 pub mod hd;
+pub mod multisig;
 pub mod network;
 pub mod rpa;
 pub mod spend;
