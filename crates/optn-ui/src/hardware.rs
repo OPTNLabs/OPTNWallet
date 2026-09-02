@@ -24,6 +24,7 @@ fn vendor_hint(vendor: HardwareVendor) -> &'static str {
         HardwareVendor::Ledger => "Open the Bitcoin Cash app on the device",
         HardwareVendor::Trezor => "Confirm the export on the device screen",
         HardwareVendor::OneKey => "Confirm the export on the device screen",
+        HardwareVendor::Keystone => "Air-gapped: show the account QR on the device",
         HardwareVendor::Mock => "Test signer, not for real funds",
     }
 }

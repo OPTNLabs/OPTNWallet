@@ -99,11 +99,66 @@ pub trait HardwareWallet {
     fn exchange<'a>(&'a self, request: &'a [u8]) -> PlatformFuture<'a, Vec<u8>>;
 }
 
+/// How a device can actually be talked to.
+///
+/// A Tauri WebView has no WebHID/WebUSB/WebBLE — USB is done natively in Rust
+/// and the app protocol rides on top. A browser tab is the mirror image. So
+/// "can I reach this device" is a property of the transport, not of the
+/// device alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum HardwareTransport {
+    /// Native USB/HID owned by the shell.
+    NativeUsb,
+    WebHid,
+    WebUsb,
+    WebBle,
+    /// Air-gapped animated QR (UR). No cable at all.
+    Camera,
+    /// Cross-origin vendor connect page.
+    Iframe,
+}
+
+/// What this runtime can actually offer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TransportSupport {
+    pub native_usb: bool,
+    pub web_hid: bool,
+    pub web_usb: bool,
+    pub web_ble: bool,
+    pub camera: bool,
+    pub iframe: bool,
+}
+
+impl TransportSupport {
+    /// Nothing is reachable. The honest default for an unknown host.
+    pub const NONE: Self = Self {
+        native_usb: false,
+        web_hid: false,
+        web_usb: false,
+        web_ble: false,
+        camera: false,
+        iframe: false,
+    };
+
+    pub const fn provides(self, transport: HardwareTransport) -> bool {
+        match transport {
+            HardwareTransport::NativeUsb => self.native_usb,
+            HardwareTransport::WebHid => self.web_hid,
+            HardwareTransport::WebUsb => self.web_usb,
+            HardwareTransport::WebBle => self.web_ble,
+            HardwareTransport::Camera => self.camera,
+            HardwareTransport::Iframe => self.iframe,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum HardwareVendor {
     Ledger,
     Trezor,
     OneKey,
+    /// Air-gapped signer driven entirely by animated QR.
+    Keystone,
     Mock,
 }
 
@@ -113,13 +168,21 @@ impl HardwareVendor {
     /// `Mock` is deliberately absent: it exists for tests and adapters without
     /// USB, and offering it in the product would let someone "connect" a
     /// signer that cannot hold a key.
-    pub const OFFERED: &'static [Self] = &[Self::Ledger, Self::Trezor, Self::OneKey];
+    pub const OFFERED: &'static [Self] =
+        &[Self::Ledger, Self::Trezor, Self::OneKey, Self::Keystone];
+
+    /// The cabled devices. Keystone is excluded on purpose: it is air-gapped,
+    /// and the React shell keeps it out of `HardwareDeviceKind` for the same
+    /// reason — it is reached through the watch-only airgap panel, not a USB
+    /// session.
+    pub const USB_DEVICES: &'static [Self] = &[Self::Ledger, Self::Trezor, Self::OneKey];
 
     pub const fn label(self) -> &'static str {
         match self {
             Self::Ledger => "Ledger",
             Self::Trezor => "Trezor",
             Self::OneKey => "OneKey",
+            Self::Keystone => "Keystone",
             Self::Mock => "Mock signer",
         }
     }
@@ -130,6 +193,7 @@ impl HardwareVendor {
             Self::Ledger => "ledger",
             Self::Trezor => "trezor",
             Self::OneKey => "onekey",
+            Self::Keystone => "keystone",
             Self::Mock => "mock",
         }
     }
@@ -137,9 +201,63 @@ impl HardwareVendor {
     /// Inverse of [`id`](Self::id). Unknown ids are rejected rather than
     /// defaulted, so a newer peer's device cannot arrive decoded as a Ledger.
     pub fn from_id(id: &str) -> Option<Self> {
-        [Self::Ledger, Self::Trezor, Self::OneKey, Self::Mock]
-            .into_iter()
-            .find(|vendor| vendor.id() == id)
+        [
+            Self::Ledger,
+            Self::Trezor,
+            Self::OneKey,
+            Self::Keystone,
+            Self::Mock,
+        ]
+        .into_iter()
+        .find(|vendor| vendor.id() == id)
+    }
+
+    /// Transports this device can be driven over, in preference order.
+    ///
+    /// Ported from the React shell's `DEVICE_TRANSPORTS`. Keystone is camera
+    /// only — it never touches a cable, which is why "hardware wallets are
+    /// desktop only" is the wrong gate for it.
+    pub const fn transports(self) -> &'static [HardwareTransport] {
+        match self {
+            Self::Ledger => &[
+                HardwareTransport::NativeUsb,
+                HardwareTransport::WebHid,
+                HardwareTransport::WebBle,
+            ],
+            Self::Trezor | Self::OneKey => {
+                &[HardwareTransport::NativeUsb, HardwareTransport::Iframe]
+            }
+            Self::Keystone => &[HardwareTransport::Camera],
+            // The mock needs no transport; it is in-process.
+            Self::Mock => &[],
+        }
+    }
+
+    /// Whether this runtime can reach the device at all.
+    pub fn is_reachable_with(self, support: TransportSupport) -> bool {
+        match self {
+            Self::Mock => true,
+            _ => self
+                .transports()
+                .iter()
+                .any(|&transport| support.provides(transport)),
+        }
+    }
+
+    /// Why the device cannot be reached here, or `None` when it can.
+    ///
+    /// Phrased for a user who will otherwise blame their cable.
+    pub fn unreachable_reason(self, support: TransportSupport) -> Option<&'static str> {
+        if self.is_reachable_with(support) {
+            return None;
+        }
+        if self.transports().contains(&HardwareTransport::Camera) {
+            return Some("No camera is available, so QR-based signing cannot be used here.");
+        }
+        Some(
+            "This build cannot reach USB hardware wallets. Use the desktop app, \
+             or a browser with WebHID. It is not your cable or your device.",
+        )
     }
 }
 
@@ -476,16 +594,78 @@ mod tests {
             &[
                 HardwareVendor::Ledger,
                 HardwareVendor::Trezor,
-                HardwareVendor::OneKey
+                HardwareVendor::OneKey,
+                HardwareVendor::Keystone
             ]
         );
         assert!(!HardwareVendor::OFFERED.contains(&HardwareVendor::Mock));
 
         let ids: Vec<&str> = HardwareVendor::OFFERED.iter().map(|v| v.id()).collect();
-        assert_eq!(ids, vec!["ledger", "trezor", "onekey"]);
+        assert_eq!(ids, vec!["ledger", "trezor", "onekey", "keystone"]);
         for vendor in HardwareVendor::OFFERED {
             assert!(!vendor.label().is_empty());
         }
+
+        // Keystone is offered, but it is not a cabled device: the React shell
+        // keeps it out of HardwareDeviceKind and reaches it through the
+        // watch-only airgap panel instead.
+        assert!(!HardwareVendor::USB_DEVICES.contains(&HardwareVendor::Keystone));
+        assert_eq!(
+            HardwareVendor::USB_DEVICES,
+            &[
+                HardwareVendor::Ledger,
+                HardwareVendor::Trezor,
+                HardwareVendor::OneKey
+            ]
+        );
+    }
+
+    #[test]
+    fn reachability_follows_the_transport_not_the_platform() {
+        // A desktop shell owns USB but has no WebHID inside its WebView.
+        let desktop = TransportSupport {
+            native_usb: true,
+            camera: true,
+            iframe: true,
+            ..TransportSupport::NONE
+        };
+        for vendor in HardwareVendor::OFFERED {
+            assert!(
+                vendor.is_reachable_with(desktop),
+                "{vendor:?} should be reachable on desktop"
+            );
+            assert_eq!(vendor.unreachable_reason(desktop), None);
+        }
+
+        // A phone has a camera and no USB stack. Keystone is air-gapped, so it
+        // works there even though the cabled devices do not — treating
+        // "hardware" as one desktop-only switch would wrongly hide it.
+        let phone = TransportSupport {
+            camera: true,
+            ..TransportSupport::NONE
+        };
+        assert!(HardwareVendor::Keystone.is_reachable_with(phone));
+        for vendor in HardwareVendor::USB_DEVICES {
+            assert!(!vendor.is_reachable_with(phone), "{vendor:?}");
+            assert!(vendor
+                .unreachable_reason(phone)
+                .is_some_and(|reason| reason.contains("not your cable")));
+        }
+
+        // No camera: say so, instead of blaming the device.
+        assert!(HardwareVendor::Keystone
+            .unreachable_reason(TransportSupport::NONE)
+            .is_some_and(|reason| reason.contains("camera")));
+
+        // A browser with WebHID reaches a Ledger without any native USB.
+        let browser = TransportSupport {
+            web_hid: true,
+            camera: true,
+            iframe: true,
+            ..TransportSupport::NONE
+        };
+        assert!(HardwareVendor::Ledger.is_reachable_with(browser));
+        assert!(HardwareVendor::Trezor.is_reachable_with(browser));
     }
 
     #[test]
@@ -494,13 +674,18 @@ mod tests {
             HardwareVendor::Ledger,
             HardwareVendor::Trezor,
             HardwareVendor::OneKey,
+            HardwareVendor::Keystone,
             HardwareVendor::Mock,
         ] {
             assert_eq!(HardwareVendor::from_id(vendor.id()), Some(vendor));
         }
         // Defaulting an unknown id would decode a device this build does not
         // support as one it does.
-        assert_eq!(HardwareVendor::from_id("keystone"), None);
+        assert_eq!(
+            HardwareVendor::from_id("keystone"),
+            Some(HardwareVendor::Keystone)
+        );
+        assert_eq!(HardwareVendor::from_id("coldcard"), None);
         assert_eq!(HardwareVendor::from_id(""), None);
         assert_eq!(HardwareVendor::from_id("Ledger"), None);
     }
