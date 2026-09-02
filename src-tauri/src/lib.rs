@@ -1114,7 +1114,7 @@ pub fn run() {
             use tauri::Manager;
 
             #[cfg(desktop)]
-            app.manage(clipboard::ClipboardState::new());
+            app.manage(optn_platform_native::NativeClipboard::new());
 
             // The authoritative application runtime is framework-neutral.
             // Tauri only chooses the executor and stores the handle.
