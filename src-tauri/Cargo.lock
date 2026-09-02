@@ -3143,6 +3143,7 @@ name = "optn-transport"
 version = "1.7.3"
 dependencies = [
  "optn-app",
+ "serde",
 ]
 
 [[package]]
@@ -3164,6 +3165,7 @@ dependencies = [
  "optn-platform",
  "optn-platform-native",
  "optn-runtime",
+ "optn-transport",
  "prost",
  "prost-build",
  "protox",
