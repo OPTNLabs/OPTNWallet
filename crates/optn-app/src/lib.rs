@@ -6,6 +6,12 @@
 //! adapters may subscribe to typed events. No UI or native-shell framework
 //! belongs in this crate.
 
+pub use optn_core::coins::{Coin, CoinSet, FreezeReason, Outpoint};
+pub use optn_core::flipstarter::{
+    chipnet_demo_coin, encode_campaign_blob, sample_chipnet_campaign_blob, Campaign,
+    CampaignOutput, FlipstarterPledge, PledgeStatus,
+};
+pub use optn_core::fundme::{FundMeProduct, FundMeStatus};
 pub use optn_core::network::Network;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,6 +129,12 @@ pub enum AppRoute {
     ImportWallet,
     WatchOnlyWallet,
     WalletHome,
+    Coins,
+    Actions,
+    Explore,
+    Settings,
+    Flipstarter,
+    FundMe,
 }
 
 impl AppRoute {
@@ -133,7 +145,56 @@ impl AppRoute {
             Self::ImportWallet => "#/importwallet",
             Self::WatchOnlyWallet => "#/watch-only",
             Self::WalletHome => "#/wallet",
+            Self::Coins => "#/assets",
+            Self::Actions => "#/actions",
+            Self::Explore => "#/explore",
+            Self::Settings => "#/settings",
+            Self::Flipstarter => "#/flipstarter",
+            Self::FundMe => "#/fundme",
         }
+    }
+
+    pub const fn is_wallet_chrome(self) -> bool {
+        matches!(
+            self,
+            Self::WalletHome
+                | Self::Coins
+                | Self::Actions
+                | Self::Explore
+                | Self::Settings
+                | Self::Flipstarter
+                | Self::FundMe
+        )
+    }
+}
+
+/// Product layout. Desktop gets a wide shell; every other surface is stacked.
+/// Do not derive this from CSS breakpoints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayoutKind {
+    Desktop,
+    Compact,
+}
+
+impl LayoutKind {
+    pub const fn from_surface(surface: AppSurface) -> Self {
+        match surface {
+            AppSurface::Desktop => Self::Desktop,
+            AppSurface::Android | AppSurface::Ios | AppSurface::Web | AppSurface::Extension => {
+                Self::Compact
+            }
+        }
+    }
+
+    pub const fn css_class(self) -> &'static str {
+        match self {
+            Self::Desktop => "shell-desktop",
+            Self::Compact => "shell-mobile",
+        }
+    }
+
+    pub const fn is_desktop(self) -> bool {
+        matches!(self, Self::Desktop)
     }
 }
 
@@ -146,6 +207,9 @@ pub struct AppState {
     pub help_open: bool,
     pub surface: AppSurface,
     pub features: FeatureFlags,
+    pub coins: CoinSet,
+    pub pledges: Vec<FlipstarterPledge>,
+    pub notice: Option<String>,
 }
 
 impl Default for AppState {
@@ -167,11 +231,22 @@ impl AppState {
                 cash_fusion: None,
                 hardware_wallet: None,
             },
+            coins: CoinSet::new(),
+            pledges: Vec::new(),
+            notice: None,
         }
+    }
+
+    pub const fn layout(&self) -> LayoutKind {
+        LayoutKind::from_surface(self.surface)
+    }
+
+    pub fn fundme(&self) -> FundMeProduct {
+        optn_core::fundme::product()
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppAction {
     Navigate(AppRoute),
     ToggleTheme,
@@ -181,10 +256,26 @@ pub enum AppAction {
     OpenHelp,
     CloseHelp,
     SetSurface(AppSurface),
-    SetFeatureEnabled { flag: FeatureFlag, enabled: bool },
+    SetFeatureEnabled {
+        flag: FeatureFlag,
+        enabled: bool,
+    },
+    InsertCoin(Coin),
+    FreezeCoin(Outpoint),
+    UnfreezeCoin(Outpoint),
+    SetCoinLabel {
+        outpoint: Outpoint,
+        label: Option<String>,
+    },
+    PrepareFlipstarterPledge {
+        blob: String,
+        now_unix: Option<u64>,
+    },
+    CancelFlipstarterPledge(u32),
+    ClearNotice,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppEvent {
     RouteChanged(AppRoute),
     ThemeChanged(ThemeMode),
@@ -193,6 +284,9 @@ pub enum AppEvent {
     HelpVisibilityChanged(bool),
     SurfaceChanged(AppSurface),
     FeatureFlagChanged { flag: FeatureFlag, enabled: bool },
+    CoinsChanged,
+    FlipstarterPledgesChanged,
+    NoticeChanged,
 }
 
 impl AppState {
@@ -248,6 +342,85 @@ impl AppState {
                     enabled: wanted,
                 })
             }
+            AppAction::InsertCoin(coin) => match self.coins.insert(coin) {
+                Ok(()) => {
+                    self.notice = None;
+                    Some(AppEvent::CoinsChanged)
+                }
+                Err(error) => self.reject(error.to_string()),
+            },
+            AppAction::FreezeCoin(outpoint) => {
+                match self.coins.freeze(outpoint, FreezeReason::User) {
+                    Ok(()) => {
+                        self.notice = None;
+                        Some(AppEvent::CoinsChanged)
+                    }
+                    Err(error) => self.reject(error.to_string()),
+                }
+            }
+            AppAction::UnfreezeCoin(outpoint) => match self.coins.unfreeze(outpoint) {
+                Ok(reason) => {
+                    if reason == FreezeReason::FlipstarterPledge {
+                        if let Some(pledge) = self
+                            .pledges
+                            .iter_mut()
+                            .find(|pledge| pledge.outpoint == outpoint)
+                        {
+                            pledge.status = PledgeStatus::Cancelled {
+                                spend_to_self: true,
+                            };
+                        }
+                    }
+                    self.notice = None;
+                    Some(AppEvent::CoinsChanged)
+                }
+                Err(error) => self.reject(error.to_string()),
+            },
+            AppAction::SetCoinLabel { outpoint, label } => {
+                match self.coins.set_label(outpoint, label) {
+                    Ok(()) => {
+                        self.notice = None;
+                        Some(AppEvent::CoinsChanged)
+                    }
+                    Err(error) => self.reject(error.to_string()),
+                }
+            }
+            AppAction::PrepareFlipstarterPledge { blob, now_unix } => {
+                match optn_core::flipstarter::prepare_pledge(
+                    &mut self.coins,
+                    &mut self.pledges,
+                    self.network,
+                    &blob,
+                    now_unix,
+                ) {
+                    Ok(_) => {
+                        self.notice = None;
+                        Some(AppEvent::FlipstarterPledgesChanged)
+                    }
+                    Err(error) => self.reject(error.to_string()),
+                }
+            }
+            AppAction::CancelFlipstarterPledge(pledge_id) => {
+                match optn_core::flipstarter::cancel_pledge(
+                    &mut self.coins,
+                    &mut self.pledges,
+                    pledge_id,
+                ) {
+                    Ok(_) => {
+                        self.notice = None;
+                        Some(AppEvent::FlipstarterPledgesChanged)
+                    }
+                    Err(error) => self.reject(error.to_string()),
+                }
+            }
+            AppAction::ClearNotice => {
+                if self.notice.is_none() {
+                    None
+                } else {
+                    self.notice = None;
+                    Some(AppEvent::NoticeChanged)
+                }
+            }
             AppAction::Navigate(_)
             | AppAction::SetNetwork(_)
             | AppAction::SetTheme(_)
@@ -256,6 +429,14 @@ impl AppState {
             | AppAction::CloseHelp
             | AppAction::SetSurface(_) => None,
         }
+    }
+
+    fn reject(&mut self, message: String) -> Option<AppEvent> {
+        if self.notice.as_deref() == Some(message.as_str()) {
+            return Some(AppEvent::NoticeChanged);
+        }
+        self.notice = Some(message);
+        Some(AppEvent::NoticeChanged)
     }
 
     /// Convenience for callers that only care about the resulting state.
@@ -338,6 +519,116 @@ pub fn onboarding_actions(state: &AppState) -> Vec<OnboardingAction> {
         actions.push(OnboardingAction::ConnectHardwareWallet);
     }
     actions
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProductNavItem {
+    Home,
+    Assets,
+    Actions,
+    Explore,
+    Settings,
+}
+
+impl ProductNavItem {
+    pub const fn route(self) -> AppRoute {
+        match self {
+            Self::Home => AppRoute::WalletHome,
+            Self::Assets => AppRoute::Coins,
+            Self::Actions => AppRoute::Actions,
+            Self::Explore => AppRoute::Explore,
+            Self::Settings => AppRoute::Settings,
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Home => "Home",
+            Self::Assets => "Assets",
+            Self::Actions => "Actions",
+            Self::Explore => "Explore",
+            Self::Settings => "Settings",
+        }
+    }
+
+    pub fn is_active(self, route: AppRoute) -> bool {
+        match self {
+            Self::Home => route == AppRoute::WalletHome,
+            Self::Assets => route == AppRoute::Coins,
+            Self::Actions => matches!(route, AppRoute::Actions | AppRoute::Flipstarter),
+            Self::Explore => matches!(route, AppRoute::Explore | AppRoute::FundMe),
+            Self::Settings => route == AppRoute::Settings,
+        }
+    }
+}
+
+pub fn product_nav() -> [ProductNavItem; 5] {
+    [
+        ProductNavItem::Home,
+        ProductNavItem::Assets,
+        ProductNavItem::Actions,
+        ProductNavItem::Explore,
+        ProductNavItem::Settings,
+    ]
+}
+
+/// Display helper used by the home portfolio card. 1 BCH = 100_000_000 sats.
+pub fn format_bch(sats: u64) -> String {
+    let whole = sats / 100_000_000;
+    let frac = sats % 100_000_000;
+    format!("{whole}.{frac:08} BCH")
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoinsViewModel {
+    pub layout: LayoutKind,
+    pub spendable_sats: u64,
+    pub reserved_sats: u64,
+    pub coins: Vec<Coin>,
+}
+
+pub fn coins_view_model(state: &AppState) -> CoinsViewModel {
+    CoinsViewModel {
+        layout: state.layout(),
+        spendable_sats: state.coins.spendable_sats(),
+        reserved_sats: state.coins.reserved_sats(),
+        coins: state.coins.iter().cloned().collect(),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FlipstarterViewModel {
+    pub layout: LayoutKind,
+    pub network: Network,
+    pub pledges: Vec<FlipstarterPledge>,
+    pub spendable_sats: u64,
+    pub sighash: u8,
+}
+
+pub fn flipstarter_view_model(state: &AppState) -> FlipstarterViewModel {
+    FlipstarterViewModel {
+        layout: state.layout(),
+        network: state.network,
+        pledges: state.pledges.clone(),
+        spendable_sats: state.coins.spendable_sats(),
+        sighash: optn_core::flipstarter::PLEDGE_SIGHASH,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FundMeViewModel {
+    pub layout: LayoutKind,
+    pub product: FundMeProduct,
+    pub available: bool,
+}
+
+pub fn fundme_view_model(state: &AppState) -> FundMeViewModel {
+    let product = state.fundme();
+    FundMeViewModel {
+        layout: state.layout(),
+        product,
+        available: !matches!(product.status, FundMeStatus::Unavailable),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -424,7 +715,7 @@ mod tests {
     proptest::proptest! {
         #[test]
         fn arbitrary_action_sequences_keep_view_model_consistent(
-            actions in proptest::collection::vec(0u8..9, 0..256)
+            actions in proptest::collection::vec(0u8..15, 0..256)
         ) {
             let mut state = AppState::default();
 
@@ -435,9 +726,15 @@ mod tests {
                     2 => AppAction::Navigate(AppRoute::ImportWallet),
                     3 => AppAction::Navigate(AppRoute::WatchOnlyWallet),
                     4 => AppAction::Navigate(AppRoute::WalletHome),
-                    5 => AppAction::ToggleTheme,
-                    6 => AppAction::SetNetwork(Network::Mainnet),
-                    7 => AppAction::SetNetwork(Network::Chipnet),
+                    5 => AppAction::Navigate(AppRoute::Coins),
+                    6 => AppAction::Navigate(AppRoute::Actions),
+                    7 => AppAction::Navigate(AppRoute::Explore),
+                    8 => AppAction::Navigate(AppRoute::Settings),
+                    9 => AppAction::Navigate(AppRoute::Flipstarter),
+                    10 => AppAction::Navigate(AppRoute::FundMe),
+                    11 => AppAction::ToggleTheme,
+                    12 => AppAction::SetNetwork(Network::Mainnet),
+                    13 => AppAction::SetNetwork(Network::Chipnet),
                     _ => if state.help_open {
                         AppAction::CloseHelp
                     } else {
@@ -649,5 +946,149 @@ mod tests {
         );
         assert_eq!(state.features.hardware_wallet, Some(false));
         assert!(!onboarding_view_model(&state).show_hardware_wallet);
+    }
+
+    #[test]
+    fn desktop_layout_is_not_a_css_breakpoint() {
+        assert_eq!(
+            LayoutKind::from_surface(AppSurface::Desktop),
+            LayoutKind::Desktop
+        );
+        assert_eq!(LayoutKind::Desktop.css_class(), "shell-desktop");
+        for surface in [
+            AppSurface::Android,
+            AppSurface::Ios,
+            AppSurface::Web,
+            AppSurface::Extension,
+        ] {
+            assert_eq!(
+                LayoutKind::from_surface(surface),
+                LayoutKind::Compact,
+                "{surface:?} stays compact; do not share sm/lg with desktop"
+            );
+            assert_eq!(
+                AppState::for_surface(surface).layout().css_class(),
+                "shell-mobile"
+            );
+        }
+    }
+
+    #[test]
+    fn user_freeze_moves_sats_from_spendable_to_reserved() {
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        let coin = chipnet_demo_coin(25_000, 1).expect("coin");
+        let outpoint = coin.outpoint();
+        assert_eq!(
+            state.reduce(AppAction::InsertCoin(coin)),
+            Some(AppEvent::CoinsChanged)
+        );
+        assert_eq!(coins_view_model(&state).spendable_sats, 25_000);
+        assert_eq!(
+            state.reduce(AppAction::FreezeCoin(outpoint)),
+            Some(AppEvent::CoinsChanged)
+        );
+        let vm = coins_view_model(&state);
+        assert_eq!(vm.spendable_sats, 0);
+        assert_eq!(vm.reserved_sats, 25_000);
+        assert_eq!(vm.layout, LayoutKind::Desktop);
+        assert_eq!(
+            state.coins.get(outpoint).and_then(Coin::freeze),
+            Some(FreezeReason::User)
+        );
+    }
+
+    #[test]
+    fn flipstarter_pledge_uses_the_shared_freeze_not_fundme() {
+        let mut state = AppState::default();
+        state.apply(AppAction::SetNetwork(Network::Chipnet));
+        let coin = chipnet_demo_coin(4_000, 3).expect("coin");
+        let outpoint = coin.outpoint();
+        state.apply(AppAction::InsertCoin(coin));
+
+        let address = optn_core::cashaddr::Address::from_hash(
+            Network::Chipnet.prefix(),
+            optn_core::cashaddr::AddressKind::P2pkh,
+            [0x42; 20],
+        )
+        .encode();
+        let json = format!(
+            r#"{{"outputs":[{{"value":1000,"address":"{address}"}}],"data":{{"alias":"Ada"}},"donation":{{"amount":4000}}}}"#
+        );
+        let blob = encode_campaign_blob(&json);
+
+        assert_eq!(
+            state.reduce(AppAction::PrepareFlipstarterPledge {
+                blob,
+                now_unix: None,
+            }),
+            Some(AppEvent::FlipstarterPledgesChanged)
+        );
+        assert_eq!(
+            state.coins.get(outpoint).and_then(Coin::freeze),
+            Some(FreezeReason::FlipstarterPledge)
+        );
+        assert_eq!(state.pledges.len(), 1);
+        assert_eq!(state.pledges[0].alias.as_deref(), Some("Ada"));
+        let fundme = fundme_view_model(&state);
+        assert!(!fundme.available);
+        assert_eq!(fundme.product.name, "FundMe");
+        assert_ne!(fundme.product.name, "Flipstarter");
+        assert_eq!(
+            flipstarter_view_model(&state).sighash,
+            optn_core::flipstarter::PLEDGE_SIGHASH
+        );
+
+        let pledge_id = state.pledges[0].id;
+        assert_eq!(
+            state.reduce(AppAction::CancelFlipstarterPledge(pledge_id)),
+            Some(AppEvent::FlipstarterPledgesChanged)
+        );
+        assert!(state.coins.get(outpoint).is_some_and(Coin::is_spendable));
+        assert_eq!(
+            state.pledges[0].status,
+            PledgeStatus::Cancelled {
+                spend_to_self: true
+            }
+        );
+    }
+
+    #[test]
+    fn flipstarter_rejects_a_frozen_coin_and_keeps_fundme_separate() {
+        let mut state = AppState::default();
+        state.apply(AppAction::SetNetwork(Network::Chipnet));
+        let coin = chipnet_demo_coin(2_000, 8).expect("coin");
+        let outpoint = coin.outpoint();
+        state.apply(AppAction::InsertCoin(coin));
+        state.apply(AppAction::FreezeCoin(outpoint));
+
+        let address = optn_core::cashaddr::Address::from_hash(
+            Network::Chipnet.prefix(),
+            optn_core::cashaddr::AddressKind::P2pkh,
+            [0x42; 20],
+        )
+        .encode();
+        let json = format!(
+            r#"{{"outputs":[{{"value":1,"address":"{address}"}}],"donation":{{"amount":2000}}}}"#
+        );
+        state.apply(AppAction::PrepareFlipstarterPledge {
+            blob: encode_campaign_blob(&json),
+            now_unix: None,
+        });
+        assert!(state.pledges.is_empty());
+        assert!(state
+            .notice
+            .as_deref()
+            .is_some_and(|text| text.contains("exactly 2000 sats")));
+        assert_eq!(product_nav()[0].label(), "Home");
+        assert_eq!(product_nav()[1].label(), "Assets");
+        assert_eq!(product_nav()[2].label(), "Actions");
+        assert_eq!(product_nav()[3].label(), "Explore");
+        assert_eq!(product_nav()[4].label(), "Settings");
+        assert_eq!(AppRoute::Flipstarter.fragment(), "#/flipstarter");
+        assert_eq!(AppRoute::FundMe.fragment(), "#/fundme");
+        assert_eq!(AppRoute::Coins.fragment(), "#/assets");
+        assert_eq!(format_bch(100_001_127), "1.00001127 BCH");
+        assert!(AppRoute::WalletHome.is_wallet_chrome());
+        assert!(!AppRoute::Landing.is_wallet_chrome());
     }
 }

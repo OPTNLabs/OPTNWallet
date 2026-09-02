@@ -5,6 +5,9 @@ use leptos::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use leptos::reactive::owner::LocalStorage;
 #[cfg(target_arch = "wasm32")]
+mod tools;
+
+#[cfg(target_arch = "wasm32")]
 use optn_app::{
     onboarding_actions, onboarding_view_model, watch_only_setup_preview, AppAction, AppRoute,
     AppState, AppSurface, Network, OnboardingAction, ThemeMode, WatchOnlySetupPreview,
@@ -15,6 +18,10 @@ use optn_transport::AppTransport;
 use optn_transport::LocalTransport;
 #[cfg(target_arch = "wasm32")]
 use std::rc::Rc;
+#[cfg(target_arch = "wasm32")]
+use tools::{
+    ActionsPage, CoinsPage, ExplorePage, FlipstarterPage, FundMePage, SettingsPage, WalletHome,
+};
 
 #[cfg(target_arch = "wasm32")]
 type UiTransport = StoredValue<Rc<dyn AppTransport>, LocalStorage>;
@@ -329,19 +336,11 @@ fn Landing(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
             </div>
 
             <section class="wallet-card">
-                <p class="eyebrow">"Bitcoin Cash, owned by you"</p>
-                <h1>"A Rust-first OPTN Wallet"</h1>
+                <p class="eyebrow">"Pay, Your Way"</p>
+                <h1>"OPTN Wallet"</h1>
                 <p class="description">
-                    "Leptos renders the UI, while application state, transport, and platform "
-                    "capabilities remain independently replaceable."
+                    "A self-custodial Bitcoin Cash wallet. Create, import, or open a watch-only account."
                 </p>
-
-                <div class="core-proof">
-                    <span>"Shared-core network prefix"</span>
-                    <strong>
-                        {move || onboarding_view_model(&state.get()).network_prefix}
-                    </strong>
-                </div>
 
                 <nav class="actions" aria-label="Wallet onboarding">
                     <For
@@ -357,6 +356,17 @@ fn Landing(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
                         <LandingActionLink transport=transport state=state action=action />
                     </For>
                 </nav>
+                <button
+                    class="secondary open-wallet"
+                    type="button"
+                    on:click=move |_| dispatch_action(
+                        transport,
+                        state,
+                        AppAction::Navigate(AppRoute::WalletHome),
+                    )
+                >
+                    "Open wallet"
+                </button>
             </section>
         </section>
     }
@@ -399,38 +409,59 @@ fn App(transport: Rc<dyn AppTransport>) -> impl IntoView {
                 when=move || ready.get()
                 fallback=move || view! { <p class="shell-loading">"Loading OPTN"</p> }
             >
-            <header class="topbar">
-                <div class="brand" aria-label="OPTN Wallet">"OPTN"</div>
-
-                <button
-                    class="chip"
-                    type="button"
-                    on:click=move |_| dispatch_action(transport, state, AppAction::ToggleTheme)
-                    aria-label="Toggle theme"
-                >
-                    {move || match state.get().theme {
-                        ThemeMode::Light => "Gray",
-                        ThemeMode::Gray => "Green",
-                        ThemeMode::Green => "Dark",
-                        ThemeMode::Dark => "Light",
-                    }}
-                </button>
-
-                <button
-                    class="chip"
-                    type="button"
-                    on:click=move |_| dispatch_action(transport, state, AppAction::OpenHelp)
-                >
-                    "Help"
-                </button>
-            </header>
-
-            <Show
-                when=move || state.get().route == AppRoute::WatchOnlyWallet
-                fallback=move || view! { <Landing transport=transport state=state /> }
-            >
-                <WatchOnlySetup transport=transport state=state />
+            <Show when=move || !state.get().route.is_wallet_chrome()>
+                <header class="topbar">
+                    <div class="brand-lockup">
+                        <span class="brand-mark" aria-hidden="true"></span>
+                        <div class="brand" aria-label="OPTN Wallet">"OPTN"</div>
+                    </div>
+                    <button
+                        class="chip"
+                        type="button"
+                        on:click=move |_| dispatch_action(transport, state, AppAction::ToggleTheme)
+                        aria-label="Toggle theme"
+                    >
+                        {move || match state.get().theme {
+                            ThemeMode::Light => "Gray",
+                            ThemeMode::Gray => "Green",
+                            ThemeMode::Green => "Dark",
+                            ThemeMode::Dark => "Light",
+                        }}
+                    </button>
+                </header>
             </Show>
+
+            {move || match state.get().route {
+                AppRoute::WatchOnlyWallet => view! {
+                    <WatchOnlySetup transport=transport state=state />
+                }.into_any(),
+                AppRoute::WalletHome => view! {
+                    <WalletHome transport=transport state=state />
+                }.into_any(),
+                AppRoute::Coins => view! {
+                    <CoinsPage transport=transport state=state />
+                }.into_any(),
+                AppRoute::Actions => view! {
+                    <ActionsPage transport=transport state=state />
+                }.into_any(),
+                AppRoute::Explore => view! {
+                    <ExplorePage transport=transport state=state />
+                }.into_any(),
+                AppRoute::Settings => view! {
+                    <SettingsPage transport=transport state=state />
+                }.into_any(),
+                AppRoute::Flipstarter => view! {
+                    <FlipstarterPage transport=transport state=state />
+                }.into_any(),
+                AppRoute::FundMe => view! {
+                    <FundMePage transport=transport state=state />
+                }.into_any(),
+                AppRoute::Landing
+                | AppRoute::CreateWallet
+                | AppRoute::ImportWallet => view! {
+                    <Landing transport=transport state=state />
+                }.into_any(),
+            }}
 
             <Show when=move || onboarding_view_model(&state.get()).help_open>
                 <div

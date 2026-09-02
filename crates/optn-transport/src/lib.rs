@@ -7,8 +7,9 @@
 //! crate; only these typed contracts are shared.
 
 use optn_app::{
-    AppAction, AppEvent, AppRoute, AppState, AppSurface, FeatureFlag, FeatureFlags, Network,
-    ThemeMode, UiSkin,
+    AppAction, AppEvent, AppRoute, AppState, AppSurface, CampaignOutput, Coin, FeatureFlag,
+    FeatureFlags, FlipstarterPledge, FreezeReason, Network, Outpoint, PledgeStatus, ThemeMode,
+    UiSkin,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -48,6 +49,12 @@ pub enum WireRoute {
     ImportWallet,
     WatchOnlyWallet,
     WalletHome,
+    Coins,
+    Actions,
+    Explore,
+    Settings,
+    Flipstarter,
+    FundMe,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,6 +99,56 @@ pub enum WireFeatureFlag {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WireFreezeReason {
+    User,
+    FlipstarterPledge,
+    Authhead,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireCoin {
+    pub txid: String,
+    pub vout: u32,
+    pub value_sats: u64,
+    pub address: String,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub freeze: Option<WireFreezeReason>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireCampaignOutput {
+    pub value_sats: u64,
+    pub address: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WirePledgeStatus {
+    Frozen,
+    CancelledSpendToSelf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WirePledge {
+    pub id: u32,
+    pub txid: String,
+    pub vout: u32,
+    pub amount_sats: u64,
+    #[serde(default)]
+    pub alias: Option<String>,
+    #[serde(default)]
+    pub comment: Option<String>,
+    #[serde(default)]
+    pub campaign_expires: Option<u64>,
+    #[serde(default)]
+    pub outputs: Vec<WireCampaignOutput>,
+    pub status: WirePledgeStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum WireActionKind {
     Navigate(WireRoute),
@@ -106,9 +163,29 @@ pub enum WireActionKind {
         flag: WireFeatureFlag,
         enabled: bool,
     },
+    InsertCoin(WireCoin),
+    FreezeCoin {
+        txid: String,
+        vout: u32,
+    },
+    UnfreezeCoin {
+        txid: String,
+        vout: u32,
+    },
+    SetCoinLabel {
+        txid: String,
+        vout: u32,
+        label: Option<String>,
+    },
+    PrepareFlipstarterPledge {
+        blob: String,
+        now_unix: Option<u64>,
+    },
+    CancelFlipstarterPledge(u32),
+    ClearNotice,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WireAction {
     pub version: u16,
     pub action: WireActionKind,
@@ -126,6 +203,12 @@ pub struct WireState {
     pub surface: WireSurface,
     pub cash_fusion: bool,
     pub hardware_wallet: bool,
+    #[serde(default)]
+    pub coins: Vec<WireCoin>,
+    #[serde(default)]
+    pub pledges: Vec<WirePledge>,
+    #[serde(default)]
+    pub notice: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -141,6 +224,9 @@ pub enum WireEventKind {
         flag: WireFeatureFlag,
         enabled: bool,
     },
+    CoinsChanged,
+    FlipstarterPledgesChanged,
+    NoticeChanged,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -157,6 +243,12 @@ impl From<AppRoute> for WireRoute {
             AppRoute::ImportWallet => Self::ImportWallet,
             AppRoute::WatchOnlyWallet => Self::WatchOnlyWallet,
             AppRoute::WalletHome => Self::WalletHome,
+            AppRoute::Coins => Self::Coins,
+            AppRoute::Actions => Self::Actions,
+            AppRoute::Explore => Self::Explore,
+            AppRoute::Settings => Self::Settings,
+            AppRoute::Flipstarter => Self::Flipstarter,
+            AppRoute::FundMe => Self::FundMe,
         }
     }
 }
@@ -169,6 +261,12 @@ impl From<WireRoute> for AppRoute {
             WireRoute::ImportWallet => Self::ImportWallet,
             WireRoute::WatchOnlyWallet => Self::WatchOnlyWallet,
             WireRoute::WalletHome => Self::WalletHome,
+            WireRoute::Coins => Self::Coins,
+            WireRoute::Actions => Self::Actions,
+            WireRoute::Explore => Self::Explore,
+            WireRoute::Settings => Self::Settings,
+            WireRoute::Flipstarter => Self::Flipstarter,
+            WireRoute::FundMe => Self::FundMe,
         }
     }
 }
@@ -273,6 +371,113 @@ impl From<WireFeatureFlag> for FeatureFlag {
     }
 }
 
+impl From<FreezeReason> for WireFreezeReason {
+    fn from(value: FreezeReason) -> Self {
+        match value {
+            FreezeReason::User => Self::User,
+            FreezeReason::FlipstarterPledge => Self::FlipstarterPledge,
+            FreezeReason::Authhead => Self::Authhead,
+        }
+    }
+}
+
+impl From<WireFreezeReason> for FreezeReason {
+    fn from(value: WireFreezeReason) -> Self {
+        match value {
+            WireFreezeReason::User => Self::User,
+            WireFreezeReason::FlipstarterPledge => Self::FlipstarterPledge,
+            WireFreezeReason::Authhead => Self::Authhead,
+        }
+    }
+}
+
+impl From<&Coin> for WireCoin {
+    fn from(value: &Coin) -> Self {
+        Self {
+            txid: value.outpoint().txid_hex(),
+            vout: value.outpoint().vout(),
+            value_sats: value.value_sats(),
+            address: value.address().to_owned(),
+            label: value.label().map(str::to_owned),
+            freeze: value.freeze().map(WireFreezeReason::from),
+        }
+    }
+}
+
+impl TryFrom<WireCoin> for Coin {
+    type Error = TransportError;
+
+    fn try_from(value: WireCoin) -> Result<Self, Self::Error> {
+        let outpoint = Outpoint::parse(&value.txid, value.vout)
+            .map_err(|error| TransportError::InvalidData(error.to_string()))?;
+        let mut coin = Coin::new(outpoint, value.value_sats, value.address)
+            .map_err(|error| TransportError::InvalidData(error.to_string()))?;
+        coin.set_label(value.label);
+        coin.restore_freeze(value.freeze.map(FreezeReason::from));
+        Ok(coin)
+    }
+}
+
+impl From<&FlipstarterPledge> for WirePledge {
+    fn from(value: &FlipstarterPledge) -> Self {
+        Self {
+            id: value.id,
+            txid: value.outpoint.txid_hex(),
+            vout: value.outpoint.vout(),
+            amount_sats: value.amount_sats,
+            alias: value.alias.clone(),
+            comment: value.comment.clone(),
+            campaign_expires: value.campaign_expires,
+            outputs: value
+                .outputs
+                .iter()
+                .map(|output| WireCampaignOutput {
+                    value_sats: output.value_sats,
+                    address: output.address.clone(),
+                })
+                .collect(),
+            status: match value.status {
+                PledgeStatus::Frozen => WirePledgeStatus::Frozen,
+                PledgeStatus::Cancelled { .. } => WirePledgeStatus::CancelledSpendToSelf,
+            },
+        }
+    }
+}
+
+impl TryFrom<WirePledge> for FlipstarterPledge {
+    type Error = TransportError;
+
+    fn try_from(value: WirePledge) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: value.id,
+            outpoint: Outpoint::parse(&value.txid, value.vout)
+                .map_err(|error| TransportError::InvalidData(error.to_string()))?,
+            amount_sats: value.amount_sats,
+            alias: value.alias,
+            comment: value.comment,
+            campaign_expires: value.campaign_expires,
+            outputs: value
+                .outputs
+                .into_iter()
+                .map(|output| CampaignOutput {
+                    value_sats: output.value_sats,
+                    address: output.address,
+                })
+                .collect(),
+            status: match value.status {
+                WirePledgeStatus::Frozen => PledgeStatus::Frozen,
+                WirePledgeStatus::CancelledSpendToSelf => PledgeStatus::Cancelled {
+                    spend_to_self: true,
+                },
+            },
+        })
+    }
+}
+
+fn parse_outpoint(txid: &str, vout: u32) -> Result<Outpoint, TransportError> {
+    Outpoint::parse(txid, vout).map_err(|error| TransportError::InvalidData(error.to_string()))
+}
+
 impl From<AppAction> for WireAction {
     fn from(value: AppAction) -> Self {
         let action = match value {
@@ -288,6 +493,25 @@ impl From<AppAction> for WireAction {
                 flag: flag.into(),
                 enabled,
             },
+            AppAction::InsertCoin(coin) => WireActionKind::InsertCoin(WireCoin::from(&coin)),
+            AppAction::FreezeCoin(outpoint) => WireActionKind::FreezeCoin {
+                txid: outpoint.txid_hex(),
+                vout: outpoint.vout(),
+            },
+            AppAction::UnfreezeCoin(outpoint) => WireActionKind::UnfreezeCoin {
+                txid: outpoint.txid_hex(),
+                vout: outpoint.vout(),
+            },
+            AppAction::SetCoinLabel { outpoint, label } => WireActionKind::SetCoinLabel {
+                txid: outpoint.txid_hex(),
+                vout: outpoint.vout(),
+                label,
+            },
+            AppAction::PrepareFlipstarterPledge { blob, now_unix } => {
+                WireActionKind::PrepareFlipstarterPledge { blob, now_unix }
+            }
+            AppAction::CancelFlipstarterPledge(id) => WireActionKind::CancelFlipstarterPledge(id),
+            AppAction::ClearNotice => WireActionKind::ClearNotice,
         };
         Self {
             version: WIRE_PROTOCOL_VERSION,
@@ -314,6 +538,22 @@ impl TryFrom<WireAction> for AppAction {
                 flag: flag.into(),
                 enabled,
             },
+            WireActionKind::InsertCoin(coin) => Self::InsertCoin(Coin::try_from(coin)?),
+            WireActionKind::FreezeCoin { txid, vout } => {
+                Self::FreezeCoin(parse_outpoint(&txid, vout)?)
+            }
+            WireActionKind::UnfreezeCoin { txid, vout } => {
+                Self::UnfreezeCoin(parse_outpoint(&txid, vout)?)
+            }
+            WireActionKind::SetCoinLabel { txid, vout, label } => Self::SetCoinLabel {
+                outpoint: parse_outpoint(&txid, vout)?,
+                label,
+            },
+            WireActionKind::PrepareFlipstarterPledge { blob, now_unix } => {
+                Self::PrepareFlipstarterPledge { blob, now_unix }
+            }
+            WireActionKind::CancelFlipstarterPledge(id) => Self::CancelFlipstarterPledge(id),
+            WireActionKind::ClearNotice => Self::ClearNotice,
         })
     }
 }
@@ -334,6 +574,9 @@ impl From<&AppState> for WireState {
             hardware_wallet: value
                 .features
                 .enabled(value.surface, FeatureFlag::HardwareWallet),
+            coins: value.coins.iter().map(WireCoin::from).collect(),
+            pledges: value.pledges.iter().map(WirePledge::from).collect(),
+            notice: value.notice.clone(),
         }
     }
 }
@@ -370,6 +613,21 @@ impl TryFrom<WireState> for AppState {
                     },
                 }
             },
+            coins: {
+                let mut coins = optn_app::CoinSet::new();
+                for wire in value.coins {
+                    coins
+                        .insert(Coin::try_from(wire)?)
+                        .map_err(|error| TransportError::InvalidData(error.to_string()))?;
+                }
+                coins
+            },
+            pledges: value
+                .pledges
+                .into_iter()
+                .map(FlipstarterPledge::try_from)
+                .collect::<Result<Vec<_>, _>>()?,
+            notice: value.notice,
         })
     }
 }
@@ -387,6 +645,9 @@ impl From<AppEvent> for WireEvent {
                 flag: flag.into(),
                 enabled,
             },
+            AppEvent::CoinsChanged => WireEventKind::CoinsChanged,
+            AppEvent::FlipstarterPledgesChanged => WireEventKind::FlipstarterPledgesChanged,
+            AppEvent::NoticeChanged => WireEventKind::NoticeChanged,
         };
         Self {
             version: WIRE_PROTOCOL_VERSION,
@@ -411,6 +672,9 @@ impl TryFrom<WireEvent> for AppEvent {
                 flag: flag.into(),
                 enabled,
             },
+            WireEventKind::CoinsChanged => Self::CoinsChanged,
+            WireEventKind::FlipstarterPledgesChanged => Self::FlipstarterPledgesChanged,
+            WireEventKind::NoticeChanged => Self::NoticeChanged,
         })
     }
 }
@@ -520,7 +784,7 @@ mod tests {
     #[test]
     fn wire_round_trip_preserves_typed_action_state_and_event() {
         let action = AppAction::SetNetwork(Network::Chipnet);
-        let encoded = serde_json::to_string(&WireAction::from(action)).unwrap();
+        let encoded = serde_json::to_string(&WireAction::from(action.clone())).unwrap();
         let decoded: WireAction = serde_json::from_str(&encoded).unwrap();
         assert_eq!(AppAction::try_from(decoded).unwrap(), action);
 
@@ -531,7 +795,7 @@ mod tests {
         assert_eq!(AppState::try_from(decoded).unwrap(), state);
 
         let event = AppEvent::RouteChanged(AppRoute::WatchOnlyWallet);
-        let encoded = serde_json::to_string(&WireEvent::from(event)).unwrap();
+        let encoded = serde_json::to_string(&WireEvent::from(event.clone())).unwrap();
         let decoded: WireEvent = serde_json::from_str(&encoded).unwrap();
         assert_eq!(AppEvent::try_from(decoded).unwrap(), event);
 
@@ -539,7 +803,7 @@ mod tests {
             flag: optn_app::FeatureFlag::HardwareWallet,
             enabled: false,
         };
-        let decoded = AppAction::try_from(WireAction::from(action)).unwrap();
+        let decoded = AppAction::try_from(WireAction::from(action.clone())).unwrap();
         assert_eq!(decoded, action);
     }
 
@@ -572,5 +836,36 @@ mod tests {
     fn transport_can_be_used_as_a_framework_neutral_trait_object() {
         let transport = NeverTransport;
         assert_transport_object_safe(&transport);
+    }
+
+    #[test]
+    fn wire_round_trip_preserves_frozen_coins_and_flipstarter_route() {
+        let mut state = AppState::default();
+        state.apply(AppAction::SetNetwork(Network::Chipnet));
+        state.apply(AppAction::Navigate(AppRoute::Flipstarter));
+        let coin = optn_app::chipnet_demo_coin(6_000, 5).expect("coin");
+        let outpoint = coin.outpoint();
+        state.apply(AppAction::InsertCoin(coin));
+        state.apply(AppAction::FreezeCoin(outpoint));
+
+        let encoded = serde_json::to_string(&WireState::from(&state)).unwrap();
+        let decoded: WireState = serde_json::from_str(&encoded).unwrap();
+        let restored = AppState::try_from(decoded).unwrap();
+        assert_eq!(restored.route, AppRoute::Flipstarter);
+        assert_eq!(restored.coins.reserved_sats(), 6_000);
+        assert_eq!(
+            restored
+                .coins
+                .get(outpoint)
+                .and_then(optn_app::Coin::freeze),
+            Some(optn_app::FreezeReason::User)
+        );
+
+        let action = AppAction::PrepareFlipstarterPledge {
+            blob: "YQ==".into(),
+            now_unix: None,
+        };
+        let decoded = AppAction::try_from(WireAction::from(action.clone())).unwrap();
+        assert_eq!(decoded, action);
     }
 }
