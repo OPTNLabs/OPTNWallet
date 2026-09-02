@@ -44,8 +44,7 @@ mod wasm {
 
     fn command_args(key: &str, value: &JsValue) -> Result<JsValue, TransportError> {
         let args = Object::new();
-        Reflect::set(&args, &JsValue::from_str(key), value)
-            .map_err(js_error)?;
+        Reflect::set(&args, &JsValue::from_str(key), value).map_err(js_error)?;
         Ok(args.into())
     }
 

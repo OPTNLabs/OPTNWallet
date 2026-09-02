@@ -45,12 +45,7 @@ fn architecture() {
     }
 
     let ui_manifest = read(&root.join("crates/optn-ui/Cargo.toml"));
-    require_dependency(
-        "crates/optn-ui",
-        &ui_manifest,
-        "optn-app",
-        &mut failures,
-    );
+    require_dependency("crates/optn-ui", &ui_manifest, "optn-app", &mut failures);
     require_dependency(
         "crates/optn-ui",
         &ui_manifest,
@@ -60,7 +55,12 @@ fn architecture() {
     forbid_dependencies(
         "crates/optn-ui",
         &ui_manifest,
-        &["optn-core", "optn-runtime", "optn-platform", "optn-platform-native"],
+        &[
+            "optn-core",
+            "optn-runtime",
+            "optn-platform",
+            "optn-platform-native",
+        ],
         &mut failures,
     );
 
@@ -74,7 +74,12 @@ fn architecture() {
     forbid_dependencies(
         "crates/optn-transport",
         &transport_manifest,
-        &["optn-runtime", "optn-platform", "optn-platform-native", "optn-ui"],
+        &[
+            "optn-runtime",
+            "optn-platform",
+            "optn-platform-native",
+            "optn-ui",
+        ],
         &mut failures,
     );
 
@@ -116,7 +121,12 @@ fn architecture() {
     forbid_dependencies(
         "crates/optn-app",
         &app_manifest,
-        &["optn-transport", "optn-runtime", "optn-platform-native", "optn-ui"],
+        &[
+            "optn-transport",
+            "optn-runtime",
+            "optn-platform-native",
+            "optn-ui",
+        ],
         &mut failures,
     );
 
