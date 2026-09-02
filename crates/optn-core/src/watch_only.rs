@@ -168,6 +168,19 @@ mod tests {
     }
 
     #[test]
+    fn chipnet_watch_only_receive_is_bchtest_and_fingerprint_is_public_only() {
+        let xpub = account_xpub(Network::Chipnet, 0);
+        let preview = account_preview(Network::Chipnet, &xpub).unwrap();
+        assert!(preview.receive.address.starts_with("bchtest:"));
+        let fingerprint = normalize_master_fingerprint("4c9a1f7b").unwrap();
+        assert_eq!(fingerprint.as_deref(), Some("4c9a1f7b"));
+        assert!(
+            !xpub.to_lowercase().contains("mnemonic"),
+            "watch-only preview is public account material only"
+        );
+    }
+
+    #[test]
     fn rejects_non_account_depth_public_keys() {
         let mnemonic = Mnemonic::parse_in_normalized(Language::English, TEST_MNEMONIC).unwrap();
         let seed = mnemonic.to_seed_normalized("");

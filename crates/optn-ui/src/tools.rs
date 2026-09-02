@@ -5,7 +5,7 @@ use leptos::prelude::*;
 use optn_app::{
     chipnet_demo_coin, coins_view_model, flipstarter_view_model, format_bch, fundme_view_model,
     product_nav, sample_chipnet_campaign_blob, AppAction, AppRoute, AppState, Coin, FreezeReason,
-    Network, PledgeStatus, ProductNavItem,
+    Network, PledgeStatus, ProductNavItem, SpendKind, WalletKind,
 };
 
 fn coins_snapshot(state: RwSignal<AppState>) -> Vec<Coin> {
@@ -131,13 +131,30 @@ pub fn WalletHome(transport: UiTransport, state: RwSignal<AppState>) -> impl Int
         <WalletChrome transport=transport state=state>
             <section class="page">
                 <article class="hero-card">
-                    <p class="muted">"Total portfolio"</p>
+                    <p class="muted">{move || {
+                        state
+                            .get()
+                            .wallet
+                            .as_ref()
+                            .map(|wallet| wallet.name.clone())
+                            .unwrap_or_else(|| "Wallet".into())
+                    }}</p>
                     <h1 class="balance">
                         {move || format_bch(
                             coins_view_model(&state.get()).spendable_sats
                                 + coins_view_model(&state.get()).reserved_sats
                         )}
                     </h1>
+                    <p class="mono">
+                        {move || {
+                            state
+                                .get()
+                                .wallet
+                                .as_ref()
+                                .map(|wallet| wallet.receive_address.clone())
+                                .unwrap_or_default()
+                        }}
+                    </p>
                     <div class="hero-meta">
                         <span class="ok">
                             {move || {
@@ -245,7 +262,7 @@ pub fn WalletHome(transport: UiTransport, state: RwSignal<AppState>) -> impl Int
                             on:click=move |_| dispatch_action(
                                 transport,
                                 state,
-                                AppAction::Navigate(AppRoute::Actions),
+                                AppAction::Navigate(AppRoute::Send),
                             )
                         >
                             <span>"↗"</span>
@@ -257,7 +274,7 @@ pub fn WalletHome(transport: UiTransport, state: RwSignal<AppState>) -> impl Int
                             on:click=move |_| dispatch_action(
                                 transport,
                                 state,
-                                AppAction::Navigate(AppRoute::Actions),
+                                AppAction::Navigate(AppRoute::Receive),
                             )
                         >
                             <span>"↙"</span>
@@ -791,6 +808,143 @@ pub fn FundMePage(transport: UiTransport, state: RwSignal<AppState>) -> impl Int
                         <article class="hint-card">{vm.product.status.reason()}</article>
                     }
                 }}
+            </section>
+        </WalletChrome>
+    }
+}
+
+#[component]
+pub fn ReceivePage(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
+    view! {
+        <WalletChrome transport=transport state=state>
+            <section class="page">
+                <button
+                    class="text-link back"
+                    type="button"
+                    on:click=move |_| dispatch_action(
+                        transport,
+                        state,
+                        AppAction::Navigate(AppRoute::WalletHome),
+                    )
+                >
+                    "‹ Home"
+                </button>
+                <h1>"Receive"</h1>
+                <p class="lede">"Share this address on the selected network."</p>
+                <article class="panel">
+                    <p class="muted">
+                        {move || match state.get().wallet.as_ref().map(|wallet| wallet.kind) {
+                            Some(WalletKind::WatchOnly) => "Watch-only receive",
+                            Some(WalletKind::Seed) => "Seed wallet receive",
+                            None => "No wallet",
+                        }}
+                    </p>
+                    <p class="mono">
+                        {move || {
+                            state
+                                .get()
+                                .wallet
+                                .as_ref()
+                                .map(|wallet| wallet.receive_address.clone())
+                                .unwrap_or_default()
+                        }}
+                    </p>
+                </article>
+            </section>
+        </WalletChrome>
+    }
+}
+
+#[component]
+pub fn SendPage(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
+    let destination = RwSignal::new(String::new());
+    let amount = RwSignal::new(String::from("1000"));
+    view! {
+        <WalletChrome transport=transport state=state>
+            <section class="page">
+                <button
+                    class="text-link back"
+                    type="button"
+                    on:click=move |_| dispatch_action(
+                        transport,
+                        state,
+                        AppAction::Navigate(AppRoute::WalletHome),
+                    )
+                >
+                    "‹ Home"
+                </button>
+                <h1>"Send"</h1>
+                <p class="lede">
+                    {move || match state.get().wallet.as_ref().map(|wallet| wallet.kind) {
+                        Some(WalletKind::WatchOnly) => {
+                            "Watch-only prepares an unsigned PSBT (SIGHASH_ALL|FORKID)."
+                        }
+                        _ => "Spendable coins only. Frozen coins are not selected.",
+                    }}
+                </p>
+                <label class="field">
+                    <span>"Destination"</span>
+                    <input
+                        type="text"
+                        spellcheck="false"
+                        prop:value=move || destination.get()
+                        on:input=move |event| destination.set(event_target_value(&event))
+                    />
+                </label>
+                <label class="field">
+                    <span>"Amount (sats)"</span>
+                    <input
+                        type="text"
+                        inputmode="numeric"
+                        prop:value=move || amount.get()
+                        on:input=move |event| amount.set(event_target_value(&event))
+                    />
+                </label>
+                <button
+                    class="primary"
+                    type="button"
+                    on:click=move |_| {
+                        let parsed = amount.get_untracked().parse::<u64>().unwrap_or(0);
+                        dispatch_action(
+                            transport,
+                            state,
+                            AppAction::PrepareSend {
+                                destination: destination.get_untracked(),
+                                amount_sats: parsed,
+                            },
+                        );
+                    }
+                >
+                    "Prepare send"
+                </button>
+                <Show when=move || state.get().spend.is_some()>
+                    <article class="panel">
+                        <p class="source-title">
+                            {move || match state.get().spend.as_ref().map(|plan| plan.kind) {
+                                Some(SpendKind::WatchOnlyUnsignedPsbt) => {
+                                    "Unsigned PSBT intent"
+                                }
+                                Some(SpendKind::SeedSpecified) => "Specified spend",
+                                None => "",
+                            }}
+                        </p>
+                        <p class="mono">
+                            {move || {
+                                state
+                                    .get()
+                                    .spend
+                                    .as_ref()
+                                    .map(|plan| format!(
+                                        "{} sats to {} · sighash 0x{:02X}",
+                                        plan.amount_sats,
+                                        plan.destination,
+                                        plan.sighash
+                                    ))
+                                    .unwrap_or_default()
+                            }}
+                        </p>
+                    </article>
+                </Show>
             </section>
         </WalletChrome>
     }

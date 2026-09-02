@@ -9,8 +9,9 @@ mod tools;
 
 #[cfg(target_arch = "wasm32")]
 use optn_app::{
-    onboarding_actions, onboarding_view_model, watch_only_setup_preview, AppAction, AppRoute,
-    AppState, AppSurface, Network, OnboardingAction, ThemeMode, WatchOnlySetupPreview,
+    mnemonic_from_entropy, onboarding_actions, onboarding_view_model, seed_wallet_preview,
+    watch_only_setup_preview, AppAction, AppRoute, AppState, AppSurface, Network, OnboardingAction,
+    ThemeMode, WatchOnlySetupPreview,
 };
 #[cfg(target_arch = "wasm32")]
 use optn_transport::AppTransport;
@@ -20,7 +21,8 @@ use optn_transport::LocalTransport;
 use std::rc::Rc;
 #[cfg(target_arch = "wasm32")]
 use tools::{
-    ActionsPage, CoinsPage, ExplorePage, FlipstarterPage, FundMePage, SettingsPage, WalletHome,
+    ActionsPage, CoinsPage, ExplorePage, FlipstarterPage, FundMePage, ReceivePage, SendPage,
+    SettingsPage, WalletHome,
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -259,11 +261,21 @@ fn WatchOnlySetup(transport: UiTransport, state: RwSignal<AppState>) -> impl Int
                             </div>
                         </dl>
 
-                        <p class="migration-note">
-                            "This Rust renderer now validates the same public account model. "
-                            "During the alpha migration, wallet persistence remains on the existing "
-                            "shared production database path rather than creating a second store."
-                        </p>
+                        <button
+                            class="primary"
+                            type="button"
+                            on:click=move |_| {
+                                if let Some(preview) = preview.get_untracked() {
+                                    dispatch_action(
+                                        transport,
+                                        state,
+                                        AppAction::OpenWatchOnlyWallet(preview),
+                                    );
+                                }
+                            }
+                        >
+                            "Open watch-only wallet"
+                        </button>
                     </section>
                 </Show>
             </section>
@@ -356,16 +368,230 @@ fn Landing(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
                         <LandingActionLink transport=transport state=state action=action />
                     </For>
                 </nav>
+            </section>
+        </section>
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn fill_entropy() -> Result<[u8; 16], String> {
+    let crypto = web_sys::window()
+        .ok_or_else(|| "browser window is unavailable".to_string())?
+        .crypto()
+        .map_err(|_| "Web Crypto is unavailable".to_string())?;
+    let mut entropy = [0u8; 16];
+    crypto
+        .get_random_values_with_u8_array(&mut entropy)
+        .map_err(|_| "could not gather entropy".to_string())?;
+    Ok(entropy)
+}
+
+#[cfg(target_arch = "wasm32")]
+#[component]
+fn CreateWallet(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
+    let name = RwSignal::new(String::from("My wallet"));
+    let phrase = RwSignal::new(String::new());
+    let error = RwSignal::new(None::<String>);
+
+    view! {
+        <section class="watch-only-page">
+            <section class="watch-only-card">
                 <button
-                    class="secondary open-wallet"
+                    class="text-button"
                     type="button"
                     on:click=move |_| dispatch_action(
                         transport,
                         state,
-                        AppAction::Navigate(AppRoute::WalletHome),
+                        AppAction::Navigate(AppRoute::Landing),
                     )
                 >
-                    "Open wallet"
+                    "← Back"
+                </button>
+                <p class="eyebrow">"New seed wallet"</p>
+                <h1>"Create wallet"</h1>
+                <p class="description">
+                    "Write down the 12-word phrase. It is not stored in application state."
+                </p>
+                <div class="network-picker" role="group" aria-label="Wallet network">
+                    <button
+                        type="button"
+                        class="network-option"
+                        class:active=move || state.get().network == Network::Chipnet
+                        on:click=move |_| dispatch_action(
+                            transport,
+                            state,
+                            AppAction::SetNetwork(Network::Chipnet),
+                        )
+                    >
+                        "Chipnet"
+                    </button>
+                    <button
+                        type="button"
+                        class="network-option"
+                        class:active=move || state.get().network == Network::Mainnet
+                        on:click=move |_| dispatch_action(
+                            transport,
+                            state,
+                            AppAction::SetNetwork(Network::Mainnet),
+                        )
+                    >
+                        "Mainnet"
+                    </button>
+                </div>
+                <label class="field">
+                    <span>"Wallet name"</span>
+                    <input
+                        type="text"
+                        maxlength="80"
+                        prop:value=move || name.get()
+                        on:input=move |event| name.set(event_target_value(&event))
+                    />
+                </label>
+                <button
+                    class="secondary"
+                    type="button"
+                    on:click=move |_| {
+                        match fill_entropy().and_then(|entropy| {
+                            mnemonic_from_entropy(&entropy).map_err(|error| error.to_string())
+                        }) {
+                            Ok(next) => {
+                                error.set(None);
+                                phrase.set(next);
+                            }
+                            Err(message) => error.set(Some(message)),
+                        }
+                    }
+                >
+                    "Generate recovery phrase"
+                </button>
+                <Show when=move || !phrase.get().is_empty()>
+                    <p class="mono">{move || phrase.get()}</p>
+                    <button
+                        class="primary"
+                        type="button"
+                        on:click=move |_| {
+                            match seed_wallet_preview(
+                                state.get_untracked().network,
+                                &name.get_untracked(),
+                                &phrase.get_untracked(),
+                            ) {
+                                Ok(opened) => dispatch_action(
+                                    transport,
+                                    state,
+                                    AppAction::OpenCreatedWallet {
+                                        name: opened.name,
+                                        receive_address: opened.receive_address,
+                                    },
+                                ),
+                                Err(message) => error.set(Some(message)),
+                            }
+                        }
+                    >
+                        "I wrote it down — open wallet"
+                    </button>
+                </Show>
+                <Show when=move || error.get().is_some()>
+                    <p class="form-error" role="alert">
+                        {move || error.get().unwrap_or_default()}
+                    </p>
+                </Show>
+            </section>
+        </section>
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[component]
+fn ImportWallet(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
+    let name = RwSignal::new(String::from("Imported wallet"));
+    let phrase = RwSignal::new(String::new());
+    let error = RwSignal::new(None::<String>);
+
+    view! {
+        <section class="watch-only-page">
+            <section class="watch-only-card">
+                <button
+                    class="text-button"
+                    type="button"
+                    on:click=move |_| dispatch_action(
+                        transport,
+                        state,
+                        AppAction::Navigate(AppRoute::Landing),
+                    )
+                >
+                    "← Back"
+                </button>
+                <p class="eyebrow">"Existing seed"</p>
+                <h1>"Import wallet"</h1>
+                <div class="network-picker" role="group" aria-label="Wallet network">
+                    <button
+                        type="button"
+                        class="network-option"
+                        class:active=move || state.get().network == Network::Chipnet
+                        on:click=move |_| dispatch_action(
+                            transport,
+                            state,
+                            AppAction::SetNetwork(Network::Chipnet),
+                        )
+                    >
+                        "Chipnet"
+                    </button>
+                    <button
+                        type="button"
+                        class="network-option"
+                        class:active=move || state.get().network == Network::Mainnet
+                        on:click=move |_| dispatch_action(
+                            transport,
+                            state,
+                            AppAction::SetNetwork(Network::Mainnet),
+                        )
+                    >
+                        "Mainnet"
+                    </button>
+                </div>
+                <label class="field">
+                    <span>"Wallet name"</span>
+                    <input
+                        type="text"
+                        maxlength="80"
+                        prop:value=move || name.get()
+                        on:input=move |event| name.set(event_target_value(&event))
+                    />
+                </label>
+                <label class="field">
+                    <span>"Recovery phrase"</span>
+                    <textarea
+                        rows="3"
+                        spellcheck="false"
+                        prop:value=move || phrase.get()
+                        on:input=move |event| phrase.set(event_target_value(&event))
+                    ></textarea>
+                </label>
+                <Show when=move || error.get().is_some()>
+                    <p class="form-error" role="alert">{move || error.get().unwrap_or_default()}</p>
+                </Show>
+                <button
+                    class="primary"
+                    type="button"
+                    on:click=move |_| {
+                        match seed_wallet_preview(
+                            state.get_untracked().network,
+                            &name.get_untracked(),
+                            &phrase.get_untracked(),
+                        ) {
+                            Ok(opened) => dispatch_action(
+                                transport,
+                                state,
+                                AppAction::OpenImportedWallet {
+                                    name: opened.name,
+                                    receive_address: opened.receive_address,
+                                },
+                            ),
+                            Err(message) => error.set(Some(message)),
+                        }
+                    }
+                >
+                    "Import and open"
                 </button>
             </section>
         </section>
@@ -456,9 +682,19 @@ fn App(transport: Rc<dyn AppTransport>) -> impl IntoView {
                 AppRoute::FundMe => view! {
                     <FundMePage transport=transport state=state />
                 }.into_any(),
-                AppRoute::Landing
-                | AppRoute::CreateWallet
-                | AppRoute::ImportWallet => view! {
+                AppRoute::Receive => view! {
+                    <ReceivePage transport=transport state=state />
+                }.into_any(),
+                AppRoute::Send => view! {
+                    <SendPage transport=transport state=state />
+                }.into_any(),
+                AppRoute::CreateWallet => view! {
+                    <CreateWallet transport=transport state=state />
+                }.into_any(),
+                AppRoute::ImportWallet => view! {
+                    <ImportWallet transport=transport state=state />
+                }.into_any(),
+                AppRoute::Landing => view! {
                     <Landing transport=transport state=state />
                 }.into_any(),
             }}
