@@ -6,6 +6,10 @@
 //! adapters may subscribe to typed events. No UI or native-shell framework
 //! belongs in this crate.
 
+mod flow;
+
+pub use flow::{create_confirm_indices, flow_view_model, CreateStep, FlowViewModel, ImportStep};
+
 pub use optn_core::coins::{Coin, CoinSet, FreezeReason, Outpoint};
 pub use optn_core::flipstarter::{
     chipnet_demo_coin, encode_campaign_blob, sample_chipnet_campaign_blob, Campaign,
@@ -226,6 +230,9 @@ pub struct AppState {
     pub notice: Option<String>,
     pub wallet: Option<OpenedWallet>,
     pub spend: Option<SpendPlan>,
+    pub create_step: CreateStep,
+    pub import_step: ImportStep,
+    pub settings_focus: Option<SettingsRowId>,
 }
 
 /// Public session for an opened wallet. The mnemonic never lives here.
@@ -285,6 +292,9 @@ impl AppState {
             notice: None,
             wallet: None,
             spend: None,
+            create_step: CreateStep::Reveal,
+            import_step: ImportStep::Words,
+            settings_focus: None,
         }
     }
 
@@ -294,6 +304,15 @@ impl AppState {
 
     pub fn fundme(&self) -> FundMeProduct {
         optn_core::fundme::product()
+    }
+
+    pub fn flow(&self) -> FlowViewModel {
+        flow_view_model(
+            self.route,
+            self.create_step,
+            self.import_step,
+            self.settings_focus,
+        )
     }
 }
 
@@ -341,6 +360,12 @@ pub enum AppAction {
         amount_sats: u64,
     },
     RebuildWallet,
+    /// Pop the current section (create/import step, settings panel, or page).
+    GoBack,
+    /// Advance create/import to the next desktop section. The renderer validates
+    /// form fields first; the mnemonic never enters application state.
+    AdvanceOnboarding,
+    OpenSettingsRow(SettingsRowId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -358,6 +383,7 @@ pub enum AppEvent {
     WalletOpened,
     SpendPrepared,
     WalletRebuilt,
+    FlowChanged,
 }
 
 impl AppState {
@@ -382,8 +408,27 @@ impl AppState {
                 {
                     return self.reject("Hardware wallets are not available here.".into());
                 }
+                let mut flow_changed = false;
+                if route == AppRoute::CreateWallet && self.create_step != CreateStep::Reveal {
+                    self.create_step = CreateStep::Reveal;
+                    flow_changed = true;
+                }
+                if route == AppRoute::ImportWallet && self.import_step != ImportStep::Words {
+                    self.import_step = ImportStep::Words;
+                    flow_changed = true;
+                }
+                if route == AppRoute::Settings && self.settings_focus.is_some() {
+                    self.settings_focus = None;
+                    flow_changed = true;
+                }
                 if self.route == route {
-                    return None;
+                    return flow_changed.then_some(AppEvent::FlowChanged);
+                }
+                if route == AppRoute::CreateWallet {
+                    self.create_step = CreateStep::Reveal;
+                }
+                if route == AppRoute::ImportWallet {
+                    self.import_step = ImportStep::Words;
                 }
                 self.route = route;
                 Some(AppEvent::RouteChanged(route))
@@ -592,6 +637,21 @@ impl AppState {
                 self.notice = None;
                 Some(AppEvent::WalletRebuilt)
             }
+            AppAction::GoBack => self.go_back(),
+            AppAction::AdvanceOnboarding => self.advance_onboarding(),
+            AppAction::OpenSettingsRow(row) => {
+                if self.route != AppRoute::Settings {
+                    return self.reject("open Settings first".into());
+                }
+                if !settings_view_model(self).rows.contains(&row) {
+                    return self.reject("that setting is not available".into());
+                }
+                if self.settings_focus == Some(row) {
+                    return None;
+                }
+                self.settings_focus = Some(row);
+                Some(AppEvent::FlowChanged)
+            }
             AppAction::SetNetwork(_)
             | AppAction::SetTheme(_)
             | AppAction::SetSkin(_)
@@ -630,6 +690,78 @@ impl AppState {
         self.notice = None;
         self.route = AppRoute::WalletHome;
         Some(AppEvent::WalletOpened)
+    }
+
+    fn go_back(&mut self) -> Option<AppEvent> {
+        match self.route {
+            AppRoute::CreateWallet => match self.create_step.back() {
+                Some(step) => {
+                    self.create_step = step;
+                    Some(AppEvent::FlowChanged)
+                }
+                None => {
+                    self.route = AppRoute::Landing;
+                    Some(AppEvent::RouteChanged(AppRoute::Landing))
+                }
+            },
+            AppRoute::ImportWallet => match self.import_step.back() {
+                Some(step) => {
+                    self.import_step = step;
+                    Some(AppEvent::FlowChanged)
+                }
+                None => {
+                    self.route = AppRoute::Landing;
+                    Some(AppEvent::RouteChanged(AppRoute::Landing))
+                }
+            },
+            AppRoute::WatchOnlyWallet | AppRoute::HardwareWallet => {
+                self.route = AppRoute::Landing;
+                Some(AppEvent::RouteChanged(AppRoute::Landing))
+            }
+            AppRoute::Settings if self.settings_focus.is_some() => {
+                self.settings_focus = None;
+                Some(AppEvent::FlowChanged)
+            }
+            AppRoute::Receive
+            | AppRoute::Send
+            | AppRoute::History
+            | AppRoute::Flipstarter
+            | AppRoute::FundMe
+            | AppRoute::Settings => {
+                if self.wallet.is_some() {
+                    self.route = AppRoute::WalletHome;
+                    Some(AppEvent::RouteChanged(AppRoute::WalletHome))
+                } else {
+                    self.route = AppRoute::Landing;
+                    Some(AppEvent::RouteChanged(AppRoute::Landing))
+                }
+            }
+            AppRoute::Landing
+            | AppRoute::WalletHome
+            | AppRoute::Coins
+            | AppRoute::Actions
+            | AppRoute::Explore => None,
+        }
+    }
+
+    fn advance_onboarding(&mut self) -> Option<AppEvent> {
+        match self.route {
+            AppRoute::CreateWallet => match self.create_step.next() {
+                Some(step) => {
+                    self.create_step = step;
+                    Some(AppEvent::FlowChanged)
+                }
+                None => self.reject("name the wallet, then open it.".into()),
+            },
+            AppRoute::ImportWallet => match self.import_step.next() {
+                Some(step) => {
+                    self.import_step = step;
+                    Some(AppEvent::FlowChanged)
+                }
+                None => self.reject("name the wallet, then open it.".into()),
+            },
+            _ => self.reject("nothing to continue.".into()),
+        }
     }
 
     fn reject(&mut self, message: String) -> Option<AppEvent> {
@@ -1054,7 +1186,83 @@ pub fn watch_only_setup_preview(
 
 /// Vendors onboarding offers, surfaced from `optn-platform` so the renderer
 /// does not keep its own list.
-pub use optn_platform::HardwareVendor;
+pub use optn_platform::{HardwareTransport, HardwareVendor, TransportSupport};
+
+pub use optn_core::multisig::{Cosigner, MultisigPreview, MAX_COSIGNERS};
+
+/// Transports a surface can be relied on to provide.
+///
+/// A Tauri WebView owns USB natively but exposes no WebHID; a browser tab is
+/// the mirror image. Reachability is then a property of the device and the
+/// transport together, not a single "is this desktop" flag — which is what
+/// would otherwise hide Keystone, an air-gapped device that needs only a
+/// camera, on phones.
+pub fn transport_support(surface: AppSurface) -> TransportSupport {
+    match surface {
+        AppSurface::Desktop => TransportSupport {
+            native_usb: true,
+            camera: true,
+            iframe: true,
+            ..TransportSupport::NONE
+        },
+        AppSurface::Android | AppSurface::Ios => TransportSupport {
+            camera: true,
+            ..TransportSupport::NONE
+        },
+        AppSurface::Web => TransportSupport {
+            web_hid: true,
+            web_usb: true,
+            web_ble: true,
+            camera: true,
+            iframe: true,
+            ..TransportSupport::NONE
+        },
+        // A popup has no room for a device dance and no camera permission.
+        AppSurface::Extension => TransportSupport::NONE,
+    }
+}
+
+/// A multisig wallet validated and previewed, ready to open.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MultisigSetupPreview {
+    pub wallet_name: String,
+    pub policy: String,
+    pub required: u8,
+    pub total: u8,
+    pub receive_address: String,
+    pub receive_token_address: String,
+    pub change_address: String,
+    pub cosigner_names: Vec<String>,
+}
+
+/// Validate a cosigner set and derive the shared P2SH addresses.
+///
+/// Every cosigner runs this and must land on the same address; BIP-67 key
+/// ordering in `optn-core` is what guarantees that regardless of the order
+/// they were typed in.
+pub fn multisig_setup_preview(
+    network: Network,
+    wallet_name: &str,
+    required: u8,
+    cosigners: &[Cosigner],
+) -> Result<MultisigSetupPreview, String> {
+    let wallet_name = wallet_name.trim();
+    if wallet_name.is_empty() {
+        return Err("Give the wallet a name.".into());
+    }
+    let preview = optn_core::multisig::multisig_preview(network, required, cosigners)
+        .map_err(|error| error.to_string())?;
+    Ok(MultisigSetupPreview {
+        wallet_name: wallet_name.to_owned(),
+        policy: preview.policy,
+        required: preview.required,
+        total: preview.total,
+        receive_address: preview.receive.address,
+        receive_token_address: preview.receive.token_address,
+        change_address: preview.change.address,
+        cosigner_names: preview.cosigner_names,
+    })
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HardwareSetupPreview {
@@ -1704,6 +1912,61 @@ mod tests {
     }
 
     #[test]
+    fn create_and_import_walk_desktop_sections_with_back() {
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        state.apply(AppAction::Navigate(AppRoute::CreateWallet));
+        assert_eq!(state.flow().create_step, CreateStep::Reveal);
+        assert_eq!(state.flow().next_label, "I wrote it down");
+        assert!(state.flow().can_advance);
+
+        state.apply(AppAction::AdvanceOnboarding);
+        assert_eq!(state.flow().create_step, CreateStep::Confirm);
+        state.apply(AppAction::GoBack);
+        assert_eq!(state.flow().create_step, CreateStep::Reveal);
+
+        state.apply(AppAction::AdvanceOnboarding);
+        state.apply(AppAction::AdvanceOnboarding);
+        assert_eq!(state.flow().create_step, CreateStep::Path);
+        state.apply(AppAction::AdvanceOnboarding);
+        assert_eq!(state.flow().create_step, CreateStep::Name);
+        assert!(!state.flow().can_advance);
+
+        state.apply(AppAction::GoBack);
+        assert_eq!(state.flow().create_step, CreateStep::Path);
+        state.apply(AppAction::GoBack);
+        state.apply(AppAction::GoBack);
+        state.apply(AppAction::GoBack);
+        assert_eq!(state.route, AppRoute::Landing);
+
+        state.apply(AppAction::Navigate(AppRoute::ImportWallet));
+        assert_eq!(state.flow().import_step, ImportStep::Words);
+        state.apply(AppAction::AdvanceOnboarding);
+        assert_eq!(state.flow().import_step, ImportStep::Path);
+        state.apply(AppAction::AdvanceOnboarding);
+        assert_eq!(state.flow().import_step, ImportStep::Name);
+        state.apply(AppAction::GoBack);
+        assert_eq!(state.flow().import_step, ImportStep::Path);
+    }
+
+    #[test]
+    fn settings_drills_into_a_row_and_back_returns_to_the_list() {
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        open_chipnet_seed(&mut state, "settings-flow");
+        state.apply(AppAction::Navigate(AppRoute::Settings));
+        assert_eq!(state.flow().settings_focus, None);
+        state.apply(AppAction::OpenSettingsRow(SettingsRowId::RebuildWallet));
+        assert_eq!(
+            state.flow().settings_focus,
+            Some(SettingsRowId::RebuildWallet)
+        );
+        state.apply(AppAction::GoBack);
+        assert_eq!(state.route, AppRoute::Settings);
+        assert_eq!(state.flow().settings_focus, None);
+        state.apply(AppAction::GoBack);
+        assert_eq!(state.route, AppRoute::WalletHome);
+    }
+
+    #[test]
     fn home_is_blocked_until_a_wallet_is_opened() {
         let mut state = AppState::for_surface(AppSurface::Android);
         assert_eq!(
@@ -2024,6 +2287,69 @@ mod tests {
             );
             assert!(!item.label().is_empty());
         }
+    }
+
+    #[test]
+    fn a_multisig_wallet_is_previewed_from_cosigner_accounts() {
+        let cosigners: Vec<Cosigner> = (0..3)
+            .map(|account| {
+                let wallet = optn_core::hd::Wallet::from_mnemonic(BIP39_TEST_VECTOR_MNEMONIC, "")
+                    .expect("mnemonic");
+                Cosigner {
+                    name: String::new(),
+                    account_xpub: wallet
+                        .account_xpub(Network::Chipnet, account)
+                        .expect("xpub"),
+                    master_fingerprint: None,
+                }
+            })
+            .collect();
+
+        let preview = multisig_setup_preview(Network::Chipnet, "shared funds", 2, &cosigners)
+            .expect("2-of-3 is valid");
+        assert_eq!(preview.policy, "2 of 3");
+        assert_eq!((preview.required, preview.total), (2, 3));
+        assert!(preview.receive_address.starts_with("bchtest:p"), "P2SH");
+        assert_ne!(preview.receive_address, preview.change_address);
+        assert_eq!(
+            preview.cosigner_names,
+            vec!["Cosigner 1", "Cosigner 2", "Cosigner 3"]
+        );
+
+        // Order-independence is the whole point: cosigners type each other in
+        // whatever order and must still land on one wallet.
+        let mut shuffled = cosigners.clone();
+        shuffled.reverse();
+        let same = multisig_setup_preview(Network::Chipnet, "shared funds", 2, &shuffled)
+            .expect("still valid");
+        assert_eq!(preview.receive_address, same.receive_address);
+
+        assert!(multisig_setup_preview(Network::Chipnet, "", 2, &cosigners).is_err());
+        assert!(multisig_setup_preview(Network::Chipnet, "n", 4, &cosigners).is_err());
+    }
+
+    #[test]
+    fn transports_decide_reachability_so_keystone_survives_on_a_phone() {
+        // The old capability matrix collapsed every device into one
+        // desktop-only switch. Keystone needs a camera, not a cable.
+        let phone = transport_support(AppSurface::Android);
+        assert!(HardwareVendor::Keystone.is_reachable_with(phone));
+        assert!(!HardwareVendor::Ledger.is_reachable_with(phone));
+
+        let desktop = transport_support(AppSurface::Desktop);
+        for vendor in HardwareVendor::OFFERED {
+            assert!(vendor.is_reachable_with(desktop), "{vendor:?} on desktop");
+        }
+
+        // A browser has WebHID but no native USB, and still reaches a Ledger.
+        assert!(HardwareVendor::Ledger.is_reachable_with(transport_support(AppSurface::Web)));
+
+        // A popup reaches nothing, and says why rather than blaming the cable.
+        let popup = transport_support(AppSurface::Extension);
+        assert!(!HardwareVendor::Keystone.is_reachable_with(popup));
+        assert!(HardwareVendor::Keystone
+            .unreachable_reason(popup)
+            .is_some_and(|reason| reason.contains("camera")));
     }
 
     #[test]

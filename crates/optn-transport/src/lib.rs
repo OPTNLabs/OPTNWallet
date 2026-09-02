@@ -7,10 +7,10 @@
 //! crate; only these typed contracts are shared.
 
 use optn_app::{
-    AppAction, AppEvent, AppRoute, AppState, AppSurface, CampaignOutput, Coin, FeatureFlag,
-    FeatureFlags, FlipstarterPledge, FreezeReason, HardwareSetupPreview, HardwareVendor, Network,
-    OpenedWallet, Outpoint, PledgeStatus, SpendKind, SpendPlan, ThemeMode, UiSkin, WalletKind,
-    WatchOnlySetupPreview,
+    AppAction, AppEvent, AppRoute, AppState, AppSurface, CampaignOutput, Coin, CreateStep,
+    FeatureFlag, FeatureFlags, FlipstarterPledge, FreezeReason, HardwareSetupPreview,
+    HardwareVendor, ImportStep, Network, OpenedWallet, Outpoint, PledgeStatus, SettingsRowId,
+    SpendKind, SpendPlan, ThemeMode, UiSkin, WalletKind, WatchOnlySetupPreview,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -223,6 +223,9 @@ pub enum WireActionKind {
         amount_sats: u64,
     },
     RebuildWallet,
+    GoBack,
+    AdvanceOnboarding,
+    OpenSettingsRow(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -255,6 +258,31 @@ pub struct WireState {
     pub wallet: Option<WireOpenedWallet>,
     #[serde(default)]
     pub spend: Option<WireSpendPlan>,
+    #[serde(default)]
+    pub create_step: WireCreateStep,
+    #[serde(default)]
+    pub import_step: WireImportStep,
+    #[serde(default)]
+    pub settings_focus: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WireCreateStep {
+    #[default]
+    Reveal,
+    Confirm,
+    Path,
+    Name,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WireImportStep {
+    #[default]
+    Words,
+    Path,
+    Name,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -315,6 +343,7 @@ pub enum WireEventKind {
     WalletOpened,
     SpendPrepared,
     WalletRebuilt,
+    FlowChanged,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -653,6 +682,11 @@ impl From<AppAction> for WireAction {
                 amount_sats,
             },
             AppAction::RebuildWallet => WireActionKind::RebuildWallet,
+            AppAction::GoBack => WireActionKind::GoBack,
+            AppAction::AdvanceOnboarding => WireActionKind::AdvanceOnboarding,
+            AppAction::OpenSettingsRow(row) => {
+                WireActionKind::OpenSettingsRow(settings_row_id(row).into())
+            }
         };
         Self {
             version: WIRE_PROTOCOL_VERSION,
@@ -758,6 +792,11 @@ impl TryFrom<WireAction> for AppAction {
                 amount_sats,
             },
             WireActionKind::RebuildWallet => Self::RebuildWallet,
+            WireActionKind::GoBack => Self::GoBack,
+            WireActionKind::AdvanceOnboarding => Self::AdvanceOnboarding,
+            WireActionKind::OpenSettingsRow(row) => {
+                Self::OpenSettingsRow(parse_settings_row(&row)?)
+            }
         })
     }
 }
@@ -786,6 +825,9 @@ impl From<&AppState> for WireState {
             notice: value.notice.clone(),
             wallet: value.wallet.as_ref().map(WireOpenedWallet::from),
             spend: value.spend.as_ref().map(WireSpendPlan::from),
+            create_step: value.create_step.into(),
+            import_step: value.import_step.into(),
+            settings_focus: value.settings_focus.map(settings_row_id).map(str::to_owned),
         }
     }
 }
@@ -913,6 +955,13 @@ impl TryFrom<WireState> for AppState {
             notice: value.notice,
             wallet: value.wallet.map(OpenedWallet::from),
             spend: value.spend.map(SpendPlan::try_from).transpose()?,
+            create_step: value.create_step.into(),
+            import_step: value.import_step.into(),
+            settings_focus: value
+                .settings_focus
+                .as_deref()
+                .map(parse_settings_row)
+                .transpose()?,
         })
     }
 }
@@ -936,6 +985,7 @@ impl From<AppEvent> for WireEvent {
             AppEvent::WalletOpened => WireEventKind::WalletOpened,
             AppEvent::SpendPrepared => WireEventKind::SpendPrepared,
             AppEvent::WalletRebuilt => WireEventKind::WalletRebuilt,
+            AppEvent::FlowChanged => WireEventKind::FlowChanged,
         };
         Self {
             version: WIRE_PROTOCOL_VERSION,
@@ -966,12 +1016,84 @@ impl TryFrom<WireEvent> for AppEvent {
             WireEventKind::WalletOpened => Self::WalletOpened,
             WireEventKind::SpendPrepared => Self::SpendPrepared,
             WireEventKind::WalletRebuilt => Self::WalletRebuilt,
+            WireEventKind::FlowChanged => Self::FlowChanged,
         })
     }
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn settings_row_id(row: SettingsRowId) -> &'static str {
+    match row {
+        SettingsRowId::Network => "network",
+        SettingsRowId::Faucet => "faucet",
+        SettingsRowId::WalletInfo => "wallet-info",
+        SettingsRowId::Derivation => "derivation",
+        SettingsRowId::Recovery => "recovery",
+        SettingsRowId::RebuildWallet => "rebuild-wallet",
+        SettingsRowId::Servers => "servers",
+        SettingsRowId::CashFusion => "cash-fusion",
+    }
+}
+
+fn parse_settings_row(row: &str) -> Result<SettingsRowId, TransportError> {
+    match row {
+        "network" => Ok(SettingsRowId::Network),
+        "faucet" => Ok(SettingsRowId::Faucet),
+        "wallet-info" => Ok(SettingsRowId::WalletInfo),
+        "derivation" => Ok(SettingsRowId::Derivation),
+        "recovery" => Ok(SettingsRowId::Recovery),
+        "rebuild-wallet" => Ok(SettingsRowId::RebuildWallet),
+        "servers" => Ok(SettingsRowId::Servers),
+        "cash-fusion" => Ok(SettingsRowId::CashFusion),
+        other => Err(TransportError::InvalidData(format!(
+            "unknown settings row '{other}'"
+        ))),
+    }
+}
+
+impl From<CreateStep> for WireCreateStep {
+    fn from(value: CreateStep) -> Self {
+        match value {
+            CreateStep::Reveal => Self::Reveal,
+            CreateStep::Confirm => Self::Confirm,
+            CreateStep::Path => Self::Path,
+            CreateStep::Name => Self::Name,
+        }
+    }
+}
+
+impl From<WireCreateStep> for CreateStep {
+    fn from(value: WireCreateStep) -> Self {
+        match value {
+            WireCreateStep::Reveal => Self::Reveal,
+            WireCreateStep::Confirm => Self::Confirm,
+            WireCreateStep::Path => Self::Path,
+            WireCreateStep::Name => Self::Name,
+        }
+    }
+}
+
+impl From<ImportStep> for WireImportStep {
+    fn from(value: ImportStep) -> Self {
+        match value {
+            ImportStep::Words => Self::Words,
+            ImportStep::Path => Self::Path,
+            ImportStep::Name => Self::Name,
+        }
+    }
+}
+
+impl From<WireImportStep> for ImportStep {
+    fn from(value: WireImportStep) -> Self {
+        match value {
+            WireImportStep::Words => Self::Words,
+            WireImportStep::Path => Self::Path,
+            WireImportStep::Name => Self::Name,
+        }
+    }
 }
 
 fn verify_wire_version(version: u16) -> Result<(), TransportError> {
