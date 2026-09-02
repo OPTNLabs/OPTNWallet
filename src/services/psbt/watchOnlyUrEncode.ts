@@ -1,5 +1,11 @@
 import { SIGHASH_ALL_FORKID_ANYONECANPAY, decodePsbt } from './psbtBch';
-import { DEFAULT_UR_FRAGMENT_LENGTH, encodePsbtToUrFrames } from './urPsbt';
+import {
+  DEFAULT_UR_FRAGMENT_LENGTH,
+  PSBT_UR_FRAGMENT_LENGTHS,
+  encodePsbtToUrFrames,
+  isPsbtUrFragmentLength,
+  type PsbtUrFragmentLength,
+} from './urPsbt';
 
 /** CLI and GUI share this. File/stdout UR is Chipnet-only. */
 export const WATCH_ONLY_UR_NETWORK = 'chipnet' as const;
@@ -44,6 +50,25 @@ export function assertWatchOnlySighash(psbt: Uint8Array): void {
   });
 }
 
+/**
+ * Parse a user/CLI-selected QR density.
+ *
+ * The four presets are deliberate interoperability points, not arbitrary
+ * encoder tuning. 50 remains the safe default for SeedCash.
+ */
+export function parseWatchOnlyUrFragmentLength(
+  value: string | number | undefined
+): PsbtUrFragmentLength {
+  if (value === undefined || value === '') return DEFAULT_UR_FRAGMENT_LENGTH;
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!Number.isInteger(parsed) || !isPsbtUrFragmentLength(parsed)) {
+    throw new Error(
+      `UR fragment length must be one of ${PSBT_UR_FRAGMENT_LENGTHS.join(', ')}.`
+    );
+  }
+  return parsed;
+}
+
 /** Hex, base64, or raw PSBT bytes. Never treats the payload as a key. */
 export function parsePsbtBytes(raw: Uint8Array | string): Uint8Array {
   if (typeof raw !== 'string') {
@@ -77,9 +102,12 @@ export function parsePsbtBytes(raw: Uint8Array | string): Uint8Array {
  * Padding 8 is a QR display constant (PSBT_UR_QR_MARGIN_MODULES), not a UR
  * byte. CLI emits UR strings for stdout/files; GUI applies the quiet zone.
  */
-export function encodeWatchOnlyUrFrames(psbt: Uint8Array): string[] {
+export function encodeWatchOnlyUrFrames(
+  psbt: Uint8Array,
+  fragmentLength: PsbtUrFragmentLength = DEFAULT_UR_FRAGMENT_LENGTH
+): string[] {
   assertWatchOnlySighash(psbt);
-  const ur = encodePsbtToUrFrames(psbt, DEFAULT_UR_FRAGMENT_LENGTH);
+  const ur = encodePsbtToUrFrames(psbt, fragmentLength);
   const frames: string[] = [];
   for (let i = 0; i < ur.count; i += 1) {
     frames.push(ur.next());

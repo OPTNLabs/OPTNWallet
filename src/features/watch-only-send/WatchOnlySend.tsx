@@ -57,11 +57,14 @@ import {
   type CosignerStatus,
 } from '../../services/psbt/psbtMultisig';
 import {
+  DEFAULT_UR_FRAGMENT_LENGTH,
+  PSBT_UR_FRAGMENT_LENGTHS,
   encodePsbtToUrFrames,
   UrPsbtScanner,
   PSBT_UR_QR_DISPLAY_SIZE,
   PSBT_UR_QR_ERROR_LEVEL,
   PSBT_UR_QR_MARGIN_MODULES,
+  type PsbtUrFragmentLength,
 } from '../../services/psbt/urPsbt';
 import {
   masterFingerprintBytes,
@@ -166,6 +169,8 @@ export const WatchOnlySend: FC = () => {
   const [inputs, setInputs] = useState<SpendableInput[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [fingerprint, setFingerprint] = useState('');
+  const [urFragmentLength, setUrFragmentLength] =
+    useState<PsbtUrFragmentLength>(DEFAULT_UR_FRAGMENT_LENGTH);
   const [accountPath, setAccountPath] = useState(() =>
     getBchAccountPath(currentNetwork)
   );
@@ -435,6 +440,20 @@ export const WatchOnlySend: FC = () => {
     };
   }, []);
 
+  // Re-split the exact same approved PSBT when the user changes QR density.
+  // No transaction fields or signatures change; only the air-gap transport.
+  useEffect(() => {
+    if (!proposalState) return;
+    const frameSource = encodePsbtToUrFrames(
+      proposalState.psbtBytes,
+      urFragmentLength
+    );
+    frameIndexRef.current = 0;
+    frameCountRef.current = frameSource.count;
+    setFrames(frameSource);
+    setQrUri(frameSource.next());
+  }, [proposalState, urFragmentLength]);
+
   // Drive the animated QR: advance one frame on every tick, always.
   useEffect(() => {
     if (!frames) return;
@@ -576,11 +595,8 @@ export const WatchOnlySend: FC = () => {
         changeSats: result.changeSats,
         inputSumSats: result.inputSumSats,
       });
-      const frameSource = encodePsbtToUrFrames(result.psbtBytes);
-      frameIndexRef.current = 0;
-      frameCountRef.current = frameSource.count;
-      setFrames(frameSource);
-      setQrUri(frameSource.next());
+      // Frame generation is derived from proposalState + the selected density
+      // in the effect above, so changing density never rebuilds the transaction.
     } catch (err) {
       setError(
         err instanceof Error
@@ -957,6 +973,34 @@ export const WatchOnlySend: FC = () => {
                   <p className="text-sm font-semibold wallet-text-strong">
                     Scan this with SeedCash (air-gapped)
                   </p>
+                  <div
+                    className="space-y-2"
+                    role="group"
+                    aria-label="QR density"
+                  >
+                    <div className="grid grid-cols-4 gap-2">
+                      {PSBT_UR_FRAGMENT_LENGTHS.map((length) => (
+                        <button
+                          key={length}
+                          type="button"
+                          aria-pressed={urFragmentLength === length}
+                          onClick={() => setUrFragmentLength(length)}
+                          className={
+                            urFragmentLength === length
+                              ? 'wallet-btn-primary py-1.5 text-xs font-semibold'
+                              : 'wallet-btn-secondary py-1.5 text-xs font-semibold'
+                          }
+                        >
+                          {length}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-center text-[11px] wallet-muted">
+                      QR density · 50 is easiest to scan; higher values use
+                      fewer frames. Use the highest value your signer can read
+                      reliably.
+                    </p>
+                  </div>
                   <div className="mx-auto w-full max-w-[min(100%,70svh)] rounded-md bg-white p-2">
                     <QRCodeSVG
                       value={qrUri}
