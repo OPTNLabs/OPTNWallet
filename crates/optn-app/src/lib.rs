@@ -238,6 +238,49 @@ pub fn onboarding_view_model(state: &AppState) -> OnboardingViewModel {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WatchOnlySetupPreview {
+    pub wallet_name: String,
+    pub master_fingerprint: Option<String>,
+    pub account_path: String,
+    pub receive_address: String,
+    pub receive_token_address: String,
+    pub change_address: String,
+}
+
+/// Validate watch-only onboarding data in the application/domain layer.
+///
+/// Renderers submit strings; the shared core decides whether the account xPub
+/// and optional master fingerprint are valid and derives the public preview.
+pub fn watch_only_setup_preview(
+    network: Network,
+    wallet_name: &str,
+    account_xpub: &str,
+    master_fingerprint: &str,
+) -> Result<WatchOnlySetupPreview, String> {
+    let wallet_name = wallet_name.trim();
+    if wallet_name.is_empty() {
+        return Err("Give the wallet a name.".into());
+    }
+    if wallet_name.chars().count() > 80 {
+        return Err("Wallet name is too long.".into());
+    }
+
+    let fingerprint = optn_core::watch_only::normalize_master_fingerprint(master_fingerprint)
+        .map_err(|error| error.to_string())?;
+    let preview = optn_core::watch_only::account_preview(network, account_xpub)
+        .map_err(|error| error.to_string())?;
+
+    Ok(WatchOnlySetupPreview {
+        wallet_name: wallet_name.to_owned(),
+        master_fingerprint: fingerprint,
+        account_path: preview.account_path,
+        receive_address: preview.receive.address,
+        receive_token_address: preview.receive.token_address,
+        change_address: preview.change.address,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
