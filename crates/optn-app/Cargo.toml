@@ -2,11 +2,11 @@
 name = "optn-app"
 version = "1.7.3"
 edition = "2021"
-license = "GPL-3.0"
+license = "GPL-3.0-only"
 description = "Framework-neutral application state and use-case layer for OPTN Wallet."
 
 [dependencies]
-optn-core = { path = "../optn-core" }
+optn-core = { path = "../optn-core", version = "=1.7.3" }
 
 [dev-dependencies]
 proptest = "1.9.0"
