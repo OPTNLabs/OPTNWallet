@@ -51,7 +51,6 @@ vi.mock('../../../components/transaction/Popup', () => ({
     React.createElement('div', null, children),
 }));
 
-
 import LandingPage from '../LandingPage';
 
 afterEach(() => {
@@ -59,28 +58,21 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe('mobile onboarding landing page', () => {
-  it.each(['android', 'ios'] as const)(
+describe('onboarding watch-only capability', () => {
+  it.each(['android', 'ios', 'web', 'extension'] as const)(
     'shows watch-only alongside create and import on %s',
     (surface) => {
       render(<LandingPage surface={surface} />);
 
-    expect(
-      screen.getByRole('link', { name: 'Create Wallet' })
-    ).toHaveAttribute('href', '/createwallet');
-    expect(
-      screen.getByRole('link', { name: 'Import Wallet' })
-    ).toHaveAttribute('href', '/importwallet');
+      expect(
+        screen.getByRole('link', { name: 'Create Wallet' })
+      ).toHaveAttribute('href', '/createwallet');
+      expect(
+        screen.getByRole('link', { name: 'Import Wallet' })
+      ).toHaveAttribute('href', '/importwallet');
       expect(
         screen.getByRole('link', { name: 'Create Watch-Only Wallet' })
       ).toHaveAttribute('href', '/watch-only');
     }
   );
-
-  it('keeps watch-only out of the web surface', () => {
-    render(<LandingPage surface="web" />);
-    expect(
-      screen.queryByRole('link', { name: 'Create Watch-Only Wallet' })
-    ).not.toBeInTheDocument();
-  });
 });
