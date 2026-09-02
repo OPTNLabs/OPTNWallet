@@ -10,6 +10,8 @@ pub mod hw;
 pub mod nostr_tor;
 #[cfg(desktop)]
 pub mod platform;
+#[cfg(mobile)]
+pub mod platform_mobile;
 pub mod spv;
 
 async fn verified_fusion_proxy<'a>(
@@ -1019,17 +1021,28 @@ async fn optn_cold_file_exists(path: String) -> Result<bool, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_keyring::init())
-        .plugin(tauri_plugin_biometry::init())
+        .plugin(tauri_plugin_biometry::init());
+
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_keyring::init());
+
+    #[cfg(mobile)]
+    let builder = builder.plugin(tauri_plugin_clipboard_manager::init());
+
+    builder
         .invoke_handler(tauri::generate_handler![
             #[cfg(desktop)]
             clipboard::clipboard_write_text,
             #[cfg(desktop)]
             clipboard::clipboard_read_text,
+            #[cfg(mobile)]
+            platform_mobile::clipboard_write_text,
+            #[cfg(mobile)]
+            platform_mobile::clipboard_read_text,
             optn_price_fetch,
             open_external,
             read_wallet_file,
