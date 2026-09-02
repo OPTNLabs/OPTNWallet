@@ -228,7 +228,23 @@ pub fn WalletHome(transport: UiTransport, state: RwSignal<AppState>) -> impl Int
                                     "Wallet"
                                     <span class="enabled-pill">"Enabled"</span>
                                 </p>
-                                <p class="muted">"Standard BCH wallet"</p>
+                                <p class="muted">
+                                    {move || {
+                                        let wallet = state.get().wallet;
+                                        match wallet.as_ref().and_then(|w| w.multisig_policy.as_deref()) {
+                                            Some(policy) => format!("{policy} shared wallet"),
+                                            None => match wallet.as_ref().map(|w| w.kind) {
+                                                Some(WalletKind::WatchOnly) => {
+                                                    "Watch-only account".into()
+                                                }
+                                                Some(WalletKind::Hardware) => {
+                                                    "Hardware wallet".into()
+                                                }
+                                                _ => "Standard BCH wallet".into(),
+                                            },
+                                        }
+                                    }}
+                                </p>
                             </div>
                             <div class="source-value">
                                 <strong>

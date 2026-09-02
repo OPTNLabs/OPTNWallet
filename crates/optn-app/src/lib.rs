@@ -8,7 +8,10 @@
 
 mod flow;
 
-pub use flow::{create_confirm_indices, flow_view_model, CreateStep, FlowViewModel, ImportStep};
+pub use flow::{
+    create_confirm_indices, flow_view_model, CreateStep, FlowViewModel, ImportStep, MultisigStep,
+    WatchOnlyKind,
+};
 
 pub use optn_core::coins::{Coin, CoinSet, FreezeReason, Outpoint};
 pub use optn_core::flipstarter::{
@@ -281,6 +284,8 @@ pub struct AppState {
     pub create_step: CreateStep,
     pub import_step: ImportStep,
     pub settings_focus: Option<SettingsRowId>,
+    pub watch_only_kind: WatchOnlyKind,
+    pub multisig_step: MultisigStep,
     /// Tab that opened the current overlay. `None` on a section root.
     pub return_to: Option<AppRoute>,
 }
@@ -351,6 +356,8 @@ impl AppState {
             create_step: CreateStep::Reveal,
             import_step: ImportStep::Words,
             settings_focus: None,
+            watch_only_kind: WatchOnlyKind::Single,
+            multisig_step: MultisigStep::Policy,
             return_to: None,
         }
     }
@@ -370,6 +377,8 @@ impl AppState {
             self.import_step,
             self.settings_focus,
             self.return_to,
+            self.watch_only_kind,
+            self.multisig_step,
         )
     }
 }
@@ -421,10 +430,12 @@ pub enum AppAction {
     RebuildWallet,
     /// Pop the current section (create/import step, settings panel, or page).
     GoBack,
-    /// Advance create/import to the next desktop section. The renderer validates
-    /// form fields first; the mnemonic never enters application state.
+    /// Advance create/import/shared-wallet to the next desktop section. The
+    /// renderer validates form fields first; the mnemonic never enters
+    /// application state.
     AdvanceOnboarding,
     OpenSettingsRow(SettingsRowId),
+    SetWatchOnlyKind(WatchOnlyKind),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -489,6 +500,14 @@ impl AppState {
                     self.settings_focus = None;
                     flow_changed = true;
                 }
+                if route == AppRoute::WatchOnlyWallet
+                    && (self.watch_only_kind != WatchOnlyKind::Single
+                        || self.multisig_step != MultisigStep::Policy)
+                {
+                    self.watch_only_kind = WatchOnlyKind::Single;
+                    self.multisig_step = MultisigStep::Policy;
+                    flow_changed = true;
+                }
                 if self.route == route {
                     return flow_changed.then_some(AppEvent::FlowChanged);
                 }
@@ -497,6 +516,10 @@ impl AppState {
                 }
                 if route == AppRoute::ImportWallet {
                     self.import_step = ImportStep::Words;
+                }
+                if route == AppRoute::WatchOnlyWallet {
+                    self.watch_only_kind = WatchOnlyKind::Single;
+                    self.multisig_step = MultisigStep::Policy;
                 }
                 self.route = route;
                 Some(AppEvent::RouteChanged(route))
@@ -748,6 +771,17 @@ impl AppState {
                 self.settings_focus = Some(row);
                 Some(AppEvent::FlowChanged)
             }
+            AppAction::SetWatchOnlyKind(kind) => {
+                if self.route != AppRoute::WatchOnlyWallet {
+                    return self.reject("open Watch Only first".into());
+                }
+                if self.watch_only_kind == kind {
+                    return None;
+                }
+                self.watch_only_kind = kind;
+                self.multisig_step = MultisigStep::Policy;
+                Some(AppEvent::FlowChanged)
+            }
             AppAction::SetNetwork(_)
             | AppAction::SetTheme(_)
             | AppAction::SetSkin(_)
@@ -832,6 +866,18 @@ impl AppState {
             | AppRoute::Coins
             | AppRoute::Actions
             | AppRoute::Explore => None,
+            AppRoute::WatchOnlyWallet if self.watch_only_kind == WatchOnlyKind::Shared => {
+                match self.multisig_step.back() {
+                    Some(step) => {
+                        self.multisig_step = step;
+                        Some(AppEvent::FlowChanged)
+                    }
+                    None => {
+                        self.watch_only_kind = WatchOnlyKind::Single;
+                        Some(AppEvent::FlowChanged)
+                    }
+                }
+            }
             AppRoute::WatchOnlyWallet
             | AppRoute::HardwareWallet
             | AppRoute::Receive
@@ -859,6 +905,15 @@ impl AppState {
                 }
                 None => self.reject("name the wallet, then open it.".into()),
             },
+            AppRoute::WatchOnlyWallet if self.watch_only_kind == WatchOnlyKind::Shared => {
+                match self.multisig_step.next() {
+                    Some(step) => {
+                        self.multisig_step = step;
+                        Some(AppEvent::FlowChanged)
+                    }
+                    None => self.reject("open the shared wallet from the confirmation.".into()),
+                }
+            }
             _ => self.reject("nothing to continue.".into()),
         }
     }
@@ -2142,6 +2197,34 @@ mod tests {
         state.apply(AppAction::Navigate(AppRoute::History));
         state.apply(AppAction::GoBack);
         assert_eq!(state.route, AppRoute::WalletHome);
+    }
+
+    #[test]
+    fn shared_wallet_walks_policy_cosigners_confirm_with_back() {
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        state.apply(AppAction::Navigate(AppRoute::WatchOnlyWallet));
+        assert_eq!(state.flow().watch_only_kind, WatchOnlyKind::Single);
+
+        state.apply(AppAction::SetWatchOnlyKind(WatchOnlyKind::Shared));
+        assert_eq!(state.flow().multisig_step, MultisigStep::Policy);
+        assert_eq!(state.flow().title, "Shared wallet");
+        assert!(state.flow().can_advance);
+
+        state.apply(AppAction::AdvanceOnboarding);
+        assert_eq!(state.flow().multisig_step, MultisigStep::Cosigners);
+        state.apply(AppAction::AdvanceOnboarding);
+        assert_eq!(state.flow().multisig_step, MultisigStep::Confirm);
+        assert!(!state.flow().can_advance);
+
+        state.apply(AppAction::GoBack);
+        assert_eq!(state.flow().multisig_step, MultisigStep::Cosigners);
+        state.apply(AppAction::GoBack);
+        assert_eq!(state.flow().multisig_step, MultisigStep::Policy);
+        state.apply(AppAction::GoBack);
+        assert_eq!(state.flow().watch_only_kind, WatchOnlyKind::Single);
+        assert_eq!(state.route, AppRoute::WatchOnlyWallet);
+        state.apply(AppAction::GoBack);
+        assert_eq!(state.route, AppRoute::Landing);
     }
 
     #[test]
