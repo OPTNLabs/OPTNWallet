@@ -4,11 +4,36 @@
 use leptos::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use optn_app::{onboarding_view_model, AppAction, AppState, ThemeMode};
+#[cfg(target_arch = "wasm32")]
+use optn_transport::{AppTransport, LocalTransport};
+#[cfg(target_arch = "wasm32")]
+use std::rc::Rc;
+
+#[cfg(target_arch = "wasm32")]
+fn dispatch_action(
+    transport: Rc<LocalTransport>,
+    state: RwSignal<AppState>,
+    action: AppAction,
+) {
+    leptos::task::spawn_local(async move {
+        if transport.dispatch(action).await.is_ok() {
+            if let Ok(snapshot) = transport.snapshot().await {
+                state.set(snapshot);
+            }
+        }
+    });
+}
 
 #[cfg(target_arch = "wasm32")]
 #[component]
 fn App() -> impl IntoView {
-    let state = RwSignal::new(AppState::default());
+    let initial_state = AppState::default();
+    let state = RwSignal::new(initial_state.clone());
+    let transport = Rc::new(LocalTransport::new(initial_state));
+    let theme_transport = transport.clone();
+    let open_help_transport = transport.clone();
+    let backdrop_close_transport = transport.clone();
+    let button_close_transport = transport.clone();
 
     view! {
         <main
@@ -21,7 +46,7 @@ fn App() -> impl IntoView {
                 <button
                     class="chip"
                     type="button"
-                    on:click=move |_| state.update(|state| state.apply(AppAction::ToggleTheme))
+                    on:click=move |_| dispatch_action(theme_transport.clone(), state, AppAction::ToggleTheme)
                     aria-label="Toggle theme"
                 >
                     {move || {
@@ -36,7 +61,7 @@ fn App() -> impl IntoView {
                 <button
                     class="chip"
                     type="button"
-                    on:click=move |_| state.update(|state| state.apply(AppAction::OpenHelp))
+                    on:click=move |_| dispatch_action(open_help_transport.clone(), state, AppAction::OpenHelp)
                 >
                     "Help"
                 </button>
@@ -86,7 +111,7 @@ fn App() -> impl IntoView {
                 <div
                     class="modal-backdrop"
                     role="presentation"
-                    on:click=move |_| state.update(|state| state.apply(AppAction::CloseHelp))
+                    on:click=move |_| dispatch_action(backdrop_close_transport.clone(), state, AppAction::CloseHelp)
                 >
                     <section
                         class="modal"
@@ -103,7 +128,7 @@ fn App() -> impl IntoView {
                         <button
                             class="primary"
                             type="button"
-                            on:click=move |_| state.update(|state| state.apply(AppAction::CloseHelp))
+                            on:click=move |_| dispatch_action(button_close_transport.clone(), state, AppAction::CloseHelp)
                         >
                             "Close"
                         </button>
