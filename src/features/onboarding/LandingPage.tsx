@@ -7,6 +7,8 @@ import Popup from '../../components/transaction/Popup';
 import { MdSunny, MdModeNight } from 'react-icons/md';
 import { useI18n } from '../../i18n/useI18n';
 import LanguagePicker from '../../components/LanguagePicker';
+import { hasCapability } from '../../platform/capabilities';
+import { ROUTE_PATHS } from '../../navigation/routes';
 
 const ThemeModeSwitch = () => {
   const { mode, toggleMode } = useTheme();
@@ -77,7 +79,7 @@ const LandingPage = () => {
             {t('onboarding.poweredBy')}
           </h1>
 
-          <div className="flex flex-col sm:flex-row gap-4 mt-20">
+          <div className="flex flex-col sm:flex-row sm:flex-wrap gap-4 mt-20 justify-center">
             <Link
               to="/createwallet"
               className="wallet-btn-primary py-3 px-10 rounded-lg mx-2 my-2 shadow-md"
@@ -90,6 +92,14 @@ const LandingPage = () => {
             >
               {t('onboarding.importWallet')}
             </Link>
+            {hasCapability('watchOnlyWallet') && (
+              <Link
+                to={ROUTE_PATHS.watchOnlyWallet}
+                className="wallet-btn-secondary py-3 px-10 rounded-lg mx-2 my-2 shadow-md"
+              >
+                {t('onboarding.createWatchOnly')}
+              </Link>
+            )}
           </div>
         </div>
       </main>
