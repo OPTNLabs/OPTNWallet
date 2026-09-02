@@ -14,7 +14,7 @@ import {
 } from 'node:fs';
 import { join, resolve } from 'node:path';
 
-export const KOTLIN_PIN = '2.1.0';
+export const KOTLIN_PIN = '2.1.21';
 export const STDLIB_PIN_MARKER = 'optn-kotlin-stdlib-pin';
 
 export function rewriteKotlinCompilerPins(text: string): string {
