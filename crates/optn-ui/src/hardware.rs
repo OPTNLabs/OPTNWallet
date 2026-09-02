@@ -77,7 +77,7 @@ pub fn HardwareWalletSetup(transport: UiTransport, state: RwSignal<AppState>) ->
                         AppAction::GoBack,
                     )
                 >
-                    "← Back"
+                    {move || format!("← {}", state.get().flow().back_label)}
                 </button>
 
                 <p class="eyebrow">"Keys stay on the device"</p>

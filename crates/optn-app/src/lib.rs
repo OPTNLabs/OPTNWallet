@@ -184,6 +184,54 @@ impl AppRoute {
                 | Self::Send
         )
     }
+
+    /// Landing and the five product tabs. Switching these replaces the overlay.
+    pub const fn is_section_root(self) -> bool {
+        matches!(
+            self,
+            Self::Landing
+                | Self::WalletHome
+                | Self::Coins
+                | Self::Actions
+                | Self::Explore
+                | Self::Settings
+        )
+    }
+
+    /// Fallback when an overlay was opened without recording a return tab.
+    pub const fn default_parent(self) -> Option<Self> {
+        match self {
+            Self::Landing | Self::WalletHome | Self::Coins | Self::Actions | Self::Explore => None,
+            Self::Settings => Some(Self::WalletHome),
+            Self::CreateWallet
+            | Self::ImportWallet
+            | Self::WatchOnlyWallet
+            | Self::HardwareWallet => Some(Self::Landing),
+            Self::Receive | Self::Send | Self::History => Some(Self::WalletHome),
+            Self::Flipstarter => Some(Self::Actions),
+            Self::FundMe => Some(Self::Explore),
+        }
+    }
+
+    pub const fn section_title(self) -> &'static str {
+        match self {
+            Self::Landing => "Wallets",
+            Self::CreateWallet => "Create wallet",
+            Self::ImportWallet => "Import wallet",
+            Self::WatchOnlyWallet => "Watch-only",
+            Self::HardwareWallet => "Hardware",
+            Self::WalletHome => "Home",
+            Self::Coins => "Assets",
+            Self::Actions => "Actions",
+            Self::Explore => "Explore",
+            Self::Settings => "Settings",
+            Self::History => "History",
+            Self::Flipstarter => "Flipstarter",
+            Self::FundMe => "FundMe",
+            Self::Receive => "Receive",
+            Self::Send => "Send",
+        }
+    }
 }
 
 /// Product layout. Desktop gets a wide shell; every other surface is stacked.
@@ -233,6 +281,8 @@ pub struct AppState {
     pub create_step: CreateStep,
     pub import_step: ImportStep,
     pub settings_focus: Option<SettingsRowId>,
+    /// Tab that opened the current overlay. `None` on a section root.
+    pub return_to: Option<AppRoute>,
 }
 
 /// Public session for an opened wallet. The mnemonic never lives here.
@@ -301,6 +351,7 @@ impl AppState {
             create_step: CreateStep::Reveal,
             import_step: ImportStep::Words,
             settings_focus: None,
+            return_to: None,
         }
     }
 
@@ -318,6 +369,7 @@ impl AppState {
             self.create_step,
             self.import_step,
             self.settings_focus,
+            self.return_to,
         )
     }
 }
@@ -416,6 +468,15 @@ impl AppState {
                     return self.reject("Hardware wallets are not available here.".into());
                 }
                 let mut flow_changed = false;
+                if route.is_section_root() {
+                    if self.return_to.is_some() {
+                        self.return_to = None;
+                        flow_changed = true;
+                    }
+                } else if self.route.is_section_root() && self.return_to != Some(self.route) {
+                    self.return_to = Some(self.route);
+                    flow_changed = true;
+                }
                 if route == AppRoute::CreateWallet && self.create_step != CreateStep::Reveal {
                     self.create_step = CreateStep::Reveal;
                     flow_changed = true;
@@ -588,6 +649,7 @@ impl AppState {
                 });
                 self.spend = None;
                 self.notice = None;
+                self.return_to = None;
                 self.route = AppRoute::WalletHome;
                 Some(AppEvent::WalletOpened)
             }
@@ -608,6 +670,7 @@ impl AppState {
                 });
                 self.spend = None;
                 self.notice = None;
+                self.return_to = None;
                 self.route = AppRoute::WalletHome;
                 Some(AppEvent::WalletOpened)
             }
@@ -630,6 +693,7 @@ impl AppState {
                 });
                 self.spend = None;
                 self.notice = None;
+                self.return_to = None;
                 self.route = AppRoute::WalletHome;
                 Some(AppEvent::WalletOpened)
             }
@@ -650,6 +714,9 @@ impl AppState {
                     Ok(plan) => {
                         self.spend = Some(plan);
                         self.notice = None;
+                        if self.route.is_section_root() {
+                            self.return_to = Some(self.route);
+                        }
                         self.route = AppRoute::Send;
                         Some(AppEvent::SpendPrepared)
                     }
@@ -718,8 +785,26 @@ impl AppState {
         });
         self.spend = None;
         self.notice = None;
+        self.return_to = None;
         self.route = AppRoute::WalletHome;
         Some(AppEvent::WalletOpened)
+    }
+
+    fn pop_overlay(&mut self) -> Option<AppEvent> {
+        let dest = match self
+            .return_to
+            .take()
+            .or_else(|| self.route.default_parent())
+        {
+            Some(dest) => dest,
+            None if self.wallet.is_some() => AppRoute::WalletHome,
+            None => AppRoute::Landing,
+        };
+        if self.route == dest {
+            return None;
+        }
+        self.route = dest;
+        Some(AppEvent::RouteChanged(dest))
     }
 
     fn go_back(&mut self) -> Option<AppEvent> {
@@ -729,48 +814,32 @@ impl AppState {
                     self.create_step = step;
                     Some(AppEvent::FlowChanged)
                 }
-                None => {
-                    self.route = AppRoute::Landing;
-                    Some(AppEvent::RouteChanged(AppRoute::Landing))
-                }
+                None => self.pop_overlay(),
             },
             AppRoute::ImportWallet => match self.import_step.back() {
                 Some(step) => {
                     self.import_step = step;
                     Some(AppEvent::FlowChanged)
                 }
-                None => {
-                    self.route = AppRoute::Landing;
-                    Some(AppEvent::RouteChanged(AppRoute::Landing))
-                }
+                None => self.pop_overlay(),
             },
-            AppRoute::WatchOnlyWallet | AppRoute::HardwareWallet => {
-                self.route = AppRoute::Landing;
-                Some(AppEvent::RouteChanged(AppRoute::Landing))
-            }
             AppRoute::Settings if self.settings_focus.is_some() => {
                 self.settings_focus = None;
                 Some(AppEvent::FlowChanged)
-            }
-            AppRoute::Receive
-            | AppRoute::Send
-            | AppRoute::History
-            | AppRoute::Flipstarter
-            | AppRoute::FundMe
-            | AppRoute::Settings => {
-                if self.wallet.is_some() {
-                    self.route = AppRoute::WalletHome;
-                    Some(AppEvent::RouteChanged(AppRoute::WalletHome))
-                } else {
-                    self.route = AppRoute::Landing;
-                    Some(AppEvent::RouteChanged(AppRoute::Landing))
-                }
             }
             AppRoute::Landing
             | AppRoute::WalletHome
             | AppRoute::Coins
             | AppRoute::Actions
             | AppRoute::Explore => None,
+            AppRoute::WatchOnlyWallet
+            | AppRoute::HardwareWallet
+            | AppRoute::Receive
+            | AppRoute::Send
+            | AppRoute::History
+            | AppRoute::Flipstarter
+            | AppRoute::FundMe
+            | AppRoute::Settings => self.pop_overlay(),
         }
     }
 
@@ -1993,6 +2062,44 @@ mod tests {
         state.apply(AppAction::GoBack);
         assert_eq!(state.route, AppRoute::Settings);
         assert_eq!(state.flow().settings_focus, None);
+        state.apply(AppAction::GoBack);
+        assert_eq!(state.route, AppRoute::WalletHome);
+    }
+
+    #[test]
+    fn overlay_back_returns_to_the_tab_that_opened_it() {
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        open_chipnet_seed(&mut state, "flow-return");
+
+        state.apply(AppAction::Navigate(AppRoute::Actions));
+        state.apply(AppAction::Navigate(AppRoute::Flipstarter));
+        assert_eq!(state.flow().return_to, Some(AppRoute::Actions));
+        assert_eq!(state.flow().back_label, "Actions");
+        state.apply(AppAction::GoBack);
+        assert_eq!(state.route, AppRoute::Actions);
+
+        state.apply(AppAction::Navigate(AppRoute::Explore));
+        state.apply(AppAction::Navigate(AppRoute::Flipstarter));
+        assert_eq!(state.flow().back_label, "Explore");
+        state.apply(AppAction::GoBack);
+        assert_eq!(state.route, AppRoute::Explore);
+
+        state.apply(AppAction::Navigate(AppRoute::Explore));
+        state.apply(AppAction::Navigate(AppRoute::FundMe));
+        state.apply(AppAction::GoBack);
+        assert_eq!(state.route, AppRoute::Explore);
+
+        state.apply(AppAction::Navigate(AppRoute::WalletHome));
+        state.apply(AppAction::Navigate(AppRoute::Receive));
+        assert_eq!(state.flow().back_label, "Home");
+        state.apply(AppAction::GoBack);
+        assert_eq!(state.route, AppRoute::WalletHome);
+
+        state.apply(AppAction::Navigate(AppRoute::Send));
+        state.apply(AppAction::GoBack);
+        assert_eq!(state.route, AppRoute::WalletHome);
+
+        state.apply(AppAction::Navigate(AppRoute::History));
         state.apply(AppAction::GoBack);
         assert_eq!(state.route, AppRoute::WalletHome);
     }

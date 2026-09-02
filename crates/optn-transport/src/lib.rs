@@ -41,6 +41,24 @@ pub trait AppTransport {
     fn dispatch<'a>(&'a self, action: AppAction) -> TransportFuture<'a, ()>;
     fn snapshot<'a>(&'a self) -> TransportFuture<'a, AppState>;
     fn next_event<'a>(&'a self) -> TransportFuture<'a, Option<AppEvent>>;
+
+    /// Read one QR payload from the host's camera.
+    ///
+    /// Renderers must not reach for a camera API themselves — a Leptos build
+    /// would use `getUserMedia`, a Dioxus desktop build would not, and the
+    /// screen would then have to know which shell it is in. It asks the
+    /// transport, and the shell supplies the scanner.
+    ///
+    /// One payload per call. An animated-QR export (Keystone's BC-UR) is many
+    /// frames, so the caller scans repeatedly and accumulates until its
+    /// decoder is satisfied.
+    ///
+    /// Defaulted to `Unsupported` so a shell without a camera is honest
+    /// rather than failing at runtime in some other way. Whether to offer the
+    /// control at all is `optn_app::transport_support(surface).camera`.
+    fn scan_qr<'a>(&'a self) -> TransportFuture<'a, String> {
+        Box::pin(async { Err(TransportError::Unsupported) })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -276,6 +294,8 @@ pub struct WireState {
     pub import_step: WireImportStep,
     #[serde(default)]
     pub settings_focus: Option<String>,
+    #[serde(default)]
+    pub return_to: Option<WireRoute>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -871,6 +891,7 @@ impl From<&AppState> for WireState {
             create_step: value.create_step.into(),
             import_step: value.import_step.into(),
             settings_focus: value.settings_focus.map(settings_row_id).map(str::to_owned),
+            return_to: value.return_to.map(WireRoute::from),
         }
     }
 }
@@ -1007,6 +1028,7 @@ impl TryFrom<WireState> for AppState {
                 .as_deref()
                 .map(parse_settings_row)
                 .transpose()?,
+            return_to: value.return_to.map(AppRoute::from),
         })
     }
 }
