@@ -39,14 +39,52 @@ a {
     color 160ms ease;
 }
 
+.app-shell.theme-light {
+  --bg: #f4f6f8;
+  --surface: #ffffff;
+  --text: #111827;
+  --muted: #637083;
+  --border: rgba(17, 24, 39, 0.12);
+  --accent: #19b773;
+  --accent-text: #051b12;
+}
+
+.app-shell.theme-gray {
+  --bg: #1c2128;
+  --surface: #252b34;
+  --text: #e8edf2;
+  --muted: #9aa7b4;
+  --border: rgba(255, 255, 255, 0.1);
+  --accent: #3dd68c;
+  --accent-text: #052014;
+}
+
+.app-shell.theme-green,
 .app-shell.dark {
-  --bg: #09110e;
-  --surface: rgba(17, 28, 23, 0.92);
-  --text: #f5fff9;
-  --muted: #9ab0a3;
-  --border: rgba(255, 255, 255, 0.11);
+  --bg: #06251c;
+  --surface: #0b3327;
+  --text: #e8fff4;
+  --muted: #8fbfa8;
+  --border: rgba(61, 214, 140, 0.22);
+  --accent: #3dd68c;
+  --accent-text: #042016;
+}
+
+.app-shell.theme-dark {
+  --bg: #000000;
+  --surface: #0a0a0a;
+  --text: #f3f3f3;
+  --muted: #8a8a8a;
+  --border: rgba(255, 255, 255, 0.12);
   --accent: #31db90;
   --accent-text: #03150d;
+}
+
+.app-shell.skin-cyberpunk {
+  --accent: #39ff14;
+  --accent-text: #03150d;
+  --border: rgba(57, 255, 20, 0.35);
+  letter-spacing: 0.02em;
 }
 
 .topbar {

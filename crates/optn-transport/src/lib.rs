@@ -8,7 +8,7 @@
 
 use optn_app::{
     AppAction, AppEvent, AppRoute, AppState, AppSurface, FeatureFlag, FeatureFlags, Network,
-    ThemeMode,
+    ThemeMode, UiSkin,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -54,7 +54,17 @@ pub enum WireRoute {
 #[serde(rename_all = "snake_case")]
 pub enum WireTheme {
     Light,
+    Gray,
+    Green,
     Dark,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WireSkin {
+    #[default]
+    Default,
+    Cyberpunk,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,6 +96,8 @@ pub enum WireFeatureFlag {
 pub enum WireActionKind {
     Navigate(WireRoute),
     ToggleTheme,
+    SetTheme(WireTheme),
+    SetSkin(WireSkin),
     SetNetwork(WireNetwork),
     OpenHelp,
     CloseHelp,
@@ -107,6 +119,8 @@ pub struct WireState {
     pub version: u16,
     pub route: WireRoute,
     pub theme: WireTheme,
+    #[serde(default)]
+    pub skin: WireSkin,
     pub network: WireNetwork,
     pub help_open: bool,
     pub surface: WireSurface,
@@ -119,6 +133,7 @@ pub struct WireState {
 pub enum WireEventKind {
     RouteChanged(WireRoute),
     ThemeChanged(WireTheme),
+    SkinChanged(WireSkin),
     NetworkChanged(WireNetwork),
     HelpVisibilityChanged(bool),
     SurfaceChanged(WireSurface),
@@ -162,6 +177,8 @@ impl From<ThemeMode> for WireTheme {
     fn from(value: ThemeMode) -> Self {
         match value {
             ThemeMode::Light => Self::Light,
+            ThemeMode::Gray => Self::Gray,
+            ThemeMode::Green => Self::Green,
             ThemeMode::Dark => Self::Dark,
         }
     }
@@ -171,7 +188,27 @@ impl From<WireTheme> for ThemeMode {
     fn from(value: WireTheme) -> Self {
         match value {
             WireTheme::Light => Self::Light,
+            WireTheme::Gray => Self::Gray,
+            WireTheme::Green => Self::Green,
             WireTheme::Dark => Self::Dark,
+        }
+    }
+}
+
+impl From<UiSkin> for WireSkin {
+    fn from(value: UiSkin) -> Self {
+        match value {
+            UiSkin::Default => Self::Default,
+            UiSkin::Cyberpunk => Self::Cyberpunk,
+        }
+    }
+}
+
+impl From<WireSkin> for UiSkin {
+    fn from(value: WireSkin) -> Self {
+        match value {
+            WireSkin::Default => Self::Default,
+            WireSkin::Cyberpunk => Self::Cyberpunk,
         }
     }
 }
@@ -241,6 +278,8 @@ impl From<AppAction> for WireAction {
         let action = match value {
             AppAction::Navigate(route) => WireActionKind::Navigate(route.into()),
             AppAction::ToggleTheme => WireActionKind::ToggleTheme,
+            AppAction::SetTheme(theme) => WireActionKind::SetTheme(theme.into()),
+            AppAction::SetSkin(skin) => WireActionKind::SetSkin(skin.into()),
             AppAction::SetNetwork(network) => WireActionKind::SetNetwork(network.into()),
             AppAction::OpenHelp => WireActionKind::OpenHelp,
             AppAction::CloseHelp => WireActionKind::CloseHelp,
@@ -265,6 +304,8 @@ impl TryFrom<WireAction> for AppAction {
         Ok(match value.action {
             WireActionKind::Navigate(route) => Self::Navigate(route.into()),
             WireActionKind::ToggleTheme => Self::ToggleTheme,
+            WireActionKind::SetTheme(theme) => Self::SetTheme(theme.into()),
+            WireActionKind::SetSkin(skin) => Self::SetSkin(skin.into()),
             WireActionKind::SetNetwork(network) => Self::SetNetwork(network.into()),
             WireActionKind::OpenHelp => Self::OpenHelp,
             WireActionKind::CloseHelp => Self::CloseHelp,
@@ -283,6 +324,7 @@ impl From<&AppState> for WireState {
             version: WIRE_PROTOCOL_VERSION,
             route: value.route.into(),
             theme: value.theme.into(),
+            skin: value.skin.into(),
             network: value.network.into(),
             help_open: value.help_open,
             surface: value.surface.into(),
@@ -304,6 +346,7 @@ impl TryFrom<WireState> for AppState {
         Ok(Self {
             route: value.route.into(),
             theme: value.theme.into(),
+            skin: value.skin.into(),
             network: value.network.into(),
             help_open: value.help_open,
             surface: value.surface.into(),
@@ -336,6 +379,7 @@ impl From<AppEvent> for WireEvent {
         let event = match value {
             AppEvent::RouteChanged(route) => WireEventKind::RouteChanged(route.into()),
             AppEvent::ThemeChanged(theme) => WireEventKind::ThemeChanged(theme.into()),
+            AppEvent::SkinChanged(skin) => WireEventKind::SkinChanged(skin.into()),
             AppEvent::NetworkChanged(network) => WireEventKind::NetworkChanged(network.into()),
             AppEvent::HelpVisibilityChanged(open) => WireEventKind::HelpVisibilityChanged(open),
             AppEvent::SurfaceChanged(surface) => WireEventKind::SurfaceChanged(surface.into()),
@@ -359,6 +403,7 @@ impl TryFrom<WireEvent> for AppEvent {
         Ok(match value.event {
             WireEventKind::RouteChanged(route) => Self::RouteChanged(route.into()),
             WireEventKind::ThemeChanged(theme) => Self::ThemeChanged(theme.into()),
+            WireEventKind::SkinChanged(skin) => Self::SkinChanged(skin.into()),
             WireEventKind::NetworkChanged(network) => Self::NetworkChanged(network.into()),
             WireEventKind::HelpVisibilityChanged(open) => Self::HelpVisibilityChanged(open),
             WireEventKind::SurfaceChanged(surface) => Self::SurfaceChanged(surface.into()),
@@ -467,9 +512,9 @@ mod tests {
         });
         assert_eq!(
             result.0,
-            Some(AppEvent::ThemeChanged(optn_app::ThemeMode::Light))
+            Some(AppEvent::ThemeChanged(optn_app::ThemeMode::Dark))
         );
-        assert_eq!(result.1.theme, optn_app::ThemeMode::Light);
+        assert_eq!(result.1.theme, optn_app::ThemeMode::Dark);
     }
 
     #[test]

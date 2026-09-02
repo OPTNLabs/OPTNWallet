@@ -383,8 +383,17 @@ fn App(transport: Rc<dyn AppTransport>) -> impl IntoView {
 
     view! {
         <main
-            class="app-shell"
-            class:dark=move || ready.get() && state.get().theme == ThemeMode::Dark
+            class=move || {
+                if !ready.get() {
+                    return "app-shell theme-green skin-default".to_string();
+                }
+                let current = state.get();
+                format!(
+                    "app-shell {} {}",
+                    current.theme.css_class(),
+                    current.skin.css_class()
+                )
+            }
         >
             <Show
                 when=move || ready.get()
@@ -399,12 +408,11 @@ fn App(transport: Rc<dyn AppTransport>) -> impl IntoView {
                     on:click=move |_| dispatch_action(transport, state, AppAction::ToggleTheme)
                     aria-label="Toggle theme"
                 >
-                    {move || {
-                        if state.get().theme == ThemeMode::Dark {
-                            "☀ Light"
-                        } else {
-                            "☾ Dark"
-                        }
+                    {move || match state.get().theme {
+                        ThemeMode::Light => "Gray",
+                        ThemeMode::Gray => "Green",
+                        ThemeMode::Green => "Dark",
+                        ThemeMode::Dark => "Light",
                     }}
                 </button>
 

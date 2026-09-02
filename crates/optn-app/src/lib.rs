@@ -10,8 +10,55 @@ pub use optn_core::network::Network;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThemeMode {
+    /// Light surfaces, dark text.
     Light,
+    /// Charcoal everyday dark. Not OLED black.
+    Gray,
+    /// OPTN brand green.
+    Green,
+    /// True black / OLED.
     Dark,
+}
+
+impl ThemeMode {
+    pub const fn next(self) -> Self {
+        match self {
+            Self::Light => Self::Gray,
+            Self::Gray => Self::Green,
+            Self::Green => Self::Dark,
+            Self::Dark => Self::Light,
+        }
+    }
+
+    pub const fn is_dark_surface(self) -> bool {
+        !matches!(self, Self::Light)
+    }
+
+    pub const fn css_class(self) -> &'static str {
+        match self {
+            Self::Light => "theme-light",
+            Self::Gray => "theme-gray",
+            Self::Green => "theme-green",
+            Self::Dark => "theme-dark",
+        }
+    }
+}
+
+/// Visual language on top of a theme mode. Not a second wallet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UiSkin {
+    #[default]
+    Default,
+    Cyberpunk,
+}
+
+impl UiSkin {
+    pub const fn css_class(self) -> &'static str {
+        match self {
+            Self::Default => "skin-default",
+            Self::Cyberpunk => "skin-cyberpunk",
+        }
+    }
 }
 
 /// Build/runtime surface. Feature flags are booleans derived from this, then
@@ -94,6 +141,7 @@ impl AppRoute {
 pub struct AppState {
     pub route: AppRoute,
     pub theme: ThemeMode,
+    pub skin: UiSkin,
     pub network: Network,
     pub help_open: bool,
     pub surface: AppSurface,
@@ -110,7 +158,8 @@ impl AppState {
     pub const fn for_surface(surface: AppSurface) -> Self {
         Self {
             route: AppRoute::Landing,
-            theme: ThemeMode::Dark,
+            theme: ThemeMode::Green,
+            skin: UiSkin::Default,
             network: Network::Mainnet,
             help_open: false,
             surface,
@@ -126,6 +175,8 @@ impl AppState {
 pub enum AppAction {
     Navigate(AppRoute),
     ToggleTheme,
+    SetTheme(ThemeMode),
+    SetSkin(UiSkin),
     SetNetwork(Network),
     OpenHelp,
     CloseHelp,
@@ -137,6 +188,7 @@ pub enum AppAction {
 pub enum AppEvent {
     RouteChanged(AppRoute),
     ThemeChanged(ThemeMode),
+    SkinChanged(UiSkin),
     NetworkChanged(Network),
     HelpVisibilityChanged(bool),
     SurfaceChanged(AppSurface),
@@ -153,11 +205,16 @@ impl AppState {
                 Some(AppEvent::RouteChanged(route))
             }
             AppAction::ToggleTheme => {
-                self.theme = match self.theme {
-                    ThemeMode::Light => ThemeMode::Dark,
-                    ThemeMode::Dark => ThemeMode::Light,
-                };
+                self.theme = self.theme.next();
                 Some(AppEvent::ThemeChanged(self.theme))
+            }
+            AppAction::SetTheme(theme) if self.theme != theme => {
+                self.theme = theme;
+                Some(AppEvent::ThemeChanged(theme))
+            }
+            AppAction::SetSkin(skin) if self.skin != skin => {
+                self.skin = skin;
+                Some(AppEvent::SkinChanged(skin))
             }
             AppAction::SetNetwork(network) if self.network != network => {
                 self.network = network;
@@ -193,6 +250,8 @@ impl AppState {
             }
             AppAction::Navigate(_)
             | AppAction::SetNetwork(_)
+            | AppAction::SetTheme(_)
+            | AppAction::SetSkin(_)
             | AppAction::OpenHelp
             | AppAction::CloseHelp
             | AppAction::SetSurface(_) => None,
@@ -224,7 +283,7 @@ pub fn onboarding_view_model(state: &AppState) -> OnboardingViewModel {
         create_wallet_href: AppRoute::CreateWallet.fragment(),
         import_wallet_href: AppRoute::ImportWallet.fragment(),
         watch_only_wallet_href: AppRoute::WatchOnlyWallet.fragment(),
-        dark: state.theme == ThemeMode::Dark,
+        dark: state.theme.is_dark_surface(),
         help_open: state.help_open,
         show_cash_fusion: state
             .features
@@ -333,7 +392,7 @@ mod tests {
         let mut state = AppState::default();
         assert_eq!(
             state.reduce(AppAction::ToggleTheme),
-            Some(AppEvent::ThemeChanged(ThemeMode::Light))
+            Some(AppEvent::ThemeChanged(ThemeMode::Dark))
         );
         assert_eq!(
             state.reduce(AppAction::SetNetwork(Network::Chipnet)),
@@ -348,7 +407,7 @@ mod tests {
             Some(AppEvent::RouteChanged(AppRoute::ImportWallet))
         );
 
-        assert_eq!(state.theme, ThemeMode::Light);
+        assert_eq!(state.theme, ThemeMode::Dark);
         assert_eq!(state.network, Network::Chipnet);
         assert!(state.help_open);
         assert_eq!(state.route, AppRoute::ImportWallet);
@@ -394,11 +453,34 @@ mod tests {
                 );
                 proptest::prop_assert_eq!(
                     vm.dark,
-                    state.theme == ThemeMode::Dark
+                    state.theme.is_dark_surface()
                 );
+                proptest::prop_assert_eq!(state.skin, state.skin);
                 proptest::prop_assert_eq!(vm.help_open, state.help_open);
             }
         }
+    }
+
+    #[test]
+    fn theme_and_skin_do_not_change_wallet_route_or_network() {
+        let mut state = AppState::default();
+        state.apply(AppAction::Navigate(AppRoute::WatchOnlyWallet));
+        state.apply(AppAction::SetNetwork(Network::Chipnet));
+        assert_eq!(
+            state.reduce(AppAction::SetTheme(ThemeMode::Gray)),
+            Some(AppEvent::ThemeChanged(ThemeMode::Gray))
+        );
+        assert_eq!(
+            state.reduce(AppAction::SetSkin(UiSkin::Cyberpunk)),
+            Some(AppEvent::SkinChanged(UiSkin::Cyberpunk))
+        );
+        assert_eq!(state.route, AppRoute::WatchOnlyWallet);
+        assert_eq!(state.network, Network::Chipnet);
+        assert_eq!(state.theme, ThemeMode::Gray);
+        assert_eq!(state.skin, UiSkin::Cyberpunk);
+        assert_eq!(state.theme.next(), ThemeMode::Green);
+        assert_eq!(ThemeMode::Green.css_class(), "theme-green");
+        assert_eq!(UiSkin::Cyberpunk.css_class(), "skin-cyberpunk");
     }
 
     #[test]
