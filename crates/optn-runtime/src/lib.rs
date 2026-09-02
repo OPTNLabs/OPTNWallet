@@ -10,7 +10,8 @@
 //! returns a driver future which Tauri, tests, or another shell can spawn.
 
 use optn_app::{AppAction, AppEvent, AppState};
-use tokio::sync::{broadcast, mpsc, watch};
+use optn_transport::{AppTransport, TransportError, TransportFuture};
+use tokio::sync::{broadcast, mpsc, watch, Mutex};
 
 const ACTION_CAPACITY: usize = 128;
 const EVENT_CAPACITY: usize = 128;
@@ -27,6 +28,53 @@ pub struct AppRuntimeDriver {
     state_tx: watch::Sender<AppState>,
     event_tx: broadcast::Sender<AppEvent>,
     state: AppState,
+}
+
+/// Zero-IPC transport for renderers hosted in the same Rust process.
+///
+/// Native renderers can use this directly. Tauri/WASM and remote shells can
+/// implement the same `AppTransport` contract without changing optn-app.
+pub struct DirectTransport {
+    runtime: AppRuntime,
+    events: Mutex<broadcast::Receiver<AppEvent>>,
+}
+
+impl DirectTransport {
+    pub fn new(runtime: AppRuntime) -> Self {
+        let events = runtime.subscribe_events();
+        Self {
+            runtime,
+            events: Mutex::new(events),
+        }
+    }
+}
+
+impl AppTransport for DirectTransport {
+    fn dispatch<'a>(&'a self, action: AppAction) -> TransportFuture<'a, ()> {
+        Box::pin(async move {
+            self.runtime
+                .dispatch(action)
+                .await
+                .map_err(|_| TransportError::Closed)
+        })
+    }
+
+    fn snapshot<'a>(&'a self) -> TransportFuture<'a, AppState> {
+        Box::pin(async move { Ok(self.runtime.state()) })
+    }
+
+    fn next_event<'a>(&'a self) -> TransportFuture<'a, Option<AppEvent>> {
+        Box::pin(async move {
+            let mut events = self.events.lock().await;
+            loop {
+                match events.recv().await {
+                    Ok(event) => return Ok(Some(event)),
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => return Ok(None),
+                }
+            }
+        })
+    }
 }
 
 impl AppRuntime {
@@ -124,6 +172,23 @@ mod tests {
 
         let event = events.recv().await.unwrap();
         assert_eq!(event, AppEvent::HelpVisibilityChanged(true));
+    }
+
+    #[tokio::test]
+    async fn direct_transport_uses_the_same_typed_contract_without_ipc() {
+        let runtime = AppRuntime::spawn(AppState::default());
+        let transport = DirectTransport::new(runtime);
+        let mut state = transport.snapshot().await.unwrap();
+        assert_eq!(state.theme, ThemeMode::Dark);
+
+        transport.dispatch(AppAction::ToggleTheme).await.unwrap();
+        assert_eq!(
+            transport.next_event().await.unwrap(),
+            Some(AppEvent::ThemeChanged(ThemeMode::Light))
+        );
+
+        state = transport.snapshot().await.unwrap();
+        assert_eq!(state.theme, ThemeMode::Light);
     }
 
     #[tokio::test]
