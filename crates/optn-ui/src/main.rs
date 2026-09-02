@@ -3,16 +3,31 @@
 #[cfg(target_arch = "wasm32")]
 use leptos::prelude::*;
 #[cfg(target_arch = "wasm32")]
-use optn_app::{onboarding_view_model, AppAction, AppState, ThemeMode};
+use leptos::reactive::owner::LocalStorage;
 #[cfg(target_arch = "wasm32")]
-use optn_transport::{AppTransport, LocalTransport};
+use optn_app::{onboarding_view_model, AppAction, AppRoute, AppState, ThemeMode};
+#[cfg(all(target_arch = "wasm32", not(feature = "tauri-transport")))]
+use optn_transport::LocalTransport;
+#[cfg(target_arch = "wasm32")]
+use optn_transport::AppTransport;
+#[cfg(target_arch = "wasm32")]
+use std::rc::Rc;
 
 #[cfg(target_arch = "wasm32")]
-fn dispatch_action(
-    transport: StoredValue<LocalTransport>,
-    state: RwSignal<AppState>,
-    action: AppAction,
-) {
+type UiTransport = StoredValue<Rc<dyn AppTransport>, LocalStorage>;
+
+#[cfg(all(target_arch = "wasm32", feature = "tauri-transport"))]
+fn make_transport() -> Rc<dyn AppTransport> {
+    Rc::new(optn_transport_tauri::TauriWebTransport)
+}
+
+#[cfg(all(target_arch = "wasm32", not(feature = "tauri-transport")))]
+fn make_transport() -> Rc<dyn AppTransport> {
+    Rc::new(LocalTransport::new(AppState::default()))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn dispatch_action(transport: UiTransport, state: RwSignal<AppState>, action: AppAction) {
     let transport = transport.get_value();
     leptos::task::spawn_local(async move {
         if transport.dispatch(action).await.is_ok() {
@@ -25,10 +40,20 @@ fn dispatch_action(
 
 #[cfg(target_arch = "wasm32")]
 #[component]
-fn App() -> impl IntoView {
-    let initial_state = AppState::default();
-    let state = RwSignal::new(initial_state.clone());
-    let transport = StoredValue::new(LocalTransport::new(initial_state));
+fn App(transport: Rc<dyn AppTransport>) -> impl IntoView {
+    let state = RwSignal::new(AppState::default());
+    let transport = StoredValue::new_local(transport);
+
+    // The renderer never assumes where authoritative state lives. Local WASM
+    // returns immediately; an IPC-backed provider can hydrate from native Rust.
+    {
+        let transport = transport.get_value();
+        leptos::task::spawn_local(async move {
+            if let Ok(snapshot) = transport.snapshot().await {
+                state.set(snapshot);
+            }
+        });
+    }
 
     view! {
         <main
@@ -73,9 +98,8 @@ fn App() -> impl IntoView {
                     <p class="eyebrow">"Bitcoin Cash, owned by you"</p>
                     <h1>"A Rust-first OPTN Wallet"</h1>
                     <p class="description">
-                        "Leptos renders the UI, but application state and routes live "
-                        <code>"optn-app"</code>
-                        ", so the UI framework remains replaceable."
+                        "Leptos renders the UI, while application state, transport, and platform "
+                        "capabilities remain independently replaceable."
                     </p>
 
                     <div class="core-proof">
@@ -89,12 +113,22 @@ fn App() -> impl IntoView {
                         <a
                             class="primary"
                             href={onboarding_view_model(&AppState::default()).create_wallet_href}
+                            on:click=move |_| dispatch_action(
+                                transport,
+                                state,
+                                AppAction::Navigate(AppRoute::CreateWallet),
+                            )
                         >
                             "Create wallet"
                         </a>
                         <a
                             class="secondary"
                             href={onboarding_view_model(&AppState::default()).import_wallet_href}
+                            on:click=move |_| dispatch_action(
+                                transport,
+                                state,
+                                AppAction::Navigate(AppRoute::ImportWallet),
+                            )
                         >
                             "Import wallet"
                         </a>
@@ -118,7 +152,7 @@ fn App() -> impl IntoView {
                         <h2 id="help-title">"Getting started"</h2>
                         <p>
                             "Create a new wallet or import an existing one. "
-                            "This is the first Rust-authored UI slice over framework-neutral state."
+                            "This Rust renderer receives state through a shell-agnostic transport."
                         </p>
                         <button
                             class="primary"
@@ -137,7 +171,8 @@ fn App() -> impl IntoView {
 #[cfg(target_arch = "wasm32")]
 fn main() {
     console_error_panic_hook::set_once();
-    leptos::mount::mount_to_body(|| view! { <App /> });
+    let transport = make_transport();
+    leptos::mount::mount_to_body(move || view! { <App transport=transport.clone() /> });
 }
 
 #[cfg(not(target_arch = "wasm32"))]
