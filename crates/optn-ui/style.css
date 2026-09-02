@@ -209,6 +209,189 @@ h1 {
   line-height: 1.6;
 }
 
+
+
+.watch-only-page {
+  width: min(58rem, calc(100% - 2rem));
+  margin: 0 auto;
+  padding: 2rem 0 max(3rem, env(safe-area-inset-bottom));
+}
+
+.watch-only-card {
+  border: 1px solid var(--border);
+  border-radius: 2rem;
+  background: var(--surface);
+  padding: clamp(1.25rem, 4vw, 3rem);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 1.5rem 4rem rgba(0, 0, 0, 0.12);
+}
+
+.watch-only-card h1 {
+  max-width: 18ch;
+}
+
+.text-button {
+  appearance: none;
+  border: 0;
+  padding: 0;
+  margin: 0 0 1.5rem;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 750;
+}
+
+.network-picker {
+  display: inline-flex;
+  gap: 0.4rem;
+  margin: 1.25rem 0 0.5rem;
+  padding: 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+}
+
+.network-option {
+  border: 0;
+  border-radius: 999px;
+  padding: 0.65rem 1rem;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.network-option.active {
+  color: var(--accent-text);
+  background: var(--accent);
+  font-weight: 800;
+}
+
+.watch-only-form {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.field {
+  display: grid;
+  gap: 0.45rem;
+  text-align: left;
+}
+
+.field > span {
+  font-weight: 750;
+}
+
+.field input,
+.field textarea {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 0.9rem;
+  padding: 0.85rem 0.95rem;
+  background: color-mix(in srgb, var(--bg) 64%, transparent);
+  color: var(--text);
+  font: inherit;
+  outline: none;
+}
+
+.field textarea {
+  resize: vertical;
+  min-height: 7rem;
+  overflow-wrap: anywhere;
+}
+
+.field input:focus,
+.field textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.field small,
+.migration-note {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.form-submit {
+  justify-self: start;
+  margin-top: 0.25rem;
+}
+
+.form-error {
+  margin: 0;
+  border: 1px solid rgba(220, 70, 70, 0.42);
+  border-radius: 0.9rem;
+  padding: 0.8rem 0.95rem;
+  background: rgba(220, 70, 70, 0.08);
+  color: var(--text);
+}
+
+.watch-preview {
+  margin-top: 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: 1.25rem;
+  padding: 1rem;
+  background: color-mix(in srgb, var(--bg) 38%, transparent);
+}
+
+.preview-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.preview-heading h2 {
+  margin: 0;
+}
+
+.success-badge {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 0.4rem 0.65rem;
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  color: var(--accent);
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.preview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin: 1rem 0;
+}
+
+.preview-grid > div {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 0.9rem;
+  padding: 0.75rem;
+}
+
+.preview-grid dt {
+  margin-bottom: 0.35rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.preview-grid dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.84rem;
+}
+
+.preview-wide {
+  grid-column: 1 / -1;
+}
+
+.migration-note {
+  margin: 1rem 0 0;
+  font-size: 0.86rem;
+}
+
 @media (max-width: 760px) {
   .landing {
     grid-template-columns: 1fr;
@@ -243,5 +426,39 @@ h1 {
 
   .core-proof {
     flex-direction: column;
+  }
+
+  .watch-only-page {
+    width: min(100% - 1rem, 58rem);
+    padding-top: 0.75rem;
+  }
+
+  .watch-only-card {
+    border-radius: 1.4rem;
+  }
+
+  .network-picker,
+  .form-submit {
+    width: 100%;
+  }
+
+  .network-option {
+    flex: 1;
+  }
+
+  .form-submit {
+    text-align: center;
+  }
+
+  .preview-heading {
+    flex-direction: column;
+  }
+
+  .preview-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .preview-wide {
+    grid-column: auto;
   }
 }
