@@ -13,6 +13,7 @@ all-features = true
 unmaintained = "workspace"
 unsound = "all"
 ignore = [
+  { id = "RUSTSEC-2024-0429", reason = "Tauri 2.11.5 Linux currently depends on GTK/glib 0.18.5; the RustSec fix requires glib >=0.20, outside Tauri's accepted GTK graph. OPTN does not call VariantStrIter directly. Remove this exception as soon as upstream Tauri/WebKitGTK moves to glib >=0.20." },
   { id = "RUSTSEC-2026-0194", reason = "Existing quick-xml availability issue; tracked in security-analysis.yml until upstream dependency graph can move to >=0.41." },
   { id = "RUSTSEC-2026-0195", reason = "Existing quick-xml availability issue; tracked in security-analysis.yml until upstream dependency graph can move to >=0.41." },
   { id = "RUSTSEC-2026-0185", reason = "Existing quinn-proto baseline; the Tauri graph is being upgraded and this exemption must disappear once no affected version remains." },
@@ -42,6 +43,7 @@ allow = [
   "BSD-3-Clause",
   "BSL-1.0",
   "CC0-1.0",
+  "CDLA-Permissive-2.0",
   "GPL-3.0-only",
   "GPL-3.0-or-later",
   "ISC",
