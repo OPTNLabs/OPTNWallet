@@ -1,0 +1,9 @@
+[package]
+name = "optn-transport"
+version = "1.7.3"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Shell-agnostic application transport contracts for OPTN Wallet."
+
+[dependencies]
+optn-app = { path = "../optn-app", version = "=1.7.3" }
