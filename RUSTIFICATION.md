@@ -80,10 +80,27 @@ NativeFfi
 Web
 ```
 
-The current desktop clipboard implementation is a Tauri-shell provider backed by
-Rust `arboard`. Hardware HID/WebUSB providers are desktop-only and no longer enter
-Android/iOS builds. Mobile-native implementations can be substituted without
-changing application logic.
+Current concrete providers now prove the model:
+
+```
+Desktop clipboard:
+Tauri host → optn-platform-native::NativeClipboard → arboard
+ProviderKind::PureRust
+
+Android/iOS clipboard:
+Tauri host → TauriMobileClipboard → official clipboard-manager plugin
+ProviderKind::Shell
+```
+
+`optn-platform-native` selects providers per Cargo feature. Clipboard, secure
+storage, and notifications are independent features, so enabling one capability
+does not drag unrelated OS integrations into a target. The secure-storage
+candidate uses keyring 4.x and the notification candidate uses notify-rust; they
+remain opt-in until migrated call sites prove parity.
+
+Hardware HID/WebUSB providers are desktop-only and no longer enter Android/iOS
+builds. The legacy Tauri keyring plugin is also desktop-only while secure-storage
+migration is evaluated.
 
 ## Dependency rules
 
@@ -148,11 +165,12 @@ Wallet, transaction, crypto, protocol, and application-state logic remain unchan
 3. Route renderer interaction through `optn-transport`.
 4. Define OS capabilities and provider metadata in `optn-platform`.
 5. Keep shell/native implementations behind providers.
-6. Migrate React screens to the Rust renderer incrementally.
-7. Prove Tauri Android/iOS parity before removing Capacitor.
-8. Prefer mature pure-Rust capability providers where they improve portability.
-9. Use shell plugins or thin native FFI where pure-Rust support is not production-ready.
-10. Keep web/extension on the same application/domain contracts through WASM.
+6. Select provider dependencies per capability rather than per shell.
+7. Migrate React screens to the Rust renderer incrementally.
+8. Prove Tauri Android/iOS parity before removing Capacitor.
+9. Prefer mature pure-Rust capability providers where they improve portability.
+10. Use shell plugins or thin native FFI where pure-Rust support is not production-ready.
+11. Keep web/extension on the same application/domain contracts through WASM.
 
 ## Version policy
 
