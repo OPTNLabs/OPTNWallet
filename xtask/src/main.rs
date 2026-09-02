@@ -130,6 +130,25 @@ fn architecture() {
         &mut failures,
     );
 
+
+    // The Rust renderer may use HTML/CSS build assets, but application/source
+    // logic under optn-ui must remain Rust. Reference-wallet TypeScript/Vue is
+    // a behavior oracle, not a migration destination.
+    let ui_root = root.join("crates/optn-ui");
+    for entry in walk_files(&ui_root) {
+        let extension = entry
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if matches!(extension.as_str(), "js" | "jsx" | "ts" | "tsx" | "vue") {
+            failures.push(format!(
+                "{} is handwritten web-framework source inside the Rust renderer",
+                entry.display()
+            ));
+        }
+    }
+
     if failures.is_empty() {
         println!("architecture boundary check: PASS");
         return;
@@ -167,4 +186,23 @@ fn forbid_dependencies(
 fn read(path: &Path) -> String {
     fs::read_to_string(path)
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()))
+}
+
+fn walk_files(root: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(path) = pending.pop() {
+        let Ok(entries) = fs::read_dir(&path) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                files.push(path);
+            }
+        }
+    }
+    files
 }
