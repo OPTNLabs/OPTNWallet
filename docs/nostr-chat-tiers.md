@@ -23,6 +23,7 @@ flow.
 | `src/platform/desktop/nostr/identity.ts`            | Account seed (NIP-06 today) → npub               |
 | `src/platform/desktop/nostr/__tests__/chat.test.ts` | DM wrap/unwrap, tips, 10050                      |
 | `src/platform/desktop/nostr/__tests__/mls.test.ts`  | MLS ratchet, 443/444/445, private wrap           |
+| `scripts/chat-cli.mts`                              | Optional Node helper: DM / private / open, no UI |
 
 Public specs: [NIP-17](https://nips.nostr.com/17),
 [NIP-44](https://nips.nostr.com/44),
