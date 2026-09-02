@@ -12,7 +12,11 @@ pub use optn_core::flipstarter::{
     CampaignOutput, FlipstarterPledge, PledgeStatus,
 };
 pub use optn_core::fundme::{FundMeProduct, FundMeStatus};
+pub use optn_core::hd::{mnemonic_from_entropy, seed_receive_address, BIP39_TEST_VECTOR_MNEMONIC};
 pub use optn_core::network::Network;
+pub use optn_core::spend::{
+    prepare_spend, sign_seed_spend, SpendKind, SpendPlan, SpendingCapability, SIGHASH_ALL_FORKID,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThemeMode {
@@ -135,6 +139,8 @@ pub enum AppRoute {
     Settings,
     Flipstarter,
     FundMe,
+    Receive,
+    Send,
 }
 
 impl AppRoute {
@@ -151,6 +157,8 @@ impl AppRoute {
             Self::Settings => "#/settings",
             Self::Flipstarter => "#/flipstarter",
             Self::FundMe => "#/fundme",
+            Self::Receive => "#/receive",
+            Self::Send => "#/send",
         }
     }
 
@@ -164,6 +172,8 @@ impl AppRoute {
                 | Self::Settings
                 | Self::Flipstarter
                 | Self::FundMe
+                | Self::Receive
+                | Self::Send
         )
     }
 }
@@ -210,6 +220,32 @@ pub struct AppState {
     pub coins: CoinSet,
     pub pledges: Vec<FlipstarterPledge>,
     pub notice: Option<String>,
+    pub wallet: Option<OpenedWallet>,
+    pub spend: Option<SpendPlan>,
+}
+
+/// Public session for an opened wallet. The mnemonic never lives here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WalletKind {
+    Seed,
+    WatchOnly,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenedWallet {
+    pub kind: WalletKind,
+    pub name: String,
+    pub receive_address: String,
+    pub master_fingerprint: Option<String>,
+}
+
+impl OpenedWallet {
+    pub const fn spending_capability(&self) -> SpendingCapability {
+        match self.kind {
+            WalletKind::Seed => SpendingCapability::Seed,
+            WalletKind::WatchOnly => SpendingCapability::WatchOnly,
+        }
+    }
 }
 
 impl Default for AppState {
@@ -234,6 +270,8 @@ impl AppState {
             coins: CoinSet::new(),
             pledges: Vec::new(),
             notice: None,
+            wallet: None,
+            spend: None,
         }
     }
 
@@ -273,6 +311,19 @@ pub enum AppAction {
     },
     CancelFlipstarterPledge(u32),
     ClearNotice,
+    OpenCreatedWallet {
+        name: String,
+        receive_address: String,
+    },
+    OpenImportedWallet {
+        name: String,
+        receive_address: String,
+    },
+    OpenWatchOnlyWallet(WatchOnlySetupPreview),
+    PrepareSend {
+        destination: String,
+        amount_sats: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -287,6 +338,8 @@ pub enum AppEvent {
     CoinsChanged,
     FlipstarterPledgesChanged,
     NoticeChanged,
+    WalletOpened,
+    SpendPrepared,
 }
 
 impl AppState {
@@ -294,7 +347,17 @@ impl AppState {
     /// produced by the state transition. No event is emitted for a no-op.
     pub fn reduce(&mut self, action: AppAction) -> Option<AppEvent> {
         match action {
-            AppAction::Navigate(route) if self.route != route => {
+            AppAction::Navigate(route) => {
+                if route.is_wallet_chrome() && self.wallet.is_none() {
+                    return self
+                        .reject("Create, import, or open a watch-only wallet first.".into());
+                }
+                if route == AppRoute::WatchOnlyWallet && !self.surface.offers_watch_only() {
+                    return self.reject("Watch-only is not offered on this surface.".into());
+                }
+                if self.route == route {
+                    return None;
+                }
                 self.route = route;
                 Some(AppEvent::RouteChanged(route))
             }
@@ -421,14 +484,79 @@ impl AppState {
                     Some(AppEvent::NoticeChanged)
                 }
             }
-            AppAction::Navigate(_)
-            | AppAction::SetNetwork(_)
+            AppAction::OpenCreatedWallet {
+                name,
+                receive_address,
+            } => self.open_seed_wallet(name, receive_address),
+            AppAction::OpenImportedWallet {
+                name,
+                receive_address,
+            } => self.open_seed_wallet(name, receive_address),
+            AppAction::OpenWatchOnlyWallet(preview) => {
+                if !self.surface.offers_watch_only() {
+                    return self.reject("Watch-only is not offered on this surface.".into());
+                }
+                self.wallet = Some(OpenedWallet {
+                    kind: WalletKind::WatchOnly,
+                    name: preview.wallet_name,
+                    receive_address: preview.receive_address,
+                    master_fingerprint: preview.master_fingerprint,
+                });
+                self.spend = None;
+                self.notice = None;
+                self.route = AppRoute::WalletHome;
+                Some(AppEvent::WalletOpened)
+            }
+            AppAction::PrepareSend {
+                destination,
+                amount_sats,
+            } => {
+                let Some(wallet) = self.wallet.as_ref() else {
+                    return self.reject("open a wallet first".into());
+                };
+                match prepare_spend(
+                    &self.coins,
+                    self.network,
+                    &destination,
+                    amount_sats,
+                    wallet.spending_capability(),
+                ) {
+                    Ok(plan) => {
+                        self.spend = Some(plan);
+                        self.notice = None;
+                        self.route = AppRoute::Send;
+                        Some(AppEvent::SpendPrepared)
+                    }
+                    Err(error) => self.reject(error.to_string()),
+                }
+            }
+            AppAction::SetNetwork(_)
             | AppAction::SetTheme(_)
             | AppAction::SetSkin(_)
             | AppAction::OpenHelp
             | AppAction::CloseHelp
             | AppAction::SetSurface(_) => None,
         }
+    }
+
+    fn open_seed_wallet(&mut self, name: String, receive_address: String) -> Option<AppEvent> {
+        let name = name.trim();
+        if name.is_empty() {
+            return self.reject("Give the wallet a name.".into());
+        }
+        if receive_address.trim().is_empty() {
+            return self.reject("Receive address is missing.".into());
+        }
+        self.wallet = Some(OpenedWallet {
+            kind: WalletKind::Seed,
+            name: name.to_owned(),
+            receive_address,
+            master_fingerprint: None,
+        });
+        self.spend = None;
+        self.notice = None;
+        self.route = AppRoute::WalletHome;
+        Some(AppEvent::WalletOpened)
     }
 
     fn reject(&mut self, message: String) -> Option<AppEvent> {
@@ -671,6 +799,26 @@ pub fn watch_only_setup_preview(
         receive_address: preview.receive.address,
         receive_token_address: preview.receive.token_address,
         change_address: preview.change.address,
+    })
+}
+
+/// Derive a seed wallet's public receive address. The mnemonic is not stored.
+pub fn seed_wallet_preview(
+    network: Network,
+    wallet_name: &str,
+    mnemonic: &str,
+) -> Result<OpenedWallet, String> {
+    let wallet_name = wallet_name.trim();
+    if wallet_name.is_empty() {
+        return Err("Give the wallet a name.".into());
+    }
+    let receive_address =
+        seed_receive_address(network, mnemonic).map_err(|error| error.to_string())?;
+    Ok(OpenedWallet {
+        kind: WalletKind::Seed,
+        name: wallet_name.to_owned(),
+        receive_address,
+        master_fingerprint: None,
     })
 }
 
@@ -1090,5 +1238,138 @@ mod tests {
         assert_eq!(format_bch(100_001_127), "1.00001127 BCH");
         assert!(AppRoute::WalletHome.is_wallet_chrome());
         assert!(!AppRoute::Landing.is_wallet_chrome());
+    }
+
+    fn open_chipnet_seed(state: &mut AppState, name: &str) {
+        state.apply(AppAction::SetNetwork(Network::Chipnet));
+        let opened = seed_wallet_preview(Network::Chipnet, name, BIP39_TEST_VECTOR_MNEMONIC)
+            .expect("seed preview");
+        assert!(opened.receive_address.starts_with("bchtest:"));
+        state.apply(AppAction::OpenCreatedWallet {
+            name: opened.name,
+            receive_address: opened.receive_address,
+        });
+    }
+
+    #[test]
+    fn native_create_import_and_watch_only_open_home() {
+        for surface in [AppSurface::Desktop, AppSurface::Android, AppSurface::Ios] {
+            let mut created = AppState::for_surface(surface);
+            open_chipnet_seed(&mut created, "created");
+            assert_eq!(created.route, AppRoute::WalletHome, "{surface:?} create");
+            assert_eq!(
+                created.wallet.as_ref().map(|wallet| wallet.kind),
+                Some(WalletKind::Seed)
+            );
+
+            let mut imported = AppState::for_surface(surface);
+            imported.apply(AppAction::SetNetwork(Network::Chipnet));
+            let opened =
+                seed_wallet_preview(Network::Chipnet, "imported", BIP39_TEST_VECTOR_MNEMONIC)
+                    .expect("import preview");
+            imported.apply(AppAction::OpenImportedWallet {
+                name: opened.name,
+                receive_address: opened.receive_address,
+            });
+            assert_eq!(imported.route, AppRoute::WalletHome, "{surface:?} import");
+
+            let mut watch = AppState::for_surface(surface);
+            watch.apply(AppAction::SetNetwork(Network::Chipnet));
+            let wallet = optn_core::hd::Wallet::from_mnemonic(BIP39_TEST_VECTOR_MNEMONIC, "")
+                .expect("mnemonic");
+            let xpub = wallet.account_xpub(Network::Chipnet, 0).expect("xpub");
+            let preview = watch_only_setup_preview(Network::Chipnet, "watch", &xpub, "4c9a1f7b")
+                .expect("watch preview");
+            assert!(preview.receive_address.starts_with("bchtest:"));
+            assert_eq!(preview.master_fingerprint.as_deref(), Some("4c9a1f7b"));
+            watch.apply(AppAction::OpenWatchOnlyWallet(preview));
+            assert_eq!(watch.route, AppRoute::WalletHome, "{surface:?} watch-only");
+            assert_eq!(
+                watch.wallet.as_ref().map(|wallet| wallet.kind),
+                Some(WalletKind::WatchOnly)
+            );
+        }
+
+        for surface in [AppSurface::Web, AppSurface::Extension] {
+            assert!(
+                !onboarding_actions(&AppState::for_surface(surface))
+                    .contains(&OnboardingAction::CreateWatchOnlyWallet),
+                "{surface:?} must omit Watch Only"
+            );
+            let mut state = AppState::for_surface(surface);
+            state.apply(AppAction::Navigate(AppRoute::WatchOnlyWallet));
+            assert_ne!(state.route, AppRoute::WatchOnlyWallet);
+        }
+    }
+
+    #[test]
+    fn home_is_blocked_until_a_wallet_is_opened() {
+        let mut state = AppState::for_surface(AppSurface::Android);
+        assert_eq!(
+            state.reduce(AppAction::Navigate(AppRoute::WalletHome)),
+            Some(AppEvent::NoticeChanged)
+        );
+        assert_eq!(state.route, AppRoute::Landing);
+    }
+
+    #[test]
+    fn seed_send_selects_spendable_coin_watch_only_is_unsigned_psbt() {
+        let dest = optn_core::cashaddr::Address::from_hash(
+            Network::Chipnet.prefix(),
+            optn_core::cashaddr::AddressKind::P2pkh,
+            [0x7a; 20],
+        )
+        .encode();
+
+        let mut seed = AppState::for_surface(AppSurface::Desktop);
+        open_chipnet_seed(&mut seed, "seed");
+        seed.apply(AppAction::InsertCoin(
+            chipnet_demo_coin(9_000, 1).expect("coin"),
+        ));
+        seed.apply(AppAction::PrepareSend {
+            destination: dest.clone(),
+            amount_sats: 9_000,
+        });
+        let plan = seed.spend.as_ref().expect("seed spend");
+        assert_eq!(plan.sighash, SIGHASH_ALL_FORKID);
+        assert!(plan.uses_seed_signing());
+        assert_eq!(plan.kind, SpendKind::SeedSpecified);
+
+        let frozen = chipnet_demo_coin(9_000, 2).expect("frozen");
+        let frozen_out = frozen.outpoint();
+        seed.apply(AppAction::InsertCoin(frozen));
+        seed.apply(AppAction::FreezeCoin(frozen_out));
+        seed.spend = None;
+        seed.apply(AppAction::PrepareSend {
+            destination: dest.clone(),
+            amount_sats: 9_000,
+        });
+        assert_ne!(
+            seed.spend.as_ref().map(|plan| plan.selected),
+            Some(frozen_out)
+        );
+
+        let mut watch = AppState::for_surface(AppSurface::Ios);
+        watch.apply(AppAction::SetNetwork(Network::Chipnet));
+        let wallet =
+            optn_core::hd::Wallet::from_mnemonic(BIP39_TEST_VECTOR_MNEMONIC, "").expect("mnemonic");
+        let xpub = wallet.account_xpub(Network::Chipnet, 0).expect("xpub");
+        let preview =
+            watch_only_setup_preview(Network::Chipnet, "watch", &xpub, "").expect("preview");
+        watch.apply(AppAction::OpenWatchOnlyWallet(preview));
+        watch.apply(AppAction::InsertCoin(
+            chipnet_demo_coin(4_000, 3).expect("coin"),
+        ));
+        watch.apply(AppAction::PrepareSend {
+            destination: dest,
+            amount_sats: 4_000,
+        });
+        let plan = watch.spend.expect("watch spend");
+        assert_eq!(plan.kind, SpendKind::WatchOnlyUnsignedPsbt);
+        assert!(!plan.uses_seed_signing());
+        assert_eq!(
+            sign_seed_spend(&plan, BIP39_TEST_VECTOR_MNEMONIC, Network::Chipnet),
+            Err(optn_core::spend::SpendError::WatchOnlyCannotSign)
+        );
     }
 }

@@ -10,7 +10,7 @@
 //! coins". Discovery scans more than the default, because a seed created by
 //! other BCH tooling may sit under a different coin type — see `SCAN_COIN_TYPES`.
 
-use bip32::{DerivationPath, XPrv};
+use bip32::{DerivationPath, Prefix, XPrv};
 use bip39::{Language, Mnemonic};
 use ripemd::Ripemd160;
 use sha2::{Digest, Sha256};
@@ -49,6 +49,28 @@ pub fn address_path(coin_type: u32, account: u32, change: bool, index: u32) -> S
 /// `m/44'/<coin>'/<account>'` — the account path the wallet stores.
 pub fn account_path(coin_type: u32, account: u32) -> String {
     format!("m/44'/{coin_type}'/{account}'")
+}
+
+/// BIP39 published all-zeros entropy phrase. Tests only; never a user seed.
+pub const BIP39_TEST_VECTOR_MNEMONIC: &str =
+    "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+/// First receive address at `m/44'/<coin>'/0'/0/0` for a mnemonic.
+///
+/// The phrase is borrowed and dropped by the caller. This function does not
+/// keep it.
+pub fn seed_receive_address(network: Network, mnemonic: &str) -> Result<String> {
+    let wallet = Wallet::from_mnemonic(mnemonic, "")?;
+    let path = address_path(network.default_coin_type(), 0, false, 0);
+    Ok(wallet.address(network, &path)?.encode())
+}
+
+/// Build a mnemonic from caller-supplied entropy (16 bytes → 12 words).
+pub fn mnemonic_from_entropy(entropy: &[u8]) -> Result<String> {
+    let mnemonic = Mnemonic::from_entropy(entropy).map_err(|error| {
+        CliError::Usage(format!("entropy must be a valid BIP39 length ({error})"))
+    })?;
+    Ok(mnemonic.to_string())
 }
 
 #[derive(ZeroizeOnDrop)]
@@ -109,6 +131,16 @@ impl Wallet {
             hash160(&pubkey),
         ))
     }
+
+    /// Account-level xPub at `m/44'/<coin>'/<account>'`. Public material only.
+    pub fn account_xpub(&self, network: Network, account: u32) -> Result<String> {
+        let path: DerivationPath = account_path(network.default_coin_type(), account)
+            .parse()
+            .map_err(|_| CliError::Usage("invalid account path".into()))?;
+        let xprv = XPrv::derive_from_path(self.seed, &path)
+            .map_err(|error| CliError::Internal(format!("derivation failed: {error}")))?;
+        Ok(xprv.public_key().to_string(Prefix::XPUB))
+    }
 }
 
 /// RIPEMD160(SHA256(pubkey)) — the 20 bytes a P2PKH script commits to.
@@ -128,8 +160,7 @@ mod tests {
     // fixed mnemonic means a regression in seed generation or in the
     // derivation path shows up as a changed address rather than silently
     // producing a valid-looking but wrong one.
-    const TEST_MNEMONIC: &str =
-        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    const TEST_MNEMONIC: &str = BIP39_TEST_VECTOR_MNEMONIC;
 
     #[test]
     fn paths_follow_the_documented_layout() {
@@ -137,6 +168,19 @@ mod tests {
         assert_eq!(account_path(1, 1), "m/44'/1'/1'");
         assert_eq!(address_path(145, 0, false, 0), "m/44'/145'/0'/0/0");
         assert_eq!(address_path(145, 0, true, 7), "m/44'/145'/0'/1/7");
+    }
+
+    #[test]
+    fn chipnet_seed_receive_address_is_bchtest() {
+        let address =
+            seed_receive_address(Network::Chipnet, BIP39_TEST_VECTOR_MNEMONIC).expect("derive");
+        assert!(
+            address.starts_with("bchtest:"),
+            "chipnet receive must be bchtest, got {address}"
+        );
+        let again =
+            seed_receive_address(Network::Chipnet, BIP39_TEST_VECTOR_MNEMONIC).expect("again");
+        assert_eq!(address, again);
     }
 
     #[test]

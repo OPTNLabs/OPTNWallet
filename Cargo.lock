@@ -1945,6 +1945,7 @@ dependencies = [
  "optn-app",
  "optn-transport",
  "optn-transport-tauri",
+ "web-sys",
 ]
 
 [[package]]

@@ -8,8 +8,8 @@
 
 use optn_app::{
     AppAction, AppEvent, AppRoute, AppState, AppSurface, CampaignOutput, Coin, FeatureFlag,
-    FeatureFlags, FlipstarterPledge, FreezeReason, Network, Outpoint, PledgeStatus, ThemeMode,
-    UiSkin,
+    FeatureFlags, FlipstarterPledge, FreezeReason, Network, OpenedWallet, Outpoint, PledgeStatus,
+    SpendKind, SpendPlan, ThemeMode, UiSkin, WalletKind, WatchOnlySetupPreview,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -55,6 +55,8 @@ pub enum WireRoute {
     Settings,
     Flipstarter,
     FundMe,
+    Receive,
+    Send,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -183,6 +185,26 @@ pub enum WireActionKind {
     },
     CancelFlipstarterPledge(u32),
     ClearNotice,
+    OpenCreatedWallet {
+        name: String,
+        receive_address: String,
+    },
+    OpenImportedWallet {
+        name: String,
+        receive_address: String,
+    },
+    OpenWatchOnlyWallet {
+        wallet_name: String,
+        master_fingerprint: Option<String>,
+        account_path: String,
+        receive_address: String,
+        receive_token_address: String,
+        change_address: String,
+    },
+    PrepareSend {
+        destination: String,
+        amount_sats: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -209,6 +231,43 @@ pub struct WireState {
     pub pledges: Vec<WirePledge>,
     #[serde(default)]
     pub notice: Option<String>,
+    #[serde(default)]
+    pub wallet: Option<WireOpenedWallet>,
+    #[serde(default)]
+    pub spend: Option<WireSpendPlan>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WireWalletKind {
+    Seed,
+    WatchOnly,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireOpenedWallet {
+    pub kind: WireWalletKind,
+    pub name: String,
+    pub receive_address: String,
+    #[serde(default)]
+    pub master_fingerprint: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WireSpendKind {
+    SeedSpecified,
+    WatchOnlyUnsignedPsbt,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireSpendPlan {
+    pub txid: String,
+    pub vout: u32,
+    pub amount_sats: u64,
+    pub destination: String,
+    pub sighash: u8,
+    pub kind: WireSpendKind,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -227,6 +286,8 @@ pub enum WireEventKind {
     CoinsChanged,
     FlipstarterPledgesChanged,
     NoticeChanged,
+    WalletOpened,
+    SpendPrepared,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -249,6 +310,8 @@ impl From<AppRoute> for WireRoute {
             AppRoute::Settings => Self::Settings,
             AppRoute::Flipstarter => Self::Flipstarter,
             AppRoute::FundMe => Self::FundMe,
+            AppRoute::Receive => Self::Receive,
+            AppRoute::Send => Self::Send,
         }
     }
 }
@@ -267,6 +330,8 @@ impl From<WireRoute> for AppRoute {
             WireRoute::Settings => Self::Settings,
             WireRoute::Flipstarter => Self::Flipstarter,
             WireRoute::FundMe => Self::FundMe,
+            WireRoute::Receive => Self::Receive,
+            WireRoute::Send => Self::Send,
         }
     }
 }
@@ -512,6 +577,35 @@ impl From<AppAction> for WireAction {
             }
             AppAction::CancelFlipstarterPledge(id) => WireActionKind::CancelFlipstarterPledge(id),
             AppAction::ClearNotice => WireActionKind::ClearNotice,
+            AppAction::OpenCreatedWallet {
+                name,
+                receive_address,
+            } => WireActionKind::OpenCreatedWallet {
+                name,
+                receive_address,
+            },
+            AppAction::OpenImportedWallet {
+                name,
+                receive_address,
+            } => WireActionKind::OpenImportedWallet {
+                name,
+                receive_address,
+            },
+            AppAction::OpenWatchOnlyWallet(preview) => WireActionKind::OpenWatchOnlyWallet {
+                wallet_name: preview.wallet_name,
+                master_fingerprint: preview.master_fingerprint,
+                account_path: preview.account_path,
+                receive_address: preview.receive_address,
+                receive_token_address: preview.receive_token_address,
+                change_address: preview.change_address,
+            },
+            AppAction::PrepareSend {
+                destination,
+                amount_sats,
+            } => WireActionKind::PrepareSend {
+                destination,
+                amount_sats,
+            },
         };
         Self {
             version: WIRE_PROTOCOL_VERSION,
@@ -554,6 +648,42 @@ impl TryFrom<WireAction> for AppAction {
             }
             WireActionKind::CancelFlipstarterPledge(id) => Self::CancelFlipstarterPledge(id),
             WireActionKind::ClearNotice => Self::ClearNotice,
+            WireActionKind::OpenCreatedWallet {
+                name,
+                receive_address,
+            } => Self::OpenCreatedWallet {
+                name,
+                receive_address,
+            },
+            WireActionKind::OpenImportedWallet {
+                name,
+                receive_address,
+            } => Self::OpenImportedWallet {
+                name,
+                receive_address,
+            },
+            WireActionKind::OpenWatchOnlyWallet {
+                wallet_name,
+                master_fingerprint,
+                account_path,
+                receive_address,
+                receive_token_address,
+                change_address,
+            } => Self::OpenWatchOnlyWallet(WatchOnlySetupPreview {
+                wallet_name,
+                master_fingerprint,
+                account_path,
+                receive_address,
+                receive_token_address,
+                change_address,
+            }),
+            WireActionKind::PrepareSend {
+                destination,
+                amount_sats,
+            } => Self::PrepareSend {
+                destination,
+                amount_sats,
+            },
         })
     }
 }
@@ -577,7 +707,70 @@ impl From<&AppState> for WireState {
             coins: value.coins.iter().map(WireCoin::from).collect(),
             pledges: value.pledges.iter().map(WirePledge::from).collect(),
             notice: value.notice.clone(),
+            wallet: value.wallet.as_ref().map(WireOpenedWallet::from),
+            spend: value.spend.as_ref().map(WireSpendPlan::from),
         }
+    }
+}
+
+impl From<&OpenedWallet> for WireOpenedWallet {
+    fn from(value: &OpenedWallet) -> Self {
+        Self {
+            kind: match value.kind {
+                WalletKind::Seed => WireWalletKind::Seed,
+                WalletKind::WatchOnly => WireWalletKind::WatchOnly,
+            },
+            name: value.name.clone(),
+            receive_address: value.receive_address.clone(),
+            master_fingerprint: value.master_fingerprint.clone(),
+        }
+    }
+}
+
+impl From<WireOpenedWallet> for OpenedWallet {
+    fn from(value: WireOpenedWallet) -> Self {
+        Self {
+            kind: match value.kind {
+                WireWalletKind::Seed => WalletKind::Seed,
+                WireWalletKind::WatchOnly => WalletKind::WatchOnly,
+            },
+            name: value.name,
+            receive_address: value.receive_address,
+            master_fingerprint: value.master_fingerprint,
+        }
+    }
+}
+
+impl From<&SpendPlan> for WireSpendPlan {
+    fn from(value: &SpendPlan) -> Self {
+        Self {
+            txid: value.selected.txid_hex(),
+            vout: value.selected.vout(),
+            amount_sats: value.amount_sats,
+            destination: value.destination.clone(),
+            sighash: value.sighash,
+            kind: match value.kind {
+                SpendKind::SeedSpecified => WireSpendKind::SeedSpecified,
+                SpendKind::WatchOnlyUnsignedPsbt => WireSpendKind::WatchOnlyUnsignedPsbt,
+            },
+        }
+    }
+}
+
+impl TryFrom<WireSpendPlan> for SpendPlan {
+    type Error = TransportError;
+
+    fn try_from(value: WireSpendPlan) -> Result<Self, Self::Error> {
+        Ok(Self {
+            selected: parse_outpoint(&value.txid, value.vout)?,
+            amount_sats: value.amount_sats,
+            destination: value.destination,
+            sighash: value.sighash,
+            kind: match value.kind {
+                WireSpendKind::SeedSpecified => SpendKind::SeedSpecified,
+                WireSpendKind::WatchOnlyUnsignedPsbt => SpendKind::WatchOnlyUnsignedPsbt,
+            },
+        })
     }
 }
 
@@ -628,6 +821,8 @@ impl TryFrom<WireState> for AppState {
                 .map(FlipstarterPledge::try_from)
                 .collect::<Result<Vec<_>, _>>()?,
             notice: value.notice,
+            wallet: value.wallet.map(OpenedWallet::from),
+            spend: value.spend.map(SpendPlan::try_from).transpose()?,
         })
     }
 }
@@ -648,6 +843,8 @@ impl From<AppEvent> for WireEvent {
             AppEvent::CoinsChanged => WireEventKind::CoinsChanged,
             AppEvent::FlipstarterPledgesChanged => WireEventKind::FlipstarterPledgesChanged,
             AppEvent::NoticeChanged => WireEventKind::NoticeChanged,
+            AppEvent::WalletOpened => WireEventKind::WalletOpened,
+            AppEvent::SpendPrepared => WireEventKind::SpendPrepared,
         };
         Self {
             version: WIRE_PROTOCOL_VERSION,
@@ -675,6 +872,8 @@ impl TryFrom<WireEvent> for AppEvent {
             WireEventKind::CoinsChanged => Self::CoinsChanged,
             WireEventKind::FlipstarterPledgesChanged => Self::FlipstarterPledgesChanged,
             WireEventKind::NoticeChanged => Self::NoticeChanged,
+            WireEventKind::WalletOpened => Self::WalletOpened,
+            WireEventKind::SpendPrepared => Self::SpendPrepared,
         })
     }
 }
@@ -842,6 +1041,16 @@ mod tests {
     fn wire_round_trip_preserves_frozen_coins_and_flipstarter_route() {
         let mut state = AppState::default();
         state.apply(AppAction::SetNetwork(Network::Chipnet));
+        let opened = optn_app::seed_wallet_preview(
+            Network::Chipnet,
+            "wire",
+            optn_app::BIP39_TEST_VECTOR_MNEMONIC,
+        )
+        .expect("preview");
+        state.apply(AppAction::OpenCreatedWallet {
+            name: opened.name,
+            receive_address: opened.receive_address,
+        });
         state.apply(AppAction::Navigate(AppRoute::Flipstarter));
         let coin = optn_app::chipnet_demo_coin(6_000, 5).expect("coin");
         let outpoint = coin.outpoint();
