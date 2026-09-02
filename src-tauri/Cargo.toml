@@ -70,6 +70,7 @@ optn-core = { path = "../crates/optn-core", version = "=1.7.3" }
 optn-app = { path = "../crates/optn-app", version = "=1.7.3" }
 optn-platform = { path = "../crates/optn-platform", version = "=1.7.3" }
 optn-runtime = { path = "../crates/optn-runtime", version = "=1.7.3" }
+optn-transport = { path = "../crates/optn-transport", version = "=1.7.3" }
 # Secure randomness for one-time nonces/blinding factors (OsRng). NOT the
 # counter+clock token used for Tor circuit isolation — those must never be reused
 # for crypto secrets.
