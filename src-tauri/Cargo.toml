@@ -110,7 +110,7 @@ hex = "0.4"
 # is no external dylib to resolve and nothing for Library Validation to reject.
 # Fixes both halves of the launch failure rather than only the missing file.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
-optn-platform-native = { path = "../crates/optn-platform-native", version = "=1.7.3" }
+optn-platform-native = { path = "../crates/optn-platform-native", version = "=1.7.3", features = ["clipboard"] }
 hidapi = "2.6"
 tauri-plugin-keyring = "=0.1.0"
 
