@@ -112,6 +112,7 @@ fn SettingsRow(
                                 vm.wallet_name.unwrap_or_else(|| "Wallet".into()),
                                 match vm.wallet_kind {
                                     Some(WalletKind::WatchOnly) => "Watch-only",
+                                    Some(WalletKind::Hardware) => "Hardware",
                                     Some(WalletKind::Seed) => "Seed",
                                     None => "Closed",
                                 },

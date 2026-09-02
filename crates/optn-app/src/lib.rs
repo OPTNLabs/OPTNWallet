@@ -13,8 +13,9 @@ pub use optn_core::flipstarter::{
 };
 pub use optn_core::fundme::{FundMeProduct, FundMeStatus};
 pub use optn_core::hd::{
-    account_choices, mnemonic_from_entropy, parse_account_path, seed_receive_address,
-    seed_receive_address_at, AccountPath, BIP39_TEST_VECTOR_MNEMONIC,
+    account_choices, entropy_len_for_word_count, mnemonic_from_entropy, parse_account_path,
+    seed_receive_address, seed_receive_address_at, AccountPath, BIP39_DEFAULT_WORD_COUNT,
+    BIP39_TEST_VECTOR_MNEMONIC, BIP39_WORD_COUNTS,
 };
 pub use optn_core::network::Network;
 pub use optn_core::spend::{
@@ -130,6 +131,7 @@ pub enum AppRoute {
     CreateWallet,
     ImportWallet,
     WatchOnlyWallet,
+    HardwareWallet,
     WalletHome,
     Coins,
     Actions,
@@ -149,6 +151,7 @@ impl AppRoute {
             Self::CreateWallet => "#/createwallet",
             Self::ImportWallet => "#/importwallet",
             Self::WatchOnlyWallet => "#/watch-only",
+            Self::HardwareWallet => "#/hardware",
             Self::WalletHome => "#/wallet",
             Self::Coins => "#/assets",
             Self::Actions => "#/actions",
@@ -230,6 +233,9 @@ pub struct AppState {
 pub enum WalletKind {
     Seed,
     WatchOnly,
+    /// Public keys here, private key on a connected device. Distinct from
+    /// WatchOnly: this wallet can spend, it just cannot sign locally.
+    Hardware,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -249,6 +255,7 @@ impl OpenedWallet {
         match self.kind {
             WalletKind::Seed => SpendingCapability::Seed,
             WalletKind::WatchOnly => SpendingCapability::WatchOnly,
+            WalletKind::Hardware => SpendingCapability::Hardware,
         }
     }
 }
@@ -328,6 +335,7 @@ pub enum AppAction {
         account_path: String,
     },
     OpenWatchOnlyWallet(WatchOnlySetupPreview),
+    OpenHardwareWallet(HardwareSetupPreview),
     PrepareSend {
         destination: String,
         amount_sats: u64,
@@ -366,6 +374,13 @@ impl AppState {
                     && !self.features.enabled(self.surface, FeatureFlag::WatchOnly)
                 {
                     return self.reject("Watch-only is turned off.".into());
+                }
+                if route == AppRoute::HardwareWallet
+                    && !self
+                        .features
+                        .enabled(self.surface, FeatureFlag::HardwareWallet)
+                {
+                    return self.reject("Hardware wallets are not available here.".into());
                 }
                 if self.route == route {
                     return None;
@@ -523,6 +538,27 @@ impl AppState {
                 self.route = AppRoute::WalletHome;
                 Some(AppEvent::WalletOpened)
             }
+            AppAction::OpenHardwareWallet(preview) => {
+                // Same gate as the route: a surface without USB must not end
+                // up holding a wallet that can only be spent from a device.
+                if !self
+                    .features
+                    .enabled(self.surface, FeatureFlag::HardwareWallet)
+                {
+                    return self.reject("Hardware wallets are not available here.".into());
+                }
+                self.wallet = Some(OpenedWallet {
+                    kind: WalletKind::Hardware,
+                    name: preview.wallet_name,
+                    receive_address: preview.receive_address,
+                    master_fingerprint: preview.master_fingerprint,
+                    account_path: preview.account_path,
+                });
+                self.spend = None;
+                self.notice = None;
+                self.route = AppRoute::WalletHome;
+                Some(AppEvent::WalletOpened)
+            }
             AppAction::PrepareSend {
                 destination,
                 amount_sats,
@@ -659,7 +695,7 @@ impl OnboardingAction {
             Self::CreateWallet => Some(AppRoute::CreateWallet.fragment()),
             Self::ImportWallet => Some(AppRoute::ImportWallet.fragment()),
             Self::CreateWatchOnlyWallet => Some(AppRoute::WatchOnlyWallet.fragment()),
-            Self::ConnectHardwareWallet => None,
+            Self::ConnectHardwareWallet => Some(AppRoute::HardwareWallet.fragment()),
         }
     }
 
@@ -668,7 +704,7 @@ impl OnboardingAction {
             Self::CreateWallet => Some(AppRoute::CreateWallet),
             Self::ImportWallet => Some(AppRoute::ImportWallet),
             Self::CreateWatchOnlyWallet => Some(AppRoute::WatchOnlyWallet),
-            Self::ConnectHardwareWallet => None,
+            Self::ConnectHardwareWallet => Some(AppRoute::HardwareWallet),
         }
     }
 }
@@ -992,6 +1028,76 @@ pub fn watch_only_setup_preview(
         receive_token_address: preview.receive.token_address,
         change_address: preview.change.address,
     })
+}
+
+/// Vendors onboarding offers, surfaced from `optn-platform` so the renderer
+/// does not keep its own list.
+pub use optn_platform::HardwareVendor;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HardwareSetupPreview {
+    pub vendor: HardwareVendor,
+    pub wallet_name: String,
+    pub master_fingerprint: Option<String>,
+    pub account_path: String,
+    pub receive_address: String,
+    pub receive_token_address: String,
+    pub change_address: String,
+}
+
+/// Validate an account exported from a hardware device.
+///
+/// A device hands over the same public material a watch-only import does — an
+/// account xPub plus an optional fingerprint — so this reuses that validation
+/// rather than duplicating it. What differs is the resulting wallet: it can
+/// spend, because the device holds the key.
+pub fn hardware_setup_preview(
+    network: Network,
+    vendor: HardwareVendor,
+    wallet_name: &str,
+    account_xpub: &str,
+    master_fingerprint: &str,
+) -> Result<HardwareSetupPreview, String> {
+    if !HardwareVendor::OFFERED.contains(&vendor) {
+        return Err(format!("{} is not a supported device.", vendor.label()));
+    }
+    let watch = watch_only_setup_preview(network, wallet_name, account_xpub, master_fingerprint)?;
+    Ok(HardwareSetupPreview {
+        vendor,
+        wallet_name: watch.wallet_name,
+        master_fingerprint: watch.master_fingerprint,
+        account_path: watch.account_path,
+        receive_address: watch.receive_address,
+        receive_token_address: watch.receive_token_address,
+        change_address: watch.change_address,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HardwareViewModel {
+    pub layout: LayoutKind,
+    pub network: Network,
+    /// Empty when the surface does not offer hardware wallets at all.
+    pub vendors: Vec<HardwareVendor>,
+    pub available: bool,
+}
+
+pub fn hardware_view_model(state: &AppState) -> HardwareViewModel {
+    let available = state
+        .features
+        .enabled(state.surface, FeatureFlag::HardwareWallet);
+    HardwareViewModel {
+        layout: state.layout(),
+        network: state.network,
+        // No vendor list when the capability is off, so a renderer cannot
+        // paint a device picker on a surface that has no USB.
+        vendors: if available {
+            HardwareVendor::OFFERED.to_vec()
+        } else {
+            Vec::new()
+        },
+        available,
+    }
 }
 
 /// Derive a seed wallet's public receive address. The mnemonic is not stored.
@@ -1807,6 +1913,99 @@ mod tests {
             "m/44'/145'/1'",
             "Settings must show the account the wallet was opened at"
         );
+    }
+
+    #[test]
+    fn hardware_is_a_desktop_capability_end_to_end() {
+        // Desktop offers it; every other surface refuses the route and the
+        // open, so a renderer bug cannot strand funds behind a device the
+        // surface cannot reach.
+        let mut desktop = AppState::for_surface(AppSurface::Desktop);
+        let vm = hardware_view_model(&desktop);
+        assert!(vm.available);
+        assert_eq!(vm.vendors, HardwareVendor::OFFERED.to_vec());
+        assert!(!vm.vendors.contains(&HardwareVendor::Mock));
+        desktop.apply(AppAction::Navigate(AppRoute::HardwareWallet));
+        assert_eq!(desktop.route, AppRoute::HardwareWallet);
+        assert_eq!(AppRoute::HardwareWallet.fragment(), "#/hardware");
+        assert_eq!(
+            OnboardingAction::ConnectHardwareWallet.route(),
+            Some(AppRoute::HardwareWallet),
+            "the landing action must lead somewhere"
+        );
+
+        for surface in [
+            AppSurface::Android,
+            AppSurface::Ios,
+            AppSurface::Web,
+            AppSurface::Extension,
+        ] {
+            let mut state = AppState::for_surface(surface);
+            let vm = hardware_view_model(&state);
+            assert!(!vm.available, "{surface:?}");
+            assert!(vm.vendors.is_empty(), "{surface:?} must offer no devices");
+            state.apply(AppAction::Navigate(AppRoute::HardwareWallet));
+            assert_ne!(state.route, AppRoute::HardwareWallet, "{surface:?}");
+        }
+    }
+
+    #[test]
+    fn a_hardware_wallet_can_spend_but_never_seed_signs() {
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        state.apply(AppAction::SetNetwork(Network::Chipnet));
+        let wallet =
+            optn_core::hd::Wallet::from_mnemonic(BIP39_TEST_VECTOR_MNEMONIC, "").expect("mnemonic");
+        let xpub = wallet.account_xpub(Network::Chipnet, 0).expect("xpub");
+        let preview = hardware_setup_preview(
+            Network::Chipnet,
+            HardwareVendor::Trezor,
+            "device wallet",
+            &xpub,
+            "0f0f0f0f",
+        )
+        .expect("device account is valid");
+        assert_eq!(preview.vendor, HardwareVendor::Trezor);
+        assert_eq!(preview.account_path, "m/44'/1'/0'");
+
+        state.apply(AppAction::OpenHardwareWallet(preview));
+        assert_eq!(state.route, AppRoute::WalletHome);
+        let opened = state.wallet.as_ref().expect("wallet opened");
+        assert_eq!(opened.kind, WalletKind::Hardware);
+        assert_eq!(opened.master_fingerprint.as_deref(), Some("0f0f0f0f"));
+        // Not watch-only: it can spend, it just cannot sign here.
+        assert_eq!(
+            opened.spending_capability(),
+            SpendingCapability::Hardware,
+            "a device wallet must not be treated as watch-only"
+        );
+
+        let coin = chipnet_demo_coin(9_000, 1).expect("coin");
+        let dest = coin.address().to_string();
+        state.apply(AppAction::InsertCoin(coin));
+        state.apply(AppAction::PrepareSend {
+            destination: dest,
+            amount_sats: 4_000,
+        });
+        let plan = state.spend.as_ref().expect("hardware spend planned");
+        assert_eq!(plan.kind, SpendKind::HardwareUnsignedPsbt);
+        assert!(!plan.uses_seed_signing());
+    }
+
+    #[test]
+    fn an_unsupported_device_is_refused_before_a_wallet_opens() {
+        // Mock exists for tests and adapters without USB. Offering it in the
+        // product would let someone open a wallet nothing can sign for.
+        let wallet =
+            optn_core::hd::Wallet::from_mnemonic(BIP39_TEST_VECTOR_MNEMONIC, "").expect("mnemonic");
+        let xpub = wallet.account_xpub(Network::Chipnet, 0).expect("xpub");
+        let refused = hardware_setup_preview(
+            Network::Chipnet,
+            HardwareVendor::Mock,
+            "mock wallet",
+            &xpub,
+            "",
+        );
+        assert!(refused.is_err(), "Mock must not be onboardable");
     }
 
     #[test]

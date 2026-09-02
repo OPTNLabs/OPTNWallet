@@ -133,6 +133,14 @@ impl HardwareVendor {
             Self::Mock => "mock",
         }
     }
+
+    /// Inverse of [`id`](Self::id). Unknown ids are rejected rather than
+    /// defaulted, so a newer peer's device cannot arrive decoded as a Ledger.
+    pub fn from_id(id: &str) -> Option<Self> {
+        [Self::Ledger, Self::Trezor, Self::OneKey, Self::Mock]
+            .into_iter()
+            .find(|vendor| vendor.id() == id)
+    }
 }
 
 /// A public account exported from a device at onboarding.
@@ -478,5 +486,22 @@ mod tests {
         for vendor in HardwareVendor::OFFERED {
             assert!(!vendor.label().is_empty());
         }
+    }
+
+    #[test]
+    fn a_vendor_id_round_trips_and_an_unknown_one_is_refused() {
+        for vendor in [
+            HardwareVendor::Ledger,
+            HardwareVendor::Trezor,
+            HardwareVendor::OneKey,
+            HardwareVendor::Mock,
+        ] {
+            assert_eq!(HardwareVendor::from_id(vendor.id()), Some(vendor));
+        }
+        // Defaulting an unknown id would decode a device this build does not
+        // support as one it does.
+        assert_eq!(HardwareVendor::from_id("keystone"), None);
+        assert_eq!(HardwareVendor::from_id(""), None);
+        assert_eq!(HardwareVendor::from_id("Ledger"), None);
     }
 }
