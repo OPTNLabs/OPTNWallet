@@ -66,3 +66,20 @@ jobs:
         run: |
           test -s crates/optn-ui/dist/index.html
           find crates/optn-ui/dist -maxdepth 1 -type f -name '*.wasm' -size +0c -print -quit | grep -q .
+
+      - name: Build Tauri-hosted Leptos bundle
+        working-directory: crates/optn-ui
+        run: trunk build --release --config Trunk.tauri.toml
+
+      - name: Verify Tauri-hosted bundle uses host snapshots
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          dist = Path("crates/optn-ui/dist")
+          blob = b"".join(path.read_bytes() for path in dist.rglob("*") if path.is_file())
+          if b"optn_app_snapshot" not in blob:
+              raise SystemExit(
+                  "Tauri Leptos bundle is missing optn_app_snapshot; tauri-transport was not compiled in"
+              )
+          print("tauri-transport snapshot command present")
+          PY

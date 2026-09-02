@@ -186,6 +186,15 @@ h1 {
   gap: 0.8rem;
 }
 
+.shell-loading {
+  display: grid;
+  place-items: center;
+  min-height: 40dvh;
+  margin: 0;
+  color: var(--muted);
+  font-weight: 700;
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -395,21 +404,30 @@ h1 {
 @media (max-width: 760px) {
   .landing {
     grid-template-columns: 1fr;
-    align-content: center;
+    min-height: auto;
+    align-content: start;
+    gap: 1.25rem;
+    padding-top: 0.5rem;
   }
 
   .hero {
-    min-height: 13rem;
+    min-height: 6.5rem;
+  }
+
+  .hero-mark {
+    width: 4.5rem;
+    font-size: 1rem;
+    border-radius: 1.1rem;
   }
 
   .hero-ring-one {
-    width: 13rem;
-    height: 13rem;
+    width: 8rem;
+    height: 8rem;
   }
 
   .hero-ring-two {
-    width: 18rem;
-    height: 18rem;
+    width: 11rem;
+    height: 11rem;
   }
 
   .wallet-card {
@@ -418,14 +436,25 @@ h1 {
 
   h1 {
     margin-inline: auto;
-  }
-
-  .actions {
-    justify-content: center;
+    max-width: none;
+    font-size: clamp(1.6rem, 8vw, 2.4rem);
   }
 
   .core-proof {
+    margin: 1rem 0;
     flex-direction: column;
+  }
+
+  .actions {
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+  }
+
+  .actions a,
+  .actions button {
+    width: 100%;
+    text-align: center;
   }
 
   .watch-only-page {
