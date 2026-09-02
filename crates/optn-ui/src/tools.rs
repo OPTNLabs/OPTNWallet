@@ -77,14 +77,15 @@ pub fn WalletChrome(
 fn TabList(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
     view! {
         <For
-            each=|| product_nav()
+            each=move || product_nav(&state.get())
             key=|item| match item {
                 ProductNavItem::Home => 0u8,
                 ProductNavItem::Assets => 1,
                 ProductNavItem::Actions => 2,
-                ProductNavItem::Explore => 3,
-                ProductNavItem::History => 4,
-                ProductNavItem::Settings => 5,
+                ProductNavItem::Receive => 3,
+                ProductNavItem::Explore => 4,
+                ProductNavItem::History => 5,
+                ProductNavItem::Settings => 6,
             }
             let:item
         >
@@ -103,6 +104,7 @@ fn TabList(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
                         ProductNavItem::Home => "⌂",
                         ProductNavItem::Assets => "▣",
                         ProductNavItem::Actions => "⚡",
+                        ProductNavItem::Receive => "↙",
                         ProductNavItem::Explore => "◎",
                         ProductNavItem::History => "☰",
                         ProductNavItem::Settings => "⚙",

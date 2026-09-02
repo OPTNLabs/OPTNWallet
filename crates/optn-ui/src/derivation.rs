@@ -1,27 +1,10 @@
 #![cfg(target_arch = "wasm32")]
 
-//! Account picker shared by Create and Import.
-//!
-//! The offered paths come from `optn_app::account_choices`, which is generated
-//! from the same coin types discovery scans. A renderer-local menu could drift
-//! from that set and offer a branch the wallet never looks at.
+//! Derivation on Create/Import: standard path, with Customize for a typed account.
 
 use crate::onboarding::derivation_for_network;
 use leptos::prelude::*;
-use optn_app::{account_choices, parse_account_path, AccountPath, AppState, Network};
-
-/// Label for one offered account, explaining why it is on the list.
-fn choice_note(account: AccountPath, network: Network) -> &'static str {
-    if account.is_default_for(network) {
-        return "Standard for this network";
-    }
-    match (account.coin_type(), account.account()) {
-        (145, _) => "Bitcoin Cash coin type",
-        (1, _) => "Test-net coin type",
-        (0, _) => "Legacy coin type, used by older tooling",
-        _ => "Scanned during discovery",
-    }
-}
+use optn_app::{parse_account_path, AccountPath, AppState};
 
 /// Account selection for a new or imported seed wallet.
 ///
@@ -49,56 +32,23 @@ pub fn DerivationPicker(
         <section class="derivation-picker">
             <div class="panel-head">
                 <span class="field-label">"Derivation path"</span>
-                <span class="mono muted">{move || selected.get().to_string()}</span>
-            </div>
-
-            <div class="choice-list" role="radiogroup" aria-label="Derivation path">
-                <For
-                    each=move || account_choices(network.get())
-                    key=|account| account.to_string()
-                    let:account
-                >
-                    <button
-                        class="network-choice"
-                        class:active=move || selected.get() == account
-                        type="button"
-                        role="radio"
-                        aria-checked=move || {
-                            if selected.get() == account { "true" } else { "false" }
-                        }
-                        // Coin type and account both, because the offered list
-                        // contains several accounts that share an index —
-                        // m/44'/145'/0' and m/44'/0'/0' are different wallets.
-                        data-testid=format!(
-                            "derivation-{}-{}",
-                            account.coin_type(),
-                            account.account()
-                        )
-                        on:click=move |_| {
+                <button
+                    class="text-button"
+                    type="button"
+                    on:click=move |_| {
+                        let next = !advanced.get_untracked();
+                        advanced.set(next);
+                        if !next {
                             error.set(None);
                             custom.set(String::new());
-                            selected.set(account);
+                            selected.set(derivation_for_network(network.get_untracked()));
                         }
-                    >
-                        <div>
-                            <p class="source-title mono">{account.to_string()}</p>
-                            <p class="muted">{move || choice_note(account, network.get())}</p>
-                        </div>
-                        <Show when=move || selected.get() == account>
-                            <span class="ok">"Selected"</span>
-                        </Show>
-                    </button>
-                </For>
+                    }
+                >
+                    {move || if advanced.get() { "Use standard path" } else { "Customize" }}
+                </button>
             </div>
-
-            <button
-                class="text-button"
-                type="button"
-                on:click=move |_| advanced.update(|open| *open = !*open)
-            >
-                {move || if advanced.get() { "Hide custom path" } else { "Use a custom path" }}
-            </button>
-
+            <p class="mono">{move || selected.get().to_string()}</p>
             <Show when=move || advanced.get()>
                 <label class="field">
                     <span>"Custom account path"</span>
@@ -129,13 +79,6 @@ pub fn DerivationPicker(
                         "Account level only, such as m/44'/145'/0'. An address path is refused."
                     </small>
                 </label>
-            </Show>
-
-            <Show when=move || !selected.get().is_default_for(network.get())>
-                <p class="hint-card">
-                    "This is not the standard account for this network. Use it only if you "
-                    "know your funds were derived there."
-                </p>
             </Show>
         </section>
     }
