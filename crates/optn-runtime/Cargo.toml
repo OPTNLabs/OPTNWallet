@@ -2,11 +2,12 @@
 name = "optn-runtime"
 version = "1.7.3"
 edition = "2021"
-license = "GPL-3.0"
+license = "GPL-3.0-only"
 description = "Framework-neutral async runtime and reconciliation channels for OPTN Wallet."
 
 [dependencies]
-optn-app = { path = "../optn-app" }
+optn-app = { path = "../optn-app", version = "=1.7.3" }
+optn-transport = { path = "../optn-transport", version = "=1.7.3" }
 tokio = { version = "1.53.1", features = ["rt", "sync"] }
 
 [dev-dependencies]
