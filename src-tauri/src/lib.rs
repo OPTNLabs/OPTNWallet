@@ -1,4 +1,5 @@
 #[allow(dead_code)] // menu bar is built on the JS side now; kept for reference
+#[cfg(desktop)]
 mod menu;
 
 pub mod app_transport;
@@ -1020,6 +1021,21 @@ async fn optn_cold_file_exists(path: String) -> Result<bool, String> {
     Ok(std::path::Path::new(&path).is_file())
 }
 
+fn host_app_surface() -> optn_app::AppSurface {
+    #[cfg(target_os = "android")]
+    {
+        optn_app::AppSurface::Android
+    }
+    #[cfg(target_os = "ios")]
+    {
+        optn_app::AppSurface::Ios
+    }
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        optn_app::AppSurface::Desktop
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
@@ -1122,7 +1138,7 @@ pub fn run() {
             // The authoritative application runtime is framework-neutral.
             // Tauri only chooses the executor and stores the handle.
             let (app_runtime, app_driver) =
-                optn_runtime::AppRuntime::new(optn_app::AppState::default());
+                optn_runtime::AppRuntime::new(optn_app::AppState::for_surface(host_app_surface()));
             tauri::async_runtime::spawn(app_driver.run());
             app.manage(app_runtime);
 
@@ -1175,6 +1191,16 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_app_surface_matches_the_native_os() {
+        #[cfg(target_os = "android")]
+        assert_eq!(host_app_surface(), optn_app::AppSurface::Android);
+        #[cfg(target_os = "ios")]
+        assert_eq!(host_app_surface(), optn_app::AppSurface::Ios);
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        assert_eq!(host_app_surface(), optn_app::AppSurface::Desktop);
+    }
 
     fn test_fusion_status() -> fusion::FusionServerStatus {
         fusion::FusionServerStatus {

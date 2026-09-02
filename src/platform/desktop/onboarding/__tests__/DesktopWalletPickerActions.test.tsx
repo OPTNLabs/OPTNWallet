@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const capability = vi.hoisted(() => ({
   hardwareWallet: true,
+  watchOnlyWallet: true,
 }));
 
 vi.mock('react-router-dom', () => ({
@@ -37,8 +38,11 @@ vi.mock('../../../../i18n/useI18n', () => ({
 }));
 
 vi.mock('../../../capabilities', () => ({
-  hasCapability: (name: string) =>
-    name === 'hardwareWallet' ? capability.hardwareWallet : false,
+  hasCapability: (name: string) => {
+    if (name === 'hardwareWallet') return capability.hardwareWallet;
+    if (name === 'watchOnlyWallet') return capability.watchOnlyWallet;
+    return false;
+  },
 }));
 
 import { DesktopWalletPickerActions } from '../DesktopWalletPickerActions';
@@ -77,5 +81,20 @@ describe('DesktopWalletPickerActions hardware toggle', () => {
     expect(
       screen.getByRole('button', { name: 'Create Watch-Only Wallet' })
     ).toBeInTheDocument();
+  });
+
+  it('hides Create Watch-Only Wallet when the capability is off', () => {
+    capability.hardwareWallet = false;
+    capability.watchOnlyWallet = false;
+    render(
+      <DesktopWalletPickerActions
+        hasWallets={false}
+        onHardware={() => undefined}
+        onWatchOnly={() => undefined}
+      />
+    );
+    expect(
+      screen.queryByRole('button', { name: 'Create Watch-Only Wallet' })
+    ).not.toBeInTheDocument();
   });
 });

@@ -25,6 +25,14 @@ pub enum AppSurface {
     Extension,
 }
 
+impl AppSurface {
+    /// Watch-only onboarding is a surface capability, not a renderer feature.
+    /// Desktop, Android, and iOS offer it; web and extension do not.
+    pub const fn offers_watch_only(self) -> bool {
+        matches!(self, Self::Desktop | Self::Android | Self::Ios)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FeatureFlag {
     CashFusion,
@@ -41,10 +49,13 @@ pub struct FeatureFlags {
 impl FeatureFlags {
     /// Hardware wallets and CashFusion are offered on desktop only.
     pub const fn surface_allows(surface: AppSurface, flag: FeatureFlag) -> bool {
-        match (surface, flag) {
-            (AppSurface::Desktop, FeatureFlag::CashFusion | FeatureFlag::HardwareWallet) => true,
-            _ => false,
-        }
+        matches!(
+            (surface, flag),
+            (
+                AppSurface::Desktop,
+                FeatureFlag::CashFusion | FeatureFlag::HardwareWallet
+            )
+        )
     }
 
     pub fn enabled(self, surface: AppSurface, flag: FeatureFlag) -> bool {
@@ -91,13 +102,22 @@ pub struct AppState {
 
 impl Default for AppState {
     fn default() -> Self {
+        Self::for_surface(AppSurface::Desktop)
+    }
+}
+
+impl AppState {
+    pub const fn for_surface(surface: AppSurface) -> Self {
         Self {
             route: AppRoute::Landing,
             theme: ThemeMode::Dark,
             network: Network::Mainnet,
             help_open: false,
-            surface: AppSurface::Desktop,
-            features: FeatureFlags::default(),
+            surface,
+            features: FeatureFlags {
+                cash_fusion: None,
+                hardware_wallet: None,
+            },
         }
     }
 }
@@ -195,6 +215,7 @@ pub struct OnboardingViewModel {
     pub help_open: bool,
     pub show_cash_fusion: bool,
     pub show_hardware_wallet: bool,
+    pub show_watch_only: bool,
 }
 
 pub fn onboarding_view_model(state: &AppState) -> OnboardingViewModel {
@@ -211,6 +232,7 @@ pub fn onboarding_view_model(state: &AppState) -> OnboardingViewModel {
         show_hardware_wallet: state
             .features
             .enabled(state.surface, FeatureFlag::HardwareWallet),
+        show_watch_only: state.surface.offers_watch_only(),
     }
 }
 
@@ -323,6 +345,36 @@ mod tests {
         assert_eq!(vm.watch_only_wallet_href, "#/watch-only");
         assert!(vm.show_cash_fusion);
         assert!(vm.show_hardware_wallet);
+        assert!(vm.show_watch_only);
+    }
+
+    #[test]
+    fn watch_only_follows_the_surface_capability_matrix_not_a_hardcoded_menu() {
+        let expected = [
+            (AppSurface::Desktop, true, true),
+            (AppSurface::Android, true, false),
+            (AppSurface::Ios, true, false),
+            (AppSurface::Web, false, false),
+            (AppSurface::Extension, false, false),
+        ];
+        for (surface, watch_only, hardware) in expected {
+            let vm = onboarding_view_model(&AppState::for_surface(surface));
+            assert_eq!(
+                vm.show_watch_only, watch_only,
+                "{surface:?} watch-only must come from the surface matrix"
+            );
+            assert_eq!(
+                vm.show_hardware_wallet, hardware,
+                "{surface:?} hardware stays desktop-only"
+            );
+        }
+
+        let android = onboarding_view_model(&AppState::for_surface(AppSurface::Android));
+        let web = onboarding_view_model(&AppState::for_surface(AppSurface::Web));
+        assert_ne!(
+            android.show_watch_only, web.show_watch_only,
+            "a renderer-hardcoded Watch Only menu cannot distinguish Android from web"
+        );
     }
 
     #[test]
@@ -358,6 +410,7 @@ mod tests {
         let vm = onboarding_view_model(&state);
         assert!(!vm.show_hardware_wallet);
         assert!(!vm.show_cash_fusion);
+        assert!(vm.show_watch_only);
 
         assert_eq!(
             state.reduce(AppAction::SetFeatureEnabled {
