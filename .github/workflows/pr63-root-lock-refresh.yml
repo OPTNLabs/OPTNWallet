@@ -1,0 +1,51 @@
+name: PR63 Root Lock Refresh
+
+on:
+  push:
+    branches:
+      - agent/rpa-shared-vectors
+    paths:
+      - 'Cargo.toml'
+      - 'crates/**/Cargo.toml'
+      - '.github/workflows/pr63-root-lock-refresh.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr63-root-lock-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    if: github.repository == 'CyberAshven/OPTNWallet'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: agent/rpa-shared-vectors
+          persist-credentials: true
+
+      - name: Install pinned Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.98.0
+
+      - name: Generate exact workspace lockfile
+        run: cargo generate-lockfile
+
+      - name: Commit generated lockfile
+        run: |
+          set -euo pipefail
+          git add Cargo.lock
+          if git diff --cached --quiet; then
+            echo 'Root Cargo.lock already current.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'build: refresh Rust workspace lockfile'
+          git push origin HEAD:agent/rpa-shared-vectors
