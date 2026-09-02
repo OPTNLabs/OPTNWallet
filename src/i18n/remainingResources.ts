@@ -219,9 +219,9 @@ export const remainingTranslations = {
     'experimental.rpaTitle': 'Reusable Payment Addresses (RPA)',
     'experimental.rpaBadge': 'BCH RPA',
     'experimental.rpaDescription':
-      "Generates a static paycode (paycode:q...) that you can share publicly. Senders derive a unique one-time address for each payment via ECDH — no notification transaction, no chain bloat. Received stealth funds appear separately as 'Stealth BCH'. Scanning requires a Fulcrum-RPA capable server.",
+      "Generates a static Cash Code (cashcode:q...) that you can share publicly. Senders derive a unique one-time address for each payment via ECDH — no notification transaction, no chain bloat. Received stealth funds appear separately as 'Stealth BCH'. Scanning requires a Fulcrum-RPA capable server.",
     'experimental.rpaWarning':
-      'Sending to paycodes requires signature grinding (not yet implemented). Receiving and scanning are available.',
+      'Sending to Cash Codes requires signature grinding (not yet implemented). Receiving and scanning are available.',
     'experimental.privacy': 'Privacy',
     'experimental.cashFusionDescription':
       'CashFusion is a non-custodial privacy protocol that combines your UTXOs with those of other users in a way that breaks transaction history linkage. Connect to a CashFusion server to participate. Your funds are never at risk — the protocol is trustless.',
