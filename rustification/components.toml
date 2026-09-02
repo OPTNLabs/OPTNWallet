@@ -55,3 +55,19 @@ target = "rust-actions-events-workers"
 layer = "runtime"
 status = "started"
 security_weight = 8
+
+[[component]]
+name = "application-transport"
+current = "local-wasm-and-direct-rust"
+target = "renderer-shell-agnostic"
+layer = "transport"
+status = "started"
+security_weight = 8
+
+[[component]]
+name = "capability-providers"
+current = "tauri-and-direct-rust-mixed"
+target = "provider-per-capability"
+layer = "platform-provider"
+status = "started"
+security_weight = 8
