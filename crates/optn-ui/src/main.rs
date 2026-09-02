@@ -10,11 +10,7 @@ use optn_transport::{AppTransport, LocalTransport};
 use std::rc::Rc;
 
 #[cfg(target_arch = "wasm32")]
-fn dispatch_action(
-    transport: Rc<LocalTransport>,
-    state: RwSignal<AppState>,
-    action: AppAction,
-) {
+fn dispatch_action(transport: Rc<LocalTransport>, state: RwSignal<AppState>, action: AppAction) {
     leptos::task::spawn_local(async move {
         if transport.dispatch(action).await.is_ok() {
             if let Ok(snapshot) = transport.snapshot().await {
