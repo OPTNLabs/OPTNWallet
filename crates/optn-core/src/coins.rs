@@ -236,6 +236,11 @@ impl CoinSet {
         self.spendable().find(|coin| coin.value_sats == amount_sats)
     }
 
+    /// Drop chain/UTXO state. The opened seed session lives outside this set.
+    pub fn clear(&mut self) {
+        self.coins.clear();
+    }
+
     pub fn set_label(
         &mut self,
         outpoint: Outpoint,
@@ -379,5 +384,19 @@ mod tests {
             set.insert(coin(4, 2_000)),
             Err(CoinError::DuplicateOutpoint)
         );
+    }
+
+    #[test]
+    fn clear_wipes_chain_coins_and_keeps_the_set_usable() {
+        let mut set = CoinSet::new();
+        set.insert(coin(5, 7_000)).expect("insert");
+        set.freeze(coin(5, 7_000).outpoint(), FreezeReason::User)
+            .expect("freeze");
+        assert_eq!(set.len(), 1);
+        set.clear();
+        assert!(set.is_empty());
+        assert_eq!(set.spendable_sats(), 0);
+        set.insert(coin(6, 3_000)).expect("insert after rebuild");
+        assert_eq!(set.spendable_sats(), 3_000);
     }
 }

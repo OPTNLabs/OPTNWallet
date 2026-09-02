@@ -12,7 +12,10 @@ pub use optn_core::flipstarter::{
     CampaignOutput, FlipstarterPledge, PledgeStatus,
 };
 pub use optn_core::fundme::{FundMeProduct, FundMeStatus};
-pub use optn_core::hd::{mnemonic_from_entropy, seed_receive_address, BIP39_TEST_VECTOR_MNEMONIC};
+pub use optn_core::hd::{
+    account_choices, mnemonic_from_entropy, parse_account_path, seed_receive_address,
+    seed_receive_address_at, AccountPath, BIP39_TEST_VECTOR_MNEMONIC,
+};
 pub use optn_core::network::Network;
 pub use optn_core::spend::{
     prepare_spend, sign_seed_spend, SpendKind, SpendPlan, SpendingCapability, SIGHASH_ALL_FORKID,
@@ -132,6 +135,7 @@ pub enum AppRoute {
     Actions,
     Explore,
     Settings,
+    History,
     Flipstarter,
     FundMe,
     Receive,
@@ -150,6 +154,7 @@ impl AppRoute {
             Self::Actions => "#/actions",
             Self::Explore => "#/explore",
             Self::Settings => "#/settings",
+            Self::History => "#/history",
             Self::Flipstarter => "#/flipstarter",
             Self::FundMe => "#/fundme",
             Self::Receive => "#/receive",
@@ -165,6 +170,7 @@ impl AppRoute {
                 | Self::Actions
                 | Self::Explore
                 | Self::Settings
+                | Self::History
                 | Self::Flipstarter
                 | Self::FundMe
                 | Self::Receive
@@ -232,6 +238,10 @@ pub struct OpenedWallet {
     pub name: String,
     pub receive_address: String,
     pub master_fingerprint: Option<String>,
+    /// The BIP44 account this wallet was opened at, as text. Settings shows
+    /// it, and it is what a rescan or an air-gapped signer has to agree with,
+    /// so it follows the wallet rather than being recomputed from the network.
+    pub account_path: String,
 }
 
 impl OpenedWallet {
@@ -310,16 +320,19 @@ pub enum AppAction {
     OpenCreatedWallet {
         name: String,
         receive_address: String,
+        account_path: String,
     },
     OpenImportedWallet {
         name: String,
         receive_address: String,
+        account_path: String,
     },
     OpenWatchOnlyWallet(WatchOnlySetupPreview),
     PrepareSend {
         destination: String,
         amount_sats: u64,
     },
+    RebuildWallet,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -336,6 +349,7 @@ pub enum AppEvent {
     NoticeChanged,
     WalletOpened,
     SpendPrepared,
+    WalletRebuilt,
 }
 
 impl AppState {
@@ -486,11 +500,13 @@ impl AppState {
             AppAction::OpenCreatedWallet {
                 name,
                 receive_address,
-            } => self.open_seed_wallet(name, receive_address),
+                account_path,
+            } => self.open_seed_wallet(name, receive_address, account_path),
             AppAction::OpenImportedWallet {
                 name,
                 receive_address,
-            } => self.open_seed_wallet(name, receive_address),
+                account_path,
+            } => self.open_seed_wallet(name, receive_address, account_path),
             AppAction::OpenWatchOnlyWallet(preview) => {
                 if !self.features.enabled(self.surface, FeatureFlag::WatchOnly) {
                     return self.reject("Watch-only is turned off.".into());
@@ -500,6 +516,7 @@ impl AppState {
                     name: preview.wallet_name,
                     receive_address: preview.receive_address,
                     master_fingerprint: preview.master_fingerprint,
+                    account_path: preview.account_path,
                 });
                 self.spend = None;
                 self.notice = None;
@@ -529,6 +546,16 @@ impl AppState {
                     Err(error) => self.reject(error.to_string()),
                 }
             }
+            AppAction::RebuildWallet => {
+                if self.wallet.is_none() {
+                    return self.reject("open a wallet first".into());
+                }
+                self.coins.clear();
+                self.pledges.clear();
+                self.spend = None;
+                self.notice = None;
+                Some(AppEvent::WalletRebuilt)
+            }
             AppAction::SetNetwork(_)
             | AppAction::SetTheme(_)
             | AppAction::SetSkin(_)
@@ -538,7 +565,12 @@ impl AppState {
         }
     }
 
-    fn open_seed_wallet(&mut self, name: String, receive_address: String) -> Option<AppEvent> {
+    fn open_seed_wallet(
+        &mut self,
+        name: String,
+        receive_address: String,
+        account_path: String,
+    ) -> Option<AppEvent> {
         let name = name.trim();
         if name.is_empty() {
             return self.reject("Give the wallet a name.".into());
@@ -546,11 +578,17 @@ impl AppState {
         if receive_address.trim().is_empty() {
             return self.reject("Receive address is missing.".into());
         }
+        // An unparseable path would open a wallet whose Settings and whose
+        // rescan disagree about which branch it lives on.
+        let Ok(account) = parse_account_path(&account_path) else {
+            return self.reject(format!("'{account_path}' is not a BIP44 account path."));
+        };
         self.wallet = Some(OpenedWallet {
             kind: WalletKind::Seed,
             name: name.to_owned(),
             receive_address,
             master_fingerprint: None,
+            account_path: account.to_string(),
         });
         self.spend = None;
         self.notice = None;
@@ -656,6 +694,7 @@ pub enum ProductNavItem {
     Assets,
     Actions,
     Explore,
+    History,
     Settings,
 }
 
@@ -666,6 +705,7 @@ impl ProductNavItem {
             Self::Assets => AppRoute::Coins,
             Self::Actions => AppRoute::Actions,
             Self::Explore => AppRoute::Explore,
+            Self::History => AppRoute::History,
             Self::Settings => AppRoute::Settings,
         }
     }
@@ -676,6 +716,7 @@ impl ProductNavItem {
             Self::Assets => "Assets",
             Self::Actions => "Actions",
             Self::Explore => "Explore",
+            Self::History => "History",
             Self::Settings => "Settings",
         }
     }
@@ -686,20 +727,25 @@ impl ProductNavItem {
             Self::Assets => route == AppRoute::Coins,
             Self::Actions => matches!(route, AppRoute::Actions | AppRoute::Flipstarter),
             Self::Explore => matches!(route, AppRoute::Explore | AppRoute::FundMe),
+            Self::History => route == AppRoute::History,
             Self::Settings => route == AppRoute::Settings,
         }
     }
 }
 
-pub fn product_nav() -> [ProductNavItem; 5] {
+pub fn product_nav() -> [ProductNavItem; 6] {
     [
         ProductNavItem::Home,
         ProductNavItem::Assets,
         ProductNavItem::Actions,
         ProductNavItem::Explore,
+        ProductNavItem::History,
         ProductNavItem::Settings,
     ]
 }
+
+/// Chipnet faucet used by the TS wallet settings row.
+pub const CHIPNET_FAUCET_URL: &str = "https://tbch.googol.cash/";
 
 /// Display helper used by the home portfolio card. 1 BCH = 100_000_000 sats.
 pub fn format_bch(sats: u64) -> String {
@@ -760,6 +806,151 @@ pub fn fundme_view_model(state: &AppState) -> FundMeViewModel {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HistoryKind {
+    Received,
+    PendingSend,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoryEntry {
+    pub kind: HistoryKind,
+    pub txid: String,
+    pub amount_sats: u64,
+    pub address: String,
+    pub reserved: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoryViewModel {
+    pub layout: LayoutKind,
+    pub entries: Vec<HistoryEntry>,
+}
+
+/// History is derived from opened coins and a pending spend. Rebuild clears it.
+pub fn history_view_model(state: &AppState) -> HistoryViewModel {
+    let mut entries: Vec<HistoryEntry> = state
+        .coins
+        .iter()
+        .map(|coin| HistoryEntry {
+            kind: HistoryKind::Received,
+            txid: coin.outpoint().txid_hex(),
+            amount_sats: coin.value_sats(),
+            address: coin.address().to_owned(),
+            reserved: coin.is_reserved(),
+        })
+        .collect();
+    if let Some(plan) = state.spend.as_ref() {
+        entries.push(HistoryEntry {
+            kind: HistoryKind::PendingSend,
+            txid: plan.selected.txid_hex(),
+            amount_sats: plan.amount_sats,
+            address: plan.destination.clone(),
+            reserved: false,
+        });
+    }
+    HistoryViewModel {
+        layout: state.layout(),
+        entries,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsRowId {
+    Network,
+    Faucet,
+    WalletInfo,
+    Derivation,
+    Recovery,
+    RebuildWallet,
+    Servers,
+    CashFusion,
+}
+
+impl SettingsRowId {
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::Network => "Network",
+            Self::Faucet => "Chipnet Faucet",
+            Self::WalletInfo => "Wallet info",
+            Self::Derivation => "Derivation Path",
+            Self::Recovery => "Recovery Phrase",
+            Self::RebuildWallet => "Rebuild Wallet",
+            Self::Servers => "Servers",
+            Self::CashFusion => "CashFusion",
+        }
+    }
+
+    pub const fn description(self) -> &'static str {
+        match self {
+            Self::Network => "Switch between Mainnet and Chipnet",
+            Self::Faucet => "Get test BCH on Chipnet",
+            Self::WalletInfo => "Name, type, network, and receive address",
+            Self::Derivation => "Active BIP44 account path",
+            Self::Recovery => "Back up your wallet",
+            Self::RebuildWallet => "Wipe chain data and resync from network (keeps seed)",
+            Self::Servers => "Electrum · Block explorer · Transaction fees",
+            Self::CashFusion => "Privacy mixing on desktop",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettingsViewModel {
+    pub layout: LayoutKind,
+    pub network: Network,
+    pub faucet_url: Option<&'static str>,
+    pub wallet_name: Option<String>,
+    pub wallet_kind: Option<WalletKind>,
+    pub receive_address: Option<String>,
+    pub derivation_path: String,
+    pub electrum_host: &'static str,
+    pub show_cash_fusion: bool,
+    pub rows: Vec<SettingsRowId>,
+}
+
+pub fn settings_view_model(state: &AppState) -> SettingsViewModel {
+    let faucet_url = matches!(state.network, Network::Chipnet).then_some(CHIPNET_FAUCET_URL);
+    let mut rows = vec![SettingsRowId::Network];
+    if faucet_url.is_some() {
+        rows.push(SettingsRowId::Faucet);
+    }
+    rows.extend([
+        SettingsRowId::WalletInfo,
+        SettingsRowId::Derivation,
+        SettingsRowId::Recovery,
+        SettingsRowId::RebuildWallet,
+        SettingsRowId::Servers,
+    ]);
+    let show_cash_fusion = state
+        .features
+        .enabled(state.surface, FeatureFlag::CashFusion);
+    if show_cash_fusion {
+        rows.push(SettingsRowId::CashFusion);
+    }
+    SettingsViewModel {
+        layout: state.layout(),
+        network: state.network,
+        faucet_url,
+        wallet_name: state.wallet.as_ref().map(|wallet| wallet.name.clone()),
+        wallet_kind: state.wallet.as_ref().map(|wallet| wallet.kind),
+        receive_address: state
+            .wallet
+            .as_ref()
+            .map(|wallet| wallet.receive_address.clone()),
+        // The open wallet's own account, not a guess from the network. A
+        // wallet opened at a non-default account must not read as default.
+        derivation_path: state
+            .wallet
+            .as_ref()
+            .map(|wallet| wallet.account_path.clone())
+            .unwrap_or_else(|| AccountPath::default_for(state.network).to_string()),
+        electrum_host: state.network.default_host(),
+        show_cash_fusion,
+        rows,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WatchOnlySetupPreview {
     pub wallet_name: String,
@@ -809,17 +1000,37 @@ pub fn seed_wallet_preview(
     wallet_name: &str,
     mnemonic: &str,
 ) -> Result<OpenedWallet, String> {
+    seed_wallet_preview_at(
+        network,
+        wallet_name,
+        mnemonic,
+        AccountPath::default_for(network),
+    )
+}
+
+/// Derive a seed wallet's public receive address at a chosen BIP44 account.
+///
+/// The mnemonic is borrowed and not stored. The account travels with the
+/// returned wallet so every later surface — Settings, receive, rescan — agrees
+/// about which branch this wallet lives on.
+pub fn seed_wallet_preview_at(
+    network: Network,
+    wallet_name: &str,
+    mnemonic: &str,
+    account: AccountPath,
+) -> Result<OpenedWallet, String> {
     let wallet_name = wallet_name.trim();
     if wallet_name.is_empty() {
         return Err("Give the wallet a name.".into());
     }
     let receive_address =
-        seed_receive_address(network, mnemonic).map_err(|error| error.to_string())?;
+        seed_receive_address_at(network, mnemonic, account).map_err(|error| error.to_string())?;
     Ok(OpenedWallet {
         kind: WalletKind::Seed,
         name: wallet_name.to_owned(),
         receive_address,
         master_fingerprint: None,
+        account_path: account.to_string(),
     })
 }
 
@@ -864,7 +1075,7 @@ mod tests {
     proptest::proptest! {
         #[test]
         fn arbitrary_action_sequences_keep_view_model_consistent(
-            actions in proptest::collection::vec(0u8..15, 0..256)
+            actions in proptest::collection::vec(0u8..16, 0..256)
         ) {
             let mut state = AppState::default();
 
@@ -881,9 +1092,10 @@ mod tests {
                     8 => AppAction::Navigate(AppRoute::Settings),
                     9 => AppAction::Navigate(AppRoute::Flipstarter),
                     10 => AppAction::Navigate(AppRoute::FundMe),
-                    11 => AppAction::ToggleTheme,
-                    12 => AppAction::SetNetwork(Network::Mainnet),
-                    13 => AppAction::SetNetwork(Network::Chipnet),
+                    11 => AppAction::Navigate(AppRoute::History),
+                    12 => AppAction::ToggleTheme,
+                    13 => AppAction::SetNetwork(Network::Mainnet),
+                    14 => AppAction::SetNetwork(Network::Chipnet),
                     _ => if state.help_open {
                         AppAction::CloseHelp
                     } else {
@@ -1253,7 +1465,9 @@ mod tests {
         assert_eq!(product_nav()[1].label(), "Assets");
         assert_eq!(product_nav()[2].label(), "Actions");
         assert_eq!(product_nav()[3].label(), "Explore");
-        assert_eq!(product_nav()[4].label(), "Settings");
+        assert_eq!(product_nav()[4].label(), "History");
+        assert_eq!(product_nav()[5].label(), "Settings");
+        assert_eq!(AppRoute::History.fragment(), "#/history");
         assert_eq!(AppRoute::Flipstarter.fragment(), "#/flipstarter");
         assert_eq!(AppRoute::FundMe.fragment(), "#/fundme");
         assert_eq!(AppRoute::Coins.fragment(), "#/assets");
@@ -1270,6 +1484,7 @@ mod tests {
         state.apply(AppAction::OpenCreatedWallet {
             name: opened.name,
             receive_address: opened.receive_address,
+            account_path: opened.account_path,
         });
     }
 
@@ -1292,6 +1507,7 @@ mod tests {
             imported.apply(AppAction::OpenImportedWallet {
                 name: opened.name,
                 receive_address: opened.receive_address,
+                account_path: opened.account_path,
             });
             assert_eq!(imported.route, AppRoute::WalletHome, "{surface:?} import");
 
@@ -1394,5 +1610,212 @@ mod tests {
             sign_seed_spend(&plan, BIP39_TEST_VECTOR_MNEMONIC, Network::Chipnet),
             Err(optn_core::spend::SpendError::WatchOnlyCannotSign)
         );
+    }
+
+    #[test]
+    fn product_chrome_opens_home_and_lists_history() {
+        for surface in [
+            AppSurface::Desktop,
+            AppSurface::Android,
+            AppSurface::Ios,
+            AppSurface::Web,
+            AppSurface::Extension,
+        ] {
+            let actions = onboarding_actions(&AppState::for_surface(surface));
+            assert_eq!(
+                actions[..3],
+                [
+                    OnboardingAction::CreateWallet,
+                    OnboardingAction::ImportWallet,
+                    OnboardingAction::CreateWatchOnlyWallet
+                ],
+                "{surface:?}"
+            );
+            let mut off = AppState::for_surface(surface);
+            off.apply(AppAction::SetFeatureEnabled {
+                flag: FeatureFlag::WatchOnly,
+                enabled: false,
+            });
+            assert!(
+                !onboarding_actions(&off).contains(&OnboardingAction::CreateWatchOnlyWallet),
+                "{surface:?} hides Watch Only when the flag is false"
+            );
+
+            let mut state = AppState::for_surface(surface);
+            open_chipnet_seed(&mut state, "chrome");
+            assert_eq!(state.route, AppRoute::WalletHome);
+            state.apply(AppAction::Navigate(AppRoute::History));
+            assert_eq!(state.route, AppRoute::History);
+            assert!(AppRoute::History.is_wallet_chrome());
+        }
+        let labels: Vec<_> = product_nav().iter().map(|item| item.label()).collect();
+        assert_eq!(
+            labels,
+            ["Home", "Assets", "Actions", "Explore", "History", "Settings"]
+        );
+    }
+
+    #[test]
+    fn history_comes_from_coins_and_rebuild_keeps_the_seed() {
+        let dest = optn_core::cashaddr::Address::from_hash(
+            Network::Chipnet.prefix(),
+            optn_core::cashaddr::AddressKind::P2pkh,
+            [0x7a; 20],
+        )
+        .encode();
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        open_chipnet_seed(&mut state, "history");
+        let receive = state
+            .wallet
+            .as_ref()
+            .map(|wallet| wallet.receive_address.clone())
+            .expect("opened");
+        assert!(receive.starts_with("bchtest:"));
+        let coin = chipnet_demo_coin(8_000, 4).expect("coin");
+        let frozen = chipnet_demo_coin(8_000, 5).expect("frozen");
+        let frozen_out = frozen.outpoint();
+        state.apply(AppAction::InsertCoin(coin));
+        state.apply(AppAction::InsertCoin(frozen));
+        state.apply(AppAction::FreezeCoin(frozen_out));
+        let history = history_view_model(&state);
+        assert_eq!(history.entries.len(), 2);
+        assert!(history
+            .entries
+            .iter()
+            .all(|entry| entry.kind == HistoryKind::Received));
+        assert!(history.entries.iter().any(|entry| entry.reserved));
+
+        state.apply(AppAction::PrepareSend {
+            destination: dest,
+            amount_sats: 8_000,
+        });
+        assert_ne!(
+            state.spend.as_ref().map(|plan| plan.selected),
+            Some(frozen_out)
+        );
+        assert_eq!(
+            state.spend.as_ref().map(|plan| plan.sighash),
+            Some(SIGHASH_ALL_FORKID)
+        );
+        assert_eq!(history_view_model(&state).entries.len(), 3);
+        assert_eq!(
+            history_view_model(&state)
+                .entries
+                .last()
+                .map(|entry| entry.kind),
+            Some(HistoryKind::PendingSend)
+        );
+
+        let opened = state.wallet.clone();
+        state.apply(AppAction::RebuildWallet);
+        assert_eq!(state.wallet, opened);
+        assert!(state.coins.is_empty());
+        assert!(state.spend.is_none());
+        assert!(state.pledges.is_empty());
+        assert!(history_view_model(&state).entries.is_empty());
+        assert_eq!(state.route, AppRoute::Send);
+    }
+
+    #[test]
+    fn settings_lists_chipnet_faucet_servers_rebuild_and_desktop_fusion() {
+        let mut desktop = AppState::for_surface(AppSurface::Desktop);
+        open_chipnet_seed(&mut desktop, "settings");
+        let chipnet = settings_view_model(&desktop);
+        assert_eq!(chipnet.network, Network::Chipnet);
+        assert_eq!(chipnet.faucet_url, Some(CHIPNET_FAUCET_URL));
+        assert_eq!(chipnet.derivation_path, "m/44'/1'/0'");
+        assert_eq!(chipnet.electrum_host, Network::Chipnet.default_host());
+        assert!(chipnet.rows.contains(&SettingsRowId::Network));
+        assert!(chipnet.rows.contains(&SettingsRowId::Faucet));
+        assert!(chipnet.rows.contains(&SettingsRowId::WalletInfo));
+        assert!(chipnet.rows.contains(&SettingsRowId::Derivation));
+        assert!(chipnet.rows.contains(&SettingsRowId::Recovery));
+        assert!(chipnet.rows.contains(&SettingsRowId::RebuildWallet));
+        assert!(chipnet.rows.contains(&SettingsRowId::Servers));
+        assert!(chipnet.rows.contains(&SettingsRowId::CashFusion));
+        assert!(chipnet.show_cash_fusion);
+
+        desktop.apply(AppAction::SetNetwork(Network::Mainnet));
+        let mainnet = settings_view_model(&desktop);
+        assert!(!mainnet.rows.contains(&SettingsRowId::Faucet));
+        assert_eq!(mainnet.faucet_url, None);
+        // The open wallet keeps its own account. Its addresses are still
+        // derived under coin type 1, exactly as `receive_address` still shows
+        // a bchtest address, so relabelling it as mainnet's m/44'/145'/0'
+        // would point a rescan at a branch this wallet does not live on.
+        assert_eq!(mainnet.derivation_path, "m/44'/1'/0'");
+        assert_eq!(
+            mainnet.receive_address, chipnet.receive_address,
+            "the network toggle must not silently re-identify an open wallet"
+        );
+
+        // With no wallet open there is nothing to follow, so the row falls
+        // back to what this network would derive.
+        assert_eq!(
+            settings_view_model(&AppState::for_surface(AppSurface::Desktop)).derivation_path,
+            "m/44'/145'/0'"
+        );
+
+        desktop.apply(AppAction::SetFeatureEnabled {
+            flag: FeatureFlag::CashFusion,
+            enabled: false,
+        });
+        assert!(!settings_view_model(&desktop)
+            .rows
+            .contains(&SettingsRowId::CashFusion));
+
+        let android = AppState::for_surface(AppSurface::Android);
+        assert!(!settings_view_model(&android)
+            .rows
+            .contains(&SettingsRowId::CashFusion));
+        assert!(!settings_view_model(&android).show_cash_fusion);
+    }
+
+    #[test]
+    fn a_wallet_opened_at_a_chosen_account_keeps_and_reports_that_account() {
+        let chosen = AccountPath::new(145, 1).expect("in range");
+        let opened = seed_wallet_preview_at(
+            Network::Mainnet,
+            "second account",
+            BIP39_TEST_VECTOR_MNEMONIC,
+            chosen,
+        )
+        .expect("preview");
+        assert_eq!(opened.account_path, "m/44'/145'/1'");
+        assert_ne!(
+            opened.receive_address,
+            seed_wallet_preview(Network::Mainnet, "default", BIP39_TEST_VECTOR_MNEMONIC)
+                .expect("default preview")
+                .receive_address,
+            "choosing an account must derive a different wallet"
+        );
+
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        state.apply(AppAction::OpenCreatedWallet {
+            name: opened.name.clone(),
+            receive_address: opened.receive_address.clone(),
+            account_path: opened.account_path.clone(),
+        });
+        assert_eq!(state.route, AppRoute::WalletHome);
+        assert_eq!(
+            settings_view_model(&state).derivation_path,
+            "m/44'/145'/1'",
+            "Settings must show the account the wallet was opened at"
+        );
+    }
+
+    #[test]
+    fn opening_a_wallet_at_an_unparseable_account_is_refused() {
+        // A path Settings cannot round-trip is a path a rescan cannot follow,
+        // so it must not open a wallet at all.
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        state.apply(AppAction::OpenCreatedWallet {
+            name: "bad path".into(),
+            receive_address: "bitcoincash:qexample".into(),
+            account_path: "m/44'/145'/0'/0/0".into(),
+        });
+        assert_eq!(state.route, AppRoute::Landing);
+        assert!(state.wallet.is_none());
+        assert!(state.notice.is_some());
     }
 }

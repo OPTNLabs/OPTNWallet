@@ -4,12 +4,17 @@ use crate::{dispatch_action, UiTransport};
 use leptos::prelude::*;
 use optn_app::{
     chipnet_demo_coin, coins_view_model, flipstarter_view_model, format_bch, fundme_view_model,
-    product_nav, sample_chipnet_campaign_blob, AppAction, AppRoute, AppState, Coin, FreezeReason,
-    Network, PledgeStatus, ProductNavItem, SpendKind, WalletKind,
+    history_view_model, product_nav, sample_chipnet_campaign_blob, AppAction, AppRoute, AppState,
+    Coin, FreezeReason, HistoryEntry, HistoryKind, Network, PledgeStatus, ProductNavItem,
+    SpendKind, WalletKind,
 };
 
 fn coins_snapshot(state: RwSignal<AppState>) -> Vec<Coin> {
     state.get().coins.iter().cloned().collect()
+}
+
+fn history_snapshot(state: RwSignal<AppState>) -> Vec<HistoryEntry> {
+    history_view_model(&state.get()).entries
 }
 
 fn network_label(network: Network) -> &'static str {
@@ -78,7 +83,8 @@ fn TabList(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
                 ProductNavItem::Assets => 1,
                 ProductNavItem::Actions => 2,
                 ProductNavItem::Explore => 3,
-                ProductNavItem::Settings => 4,
+                ProductNavItem::History => 4,
+                ProductNavItem::Settings => 5,
             }
             let:item
         >
@@ -98,6 +104,7 @@ fn TabList(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
                         ProductNavItem::Assets => "▣",
                         ProductNavItem::Actions => "⚡",
                         ProductNavItem::Explore => "◎",
+                        ProductNavItem::History => "☰",
                         ProductNavItem::Settings => "⚙",
                     }}
                 </span>
@@ -286,11 +293,11 @@ pub fn WalletHome(transport: UiTransport, state: RwSignal<AppState>) -> impl Int
                             on:click=move |_| dispatch_action(
                                 transport,
                                 state,
-                                AppAction::Navigate(AppRoute::Explore),
+                                AppAction::Navigate(AppRoute::History),
                             )
                         >
-                            <span>"⇄"</span>
-                            "Swap"
+                            <span>"☰"</span>
+                            "History"
                         </button>
                     </div>
                 </section>
@@ -298,8 +305,40 @@ pub fn WalletHome(transport: UiTransport, state: RwSignal<AppState>) -> impl Int
                 <section class="panel">
                     <div class="panel-head">
                         <h2>"Recent activity"</h2>
+                        <button
+                            class="text-link"
+                            type="button"
+                            on:click=move |_| dispatch_action(
+                                transport,
+                                state,
+                                AppAction::Navigate(AppRoute::History),
+                            )
+                        >
+                            "History ›"
+                        </button>
                     </div>
-                    <p class="empty-line">"No activity yet. Pledges and freezes show up under Assets."</p>
+                    <Show
+                        when=move || !history_snapshot(state).is_empty()
+                        fallback=move || view! { <p class="empty-line">"No activity yet."</p> }
+                    >
+                        <ul class="history-list">
+                            <For
+                                each=move || history_snapshot(state)
+                                key=|entry| format!("{}:{}", entry.txid, entry.amount_sats)
+                                let:entry
+                            >
+                                <li class="source-row stacked">
+                                    <p class="source-title">
+                                        {match entry.kind {
+                                            HistoryKind::Received => "Received",
+                                            HistoryKind::PendingSend => "Pending send",
+                                        }}
+                                    </p>
+                                    <p class="mono">{format_bch(entry.amount_sats)}</p>
+                                </li>
+                            </For>
+                        </ul>
+                    </Show>
                 </section>
             </section>
         </WalletChrome>
@@ -583,61 +622,39 @@ pub fn ExplorePage(transport: UiTransport, state: RwSignal<AppState>) -> impl In
 }
 
 #[component]
-pub fn SettingsPage(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
+pub fn HistoryPage(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
     view! {
         <WalletChrome transport=transport state=state>
             <section class="page">
-                <h1>"Network"</h1>
-                <p class="lede">"Select your active Bitcoin Cash network."</p>
-                <article class="panel">
-                    <p class="muted">"Current network"</p>
-                    <p class="source-title">
-                        {move || network_label(state.get().network)}
-                    </p>
-                    <p class="muted">
-                        {move || match state.get().network {
-                            Network::Mainnet => "Real BCH network",
-                            Network::Chipnet => "BCH testing network",
-                        }}
-                    </p>
-                </article>
-                <h2>"Choose network"</h2>
-                <button
-                    class="network-choice"
-                    class:active=move || state.get().network == Network::Mainnet
-                    type="button"
-                    on:click=move |_| dispatch_action(
-                        transport,
-                        state,
-                        AppAction::SetNetwork(Network::Mainnet),
-                    )
+                <h1>"History"</h1>
+                <p class="lede">"Receives from coins and a pending send. Rebuild Wallet clears this."</p>
+                <Show
+                    when=move || !history_snapshot(state).is_empty()
+                    fallback=move || view! { <p class="empty-line">"No transactions yet."</p> }
                 >
-                    <div>
-                        <p class="source-title">"Mainnet"</p>
-                        <p class="muted">"Real BCH network"</p>
-                    </div>
-                    <Show when=move || state.get().network == Network::Mainnet>
-                        <span class="ok">"Active"</span>
-                    </Show>
-                </button>
-                <button
-                    class="network-choice"
-                    class:active=move || state.get().network == Network::Chipnet
-                    type="button"
-                    on:click=move |_| dispatch_action(
-                        transport,
-                        state,
-                        AppAction::SetNetwork(Network::Chipnet),
-                    )
-                >
-                    <div>
-                        <p class="source-title">"Chipnet"</p>
-                        <p class="muted">"BCH testing network"</p>
-                    </div>
-                    <Show when=move || state.get().network == Network::Chipnet>
-                        <span class="ok">"Active"</span>
-                    </Show>
-                </button>
+                    <ul class="history-list">
+                        <For
+                            each=move || history_snapshot(state)
+                            key=|entry| format!("{}-{}-{}", entry.txid, entry.amount_sats, entry.reserved)
+                            let:entry
+                        >
+                            <li class="source-row stacked">
+                                <div>
+                                    <p class="source-title">
+                                        {match entry.kind {
+                                            HistoryKind::Received => "Received",
+                                            HistoryKind::PendingSend => "Pending send",
+                                        }}
+                                        {if entry.reserved { " · reserved" } else { "" }}
+                                    </p>
+                                    <p class="mono">{format_bch(entry.amount_sats)}</p>
+                                    <p class="mono">{entry.address.clone()}</p>
+                                    <p class="muted">{entry.txid.clone()}</p>
+                                </div>
+                            </li>
+                        </For>
+                    </ul>
+                </Show>
             </section>
         </WalletChrome>
     }

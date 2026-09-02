@@ -5,24 +5,32 @@ use leptos::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use leptos::reactive::owner::LocalStorage;
 #[cfg(target_arch = "wasm32")]
+mod derivation;
+#[cfg(target_arch = "wasm32")]
+mod settings;
+#[cfg(target_arch = "wasm32")]
 mod tools;
 
 #[cfg(target_arch = "wasm32")]
+use derivation::DerivationPicker;
+#[cfg(target_arch = "wasm32")]
 use optn_app::{
-    mnemonic_from_entropy, onboarding_actions, onboarding_view_model, seed_wallet_preview,
-    watch_only_setup_preview, AppAction, AppRoute, AppState, AppSurface, Network, OnboardingAction,
-    ThemeMode, WatchOnlySetupPreview,
+    mnemonic_from_entropy, onboarding_actions, onboarding_view_model, seed_wallet_preview_at,
+    watch_only_setup_preview, AccountPath, AppAction, AppRoute, AppState, AppSurface, Network,
+    OnboardingAction, ThemeMode, WatchOnlySetupPreview,
 };
 #[cfg(target_arch = "wasm32")]
 use optn_transport::AppTransport;
 #[cfg(all(target_arch = "wasm32", not(feature = "tauri-transport")))]
 use optn_transport::LocalTransport;
 #[cfg(target_arch = "wasm32")]
+use settings::SettingsPage;
+#[cfg(target_arch = "wasm32")]
 use std::rc::Rc;
 #[cfg(target_arch = "wasm32")]
 use tools::{
-    ActionsPage, CoinsPage, ExplorePage, FlipstarterPage, FundMePage, ReceivePage, SendPage,
-    SettingsPage, WalletHome,
+    ActionsPage, CoinsPage, ExplorePage, FlipstarterPage, FundMePage, HistoryPage, ReceivePage,
+    SendPage, WalletHome,
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -392,6 +400,7 @@ fn CreateWallet(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
     let name = RwSignal::new(String::from("My wallet"));
     let phrase = RwSignal::new(String::new());
     let error = RwSignal::new(None::<String>);
+    let account = RwSignal::new(AccountPath::default_for(state.get_untracked().network));
 
     view! {
         <section class="watch-only-page">
@@ -464,16 +473,22 @@ fn CreateWallet(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
                 >
                     "Generate recovery phrase"
                 </button>
+                <DerivationPicker
+                    network=state.get_untracked().network
+                    selected=account
+                    error=error
+                />
                 <Show when=move || !phrase.get().is_empty()>
                     <p class="mono">{move || phrase.get()}</p>
                     <button
                         class="primary"
                         type="button"
                         on:click=move |_| {
-                            match seed_wallet_preview(
+                            match seed_wallet_preview_at(
                                 state.get_untracked().network,
                                 &name.get_untracked(),
                                 &phrase.get_untracked(),
+                                account.get_untracked(),
                             ) {
                                 Ok(opened) => dispatch_action(
                                     transport,
@@ -481,6 +496,7 @@ fn CreateWallet(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
                                     AppAction::OpenCreatedWallet {
                                         name: opened.name,
                                         receive_address: opened.receive_address,
+                                        account_path: opened.account_path,
                                     },
                                 ),
                                 Err(message) => error.set(Some(message)),
@@ -506,6 +522,7 @@ fn ImportWallet(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
     let name = RwSignal::new(String::from("Imported wallet"));
     let phrase = RwSignal::new(String::new());
     let error = RwSignal::new(None::<String>);
+    let account = RwSignal::new(AccountPath::default_for(state.get_untracked().network));
 
     view! {
         <section class="watch-only-page">
@@ -567,6 +584,11 @@ fn ImportWallet(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
                         on:input=move |event| phrase.set(event_target_value(&event))
                     ></textarea>
                 </label>
+                <DerivationPicker
+                    network=state.get_untracked().network
+                    selected=account
+                    error=error
+                />
                 <Show when=move || error.get().is_some()>
                     <p class="form-error" role="alert">{move || error.get().unwrap_or_default()}</p>
                 </Show>
@@ -574,10 +596,11 @@ fn ImportWallet(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
                     class="primary"
                     type="button"
                     on:click=move |_| {
-                        match seed_wallet_preview(
+                        match seed_wallet_preview_at(
                             state.get_untracked().network,
                             &name.get_untracked(),
                             &phrase.get_untracked(),
+                            account.get_untracked(),
                         ) {
                             Ok(opened) => dispatch_action(
                                 transport,
@@ -585,6 +608,7 @@ fn ImportWallet(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
                                 AppAction::OpenImportedWallet {
                                     name: opened.name,
                                     receive_address: opened.receive_address,
+                                    account_path: opened.account_path,
                                 },
                             ),
                             Err(message) => error.set(Some(message)),
@@ -672,6 +696,9 @@ fn App(transport: Rc<dyn AppTransport>) -> impl IntoView {
                 }.into_any(),
                 AppRoute::Explore => view! {
                     <ExplorePage transport=transport state=state />
+                }.into_any(),
+                AppRoute::History => view! {
+                    <HistoryPage transport=transport state=state />
                 }.into_any(),
                 AppRoute::Settings => view! {
                     <SettingsPage transport=transport state=state />

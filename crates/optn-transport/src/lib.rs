@@ -53,6 +53,7 @@ pub enum WireRoute {
     Actions,
     Explore,
     Settings,
+    History,
     Flipstarter,
     FundMe,
     Receive,
@@ -189,10 +190,14 @@ pub enum WireActionKind {
     OpenCreatedWallet {
         name: String,
         receive_address: String,
+        #[serde(default)]
+        account_path: String,
     },
     OpenImportedWallet {
         name: String,
         receive_address: String,
+        #[serde(default)]
+        account_path: String,
     },
     OpenWatchOnlyWallet {
         wallet_name: String,
@@ -206,6 +211,7 @@ pub enum WireActionKind {
         destination: String,
         amount_sats: u64,
     },
+    RebuildWallet,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -254,6 +260,10 @@ pub struct WireOpenedWallet {
     pub receive_address: String,
     #[serde(default)]
     pub master_fingerprint: Option<String>,
+    /// Defaulted so a snapshot written before accounts were choosable still
+    /// decodes; an empty path reads as "not recorded", not as account zero.
+    #[serde(default)]
+    pub account_path: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -291,6 +301,7 @@ pub enum WireEventKind {
     NoticeChanged,
     WalletOpened,
     SpendPrepared,
+    WalletRebuilt,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -311,6 +322,7 @@ impl From<AppRoute> for WireRoute {
             AppRoute::Actions => Self::Actions,
             AppRoute::Explore => Self::Explore,
             AppRoute::Settings => Self::Settings,
+            AppRoute::History => Self::History,
             AppRoute::Flipstarter => Self::Flipstarter,
             AppRoute::FundMe => Self::FundMe,
             AppRoute::Receive => Self::Receive,
@@ -331,6 +343,7 @@ impl From<WireRoute> for AppRoute {
             WireRoute::Actions => Self::Actions,
             WireRoute::Explore => Self::Explore,
             WireRoute::Settings => Self::Settings,
+            WireRoute::History => Self::History,
             WireRoute::Flipstarter => Self::Flipstarter,
             WireRoute::FundMe => Self::FundMe,
             WireRoute::Receive => Self::Receive,
@@ -585,16 +598,20 @@ impl From<AppAction> for WireAction {
             AppAction::OpenCreatedWallet {
                 name,
                 receive_address,
+                account_path,
             } => WireActionKind::OpenCreatedWallet {
                 name,
                 receive_address,
+                account_path,
             },
             AppAction::OpenImportedWallet {
                 name,
                 receive_address,
+                account_path,
             } => WireActionKind::OpenImportedWallet {
                 name,
                 receive_address,
+                account_path,
             },
             AppAction::OpenWatchOnlyWallet(preview) => WireActionKind::OpenWatchOnlyWallet {
                 wallet_name: preview.wallet_name,
@@ -611,6 +628,7 @@ impl From<AppAction> for WireAction {
                 destination,
                 amount_sats,
             },
+            AppAction::RebuildWallet => WireActionKind::RebuildWallet,
         };
         Self {
             version: WIRE_PROTOCOL_VERSION,
@@ -656,16 +674,20 @@ impl TryFrom<WireAction> for AppAction {
             WireActionKind::OpenCreatedWallet {
                 name,
                 receive_address,
+                account_path,
             } => Self::OpenCreatedWallet {
                 name,
                 receive_address,
+                account_path,
             },
             WireActionKind::OpenImportedWallet {
                 name,
                 receive_address,
+                account_path,
             } => Self::OpenImportedWallet {
                 name,
                 receive_address,
+                account_path,
             },
             WireActionKind::OpenWatchOnlyWallet {
                 wallet_name,
@@ -689,6 +711,7 @@ impl TryFrom<WireAction> for AppAction {
                 destination,
                 amount_sats,
             },
+            WireActionKind::RebuildWallet => Self::RebuildWallet,
         })
     }
 }
@@ -731,6 +754,7 @@ impl From<&OpenedWallet> for WireOpenedWallet {
             name: value.name.clone(),
             receive_address: value.receive_address.clone(),
             master_fingerprint: value.master_fingerprint.clone(),
+            account_path: value.account_path.clone(),
         }
     }
 }
@@ -745,6 +769,7 @@ impl From<WireOpenedWallet> for OpenedWallet {
             name: value.name,
             receive_address: value.receive_address,
             master_fingerprint: value.master_fingerprint,
+            account_path: value.account_path,
         }
     }
 }
@@ -860,6 +885,7 @@ impl From<AppEvent> for WireEvent {
             AppEvent::NoticeChanged => WireEventKind::NoticeChanged,
             AppEvent::WalletOpened => WireEventKind::WalletOpened,
             AppEvent::SpendPrepared => WireEventKind::SpendPrepared,
+            AppEvent::WalletRebuilt => WireEventKind::WalletRebuilt,
         };
         Self {
             version: WIRE_PROTOCOL_VERSION,
@@ -889,6 +915,7 @@ impl TryFrom<WireEvent> for AppEvent {
             WireEventKind::NoticeChanged => Self::NoticeChanged,
             WireEventKind::WalletOpened => Self::WalletOpened,
             WireEventKind::SpendPrepared => Self::SpendPrepared,
+            WireEventKind::WalletRebuilt => Self::WalletRebuilt,
         })
     }
 }
@@ -1023,6 +1050,29 @@ mod tests {
         };
         let decoded = AppAction::try_from(WireAction::from(action.clone())).unwrap();
         assert_eq!(decoded, action);
+
+        // A chosen account must survive the wire. Dropping it silently would
+        // reopen the wallet on the default branch on the far side.
+        let opened = AppAction::OpenCreatedWallet {
+            name: "second account".into(),
+            receive_address: "bitcoincash:qexample".into(),
+            account_path: "m/44'/145'/1'".into(),
+        };
+        let encoded = serde_json::to_string(&WireAction::from(opened.clone())).unwrap();
+        assert!(encoded.contains("m/44'/145'/1'"), "{encoded}");
+        let decoded: WireAction = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(AppAction::try_from(decoded).unwrap(), opened);
+
+        let rebuild = AppAction::RebuildWallet;
+        let decoded = AppAction::try_from(WireAction::from(rebuild.clone())).unwrap();
+        assert_eq!(decoded, rebuild);
+        let rebuilt = AppEvent::WalletRebuilt;
+        let decoded = AppEvent::try_from(WireEvent::from(rebuilt.clone())).unwrap();
+        assert_eq!(decoded, rebuilt);
+        assert_eq!(
+            AppRoute::from(WireRoute::from(AppRoute::History)),
+            AppRoute::History
+        );
     }
 
     #[test]
@@ -1074,6 +1124,7 @@ mod tests {
         state.apply(AppAction::OpenCreatedWallet {
             name: opened.name,
             receive_address: opened.receive_address,
+            account_path: opened.account_path,
         });
         state.apply(AppAction::Navigate(AppRoute::Flipstarter));
         let coin = optn_app::chipnet_demo_coin(6_000, 5).expect("coin");
