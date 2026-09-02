@@ -1,11 +1,14 @@
 #[allow(dead_code)] // menu bar is built on the JS side now; kept for reference
 mod menu;
 
+#[cfg(desktop)]
 pub mod clipboard;
 pub mod electrum_tcp;
 pub mod fusion;
+#[cfg(desktop)]
 pub mod hw;
 pub mod nostr_tor;
+#[cfg(desktop)]
 pub mod platform;
 pub mod spv;
 
@@ -1022,9 +1025,10 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_keyring::init())
         .plugin(tauri_plugin_biometry::init())
-        .manage(clipboard::ClipboardState::new())
         .invoke_handler(tauri::generate_handler![
+            #[cfg(desktop)]
             clipboard::clipboard_write_text,
+            #[cfg(desktop)]
             clipboard::clipboard_read_text,
             optn_price_fetch,
             open_external,
@@ -1058,26 +1062,46 @@ pub fn run() {
             nostr_tor::nostr_tor_open,
             nostr_tor::nostr_tor_send,
             nostr_tor::nostr_tor_close,
+            #[cfg(desktop)]
             hw::session::hw_enumerate,
+            #[cfg(desktop)]
             hw::session::hw_open,
+            #[cfg(desktop)]
             hw::session::hw_close,
+            #[cfg(desktop)]
             hw::session::hw_write,
+            #[cfg(desktop)]
             hw::session::hw_read,
+            #[cfg(desktop)]
             hw::ledger::hw_ledger_open,
+            #[cfg(desktop)]
             hw::ledger::hw_ledger_exchange,
+            #[cfg(desktop)]
             hw::trezor_bridge::trezor_bridge_ping,
+            #[cfg(desktop)]
             hw::trezor_bridge::trezor_bridge_enumerate,
+            #[cfg(desktop)]
             hw::trezor_bridge::trezor_bridge_acquire,
+            #[cfg(desktop)]
             hw::trezor_bridge::trezor_bridge_release,
+            #[cfg(desktop)]
             hw::trezor_bridge::trezor_bridge_call,
+            #[cfg(desktop)]
             hw::trezor_webusb::trezor_webusb_enumerate,
+            #[cfg(desktop)]
             hw::trezor_webusb::trezor_webusb_open,
+            #[cfg(desktop)]
             hw::trezor_webusb::trezor_webusb_close,
+            #[cfg(desktop)]
             hw::trezor_webusb::trezor_webusb_write,
+            #[cfg(desktop)]
             hw::trezor_webusb::trezor_webusb_read,
         ])
         .setup(|app| {
             use tauri::Manager;
+
+            #[cfg(desktop)]
+            app.manage(clipboard::ClipboardState::new());
 
             // The authoritative application runtime is framework-neutral.
             // Tauri only chooses the executor and stores the handle.
