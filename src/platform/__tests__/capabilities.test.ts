@@ -16,7 +16,6 @@ const APP_SURFACES: Surface[] = [
 ];
 
 const DESKTOP_ONLY: Capability[] = [
-  'watchOnlyWallet',
   'hardwareWallet',
   'keystone',
   'cashFusion',
@@ -40,7 +39,7 @@ describe('cross-platform capability contract', () => {
     });
   });
 
-  it('keeps native-only wallet features off non-desktop surfaces', () => {
+  it('keeps desktop-only wallet features off non-desktop surfaces', () => {
     for (const capability of DESKTOP_ONLY) {
       expect(hasCapability(capability, 'desktop')).toBe(true);
       for (const surface of APP_SURFACES.filter(
@@ -49,6 +48,20 @@ describe('cross-platform capability contract', () => {
         expect(hasCapability(capability, surface)).toBe(false);
       }
     }
+  });
+
+  it('enables watch-only wallets on native mobile without enabling web/extension', () => {
+    expect(CAPABILITIES.watchOnlyWallet.enabledOn).toEqual({
+      desktop: true,
+      android: true,
+      ios: true,
+      web: false,
+      extension: false,
+    });
+    expect(hasCapability('watchOnlyWallet', 'android')).toBe(true);
+    expect(hasCapability('watchOnlyWallet', 'ios')).toBe(true);
+    expect(hasCapability('watchOnlyWallet', 'web')).toBe(false);
+    expect(hasCapability('watchOnlyWallet', 'extension')).toBe(false);
   });
 
   it('keeps the shared Rust RPA implementation available on every app surface', () => {
