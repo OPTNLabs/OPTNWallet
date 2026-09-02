@@ -2,15 +2,17 @@
 
 //! Shell-independent native capability providers.
 //!
-//! These providers depend on standalone Rust crates and OS APIs, never Tauri,
-//! Leptos, Capacitor, or another application shell. Hosts may use them directly
-//! or substitute shell/native/web providers capability by capability.
+//! Providers are selected per capability. Enabling clipboard does not pull
+//! secure-storage or notification dependencies, and vice versa.
 
-#[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
-mod desktop {
+#[cfg(all(
+    feature = "clipboard",
+    not(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))
+))]
+mod clipboard {
     use optn_platform::{
-        Capability, CapabilityProvider, Clipboard, Notifications, PlatformError, PlatformFuture,
-        PlatformResult, ProviderDescriptor, ProviderKind, SecureStorage,
+        Capability, CapabilityProvider, Clipboard, PlatformError, PlatformFuture, PlatformResult,
+        ProviderDescriptor, ProviderKind,
     };
     use std::sync::Mutex;
 
@@ -80,6 +82,33 @@ mod desktop {
         }
     }
 
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn assert_provider<T: Clipboard + CapabilityProvider>() {}
+
+        #[test]
+        fn clipboard_provider_is_shell_independent() {
+            assert_provider::<NativeClipboard>();
+            assert_eq!(
+                NativeClipboard::new().descriptor().kind,
+                ProviderKind::PureRust
+            );
+        }
+    }
+}
+
+#[cfg(all(
+    feature = "secure-storage",
+    not(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))
+))]
+mod secure_storage {
+    use optn_platform::{
+        Capability, CapabilityProvider, PlatformError, PlatformFuture, PlatformResult,
+        ProviderDescriptor, ProviderKind, SecureStorage,
+    };
+
     #[derive(Clone)]
     pub struct NativeSecureStorage {
         service: String,
@@ -145,6 +174,35 @@ mod desktop {
         }
     }
 
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn assert_provider<T: SecureStorage + CapabilityProvider>() {}
+
+        #[test]
+        fn storage_provider_is_shell_independent() {
+            assert_provider::<NativeSecureStorage>();
+            assert_eq!(
+                NativeSecureStorage::new("com.optilabs.wallet")
+                    .descriptor()
+                    .kind,
+                ProviderKind::NativeFfi
+            );
+        }
+    }
+}
+
+#[cfg(all(
+    feature = "notifications",
+    not(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))
+))]
+mod notifications {
+    use optn_platform::{
+        Capability, CapabilityProvider, Notifications, PlatformError, PlatformFuture,
+        ProviderDescriptor, ProviderKind,
+    };
+
     #[derive(Clone, Copy, Default)]
     pub struct NativeNotifications;
 
@@ -175,22 +233,11 @@ mod desktop {
     mod tests {
         use super::*;
 
-        fn assert_clipboard<T: Clipboard + CapabilityProvider>() {}
-        fn assert_storage<T: SecureStorage + CapabilityProvider>() {}
-        fn assert_notifications<T: Notifications + CapabilityProvider>() {}
+        fn assert_provider<T: Notifications + CapabilityProvider>() {}
 
         #[test]
-        fn providers_satisfy_shell_neutral_contracts() {
-            assert_clipboard::<NativeClipboard>();
-            assert_storage::<NativeSecureStorage>();
-            assert_notifications::<NativeNotifications>();
-
-            assert_eq!(
-                NativeSecureStorage::new("com.optilabs.wallet")
-                    .descriptor()
-                    .kind,
-                ProviderKind::NativeFfi
-            );
+        fn notification_provider_is_shell_independent() {
+            assert_provider::<NativeNotifications>();
             assert_eq!(
                 NativeNotifications.descriptor().capabilities,
                 &[Capability::Notifications]
@@ -199,5 +246,20 @@ mod desktop {
     }
 }
 
-#[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
-pub use desktop::{NativeClipboard, NativeNotifications, NativeSecureStorage};
+#[cfg(all(
+    feature = "clipboard",
+    not(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))
+))]
+pub use clipboard::NativeClipboard;
+
+#[cfg(all(
+    feature = "secure-storage",
+    not(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))
+))]
+pub use secure_storage::NativeSecureStorage;
+
+#[cfg(all(
+    feature = "notifications",
+    not(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))
+))]
+pub use notifications::NativeNotifications;
