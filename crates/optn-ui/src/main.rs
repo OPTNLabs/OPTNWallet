@@ -4,6 +4,8 @@
 use leptos::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use leptos::reactive::owner::LocalStorage;
+#[cfg(all(target_arch = "wasm32", not(feature = "tauri-transport")))]
+use optn_app::AppSurface;
 #[cfg(target_arch = "wasm32")]
 use optn_app::{onboarding_view_model, AppAction, AppRoute, AppState, ThemeMode};
 #[cfg(target_arch = "wasm32")]
@@ -23,7 +25,7 @@ fn make_transport() -> Rc<dyn AppTransport> {
 
 #[cfg(all(target_arch = "wasm32", not(feature = "tauri-transport")))]
 fn make_transport() -> Rc<dyn AppTransport> {
-    Rc::new(LocalTransport::new(AppState::default()))
+    Rc::new(LocalTransport::new(AppState::for_surface(AppSurface::Web)))
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -142,10 +144,10 @@ fn App(transport: Rc<dyn AppTransport>) -> impl IntoView {
                                 "Connect hardware wallet"
                             </button>
                         </Show>
-                        <Show when=|| cfg!(feature = "tauri-transport")>
+                        <Show when=move || onboarding_view_model(&state.get()).show_watch_only>
                             <a
                                 class="secondary"
-                                href={onboarding_view_model(&AppState::default()).watch_only_wallet_href}
+                                href={onboarding_view_model(&state.get()).watch_only_wallet_href}
                                 on:click=move |_| dispatch_action(
                                     transport,
                                     state,

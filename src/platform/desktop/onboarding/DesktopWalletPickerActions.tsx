@@ -42,13 +42,15 @@ export const DesktopWalletPickerActions: FC<
           {t('onboarding.connectHardware')}
         </button>
       ) : null}
-      <button
-        type="button"
-        onClick={onWatchOnly}
-        className="wallet-btn-secondary w-full text-center py-3 font-bold"
-      >
-        {t('onboarding.createWatchOnly')}
-      </button>
+      {hasCapability('watchOnlyWallet') ? (
+        <button
+          type="button"
+          onClick={onWatchOnly}
+          className="wallet-btn-secondary w-full text-center py-3 font-bold"
+        >
+          {t('onboarding.createWatchOnly')}
+        </button>
+      ) : null}
     </div>
   );
 };

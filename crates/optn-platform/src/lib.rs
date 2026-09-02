@@ -255,7 +255,7 @@ mod tests {
     fn ready<T>(fut: PlatformFuture<'_, T>) -> PlatformResult<T> {
         let mut fut = std::pin::pin!(fut);
         let waker = std::task::Waker::noop();
-        let mut cx = std::task::Context::from_waker(&waker);
+        let mut cx = std::task::Context::from_waker(waker);
         match fut.as_mut().poll(&mut cx) {
             std::task::Poll::Ready(value) => value,
             std::task::Poll::Pending => panic!("mock platform futures must be ready"),
