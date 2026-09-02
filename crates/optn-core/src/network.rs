@@ -39,6 +39,14 @@ impl Network {
     pub fn default_port(&self) -> u16 {
         50002
     }
+
+    /// Default BIP44/SLIP-44 coin type used by this wallet.
+    pub const fn default_coin_type(&self) -> u32 {
+        match self {
+            Network::Mainnet => 145,
+            Network::Chipnet => 1,
+        }
+    }
 }
 
 impl fmt::Display for Network {
