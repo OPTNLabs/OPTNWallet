@@ -27,6 +27,7 @@ fn architecture() {
         root.join("crates/optn-app/Cargo.toml"),
         root.join("crates/optn-platform/Cargo.toml"),
         root.join("crates/optn-runtime/Cargo.toml"),
+        root.join("crates/optn-transport/Cargo.toml"),
     ];
 
     let mut failures = Vec::new();
@@ -45,6 +46,9 @@ fn architecture() {
     let ui_manifest = read(&root.join("crates/optn-ui/Cargo.toml"));
     if ui_manifest.contains("optn-core") {
         failures.push("crates/optn-ui must depend on optn-app, not bypass it via optn-core".into());
+    }
+    if ui_manifest.contains("optn-runtime") {
+        failures.push("crates/optn-ui must communicate through optn-transport, not depend on optn-runtime".into());
     }
 
     if failures.is_empty() {
