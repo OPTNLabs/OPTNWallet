@@ -12,7 +12,10 @@
 //! for the riscv64 and armv7 cross targets, and for wasm32 alike.
 
 pub mod cashaddr;
+pub mod coins;
 pub mod error;
+pub mod flipstarter;
+pub mod fundme;
 pub mod fusion;
 pub mod hd;
 pub mod network;
