@@ -78,13 +78,30 @@ function isExtensionRuntime(): boolean {
   return typeof runtime?.id === 'string' && runtime.id.length > 0;
 }
 
-export function currentSurface(): Surface {
-  if (isDesktopPlatform()) return 'desktop';
+function buildSurface(): Surface | null {
+  const configured = import.meta.env.VITE_APP_SURFACE;
+  return configured === 'desktop' ||
+    configured === 'android' ||
+    configured === 'ios' ||
+    configured === 'web' ||
+    configured === 'extension'
+    ? configured
+    : null;
+}
 
+export function currentSurface(): Surface {
+  // Native release builds stamp the intended surface. This is authoritative:
+  // capability gating must not depend on WebView bridge timing at first render.
+  const configured = buildSurface();
+  if (configured) return configured;
+
+  // Runtime fallback for dev/tests and unstamped legacy builds. Check Capacitor
+  // before Tauri so an Android/iOS WebView can never be promoted to desktop.
   const platform = Capacitor.getPlatform();
   if (platform === 'android') return 'android';
   if (platform === 'ios') return 'ios';
   if (isExtensionRuntime()) return 'extension';
+  if (isDesktopPlatform()) return 'desktop';
   return 'web';
 }
 
