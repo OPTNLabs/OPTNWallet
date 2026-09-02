@@ -140,7 +140,6 @@ fn architecture() {
         &mut failures,
     );
 
-
     // The Rust renderer may use HTML/CSS build assets, but application/source
     // logic under optn-ui must remain Rust. Reference-wallet TypeScript/Vue is
     // a behavior oracle, not a migration destination.
