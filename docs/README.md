@@ -16,6 +16,8 @@ Technical documentation for contributors and third-party integrators.
     end-user install path.
 - [Docker vs releases](./docker-release-model.md)
   - Images update **from** git tags; installers stay the primary ship.
+- [Wallet UI layouts](./ui-overhaul/README.md)
+  - Product screens for the UI overhaul (home, portfolio, send, receive, actions).
 - [Wallet Architecture](./wallet-architecture.md)
   - Runtime shape, major modules, and where responsibilities live.
 - [Wallet Ledger & Sync Design](./wallet-ledger-sync-design.md)
