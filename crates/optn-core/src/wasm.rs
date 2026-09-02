@@ -17,7 +17,7 @@ use wasm_bindgen::prelude::*;
 use zeroize::Zeroize;
 
 use crate::network::Network;
-use crate::{rpa, watch_only};
+use crate::rpa;
 
 fn network_from(name: &str) -> Result<Network, JsValue> {
     match name {
@@ -225,30 +225,6 @@ pub fn scan_transaction(
         })
         .collect();
     Ok(format!("[{}]", items.join(",")))
-}
-
-/// Validate a watch-only account xPub and derive its first receive/change
-/// addresses in the shared Rust core. The JSON shape mirrors the existing
-/// TypeScript view model so mobile/web become thin adapters.
-#[wasm_bindgen(js_name = watchOnlyAccountPreview)]
-pub fn watch_only_account_preview(network: &str, account_xpub: &str) -> Result<String, JsValue> {
-    let preview = watch_only::account_preview(network_from(network)?, account_xpub).map_err(err)?;
-    Ok(format!(
-        r#"{{"accountPath":"{}","receive":{{"path":"{}","address":"{}","tokenAddress":"{}"}},"change":{{"path":"{}","address":"{}","tokenAddress":"{}"}}}}"#,
-        preview.account_path,
-        preview.receive.path,
-        preview.receive.address,
-        preview.receive.token_address,
-        preview.change.path,
-        preview.change.address,
-        preview.change.token_address,
-    ))
-}
-
-/// Canonicalize the optional 4-byte PSBT master fingerprint.
-#[wasm_bindgen(js_name = normalizeWatchOnlyMasterFingerprint)]
-pub fn normalize_watch_only_master_fingerprint(raw: &str) -> Result<Option<String>, JsValue> {
-    watch_only::normalize_master_fingerprint(raw).map_err(err)
 }
 
 // ---------------------------------------------------------------------------
