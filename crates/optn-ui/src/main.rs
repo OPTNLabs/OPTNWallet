@@ -6,10 +6,10 @@ use leptos::prelude::*;
 use leptos::reactive::owner::LocalStorage;
 #[cfg(target_arch = "wasm32")]
 use optn_app::{onboarding_view_model, AppAction, AppRoute, AppState, ThemeMode};
-#[cfg(all(target_arch = "wasm32", not(feature = "tauri-transport")))]
-use optn_transport::LocalTransport;
 #[cfg(target_arch = "wasm32")]
 use optn_transport::AppTransport;
+#[cfg(all(target_arch = "wasm32", not(feature = "tauri-transport")))]
+use optn_transport::LocalTransport;
 #[cfg(target_arch = "wasm32")]
 use std::rc::Rc;
 
