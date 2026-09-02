@@ -7,7 +7,11 @@ import Popup from '../../components/transaction/Popup';
 import { MdSunny, MdModeNight } from 'react-icons/md';
 import { useI18n } from '../../i18n/useI18n';
 import LanguagePicker from '../../components/LanguagePicker';
-import { hasCapability } from '../../platform/capabilities';
+import {
+  currentSurface,
+  hasCapability,
+  type Surface,
+} from '../../platform/capabilities';
 import { ROUTE_PATHS } from '../../navigation/routes';
 
 const ThemeModeSwitch = () => {
@@ -41,8 +45,14 @@ const ThemeModeSwitch = () => {
   );
 };
 
-const LandingPage = () => {
+type LandingPageProps = {
+  /** Explicit surface makes native capability rendering deterministic and testable. */
+  surface?: Surface;
+};
+
+const LandingPage = ({ surface }: LandingPageProps) => {
   const [showHelp, setShowHelp] = useState(false);
+  const resolvedSurface = surface ?? currentSurface();
   const { t } = useI18n();
 
   return (
@@ -92,7 +102,7 @@ const LandingPage = () => {
             >
               {t('onboarding.importWallet')}
             </Link>
-            {hasCapability('watchOnlyWallet') && (
+            {hasCapability('watchOnlyWallet', resolvedSurface) && (
               <Link
                 to={ROUTE_PATHS.watchOnlyWallet}
                 className="wallet-btn-secondary py-3 px-10 rounded-lg mx-2 my-2 shadow-md"
