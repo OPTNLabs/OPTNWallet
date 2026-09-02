@@ -32,7 +32,6 @@ tauri-plugin-notification = "=2.4.0"
 tauri-plugin-fs = "=2.5.2"
 tauri-plugin-dialog = "=2.7.3"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "charset", "json"] }
-tauri-plugin-keyring = "=0.1.0"
 tauri-plugin-biometry = "=0.2.8"
 # Clipboard. The WebView clipboard is not dependable: WKWebView resolves
 # navigator.clipboard.writeText() and silently drops the write, and readText()
@@ -113,6 +112,10 @@ hex = "0.4"
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 hidapi = "2.6"
+tauri-plugin-keyring = "=0.1.0"
+
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+tauri-plugin-clipboard-manager = "=2.3.2"
 
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
 rusb = "0.9"
