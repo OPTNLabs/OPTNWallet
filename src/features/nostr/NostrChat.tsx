@@ -62,12 +62,16 @@ import {
 import {
   addMlsMember,
   createMlsGroup,
-  linkOwnDevice,
+  forgetMlsGroup,
+  isMlsAdmin,
+  leaveMlsGroup,
   listMlsGroups,
   loadMlsDeviceIndex,
   loadMlsIndex,
   publishMlsKeyPackage,
   refetchMlsInbox,
+  removeMlsMember,
+  renameMlsGroup,
   sendMlsFile,
   sendMlsMessage,
   subscribeMls,
@@ -213,6 +217,9 @@ const NostrChat: React.FC = () => {
   const [editOf, setEditOf] = useState<ChatMessage | null>(null);
   const [activeMembers, setActiveMembers] = useState<string[] | null>(null);
   const [mlsGroupId, setMlsGroupId] = useState<string | null>(null);
+  const [inviteDraft, setInviteDraft] = useState('');
+  const [renameDraft, setRenameDraft] = useState('');
+  const [showGroupPanel, setShowGroupPanel] = useState(false);
   const [mlsDeviceIndex, setMlsDeviceIndex] = useState(0);
   const [groupName, setGroupName] = useState('');
   const [mlsGroups, setMlsGroups] = useState<MlsGroupRecord[]>([]);
@@ -466,9 +473,14 @@ const NostrChat: React.FC = () => {
         }));
       }
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      const raw = e instanceof Error ? e.message : String(e);
+      setErr(
+        raw === 'invalid pubkey' || raw.includes('npub or 64-character')
+          ? t('chat.invalidPubkey')
+          : raw
+      );
     }
-  }, [composeKind, recipient, relays, profiles, me, groupName, walletId]);
+  }, [composeKind, recipient, relays, profiles, me, groupName, walletId, t]);
 
   const send = useCallback(async () => {
     if (!activePeer || !draft.trim() || walletId <= 0 || !me) return;
@@ -900,6 +912,19 @@ const NostrChat: React.FC = () => {
                           : (profiles[activePeer]?.nip05 ?? t('chat.encrypted'))}
                     </p>
                   </div>
+                  {mlsGroupId && (
+                    <button
+                      type="button"
+                      className="shrink-0 rounded-lg border border-[var(--wallet-border)] px-2 py-1 text-[10px] font-semibold wallet-text-strong"
+                      onClick={() => {
+                        const record = groupRecordForPeer(activePeer, mlsGroups);
+                        setRenameDraft(record?.name ?? '');
+                        setShowGroupPanel((open) => !open);
+                      }}
+                    >
+                      {t('chat.groupMembers')}
+                    </button>
+                  )}
                   {mlsGroupId && mlsDeviceIndex === 0 && (
                     <button
                       type="button"
@@ -927,6 +952,217 @@ const NostrChat: React.FC = () => {
                     </button>
                   )}
                 </header>
+
+                {showGroupPanel && mlsGroupId && me && (
+                  <div className="space-y-2 border-b border-[var(--wallet-border)] px-4 py-3 text-xs">
+                    {(() => {
+                      const record = groupRecordForPeer(activePeer, mlsGroups);
+                      const admin = record ? isMlsAdmin(record, me.pubkey) : false;
+                      const members = record?.memberPubKeys ?? activeMembers ?? [];
+                      return (
+                        <>
+                          {admin && (
+                            <div className="flex gap-2">
+                              <input
+                                value={renameDraft}
+                                onChange={(e) => setRenameDraft(e.target.value)}
+                                className="wallet-input min-w-0 flex-1 text-xs"
+                                placeholder={t('chat.groupNameOptional')}
+                              />
+                              <button
+                                type="button"
+                                className="rounded-lg border border-[var(--wallet-border)] px-2 py-1 font-semibold"
+                                onClick={() => {
+                                  void (async () => {
+                                    try {
+                                      await renameMlsGroup(
+                                        walletId,
+                                        mlsGroupId,
+                                        renameDraft,
+                                        relays
+                                      );
+                                      setMlsGroups(listMlsGroups(me.pubkey));
+                                    } catch (e) {
+                                      setErr(
+                                        e instanceof Error ? e.message : String(e)
+                                      );
+                                    }
+                                  })();
+                                }}
+                              >
+                                {t('chat.renameGroup')}
+                              </button>
+                            </div>
+                          )}
+                          <p className="font-semibold wallet-text-strong">
+                            {t('chat.groupMembers')}
+                            {admin ? ` · ${t('chat.youAreAdmin')}` : ''}
+                          </p>
+                          <ul className="space-y-1">
+                            {members.map((member) => (
+                              <li
+                                key={member}
+                                className="flex items-center justify-between gap-2"
+                              >
+                                <span className="truncate font-mono">
+                                  {member === me.pubkey
+                                    ? `${t('chat.youPrefix').replace(': ', '')} (${short(member)})`
+                                    : profiles[member]?.name || short(member)}
+                                </span>
+                                {admin && member !== me.pubkey && (
+                                  <button
+                                    type="button"
+                                    className="shrink-0 text-[10px] font-semibold text-red-400"
+                                    onClick={() => {
+                                      void (async () => {
+                                        const ok = await confirm(
+                                          t('chat.kickMember')
+                                        );
+                                        if (!ok) return;
+                                        try {
+                                          await removeMlsMember(
+                                            walletId,
+                                            mlsGroupId,
+                                            member,
+                                            relays
+                                          );
+                                          setMlsGroups(listMlsGroups(me.pubkey));
+                                          setActiveMembers(
+                                            listMlsGroups(me.pubkey).find(
+                                              (group) =>
+                                                group.nostrGroupIdHex ===
+                                                mlsGroupId
+                                            )?.memberPubKeys ?? null
+                                          );
+                                        } catch (e) {
+                                          setErr(
+                                            e instanceof Error
+                                              ? e.message
+                                              : String(e)
+                                          );
+                                        }
+                                      })();
+                                    }}
+                                  >
+                                    {t('chat.kickMember')}
+                                  </button>
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                          {admin && (
+                            <div className="flex gap-2">
+                              <input
+                                value={inviteDraft}
+                                onChange={(e) => setInviteDraft(e.target.value)}
+                                className="wallet-input min-w-0 flex-1 font-mono text-xs"
+                                placeholder={t('chat.invitePlaceholder')}
+                              />
+                              <button
+                                type="button"
+                                className="rounded-lg border border-[var(--wallet-border)] px-2 py-1 font-semibold"
+                                onClick={() => {
+                                  void (async () => {
+                                    try {
+                                      const hex = toPubkeyHex(inviteDraft);
+                                      await addMlsMember(
+                                        walletId,
+                                        mlsGroupId,
+                                        hex,
+                                        relays
+                                      );
+                                      setInviteDraft('');
+                                      setMlsGroups(listMlsGroups(me.pubkey));
+                                    } catch (e) {
+                                      const raw =
+                                        e instanceof Error
+                                          ? e.message
+                                          : String(e);
+                                      setErr(
+                                        raw.includes('npub') ||
+                                          raw === 'invalid pubkey'
+                                          ? t('chat.invalidPubkey')
+                                          : raw
+                                      );
+                                    }
+                                  })();
+                                }}
+                              >
+                                {t('chat.inviteMember')}
+                              </button>
+                            </div>
+                          )}
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              className="rounded-lg border border-[var(--wallet-border)] px-2 py-1 font-semibold"
+                              onClick={() => {
+                                void (async () => {
+                                  const ok = await confirm(t('chat.leaveGroup'));
+                                  if (!ok || !me) return;
+                                  try {
+                                    await leaveMlsGroup(
+                                      walletId,
+                                      mlsGroupId,
+                                      relays
+                                    );
+                                    setMlsGroups(listMlsGroups(me.pubkey));
+                                    setActivePeer(null);
+                                    setMlsGroupId(null);
+                                    setShowGroupPanel(false);
+                                  } catch (e) {
+                                    setErr(
+                                      e instanceof Error ? e.message : String(e)
+                                    );
+                                  }
+                                })();
+                              }}
+                            >
+                              {t('chat.leaveGroup')}
+                            </button>
+                            {admin && (
+                              <button
+                                type="button"
+                                className="rounded-lg border border-red-400/40 px-2 py-1 font-semibold text-red-400"
+                                onClick={() => {
+                                  void (async () => {
+                                    const ok = await confirm(
+                                      t('chat.deleteGroup')
+                                    );
+                                    if (!ok || !me) return;
+                                    try {
+                                      await leaveMlsGroup(
+                                        walletId,
+                                        mlsGroupId,
+                                        relays
+                                      );
+                                      await forgetMlsGroup(
+                                        mlsGroupId,
+                                        me.pubkey
+                                      );
+                                      setMlsGroups(listMlsGroups(me.pubkey));
+                                      setActivePeer(null);
+                                      setMlsGroupId(null);
+                                      setShowGroupPanel(false);
+                                    } catch (e) {
+                                      setErr(
+                                        e instanceof Error
+                                          ? e.message
+                                          : String(e)
+                                      );
+                                    }
+                                  })();
+                                }}
+                              >
+                                {t('chat.deleteGroup')}
+                              </button>
+                            )}
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
+                )}
 
                 <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-4">
                   {thread.length === 0 ? (

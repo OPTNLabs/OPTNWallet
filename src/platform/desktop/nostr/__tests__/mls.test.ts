@@ -57,6 +57,7 @@ import {
   mlsLeafCount,
   parseApplicationPayload,
   PRIVATE_MLS_MAX_MEMBERS,
+  isMlsAdmin,
   readMlsAppData,
   unsignedKind444,
   unsignedMlsRumor,
@@ -314,6 +315,23 @@ describe('MLS keys and NIP-EE wire', () => {
     expect(profile).toBeDefined();
     expect(new TextDecoder().decode(profile!)).toContain('after');
     expect(appDataUpdateProposalType).toBe(8);
+  });
+
+  it('only listed admins can rename or kick', () => {
+    const record = {
+      nostrGroupIdHex: 'aa',
+      mlsGroupIdHex: 'bb',
+      roomId: 'room',
+      wire: 'nip-ee' as const,
+      visibility: 'private' as const,
+      name: 'crew',
+      paytacaDual: false,
+      memberPubKeys: ['admin', 'member'],
+      ownerPubKey: 'member',
+      adminPubKeys: ['admin'],
+    };
+    expect(isMlsAdmin(record, 'admin')).toBe(true);
+    expect(isMlsAdmin(record, 'member')).toBe(false);
   });
 
   it('private MLS rumor is gift-wrapped; outer 1059 has no group h tag', async () => {

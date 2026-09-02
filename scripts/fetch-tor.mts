@@ -173,9 +173,22 @@ function setLinuxRpath(binary) {
   }
 }
 
+/** macOS 26+ refuses to load unsigned Expert Bundle dylibs. */
+function adHocSignMacosBundle(target, directory, names) {
+  if (process.platform !== 'darwin' || !String(target).startsWith('macos')) {
+    return;
+  }
+  const files = names ?? readdirSync(directory);
+  for (const name of files) {
+    if (name !== 'tor' && !name.endsWith('.dylib')) continue;
+    execFileSync('codesign', ['--force', '--sign', '-', join(directory, name)]);
+  }
+}
+
 /** Run the staged binary on matching-host builds to prove it can load. */
 function verifyStagedTorExecutable(target, binary) {
   if (inferTarget() !== target) return;
+  adHocSignMacosBundle(target, dirname(binary));
   let output;
   try {
     output = execFileSync(binary, ['--version'], { encoding: 'utf8' });
@@ -408,6 +421,7 @@ async function main() {
   if (!existsSync(join(outDir, torBinary))) {
     throw new Error('staging failed: binary missing');
   }
+  adHocSignMacosBundle(target, outDir, staged);
   verifyStagedTorExecutable(target, join(outDir, torBinary));
   console.log(readFileSync(markerPath, 'utf8').trim());
 }

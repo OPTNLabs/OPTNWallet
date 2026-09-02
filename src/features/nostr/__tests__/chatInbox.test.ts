@@ -26,6 +26,7 @@ const group = (
   paytacaDual: false,
   memberPubKeys: ['me'],
   ownerPubKey: 'me',
+  adminPubKeys: ['me'],
   ...partial,
 });
 

@@ -20,6 +20,7 @@ import {
   createApplicationMessage,
   createCommit,
   createGroup,
+  createSelfRemoveProposal,
   decode,
   defaultAppDataUpdateCallback,
   defaultCapabilities,
@@ -39,6 +40,7 @@ import {
   mlsExporter,
   mlsMessageDecoder,
   mlsMessageEncoder,
+  nodeTypes,
   processMessage,
   protocolVersions,
   selfRemoveProposalType,
@@ -67,13 +69,15 @@ import { unwrapEvent } from 'nostr-tools/nip17';
 import { wrapManyEvents as wrapRumor } from 'nostr-tools/nip59';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
 import { chacha20poly1305 } from '@noble/ciphers/chacha.js';
-import { get as idbGet, set as idbSet } from 'idb-keyval';
+import { del as idbDel, get as idbGet, set as idbSet } from 'idb-keyval';
 import SecretCryptoService from '../../../services/SecretCryptoService';
 import { deriveMlsKeys } from './mlsKeys';
 import {
   APP_DATA_DICTIONARY_EXT,
   KIND_KEYPACKAGE_MARMOT,
   LAST_RESORT_EXT,
+  COMP_PROFILE,
+  encodeGroupProfile,
   makeMarmotAppDataExtension,
 } from './mlsMarmot';
 import {
@@ -174,6 +178,8 @@ export type MlsGroupRecord = {
   paytacaDual: boolean;
   memberPubKeys: string[];
   ownerPubKey: string;
+  /** Group admins from NIP-EE group data. Empty means nobody can kick/rename. */
+  adminPubKeys?: string[];
 };
 
 let pool: SimplePool | null = null;
@@ -965,6 +971,7 @@ export async function createMlsGroup(
     paytacaDual: false,
     memberPubKeys: [myPubkey],
     ownerPubKey: myPubkey,
+    adminPubKeys: [myPubkey],
   };
   rememberGroup(record);
   await saveMlsState(
@@ -1236,6 +1243,161 @@ export async function addMlsMember(
     await persistIndex(nostr.pubkey);
   }
   await publish(targets, published);
+}
+
+export function isMlsAdmin(record: MlsGroupRecord, myPubkey: string): boolean {
+  const admins = record.adminPubKeys ?? [];
+  return admins.includes(myPubkey.toLowerCase()) || admins.includes(myPubkey);
+}
+
+function leafIndicesForPubkey(state: ClientState, pubkey: string): number[] {
+  const want = pubkey.toLowerCase();
+  const indices: number[] = [];
+  for (let nodeIndex = 0; nodeIndex < state.ratchetTree.length; nodeIndex += 2) {
+    const node = state.ratchetTree[nodeIndex];
+    if (!node || node.nodeType !== nodeTypes.leaf) continue;
+    if (credentialPubkeyHex(node.leaf.credential) === want) {
+      indices.push(nodeIndex / 2);
+    }
+  }
+  return indices;
+}
+
+async function publishMlsCommit(
+  walletId: number,
+  nostrGroupIdHex: string,
+  result: { commit: MlsMessage; newState: ClientState; welcome?: MlsMessage },
+  relays: string[]
+): Promise<void> {
+  const { mnemonic, passphrase } = await walletMnemonic(walletId);
+  const nostr = await deriveNostrIdentity(mnemonic, passphrase);
+  const record = getMlsRecord(nostrGroupIdHex);
+  const targets = Array.from(new Set([...DISCOVERY_RELAYS, ...relays]));
+  const published: Event[] = [];
+  if (record?.visibility === 'private') {
+    const rumor = unsignedMlsRumor(nostr.pubkey, nostrGroupIdHex, result.commit);
+    const members = (record.memberPubKeys || []).filter((p) => p !== nostr.pubkey);
+    if (members.length) {
+      published.push(...(wrapRumor(rumor, nostr.secretKey, members) as Event[]));
+    }
+  } else {
+    published.push(
+      await buildKind445(result.newState, result.commit, nostrGroupIdHex)
+    );
+  }
+  await saveMlsState(nostrGroupIdHex, result.newState, nostr.pubkey, nostr.secretKey);
+  if (record) {
+    record.memberPubKeys = coalescedMemberPubKeys(result.newState);
+    rememberGroup(record);
+    await persistIndex(nostr.pubkey);
+  }
+  if (published.length) await publish(targets, published);
+}
+
+export async function renameMlsGroup(
+  walletId: number,
+  nostrGroupIdHex: string,
+  name: string,
+  relays: string[] = DEFAULT_RELAYS
+): Promise<void> {
+  const record = getMlsRecord(nostrGroupIdHex);
+  const { mnemonic, passphrase } = await walletMnemonic(walletId);
+  const nostr = await deriveNostrIdentity(mnemonic, passphrase);
+  if (!record || !isMlsAdmin(record, nostr.pubkey)) {
+    throw new Error('Only a group admin can rename this group');
+  }
+  const loaded = await loadMlsState(nostrGroupIdHex);
+  if (!loaded) throw new Error('MLS group state not found');
+  const result = await commitAppDataUpdate(
+    loaded,
+    COMP_PROFILE,
+    encodeGroupProfile(name.trim() || record.name, '')
+  );
+  record.name = name.trim() || record.name;
+  rememberGroup(record);
+  await publishMlsCommit(walletId, nostrGroupIdHex, result, relays);
+}
+
+export async function removeMlsMember(
+  walletId: number,
+  nostrGroupIdHex: string,
+  memberPubKey: string,
+  relays: string[] = DEFAULT_RELAYS
+): Promise<void> {
+  const record = getMlsRecord(nostrGroupIdHex);
+  const { mnemonic, passphrase } = await walletMnemonic(walletId);
+  const nostr = await deriveNostrIdentity(mnemonic, passphrase);
+  if (!record || !isMlsAdmin(record, nostr.pubkey)) {
+    throw new Error('Only a group admin can remove members');
+  }
+  if (memberPubKey.toLowerCase() === nostr.pubkey.toLowerCase()) {
+    throw new Error('Leave the group instead of removing yourself');
+  }
+  const loaded = await loadMlsState(nostrGroupIdHex);
+  if (!loaded) throw new Error('MLS group state not found');
+  const { impl } = await ensureMlsCrypto();
+  const indices = leafIndicesForPubkey(loaded, memberPubKey);
+  if (!indices.length) throw new Error('That member is not in this group');
+  const result = await createCommit({
+    context: mlsContext(impl),
+    state: loaded,
+    extraProposals: indices.map((removed) => ({
+      proposalType: defaultProposalTypes.remove,
+      remove: { removed },
+    })),
+  });
+  await publishMlsCommit(walletId, nostrGroupIdHex, result, relays);
+}
+
+export async function leaveMlsGroup(
+  walletId: number,
+  nostrGroupIdHex: string,
+  relays: string[] = DEFAULT_RELAYS
+): Promise<void> {
+  const { mnemonic, passphrase } = await walletMnemonic(walletId);
+  const nostr = await deriveNostrIdentity(mnemonic, passphrase);
+  const loaded = await loadMlsState(nostrGroupIdHex);
+  const record = getMlsRecord(nostrGroupIdHex);
+  if (loaded && (record?.memberPubKeys.length ?? 1) > 1) {
+    const { impl } = await ensureMlsCrypto();
+    const proposal = await createSelfRemoveProposal({
+      context: mlsContext(impl),
+      state: loaded,
+    });
+    const framed = proposal.message as unknown as MlsMessage;
+    const targets = Array.from(new Set([...DISCOVERY_RELAYS, ...relays]));
+    if (record?.visibility === 'private') {
+      const rumor = unsignedMlsRumor(nostr.pubkey, nostrGroupIdHex, framed);
+      const members = (record.memberPubKeys || []).filter(
+        (p) => p !== nostr.pubkey
+      );
+      if (members.length) {
+        await publish(
+          targets,
+          wrapRumor(rumor, nostr.secretKey, members) as Event[]
+        );
+      }
+    } else {
+      await publish(targets, [
+        await buildKind445(loaded, framed, nostrGroupIdHex),
+      ]);
+    }
+  }
+  await forgetMlsGroup(nostrGroupIdHex, nostr.pubkey);
+}
+
+export async function forgetMlsGroup(
+  nostrGroupIdHex: string,
+  myPubkey: string
+): Promise<void> {
+  mlsStates.delete(nostrGroupIdHex);
+  groupIndex.delete(nostrGroupIdHex);
+  try {
+    await idbDel(RATCHET_KEY(myPubkey, nostrGroupIdHex));
+  } catch {
+    /* best-effort */
+  }
+  await persistIndex(myPubkey);
 }
 
 /** Add this account's extra-device KeyPackage (kind 30443 `d=<index>`) as a new leaf. */

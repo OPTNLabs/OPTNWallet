@@ -326,6 +326,14 @@ describe('nostr chat DM (NIP-17)', () => {
         'npub10gp4r5svjlwphe8rz3tt0w6t8z042md3adtreyx8wgpdxyj8vxgqfhl65t'
       )
     ).toMatch(/^[0-9a-f]{64}$/);
-    expect(() => toPubkeyHex('not-a-key')).toThrow();
+    expect(() => toPubkeyHex('not-a-key')).toThrow(
+      /npub or 64-character hex pubkey/
+    );
+    expect(() => toPubkeyHex('nsec1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqs0k5w')).toThrow(
+      /secret key/
+    );
+    expect(() => toPubkeyHex('nostr:not-valid')).toThrow(
+      /npub or 64-character hex pubkey/
+    );
   });
 });

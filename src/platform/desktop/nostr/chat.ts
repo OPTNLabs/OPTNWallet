@@ -89,15 +89,26 @@ export interface NostrProfile {
   nip05?: string;
 }
 
-/** Accept an npub or a raw hex pubkey; return hex. */
+/** Accept an npub, nprofile, or raw hex pubkey; return hex. */
 export function toPubkeyHex(npubOrHex: string): string {
-  const s = npubOrHex.trim();
-  if (s.startsWith('npub')) {
-    const decoded = nip19.decode(s);
-    if (decoded.type !== 'npub') throw new Error('not an npub');
-    return decoded.data;
+  let s = npubOrHex.trim();
+  if (s.startsWith('nostr:')) s = s.slice('nostr:'.length);
+  if (/^nsec1/i.test(s)) {
+    throw new Error('That is a secret key. Paste an npub, not an nsec.');
   }
-  if (!/^[0-9a-f]{64}$/i.test(s)) throw new Error('invalid pubkey');
+  if (/^(npub|nprofile)1/i.test(s)) {
+    try {
+      const decoded = nip19.decode(s);
+      if (decoded.type === 'npub') return decoded.data;
+      if (decoded.type === 'nprofile') return decoded.data.pubkey;
+    } catch {
+      throw new Error('Enter an npub or 64-character hex pubkey.');
+    }
+    throw new Error('Enter an npub or 64-character hex pubkey.');
+  }
+  if (!/^[0-9a-f]{64}$/i.test(s)) {
+    throw new Error('Enter an npub or 64-character hex pubkey.');
+  }
   return s.toLowerCase();
 }
 
