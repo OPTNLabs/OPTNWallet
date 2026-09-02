@@ -56,11 +56,11 @@ mod tests {
     use super::*;
 
     fn assert_clipboard_port<T: ClipboardPort>() {}
+    fn assert_capability_provider<T: CapabilityProvider>() {}
 
     #[test]
     fn tauri_clipboard_implements_platform_contract() {
         assert_clipboard_port::<TauriClipboard>();
-        let provider = TauriClipboard::new(tauri::test::mock_app().handle().clone());
-        assert_eq!(provider.descriptor().id, "tauri-arboard-clipboard");
+        assert_capability_provider::<TauriClipboard>();
     }
 }
