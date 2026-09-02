@@ -65,7 +65,7 @@ import {
   transactionsRoute,
 } from '../navigation/routes';
 import { NostrChatRoute } from '../features/nostr/NostrChatRoute';
-import { hasCapability, offersWatchOnly } from '../platform/capabilities';
+import { hasCapability } from '../platform/capabilities';
 
 const SimpleSend = lazy(() => import('../features/simple-send/SimpleSend'));
 const WatchOnlySend = lazy(
@@ -244,12 +244,10 @@ function AppContent({ viewerOnly = false }: AppShellProps) {
                   path={ROUTE_PATHS.importWallet}
                   element={<ImportWalletPage />}
                 />
-                {offersWatchOnly() && (
-                  <Route
-                    path={ROUTE_PATHS.watchOnlyWallet}
-                    element={<WatchOnlyWalletPage />}
-                  />
-                )}
+                <Route
+                  path={ROUTE_PATHS.watchOnlyWallet}
+                  element={<WatchOnlyWalletPage />}
+                />
                 <Route
                   path="*"
                   element={<Navigate to={ROUTE_PATHS.landing} replace />}

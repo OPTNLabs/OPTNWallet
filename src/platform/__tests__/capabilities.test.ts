@@ -109,18 +109,17 @@ describe('cross-platform capability contract', () => {
     expect(hasCapability('hardwareWallet')).toBe(false);
   });
 
-  it('enables watch-only wallets on native mobile without enabling web/extension', () => {
+  it('enables watch-only wallets on every surface; hide it by flipping the flag', () => {
     expect(CAPABILITIES.watchOnlyWallet.enabledOn).toEqual({
       desktop: true,
       android: true,
       ios: true,
-      web: false,
-      extension: false,
+      web: true,
+      extension: true,
     });
-    expect(hasCapability('watchOnlyWallet', 'android')).toBe(true);
-    expect(hasCapability('watchOnlyWallet', 'ios')).toBe(true);
-    expect(hasCapability('watchOnlyWallet', 'web')).toBe(false);
-    expect(hasCapability('watchOnlyWallet', 'extension')).toBe(false);
+    for (const surface of APP_SURFACES) {
+      expect(hasCapability('watchOnlyWallet', surface)).toBe(true);
+    }
   });
 
   it('keeps the shared Rust RPA implementation available on every app surface', () => {

@@ -98,6 +98,7 @@ pub enum WireSurface {
 pub enum WireFeatureFlag {
     CashFusion,
     HardwareWallet,
+    WatchOnly,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -225,6 +226,8 @@ pub struct WireState {
     pub surface: WireSurface,
     pub cash_fusion: bool,
     pub hardware_wallet: bool,
+    #[serde(default = "default_true")]
+    pub watch_only: bool,
     #[serde(default)]
     pub coins: Vec<WireCoin>,
     #[serde(default)]
@@ -423,6 +426,7 @@ impl From<FeatureFlag> for WireFeatureFlag {
         match value {
             FeatureFlag::CashFusion => Self::CashFusion,
             FeatureFlag::HardwareWallet => Self::HardwareWallet,
+            FeatureFlag::WatchOnly => Self::WatchOnly,
         }
     }
 }
@@ -432,6 +436,7 @@ impl From<WireFeatureFlag> for FeatureFlag {
         match value {
             WireFeatureFlag::CashFusion => Self::CashFusion,
             WireFeatureFlag::HardwareWallet => Self::HardwareWallet,
+            WireFeatureFlag::WatchOnly => Self::WatchOnly,
         }
     }
 }
@@ -704,6 +709,9 @@ impl From<&AppState> for WireState {
             hardware_wallet: value
                 .features
                 .enabled(value.surface, FeatureFlag::HardwareWallet),
+            watch_only: value
+                .features
+                .enabled(value.surface, FeatureFlag::WatchOnly),
             coins: value.coins.iter().map(WireCoin::from).collect(),
             pledges: value.pledges.iter().map(WirePledge::from).collect(),
             notice: value.notice.clone(),
@@ -804,6 +812,13 @@ impl TryFrom<WireState> for AppState {
                     } else {
                         Some(value.hardware_wallet)
                     },
+                    watch_only: if value.watch_only
+                        == defaults.enabled(surface, FeatureFlag::WatchOnly)
+                    {
+                        None
+                    } else {
+                        Some(value.watch_only)
+                    },
                 }
             },
             coins: {
@@ -876,6 +891,10 @@ impl TryFrom<WireEvent> for AppEvent {
             WireEventKind::SpendPrepared => Self::SpendPrepared,
         })
     }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn verify_wire_version(version: u16) -> Result<(), TransportError> {
@@ -1008,17 +1027,22 @@ mod tests {
 
     #[test]
     fn android_wire_snapshot_keeps_watch_only_on_the_landing() {
-        let state = AppState::for_surface(AppSurface::Android);
-        let restored = AppState::try_from(WireState::from(&state)).expect("android wire state");
-        assert_eq!(restored.surface, AppSurface::Android);
-        assert_eq!(
-            optn_app::onboarding_actions(&restored),
-            vec![
-                optn_app::OnboardingAction::CreateWallet,
-                optn_app::OnboardingAction::ImportWallet,
-                optn_app::OnboardingAction::CreateWatchOnlyWallet,
-            ]
-        );
+        for surface in [
+            AppSurface::Desktop,
+            AppSurface::Android,
+            AppSurface::Ios,
+            AppSurface::Web,
+            AppSurface::Extension,
+        ] {
+            let state = AppState::for_surface(surface);
+            let restored = AppState::try_from(WireState::from(&state)).expect("wire state");
+            assert_eq!(restored.surface, surface);
+            assert!(
+                optn_app::onboarding_actions(&restored)
+                    .contains(&optn_app::OnboardingAction::CreateWatchOnlyWallet),
+                "{surface:?} Watch Only stays on the landing when the flag is true"
+            );
+        }
     }
 
     #[test]

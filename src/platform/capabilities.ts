@@ -24,8 +24,8 @@ export const CAPABILITIES: Readonly<Record<Capability, CapabilitySpec>> = {
       desktop: true,
       android: true,
       ios: true,
-      web: false,
-      extension: false,
+      web: true,
+      extension: true,
     },
     whenAbsent: 'explain',
   },
@@ -127,7 +127,7 @@ export function currentSurface(): Surface {
   return 'web';
 }
 
-/** Matches `optn-app::AppSurface::offers_watch_only`. */
+/** Matches `FeatureFlags::enabled(..., FeatureFlag::WatchOnly)`. */
 export function offersWatchOnly(surface: Surface = currentSurface()): boolean {
   return hasCapability('watchOnlyWallet', surface);
 }

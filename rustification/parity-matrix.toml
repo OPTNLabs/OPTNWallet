@@ -39,18 +39,16 @@ evidence_refs = { windows = "e2e/specs/onboarding-navigation.spec.ts", linux = "
 [[feature]]
 id = "watch_only"
 name = "Watch-only"
-policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "na", extension = "na" }
-evidence = { windows = "e2e", linux = "e2e", macos = "unit", android = "e2e-declared", ios = "unit", web = "hidden", extension = "hidden" }
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "pass", extension = "pass" }
+evidence = { windows = "e2e", linux = "e2e", macos = "unit", android = "e2e-declared", ios = "unit", web = "unit", extension = "unit" }
 evidence_refs = { windows = "e2e/specs/onboarding-navigation.spec.ts", linux = "e2e/specs/onboarding-navigation.spec.ts", android = "android/app/src/androidTest/java/com/getcapacitor/myapp/ExampleInstrumentedTest.java::androidLanding_watchOnlyLifecycle" }
-na_reason = { web = "capability matrix hides watch-only on web", extension = "capability matrix hides watch-only on extension" }
 
 [[feature]]
 id = "master_fingerprint"
 name = "Master fingerprint"
-policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "na", extension = "na" }
-evidence = { windows = "unit", linux = "unit", macos = "unit", android = "e2e-declared", ios = "unit", web = "hidden", extension = "hidden" }
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "pass", extension = "pass" }
+evidence = { windows = "unit", linux = "unit", macos = "unit", android = "e2e-declared", ios = "unit", web = "unit", extension = "unit" }
 evidence_refs = { android = "android/app/src/androidTest/java/com/getcapacitor/myapp/ExampleInstrumentedTest.java::androidLanding_watchOnlyLifecycle" }
-na_reason = { web = "watch-only is hidden on web", extension = "watch-only is hidden on extension" }
 
 [[feature]]
 id = "receive"
