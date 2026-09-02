@@ -15,7 +15,8 @@ use crate::scan::ScanButton;
 use crate::{dispatch_action, UiTransport};
 use leptos::prelude::*;
 use optn_app::{
-    multisig_setup_preview, AppAction, AppState, Cosigner, MultisigSetupPreview, MAX_COSIGNERS,
+    multisig_setup_preview, AppAction, AppState, Cosigner, MultisigSetupPreview, MultisigStep,
+    MAX_COSIGNERS,
 };
 
 /// What the user is editing, before validation.
@@ -106,7 +107,16 @@ pub fn MultisigSection(transport: UiTransport, state: RwSignal<AppState>) -> imp
                 "arrives at the same wallet."
             </p>
 
-            <form class="watch-only-form" on:submit=validate>
+            <Show when=move || state.get().multisig_step == MultisigStep::Policy>
+            <form class="watch-only-form" on:submit=move |event| {
+                event.prevent_default();
+                if wallet_name.get_untracked().trim().is_empty() {
+                    error.set(Some("Give the wallet a name.".into()));
+                    return;
+                }
+                error.set(None);
+                dispatch_action(transport, state, AppAction::AdvanceOnboarding);
+            }>
                 <label class="field">
                     <span>"Wallet name"</span>
                     <input
@@ -151,7 +161,28 @@ pub fn MultisigSection(transport: UiTransport, state: RwSignal<AppState>) -> imp
                         }}
                     </select>
                 </label>
+                <p class="muted">
+                    "How many signatures are required, out of how many cosigners. "
+                    "You add the xPubs on the next screen."
+                </p>
+                <Show when=move || error.get().is_some()>
+                    <p class="form-error" role="alert">
+                        {move || error.get().unwrap_or_default()}
+                    </p>
+                </Show>
+                <button class="primary" type="submit">
+                    {move || state.get().flow().next_label}
+                </button>
+            </form>
+            </Show>
 
+            <Show when=move || state.get().multisig_step == MultisigStep::Cosigners>
+            <form class="watch-only-form" on:submit=move |event| {
+                validate(event);
+                if preview.get_untracked().is_some() {
+                    dispatch_action(transport, state, AppAction::AdvanceOnboarding);
+                }
+            }>
                 {move || (0..drafts.get().len()).map(|index| view! {
                     <fieldset class="cosigner" data-testid=format!("cosigner-{index}")>
                         <legend>
@@ -290,7 +321,7 @@ pub fn MultisigSection(transport: UiTransport, state: RwSignal<AppState>) -> imp
                         "Add cosigner"
                     </button>
                     <button class="primary" type="submit" data-testid="multisig-validate">
-                        "Validate cosigners"
+                        {move || state.get().flow().next_label}
                     </button>
                 </div>
 
@@ -300,8 +331,9 @@ pub fn MultisigSection(transport: UiTransport, state: RwSignal<AppState>) -> imp
                     </p>
                 </Show>
             </form>
+            </Show>
 
-            <Show when=move || preview.get().is_some()>
+            <Show when=move || state.get().multisig_step == MultisigStep::Confirm>
                 <section class="watch-preview" aria-live="polite">
                     <div class="preview-heading">
                         <div>
@@ -340,8 +372,9 @@ pub fn MultisigSection(transport: UiTransport, state: RwSignal<AppState>) -> imp
                     </dl>
 
                     <p class="hint-card">
-                        "Every cosigner must see this same address. If one of you sees a "
-                        "different one, someone has a different key set."
+                        "Every cosigner must see this same address. Seeds alone cannot rebuild "
+                        "this wallet — keep the policy and every account xPub with each backup. "
+                        "If one of you sees a different address, someone has a different key set."
                     </p>
 
                     <button

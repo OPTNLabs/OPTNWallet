@@ -105,6 +105,57 @@ impl ImportStep {
     }
 }
 
+/// Watch Only policy type. Same split Sparrow uses: one xPub, or a shared set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WatchOnlyKind {
+    #[default]
+    Single,
+    Shared,
+}
+
+/// Shared-wallet sections: policy (m-of-n) → cosigner xPubs → confirm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MultisigStep {
+    #[default]
+    Policy,
+    Cosigners,
+    Confirm,
+}
+
+impl MultisigStep {
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::Policy => "Shared wallet",
+            Self::Cosigners => "Cosigners",
+            Self::Confirm => "Confirm shared wallet",
+        }
+    }
+
+    pub const fn next_label(self) -> &'static str {
+        match self {
+            Self::Policy => "Continue",
+            Self::Cosigners => "Review",
+            Self::Confirm => "Open shared wallet",
+        }
+    }
+
+    pub const fn next(self) -> Option<Self> {
+        match self {
+            Self::Policy => Some(Self::Cosigners),
+            Self::Cosigners => Some(Self::Confirm),
+            Self::Confirm => None,
+        }
+    }
+
+    pub const fn back(self) -> Option<Self> {
+        match self {
+            Self::Policy => None,
+            Self::Cosigners => Some(Self::Policy),
+            Self::Confirm => Some(Self::Cosigners),
+        }
+    }
+}
+
 /// What the renderer should paint for Back/Next. No framework types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FlowViewModel {
@@ -112,6 +163,8 @@ pub struct FlowViewModel {
     pub create_step: CreateStep,
     pub import_step: ImportStep,
     pub settings_focus: Option<SettingsRowId>,
+    pub watch_only_kind: WatchOnlyKind,
+    pub multisig_step: MultisigStep,
     /// Tab that opened the current overlay. `None` on a tab root.
     pub return_to: Option<AppRoute>,
     pub title: &'static str,
@@ -133,50 +186,62 @@ pub fn flow_view_model(
     import_step: ImportStep,
     settings_focus: Option<SettingsRowId>,
     return_to: Option<AppRoute>,
+    watch_only_kind: WatchOnlyKind,
+    multisig_step: MultisigStep,
 ) -> FlowViewModel {
+    let base = |title: &'static str,
+                next_label: &'static str,
+                back_label: &'static str,
+                can_advance: bool,
+                can_go_back: bool| FlowViewModel {
+        route,
+        create_step,
+        import_step,
+        settings_focus,
+        watch_only_kind,
+        multisig_step,
+        return_to,
+        title,
+        next_label,
+        back_label,
+        can_advance,
+        can_go_back,
+    };
     match route {
-        AppRoute::CreateWallet => FlowViewModel {
-            route,
-            create_step,
-            import_step,
-            settings_focus,
-            return_to,
-            title: create_step.title(),
-            next_label: create_step.next_label(),
-            back_label: "Back",
-            can_advance: create_step.next().is_some(),
-            can_go_back: true,
-        },
-        AppRoute::ImportWallet => FlowViewModel {
-            route,
-            create_step,
-            import_step,
-            settings_focus,
-            return_to,
-            title: import_step.title(),
-            next_label: import_step.next_label(),
-            back_label: "Back",
-            can_advance: import_step.next().is_some(),
-            can_go_back: true,
-        },
-        AppRoute::Settings => FlowViewModel {
-            route,
-            create_step,
-            import_step,
-            settings_focus,
-            return_to,
-            title: settings_focus
+        AppRoute::CreateWallet => base(
+            create_step.title(),
+            create_step.next_label(),
+            "Back",
+            create_step.next().is_some(),
+            true,
+        ),
+        AppRoute::ImportWallet => base(
+            import_step.title(),
+            import_step.next_label(),
+            "Back",
+            import_step.next().is_some(),
+            true,
+        ),
+        AppRoute::Settings => base(
+            settings_focus
                 .map(SettingsRowId::title)
                 .unwrap_or("Settings"),
-            next_label: "",
-            back_label: if settings_focus.is_some() {
+            "",
+            if settings_focus.is_some() {
                 "Settings"
             } else {
                 "Back"
             },
-            can_advance: false,
-            can_go_back: settings_focus.is_some(),
-        },
+            false,
+            settings_focus.is_some(),
+        ),
+        AppRoute::WatchOnlyWallet if watch_only_kind == WatchOnlyKind::Shared => base(
+            multisig_step.title(),
+            multisig_step.next_label(),
+            "Back",
+            multisig_step.next().is_some(),
+            true,
+        ),
         AppRoute::WatchOnlyWallet
         | AppRoute::HardwareWallet
         | AppRoute::Receive
@@ -185,31 +250,15 @@ pub fn flow_view_model(
         | AppRoute::Flipstarter
         | AppRoute::FundMe => {
             let parent = overlay_parent(route, return_to);
-            FlowViewModel {
-                route,
-                create_step,
-                import_step,
-                settings_focus,
-                return_to,
-                title: route.section_title(),
-                next_label: "",
-                back_label: parent.map(AppRoute::section_title).unwrap_or("Back"),
-                can_advance: false,
-                can_go_back: parent.is_some(),
-            }
+            base(
+                route.section_title(),
+                "",
+                parent.map(AppRoute::section_title).unwrap_or("Back"),
+                false,
+                parent.is_some(),
+            )
         }
-        _ => FlowViewModel {
-            route,
-            create_step,
-            import_step,
-            settings_focus,
-            return_to,
-            title: route.section_title(),
-            next_label: "",
-            back_label: "Back",
-            can_advance: false,
-            can_go_back: false,
-        },
+        _ => base(route.section_title(), "", "Back", false, false),
     }
 }
 
@@ -257,6 +306,8 @@ mod tests {
             ImportStep::Words,
             None,
             Some(AppRoute::Actions),
+            WatchOnlyKind::Single,
+            MultisigStep::Policy,
         );
         assert_eq!(from_actions.back_label, "Actions");
         assert!(from_actions.can_go_back);
@@ -267,7 +318,29 @@ mod tests {
             ImportStep::Words,
             None,
             Some(AppRoute::Explore),
+            WatchOnlyKind::Single,
+            MultisigStep::Policy,
         );
         assert_eq!(from_explore.back_label, "Explore");
+    }
+
+    #[test]
+    fn shared_wallet_matches_policy_then_cosigners_then_confirm() {
+        assert_eq!(MultisigStep::Policy.next(), Some(MultisigStep::Cosigners));
+        assert_eq!(MultisigStep::Cosigners.next(), Some(MultisigStep::Confirm));
+        assert_eq!(MultisigStep::Confirm.next(), None);
+        assert_eq!(MultisigStep::Policy.back(), None);
+        let shared = flow_view_model(
+            AppRoute::WatchOnlyWallet,
+            CreateStep::Reveal,
+            ImportStep::Words,
+            None,
+            Some(AppRoute::Landing),
+            WatchOnlyKind::Shared,
+            MultisigStep::Policy,
+        );
+        assert_eq!(shared.title, "Shared wallet");
+        assert_eq!(shared.next_label, "Continue");
+        assert!(shared.can_advance);
     }
 }

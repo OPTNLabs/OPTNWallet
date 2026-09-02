@@ -9,9 +9,9 @@
 use optn_app::{
     AppAction, AppEvent, AppRoute, AppState, AppSurface, CampaignOutput, Coin, CreateStep,
     FeatureFlag, FeatureFlags, FlipstarterPledge, FreezeReason, HardwareSetupPreview,
-    HardwareVendor, ImportStep, MultisigSetupPreview, Network, OpenedWallet, Outpoint,
-    PledgeStatus, SettingsRowId, SpendKind, SpendPlan, ThemeMode, UiSkin, WalletKind,
-    WatchOnlySetupPreview,
+    HardwareVendor, ImportStep, MultisigSetupPreview, MultisigStep, Network, OpenedWallet,
+    Outpoint, PledgeStatus, SettingsRowId, SpendKind, SpendPlan, ThemeMode, UiSkin, WalletKind,
+    WatchOnlyKind, WatchOnlySetupPreview,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -256,6 +256,7 @@ pub enum WireActionKind {
     GoBack,
     AdvanceOnboarding,
     OpenSettingsRow(String),
+    SetWatchOnlyKind(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -296,6 +297,27 @@ pub struct WireState {
     pub settings_focus: Option<String>,
     #[serde(default)]
     pub return_to: Option<WireRoute>,
+    #[serde(default)]
+    pub watch_only_kind: WireWatchOnlyKind,
+    #[serde(default)]
+    pub multisig_step: WireMultisigStep,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WireWatchOnlyKind {
+    #[default]
+    Single,
+    Shared,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WireMultisigStep {
+    #[default]
+    Policy,
+    Cosigners,
+    Confirm,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -731,6 +753,13 @@ impl From<AppAction> for WireAction {
             AppAction::OpenSettingsRow(row) => {
                 WireActionKind::OpenSettingsRow(settings_row_id(row).into())
             }
+            AppAction::SetWatchOnlyKind(kind) => WireActionKind::SetWatchOnlyKind(
+                match kind {
+                    WatchOnlyKind::Single => "single",
+                    WatchOnlyKind::Shared => "shared",
+                }
+                .into(),
+            ),
         };
         Self {
             version: WIRE_PROTOCOL_VERSION,
@@ -860,6 +889,15 @@ impl TryFrom<WireAction> for AppAction {
             WireActionKind::OpenSettingsRow(row) => {
                 Self::OpenSettingsRow(parse_settings_row(&row)?)
             }
+            WireActionKind::SetWatchOnlyKind(kind) => Self::SetWatchOnlyKind(match kind.as_str() {
+                "single" => WatchOnlyKind::Single,
+                "shared" => WatchOnlyKind::Shared,
+                other => {
+                    return Err(TransportError::InvalidData(format!(
+                        "unknown watch-only kind '{other}'"
+                    )))
+                }
+            }),
         })
     }
 }
@@ -892,6 +930,8 @@ impl From<&AppState> for WireState {
             import_step: value.import_step.into(),
             settings_focus: value.settings_focus.map(settings_row_id).map(str::to_owned),
             return_to: value.return_to.map(WireRoute::from),
+            watch_only_kind: value.watch_only_kind.into(),
+            multisig_step: value.multisig_step.into(),
         }
     }
 }
@@ -1029,6 +1069,8 @@ impl TryFrom<WireState> for AppState {
                 .map(parse_settings_row)
                 .transpose()?,
             return_to: value.return_to.map(AppRoute::from),
+            watch_only_kind: value.watch_only_kind.into(),
+            multisig_step: value.multisig_step.into(),
         })
     }
 }
@@ -1118,6 +1160,44 @@ fn parse_settings_row(row: &str) -> Result<SettingsRowId, TransportError> {
         other => Err(TransportError::InvalidData(format!(
             "unknown settings row '{other}'"
         ))),
+    }
+}
+
+impl From<WatchOnlyKind> for WireWatchOnlyKind {
+    fn from(value: WatchOnlyKind) -> Self {
+        match value {
+            WatchOnlyKind::Single => Self::Single,
+            WatchOnlyKind::Shared => Self::Shared,
+        }
+    }
+}
+
+impl From<WireWatchOnlyKind> for WatchOnlyKind {
+    fn from(value: WireWatchOnlyKind) -> Self {
+        match value {
+            WireWatchOnlyKind::Single => Self::Single,
+            WireWatchOnlyKind::Shared => Self::Shared,
+        }
+    }
+}
+
+impl From<MultisigStep> for WireMultisigStep {
+    fn from(value: MultisigStep) -> Self {
+        match value {
+            MultisigStep::Policy => Self::Policy,
+            MultisigStep::Cosigners => Self::Cosigners,
+            MultisigStep::Confirm => Self::Confirm,
+        }
+    }
+}
+
+impl From<WireMultisigStep> for MultisigStep {
+    fn from(value: WireMultisigStep) -> Self {
+        match value {
+            WireMultisigStep::Policy => Self::Policy,
+            WireMultisigStep::Cosigners => Self::Cosigners,
+            WireMultisigStep::Confirm => Self::Confirm,
+        }
     }
 }
 

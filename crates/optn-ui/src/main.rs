@@ -30,7 +30,7 @@ use optn_app::{
     create_confirm_indices, entropy_len_for_word_count, mnemonic_from_entropy, onboarding_actions,
     onboarding_view_model, seed_wallet_preview_at, watch_only_setup_preview, AppAction, AppRoute,
     AppState, AppSurface, CreateStep, ImportStep, Network, OnboardingAction, ThemeMode,
-    WatchOnlySetupPreview, BIP39_DEFAULT_WORD_COUNT, BIP39_WORD_COUNTS,
+    WatchOnlyKind, WatchOnlySetupPreview, BIP39_DEFAULT_WORD_COUNT, BIP39_WORD_COUNTS,
 };
 #[cfg(target_arch = "wasm32")]
 use optn_transport::AppTransport;
@@ -118,12 +118,38 @@ fn WatchOnlySetup(transport: UiTransport, state: RwSignal<AppState>) -> impl Int
                 </button>
 
                 <p class="eyebrow">"Public keys only"</p>
-                <h1>"Create Watch-Only Wallet"</h1>
+                <h1>{move || state.get().flow().title}</h1>
                 <p class="description">
                     "Import an account xPub without importing a seed or private key. "
-                    "The optional master fingerprint is stored as public PSBT origin metadata "
-                    "so an air-gapped signer can identify its inputs."
+                    "A shared wallet is the same public-only import with an m-of-n policy."
                 </p>
+
+                <div class="network-picker" role="group" aria-label="Watch-only kind">
+                    <button
+                        type="button"
+                        class="network-option"
+                        class:active=move || state.get().watch_only_kind == WatchOnlyKind::Single
+                        on:click=move |_| dispatch_action(
+                            transport,
+                            state,
+                            AppAction::SetWatchOnlyKind(WatchOnlyKind::Single),
+                        )
+                    >
+                        "Account xPub"
+                    </button>
+                    <button
+                        type="button"
+                        class="network-option"
+                        class:active=move || state.get().watch_only_kind == WatchOnlyKind::Shared
+                        on:click=move |_| dispatch_action(
+                            transport,
+                            state,
+                            AppAction::SetWatchOnlyKind(WatchOnlyKind::Shared),
+                        )
+                    >
+                        "Shared wallet"
+                    </button>
+                </div>
 
                 <div class="network-picker" role="group" aria-label="Wallet network">
                     <button
@@ -152,6 +178,7 @@ fn WatchOnlySetup(transport: UiTransport, state: RwSignal<AppState>) -> impl Int
                     </button>
                 </div>
 
+                <Show when=move || state.get().watch_only_kind == WatchOnlyKind::Single>
                 <form class="watch-only-form" on:submit=validate>
                     <label class="field">
                         <span>"Wallet name"</span>
@@ -230,8 +257,11 @@ fn WatchOnlySetup(transport: UiTransport, state: RwSignal<AppState>) -> impl Int
                         "Validate public account"
                     </button>
                 </form>
+                </Show>
 
-                <MultisigSection transport=transport state=state />
+                <Show when=move || state.get().watch_only_kind == WatchOnlyKind::Shared>
+                    <MultisigSection transport=transport state=state />
+                </Show>
 
                 <HardwareSection transport=transport state=state />
 
