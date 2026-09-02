@@ -127,6 +127,9 @@ jobs:
       - name: Initialize Tauri Android
         run: npx tauri android init --ci --skip-targets-install --config src-tauri/tauri.leptos.mobile.conf.json
 
+      - name: Pin generated Android Kotlin to plugin stdlib metadata
+        run: npx tsx scripts/pin-tauri-android-kotlin.mts src-tauri/gen/android
+
       - name: Build Tauri Leptos Android APK
         run: npx tauri android build --debug --apk --target aarch64 --config src-tauri/tauri.leptos.mobile.conf.json
 
