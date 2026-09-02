@@ -105,6 +105,7 @@ const LandingPage = ({ surface }: LandingPageProps) => {
             {hasCapability('watchOnlyWallet', resolvedSurface) && (
               <Link
                 to={ROUTE_PATHS.watchOnlyWallet}
+                data-testid="watch-only-landing-action"
                 className="wallet-btn-secondary w-full sm:w-auto py-3 px-10 rounded-lg sm:mx-2 sm:my-2 shadow-md"
               >
                 {t('onboarding.createWatchOnly')}

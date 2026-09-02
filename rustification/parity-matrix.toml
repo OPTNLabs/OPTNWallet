@@ -1,0 +1,135 @@
+schema = 1
+# Production-ready cells are only allowed to be "pass" or "na".
+# "fail" is computed by xtask from policy vs evidence, never authored.
+#
+# policy: pass = must work on that surface; na = deliberately unsupported
+# evidence: none | unit | e2e | device | hidden
+#   hidden is valid only with policy = na
+#   production-ready requires pass+e2e/device or na+hidden
+
+platforms = [
+  "windows",
+  "linux",
+  "macos",
+  "android",
+  "ios",
+  "web",
+  "extension",
+]
+
+[[feature]]
+id = "create_wallet"
+name = "Create wallet"
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "pass", extension = "pass" }
+evidence = { windows = "e2e", linux = "e2e", macos = "unit", android = "unit", ios = "unit", web = "unit", extension = "unit" }
+evidence_refs = { windows = "e2e/specs/create-lock-reopen.spec.ts", linux = "e2e/specs/create-lock-reopen.spec.ts" }
+
+[[feature]]
+id = "import_seed"
+name = "Import seed"
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "pass", extension = "pass" }
+evidence = { windows = "e2e", linux = "e2e", macos = "unit", android = "unit", ios = "unit", web = "unit", extension = "unit" }
+evidence_refs = { windows = "e2e/specs/onboarding-navigation.spec.ts", linux = "e2e/specs/onboarding-navigation.spec.ts" }
+
+[[feature]]
+id = "watch_only"
+name = "Watch-only"
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "na", extension = "na" }
+evidence = { windows = "e2e", linux = "e2e", macos = "unit", android = "e2e", ios = "unit", web = "hidden", extension = "hidden" }
+evidence_refs = { windows = "e2e/specs/onboarding-navigation.spec.ts", linux = "e2e/specs/onboarding-navigation.spec.ts", android = "android/app/src/androidTest/java/com/getcapacitor/myapp/ExampleInstrumentedTest.java::androidLanding_watchOnlyLifecycle" }
+na_reason = { web = "capability matrix hides watch-only on web", extension = "capability matrix hides watch-only on extension" }
+
+[[feature]]
+id = "master_fingerprint"
+name = "Master fingerprint"
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "na", extension = "na" }
+evidence = { windows = "unit", linux = "unit", macos = "unit", android = "e2e", ios = "unit", web = "hidden", extension = "hidden" }
+evidence_refs = { android = "android/app/src/androidTest/java/com/getcapacitor/myapp/ExampleInstrumentedTest.java::androidLanding_watchOnlyLifecycle" }
+na_reason = { web = "watch-only is hidden on web", extension = "watch-only is hidden on extension" }
+
+[[feature]]
+id = "receive"
+name = "Receive"
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "pass", extension = "pass" }
+evidence = { windows = "unit", linux = "unit", macos = "unit", android = "unit", ios = "unit", web = "unit", extension = "unit" }
+
+[[feature]]
+id = "send"
+name = "Send"
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "pass", extension = "pass" }
+evidence = { windows = "unit", linux = "unit", macos = "unit", android = "unit", ios = "unit", web = "unit", extension = "unit" }
+
+[[feature]]
+id = "cashtokens"
+name = "CashTokens"
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "pass", extension = "pass" }
+evidence = { windows = "unit", linux = "unit", macos = "unit", android = "unit", ios = "unit", web = "unit", extension = "unit" }
+
+[[feature]]
+id = "psbt"
+name = "PSBT"
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "pass", extension = "pass" }
+evidence = { windows = "unit", linux = "unit", macos = "unit", android = "unit", ios = "unit", web = "unit", extension = "unit" }
+
+[[feature]]
+id = "ur_qr"
+name = "UR / animated QR"
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "pass", extension = "pass" }
+evidence = { windows = "unit", linux = "unit", macos = "unit", android = "unit", ios = "unit", web = "unit", extension = "unit" }
+
+[[feature]]
+id = "seedcash_roundtrip"
+name = "SeedCash round trip"
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "na", extension = "na" }
+evidence = { windows = "unit", linux = "unit", macos = "unit", android = "unit", ios = "unit", web = "hidden", extension = "hidden" }
+na_reason = { web = "air-gap camera/UR signer is not a web capability yet", extension = "air-gap camera/UR signer is not an extension capability yet" }
+
+[[feature]]
+id = "multisig"
+name = "Multisig"
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "pass", extension = "pass" }
+evidence = { windows = "unit", linux = "unit", macos = "unit", android = "unit", ios = "unit", web = "unit", extension = "unit" }
+
+[[feature]]
+id = "hardware_wallet"
+name = "Hardware wallet"
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "na", ios = "na", web = "na", extension = "na" }
+evidence = { windows = "unit", linux = "unit", macos = "unit", android = "hidden", ios = "hidden", web = "hidden", extension = "hidden" }
+na_reason = { android = "USB hardware wallets are desktop-only", ios = "USB hardware wallets are desktop-only", web = "USB hardware wallets are desktop-only", extension = "USB hardware wallets are desktop-only" }
+
+[[feature]]
+id = "rpa"
+name = "RPA"
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "pass", extension = "pass" }
+evidence = { windows = "unit", linux = "unit", macos = "unit", android = "unit", ios = "unit", web = "unit", extension = "unit" }
+
+[[feature]]
+id = "cash_fusion"
+name = "CashFusion"
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "na", ios = "na", web = "na", extension = "na" }
+evidence = { windows = "unit", linux = "unit", macos = "unit", android = "hidden", ios = "hidden", web = "hidden", extension = "hidden" }
+na_reason = { android = "CashFusion UI is desktop-only", ios = "CashFusion UI is desktop-only", web = "CashFusion UI is desktop-only", extension = "CashFusion UI is desktop-only" }
+
+[[feature]]
+id = "spv"
+name = "SPV"
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "pass", extension = "pass" }
+evidence = { windows = "unit", linux = "unit", macos = "unit", android = "none", ios = "none", web = "none", extension = "none" }
+
+[[feature]]
+id = "electrum"
+name = "Electrum"
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "pass", extension = "pass" }
+evidence = { windows = "unit", linux = "unit", macos = "unit", android = "none", ios = "none", web = "none", extension = "none" }
+
+[[feature]]
+id = "x402"
+name = "x402"
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "pass", extension = "pass" }
+evidence = { windows = "unit", linux = "unit", macos = "unit", android = "none", ios = "none", web = "none", extension = "none" }
+
+[[feature]]
+id = "nostr"
+name = "Nostr"
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "pass", extension = "pass" }
+evidence = { windows = "unit", linux = "unit", macos = "unit", android = "unit", ios = "unit", web = "unit", extension = "unit" }

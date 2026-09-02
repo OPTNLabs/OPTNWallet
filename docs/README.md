@@ -6,6 +6,9 @@ Technical documentation for contributors and third-party integrators.
 
 - [Contributing Guide](../CONTRIBUTING.md)
   - Setup, quality checks, Docker paths, and pull-request expectations.
+- [Production-ready definition](./production-ready.md)
+  - Green CI is necessary and not sufficient. Machine-readable parity matrix
+    and the 18 release gates.
 - [Build and Release Scripts](./build-and-release.md)
   - Commands for Android APK/AAB builds and iOS Capacitor preparation.
 - [Docker contributor lab](./docker-dev.md)

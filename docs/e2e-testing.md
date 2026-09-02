@@ -69,7 +69,10 @@ launches `WebKitWebDriver` itself if it's on `PATH`.
   → reopen lifecycle with wrong-password coverage.
 - **CI**: the Linux desktop-preview workflow builds the unbundled Tauri binary,
   runs `tauri-driver` under `xvfb`, and executes the non-mutating E2E suite on
-  every desktop-preview push or pull request.
+  every desktop-preview push or pull request. Android Preview runs packaged
+  instrumented tests on an emulator, including Watch Only landing visibility,
+  Chipnet xPub preview, create, and relaunch. A missing Watch Only action on
+  the Android landing fails that job.
 - Biometric unlock is out of scope for WebDriver automation — it's a native OS
   dialog outside the webview and generally can't be driven by WebDriver; that
   one stays a manual test.
