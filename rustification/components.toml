@@ -27,7 +27,7 @@ security_weight = 8
 [[component]]
 name = "ui"
 current = "react-typescript"
-target = "leptos-rust"
+target = "transport-generic-leptos-rust"
 layer = "ui-adapter"
 status = "started"
 security_weight = 1
@@ -35,9 +35,9 @@ security_weight = 1
 [[component]]
 name = "native-shell"
 current = "tauri-desktop-capacitor-mobile"
-target = "tauri2"
-layer = "platform-adapter"
-status = "planned"
+target = "replaceable-native-shell"
+layer = "shell-adapter"
+status = "started"
 security_weight = 6
 
 [[component]]
@@ -58,11 +58,19 @@ security_weight = 8
 
 [[component]]
 name = "application-transport"
-current = "local-wasm-and-direct-rust"
+current = "local-wasm-direct-rust-versioned-wire"
 target = "renderer-shell-agnostic"
 layer = "transport"
 status = "started"
 security_weight = 8
+
+[[component]]
+name = "tauri-transport-adapter"
+current = "dedicated-rust-wasm-adapter"
+target = "replaceable-shell-transport-provider"
+layer = "transport-adapter"
+status = "started"
+security_weight = 7
 
 [[component]]
 name = "capability-providers"
@@ -76,6 +84,14 @@ security_weight = 8
 name = "native-capability-providers"
 current = "clipboard-live-storage-notifications-opt-in"
 target = "capability-by-capability-rust-providers"
+layer = "platform-provider"
+status = "started"
+security_weight = 8
+
+[[component]]
+name = "mobile-capability-providers"
+current = "tauri-shell-plugin-adapters"
+target = "best-provider-per-capability"
 layer = "platform-provider"
 status = "started"
 security_weight = 8
