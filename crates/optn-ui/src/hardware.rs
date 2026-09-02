@@ -15,7 +15,7 @@ use crate::derivation::DerivationPicker;
 use crate::{dispatch_action, UiTransport};
 use leptos::prelude::*;
 use optn_app::{
-    hardware_setup_preview, hardware_view_model, AccountPath, AppAction, AppRoute, AppState,
+    hardware_setup_preview, hardware_view_model, AccountPath, AppAction, AppState,
     HardwareSetupPreview, HardwareVendor,
 };
 
@@ -74,7 +74,7 @@ pub fn HardwareWalletSetup(transport: UiTransport, state: RwSignal<AppState>) ->
                     on:click=move |_| dispatch_action(
                         transport,
                         state,
-                        AppAction::Navigate(AppRoute::Landing),
+                        AppAction::GoBack,
                     )
                 >
                     "← Back"

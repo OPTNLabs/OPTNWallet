@@ -843,7 +843,7 @@ pub fn ReceivePage(transport: UiTransport, state: RwSignal<AppState>) -> impl In
                     on:click=move |_| dispatch_action(
                         transport,
                         state,
-                        AppAction::Navigate(AppRoute::WalletHome),
+                        AppAction::GoBack,
                     )
                 >
                     "‹ Home"
@@ -888,7 +888,7 @@ pub fn SendPage(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
                     on:click=move |_| dispatch_action(
                         transport,
                         state,
-                        AppAction::Navigate(AppRoute::WalletHome),
+                        AppAction::GoBack,
                     )
                 >
                     "‹ Home"
