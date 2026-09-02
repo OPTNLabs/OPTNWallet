@@ -4,6 +4,7 @@ members = [
   "crates/optn-app",
   "crates/optn-platform",
   "crates/optn-runtime",
+  "crates/optn-transport",
   "crates/optn-ui",
   "xtask",
 ]
@@ -16,6 +17,7 @@ default-members = [
   "crates/optn-app",
   "crates/optn-platform",
   "crates/optn-runtime",
+  "crates/optn-transport",
   "crates/optn-ui",
   "xtask",
 ]
