@@ -132,6 +132,19 @@ fn App(transport: Rc<dyn AppTransport>) -> impl IntoView {
                         >
                             "Import wallet"
                         </a>
+                        <Show when=|| cfg!(feature = "tauri-transport")>
+                            <a
+                                class="secondary"
+                                href={onboarding_view_model(&AppState::default()).watch_only_wallet_href}
+                                on:click=move |_| dispatch_action(
+                                    transport,
+                                    state,
+                                    AppAction::Navigate(AppRoute::WatchOnlyWallet),
+                                )
+                            >
+                                "Create watch-only wallet"
+                            </a>
+                        </Show>
                     </nav>
                 </section>
             </section>

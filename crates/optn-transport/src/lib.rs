@@ -43,6 +43,7 @@ pub enum WireRoute {
     Landing,
     CreateWallet,
     ImportWallet,
+    WatchOnlyWallet,
     WalletHome,
 }
 
@@ -106,6 +107,7 @@ impl From<AppRoute> for WireRoute {
             AppRoute::Landing => Self::Landing,
             AppRoute::CreateWallet => Self::CreateWallet,
             AppRoute::ImportWallet => Self::ImportWallet,
+            AppRoute::WatchOnlyWallet => Self::WatchOnlyWallet,
             AppRoute::WalletHome => Self::WalletHome,
         }
     }
@@ -117,6 +119,7 @@ impl From<WireRoute> for AppRoute {
             WireRoute::Landing => Self::Landing,
             WireRoute::CreateWallet => Self::CreateWallet,
             WireRoute::ImportWallet => Self::ImportWallet,
+            WireRoute::WatchOnlyWallet => Self::WatchOnlyWallet,
             WireRoute::WalletHome => Self::WalletHome,
         }
     }
@@ -359,7 +362,7 @@ mod tests {
         let decoded: WireState = serde_json::from_str(&encoded).unwrap();
         assert_eq!(AppState::try_from(decoded).unwrap(), state);
 
-        let event = AppEvent::RouteChanged(AppRoute::WalletHome);
+        let event = AppEvent::RouteChanged(AppRoute::WatchOnlyWallet);
         let encoded = serde_json::to_string(&WireEvent::from(event)).unwrap();
         let decoded: WireEvent = serde_json::from_str(&encoded).unwrap();
         assert_eq!(AppEvent::try_from(decoded).unwrap(), event);

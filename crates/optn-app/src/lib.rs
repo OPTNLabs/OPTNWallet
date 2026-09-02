@@ -19,6 +19,7 @@ pub enum AppRoute {
     Landing,
     CreateWallet,
     ImportWallet,
+    WatchOnlyWallet,
     WalletHome,
 }
 
@@ -28,6 +29,7 @@ impl AppRoute {
             Self::Landing => "#/",
             Self::CreateWallet => "#/createwallet",
             Self::ImportWallet => "#/importwallet",
+            Self::WatchOnlyWallet => "#/watch-only",
             Self::WalletHome => "#/wallet",
         }
     }
@@ -115,6 +117,7 @@ pub struct OnboardingViewModel {
     pub network_prefix: &'static str,
     pub create_wallet_href: &'static str,
     pub import_wallet_href: &'static str,
+    pub watch_only_wallet_href: &'static str,
     pub dark: bool,
     pub help_open: bool,
 }
@@ -124,6 +127,7 @@ pub fn onboarding_view_model(state: &AppState) -> OnboardingViewModel {
         network_prefix: state.network.prefix(),
         create_wallet_href: AppRoute::CreateWallet.fragment(),
         import_wallet_href: AppRoute::ImportWallet.fragment(),
+        watch_only_wallet_href: AppRoute::WatchOnlyWallet.fragment(),
         dark: state.theme == ThemeMode::Dark,
         help_open: state.help_open,
     }
@@ -170,7 +174,7 @@ mod tests {
     proptest::proptest! {
         #[test]
         fn arbitrary_action_sequences_keep_view_model_consistent(
-            actions in proptest::collection::vec(0u8..8, 0..256)
+            actions in proptest::collection::vec(0u8..9, 0..256)
         ) {
             let mut state = AppState::default();
 
@@ -179,10 +183,11 @@ mod tests {
                     0 => AppAction::Navigate(AppRoute::Landing),
                     1 => AppAction::Navigate(AppRoute::CreateWallet),
                     2 => AppAction::Navigate(AppRoute::ImportWallet),
-                    3 => AppAction::Navigate(AppRoute::WalletHome),
-                    4 => AppAction::ToggleTheme,
-                    5 => AppAction::SetNetwork(Network::Mainnet),
-                    6 => AppAction::SetNetwork(Network::Chipnet),
+                    3 => AppAction::Navigate(AppRoute::WatchOnlyWallet),
+                    4 => AppAction::Navigate(AppRoute::WalletHome),
+                    5 => AppAction::ToggleTheme,
+                    6 => AppAction::SetNetwork(Network::Mainnet),
+                    7 => AppAction::SetNetwork(Network::Chipnet),
                     _ => if state.help_open {
                         AppAction::CloseHelp
                     } else {
@@ -214,5 +219,6 @@ mod tests {
         assert_eq!(vm.network_prefix, "bchtest");
         assert_eq!(vm.create_wallet_href, "#/createwallet");
         assert_eq!(vm.import_wallet_href, "#/importwallet");
+        assert_eq!(vm.watch_only_wallet_href, "#/watch-only");
     }
 }
