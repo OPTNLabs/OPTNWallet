@@ -3,10 +3,9 @@
 //! Keep OS and shell details here. Wallet/application crates must only know the
 //! traits from `optn-platform`.
 
-use optn_platform::{
-    Capability, CapabilityProvider, Clipboard as ClipboardPort, PlatformError, PlatformFuture,
-    PlatformResult, ProviderDescriptor, ProviderKind,
-};
+use optn_platform::{CapabilityProvider, Clipboard as ClipboardPort, PlatformFuture, PlatformResult};
+use optn_platform_native::NativeClipboard;
+use tauri::Manager;
 
 #[derive(Clone)]
 pub struct TauriClipboard {
@@ -19,25 +18,17 @@ impl TauriClipboard {
     }
 
     pub fn read_text_sync(&self) -> PlatformResult<String> {
-        crate::clipboard::with_clipboard(&self.app, |clipboard| clipboard.get_text())
-            .map_err(PlatformError::Other)
+        self.app.state::<NativeClipboard>().read_text_sync()
     }
 
     pub fn write_text_sync(&self, value: &str) -> PlatformResult<()> {
-        crate::clipboard::with_clipboard(&self.app, |clipboard| {
-            clipboard.set_text(value.to_owned())
-        })
-        .map_err(PlatformError::Other)
+        self.app.state::<NativeClipboard>().write_text_sync(value)
     }
 }
 
 impl CapabilityProvider for TauriClipboard {
-    fn descriptor(&self) -> ProviderDescriptor {
-        ProviderDescriptor {
-            id: "tauri-arboard-clipboard",
-            kind: ProviderKind::Shell,
-            capabilities: &[Capability::Clipboard],
-        }
+    fn descriptor(&self) -> optn_platform::ProviderDescriptor {
+        self.app.state::<NativeClipboard>().descriptor()
     }
 }
 
