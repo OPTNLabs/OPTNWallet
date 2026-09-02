@@ -11,6 +11,7 @@
 //! the shared P2SH address, so every cosigner lands on the same wallet no
 //! matter what order they typed each other in.
 
+use crate::scan::ScanButton;
 use crate::{dispatch_action, UiTransport};
 use leptos::prelude::*;
 use optn_app::{
@@ -209,6 +210,20 @@ pub fn MultisigSection(transport: UiTransport, state: RwSignal<AppState>) -> imp
                                     clear();
                                 }
                             ></textarea>
+                            <ScanButton
+                                transport=transport
+                                state=state
+                                label=format!("cosigner-{index}")
+                                error=error
+                                on_payload=Callback::new(move |scanned: String| {
+                                    drafts.update(|list| {
+                                        if let Some(draft) = list.get_mut(index) {
+                                            draft.xpub = scanned;
+                                        }
+                                    });
+                                    preview.set(None);
+                                })
+                            />
                         </label>
 
                         <label class="field">

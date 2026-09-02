@@ -1,8 +1,16 @@
 //! Framework-neutral section flow.
 //!
-//! Renderers (Leptos, later Dioxus, egui, Tauri webviews) do not own Back/Next.
-//! They read [`FlowViewModel`] and dispatch [`crate::AppAction::GoBack`] /
-//! [`crate::AppAction::AdvanceOnboarding`]. The mnemonic never lives here.
+//! Renderers (Leptos now; Dioxus, egui, or a Tauri webview later) do not own
+//! Back/Next. They read [`FlowViewModel`] and dispatch
+//! [`crate::AppAction::GoBack`] / [`crate::AppAction::AdvanceOnboarding`].
+//! Swapping a renderer means painting this view-model again — not rewriting
+//! the section graph. The mnemonic never lives here.
+//!
+//! Desktop create: Reveal → Confirm → Path → Name → Home.
+//! Desktop import: Words → Path → Name → Home.
+//! Settings: list → row → list.
+//! Overlays (Receive, Send, History, Flipstarter, FundMe, Watch Only,
+//! Hardware) pop to the tab that opened them.
 
 use crate::{AppRoute, SettingsRowId};
 
@@ -104,11 +112,19 @@ pub struct FlowViewModel {
     pub create_step: CreateStep,
     pub import_step: ImportStep,
     pub settings_focus: Option<SettingsRowId>,
+    /// Tab that opened the current overlay. `None` on a tab root.
+    pub return_to: Option<AppRoute>,
     pub title: &'static str,
     pub next_label: &'static str,
     pub back_label: &'static str,
     /// False on the last create/import step: the renderer must open the wallet.
     pub can_advance: bool,
+    /// False on tab roots with nothing to pop. Hide the Back control then.
+    pub can_go_back: bool,
+}
+
+fn overlay_parent(route: AppRoute, return_to: Option<AppRoute>) -> Option<AppRoute> {
+    return_to.or(route.default_parent())
 }
 
 pub fn flow_view_model(
@@ -116,6 +132,7 @@ pub fn flow_view_model(
     create_step: CreateStep,
     import_step: ImportStep,
     settings_focus: Option<SettingsRowId>,
+    return_to: Option<AppRoute>,
 ) -> FlowViewModel {
     match route {
         AppRoute::CreateWallet => FlowViewModel {
@@ -123,26 +140,31 @@ pub fn flow_view_model(
             create_step,
             import_step,
             settings_focus,
+            return_to,
             title: create_step.title(),
             next_label: create_step.next_label(),
             back_label: "Back",
             can_advance: create_step.next().is_some(),
+            can_go_back: true,
         },
         AppRoute::ImportWallet => FlowViewModel {
             route,
             create_step,
             import_step,
             settings_focus,
+            return_to,
             title: import_step.title(),
             next_label: import_step.next_label(),
             back_label: "Back",
             can_advance: import_step.next().is_some(),
+            can_go_back: true,
         },
         AppRoute::Settings => FlowViewModel {
             route,
             create_step,
             import_step,
             settings_focus,
+            return_to,
             title: settings_focus
                 .map(SettingsRowId::title)
                 .unwrap_or("Settings"),
@@ -153,16 +175,40 @@ pub fn flow_view_model(
                 "Back"
             },
             can_advance: false,
+            can_go_back: settings_focus.is_some(),
         },
+        AppRoute::WatchOnlyWallet
+        | AppRoute::HardwareWallet
+        | AppRoute::Receive
+        | AppRoute::Send
+        | AppRoute::History
+        | AppRoute::Flipstarter
+        | AppRoute::FundMe => {
+            let parent = overlay_parent(route, return_to);
+            FlowViewModel {
+                route,
+                create_step,
+                import_step,
+                settings_focus,
+                return_to,
+                title: route.section_title(),
+                next_label: "",
+                back_label: parent.map(AppRoute::section_title).unwrap_or("Back"),
+                can_advance: false,
+                can_go_back: parent.is_some(),
+            }
+        }
         _ => FlowViewModel {
             route,
             create_step,
             import_step,
             settings_focus,
-            title: "",
+            return_to,
+            title: route.section_title(),
             next_label: "",
             back_label: "Back",
             can_advance: false,
+            can_go_back: false,
         },
     }
 }
@@ -201,5 +247,27 @@ mod tests {
     fn confirm_indices_cover_a_24_word_phrase() {
         assert_eq!(create_confirm_indices(12), [0, 6, 11]);
         assert_eq!(create_confirm_indices(24), [0, 12, 23]);
+    }
+
+    #[test]
+    fn overlay_back_label_follows_the_opening_tab() {
+        let from_actions = flow_view_model(
+            AppRoute::Flipstarter,
+            CreateStep::Reveal,
+            ImportStep::Words,
+            None,
+            Some(AppRoute::Actions),
+        );
+        assert_eq!(from_actions.back_label, "Actions");
+        assert!(from_actions.can_go_back);
+
+        let from_explore = flow_view_model(
+            AppRoute::FundMe,
+            CreateStep::Reveal,
+            ImportStep::Words,
+            None,
+            Some(AppRoute::Explore),
+        );
+        assert_eq!(from_explore.back_label, "Explore");
     }
 }

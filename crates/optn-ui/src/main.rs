@@ -13,6 +13,8 @@ mod hardware;
 #[cfg(target_arch = "wasm32")]
 mod multisig;
 #[cfg(target_arch = "wasm32")]
+mod scan;
+#[cfg(target_arch = "wasm32")]
 mod settings;
 #[cfg(target_arch = "wasm32")]
 mod tools;
@@ -34,6 +36,8 @@ use optn_app::{
 use optn_transport::AppTransport;
 #[cfg(all(target_arch = "wasm32", not(feature = "tauri-transport")))]
 use optn_transport::LocalTransport;
+#[cfg(target_arch = "wasm32")]
+use scan::ScanButton;
 #[cfg(target_arch = "wasm32")]
 use settings::SettingsPage;
 #[cfg(target_arch = "wasm32")]
@@ -110,7 +114,7 @@ fn WatchOnlySetup(transport: UiTransport, state: RwSignal<AppState>) -> impl Int
                         AppAction::GoBack,
                     )
                 >
-                    "← Back"
+                    {move || format!("← {}", state.get().flow().back_label)}
                 </button>
 
                 <p class="eyebrow">"Public keys only"</p>
@@ -185,6 +189,16 @@ fn WatchOnlySetup(transport: UiTransport, state: RwSignal<AppState>) -> impl Int
                                 Network::Chipnet => "Expected account path: m/44'/1'/account'",
                             }}
                         </small>
+                        <ScanButton
+                            transport=transport
+                            state=state
+                            label="xpub"
+                            error=error
+                            on_payload=Callback::new(move |scanned: String| {
+                                account_xpub.set(scanned);
+                                preview.set(None);
+                            })
+                        />
                     </label>
 
                     <label class="field">
@@ -768,6 +782,11 @@ fn ImportWallet(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
                     >
                         {move || state.get().flow().next_label}
                     </button>
+                </Show>
+                <Show when=move || error.get().is_some()>
+                    <p class="form-error" role="alert">
+                        {move || error.get().unwrap_or_default()}
+                    </p>
                 </Show>
             </section>
         </section>

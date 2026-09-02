@@ -628,6 +628,17 @@ pub fn HistoryPage(transport: UiTransport, state: RwSignal<AppState>) -> impl In
     view! {
         <WalletChrome transport=transport state=state>
             <section class="page">
+                <button
+                    class="text-link back"
+                    type="button"
+                    on:click=move |_| dispatch_action(
+                        transport,
+                        state,
+                        AppAction::GoBack,
+                    )
+                >
+                    {move || format!("‹ {}", state.get().flow().back_label)}
+                </button>
                 <h1>"History"</h1>
                 <p class="lede">"Receives from coins and a pending send. Rebuild Wallet clears this."</p>
                 <Show
@@ -674,10 +685,10 @@ pub fn FlipstarterPage(transport: UiTransport, state: RwSignal<AppState>) -> imp
                     on:click=move |_| dispatch_action(
                         transport,
                         state,
-                        AppAction::Navigate(AppRoute::Actions),
+                        AppAction::GoBack,
                     )
                 >
-                    "‹ Actions"
+                    {move || format!("‹ {}", state.get().flow().back_label)}
                 </button>
                 <h1>"Flipstarter"</h1>
                 <p class="lede">
@@ -807,10 +818,10 @@ pub fn FundMePage(transport: UiTransport, state: RwSignal<AppState>) -> impl Int
                     on:click=move |_| dispatch_action(
                         transport,
                         state,
-                        AppAction::Navigate(AppRoute::Explore),
+                        AppAction::GoBack,
                     )
                 >
-                    "‹ Explore"
+                    {move || format!("‹ {}", state.get().flow().back_label)}
                 </button>
                 <h1>"FundMe"</h1>
                 {move || {
@@ -846,7 +857,7 @@ pub fn ReceivePage(transport: UiTransport, state: RwSignal<AppState>) -> impl In
                         AppAction::GoBack,
                     )
                 >
-                    "‹ Home"
+                    {move || format!("‹ {}", state.get().flow().back_label)}
                 </button>
                 <h1>"Receive"</h1>
                 <p class="lede">"Share this address on the selected network."</p>
@@ -891,7 +902,7 @@ pub fn SendPage(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
                         AppAction::GoBack,
                     )
                 >
-                    "‹ Home"
+                    {move || format!("‹ {}", state.get().flow().back_label)}
                 </button>
                 <h1>"Send"</h1>
                 <p class="lede">

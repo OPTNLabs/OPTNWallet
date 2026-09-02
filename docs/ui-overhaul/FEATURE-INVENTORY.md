@@ -14,6 +14,30 @@ Companion to `README.md` (the layouts) and the tracking issue #71.
 - [ ] `testnet3`, `testnet4`, `regtest` listed but **greyed out — "coming soon"**.
       Present-and-disabled, not absent, so the roadmap is visible.
 
+## Settings — Servers: bring your own node and explorer
+
+A section for pointing the wallet at infrastructure the user runs, by address
+(IP/host + port), rather than only the bundled defaults.
+
+- [ ] **Custom node** — a **BIP37** peer (bloom-filter SPV), entered by
+      IP/host and port
+- [ ] **Custom Electrum server** — **Fulcrum**, the same
+- [ ] **Custom block explorer** — used for "view this transaction" links
+- [ ] Per-network: a chipnet endpoint must not be reachable from mainnet
+      settings, and switching network must not silently keep the old host
+- [ ] Connection test / status before the endpoint is adopted
+- [ ] **Use network default** to fall back (see above)
+
+Today `SettingsRowId::Servers` renders `Network::default_host()` read-only,
+and `NodeSection` in `crates/optn-ui/src/settings.rs` says so explicitly:
+"This wallet uses the network's default Electrum endpoint. Choosing your own
+server is not wired up yet." Replacing that text is the deliverable.
+
+Note the two are different protocols and want different fields and different
+failure messages: a BIP37 peer speaks the p2p protocol, Fulcrum speaks
+Electrum over TCP/TLS. Modelling them as one "server" string would make the
+error messages useless.
+
 ## Settings — "Not seeing your coins?"
 
 Account-path discovery, with this exact reassurance:
