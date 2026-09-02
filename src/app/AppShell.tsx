@@ -57,6 +57,7 @@ import ServerNotificationCenter from '../components/notifications/ServerNotifica
 import MarketplaceAppHost from '../pages/apps/MarketplaceAppHost';
 import CreateWalletPage from '../pages/onboarding/CreateWalletPage';
 import ImportWalletPage from '../pages/onboarding/ImportWalletPage';
+import WatchOnlyWalletPage from '../pages/onboarding/WatchOnlyWalletPage';
 import LandingPage from '../pages/onboarding/LandingPage';
 import {
   ROUTE_PATHS,
@@ -243,6 +244,12 @@ function AppContent({ viewerOnly = false }: AppShellProps) {
                   path={ROUTE_PATHS.importWallet}
                   element={<ImportWalletPage />}
                 />
+                {hasCapability('watchOnlyWallet') && (
+                  <Route
+                    path={ROUTE_PATHS.watchOnlyWallet}
+                    element={<WatchOnlyWalletPage />}
+                  />
+                )}
                 <Route
                   path="*"
                   element={<Navigate to={ROUTE_PATHS.landing} replace />}
