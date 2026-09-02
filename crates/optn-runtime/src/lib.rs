@@ -155,8 +155,8 @@ mod tests {
         runtime.dispatch(AppAction::ToggleTheme).await.unwrap();
 
         let event = events.recv().await.unwrap();
-        assert_eq!(event, AppEvent::ThemeChanged(ThemeMode::Light));
-        assert_eq!(state_rx.borrow().theme, ThemeMode::Light);
+        assert_eq!(event, AppEvent::ThemeChanged(ThemeMode::Dark));
+        assert_eq!(state_rx.borrow().theme, ThemeMode::Dark);
     }
 
     #[tokio::test]
@@ -179,16 +179,16 @@ mod tests {
         let runtime = AppRuntime::spawn(AppState::default());
         let transport = DirectTransport::new(runtime);
         let mut state = transport.snapshot().await.unwrap();
-        assert_eq!(state.theme, ThemeMode::Dark);
+        assert_eq!(state.theme, ThemeMode::Green);
 
         transport.dispatch(AppAction::ToggleTheme).await.unwrap();
         assert_eq!(
             transport.next_event().await.unwrap(),
-            Some(AppEvent::ThemeChanged(ThemeMode::Light))
+            Some(AppEvent::ThemeChanged(ThemeMode::Dark))
         );
 
         state = transport.snapshot().await.unwrap();
-        assert_eq!(state.theme, ThemeMode::Light);
+        assert_eq!(state.theme, ThemeMode::Dark);
     }
 
     #[tokio::test]
@@ -200,6 +200,6 @@ mod tests {
 
         let mut state_rx = runtime.subscribe_state();
         state_rx.changed().await.unwrap();
-        assert_eq!(state_rx.borrow().theme, ThemeMode::Light);
+        assert_eq!(state_rx.borrow().theme, ThemeMode::Dark);
     }
 }
