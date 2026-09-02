@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   CAPABILITIES,
   capabilityAbsence,
+  currentSurface,
   hasCapability,
   type Capability,
   type Surface,
@@ -21,7 +22,21 @@ const DESKTOP_ONLY: Capability[] = [
   'cashFusion',
 ];
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 describe('cross-platform capability contract', () => {
+  it('uses the mobile build stamp before WebView runtime heuristics', () => {
+    vi.stubEnv('VITE_APP_SURFACE', 'android');
+    expect(currentSurface()).toBe('android');
+    expect(hasCapability('watchOnlyWallet')).toBe(true);
+
+    vi.stubEnv('VITE_APP_SURFACE', 'ios');
+    expect(currentSurface()).toBe('ios');
+    expect(hasCapability('watchOnlyWallet')).toBe(true);
+  });
+
   it('keeps each platform decision as a single explicit boolean toggle', () => {
     expect(CAPABILITIES.cashFusion.enabledOn).toEqual({
       desktop: true,
