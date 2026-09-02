@@ -27,11 +27,9 @@ pub enum AppSurface {
 
 impl AppSurface {
     /// Watch-only onboarding is a surface capability, not a renderer feature.
-    /// Every build surface offers it.
+    /// Desktop, Android, and iOS offer it; web and extension do not.
     pub const fn offers_watch_only(self) -> bool {
-        match self {
-            Self::Desktop | Self::Android | Self::Ios | Self::Web | Self::Extension => true,
-        }
+        matches!(self, Self::Desktop | Self::Android | Self::Ios)
     }
 }
 
@@ -399,8 +397,8 @@ mod tests {
             (AppSurface::Desktop, true, true),
             (AppSurface::Android, true, false),
             (AppSurface::Ios, true, false),
-            (AppSurface::Web, true, false),
-            (AppSurface::Extension, true, false),
+            (AppSurface::Web, false, false),
+            (AppSurface::Extension, false, false),
         ];
         for (surface, watch_only, hardware) in expected {
             let vm = onboarding_view_model(&AppState::for_surface(surface));
@@ -414,13 +412,11 @@ mod tests {
             );
         }
 
-        let desktop = onboarding_view_model(&AppState::for_surface(AppSurface::Desktop));
+        let android = onboarding_view_model(&AppState::for_surface(AppSurface::Android));
         let web = onboarding_view_model(&AppState::for_surface(AppSurface::Web));
-        assert!(desktop.show_watch_only);
-        assert!(web.show_watch_only);
         assert_ne!(
-            desktop.show_hardware_wallet, web.show_hardware_wallet,
-            "hardware stays desktop-only even when watch-only is on every surface"
+            android.show_watch_only, web.show_watch_only,
+            "a renderer-hardcoded Watch Only menu cannot distinguish Android from web"
         );
     }
 

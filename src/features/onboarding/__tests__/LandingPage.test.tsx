@@ -59,7 +59,7 @@ afterEach(() => {
 });
 
 describe('onboarding watch-only capability', () => {
-  it.each(['android', 'ios', 'web', 'extension'] as const)(
+  it.each(['android', 'ios'] as const)(
     'shows watch-only alongside create and import on %s',
     (surface) => {
       render(<LandingPage surface={surface} />);
@@ -73,6 +73,16 @@ describe('onboarding watch-only capability', () => {
       expect(
         screen.getByRole('link', { name: 'Create Watch-Only Wallet' })
       ).toHaveAttribute('href', '/watch-only');
+    }
+  );
+
+  it.each(['web', 'extension'] as const)(
+    'keeps watch-only out of the %s surface',
+    (surface) => {
+      render(<LandingPage surface={surface} />);
+      expect(
+        screen.queryByRole('link', { name: 'Create Watch-Only Wallet' })
+      ).not.toBeInTheDocument();
     }
   );
 });
