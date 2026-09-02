@@ -1,6 +1,7 @@
 #[allow(dead_code)] // menu bar is built on the JS side now; kept for reference
 mod menu;
 
+pub mod app_transport;
 #[cfg(desktop)]
 pub mod clipboard;
 pub mod electrum_tcp;
@@ -1035,6 +1036,8 @@ pub fn run() {
 
     builder
         .invoke_handler(tauri::generate_handler![
+            app_transport::optn_app_dispatch,
+            app_transport::optn_app_snapshot,
             #[cfg(desktop)]
             clipboard::clipboard_write_text,
             #[cfg(desktop)]
