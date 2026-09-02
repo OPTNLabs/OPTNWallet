@@ -71,3 +71,11 @@ target = "provider-per-capability"
 layer = "platform-provider"
 status = "started"
 security_weight = 8
+
+[[component]]
+name = "native-capability-providers"
+current = "clipboard-live-storage-notifications-opt-in"
+target = "capability-by-capability-rust-providers"
+layer = "platform-provider"
+status = "started"
+security_weight = 8
