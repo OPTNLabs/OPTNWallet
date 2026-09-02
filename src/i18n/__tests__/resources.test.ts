@@ -122,6 +122,25 @@ describe('i18n resources', () => {
     expect(untranslated).toEqual([]);
   });
 
+  it('keeps Cash Code as the stable RPA UI name in every locale', () => {
+    const brandedKeys = [
+      'experimental.rpaDescription',
+      'experimental.rpaWarning',
+      'rpa.copySuccess',
+      'rpa.derivationFailed',
+      'rpa.title',
+      'rpa.deriving',
+      'rpa.shareDescription',
+      'rpa.paycode',
+    ] as const;
+
+    for (const locale of SUPPORTED_LOCALES) {
+      for (const key of brandedKeys) {
+        expect(translations[locale][key]).toContain('Cash Code');
+      }
+    }
+  });
+
   it('uses RTL layout only for Arabic', () => {
     expect(localeDirection('ar')).toBe('rtl');
     expect(localeDirection('pt-BR')).toBe('ltr');
