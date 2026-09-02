@@ -8,8 +8,9 @@
 
 use optn_app::{
     AppAction, AppEvent, AppRoute, AppState, AppSurface, CampaignOutput, Coin, FeatureFlag,
-    FeatureFlags, FlipstarterPledge, FreezeReason, Network, OpenedWallet, Outpoint, PledgeStatus,
-    SpendKind, SpendPlan, ThemeMode, UiSkin, WalletKind, WatchOnlySetupPreview,
+    FeatureFlags, FlipstarterPledge, FreezeReason, HardwareSetupPreview, HardwareVendor, Network,
+    OpenedWallet, Outpoint, PledgeStatus, SpendKind, SpendPlan, ThemeMode, UiSkin, WalletKind,
+    WatchOnlySetupPreview,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -48,6 +49,7 @@ pub enum WireRoute {
     CreateWallet,
     ImportWallet,
     WatchOnlyWallet,
+    HardwareWallet,
     WalletHome,
     Coins,
     Actions,
@@ -207,6 +209,15 @@ pub enum WireActionKind {
         receive_token_address: String,
         change_address: String,
     },
+    OpenHardwareWallet {
+        vendor: String,
+        wallet_name: String,
+        master_fingerprint: Option<String>,
+        account_path: String,
+        receive_address: String,
+        receive_token_address: String,
+        change_address: String,
+    },
     PrepareSend {
         destination: String,
         amount_sats: u64,
@@ -251,6 +262,7 @@ pub struct WireState {
 pub enum WireWalletKind {
     Seed,
     WatchOnly,
+    Hardware,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -318,6 +330,7 @@ impl From<AppRoute> for WireRoute {
             AppRoute::CreateWallet => Self::CreateWallet,
             AppRoute::ImportWallet => Self::ImportWallet,
             AppRoute::WatchOnlyWallet => Self::WatchOnlyWallet,
+            AppRoute::HardwareWallet => Self::HardwareWallet,
             AppRoute::WalletHome => Self::WalletHome,
             AppRoute::Coins => Self::Coins,
             AppRoute::Actions => Self::Actions,
@@ -339,6 +352,7 @@ impl From<WireRoute> for AppRoute {
             WireRoute::CreateWallet => Self::CreateWallet,
             WireRoute::ImportWallet => Self::ImportWallet,
             WireRoute::WatchOnlyWallet => Self::WatchOnlyWallet,
+            WireRoute::HardwareWallet => Self::HardwareWallet,
             WireRoute::WalletHome => Self::WalletHome,
             WireRoute::Coins => Self::Coins,
             WireRoute::Actions => Self::Actions,
@@ -622,6 +636,15 @@ impl From<AppAction> for WireAction {
                 receive_token_address: preview.receive_token_address,
                 change_address: preview.change_address,
             },
+            AppAction::OpenHardwareWallet(preview) => WireActionKind::OpenHardwareWallet {
+                vendor: preview.vendor.id().to_string(),
+                wallet_name: preview.wallet_name,
+                master_fingerprint: preview.master_fingerprint,
+                account_path: preview.account_path,
+                receive_address: preview.receive_address,
+                receive_token_address: preview.receive_token_address,
+                change_address: preview.change_address,
+            },
             AppAction::PrepareSend {
                 destination,
                 amount_sats,
@@ -705,6 +728,28 @@ impl TryFrom<WireAction> for AppAction {
                 receive_token_address,
                 change_address,
             }),
+            WireActionKind::OpenHardwareWallet {
+                vendor,
+                wallet_name,
+                master_fingerprint,
+                account_path,
+                receive_address,
+                receive_token_address,
+                change_address,
+            } => Self::OpenHardwareWallet(HardwareSetupPreview {
+                // An unknown vendor is refused rather than defaulted: opening
+                // a spendable wallet against a device this build cannot drive
+                // would strand the funds.
+                vendor: HardwareVendor::from_id(&vendor).ok_or_else(|| {
+                    TransportError::InvalidData(format!("unknown hardware vendor '{vendor}'"))
+                })?,
+                wallet_name,
+                master_fingerprint,
+                account_path,
+                receive_address,
+                receive_token_address,
+                change_address,
+            }),
             WireActionKind::PrepareSend {
                 destination,
                 amount_sats,
@@ -751,6 +796,7 @@ impl From<&OpenedWallet> for WireOpenedWallet {
             kind: match value.kind {
                 WalletKind::Seed => WireWalletKind::Seed,
                 WalletKind::WatchOnly => WireWalletKind::WatchOnly,
+                WalletKind::Hardware => WireWalletKind::Hardware,
             },
             name: value.name.clone(),
             receive_address: value.receive_address.clone(),
@@ -766,6 +812,7 @@ impl From<WireOpenedWallet> for OpenedWallet {
             kind: match value.kind {
                 WireWalletKind::Seed => WalletKind::Seed,
                 WireWalletKind::WatchOnly => WalletKind::WatchOnly,
+                WireWalletKind::Hardware => WalletKind::Hardware,
             },
             name: value.name,
             receive_address: value.receive_address,

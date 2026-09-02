@@ -226,7 +226,32 @@ pub fn seed_receive_address_at(
         .encode())
 }
 
-/// Build a mnemonic from caller-supplied entropy (16 bytes → 12 words).
+/// BIP39 word counts this wallet creates and imports.
+///
+/// Same set as `optn new --words`. 12 is the default; 24 is 256 bits of entropy.
+pub const BIP39_WORD_COUNTS: [usize; 5] = [12, 15, 18, 21, 24];
+
+/// Default create length. Matches `optn new` when `--words` is omitted.
+pub const BIP39_DEFAULT_WORD_COUNT: usize = 12;
+
+/// Entropy bytes for a BIP39 word count. Shared by the CLI and the wallet UI.
+pub fn entropy_len_for_word_count(words: usize) -> Result<usize> {
+    match words {
+        12 => Ok(16),
+        15 => Ok(20),
+        18 => Ok(24),
+        21 => Ok(28),
+        24 => Ok(32),
+        other => Err(CliError::Usage(format!(
+            "word count must be 12, 15, 18, 21 or 24 (got {other})"
+        ))),
+    }
+}
+
+/// Build a mnemonic from caller-supplied entropy.
+///
+/// Valid lengths are 16, 20, 24, 28, and 32 bytes (12–24 words). The caller
+/// gathers the bytes (Web Crypto, OS RNG); this function does not.
 pub fn mnemonic_from_entropy(entropy: &[u8]) -> Result<String> {
     let mnemonic = Mnemonic::from_entropy(entropy).map_err(|error| {
         CliError::Usage(format!("entropy must be a valid BIP39 length ({error})"))
@@ -429,23 +454,26 @@ mod tests {
         // `entropy.len() != KEY_SIZE + 1`, which accepts 24 words and silently
         // rejects every shorter phrase — so this asserts the property that
         // choice of crate is responsible for.
-        for (entropy_bytes, expected_words) in [(16, 12), (20, 15), (24, 18), (28, 21), (32, 24)] {
+        for words in BIP39_WORD_COUNTS {
+            let entropy_bytes = entropy_len_for_word_count(words).expect("supported count");
             let entropy = vec![0x2a_u8; entropy_bytes];
-            let phrase = Mnemonic::from_entropy_in(Language::English, &entropy)
-                .unwrap_or_else(|e| panic!("{entropy_bytes} bytes of entropy must be valid: {e}"))
-                .to_string();
+            let phrase = mnemonic_from_entropy(&entropy).unwrap_or_else(|e| {
+                panic!("{entropy_bytes} bytes of entropy must be valid: {e}")
+            });
             assert_eq!(
                 phrase.split_whitespace().count(),
-                expected_words,
-                "{entropy_bytes} bytes should give {expected_words} words"
+                words,
+                "{entropy_bytes} bytes should give {words} words"
             );
             let wallet = Wallet::from_mnemonic(&phrase, "")
-                .unwrap_or_else(|e| panic!("{expected_words}-word phrase must import: {e}"));
+                .unwrap_or_else(|e| panic!("{words}-word phrase must import: {e}"));
             let address = wallet
                 .address(Network::Mainnet, "m/44'/145'/0'/0/0")
                 .expect("derivation must succeed");
             assert!(address.encode().starts_with("bitcoincash:"));
         }
+        assert!(entropy_len_for_word_count(13).is_err());
+        assert_eq!(BIP39_DEFAULT_WORD_COUNT, 12);
     }
 
     #[test]

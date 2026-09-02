@@ -9,12 +9,16 @@ use leptos::reactive::owner::LocalStorage;
 #[cfg(target_arch = "wasm32")]
 mod derivation;
 #[cfg(target_arch = "wasm32")]
+mod hardware;
+#[cfg(target_arch = "wasm32")]
 mod settings;
 #[cfg(target_arch = "wasm32")]
 mod tools;
 
 #[cfg(target_arch = "wasm32")]
 use derivation::DerivationPicker;
+#[cfg(target_arch = "wasm32")]
+use hardware::HardwareWalletSetup;
 #[cfg(target_arch = "wasm32")]
 use optn_app::{
     mnemonic_from_entropy, onboarding_actions, onboarding_view_model, seed_wallet_preview_at,
@@ -694,6 +698,9 @@ fn App(transport: Rc<dyn AppTransport>) -> impl IntoView {
             {move || match page.get() {
                 AppRoute::WatchOnlyWallet => view! {
                     <WatchOnlySetup transport=transport state=state />
+                }.into_any(),
+                AppRoute::HardwareWallet => view! {
+                    <HardwareWalletSetup transport=transport state=state />
                 }.into_any(),
                 AppRoute::WalletHome => view! {
                     <WalletHome transport=transport state=state />

@@ -852,6 +852,7 @@ pub fn ReceivePage(transport: UiTransport, state: RwSignal<AppState>) -> impl In
                     <p class="muted">
                         {move || match state.get().wallet.as_ref().map(|wallet| wallet.kind) {
                             Some(WalletKind::WatchOnly) => "Watch-only receive",
+                            Some(WalletKind::Hardware) => "Hardware wallet receive",
                             Some(WalletKind::Seed) => "Seed wallet receive",
                             None => "No wallet",
                         }}
