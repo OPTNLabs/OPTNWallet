@@ -16,6 +16,18 @@ use tokio::sync::{broadcast, mpsc, watch, Mutex};
 const ACTION_CAPACITY: usize = 128;
 const EVENT_CAPACITY: usize = 128;
 
+/// The runtime driver is no longer running, so the action was not applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuntimeStopped;
+
+impl std::fmt::Display for RuntimeStopped {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "application runtime is closed")
+    }
+}
+
+impl std::error::Error for RuntimeStopped {}
+
 #[derive(Clone)]
 pub struct AppRuntime {
     action_tx: mpsc::Sender<AppAction>,
@@ -106,11 +118,18 @@ impl AppRuntime {
         runtime
     }
 
-    pub async fn dispatch(
-        &self,
-        action: AppAction,
-    ) -> Result<(), mpsc::error::SendError<AppAction>> {
-        self.action_tx.send(action).await
+    /// Hand an action to the driver.
+    ///
+    /// The error deliberately does not carry the action back. Tokio's
+    /// `SendError<AppAction>` returns the whole action by value, which makes
+    /// every `Result` on this call as large as the biggest `AppAction`
+    /// variant, and no caller wants the action back — they all map this to
+    /// "the runtime is gone".
+    pub async fn dispatch(&self, action: AppAction) -> Result<(), RuntimeStopped> {
+        self.action_tx
+            .send(action)
+            .await
+            .map_err(|_| RuntimeStopped)
     }
 
     pub fn state(&self) -> AppState {

@@ -271,6 +271,7 @@ pub struct WireOpenedWallet {
 pub enum WireSpendKind {
     SeedSpecified,
     WatchOnlyUnsignedPsbt,
+    HardwareUnsignedPsbt,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -785,6 +786,7 @@ impl From<&SpendPlan> for WireSpendPlan {
             kind: match value.kind {
                 SpendKind::SeedSpecified => WireSpendKind::SeedSpecified,
                 SpendKind::WatchOnlyUnsignedPsbt => WireSpendKind::WatchOnlyUnsignedPsbt,
+                SpendKind::HardwareUnsignedPsbt => WireSpendKind::HardwareUnsignedPsbt,
             },
         }
     }
@@ -802,6 +804,7 @@ impl TryFrom<WireSpendPlan> for SpendPlan {
             kind: match value.kind {
                 WireSpendKind::SeedSpecified => SpendKind::SeedSpecified,
                 WireSpendKind::WatchOnlyUnsignedPsbt => SpendKind::WatchOnlyUnsignedPsbt,
+                WireSpendKind::HardwareUnsignedPsbt => SpendKind::HardwareUnsignedPsbt,
             },
         })
     }

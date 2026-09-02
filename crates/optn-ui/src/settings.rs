@@ -222,8 +222,8 @@ fn ThemeChoice(
             class:active=selected
             type="button"
             role="radio"
-            attr:aria-checked=move || if selected() { "true" } else { "false" }
-            attr:data-testid=format!("theme-{}", mode.css_class())
+            aria-checked=move || if selected() { "true" } else { "false" }
+            data-testid=format!("theme-{}", mode.css_class())
             on:click=move |_| dispatch_action(transport, state, AppAction::SetTheme(mode))
         >
             <span class=format!("theme-swatch {}", mode.css_class()) aria-hidden="true"></span>
@@ -248,8 +248,8 @@ fn SkinChoice(transport: UiTransport, state: RwSignal<AppState>, skin: UiSkin) -
             class:active=selected
             type="button"
             role="radio"
-            attr:aria-checked=move || if selected() { "true" } else { "false" }
-            attr:data-testid=format!("skin-{}", skin.css_class())
+            aria-checked=move || if selected() { "true" } else { "false" }
+            data-testid=format!("skin-{}", skin.css_class())
             on:click=move |_| dispatch_action(transport, state, AppAction::SetSkin(skin))
         >
             <span
@@ -296,7 +296,7 @@ fn NetworkChoice(
             class:active=selected
             type="button"
             role="radio"
-            attr:aria-checked=move || if selected() { "true" } else { "false" }
+            aria-checked=move || if selected() { "true" } else { "false" }
             on:click=move |_| dispatch_action(transport, state, AppAction::SetNetwork(network))
         >
             <div>

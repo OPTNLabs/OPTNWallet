@@ -63,10 +63,17 @@ pub fn DerivationPicker(
                         class:active=move || selected.get() == account
                         type="button"
                         role="radio"
-                        attr:aria-checked=move || {
+                        aria-checked=move || {
                             if selected.get() == account { "true" } else { "false" }
                         }
-                        attr:data-testid=format!("derivation-{}", account.account())
+                        // Coin type and account both, because the offered list
+                        // contains several accounts that share an index —
+                        // m/44'/145'/0' and m/44'/0'/0' are different wallets.
+                        data-testid=format!(
+                            "derivation-{}-{}",
+                            account.coin_type(),
+                            account.account()
+                        )
                         on:click=move |_| {
                             error.set(None);
                             custom.set(String::new());

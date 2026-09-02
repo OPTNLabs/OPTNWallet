@@ -1607,7 +1607,12 @@ mod tests {
         assert_eq!(plan.kind, SpendKind::WatchOnlyUnsignedPsbt);
         assert!(!plan.uses_seed_signing());
         assert_eq!(
-            sign_seed_spend(&plan, BIP39_TEST_VECTOR_MNEMONIC, Network::Chipnet),
+            sign_seed_spend(
+                &plan,
+                BIP39_TEST_VECTOR_MNEMONIC,
+                Network::Chipnet,
+                AccountPath::default_for(Network::Chipnet)
+            ),
             Err(optn_core::spend::SpendError::WatchOnlyCannotSign)
         );
     }

@@ -99,12 +99,57 @@ pub trait HardwareWallet {
     fn exchange<'a>(&'a self, request: &'a [u8]) -> PlatformFuture<'a, Vec<u8>>;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum HardwareVendor {
     Ledger,
     Trezor,
     OneKey,
     Mock,
+}
+
+impl HardwareVendor {
+    /// Vendors onboarding offers, in the order they are listed.
+    ///
+    /// `Mock` is deliberately absent: it exists for tests and adapters without
+    /// USB, and offering it in the product would let someone "connect" a
+    /// signer that cannot hold a key.
+    pub const OFFERED: &'static [Self] = &[Self::Ledger, Self::Trezor, Self::OneKey];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Ledger => "Ledger",
+            Self::Trezor => "Trezor",
+            Self::OneKey => "OneKey",
+            Self::Mock => "Mock signer",
+        }
+    }
+
+    /// Stable identifier for wire encoding and test selectors.
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Ledger => "ledger",
+            Self::Trezor => "trezor",
+            Self::OneKey => "onekey",
+            Self::Mock => "mock",
+        }
+    }
+}
+
+/// A public account exported from a device at onboarding.
+///
+/// Public material only — an account xPub and the master fingerprint that
+/// lets a later PSBT say which device owns an input. A hardware wallet never
+/// yields a private key, so this is everything the wallet gets to keep.
+///
+/// The path is a plain string: this crate is a capability port and must not
+/// depend on the domain crate that parses BIP44 paths.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HardwareAccount {
+    pub vendor: HardwareVendor,
+    pub account_path: String,
+    pub account_xpub: String,
+    /// Eight hex characters. Optional because not every device exports it.
+    pub master_fingerprint: Option<String>,
 }
 
 /// Events the UI/application layer is allowed to observe. No HID/WebUSB.
@@ -131,6 +176,15 @@ pub enum HardwareEvent {
 /// [`HardwareWallet::exchange`]. Tests use an in-process mock.
 pub trait HardwareSession {
     fn connect<'a>(&'a mut self) -> PlatformFuture<'a, HardwareEvent>;
+    /// Export the public account at a BIP44 account path.
+    ///
+    /// This is the onboarding operation: the device is asked for one account's
+    /// public key, and the wallet watches it. Requires a connected session so
+    /// a caller cannot mistake a cached answer for a present device.
+    fn export_account<'a>(
+        &'a mut self,
+        account_path: &'a str,
+    ) -> PlatformFuture<'a, HardwareAccount>;
     fn sign_digest<'a>(
         &'a mut self,
         digest: &'a [u8; 32],
@@ -146,12 +200,28 @@ pub trait HardwareSession {
 pub struct MockHardwareWallet {
     /// `None` means no device in this session. Not a nullable pointer.
     session: Option<HardwareVendor>,
+    /// What `export_account` answers with. Injected rather than hard-coded so
+    /// a caller can supply a genuinely derived xPub without this crate taking
+    /// a dependency on the derivation code.
+    account_xpub: Option<String>,
 }
 
 impl MockHardwareWallet {
     pub fn new() -> Self {
-        Self { session: None }
+        Self {
+            session: None,
+            account_xpub: None,
+        }
     }
+
+    /// Answer `export_account` with a caller-supplied account xPub.
+    pub fn with_account_xpub(mut self, xpub: impl Into<String>) -> Self {
+        self.account_xpub = Some(xpub.into());
+        self
+    }
+
+    /// Fingerprint the mock reports. Fixed so a test can assert on it.
+    pub const MOCK_FINGERPRINT: &'static str = "0f0f0f0f";
 
     pub fn attached_vendor(&self) -> Option<HardwareVendor> {
         self.session
@@ -199,6 +269,32 @@ impl HardwareSession for MockHardwareWallet {
             vendor: HardwareVendor::Mock,
             label: "OPTN mock signer".to_string(),
         })))
+    }
+
+    fn export_account<'a>(
+        &'a mut self,
+        account_path: &'a str,
+    ) -> PlatformFuture<'a, HardwareAccount> {
+        let attached = self.session;
+        let xpub = self.account_xpub.clone();
+        let account_path = account_path.to_owned();
+        Box::pin(async move {
+            let Some(vendor) = attached else {
+                return Err(PlatformError::Unavailable);
+            };
+            // No injected key means the caller wired the mock up without
+            // deciding what it should answer; that is a setup bug, not an
+            // empty account.
+            let account_xpub = xpub.ok_or_else(|| {
+                PlatformError::InvalidData("mock has no account xPub configured".into())
+            })?;
+            Ok(HardwareAccount {
+                vendor,
+                account_path,
+                account_xpub,
+                master_fingerprint: Some(Self::MOCK_FINGERPRINT.to_string()),
+            })
+        })
     }
 
     fn sign_digest<'a>(
@@ -313,5 +409,74 @@ mod tests {
         );
         assert_eq!(device.attached_vendor(), None);
         assert_eq!(ready(device.disconnect()), Err(PlatformError::Unavailable));
+    }
+
+    #[test]
+    fn exporting_an_account_requires_a_connected_device() {
+        // A cached answer returned with no device attached would let
+        // onboarding open a "hardware" wallet nothing is actually behind.
+        let mut device = MockHardwareWallet::new().with_account_xpub("xpub-under-test");
+        assert_eq!(
+            ready(device.export_account("m/44'/145'/0'")),
+            Err(PlatformError::Unavailable)
+        );
+
+        ready(device.connect()).expect("mock connects");
+        let account =
+            ready(device.export_account("m/44'/145'/0'")).expect("connected mock exports");
+        assert_eq!(
+            account,
+            HardwareAccount {
+                vendor: HardwareVendor::Mock,
+                account_path: "m/44'/145'/0'".to_string(),
+                account_xpub: "xpub-under-test".to_string(),
+                master_fingerprint: Some(MockHardwareWallet::MOCK_FINGERPRINT.to_string()),
+            }
+        );
+
+        // The path is echoed, not fixed: asking for a different account must
+        // not silently return account zero.
+        let second = ready(device.export_account("m/44'/145'/1'")).expect("second account");
+        assert_eq!(second.account_path, "m/44'/145'/1'");
+
+        ready(device.disconnect()).expect("mock disconnects");
+        assert_eq!(
+            ready(device.export_account("m/44'/145'/0'")),
+            Err(PlatformError::Unavailable),
+            "a disconnected device must stop answering"
+        );
+    }
+
+    #[test]
+    fn an_unconfigured_mock_reports_setup_error_not_an_empty_account() {
+        let mut device = MockHardwareWallet::new();
+        ready(device.connect()).expect("mock connects");
+        match ready(device.export_account("m/44'/145'/0'")) {
+            Err(PlatformError::InvalidData(message)) => {
+                assert!(message.contains("xPub"), "unexpected message: {message}");
+            }
+            other => panic!("expected a setup error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn only_real_vendors_are_offered_for_onboarding() {
+        // Offering Mock in the product would let someone "connect" a signer
+        // that holds no key.
+        assert_eq!(
+            HardwareVendor::OFFERED,
+            &[
+                HardwareVendor::Ledger,
+                HardwareVendor::Trezor,
+                HardwareVendor::OneKey
+            ]
+        );
+        assert!(!HardwareVendor::OFFERED.contains(&HardwareVendor::Mock));
+
+        let ids: Vec<&str> = HardwareVendor::OFFERED.iter().map(|v| v.id()).collect();
+        assert_eq!(ids, vec!["ledger", "trezor", "onekey"]);
+        for vendor in HardwareVendor::OFFERED {
+            assert!(!vendor.label().is_empty());
+        }
     }
 }

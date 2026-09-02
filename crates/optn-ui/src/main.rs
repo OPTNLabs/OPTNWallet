@@ -317,7 +317,7 @@ fn LandingActionLink(
             <a
                 class=class
                 href=href
-                attr:data-testid=if matches!(action, OnboardingAction::CreateWatchOnlyWallet) {
+                data-testid=if matches!(action, OnboardingAction::CreateWatchOnlyWallet) {
                     "watch-only-landing-action"
                 } else {
                     ""
