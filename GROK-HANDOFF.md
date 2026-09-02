@@ -79,6 +79,57 @@ which #71 calls out (44px targets, primary actions on screen).
 - Recent activity rows: circular direction icon, human label, signed amount,
   relative time. Ours is still the "No activity yet" placeholder.
 
+## Where the old wallet actually put things (read this before porting a screen)
+
+I built a standalone `#/hardware` route. **That is not how the React wallet
+works** and it should be folded back. The real shape:
+
+### Watch Only is the hub, not a leaf
+
+`src/platform/desktop/onboarding/WatchOnlyWalletPreview.tsx`, its own header:
+
+> One form card: name, network, single-sig xPub or Multisig cosigners, password.
+> Bottom: separate Airgap section (Keystone only for now).
+
+So one screen carries **three** things we have modelled as one:
+
+1. **Single-sig watch-only** — paste **or scan** an account xPub + fingerprint.
+   The shared mobile page (`src/features/onboarding/WatchOnlyWalletPage.tsx`)
+   has a camera button via `scanBarcodeSafely`. Our Rust screen has paste only;
+   the scan path is missing.
+2. **Multisig** — this is where multisig lives, and it is easy to miss.
+   `CosignerDraft { name, xpub, fingerprint }`, a list starting at two with
+   add/remove, an `m of n` threshold select, and **per-cosigner QR scanning**
+   (`scanningCosigner`). Spending is `src/features/watch-only-send/WatchOnlySend.tsx`.
+   We have none of this yet.
+3. **Airgap / Keystone** — `panel: 'main' | 'keystone'`, animated-QR frames
+   accumulated into `parseKeystoneAccount(frames)`
+   (`src/services/psbt/keystoneAccount.ts`). Auto-names the wallet "Keystone".
+
+USB devices are a different module: `src/platform/desktop/onboarding/hardwareWallet.ts`
+with `HardwareDeviceKind = 'ledger' | 'trezor' | 'onekey'`,
+`HARDWARE_WALLET_TYPE = 'hardware'`, `HARDWARE_GAP_LIMIT = 20`.
+
+### Hardware fields we have not modelled yet
+
+`src/state/slices/hardwareWalletSlice.ts`:
+
+| Field | Note |
+| --- | --- |
+| `type` | `none \| trezor \| ledger \| onekey \| keystone` |
+| `connected` | live session flag |
+| `xpub` | account xPub from the device |
+| `deviceLabel` | shown in settings |
+| `derivationPath` | with an `UNSET_DERIVATION_PATH` sentinel, `m/44'/145'/0'` |
+| `ledgerTransport` | `usb \| ble` — Ledger Nano X Bluetooth |
+
+`UNSET_DERIVATION_PATH` is a **sentinel, not a default**: settings compares
+against that exact literal and, on a match, falls back to the wallet's own path.
+It must stay network-blind or a stale mainnet path leaks onto chipnet unflagged.
+
+I have landed the vendor list, transports and reachability
+(`optn-platform`), but not `connected` / `deviceLabel` / `ledgerTransport`.
+
 ## Also worth knowing
 
 - `optn-core` is **excluded** from the workspace (`Cargo.toml` `exclude`), so
