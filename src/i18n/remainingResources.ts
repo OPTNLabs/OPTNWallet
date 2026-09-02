@@ -825,16 +825,16 @@ export const remainingTranslations = {
     'camera.cancel': 'Cancel',
     'walkthrough.label': 'Walkthrough',
     'error.somethingWrong': 'Something went wrong.',
-    'rpa.copySuccess': 'Paycode copied!',
+    'rpa.copySuccess': 'Cash Code copied!',
     'rpa.copyFailed': 'Copy failed.',
     'rpa.walletUnavailable': 'Wallet not available',
     'rpa.derivationFailed':
-      'Paycode derivation failed. Unlock your wallet and try again.',
-    'rpa.title': 'RPA Paycode',
-    'rpa.deriving': 'Deriving paycode…',
+      'Cash Code derivation failed. Unlock your wallet and try again.',
+    'rpa.title': 'Cash Code',
+    'rpa.deriving': 'Deriving Cash Code…',
     'rpa.shareDescription':
-      'Share this paycode with senders. Each payment creates a unique stealth address — no link between payments on-chain.',
-    'rpa.paycode': 'Paycode',
+      'Share this Cash Code with senders. Each payment creates a unique stealth address — no link between payments on-chain.',
+    'rpa.paycode': 'Cash Code',
     'rpa.howWorks': 'How it works',
     'rpa.noNotification': 'No notification tx.',
     'rpa.noNotificationText':

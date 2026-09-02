@@ -64,7 +64,7 @@ export const localeFeatureOverrides: Partial<
     'rpa.deriving': 'Derivando Paycode…',
     'rpa.shareDescription':
       'Compartilhe este Paycode com remetentes. Cada pagamento cria um endereço furtivo exclusivo, sem vínculo entre pagamentos na cadeia.',
-    'rpa.paycode': 'Paycode',
+    'rpa.paycode': 'Cash Code',
     'rpa.howWorks': 'Como funciona',
     'rpa.noNotification': 'Nenhuma transação de notificação.',
     'rpa.noNotificationText':
@@ -192,7 +192,7 @@ export const localeFeatureOverrides: Partial<
     'rpa.deriving': 'Đang dẫn xuất Paycode…',
     'rpa.shareDescription':
       'Chia sẻ Paycode này với người gửi. Mỗi khoản thanh toán tạo một địa chỉ ẩn riêng — không liên kết các khoản thanh toán trên chuỗi.',
-    'rpa.paycode': 'Paycode',
+    'rpa.paycode': 'Cash Code',
     'rpa.howWorks': 'Cách hoạt động',
     'rpa.noNotification': 'Không có giao dịch thông báo.',
     'rpa.noNotificationText':
@@ -314,7 +314,7 @@ export const localeFeatureOverrides: Partial<
     'rpa.deriving': '正在衍生 Paycode…',
     'rpa.shareDescription':
       '將此 Paycode 分享給寄件者。每筆付款都會建立唯一的隱密地址，鏈上付款之間不會互相連結。',
-    'rpa.paycode': 'Paycode',
+    'rpa.paycode': 'Cash Code',
     'rpa.howWorks': '運作方式',
     'rpa.noNotification': '沒有通知交易。',
     'rpa.noNotificationText':
@@ -439,7 +439,7 @@ export const localeFeatureOverrides: Partial<
     'rpa.deriving': 'Dérivation du Paycode…',
     'rpa.shareDescription':
       'Partagez ce Paycode avec les expéditeurs. Chaque paiement crée une adresse furtive unique, sans lien entre les paiements sur la chaîne.',
-    'rpa.paycode': 'Paycode',
+    'rpa.paycode': 'Cash Code',
     'rpa.howWorks': 'Fonctionnement',
     'rpa.noNotification': 'Aucune transaction de notification.',
     'rpa.noNotificationText':
@@ -543,7 +543,7 @@ export const localeFeatureOverrides: Partial<
     'rpa.deriving': 'Paycode 파생 중…',
     'rpa.shareDescription':
       '이 Paycode를 송금자와 공유하세요. 각 결제는 고유한 스텔스 주소를 만들며 체인에서 결제 간 연결이 없습니다.',
-    'rpa.paycode': 'Paycode',
+    'rpa.paycode': 'Cash Code',
     'rpa.howWorks': '작동 방식',
     'rpa.noNotification': '알림 트랜잭션이 없습니다.',
     'rpa.noNotificationText':
@@ -644,7 +644,7 @@ export const localeFeatureOverrides: Partial<
     'rpa.deriving': 'Paycode を導出中…',
     'rpa.shareDescription':
       'この Paycode を送信者と共有します。支払いごとに固有のステルスアドレスが作られ、チェーン上で支払い同士はリンクされません。',
-    'rpa.paycode': 'Paycode',
+    'rpa.paycode': 'Cash Code',
     'rpa.howWorks': '仕組み',
     'rpa.noNotification': '通知トランザクションはありません。',
     'rpa.noNotificationText':
@@ -747,7 +747,7 @@ export const localeFeatureOverrides: Partial<
     'rpa.deriving': 'Вывод Paycode…',
     'rpa.shareDescription':
       'Поделитесь этим Paycode с отправителями. Каждый платёж создаёт уникальный скрытый адрес, поэтому платежи не связаны в цепочке.',
-    'rpa.paycode': 'Paycode',
+    'rpa.paycode': 'Cash Code',
     'rpa.howWorks': 'Как это работает',
     'rpa.noNotification': 'Нет транзакции уведомления.',
     'rpa.noNotificationText':
@@ -848,7 +848,7 @@ export const localeFeatureOverrides: Partial<
     'rpa.deriving': 'Ana samo Paycode…',
     'rpa.shareDescription':
       'Raba wannan Paycode da masu aikawa. Kowace biyan kuɗi tana ƙirƙirar adireshin ɓoye na musamman; babu haɗin biyan kuɗi a sarka.',
-    'rpa.paycode': 'Paycode',
+    'rpa.paycode': 'Cash Code',
     'rpa.howWorks': 'Yadda yake aiki',
     'rpa.noNotification': 'Babu cinikin sanarwa.',
     'rpa.noNotificationText':
