@@ -36,4 +36,13 @@ describe('Home connect popup', () => {
     expect(hookSource).toContain("kind === 'wizardconnect'");
     expect(hookSource).toContain('setPopupOpen(false)');
   });
+
+  it('routes Merchant Pay QR proposals into the Cauldron payment review', () => {
+    expect(hookSource).toContain("parsed.kind === 'merchant-proposal'");
+    expect(hookSource).toContain(
+      'merchantProposalQrPayload: parsed.scannedValue'
+    );
+    expect(hookSource).toContain('machine-readable proposal');
+    expect(homeSource).toContain('homeConnect.uri');
+  });
 });

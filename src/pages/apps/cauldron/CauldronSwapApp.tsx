@@ -8,6 +8,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 import { binToHex, hexToBin } from '@bitauth/libauth';
@@ -21,7 +22,6 @@ import type { RootState } from '../../../state/store';
 import KeyService from '../../../services/KeyService';
 import useSharedTokenMetadata from '../../../hooks/useSharedTokenMetadata';
 import { ensureUint8Array, parseSatoshis } from '../../../utils/binary';
-import { TOKEN_OUTPUT_SATS } from '../../../utils/constants';
 import { derivePublicKeyHash } from '../../../utils/derivePublicKeyHash';
 import { shortenAddress, shortenHash } from '../../../utils/shortenHash';
 import {
@@ -31,11 +31,13 @@ import {
   CAULDRON_V0_VERSION,
   CauldronApiClient,
   buildCauldronMerchantPaymentRequest,
+  buildCauldronMerchantDirectPaymentRequest,
   type BuiltCauldronPoolDepositRequest,
   type BuiltCauldronPoolWithdrawRequest,
   buildCauldronPoolDepositRequest,
   buildCauldronTradeRequest,
   buildCauldronPoolWithdrawRequest,
+  CAULDRON_TARGET_FEE_RATE_SATS_PER_BYTE,
   analyzeCauldronMarketLiquidity,
   collectWalletCreatedCauldronPoolCandidates,
   detectCauldronWalletPoolPositions,
@@ -71,8 +73,10 @@ import {
 } from '../../../services/cauldron/amount';
 import {
   assertWalletInputsStillAvailable,
+  fetchCurrentCauldronPools,
   fetchCurrentQuotedPoolsFromCauldron,
   fetchCurrentQuotedPoolsFromChain,
+  fetchCurrentLiquidityPoolsFromChain,
   fetchVisiblePoolsFromChain,
   getPoolSelectionId,
   resolveCurrentPoolForReview,
@@ -90,12 +94,13 @@ import {
   getMerchantStablecoins,
   isMerchantStablecoin,
 } from './merchantStablecoins';
-import { QrStreamScanner } from '../../../components/qr/QrStreamScanner';
 import {
   deserializeMerchantPaymentProposal,
+  getMerchantPaymentTerms,
   type MerchantPaymentProposal,
 } from '../merchant-pay/merchantPaymentProposal';
 import {
+  chooseBestCauldronFundingCandidate,
   selectFundingUtxosByToken,
   selectLargestBchUtxos,
   selectWalletBchFundingUtxo,
@@ -112,8 +117,13 @@ import {
   formatTimestamp,
   dedupeWalletPoolPositionsForDisplay,
   shortTokenId,
+  applySlippage,
 } from './cauldronHelpers';
 import { toTokenAwareCashAddress } from '../../../utils/cashAddress';
+import {
+  buildTxUrl,
+  DEFAULT_EXPLORER_ID,
+} from '../../../utils/servers/explorers';
 
 type CauldronSwapAppProps = {
   sdk: AddonSDK;
@@ -1050,10 +1060,6 @@ function fuzzyTokenMatchScore(
   return -1;
 }
 
-function applySlippage(amount: bigint, bps: bigint): bigint {
-  return (amount * (10_000n - bps)) / 10_000n;
-}
-
 function estimateBps(part: bigint, total: bigint): bigint {
   if (part <= 0n || total <= 0n) return 0n;
   return (part * 10_000n) / total;
@@ -1310,6 +1316,10 @@ async function buildTradeWithFunding(params: {
   feeRate: bigint;
   userPrompt: string;
   allowBchExpansion?: boolean;
+  minimumDemand?: bigint;
+  requiredTokenAmount?: bigint;
+  merchantPaymentTerms?: ReturnType<typeof getMerchantPaymentTerms>;
+  requireAdditionalBchUtxo?: boolean;
 }) {
   const {
     walletId,
@@ -1324,6 +1334,10 @@ async function buildTradeWithFunding(params: {
     feeRate,
     userPrompt,
     allowBchExpansion = true,
+    minimumDemand,
+    requiredTokenAmount,
+    merchantPaymentTerms,
+    requireAdditionalBchUtxo = false,
   } = params;
 
   const walletKeys = await KeyService.retrieveKeys(walletId);
@@ -1367,6 +1381,83 @@ async function buildTradeWithFunding(params: {
     feeRate: feeRate.toString(),
   });
 
+  if (requestKind === 'merchant' && trades.length === 0) {
+    if (!merchantPaymentTerms) {
+      throw new Error('Merchant payment terms are missing.');
+    }
+
+    if (merchantPaymentTerms.incomingAsset === 'bch') {
+      for (let i = 1; i <= sortedBchUtxos.length; i += 1) {
+        try {
+          const walletInputs = await resolveCauldronFundingInputs(
+            walletId,
+            sortedBchUtxos.slice(0, i)
+          );
+          return buildCauldronMerchantDirectPaymentRequest({
+            walletInputs,
+            merchantAddress: recipientAddress,
+            changeAddress,
+            tokenChangeAddress,
+            paymentAsset: 'bch',
+            amountAtomic: merchantPaymentTerms.incomingAmountAtomic,
+            feeRateSatsPerByte: feeRate,
+            userPrompt,
+          });
+        } catch {
+          // Keep expanding until the amount and fee fit.
+        }
+      }
+      throw new Error(
+        'Not enough BCH UTXOs are available for this merchant payment.'
+      );
+    }
+
+    const tokenFunding = selectFundingUtxosByToken(
+      signableUtxos,
+      selectedTokenId,
+      merchantPaymentTerms.incomingAmountAtomic
+    );
+    if (tokenFunding.selected.length === 0) {
+      throw new Error(
+        `Not enough token UTXOs are available for this swap. Available ${formatTokenAmount(
+          tokenFunding.totalAvailable,
+          0
+        )} atoms across ${tokenFunding.candidateCount} UTXOs.`
+      );
+    }
+    const firstExtraBch = requireAdditionalBchUtxo ? 1 : 0;
+    for (
+      let extraBch = firstExtraBch;
+      extraBch <= sortedBchUtxos.length;
+      extraBch += 1
+    ) {
+      try {
+        const walletInputs = await resolveCauldronFundingInputs(walletId, [
+          ...tokenFunding.selected,
+          ...sortedBchUtxos.slice(0, extraBch),
+        ]);
+        return buildCauldronMerchantDirectPaymentRequest({
+          walletInputs,
+          merchantAddress: recipientAddress,
+          changeAddress,
+          tokenChangeAddress,
+          paymentAsset: 'token',
+          tokenCategoryHex: selectedTokenId,
+          amountAtomic: merchantPaymentTerms.incomingAmountAtomic,
+          requireAdditionalBchUtxo:
+            merchantPaymentTerms.merchantBchAmountSatoshis > 0n,
+          feeRateSatsPerByte: feeRate,
+          userPrompt,
+        });
+      } catch {
+        // Keep expanding BCH-only funding while retaining the token inputs.
+      }
+    }
+    throw new Error(
+      'A reverse merchant payment requires an additional BCH UTXO for fees.'
+    );
+  }
+
   if (direction === 'bch_to_token') {
     for (let i = 1; i <= sortedBchUtxos.length; i += 1) {
       const selected = sortedBchUtxos.slice(0, i);
@@ -1383,11 +1474,13 @@ async function buildTradeWithFunding(params: {
           tokenChangeAddress,
           feeRateSatsPerByte: feeRate,
           userPrompt,
+          minimumDemand,
         };
         return requestKind === 'merchant'
           ? buildCauldronMerchantPaymentRequest({
               ...requestParams,
               merchantAddress: recipientAddress,
+              merchantPaymentTerms,
             })
           : buildCauldronTradeRequest(requestParams);
       } catch {
@@ -1404,7 +1497,7 @@ async function buildTradeWithFunding(params: {
   const tokenFunding = selectFundingUtxosByToken(
     signableUtxos,
     selectedTokenId,
-    trades.reduce((sum, trade) => sum + trade.supply, 0n)
+    requiredTokenAmount ?? trades.reduce((sum, trade) => sum + trade.supply, 0n)
   );
   logCauldronTxPlan('token-funding-selection', {
     selectedTokenId,
@@ -1440,21 +1533,55 @@ async function buildTradeWithFunding(params: {
       tokenChangeAddress,
       feeRateSatsPerByte: feeRate,
       userPrompt,
+      minimumDemand,
     };
-    return buildCauldronTradeRequest(requestParams);
+    return requestKind === 'merchant'
+      ? buildCauldronMerchantPaymentRequest({
+          ...requestParams,
+          merchantAddress: recipientAddress,
+          merchantPaymentTerms,
+        })
+      : buildCauldronTradeRequest(requestParams);
   };
 
   if (!allowBchExpansion) {
     return buildWithSelectedInputs(tokenFunding.selected);
   }
 
-  for (let extraBch = 0; extraBch <= sortedBchUtxos.length; extraBch += 1) {
+  const candidates: Array<{
+    value: BuiltCauldronTradeRequest;
+    feePremiumSatoshis: bigint;
+    inputCount: number;
+    expansionCount: number;
+  }> = [];
+  const firstExtraBch = requireAdditionalBchUtxo ? 1 : 0;
+  for (
+    let extraBch = firstExtraBch;
+    extraBch <= sortedBchUtxos.length;
+    extraBch += 1
+  ) {
     const selected = [
       ...tokenFunding.selected,
       ...sortedBchUtxos.slice(0, extraBch),
     ];
     try {
-      return await buildWithSelectedInputs(selected);
+      const built = await buildWithSelectedInputs(selected);
+      const transaction = built.signRequest.transaction.transaction;
+      const inputValue = built.sourceOutputs.reduce(
+        (sum, output) => sum + output.valueSatoshis,
+        0n
+      );
+      const outputValue = transaction.outputs.reduce(
+        (sum, output) => sum + output.valueSatoshis,
+        0n
+      );
+      candidates.push({
+        value: built,
+        feePremiumSatoshis:
+          inputValue - outputValue - built.estimatedFeeSatoshis,
+        inputCount: selected.length,
+        expansionCount: extraBch,
+      });
     } catch (error) {
       logCauldronTxPlan('trade-build-failed', {
         extraBch,
@@ -1466,6 +1593,9 @@ async function buildTradeWithFunding(params: {
       // keep expanding
     }
   }
+
+  const bestCandidate = chooseBestCauldronFundingCandidate(candidates);
+  if (bestCandidate) return bestCandidate;
 
   throw new Error(
     'Not enough BCH value is attached to token funding inputs to cover network fees.'
@@ -1674,27 +1804,44 @@ async function resolveMerchantProposalTrades(
   sdk: AddonSDK,
   proposal: MerchantPaymentProposal
 ): Promise<CauldronPoolTrade[]> {
-  let resolvedPools: CauldronPool[] = [];
-  let missingQuotedPoolCount = proposal.route.trades.length;
+  // The proposal carries exact LP outpoints. Validate those outpoints against
+  // chain state first instead of waiting on the general live-pool feed. This
+  // keeps buyer preparation responsive and prevents a refreshed market view
+  // from silently substituting a different LP UTXO into a fixed payment.
   try {
-    const live = await fetchCurrentQuotedPoolsFromCauldron({
-      network: proposal.network,
-      quotedPools: proposal.route.trades.map((trade) => trade.pool),
-    });
-    resolvedPools = live.resolvedPools;
-    missingQuotedPoolCount = live.missingQuotedPoolCount;
-  } catch {
-    // Fall through to Chaingraph validation when the live Cauldron feed is unavailable.
-  }
-
-  if (missingQuotedPoolCount > 0) {
     const chain = await fetchCurrentQuotedPoolsFromChain({
       sdk,
       quotedPools: proposal.route.trades.map((trade) => trade.pool),
+      forceRefresh: true,
     });
-    resolvedPools = chain.resolvedPools;
-    missingQuotedPoolCount = chain.missingQuotedPoolCount;
+    if (chain.missingQuotedPoolCount === 0) {
+      return proposal.route.trades.map((trade) => {
+        const pool = chain.resolvedPools.find(
+          (candidate) =>
+            candidate.txHash.toLowerCase() ===
+              trade.pool.txHash.toLowerCase() &&
+            candidate.outputIndex === trade.pool.outputIndex
+        );
+        if (!pool) {
+          throw new Error(
+            `LP pool input ${trade.pool.txHash}:${trade.pool.outputIndex} could not be refreshed.`
+          );
+        }
+        return { ...trade, pool };
+      });
+    }
+  } catch {
+    // Fall through to the public Cauldron feed when the chain preflight
+    // service is temporarily unavailable. Exact outpoints are still checked
+    // below before the transaction is built.
   }
+
+  const live = await fetchCurrentQuotedPoolsFromCauldron({
+    network: proposal.network,
+    quotedPools: proposal.route.trades.map((trade) => trade.pool),
+  });
+  const resolvedPools = live.resolvedPools;
+  const missingQuotedPoolCount = live.missingQuotedPoolCount;
   if (missingQuotedPoolCount > 0) {
     throw new Error(
       'One or more LP pool inputs are no longer unspent. Ask the merchant for a fresh proposal.'
@@ -1786,8 +1933,8 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const backTarget = getReturnPath(location, '/apps');
-  const merchantProposalInitialQrPayload = location.state
-    ?.merchantProposalInitialQrPayload as string | undefined;
+  const merchantProposalQrPayload = location.state
+    ?.merchantProposalQrPayload as string | undefined;
   const currentNetwork = useSelector((state: RootState) =>
     selectCurrentNetwork(state)
   );
@@ -1803,12 +1950,6 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
   const [merchantRecipientAddress, setMerchantRecipientAddress] = useState('');
   const [merchantPaymentProposal, setMerchantPaymentProposal] =
     useState<MerchantPaymentProposal | null>(null);
-  const [merchantProposalScanOpen, setMerchantProposalScanOpen] = useState(
-    Boolean(merchantProposalInitialQrPayload)
-  );
-  const [merchantProposalScanError, setMerchantProposalScanError] = useState<
-    string | null
-  >(null);
   const [
     merchantProposalAutoPreparePending,
     setMerchantProposalAutoPreparePending,
@@ -1826,6 +1967,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
   >(null);
   const [quoteDetailsOpen, setQuoteDetailsOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
+  const [merchantDetailsOpen, setMerchantDetailsOpen] = useState(false);
   const [reviewWarningsAccepted, setReviewWarningsAccepted] = useState(false);
   const [poolReview, setPoolReview] = useState<PoolReviewState | null>(null);
   const [withdrawConfirmOpen, setWithdrawConfirmOpen] = useState(false);
@@ -1835,6 +1977,11 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     txid?: string | null;
     kind: 'broadcasting' | 'submitted' | 'error';
   } | null>(null);
+  const [merchantBroadcastStarted, setMerchantBroadcastStarted] =
+    useState(false);
+  const [merchantSubmittedDebitSats, setMerchantSubmittedDebitSats] = useState<
+    bigint | null
+  >(null);
   const [walletPoolPositions, setWalletPoolPositions] = useState<
     CauldronWalletPoolPosition[]
   >([]);
@@ -1860,6 +2007,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
   >(null);
   const selectedTokenManualRef = useRef(false);
   const merchantAutoSelectionRef = useRef(false);
+  const merchantProposalLoadedPayloadRef = useRef<string | null>(null);
   const [loadingWalletPoolHistory, setLoadingWalletPoolHistory] =
     useState(false);
   const [poolCreateBchAmount, setPoolCreateBchAmount] = useState('0.01');
@@ -1957,7 +2105,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     pendingWalletPoolPositionsRef.current = pendingWalletPoolPositions;
   }, [pendingWalletPoolPositions, pendingWalletPoolsStorageKey]);
 
-  const feeRate = 2n;
+  const feeRate = CAULDRON_TARGET_FEE_RATE_SATS_PER_BYTE;
   const quoteActionsDisabled = false;
   const amountInputRef = useRef<HTMLInputElement | null>(null);
   const selectedToken = useMemo(
@@ -1974,32 +2122,48 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
   );
 
   const handleMerchantProposalScanComplete = useCallback(
-    (payload: Uint8Array) => {
+    (payload: string | Uint8Array) => {
       try {
+        const payloadBytes =
+          typeof payload === 'string'
+            ? new TextEncoder().encode(payload)
+            : payload;
         const proposal = deserializeMerchantPaymentProposal(
-          payload,
+          payloadBytes,
           currentNetwork
         );
         setMerchantPaymentProposal(proposal);
-        setMerchantProposalScanError(null);
-        setMerchantProposalScanOpen(false);
         setActiveView('merchant');
-        setDirection('bch_to_token');
+        const merchantTerms = getMerchantPaymentTerms(proposal);
+        setDirection(
+          merchantTerms.incomingAsset === 'bch'
+            ? 'bch_to_token'
+            : 'token_to_bch'
+        );
         selectedTokenManualRef.current = true;
         setSelectedTokenId(proposal.tokenId);
         setAmount(
-          formatTokenAmount(proposal.tokenAmountAtomic, proposal.tokenDecimals)
+          merchantTerms.incomingAsset === 'bch'
+            ? formatBchAmount(merchantTerms.incomingAmountAtomic)
+            : formatTokenAmount(
+                merchantTerms.incomingAmountAtomic,
+                proposal.tokenDecimals
+              )
         );
         setMerchantRecipientAddress(proposal.merchantAddress);
         setSlippageBps('0');
         setQuote(null);
         setMerchantProposalAutoPreparePending(true);
         setReviewOpen(false);
+        setMerchantDetailsOpen(false);
+        setMerchantBroadcastStarted(false);
         setMessage(
-          `Merchant request received. Preparing payment for ${formatTokenAmount(proposal.tokenAmountAtomic, proposal.tokenDecimals)} ${proposal.tokenSymbol}.`
+          `Merchant request received. Preparing ${
+            merchantTerms.incomingAsset === 'bch' ? 'BCH' : proposal.tokenSymbol
+          } payment.`
         );
       } catch (error) {
-        setMerchantProposalScanError(
+        setMessage(
           error instanceof Error
             ? error.message
             : 'Unable to decode the merchant transaction proposal.'
@@ -2010,17 +2174,22 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
   );
 
   useEffect(() => {
-    if (merchantPaymentProposal) {
+    if (merchantPaymentProposal && merchantPaymentProposal.version === 1) {
       setActiveView('merchant');
       setDirection('bch_to_token');
     }
   }, [merchantPaymentProposal]);
 
   useEffect(() => {
+    // A merchant proposal is carried in route state while the wallet context
+    // finishes loading. Do not let that asynchronous context update erase the
+    // fixed-output request before its proposal handler has applied it.
+    if (merchantProposalQrPayload) return;
+
     setSelectedTokenId('');
     setMerchantPaymentProposal(null);
-    setMerchantProposalScanError(null);
     setMerchantProposalAutoPreparePending(false);
+    setMerchantDetailsOpen(false);
     setQuote(null);
     setSelectedTokenSpotPriceSats(null);
     setPoolReview(null);
@@ -2035,13 +2204,28 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     setWalletUtxos([]);
     selectedTokenManualRef.current = false;
     merchantAutoSelectionRef.current = false;
-  }, [currentNetwork, walletContext.walletId]);
+  }, [currentNetwork, merchantProposalQrPayload, walletContext.walletId]);
 
   useEffect(() => {
-    if (activeView === 'merchant' && direction !== 'bch_to_token') {
+    if (
+      !merchantProposalQrPayload ||
+      merchantProposalLoadedPayloadRef.current === merchantProposalQrPayload
+    ) {
+      return;
+    }
+    merchantProposalLoadedPayloadRef.current = merchantProposalQrPayload;
+    handleMerchantProposalScanComplete(merchantProposalQrPayload);
+  }, [handleMerchantProposalScanComplete, merchantProposalQrPayload]);
+
+  useEffect(() => {
+    if (
+      activeView === 'merchant' &&
+      !merchantPaymentProposal &&
+      direction !== 'bch_to_token'
+    ) {
       setDirection('bch_to_token');
     }
-  }, [activeView, direction]);
+  }, [activeView, direction, merchantPaymentProposal]);
 
   useEffect(() => {
     if (activeView !== 'merchant') {
@@ -2763,12 +2947,17 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     backgroundColor: 'var(--wallet-surface)',
     borderColor: 'var(--wallet-border)',
   };
+  const merchantTerms = merchantPaymentProposal
+    ? getMerchantPaymentTerms(merchantPaymentProposal)
+    : null;
   const tradeModeTitle =
     activeView === 'merchant' ? 'Merchant payment' : 'Swap';
   const tradeModeSubtitle = merchantPaymentProposal
-    ? 'Review a fixed merchant request. Your wallet supplies BCH and returns change.'
+    ? merchantTerms?.incomingAsset === 'token'
+      ? 'Review the payment, add BCH for the converted output, then slide to send.'
+      : 'Review the payment, then slide to send.'
     : activeView === 'merchant'
-      ? 'Enter the stablecoin amount you want to receive. Customers pay in BCH.'
+      ? 'Choose what customers pay and how much to convert.'
       : 'Swap BCH and CashTokens through Cauldron.';
   const merchantNetworkLabel =
     currentNetwork === 'chipnet'
@@ -2780,11 +2969,41 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
         minute: '2-digit',
       })
     : null;
+  const merchantIncomingDisplay = merchantTerms
+    ? merchantTerms.incomingAsset === 'bch'
+      ? formatCompactBchAmount(merchantTerms.incomingAmountAtomic)
+      : `${formatTokenAmount(merchantTerms.incomingAmountAtomic, effectiveDecimals)} ${effectiveSymbol}`
+    : null;
+  const merchantReceivesDisplay = merchantTerms
+    ? [
+        merchantTerms.merchantBchAmountSatoshis > 0n
+          ? formatCompactBchAmount(merchantTerms.merchantBchAmountSatoshis)
+          : null,
+        merchantTerms.merchantTokenAmountAtomic > 0n
+          ? `${formatTokenAmount(merchantTerms.merchantTokenAmountAtomic, effectiveDecimals)} ${effectiveSymbol}`
+          : null,
+      ]
+        .filter((value): value is string => Boolean(value))
+        .join(' + ')
+    : null;
+  const merchantAdditionalBchSats =
+    merchantPaymentProposal && quote
+      ? quote.built.walletInputs.reduce(
+          (total, input) =>
+            total +
+            (!input.utxo.token
+              ? parseSatoshis(input.utxo.amount ?? input.utxo.value ?? 0)
+              : 0n),
+          0n
+        )
+      : null;
   const merchantEstimatedWalletDebitSats =
     merchantPaymentProposal && quote
-      ? quote.totalSupply +
-        quote.estimatedFeeSatoshis +
-        BigInt(TOKEN_OUTPUT_SATS)
+      ? quote.built.walletInputs.reduce(
+          (total, input) =>
+            total + parseSatoshis(input.utxo.amount ?? input.utxo.value ?? 0),
+          0n
+        )
       : null;
 
   useEffect(() => {
@@ -2874,7 +3093,9 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
   const parsedAmount = useMemo(
     () =>
       activeView === 'merchant'
-        ? parseDecimalToAtomic(amount, effectiveDecimals)
+        ? direction === 'bch_to_token'
+          ? parseBchInputToSats(amount)
+          : parseDecimalToAtomic(amount, effectiveDecimals)
         : direction === 'bch_to_token'
           ? parseBchInputToSats(amount)
           : parseDecimalToAtomic(amount, effectiveDecimals),
@@ -3284,7 +3505,8 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
   );
   const quoteReviewWarnings =
     quoteSafetyBanner?.messages ?? quote?.warnings ?? [];
-  const reviewWarningsAcceptedNeeded = quoteReviewWarnings.length > 0;
+  const reviewWarningsAcceptedNeeded =
+    activeView !== 'merchant' && quoteReviewWarnings.length > 0;
   const quoteRiskSummary = quote
     ? {
         slippageBps: quote.slippageBps,
@@ -3543,6 +3765,9 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
       setQuoting(true);
       setMessage(null);
       setQuote(null);
+      const merchantTerms = merchantPaymentProposal
+        ? getMerchantPaymentTerms(merchantPaymentProposal)
+        : null;
 
       if (merchantPaymentProposal) {
         if (merchantPaymentProposal.expiresAt <= Date.now()) {
@@ -3569,7 +3794,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
       if (
         merchantPaymentProposal &&
         (selectedTokenId !== merchantPaymentProposal.tokenId ||
-          parsedAmount !== merchantPaymentProposal.tokenAmountAtomic ||
+          parsedAmount !== merchantTerms?.incomingAmountAtomic ||
           merchantRecipientAddress !== merchantPaymentProposal.merchantAddress)
       ) {
         throw new Error(
@@ -3616,16 +3841,19 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
       let previewUsedCachedPools = false;
       let merchantProposalTrades: CauldronPoolTrade[] | null = null;
       if (merchantPaymentProposal) {
-        merchantProposalTrades = await resolveMerchantProposalTrades(
-          sdk,
-          merchantPaymentProposal
-        );
+        // The merchant proposal already contains the exact LP outpoints and
+        // reserve state needed for the local review build. Do not block the
+        // first buyer screen on an indexer round trip here. The signing path
+        // below still performs strict exact-outpoint validation immediately
+        // before building and broadcasting the transaction.
+        merchantProposalTrades = merchantPaymentProposal.route.trades;
         confirmedPools = merchantProposalTrades.map((trade) => trade.pool);
       } else {
         try {
           const resolved = await fetchVisiblePoolsFromChain({
             sdk,
             visiblePools: tokenPools,
+            forceRefresh: true,
           });
           confirmedPools = resolved.confirmedPools;
           missingVisiblePoolCount = resolved.missingVisiblePoolCount;
@@ -3704,7 +3932,9 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
         );
       }
       const aggregatedTrades = aggregatePoolTrades(planned.trades);
-      if (aggregatedTrades.length === 0) {
+      const directMerchantPayment =
+        Boolean(merchantPaymentProposal) && aggregatedTrades.length === 0;
+      if (aggregatedTrades.length === 0 && !directMerchantPayment) {
         throw new Error(
           addonT(
             'module.noExecutableRoute',
@@ -3748,6 +3978,14 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
         tokenChangeAddress: addresses[0].tokenAddress || addresses[0].address,
         feeRate,
         allowBchExpansion: true,
+        requiredTokenAmount:
+          merchantTerms?.incomingAsset === 'token'
+            ? merchantTerms.incomingAmountAtomic
+            : undefined,
+        merchantPaymentTerms: merchantTerms ?? undefined,
+        requireAdditionalBchUtxo:
+          merchantTerms?.incomingAsset === 'token' &&
+          merchantTerms.merchantBchAmountSatoshis > 0n,
         userPrompt:
           activeView === 'merchant'
             ? `Merchant payment ${formatTokenAmount(planned.summary.demand, effectiveDecimals)} ${effectiveSymbol}`
@@ -4022,9 +4260,14 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
   };
 
   const handleSwap = async () => {
+    let merchantBroadcastStartedForAttempt = false;
+
     try {
       setSubmitting(true);
       setMessage(null);
+      const merchantTerms = merchantPaymentProposal
+        ? getMerchantPaymentTerms(merchantPaymentProposal)
+        : null;
 
       if (!quote || !selectedTokenId || !parsedAmount || parsedAmount <= 0n) {
         throw new Error(
@@ -4036,7 +4279,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
       if (
         merchantPaymentProposal &&
         (selectedTokenId !== merchantPaymentProposal.tokenId ||
-          parsedAmount !== merchantPaymentProposal.tokenAmountAtomic ||
+          parsedAmount !== merchantTerms?.incomingAmountAtomic ||
           merchantRecipientAddress !== merchantPaymentProposal.merchantAddress)
       ) {
         throw new Error(
@@ -4056,23 +4299,34 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
       }
 
       const merchantProposalTrades = merchantPaymentProposal
-        ? await resolveMerchantProposalTrades(sdk, merchantPaymentProposal)
+        ? merchantPaymentProposal.route.trades.length > 0
+          ? await resolveMerchantProposalTrades(sdk, merchantPaymentProposal)
+          : []
         : null;
-      const { resolvedPools: currentQuotedPools, missingQuotedPoolCount } =
-        merchantProposalTrades
-          ? {
-              resolvedPools: merchantProposalTrades.map((trade) => trade.pool),
-              missingQuotedPoolCount: 0,
-            }
-          : await fetchCurrentQuotedPoolsFromChain({
+      let currentQuotedPools = merchantProposalTrades
+        ? merchantProposalTrades.map((trade) => trade.pool)
+        : (
+            await fetchCurrentLiquidityPoolsFromChain({
               sdk,
               quotedPools: quote.trades.map((trade) => trade.pool),
-            });
-      if (missingQuotedPoolCount > 0) {
+              forceRefresh: true,
+            })
+          ).currentPools;
+      if (!merchantProposalTrades && currentQuotedPools.length === 0) {
+        // ChainGraph can briefly return an empty exact-locking-bytecode result
+        // while its index catches up. Merchant requests already use this
+        // chain-derived live snapshot fallback; regular swaps must do the
+        // same instead of treating an indexer gap as spent liquidity.
+        currentQuotedPools = await fetchCurrentCauldronPools({
+          network: currentNetwork,
+          tokenId: selectedTokenId,
+        });
+      }
+      if (!merchantProposalTrades && currentQuotedPools.length === 0) {
         throw new Error(
           addonT(
             'module.quoteExpiredChanged',
-            'Cauldron quote expired because one or more reviewed pools changed on chain. Get a fresh quote before submitting.'
+            'Cauldron quote expired because the reviewed liquidity is no longer available. Get a fresh quote before submitting.'
           )
         );
       }
@@ -4117,7 +4371,9 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
         );
       }
       const aggregatedTrades = aggregatePoolTrades(refreshedPlan.trades);
-      if (aggregatedTrades.length === 0) {
+      const directMerchantPayment =
+        Boolean(merchantPaymentProposal) && aggregatedTrades.length === 0;
+      if (aggregatedTrades.length === 0 && !directMerchantPayment) {
         throw new Error(
           addonT(
             'module.routeRefreshFailed',
@@ -4169,6 +4425,13 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
         tokenChangeAddress: addresses[0].tokenAddress || addresses[0].address,
         feeRate,
         allowBchExpansion: true,
+        minimumDemand: quote.minReceive,
+        requiredTokenAmount:
+          merchantTerms?.incomingAsset === 'token'
+            ? merchantTerms.incomingAmountAtomic
+            : undefined,
+        merchantPaymentTerms: merchantTerms ?? undefined,
+        requireAdditionalBchUtxo: merchantTerms?.incomingAsset === 'token',
         userPrompt:
           activeView === 'merchant'
             ? `Merchant payment ${formatTokenAmount(refreshedPlan.summary.demand, effectiveDecimals)} ${effectiveSymbol}`
@@ -4176,6 +4439,26 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
               ? `Cauldron swap ${formatBchAmount(refreshedPlan.summary.supply)} BCH -> ${effectiveSymbol}`
               : `Cauldron swap ${formatTokenAmount(refreshedPlan.summary.supply, effectiveDecimals)} ${effectiveSymbol} -> BCH`,
       });
+
+      if (merchantPaymentProposal) {
+        setMerchantSubmittedDebitSats(
+          built.walletInputs.reduce(
+            (total, input) =>
+              total + parseSatoshis(input.utxo.amount ?? input.utxo.value ?? 0),
+            0n
+          )
+        );
+      }
+
+      if (merchantPaymentProposal) {
+        showBroadcastNotice(
+          'Sending payment',
+          'Please keep OPTN Wallet open while the transaction is signed and broadcast.',
+          'broadcasting'
+        );
+        merchantBroadcastStartedForAttempt = true;
+        setMerchantBroadcastStarted(true);
+      }
 
       const result =
         activeView === 'merchant'
@@ -4219,7 +4502,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
             : addonT('module.swapBroadcasted', 'Swap broadcasted'),
         result.broadcastState === 'submitted'
           ? activeView === 'merchant'
-            ? 'The transaction was submitted. The merchant will receive the stablecoin after confirmation.'
+            ? `Submitted. Merchant output accepted at 0-conf: ${merchantReceivesDisplay ?? '—'}.`
             : addonT(
                 'module.transactionWatch',
                 'Keeping {txid} under watch while the wallet refreshes in the background.',
@@ -4230,7 +4513,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                 ? 'module.merchantPaymentBroadcastComplete'
                 : 'module.broadcastComplete',
               activeView === 'merchant'
-                ? 'Transaction broadcast. The merchant will receive the stablecoin after confirmation.'
+                ? `Broadcast. Merchant output accepted at 0-conf: ${merchantReceivesDisplay ?? '—'}.`
                 : 'Broadcast completed with {txid}.',
               activeView === 'merchant' ? undefined : { txid: result.txid }
             ),
@@ -4242,43 +4525,54 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
           ? addonT(
               'module.swapHandoff',
               activeView === 'merchant'
-                ? 'Merchant payment submitted. Wait for confirmation and do not send this request again.'
+                ? `Merchant payment submitted: ${merchantReceivesDisplay ?? '—'}. Accepted at 0-conf; do not send again.`
                 : 'Swap handoff pending visibility: {txid}. Keep the txid and avoid sending it again until it appears in history.',
               { txid: result.txid }
             )
           : addonT(
               'module.swapBroadcastedMessage',
               activeView === 'merchant'
-                ? 'Merchant payment broadcast. The merchant will receive the stablecoin after confirmation.'
+                ? `Merchant payment broadcast: ${merchantReceivesDisplay ?? '—'}. Accepted at 0-conf.`
                 : 'Swap broadcasted: {txid}',
               activeView === 'merchant' ? undefined : { txid: result.txid }
             )
       );
-      await refreshCauldronState();
-      resetCauldronViewState();
+      if (merchantPaymentProposal) {
+        // Keep the payment result and proposal visible so the buyer can copy
+        // the txid and verify the merchant output. State refresh is advisory.
+        void refreshCauldronState().catch(() => undefined);
+      } else {
+        await refreshCauldronState();
+        resetCauldronViewState();
+      }
     } catch (error) {
+      const merchantRouteUnavailable =
+        Boolean(merchantPaymentProposal) && !merchantBroadcastStartedForAttempt;
+      const failureMessage = localizeCauldronErrorMessage(
+        error,
+        'module.cauldronSwapFailed',
+        activeView === 'merchant'
+          ? 'Cauldron merchant payment failed'
+          : 'Cauldron swap failed'
+      );
       showBroadcastNotice(
-        addonT(
-          'module.swapFailed',
-          activeView === 'merchant' ? 'Merchant payment failed' : 'Swap failed'
-        ),
-        localizeCauldronErrorMessage(
-          error,
-          'module.cauldronSwapFailed',
-          activeView === 'merchant'
-            ? 'Cauldron merchant payment failed'
-            : 'Cauldron swap failed'
-        ),
+        merchantRouteUnavailable
+          ? 'Payment route unavailable'
+          : addonT(
+              'module.swapFailed',
+              activeView === 'merchant'
+                ? 'Merchant payment failed'
+                : 'Swap failed'
+            ),
+        merchantRouteUnavailable
+          ? 'The liquidity used for this payment has changed or is no longer available. No BCH was sent.'
+          : failureMessage,
         'error'
       );
       setMessage(
-        localizeCauldronErrorMessage(
-          error,
-          'module.cauldronSwapFailed',
-          activeView === 'merchant'
-            ? 'Cauldron merchant payment failed'
-            : 'Cauldron swap failed'
-        )
+        merchantRouteUnavailable
+          ? 'Payment route unavailable. No BCH was sent.'
+          : failureMessage
       );
     } finally {
       setSubmitting(false);
@@ -4293,9 +4587,10 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     setMerchantProposalAutoPreparePending(false);
     void handleQuote().then((success) => {
       if (success) {
-        setMessage(
-          'Payment ready to review. Your wallet will select BCH inputs and return change.'
-        );
+        // The review card already shows the fixed receive amount, fee, and
+        // wallet debit. Avoid adding a full-width notice here: on compact
+        // screens it pushes the primary action below the navigation bar.
+        setMessage(null);
       }
     });
   }, [
@@ -4339,6 +4634,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     setQuote(null);
     setReviewOpen(false);
     setReviewWarningsAccepted(false);
+    setMerchantDetailsOpen(false);
   };
 
   const resetPoolComposer = () => {
@@ -4369,13 +4665,21 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     setActiveView('swap');
     setMerchantPaymentProposal(null);
     setMerchantRecipientAddress('');
-    setMerchantProposalScanOpen(false);
-    setMerchantProposalScanError(null);
+    setMerchantDetailsOpen(false);
+    setMerchantBroadcastStarted(false);
+    setMerchantSubmittedDebitSats(null);
     setMerchantProposalAutoPreparePending(false);
     setSelectedWalletPoolHistory(null);
     setSelectedWalletPoolApy(null);
     setTokenSearchQuery('');
     clearBroadcastNotice();
+  };
+
+  const returnToMerchantPay = () => {
+    resetCauldronViewState();
+    navigate('/apps/optn.builtin.demo:merchantPayApp', {
+      state: { returnTo: backTarget },
+    });
   };
 
   const refreshCauldronState = async (
@@ -5159,25 +5463,60 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
   return (
     <div className="container relative mx-auto flex h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] min-h-0 max-w-md flex-col overflow-hidden px-4 pt-2 pb-[calc(var(--safe-bottom)+1rem)] wallet-page">
       <div className="flex-none">
-        <div className="flex justify-center">
-          <img
-            src="/assets/images/cauldron-header-logo.png"
-            alt="Cauldron"
-            className="h-auto w-full max-w-[220px] object-contain"
-          />
-        </div>
-        <div className="mt-2 flex items-center justify-between gap-3">
-          <h1 className="min-w-0 truncate text-lg font-bold tracking-[-0.02em] wallet-text-strong">
-            {app.name}
-          </h1>
-          <button
-            type="button"
-            onClick={() => navigate(backTarget)}
-            className="wallet-btn-danger px-3 py-1.5 text-xs"
-          >
-            {addonT('common.back', 'Back')}
-          </button>
-        </div>
+        {merchantPaymentProposal ? (
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex min-w-0 items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-[16px] border border-[var(--wallet-border)] bg-[color-mix(in_oklab,var(--wallet-accent-soft)_20%,var(--wallet-surface-strong))] shadow-lg">
+                <img
+                  src="/assets/images/OPTNUIkeyline2.png"
+                  alt="OPTN"
+                  className="h-7 w-7 object-contain"
+                />
+              </div>
+              <div className="min-w-0">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.22em] wallet-muted opacity-70">
+                  Merchant Payment
+                </div>
+                <h1 className="truncate text-xl font-extrabold leading-tight tracking-[-0.02em] wallet-text-strong">
+                  Pay merchant
+                </h1>
+                <p className="mt-0.5 text-[11px] leading-4 wallet-muted">
+                  Pay {merchantIncomingDisplay ?? '—'}, receive{' '}
+                  {merchantReceivesDisplay ?? '—'}
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => navigate(backTarget)}
+              className="wallet-btn-danger shrink-0 px-3 py-1.5 text-xs"
+            >
+              {addonT('common.back', 'Back')}
+            </button>
+          </div>
+        ) : (
+          <>
+            <div className="flex justify-center">
+              <img
+                src="/assets/images/cauldron-header-logo.png"
+                alt="Cauldron"
+                className="h-auto w-full max-w-[220px] object-contain"
+              />
+            </div>
+            <div className="mt-2 flex items-center justify-between gap-3">
+              <h1 className="min-w-0 truncate text-lg font-bold tracking-[-0.02em] wallet-text-strong">
+                {app.name}
+              </h1>
+              <button
+                type="button"
+                onClick={() => navigate(backTarget)}
+                className="wallet-btn-danger px-3 py-1.5 text-xs"
+              >
+                {addonT('common.back', 'Back')}
+              </button>
+            </div>
+          </>
+        )}
       </div>
 
       <div className={`flex min-h-0 flex-1 flex-col pt-2 ${contentClassName}`}>
@@ -5189,79 +5528,200 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
           </div>
         ) : null}
 
-        {merchantProposalScanOpen ? (
-          <div className="absolute inset-0 z-[70] flex items-center justify-center bg-black/55 px-4 py-6">
-            <div className="wallet-card max-h-full w-full max-w-[360px] overflow-y-auto rounded-[28px] p-4 shadow-[0_24px_70px_rgba(0,0,0,0.35)]">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="text-xs uppercase tracking-[0.18em] wallet-muted opacity-70">
-                    Merchant Pay
-                  </div>
-                  <h2 className="mt-1 text-lg font-semibold wallet-text-strong">
-                    Scan transaction proposal
-                  </h2>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setMerchantProposalScanOpen(false)}
-                  className="wallet-btn-secondary px-3 py-1.5 text-xs"
-                >
-                  Close
-                </button>
-              </div>
-              <p className="mt-2 text-sm leading-5 wallet-muted">
-                Keep the merchant&apos;s animated QR visible while OPTN receives
-                the payment request. We&apos;ll prepare the payment next.
-              </p>
-              {merchantProposalScanError ? (
-                <div className="wallet-danger-panel mt-3 rounded-2xl px-3 py-2 text-sm">
-                  {merchantProposalScanError}
-                </div>
-              ) : null}
-              <div className="mt-3">
-                <QrStreamScanner
-                  initialPayload={merchantProposalInitialQrPayload}
-                  onComplete={handleMerchantProposalScanComplete}
-                  onClose={() => setMerchantProposalScanOpen(false)}
-                />
-              </div>
-            </div>
-          </div>
-        ) : null}
-
-        {broadcastNotice ? (
-          <div className="absolute inset-0 z-[80] flex items-center justify-center bg-black/45 px-4">
-            <div className="wallet-card w-full max-w-[360px] rounded-[28px] border border-[var(--wallet-border)] p-4 shadow-[0_24px_70px_rgba(0,0,0,0.35)]">
-              <div className="flex flex-col items-center text-center">
-                <div className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-300">
-                  {broadcastNotice.kind === 'error' ? (
-                    <span className="text-xl leading-none">!</span>
+        {broadcastNotice && typeof document !== 'undefined'
+          ? createPortal(
+              <div className="fixed inset-0 z-[3000] flex items-center justify-center bg-black/85 px-4">
+                <div className="wallet-card w-full max-w-[360px] rounded-[28px] border border-[var(--wallet-border)] p-4 shadow-[0_24px_70px_rgba(0,0,0,0.35)]">
+                  {merchantPaymentProposal &&
+                  broadcastNotice.kind === 'broadcasting' ? (
+                    <div
+                      data-testid="merchant-payment-signing"
+                      className="space-y-4"
+                    >
+                      <div className="text-center">
+                        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-300">
+                          <div className="h-5 w-5 animate-spin rounded-full border-2 border-emerald-300 border-t-transparent" />
+                        </div>
+                        <div className="mt-4 text-lg font-semibold wallet-text-strong">
+                          Sending payment
+                        </div>
+                        <div className="mt-2 text-sm leading-6 wallet-muted">
+                          Please keep this app open while we complete your
+                          payment.
+                        </div>
+                      </div>
+                      <div className="space-y-3 rounded-2xl border border-[var(--wallet-border)] px-4 py-3 text-sm">
+                        {[
+                          ['Payment reviewed', true],
+                          ['Signing transaction', true],
+                          ['Broadcasting to network', false],
+                          ['Payment sent', false],
+                        ].map(([label, complete], index) => (
+                          <div
+                            key={label as string}
+                            className="flex items-center gap-3"
+                          >
+                            <span
+                              className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-xs font-bold ${
+                                complete
+                                  ? 'border-emerald-300 bg-emerald-400 text-emerald-950'
+                                  : index === 2
+                                    ? 'border-emerald-300 text-emerald-300'
+                                    : 'border-[var(--wallet-border)] wallet-muted'
+                              }`}
+                            >
+                              {complete ? '✓' : index === 2 ? '•' : ''}
+                            </span>
+                            <span
+                              className={
+                                complete ? 'wallet-text-strong' : 'wallet-muted'
+                              }
+                            >
+                              {label as string}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : merchantPaymentProposal &&
+                    broadcastNotice.kind === 'submitted' ? (
+                    <div
+                      data-testid="merchant-payment-sent"
+                      className="text-center"
+                    >
+                      <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-400 text-2xl font-black text-emerald-950">
+                        ✓
+                      </div>
+                      <div className="mt-4 text-lg font-semibold wallet-text-strong">
+                        Payment sent
+                      </div>
+                      <div className="mt-2 text-3xl font-black wallet-text-strong">
+                        {merchantReceivesDisplay || 'Payment'}
+                      </div>
+                      <div className="mt-2 text-sm leading-6 wallet-muted">
+                        Sent to the merchant. The exact output is accepted at
+                        0-conf.
+                      </div>
+                      <div className="mt-4 space-y-2 rounded-2xl border border-[var(--wallet-border)] px-4 py-3 text-left text-sm">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="wallet-muted">
+                            Total from wallet
+                          </span>
+                          <span className="font-semibold wallet-text-strong">
+                            {merchantSubmittedDebitSats != null
+                              ? formatCompactBchAmount(
+                                  merchantSubmittedDebitSats
+                                )
+                              : '—'}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="wallet-muted">Status</span>
+                          <span className="font-semibold text-amber-300">
+                            0-conf accepted
+                          </span>
+                        </div>
+                        {broadcastNotice.txid ? (
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="wallet-muted">Transaction ID</span>
+                            <span className="font-mono font-semibold wallet-text-strong">
+                              {shortenHash(broadcastNotice.txid)}
+                            </span>
+                          </div>
+                        ) : null}
+                      </div>
+                      {broadcastNotice.txid ? (
+                        <a
+                          href={buildTxUrl(
+                            { kind: 'preset', id: DEFAULT_EXPLORER_ID },
+                            currentNetwork,
+                            broadcastNotice.txid
+                          )}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="wallet-btn-secondary mt-3 block w-full px-4 py-2.5 text-center"
+                        >
+                          View on explorer ↗
+                        </a>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={returnToMerchantPay}
+                        data-testid="merchant-payment-done"
+                        className="wallet-btn-primary mt-3 w-full px-4 py-2.5"
+                      >
+                        Done
+                      </button>
+                    </div>
+                  ) : merchantPaymentProposal &&
+                    broadcastNotice.kind === 'error' &&
+                    !merchantBroadcastStarted ? (
+                    <div
+                      data-testid="merchant-payment-route-error"
+                      className="text-center"
+                    >
+                      <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full border-2 border-red-400 text-2xl font-black text-red-300">
+                        !
+                      </div>
+                      <div className="mt-4 text-lg font-semibold wallet-text-strong">
+                        Payment route unavailable
+                      </div>
+                      <div className="mt-2 text-sm leading-6 wallet-muted">
+                        The liquidity used for this payment has changed or is no
+                        longer available. No BCH was sent.
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          resetCauldronViewState();
+                          navigate(`/home/${walletContext.walletId}`);
+                        }}
+                        className="wallet-btn-primary mt-4 w-full px-4 py-2.5"
+                      >
+                        Scan a new request
+                      </button>
+                      <button
+                        type="button"
+                        onClick={resetCauldronViewState}
+                        className="wallet-btn-secondary mt-2 w-full px-4 py-2.5"
+                      >
+                        Close
+                      </button>
+                    </div>
                   ) : (
-                    <div className="h-5 w-5 animate-spin rounded-full border-2 border-emerald-300 border-t-transparent" />
+                    <div className="flex flex-col items-center text-center">
+                      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-300">
+                        {broadcastNotice.kind === 'error' ? (
+                          <span className="text-xl leading-none">!</span>
+                        ) : (
+                          <div className="h-5 w-5 animate-spin rounded-full border-2 border-emerald-300 border-t-transparent" />
+                        )}
+                      </div>
+                      <div className="mt-4 text-lg font-semibold wallet-text-strong">
+                        {broadcastNotice.title}
+                      </div>
+                      <div className="mt-2 text-sm leading-6 wallet-muted">
+                        {broadcastNotice.subtitle}
+                      </div>
+                      {broadcastNotice.txid ? (
+                        <div className="mt-3 rounded-full border border-[var(--wallet-border)] px-3 py-1 text-xs tracking-[0.08em] wallet-muted">
+                          {shortenHash(broadcastNotice.txid)}
+                        </div>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={clearBroadcastNotice}
+                        className="wallet-btn-secondary mt-4 w-full px-4 py-2.5"
+                      >
+                        {addonT('common.close', 'Close')}
+                      </button>
+                    </div>
                   )}
                 </div>
-                <div className="mt-4 text-lg font-semibold wallet-text-strong">
-                  {broadcastNotice.title}
-                </div>
-                <div className="mt-2 text-sm leading-6 wallet-muted">
-                  {broadcastNotice.subtitle}
-                </div>
-                {broadcastNotice.txid ? (
-                  <div className="mt-3 rounded-full border border-[var(--wallet-border)] px-3 py-1 text-xs tracking-[0.08em] wallet-muted">
-                    {shortenHash(broadcastNotice.txid)}
-                  </div>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={clearBroadcastNotice}
-                  className="wallet-btn-secondary mt-4 w-full px-4 py-2.5"
-                >
-                  {addonT('common.close', 'Close')}
-                </button>
-              </div>
-            </div>
-          </div>
-        ) : null}
+              </div>,
+              document.body
+            )
+          : null}
 
         {!merchantPaymentProposal ? (
           <div className="wallet-card mt-2 flex-none p-1 first:mt-0">
@@ -5284,349 +5744,180 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
           </div>
         ) : null}
 
-        <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain touch-pan-y pr-1 pt-2">
+        <div
+          className={`min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain touch-pan-y pr-1 pt-2 ${merchantPaymentProposal ? 'pb-6' : 'pb-32'}`}
+          style={{
+            scrollPaddingBottom: merchantPaymentProposal ? '2rem' : '10rem',
+          }}
+        >
           {activeView !== 'pool' ? (
-            <div className="space-y-2 pb-2">
-              <div className="wallet-card p-2.5">
-                <div className="space-y-1.5">
-                  <div
-                    className="rounded-[22px] border px-3 py-2.5"
-                    style={{
-                      backgroundColor: 'var(--wallet-surface)',
-                      borderColor: 'var(--wallet-border)',
-                    }}
-                  >
-                    <div className="text-xs uppercase tracking-[0.18em] wallet-muted opacity-70">
-                      {tradeModeTitle}
+            merchantPaymentProposal ? (
+              <div
+                className="space-y-2 pb-2"
+                data-testid="merchant-payment-review"
+              >
+                <div className="wallet-card p-3 text-center">
+                  <div className="text-xs uppercase tracking-[0.18em] wallet-muted">
+                    Merchant payment
+                  </div>
+                  <h2 className="mt-1.5 text-2xl font-black wallet-text-strong">
+                    Pay merchant
+                  </h2>
+                  <div className="mt-2.5 text-xs uppercase tracking-[0.16em] wallet-muted">
+                    Merchant receives
+                  </div>
+                  <div className="mt-1 text-3xl font-black wallet-text-strong">
+                    {merchantReceivesDisplay || '—'}
+                  </div>
+                  <div className="mt-1 text-sm wallet-muted">
+                    {effectiveName}
+                  </div>
+                  <div className="mt-2 flex items-center justify-center gap-2 text-xs">
+                    <span className="wallet-muted">Merchant</span>
+                    <span
+                      className="max-w-[15rem] truncate font-medium wallet-text-strong"
+                      title={merchantRecipientAddress}
+                    >
+                      {shortenAddress(merchantRecipientAddress)}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="wallet-card p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-xs uppercase tracking-[0.16em] wallet-muted">
+                        You pay
+                      </div>
+                      <div className="mt-1 text-xl font-bold wallet-text-strong">
+                        {merchantIncomingDisplay || 'Preparing quote…'}
+                      </div>
                     </div>
-                    <div className="mt-1 text-sm wallet-text-strong">
-                      {tradeModeSubtitle}
+                    <div className="rounded-full bg-[var(--wallet-surface-strong)] px-3 py-1 text-xs font-semibold wallet-text-strong">
+                      {merchantTerms?.incomingAsset === 'token'
+                        ? effectiveSymbol
+                        : 'BCH'}
                     </div>
                   </div>
-                  {merchantPaymentProposal ? (
-                    <div className="rounded-[22px] border border-emerald-400/40 bg-emerald-400/10 px-3 py-3 text-xs">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="font-semibold uppercase tracking-[0.16em] wallet-text-strong">
-                          OPTN merchant payment
-                        </div>
-                        <span className="shrink-0 rounded-full bg-[var(--wallet-surface-strong)] px-2.5 py-1 text-[10px] font-semibold wallet-text-strong">
-                          {merchantNetworkLabel}
+                  {quote ? (
+                    <div className="mt-2.5 space-y-1.5 border-t border-[var(--wallet-border)] pt-2.5 text-sm">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="wallet-muted">Network fee</span>
+                        <span className="wallet-text-strong">
+                          {formatCompactBchAmount(quote.estimatedFeeSatoshis)}
                         </span>
                       </div>
-                      <div className="mt-3 flex items-end justify-between gap-3">
-                        <div>
-                          <div className="text-[10px] uppercase tracking-[0.16em] wallet-muted opacity-70">
-                            Receive exactly
-                          </div>
-                          <div className="mt-1 text-2xl font-bold wallet-text-strong">
-                            {formatTokenAmount(
-                              merchantPaymentProposal.tokenAmountAtomic,
-                              merchantPaymentProposal.tokenDecimals
-                            )}{' '}
-                            {merchantPaymentProposal.tokenSymbol}
-                          </div>
+                      {merchantTerms?.incomingAsset === 'token' &&
+                      merchantAdditionalBchSats != null ? (
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="wallet-muted">
+                            Additional BCH input
+                          </span>
+                          <span className="wallet-text-strong">
+                            {formatCompactBchAmount(merchantAdditionalBchSats)}
+                          </span>
                         </div>
-                        <div className="text-right text-[11px] wallet-muted">
-                          <div>Expires</div>
-                          <div className="mt-1 font-semibold wallet-text-strong">
-                            {merchantExpiryLabel}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="mt-3 grid gap-1 text-xs wallet-muted">
-                        <div>
-                          Merchant: {shortenAddress(merchantRecipientAddress)}
-                        </div>
-                        <div>
-                          Only your BCH funding and change can vary. The
-                          merchant output is fixed.
-                        </div>
+                      ) : null}
+                      <div className="flex items-center justify-between gap-3 font-semibold">
+                        <span className="wallet-text-strong">
+                          Total from wallet
+                        </span>
+                        <span className="wallet-text-strong">
+                          {formatCompactBchAmount(
+                            merchantEstimatedWalletDebitSats ?? 0n
+                          )}
+                        </span>
                       </div>
                     </div>
                   ) : null}
-                  <div
-                    className="rounded-[22px] border px-3 py-2.5"
-                    style={{
-                      backgroundColor: 'var(--wallet-surface)',
-                      borderColor: 'var(--wallet-border)',
-                    }}
+                </div>
+
+                <div className="rounded-2xl px-1">
+                  <button
+                    type="button"
+                    className="wallet-btn-primary w-full px-4 py-3 text-base"
+                    onClick={
+                      quote ? handleReviewSwap : () => void handleQuote()
+                    }
+                    disabled={
+                      loading || quoting || submitting || !selectedTokenId
+                    }
+                    data-testid="merchant-payment-review-cta"
                   >
-                    {activeView === 'merchant' ? (
-                      <>
-                        <div className="mb-2 flex items-center justify-between gap-3">
-                          <span className="min-w-0 truncate text-sm font-semibold wallet-muted">
-                            {merchantPaymentProposal
-                              ? 'BCH route input'
-                              : 'You pay'}
-                          </span>
-                          <span className="min-w-0 truncate text-xs wallet-muted opacity-80">
-                            {merchantPaymentProposal
-                              ? 'Network fee added at build time'
-                              : 'Bitcoin Cash'}
-                          </span>
-                        </div>
-                        <div
-                          className="rounded-xl border px-3 py-2"
-                          style={{
-                            backgroundColor: 'var(--wallet-surface-strong)',
-                            borderColor: 'var(--wallet-border)',
-                          }}
-                        >
-                          {renderAssetBadge('BCH', 'Wallet', null, 'bch')}
-                        </div>
-                        <div className="mt-3 text-xs wallet-muted">
-                          {merchantPaymentProposal
-                            ? 'The buyer funds the BCH route and pays the network fee. The merchant output is fixed by the scanned proposal.'
-                            : 'Customers pay in BCH. This checkout settles in the selected stablecoin.'}
-                        </div>
-                        <div className="mt-3 flex items-end gap-2">
-                          <div className="min-w-0 truncate text-3xl font-bold leading-none wallet-text-strong">
-                            {quote
-                              ? formatCompactBchAmount(quote.totalSupply)
-                              : merchantPaymentProposal
-                                ? formatCompactBchAmount(
-                                    merchantPaymentProposal.maxBchSats
-                                  )
-                                : 'Quote to estimate'}
-                          </div>
-                          <span className="shrink-0 pb-0.5 text-base font-semibold wallet-muted">
-                            BCH
-                          </span>
-                        </div>
-                        {merchantPaymentProposal && quote ? (
-                          <div className="mt-3 space-y-1 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface-strong)] px-3 py-2 text-xs">
-                            <div className="flex items-center justify-between gap-3">
-                              <span className="wallet-muted">BCH route</span>
-                              <span className="font-semibold wallet-text-strong">
-                                {formatCompactBchAmount(quote.totalSupply)}
-                              </span>
-                            </div>
-                            <div className="flex items-center justify-between gap-3">
-                              <span className="wallet-muted">
-                                Network fee (estimated)
-                              </span>
-                              <span className="font-semibold wallet-text-strong">
-                                {formatCompactBchAmount(
-                                  quote.estimatedFeeSatoshis
-                                )}
-                              </span>
-                            </div>
-                            <div className="flex items-center justify-between gap-3 border-t border-[var(--wallet-border)] pt-1">
-                              <span className="font-semibold wallet-text-strong">
-                                Estimated wallet debit
-                              </span>
-                              <span className="font-semibold wallet-text-strong">
-                                {formatCompactBchAmount(
-                                  merchantEstimatedWalletDebitSats ?? 0n
-                                )}
-                              </span>
-                            </div>
-                          </div>
-                        ) : null}
-                      </>
-                    ) : (
-                      <>
-                        <div className="mb-2 flex items-center justify-between gap-3">
-                          <span className="min-w-0 truncate text-sm font-semibold wallet-muted">
-                            You pay
-                          </span>
-                          <div className="flex min-w-0 items-center gap-2">
-                            <span className="min-w-0 truncate text-xs wallet-muted opacity-80">
-                              {payBalanceCaption}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setAmount(
-                                  direction === 'bch_to_token'
-                                    ? formatCompactBchAmount(
-                                        currentSwapMaxInput
-                                      )
-                                    : formatTokenAmount(
-                                        currentSwapMaxInput,
-                                        effectiveDecimals
-                                      )
-                                );
-                                setQuote(null);
-                              }}
-                              className="wallet-btn-secondary px-2.5 py-1 text-[11px]"
-                              disabled={
-                                loading ||
-                                submitting ||
-                                currentSwapMaxInput <= 0n
-                              }
-                            >
-                              Max
-                            </button>
-                          </div>
-                        </div>
-                        <div
-                          className="rounded-xl border px-3 py-2"
-                          style={{
-                            backgroundColor: 'var(--wallet-surface-strong)',
-                            borderColor: 'var(--wallet-border)',
-                          }}
-                        >
-                          {direction === 'bch_to_token'
-                            ? renderAssetBadge('BCH', 'Wallet', null, 'bch')
-                            : renderTokenPickerTrigger(true)}
-                        </div>
-                        <div
-                          className="mt-3"
-                          onClick={() => amountInputRef.current?.focus()}
-                          role="presentation"
-                        >
-                          <div className="flex items-end gap-2">
-                            <input
-                              ref={amountInputRef}
-                              value={amount}
-                              onChange={(event) => {
-                                const decimals =
-                                  direction === 'bch_to_token'
-                                    ? 8
-                                    : effectiveDecimals;
-                                const sanitizedAmount = sanitizeDecimalInput(
-                                  event.target.value,
-                                  decimals,
-                                  currentSwapMaxInput,
-                                  direction === 'bch_to_token'
-                                    ? formatCompactBchAmount
-                                    : formatTokenAmount
-                                );
-                                const parsedNextAmount = parseDecimalToAtomic(
-                                  sanitizedAmount,
-                                  decimals
-                                );
-                                let nextAmount = sanitizedAmount;
-                                if (parsedNextAmount != null) {
-                                  if (
-                                    minExecutableRouteInput > 0n &&
-                                    parsedNextAmount < minExecutableRouteInput
-                                  ) {
-                                    nextAmount = formatTokenAmount(
-                                      minExecutableRouteInput,
-                                      decimals
-                                    );
-                                  } else if (
-                                    currentSwapMaxInput > 0n &&
-                                    parsedNextAmount > currentSwapMaxInput
-                                  ) {
-                                    nextAmount = formatTokenAmount(
-                                      currentSwapMaxInput,
-                                      decimals
-                                    );
-                                  }
-                                }
-                                if (nextAmount !== event.target.value) {
-                                  setMessage('Adjusted to fit range.');
-                                }
-                                setAmount(nextAmount);
-                                setQuote(null);
-                              }}
-                              inputMode="decimal"
-                              pattern="[0-9]*[.,]?[0-9]*"
-                              enterKeyHint="done"
-                              placeholder={
-                                direction === 'bch_to_token' ? '0.001' : '1'
-                              }
-                              className="min-w-0 flex-1 border-0 bg-transparent p-0 text-3xl font-bold leading-none wallet-text-strong outline-none"
-                              disabled={loading || submitting}
-                            />
-                            <span className="shrink-0 pb-0.5 text-base font-semibold wallet-muted">
-                              {payUnitLabel}
-                            </span>
-                          </div>
-                          <div className="mt-1.5 truncate text-xs wallet-muted">
-                            Wallet: {swapPayBalanceLabel}
-                          </div>
-                          <div className="mt-0.5 truncate text-xs wallet-muted">
-                            Range:{' '}
-                            {minExecutableRouteInput > 0n
-                              ? direction === 'bch_to_token'
-                                ? `${formatCompactBchAmount(minExecutableRouteInput)} - ${formatCompactBchAmount(maxRoutableBchToToken)}`
-                                : `${formatTokenDisplayAmount(
-                                    minExecutableRouteInput,
-                                    effectiveDecimals,
-                                    effectiveSymbol
-                                  )} - ${formatTokenDisplayAmount(
-                                    maxRoutableTokenToBch,
-                                    effectiveDecimals,
-                                    effectiveSymbol
-                                  )}`
-                              : 'Get quote'}
-                          </div>
-                          {swapAmountExceedsBalance ? (
-                            <div className="mt-1 text-xs text-amber-200">
-                              Above current range.
-                            </div>
-                          ) : null}
-                        </div>
-                      </>
-                    )}
+                    {submitting
+                      ? 'Sending…'
+                      : quoting
+                        ? 'Preparing payment…'
+                        : quote
+                          ? `Pay ${merchantIncomingDisplay}`
+                          : 'Prepare payment'}
+                  </button>
+                </div>
+
+                <div className="rounded-2xl border border-emerald-400/40 bg-emerald-400/10 px-3 py-2.5">
+                  <div className="font-semibold wallet-text-strong">
+                    One transaction
                   </div>
+                  <div className="mt-1 text-sm wallet-muted">
+                    {merchantTerms?.incomingAsset === 'token'
+                      ? 'PUSD and any BCH fee input settle in one transaction.'
+                      : 'The payment and any conversion settle in one transaction.'}
+                  </div>
+                </div>
 
-                  {activeView === 'swap' ? (
-                    <div className="flex justify-center py-0.5">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setDirection((current) =>
-                            current === 'bch_to_token'
-                              ? 'token_to_bch'
-                              : 'bch_to_token'
-                          );
-                          setAmount((current) =>
-                            current === '0.001' ? '1' : '0.001'
-                          );
-                          setQuote(null);
-                        }}
-                        className="flex h-10 w-10 items-center justify-center rounded-xl border text-xl wallet-text-strong"
-                        style={{
-                          backgroundColor: 'var(--wallet-surface-strong)',
-                          borderColor: 'var(--wallet-border)',
-                          boxShadow: 'var(--wallet-shadow-card)',
-                        }}
-                        aria-label="Flip swap direction"
-                      >
-                        <span aria-hidden="true">⌄</span>
-                      </button>
-                    </div>
-                  ) : null}
-
-                  <div
-                    className="rounded-[22px] border px-3 py-3"
-                    style={{
-                      backgroundColor: 'var(--wallet-surface)',
-                      borderColor: 'var(--wallet-border)',
-                    }}
+                <button
+                  type="button"
+                  className="wallet-card flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left"
+                  onClick={() => setMerchantDetailsOpen(true)}
+                  data-testid="merchant-payment-details-button"
+                >
+                  <span className="font-semibold wallet-text-strong">
+                    Payment details
+                  </span>
+                  <span
+                    className="text-xl font-normal wallet-muted"
+                    aria-hidden="true"
                   >
-                    <div className="mb-2 flex items-center justify-between gap-3">
-                      <span className="min-w-0 truncate text-sm font-semibold wallet-muted">
-                        {addonT('module.youReceive', 'You receive')}
-                      </span>
-                      <span className="min-w-0 truncate text-xs wallet-muted opacity-80">
-                        {receiveBalanceCaption}
-                      </span>
-                    </div>
+                    ›
+                  </span>
+                </button>
+                <div className="px-1 text-center text-[11px] leading-4 wallet-muted">
+                  BCH fees and change are handled automatically. The merchant
+                  amount and address are fixed.
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-2 pb-28">
+                <div className="wallet-card p-2.5">
+                  <div className="space-y-1.5">
                     <div
-                      className="rounded-xl border px-3 py-2"
+                      className="rounded-[22px] border px-3 py-2.5"
                       style={{
-                        backgroundColor: 'var(--wallet-surface-strong)',
+                        backgroundColor: 'var(--wallet-surface)',
                         borderColor: 'var(--wallet-border)',
                       }}
                     >
-                      {activeView === 'merchant'
-                        ? renderTokenPickerTrigger(true)
-                        : direction === 'bch_to_token'
-                          ? renderTokenPickerTrigger(true)
-                          : renderAssetBadge('BCH', 'Wallet', null, 'bch')}
+                      <div className="text-xs uppercase tracking-[0.18em] wallet-muted opacity-70">
+                        {tradeModeTitle}
+                      </div>
+                      <div className="mt-1 text-sm wallet-text-strong">
+                        {tradeModeSubtitle}
+                      </div>
                     </div>
-                    {activeView === 'merchant' ? (
-                      <div className="mt-3 space-y-3">
-                        {merchantPaymentProposal ? (
-                          <div className="rounded-2xl border border-emerald-400/40 bg-emerald-400/10 px-4 py-3">
+                    {merchantPaymentProposal ? (
+                      <div className="rounded-[22px] border border-emerald-400/40 bg-emerald-400/10 px-3 py-3 text-xs">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="font-semibold uppercase tracking-[0.16em] wallet-text-strong">
+                            OPTN merchant payment
+                          </div>
+                          <span className="shrink-0 rounded-full bg-[var(--wallet-surface-strong)] px-2.5 py-1 text-[10px] font-semibold wallet-text-strong">
+                            {merchantNetworkLabel}
+                          </span>
+                        </div>
+                        <div className="mt-3 flex items-end justify-between gap-3">
+                          <div>
                             <div className="text-[10px] uppercase tracking-[0.16em] wallet-muted opacity-70">
-                              Fixed merchant receive amount
+                              Receive exactly
                             </div>
                             <div className="mt-1 text-2xl font-bold wallet-text-strong">
                               {formatTokenAmount(
@@ -5635,168 +5926,479 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                               )}{' '}
                               {merchantPaymentProposal.tokenSymbol}
                             </div>
-                            <div className="mt-1 text-xs wallet-muted">
-                              Confirm after reviewing the BCH funding and
-                              change. This output is not editable.
+                          </div>
+                          <div className="text-right text-[11px] wallet-muted">
+                            <div>Expires</div>
+                            <div className="mt-1 font-semibold wallet-text-strong">
+                              {merchantExpiryLabel}
                             </div>
                           </div>
-                        ) : (
-                          <MerchantAmountPad
-                            amount={amount}
-                            decimals={effectiveDecimals}
-                            symbol={effectiveSymbol}
-                            disabled={loading || submitting}
-                            onChange={(nextAmount) => {
-                              setAmount(nextAmount);
-                              setQuote(null);
-                            }}
-                            onClear={() => {
-                              setAmount('');
-                              setQuote(null);
-                            }}
-                          />
-                        )}
-                        {!merchantPaymentProposal ? (
-                          <div className="rounded-2xl border border-[var(--wallet-border)] px-4 py-3 text-xs wallet-muted">
-                            Customers pay in BCH. OPTN settles stablecoins to
-                            your wallet&apos;s token-aware address.
+                        </div>
+                        <div className="mt-3 grid gap-1 text-xs wallet-muted">
+                          <div>
+                            Merchant: {shortenAddress(merchantRecipientAddress)}
                           </div>
-                        ) : null}
+                          <div>
+                            Only your BCH funding and change can vary. The
+                            merchant output is fixed.
+                          </div>
+                        </div>
                       </div>
-                    ) : (
-                      <div className="mt-3">
-                        <div className="flex min-w-0 items-end gap-2">
-                          <div className="min-w-0 truncate text-3xl font-bold leading-none wallet-text-strong">
-                            {outputDisplayValue}
+                    ) : null}
+                    <div
+                      className="rounded-[22px] border px-3 py-2.5"
+                      style={{
+                        backgroundColor: 'var(--wallet-surface)',
+                        borderColor: 'var(--wallet-border)',
+                      }}
+                    >
+                      {activeView === 'merchant' ? (
+                        <>
+                          <div className="mb-2 flex items-center justify-between gap-3">
+                            <span className="min-w-0 truncate text-sm font-semibold wallet-muted">
+                              {merchantPaymentProposal
+                                ? 'BCH route input'
+                                : 'You pay'}
+                            </span>
+                            <span className="min-w-0 truncate text-xs wallet-muted opacity-80">
+                              {merchantPaymentProposal
+                                ? 'Network fee added at build time'
+                                : 'Bitcoin Cash'}
+                            </span>
                           </div>
-                          <span className="shrink-0 pb-0.5 text-base font-semibold wallet-muted">
-                            {receiveUnitLabel}
+                          <div
+                            className="rounded-xl border px-3 py-2"
+                            style={{
+                              backgroundColor: 'var(--wallet-surface-strong)',
+                              borderColor: 'var(--wallet-border)',
+                            }}
+                          >
+                            {renderAssetBadge('BCH', 'Wallet', null, 'bch')}
+                          </div>
+                          <div className="mt-3 text-xs wallet-muted">
+                            {merchantPaymentProposal
+                              ? 'The buyer funds the BCH route and pays the network fee. The merchant output is fixed by the scanned proposal.'
+                              : 'Customers pay in BCH. This checkout settles in the selected stablecoin.'}
+                          </div>
+                          <div className="mt-3 flex items-end gap-2">
+                            <div className="min-w-0 truncate text-3xl font-bold leading-none wallet-text-strong">
+                              {quote
+                                ? formatCompactBchAmount(quote.totalSupply)
+                                : merchantPaymentProposal
+                                  ? formatCompactBchAmount(
+                                      merchantPaymentProposal.maxBchSats
+                                    )
+                                  : 'Quote to estimate'}
+                            </div>
+                            <span className="shrink-0 pb-0.5 text-base font-semibold wallet-muted">
+                              BCH
+                            </span>
+                          </div>
+                          {merchantPaymentProposal && quote ? (
+                            <div className="mt-3 space-y-1 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface-strong)] px-3 py-2 text-xs">
+                              <div className="flex items-center justify-between gap-3">
+                                <span className="wallet-muted">BCH route</span>
+                                <span className="font-semibold wallet-text-strong">
+                                  {formatCompactBchAmount(quote.totalSupply)}
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-between gap-3">
+                                <span className="wallet-muted">
+                                  Network fee (estimated)
+                                </span>
+                                <span className="font-semibold wallet-text-strong">
+                                  {formatCompactBchAmount(
+                                    quote.estimatedFeeSatoshis
+                                  )}
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-between gap-3 border-t border-[var(--wallet-border)] pt-1">
+                                <span className="font-semibold wallet-text-strong">
+                                  Estimated wallet debit
+                                </span>
+                                <span className="font-semibold wallet-text-strong">
+                                  {formatCompactBchAmount(
+                                    merchantEstimatedWalletDebitSats ?? 0n
+                                  )}
+                                </span>
+                              </div>
+                            </div>
+                          ) : null}
+                        </>
+                      ) : (
+                        <>
+                          <div className="mb-2 flex items-center justify-between gap-3">
+                            <span className="min-w-0 truncate text-sm font-semibold wallet-muted">
+                              You pay
+                            </span>
+                            <div className="flex min-w-0 items-center gap-2">
+                              <span className="min-w-0 truncate text-xs wallet-muted opacity-80">
+                                {payBalanceCaption}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setAmount(
+                                    direction === 'bch_to_token'
+                                      ? formatCompactBchAmount(
+                                          currentSwapMaxInput
+                                        )
+                                      : formatTokenAmount(
+                                          currentSwapMaxInput,
+                                          effectiveDecimals
+                                        )
+                                  );
+                                  setQuote(null);
+                                }}
+                                className="wallet-btn-secondary px-2.5 py-1 text-[11px]"
+                                disabled={
+                                  loading ||
+                                  submitting ||
+                                  currentSwapMaxInput <= 0n
+                                }
+                              >
+                                Max
+                              </button>
+                            </div>
+                          </div>
+                          <div
+                            className="rounded-xl border px-3 py-2"
+                            style={{
+                              backgroundColor: 'var(--wallet-surface-strong)',
+                              borderColor: 'var(--wallet-border)',
+                            }}
+                          >
+                            {direction === 'bch_to_token'
+                              ? renderAssetBadge('BCH', 'Wallet', null, 'bch')
+                              : renderTokenPickerTrigger(true)}
+                          </div>
+                          <div
+                            className="mt-3"
+                            onClick={() => amountInputRef.current?.focus()}
+                            role="presentation"
+                          >
+                            <div className="flex items-end gap-2">
+                              <input
+                                ref={amountInputRef}
+                                value={amount}
+                                onChange={(event) => {
+                                  const decimals =
+                                    direction === 'bch_to_token'
+                                      ? 8
+                                      : effectiveDecimals;
+                                  const sanitizedAmount = sanitizeDecimalInput(
+                                    event.target.value,
+                                    decimals,
+                                    currentSwapMaxInput,
+                                    direction === 'bch_to_token'
+                                      ? formatCompactBchAmount
+                                      : formatTokenAmount
+                                  );
+                                  const parsedNextAmount = parseDecimalToAtomic(
+                                    sanitizedAmount,
+                                    decimals
+                                  );
+                                  let nextAmount = sanitizedAmount;
+                                  if (parsedNextAmount != null) {
+                                    if (
+                                      minExecutableRouteInput > 0n &&
+                                      parsedNextAmount < minExecutableRouteInput
+                                    ) {
+                                      nextAmount = formatTokenAmount(
+                                        minExecutableRouteInput,
+                                        decimals
+                                      );
+                                    } else if (
+                                      currentSwapMaxInput > 0n &&
+                                      parsedNextAmount > currentSwapMaxInput
+                                    ) {
+                                      nextAmount = formatTokenAmount(
+                                        currentSwapMaxInput,
+                                        decimals
+                                      );
+                                    }
+                                  }
+                                  if (nextAmount !== event.target.value) {
+                                    setMessage('Adjusted to fit range.');
+                                  }
+                                  setAmount(nextAmount);
+                                  setQuote(null);
+                                }}
+                                inputMode="decimal"
+                                pattern="[0-9]*[.,]?[0-9]*"
+                                enterKeyHint="done"
+                                placeholder={
+                                  direction === 'bch_to_token' ? '0.001' : '1'
+                                }
+                                className="min-w-0 flex-1 border-0 bg-transparent p-0 text-3xl font-bold leading-none wallet-text-strong outline-none"
+                                disabled={loading || submitting}
+                              />
+                              <span className="shrink-0 pb-0.5 text-base font-semibold wallet-muted">
+                                {payUnitLabel}
+                              </span>
+                            </div>
+                            <div className="mt-1.5 truncate text-xs wallet-muted">
+                              Wallet: {swapPayBalanceLabel}
+                            </div>
+                            <div className="mt-0.5 truncate text-xs wallet-muted">
+                              Range:{' '}
+                              {minExecutableRouteInput > 0n
+                                ? direction === 'bch_to_token'
+                                  ? `${formatCompactBchAmount(minExecutableRouteInput)} - ${formatCompactBchAmount(maxRoutableBchToToken)}`
+                                  : `${formatTokenDisplayAmount(
+                                      minExecutableRouteInput,
+                                      effectiveDecimals,
+                                      effectiveSymbol
+                                    )} - ${formatTokenDisplayAmount(
+                                      maxRoutableTokenToBch,
+                                      effectiveDecimals,
+                                      effectiveSymbol
+                                    )}`
+                                : 'Get quote'}
+                            </div>
+                            {swapAmountExceedsBalance ? (
+                              <div className="mt-1 text-xs text-amber-200">
+                                Above current range.
+                              </div>
+                            ) : null}
+                          </div>
+                        </>
+                      )}
+                    </div>
+
+                    {activeView === 'swap' ? (
+                      <div className="flex justify-center py-0.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDirection((current) =>
+                              current === 'bch_to_token'
+                                ? 'token_to_bch'
+                                : 'bch_to_token'
+                            );
+                            setAmount((current) =>
+                              current === '0.001' ? '1' : '0.001'
+                            );
+                            setQuote(null);
+                          }}
+                          className="flex h-10 w-10 items-center justify-center rounded-xl border text-xl wallet-text-strong"
+                          style={{
+                            backgroundColor: 'var(--wallet-surface-strong)',
+                            borderColor: 'var(--wallet-border)',
+                            boxShadow: 'var(--wallet-shadow-card)',
+                          }}
+                          aria-label="Flip swap direction"
+                        >
+                          <span aria-hidden="true">⌄</span>
+                        </button>
+                      </div>
+                    ) : null}
+
+                    <div
+                      className="rounded-[22px] border px-3 py-3"
+                      style={{
+                        backgroundColor: 'var(--wallet-surface)',
+                        borderColor: 'var(--wallet-border)',
+                      }}
+                    >
+                      <div className="mb-2 flex items-center justify-between gap-3">
+                        <span className="min-w-0 truncate text-sm font-semibold wallet-muted">
+                          {addonT('module.youReceive', 'You receive')}
+                        </span>
+                        <span className="min-w-0 truncate text-xs wallet-muted opacity-80">
+                          {receiveBalanceCaption}
+                        </span>
+                      </div>
+                      <div
+                        className="rounded-xl border px-3 py-2"
+                        style={{
+                          backgroundColor: 'var(--wallet-surface-strong)',
+                          borderColor: 'var(--wallet-border)',
+                        }}
+                      >
+                        {activeView === 'merchant'
+                          ? merchantPaymentProposal
+                            ? merchantReceivesDisplay || 'Fixed by request'
+                            : renderTokenPickerTrigger(true)
+                          : direction === 'bch_to_token'
+                            ? renderTokenPickerTrigger(true)
+                            : renderAssetBadge('BCH', 'Wallet', null, 'bch')}
+                      </div>
+                      {activeView === 'merchant' ? (
+                        <div className="mt-3 space-y-3">
+                          {merchantPaymentProposal ? (
+                            <div className="rounded-2xl border border-emerald-400/40 bg-emerald-400/10 px-4 py-3">
+                              <div className="text-[10px] uppercase tracking-[0.16em] wallet-muted opacity-70">
+                                Fixed merchant outputs
+                              </div>
+                              <div className="mt-1 text-2xl font-bold wallet-text-strong">
+                                {merchantReceivesDisplay || '—'}
+                              </div>
+                              <div className="mt-1 text-xs wallet-muted">
+                                The amount and recipient are fixed by the
+                                payment request.
+                              </div>
+                            </div>
+                          ) : (
+                            <MerchantAmountPad
+                              amount={amount}
+                              decimals={effectiveDecimals}
+                              symbol={effectiveSymbol}
+                              disabled={loading || submitting}
+                              onChange={(nextAmount) => {
+                                setAmount(nextAmount);
+                                setQuote(null);
+                              }}
+                              onClear={() => {
+                                setAmount('');
+                                setQuote(null);
+                              }}
+                            />
+                          )}
+                          {!merchantPaymentProposal ? (
+                            <div className="rounded-2xl border border-[var(--wallet-border)] px-4 py-3 text-xs wallet-muted">
+                              Customers pay in BCH. OPTN settles stablecoins to
+                              your wallet&apos;s token-aware address.
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <div className="mt-3">
+                          <div className="flex min-w-0 items-end gap-2">
+                            <div className="min-w-0 truncate text-3xl font-bold leading-none wallet-text-strong">
+                              {outputDisplayValue}
+                            </div>
+                            <span className="shrink-0 pb-0.5 text-base font-semibold wallet-muted">
+                              {receiveUnitLabel}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-3 grid grid-cols-[1fr_auto] items-end gap-2 rounded-2xl px-1 py-1">
+                    {merchantPaymentProposal ? (
+                      <div className="block">
+                        <span className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.2em] wallet-muted">
+                          Merchant quote protection
+                        </span>
+                        <div
+                          className={`${fieldClass} py-2.5`}
+                          style={fieldStyle}
+                        >
+                          {(
+                            Number(merchantPaymentProposal.quoteProtectionBps) /
+                            100
+                          ).toFixed(2)}
+                          %
+                          <span className="ml-2 text-xs wallet-muted">
+                            Locked
                           </span>
                         </div>
                       </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="mt-3 grid grid-cols-[1fr_auto] items-end gap-2">
-                  {merchantPaymentProposal ? (
-                    <div className="block">
-                      <span className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.2em] wallet-muted">
-                        Merchant quote protection
-                      </span>
-                      <div
-                        className={`${fieldClass} py-2.5`}
-                        style={fieldStyle}
-                      >
-                        {(
-                          Number(merchantPaymentProposal.quoteProtectionBps) /
-                          100
-                        ).toFixed(2)}
-                        %
-                        <span className="ml-2 text-xs wallet-muted">
-                          Locked
+                    ) : (
+                      <label className="block">
+                        <span className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.2em] wallet-muted">
+                          {addonT('module.slippage', 'Slippage')}
                         </span>
-                      </div>
-                    </div>
-                  ) : (
-                    <label className="block">
-                      <span className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.2em] wallet-muted">
-                        {addonT('module.slippage', 'Slippage')}
-                      </span>
-                      <select
-                        value={slippageBps}
-                        onChange={(event) => setSlippageBps(event.target.value)}
-                        className={`${fieldClass} py-2.5`}
-                        style={fieldStyle}
-                        disabled={submitting}
-                      >
-                        <option value="50">0.50%</option>
-                        <option value="100">1.00%</option>
-                        <option value="300">3.00%</option>
-                        <option value="500">5.00%</option>
-                      </select>
-                    </label>
-                  )}
+                        <select
+                          value={slippageBps}
+                          onChange={(event) =>
+                            setSlippageBps(event.target.value)
+                          }
+                          className={`${fieldClass} wallet-select wallet-cauldron-slippage-select py-2.5`}
+                          style={fieldStyle}
+                          disabled={submitting}
+                        >
+                          <option value="50">0.50%</option>
+                          <option value="100">1.00%</option>
+                          <option value="300">3.00%</option>
+                          <option value="500">5.00%</option>
+                        </select>
+                      </label>
+                    )}
 
-                  <button
-                    type="button"
-                    onClick={
-                      quote
-                        ? handleReviewSwap
-                        : activeView === 'merchant'
-                          ? () => void handleQuote()
-                          : handleQuoteAndOpenDetails
-                    }
-                    disabled={
-                      quoteActionsDisabled ||
-                      loading ||
-                      quoting ||
-                      submitting ||
-                      !canSwap ||
-                      !selectedTokenId
-                    }
-                    className="wallet-btn-primary min-w-[128px] px-4 py-[13px] text-base"
-                  >
-                    {submitting
-                      ? addonT('module.signing', 'Signing…')
-                      : quoting
-                        ? activeView === 'merchant'
-                          ? 'Preparing…'
-                          : addonT('module.loading', 'Loading…')
-                        : quote
-                          ? activeView === 'merchant'
-                            ? 'Review Payment'
-                            : 'Review Swap'
-                          : activeView === 'merchant'
-                            ? 'Prepare payment'
-                            : 'Get Quote'}
-                  </button>
-                </div>
-                <div className="mt-2 px-1 text-xs wallet-muted">
-                  {activeView === 'merchant'
-                    ? merchantPaymentProposal
-                      ? 'Review the fixed output, fee, and BCH change before signing and broadcasting.'
-                      : 'Slippage protects the merchant quote.'
-                    : 'Slippage sets minimum.'}
-                </div>
-              </div>
-
-              {quoteSafetyBanner ? (
-                <div className="wallet-warning-panel rounded-2xl px-4 py-3 text-sm shadow-lg">
-                  <div className="text-xs font-semibold uppercase tracking-[0.18em] wallet-text-strong">
-                    {quoteSafetyBanner.title}
-                  </div>
-                  <div className="mt-2 space-y-1.5 wallet-text-strong">
-                    {quoteSafetyBanner.messages.map((warning) => (
-                      <div key={warning}>{warning}</div>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-
-              {quoteRateLabel ? (
-                <div className="wallet-card p-2.5">
-                  <div className="flex items-center justify-between gap-3 text-sm wallet-text-strong">
-                    <span className="min-w-0 truncate">{quoteRateLabel}</span>
                     <button
                       type="button"
-                      onClick={() => setQuoteDetailsOpen(true)}
-                      className="wallet-btn-secondary shrink-0 px-3 py-1.5 text-xs"
+                      onClick={
+                        quote
+                          ? handleReviewSwap
+                          : activeView === 'merchant'
+                            ? () => void handleQuote()
+                            : handleQuoteAndOpenDetails
+                      }
+                      disabled={
+                        quoteActionsDisabled ||
+                        loading ||
+                        quoting ||
+                        submitting ||
+                        !canSwap ||
+                        !selectedTokenId
+                      }
+                      className="wallet-btn-primary min-w-[128px] px-4 py-[13px] text-base"
                     >
-                      {addonT('module.details', 'Details')}
+                      {submitting
+                        ? addonT('module.signing', 'Signing…')
+                        : quoting
+                          ? activeView === 'merchant'
+                            ? 'Preparing…'
+                            : addonT('module.loading', 'Loading…')
+                          : quote
+                            ? activeView === 'merchant'
+                              ? 'Review Payment'
+                              : 'Review Swap'
+                            : activeView === 'merchant'
+                              ? 'Prepare payment'
+                              : 'Get Quote'}
                     </button>
                   </div>
+                  <div className="mt-2 px-1 text-xs wallet-muted">
+                    {activeView === 'merchant'
+                      ? merchantPaymentProposal
+                        ? 'Review the fixed output, fee, and BCH change before signing and broadcasting.'
+                        : 'Slippage protects the merchant quote.'
+                      : 'Slippage sets minimum.'}
+                  </div>
                 </div>
-              ) : previewError ? (
-                <div className="px-1 text-xs text-amber-200">
-                  {previewError}
-                </div>
-              ) : (
-                <div className="px-1 text-xs wallet-muted">
-                  {addonT('module.enterAmount', 'Enter an amount.')}
-                </div>
-              )}
-            </div>
+
+                {quoteSafetyBanner ? (
+                  <div className="wallet-warning-panel rounded-2xl px-4 py-3 text-sm shadow-lg">
+                    <div className="text-xs font-semibold uppercase tracking-[0.18em] wallet-text-strong">
+                      {quoteSafetyBanner.title}
+                    </div>
+                    <div className="mt-2 space-y-1.5 wallet-text-strong">
+                      {quoteSafetyBanner.messages.map((warning) => (
+                        <div key={warning}>{warning}</div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                {quoteRateLabel ? (
+                  <div className="wallet-card p-2.5">
+                    <div className="flex items-center justify-between gap-3 text-sm wallet-text-strong">
+                      <span className="min-w-0 truncate">{quoteRateLabel}</span>
+                      <button
+                        type="button"
+                        onClick={() => setQuoteDetailsOpen(true)}
+                        className="wallet-btn-secondary shrink-0 px-3 py-1.5 text-xs"
+                      >
+                        {addonT('module.details', 'Details')}
+                      </button>
+                    </div>
+                  </div>
+                ) : previewError ? (
+                  <div className="px-1 text-xs text-amber-200">
+                    {previewError}
+                  </div>
+                ) : (
+                  <div className="px-1 text-xs wallet-muted">
+                    {addonT('module.enterAmount', 'Enter an amount.')}
+                  </div>
+                )}
+              </div>
+            )
           ) : (
             <div className="space-y-4 pb-3">
               <div className="wallet-card p-4">
@@ -6132,16 +6734,20 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
               : 'Review Cauldron Swap'
           }
           subtitle={
-            activeView === 'merchant'
-              ? `Pay BCH, receive ${effectiveSymbol}`
-              : direction === 'bch_to_token'
+            activeView === 'merchant' && merchantPaymentProposal
+              ? `Pay ${merchantIncomingDisplay ?? '—'}, receive ${merchantReceivesDisplay ?? '—'}`
+              : activeView === 'merchant'
                 ? `Pay BCH, receive ${effectiveSymbol}`
-                : `Pay ${effectiveSymbol}, receive BCH`
+                : direction === 'bch_to_token'
+                  ? `Pay BCH, receive ${effectiveSymbol}`
+                  : `Pay ${effectiveSymbol}, receive BCH`
           }
           loading={submitting}
           canConfirm={!reviewWarningsAcceptedNeeded || reviewWarningsAccepted}
           warning={
-            quoteSafetyBanner ? (
+            activeView === 'merchant' ? (
+              <span>Slide to confirm.</span>
+            ) : quoteSafetyBanner ? (
               <span>{quoteSafetyBanner.title}</span>
             ) : quoteReviewWarnings.length > 0 ? (
               <span>
@@ -6153,7 +6759,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
             ) : (
               <span>
                 {activeView === 'merchant'
-                  ? 'Slide to sign and broadcast.'
+                  ? 'Review the fixed amount and merchant, then confirm.'
                   : addonT('module.slideConfirm', 'Slide to confirm.')}
               </span>
             )
@@ -6163,29 +6769,43 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
         >
           <div className="space-y-3 px-1 py-2 text-sm">
             <div className="rounded-2xl border border-[var(--wallet-border)] px-4 py-3">
-              {merchantPaymentProposal &&
-              merchantEstimatedWalletDebitSats != null ? (
+              {merchantPaymentProposal && merchantTerms ? (
                 <>
                   <div className="flex items-center justify-between gap-3">
-                    <span className="wallet-muted">BCH route</span>
-                    <span className="font-medium wallet-text-strong">
-                      {formatCompactBchAmount(quote.totalSupply)}
+                    <span className="wallet-muted">You pay</span>
+                    <span className="text-right font-medium wallet-text-strong">
+                      {merchantIncomingDisplay}
                     </span>
                   </div>
                   <div className="mt-2 flex items-center justify-between gap-3">
-                    <span className="wallet-muted">
-                      Network fee (estimated)
+                    <span className="wallet-muted">Merchant receives</span>
+                    <span className="text-right font-medium wallet-text-strong">
+                      {merchantReceivesDisplay || '—'}
                     </span>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between gap-3">
+                    <span className="wallet-muted">Network fee</span>
                     <span className="font-medium wallet-text-strong">
                       {formatCompactBchAmount(quote.estimatedFeeSatoshis)}
                     </span>
                   </div>
+                  {merchantTerms.incomingAsset === 'token' &&
+                  merchantAdditionalBchSats != null ? (
+                    <div className="mt-2 flex items-center justify-between gap-3">
+                      <span className="wallet-muted">Additional BCH input</span>
+                      <span className="font-medium wallet-text-strong">
+                        {formatCompactBchAmount(merchantAdditionalBchSats)}
+                      </span>
+                    </div>
+                  ) : null}
                   <div className="mt-2 flex items-center justify-between gap-3 border-t border-[var(--wallet-border)] pt-2">
                     <span className="font-semibold wallet-text-strong">
-                      Estimated wallet debit
+                      Total from wallet
                     </span>
                     <span className="font-semibold wallet-text-strong">
-                      {formatCompactBchAmount(merchantEstimatedWalletDebitSats)}
+                      {formatCompactBchAmount(
+                        merchantEstimatedWalletDebitSats ?? 0n
+                      )}
                     </span>
                   </div>
                 </>
@@ -6199,30 +6819,32 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                   </span>
                 </div>
               )}
-              <div className="mt-2 flex items-center justify-between gap-3">
-                <span className="wallet-muted">
-                  {addonT('module.receive', 'Receive')}
-                </span>
-                <span className="font-medium wallet-text-strong">
-                  {receiveSummary}
-                </span>
-              </div>
-              <div className="mt-2 flex items-center justify-between gap-3">
-                <span className="wallet-muted">
-                  {merchantPaymentProposal
-                    ? 'Guaranteed receive'
-                    : addonT('module.minimumReceive', 'Minimum receive')}
-                </span>
-                <span className="font-medium wallet-text-strong">
-                  {direction === 'bch_to_token'
-                    ? formatTokenDisplayAmount(
-                        quote.minReceive,
-                        effectiveDecimals,
-                        effectiveSymbol
-                      )
-                    : formatCompactBchAmount(quote.minReceive)}
-                </span>
-              </div>
+              {!merchantPaymentProposal ? (
+                <>
+                  <div className="mt-2 flex items-center justify-between gap-3">
+                    <span className="wallet-muted">
+                      {addonT('module.receive', 'Receive')}
+                    </span>
+                    <span className="font-medium wallet-text-strong">
+                      {receiveSummary}
+                    </span>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between gap-3">
+                    <span className="wallet-muted">
+                      {addonT('module.minimumReceive', 'Minimum receive')}
+                    </span>
+                    <span className="font-medium wallet-text-strong">
+                      {direction === 'bch_to_token'
+                        ? formatTokenDisplayAmount(
+                            quote.minReceive,
+                            effectiveDecimals,
+                            effectiveSymbol
+                          )
+                        : formatCompactBchAmount(quote.minReceive)}
+                    </span>
+                  </div>
+                </>
+              ) : null}
               {merchantPaymentProposal ? (
                 <>
                   <div className="mt-2 flex items-center justify-between gap-3">
@@ -6241,7 +6863,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
               ) : null}
             </div>
 
-            {quoteRiskSummary ? (
+            {activeView !== 'merchant' && quoteRiskSummary ? (
               <div
                 className={`rounded-2xl border px-4 py-3 ${
                   quoteRiskSummary.highSlippage ||
@@ -6336,7 +6958,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
               </div>
             ) : null}
 
-            {quoteReviewWarnings.length > 0 ? (
+            {activeView !== 'merchant' && quoteReviewWarnings.length > 0 ? (
               <div className="rounded-2xl border border-[var(--wallet-warning-border)] bg-[var(--wallet-warning-bg)] px-4 py-3">
                 <div className="text-xs font-semibold uppercase tracking-[0.18em] wallet-text-strong">
                   {addonT('module.warnings', 'Warnings')}
@@ -6346,63 +6968,196 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                     <div key={warning}>{warning}</div>
                   ))}
                 </div>
-                <label className="mt-3 flex items-start gap-3 text-sm wallet-text-strong">
-                  <input
-                    type="checkbox"
-                    className="mt-1"
-                    checked={reviewWarningsAccepted}
-                    onChange={(event) =>
-                      setReviewWarningsAccepted(event.target.checked)
-                    }
-                  />
-                  <span>
-                    {addonT(
-                      'module.reviewedWarnings',
-                      'I reviewed these warnings and still want to continue.'
-                    )}
-                  </span>
-                </label>
+                {activeView !== 'merchant' ? (
+                  <label className="mt-3 flex items-start gap-3 text-sm wallet-text-strong">
+                    <input
+                      type="checkbox"
+                      className="mt-1"
+                      checked={reviewWarningsAccepted}
+                      onChange={(event) =>
+                        setReviewWarningsAccepted(event.target.checked)
+                      }
+                    />
+                    <span>
+                      {addonT(
+                        'module.reviewedWarnings',
+                        'I reviewed these warnings and still want to continue.'
+                      )}
+                    </span>
+                  </label>
+                ) : (
+                  <div className="mt-3 text-xs wallet-muted">
+                    Slide to confirm after reviewing the fixed merchant amount
+                    and BCH debit.
+                  </div>
+                )}
               </div>
             ) : null}
 
-            <div className="rounded-2xl border border-[var(--wallet-border)] px-4 py-3">
-              <div className="text-xs uppercase tracking-[0.18em] wallet-muted opacity-70">
-                {addonT('module.route', 'Route')}
+            {activeView !== 'merchant' ? (
+              <div className="rounded-2xl border border-[var(--wallet-border)] px-4 py-3">
+                <div className="text-xs uppercase tracking-[0.18em] wallet-muted opacity-70">
+                  {addonT('module.route', 'Route')}
+                </div>
+                <div className="mt-2 space-y-2">
+                  {previewedRouteRows.slice(0, 2).map((trade) => (
+                    <div
+                      key={
+                        trade.pool.poolId ??
+                        `${trade.pool.txHash}:${trade.pool.outputIndex}`
+                      }
+                      className="flex items-center justify-between gap-3 text-sm"
+                    >
+                      <span className="wallet-muted">
+                        {trade.pool.poolId
+                          ? `${trade.pool.poolId.slice(0, 8)}...`
+                          : `${trade.pool.txHash.slice(0, 8)}:${trade.pool.outputIndex}`}
+                      </span>
+                      <span className="wallet-text-strong">
+                        {direction === 'bch_to_token'
+                          ? formatTokenDisplayAmount(
+                              trade.demand,
+                              effectiveDecimals,
+                              effectiveSymbol
+                            )
+                          : formatCompactBchAmount(trade.demand)}
+                      </span>
+                    </div>
+                  ))}
+                  {previewedRouteRows.length > 2 ? (
+                    <div className="text-xs wallet-muted">
+                      {previewedRouteRows.length - 2} more pools hidden.
+                    </div>
+                  ) : null}
+                </div>
               </div>
-              <div className="mt-2 space-y-2">
-                {previewedRouteRows.slice(0, 2).map((trade) => (
-                  <div
-                    key={
-                      trade.pool.poolId ??
-                      `${trade.pool.txHash}:${trade.pool.outputIndex}`
-                    }
-                    className="flex items-center justify-between gap-3 text-sm"
-                  >
-                    <span className="wallet-muted">
-                      {trade.pool.poolId
-                        ? `${trade.pool.poolId.slice(0, 8)}...`
-                        : `${trade.pool.txHash.slice(0, 8)}:${trade.pool.outputIndex}`}
-                    </span>
-                    <span className="wallet-text-strong">
-                      {direction === 'bch_to_token'
-                        ? formatTokenDisplayAmount(
-                            trade.demand,
-                            effectiveDecimals,
-                            effectiveSymbol
-                          )
-                        : formatCompactBchAmount(trade.demand)}
-                    </span>
-                  </div>
-                ))}
-                {previewedRouteRows.length > 2 ? (
-                  <div className="text-xs wallet-muted">
-                    {previewedRouteRows.length - 2} more pools hidden.
-                  </div>
-                ) : null}
-              </div>
-            </div>
+            ) : null}
           </div>
         </ContainedSwipeConfirmModal>
+      ) : null}
+
+      {merchantDetailsOpen && merchantPaymentProposal ? (
+        <div
+          className="absolute inset-0 z-[70] flex items-end bg-black/55 px-3 pb-3 pt-12 sm:px-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="merchant-payment-details-title"
+        >
+          <div className="wallet-card max-h-[85vh] w-full overflow-y-auto rounded-[28px] p-4 shadow-[0_24px_70px_rgba(0,0,0,0.4)]">
+            <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-[var(--wallet-border)]" />
+            <div className="flex items-center justify-between gap-3">
+              <h2
+                id="merchant-payment-details-title"
+                className="text-lg font-semibold wallet-text-strong"
+              >
+                Payment details
+              </h2>
+              <button
+                type="button"
+                onClick={() => setMerchantDetailsOpen(false)}
+                className="wallet-btn-secondary px-3 py-1.5 text-xs"
+                aria-label="Close payment details"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-3 text-sm">
+              <div className="flex items-center justify-between gap-3">
+                <span className="wallet-muted">Merchant receives</span>
+                <span className="text-right font-semibold wallet-text-strong">
+                  {merchantReceivesDisplay || '—'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="wallet-muted">Customer pays</span>
+                <span className="text-right font-medium wallet-text-strong">
+                  {merchantIncomingDisplay || '—'}
+                </span>
+              </div>
+              {merchantPaymentProposal.version === 2 ? (
+                <div className="flex items-center justify-between gap-3">
+                  <span className="wallet-muted">Conversion</span>
+                  <span className="font-medium wallet-text-strong">
+                    {(
+                      Number(merchantPaymentProposal.conversionBps) / 100
+                    ).toFixed(0)}
+                    %
+                  </span>
+                </div>
+              ) : null}
+              <div className="flex items-start justify-between gap-3">
+                <span className="wallet-muted">Merchant address</span>
+                <span className="max-w-[64%] break-all text-right font-medium wallet-text-strong">
+                  {shortenAddress(merchantPaymentProposal.merchantAddress)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="wallet-muted">Exchange rate</span>
+                <span className="text-right font-medium wallet-text-strong">
+                  {merchantPaymentProposal.route.summary.supply > 0n &&
+                  merchantPaymentProposal.route.summary.demand > 0n
+                    ? `1 ${merchantPaymentProposal.tokenSymbol} ≈ ${(
+                        Number(merchantPaymentProposal.route.summary.supply) /
+                        Number(merchantPaymentProposal.route.summary.demand) /
+                        100_000_000
+                      ).toFixed(8)} BCH`
+                    : 'Direct payment'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="wallet-muted">Route input</span>
+                <span className="font-medium wallet-text-strong">
+                  {merchantPaymentProposal.route.supplyTokenId ===
+                  CAULDRON_NATIVE_BCH
+                    ? formatCompactBchAmount(
+                        merchantPaymentProposal.route.summary.supply
+                      )
+                    : `${formatTokenAmount(merchantPaymentProposal.route.summary.supply, effectiveDecimals)} ${effectiveSymbol}`}
+                </span>
+              </div>
+              {merchantTerms?.incomingAsset === 'token' &&
+              merchantTerms.merchantBchAmountSatoshis > 0n ? (
+                <div className="flex items-center justify-between gap-3">
+                  <span className="wallet-muted">Additional BCH input</span>
+                  <span className="text-right font-medium wallet-text-strong">
+                    {merchantAdditionalBchSats != null
+                      ? formatCompactBchAmount(merchantAdditionalBchSats)
+                      : 'Required for fees'}
+                  </span>
+                </div>
+              ) : null}
+              <div className="flex items-center justify-between gap-3">
+                <span className="wallet-muted">Quote expires at</span>
+                <span className="font-medium wallet-text-strong">
+                  {merchantExpiryLabel ?? '—'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="wallet-muted">Routing</span>
+                <span className="font-medium wallet-text-strong">
+                  {merchantPaymentProposal.route.trades.length > 0
+                    ? 'Cauldron'
+                    : 'Direct'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="wallet-muted">Network</span>
+                <span className="font-medium wallet-text-strong">
+                  {merchantNetworkLabel}
+                </span>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setMerchantDetailsOpen(false)}
+              className="wallet-btn-secondary mt-4 w-full px-4 py-3"
+            >
+              Close
+            </button>
+          </div>
+        </div>
       ) : null}
 
       {quoteDetailsOpen && quote ? (

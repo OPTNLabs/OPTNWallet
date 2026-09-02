@@ -60,6 +60,7 @@ const PSBT_IN_PARTIAL_SIG = 0x02;
 const PSBT_IN_SIGHASH_TYPE = 0x03;
 const PSBT_IN_REDEEM_SCRIPT = 0x04;
 const PSBT_IN_BIP32_DERIVATION = 0x06;
+const PSBT_IN_FINAL_SCRIPTSIG = 0x07;
 const PSBT_IN_PREVIOUS_TXID = 0x0e;
 const PSBT_IN_OUTPUT_INDEX = 0x0f;
 const PSBT_IN_SEQUENCE = 0x10;
@@ -154,6 +155,8 @@ export interface PsbtInputSpec {
    * partially-signed PSBT being merged). Emitted as PSBT_IN_PARTIAL_SIG.
    */
   partialSignatures?: PsbtSignature[];
+  /** Final unlocking script for a covenant input already authorized. */
+  finalScriptSig?: Uint8Array;
 }
 
 export interface PsbtTokenSpec {
@@ -503,7 +506,7 @@ export function encodeUnsignedPsbt(
       ];
     }
     derivations ??= [];
-    if (derivations.length === 0) {
+    if (derivations.length === 0 && !input.finalScriptSig) {
       throw new Error('Inputs need at least one public key derivation.');
     }
     for (const derivation of derivations) {
@@ -557,6 +560,14 @@ export function encodeUnsignedPsbt(
           signature.signature
         );
       }),
+      ...(input.finalScriptSig
+        ? [
+            record(
+              Uint8Array.from([PSBT_IN_FINAL_SCRIPTSIG]),
+              input.finalScriptSig
+            ),
+          ]
+        : []),
       ...derivations.map((derivation) =>
         record(
           concat([
@@ -667,6 +678,8 @@ export interface ParsedPsbtInput {
   partialSignatures: PsbtSignature[];
   /** BIP32 derivations: which keys the signer is expected to use. */
   derivations: ParsedPsbtDerivation[];
+  /** Final unlocking script, when this input is already finalized. */
+  finalScriptSig: Uint8Array | null;
 }
 
 export interface ParsedPsbtOutput {
@@ -770,6 +783,7 @@ function parseInputMap(
     requestedSighashType: null,
     partialSignatures: [],
     derivations: [],
+    finalScriptSig: null,
   };
   for (const { key, value } of map) {
     switch (key[0]) {
@@ -811,6 +825,9 @@ function parseInputMap(
         break;
       case PSBT_IN_REDEEM_SCRIPT:
         parsed.redeemScript = value;
+        break;
+      case PSBT_IN_FINAL_SCRIPTSIG:
+        parsed.finalScriptSig = value;
         break;
       case PSBT_IN_PREVIOUS_TXID:
         parsed.previousTxid = value;
@@ -938,6 +955,7 @@ export function decodePsbt(bytes: Uint8Array): ParsedPsbt {
         parsedInput.nonWitnessUtxo !== null ||
         parsedInput.partialSignatures.length > 0 ||
         parsedInput.redeemScript !== null ||
+        parsedInput.finalScriptSig !== null ||
         parsedInput.previousTxid !== null ||
         map.some(({ key }) => key[0] === PSBT_IN_BIP32_DERIVATION);
       if (sawInputField || map.length === 0) {
