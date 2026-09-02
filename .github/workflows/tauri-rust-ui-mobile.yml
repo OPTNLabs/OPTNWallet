@@ -128,7 +128,17 @@ jobs:
         run: npx tauri android init --ci --skip-targets-install --config src-tauri/tauri.leptos.mobile.conf.json
 
       - name: Pin generated Android Kotlin to plugin stdlib metadata
-        run: npx tsx scripts/pin-tauri-android-kotlin.mts src-tauri/gen/android
+        run: |
+          npx tsx scripts/pin-tauri-android-kotlin.mts src-tauri/gen/android
+          grep -R --line-number --fixed-strings \
+            'org.jetbrains.kotlin:kotlin-gradle-plugin:2.1.21' \
+            src-tauri/gen/android
+          if grep -R --line-number -E \
+            'org\.jetbrains\.kotlin:kotlin-gradle-plugin:1\.9\.' \
+            src-tauri/gen/android; then
+            echo '::error::stale Kotlin 1.9 compiler remains in generated Android project'
+            exit 1
+          fi
 
       - name: Build Tauri Leptos Android APK
         run: npx tauri android build --debug --apk --target aarch64 --config src-tauri/tauri.leptos.mobile.conf.json
