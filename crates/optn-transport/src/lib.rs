@@ -7,16 +7,9 @@
 //! crate; only these typed contracts are shared.
 
 use optn_app::{AppAction, AppEvent, AppState};
-use std::{
-    cell::RefCell,
-    collections::VecDeque,
-    future::Future,
-    pin::Pin,
-    rc::Rc,
-};
+use std::{cell::RefCell, collections::VecDeque, future::Future, pin::Pin, rc::Rc};
 
-pub type TransportFuture<'a, T> =
-    Pin<Box<dyn Future<Output = Result<T, TransportError>> + 'a>>;
+pub type TransportFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, TransportError>> + 'a>>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TransportError {
@@ -106,7 +99,10 @@ mod tests {
             let snapshot = transport.snapshot().await.unwrap();
             (event, snapshot)
         });
-        assert_eq!(result.0, Some(AppEvent::ThemeChanged(optn_app::ThemeMode::Light)));
+        assert_eq!(
+            result.0,
+            Some(AppEvent::ThemeChanged(optn_app::ThemeMode::Light))
+        );
         assert_eq!(result.1.theme, optn_app::ThemeMode::Light);
     }
 
