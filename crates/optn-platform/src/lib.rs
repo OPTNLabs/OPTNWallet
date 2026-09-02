@@ -261,6 +261,36 @@ impl HardwareVendor {
     }
 }
 
+/// Which wire a Ledger is on.
+///
+/// Ledger is the only vendor with a real choice here: a Nano X speaks
+/// Bluetooth as well as USB, and the React wallet stores the preference per
+/// wallet (`ledgerTransport`). Modelled as its own type rather than a bool so
+/// a third option cannot arrive as "not USB".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LedgerLink {
+    #[default]
+    Usb,
+    /// Nano X over Bluetooth.
+    Bluetooth,
+}
+
+impl LedgerLink {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Usb => "USB",
+            Self::Bluetooth => "Bluetooth",
+        }
+    }
+
+    pub const fn transport(self) -> HardwareTransport {
+        match self {
+            Self::Usb => HardwareTransport::NativeUsb,
+            Self::Bluetooth => HardwareTransport::WebBle,
+        }
+    }
+}
+
 /// A public account exported from a device at onboarding.
 ///
 /// Public material only — an account xPub and the master fingerprint that

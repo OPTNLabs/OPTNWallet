@@ -22,7 +22,7 @@ mod tools;
 #[cfg(target_arch = "wasm32")]
 use derivation::DerivationPicker;
 #[cfg(target_arch = "wasm32")]
-use hardware::HardwareWalletSetup;
+use hardware::HardwareSection;
 #[cfg(target_arch = "wasm32")]
 use multisig::MultisigSection;
 #[cfg(target_arch = "wasm32")]
@@ -232,6 +232,8 @@ fn WatchOnlySetup(transport: UiTransport, state: RwSignal<AppState>) -> impl Int
                 </form>
 
                 <MultisigSection transport=transport state=state />
+
+                <HardwareSection transport=transport state=state />
 
                 <Show when=move || preview.get().is_some()>
                     <section class="watch-preview" aria-live="polite">
@@ -861,7 +863,22 @@ fn App(transport: Rc<dyn AppTransport>) -> impl IntoView {
                     <WatchOnlySetup transport=transport state=state />
                 }.into_any(),
                 AppRoute::HardwareWallet => view! {
-                    <HardwareWalletSetup transport=transport state=state />
+                    <section class="watch-only-page">
+                        <section class="watch-only-card">
+                            <button
+                                class="text-button"
+                                type="button"
+                                on:click=move |_| dispatch_action(
+                                    transport,
+                                    state,
+                                    AppAction::GoBack,
+                                )
+                            >
+                                {move || format!("← {}", state.get().flow().back_label)}
+                            </button>
+                            <HardwareSection transport=transport state=state />
+                        </section>
+                    </section>
                 }.into_any(),
                 AppRoute::WalletHome => view! {
                     <WalletHome transport=transport state=state />

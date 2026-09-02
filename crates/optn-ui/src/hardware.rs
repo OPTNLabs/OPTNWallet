@@ -1,6 +1,6 @@
 #![cfg(target_arch = "wasm32")]
 
-//! Hardware wallet onboarding.
+//! Hardware wallet onboarding, as a section of Watch Only.
 //!
 //! A device hands over public material only: an account xPub plus an optional
 //! master fingerprint. The private key never leaves it, so this screen looks
@@ -30,7 +30,7 @@ fn vendor_hint(vendor: HardwareVendor) -> &'static str {
 }
 
 #[component]
-pub fn HardwareWalletSetup(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
+pub fn HardwareSection(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
     let name = RwSignal::new(String::from("Hardware wallet"));
     let account_xpub = RwSignal::new(String::new());
     let fingerprint = RwSignal::new(String::new());
@@ -66,22 +66,11 @@ pub fn HardwareWalletSetup(transport: UiTransport, state: RwSignal<AppState>) ->
     };
 
     view! {
-        <section class="watch-only-page">
-            <section class="watch-only-card">
-                <button
-                    class="text-button"
-                    type="button"
-                    on:click=move |_| dispatch_action(
-                        transport,
-                        state,
-                        AppAction::GoBack,
-                    )
-                >
-                    {move || format!("← {}", state.get().flow().back_label)}
-                </button>
-
-                <p class="eyebrow">"Keys stay on the device"</p>
-                <h1>"Connect hardware wallet"</h1>
+        <section class="hardware-section" data-testid="hardware-section">
+            <div class="panel-head">
+                <span class="field-label">"Connect a device"</span>
+                <span class="muted">"Keys stay on the device"</span>
+            </div>
 
                 <Show
                     when=move || model().available
@@ -268,7 +257,6 @@ pub fn HardwareWalletSetup(transport: UiTransport, state: RwSignal<AppState>) ->
                         </section>
                     </Show>
                 </Show>
-            </section>
         </section>
     }
 }

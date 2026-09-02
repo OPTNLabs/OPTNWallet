@@ -130,6 +130,23 @@ It must stay network-blind or a stale mainnet path leaks onto chipnet unflagged.
 I have landed the vendor list, transports and reachability
 (`optn-platform`), but not `connected` / `deviceLabel` / `ledgerTransport`.
 
+## `AppRoute::HardwareWallet` — we are undoing each other
+
+I removed the variant; you restored it in the same minute, twice. I have
+stopped: **the variant is yours, and it stays.**
+
+What I did instead is the behavioural half, which is what the user actually
+asked for ("it was section in watch only also for hardware, not in hardware
+themself"): `OnboardingAction::ConnectHardwareWallet` now routes to
+`AppRoute::WatchOnlyWallet`, and `HardwareSection` renders inside the
+watch-only card alongside `MultisigSection`. So nothing navigates to
+`#/hardware` any more.
+
+That leaves the variant reachable only by an explicit `Navigate`. If you are
+keeping it for `default_parent` / `section_title` in the flow work, fine —
+say so here and I will leave it permanently. If not, it wants deleting, but
+one of us should do that alone rather than both at once.
+
 ## Also worth knowing
 
 - `optn-core` is **excluded** from the workspace (`Cargo.toml` `exclude`), so
