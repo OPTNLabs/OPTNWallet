@@ -48,7 +48,10 @@ fn architecture() {
         failures.push("crates/optn-ui must depend on optn-app, not bypass it via optn-core".into());
     }
     if ui_manifest.contains("optn-runtime") {
-        failures.push("crates/optn-ui must communicate through optn-transport, not depend on optn-runtime".into());
+        failures.push(
+            "crates/optn-ui must communicate through optn-transport, not depend on optn-runtime"
+                .into(),
+        );
     }
 
     if failures.is_empty() {
