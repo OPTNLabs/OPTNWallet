@@ -6,7 +6,10 @@
 //! in-process, or run inside a WASM host. Implementations live outside this
 //! crate; only these typed contracts are shared.
 
-use optn_app::{AppAction, AppEvent, AppRoute, AppState, Network, ThemeMode};
+use optn_app::{
+    AppAction, AppEvent, AppRoute, AppState, AppSurface, FeatureFlag, FeatureFlags, Network,
+    ThemeMode,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::VecDeque,
@@ -62,6 +65,23 @@ pub enum WireNetwork {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WireSurface {
+    Desktop,
+    Android,
+    Ios,
+    Web,
+    Extension,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WireFeatureFlag {
+    CashFusion,
+    HardwareWallet,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum WireActionKind {
     Navigate(WireRoute),
@@ -69,6 +89,11 @@ pub enum WireActionKind {
     SetNetwork(WireNetwork),
     OpenHelp,
     CloseHelp,
+    SetSurface(WireSurface),
+    SetFeatureEnabled {
+        flag: WireFeatureFlag,
+        enabled: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,6 +109,9 @@ pub struct WireState {
     pub theme: WireTheme,
     pub network: WireNetwork,
     pub help_open: bool,
+    pub surface: WireSurface,
+    pub cash_fusion: bool,
+    pub hardware_wallet: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,6 +121,11 @@ pub enum WireEventKind {
     ThemeChanged(WireTheme),
     NetworkChanged(WireNetwork),
     HelpVisibilityChanged(bool),
+    SurfaceChanged(WireSurface),
+    FeatureFlagChanged {
+        flag: WireFeatureFlag,
+        enabled: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -161,6 +194,48 @@ impl From<WireNetwork> for Network {
     }
 }
 
+impl From<AppSurface> for WireSurface {
+    fn from(value: AppSurface) -> Self {
+        match value {
+            AppSurface::Desktop => Self::Desktop,
+            AppSurface::Android => Self::Android,
+            AppSurface::Ios => Self::Ios,
+            AppSurface::Web => Self::Web,
+            AppSurface::Extension => Self::Extension,
+        }
+    }
+}
+
+impl From<WireSurface> for AppSurface {
+    fn from(value: WireSurface) -> Self {
+        match value {
+            WireSurface::Desktop => Self::Desktop,
+            WireSurface::Android => Self::Android,
+            WireSurface::Ios => Self::Ios,
+            WireSurface::Web => Self::Web,
+            WireSurface::Extension => Self::Extension,
+        }
+    }
+}
+
+impl From<FeatureFlag> for WireFeatureFlag {
+    fn from(value: FeatureFlag) -> Self {
+        match value {
+            FeatureFlag::CashFusion => Self::CashFusion,
+            FeatureFlag::HardwareWallet => Self::HardwareWallet,
+        }
+    }
+}
+
+impl From<WireFeatureFlag> for FeatureFlag {
+    fn from(value: WireFeatureFlag) -> Self {
+        match value {
+            WireFeatureFlag::CashFusion => Self::CashFusion,
+            WireFeatureFlag::HardwareWallet => Self::HardwareWallet,
+        }
+    }
+}
+
 impl From<AppAction> for WireAction {
     fn from(value: AppAction) -> Self {
         let action = match value {
@@ -169,6 +244,11 @@ impl From<AppAction> for WireAction {
             AppAction::SetNetwork(network) => WireActionKind::SetNetwork(network.into()),
             AppAction::OpenHelp => WireActionKind::OpenHelp,
             AppAction::CloseHelp => WireActionKind::CloseHelp,
+            AppAction::SetSurface(surface) => WireActionKind::SetSurface(surface.into()),
+            AppAction::SetFeatureEnabled { flag, enabled } => WireActionKind::SetFeatureEnabled {
+                flag: flag.into(),
+                enabled,
+            },
         };
         Self {
             version: WIRE_PROTOCOL_VERSION,
@@ -188,6 +268,11 @@ impl TryFrom<WireAction> for AppAction {
             WireActionKind::SetNetwork(network) => Self::SetNetwork(network.into()),
             WireActionKind::OpenHelp => Self::OpenHelp,
             WireActionKind::CloseHelp => Self::CloseHelp,
+            WireActionKind::SetSurface(surface) => Self::SetSurface(surface.into()),
+            WireActionKind::SetFeatureEnabled { flag, enabled } => Self::SetFeatureEnabled {
+                flag: flag.into(),
+                enabled,
+            },
         })
     }
 }
@@ -200,6 +285,9 @@ impl From<&AppState> for WireState {
             theme: value.theme.into(),
             network: value.network.into(),
             help_open: value.help_open,
+            surface: value.surface.into(),
+            cash_fusion: value.features.cash_fusion,
+            hardware_wallet: value.features.hardware_wallet,
         }
     }
 }
@@ -214,6 +302,11 @@ impl TryFrom<WireState> for AppState {
             theme: value.theme.into(),
             network: value.network.into(),
             help_open: value.help_open,
+            surface: value.surface.into(),
+            features: FeatureFlags {
+                cash_fusion: value.cash_fusion,
+                hardware_wallet: value.hardware_wallet,
+            },
         })
     }
 }
@@ -225,6 +318,11 @@ impl From<AppEvent> for WireEvent {
             AppEvent::ThemeChanged(theme) => WireEventKind::ThemeChanged(theme.into()),
             AppEvent::NetworkChanged(network) => WireEventKind::NetworkChanged(network.into()),
             AppEvent::HelpVisibilityChanged(open) => WireEventKind::HelpVisibilityChanged(open),
+            AppEvent::SurfaceChanged(surface) => WireEventKind::SurfaceChanged(surface.into()),
+            AppEvent::FeatureFlagChanged { flag, enabled } => WireEventKind::FeatureFlagChanged {
+                flag: flag.into(),
+                enabled,
+            },
         };
         Self {
             version: WIRE_PROTOCOL_VERSION,
@@ -243,6 +341,11 @@ impl TryFrom<WireEvent> for AppEvent {
             WireEventKind::ThemeChanged(theme) => Self::ThemeChanged(theme.into()),
             WireEventKind::NetworkChanged(network) => Self::NetworkChanged(network.into()),
             WireEventKind::HelpVisibilityChanged(open) => Self::HelpVisibilityChanged(open),
+            WireEventKind::SurfaceChanged(surface) => Self::SurfaceChanged(surface.into()),
+            WireEventKind::FeatureFlagChanged { flag, enabled } => Self::FeatureFlagChanged {
+                flag: flag.into(),
+                enabled,
+            },
         })
     }
 }
@@ -366,6 +469,13 @@ mod tests {
         let encoded = serde_json::to_string(&WireEvent::from(event)).unwrap();
         let decoded: WireEvent = serde_json::from_str(&encoded).unwrap();
         assert_eq!(AppEvent::try_from(decoded).unwrap(), event);
+
+        let action = AppAction::SetFeatureEnabled {
+            flag: optn_app::FeatureFlag::HardwareWallet,
+            enabled: false,
+        };
+        let decoded = AppAction::try_from(WireAction::from(action)).unwrap();
+        assert_eq!(decoded, action);
     }
 
     #[test]

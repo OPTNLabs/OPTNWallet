@@ -78,6 +78,10 @@ describe('cross-platform capability contract', () => {
       policy: 'explain',
     });
     expect(capabilityAbsence('cashFusion', 'desktop')).toBeNull();
+    expect(hasCapability('hardwareWallet', 'desktop')).toBe(true);
+    expect(hasCapability('hardwareWallet', 'android')).toBe(false);
+    expect(hasCapability('cashFusion', 'desktop')).toBe(true);
+    expect(hasCapability('cashFusion', 'android')).toBe(false);
   });
 
   it('declares only known surfaces and never declares a dead capability', () => {

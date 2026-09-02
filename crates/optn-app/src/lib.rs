@@ -14,6 +14,53 @@ pub enum ThemeMode {
     Dark,
 }
 
+/// Build/runtime surface. Feature flags are booleans derived from this, then
+/// optionally turned off by the user. Hardware wallets stay desktop-only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppSurface {
+    Desktop,
+    Android,
+    Ios,
+    Web,
+    Extension,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FeatureFlag {
+    CashFusion,
+    HardwareWallet,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FeatureFlags {
+    pub cash_fusion: bool,
+    pub hardware_wallet: bool,
+}
+
+impl FeatureFlags {
+    pub const fn for_surface(surface: AppSurface) -> Self {
+        match surface {
+            AppSurface::Desktop => Self {
+                cash_fusion: true,
+                hardware_wallet: true,
+            },
+            AppSurface::Android | AppSurface::Ios | AppSurface::Web | AppSurface::Extension => {
+                Self {
+                    cash_fusion: false,
+                    hardware_wallet: false,
+                }
+            }
+        }
+    }
+
+    pub const fn allows(self, flag: FeatureFlag) -> bool {
+        match flag {
+            FeatureFlag::CashFusion => self.cash_fusion,
+            FeatureFlag::HardwareWallet => self.hardware_wallet,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppRoute {
     Landing,
@@ -41,6 +88,8 @@ pub struct AppState {
     pub theme: ThemeMode,
     pub network: Network,
     pub help_open: bool,
+    pub surface: AppSurface,
+    pub features: FeatureFlags,
 }
 
 impl Default for AppState {
@@ -50,6 +99,8 @@ impl Default for AppState {
             theme: ThemeMode::Dark,
             network: Network::Mainnet,
             help_open: false,
+            surface: AppSurface::Desktop,
+            features: FeatureFlags::for_surface(AppSurface::Desktop),
         }
     }
 }
@@ -61,6 +112,8 @@ pub enum AppAction {
     SetNetwork(Network),
     OpenHelp,
     CloseHelp,
+    SetSurface(AppSurface),
+    SetFeatureEnabled { flag: FeatureFlag, enabled: bool },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +122,8 @@ pub enum AppEvent {
     ThemeChanged(ThemeMode),
     NetworkChanged(Network),
     HelpVisibilityChanged(bool),
+    SurfaceChanged(AppSurface),
+    FeatureFlagChanged { flag: FeatureFlag, enabled: bool },
 }
 
 impl AppState {
@@ -99,10 +154,32 @@ impl AppState {
                 self.help_open = false;
                 Some(AppEvent::HelpVisibilityChanged(false))
             }
+            AppAction::SetSurface(surface) if self.surface != surface => {
+                self.surface = surface;
+                self.features = FeatureFlags::for_surface(surface);
+                Some(AppEvent::SurfaceChanged(surface))
+            }
+            AppAction::SetFeatureEnabled { flag, enabled } => {
+                let allowed = FeatureFlags::for_surface(self.surface).allows(flag);
+                let next = enabled && allowed;
+                let current = self.features.allows(flag);
+                if current == next {
+                    return None;
+                }
+                match flag {
+                    FeatureFlag::CashFusion => self.features.cash_fusion = next,
+                    FeatureFlag::HardwareWallet => self.features.hardware_wallet = next,
+                }
+                Some(AppEvent::FeatureFlagChanged {
+                    flag,
+                    enabled: next,
+                })
+            }
             AppAction::Navigate(_)
             | AppAction::SetNetwork(_)
             | AppAction::OpenHelp
-            | AppAction::CloseHelp => None,
+            | AppAction::CloseHelp
+            | AppAction::SetSurface(_) => None,
         }
     }
 
@@ -120,6 +197,8 @@ pub struct OnboardingViewModel {
     pub watch_only_wallet_href: &'static str,
     pub dark: bool,
     pub help_open: bool,
+    pub show_cash_fusion: bool,
+    pub show_hardware_wallet: bool,
 }
 
 pub fn onboarding_view_model(state: &AppState) -> OnboardingViewModel {
@@ -130,6 +209,8 @@ pub fn onboarding_view_model(state: &AppState) -> OnboardingViewModel {
         watch_only_wallet_href: AppRoute::WatchOnlyWallet.fragment(),
         dark: state.theme == ThemeMode::Dark,
         help_open: state.help_open,
+        show_cash_fusion: state.features.cash_fusion,
+        show_hardware_wallet: state.features.hardware_wallet,
     }
 }
 
@@ -240,5 +321,75 @@ mod tests {
         assert_eq!(vm.create_wallet_href, "#/createwallet");
         assert_eq!(vm.import_wallet_href, "#/importwallet");
         assert_eq!(vm.watch_only_wallet_href, "#/watch-only");
+        assert!(vm.show_cash_fusion);
+        assert!(vm.show_hardware_wallet);
+    }
+
+    #[test]
+    fn cash_fusion_and_hardware_wallet_are_boolean_surface_toggles() {
+        let desktop = FeatureFlags::for_surface(AppSurface::Desktop);
+        assert!(desktop.cash_fusion);
+        assert!(desktop.hardware_wallet);
+
+        for surface in [
+            AppSurface::Android,
+            AppSurface::Ios,
+            AppSurface::Web,
+            AppSurface::Extension,
+        ] {
+            let flags = FeatureFlags::for_surface(surface);
+            assert!(!flags.cash_fusion, "{surface:?} must hide CashFusion");
+            assert!(
+                !flags.hardware_wallet,
+                "{surface:?} must hide hardware wallets"
+            );
+        }
+    }
+
+    #[test]
+    fn hardware_wallet_cannot_be_enabled_off_desktop() {
+        let mut state = AppState::default();
+        assert_eq!(
+            state.reduce(AppAction::SetSurface(AppSurface::Android)),
+            Some(AppEvent::SurfaceChanged(AppSurface::Android))
+        );
+        let vm = onboarding_view_model(&state);
+        assert!(!vm.show_hardware_wallet);
+        assert!(!vm.show_cash_fusion);
+
+        assert_eq!(
+            state.reduce(AppAction::SetFeatureEnabled {
+                flag: FeatureFlag::HardwareWallet,
+                enabled: true,
+            }),
+            None
+        );
+        assert!(!state.features.hardware_wallet);
+
+        state.apply(AppAction::SetSurface(AppSurface::Desktop));
+        assert_eq!(
+            state.reduce(AppAction::SetFeatureEnabled {
+                flag: FeatureFlag::CashFusion,
+                enabled: false,
+            }),
+            Some(AppEvent::FeatureFlagChanged {
+                flag: FeatureFlag::CashFusion,
+                enabled: false,
+            })
+        );
+        assert!(!onboarding_view_model(&state).show_cash_fusion);
+        assert!(onboarding_view_model(&state).show_hardware_wallet);
+
+        assert_eq!(
+            state.reduce(AppAction::SetFeatureEnabled {
+                flag: FeatureFlag::HardwareWallet,
+                enabled: false,
+            }),
+            Some(AppEvent::FeatureFlagChanged {
+                flag: FeatureFlag::HardwareWallet,
+                enabled: false,
+            })
+        );
+        assert!(!onboarding_view_model(&state).show_hardware_wallet);
     }
 }

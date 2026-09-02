@@ -132,6 +132,16 @@ fn App(transport: Rc<dyn AppTransport>) -> impl IntoView {
                         >
                             "Import wallet"
                         </a>
+                        <Show when=move || onboarding_view_model(&state.get()).show_hardware_wallet>
+                            <button
+                                class="secondary"
+                                type="button"
+                                disabled
+                                title="Desktop USB hardware wallets"
+                            >
+                                "Connect hardware wallet"
+                            </button>
+                        </Show>
                         <Show when=|| cfg!(feature = "tauri-transport")>
                             <a
                                 class="secondary"

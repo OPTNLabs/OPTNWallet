@@ -103,6 +103,10 @@ vi.mock('../../../../platform/desktop/walletFusionPolicy', () => ({
   clearWalletFusionPolicy: vi.fn(),
 }));
 
+vi.mock('../../../../utils/platform', () => ({
+  isDesktopPlatform: () => true,
+}));
+
 vi.mock('../../../../features/settings/HardwareWalletSettings', () => ({
   HardwareWalletSettings: () => null,
 }));
@@ -165,6 +169,13 @@ describe('DesktopLandingPage UI', () => {
       expect(mocks.openWalletWithPassword).toHaveBeenCalledTimes(2);
       expect(mocks.navigate).toHaveBeenCalledWith('/home/7');
     });
+  });
+
+  it('shows the hardware-wallet action on desktop', async () => {
+    render(<DesktopLandingPage />);
+    expect(
+      await screen.findByRole('button', { name: 'Connect Hardware Wallet' })
+    ).toBeInTheDocument();
   });
 
   it('exposes the watch-only route from the wallet picker', async () => {
