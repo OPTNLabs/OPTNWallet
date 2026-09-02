@@ -255,6 +255,12 @@ pub struct OpenedWallet {
     /// it, and it is what a rescan or an air-gapped signer has to agree with,
     /// so it follows the wallet rather than being recomputed from the network.
     pub account_path: String,
+    /// `2 of 3` when this is a multisig wallet, `None` for single-sig.
+    ///
+    /// Kept beside the account rather than folded into it: a multisig wallet
+    /// still has a derivation account, and writing the policy into that field
+    /// would make Settings report a threshold where a path belongs.
+    pub multisig_policy: Option<String>,
 }
 
 impl OpenedWallet {
@@ -355,6 +361,7 @@ pub enum AppAction {
     },
     OpenWatchOnlyWallet(WatchOnlySetupPreview),
     OpenHardwareWallet(HardwareSetupPreview),
+    OpenMultisigWallet(MultisigSetupPreview),
     PrepareSend {
         destination: String,
         amount_sats: u64,
@@ -577,6 +584,27 @@ impl AppState {
                     receive_address: preview.receive_address,
                     master_fingerprint: preview.master_fingerprint,
                     account_path: preview.account_path,
+                    multisig_policy: None,
+                });
+                self.spend = None;
+                self.notice = None;
+                self.route = AppRoute::WalletHome;
+                Some(AppEvent::WalletOpened)
+            }
+            AppAction::OpenMultisigWallet(preview) => {
+                // Multisig is a watch-only wallet: this device holds public
+                // cosigner accounts and can never reach the threshold alone.
+                // Spending is a PSBT the other cosigners countersign.
+                if !self.features.enabled(self.surface, FeatureFlag::WatchOnly) {
+                    return self.reject("Watch-only is turned off.".into());
+                }
+                self.wallet = Some(OpenedWallet {
+                    kind: WalletKind::WatchOnly,
+                    name: preview.wallet_name,
+                    receive_address: preview.receive_address,
+                    master_fingerprint: None,
+                    account_path: AccountPath::default_for(self.network).to_string(),
+                    multisig_policy: Some(preview.policy),
                 });
                 self.spend = None;
                 self.notice = None;
@@ -598,6 +626,7 @@ impl AppState {
                     receive_address: preview.receive_address,
                     master_fingerprint: preview.master_fingerprint,
                     account_path: preview.account_path,
+                    multisig_policy: None,
                 });
                 self.spend = None;
                 self.notice = None;
@@ -685,6 +714,7 @@ impl AppState {
             receive_address,
             master_fingerprint: None,
             account_path: account.to_string(),
+            multisig_policy: None,
         });
         self.spend = None;
         self.notice = None;
@@ -1367,6 +1397,7 @@ pub fn seed_wallet_preview_at(
         receive_address,
         master_fingerprint: None,
         account_path: account.to_string(),
+        multisig_policy: None,
     })
 }
 
@@ -2326,6 +2357,44 @@ mod tests {
 
         assert!(multisig_setup_preview(Network::Chipnet, "", 2, &cosigners).is_err());
         assert!(multisig_setup_preview(Network::Chipnet, "n", 4, &cosigners).is_err());
+    }
+
+    #[test]
+    fn opening_a_multisig_wallet_keeps_its_policy_and_cannot_sign_alone() {
+        let cosigners: Vec<Cosigner> = (0..3)
+            .map(|account| {
+                let wallet = optn_core::hd::Wallet::from_mnemonic(BIP39_TEST_VECTOR_MNEMONIC, "")
+                    .expect("mnemonic");
+                Cosigner {
+                    name: String::new(),
+                    account_xpub: wallet
+                        .account_xpub(Network::Chipnet, account)
+                        .expect("xpub"),
+                    master_fingerprint: None,
+                }
+            })
+            .collect();
+        let preview = multisig_setup_preview(Network::Chipnet, "treasury", 2, &cosigners)
+            .expect("2-of-3 preview");
+
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        state.apply(AppAction::SetNetwork(Network::Chipnet));
+        state.apply(AppAction::OpenMultisigWallet(preview.clone()));
+
+        assert_eq!(state.route, AppRoute::WalletHome);
+        let opened = state.wallet.as_ref().expect("multisig wallet opened");
+        assert_eq!(opened.receive_address, preview.receive_address);
+        assert_eq!(opened.multisig_policy.as_deref(), Some("2 of 3"));
+        // The policy does not squat in the derivation field.
+        assert_eq!(opened.account_path, "m/44'/1'/0'");
+        // This device holds public cosigner accounts only, so it can never
+        // reach the threshold by itself.
+        assert_eq!(opened.kind, WalletKind::WatchOnly);
+        assert_eq!(
+            opened.spending_capability(),
+            SpendingCapability::WatchOnly,
+            "a multisig wallet must plan an unsigned PSBT for the cosigners"
+        );
     }
 
     #[test]

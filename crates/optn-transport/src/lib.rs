@@ -9,8 +9,9 @@
 use optn_app::{
     AppAction, AppEvent, AppRoute, AppState, AppSurface, CampaignOutput, Coin, CreateStep,
     FeatureFlag, FeatureFlags, FlipstarterPledge, FreezeReason, HardwareSetupPreview,
-    HardwareVendor, ImportStep, Network, OpenedWallet, Outpoint, PledgeStatus, SettingsRowId,
-    SpendKind, SpendPlan, ThemeMode, UiSkin, WalletKind, WatchOnlySetupPreview,
+    HardwareVendor, ImportStep, MultisigSetupPreview, Network, OpenedWallet, Outpoint,
+    PledgeStatus, SettingsRowId, SpendKind, SpendPlan, ThemeMode, UiSkin, WalletKind,
+    WatchOnlySetupPreview,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -209,6 +210,17 @@ pub enum WireActionKind {
         receive_token_address: String,
         change_address: String,
     },
+    OpenMultisigWallet {
+        wallet_name: String,
+        policy: String,
+        required: u8,
+        total: u8,
+        receive_address: String,
+        receive_token_address: String,
+        change_address: String,
+        #[serde(default)]
+        cosigner_names: Vec<String>,
+    },
     OpenHardwareWallet {
         vendor: String,
         wallet_name: String,
@@ -304,6 +316,8 @@ pub struct WireOpenedWallet {
     /// decodes; an empty path reads as "not recorded", not as account zero.
     #[serde(default)]
     pub account_path: String,
+    #[serde(default)]
+    pub multisig_policy: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -665,6 +679,16 @@ impl From<AppAction> for WireAction {
                 receive_token_address: preview.receive_token_address,
                 change_address: preview.change_address,
             },
+            AppAction::OpenMultisigWallet(preview) => WireActionKind::OpenMultisigWallet {
+                wallet_name: preview.wallet_name,
+                policy: preview.policy,
+                required: preview.required,
+                total: preview.total,
+                receive_address: preview.receive_address,
+                receive_token_address: preview.receive_token_address,
+                change_address: preview.change_address,
+                cosigner_names: preview.cosigner_names,
+            },
             AppAction::OpenHardwareWallet(preview) => WireActionKind::OpenHardwareWallet {
                 vendor: preview.vendor.id().to_string(),
                 wallet_name: preview.wallet_name,
@@ -762,6 +786,25 @@ impl TryFrom<WireAction> for AppAction {
                 receive_token_address,
                 change_address,
             }),
+            WireActionKind::OpenMultisigWallet {
+                wallet_name,
+                policy,
+                required,
+                total,
+                receive_address,
+                receive_token_address,
+                change_address,
+                cosigner_names,
+            } => Self::OpenMultisigWallet(MultisigSetupPreview {
+                wallet_name,
+                policy,
+                required,
+                total,
+                receive_address,
+                receive_token_address,
+                change_address,
+                cosigner_names,
+            }),
             WireActionKind::OpenHardwareWallet {
                 vendor,
                 wallet_name,
@@ -844,6 +887,7 @@ impl From<&OpenedWallet> for WireOpenedWallet {
             receive_address: value.receive_address.clone(),
             master_fingerprint: value.master_fingerprint.clone(),
             account_path: value.account_path.clone(),
+            multisig_policy: value.multisig_policy.clone(),
         }
     }
 }
@@ -860,6 +904,7 @@ impl From<WireOpenedWallet> for OpenedWallet {
             receive_address: value.receive_address,
             master_fingerprint: value.master_fingerprint,
             account_path: value.account_path,
+            multisig_policy: value.multisig_policy,
         }
     }
 }
