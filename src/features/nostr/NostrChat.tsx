@@ -65,6 +65,7 @@ import {
   forgetMlsGroup,
   isMlsAdmin,
   leaveMlsGroup,
+  linkOwnDevice,
   listMlsGroups,
   loadMlsDeviceIndex,
   loadMlsIndex,
