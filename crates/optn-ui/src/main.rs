@@ -8,7 +8,11 @@ use optn_app::{onboarding_view_model, AppAction, AppState, ThemeMode};
 use optn_transport::{AppTransport, LocalTransport};
 
 #[cfg(target_arch = "wasm32")]
-fn dispatch_action(transport: StoredValue<LocalTransport>, state: RwSignal<AppState>, action: AppAction) {
+fn dispatch_action(
+    transport: StoredValue<LocalTransport>,
+    state: RwSignal<AppState>,
+    action: AppAction,
+) {
     let transport = transport.get_value();
     leptos::task::spawn_local(async move {
         if transport.dispatch(action).await.is_ok() {
