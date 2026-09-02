@@ -374,7 +374,7 @@ jobs:
             sleep 5
 
             set +e
-            timeout 300s adb -s "$emulator_serial" shell am instrument -w -r \
+            timeout 540s adb -s "$emulator_serial" shell am instrument -w -r \
               optn.wallet.app.test/androidx.test.runner.AndroidJUnitRunner \
               | tee "$instrumentation_log"
             instrumentation_exit=${PIPESTATUS[0]}

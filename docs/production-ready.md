@@ -25,12 +25,21 @@ cargo run -p xtask -- parity --production-ready
 ```
 
 `--report` fails on matrix/source drift or missing evidence references.
+It is a required integrity check. `pending` is valid here.
+
 `--production-ready` fails unless every required cell is `pass` or `na`.
+Pending and fail cells are remaining work. This check is informational on
+PR #63 so required architecture, compilation, test, and artifact jobs can
+go green without claiming the Rust conversion is finished.
 
-A missing feature has only two acceptable states:
+A missing feature has only two acceptable **production-ready** states:
 
-- `pass` — implemented and tested at the evidence level the matrix records
+- `pass` — implemented and proven at the evidence level the matrix records
 - `na` — deliberately unsupported, documented, and hidden correctly
+
+`e2e-declared` is a third matrix evidence value used before a packaged run
+has proven the current artifact. xtask prints that cell as `pending`. A
+referenced test file is not proof that this commit's APK passed.
 
 Not: it happens not to appear on Android.
 
@@ -70,10 +79,10 @@ Packaged-app scenario:
 4. Enter Chipnet xPub, optional master fingerprint, and a name
 5. Public receive address preview derives
 6. Wallet is created
-7. App is force-stopped and relaunched
-8. The wallet remains watch-only
-9. The send path builds an unsigned PSBT and does not expose seed signing
-10. Receive/address derivation still works
+7. App is force-stopped (`am force-stop`) and launched from scratch
+8. The same watch-only wallet is still present
+9. Receive/address derivation still works
+10. The send path is the unsigned-PSBT workspace and does not expose seed signing
 
 Run the equivalent scenario on iOS, desktop, and web **where the matrix says
 `pass`**. Where the matrix says `na`, the action must stay hidden.
@@ -83,12 +92,43 @@ for the capabilities they are supposed to replace.
 
 ## Current Watch Only policy
 
-Desktop, Android, and iOS: `pass`.
-Web and extension: `na` (hidden on purpose). Promoting web/extension to `pass`
-requires flipping the matrix and the capability flags together, then proving
-the E2E path. Do not leave Watch Only accidentally missing on a native surface.
+Intended surfaces: desktop, Android, and iOS must offer Watch Only. Web and
+extension keep it hidden until the capability flags and matrix are flipped
+together.
+
+Current evidence declaration (not a production-ready claim):
+
+| Surface | Verdict | Meaning |
+| --- | --- | --- |
+| Windows | pass | proven packaged E2E |
+| Linux | pass | proven packaged E2E |
+| macOS | fail | unit only |
+| Android | pending | packaged E2E implemented; a passing run of this commit's APK is still required before `pass` |
+| iOS | fail | unit only |
+| Web | na | intentionally hidden |
+| Extension | na | intentionally hidden |
+
+Android becomes `pass` only after the packaged instrumentation for that
+commit passes, including force-stop/relaunch, receive derivation, the
+unsigned-PSBT send path, and no seed-signing path.
 
 Hardware wallets and CashFusion stay desktop `pass` and `na` everywhere else.
+
+## PR #63 required gates versus production-ready
+
+Required on this PR, without lying about unfinished conversion:
+
+- architecture
+- compilation
+- tests
+- Android artifact
+- iOS artifact
+- desktop artifacts
+- Watch-only Android packaged E2E (the Android Preview instrumentation job)
+- parity matrix integrity (`--report`)
+
+Production-ready remains a separate report of remaining work. Do not mark
+unfinished cells `pass` to make `--production-ready` green.
 
 ## Property-level testing for trusted code
 

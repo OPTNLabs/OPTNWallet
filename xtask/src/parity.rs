@@ -33,6 +33,7 @@ struct Feature {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
     Pass,
+    Pending,
     Na,
     Fail,
 }
@@ -41,6 +42,7 @@ impl Verdict {
     fn as_str(self) -> &'static str {
         match self {
             Self::Pass => "pass",
+            Self::Pending => "pending",
             Self::Na => "na",
             Self::Fail => "fail",
         }
@@ -67,6 +69,8 @@ pub fn run(root: &Path, production_ready: bool) {
     }
 
     let mut fail_cells = 0usize;
+    let mut pending_cells = 0usize;
+    let mut watch_only_row = String::new();
     println!(
         "{:<22} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8} {:>10}",
         "feature", "windows", "linux", "macos", "android", "ios", "web", "extension"
@@ -77,8 +81,10 @@ pub fn run(root: &Path, production_ready: bool) {
         for platform in PLATFORMS {
             match verdict(feature, platform) {
                 Ok(verdict) => {
-                    if verdict == Verdict::Fail {
-                        fail_cells += 1;
+                    match verdict {
+                        Verdict::Fail => fail_cells += 1,
+                        Verdict::Pending => pending_cells += 1,
+                        Verdict::Pass | Verdict::Na => {}
                     }
                     row.push_str(&format!("{:>8}", verdict.as_str()));
                 }
@@ -90,6 +96,9 @@ pub fn run(root: &Path, production_ready: bool) {
             }
         }
         println!("{row}  {}", feature.name);
+        if feature.id == "watch_only" {
+            watch_only_row = row;
+        }
         collect_ref_failures(root, feature, &mut failures);
     }
 
@@ -104,10 +113,17 @@ pub fn run(root: &Path, production_ready: bool) {
     }
 
     println!("parity matrix integrity: PASS");
+    if !watch_only_row.is_empty() {
+        println!("watch_only status:{watch_only_row}");
+        println!(
+            "note: pending means a packaged E2E test is referenced, not that this commit's APK passed it"
+        );
+    }
     println!("failing production-ready cells: {fail_cells}");
-    if production_ready && fail_cells > 0 {
+    println!("pending production-ready cells: {pending_cells}");
+    if production_ready && (fail_cells > 0 || pending_cells > 0) {
         eprintln!(
-            "production-ready: FAIL ({fail_cells} cells are not pass or na). Green CI is not sufficient."
+            "production-ready: FAIL ({fail_cells} fail, {pending_cells} pending). This gate is informational; required CI jobs may still pass."
         );
         std::process::exit(1);
     }
@@ -135,6 +151,7 @@ fn verdict(feature: &Feature, platform: &str) -> Result<Verdict, String> {
     })?;
     match (policy.as_str(), evidence.as_str()) {
         ("pass", "e2e" | "device") => Ok(Verdict::Pass),
+        ("pass", "e2e-declared") => Ok(Verdict::Pending),
         ("na", "hidden") => {
             if feature
                 .na_reason
@@ -160,7 +177,8 @@ fn verdict(feature: &Feature, platform: &str) -> Result<Verdict, String> {
 fn collect_ref_failures(root: &Path, feature: &Feature, failures: &mut Vec<String>) {
     for platform in PLATFORMS {
         let evidence = feature.evidence.get(*platform).map(String::as_str);
-        if evidence != Some("e2e") && evidence != Some("device") {
+        if evidence != Some("e2e") && evidence != Some("device") && evidence != Some("e2e-declared")
+        {
             continue;
         }
         let Some(reference) = feature.evidence_refs.get(*platform) else {
@@ -302,6 +320,10 @@ mod tests {
             Ok(Verdict::Pass)
         );
         assert_eq!(
+            verdict(&feature("pass", "e2e-declared", None), "android"),
+            Ok(Verdict::Pending)
+        );
+        assert_eq!(
             verdict(&feature("pass", "unit", None), "android"),
             Ok(Verdict::Fail)
         );
@@ -312,6 +334,15 @@ mod tests {
         assert_eq!(
             verdict(&feature("pass", "hidden", None), "android"),
             Ok(Verdict::Fail)
+        );
+    }
+
+    #[test]
+    fn declared_e2e_is_not_a_proven_pass() {
+        // A referenced instrumented test is not proof that this commit's APK passed.
+        assert_ne!(
+            verdict(&feature("pass", "e2e-declared", None), "android"),
+            Ok(Verdict::Pass)
         );
     }
 

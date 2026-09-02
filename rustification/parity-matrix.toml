@@ -1,11 +1,16 @@
 schema = 1
 # Production-ready cells are only allowed to be "pass" or "na".
-# "fail" is computed by xtask from policy vs evidence, never authored.
+# "fail" and "pending" are computed by xtask from policy vs evidence, never authored.
 #
 # policy: pass = must work on that surface; na = deliberately unsupported
-# evidence: none | unit | e2e | device | hidden
+# evidence: none | unit | e2e | e2e-declared | device | hidden
 #   hidden is valid only with policy = na
-#   production-ready requires pass+e2e/device or na+hidden
+#   e2e / device = packaged/device test is referenced and treated as proven
+#   e2e-declared = packaged E2E exists and is referenced, but a passing run
+#                  of this commit's artifact has not yet been claimed
+#   --report integrity accepts pending
+#   --production-ready requires pass+e2e/device or na+hidden
+#   A referenced test file is not proof that the current APK passed CI.
 
 platforms = [
   "windows",
@@ -35,7 +40,7 @@ evidence_refs = { windows = "e2e/specs/onboarding-navigation.spec.ts", linux = "
 id = "watch_only"
 name = "Watch-only"
 policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "na", extension = "na" }
-evidence = { windows = "e2e", linux = "e2e", macos = "unit", android = "e2e", ios = "unit", web = "hidden", extension = "hidden" }
+evidence = { windows = "e2e", linux = "e2e", macos = "unit", android = "e2e-declared", ios = "unit", web = "hidden", extension = "hidden" }
 evidence_refs = { windows = "e2e/specs/onboarding-navigation.spec.ts", linux = "e2e/specs/onboarding-navigation.spec.ts", android = "android/app/src/androidTest/java/com/getcapacitor/myapp/ExampleInstrumentedTest.java::androidLanding_watchOnlyLifecycle" }
 na_reason = { web = "capability matrix hides watch-only on web", extension = "capability matrix hides watch-only on extension" }
 
@@ -43,7 +48,7 @@ na_reason = { web = "capability matrix hides watch-only on web", extension = "ca
 id = "master_fingerprint"
 name = "Master fingerprint"
 policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "na", extension = "na" }
-evidence = { windows = "unit", linux = "unit", macos = "unit", android = "e2e", ios = "unit", web = "hidden", extension = "hidden" }
+evidence = { windows = "unit", linux = "unit", macos = "unit", android = "e2e-declared", ios = "unit", web = "hidden", extension = "hidden" }
 evidence_refs = { android = "android/app/src/androidTest/java/com/getcapacitor/myapp/ExampleInstrumentedTest.java::androidLanding_watchOnlyLifecycle" }
 na_reason = { web = "watch-only is hidden on web", extension = "watch-only is hidden on extension" }
 

@@ -43,7 +43,7 @@ jobs:
       - name: Parity matrix integrity
         run: cargo run -p xtask -- parity --report
 
-      - name: Production-ready gate (informational)
+      - name: Production-ready report (informational, not a required gate)
         continue-on-error: true
         run: cargo run -p xtask -- parity --production-ready
 
