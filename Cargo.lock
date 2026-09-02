@@ -597,6 +597,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "53c0fa8157de1303bfffdaa1cc2a673bfffb60102f76b0ef4441659124373fed"
 
 [[package]]
+name = "futures-lite"
+version = "2.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f78e10609fe0e0b3f4157ffab1876319b5b0db102a2c60dc4626306dc46b44ad"
+dependencies = [
+ "fastrand",
+ "futures-core",
+ "futures-io",
+ "parking",
+ "pin-project-lite",
+]
+
+[[package]]
 name = "futures-macro"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1225,7 +1238,16 @@ name = "optn-runtime"
 version = "1.7.3"
 dependencies = [
  "optn-app",
+ "optn-transport",
  "tokio",
+]
+
+[[package]]
+name = "optn-transport"
+version = "1.7.3"
+dependencies = [
+ "futures-lite",
+ "optn-app",
 ]
 
 [[package]]
@@ -1235,6 +1257,7 @@ dependencies = [
  "console_error_panic_hook",
  "leptos",
  "optn-app",
+ "optn-transport",
 ]
 
 [[package]]
