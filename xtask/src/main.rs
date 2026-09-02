@@ -207,7 +207,15 @@ fn walk_files(root: &Path) -> Vec<PathBuf> {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                pending.push(path);
+                let skip = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| {
+                        matches!(name, "dist" | "target" | "node_modules" | ".git")
+                    });
+                if !skip {
+                    pending.push(path);
+                }
             } else {
                 files.push(path);
             }

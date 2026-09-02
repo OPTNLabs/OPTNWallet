@@ -223,29 +223,33 @@ fn collect_source_drift(root: &Path, matrix: &Matrix, failures: &mut Vec<String>
         return;
     };
     let app = fs::read_to_string(root.join("crates/optn-app/src/lib.rs")).unwrap_or_default();
-    if !app.contains("Self::Desktop | Self::Android | Self::Ios") {
+    if !app.contains("FeatureFlag::WatchOnly") {
         failures.push(
-            "optn-app offers_watch_only no longer matches desktop/android/ios pass, web/extension na"
+            "optn-app must expose Watch Only as FeatureFlag::WatchOnly, not a hardcoded surface hide"
                 .into(),
         );
     }
 
-    for platform in ["windows", "linux", "macos"] {
+    for platform in [
+        "windows",
+        "linux",
+        "macos",
+        "android",
+        "ios",
+        "web",
+        "extension",
+    ] {
         if watch_only.policy.get(platform).map(String::as_str) != Some("pass") {
             failures.push(format!("watch_only {platform} policy must be pass"));
         }
     }
-    for platform in ["android", "ios"] {
-        if watch_only.policy.get(platform).map(String::as_str) != Some("pass") {
-            failures.push(format!("watch_only {platform} policy must be pass"));
-        }
-    }
-    for platform in ["web", "extension"] {
-        if watch_only.policy.get(platform).map(String::as_str) != Some("na") {
-            failures.push(format!(
-                "watch_only {platform} policy must stay na until the capability flags are flipped together"
-            ));
-        }
+
+    let shell = fs::read_to_string(root.join("src/app/AppShell.tsx")).unwrap_or_default();
+    if shell.contains("offersWatchOnly()") {
+        failures.push(
+            "AppShell must keep the Watch Only route registered; hide it with the flag, not by omitting the route"
+                .into(),
+        );
     }
 
     let capabilities =
@@ -254,8 +258,8 @@ fn collect_source_drift(root: &Path, matrix: &Matrix, failures: &mut Vec<String>
         ("desktop", true),
         ("android", true),
         ("ios", true),
-        ("web", false),
-        ("extension", false),
+        ("web", true),
+        ("extension", true),
     ] {
         if !capability_enabled(&capabilities, "watchOnlyWallet", surface, expected) {
             failures.push(format!(
