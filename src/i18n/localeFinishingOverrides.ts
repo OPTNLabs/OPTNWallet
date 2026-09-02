@@ -613,7 +613,7 @@ export const localeFinishingOverrides: Partial<
     'history.unavailable': 'Недоступна',
     'history.confirmations': 'Подтверждений: {count}',
     'history.output': 'Выход',
-    'onboarding.welcomeAlt': 'Кошелёк Smart BCH',
+    'onboarding.welcomeAlt': 'Кошелёк OPTN',
     'onboarding.helpCreateDescription':
       'Выберите этот вариант, чтобы создать новый кошелёк с новой сид-фразой на этом устройстве.',
     'onboarding.helpImportDescription':
@@ -734,7 +734,7 @@ export const localeFinishingOverrides: Partial<
     'history.unavailable': 'Ba ya samuwa',
     'history.confirmations': 'tabbatarwa {count}',
     'history.output': 'Fitarwa',
-    'onboarding.welcomeAlt': 'Smart BCH Wallet',
+    'onboarding.welcomeAlt': 'OPTN Wallet',
     'onboarding.helpCreateDescription':
       'Yi amfani da wannan idan kana son ƙirƙirar sabon wallet da sabuwar kalmar iri a wannan na’ura.',
     'onboarding.helpImportDescription':
