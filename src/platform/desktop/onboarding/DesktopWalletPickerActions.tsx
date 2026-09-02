@@ -33,7 +33,7 @@ export const DesktopWalletPickerActions: FC<
       >
         {t('onboarding.importWallet')}
       </Link>
-      {hasCapability('hardwareWallet') ? (
+      {hasCapability('hardwareWallet', 'desktop') ? (
         <button
           type="button"
           onClick={onHardware}
@@ -42,7 +42,7 @@ export const DesktopWalletPickerActions: FC<
           {t('onboarding.connectHardware')}
         </button>
       ) : null}
-      {hasCapability('watchOnlyWallet') ? (
+      {hasCapability('watchOnlyWallet', 'desktop') ? (
         <button
           type="button"
           onClick={onWatchOnly}
