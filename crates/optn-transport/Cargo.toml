@@ -7,3 +7,6 @@ description = "Shell-agnostic application transport contracts for OPTN Wallet."
 
 [dependencies]
 optn-app = { path = "../optn-app", version = "=1.7.3" }
+
+[dev-dependencies]
+futures-lite = "2.6.1"
