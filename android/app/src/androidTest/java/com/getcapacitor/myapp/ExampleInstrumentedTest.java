@@ -80,6 +80,18 @@ public class ExampleInstrumentedTest {
                 "Android landing page did not expose the Watch-Only wallet action"
             );
 
+            waitForJavascriptTrue(
+                scenario,
+                "(() => {" +
+                    "const el = document.querySelector('a[href$=\"#/watch-only\"]');" +
+                    "if (!el) return false;" +
+                    "const r = el.getBoundingClientRect();" +
+                    "return r.width > 0 && r.height > 0 && r.top >= 0 && " +
+                    "r.bottom <= window.innerHeight;" +
+                "})()",
+                "Watch-Only action exists but is outside the initial Android viewport"
+            );
+
             scenario.onActivity(activity ->
                 activity.getBridge().getWebView().evaluateJavascript(
                     "document.querySelector('a[href$=\"#/watch-only\"]').click()",
