@@ -4,47 +4,99 @@
 
 OPTN currently uses:
 
-- **Leptos 0.8.x** for Rust-authored UI/WASM
-- **Tauri 2.x** for desktop/mobile native shell and OS integrations
+- **Leptos 0.8.x** as the current Rust renderer
+- **Tauri 2.x** as the current desktop/mobile shell
 - **optn-core** for reusable BCH/protocol logic
+- **optn-app** for framework-neutral application state and actions
+- **optn-transport** for renderer-to-application communication contracts
+- **optn-platform** for OS capability contracts and provider metadata
 
-Leptos and Tauri are implementation choices, not architectural dependencies.
+Leptos, Tauri, IPC, and individual OS integration libraries are implementation
+choices, not architectural dependencies.
 
-## Dependency rule
-
-The stable center of the application is:
+## Stable center
 
 ```
 optn-core
     ↑
 optn-app
     ↑
-UI adapter
+optn-transport ← renderer transport implementations
+    ↑
+renderer
 
-optn-platform ← native/browser adapters
+optn-platform ← capability providers
 ```
 
-Framework dependencies must point inward only through adapters:
+The architecture has four independently replaceable boundaries:
+
+1. **Renderer** — Leptos today; Slint/Dioxus/another renderer may be added later.
+2. **Shell** — Tauri today; another native host may replace it.
+3. **Transport** — local WASM, direct in-process Rust, Tauri IPC, or another transport.
+4. **Capability provider** — pure Rust, shell plugin, direct native FFI, or browser APIs.
+
+## Transport model
+
+Renderers dispatch typed `AppAction` values and consume typed state/events through
+`optn_transport::AppTransport`.
+
+Current implementations:
 
 ```
-optn-ui (Leptos today)
-        ↓
-     optn-app
-        ↓
-     optn-core
+Web / extension:
+Leptos → LocalTransport → optn-app
 
-Tauri adapter
-        ↓
-  optn-platform
+Native Rust renderer:
+renderer → DirectTransport → optn-runtime → optn-app
+
+Tauri/WASM:
+renderer → Tauri IPC transport (adapter boundary) → optn-runtime
 ```
+
+The Tauri IPC implementation can evolve independently; the renderer must not depend
+on `optn-runtime` directly.
+
+## Capability-provider model
+
+`optn-platform` owns capability contracts such as:
+
+```
+SecureStorage
+Biometrics
+QrScanner
+Clipboard
+Notifications
+FileSystem
+DeepLinks
+HardwareWallet
+```
+
+Providers declare their type:
+
+```
+PureRust
+Shell
+NativeFfi
+Web
+```
+
+The current desktop clipboard implementation is a Tauri-shell provider backed by
+Rust `arboard`. Hardware HID/WebUSB providers are desktop-only and no longer enter
+Android/iOS builds. Mobile-native implementations can be substituted without
+changing application logic.
+
+## Dependency rules
 
 The following are forbidden:
 
 ```
-optn-core     → Leptos/Tauri/Dioxus/Capacitor
-optn-app      → Leptos/Tauri/Dioxus/Capacitor
-optn-platform → Leptos/Tauri/Dioxus/Capacitor
-optn-ui       → optn-core directly
+optn-core      → Leptos/Tauri/Dioxus/Capacitor
+optn-app       → Leptos/Tauri/Dioxus/Capacitor
+optn-platform  → Leptos/Tauri/Dioxus/Capacitor
+optn-transport → Leptos/Tauri/Dioxus/Capacitor
+optn-runtime   → Leptos/Tauri/Dioxus/Capacitor
+optn-ui        → optn-core directly
+optn-ui        → optn-runtime directly
 ```
 
 This is enforced by:
@@ -53,48 +105,57 @@ This is enforced by:
 cargo run -p xtask -- architecture
 ```
 
-## Swap model
+## Swap examples
 
-A future UI framework swap should replace only `optn-ui`.
-
-Example:
+Renderer swap:
 
 ```
-optn-ui-leptos
-      ↓
-   optn-app
-
-      becomes
-
-optn-ui-other
-      ↓
-   optn-app
-```
-
-A future native shell swap should replace platform adapters only:
-
-```
-Tauri adapters → optn-platform
-
+Leptos → AppTransport
 becomes
-
-other adapters → optn-platform
+Slint/Dioxus → AppTransport
 ```
 
-Wallet, transaction, crypto, protocol, and application state logic should remain unchanged.
+Shell swap:
+
+```
+Tauri adapters → optn-platform / optn-transport
+becomes
+other shell adapters → optn-platform / optn-transport
+```
+
+Capability swap:
+
+```
+TauriBiometrics → Biometrics
+becomes
+AndroidNativeBiometrics → Biometrics
+```
+
+Transport swap:
+
+```
+Tauri IPC → AppTransport
+becomes
+DirectTransport → AppTransport
+```
+
+Wallet, transaction, crypto, protocol, and application-state logic remain unchanged.
 
 ## Migration order
 
 1. Move trusted wallet/protocol logic into `optn-core`.
 2. Move framework-neutral application state/use-cases into `optn-app`.
-3. Define OS capabilities in `optn-platform`.
-4. Keep Tauri-specific implementation behind adapters.
-5. Migrate React screens to `optn-ui` incrementally.
-6. Prove Tauri Android/iOS parity before removing Capacitor.
-7. Keep web/extension using the same `optn-app` + `optn-core` through WASM.
+3. Route renderer interaction through `optn-transport`.
+4. Define OS capabilities and provider metadata in `optn-platform`.
+5. Keep shell/native implementations behind providers.
+6. Migrate React screens to the Rust renderer incrementally.
+7. Prove Tauri Android/iOS parity before removing Capacitor.
+8. Prefer mature pure-Rust capability providers where they improve portability.
+9. Use shell plugins or thin native FFI where pure-Rust support is not production-ready.
+10. Keep web/extension on the same application/domain contracts through WASM.
 
 ## Version policy
 
-Use current stable Rust and current stable minor releases of Leptos/Tauri, but update
-them as reviewed dependency changes with lockfile regeneration and full CI rather
-than coupling framework upgrades to unrelated wallet migrations.
+Use current stable Rust and reviewed stable framework/tool releases. Regenerate and
+verify lockfiles for dependency changes; never couple framework upgrades to unrelated
+wallet behavior changes without CI evidence.
