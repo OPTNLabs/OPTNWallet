@@ -89,23 +89,23 @@ const LandingPage = ({ surface }: LandingPageProps) => {
             {t('onboarding.poweredBy')}
           </h1>
 
-          <div className="flex flex-col sm:flex-row sm:flex-wrap gap-4 mt-20 justify-center">
+          <div className="flex w-full flex-col sm:flex-row sm:flex-wrap gap-3 sm:gap-4 mt-10 sm:mt-12 lg:mt-20 justify-center">
             <Link
               to="/createwallet"
-              className="wallet-btn-primary py-3 px-10 rounded-lg mx-2 my-2 shadow-md"
+              className="wallet-btn-primary w-full sm:w-auto py-3 px-10 rounded-lg sm:mx-2 sm:my-2 shadow-md"
             >
               {t('onboarding.createWallet')}
             </Link>
             <Link
               to="/importwallet"
-              className="wallet-btn-secondary py-3 px-10 rounded-lg mx-2 my-2 shadow-md"
+              className="wallet-btn-secondary w-full sm:w-auto py-3 px-10 rounded-lg sm:mx-2 sm:my-2 shadow-md"
             >
               {t('onboarding.importWallet')}
             </Link>
             {hasCapability('watchOnlyWallet', resolvedSurface) && (
               <Link
                 to={ROUTE_PATHS.watchOnlyWallet}
-                className="wallet-btn-secondary py-3 px-10 rounded-lg mx-2 my-2 shadow-md"
+                className="wallet-btn-secondary w-full sm:w-auto py-3 px-10 rounded-lg sm:mx-2 sm:my-2 shadow-md"
               >
                 {t('onboarding.createWatchOnly')}
               </Link>
