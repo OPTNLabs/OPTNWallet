@@ -144,12 +144,17 @@ pub trait HardwareSession {
 /// digest was the payload that was signed, without a device.
 #[derive(Debug, Default)]
 pub struct MockHardwareWallet {
-    connected: bool,
+    /// `None` means no device in this session. Not a nullable pointer.
+    session: Option<HardwareVendor>,
 }
 
 impl MockHardwareWallet {
     pub fn new() -> Self {
-        Self { connected: false }
+        Self { session: None }
+    }
+
+    pub fn attached_vendor(&self) -> Option<HardwareVendor> {
+        self.session
     }
 
     pub fn mock_signature(digest: &[u8; 32]) -> Vec<u8> {
@@ -172,15 +177,16 @@ impl CapabilityProvider for MockHardwareWallet {
 
 impl HardwareWallet for MockHardwareWallet {
     fn exchange<'a>(&'a self, request: &'a [u8]) -> PlatformFuture<'a, Vec<u8>> {
-        let connected = self.connected;
+        let attached = self.session;
         let request = request.to_vec();
         Box::pin(async move {
-            if connected {
-                let mut response = request;
-                response.extend_from_slice(&[0x90, 0x00]);
-                Ok(response)
-            } else {
-                Err(PlatformError::Unavailable)
+            match attached {
+                Some(_) => {
+                    let mut response = request;
+                    response.extend_from_slice(&[0x90, 0x00]);
+                    Ok(response)
+                }
+                None => Err(PlatformError::Unavailable),
             }
         })
     }
@@ -188,7 +194,7 @@ impl HardwareWallet for MockHardwareWallet {
 
 impl HardwareSession for MockHardwareWallet {
     fn connect<'a>(&'a mut self) -> PlatformFuture<'a, HardwareEvent> {
-        self.connected = true;
+        self.session = Some(HardwareVendor::Mock);
         Box::pin(std::future::ready(Ok(HardwareEvent::DeviceDetected {
             vendor: HardwareVendor::Mock,
             label: "OPTN mock signer".to_string(),
@@ -199,26 +205,26 @@ impl HardwareSession for MockHardwareWallet {
         &'a mut self,
         digest: &'a [u8; 32],
     ) -> PlatformFuture<'a, Vec<HardwareEvent>> {
-        let connected = self.connected;
         let digest = *digest;
+        let attached = self.session;
         Box::pin(async move {
-            if !connected {
-                return Err(PlatformError::Unavailable);
+            match attached {
+                Some(_) => Ok(vec![
+                    HardwareEvent::SigningRequested { digest },
+                    HardwareEvent::SignatureReceived {
+                        signature: MockHardwareWallet::mock_signature(&digest),
+                    },
+                ]),
+                None => Err(PlatformError::Unavailable),
             }
-            Ok(vec![
-                HardwareEvent::SigningRequested { digest },
-                HardwareEvent::SignatureReceived {
-                    signature: MockHardwareWallet::mock_signature(&digest),
-                },
-            ])
         })
     }
 
     fn disconnect<'a>(&'a mut self) -> PlatformFuture<'a, HardwareEvent> {
-        self.connected = false;
-        Box::pin(std::future::ready(Ok(HardwareEvent::DeviceDisconnected {
-            vendor: HardwareVendor::Mock,
-        })))
+        Box::pin(std::future::ready(match self.session.take() {
+            Some(vendor) => Ok(HardwareEvent::DeviceDisconnected { vendor }),
+            None => Err(PlatformError::Unavailable),
+        }))
     }
 }
 
@@ -267,6 +273,10 @@ mod tests {
             ready(device.exchange(&[0x01])),
             Err(PlatformError::Unavailable)
         );
+        match device.attached_vendor() {
+            None => {}
+            Some(vendor) => panic!("expected no session, found {vendor:?}"),
+        }
 
         assert_eq!(
             ready(device.connect()),
@@ -301,5 +311,7 @@ mod tests {
             ready(device.sign_digest(&digest)),
             Err(PlatformError::Unavailable)
         );
+        assert_eq!(device.attached_vendor(), None);
+        assert_eq!(ready(device.disconnect()), Err(PlatformError::Unavailable));
     }
 }

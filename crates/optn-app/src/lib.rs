@@ -31,32 +31,29 @@ pub enum FeatureFlag {
     HardwareWallet,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// User overrides. `None` means "use the surface default" — not a nullable bool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct FeatureFlags {
-    pub cash_fusion: bool,
-    pub hardware_wallet: bool,
+    pub cash_fusion: Option<bool>,
+    pub hardware_wallet: Option<bool>,
 }
 
 impl FeatureFlags {
-    pub const fn for_surface(surface: AppSurface) -> Self {
-        match surface {
-            AppSurface::Desktop => Self {
-                cash_fusion: true,
-                hardware_wallet: true,
-            },
-            AppSurface::Android | AppSurface::Ios | AppSurface::Web | AppSurface::Extension => {
-                Self {
-                    cash_fusion: false,
-                    hardware_wallet: false,
-                }
-            }
+    /// Hardware wallets and CashFusion are offered on desktop only.
+    pub const fn surface_allows(surface: AppSurface, flag: FeatureFlag) -> bool {
+        match (surface, flag) {
+            (AppSurface::Desktop, FeatureFlag::CashFusion | FeatureFlag::HardwareWallet) => true,
+            _ => false,
         }
     }
 
-    pub const fn allows(self, flag: FeatureFlag) -> bool {
+    pub fn enabled(self, surface: AppSurface, flag: FeatureFlag) -> bool {
+        if !Self::surface_allows(surface, flag) {
+            return false;
+        }
         match flag {
-            FeatureFlag::CashFusion => self.cash_fusion,
-            FeatureFlag::HardwareWallet => self.hardware_wallet,
+            FeatureFlag::CashFusion => self.cash_fusion.unwrap_or(true),
+            FeatureFlag::HardwareWallet => self.hardware_wallet.unwrap_or(true),
         }
     }
 }
@@ -100,7 +97,7 @@ impl Default for AppState {
             network: Network::Mainnet,
             help_open: false,
             surface: AppSurface::Desktop,
-            features: FeatureFlags::for_surface(AppSurface::Desktop),
+            features: FeatureFlags::default(),
         }
     }
 }
@@ -156,23 +153,22 @@ impl AppState {
             }
             AppAction::SetSurface(surface) if self.surface != surface => {
                 self.surface = surface;
-                self.features = FeatureFlags::for_surface(surface);
+                self.features = FeatureFlags::default();
                 Some(AppEvent::SurfaceChanged(surface))
             }
             AppAction::SetFeatureEnabled { flag, enabled } => {
-                let allowed = FeatureFlags::for_surface(self.surface).allows(flag);
-                let next = enabled && allowed;
-                let current = self.features.allows(flag);
-                if current == next {
+                let next = self.features.enabled(self.surface, flag);
+                let wanted = enabled && FeatureFlags::surface_allows(self.surface, flag);
+                if next == wanted {
                     return None;
                 }
                 match flag {
-                    FeatureFlag::CashFusion => self.features.cash_fusion = next,
-                    FeatureFlag::HardwareWallet => self.features.hardware_wallet = next,
+                    FeatureFlag::CashFusion => self.features.cash_fusion = Some(wanted),
+                    FeatureFlag::HardwareWallet => self.features.hardware_wallet = Some(wanted),
                 }
                 Some(AppEvent::FeatureFlagChanged {
                     flag,
-                    enabled: next,
+                    enabled: wanted,
                 })
             }
             AppAction::Navigate(_)
@@ -209,8 +205,12 @@ pub fn onboarding_view_model(state: &AppState) -> OnboardingViewModel {
         watch_only_wallet_href: AppRoute::WatchOnlyWallet.fragment(),
         dark: state.theme == ThemeMode::Dark,
         help_open: state.help_open,
-        show_cash_fusion: state.features.cash_fusion,
-        show_hardware_wallet: state.features.hardware_wallet,
+        show_cash_fusion: state
+            .features
+            .enabled(state.surface, FeatureFlag::CashFusion),
+        show_hardware_wallet: state
+            .features
+            .enabled(state.surface, FeatureFlag::HardwareWallet),
     }
 }
 
@@ -327,9 +327,9 @@ mod tests {
 
     #[test]
     fn cash_fusion_and_hardware_wallet_are_boolean_surface_toggles() {
-        let desktop = FeatureFlags::for_surface(AppSurface::Desktop);
-        assert!(desktop.cash_fusion);
-        assert!(desktop.hardware_wallet);
+        let none = FeatureFlags::default();
+        assert!(none.enabled(AppSurface::Desktop, FeatureFlag::CashFusion));
+        assert!(none.enabled(AppSurface::Desktop, FeatureFlag::HardwareWallet));
 
         for surface in [
             AppSurface::Android,
@@ -337,10 +337,12 @@ mod tests {
             AppSurface::Web,
             AppSurface::Extension,
         ] {
-            let flags = FeatureFlags::for_surface(surface);
-            assert!(!flags.cash_fusion, "{surface:?} must hide CashFusion");
             assert!(
-                !flags.hardware_wallet,
+                !none.enabled(surface, FeatureFlag::CashFusion),
+                "{surface:?} must hide CashFusion"
+            );
+            assert!(
+                !none.enabled(surface, FeatureFlag::HardwareWallet),
                 "{surface:?} must hide hardware wallets"
             );
         }
@@ -364,7 +366,7 @@ mod tests {
             }),
             None
         );
-        assert!(!state.features.hardware_wallet);
+        assert_eq!(state.features.hardware_wallet, None);
 
         state.apply(AppAction::SetSurface(AppSurface::Desktop));
         assert_eq!(
@@ -377,6 +379,7 @@ mod tests {
                 enabled: false,
             })
         );
+        assert_eq!(state.features.cash_fusion, Some(false));
         assert!(!onboarding_view_model(&state).show_cash_fusion);
         assert!(onboarding_view_model(&state).show_hardware_wallet);
 
@@ -390,6 +393,7 @@ mod tests {
                 enabled: false,
             })
         );
+        assert_eq!(state.features.hardware_wallet, Some(false));
         assert!(!onboarding_view_model(&state).show_hardware_wallet);
     }
 }
