@@ -56,9 +56,25 @@ import LandingPage from '../LandingPage';
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe('onboarding watch-only capability', () => {
+  it('shows watch-only from the android build stamp without an explicit surface prop', () => {
+    vi.stubEnv('VITE_APP_SURFACE', 'android');
+    render(<LandingPage />);
+
+    expect(
+      screen.getByRole('link', { name: 'Create Wallet' })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('link', { name: 'Import Wallet' })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId('watch-only-landing-action')
+    ).toHaveAttribute('href', '/watch-only');
+  });
+
   it.each(['android', 'ios'] as const)(
     'shows watch-only alongside create and import on %s',
     (surface) => {

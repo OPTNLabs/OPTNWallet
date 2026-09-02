@@ -1,9 +1,23 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const { isNativePlatformMock, getPlatformMock } = vi.hoisted(() => ({
+  isNativePlatformMock: vi.fn(() => false),
+  getPlatformMock: vi.fn(() => 'web'),
+}));
+
+vi.mock('@capacitor/core', () => ({
+  Capacitor: {
+    isNativePlatform: isNativePlatformMock,
+    getPlatform: getPlatformMock,
+  },
+}));
+
 import {
   CAPABILITIES,
   capabilityAbsence,
   currentSurface,
   hasCapability,
+  offersWatchOnly,
   type Capability,
   type Surface,
 } from '../capabilities';
@@ -24,6 +38,9 @@ const DESKTOP_ONLY: Capability[] = [
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+  isNativePlatformMock.mockReturnValue(false);
+  getPlatformMock.mockReturnValue('web');
 });
 
 describe('cross-platform capability contract', () => {
@@ -63,6 +80,33 @@ describe('cross-platform capability contract', () => {
         expect(hasCapability(capability, surface)).toBe(false);
       }
     }
+  });
+
+  it('does not classify a native shell as web when the bridge reports web', () => {
+    vi.unstubAllEnvs();
+    isNativePlatformMock.mockReturnValue(true);
+    getPlatformMock.mockReturnValue('web');
+    vi.stubGlobal('navigator', {
+      userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel) AppleWebKit/537.36',
+    });
+
+    expect(currentSurface()).toBe('android');
+    expect(offersWatchOnly()).toBe(true);
+    expect(hasCapability('watchOnlyWallet')).toBe(true);
+  });
+
+  it('classifies a Tauri Android WebView as android, not desktop or web', () => {
+    vi.unstubAllEnvs();
+    isNativePlatformMock.mockReturnValue(false);
+    getPlatformMock.mockReturnValue('web');
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
+    vi.stubGlobal('navigator', {
+      userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel) AppleWebKit/537.36',
+    });
+
+    expect(currentSurface()).toBe('android');
+    expect(offersWatchOnly()).toBe(true);
+    expect(hasCapability('hardwareWallet')).toBe(false);
   });
 
   it('enables watch-only wallets on native mobile without enabling web/extension', () => {

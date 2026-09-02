@@ -89,20 +89,47 @@ function buildSurface(): Surface | null {
     : null;
 }
 
+function userAgent(): string {
+  return typeof navigator === 'undefined' ? '' : navigator.userAgent;
+}
+
+function surfaceFromUserAgent(): Surface | null {
+  const ua = userAgent();
+  if (/android/i.test(ua)) return 'android';
+  if (/iPhone|iPad|iPod/i.test(ua)) return 'ios';
+  return null;
+}
+
 export function currentSurface(): Surface {
   // Native release builds stamp the intended surface. This is authoritative:
   // capability gating must not depend on WebView bridge timing at first render.
   const configured = buildSurface();
   if (configured) return configured;
 
-  // Runtime fallback for dev/tests and unstamped legacy builds. Check Capacitor
-  // before Tauri so an Android/iOS WebView can never be promoted to desktop.
+  // Named Capacitor platforms first. An Android/iOS WebView must never be
+  // classified as web — that hides Watch Only on the landing.
   const platform = Capacitor.getPlatform();
-  if (platform === 'android') return 'android';
-  if (platform === 'ios') return 'ios';
+  if (platform === 'android' || platform === 'ios') return platform;
+
+  if (Capacitor.isNativePlatform()) {
+    return surfaceFromUserAgent() ?? 'android';
+  }
+
+  // Tauri mobile WebViews inject the same internals as desktop. Classify them
+  // as Android/iOS so Watch Only stays on the landing and USB hardware stays off.
+  if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+    const tauriMobile = surfaceFromUserAgent();
+    if (tauriMobile) return tauriMobile;
+  }
+
   if (isExtensionRuntime()) return 'extension';
   if (isDesktopPlatform()) return 'desktop';
   return 'web';
+}
+
+/** Matches `optn-app::AppSurface::offers_watch_only`. */
+export function offersWatchOnly(surface: Surface = currentSurface()): boolean {
+  return hasCapability('watchOnlyWallet', surface);
 }
 
 export function hasCapability(
