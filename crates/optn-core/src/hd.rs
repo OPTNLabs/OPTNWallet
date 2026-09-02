@@ -149,6 +149,30 @@ mod tests {
     }
 
     #[test]
+    fn derived_p2pkh_round_trips_through_cashaddr() {
+        let w = Wallet::from_mnemonic(TEST_MNEMONIC, "").unwrap();
+        let derived = w
+            .address(Network::Mainnet, "m/44'/145'/0'/0/0")
+            .expect("derivation must succeed");
+        let encoded = derived.encode();
+        let decoded = Address::decode(&encoded).expect("derived CashAddr must decode");
+        assert_eq!(decoded.kind, AddressKind::P2pkh);
+        assert_eq!(decoded.hash, derived.hash);
+        assert_eq!(decoded.encode(), encoded);
+
+        let chip = w
+            .address(Network::Chipnet, "m/44'/1'/0'/0/0")
+            .expect("chipnet derivation must succeed");
+        assert!(chip.encode().starts_with("bchtest:"));
+        assert_eq!(
+            Address::decode(&chip.encode())
+                .expect("chipnet CashAddr must decode")
+                .hash,
+            chip.hash
+        );
+    }
+
+    #[test]
     fn different_indexes_give_different_addresses() {
         let w = Wallet::from_mnemonic(TEST_MNEMONIC, "").unwrap();
         let a = w.address(Network::Mainnet, "m/44'/145'/0'/0/0").unwrap();

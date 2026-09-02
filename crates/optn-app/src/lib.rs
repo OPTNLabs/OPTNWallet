@@ -211,6 +211,26 @@ mod tests {
     }
 
     #[test]
+    fn watch_only_navigation_emits_a_typed_route_event() {
+        let mut state = AppState::default();
+        assert_eq!(state.route, AppRoute::Landing);
+        assert_eq!(
+            state.reduce(AppAction::Navigate(AppRoute::WatchOnlyWallet)),
+            Some(AppEvent::RouteChanged(AppRoute::WatchOnlyWallet))
+        );
+        assert_eq!(state.route, AppRoute::WatchOnlyWallet);
+        assert_eq!(state.route.fragment(), "#/watch-only");
+        assert_eq!(
+            onboarding_view_model(&state).watch_only_wallet_href,
+            "#/watch-only"
+        );
+        assert_eq!(
+            state.reduce(AppAction::Navigate(AppRoute::WatchOnlyWallet)),
+            None
+        );
+    }
+
+    #[test]
     fn onboarding_view_model_comes_from_application_state() {
         let mut state = AppState::default();
         state.apply(AppAction::SetNetwork(Network::Chipnet));
