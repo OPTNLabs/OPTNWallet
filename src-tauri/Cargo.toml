@@ -40,7 +40,6 @@ tauri-plugin-biometry = "0.2"
 # directly. default-features = false drops image-data (and with it the image,
 # core-graphics and windows-sys pulls) since only text is copied;
 # wayland-data-control is NOT default and the Linux AppImage needs it.
-arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 # CashFusion: the protocol is raw TCP+TLS with protobuf framing, which a
 # WebView cannot speak at all — hence a Rust-side client. rustls/tokio are
 # already in the tree transitively via reqwest and tauri; naming them here
@@ -90,7 +89,6 @@ cbc = { version = "0.1", features = ["alloc"] }
 hmac = "0.12"
 # Hardware wallets (Ledger / Trezor One / OneKey HID): same model as Electron Cash
 # and Ledger Live — OS USB HID from the native process, never WebView WebHID.
-hidapi = "2.6"
 # Trezor Safe 5 / Model T: WebUSB via libusb (trezorlib WebUsbTransport).
 # Modern Suite uses node-usb the same way — Bridge on :21325 is optional/legacy.
 #
@@ -98,7 +96,6 @@ hidapi = "2.6"
 # dylib is not resolved from the build machine. Left dynamic elsewhere:
 # vendoring compiles libusb's C, and the riscv64 and armv7 cross builds are
 # deliberately kept free of anything that needs a C toolchain they do not have.
-rusb = "0.9"
 hex = "0.4"
 
 # libusb, statically linked, for macOS only.
@@ -113,5 +110,12 @@ hex = "0.4"
 # `vendored` builds libusb 1.0.27 from source and links it statically, so there
 # is no external dylib to resolve and nothing for Library Validation to reject.
 # Fixes both halves of the launch failure rather than only the missing file.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
+hidapi = "2.6"
+
+[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+rusb = "0.9"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 rusb = { version = "0.9", features = ["vendored"] }
