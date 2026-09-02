@@ -141,6 +141,7 @@ const WatchOnlyWalletPage = () => {
                 setWalletName(event.target.value);
                 setError('');
               }}
+              data-testid="watch-only-wallet-name"
               className="wallet-input w-full rounded-md px-3 py-2"
               placeholder={t('onboarding.walletNamePlaceholder')}
               autoComplete="off"
@@ -155,6 +156,7 @@ const WatchOnlyWalletPage = () => {
                 setSelectedNetwork(event.target.value as Network);
                 setError('');
               }}
+              data-testid="watch-only-network"
               className="wallet-input w-full rounded-md px-3 py-2"
             >
               <option value={Network.MAINNET}>{t('watchOnly.mainnet')}</option>
@@ -173,6 +175,7 @@ const WatchOnlyWalletPage = () => {
               rows={3}
               spellCheck={false}
               autoComplete="off"
+              data-testid="watch-only-account-xpub"
               className="wallet-input w-full resize-none rounded-md px-3 py-2 font-mono text-xs"
               placeholder={t('watchOnly.xpubPlaceholder')}
             />
@@ -200,6 +203,7 @@ const WatchOnlyWalletPage = () => {
               autoCapitalize="none"
               autoCorrect="off"
               spellCheck={false}
+              data-testid="watch-only-fingerprint"
               className="wallet-input w-full rounded-md px-3 py-2 font-mono uppercase"
               placeholder="8 hex characters"
             />
@@ -234,6 +238,7 @@ const WatchOnlyWalletPage = () => {
             type="button"
             onClick={() => void handleCreate()}
             disabled={busy}
+            data-testid="watch-only-create"
             className="wallet-btn-primary w-full py-3 text-lg font-bold disabled:opacity-50"
           >
             {busy ? 'Creating…' : t('onboarding.createWatchOnly')}

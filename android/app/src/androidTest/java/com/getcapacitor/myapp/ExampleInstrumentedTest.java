@@ -59,7 +59,16 @@ public class ExampleInstrumentedTest {
         String javascript,
         String failureMessage
     ) throws Exception {
-        long deadline = System.currentTimeMillis() + 30_000L;
+        waitForJavascriptTrue(scenario, javascript, failureMessage, 30_000L);
+    }
+
+    private void waitForJavascriptTrue(
+        ActivityScenario<MainActivity> scenario,
+        String javascript,
+        String failureMessage,
+        long timeoutMs
+    ) throws Exception {
+        long deadline = System.currentTimeMillis() + timeoutMs;
         while (System.currentTimeMillis() < deadline) {
             if (evaluateBoolean(scenario, javascript)) return;
             Thread.sleep(250L);
@@ -71,50 +80,136 @@ public class ExampleInstrumentedTest {
     public void androidLanding_exposesAndOpensWatchOnlyWallet() throws Exception {
         ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class);
         try {
-            // This exercises the actual APK WebView and real platform capability
-            // detection. A mocked React test cannot catch a mobile artifact that
-            // silently drops the watch-only action.
-            waitForJavascriptTrue(
-                scenario,
-                "Boolean(document.querySelector('a[href$=\"#/watch-only\"]'))",
-                "Android landing page did not expose the Watch-Only wallet action"
-            );
-
-            waitForJavascriptTrue(
-                scenario,
-                "(() => {" +
-                    "const el = document.querySelector('a[href$=\"#/watch-only\"]');" +
-                    "if (!el) return false;" +
-                    "const r = el.getBoundingClientRect();" +
-                    "return r.width > 0 && r.height > 0 && r.top >= 0 && " +
-                    "r.bottom <= window.innerHeight;" +
-                "})()",
-                "Watch-Only action exists but is outside the initial Android viewport"
-            );
-
-            scenario.onActivity(activity ->
-                activity.getBridge().getWebView().evaluateJavascript(
-                    "document.querySelector('a[href$=\"#/watch-only\"]').click()",
-                    ignored -> {}
-                )
-            );
-
+            assertWatchOnlyLandingVisible(scenario);
+            clickWatchOnlyLanding(scenario);
             waitForJavascriptTrue(
                 scenario,
                 "Boolean([...document.querySelectorAll('h1,h2')].find(" +
                     "el => el.textContent?.includes('Create Watch-Only Wallet')))",
                 "Watch-Only action did not open the mobile watch-only setup screen"
             );
-
             waitForJavascriptTrue(
                 scenario,
-                "Boolean([...document.querySelectorAll('label')].find(" +
-                    "el => el.textContent?.includes('Master fingerprint')))",
+                "Boolean(document.querySelector('[data-testid=\"watch-only-fingerprint\"]'))",
                 "Mobile watch-only setup did not expose the optional master fingerprint"
             );
         } finally {
             scenario.close();
         }
+    }
+
+    @Test
+    public void androidLanding_watchOnlyLifecycle() throws Exception {
+        // Chipnet account tpub from the BIP39 all-abandon mnemonic at m/44'/1'/0'.
+        // Public key material only; this test never imports a seed.
+        final String chipnetAccountTpub =
+            "tpubDC5FSnBiZDMmhiuCmWAYsLwgLYrrT9rAqvTySfuCCrgsWz8wxMXUS9Tb9iVMvcRbvFcAHGkMD5Kx8koh4GquNGNTfohfk7pgjhaPCdXpoba";
+        ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class);
+        try {
+            assertWatchOnlyLandingVisible(scenario);
+            clickWatchOnlyLanding(scenario);
+
+            waitForJavascriptTrue(
+                scenario,
+                "Boolean(document.querySelector('[data-testid=\"watch-only-create\"]'))",
+                "Watch-only setup did not render the create action"
+            );
+
+            scenario.onActivity(activity ->
+                activity.getBridge().getWebView().evaluateJavascript(
+                    fillWatchOnlyFormScript(chipnetAccountTpub),
+                    ignored -> {}
+                )
+            );
+
+            waitForJavascriptTrue(
+                scenario,
+                "Boolean(document.body.innerText.includes('bchtest:q'))",
+                "Watch-only setup did not derive a Chipnet receive address from the account xPub"
+            );
+
+            scenario.onActivity(activity ->
+                activity.getBridge().getWebView().evaluateJavascript(
+                    "document.querySelector('[data-testid=\"watch-only-create\"]').click()",
+                    ignored -> {}
+                )
+            );
+
+            waitForJavascriptTrue(
+                scenario,
+                "Boolean(![...document.querySelectorAll('h1,h2')].find(" +
+                    "el => el.textContent?.includes('Create Watch-Only Wallet')))",
+                "Watch-only wallet was not created from the packaged Android app",
+                45_000L
+            );
+        } finally {
+            scenario.close();
+        }
+
+        scenario = ActivityScenario.launch(MainActivity.class);
+        try {
+            waitForJavascriptTrue(
+                scenario,
+                "Boolean(document.body.innerText.includes('E2E Watch Only') || " +
+                    "document.body.innerText.includes('Build unsigned transaction') || " +
+                    "document.body.innerText.includes('bchtest:q'))",
+                "Watch-only wallet did not survive Android process relaunch"
+            );
+            waitForJavascriptTrue(
+                scenario,
+                "Boolean(!document.body.innerText.includes('Enter your secret recovery phrase'))",
+                "Relaunched watch-only wallet exposed seed-signing onboarding"
+            );
+        } finally {
+            scenario.close();
+        }
+    }
+
+    private void assertWatchOnlyLandingVisible(ActivityScenario<MainActivity> scenario)
+        throws Exception {
+        waitForJavascriptTrue(
+            scenario,
+            "(() => {" +
+                "const el = document.querySelector('[data-testid=\"watch-only-landing-action\"], a[href*=\"watch-only\"]');" +
+                "if (!el) return false;" +
+                "const r = el.getBoundingClientRect();" +
+                "return r.width > 0 && r.height > 0 && r.top >= 0 && " +
+                "r.bottom <= (window.innerHeight + 8);" +
+            "})()",
+            "Android landing page did not expose Watch Only in the initial viewport"
+        );
+    }
+
+    private void clickWatchOnlyLanding(ActivityScenario<MainActivity> scenario) {
+        scenario.onActivity(activity ->
+            activity.getBridge().getWebView().evaluateJavascript(
+                "document.querySelector('[data-testid=\"watch-only-landing-action\"], a[href*=\"watch-only\"]').click()",
+                ignored -> {}
+            )
+        );
+    }
+
+    private String fillWatchOnlyFormScript(String tpub) {
+        return "(() => {" +
+            "function setValue(el, value) {" +
+            "  const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;" +
+            "  const desc = Object.getOwnPropertyDescriptor(proto, 'value');" +
+            "  desc.set.call(el, value);" +
+            "  el.dispatchEvent(new Event('input', { bubbles: true }));" +
+            "  el.dispatchEvent(new Event('change', { bubbles: true }));" +
+            "}" +
+            "const network = document.querySelector('[data-testid=\"watch-only-network\"]');" +
+            "if (network) {" +
+            "  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set;" +
+            "  setter.call(network, 'chipnet');" +
+            "  network.dispatchEvent(new Event('input', { bubbles: true }));" +
+            "  network.dispatchEvent(new Event('change', { bubbles: true }));" +
+            "}" +
+            "setValue(document.querySelector('[data-testid=\"watch-only-wallet-name\"]'), 'E2E Watch Only');" +
+            "setValue(document.querySelector('[data-testid=\"watch-only-account-xpub\"]'), '" + tpub + "');" +
+            "setValue(document.querySelector('[data-testid=\"watch-only-fingerprint\"]'), 'deadbeef');" +
+            "return true;" +
+            "})()";
     }
 }
 

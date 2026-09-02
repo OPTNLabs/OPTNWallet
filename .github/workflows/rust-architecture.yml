@@ -40,6 +40,13 @@ jobs:
       - name: Framework boundary
         run: cargo run -p xtask -- architecture
 
+      - name: Parity matrix integrity
+        run: cargo run -p xtask -- parity --report
+
+      - name: Production-ready gate (informational)
+        continue-on-error: true
+        run: cargo run -p xtask -- parity --production-ready
+
       - name: Format
         run: cargo fmt --all -- --check
 

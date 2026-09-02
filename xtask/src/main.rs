@@ -1,3 +1,5 @@
+mod parity;
+
 use std::{
     env, fs,
     path::{Path, PathBuf},
@@ -9,6 +11,14 @@ fn main() {
     let command = env::args().nth(1).unwrap_or_else(|| "architecture".into());
     match command.as_str() {
         "architecture" => architecture(),
+        "parity" => {
+            let production_ready = env::args().any(|arg| arg == "--production-ready");
+            let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .expect("xtask must live below workspace root")
+                .to_path_buf();
+            parity::run(&root, production_ready);
+        }
         other => {
             eprintln!("unknown xtask '{other}'");
             std::process::exit(2);
