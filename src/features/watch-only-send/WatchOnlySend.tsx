@@ -792,7 +792,10 @@ export const WatchOnlySend: FC = () => {
           >
             Back
           </button>
-          <h1 className="text-lg font-bold wallet-text-strong">
+          <h1
+            className="text-lg font-bold wallet-text-strong"
+            data-testid="watch-only-send-workspace"
+          >
             Watch-only Send
           </h1>
         </div>
@@ -960,6 +963,7 @@ export const WatchOnlySend: FC = () => {
                 </div>
                 <button
                   type="button"
+                  data-testid="watch-only-build-unsigned"
                   onClick={() => void handleBuild()}
                   className="wallet-btn-primary w-full py-2 font-semibold disabled:opacity-50"
                 >

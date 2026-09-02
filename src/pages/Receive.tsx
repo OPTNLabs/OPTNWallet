@@ -769,6 +769,7 @@ const Receive: React.FC = () => {
             <div className="w-full flex items-center gap-1.5">
               <button
                 type="button"
+                data-testid="receive-address"
                 className={`min-w-0 overflow-hidden wallet-surface-strong rounded-[12px] px-3 py-2 text-left hover:brightness-[0.97] ${
                   qrCodeType === 'address' ? 'flex-1' : 'w-full'
                 }`}

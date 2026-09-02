@@ -3,9 +3,12 @@ package com.getcapacitor.myapp;
 import static org.junit.Assert.*;
 
 import android.content.Context;
+import android.os.ParcelFileDescriptor;
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
+import java.io.FileInputStream;
+import java.io.InputStream;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -146,6 +149,8 @@ public class ExampleInstrumentedTest {
             scenario.close();
         }
 
+        forceStopApp();
+
         scenario = ActivityScenario.launch(MainActivity.class);
         try {
             waitForJavascriptTrue(
@@ -153,12 +158,49 @@ public class ExampleInstrumentedTest {
                 "Boolean(document.body.innerText.includes('E2E Watch Only') || " +
                     "document.body.innerText.includes('Build unsigned transaction') || " +
                     "document.body.innerText.includes('bchtest:q'))",
-                "Watch-only wallet did not survive Android process relaunch"
+                "Watch-only wallet did not survive Android force-stop and process relaunch",
+                45_000L
             );
             waitForJavascriptTrue(
                 scenario,
-                "Boolean(!document.body.innerText.includes('Enter your secret recovery phrase'))",
-                "Relaunched watch-only wallet exposed seed-signing onboarding"
+                noSeedSigningScript(),
+                "Relaunched watch-only wallet exposed a seed-signing path"
+            );
+
+            openHashRoute(scenario, "/receive");
+            waitForJavascriptTrue(
+                scenario,
+                "Boolean(document.querySelector('[data-testid=\"receive-address\"]') || " +
+                    "document.body.innerText.includes('bchtest:q'))",
+                "Force-stopped watch-only wallet did not expose receive derivation",
+                45_000L
+            );
+            waitForJavascriptTrue(
+                scenario,
+                noSeedSigningScript(),
+                "Receive on a watch-only wallet exposed a seed-signing path"
+            );
+
+            openHashRoute(scenario, "/send");
+            waitForJavascriptTrue(
+                scenario,
+                "Boolean(document.querySelector('[data-testid=\"watch-only-send-workspace\"]') || " +
+                    "document.body.innerText.includes('Watch-only Send'))",
+                "Force-stopped watch-only wallet did not open the unsigned-PSBT send path",
+                45_000L
+            );
+            waitForJavascriptTrue(
+                scenario,
+                "Boolean(document.querySelector('[data-testid=\"watch-only-build-unsigned\"]') || " +
+                    "document.body.innerText.includes('Build unsigned transaction'))",
+                "Watch-only send path did not expose unsigned PSBT construction",
+                45_000L
+            );
+            waitForJavascriptTrue(
+                scenario,
+                noSeedSigningScript() +
+                    " && Boolean(!document.body.innerText.includes('Enter your secret recovery phrase'))",
+                "Watch-only send path exposed seed signing"
             );
         } finally {
             scenario.close();
@@ -178,6 +220,41 @@ public class ExampleInstrumentedTest {
             "})()",
             "Android landing page did not expose Watch Only in the initial viewport"
         );
+    }
+
+    private void openHashRoute(ActivityScenario<MainActivity> scenario, String route) {
+        scenario.onActivity(activity ->
+            activity.getBridge().getWebView().evaluateJavascript(
+                "window.location.hash = '#" + route + "'",
+                ignored -> {}
+            )
+        );
+    }
+
+    private void forceStopApp() throws Exception {
+        String packageName =
+            InstrumentationRegistry.getInstrumentation().getTargetContext().getPackageName();
+        ParcelFileDescriptor descriptor =
+            InstrumentationRegistry.getInstrumentation()
+                .getUiAutomation()
+                .executeShellCommand("am force-stop " + packageName);
+        try (InputStream output = new FileInputStream(descriptor.getFileDescriptor())) {
+            byte[] buffer = new byte[1024];
+            while (output.read(buffer) != -1) {
+                // Drain the shell command so force-stop finishes before relaunch.
+            }
+        } finally {
+            descriptor.close();
+        }
+        Thread.sleep(2_000L);
+    }
+
+    private String noSeedSigningScript() {
+        return "Boolean(" +
+            "!document.body.innerText.includes('Enter your secret recovery phrase') && " +
+            "!document.body.innerText.includes('Your secret recovery phrase') && " +
+            "!document.querySelector('textarea[name=\"mnemonic\"], input[name=\"mnemonic\"]')" +
+            ")";
     }
 
     private void clickWatchOnlyLanding(ActivityScenario<MainActivity> scenario) {
