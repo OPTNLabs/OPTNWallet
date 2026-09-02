@@ -22,8 +22,8 @@ export const CAPABILITIES: Readonly<Record<Capability, CapabilitySpec>> = {
   watchOnlyWallet: {
     enabledOn: {
       desktop: true,
-      android: false,
-      ios: false,
+      android: true,
+      ios: true,
       web: false,
       extension: false,
     },
