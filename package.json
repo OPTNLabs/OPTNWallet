@@ -71,11 +71,12 @@
     "rust:ui:check": "cargo check -p optn-ui --target wasm32-unknown-unknown",
     "tauri:leptos:dev": "npx tauri dev --config src-tauri/tauri.leptos.conf.json",
     "tauri:leptos:build": "npx tauri build --config src-tauri/tauri.leptos.conf.json",
-    "tauri:leptos:android:dev": "npx tauri android dev --config src-tauri/tauri.leptos.conf.json",
-    "tauri:leptos:android:build": "npx tauri android build --config src-tauri/tauri.leptos.conf.json",
+    "tauri:leptos:android:dev": "npx tsx scripts/pin-tauri-android-kotlin.mts src-tauri/gen/android && npx tauri android dev --config src-tauri/tauri.leptos.mobile.conf.json",
+    "tauri:leptos:android:build": "npx tsx scripts/pin-tauri-android-kotlin.mts src-tauri/gen/android && npx tauri android build --config src-tauri/tauri.leptos.mobile.conf.json",
     "tauri:leptos:ios:dev": "npx tauri ios dev --config src-tauri/tauri.leptos.conf.json",
     "tauri:leptos:ios:build": "npx tauri ios build --config src-tauri/tauri.leptos.conf.json",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "tauri:leptos:android:init": "npx tauri android init --config src-tauri/tauri.leptos.mobile.conf.json && npx tsx scripts/pin-tauri-android-kotlin.mts src-tauri/gen/android"
   },
   "dependencies": {
     "@bitauth/libauth": "3.1.0-next.8",
