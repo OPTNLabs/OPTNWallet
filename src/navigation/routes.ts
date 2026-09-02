@@ -3,6 +3,7 @@ export const ROUTE_PATHS = {
   landing: '/landing',
   createWallet: '/createwallet',
   importWallet: '/importwallet',
+  watchOnlyWallet: '/watch-only',
   home: '/home/:wallet_id',
   assets: '/assets',
   actions: '/actions',
