@@ -16,7 +16,6 @@ import {
   MdAdd,
   MdArrowBack,
   MdChatBubbleOutline,
-  MdContentCopy,
   MdAttachFile,
   MdImage,
   MdMic,
@@ -27,7 +26,6 @@ import {
   MdStop,
 } from 'react-icons/md';
 
-import PageHeader from '../../components/ui/PageHeader';
 import WalletScreen from '../../components/ui/WalletScreen';
 import type { RootState } from '../../state/store';
 import { selectNostrRelays } from '../../state/slices/experimentalSlice';
@@ -43,11 +41,6 @@ import {
   fetchPublishedAvatar,
   fetchPublishedDisplayName,
   fetchPublishedBchAddress,
-  publishMyProfile,
-  publishDisplayName,
-  publishAvatar,
-  storeLocalAvatar,
-  loadLocalAvatar,
   inlineChatLabel,
   isInlineChatMedia,
   MAX_INLINE_CHAT_DATA_URL,
@@ -65,19 +58,27 @@ import {
   type ChatMessage,
   type NostrProfile,
 } from '../../platform/desktop/nostr/chat';
-import { copyToClipboard } from '../../utils/clipboard';
+
 import {
   addMlsMember,
-  claimExtraMlsDeviceSlot,
   createMlsGroup,
   linkOwnDevice,
+  listMlsGroups,
   loadMlsDeviceIndex,
+  loadMlsIndex,
   publishMlsKeyPackage,
   refetchMlsInbox,
-  sendMlsMessage,
   sendMlsFile,
+  sendMlsMessage,
   subscribeMls,
+  type MlsGroupRecord,
 } from '../../platform/desktop/nostr/mls';
+import {
+  buildChatInbox,
+  classifyChatPeer,
+  groupRecordForPeer,
+  type ChatInboxKind,
+} from './chatInbox';
 import { useWalletConfirm } from '../../components/WalletConfirmDialog';
 
 const short = (s: string) =>
@@ -154,10 +155,6 @@ function fileToJpegDataUrl(
   });
 }
 
-function fileToAvatarDataUrl(file: File): Promise<string> {
-  return fileToJpegDataUrl(file, 128, 0.8);
-}
-
 function fileToChatPhotoDataUrl(file: File): Promise<string> {
   return fileToJpegDataUrl(file, 512, 0.72);
 }
@@ -211,11 +208,6 @@ const NostrChat: React.FC = () => {
   const [err, setErr] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
 
-  // Self-profile editor.
-  const [showProfile, setShowProfile] = useState(false);
-  const [myName, setMyName] = useState('');
-  const [myPicture, setMyPicture] = useState('');
-  const [profileMsg, setProfileMsg] = useState<string | null>(null);
   const [lastRead, setLastRead] = useState<Record<string, number>>({});
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   const [editOf, setEditOf] = useState<ChatMessage | null>(null);
@@ -223,6 +215,8 @@ const NostrChat: React.FC = () => {
   const [mlsGroupId, setMlsGroupId] = useState<string | null>(null);
   const [mlsDeviceIndex, setMlsDeviceIndex] = useState(0);
   const [groupName, setGroupName] = useState('');
+  const [mlsGroups, setMlsGroups] = useState<MlsGroupRecord[]>([]);
+  const [composeKind, setComposeKind] = useState<ChatInboxKind>('dm');
   const [showTip, setShowTip] = useState(false);
   const [tipAmount, setTipAmount] = useState('');
   const [tipCategory, setTipCategory] = useState('');
@@ -230,7 +224,6 @@ const NostrChat: React.FC = () => {
   const [recording, setRecording] = useState(false);
 
   const bottomRef = useRef<HTMLDivElement>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
   const chatPhotoRef = useRef<HTMLInputElement>(null);
   const chatFileRef = useRef<HTMLInputElement>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -244,6 +237,8 @@ const NostrChat: React.FC = () => {
         void publishKind10050(walletId, relays);
         const slot = await loadMlsDeviceIndex(id.pubkey);
         setMlsDeviceIndex(slot);
+        const groups = await loadMlsIndex(id.pubkey);
+        setMlsGroups(groups);
         void publishMlsKeyPackage(walletId, relays);
         // Hydrate saved history (contacts survive restarts) + my own profile so
         // the name/picture I published are shown instead of an empty editor.
@@ -251,18 +246,6 @@ const NostrChat: React.FC = () => {
         if (stored.length) setMessages((prev) => mergeById(prev, stored));
         const read = await loadLastRead(id.pubkey);
         setLastRead(read);
-        const [mine, avatar, displayName] = await Promise.all([
-          fetchProfile(id.pubkey, relays),
-          fetchPublishedAvatar(relays, id.pubkey),
-          fetchPublishedDisplayName(relays, id.pubkey),
-        ]);
-        if (displayName || mine.name) setMyName(displayName || mine.name || '');
-        const localPic = await loadLocalAvatar(id.pubkey);
-        const pic =
-          localPic ||
-          (avatar && !/^https?:/i.test(avatar) ? avatar : '') ||
-          (mine.picture && !/^https?:/i.test(mine.picture) ? mine.picture : '');
-        if (pic) setMyPicture(pic);
       })
       .catch((e) => setErr(e instanceof Error ? e.message : String(e)));
   }, [walletId, relays]);
@@ -304,45 +287,41 @@ const NostrChat: React.FC = () => {
     };
   }, [walletId, relays]);
 
-  // Conversations = messages grouped by the other party, newest first.
-  const conversations = useMemo(() => {
-    const map = new Map<string, { peer: string; last: ChatMessage | null }>();
-    for (const m of messages) {
-      if (!isChatText(m)) continue;
-      const peer = m.roomId || (m.mine ? m.to[0] ?? '' : m.from);
-      if (!peer || peer === me?.pubkey) continue;
-      const cur = map.get(peer);
-      if (!cur || !cur.last || m.at > cur.last.at)
-        map.set(peer, { peer, last: m });
-    }
-    if (activePeer && !map.has(activePeer))
-      map.set(activePeer, { peer: activePeer, last: null });
-    const list = [...map.values()].sort(
-      (a, b) => (b.last?.at ?? 0) - (a.last?.at ?? 0)
-    );
-    const q = query.trim().toLowerCase();
-    if (!q) return list;
-    return list.filter((c) =>
-      (profiles[c.peer]?.name ?? c.peer).toLowerCase().includes(q)
-    );
-  }, [messages, me, activePeer, query, profiles]);
+  const inbox = useMemo(
+    () =>
+      buildChatInbox({
+        messages,
+        groups: mlsGroups,
+        mePubKey: me?.pubkey,
+        activePeer,
+        query,
+        names: Object.fromEntries(
+          Object.entries(profiles).map(([peer, profile]) => [peer, profile.name])
+        ),
+      }),
+    [messages, mlsGroups, me, activePeer, query, profiles]
+  );
+  const conversations = useMemo(
+    () => [...inbox.dm, ...inbox['private-group'], ...inbox['open-group']],
+    [inbox]
+  );
 
   // Fetch each peer's profile (name + picture) once.
   useEffect(() => {
     for (const c of conversations) {
-      if (profiles[c.peer]) continue;
+      if (c.kind !== 'dm' || profiles[c.id]) continue;
       Promise.all([
-        fetchProfile(c.peer, relays),
-        fetchPublishedAvatar(relays, c.peer),
-        fetchPublishedDisplayName(relays, c.peer),
+        fetchProfile(c.id, relays),
+        fetchPublishedAvatar(relays, c.id),
+        fetchPublishedDisplayName(relays, c.id),
       ])
         .then(([p, avatar, displayName]) =>
           setProfiles((prev) =>
-            prev[c.peer]
+            prev[c.id]
               ? prev
               : {
                   ...prev,
-                  [c.peer]: {
+                  [c.id]: {
                     ...p,
                     name: displayName || p.name,
                     picture: avatar || p.picture,
@@ -417,19 +396,36 @@ const NostrChat: React.FC = () => {
   const openConversation = useCallback(async () => {
     setErr(null);
     try {
+      if (composeKind === 'open-group') {
+        if (!me || walletId <= 0) return;
+        const created = await createMlsGroup(
+          walletId,
+          groupName.trim() || 'Open MLS group',
+          me.pubkey,
+          { visibility: 'open', relays }
+        );
+        setMlsGroups(listMlsGroups(me.pubkey));
+        setActivePeer(created.roomId);
+        setActiveMembers([me.pubkey]);
+        setMlsGroupId(created.nostrGroupIdHex);
+        setShowNewChat(false);
+        setGroupName('');
+        return;
+      }
       const parts = recipient
         .split(/[\s,]+/)
         .map((s) => s.trim())
         .filter(Boolean);
-      if (parts.length > 1 && me) {
+      if ((composeKind === 'private-group' || parts.length > 1) && me) {
         const hexes = parts.map(toPubkeyHex);
         const members = Array.from(new Set([me.pubkey, ...hexes]));
         const created = await createMlsGroup(
           walletId,
-          groupName.trim() || 'MLS Group',
+          groupName.trim() || 'Private group',
           me.pubkey,
           { visibility: 'private', relays }
         );
+        setMlsGroups(listMlsGroups(me.pubkey));
         setActivePeer(created.roomId);
         setActiveMembers(members);
         setMlsGroupId(created.nostrGroupIdHex);
@@ -472,7 +468,7 @@ const NostrChat: React.FC = () => {
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     }
-  }, [recipient, relays, profiles, me, groupName, walletId]);
+  }, [composeKind, recipient, relays, profiles, me, groupName, walletId]);
 
   const send = useCallback(async () => {
     if (!activePeer || !draft.trim() || walletId <= 0 || !me) return;
@@ -522,42 +518,6 @@ const NostrChat: React.FC = () => {
     mlsGroupId,
     activeMembers,
   ]);
-
-  const onPickImage = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    fileToAvatarDataUrl(file)
-      .then(setMyPicture)
-      .catch((x) => setProfileMsg(x instanceof Error ? x.message : String(x)));
-  }, []);
-
-  const saveProfile = useCallback(async () => {
-    setProfileMsg(null);
-    try {
-      await Promise.all([
-        publishMyProfile(
-          walletId,
-          {
-            name: myName || undefined,
-            picture: myPicture || undefined,
-          },
-          relays
-        ),
-        myName
-          ? publishDisplayName(walletId, myName, relays)
-          : Promise.resolve(),
-        myPicture
-          ? publishAvatar(walletId, myPicture, relays)
-          : Promise.resolve(),
-        myPicture && me
-          ? storeLocalAvatar(me.pubkey, myPicture)
-          : Promise.resolve(),
-      ]);
-      setProfileMsg(t('chat.profilePublished'));
-    } catch (e) {
-      setProfileMsg(e instanceof Error ? e.message : String(e));
-    }
-  }, [walletId, myName, myPicture, relays, t, me]);
 
   const refetchHistory = useCallback(async () => {
     if (walletId <= 0) return;
@@ -676,13 +636,24 @@ const NostrChat: React.FC = () => {
     }
   }, [activePeer, recording, sendChatFile, stopVoice]);
 
-  const nameOf = (peer: string) => profiles[peer]?.name || short(peer);
+  const nameOf = (peer: string) =>
+    groupRecordForPeer(peer, mlsGroups)?.name ||
+    profiles[peer]?.name ||
+    short(peer);
+  const kindOf = (peer: string): ChatInboxKind =>
+    classifyChatPeer(peer, mlsGroups);
+  const openInboxItem = (peer: string) => {
+    setActivePeer(peer);
+    const record = groupRecordForPeer(peer, mlsGroups);
+    setMlsGroupId(record?.nostrGroupIdHex ?? null);
+    setActiveMembers(record?.memberPubKeys ?? null);
+  };
   const unreadOf = (peer: string) =>
     messages.filter(
       (m) =>
         isChatText(m) &&
         !m.mine &&
-        m.from === peer &&
+        (m.roomId === peer || (!m.roomId && m.from === peer)) &&
         m.at > (lastRead[peer] ?? 0)
     ).length;
   const reactTo = async (m: ChatMessage, emoji: string) => {
@@ -698,7 +669,6 @@ const NostrChat: React.FC = () => {
   return (
     <WalletScreen maxWidthClassName="max-w-5xl" scrollable={false}>
       <div className="flex h-full min-h-0 flex-col gap-3">
-        <PageHeader title={t('chat.title')} compact />
         <div className="flex items-center justify-between gap-3">
           <div>
             <h1 className="text-2xl font-bold tracking-tight wallet-text-strong">
@@ -719,120 +689,14 @@ const NostrChat: React.FC = () => {
             </button>
             <button
               type="button"
-              onClick={() => navigate('/settings?panel=nostr')}
+              onClick={() => navigate('/settings')}
               className="flex items-center gap-2 rounded-xl border border-[var(--wallet-border)] px-3 py-2 text-xs font-semibold wallet-text-strong"
             >
               <MdSettings aria-hidden="true" />
-              {t('chat.setup')}
+              {t('app.settings')}
             </button>
           </div>
         </div>
-
-        {/* My identity + profile (with device-picked avatar) */}
-        {me && (
-          <div className="rounded-xl border border-[var(--wallet-border)] wallet-surface px-3 py-2">
-            <div className="flex items-center gap-2">
-              <Avatar
-                url={myPicture || undefined}
-                fallback={myName || 'me'}
-                size={36}
-              />
-              <div className="min-w-0 flex-1">
-                <p className="text-[10px] wallet-muted">{t('chat.yourNpub')}</p>
-                <p className="truncate font-mono text-[11px] wallet-text-strong">
-                  {me.npub}
-                </p>
-              </div>
-              <button
-                onClick={() => void copyToClipboard(me.npub)}
-                className="wallet-icon-btn"
-                aria-label={t('chat.copyNpub')}
-              >
-                <MdContentCopy />
-              </button>
-              <button
-                onClick={() => setShowProfile((v) => !v)}
-                className="rounded-lg border border-[var(--wallet-border)] px-2 py-1 text-[10px] font-semibold wallet-text-strong"
-              >
-                {t('chat.profile')}
-              </button>
-              {mlsDeviceIndex === 0 ? (
-                <button
-                  type="button"
-                  className="rounded-lg border border-[var(--wallet-border)] px-2 py-1 text-[10px] font-semibold wallet-text-strong"
-                  onClick={() => {
-                    if (!me) return;
-                    void (async () => {
-                      const ok = await confirm(
-                        'Only on the new install. This device becomes a separate MLS leaf (slot 1). Do not tap this on your first device.'
-                      );
-                      if (!ok) return;
-                      try {
-                        const slot = await claimExtraMlsDeviceSlot(me.pubkey);
-                        setMlsDeviceIndex(slot);
-                        await publishMlsKeyPackage(walletId, relays);
-                      } catch (e) {
-                        setErr(e instanceof Error ? e.message : String(e));
-                      }
-                    })();
-                  }}
-                >
-                  Extra device
-                </button>
-              ) : (
-                <span className="text-[10px] wallet-muted">
-                  Device {mlsDeviceIndex}
-                </span>
-              )}
-            </div>
-            {showProfile && (
-              <div className="mt-2 space-y-1.5 border-t border-[var(--wallet-border)] pt-2">
-                <input
-                  value={myName}
-                  onChange={(e) => setMyName(e.target.value)}
-                  placeholder={t('chat.displayName')}
-                  className="wallet-input w-full text-xs"
-                />
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => fileRef.current?.click()}
-                    className="flex items-center gap-1 rounded-lg border border-[var(--wallet-border)] px-2 py-1.5 text-[10px] font-semibold wallet-text-strong"
-                  >
-                    <MdImage aria-hidden="true" /> {t('chat.choosePhoto')}
-                  </button>
-                  {myPicture && (
-                    <Avatar
-                      url={myPicture}
-                      fallback={myName || 'me'}
-                      size={28}
-                    />
-                  )}
-                  <input
-                    ref={fileRef}
-                    type="file"
-                    accept="image/*"
-                    onChange={onPickImage}
-                    className="hidden"
-                  />
-                </div>
-                <div className="flex items-center justify-between gap-2">
-                  <button
-                    onClick={() => void saveProfile()}
-                    className="wallet-btn-primary px-3 py-1 text-xs"
-                  >
-                    {t('chat.publishProfile')}
-                  </button>
-                  {profileMsg && (
-                    <span className="text-[10px] wallet-muted">
-                      {profileMsg}
-                    </span>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
 
         {err && <p className="break-all text-[10px] text-red-400/90">{err}</p>}
 
@@ -870,113 +734,137 @@ const NostrChat: React.FC = () => {
               </div>
               {showNewChat && (
                 <div className="space-y-2">
-                  <input
-                    value={recipient}
-                    onChange={(e) => setRecipient(e.target.value)}
-                    placeholder="npub… (comma-separate for a group)"
-                    className="wallet-input w-full font-mono text-xs"
-                    onKeyDown={(e) =>
-                      e.key === 'Enter' && void openConversation()
-                    }
-                  />
-                  <input
-                    value={groupName}
-                    onChange={(e) => setGroupName(e.target.value)}
-                    placeholder="Group name (optional)"
-                    className="wallet-input w-full text-xs"
-                  />
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => void openConversation()}
-                      className="wallet-btn-primary px-3 py-2 text-xs"
-                    >
-                      {t('chat.open')}
-                    </button>
-                    <button
-                      type="button"
-                      className="rounded-lg border border-[var(--wallet-border)] px-3 py-2 text-xs font-semibold wallet-text-strong"
-                      onClick={() => {
-                        void (async () => {
-                          if (!me || walletId <= 0) return;
-                          try {
-                            const created = await createMlsGroup(
-                              walletId,
-                              groupName || 'MLS Group',
-                              me.pubkey,
-                              { visibility: 'open', relays }
-                            );
-                            setActivePeer(created.roomId);
-                            setActiveMembers([me.pubkey]);
-                            setMlsGroupId(created.nostrGroupIdHex);
-                            setShowNewChat(false);
-                          } catch (e) {
-                            setErr(e instanceof Error ? e.message : String(e));
-                          }
-                        })();
-                      }}
-                    >
-                      New MLS group
-                    </button>
+                  <div className="grid grid-cols-3 gap-1">
+                    {(
+                      [
+                        ['dm', t('chat.newPrivateChat')],
+                        ['private-group', t('chat.newPrivateGroup')],
+                        ['open-group', t('chat.newOpenMlsGroup')],
+                      ] as const
+                    ).map(([kind, label]) => (
+                      <button
+                        key={kind}
+                        type="button"
+                        onClick={() => setComposeKind(kind)}
+                        className={`rounded-lg border px-1.5 py-1.5 text-[10px] font-semibold ${
+                          composeKind === kind
+                            ? 'border-[var(--wallet-accent)] text-[var(--wallet-accent)]'
+                            : 'border-[var(--wallet-border)] wallet-text-strong'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
                   </div>
+                  {composeKind !== 'open-group' && (
+                    <input
+                      value={recipient}
+                      onChange={(e) => setRecipient(e.target.value)}
+                      placeholder={
+                        composeKind === 'private-group'
+                          ? t('chat.privateGroupPlaceholder')
+                          : t('chat.privateChatPlaceholder')
+                      }
+                      className="wallet-input w-full font-mono text-xs"
+                      onKeyDown={(e) =>
+                        e.key === 'Enter' && void openConversation()
+                      }
+                    />
+                  )}
+                  {composeKind !== 'dm' && (
+                    <input
+                      value={groupName}
+                      onChange={(e) => setGroupName(e.target.value)}
+                      placeholder={t('chat.groupNameOptional')}
+                      className="wallet-input w-full text-xs"
+                    />
+                  )}
+                  <button
+                    onClick={() => void openConversation()}
+                    className="wallet-btn-primary w-full px-3 py-2 text-xs"
+                  >
+                    {composeKind === 'dm'
+                      ? t('chat.open')
+                      : composeKind === 'private-group'
+                        ? t('chat.createPrivateGroup')
+                        : t('chat.createOpenGroup')}
+                  </button>
                 </div>
               )}
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto p-2">
-              {conversations.length === 0 ? (
-                <div className="grid h-full place-items-center p-6 text-center">
-                  <p className="text-xs wallet-muted">
-                    {t('chat.noConversations')}
-                  </p>
-                </div>
-              ) : (
-                conversations.map((c) => (
-                  <button
-                    key={c.peer}
-                    type="button"
-                    onClick={() => setActivePeer(c.peer)}
-                    className={`flex w-full items-center gap-3 rounded-xl border p-3 text-left transition-colors ${
-                      activePeer === c.peer
-                        ? 'border-[var(--wallet-accent)]/40 bg-[var(--wallet-accent)]/10'
-                        : 'border-transparent hover:bg-[var(--wallet-surface)]'
-                    }`}
-                  >
-                    <Avatar
-                      url={profiles[c.peer]?.picture}
-                      fallback={nameOf(c.peer)}
-                      size={52}
-                    />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-baseline justify-between gap-2">
-                        <span className="block truncate text-sm font-semibold wallet-text-strong">
-                          {nameOf(c.peer)}
-                        </span>
-                        {c.last && (
-                          <span className="shrink-0 text-[10px] wallet-muted">
-                            {relativeTime(c.last.at)}
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="truncate text-[11px] wallet-muted">
-                          {c.last
-                            ? `${c.last.mine ? t('chat.youPrefix') : ''}${
-                                isInlineChatMedia(c.last.text)
-                                  ? inlineChatLabel(c.last.text)
-                                  : c.last.text
-                              }`
-                            : t('chat.newConversation')}
-                        </p>
-                        {unreadOf(c.peer) > 0 && (
-                          <span className="grid h-5 min-w-5 place-items-center rounded-full bg-[var(--wallet-accent)] px-1.5 text-[10px] font-bold text-white">
-                            {unreadOf(c.peer)}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </button>
-                ))
-              )}
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-2">
+              {(
+                [
+                  ['dm', t('chat.privateChats'), t('chat.emptyPrivateChats')],
+                  [
+                    'private-group',
+                    t('chat.privateGroups'),
+                    t('chat.emptyPrivateGroups'),
+                  ],
+                  [
+                    'open-group',
+                    t('chat.openMlsGroups'),
+                    t('chat.emptyOpenGroups'),
+                  ],
+                ] as const
+              ).map(([kind, title, empty]) => (
+                <section key={kind} className="space-y-1">
+                  <h2 className="px-1 text-[10px] font-semibold uppercase tracking-wide wallet-muted">
+                    {title}
+                  </h2>
+                  {inbox[kind].length === 0 ? (
+                    <p className="px-1 py-2 text-[11px] wallet-muted">{empty}</p>
+                  ) : (
+                    inbox[kind].map((c) => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => openInboxItem(c.id)}
+                        className={`flex w-full items-center gap-3 rounded-xl border p-3 text-left transition-colors ${
+                          activePeer === c.id
+                            ? 'border-[var(--wallet-accent)]/40 bg-[var(--wallet-accent)]/10'
+                            : 'border-transparent hover:bg-[var(--wallet-surface)]'
+                        }`}
+                      >
+                        <Avatar
+                          url={profiles[c.id]?.picture}
+                          fallback={nameOf(c.id)}
+                          size={44}
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-baseline justify-between gap-2">
+                            <span className="block truncate text-sm font-semibold wallet-text-strong">
+                              {nameOf(c.id)}
+                            </span>
+                            {c.last && (
+                              <span className="shrink-0 text-[10px] wallet-muted">
+                                {relativeTime(c.last.at)}
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="truncate text-[11px] wallet-muted">
+                              {c.last
+                                ? `${c.last.mine ? t('chat.youPrefix') : ''}${
+                                    isInlineChatMedia(c.last.text)
+                                      ? inlineChatLabel(c.last.text)
+                                      : c.last.text
+                                  }`
+                                : t('chat.newConversation')}
+                            </p>
+                            {unreadOf(c.id) > 0 && (
+                              <span className="grid h-5 min-w-5 place-items-center rounded-full bg-[var(--wallet-accent)] px-1.5 text-[10px] font-bold text-white">
+                                {unreadOf(c.id)}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </button>
+                    ))
+                  )}
+                </section>
+              ))}
             </div>
           </aside>
 
@@ -1005,7 +893,11 @@ const NostrChat: React.FC = () => {
                       {nameOf(activePeer)}
                     </h2>
                     <p className="truncate text-[11px] wallet-muted">
-                      {profiles[activePeer]?.nip05 ?? t('chat.encrypted')}
+                      {kindOf(activePeer) === 'private-group'
+                        ? t('chat.encryptedPrivateGroup')
+                        : kindOf(activePeer) === 'open-group'
+                          ? t('chat.encryptedOpenGroup')
+                          : (profiles[activePeer]?.nip05 ?? t('chat.encrypted'))}
                     </p>
                   </div>
                   {mlsGroupId && mlsDeviceIndex === 0 && (
