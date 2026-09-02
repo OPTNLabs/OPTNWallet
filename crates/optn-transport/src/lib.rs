@@ -286,8 +286,12 @@ impl From<&AppState> for WireState {
             network: value.network.into(),
             help_open: value.help_open,
             surface: value.surface.into(),
-            cash_fusion: value.features.cash_fusion,
-            hardware_wallet: value.features.hardware_wallet,
+            cash_fusion: value
+                .features
+                .enabled(value.surface, FeatureFlag::CashFusion),
+            hardware_wallet: value
+                .features
+                .enabled(value.surface, FeatureFlag::HardwareWallet),
         }
     }
 }
@@ -303,9 +307,25 @@ impl TryFrom<WireState> for AppState {
             network: value.network.into(),
             help_open: value.help_open,
             surface: value.surface.into(),
-            features: FeatureFlags {
-                cash_fusion: value.cash_fusion,
-                hardware_wallet: value.hardware_wallet,
+            features: {
+                let surface = AppSurface::from(value.surface);
+                let defaults = FeatureFlags::default();
+                FeatureFlags {
+                    cash_fusion: if value.cash_fusion
+                        == defaults.enabled(surface, FeatureFlag::CashFusion)
+                    {
+                        None
+                    } else {
+                        Some(value.cash_fusion)
+                    },
+                    hardware_wallet: if value.hardware_wallet
+                        == defaults.enabled(surface, FeatureFlag::HardwareWallet)
+                    {
+                        None
+                    } else {
+                        Some(value.hardware_wallet)
+                    },
+                }
             },
         })
     }
