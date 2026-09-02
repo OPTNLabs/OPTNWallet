@@ -14,6 +14,30 @@ Companion to `README.md` (the layouts) and the tracking issue #71.
 - [ ] `testnet3`, `testnet4`, `regtest` listed but **greyed out — "coming soon"**.
       Present-and-disabled, not absent, so the roadmap is visible.
 
+## Watch Only — the air-gap options, in order
+
+Watch Only is one card that produces one kind of wallet from several sources.
+Below the single-sig and multisig inputs come the air-gap options, in this
+order:
+
+1. **SeedCash** — exports a **bare base58 xPub** and nothing else
+   (`wallet_views.py` → `SeedCashQRView(address=self.wallet._xpub)`), so the
+   master fingerprint is read off the device by hand and the account path is
+   assumed.
+2. **Keystone** — below SeedCash. Emits **BC-UR** carrying the key *and* its
+   origin, so `CryptoHDKey.getOrigin()` yields the master fingerprint and the
+   full derivation path. Nothing is typed and nothing is assumed.
+
+They are separate options precisely because of that difference, not because
+of branding. `src/services/psbt/keystoneAccount.ts` says so directly.
+
+- [x] **The master fingerprint is optional** everywhere it appears — SeedCash,
+      and watch-only generally, which accepts an account xPub from any wallet.
+      `optn_core::watch_only::normalize_master_fingerprint("")` returns
+      `Ok(None)`, and `multisig_preview` accepts cosigners without one.
+- [ ] SeedCash air-gap option (bare xPub, hand-typed fingerprint)
+- [ ] Keystone air-gap option — blocked on a Rust BC-UR decoder
+
 ## Settings — Servers: bring your own node and explorer
 
 A section for pointing the wallet at infrastructure the user runs, by address

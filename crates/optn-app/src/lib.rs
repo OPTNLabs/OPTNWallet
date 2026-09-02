@@ -926,7 +926,7 @@ impl OnboardingAction {
             Self::CreateWallet => Some(AppRoute::CreateWallet.fragment()),
             Self::ImportWallet => Some(AppRoute::ImportWallet.fragment()),
             Self::CreateWatchOnlyWallet => Some(AppRoute::WatchOnlyWallet.fragment()),
-            Self::ConnectHardwareWallet => Some(AppRoute::HardwareWallet.fragment()),
+            Self::ConnectHardwareWallet => Some(AppRoute::WatchOnlyWallet.fragment()),
         }
     }
 
@@ -935,7 +935,7 @@ impl OnboardingAction {
             Self::CreateWallet => Some(AppRoute::CreateWallet),
             Self::ImportWallet => Some(AppRoute::ImportWallet),
             Self::CreateWatchOnlyWallet => Some(AppRoute::WatchOnlyWallet),
-            Self::ConnectHardwareWallet => Some(AppRoute::HardwareWallet),
+            Self::ConnectHardwareWallet => Some(AppRoute::WatchOnlyWallet),
         }
     }
 }
@@ -1320,6 +1320,46 @@ pub fn transport_support(surface: AppSurface) -> TransportSupport {
         AppSurface::Extension => TransportSupport::NONE,
     }
 }
+
+/// The live device session.
+///
+/// Ported field-for-field from the React `hardwareWallet` slice, which the
+/// Rust target had no equivalent of: which device, whether it is attached
+/// right now, the label it reports, the account it exported, and the Ledger
+/// wire preference.
+///
+/// `vendor: None` means no device has been chosen — not "Ledger by default".
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct HardwareSessionState {
+    pub vendor: Option<HardwareVendor>,
+    /// Attached right now. Distinct from `vendor.is_some()`: a wallet can
+    /// remember its device across restarts while nothing is plugged in.
+    pub connected: bool,
+    /// What the device calls itself, shown in Settings.
+    pub device_label: Option<String>,
+    /// The account xPub last exported from it. Public material only.
+    pub account_xpub: Option<String>,
+    /// Ledger only; ignored by every other vendor.
+    pub ledger_link: LedgerLink,
+}
+
+impl HardwareSessionState {
+    /// Whether the Ledger wire choice should even be offered.
+    pub fn offers_link_choice(&self) -> bool {
+        matches!(self.vendor, Some(HardwareVendor::Ledger))
+    }
+
+    /// Forget the attachment but keep the chosen device, as
+    /// `disconnectHardwareWallet` does: the wallet still knows what it is,
+    /// it just is not talking to it.
+    pub fn disconnect(&mut self) {
+        self.connected = false;
+        self.device_label = None;
+        self.account_xpub = None;
+    }
+}
+
+pub use optn_platform::LedgerLink;
 
 /// A multisig wallet validated and previewed, ready to open.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2428,6 +2468,49 @@ mod tests {
     }
 
     #[test]
+    fn the_device_session_keeps_every_field_the_react_slice_had() {
+        let mut session = HardwareSessionState::default();
+        // No device chosen is None, not a defaulted Ledger.
+        assert_eq!(session.vendor, None);
+        assert!(!session.connected);
+        assert!(!session.offers_link_choice());
+        assert_eq!(session.ledger_link, LedgerLink::Usb);
+
+        session.vendor = Some(HardwareVendor::Ledger);
+        session.connected = true;
+        session.device_label = Some("Nano X".into());
+        session.account_xpub = Some("xpub-under-test".into());
+        session.ledger_link = LedgerLink::Bluetooth;
+
+        // The wire choice is Ledger's alone.
+        assert!(session.offers_link_choice());
+        assert_eq!(session.ledger_link.label(), "Bluetooth");
+        assert_eq!(
+            session.ledger_link.transport(),
+            HardwareTransport::WebBle,
+            "Bluetooth must not be reported as a cable"
+        );
+
+        // Disconnecting forgets the attachment, not the device.
+        session.disconnect();
+        assert_eq!(session.vendor, Some(HardwareVendor::Ledger));
+        assert!(!session.connected);
+        assert_eq!(session.device_label, None);
+        assert_eq!(session.account_xpub, None);
+
+        let mut trezor = HardwareSessionState {
+            vendor: Some(HardwareVendor::Trezor),
+            ..HardwareSessionState::default()
+        };
+        assert!(
+            !trezor.offers_link_choice(),
+            "only Ledger has a wire to choose"
+        );
+        trezor.disconnect();
+        assert_eq!(trezor.vendor, Some(HardwareVendor::Trezor));
+    }
+
+    #[test]
     fn a_multisig_wallet_is_previewed_from_cosigner_accounts() {
         let cosigners: Vec<Cosigner> = (0..3)
             .map(|account| {
@@ -2533,32 +2616,37 @@ mod tests {
         // Desktop offers it; every other surface refuses the route and the
         // open, so a renderer bug cannot strand funds behind a device the
         // surface cannot reach.
-        let mut desktop = AppState::for_surface(AppSurface::Desktop);
+        let desktop = AppState::for_surface(AppSurface::Desktop);
         let vm = hardware_view_model(&desktop);
         assert!(vm.available);
         assert_eq!(vm.vendors, HardwareVendor::OFFERED.to_vec());
         assert!(!vm.vendors.contains(&HardwareVendor::Mock));
-        desktop.apply(AppAction::Navigate(AppRoute::HardwareWallet));
-        assert_eq!(desktop.route, AppRoute::HardwareWallet);
-        assert_eq!(AppRoute::HardwareWallet.fragment(), "#/hardware");
+        // Devices are reached through Watch Only, matching the React shell:
+        // the desktop watch-only card is where a device, a cosigner set, or a
+        // pasted xPub all produce the same kind of wallet. There is no
+        // standalone hardware route to navigate to.
         assert_eq!(
             OnboardingAction::ConnectHardwareWallet.route(),
-            Some(AppRoute::HardwareWallet),
-            "the landing action must lead somewhere"
+            Some(AppRoute::WatchOnlyWallet),
+            "the landing action must lead into Watch Only"
+        );
+        assert_eq!(
+            OnboardingAction::ConnectHardwareWallet.href(),
+            Some("#/watch-only")
         );
 
+        // Off desktop the section offers nothing, so a renderer cannot paint
+        // a device picker where no device can be reached.
         for surface in [
             AppSurface::Android,
             AppSurface::Ios,
             AppSurface::Web,
             AppSurface::Extension,
         ] {
-            let mut state = AppState::for_surface(surface);
+            let state = AppState::for_surface(surface);
             let vm = hardware_view_model(&state);
             assert!(!vm.available, "{surface:?}");
             assert!(vm.vendors.is_empty(), "{surface:?} must offer no devices");
-            state.apply(AppAction::Navigate(AppRoute::HardwareWallet));
-            assert_ne!(state.route, AppRoute::HardwareWallet, "{surface:?}");
         }
     }
 
