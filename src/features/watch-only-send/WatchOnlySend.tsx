@@ -78,6 +78,7 @@ import {
   watchOnlyMasterFingerprint,
 } from '../../platform/desktop/onboarding/watchOnlyWallet';
 import { CameraQrScanner } from '../../platform/desktop/CameraQrScanner';
+import { isDesktopPlatform } from '../../utils/platform';
 
 type WatchOnlySendLocationState = {
   returnTo?: string;
@@ -200,6 +201,7 @@ export const WatchOnlySend: FC = () => {
     getBchAccountPath(currentNetwork)
   );
   const [sighashType, setSighashType] = useState(SIGHASH_ALL_FORKID);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [multisigPolicy, setMultisigPolicy] = useState<MultisigPolicy | null>(
     null
   );
@@ -752,6 +754,19 @@ export const WatchOnlySend: FC = () => {
     startQrFrames(proposalState.psbtBytes, next);
   };
 
+  const densityIndex = UR_FRAGMENT_LENGTH_OPTIONS.indexOf(
+    urFragmentLength as (typeof UR_FRAGMENT_LENGTH_OPTIONS)[number]
+  );
+  const densityAt = densityIndex < 0 ? 0 : densityIndex;
+  const canDecreaseDensity = densityAt > 0;
+  const canIncreaseDensity = densityAt < UR_FRAGMENT_LENGTH_OPTIONS.length - 1;
+  const stepQrDensity = (delta: -1 | 1) => {
+    const next = UR_FRAGMENT_LENGTH_OPTIONS[densityAt + delta];
+    if (next == null) return;
+    changeQrDensity(next);
+  };
+  const desktopQr = isDesktopPlatform();
+
   const openScanner = () => {
     urScannerRef.current = new UrPsbtScanner();
     setScanProgress(0);
@@ -856,7 +871,11 @@ export const WatchOnlySend: FC = () => {
   return (
     <WalletScreen
       maxWidthClassName={
-        frames ? 'max-w-[min(calc(100vw-1rem),64rem)]' : 'max-w-md'
+        frames
+          ? desktopQr
+            ? 'max-w-[min(calc(100vw-1rem),64rem)]'
+            : 'max-w-none px-1'
+          : 'max-w-md'
       }
       scrollable={false}
     >
@@ -1027,28 +1046,40 @@ export const WatchOnlySend: FC = () => {
                     className="wallet-input w-full rounded-md px-3 py-2"
                   />
                 </label>
-                <label className="block space-y-1 text-sm wallet-text-strong">
-                  Sighash type
-                  <select
-                    value={sighashType}
-                    onChange={(event) =>
-                      setSighashType(Number(event.target.value))
-                    }
-                    className="wallet-input w-full rounded-md px-3 py-2"
-                  >
-                    {SIGHASH_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                {sighashType !== SIGHASH_ALL_FORKID && (
-                  <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
-                    Advanced sighash modes commit to fewer transaction fields.
-                    Only use this when the BCH script or signing policy
-                    explicitly requires it.
-                  </p>
+                <button
+                  type="button"
+                  onClick={() => setShowAdvanced((open) => !open)}
+                  className="text-left text-sm font-semibold wallet-text-strong underline-offset-2 hover:underline"
+                  aria-expanded={showAdvanced}
+                >
+                  {showAdvanced ? 'Hide advanced' : 'Advanced'}
+                </button>
+                {showAdvanced && (
+                  <div className="space-y-2">
+                    <label className="block space-y-1 text-sm wallet-text-strong">
+                      Sighash type
+                      <select
+                        value={sighashType}
+                        onChange={(event) =>
+                          setSighashType(Number(event.target.value))
+                        }
+                        className="wallet-input w-full rounded-md px-3 py-2"
+                      >
+                        {SIGHASH_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    {sighashType !== SIGHASH_ALL_FORKID && (
+                      <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                        Advanced sighash modes commit to fewer transaction
+                        fields. Only use this when the BCH script or signing
+                        policy explicitly requires it.
+                      </p>
+                    )}
+                  </div>
                 )}
                 <div className="flex items-center justify-between text-xs wallet-muted">
                   <span>
@@ -1073,52 +1104,75 @@ export const WatchOnlySend: FC = () => {
                   <p className="text-sm font-semibold wallet-text-strong">
                     Scan this with SeedCash (air-gapped)
                   </p>
-                  <div className="mx-auto w-full max-w-[min(100%,calc(100svh-14rem))] rounded-md bg-white p-1">
+                  <div
+                    className={`mx-auto rounded-md bg-white ${
+                      desktopQr
+                        ? 'w-full max-w-[min(100%,calc(100svh-14rem))] p-1'
+                        : 'w-full max-w-none p-0'
+                    }`}
+                  >
                     <QRCodeSVG
                       value={qrUri}
                       size={PSBT_UR_QR_DISPLAY_SIZE}
-                      marginSize={PSBT_UR_QR_MARGIN_MODULES}
+                      marginSize={desktopQr ? PSBT_UR_QR_MARGIN_MODULES : 1}
                       level={PSBT_UR_QR_ERROR_LEVEL}
-                      className="h-auto w-full max-w-full"
+                      className={
+                        desktopQr
+                          ? 'h-auto w-full max-w-full'
+                          : 'h-auto w-full max-w-none'
+                      }
                     />
                   </div>
                   <p className="text-center text-xs wallet-muted">
                     Frame {frameNumber} / {frameCountRef.current} · hold the
                     camera steady, the code loops
                   </p>
-                  <label className="block space-y-1 text-sm wallet-text-strong">
-                    QR density
-                    <select
-                      value={urFragmentLength}
-                      onChange={(event) =>
-                        changeQrDensity(Number(event.target.value))
-                      }
-                      className="wallet-input w-full rounded-md px-3 py-2"
-                    >
-                      {UR_FRAGMENT_LENGTH_OPTIONS.map((option) => (
-                        <option key={option} value={option}>
-                          {option} — {QR_DENSITY_LABELS[option]}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <p className="text-center text-[11px] wallet-muted">
-                    50 is the safe default. Higher density uses the same large
-                    QR area but asks the device camera to resolve smaller
-                    patterns.
-                  </p>
-                  <p className="text-center text-[11px] wallet-muted">
-                    Changing density restarts scan progress on the signing
-                    device.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => changeQrDensity(DEFAULT_UR_FRAGMENT_LENGTH)}
-                    disabled={urFragmentLength === DEFAULT_UR_FRAGMENT_LENGTH}
-                    className="wallet-btn-secondary w-full py-2 text-sm disabled:opacity-50"
-                  >
-                    Reset to easiest scan
-                  </button>
+                  {desktopQr && (
+                    <>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          aria-label="Decrease QR density"
+                          onClick={() => stepQrDensity(-1)}
+                          disabled={!canDecreaseDensity}
+                          className="wallet-btn-secondary min-h-11 min-w-11 px-3 text-lg font-semibold disabled:opacity-50"
+                        >
+                          −
+                        </button>
+                        <p className="flex-1 text-center text-sm wallet-text-strong">
+                          {urFragmentLength} —{' '}
+                          {QR_DENSITY_LABELS[
+                            urFragmentLength as keyof typeof QR_DENSITY_LABELS
+                          ] ?? 'Custom'}
+                        </p>
+                        <button
+                          type="button"
+                          aria-label="Increase QR density"
+                          onClick={() => stepQrDensity(1)}
+                          disabled={!canIncreaseDensity}
+                          className="wallet-btn-secondary min-h-11 min-w-11 px-3 text-lg font-semibold disabled:opacity-50"
+                        >
+                          +
+                        </button>
+                      </div>
+                      <p className="text-center text-[11px] wallet-muted">
+                        Desktop only. Higher density packs more into each frame
+                        and restarts scan progress on the signing device.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          changeQrDensity(DEFAULT_UR_FRAGMENT_LENGTH)
+                        }
+                        disabled={
+                          urFragmentLength === DEFAULT_UR_FRAGMENT_LENGTH
+                        }
+                        className="wallet-btn-secondary w-full py-2 text-sm disabled:opacity-50"
+                      >
+                        Reset to easiest scan
+                      </button>
+                    </>
+                  )}
                   <button
                     type="button"
                     onClick={() => setQrFullscreen(true)}
