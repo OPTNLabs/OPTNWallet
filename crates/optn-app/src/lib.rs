@@ -729,6 +729,7 @@ pub enum ProductNavItem {
     Home,
     Assets,
     Actions,
+    Receive,
     Explore,
     History,
     Settings,
@@ -740,6 +741,7 @@ impl ProductNavItem {
             Self::Home => AppRoute::WalletHome,
             Self::Assets => AppRoute::Coins,
             Self::Actions => AppRoute::Actions,
+            Self::Receive => AppRoute::Receive,
             Self::Explore => AppRoute::Explore,
             Self::History => AppRoute::History,
             Self::Settings => AppRoute::Settings,
@@ -751,6 +753,7 @@ impl ProductNavItem {
             Self::Home => "Home",
             Self::Assets => "Assets",
             Self::Actions => "Actions",
+            Self::Receive => "Receive",
             Self::Explore => "Explore",
             Self::History => "History",
             Self::Settings => "Settings",
@@ -762,6 +765,7 @@ impl ProductNavItem {
             Self::Home => route == AppRoute::WalletHome,
             Self::Assets => route == AppRoute::Coins,
             Self::Actions => matches!(route, AppRoute::Actions | AppRoute::Flipstarter),
+            Self::Receive => route == AppRoute::Receive,
             Self::Explore => matches!(route, AppRoute::Explore | AppRoute::FundMe),
             Self::History => route == AppRoute::History,
             Self::Settings => route == AppRoute::Settings,
@@ -769,15 +773,33 @@ impl ProductNavItem {
     }
 }
 
-pub fn product_nav() -> [ProductNavItem; 6] {
-    [
-        ProductNavItem::Home,
-        ProductNavItem::Assets,
-        ProductNavItem::Actions,
-        ProductNavItem::Explore,
-        ProductNavItem::History,
-        ProductNavItem::Settings,
-    ]
+/// Bottom-nav destinations for a surface.
+///
+/// Five on the product surfaces, matching `docs/ui-overhaul/A_home_single.png`
+/// and issue #71 (`Home · Assets · Actions · Explore · Settings`). Recent
+/// activity is a panel on Home with "View all", not a sixth tab — a sixth also
+/// costs touch-target width at the 44px minimum the issue requires.
+///
+/// The extension popup is a constrained viewer, exactly as the React shell
+/// treats it (`AppShell viewerOnly`): no Actions, no Settings, and Receive and
+/// History take those slots instead. A popup is too small for the action and
+/// settings flows, and porting that rule keeps the two shells consistent.
+pub fn product_nav(state: &AppState) -> Vec<ProductNavItem> {
+    match state.surface {
+        AppSurface::Extension => vec![
+            ProductNavItem::Home,
+            ProductNavItem::Assets,
+            ProductNavItem::Receive,
+            ProductNavItem::History,
+        ],
+        AppSurface::Desktop | AppSurface::Android | AppSurface::Ios | AppSurface::Web => vec![
+            ProductNavItem::Home,
+            ProductNavItem::Assets,
+            ProductNavItem::Actions,
+            ProductNavItem::Explore,
+            ProductNavItem::Settings,
+        ],
+    }
 }
 
 /// Chipnet faucet used by the TS wallet settings row.
@@ -1567,12 +1589,14 @@ mod tests {
             .notice
             .as_deref()
             .is_some_and(|text| text.contains("exactly 2000 sats")));
-        assert_eq!(product_nav()[0].label(), "Home");
-        assert_eq!(product_nav()[1].label(), "Assets");
-        assert_eq!(product_nav()[2].label(), "Actions");
-        assert_eq!(product_nav()[3].label(), "Explore");
-        assert_eq!(product_nav()[4].label(), "History");
-        assert_eq!(product_nav()[5].label(), "Settings");
+        let nav = product_nav(&state);
+        let labels: Vec<&str> = nav.iter().map(|item| item.label()).collect();
+        assert_eq!(
+            labels,
+            vec!["Home", "Assets", "Actions", "Explore", "Settings"]
+        );
+        // History is still a route, reached from Home's "View all" rather
+        // than a sixth tab. See the_bottom_nav_matches_the_blueprint...
         assert_eq!(AppRoute::History.fragment(), "#/history");
         assert_eq!(AppRoute::Flipstarter.fragment(), "#/flipstarter");
         assert_eq!(AppRoute::FundMe.fragment(), "#/fundme");
@@ -1645,6 +1669,38 @@ mod tests {
             state.apply(AppAction::Navigate(AppRoute::WatchOnlyWallet));
             assert_eq!(state.route, AppRoute::WatchOnlyWallet, "{surface:?}");
         }
+    }
+
+    #[test]
+    fn create_and_import_use_the_shared_cli_word_counts() {
+        assert_eq!(BIP39_WORD_COUNTS, [12, 15, 18, 21, 24]);
+        assert_eq!(BIP39_DEFAULT_WORD_COUNT, 12);
+        for words in BIP39_WORD_COUNTS {
+            let len = entropy_len_for_word_count(words).expect("cli word count");
+            let entropy = vec![0x5a_u8; len];
+            let phrase = mnemonic_from_entropy(&entropy).expect("phrase");
+            assert_eq!(phrase.split_whitespace().count(), words);
+            let opened = seed_wallet_preview_at(
+                Network::Chipnet,
+                "shared",
+                &phrase,
+                AccountPath::default_for(Network::Chipnet),
+            )
+            .expect("open");
+            assert!(
+                opened.receive_address.starts_with("bchtest:"),
+                "{words}-word Chipnet receive"
+            );
+            let mut state = AppState::for_surface(AppSurface::Desktop);
+            state.apply(AppAction::SetNetwork(Network::Chipnet));
+            state.apply(AppAction::OpenImportedWallet {
+                name: opened.name,
+                receive_address: opened.receive_address,
+                account_path: opened.account_path,
+            });
+            assert_eq!(state.route, AppRoute::WalletHome, "{words}-word import");
+        }
+        assert!(entropy_len_for_word_count(16).is_err());
     }
 
     #[test]
@@ -1759,11 +1815,12 @@ mod tests {
             assert_eq!(state.route, AppRoute::History);
             assert!(AppRoute::History.is_wallet_chrome());
         }
-        let labels: Vec<_> = product_nav().iter().map(|item| item.label()).collect();
-        assert_eq!(
-            labels,
-            ["Home", "Assets", "Actions", "Explore", "History", "Settings"]
-        );
+        let labels: Vec<_> = product_nav(&AppState::for_surface(AppSurface::Desktop))
+            .iter()
+            .map(|item| item.label())
+            .collect();
+        assert_eq!(labels, ["Home", "Assets", "Actions", "Explore", "Settings"]);
+        assert!(AppRoute::History.is_wallet_chrome());
     }
 
     #[test]
@@ -1913,6 +1970,60 @@ mod tests {
             "m/44'/145'/1'",
             "Settings must show the account the wallet was opened at"
         );
+    }
+
+    #[test]
+    fn the_bottom_nav_matches_the_blueprint_and_the_react_shell() {
+        // docs/ui-overhaul/A_home_single.png and issue #71 both specify five
+        // destinations. A sixth would not fit the 44px touch targets the issue
+        // requires, and recent activity belongs on Home behind "View all".
+        for surface in [
+            AppSurface::Desktop,
+            AppSurface::Android,
+            AppSurface::Ios,
+            AppSurface::Web,
+        ] {
+            let nav = product_nav(&AppState::for_surface(surface));
+            assert_eq!(
+                nav,
+                vec![
+                    ProductNavItem::Home,
+                    ProductNavItem::Assets,
+                    ProductNavItem::Actions,
+                    ProductNavItem::Explore,
+                    ProductNavItem::Settings,
+                ],
+                "{surface:?} must match the blueprint bottom nav"
+            );
+        }
+
+        // The React shell renders the extension popup with `viewerOnly`, which
+        // drops Actions and Settings and puts Receive and Transactions in
+        // their slots. Keep the two shells consistent.
+        let extension = product_nav(&AppState::for_surface(AppSurface::Extension));
+        assert_eq!(
+            extension,
+            vec![
+                ProductNavItem::Home,
+                ProductNavItem::Assets,
+                ProductNavItem::Receive,
+                ProductNavItem::History,
+            ]
+        );
+        assert!(!extension.contains(&ProductNavItem::Settings));
+        assert!(!extension.contains(&ProductNavItem::Actions));
+
+        // Every destination must lead to a route the tab can highlight.
+        for item in product_nav(&AppState::for_surface(AppSurface::Desktop))
+            .into_iter()
+            .chain(extension)
+        {
+            assert!(
+                item.is_active(item.route()),
+                "{item:?} must report itself active on its own route"
+            );
+            assert!(!item.label().is_empty());
+        }
     }
 
     #[test]

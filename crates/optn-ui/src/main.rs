@@ -21,9 +21,10 @@ use derivation::DerivationPicker;
 use hardware::HardwareWalletSetup;
 #[cfg(target_arch = "wasm32")]
 use optn_app::{
-    mnemonic_from_entropy, onboarding_actions, onboarding_view_model, seed_wallet_preview_at,
-    watch_only_setup_preview, AppAction, AppRoute, AppState, AppSurface, Network, OnboardingAction,
-    ThemeMode, WatchOnlySetupPreview,
+    entropy_len_for_word_count, mnemonic_from_entropy, onboarding_actions, onboarding_view_model,
+    seed_wallet_preview_at, watch_only_setup_preview, AppAction, AppRoute, AppState, AppSurface,
+    Network, OnboardingAction, ThemeMode, WatchOnlySetupPreview, BIP39_DEFAULT_WORD_COUNT,
+    BIP39_WORD_COUNTS,
 };
 #[cfg(target_arch = "wasm32")]
 use optn_transport::AppTransport;
@@ -388,14 +389,14 @@ fn Landing(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn fill_entropy() -> Result<[u8; 16], String> {
+fn fill_entropy(len: usize) -> Result<Vec<u8>, String> {
     let crypto = web_sys::window()
         .ok_or_else(|| "browser window is unavailable".to_string())?
         .crypto()
         .map_err(|_| "Web Crypto is unavailable".to_string())?;
-    let mut entropy = [0u8; 16];
+    let mut entropy = vec![0u8; len];
     crypto
-        .get_random_values_with_u8_array(&mut entropy)
+        .get_random_values_with_u8_array(entropy.as_mut_slice())
         .map_err(|_| "could not gather entropy".to_string())?;
     Ok(entropy)
 }
@@ -406,9 +407,25 @@ fn CreateWallet(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
     let name = RwSignal::new(String::from("My wallet"));
     let phrase = RwSignal::new(String::new());
     let error = RwSignal::new(None::<String>);
+    let word_count = RwSignal::new(BIP39_DEFAULT_WORD_COUNT);
     let account = RwSignal::new(onboarding::derivation_for_network(
         state.get_untracked().network,
     ));
+
+    Effect::new(move |_| {
+        let words = word_count.get();
+        match entropy_len_for_word_count(words)
+            .map_err(|error| error.to_string())
+            .and_then(fill_entropy)
+            .and_then(|entropy| mnemonic_from_entropy(&entropy).map_err(|error| error.to_string()))
+        {
+            Ok(next) => {
+                error.set(None);
+                phrase.set(next);
+            }
+            Err(message) => error.set(Some(message)),
+        }
+    });
 
     view! {
         <section class="watch-only-page">
@@ -464,56 +481,54 @@ fn CreateWallet(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
                         on:input=move |event| name.set(event_target_value(&event))
                     />
                 </label>
-                <button
-                    class="secondary"
-                    type="button"
-                    on:click=move |_| {
-                        match fill_entropy().and_then(|entropy| {
-                            mnemonic_from_entropy(&entropy).map_err(|error| error.to_string())
-                        }) {
-                            Ok(next) => {
-                                error.set(None);
-                                phrase.set(next);
-                            }
-                            Err(message) => error.set(Some(message)),
-                        }
-                    }
-                >
-                    "Generate recovery phrase"
-                </button>
+                <div class="network-picker" role="group" aria-label="Recovery phrase length">
+                    <For
+                        each=|| BIP39_WORD_COUNTS
+                        key=|words| *words
+                        let:words
+                    >
+                        <button
+                            class="network-option"
+                            class:active=move || word_count.get() == words
+                            type="button"
+                            on:click=move |_| word_count.set(words)
+                        >
+                            {format!("{words} words")}
+                        </button>
+                    </For>
+                </div>
+                <p class="lede">"Write this phrase down. It is not stored in application state."</p>
+                <p class="mono">{move || phrase.get()}</p>
                 <DerivationPicker
                     state=state
                     selected=account
                     error=error
                 />
-                <Show when=move || !phrase.get().is_empty()>
-                    <p class="mono">{move || phrase.get()}</p>
-                    <button
-                        class="primary"
-                        type="button"
-                        on:click=move |_| {
-                            match seed_wallet_preview_at(
-                                state.get_untracked().network,
-                                &name.get_untracked(),
-                                &phrase.get_untracked(),
-                                account.get_untracked(),
-                            ) {
-                                Ok(opened) => dispatch_action(
-                                    transport,
-                                    state,
-                                    AppAction::OpenCreatedWallet {
-                                        name: opened.name,
-                                        receive_address: opened.receive_address,
-                                        account_path: opened.account_path,
-                                    },
-                                ),
-                                Err(message) => error.set(Some(message)),
-                            }
+                <button
+                    class="primary"
+                    type="button"
+                    on:click=move |_| {
+                        match seed_wallet_preview_at(
+                            state.get_untracked().network,
+                            &name.get_untracked(),
+                            &phrase.get_untracked(),
+                            account.get_untracked(),
+                        ) {
+                            Ok(opened) => dispatch_action(
+                                transport,
+                                state,
+                                AppAction::OpenCreatedWallet {
+                                    name: opened.name,
+                                    receive_address: opened.receive_address,
+                                    account_path: opened.account_path,
+                                },
+                            ),
+                            Err(message) => error.set(Some(message)),
                         }
-                    >
-                        "I wrote it down — open wallet"
-                    </button>
-                </Show>
+                    }
+                >
+                    "I wrote it down — open wallet"
+                </button>
                 <Show when=move || error.get().is_some()>
                     <p class="form-error" role="alert">
                         {move || error.get().unwrap_or_default()}
@@ -588,11 +603,15 @@ fn ImportWallet(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
                 <label class="field">
                     <span>"Recovery phrase"</span>
                     <textarea
-                        rows="3"
+                        rows="4"
                         spellcheck="false"
+                        autocomplete="off"
+                        autocapitalize="none"
+                        placeholder="12, 15, 18, 21, or 24 words"
                         prop:value=move || phrase.get()
                         on:input=move |event| phrase.set(event_target_value(&event))
                     ></textarea>
+                    <small>"Same lengths as optn new --words: 12, 15, 18, 21, or 24."</small>
                 </label>
                 <DerivationPicker
                     state=state

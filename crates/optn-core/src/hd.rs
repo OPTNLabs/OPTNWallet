@@ -457,9 +457,8 @@ mod tests {
         for words in BIP39_WORD_COUNTS {
             let entropy_bytes = entropy_len_for_word_count(words).expect("supported count");
             let entropy = vec![0x2a_u8; entropy_bytes];
-            let phrase = mnemonic_from_entropy(&entropy).unwrap_or_else(|e| {
-                panic!("{entropy_bytes} bytes of entropy must be valid: {e}")
-            });
+            let phrase = mnemonic_from_entropy(&entropy)
+                .unwrap_or_else(|e| panic!("{entropy_bytes} bytes of entropy must be valid: {e}"));
             assert_eq!(
                 phrase.split_whitespace().count(),
                 words,
