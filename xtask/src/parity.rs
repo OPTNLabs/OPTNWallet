@@ -244,6 +244,26 @@ fn collect_source_drift(root: &Path, matrix: &Matrix, failures: &mut Vec<String>
         }
     }
 
+    let ui_main = fs::read_to_string(root.join("crates/optn-ui/src/main.rs")).unwrap_or_default();
+    if ui_main.contains("move || match state.get().route") {
+        failures.push(
+            "optn-ui must switch pages from a route Memo (mounted_page), not the full AppState snapshot"
+                .into(),
+        );
+    }
+    if !ui_main.contains("mounted_page") || !ui_main.contains("Memo::new") {
+        failures.push(
+            "optn-ui must Memo mounted_page so Create/Import/Watch-only survive Chipnet/theme snapshots"
+                .into(),
+        );
+    }
+    if ui_main.contains("network=state.get_untracked().network") {
+        failures.push(
+            "DerivationPicker must follow a reactive network, not get_untracked at first render"
+                .into(),
+        );
+    }
+
     let shell = fs::read_to_string(root.join("src/app/AppShell.tsx")).unwrap_or_default();
     if shell.contains("offersWatchOnly()") {
         failures.push(

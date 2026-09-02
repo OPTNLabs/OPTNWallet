@@ -6,8 +6,9 @@
 //! from the same coin types discovery scans. A renderer-local menu could drift
 //! from that set and offer a branch the wallet never looks at.
 
+use crate::onboarding::derivation_for_network;
 use leptos::prelude::*;
-use optn_app::{account_choices, parse_account_path, AccountPath, Network};
+use optn_app::{account_choices, parse_account_path, AccountPath, AppState, Network};
 
 /// Label for one offered account, explaining why it is on the list.
 fn choice_note(account: AccountPath, network: Network) -> &'static str {
@@ -26,23 +27,22 @@ fn choice_note(account: AccountPath, network: Network) -> &'static str {
 ///
 /// `selected` is owned by the caller so the surrounding form can derive its
 /// preview from the same value the picker shows.
+///
+/// Network is read from `state` through a Memo. Capturing it once left
+/// Chipnet on Create offering mainnet coin types.
 #[component]
 pub fn DerivationPicker(
-    network: Network,
+    state: RwSignal<AppState>,
     selected: RwSignal<AccountPath>,
     /// Set when a typed path is rejected, cleared when it parses.
     error: RwSignal<Option<String>>,
 ) -> impl IntoView {
     let custom = RwSignal::new(String::new());
     let advanced = RwSignal::new(false);
+    let network = Memo::new(move |_| state.get().network);
 
-    // Keep the selection valid when the network changes underneath: an
-    // account scanned on mainnet is not necessarily scanned on chipnet.
     Effect::new(move |_| {
-        let current = selected.get_untracked();
-        if !current.is_scanned_for(network) {
-            selected.set(AccountPath::default_for(network));
-        }
+        selected.set(derivation_for_network(network.get()));
     });
 
     view! {
@@ -54,7 +54,7 @@ pub fn DerivationPicker(
 
             <div class="choice-list" role="radiogroup" aria-label="Derivation path">
                 <For
-                    each=move || account_choices(network)
+                    each=move || account_choices(network.get())
                     key=|account| account.to_string()
                     let:account
                 >
@@ -75,7 +75,7 @@ pub fn DerivationPicker(
                     >
                         <div>
                             <p class="source-title mono">{account.to_string()}</p>
-                            <p class="muted">{choice_note(account, network)}</p>
+                            <p class="muted">{move || choice_note(account, network.get())}</p>
                         </div>
                         <Show when=move || selected.get() == account>
                             <span class="ok">"Selected"</span>
@@ -124,7 +124,7 @@ pub fn DerivationPicker(
                 </label>
             </Show>
 
-            <Show when=move || !selected.get().is_default_for(network)>
+            <Show when=move || !selected.get().is_default_for(network.get())>
                 <p class="hint-card">
                     "This is not the standard account for this network. Use it only if you "
                     "know your funds were derived there."
