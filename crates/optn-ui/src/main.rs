@@ -4,12 +4,10 @@
 use leptos::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use leptos::reactive::owner::LocalStorage;
-#[cfg(all(target_arch = "wasm32", not(feature = "tauri-transport")))]
-use optn_app::AppSurface;
 #[cfg(target_arch = "wasm32")]
 use optn_app::{
-    onboarding_view_model, watch_only_setup_preview, AppAction, AppRoute, AppState, Network,
-    ThemeMode, WatchOnlySetupPreview,
+    onboarding_actions, onboarding_view_model, watch_only_setup_preview, AppAction, AppRoute,
+    AppState, AppSurface, Network, OnboardingAction, ThemeMode, WatchOnlySetupPreview,
 };
 #[cfg(target_arch = "wasm32")]
 use optn_transport::AppTransport;
@@ -268,6 +266,54 @@ fn WatchOnlySetup(transport: UiTransport, state: RwSignal<AppState>) -> impl Int
 
 #[cfg(target_arch = "wasm32")]
 #[component]
+fn LandingActionLink(
+    transport: UiTransport,
+    state: RwSignal<AppState>,
+    action: OnboardingAction,
+) -> impl IntoView {
+    let class = if matches!(action, OnboardingAction::CreateWallet) {
+        "primary"
+    } else {
+        "secondary"
+    };
+    let label = match action {
+        OnboardingAction::CreateWallet => "Create wallet",
+        OnboardingAction::ImportWallet => "Import wallet",
+        OnboardingAction::CreateWatchOnlyWallet => "Create watch-only wallet",
+        OnboardingAction::ConnectHardwareWallet => "Connect hardware wallet",
+    };
+
+    match (action.route(), action.href()) {
+        (Some(route), Some(href)) => view! {
+            <a
+                class=class
+                href=href
+                on:click=move |_| dispatch_action(
+                    transport,
+                    state,
+                    AppAction::Navigate(route),
+                )
+            >
+                {label}
+            </a>
+        }
+        .into_any(),
+        _ => view! {
+            <button
+                class="secondary"
+                type="button"
+                disabled
+                title="Desktop USB hardware wallets"
+            >
+                {label}
+            </button>
+        }
+        .into_any(),
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[component]
 fn Landing(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
     view! {
         <section class="landing">
@@ -293,51 +339,18 @@ fn Landing(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
                 </div>
 
                 <nav class="actions" aria-label="Wallet onboarding">
-                    <a
-                        class="primary"
-                        href={onboarding_view_model(&AppState::default()).create_wallet_href}
-                        on:click=move |_| dispatch_action(
-                            transport,
-                            state,
-                            AppAction::Navigate(AppRoute::CreateWallet),
-                        )
+                    <For
+                        each=move || onboarding_actions(&state.get())
+                        key=|action| match action {
+                            OnboardingAction::CreateWallet => 0u8,
+                            OnboardingAction::ImportWallet => 1,
+                            OnboardingAction::CreateWatchOnlyWallet => 2,
+                            OnboardingAction::ConnectHardwareWallet => 3,
+                        }
+                        let:action
                     >
-                        "Create wallet"
-                    </a>
-                    <a
-                        class="secondary"
-                        href={onboarding_view_model(&AppState::default()).import_wallet_href}
-                        on:click=move |_| dispatch_action(
-                            transport,
-                            state,
-                            AppAction::Navigate(AppRoute::ImportWallet),
-                        )
-                    >
-                        "Import wallet"
-                    </a>
-                    <Show when=move || onboarding_view_model(&state.get()).show_hardware_wallet>
-                        <button
-                            class="secondary"
-                            type="button"
-                            disabled
-                            title="Desktop USB hardware wallets"
-                        >
-                            "Connect hardware wallet"
-                        </button>
-                    </Show>
-                    <Show when=move || onboarding_view_model(&state.get()).show_watch_only>
-                        <a
-                            class="secondary"
-                            href={onboarding_view_model(&state.get()).watch_only_wallet_href}
-                            on:click=move |_| dispatch_action(
-                                transport,
-                                state,
-                                AppAction::Navigate(AppRoute::WatchOnlyWallet),
-                            )
-                        >
-                            "Create watch-only wallet"
-                        </a>
-                    </Show>
+                        <LandingActionLink transport=transport state=state action=action />
+                    </For>
                 </nav>
             </section>
         </section>
@@ -347,16 +360,18 @@ fn Landing(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
 #[cfg(target_arch = "wasm32")]
 #[component]
 fn App(transport: Rc<dyn AppTransport>) -> impl IntoView {
-    let state = RwSignal::new(AppState::default());
+    // Do not paint Desktop defaults. That flashes USB hardware on mobile and
+    // hides Watch Only if a failed/web snapshot is treated as authoritative.
+    let state = RwSignal::new(AppState::for_surface(AppSurface::Web));
+    let ready = RwSignal::new(false);
     let transport = StoredValue::new_local(transport);
 
-    // The renderer never assumes where authoritative state lives. Local WASM
-    // returns immediately; an IPC-backed provider can hydrate from native Rust.
     {
         let transport = transport.get_value();
         leptos::task::spawn_local(async move {
             if let Ok(snapshot) = transport.snapshot().await {
                 state.set(snapshot);
+                ready.set(true);
             }
         });
     }
@@ -364,8 +379,12 @@ fn App(transport: Rc<dyn AppTransport>) -> impl IntoView {
     view! {
         <main
             class="app-shell"
-            class:dark=move || state.get().theme == ThemeMode::Dark
+            class:dark=move || ready.get() && state.get().theme == ThemeMode::Dark
         >
+            <Show
+                when=move || ready.get()
+                fallback=move || view! { <p class="shell-loading">"Loading OPTN"</p> }
+            >
             <header class="topbar">
                 <div class="brand" aria-label="OPTN Wallet">"OPTN"</div>
 
@@ -427,6 +446,7 @@ fn App(transport: Rc<dyn AppTransport>) -> impl IntoView {
                         </button>
                     </section>
                 </div>
+            </Show>
             </Show>
         </main>
     }

@@ -499,6 +499,21 @@ mod tests {
     }
 
     #[test]
+    fn android_wire_snapshot_keeps_watch_only_on_the_landing() {
+        let state = AppState::for_surface(AppSurface::Android);
+        let restored = AppState::try_from(WireState::from(&state)).expect("android wire state");
+        assert_eq!(restored.surface, AppSurface::Android);
+        assert_eq!(
+            optn_app::onboarding_actions(&restored),
+            vec![
+                optn_app::OnboardingAction::CreateWallet,
+                optn_app::OnboardingAction::ImportWallet,
+                optn_app::OnboardingAction::CreateWatchOnlyWallet,
+            ]
+        );
+    }
+
+    #[test]
     fn wire_protocol_rejects_unknown_version() {
         let mut wire = WireAction::from(AppAction::OpenHelp);
         wire.version = WIRE_PROTOCOL_VERSION + 1;

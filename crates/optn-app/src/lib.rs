@@ -236,6 +236,51 @@ pub fn onboarding_view_model(state: &AppState) -> OnboardingViewModel {
     }
 }
 
+/// Ordered landing CTAs. Renderers must draw this list; they must not invent a
+/// Create/Import-only menu that drops Watch Only on Android/iOS.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnboardingAction {
+    CreateWallet,
+    ImportWallet,
+    CreateWatchOnlyWallet,
+    ConnectHardwareWallet,
+}
+
+impl OnboardingAction {
+    pub const fn href(self) -> Option<&'static str> {
+        match self {
+            Self::CreateWallet => Some(AppRoute::CreateWallet.fragment()),
+            Self::ImportWallet => Some(AppRoute::ImportWallet.fragment()),
+            Self::CreateWatchOnlyWallet => Some(AppRoute::WatchOnlyWallet.fragment()),
+            Self::ConnectHardwareWallet => None,
+        }
+    }
+
+    pub const fn route(self) -> Option<AppRoute> {
+        match self {
+            Self::CreateWallet => Some(AppRoute::CreateWallet),
+            Self::ImportWallet => Some(AppRoute::ImportWallet),
+            Self::CreateWatchOnlyWallet => Some(AppRoute::WatchOnlyWallet),
+            Self::ConnectHardwareWallet => None,
+        }
+    }
+}
+
+pub fn onboarding_actions(state: &AppState) -> Vec<OnboardingAction> {
+    let vm = onboarding_view_model(state);
+    let mut actions = vec![
+        OnboardingAction::CreateWallet,
+        OnboardingAction::ImportWallet,
+    ];
+    if vm.show_watch_only {
+        actions.push(OnboardingAction::CreateWatchOnlyWallet);
+    }
+    if vm.show_hardware_wallet {
+        actions.push(OnboardingAction::ConnectHardwareWallet);
+    }
+    actions
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WatchOnlySetupPreview {
     pub wallet_name: String,
@@ -418,6 +463,37 @@ mod tests {
             android.show_watch_only, web.show_watch_only,
             "a renderer-hardcoded Watch Only menu cannot distinguish Android from web"
         );
+    }
+
+    #[test]
+    fn native_landing_actions_put_watch_only_with_create_and_import() {
+        let native = [AppSurface::Desktop, AppSurface::Android, AppSurface::Ios];
+        for surface in native {
+            let actions = onboarding_actions(&AppState::for_surface(surface));
+            assert_eq!(actions[0], OnboardingAction::CreateWallet, "{surface:?}");
+            assert_eq!(actions[1], OnboardingAction::ImportWallet, "{surface:?}");
+            assert_eq!(
+                actions[2],
+                OnboardingAction::CreateWatchOnlyWallet,
+                "{surface:?} must show Watch Only as a primary landing action, not an afterthought"
+            );
+            assert!(
+                !matches!(surface, AppSurface::Android | AppSurface::Ios)
+                    || !actions.contains(&OnboardingAction::ConnectHardwareWallet),
+                "{surface:?} must not offer USB hardware onboarding"
+            );
+        }
+
+        for surface in [AppSurface::Web, AppSurface::Extension] {
+            assert_eq!(
+                onboarding_actions(&AppState::for_surface(surface)),
+                vec![
+                    OnboardingAction::CreateWallet,
+                    OnboardingAction::ImportWallet,
+                ],
+                "{surface:?} must keep Watch Only off the landing"
+            );
+        }
     }
 
     #[test]
