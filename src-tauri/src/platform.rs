@@ -3,7 +3,10 @@
 //! Keep OS and shell details here. Wallet/application crates must only know the
 //! traits from `optn-platform`.
 
-use optn_platform::{Clipboard as ClipboardPort, PlatformError, PlatformFuture, PlatformResult};
+use optn_platform::{
+    Capability, CapabilityProvider, Clipboard as ClipboardPort, PlatformError, PlatformFuture,
+    PlatformResult, ProviderDescriptor, ProviderKind,
+};
 
 #[derive(Clone)]
 pub struct TauriClipboard {
@@ -28,6 +31,16 @@ impl TauriClipboard {
     }
 }
 
+impl CapabilityProvider for TauriClipboard {
+    fn descriptor(&self) -> ProviderDescriptor {
+        ProviderDescriptor {
+            id: "tauri-arboard-clipboard",
+            kind: ProviderKind::Shell,
+            capabilities: &[Capability::Clipboard],
+        }
+    }
+}
+
 impl ClipboardPort for TauriClipboard {
     fn read_text<'a>(&'a self) -> PlatformFuture<'a, String> {
         Box::pin(async move { self.read_text_sync() })
@@ -47,5 +60,7 @@ mod tests {
     #[test]
     fn tauri_clipboard_implements_platform_contract() {
         assert_clipboard_port::<TauriClipboard>();
+        let provider = TauriClipboard::new(tauri::test::mock_app().handle().clone());
+        assert_eq!(provider.descriptor().id, "tauri-arboard-clipboard");
     }
 }
