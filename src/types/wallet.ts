@@ -6,10 +6,9 @@ export enum WalletType {
 }
 
 /**
- * Desktop-only wallet types that are stored in the `wallets.walletType` TEXT
- * column but deliberately not added to the shared WalletType enum (that file
- * is the original author's). Downstream code that needs to branch on them
- * compares against the string values from the desktop feature that owns them.
+ * Extended wallet types stored in the `wallets.walletType` TEXT column.
+ * Watch-only is shared across desktop/Android/iOS; hardware remains a native
+ * desktop device-backed wallet until mobile hardware transports are proven.
  */
 export type ExtendedWalletType = WalletType | 'watch-only' | 'hardware';
 
