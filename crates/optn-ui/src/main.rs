@@ -11,6 +11,8 @@ mod derivation;
 #[cfg(target_arch = "wasm32")]
 mod hardware;
 #[cfg(target_arch = "wasm32")]
+mod multisig;
+#[cfg(target_arch = "wasm32")]
 mod settings;
 #[cfg(target_arch = "wasm32")]
 mod tools;
@@ -20,11 +22,13 @@ use derivation::DerivationPicker;
 #[cfg(target_arch = "wasm32")]
 use hardware::HardwareWalletSetup;
 #[cfg(target_arch = "wasm32")]
+use multisig::MultisigSection;
+#[cfg(target_arch = "wasm32")]
 use optn_app::{
-    entropy_len_for_word_count, mnemonic_from_entropy, onboarding_actions, onboarding_view_model,
-    seed_wallet_preview_at, watch_only_setup_preview, AppAction, AppRoute, AppState, AppSurface,
-    Network, OnboardingAction, ThemeMode, WatchOnlySetupPreview, BIP39_DEFAULT_WORD_COUNT,
-    BIP39_WORD_COUNTS,
+    create_confirm_indices, entropy_len_for_word_count, mnemonic_from_entropy, onboarding_actions,
+    onboarding_view_model, seed_wallet_preview_at, watch_only_setup_preview, AppAction, AppRoute,
+    AppState, AppSurface, CreateStep, ImportStep, Network, OnboardingAction, ThemeMode,
+    WatchOnlySetupPreview, BIP39_DEFAULT_WORD_COUNT, BIP39_WORD_COUNTS,
 };
 #[cfg(target_arch = "wasm32")]
 use optn_transport::AppTransport;
@@ -103,7 +107,7 @@ fn WatchOnlySetup(transport: UiTransport, state: RwSignal<AppState>) -> impl Int
                     on:click=move |_| dispatch_action(
                         transport,
                         state,
-                        AppAction::Navigate(AppRoute::Landing),
+                        AppAction::GoBack,
                     )
                 >
                     "← Back"
@@ -212,6 +216,8 @@ fn WatchOnlySetup(transport: UiTransport, state: RwSignal<AppState>) -> impl Int
                         "Validate public account"
                     </button>
                 </form>
+
+                <MultisigSection transport=transport state=state />
 
                 <Show when=move || preview.get().is_some()>
                     <section class="watch-preview" aria-live="polite">
@@ -408,6 +414,7 @@ fn CreateWallet(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
     let phrase = RwSignal::new(String::new());
     let error = RwSignal::new(None::<String>);
     let word_count = RwSignal::new(BIP39_DEFAULT_WORD_COUNT);
+    let answers = RwSignal::new([String::new(), String::new(), String::new()]);
     let account = RwSignal::new(onboarding::derivation_for_network(
         state.get_untracked().network,
     ));
@@ -433,102 +440,188 @@ fn CreateWallet(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
                 <button
                     class="text-button"
                     type="button"
-                    on:click=move |_| dispatch_action(
-                        transport,
-                        state,
-                        AppAction::Navigate(AppRoute::Landing),
-                    )
+                    on:click=move |_| dispatch_action(transport, state, AppAction::GoBack)
                 >
-                    "← Back"
+                    {move || format!("← {}", state.get().flow().back_label)}
                 </button>
                 <p class="eyebrow">"New seed wallet"</p>
-                <h1>"Create wallet"</h1>
-                <p class="description">
-                    "Write down the 12-word phrase. It is not stored in application state."
-                </p>
-                <div class="network-picker" role="group" aria-label="Wallet network">
-                    <button
-                        type="button"
-                        class="network-option"
-                        class:active=move || state.get().network == Network::Chipnet
-                        on:click=move |_| dispatch_action(
-                            transport,
-                            state,
-                            AppAction::SetNetwork(Network::Chipnet),
-                        )
-                    >
-                        "Chipnet"
-                    </button>
-                    <button
-                        type="button"
-                        class="network-option"
-                        class:active=move || state.get().network == Network::Mainnet
-                        on:click=move |_| dispatch_action(
-                            transport,
-                            state,
-                            AppAction::SetNetwork(Network::Mainnet),
-                        )
-                    >
-                        "Mainnet"
-                    </button>
-                </div>
-                <label class="field">
-                    <span>"Wallet name"</span>
-                    <input
-                        type="text"
-                        maxlength="80"
-                        prop:value=move || name.get()
-                        on:input=move |event| name.set(event_target_value(&event))
-                    />
-                </label>
-                <div class="network-picker" role="group" aria-label="Recovery phrase length">
-                    <For
-                        each=|| BIP39_WORD_COUNTS
-                        key=|words| *words
-                        let:words
-                    >
+                <h1>{move || state.get().flow().title}</h1>
+                <Show when=move || state.get().create_step == CreateStep::Reveal>
+                    <div class="network-picker" role="group" aria-label="Wallet network">
                         <button
-                            class="network-option"
-                            class:active=move || word_count.get() == words
                             type="button"
-                            on:click=move |_| word_count.set(words)
-                        >
-                            {format!("{words} words")}
-                        </button>
-                    </For>
-                </div>
-                <p class="lede">"Write this phrase down. It is not stored in application state."</p>
-                <p class="mono">{move || phrase.get()}</p>
-                <DerivationPicker
-                    state=state
-                    selected=account
-                    error=error
-                />
-                <button
-                    class="primary"
-                    type="button"
-                    on:click=move |_| {
-                        match seed_wallet_preview_at(
-                            state.get_untracked().network,
-                            &name.get_untracked(),
-                            &phrase.get_untracked(),
-                            account.get_untracked(),
-                        ) {
-                            Ok(opened) => dispatch_action(
+                            class="network-option"
+                            class:active=move || state.get().network == Network::Chipnet
+                            on:click=move |_| dispatch_action(
                                 transport,
                                 state,
-                                AppAction::OpenCreatedWallet {
-                                    name: opened.name,
-                                    receive_address: opened.receive_address,
-                                    account_path: opened.account_path,
-                                },
-                            ),
-                            Err(message) => error.set(Some(message)),
+                                AppAction::SetNetwork(Network::Chipnet),
+                            )
+                        >
+                            "Chipnet"
+                        </button>
+                        <button
+                            type="button"
+                            class="network-option"
+                            class:active=move || state.get().network == Network::Mainnet
+                            on:click=move |_| dispatch_action(
+                                transport,
+                                state,
+                                AppAction::SetNetwork(Network::Mainnet),
+                            )
+                        >
+                            "Mainnet"
+                        </button>
+                    </div>
+                    <div class="network-picker" role="group" aria-label="Recovery phrase length">
+                        <For
+                            each=|| BIP39_WORD_COUNTS
+                            key=|words| *words
+                            let:words
+                        >
+                            <button
+                                class="network-option"
+                                class:active=move || word_count.get() == words
+                                type="button"
+                                on:click=move |_| word_count.set(words)
+                            >
+                                {format!("{words} words")}
+                            </button>
+                        </For>
+                    </div>
+                    <p class="lede">"Write this phrase down. It is not stored in application state."</p>
+                    <p class="mono">{move || phrase.get()}</p>
+                    <button
+                        class="primary"
+                        type="button"
+                        on:click=move |_| dispatch_action(
+                            transport,
+                            state,
+                            AppAction::AdvanceOnboarding,
+                        )
+                    >
+                        {move || state.get().flow().next_label}
+                    </button>
+                </Show>
+                <Show when=move || state.get().create_step == CreateStep::Confirm>
+                    <p class="lede">"Type the requested words to prove you wrote the phrase down."</p>
+                    <p class="muted">
+                        {move || {
+                            let count = phrase.get().split_whitespace().count();
+                            let idx = create_confirm_indices(count);
+                            format!("Words {}, {}, and {}", idx[0] + 1, idx[1] + 1, idx[2] + 1)
+                        }}
+                    </p>
+                    <label class="field">
+                        <span>"First requested word"</span>
+                        <input type="text" spellcheck="false" autocomplete="off"
+                            on:input=move |event| {
+                                let mut next = answers.get_untracked();
+                                next[0] = event_target_value(&event);
+                                answers.set(next);
+                            }
+                        />
+                    </label>
+                    <label class="field">
+                        <span>"Second requested word"</span>
+                        <input type="text" spellcheck="false" autocomplete="off"
+                            on:input=move |event| {
+                                let mut next = answers.get_untracked();
+                                next[1] = event_target_value(&event);
+                                answers.set(next);
+                            }
+                        />
+                    </label>
+                    <label class="field">
+                        <span>"Third requested word"</span>
+                        <input type="text" spellcheck="false" autocomplete="off"
+                            on:input=move |event| {
+                                let mut next = answers.get_untracked();
+                                next[2] = event_target_value(&event);
+                                answers.set(next);
+                            }
+                        />
+                    </label>
+                    <button
+                        class="primary"
+                        type="button"
+                        on:click=move |_| {
+                            let phrase_text = phrase.get_untracked();
+                            let words: Vec<_> = phrase_text.split_whitespace().collect();
+                            let idx = create_confirm_indices(words.len());
+                            let given = answers.get_untracked();
+                            let ok = (0..3).all(|slot| {
+                                words
+                                    .get(idx[slot])
+                                    .is_some_and(|expected| {
+                                        given[slot].trim().eq_ignore_ascii_case(expected)
+                                    })
+                            });
+                            if ok {
+                                error.set(None);
+                                dispatch_action(transport, state, AppAction::AdvanceOnboarding);
+                            } else {
+                                error.set(Some("those words do not match.".into()));
+                            }
                         }
-                    }
-                >
-                    "I wrote it down — open wallet"
-                </button>
+                    >
+                        {move || state.get().flow().next_label}
+                    </button>
+                </Show>
+                <Show when=move || state.get().create_step == CreateStep::Path>
+                    <DerivationPicker
+                        state=state
+                        selected=account
+                        error=error
+                    />
+                    <button
+                        class="primary"
+                        type="button"
+                        on:click=move |_| dispatch_action(
+                            transport,
+                            state,
+                            AppAction::AdvanceOnboarding,
+                        )
+                    >
+                        {move || state.get().flow().next_label}
+                    </button>
+                </Show>
+                <Show when=move || state.get().create_step == CreateStep::Name>
+                    <label class="field">
+                        <span>"Wallet name"</span>
+                        <input
+                            type="text"
+                            maxlength="80"
+                            prop:value=move || name.get()
+                            on:input=move |event| name.set(event_target_value(&event))
+                        />
+                    </label>
+                    <button
+                        class="primary"
+                        type="button"
+                        on:click=move |_| {
+                            match seed_wallet_preview_at(
+                                state.get_untracked().network,
+                                &name.get_untracked(),
+                                &phrase.get_untracked(),
+                                account.get_untracked(),
+                            ) {
+                                Ok(opened) => dispatch_action(
+                                    transport,
+                                    state,
+                                    AppAction::OpenCreatedWallet {
+                                        name: opened.name,
+                                        receive_address: opened.receive_address,
+                                        account_path: opened.account_path,
+                                    },
+                                ),
+                                Err(message) => error.set(Some(message)),
+                            }
+                        }
+                    >
+                        {move || state.get().flow().next_label}
+                    </button>
+                </Show>
                 <Show when=move || error.get().is_some()>
                     <p class="form-error" role="alert">
                         {move || error.get().unwrap_or_default()}
@@ -555,16 +648,13 @@ fn ImportWallet(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
                 <button
                     class="text-button"
                     type="button"
-                    on:click=move |_| dispatch_action(
-                        transport,
-                        state,
-                        AppAction::Navigate(AppRoute::Landing),
-                    )
+                    on:click=move |_| dispatch_action(transport, state, AppAction::GoBack)
                 >
-                    "← Back"
+                    {move || format!("← {}", state.get().flow().back_label)}
                 </button>
                 <p class="eyebrow">"Existing seed"</p>
-                <h1>"Import wallet"</h1>
+                <h1>{move || state.get().flow().title}</h1>
+                <Show when=move || state.get().import_step == ImportStep::Words>
                 <div class="network-picker" role="group" aria-label="Wallet network">
                     <button
                         type="button"
@@ -592,15 +682,6 @@ fn ImportWallet(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
                     </button>
                 </div>
                 <label class="field">
-                    <span>"Wallet name"</span>
-                    <input
-                        type="text"
-                        maxlength="80"
-                        prop:value=move || name.get()
-                        on:input=move |event| name.set(event_target_value(&event))
-                    />
-                </label>
-                <label class="field">
                     <span>"Recovery phrase"</span>
                     <textarea
                         rows="4"
@@ -613,14 +694,6 @@ fn ImportWallet(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
                     ></textarea>
                     <small>"Same lengths as optn new --words: 12, 15, 18, 21, or 24."</small>
                 </label>
-                <DerivationPicker
-                    state=state
-                    selected=account
-                    error=error
-                />
-                <Show when=move || error.get().is_some()>
-                    <p class="form-error" role="alert">{move || error.get().unwrap_or_default()}</p>
-                </Show>
                 <button
                     class="primary"
                     type="button"
@@ -631,21 +704,71 @@ fn ImportWallet(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
                             &phrase.get_untracked(),
                             account.get_untracked(),
                         ) {
-                            Ok(opened) => dispatch_action(
-                                transport,
-                                state,
-                                AppAction::OpenImportedWallet {
-                                    name: opened.name,
-                                    receive_address: opened.receive_address,
-                                    account_path: opened.account_path,
-                                },
-                            ),
+                            Ok(_) => {
+                                error.set(None);
+                                dispatch_action(transport, state, AppAction::AdvanceOnboarding);
+                            }
                             Err(message) => error.set(Some(message)),
                         }
                     }
                 >
-                    "Import and open"
+                    {move || state.get().flow().next_label}
                 </button>
+                </Show>
+                <Show when=move || state.get().import_step == ImportStep::Path>
+                    <DerivationPicker
+                        state=state
+                        selected=account
+                        error=error
+                    />
+                    <button
+                        class="primary"
+                        type="button"
+                        on:click=move |_| dispatch_action(
+                            transport,
+                            state,
+                            AppAction::AdvanceOnboarding,
+                        )
+                    >
+                        {move || state.get().flow().next_label}
+                    </button>
+                </Show>
+                <Show when=move || state.get().import_step == ImportStep::Name>
+                    <label class="field">
+                        <span>"Wallet name"</span>
+                        <input
+                            type="text"
+                            maxlength="80"
+                            prop:value=move || name.get()
+                            on:input=move |event| name.set(event_target_value(&event))
+                        />
+                    </label>
+                    <button
+                        class="primary"
+                        type="button"
+                        on:click=move |_| {
+                            match seed_wallet_preview_at(
+                                state.get_untracked().network,
+                                &name.get_untracked(),
+                                &phrase.get_untracked(),
+                                account.get_untracked(),
+                            ) {
+                                Ok(opened) => dispatch_action(
+                                    transport,
+                                    state,
+                                    AppAction::OpenImportedWallet {
+                                        name: opened.name,
+                                        receive_address: opened.receive_address,
+                                        account_path: opened.account_path,
+                                    },
+                                ),
+                                Err(message) => error.set(Some(message)),
+                            }
+                        }
+                    >
+                        {move || state.get().flow().next_label}
+                    </button>
+                </Show>
             </section>
         </section>
     }

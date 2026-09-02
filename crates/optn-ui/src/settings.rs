@@ -69,16 +69,41 @@ pub fn SettingsPage(transport: UiTransport, state: RwSignal<AppState>) -> impl I
     view! {
         <WalletChrome transport=transport state=state>
             <section class="page">
-                <h1>"Settings"</h1>
-                <p class="lede">"Wallet controls. CashFusion is a desktop flag."</p>
-                <AppearanceSection transport=transport state=state />
-                <For
-                    each=move || settings_rows_snapshot(state)
-                    key=|row| *row as u8
-                    let:row
-                >
-                    <SettingsRow transport=transport state=state row=row />
-                </For>
+                <Show when=move || state.get().settings_focus.is_none()>
+                    <h1>"Settings"</h1>
+                    <p class="lede">"Wallet controls. CashFusion is a desktop flag."</p>
+                    <AppearanceSection transport=transport state=state />
+                    <For
+                        each=move || settings_rows_snapshot(state)
+                        key=|row| *row as u8
+                        let:row
+                    >
+                        <button
+                            class="panel settings-row"
+                            type="button"
+                            on:click=move |_| dispatch_action(
+                                transport,
+                                state,
+                                AppAction::OpenSettingsRow(row),
+                            )
+                        >
+                            <p class="source-title">{row.title()}</p>
+                            <p class="muted">{row.description()}</p>
+                        </button>
+                    </For>
+                </Show>
+                <Show when=move || state.get().settings_focus.is_some()>
+                    <button
+                        class="text-link back"
+                        type="button"
+                        on:click=move |_| dispatch_action(transport, state, AppAction::GoBack)
+                    >
+                        {move || format!("‹ {}", state.get().flow().back_label)}
+                    </button>
+                    {move || state.get().settings_focus.map(|row| {
+                        view! { <SettingsRow transport=transport state=state row=row /> }
+                    })}
+                </Show>
             </section>
         </WalletChrome>
     }
