@@ -3097,6 +3097,7 @@ name = "optn-app"
 version = "1.7.3"
 dependencies = [
  "optn-core",
+ "optn-platform",
 ]
 
 [[package]]
