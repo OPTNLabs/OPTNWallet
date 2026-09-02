@@ -18,6 +18,8 @@ pub const SIGHASH_ALL_FORKID: u8 = 0x41;
 pub enum SpendingCapability {
     Seed,
     WatchOnly,
+    /// Public keys live here; the private key stays on a connected device.
+    Hardware,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,6 +29,9 @@ pub enum SpendKind {
     SeedSpecified,
     /// Unsigned PSBT intent. Must not call [`sign_seed_spend`].
     WatchOnlyUnsignedPsbt,
+    /// Unsigned PSBT intent to be signed on the device. Also must not call
+    /// [`sign_seed_spend`] — a hardware wallet has no seed here to sign with.
+    HardwareUnsignedPsbt,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,6 +65,8 @@ pub enum SpendError {
     InsufficientSpendable { needed: u64, available: u64 },
     FrozenCoin,
     WatchOnlyCannotSign,
+    HardwareMustSignOnDevice,
+    AccountNetworkMismatch { account: String, expected: Network },
     Seed(String),
 }
 
@@ -87,6 +94,15 @@ impl fmt::Display for SpendError {
                     f,
                     "watch-only wallets produce an unsigned PSBT and cannot seed-sign"
                 )
+            }
+            Self::HardwareMustSignOnDevice => {
+                write!(
+                    f,
+                    "hardware wallets sign on the device; there is no seed here to sign with"
+                )
+            }
+            Self::AccountNetworkMismatch { account, expected } => {
+                write!(f, "account {account} is not derived for {expected}")
             }
             Self::Seed(message) => write!(f, "{message}"),
         }
@@ -146,22 +162,40 @@ pub fn prepare_spend(
         kind: match capability {
             SpendingCapability::Seed => SpendKind::SeedSpecified,
             SpendingCapability::WatchOnly => SpendKind::WatchOnlyUnsignedPsbt,
+            SpendingCapability::Hardware => SpendKind::HardwareUnsignedPsbt,
         },
     })
 }
 
-/// Seed-signing entry point. Watch-only plans must not call this.
+/// Seed-signing entry point. Watch-only and hardware plans must not call this.
+///
+/// The account is passed in rather than assumed: a wallet opened at a chosen
+/// BIP44 account must be signed with that account's key, and deriving the
+/// network default here would produce a signature from a key that does not
+/// own the input.
 pub fn sign_seed_spend(
     plan: &SpendPlan,
     mnemonic: &str,
     network: Network,
+    account: crate::hd::AccountPath,
 ) -> Result<SignedSpend, SpendError> {
-    if !plan.uses_seed_signing() {
-        return Err(SpendError::WatchOnlyCannotSign);
+    match plan.kind {
+        SpendKind::SeedSpecified => {}
+        SpendKind::WatchOnlyUnsignedPsbt => return Err(SpendError::WatchOnlyCannotSign),
+        SpendKind::HardwareUnsignedPsbt => return Err(SpendError::HardwareMustSignOnDevice),
+    }
+    // An account this network never scans is a mix-up, not a preference —
+    // signing a mainnet plan with a testnet-coin-type key produces a valid
+    // signature from a key that owns nothing on this chain.
+    if !account.is_scanned_for(network) {
+        return Err(SpendError::AccountNetworkMismatch {
+            account: account.to_string(),
+            expected: network,
+        });
     }
     let wallet = crate::hd::Wallet::from_mnemonic(mnemonic, "")
         .map_err(|error| SpendError::Seed(error.to_string()))?;
-    let path = crate::hd::address_path(network.default_coin_type(), 0, false, 0);
+    let path = account.address_path(false, 0);
     let compressed_pubkey = wallet
         .public_key(&path)
         .map_err(|error| SpendError::Seed(error.to_string()))?;
@@ -189,6 +223,15 @@ mod tests {
 
     fn dest() -> String {
         Address::from_hash(Network::Chipnet.prefix(), AddressKind::P2pkh, [0x7a; 20]).encode()
+    }
+
+    /// One spendable 8_000 sat chipnet coin.
+    fn funded() -> CoinSet {
+        let mut coins = CoinSet::new();
+        coins
+            .insert(chipnet_demo_coin(8_000, 1).expect("coin"))
+            .expect("insert");
+        coins
     }
 
     #[test]
@@ -253,9 +296,81 @@ mod tests {
         assert_eq!(plan.kind, SpendKind::WatchOnlyUnsignedPsbt);
         assert!(!plan.uses_seed_signing());
         assert_eq!(plan.sighash, 0x41);
+        let chipnet_account = crate::hd::AccountPath::default_for(Network::Chipnet);
         assert_eq!(
-            sign_seed_spend(&plan, BIP39_TEST_VECTOR_MNEMONIC, Network::Chipnet),
+            sign_seed_spend(
+                &plan,
+                BIP39_TEST_VECTOR_MNEMONIC,
+                Network::Chipnet,
+                chipnet_account
+            ),
             Err(SpendError::WatchOnlyCannotSign)
+        );
+    }
+
+    #[test]
+    fn a_hardware_plan_is_unsigned_and_refuses_to_seed_sign() {
+        let coins = funded();
+        let plan = prepare_spend(
+            &coins,
+            Network::Chipnet,
+            &dest(),
+            5_000,
+            SpendingCapability::Hardware,
+        )
+        .expect("prepare");
+        assert_eq!(plan.kind, SpendKind::HardwareUnsignedPsbt);
+        assert!(
+            !plan.uses_seed_signing(),
+            "a hardware plan must never take the seed-signing path"
+        );
+        assert_eq!(
+            sign_seed_spend(
+                &plan,
+                BIP39_TEST_VECTOR_MNEMONIC,
+                Network::Chipnet,
+                crate::hd::AccountPath::default_for(Network::Chipnet)
+            ),
+            Err(SpendError::HardwareMustSignOnDevice)
+        );
+    }
+
+    #[test]
+    fn seed_signing_uses_the_wallets_account_and_refuses_a_foreign_one() {
+        let coins = funded();
+        let plan = prepare_spend(
+            &coins,
+            Network::Chipnet,
+            &dest(),
+            5_000,
+            SpendingCapability::Seed,
+        )
+        .expect("prepare");
+
+        let default = crate::hd::AccountPath::default_for(Network::Chipnet);
+        let second = crate::hd::AccountPath::new(1, 1).expect("in range");
+        let first_key =
+            sign_seed_spend(&plan, BIP39_TEST_VECTOR_MNEMONIC, Network::Chipnet, default)
+                .expect("default account signs")
+                .compressed_pubkey;
+        let second_key =
+            sign_seed_spend(&plan, BIP39_TEST_VECTOR_MNEMONIC, Network::Chipnet, second)
+                .expect("second account signs")
+                .compressed_pubkey;
+        assert_ne!(
+            first_key, second_key,
+            "the signing key must follow the wallet's account, not the network default"
+        );
+
+        // Coin type 145 is scanned on chipnet, but 0 is only scanned via the
+        // legacy list; a mainnet-only account on chipnet is still a mix-up.
+        let foreign = crate::hd::AccountPath::new(9999, 0).expect("in range");
+        assert_eq!(
+            sign_seed_spend(&plan, BIP39_TEST_VECTOR_MNEMONIC, Network::Chipnet, foreign),
+            Err(SpendError::AccountNetworkMismatch {
+                account: "m/44'/9999'/0'".to_string(),
+                expected: Network::Chipnet,
+            })
         );
     }
 }

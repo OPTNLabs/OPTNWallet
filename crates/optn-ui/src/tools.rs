@@ -941,6 +941,9 @@ pub fn SendPage(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
                                 Some(SpendKind::WatchOnlyUnsignedPsbt) => {
                                     "Unsigned PSBT intent"
                                 }
+                                Some(SpendKind::HardwareUnsignedPsbt) => {
+                                    "Unsigned PSBT — confirm on your device"
+                                }
                                 Some(SpendKind::SeedSpecified) => "Specified spend",
                                 None => "",
                             }}

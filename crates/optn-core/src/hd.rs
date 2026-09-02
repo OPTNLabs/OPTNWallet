@@ -481,9 +481,17 @@ mod tests {
                 AccountPath::default_for(network),
                 "{network} must offer its own default first"
             );
-            for choice in &choices {
-                assert!(choice.is_scanned_for(network), "{choice} is not scanned");
-            }
+            // Counted rather than interpolated: a derivation path formatted
+            // into a panic message is flagged as cleartext logging of account
+            // material, and the count is the stronger assertion anyway.
+            let unscanned = choices
+                .iter()
+                .filter(|choice| !choice.is_scanned_for(network))
+                .count();
+            assert_eq!(
+                unscanned, 0,
+                "every offered account must be one {network} discovery scans"
+            );
         }
     }
 

@@ -3103,6 +3103,7 @@ dependencies = [
 name = "optn-core"
 version = "1.7.3"
 dependencies = [
+ "base64 0.22.1",
  "bip32",
  "bip39",
  "getrandom 0.2.17",
@@ -3112,6 +3113,8 @@ dependencies = [
  "num-bigint",
  "once_cell",
  "ripemd",
+ "serde",
+ "serde_json",
  "sha2",
  "wasm-bindgen",
  "zeroize",
