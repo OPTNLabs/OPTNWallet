@@ -45,15 +45,80 @@ fn architecture() {
     }
 
     let ui_manifest = read(&root.join("crates/optn-ui/Cargo.toml"));
-    if ui_manifest.contains("optn-core") {
-        failures.push("crates/optn-ui must depend on optn-app, not bypass it via optn-core".into());
-    }
-    if ui_manifest.contains("optn-runtime") {
-        failures.push(
-            "crates/optn-ui must communicate through optn-transport, not depend on optn-runtime"
-                .into(),
-        );
-    }
+    require_dependency(
+        "crates/optn-ui",
+        &ui_manifest,
+        "optn-app",
+        &mut failures,
+    );
+    require_dependency(
+        "crates/optn-ui",
+        &ui_manifest,
+        "optn-transport",
+        &mut failures,
+    );
+    forbid_dependencies(
+        "crates/optn-ui",
+        &ui_manifest,
+        &["optn-core", "optn-runtime", "optn-platform", "optn-platform-native"],
+        &mut failures,
+    );
+
+    let transport_manifest = read(&root.join("crates/optn-transport/Cargo.toml"));
+    require_dependency(
+        "crates/optn-transport",
+        &transport_manifest,
+        "optn-app",
+        &mut failures,
+    );
+    forbid_dependencies(
+        "crates/optn-transport",
+        &transport_manifest,
+        &["optn-runtime", "optn-platform", "optn-platform-native", "optn-ui"],
+        &mut failures,
+    );
+
+    let runtime_manifest = read(&root.join("crates/optn-runtime/Cargo.toml"));
+    require_dependency(
+        "crates/optn-runtime",
+        &runtime_manifest,
+        "optn-app",
+        &mut failures,
+    );
+    require_dependency(
+        "crates/optn-runtime",
+        &runtime_manifest,
+        "optn-transport",
+        &mut failures,
+    );
+    forbid_dependencies(
+        "crates/optn-runtime",
+        &runtime_manifest,
+        &["optn-ui", "optn-platform-native"],
+        &mut failures,
+    );
+
+    let native_manifest = read(&root.join("crates/optn-platform-native/Cargo.toml"));
+    require_dependency(
+        "crates/optn-platform-native",
+        &native_manifest,
+        "optn-platform",
+        &mut failures,
+    );
+    forbid_dependencies(
+        "crates/optn-platform-native",
+        &native_manifest,
+        &["optn-app", "optn-transport", "optn-runtime", "optn-ui"],
+        &mut failures,
+    );
+
+    let app_manifest = read(&root.join("crates/optn-app/Cargo.toml"));
+    forbid_dependencies(
+        "crates/optn-app",
+        &app_manifest,
+        &["optn-transport", "optn-runtime", "optn-platform-native", "optn-ui"],
+        &mut failures,
+    );
 
     if failures.is_empty() {
         println!("architecture boundary check: PASS");
@@ -64,6 +129,29 @@ fn architecture() {
         eprintln!("architecture boundary violation: {failure}");
     }
     std::process::exit(1);
+}
+
+fn require_dependency(scope: &str, manifest: &str, dependency: &str, failures: &mut Vec<String>) {
+    if !manifest.contains(dependency) {
+        failures.push(format!(
+            "{scope} must depend on '{dependency}' to preserve the intended boundary"
+        ));
+    }
+}
+
+fn forbid_dependencies(
+    scope: &str,
+    manifest: &str,
+    dependencies: &[&str],
+    failures: &mut Vec<String>,
+) {
+    for dependency in dependencies {
+        if manifest.contains(dependency) {
+            failures.push(format!(
+                "{scope} contains forbidden dependency '{dependency}'"
+            ));
+        }
+    }
 }
 
 fn read(path: &Path) -> String {
