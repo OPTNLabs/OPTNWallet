@@ -23,6 +23,25 @@ Framework boundary rules are architectural invariants:
   `optn-app`.
 - Run `cargo run -p xtask -- architecture` after changing these layers.
 
+## External wallet references
+
+Reference wallets are behavioral and architectural oracles, not implementation-stack templates.
+
+- Cashonize may be used to learn BCH UX, CashTokens behavior, dApp flows, HD/address management,
+  transaction previews, UTXO tools, portfolio behavior, and protocol edge cases.
+- Do **not** import Cashonize's Vue, Pinia, Quasar, Capacitor, Electron, mainnet-js, libauth-JS,
+  WalletConnect-JS, CashConnect-JS, or WizardConnect-JS architecture into the Rust target.
+- For a Cashonize-inspired feature, first characterize behavior and extract test vectors, then place:
+  domain/transaction/protocol logic in `optn-core`, use-cases/state/actions/events in `optn-app`,
+  long-running work in `optn-runtime`, native capability calls behind `optn-platform`, and rendering
+  in Rust/Leptos under `optn-ui`.
+- TypeScript/JavaScript from reference wallets may be used as a parity oracle during migration, but
+  must not become the authoritative implementation for new Rust-target functionality.
+- A temporary JS bridge for a protocol with no Rust implementation requires explicit approval,
+  must sit behind a typed Rust contract, and must have a tracked Rust replacement plan.
+- Preserve upstream license/attribution when code is actually ported rather than independently
+  reimplemented from behavior/specification. See `docs/references/cashonize-rust-port.md`.
+
 ## Working rules
 
 - Inspect the relevant code and tests before editing.
