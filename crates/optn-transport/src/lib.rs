@@ -7,7 +7,12 @@
 //! crate; only these typed contracts are shared.
 
 use optn_app::{AppAction, AppEvent, AppState};
-use std::{cell::RefCell, collections::VecDeque, future::Future, pin::Pin, rc::Rc};
+use std::{
+    collections::VecDeque,
+    future::Future,
+    pin::Pin,
+    sync::{Arc, Mutex},
+};
 
 pub type TransportFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, TransportError>> + 'a>>;
 
@@ -29,22 +34,23 @@ pub trait AppTransport {
     fn next_event<'a>(&'a self) -> TransportFuture<'a, Option<AppEvent>>;
 }
 
-/// In-process single-thread transport for WASM/web/extension renderers.
+/// In-process transport for WASM/web/extension renderers.
 ///
 /// It uses the same typed action/state/event contract as native transports but
-/// needs no shell or IPC. The internal Rc/RefCell is intentional: browser WASM
-/// is single-threaded unless an explicit threaded runtime is introduced.
+/// needs no shell or IPC. Arc/Mutex keeps the transport Send + Sync so renderer
+/// frameworks can safely store/capture the handle even when the current WASM
+/// target executes it on one thread.
 #[derive(Clone)]
 pub struct LocalTransport {
-    state: Rc<RefCell<AppState>>,
-    events: Rc<RefCell<VecDeque<AppEvent>>>,
+    state: Arc<Mutex<AppState>>,
+    events: Arc<Mutex<VecDeque<AppEvent>>>,
 }
 
 impl LocalTransport {
     pub fn new(initial_state: AppState) -> Self {
         Self {
-            state: Rc::new(RefCell::new(initial_state)),
-            events: Rc::new(RefCell::new(VecDeque::new())),
+            state: Arc::new(Mutex::new(initial_state)),
+            events: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
 }
@@ -52,19 +58,38 @@ impl LocalTransport {
 impl AppTransport for LocalTransport {
     fn dispatch<'a>(&'a self, action: AppAction) -> TransportFuture<'a, ()> {
         Box::pin(async move {
-            if let Some(event) = self.state.borrow_mut().reduce(action) {
-                self.events.borrow_mut().push_back(event);
+            let event = self
+                .state
+                .lock()
+                .map_err(|_| TransportError::Other("local state lock poisoned".into()))?
+                .reduce(action);
+
+            if let Some(event) = event {
+                self.events
+                    .lock()
+                    .map_err(|_| TransportError::Other("local event lock poisoned".into()))?
+                    .push_back(event);
             }
             Ok(())
         })
     }
 
     fn snapshot<'a>(&'a self) -> TransportFuture<'a, AppState> {
-        Box::pin(async move { Ok(self.state.borrow().clone()) })
+        Box::pin(async move {
+            self.state
+                .lock()
+                .map(|state| state.clone())
+                .map_err(|_| TransportError::Other("local state lock poisoned".into()))
+        })
     }
 
     fn next_event<'a>(&'a self) -> TransportFuture<'a, Option<AppEvent>> {
-        Box::pin(async move { Ok(self.events.borrow_mut().pop_front()) })
+        Box::pin(async move {
+            self.events
+                .lock()
+                .map(|mut events| events.pop_front())
+                .map_err(|_| TransportError::Other("local event lock poisoned".into()))
+        })
     }
 }
 
