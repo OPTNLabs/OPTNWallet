@@ -740,12 +740,28 @@ h1 {
   flex-direction: column;
   align-items: center;
   gap: 0.2rem;
+  flex: 1;
   min-height: 44px;
-  min-width: 44px;
+  min-width: 0;
+  padding: 0.35rem 0.15rem;
   border: 0;
   background: transparent;
   color: var(--muted);
   cursor: pointer;
+  font-size: 0.72rem;
+}
+
+.history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.settings-row {
+  display: grid;
+  gap: 0.45rem;
 }
 
 .tab-item.active {
@@ -976,4 +992,68 @@ h1 {
   .preview-wide {
     grid-column: auto;
   }
+}
+
+/* Settings: theme mode, skin, and network choices. */
+.choice-list {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0.5rem 0 1.25rem;
+}
+
+.choice-list .network-choice {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  /* 44px touch target, kept at every width. */
+  min-height: 2.75rem;
+}
+
+.choice-list .network-choice > div {
+  flex: 1;
+}
+
+.choice-list .network-choice.active {
+  border-color: var(--accent);
+}
+
+/* A live sample of the mode being offered, painted from that mode's own
+   tokens rather than a hard-coded hex, so a retuned palette updates here. */
+.theme-swatch {
+  flex: none;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.7rem;
+  border: 1px solid var(--border);
+  background: linear-gradient(
+    135deg,
+    var(--surface) 0%,
+    var(--surface) 55%,
+    var(--accent) 55%,
+    var(--accent) 100%
+  );
+}
+
+/* Onboarding: BIP44 account picker on Create and Import. */
+.derivation-picker {
+  display: grid;
+  gap: 0.5rem;
+  margin: 1.25rem 0;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 1.25rem;
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+}
+
+.derivation-picker .field-label {
+  font-weight: 750;
+}
+
+.derivation-picker .text-button {
+  justify-self: start;
+  margin: 0;
+}
+
+.derivation-picker .choice-list {
+  margin: 0;
 }
