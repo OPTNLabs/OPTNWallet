@@ -6,7 +6,7 @@
 //! adapters may subscribe to typed events. No UI or native-shell framework
 //! belongs in this crate.
 
-use optn_core::network::Network;
+pub use optn_core::network::Network;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThemeMode {
