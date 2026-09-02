@@ -3,7 +3,7 @@ name = "optn-wallet-desktop"
 version = "1.7.3"
 description = "OPTN Wallet Desktop"
 authors = ["OPTNLabs"]
-license = "GPL-3.0"
+license = "GPL-3.0-only"
 repository = "https://github.com/OPTNLabs/OPTNWallet"
 edition = "2021"
 rust-version = "1.77.2"
@@ -67,10 +67,10 @@ sha2 = "0.10"
 # generator H, which the Bitcoin-Core secp256k1 bindings don't expose. k256
 # (RustCrypto, pure Rust) does, and matches Electron Cash's scheme byte-for-byte.
 k256 = "0.13"
-optn-core = { path = "../crates/optn-core" }
-optn-app = { path = "../crates/optn-app" }
-optn-platform = { path = "../crates/optn-platform" }
-optn-runtime = { path = "../crates/optn-runtime" }
+optn-core = { path = "../crates/optn-core", version = "=1.7.3" }
+optn-app = { path = "../crates/optn-app", version = "=1.7.3" }
+optn-platform = { path = "../crates/optn-platform", version = "=1.7.3" }
+optn-runtime = { path = "../crates/optn-runtime", version = "=1.7.3" }
 # Secure randomness for one-time nonces/blinding factors (OsRng). NOT the
 # counter+clock token used for Tor circuit isolation — those must never be reused
 # for crypto secrets.
