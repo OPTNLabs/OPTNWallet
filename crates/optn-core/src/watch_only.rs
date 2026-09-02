@@ -89,8 +89,7 @@ fn derive_public_address(
 
     let hash = hash160(&child.to_bytes());
     let plain = Address::from_hash(network.prefix(), AddressKind::P2pkh, hash).encode();
-    let token =
-        Address::from_hash(network.prefix(), AddressKind::P2pkhToken, hash).encode();
+    let token = Address::from_hash(network.prefix(), AddressKind::P2pkhToken, hash).encode();
     let account_path = account_path(network.default_coin_type(), account_index);
 
     Ok(PublicAddressPreview {
@@ -102,7 +101,10 @@ fn derive_public_address(
 
 /// Validate an account xPub and derive the same first receive/change preview
 /// shown by the existing wallet onboarding flow.
-pub fn account_preview(network: Network, raw_account_xpub: &str) -> Result<WatchOnlyAccountPreview> {
+pub fn account_preview(
+    network: Network,
+    raw_account_xpub: &str,
+) -> Result<WatchOnlyAccountPreview> {
     let account = parse_account_xpub(raw_account_xpub)?;
     let account_index = child_index(account.attrs().child_number);
     let path = account_path(network.default_coin_type(), account_index);
@@ -124,8 +126,7 @@ mod tests {
         "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
     fn account_xpub(network: Network, account: u32) -> String {
-        let mnemonic =
-            Mnemonic::parse_in_normalized(Language::English, TEST_MNEMONIC).unwrap();
+        let mnemonic = Mnemonic::parse_in_normalized(Language::English, TEST_MNEMONIC).unwrap();
         let seed = mnemonic.to_seed_normalized("");
         let coin = network.default_coin_type();
         let path = format!("m/44'/{coin}'/{account}'").parse().unwrap();
@@ -168,8 +169,7 @@ mod tests {
 
     #[test]
     fn rejects_non_account_depth_public_keys() {
-        let mnemonic =
-            Mnemonic::parse_in_normalized(Language::English, TEST_MNEMONIC).unwrap();
+        let mnemonic = Mnemonic::parse_in_normalized(Language::English, TEST_MNEMONIC).unwrap();
         let seed = mnemonic.to_seed_normalized("");
         let path = "m/44'/145'/0'/0".parse().unwrap();
         let branch = XPrv::derive_from_path(seed, &path)
