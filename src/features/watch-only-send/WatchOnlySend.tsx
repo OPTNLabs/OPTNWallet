@@ -48,7 +48,7 @@ import {
   deriveMultisigAddress,
   type MultisigPolicy,
 } from '../../services/psbt/multisigWallet';
-import { watchOnlyMultisigPolicy } from '../../platform/desktop/onboarding/watchOnlyWallet';
+import { watchOnlyMultisigPolicy } from '../../services/watchOnlyWallet';
 import { decodePsbt } from '../../services/psbt/psbtBch';
 import {
   cosignerStatuses,
@@ -67,7 +67,7 @@ import {
   masterFingerprintBytes,
   watchOnlyMasterFingerprint,
 } from '../../platform/desktop/onboarding/watchOnlyWallet';
-import { CameraQrScanner } from '../../platform/desktop/CameraQrScanner';
+import { CameraQrScanner } from '../../components/qr/CameraQrScanner';
 import { getReturnPath } from '../../utils/navigation';
 
 type WatchOnlySendLocationState = {
