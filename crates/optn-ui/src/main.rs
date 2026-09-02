@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+mod onboarding;
+
 #[cfg(target_arch = "wasm32")]
 use leptos::prelude::*;
 #[cfg(target_arch = "wasm32")]
@@ -16,8 +18,8 @@ use derivation::DerivationPicker;
 #[cfg(target_arch = "wasm32")]
 use optn_app::{
     mnemonic_from_entropy, onboarding_actions, onboarding_view_model, seed_wallet_preview_at,
-    watch_only_setup_preview, AccountPath, AppAction, AppRoute, AppState, AppSurface, Network,
-    OnboardingAction, ThemeMode, WatchOnlySetupPreview,
+    watch_only_setup_preview, AppAction, AppRoute, AppState, AppSurface, Network, OnboardingAction,
+    ThemeMode, WatchOnlySetupPreview,
 };
 #[cfg(target_arch = "wasm32")]
 use optn_transport::AppTransport;
@@ -400,7 +402,9 @@ fn CreateWallet(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
     let name = RwSignal::new(String::from("My wallet"));
     let phrase = RwSignal::new(String::new());
     let error = RwSignal::new(None::<String>);
-    let account = RwSignal::new(AccountPath::default_for(state.get_untracked().network));
+    let account = RwSignal::new(onboarding::derivation_for_network(
+        state.get_untracked().network,
+    ));
 
     view! {
         <section class="watch-only-page">
@@ -474,7 +478,7 @@ fn CreateWallet(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
                     "Generate recovery phrase"
                 </button>
                 <DerivationPicker
-                    network=state.get_untracked().network
+                    state=state
                     selected=account
                     error=error
                 />
@@ -522,7 +526,9 @@ fn ImportWallet(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
     let name = RwSignal::new(String::from("Imported wallet"));
     let phrase = RwSignal::new(String::new());
     let error = RwSignal::new(None::<String>);
-    let account = RwSignal::new(AccountPath::default_for(state.get_untracked().network));
+    let account = RwSignal::new(onboarding::derivation_for_network(
+        state.get_untracked().network,
+    ));
 
     view! {
         <section class="watch-only-page">
@@ -585,7 +591,7 @@ fn ImportWallet(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
                     ></textarea>
                 </label>
                 <DerivationPicker
-                    network=state.get_untracked().network
+                    state=state
                     selected=account
                     error=error
                 />
@@ -641,6 +647,10 @@ fn App(transport: Rc<dyn AppTransport>) -> impl IntoView {
         });
     }
 
+    // Track route only. A Chipnet/theme snapshot must not remount Create/Import
+    // and wipe the mnemonic or xPub sitting in local signals.
+    let page = Memo::new(move |_| onboarding::mounted_page(&state.get()));
+
     view! {
         <main
             class=move || {
@@ -681,7 +691,7 @@ fn App(transport: Rc<dyn AppTransport>) -> impl IntoView {
                 </header>
             </Show>
 
-            {move || match state.get().route {
+            {move || match page.get() {
                 AppRoute::WatchOnlyWallet => view! {
                     <WatchOnlySetup transport=transport state=state />
                 }.into_any(),
