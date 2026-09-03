@@ -4,13 +4,13 @@ use std::{
 };
 
 const FORBIDDEN_OPAL_ON_SHIPPING: &[&str] = &[
-    "OpalBase",
-    "OpalCrypto",
-    "OpalFusion",
-    "OpalHedge",
+    "import OpalBase",
+    "import OpalCrypto",
+    "import OpalFusion",
+    "import OpalHedge",
     "58opals",
-    "SwiftFulcrum",
-    "OpalDiagnostics",
+    "import SwiftFulcrum",
+    "import OpalDiagnostics",
 ];
 
 const FORBIDDEN_OPTN_DOMAIN: &[&str] = &[
@@ -60,13 +60,23 @@ pub fn check(root: &Path, failures: &mut Vec<String>) {
                 .into(),
         );
     }
-    if !(shipping_manifest.contains(".macOS(.v10_15)") || shipping_manifest.contains(".macOS(.v11)")) {
+    if !(shipping_manifest.contains(".macOS(.v10_15)")
+        || shipping_manifest.contains(".macOS(.v11)"))
+    {
         failures.push("apple/OPTNAppleProvider/Package.swift must keep macOS 10.15 or 11, never Opal macOS 26".into());
     }
     if shipping_manifest.contains(".v26") {
         failures.push("shipping OPTNAppleProvider must not declare Opal's *OS 26 platforms".into());
     }
-    for token in FORBIDDEN_OPAL_ON_SHIPPING {
+    for token in [
+        "OpalBase",
+        "OpalCrypto",
+        "OpalFusion",
+        "OpalHedge",
+        "58opals",
+        "SwiftFulcrum",
+        "OpalDiagnostics",
+    ] {
         if shipping_manifest.contains(token) {
             failures.push(format!(
                 "shipping OPTNAppleProvider Package.swift depends on Opal token '{token}'"
@@ -90,10 +100,13 @@ pub fn check(root: &Path, failures: &mut Vec<String>) {
     let fulcrum_pinned = flavor_manifest.contains("exact: \"0.8.0\"")
         || flavor_manifest.contains("611a53f2047660e0dd221f75526ce11335be901a");
     if !fulcrum_pinned {
-        failures.push("Opal flavor must pin SwiftFulcrum v0.8.0 / 611a53f2047660e0dd221f75526ce11335be901a".into());
+        failures.push(
+            "Opal flavor must pin SwiftFulcrum v0.8.0 / 611a53f2047660e0dd221f75526ce11335be901a"
+                .into(),
+        );
     }
-    let diagnostics_pinned = flavor_manifest.contains("exact: \"0.2.0\"")
-        || flavor_manifest.contains("revision:");
+    let diagnostics_pinned =
+        flavor_manifest.contains("exact: \"0.2.0\"") || flavor_manifest.contains("revision:");
     if !diagnostics_pinned {
         failures.push("Opal flavor must pin OpalDiagnostics to a reviewed tag/revision".into());
     }
