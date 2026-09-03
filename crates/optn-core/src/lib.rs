@@ -14,6 +14,7 @@
 pub mod airgap;
 pub mod cashaddr;
 pub mod coins;
+pub mod discovery;
 pub mod endpoint;
 pub mod error;
 pub mod flipstarter;

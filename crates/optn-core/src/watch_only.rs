@@ -99,6 +99,28 @@ fn derive_public_address(
     })
 }
 
+/// Derive one address under an account xPub, at `<branch>/<index>`.
+///
+/// Unhardened child derivation from a *public* key, so scanning an account
+/// never needs the seed. Account-path discovery walks hundreds of addresses
+/// across several candidate accounts; doing that from a seed would mean
+/// holding private material for the whole walk to answer a question that is
+/// entirely about public history.
+///
+/// `branch` is 0 for receive and 1 for change. Branch 3 is RPA and must not
+/// be walked as an address chain — it is a key gate, not a sequence of
+/// addresses.
+pub fn address_under_account(
+    network: Network,
+    account_xpub: &str,
+    branch: u32,
+    index: u32,
+) -> Result<PublicAddressPreview> {
+    let account = parse_account_xpub(account_xpub)?;
+    let account_index = child_index(account.attrs().child_number);
+    derive_public_address(&account, network, account_index, branch, index)
+}
+
 /// Validate an account xPub and derive the same first receive/change preview
 /// shown by the existing wallet onboarding flow.
 pub fn account_preview(
@@ -178,6 +200,38 @@ mod tests {
             !xpub.to_lowercase().contains("mnemonic"),
             "watch-only preview is public account material only"
         );
+    }
+
+    #[test]
+    fn scanning_an_account_needs_no_seed() {
+        // Discovery walks hundreds of addresses per candidate account. It does
+        // that from the account xPub alone, so no private material is held for
+        // the walk.
+        let xpub = account_xpub(Network::Mainnet, 0);
+
+        let first = address_under_account(Network::Mainnet, &xpub, 0, 0).unwrap();
+        let preview = account_preview(Network::Mainnet, &xpub).unwrap();
+        assert_eq!(
+            first.address, preview.receive.address,
+            "the same key must give the same first receive address"
+        );
+
+        // Walking the chain gives distinct addresses, and change is its own
+        // branch rather than a continuation of receive.
+        let second = address_under_account(Network::Mainnet, &xpub, 0, 1).unwrap();
+        let change = address_under_account(Network::Mainnet, &xpub, 1, 0).unwrap();
+        assert_ne!(first.address, second.address);
+        assert_ne!(first.address, change.address);
+        assert_eq!(change.address, preview.change.address);
+        assert_eq!(second.path, "m/44'/145'/0'/0/1");
+
+        // Deeper indices stay derivable, which is what a gap-limit walk needs.
+        let far = address_under_account(Network::Mainnet, &xpub, 0, 199).unwrap();
+        assert_eq!(far.path, "m/44'/145'/0'/0/199");
+        assert!(far.address.starts_with("bitcoincash:q"));
+
+        // Rubbish in is still refused here rather than deeper in a scan.
+        assert!(address_under_account(Network::Mainnet, "not-an-xpub", 0, 0).is_err());
     }
 
     #[test]
