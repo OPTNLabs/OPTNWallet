@@ -27,6 +27,7 @@ pub mod psbt;
 pub mod rpa;
 pub mod scan;
 pub mod spend;
+pub mod wallet_pack;
 pub mod watch_only;
 
 /// The wallet's binding surface. wasm32 only, so no other target pays for it.
