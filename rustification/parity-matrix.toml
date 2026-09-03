@@ -39,16 +39,18 @@ evidence_refs = { windows = "e2e/specs/onboarding-navigation.spec.ts", linux = "
 [[feature]]
 id = "watch_only"
 name = "Watch-only"
-policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "pass", extension = "pass" }
-evidence = { windows = "e2e", linux = "e2e", macos = "unit", android = "e2e-declared", ios = "unit", web = "unit", extension = "unit" }
-evidence_refs = { windows = "e2e/specs/onboarding-navigation.spec.ts", linux = "e2e/specs/onboarding-navigation.spec.ts", android = "android/app/src/androidTest/java/com/getcapacitor/myapp/ExampleInstrumentedTest.java::androidLanding_watchOnlyLifecycle" }
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "na", extension = "na" }
+evidence = { windows = "e2e", linux = "e2e", macos = "unit", android = "e2e-declared", ios = "unit", web = "hidden", extension = "hidden" }
+evidence_refs = { windows = "e2e/specs/onboarding-navigation.spec.ts", linux = "e2e/specs/onboarding-navigation.spec.ts", android = "android/app/src/androidTest/java/com/getcapacitor/myapp/ExampleInstrumentedTest.java::androidLanding_watchOnlyRelaunch" }
+na_reason = { web = "Watch-only onboarding is a native wallet surface in this release", extension = "The extension remains a popup-lifecycle viewer; native watch-only onboarding is not exposed" }
 
 [[feature]]
 id = "master_fingerprint"
 name = "Master fingerprint"
-policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "pass", extension = "pass" }
-evidence = { windows = "unit", linux = "unit", macos = "unit", android = "e2e-declared", ios = "unit", web = "unit", extension = "unit" }
-evidence_refs = { android = "android/app/src/androidTest/java/com/getcapacitor/myapp/ExampleInstrumentedTest.java::androidLanding_watchOnlyLifecycle" }
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "na", extension = "na" }
+evidence = { windows = "unit", linux = "unit", macos = "unit", android = "e2e-declared", ios = "unit", web = "hidden", extension = "hidden" }
+evidence_refs = { android = "android/app/src/androidTest/java/com/getcapacitor/myapp/ExampleInstrumentedTest.java::androidLanding_watchOnlyCreate" }
+na_reason = { web = "Master fingerprint input is part of native watch-only onboarding", extension = "Master fingerprint input is not exposed by the extension viewer" }
 
 [[feature]]
 id = "receive"

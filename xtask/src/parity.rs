@@ -230,17 +230,16 @@ fn collect_source_drift(root: &Path, matrix: &Matrix, failures: &mut Vec<String>
         );
     }
 
-    for platform in [
-        "windows",
-        "linux",
-        "macos",
-        "android",
-        "ios",
-        "web",
-        "extension",
-    ] {
+    for platform in ["windows", "linux", "macos", "android", "ios"] {
         if watch_only.policy.get(platform).map(String::as_str) != Some("pass") {
             failures.push(format!("watch_only {platform} policy must be pass"));
+        }
+    }
+    for platform in ["web", "extension"] {
+        if watch_only.policy.get(platform).map(String::as_str) != Some("na") {
+            failures.push(format!(
+                "watch_only {platform} must stay na (native wallet onboarding only)"
+            ));
         }
     }
 
@@ -278,8 +277,8 @@ fn collect_source_drift(root: &Path, matrix: &Matrix, failures: &mut Vec<String>
         ("desktop", true),
         ("android", true),
         ("ios", true),
-        ("web", true),
-        ("extension", true),
+        ("web", false),
+        ("extension", false),
     ] {
         if !capability_enabled(&capabilities, "watchOnlyWallet", surface, expected) {
             failures.push(format!(

@@ -110,13 +110,16 @@ pub struct FeatureFlags {
 
 impl FeatureFlags {
     /// Hardware wallets and CashFusion are desktop-only flags.
-    /// Watch Only is allowed on every surface; a false override hides it.
+    /// Watch Only is a native wallet surface: desktop + Android + iOS.
     pub const fn surface_allows(surface: AppSurface, flag: FeatureFlag) -> bool {
         match flag {
             FeatureFlag::CashFusion | FeatureFlag::HardwareWallet => {
                 matches!(surface, AppSurface::Desktop)
             }
-            FeatureFlag::WatchOnly => true,
+            FeatureFlag::WatchOnly => matches!(
+                surface,
+                AppSurface::Desktop | AppSurface::Android | AppSurface::Ios
+            ),
         }
     }
 
@@ -1708,82 +1711,78 @@ mod tests {
     }
 
     #[test]
-    fn watch_only_is_a_flag_default_on_every_surface() {
+    fn watch_only_is_a_native_surface_flag() {
         let expected = [
             (AppSurface::Desktop, true, true),
             (AppSurface::Android, true, false),
             (AppSurface::Ios, true, false),
-            (AppSurface::Web, true, false),
-            (AppSurface::Extension, true, false),
+            (AppSurface::Web, false, false),
+            (AppSurface::Extension, false, false),
         ];
         for (surface, watch_only, hardware) in expected {
             let vm = onboarding_view_model(&AppState::for_surface(surface));
-            assert_eq!(
-                vm.show_watch_only, watch_only,
-                "{surface:?} watch-only defaults on; hide it with the flag"
-            );
+            assert_eq!(vm.show_watch_only, watch_only, "{surface:?}");
             assert_eq!(
                 vm.show_hardware_wallet, hardware,
                 "{surface:?} hardware stays a desktop-only flag"
             );
         }
 
-        for surface in [
-            AppSurface::Desktop,
-            AppSurface::Android,
-            AppSurface::Ios,
-            AppSurface::Web,
-            AppSurface::Extension,
-        ] {
+        for surface in [AppSurface::Desktop, AppSurface::Android, AppSurface::Ios] {
             let mut state = AppState::for_surface(surface);
-            assert!(
-                onboarding_view_model(&state).show_watch_only,
-                "{surface:?} Watch Only defaults on"
-            );
+            assert!(onboarding_view_model(&state).show_watch_only);
             state.apply(AppAction::SetFeatureEnabled {
                 flag: FeatureFlag::WatchOnly,
                 enabled: false,
             });
+            assert!(!onboarding_view_model(&state).show_watch_only);
             assert!(
-                !onboarding_view_model(&state).show_watch_only,
-                "{surface:?} Watch Only hides when the flag is false"
-            );
-            assert!(
-                !onboarding_actions(&state).contains(&OnboardingAction::CreateWatchOnlyWallet),
-                "{surface:?} landing must not list Watch Only when the flag is off"
+                !onboarding_actions(&state).contains(&OnboardingAction::CreateWatchOnlyWallet)
             );
             state.apply(AppAction::Navigate(AppRoute::WatchOnlyWallet));
-            assert_ne!(
-                state.route,
-                AppRoute::WatchOnlyWallet,
-                "{surface:?} must not open Watch Only while the flag is off"
+            assert_ne!(state.route, AppRoute::WatchOnlyWallet);
+        }
+
+        for surface in [AppSurface::Web, AppSurface::Extension] {
+            let mut state = AppState::for_surface(surface);
+            assert!(!onboarding_view_model(&state).show_watch_only);
+            state.apply(AppAction::SetFeatureEnabled {
+                flag: FeatureFlag::WatchOnly,
+                enabled: true,
+            });
+            assert!(
+                !onboarding_view_model(&state).show_watch_only,
+                "{surface:?} cannot override the product surface gate"
             );
+            state.apply(AppAction::Navigate(AppRoute::WatchOnlyWallet));
+            assert_ne!(state.route, AppRoute::WatchOnlyWallet);
         }
     }
 
     #[test]
     fn native_landing_actions_put_watch_only_with_create_and_import() {
-        for surface in [
-            AppSurface::Desktop,
-            AppSurface::Android,
-            AppSurface::Ios,
-            AppSurface::Web,
-            AppSurface::Extension,
-        ] {
+        for surface in [AppSurface::Desktop, AppSurface::Android, AppSurface::Ios] {
             let actions = onboarding_actions(&AppState::for_surface(surface));
             assert_eq!(actions[0], OnboardingAction::CreateWallet, "{surface:?}");
             assert_eq!(actions[1], OnboardingAction::ImportWallet, "{surface:?}");
             assert_eq!(
                 actions[2],
                 OnboardingAction::CreateWatchOnlyWallet,
-                "{surface:?} must show Watch Only when the flag is on"
+                "{surface:?} must show Watch Only"
             );
             assert!(
-                !matches!(
-                    surface,
-                    AppSurface::Android | AppSurface::Ios | AppSurface::Web | AppSurface::Extension
-                ) || !actions.contains(&OnboardingAction::ConnectHardwareWallet),
+                !matches!(surface, AppSurface::Android | AppSurface::Ios)
+                    || !actions.contains(&OnboardingAction::ConnectHardwareWallet),
                 "{surface:?} must not offer USB hardware onboarding"
+            );
+        }
+
+        for surface in [AppSurface::Web, AppSurface::Extension] {
+            let actions = onboarding_actions(&AppState::for_surface(surface));
+            assert_eq!(
+                actions,
+                vec![OnboardingAction::CreateWallet, OnboardingAction::ImportWallet],
+                "{surface:?} must keep native Watch Only out of the product surface"
             );
         }
     }
@@ -2063,14 +2062,14 @@ mod tests {
 
         for surface in [AppSurface::Web, AppSurface::Extension] {
             assert!(
-                onboarding_actions(&AppState::for_surface(surface))
+                !onboarding_actions(&AppState::for_surface(surface))
                     .contains(&OnboardingAction::CreateWatchOnlyWallet),
-                "{surface:?} must show Watch Only when the flag is on"
+                "{surface:?} must not expose native Watch Only onboarding"
             );
             let mut state = AppState::for_surface(surface);
             state.apply(AppAction::SetNetwork(Network::Chipnet));
             state.apply(AppAction::Navigate(AppRoute::WatchOnlyWallet));
-            assert_eq!(state.route, AppRoute::WatchOnlyWallet, "{surface:?}");
+            assert_ne!(state.route, AppRoute::WatchOnlyWallet, "{surface:?}");
         }
     }
 
@@ -2313,15 +2312,19 @@ mod tests {
             AppSurface::Extension,
         ] {
             let actions = onboarding_actions(&AppState::for_surface(surface));
-            assert_eq!(
-                actions[..3],
-                [
+            let expected_prefix: &[OnboardingAction] = if matches!(
+                surface,
+                AppSurface::Desktop | AppSurface::Android | AppSurface::Ios
+            ) {
+                &[
                     OnboardingAction::CreateWallet,
                     OnboardingAction::ImportWallet,
-                    OnboardingAction::CreateWatchOnlyWallet
-                ],
-                "{surface:?}"
-            );
+                    OnboardingAction::CreateWatchOnlyWallet,
+                ]
+            } else {
+                &[OnboardingAction::CreateWallet, OnboardingAction::ImportWallet]
+            };
+            assert_eq!(&actions[..expected_prefix.len()], expected_prefix, "{surface:?}");
             let mut off = AppState::for_surface(surface);
             off.apply(AppAction::SetFeatureEnabled {
                 flag: FeatureFlag::WatchOnly,

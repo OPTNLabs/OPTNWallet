@@ -75,7 +75,7 @@ describe('onboarding watch-only capability', () => {
     ).toHaveAttribute('href', '/watch-only');
   });
 
-  it.each(['android', 'ios', 'web', 'extension', 'desktop'] as const)(
+  it.each(['desktop', 'android', 'ios'] as const)(
     'shows watch-only alongside create and import on %s',
     (surface) => {
       render(<LandingPage surface={surface} />);
@@ -92,4 +92,20 @@ describe('onboarding watch-only capability', () => {
     }
   );
 
+  it.each(['web', 'extension'] as const)(
+    'keeps watch-only out of the %s product surface',
+    (surface) => {
+      render(<LandingPage surface={surface} />);
+
+      expect(
+        screen.getByRole('link', { name: 'Create Wallet' })
+      ).toHaveAttribute('href', '/createwallet');
+      expect(
+        screen.getByRole('link', { name: 'Import Wallet' })
+      ).toHaveAttribute('href', '/importwallet');
+      expect(
+        screen.queryByRole('link', { name: 'Create Watch-Only Wallet' })
+      ).not.toBeInTheDocument();
+    }
+  );
 });
