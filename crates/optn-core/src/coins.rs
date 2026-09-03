@@ -54,6 +54,16 @@ pub enum FreezeReason {
     User,
     FlipstarterPledge,
     Authhead,
+    /// Committed to a CashFusion round that has not finished.
+    ///
+    /// An ordinary send that spent one of these would double-spend the round's
+    /// own inputs: the fusion dies, and the attempt is visible on chain as a
+    /// conflict. The desktop implementation states the rule as preventing
+    /// "ordinary sends from reusing in-flight Fusion inputs", and freezing is
+    /// this crate's reservation primitive, so it is expressed as a reason of
+    /// its own rather than borrowed from `User` -- a hold the round must
+    /// release cannot be the same thing as a freeze only the user may lift.
+    FusionInFlight,
 }
 
 impl FreezeReason {
@@ -62,7 +72,17 @@ impl FreezeReason {
             Self::User => "user",
             Self::FlipstarterPledge => "flipstarter-pledge",
             Self::Authhead => "authhead",
+            Self::FusionInFlight => "fusion-in-flight",
         }
+    }
+
+    /// Whether the user may lift this hold from the coin list.
+    ///
+    /// Only their own. A pledge, an authhead and a fusion round are each held
+    /// by something with a lifecycle, and unfreezing behind its back is how the
+    /// coin gets spent out from under it.
+    pub const fn is_user_reversible(self) -> bool {
+        matches!(self, Self::User)
     }
 }
 
@@ -523,5 +543,51 @@ mod tests {
         assert_eq!(set.spendable_sats(), 0);
         set.insert(coin(6, 3_000)).expect("insert after rebuild");
         assert_eq!(set.spendable_sats(), 3_000);
+    }
+
+    #[test]
+    fn a_coin_committed_to_a_fusion_round_is_out_of_reach_of_an_ordinary_send() {
+        // An ordinary send that spent one of these would double-spend the
+        // round's own inputs: the fusion dies and the attempt shows up on chain
+        // as a conflict. Freezing is the reservation primitive, so the hold is
+        // expressed with it.
+        let mut set = CoinSet::new();
+        set.insert(coin(1, 10_000)).expect("insert");
+        set.insert(coin(2, 20_000)).expect("insert");
+        let fusing = coin(1, 10_000).outpoint();
+        set.freeze(fusing, FreezeReason::FusionInFlight)
+            .expect("hold it for the round");
+
+        assert_eq!(
+            set.spendable_sats(),
+            20_000,
+            "the round's coin is not spendable"
+        );
+        assert_eq!(set.reserved_sats(), 10_000);
+
+        let held = set.get(fusing).expect("still in the set");
+        assert!(held.is_reserved());
+        // Nor may it be pulled into a second round while the first is running.
+        assert!(!held.is_fusable(5));
+        assert_eq!(held.freeze(), Some(FreezeReason::FusionInFlight));
+        assert_eq!(FreezeReason::FusionInFlight.as_str(), "fusion-in-flight");
+    }
+
+    #[test]
+    fn only_a_user_freeze_is_the_users_to_lift() {
+        // Each of the others is held by something with a lifecycle -- a
+        // campaign, an authhead, a running fusion round -- and unfreezing
+        // behind its back is how the coin gets spent out from under it.
+        assert!(FreezeReason::User.is_user_reversible());
+        for held in [
+            FreezeReason::FlipstarterPledge,
+            FreezeReason::Authhead,
+            FreezeReason::FusionInFlight,
+        ] {
+            assert!(!held.is_user_reversible(), "{held:?}");
+            // And each stays distinguishable, so releasing one never releases
+            // another.
+            assert_ne!(held.as_str(), FreezeReason::User.as_str());
+        }
     }
 }

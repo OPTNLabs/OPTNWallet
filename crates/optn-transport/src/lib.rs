@@ -130,6 +130,7 @@ pub enum WireFreezeReason {
     User,
     FlipstarterPledge,
     Authhead,
+    FusionInFlight,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -694,6 +695,7 @@ impl From<FreezeReason> for WireFreezeReason {
             FreezeReason::User => Self::User,
             FreezeReason::FlipstarterPledge => Self::FlipstarterPledge,
             FreezeReason::Authhead => Self::Authhead,
+            FreezeReason::FusionInFlight => Self::FusionInFlight,
         }
     }
 }
@@ -704,6 +706,7 @@ impl From<WireFreezeReason> for FreezeReason {
             WireFreezeReason::User => Self::User,
             WireFreezeReason::FlipstarterPledge => Self::FlipstarterPledge,
             WireFreezeReason::Authhead => Self::Authhead,
+            WireFreezeReason::FusionInFlight => Self::FusionInFlight,
         }
     }
 }
