@@ -5,6 +5,7 @@
 //! receive/change addresses. No private key material enters this module.
 
 use bip32::{ChildNumber, XPub};
+use sha2::{Digest, Sha256};
 
 use crate::cashaddr::{Address, AddressKind};
 use crate::error::{CliError, Result};
@@ -97,6 +98,18 @@ fn derive_public_address(
         address: plain,
         token_address: token,
     })
+}
+
+/// A stable fingerprint of an account xPub, for telling wallets apart.
+///
+/// `sha256(utf8(xpub.trim()))`, hex. Two devices restored from the same
+/// account produce the same hash, which is how a user confirms they are
+/// looking at the same wallet without comparing a long key by eye. It is
+/// derived from public material and reveals nothing the xPub does not, but it
+/// still identifies the wallet, so it sits behind the same reveal gate.
+pub fn account_hash(account_xpub: &str) -> String {
+    let digest = Sha256::digest(account_xpub.trim().as_bytes());
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// Derive one address under an account xPub, at `<branch>/<index>`.

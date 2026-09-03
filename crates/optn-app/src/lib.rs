@@ -7,6 +7,8 @@
 //! belongs in this crate.
 
 mod flow;
+pub mod identity;
+pub use identity::{wallet_identity, RevealedIdentity, WalletIdentity, WalletTypeLabel};
 pub mod servers;
 pub use servers::{NetworkServers, ServerKind, ServerOverrides};
 mod lock;
@@ -294,6 +296,9 @@ pub struct AppState {
     pub hardware: HardwareSessionState,
     /// Per-network server overrides. Absent means the network default.
     pub servers: ServerOverrides,
+    /// Whether Settings is currently showing the identifying wallet fields.
+    /// Cleared by locking, so a reveal never outlives the unlocked session.
+    pub identity_revealed: bool,
     pub create_step: CreateStep,
     pub import_step: ImportStep,
     pub settings_focus: Option<SettingsRowId>,
@@ -330,6 +335,13 @@ pub struct OpenedWallet {
     /// still has a derivation account, and writing the policy into that field
     /// would make Settings report a threshold where a path belongs.
     pub multisig_policy: Option<String>,
+    /// The account xPub this wallet watches, when it is known.
+    ///
+    /// Present for watch-only, hardware and air-gapped wallets, which are
+    /// created from one. Absent for a seed wallet, whose xPub would have to be
+    /// re-derived from a seed this crate does not hold. Public material, but
+    /// identifying, so Settings keeps it behind the reveal gate.
+    pub account_xpub: Option<String>,
 }
 
 impl OpenedWallet {
@@ -369,6 +381,7 @@ impl AppState {
             spend: None,
             hardware: HardwareSessionState::new(),
             servers: ServerOverrides::new(),
+            identity_revealed: false,
             create_step: CreateStep::Reveal,
             import_step: ImportStep::Words,
             settings_focus: None,
@@ -451,6 +464,8 @@ pub enum AppAction {
     },
     /// Forget the attachment, keep the chosen device.
     DisconnectHardware,
+    /// Hide the identifying wallet fields again. Needs no authorisation.
+    HideWalletIdentity,
     /// Point one endpoint at a user-run server. An empty entry clears it.
     SetServer {
         kind: ServerKind,
@@ -745,6 +760,7 @@ impl AppState {
                     master_fingerprint: preview.master_fingerprint,
                     account_path: preview.account_path,
                     multisig_policy: None,
+                    account_xpub: Some(preview.account_xpub),
                 });
                 self.spend = None;
                 self.notice = None;
@@ -752,6 +768,13 @@ impl AppState {
                 self.route = AppRoute::WalletHome;
                 self.lock.mark_unlocked();
                 Some(AppEvent::WalletOpened)
+            }
+            AppAction::HideWalletIdentity => {
+                if !self.identity_revealed {
+                    return None;
+                }
+                self.identity_revealed = false;
+                Some(AppEvent::AppLockChanged)
             }
             AppAction::SetServer { kind, entry } => {
                 // Scoped to the selected network, so a chipnet host cannot be
@@ -822,6 +845,8 @@ impl AppState {
                     master_fingerprint: None,
                     account_path: AccountPath::default_for(self.network).to_string(),
                     multisig_policy: Some(preview.policy),
+                    // A shared wallet has a cosigner set, not one account key.
+                    account_xpub: None,
                 });
                 self.spend = None;
                 self.notice = None;
@@ -846,6 +871,7 @@ impl AppState {
                     master_fingerprint: preview.master_fingerprint,
                     account_path: preview.account_path,
                     multisig_policy: None,
+                    account_xpub: Some(preview.account_xpub),
                 });
                 self.spend = None;
                 self.notice = None;
@@ -954,6 +980,7 @@ impl AppState {
                     }
                     AuthScope::Reveal => {
                         self.lock.prompt = None;
+                        self.identity_revealed = true;
                         Some(AppEvent::AppLockChanged)
                     }
                     AuthScope::Background | AuthScope::Chat => {
@@ -1001,6 +1028,9 @@ impl AppState {
             master_fingerprint: None,
             account_path: account.to_string(),
             multisig_policy: None,
+            // A seed wallet's xPub would have to be re-derived from a seed
+            // this crate does not keep.
+            account_xpub: None,
         });
         self.spend = None;
         self.notice = None;
@@ -1015,6 +1045,9 @@ impl AppState {
             return None;
         }
         self.lock.lock();
+        // A reveal must never outlive the unlocked session: coming back to a
+        // locked wallet showing its xPub would defeat the gate entirely.
+        self.identity_revealed = false;
         self.wallet = None;
         self.spend = None;
         self.coins.clear();
@@ -1553,6 +1586,8 @@ pub fn settings_view_model(state: &AppState) -> SettingsViewModel {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WatchOnlySetupPreview {
     pub wallet_name: String,
+    /// The account xPub this preview was built from.
+    pub account_xpub: String,
     pub master_fingerprint: Option<String>,
     pub account_path: String,
     pub receive_address: String,
@@ -1585,6 +1620,7 @@ pub fn watch_only_setup_preview(
 
     Ok(WatchOnlySetupPreview {
         wallet_name: wallet_name.to_owned(),
+        account_xpub: account_xpub.trim().to_owned(),
         master_fingerprint: fingerprint,
         account_path: preview.account_path,
         receive_address: preview.receive.address,
@@ -1731,6 +1767,8 @@ pub fn multisig_setup_preview(
 pub struct HardwareSetupPreview {
     pub vendor: HardwareVendor,
     pub wallet_name: String,
+    /// The account xPub the device exported.
+    pub account_xpub: String,
     pub master_fingerprint: Option<String>,
     pub account_path: String,
     pub receive_address: String,
@@ -1758,6 +1796,7 @@ pub fn hardware_setup_preview(
     Ok(HardwareSetupPreview {
         vendor,
         wallet_name: watch.wallet_name,
+        account_xpub: watch.account_xpub,
         master_fingerprint: watch.master_fingerprint,
         account_path: watch.account_path,
         receive_address: watch.receive_address,
@@ -1831,6 +1870,7 @@ pub fn seed_wallet_preview_at(
         master_fingerprint: None,
         account_path: account.to_string(),
         multisig_policy: None,
+        account_xpub: None,
     })
 }
 
@@ -2822,6 +2862,68 @@ mod tests {
             );
             assert!(!item.label().is_empty());
         }
+    }
+
+    #[test]
+    fn the_wallet_identity_stays_hidden_until_a_reveal_is_confirmed() {
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        state.apply(AppAction::SetNetwork(Network::Chipnet));
+        let wallet =
+            optn_core::hd::Wallet::from_mnemonic(BIP39_TEST_VECTOR_MNEMONIC, "").expect("mnemonic");
+        let xpub = wallet.account_xpub(Network::Chipnet, 0).expect("xpub");
+        let preview =
+            watch_only_setup_preview(Network::Chipnet, "wallet 8", &xpub, "0f0f0f0f").expect("ok");
+        state.apply(AppAction::OpenWatchOnlyWallet(preview));
+
+        let hidden = wallet_identity(
+            state.wallet.as_ref(),
+            state.network,
+            Some(1),
+            None,
+            false,
+            state.identity_revealed,
+        )
+        .expect("a wallet is open");
+        assert_eq!(hidden.name, "wallet 8");
+        assert_eq!(hidden.wallet_type, WalletTypeLabel::WatchOnly);
+        assert!(!hidden.is_revealed(), "nothing identifying before a reveal");
+
+        // Reveal always prompts, so a request alone shows nothing.
+        state.apply(AppAction::RequestReveal { now_ms: 1_000 });
+        assert!(!state.identity_revealed);
+        state.apply(AppAction::ConfirmAuth { now_ms: 1_000 });
+        assert!(state.identity_revealed);
+
+        let shown = wallet_identity(
+            state.wallet.as_ref(),
+            state.network,
+            Some(1),
+            None,
+            false,
+            state.identity_revealed,
+        )
+        .expect("open")
+        .revealed
+        .expect("revealed");
+        assert_eq!(shown.derivation_path, "m/44'/1'/0'");
+        assert_eq!(shown.account_xpub.as_deref(), Some(xpub.as_str()));
+        assert_eq!(shown.master_fingerprint.as_deref(), Some("0f0f0f0f"));
+        assert_eq!(shown.wallet_hash.map(|h| h.len()), Some(64));
+
+        // Hiding needs no authorisation; a second hide is not an event.
+        assert!(state.reduce(AppAction::HideWalletIdentity).is_some());
+        assert!(!state.identity_revealed);
+        assert_eq!(state.reduce(AppAction::HideWalletIdentity), None);
+
+        // And a reveal never survives a lock.
+        state.apply(AppAction::RequestReveal { now_ms: 2_000 });
+        state.apply(AppAction::ConfirmAuth { now_ms: 2_000 });
+        assert!(state.identity_revealed);
+        state.apply(AppAction::LockWallet);
+        assert!(
+            !state.identity_revealed,
+            "a locked wallet must not come back showing its xPub"
+        );
     }
 
     #[test]

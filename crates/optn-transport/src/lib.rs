@@ -223,6 +223,8 @@ pub enum WireActionKind {
     },
     OpenWatchOnlyWallet {
         wallet_name: String,
+        #[serde(default)]
+        account_xpub: String,
         master_fingerprint: Option<String>,
         account_path: String,
         receive_address: String,
@@ -241,6 +243,7 @@ pub enum WireActionKind {
         account_xpub: String,
     },
     DisconnectHardware,
+    HideWalletIdentity,
     SetServer {
         kind: String,
         entry: String,
@@ -260,6 +263,8 @@ pub enum WireActionKind {
     OpenHardwareWallet {
         vendor: String,
         wallet_name: String,
+        #[serde(default)]
+        account_xpub: String,
         master_fingerprint: Option<String>,
         account_path: String,
         receive_address: String,
@@ -472,6 +477,8 @@ pub struct WireOpenedWallet {
     pub account_path: String,
     #[serde(default)]
     pub multisig_policy: Option<String>,
+    #[serde(default)]
+    pub account_xpub: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -833,6 +840,7 @@ impl From<AppAction> for WireAction {
             },
             AppAction::OpenWatchOnlyWallet(preview) => WireActionKind::OpenWatchOnlyWallet {
                 wallet_name: preview.wallet_name,
+                account_xpub: preview.account_xpub,
                 master_fingerprint: preview.master_fingerprint,
                 account_path: preview.account_path,
                 receive_address: preview.receive_address,
@@ -853,6 +861,7 @@ impl From<AppAction> for WireAction {
                 account_xpub,
             },
             AppAction::DisconnectHardware => WireActionKind::DisconnectHardware,
+            AppAction::HideWalletIdentity => WireActionKind::HideWalletIdentity,
             AppAction::SetServer { kind, entry } => WireActionKind::SetServer {
                 kind: kind.id().to_string(),
                 entry,
@@ -871,6 +880,7 @@ impl From<AppAction> for WireAction {
             AppAction::OpenHardwareWallet(preview) => WireActionKind::OpenHardwareWallet {
                 vendor: preview.vendor.id().to_string(),
                 wallet_name: preview.wallet_name,
+                account_xpub: preview.account_xpub,
                 master_fingerprint: preview.master_fingerprint,
                 account_path: preview.account_path,
                 receive_address: preview.receive_address,
@@ -974,6 +984,7 @@ impl TryFrom<WireAction> for AppAction {
             },
             WireActionKind::OpenWatchOnlyWallet {
                 wallet_name,
+                account_xpub,
                 master_fingerprint,
                 account_path,
                 receive_address,
@@ -981,6 +992,7 @@ impl TryFrom<WireAction> for AppAction {
                 change_address,
             } => Self::OpenWatchOnlyWallet(WatchOnlySetupPreview {
                 wallet_name,
+                account_xpub,
                 master_fingerprint,
                 account_path,
                 receive_address,
@@ -1010,6 +1022,7 @@ impl TryFrom<WireAction> for AppAction {
                 account_xpub,
             },
             WireActionKind::DisconnectHardware => Self::DisconnectHardware,
+            WireActionKind::HideWalletIdentity => Self::HideWalletIdentity,
             WireActionKind::SetServer { kind, entry } => Self::SetServer {
                 // An unknown kind is refused rather than defaulted: writing a
                 // node host into the Electrum slot would be silently wrong.
@@ -1045,12 +1058,14 @@ impl TryFrom<WireAction> for AppAction {
             WireActionKind::OpenHardwareWallet {
                 vendor,
                 wallet_name,
+                account_xpub,
                 master_fingerprint,
                 account_path,
                 receive_address,
                 receive_token_address,
                 change_address,
             } => Self::OpenHardwareWallet(HardwareSetupPreview {
+                account_xpub,
                 // An unknown vendor is refused rather than defaulted: opening
                 // a spendable wallet against a device this build cannot drive
                 // would strand the funds.
@@ -1168,6 +1183,7 @@ impl From<&OpenedWallet> for WireOpenedWallet {
             master_fingerprint: value.master_fingerprint.clone(),
             account_path: value.account_path.clone(),
             multisig_policy: value.multisig_policy.clone(),
+            account_xpub: value.account_xpub.clone(),
         }
     }
 }
@@ -1185,6 +1201,7 @@ impl From<WireOpenedWallet> for OpenedWallet {
             master_fingerprint: value.master_fingerprint,
             account_path: value.account_path,
             multisig_policy: value.multisig_policy,
+            account_xpub: value.account_xpub,
         }
     }
 }
@@ -1281,6 +1298,9 @@ impl TryFrom<WireState> for AppState {
             wallet: value.wallet.map(OpenedWallet::from),
             spend: value.spend.map(SpendPlan::try_from).transpose()?,
             hardware: HardwareSessionState::try_from(value.hardware)?,
+            // A decoded snapshot never arrives already revealed: the eye
+            // toggle is authorised per session, not carried on the wire.
+            identity_revealed: false,
             // Overrides live host-side; a snapshot does not carry them, so a
             // decoded state starts from the network defaults.
             servers: ServerOverrides::new(),
