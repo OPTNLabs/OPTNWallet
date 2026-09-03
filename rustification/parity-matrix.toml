@@ -136,3 +136,10 @@ id = "nostr"
 name = "Nostr"
 policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "pass", extension = "pass" }
 evidence = { windows = "unit", linux = "unit", macos = "unit", android = "unit", ios = "unit", web = "unit", extension = "unit" }
+
+[[feature]]
+id = "apple_opal_flavor"
+name = "Opal Apple26 flavor"
+policy = { windows = "na", linux = "na", macos = "na", android = "na", ios = "na", web = "na", extension = "na" }
+evidence = { windows = "hidden", linux = "hidden", macos = "hidden", android = "hidden", ios = "hidden", web = "hidden", extension = "hidden" }
+na_reason = { windows = "Opal is an optional Apple26 flavor, not a Windows product path", linux = "Opal is an optional Apple26 flavor, not a Linux product path", macos = "OpalBase v0.4.1 requires macOS 26 and unclosed develop-branch siblings; GATED until a closed SemVer graph exists", android = "Opal is Apple-only", ios = "OPTN iOS product floor is 14.0; OpalBase v0.4.1 requires iOS 26 and branch develop siblings. GATED, not product parity. Differential vectors blocked until gated flavor.", web = "Opal is Apple-only", extension = "Opal is Apple-only" }
