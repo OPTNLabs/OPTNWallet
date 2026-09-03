@@ -36,6 +36,24 @@ The architecture has four independently replaceable boundaries:
 3. **Transport** — local WASM, direct in-process Rust, Tauri IPC, or another transport.
 4. **Capability provider** — pure Rust, shell plugin, direct native FFI, or browser APIs.
 
+## Historical product contract
+
+Rustification must preserve the wallet decisions that produced the current
+product, not only the code shape visible at the latest commit.
+
+Read:
+
+- `rustification/closed-pr-history.toml` — complete 52-PR closed-history
+  snapshot (merged and closed-unmerged, with lineage/relevance).
+- `docs/rustification/closed-pr-design-invariants.md` — the human-readable
+  product/security/protocol invariants extracted from that history.
+
+Merged PRs explain why current behavior exists. Closed-unmerged PRs are not
+automatically authoritative: use their merged successor or current code/tests
+when available. An intentional behavior change is allowed only when it is
+explicitly justified and tested; changing language/framework is not itself a
+reason to change wallet semantics.
+
 ## Transport model
 
 Renderers dispatch typed `AppAction` values and consume typed state/events through

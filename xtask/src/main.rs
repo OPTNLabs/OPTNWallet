@@ -1,4 +1,5 @@
 mod apple;
+mod history;
 mod parity;
 
 use std::{
@@ -52,6 +53,7 @@ fn architecture() {
     ];
 
     let mut failures = Vec::new();
+    history::check(&root, &mut failures);
     for manifest in neutral_manifests {
         let text = read(&manifest).to_lowercase();
         for framework in FRAMEWORK_NAMES {
