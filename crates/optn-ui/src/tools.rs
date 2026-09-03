@@ -5,7 +5,7 @@ use leptos::prelude::*;
 use optn_app::{
     chipnet_demo_coin, coins_view_model, flipstarter_view_model, format_bch, fundme_view_model,
     history_view_model, product_nav, sample_chipnet_campaign_blob, AppAction, AppRoute, AppState,
-    Coin, FreezeReason, HistoryEntry, HistoryKind, Network, PledgeStatus, ProductNavItem,
+    Coin, FreezeReason, HistoryEntry, HistoryKind, Network, Outpoint, PledgeStatus, ProductNavItem,
     SpendKind, WalletKind,
 };
 
@@ -909,6 +909,7 @@ pub fn ReceivePage(transport: UiTransport, state: RwSignal<AppState>) -> impl In
 #[component]
 pub fn SendPage(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
     let destination = RwSignal::new(String::new());
+    let chosen_coin = RwSignal::new(None::<Outpoint>);
     let amount = RwSignal::new(String::from("1000"));
     view! {
         <WalletChrome transport=transport state=state>
@@ -951,6 +952,76 @@ pub fn SendPage(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
                         on:input=move |event| amount.set(event_target_value(&event))
                     />
                 </label>
+                <section class="coin-control" data-testid="coin-control">
+                    <div class="panel-head">
+                        <span class="field-label">"Coin control"</span>
+                        <span class="muted">
+                            {move || match chosen_coin.get() {
+                                Some(_) => "one coin",
+                                None => "any coin",
+                            }}
+                        </span>
+                    </div>
+                    <p class="muted">
+                        "Spend one specific coin instead of letting the wallet choose.                          Frozen coins are never selected."
+                    </p>
+                    <div class="choice-list" role="radiogroup" aria-label="Coin to spend">
+                        <button
+                            class="network-choice"
+                            class:active=move || chosen_coin.get().is_none()
+                            type="button"
+                            role="radio"
+                            aria-checked=move || {
+                                if chosen_coin.get().is_none() { "true" } else { "false" }
+                            }
+                            data-testid="coin-any"
+                            on:click=move |_| chosen_coin.set(None)
+                        >
+                            <div><p class="source-title">"Any coin"</p></div>
+                        </button>
+                        {move || {
+                            coins_view_model(&state.get())
+                                .coins
+                                .into_iter()
+                                .filter(|coin| !coin.is_reserved())
+                                .map(|coin| {
+                                    let outpoint = coin.outpoint();
+                                    let label = coin.label().unwrap_or("").to_owned();
+                                    let amount = format_bch(coin.value_sats());
+                                    view! {
+                                        <button
+                                            class="network-choice"
+                                            class:active=move || chosen_coin.get() == Some(outpoint)
+                                            type="button"
+                                            role="radio"
+                                            aria-checked=move || {
+                                                if chosen_coin.get() == Some(outpoint) {
+                                                    "true"
+                                                } else {
+                                                    "false"
+                                                }
+                                            }
+                                            data-testid=format!("coin-{}", outpoint)
+                                            on:click=move |_| chosen_coin.set(Some(outpoint))
+                                        >
+                                            <div>
+                                                <p class="source-title">{amount.clone()}</p>
+                                                <p class="muted mono">{outpoint.to_string()}</p>
+                                                <Show when={
+                                                    let label = label.clone();
+                                                    move || !label.is_empty()
+                                                }>
+                                                    <p class="muted">{label.clone()}</p>
+                                                </Show>
+                                            </div>
+                                        </button>
+                                    }
+                                })
+                                .collect_view()
+                        }}
+                    </div>
+                </section>
+
                 <button
                     class="primary"
                     type="button"
@@ -962,6 +1033,7 @@ pub fn SendPage(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
                             AppAction::PrepareSend {
                                 destination: destination.get_untracked(),
                                 amount_sats: parsed,
+                                coin: chosen_coin.get_untracked(),
                             },
                         );
                     }
