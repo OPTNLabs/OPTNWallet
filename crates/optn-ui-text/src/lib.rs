@@ -170,7 +170,22 @@ pub fn draw(state: &AppState) -> Screen {
             lines.extend(wallet_chrome(state));
             lines.push(format!("network: {}", vm.network));
             lines.push(format!("derivation: {}", vm.derivation_path));
-            lines.push(format!("electrum: {}", vm.electrum_host));
+            lines.push(format!("electrum: {}", vm.electrum_endpoint));
+            if let Some(vendor) = vm.hardware.vendor {
+                lines.push(format!(
+                    "device: {} {} {}",
+                    vendor.label(),
+                    if vm.hardware.connected {
+                        "connected"
+                    } else {
+                        "not connected"
+                    },
+                    vm.hardware.device_label.as_deref().unwrap_or("-")
+                ));
+                if vm.hardware.offers_link_choice() {
+                    lines.push(format!("link: {}", vm.hardware.ledger_link.label()));
+                }
+            }
             for row in vm.rows {
                 actions.push(row.title().to_string());
             }
@@ -374,6 +389,65 @@ mod tests {
         ui.dispatch(AppAction::Navigate(AppRoute::Settings))
             .unwrap();
         assert!(ui.screen().render().contains("derivation: m/44'/145'/1'"));
+    }
+
+    #[test]
+    fn a_feature_added_after_this_renderer_existed_still_reaches_it() {
+        // The device fields and the server override were both built after this
+        // crate. Neither needed a change here beyond drawing them, which is
+        // what "the renderer is replaceable" has to mean in practice: a
+        // feature lands in optn-app and every renderer can show it.
+        let mut ui = renderer(AppSurface::Desktop);
+        ui.dispatch(AppAction::SelectHardwareVendor(Some(
+            optn_app::HardwareVendor::Ledger,
+        )))
+        .unwrap();
+        ui.dispatch(AppAction::SetLedgerLink(optn_app::LedgerLink::Bluetooth))
+            .unwrap();
+        ui.dispatch(AppAction::HardwareConnected {
+            label: "Nano X".into(),
+            account_xpub: "xpub-under-test".into(),
+        })
+        .unwrap();
+        ui.dispatch(AppAction::SetServer {
+            kind: optn_app::ServerKind::Electrum,
+            entry: "fulcrum.example:50002".into(),
+        })
+        .unwrap();
+
+        let opened = seed_wallet_preview(
+            Network::Chipnet,
+            "device wallet",
+            BIP39_TEST_VECTOR_MNEMONIC,
+        )
+        .expect("preview");
+        ui.dispatch(AppAction::SetNetwork(Network::Chipnet))
+            .unwrap();
+        ui.dispatch(AppAction::OpenCreatedWallet {
+            name: opened.name,
+            receive_address: opened.receive_address,
+            account_path: opened.account_path,
+        })
+        .unwrap();
+        ui.dispatch(AppAction::Navigate(AppRoute::Settings))
+            .unwrap();
+
+        let screen = ui.screen().render();
+        assert!(
+            screen.contains("device: Ledger connected Nano X"),
+            "{screen}"
+        );
+        assert!(screen.contains("link: Bluetooth"), "{screen}");
+        assert!(
+            ui.screen().actions.iter().any(|a| a == "Hardware device"),
+            "the device row must be offered on desktop"
+        );
+
+        // The override was set on mainnet; chipnet must not have inherited it.
+        assert!(
+            !screen.contains("fulcrum.example"),
+            "a mainnet server must not leak into chipnet settings: {screen}"
+        );
     }
 
     #[test]
