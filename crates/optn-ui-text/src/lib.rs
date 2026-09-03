@@ -158,9 +158,12 @@ pub fn draw(state: &AppState) -> Screen {
             lines.push(format!("reserved {}", format_bch(coins.reserved_sats)));
             for coin in coins.coins {
                 lines.push(format!(
-                    "{} {}",
+                    "{} {}{}",
                     coin.outpoint(),
-                    format_bch(coin.value_sats())
+                    format_bch(coin.value_sats()),
+                    coin.fusion_label()
+                        .map(|chip| format!(" [{chip}]"))
+                        .unwrap_or_default()
                 ));
             }
             "Assets".to_string()

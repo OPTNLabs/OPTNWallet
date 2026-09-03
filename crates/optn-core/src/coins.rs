@@ -73,6 +73,15 @@ pub struct Coin {
     address: String,
     label: Option<String>,
     freeze: Option<FreezeReason>,
+    /// How many CashFusion rounds this coin has been through.
+    ///
+    /// A local wallet record, never on-chain, and never presented as
+    /// verifiable. It exists because auto-fusion needs a stopping condition:
+    /// without one it re-fuses the same coins forever, paying a real fee every
+    /// round, which is the difference between a privacy feature and a slow
+    /// drain. Electron Cash bounds this per coin rather than per wallet, so a
+    /// well-fused coin is left alone while newly received coins still fuse.
+    fuse_depth: u32,
 }
 
 impl Coin {
@@ -94,6 +103,7 @@ impl Coin {
             address,
             label: None,
             freeze: None,
+            fuse_depth: 0,
         })
     }
 
@@ -107,6 +117,43 @@ impl Coin {
 
     pub fn address(&self) -> &str {
         &self.address
+    }
+
+    /// Rounds of CashFusion this coin has been through. Local record only.
+    pub const fn fuse_depth(&self) -> u32 {
+        self.fuse_depth
+    }
+
+    /// The badge text, or `None` when the coin has never been fused.
+    ///
+    /// `Fused` for one round, `Fused ×N` beyond that, matching the wallet's
+    /// existing chip.
+    pub fn fusion_label(&self) -> Option<String> {
+        match self.fuse_depth {
+            0 => None,
+            1 => Some("Fused".to_string()),
+            depth => Some(format!("Fused ×{depth}")),
+        }
+    }
+
+    /// Record another completed round.
+    pub fn record_fusion_round(&mut self) {
+        self.fuse_depth = self.fuse_depth.saturating_add(1);
+    }
+
+    pub fn with_fuse_depth(mut self, depth: u32) -> Self {
+        self.fuse_depth = depth;
+        self
+    }
+
+    /// Whether auto-fusion should still pick this coin.
+    ///
+    /// A frozen coin is never fused -- freezing is the reservation primitive
+    /// Flipstarter pledges share, and fusing a pledged coin would spend it.
+    /// A coin at or past `max_depth` is done: continuing would pay fees
+    /// forever for privacy it already has.
+    pub const fn is_fusable(&self, max_depth: u32) -> bool {
+        self.freeze.is_none() && self.fuse_depth < max_depth
     }
 
     pub fn label(&self) -> Option<&str> {
@@ -313,6 +360,84 @@ fn hex_nibble(byte: u8) -> Option<u8> {
         b'a'..=b'f' => Some(byte - b'a' + 10),
         b'A'..=b'F' => Some(byte - b'A' + 10),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod fusion_tests {
+    use super::*;
+
+    fn coin(slot: u8, sats: u64) -> Coin {
+        Coin::new(
+            Outpoint::parse(&format!("{:064x}", slot), 0).expect("outpoint"),
+            sats,
+            "bchtest:qqexample",
+        )
+        .expect("coin")
+    }
+
+    #[test]
+    fn the_badge_reads_the_way_the_wallet_already_shows_it() {
+        let mut c = coin(1, 5_000);
+        assert_eq!(c.fusion_label(), None, "never fused shows no chip");
+
+        c.record_fusion_round();
+        assert_eq!(c.fusion_label().as_deref(), Some("Fused"));
+
+        c.record_fusion_round();
+        assert_eq!(c.fusion_label().as_deref(), Some("Fused ×2"));
+
+        assert_eq!(
+            coin(2, 5_000).with_fuse_depth(7).fusion_label().as_deref(),
+            Some("Fused ×7")
+        );
+    }
+
+    #[test]
+    fn auto_fusion_stops_at_the_configured_depth() {
+        // The reason depth is tracked at all: without a stopping condition
+        // auto-fusion re-fuses the same coins forever, paying a real fee each
+        // round. That is a slow drain, not a privacy feature.
+        let max = 3;
+        assert!(coin(1, 5_000).with_fuse_depth(0).is_fusable(max));
+        assert!(coin(1, 5_000).with_fuse_depth(2).is_fusable(max));
+        assert!(
+            !coin(1, 5_000).with_fuse_depth(3).is_fusable(max),
+            "a coin at the limit is done"
+        );
+        assert!(!coin(1, 5_000).with_fuse_depth(9).is_fusable(max));
+
+        // Bounded per coin, not per wallet: a fresh coin still fuses even when
+        // an older one is finished.
+        let fresh = coin(2, 5_000);
+        assert!(fresh.is_fusable(max));
+    }
+
+    #[test]
+    fn a_frozen_coin_is_never_fused() {
+        // Fusing spends its inputs, so fusing a Flipstarter pledge would spend
+        // the coin the pledge is holding.
+        let mut coins = CoinSet::new();
+        let pledged = coin(1, 9_000);
+        let outpoint = pledged.outpoint();
+        coins.insert(pledged).expect("insert");
+        coins
+            .freeze(outpoint, FreezeReason::FlipstarterPledge)
+            .expect("freeze");
+        assert!(!coins.get(outpoint).expect("coin").is_fusable(3));
+
+        coins.unfreeze(outpoint).expect("unfreeze");
+        assert!(coins.get(outpoint).expect("coin").is_fusable(3));
+    }
+
+    #[test]
+    fn depth_saturates_rather_than_wrapping_to_never_fused() {
+        // Wrapping would turn a heavily fused coin back into a fresh one and
+        // restart the fee drain.
+        let mut c = coin(1, 5_000).with_fuse_depth(u32::MAX);
+        c.record_fusion_round();
+        assert_eq!(c.fuse_depth(), u32::MAX);
+        assert!(c.fusion_label().is_some());
     }
 }
 
