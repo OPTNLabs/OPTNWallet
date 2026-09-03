@@ -22,6 +22,8 @@ pub enum Capability {
     NfcTagIo,
     NfcIso7816,
     ContactlessPresentment,
+    SecureEnclave,
+    Diagnostics,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -232,6 +234,19 @@ pub trait NfcIso7816 {
 /// payment semantics from becoming coupled to Apple's framework.
 pub trait ContactlessPresentment {
     fn present<'a>(&'a self, credential_id: &'a str) -> PlatformFuture<'a, ()>;
+}
+
+/// Hardware-backed key presence. Apple adapters map this to Secure Enclave.
+///
+/// Seed, mnemonic, and private-key bytes must never be arguments. Signing
+/// policy remains in Rust; this port only reports availability.
+pub trait SecureEnclave {
+    fn is_available<'a>(&'a self) -> PlatformFuture<'a, bool>;
+}
+
+/// Privacy-aware diagnostic events. Payloads must not include secrets.
+pub trait PlatformDiagnostics {
+    fn record<'a>(&'a self, event: &'a str) -> PlatformFuture<'a, ()>;
 }
 
 /// Raw APDU/HID exchange. Adapters own USB; application code should prefer
@@ -887,5 +902,19 @@ mod apple_provider_policy_tests {
         );
         assert_eq!(policy.role, AppleProviderRole::NativeCapability);
         assert!(!policy.owns_wallet_state());
+    }
+
+    #[test]
+    fn secure_enclave_and_diagnostics_are_native_capabilities_without_opal_types() {
+        let se = Capability::SecureEnclave;
+        let diagnostics = Capability::Diagnostics;
+        assert_ne!(se, diagnostics);
+        let policy = AppleProviderPolicy::native(
+            OPTN_APPLE_PRODUCT_FLOOR,
+            AppleSecretMaterialPolicy::Forbidden,
+        );
+        assert_eq!(policy.role, AppleProviderRole::NativeCapability);
+        assert!(!policy.owns_wallet_state());
+        assert!(!OPTN_APPLE_PRODUCT_FLOOR.supports(OPAL_APPLE_DEPLOYMENT_FLOOR));
     }
 }
