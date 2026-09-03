@@ -1,0 +1,71 @@
+name: Apple Provider
+
+on:
+  pull_request:
+    branches: [dev, staging, main]
+  push:
+    branches: [dev, staging]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apple-provider-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apple-provider:
+    name: Apple native and Opal reference
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Toolchain evidence
+        run: |
+          swift --version
+          xcodebuild -version
+          xcrun --sdk iphonesimulator --show-sdk-version
+
+      - name: Test native Apple provider
+        run: swift test --package-path apple/OPTNAppleProvider
+
+      - name: Resolve pinned Opal reference dependencies
+        run: swift package --package-path apple/OPTNOpalReference resolve
+
+      - name: Verify immutable upstream pins
+        run: |
+          grep -Fq '611a53f2047660e0dd221f75526ce11335be901a' apple/OPTNOpalReference/Package.swift
+          grep -Fq '8c42eeb40d64776789e70694e4e5006d2afa400c' apple/OPTNOpalReference/Package.swift
+          ! grep -Eq 'branch:|OpalBase|OpalCrypto|OpalFusion|OpalHedge' apple/OPTNOpalReference/Package.swift
+
+      - name: Test Opal reference boundary
+        run: swift test --package-path apple/OPTNOpalReference
+
+      - name: Compile native provider for iOS simulator
+        working-directory: apple/OPTNAppleProvider
+        run: |
+          xcodebuild \
+            -scheme OPTNAppleProvider \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/optn-apple-provider-ios" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Compile Opal reference for iOS 26 simulator
+        working-directory: apple/OPTNOpalReference
+        run: |
+          xcodebuild \
+            -scheme OPTNOpalReference \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/optn-opal-reference-ios" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build

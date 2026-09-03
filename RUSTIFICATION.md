@@ -102,6 +102,42 @@ Hardware HID/WebUSB providers are desktop-only and no longer enter Android/iOS
 builds. The legacy Tauri keyring plugin is also desktop-only while secure-storage
 migration is evaluated.
 
+
+## Apple-native provider and Opal reference split
+
+Apple integration is now represented by two committed SwiftPM packages rather
+than generated Xcode/Tauri project files:
+
+```
+apple/OPTNAppleProvider
+    typed ApplePlatformProvider contract
+    native Apple capability adapters
+    current concrete adapter: Keychain opaque-byte storage
+
+apple/OPTNOpalReference
+    reference/conformance build only
+    macOS 26 / iOS 26 gated
+    SwiftFulcrum v0.8.0 -> 611a53f2047660e0dd221f75526ce11335be901a
+    OpalDiagnostics v0.2.0 -> 8c42eeb40d64776789e70694e4e5006d2afa400c
+```
+
+The native package deliberately has no Opal dependency and does not set a newer
+Apple deployment floor. The committed Capacitor project remains iOS 14.0.
+
+The Opal reference package is a separate Apple-26-only build flavor. It links
+only the mature networking/diagnostics references. It does **not** link
+OpalBase, OpalCrypto, OpalFusion, or OpalHedge, and it exposes no seed,
+private-key, transaction-authoring, signing, persistence, or wallet-state API.
+
+The Rust-side `AppleProviderPolicy` mirrors the trust boundary: reference
+providers are secret-free and no Apple provider can own wallet state. CI and
+`cargo run -p xtask -- architecture` enforce the dependency firewall.
+
+This is an implementation foothold, not a parity claim. The Swift package is
+not yet wired into the production Tauri/Capacitor host, so no Apple product
+feature moves from unit/none evidence to E2E/device evidence solely because
+these packages compile.
+
 ## Dependency rules
 
 The following are forbidden:

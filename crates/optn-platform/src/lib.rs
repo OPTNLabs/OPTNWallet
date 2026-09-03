@@ -43,6 +43,102 @@ pub struct ProviderDescriptor {
     pub capabilities: &'static [Capability],
 }
 
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppleProviderRole {
+    /// Thin adapter to an Apple OS capability. It may store opaque secret bytes
+    /// but never owns wallet derivation, signing policy, or application state.
+    NativeCapability,
+    /// Independent implementation used only as a conformance/reference oracle.
+    ReferenceOracle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppleSecretMaterialPolicy {
+    /// Provider must never receive seed/private-key material.
+    Forbidden,
+    /// Provider may persist opaque bytes but must not interpret or derive from them.
+    OpaqueStorageOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AppleDeploymentFloor {
+    pub macos_major: Option<u16>,
+    pub ios_major: Option<u16>,
+}
+
+impl AppleDeploymentFloor {
+    pub const fn new(macos_major: Option<u16>, ios_major: Option<u16>) -> Self {
+        Self {
+            macos_major,
+            ios_major,
+        }
+    }
+
+    pub const fn supports(self, provider: Self) -> bool {
+        let macos_ok = match (provider.macos_major, self.macos_major) {
+            (None, _) => true,
+            (Some(required), Some(available)) => available >= required,
+            (Some(_), None) => false,
+        };
+        let ios_ok = match (provider.ios_major, self.ios_major) {
+            (None, _) => true,
+            (Some(required), Some(available)) => available >= required,
+            (Some(_), None) => false,
+        };
+        macos_ok && ios_ok
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AppleProviderPolicy {
+    pub role: AppleProviderRole,
+    pub deployment_floor: AppleDeploymentFloor,
+    pub secret_material: AppleSecretMaterialPolicy,
+}
+
+impl AppleProviderPolicy {
+    pub const fn native(
+        deployment_floor: AppleDeploymentFloor,
+        secret_material: AppleSecretMaterialPolicy,
+    ) -> Self {
+        Self {
+            role: AppleProviderRole::NativeCapability,
+            deployment_floor,
+            secret_material,
+        }
+    }
+
+    pub const fn reference(deployment_floor: AppleDeploymentFloor) -> Self {
+        Self {
+            role: AppleProviderRole::ReferenceOracle,
+            deployment_floor,
+            secret_material: AppleSecretMaterialPolicy::Forbidden,
+        }
+    }
+
+    /// Wallet/domain/application state is always Rust-authoritative.
+    pub const fn owns_wallet_state(self) -> bool {
+        false
+    }
+}
+
+/// Host-side marker for Apple adapters. Concrete Swift/native bridges implement
+/// the capability traits above; this policy describes their trust/deployment
+/// boundary without leaking Swift, Opal, Tauri, or Apple framework types here.
+pub trait ApplePlatformProvider: CapabilityProvider {
+    fn apple_policy(&self) -> AppleProviderPolicy;
+}
+
+/// The committed Capacitor iOS project remains at iOS 14.0.
+/// No macOS minimum is asserted here because the Tauri config does not set one.
+pub const OPTN_APPLE_PRODUCT_FLOOR: AppleDeploymentFloor =
+    AppleDeploymentFloor::new(None, Some(14));
+
+/// Verified against the public 58 Opals manifests on 2026-09-03.
+pub const OPAL_APPLE_DEPLOYMENT_FLOOR: AppleDeploymentFloor =
+    AppleDeploymentFloor::new(Some(26), Some(26));
+
 /// Metadata shared by all capability providers.
 ///
 /// Business/application code depends on the capability traits below, not on
@@ -764,5 +860,36 @@ mod tests {
         assert_eq!(HardwareVendor::from_id("coldcard"), None);
         assert_eq!(HardwareVendor::from_id(""), None);
         assert_eq!(HardwareVendor::from_id("Ledger"), None);
+    }
+}
+
+#[cfg(test)]
+mod apple_provider_policy_tests {
+    use super::*;
+
+    #[test]
+    fn reference_oracle_is_secret_free_and_never_authoritative() {
+        let policy = AppleProviderPolicy::reference(OPAL_APPLE_DEPLOYMENT_FLOOR);
+        assert_eq!(policy.role, AppleProviderRole::ReferenceOracle);
+        assert_eq!(
+            policy.secret_material,
+            AppleSecretMaterialPolicy::Forbidden
+        );
+        assert!(!policy.owns_wallet_state());
+    }
+
+    #[test]
+    fn ios14_product_floor_does_not_claim_opal26_compatibility() {
+        assert!(!OPTN_APPLE_PRODUCT_FLOOR.supports(OPAL_APPLE_DEPLOYMENT_FLOOR));
+    }
+
+    #[test]
+    fn native_keychain_policy_can_store_opaque_bytes_without_wallet_authority() {
+        let policy = AppleProviderPolicy::native(
+            AppleDeploymentFloor::new(None, Some(14)),
+            AppleSecretMaterialPolicy::OpaqueStorageOnly,
+        );
+        assert_eq!(policy.role, AppleProviderRole::NativeCapability);
+        assert!(!policy.owns_wallet_state());
     }
 }

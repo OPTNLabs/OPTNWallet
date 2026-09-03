@@ -103,3 +103,19 @@ target = "rust-protocols-thin-native-nfc-adapters"
 layer = "platform-provider"
 status = "started"
 security_weight = 8
+
+[[component]]
+name = "apple-native-provider"
+current = "typed-swiftpm-contract-keychain-storage"
+target = "thin-native-apple-capability-adapters-behind-optn-platform"
+layer = "platform-provider"
+status = "started"
+security_weight = 9
+
+[[component]]
+name = "apple-opal-reference"
+current = "swiftfulcrum-0.8.0-opaldiagnostics-0.2.0-reference-only"
+target = "pinned-apple-reference-and-differential-oracle"
+layer = "platform-provider"
+status = "started"
+security_weight = 8
