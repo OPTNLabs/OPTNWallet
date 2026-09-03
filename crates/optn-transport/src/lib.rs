@@ -7,11 +7,11 @@
 //! crate; only these typed contracts are shared.
 
 use optn_app::{
-    AppAction, AppEvent, AppRoute, AppState, AppSurface, CampaignOutput, Coin, CreateStep,
-    FeatureFlag, FeatureFlags, FlipstarterPledge, FreezeReason, HardwareSetupPreview,
-    HardwareVendor, ImportStep, MultisigSetupPreview, MultisigStep, Network, OpenedWallet,
-    Outpoint, PledgeStatus, SettingsRowId, SpendKind, SpendPlan, ThemeMode, UiSkin, WalletKind,
-    WatchOnlyKind, WatchOnlySetupPreview,
+    AppAction, AppEvent, AppLockState, AppRoute, AppState, AppSurface, AuthScope, AutoLockMinutes,
+    CampaignOutput, Coin, CreateStep, FeatureFlag, FeatureFlags, FlipstarterPledge, FreezeReason,
+    HardwareSetupPreview, HardwareVendor, ImportStep, MultisigSetupPreview, MultisigStep, Network,
+    OpenedWallet, Outpoint, PledgeStatus, SettingsRowId, SpendKind, SpendPlan, ThemeMode, UiSkin,
+    WalletKind, WatchOnlyKind, WatchOnlySetupPreview,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -257,6 +257,30 @@ pub enum WireActionKind {
     AdvanceOnboarding,
     OpenSettingsRow(String),
     SetWatchOnlyKind(String),
+    SetAutoLockMinutes(u32),
+    LockWallet,
+    RecordActivity {
+        now_ms: u64,
+    },
+    IdleCheck {
+        now_ms: u64,
+    },
+    AuthorizeSpend {
+        now_ms: u64,
+    },
+    RequestReveal {
+        now_ms: u64,
+    },
+    AuthorizeBackground {
+        now_ms: u64,
+    },
+    AuthorizeChat {
+        now_ms: u64,
+    },
+    ConfirmAuth {
+        now_ms: u64,
+    },
+    CancelAuth,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -301,6 +325,18 @@ pub struct WireState {
     pub watch_only_kind: WireWatchOnlyKind,
     #[serde(default)]
     pub multisig_step: WireMultisigStep,
+    #[serde(default)]
+    pub auto_lock_minutes: u32,
+    #[serde(default)]
+    pub unlock_epoch: u64,
+    #[serde(default)]
+    pub last_spend_auth_ms: u64,
+    #[serde(default)]
+    pub last_spend_auth_epoch: u64,
+    #[serde(default)]
+    pub last_activity_ms: u64,
+    #[serde(default)]
+    pub auth_prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -400,6 +436,10 @@ pub enum WireEventKind {
     SpendPrepared,
     WalletRebuilt,
     FlowChanged,
+    AppLockChanged,
+    AuthRequired,
+    SpendAuthorized,
+    WalletLocked,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -760,6 +800,18 @@ impl From<AppAction> for WireAction {
                 }
                 .into(),
             ),
+            AppAction::SetAutoLockMinutes(minutes) => WireActionKind::SetAutoLockMinutes(minutes),
+            AppAction::LockWallet => WireActionKind::LockWallet,
+            AppAction::RecordActivity { now_ms } => WireActionKind::RecordActivity { now_ms },
+            AppAction::IdleCheck { now_ms } => WireActionKind::IdleCheck { now_ms },
+            AppAction::AuthorizeSpend { now_ms } => WireActionKind::AuthorizeSpend { now_ms },
+            AppAction::RequestReveal { now_ms } => WireActionKind::RequestReveal { now_ms },
+            AppAction::AuthorizeBackground { now_ms } => {
+                WireActionKind::AuthorizeBackground { now_ms }
+            }
+            AppAction::AuthorizeChat { now_ms } => WireActionKind::AuthorizeChat { now_ms },
+            AppAction::ConfirmAuth { now_ms } => WireActionKind::ConfirmAuth { now_ms },
+            AppAction::CancelAuth => WireActionKind::CancelAuth,
         };
         Self {
             version: WIRE_PROTOCOL_VERSION,
@@ -889,6 +941,16 @@ impl TryFrom<WireAction> for AppAction {
             WireActionKind::OpenSettingsRow(row) => {
                 Self::OpenSettingsRow(parse_settings_row(&row)?)
             }
+            WireActionKind::SetAutoLockMinutes(minutes) => Self::SetAutoLockMinutes(minutes),
+            WireActionKind::LockWallet => Self::LockWallet,
+            WireActionKind::RecordActivity { now_ms } => Self::RecordActivity { now_ms },
+            WireActionKind::IdleCheck { now_ms } => Self::IdleCheck { now_ms },
+            WireActionKind::AuthorizeSpend { now_ms } => Self::AuthorizeSpend { now_ms },
+            WireActionKind::RequestReveal { now_ms } => Self::RequestReveal { now_ms },
+            WireActionKind::AuthorizeBackground { now_ms } => Self::AuthorizeBackground { now_ms },
+            WireActionKind::AuthorizeChat { now_ms } => Self::AuthorizeChat { now_ms },
+            WireActionKind::ConfirmAuth { now_ms } => Self::ConfirmAuth { now_ms },
+            WireActionKind::CancelAuth => Self::CancelAuth,
             WireActionKind::SetWatchOnlyKind(kind) => Self::SetWatchOnlyKind(match kind.as_str() {
                 "single" => WatchOnlyKind::Single,
                 "shared" => WatchOnlyKind::Shared,
@@ -932,6 +994,12 @@ impl From<&AppState> for WireState {
             return_to: value.return_to.map(WireRoute::from),
             watch_only_kind: value.watch_only_kind.into(),
             multisig_step: value.multisig_step.into(),
+            auto_lock_minutes: value.lock.auto_lock.as_minutes(),
+            unlock_epoch: value.lock.unlock_epoch,
+            last_spend_auth_ms: value.lock.last_spend_auth_ms,
+            last_spend_auth_epoch: value.lock.last_spend_auth_epoch,
+            last_activity_ms: value.lock.last_activity_ms,
+            auth_prompt: value.lock.prompt.map(auth_scope_id).map(str::to_owned),
         }
     }
 }
@@ -1071,6 +1139,18 @@ impl TryFrom<WireState> for AppState {
             return_to: value.return_to.map(AppRoute::from),
             watch_only_kind: value.watch_only_kind.into(),
             multisig_step: value.multisig_step.into(),
+            lock: AppLockState {
+                auto_lock: AutoLockMinutes::from_minutes(value.auto_lock_minutes),
+                unlock_epoch: value.unlock_epoch,
+                last_spend_auth_ms: value.last_spend_auth_ms,
+                last_spend_auth_epoch: value.last_spend_auth_epoch,
+                last_activity_ms: value.last_activity_ms,
+                prompt: value
+                    .auth_prompt
+                    .as_deref()
+                    .map(parse_auth_scope)
+                    .transpose()?,
+            },
         })
     }
 }
@@ -1095,6 +1175,10 @@ impl From<AppEvent> for WireEvent {
             AppEvent::SpendPrepared => WireEventKind::SpendPrepared,
             AppEvent::WalletRebuilt => WireEventKind::WalletRebuilt,
             AppEvent::FlowChanged => WireEventKind::FlowChanged,
+            AppEvent::AppLockChanged => WireEventKind::AppLockChanged,
+            AppEvent::AuthRequired => WireEventKind::AuthRequired,
+            AppEvent::SpendAuthorized => WireEventKind::SpendAuthorized,
+            AppEvent::WalletLocked => WireEventKind::WalletLocked,
         };
         Self {
             version: WIRE_PROTOCOL_VERSION,
@@ -1126,12 +1210,37 @@ impl TryFrom<WireEvent> for AppEvent {
             WireEventKind::SpendPrepared => Self::SpendPrepared,
             WireEventKind::WalletRebuilt => Self::WalletRebuilt,
             WireEventKind::FlowChanged => Self::FlowChanged,
+            WireEventKind::AppLockChanged => Self::AppLockChanged,
+            WireEventKind::AuthRequired => Self::AuthRequired,
+            WireEventKind::SpendAuthorized => Self::SpendAuthorized,
+            WireEventKind::WalletLocked => Self::WalletLocked,
         })
     }
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn auth_scope_id(scope: AuthScope) -> &'static str {
+    match scope {
+        AuthScope::Spend => "spend",
+        AuthScope::Reveal => "reveal",
+        AuthScope::Background => "background",
+        AuthScope::Chat => "chat",
+    }
+}
+
+fn parse_auth_scope(scope: &str) -> Result<AuthScope, TransportError> {
+    match scope {
+        "spend" => Ok(AuthScope::Spend),
+        "reveal" => Ok(AuthScope::Reveal),
+        "background" => Ok(AuthScope::Background),
+        "chat" => Ok(AuthScope::Chat),
+        other => Err(TransportError::InvalidData(format!(
+            "unknown auth scope '{other}'"
+        ))),
+    }
 }
 
 fn settings_row_id(row: SettingsRowId) -> &'static str {
@@ -1141,6 +1250,7 @@ fn settings_row_id(row: SettingsRowId) -> &'static str {
         SettingsRowId::WalletInfo => "wallet-info",
         SettingsRowId::Derivation => "derivation",
         SettingsRowId::Recovery => "recovery",
+        SettingsRowId::AppLock => "app-lock",
         SettingsRowId::RebuildWallet => "rebuild-wallet",
         SettingsRowId::Servers => "servers",
         SettingsRowId::CashFusion => "cash-fusion",
@@ -1154,6 +1264,7 @@ fn parse_settings_row(row: &str) -> Result<SettingsRowId, TransportError> {
         "wallet-info" => Ok(SettingsRowId::WalletInfo),
         "derivation" => Ok(SettingsRowId::Derivation),
         "recovery" => Ok(SettingsRowId::Recovery),
+        "app-lock" => Ok(SettingsRowId::AppLock),
         "rebuild-wallet" => Ok(SettingsRowId::RebuildWallet),
         "servers" => Ok(SettingsRowId::Servers),
         "cash-fusion" => Ok(SettingsRowId::CashFusion),
@@ -1385,6 +1496,13 @@ mod tests {
         let rebuild = AppAction::RebuildWallet;
         let decoded = AppAction::try_from(WireAction::from(rebuild.clone())).unwrap();
         assert_eq!(decoded, rebuild);
+
+        let background = AppAction::AuthorizeBackground { now_ms: 9 };
+        let decoded = AppAction::try_from(WireAction::from(background.clone())).unwrap();
+        assert_eq!(decoded, background);
+        let chat = AppAction::AuthorizeChat { now_ms: 9 };
+        let decoded = AppAction::try_from(WireAction::from(chat.clone())).unwrap();
+        assert_eq!(decoded, chat);
         let rebuilt = AppEvent::WalletRebuilt;
         let decoded = AppEvent::try_from(WireEvent::from(rebuilt.clone())).unwrap();
         assert_eq!(decoded, rebuilt);

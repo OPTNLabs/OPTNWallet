@@ -1942,10 +1942,12 @@ name = "optn-ui"
 version = "1.7.3"
 dependencies = [
  "console_error_panic_hook",
+ "js-sys",
  "leptos",
  "optn-app",
  "optn-transport",
  "optn-transport-tauri",
+ "wasm-bindgen",
  "web-sys",
 ]
 

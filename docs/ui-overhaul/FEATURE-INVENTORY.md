@@ -89,7 +89,10 @@ identity fields sit behind the **eye lock** (password or biometric).
       `C:\Users\<user>\AppData\Roaming\com.optilabs.wallet\wallets\wallet5_id1.optn`
 - [ ] **Key identity** fields behind the eye lock
 - [ ] Biometric unlock
-- [ ] **App lock** logic
+- [x] **App lock** logic — Never default, 15/30/60/120/240 timers, spend
+      re-auth + 10 min cache only on Never, CashFusion/auto-fusion/chat
+      exempt (`optn_app::lock`). Ciphertext at rest. Timer modes do not
+      re-prompt because idle lock already covers walking away.
 - [ ] **Wallet pack export**
 
 ## Desktop shell

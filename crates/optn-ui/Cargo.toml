@@ -19,4 +19,6 @@ optn-app = { path = "../optn-app", version = "=1.7.3" }
 optn-transport = { path = "../optn-transport", version = "=1.7.3" }
 optn-transport-tauri = { path = "../optn-transport-tauri", version = "=1.7.3", optional = true }
 console_error_panic_hook = "0.1"
+js-sys = "0.3"
+wasm-bindgen = "0.2"
 web-sys = { version = "0.3", features = ["Window", "Crypto"] }

@@ -11,8 +11,8 @@ use crate::tools::WalletChrome;
 use crate::{dispatch_action, UiTransport};
 use leptos::prelude::*;
 use optn_app::{
-    settings_view_model, AppAction, AppState, FeatureFlag, Network, SettingsRowId, ThemeMode,
-    UiSkin, WalletKind,
+    app_lock_view_model, settings_view_model, AppAction, AppState, AutoLockMinutes, FeatureFlag,
+    Network, SettingsRowId, ThemeMode, UiSkin, WalletKind,
 };
 
 /// Every theme mode, in the product's documented order.
@@ -62,6 +62,10 @@ fn network_copy(network: Network) -> (&'static str, &'static str) {
 
 fn settings_rows_snapshot(state: RwSignal<AppState>) -> Vec<SettingsRowId> {
     settings_view_model(&state.get()).rows
+}
+
+fn now_ms() -> u64 {
+    js_sys::Date::now() as u64
 }
 
 #[component]
@@ -158,9 +162,27 @@ fn SettingsRow(
                             Some(WalletKind::WatchOnly) => {
                                 "Watch-only wallets have no recovery phrase."
                             }
-                            _ => "The phrase stays in the keychain. It is never shown here.",
+                            _ => "The phrase stays in the keychain as ciphertext. Revealing it always asks for the password.",
                         }}
                     </p>
+                    <Show when=move || {
+                        settings_view_model(&state.get()).wallet_kind == Some(WalletKind::Seed)
+                    }>
+                        <button
+                            class="secondary"
+                            type="button"
+                            on:click=move |_| dispatch_action(
+                                transport,
+                                state,
+                                AppAction::RequestReveal { now_ms: now_ms() },
+                            )
+                        >
+                            "Reveal backup"
+                        </button>
+                    </Show>
+                }.into_any(),
+                SettingsRowId::AppLock => view! {
+                    <AppLockSection transport=transport state=state />
                 }.into_any(),
                 SettingsRowId::RebuildWallet => view! {
                     <button
@@ -362,5 +384,71 @@ fn NodeSection(state: RwSignal<AppState>) -> impl IntoView {
         <p class="muted">
             "This wallet uses the network's default Electrum endpoint."
         </p>
+    }
+}
+
+#[component]
+fn AppLockSection(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
+    view! {
+        <p class="muted">
+            {move || {
+                let vm = app_lock_view_model(
+                    &state.get().lock,
+                    state.get().wallet.as_ref().map(|wallet| wallet.kind),
+                );
+                if vm.secrets_are_ciphertext {
+                    "This wallet file stores ciphertext. The key is derived for each operation and discarded."
+                } else {
+                    "Watch-only and hardware wallets have no seed ciphertext on this device."
+                }
+            }}
+        </p>
+        <p class="muted">
+            {move || {
+                let vm = app_lock_view_model(
+                    &state.get().lock,
+                    state.get().wallet.as_ref().map(|wallet| wallet.kind),
+                );
+                if vm.auto_lock.is_never() {
+                    format!(
+                        "Never: password pops up only on Send after {} minutes. CashFusion, auto-fusion, and chat do not ask.",
+                        vm.cache_minutes
+                    )
+                } else {
+                    "A timer is set, so Send does not re-prompt — the wallet auto-locks after idle.".into()
+                }
+            }}
+        </p>
+        <div class="choice-list" role="radiogroup" aria-label="Auto-lock after">
+            <For
+                each=move || AutoLockMinutes::offered().to_vec()
+                key=|option| option.as_minutes()
+                let:option
+            >
+                <button
+                    class="network-choice"
+                    class:active=move || state.get().lock.auto_lock == option
+                    type="button"
+                    role="radio"
+                    aria-checked=move || if state.get().lock.auto_lock == option { "true" } else { "false" }
+                    on:click=move |_| dispatch_action(
+                        transport,
+                        state,
+                        AppAction::SetAutoLockMinutes(option.as_minutes()),
+                    )
+                >
+                    <div>
+                        <p class="source-title">{option.label()}</p>
+                    </div>
+                </button>
+            </For>
+        </div>
+        <button
+            class="secondary"
+            type="button"
+            on:click=move |_| dispatch_action(transport, state, AppAction::LockWallet)
+        >
+            "Lock now"
+        </button>
     }
 }

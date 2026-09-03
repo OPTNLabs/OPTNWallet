@@ -275,7 +275,7 @@ mod tests {
         let main = multisig_preview(Network::Mainnet, 2, &signers).expect("mainnet");
         assert!(
             main.receive.address.starts_with("bitcoincash:p"),
-            "{main:?}"
+            "mainnet receive must be P2SH cashaddr"
         );
         assert!(main.receive.token_address.starts_with("bitcoincash:r"));
 
