@@ -1,3 +1,4 @@
+mod apple;
 mod parity;
 
 use std::{
@@ -45,6 +46,7 @@ fn architecture() {
         root.join("crates/optn-app/Cargo.toml"),
         root.join("crates/optn-platform/Cargo.toml"),
         root.join("crates/optn-platform-native/Cargo.toml"),
+        root.join("crates/optn-platform-apple/Cargo.toml"),
         root.join("crates/optn-runtime/Cargo.toml"),
         root.join("crates/optn-transport/Cargo.toml"),
     ];
@@ -230,6 +232,29 @@ fn architecture() {
         ],
         &mut failures,
     );
+
+    let apple_manifest = read(&root.join("crates/optn-platform-apple/Cargo.toml"));
+    require_dependency(
+        "crates/optn-platform-apple",
+        &apple_manifest,
+        "optn-platform",
+        &mut failures,
+    );
+    forbid_dependencies(
+        "crates/optn-platform-apple",
+        &apple_manifest,
+        &[
+            "optn-core",
+            "optn-app",
+            "optn-runtime",
+            "optn-transport",
+            "optn-ui",
+            "optn-platform-native",
+        ],
+        &mut failures,
+    );
+
+    apple::check(&root, &mut failures);
 
     // The Rust renderer may use HTML/CSS build assets, but application/source
     // logic under optn-ui must remain Rust. Reference-wallet TypeScript/Vue is
