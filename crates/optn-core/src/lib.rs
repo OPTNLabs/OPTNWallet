@@ -11,6 +11,7 @@
 //! Everything here is pure Rust and free of I/O, so it builds for the host,
 //! for the riscv64 and armv7 cross targets, and for wasm32 alike.
 
+pub mod airgap;
 pub mod cashaddr;
 pub mod coins;
 pub mod endpoint;

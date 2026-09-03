@@ -7,10 +7,15 @@
 //! belongs in this crate.
 
 mod flow;
+mod lock;
 
 pub use flow::{
     create_confirm_indices, flow_view_model, CreateStep, FlowViewModel, ImportStep, MultisigStep,
     WatchOnlyKind,
+};
+pub use lock::{
+    app_lock_view_model, AppLockState, AppLockViewModel, AuthDecision, AuthScope, AutoLockMinutes,
+    SPEND_AUTH_TTL_MS,
 };
 
 pub use optn_core::coins::{Coin, CoinSet, FreezeReason, Outpoint};
@@ -288,6 +293,7 @@ pub struct AppState {
     pub multisig_step: MultisigStep,
     /// Tab that opened the current overlay. `None` on a section root.
     pub return_to: Option<AppRoute>,
+    pub lock: AppLockState,
 }
 
 /// Public session for an opened wallet. The mnemonic never lives here.
@@ -359,6 +365,7 @@ impl AppState {
             watch_only_kind: WatchOnlyKind::Single,
             multisig_step: MultisigStep::Policy,
             return_to: None,
+            lock: AppLockState::new(),
         }
     }
 
@@ -436,6 +443,37 @@ pub enum AppAction {
     AdvanceOnboarding,
     OpenSettingsRow(SettingsRowId),
     SetWatchOnlyKind(WatchOnlyKind),
+    /// Persist an auto-lock duration. 1 and 5 minutes become Never.
+    SetAutoLockMinutes(u32),
+    /// Wipe the in-RAM session and return to the wallet picker.
+    LockWallet,
+    RecordActivity {
+        now_ms: u64,
+    },
+    IdleCheck {
+        now_ms: u64,
+    },
+    /// Sign/broadcast path. Password popup only when auto-lock is Never and
+    /// the 10 minute spend cache has expired.
+    AuthorizeSpend {
+        now_ms: u64,
+    },
+    RequestReveal {
+        now_ms: u64,
+    },
+    /// CashFusion / auto-fusion. Never prompts.
+    AuthorizeBackground {
+        now_ms: u64,
+    },
+    /// Chat / message sign. Never prompts.
+    AuthorizeChat {
+        now_ms: u64,
+    },
+    /// Shell already verified the password. Grants the current prompt.
+    ConfirmAuth {
+        now_ms: u64,
+    },
+    CancelAuth,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -454,6 +492,10 @@ pub enum AppEvent {
     SpendPrepared,
     WalletRebuilt,
     FlowChanged,
+    AppLockChanged,
+    AuthRequired,
+    SpendAuthorized,
+    WalletLocked,
 }
 
 impl AppState {
@@ -674,6 +716,7 @@ impl AppState {
                 self.notice = None;
                 self.return_to = None;
                 self.route = AppRoute::WalletHome;
+                self.lock.mark_unlocked();
                 Some(AppEvent::WalletOpened)
             }
             AppAction::OpenMultisigWallet(preview) => {
@@ -695,6 +738,7 @@ impl AppState {
                 self.notice = None;
                 self.return_to = None;
                 self.route = AppRoute::WalletHome;
+                self.lock.mark_unlocked();
                 Some(AppEvent::WalletOpened)
             }
             AppAction::OpenHardwareWallet(preview) => {
@@ -718,6 +762,7 @@ impl AppState {
                 self.notice = None;
                 self.return_to = None;
                 self.route = AppRoute::WalletHome;
+                self.lock.mark_unlocked();
                 Some(AppEvent::WalletOpened)
             }
             AppAction::PrepareSend {
@@ -782,6 +827,55 @@ impl AppState {
                 self.multisig_step = MultisigStep::Policy;
                 Some(AppEvent::FlowChanged)
             }
+            AppAction::SetAutoLockMinutes(minutes) => {
+                let next = AutoLockMinutes::from_minutes(minutes);
+                if self.lock.auto_lock == next {
+                    return None;
+                }
+                self.lock.auto_lock = next;
+                Some(AppEvent::AppLockChanged)
+            }
+            AppAction::LockWallet => self.lock_wallet(),
+            AppAction::RecordActivity { now_ms } => {
+                self.lock.record_activity(now_ms);
+                None
+            }
+            AppAction::IdleCheck { now_ms } => {
+                self.lock.observe(now_ms);
+                if self.wallet.is_some() && self.lock.idle_should_lock(now_ms) {
+                    self.lock_wallet()
+                } else {
+                    None
+                }
+            }
+            AppAction::AuthorizeSpend { now_ms } => self.authorize(AuthScope::Spend, now_ms),
+            AppAction::RequestReveal { now_ms } => self.authorize(AuthScope::Reveal, now_ms),
+            AppAction::AuthorizeBackground { now_ms } => {
+                self.authorize(AuthScope::Background, now_ms)
+            }
+            AppAction::AuthorizeChat { now_ms } => self.authorize(AuthScope::Chat, now_ms),
+            AppAction::ConfirmAuth { now_ms } => {
+                let scope = self.lock.prompt?;
+                match scope {
+                    AuthScope::Spend => {
+                        self.lock.mark_spend_auth(now_ms);
+                        Some(AppEvent::SpendAuthorized)
+                    }
+                    AuthScope::Reveal => {
+                        self.lock.prompt = None;
+                        Some(AppEvent::AppLockChanged)
+                    }
+                    AuthScope::Background | AuthScope::Chat => {
+                        self.lock.prompt = None;
+                        Some(AppEvent::AppLockChanged)
+                    }
+                }
+            }
+            AppAction::CancelAuth => {
+                self.lock.prompt?;
+                self.lock.prompt = None;
+                Some(AppEvent::AppLockChanged)
+            }
             AppAction::SetNetwork(_)
             | AppAction::SetTheme(_)
             | AppAction::SetSkin(_)
@@ -821,7 +915,49 @@ impl AppState {
         self.notice = None;
         self.return_to = None;
         self.route = AppRoute::WalletHome;
+        self.lock.mark_unlocked();
         Some(AppEvent::WalletOpened)
+    }
+
+    fn lock_wallet(&mut self) -> Option<AppEvent> {
+        if self.wallet.is_none() && self.lock.prompt.is_none() {
+            return None;
+        }
+        self.lock.lock();
+        self.wallet = None;
+        self.spend = None;
+        self.coins.clear();
+        self.pledges.clear();
+        self.notice = None;
+        self.settings_focus = None;
+        self.return_to = None;
+        self.route = AppRoute::Landing;
+        Some(AppEvent::WalletLocked)
+    }
+
+    fn authorize(&mut self, scope: AuthScope, now_ms: u64) -> Option<AppEvent> {
+        if self.wallet.is_none() {
+            return self.reject("open a wallet first".into());
+        }
+        self.lock.observe(now_ms);
+        let kind = self.wallet.as_ref().map(|wallet| wallet.kind);
+        match self.lock.decide(scope, now_ms, kind) {
+            AuthDecision::Allow => {
+                if scope == AuthScope::Spend {
+                    self.lock.mark_spend_auth(now_ms);
+                    Some(AppEvent::SpendAuthorized)
+                } else {
+                    None
+                }
+            }
+            AuthDecision::Prompt => {
+                if self.lock.prompt == Some(scope) {
+                    return None;
+                }
+                self.lock.prompt = Some(scope);
+                Some(AppEvent::AuthRequired)
+            }
+        }
     }
 
     fn pop_overlay(&mut self) -> Option<AppEvent> {
@@ -842,6 +978,10 @@ impl AppState {
     }
 
     fn go_back(&mut self) -> Option<AppEvent> {
+        if self.lock.prompt.is_some() {
+            self.lock.prompt = None;
+            return Some(AppEvent::AppLockChanged);
+        }
         match self.route {
             AppRoute::CreateWallet => match self.create_step.back() {
                 Some(step) => {
@@ -1206,6 +1346,7 @@ pub enum SettingsRowId {
     WalletInfo,
     Derivation,
     Recovery,
+    AppLock,
     RebuildWallet,
     Servers,
     CashFusion,
@@ -1219,6 +1360,7 @@ impl SettingsRowId {
             Self::WalletInfo => "Wallet info",
             Self::Derivation => "Derivation Path",
             Self::Recovery => "Recovery Phrase",
+            Self::AppLock => "App lock",
             Self::RebuildWallet => "Rebuild Wallet",
             Self::Servers => "Servers",
             Self::CashFusion => "CashFusion",
@@ -1232,6 +1374,7 @@ impl SettingsRowId {
             Self::WalletInfo => "Name, type, network, and receive address",
             Self::Derivation => "Active BIP44 account path",
             Self::Recovery => "Back up your wallet",
+            Self::AppLock => "Auto-lock · Password on send",
             Self::RebuildWallet => "Wipe chain data and resync from network (keeps seed)",
             Self::Servers => "Electrum · Block explorer · Transaction fees",
             Self::CashFusion => "Privacy mixing on desktop",
@@ -1263,6 +1406,7 @@ pub fn settings_view_model(state: &AppState) -> SettingsViewModel {
         SettingsRowId::WalletInfo,
         SettingsRowId::Derivation,
         SettingsRowId::Recovery,
+        SettingsRowId::AppLock,
         SettingsRowId::RebuildWallet,
         SettingsRowId::Servers,
     ]);
@@ -1342,6 +1486,9 @@ pub fn watch_only_setup_preview(
 /// does not keep its own list.
 pub use optn_platform::{HardwareTransport, HardwareVendor, TransportSupport};
 
+pub use optn_core::airgap::{
+    classify_scanned_account, AirgapSigner, ScannedAccount, AIRGAP_SUBTITLE, AIRGAP_TITLE,
+};
 pub use optn_core::multisig::{Cosigner, MultisigPreview, MAX_COSIGNERS};
 
 /// Transports a surface can be relied on to provide.
@@ -2422,6 +2569,7 @@ mod tests {
         assert!(chipnet.rows.contains(&SettingsRowId::WalletInfo));
         assert!(chipnet.rows.contains(&SettingsRowId::Derivation));
         assert!(chipnet.rows.contains(&SettingsRowId::Recovery));
+        assert!(chipnet.rows.contains(&SettingsRowId::AppLock));
         assert!(chipnet.rows.contains(&SettingsRowId::RebuildWallet));
         assert!(chipnet.rows.contains(&SettingsRowId::Servers));
         assert!(chipnet.rows.contains(&SettingsRowId::CashFusion));
@@ -2805,5 +2953,83 @@ mod tests {
         assert_eq!(state.route, AppRoute::Landing);
         assert!(state.wallet.is_none());
         assert!(state.notice.is_some());
+    }
+
+    #[test]
+    fn never_mode_password_popup_is_only_on_send_after_ten_minutes() {
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        open_chipnet_seed(&mut state, "lock");
+        assert_eq!(state.lock.auto_lock, AutoLockMinutes::Never);
+        assert!(AppLockState::secrets_are_ciphertext(
+            state.wallet.as_ref().map(|wallet| wallet.kind)
+        ));
+
+        state.apply(AppAction::RecordActivity { now_ms: 1_000 });
+        state.apply(AppAction::AuthorizeSpend { now_ms: 1_000 });
+        assert_eq!(state.lock.prompt, None, "first send after unlock is free");
+        assert_eq!(
+            state.reduce(AppAction::AuthorizeSpend {
+                now_ms: 1_000 + SPEND_AUTH_TTL_MS,
+            }),
+            Some(AppEvent::AuthRequired)
+        );
+        assert_eq!(state.lock.prompt, Some(AuthScope::Spend));
+
+        state.apply(AppAction::ConfirmAuth {
+            now_ms: 1_000 + SPEND_AUTH_TTL_MS,
+        });
+        assert_eq!(state.lock.prompt, None);
+        state.apply(AppAction::AuthorizeSpend {
+            now_ms: 1_000 + SPEND_AUTH_TTL_MS + 1,
+        });
+        assert_eq!(state.lock.prompt, None, "successful auth resets the window");
+
+        state.apply(AppAction::RequestReveal { now_ms: 2_000 });
+        assert_eq!(state.lock.prompt, Some(AuthScope::Reveal));
+        state.apply(AppAction::GoBack);
+        assert_eq!(state.lock.prompt, None);
+
+        let later = 1_000 + SPEND_AUTH_TTL_MS * 2 + 2;
+        state.apply(AppAction::AuthorizeBackground { now_ms: later });
+        assert_eq!(
+            state.lock.prompt, None,
+            "CashFusion / auto-fusion must not re-prompt"
+        );
+        state.apply(AppAction::AuthorizeChat { now_ms: later });
+        assert_eq!(state.lock.prompt, None, "chat must not re-prompt");
+        state.apply(AppAction::AuthorizeSpend { now_ms: later });
+        assert_eq!(state.lock.prompt, Some(AuthScope::Spend));
+    }
+
+    #[test]
+    fn timer_auto_lock_skips_spend_prompt_and_idle_returns_to_the_picker() {
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        open_chipnet_seed(&mut state, "idle");
+        state.apply(AppAction::SetAutoLockMinutes(1));
+        assert_eq!(state.lock.auto_lock, AutoLockMinutes::Never);
+        state.apply(AppAction::SetAutoLockMinutes(15));
+        assert_eq!(state.lock.auto_lock, AutoLockMinutes::Fifteen);
+
+        state.apply(AppAction::RecordActivity { now_ms: 1_000 });
+        state.apply(AppAction::AuthorizeSpend { now_ms: 1_000 });
+        assert_eq!(state.lock.prompt, None);
+
+        state.apply(AppAction::IdleCheck {
+            now_ms: 1_000 + 15 * 60_000,
+        });
+        assert_eq!(state.route, AppRoute::Landing);
+        assert!(state.wallet.is_none());
+        assert!(state.coins.is_empty());
+    }
+
+    #[test]
+    fn lock_now_wipes_the_session_and_voids_spend_auth() {
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        open_chipnet_seed(&mut state, "lock-now");
+        state.apply(AppAction::RecordActivity { now_ms: 50 });
+        state.apply(AppAction::LockWallet);
+        assert_eq!(state.route, AppRoute::Landing);
+        assert!(state.wallet.is_none());
+        assert!(!state.lock.spend_auth_still_valid(50));
     }
 }

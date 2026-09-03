@@ -9,6 +9,10 @@ use optn_app::{
     SpendKind, WalletKind,
 };
 
+fn now_ms() -> u64 {
+    js_sys::Date::now() as u64
+}
+
 fn coins_snapshot(state: RwSignal<AppState>) -> Vec<Coin> {
     state.get().coins.iter().cloned().collect()
 }
@@ -964,6 +968,19 @@ pub fn SendPage(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
                 >
                     "Prepare send"
                 </button>
+                <Show when=move || state.get().spend.is_some()>
+                    <button
+                        class="primary"
+                        type="button"
+                        on:click=move |_| dispatch_action(
+                            transport,
+                            state,
+                            AppAction::AuthorizeSpend { now_ms: now_ms() },
+                        )
+                    >
+                        "Send"
+                    </button>
+                </Show>
                 <Show when=move || state.get().spend.is_some()>
                     <article class="panel">
                         <p class="source-title">

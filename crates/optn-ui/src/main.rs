@@ -7,6 +7,8 @@ use leptos::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use leptos::reactive::owner::LocalStorage;
 #[cfg(target_arch = "wasm32")]
+mod airgap;
+#[cfg(target_arch = "wasm32")]
 mod derivation;
 #[cfg(target_arch = "wasm32")]
 mod hardware;
@@ -20,6 +22,8 @@ mod settings;
 mod tools;
 
 #[cfg(target_arch = "wasm32")]
+use airgap::AirgapSection;
+#[cfg(target_arch = "wasm32")]
 use derivation::DerivationPicker;
 #[cfg(target_arch = "wasm32")]
 use hardware::HardwareSection;
@@ -29,7 +33,7 @@ use multisig::MultisigSection;
 use optn_app::{
     create_confirm_indices, entropy_len_for_word_count, mnemonic_from_entropy, onboarding_actions,
     onboarding_view_model, seed_wallet_preview_at, watch_only_setup_preview, AppAction, AppRoute,
-    AppState, AppSurface, CreateStep, ImportStep, Network, OnboardingAction, ThemeMode,
+    AppState, AppSurface, AuthScope, CreateStep, ImportStep, Network, OnboardingAction, ThemeMode,
     WatchOnlyKind, WatchOnlySetupPreview, BIP39_DEFAULT_WORD_COUNT, BIP39_WORD_COUNTS,
 };
 #[cfg(target_arch = "wasm32")]
@@ -264,6 +268,8 @@ fn WatchOnlySetup(transport: UiTransport, state: RwSignal<AppState>) -> impl Int
                 </Show>
 
                 <HardwareSection transport=transport state=state />
+
+                <AirgapSection transport=transport state=state />
 
                 <Show when=move || preview.get().is_some()>
                     <section class="watch-preview" aria-live="polite">
@@ -950,6 +956,51 @@ fn App(transport: Rc<dyn AppTransport>) -> impl IntoView {
                     <Landing transport=transport state=state />
                 }.into_any(),
             }}
+
+            <Show when=move || state.get().lock.prompt.is_some()>
+                <div
+                    class="modal-backdrop"
+                    role="presentation"
+                    on:click=move |_| dispatch_action(transport, state, AppAction::CancelAuth)
+                >
+                    <section
+                        class="modal"
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="auth-title"
+                        on:click=move |event| event.stop_propagation()
+                    >
+                        <h2 id="auth-title">
+                            {move || state.get().lock.prompt.map(AuthScope::title).unwrap_or("Confirm")}
+                        </h2>
+                        <p>
+                            {move || state.get().lock.prompt.map(AuthScope::description).unwrap_or_default()}
+                        </p>
+                        <label class="field">
+                            <span>"Password"</span>
+                            <input type="password" autocomplete="current-password" />
+                        </label>
+                        <button
+                            class="primary"
+                            type="button"
+                            on:click=move |_| dispatch_action(
+                                transport,
+                                state,
+                                AppAction::ConfirmAuth { now_ms: js_sys::Date::now() as u64 },
+                            )
+                        >
+                            "Confirm"
+                        </button>
+                        <button
+                            class="secondary"
+                            type="button"
+                            on:click=move |_| dispatch_action(transport, state, AppAction::CancelAuth)
+                        >
+                            "Cancel"
+                        </button>
+                    </section>
+                </div>
+            </Show>
 
             <Show when=move || onboarding_view_model(&state.get()).help_open>
                 <div
