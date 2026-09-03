@@ -241,6 +241,53 @@ mod tests {
     }
 
     #[test]
+    fn this_agrees_with_optn_multisig_core_byte_for_byte() {
+        // PR #65 adds `optn-multisig-core`, a second Rust implementation of
+        // this same derivation, and it merges before #63. Two implementations
+        // that disagree would put a wallet's coins at an address it does not
+        // watch, so these are *its* published vectors run against this code --
+        // not vectors generated here, which would only prove self-consistency.
+        //
+        // From crates/optn-multisig-core/src/lib.rs, VECTOR_1.
+        const KEY_A: &str = "02ff12471208c14bd580709cb2358d98975247d8765f92bc25eab3b2763ed605f8";
+        const KEY_B: &str = "02fe6f0a5a297eb38c391581c4413e084773ea23954d93f7753db7dc0adc188b2f";
+        const EXPECTED_SCRIPT: &str = "522102fe6f0a5a297eb38c391581c4413e084773ea23954d93f7753db7dc0adc188b2f2102ff12471208c14bd580709cb2358d98975247d8765f92bc25eab3b2763ed605f852ae";
+        const EXPECTED_ADDRESS: &str = "bchtest:ppttar4f8yf0xa592s4z4pj22cq03zn82syer0akm8";
+        const EXPECTED_TOKEN_ADDRESS: &str = "bchtest:rpttar4f8yf0xa592s4z4pj22cq03zn82srns3nsy5";
+
+        fn key(hex: &str) -> [u8; 33] {
+            let bytes: Vec<u8> = (0..hex.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("hex"))
+                .collect();
+            let mut out = [0u8; 33];
+            out.copy_from_slice(&bytes);
+            out
+        }
+
+        let script = redeem_script(2, &[key(KEY_A), key(KEY_B)]).expect("2-of-2");
+        let script_hex: String = script.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(script_hex, EXPECTED_SCRIPT, "the redeem script must match");
+
+        // BIP-67 put B before A, because fe sorts before ff. The input order
+        // was the other way round, which is the whole point of sorting.
+        assert!(
+            script_hex.find(KEY_B).expect("B is present")
+                < script_hex.find(KEY_A).expect("A is present"),
+            "sorted, not input order"
+        );
+
+        assert_eq!(
+            p2sh_address(Network::Chipnet, &script, false),
+            EXPECTED_ADDRESS
+        );
+        assert_eq!(
+            p2sh_address(Network::Chipnet, &script, true),
+            EXPECTED_TOKEN_ADDRESS
+        );
+    }
+
+    #[test]
     fn redeem_script_has_the_documented_shape() {
         let keys = [[2u8; 33], [3u8; 33]];
         let script = redeem_script(2, &keys).expect("2-of-2");
