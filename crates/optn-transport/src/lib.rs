@@ -269,6 +269,10 @@ pub enum WireActionKind {
     PrepareSend {
         destination: String,
         amount_sats: u64,
+        #[serde(default)]
+        coin_txid: Option<String>,
+        #[serde(default)]
+        coin_vout: Option<u32>,
     },
     RebuildWallet,
     GoBack,
@@ -876,9 +880,12 @@ impl From<AppAction> for WireAction {
             AppAction::PrepareSend {
                 destination,
                 amount_sats,
+                coin,
             } => WireActionKind::PrepareSend {
                 destination,
                 amount_sats,
+                coin_txid: coin.map(|c| c.txid_hex()),
+                coin_vout: coin.map(|c| c.vout()),
             },
             AppAction::RebuildWallet => WireActionKind::RebuildWallet,
             AppAction::GoBack => WireActionKind::GoBack,
@@ -1060,9 +1067,23 @@ impl TryFrom<WireAction> for AppAction {
             WireActionKind::PrepareSend {
                 destination,
                 amount_sats,
+                coin_txid,
+                coin_vout,
             } => Self::PrepareSend {
                 destination,
                 amount_sats,
+                // Half a coin reference is a bug, not a coin: refuse rather
+                // than silently falling back to automatic selection, which
+                // would spend a different coin than the user picked.
+                coin: match (coin_txid, coin_vout) {
+                    (None, None) => None,
+                    (Some(txid), Some(vout)) => Some(parse_outpoint(&txid, vout)?),
+                    _ => {
+                        return Err(TransportError::InvalidData(
+                            "a chosen coin needs both a txid and a vout".into(),
+                        ))
+                    }
+                },
             },
             WireActionKind::RebuildWallet => Self::RebuildWallet,
             WireActionKind::GoBack => Self::GoBack,

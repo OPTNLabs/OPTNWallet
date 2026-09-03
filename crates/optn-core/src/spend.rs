@@ -60,13 +60,31 @@ pub enum SpendError {
     NoWallet,
     EmptyDestination,
     InvalidDestination(String),
-    NetworkMismatch { address: String, expected: Network },
+    NetworkMismatch {
+        address: String,
+        expected: Network,
+    },
     ZeroAmount,
-    InsufficientSpendable { needed: u64, available: u64 },
+    InsufficientSpendable {
+        needed: u64,
+        available: u64,
+    },
     FrozenCoin,
+    /// Coin control: the chosen coin is not in this wallet.
+    UnknownCoin,
+    /// Coin control: the chosen coin does not cover the amount. Distinct from
+    /// InsufficientSpendable, which is about the wallet as a whole -- here the
+    /// wallet may hold plenty, just not in the coin the user picked.
+    CoinTooSmall {
+        needed: u64,
+        coin_value: u64,
+    },
     WatchOnlyCannotSign,
     HardwareMustSignOnDevice,
-    AccountNetworkMismatch { account: String, expected: Network },
+    AccountNetworkMismatch {
+        account: String,
+        expected: Network,
+    },
     Seed(String),
 }
 
@@ -89,6 +107,11 @@ impl fmt::Display for SpendError {
                 )
             }
             Self::FrozenCoin => write!(f, "frozen coins cannot be selected for a send"),
+            Self::UnknownCoin => write!(f, "that coin is not in this wallet"),
+            Self::CoinTooSmall { needed, coin_value } => write!(
+                f,
+                "that coin holds {coin_value} sats, which does not cover {needed}"
+            ),
             Self::WatchOnlyCannotSign => {
                 write!(
                     f,
@@ -119,6 +142,23 @@ pub fn prepare_spend(
     amount_sats: u64,
     capability: SpendingCapability,
 ) -> Result<SpendPlan, SpendError> {
+    prepare_spend_with(coins, network, destination, amount_sats, capability, None)
+}
+
+/// Coin control: build the same plan from a coin the user picked.
+///
+/// `chosen` of `None` selects automatically, which is what `prepare_spend`
+/// does. Naming a coin means the wallet uses that coin or says why it cannot;
+/// silently substituting another would defeat the entire point of coin
+/// control, which people use to keep specific histories apart.
+pub fn prepare_spend_with(
+    coins: &CoinSet,
+    network: Network,
+    destination: &str,
+    amount_sats: u64,
+    capability: SpendingCapability,
+    chosen: Option<Outpoint>,
+) -> Result<SpendPlan, SpendError> {
     let trimmed = destination.trim();
     if trimmed.is_empty() {
         return Err(SpendError::EmptyDestination);
@@ -135,24 +175,46 @@ pub fn prepare_spend(
         });
     }
 
-    let available = coins.spendable_sats();
-    if available < amount_sats {
-        return Err(SpendError::InsufficientSpendable {
-            needed: amount_sats,
-            available,
-        });
-    }
-
-    let selected = coins
-        .spendable()
-        .find(|coin| coin.value_sats() >= amount_sats)
-        .ok_or(SpendError::InsufficientSpendable {
-            needed: amount_sats,
-            available,
-        })?;
-    if selected.is_reserved() {
-        return Err(SpendError::FrozenCoin);
-    }
+    // A named coin is judged on its own before the wallet-wide balance,
+    // because "that coin is frozen" answers the question the user actually
+    // asked. Reporting a zero spendable balance would be true and useless.
+    let selected = match chosen {
+        // Coin control: the user named the coin, so the wallet must use that
+        // one or explain why it cannot -- never quietly substitute another.
+        Some(outpoint) => {
+            let coin = coins.get(outpoint).ok_or(SpendError::UnknownCoin)?;
+            if coin.is_reserved() {
+                return Err(SpendError::FrozenCoin);
+            }
+            if coin.value_sats() < amount_sats {
+                return Err(SpendError::CoinTooSmall {
+                    needed: amount_sats,
+                    coin_value: coin.value_sats(),
+                });
+            }
+            coin
+        }
+        None => {
+            let available = coins.spendable_sats();
+            if available < amount_sats {
+                return Err(SpendError::InsufficientSpendable {
+                    needed: amount_sats,
+                    available,
+                });
+            }
+            let coin = coins
+                .spendable()
+                .find(|coin| coin.value_sats() >= amount_sats)
+                .ok_or(SpendError::InsufficientSpendable {
+                    needed: amount_sats,
+                    available,
+                })?;
+            if coin.is_reserved() {
+                return Err(SpendError::FrozenCoin);
+            }
+            coin
+        }
+    };
 
     Ok(SpendPlan {
         selected: selected.outpoint(),
@@ -306,6 +368,111 @@ mod tests {
             ),
             Err(SpendError::WatchOnlyCannotSign)
         );
+    }
+
+    #[test]
+    fn coin_control_spends_the_named_coin_or_explains_why_not() {
+        // The point of coin control is keeping histories apart, so a named
+        // coin must never be silently swapped for a more convenient one.
+        let mut coins = CoinSet::new();
+        let small = chipnet_demo_coin(3_000, 1).expect("small");
+        let large = chipnet_demo_coin(9_000, 2).expect("large");
+        let small_out = small.outpoint();
+        let large_out = large.outpoint();
+        coins.insert(small).expect("insert");
+        coins.insert(large).expect("insert");
+
+        // Automatic selection is free to take either.
+        let auto = prepare_spend(
+            &coins,
+            Network::Chipnet,
+            &dest(),
+            2_000,
+            SpendingCapability::Seed,
+        )
+        .expect("auto");
+        assert!(auto.selected == small_out || auto.selected == large_out);
+
+        // Naming the large coin uses exactly that coin.
+        let picked = prepare_spend_with(
+            &coins,
+            Network::Chipnet,
+            &dest(),
+            2_000,
+            SpendingCapability::Seed,
+            Some(large_out),
+        )
+        .expect("named coin");
+        assert_eq!(picked.selected, large_out);
+
+        // A coin that cannot cover the amount is refused by name, even though
+        // the wallet as a whole holds plenty. Falling back to the other coin
+        // would spend a history the user was keeping separate.
+        assert_eq!(
+            prepare_spend_with(
+                &coins,
+                Network::Chipnet,
+                &dest(),
+                5_000,
+                SpendingCapability::Seed,
+                Some(small_out),
+            ),
+            Err(SpendError::CoinTooSmall {
+                needed: 5_000,
+                coin_value: 3_000,
+            })
+        );
+
+        // A coin from another wallet is not silently ignored.
+        let stranger = chipnet_demo_coin(9_000, 9).expect("stranger");
+        assert_eq!(
+            prepare_spend_with(
+                &coins,
+                Network::Chipnet,
+                &dest(),
+                1_000,
+                SpendingCapability::Seed,
+                Some(stranger.outpoint()),
+            ),
+            Err(SpendError::UnknownCoin)
+        );
+    }
+
+    #[test]
+    fn a_frozen_coin_is_refused_even_when_named_directly() {
+        // Freezing is the whole reservation primitive: Flipstarter pledges and
+        // user freezes both use it. Naming a frozen coin must not be a way
+        // around it.
+        let mut coins = CoinSet::new();
+        let coin = chipnet_demo_coin(9_000, 1).expect("coin");
+        let outpoint = coin.outpoint();
+        coins.insert(coin).expect("insert");
+        coins
+            .freeze(outpoint, FreezeReason::FlipstarterPledge)
+            .expect("freeze");
+
+        assert_eq!(
+            prepare_spend_with(
+                &coins,
+                Network::Chipnet,
+                &dest(),
+                1_000,
+                SpendingCapability::Seed,
+                Some(outpoint),
+            ),
+            Err(SpendError::FrozenCoin)
+        );
+        // And it is not reachable automatically either.
+        assert!(matches!(
+            prepare_spend(
+                &coins,
+                Network::Chipnet,
+                &dest(),
+                1_000,
+                SpendingCapability::Seed
+            ),
+            Err(SpendError::InsufficientSpendable { .. })
+        ));
     }
 
     #[test]

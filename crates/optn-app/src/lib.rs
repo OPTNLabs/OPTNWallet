@@ -33,7 +33,8 @@ pub use optn_core::hd::{
 };
 pub use optn_core::network::Network;
 pub use optn_core::spend::{
-    prepare_spend, sign_seed_spend, SpendKind, SpendPlan, SpendingCapability, SIGHASH_ALL_FORKID,
+    prepare_spend, prepare_spend_with, sign_seed_spend, SpendKind, SpendPlan, SpendingCapability,
+    SIGHASH_ALL_FORKID,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -460,6 +461,10 @@ pub enum AppAction {
     PrepareSend {
         destination: String,
         amount_sats: u64,
+        /// Coin control: spend this coin specifically. `None` selects
+        /// automatically.
+        #[allow(clippy::option_option)]
+        coin: Option<Outpoint>,
     },
     RebuildWallet,
     /// Pop the current section (create/import step, settings panel, or page).
@@ -852,16 +857,18 @@ impl AppState {
             AppAction::PrepareSend {
                 destination,
                 amount_sats,
+                coin,
             } => {
                 let Some(wallet) = self.wallet.as_ref() else {
                     return self.reject("open a wallet first".into());
                 };
-                match prepare_spend(
+                match prepare_spend_with(
                     &self.coins,
                     self.network,
                     &destination,
                     amount_sats,
                     wallet.spending_capability(),
+                    coin,
                 ) {
                     Ok(plan) => {
                         self.spend = Some(plan);
@@ -2516,6 +2523,7 @@ mod tests {
         seed.apply(AppAction::PrepareSend {
             destination: dest.clone(),
             amount_sats: 9_000,
+            coin: None,
         });
         let plan = seed.spend.as_ref().expect("seed spend");
         assert_eq!(plan.sighash, SIGHASH_ALL_FORKID);
@@ -2530,6 +2538,7 @@ mod tests {
         seed.apply(AppAction::PrepareSend {
             destination: dest.clone(),
             amount_sats: 9_000,
+            coin: None,
         });
         assert_ne!(
             seed.spend.as_ref().map(|plan| plan.selected),
@@ -2550,6 +2559,7 @@ mod tests {
         watch.apply(AppAction::PrepareSend {
             destination: dest,
             amount_sats: 4_000,
+            coin: None,
         });
         let plan = watch.spend.expect("watch spend");
         assert_eq!(plan.kind, SpendKind::WatchOnlyUnsignedPsbt);
@@ -2642,6 +2652,7 @@ mod tests {
         state.apply(AppAction::PrepareSend {
             destination: dest,
             amount_sats: 8_000,
+            coin: None,
         });
         assert_ne!(
             state.spend.as_ref().map(|plan| plan.selected),
@@ -2811,6 +2822,63 @@ mod tests {
             );
             assert!(!item.label().is_empty());
         }
+    }
+
+    #[test]
+    fn coin_control_spends_the_named_coin_through_the_application() {
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        state.apply(AppAction::SetNetwork(Network::Chipnet));
+        let opened = seed_wallet_preview(Network::Chipnet, "coins", BIP39_TEST_VECTOR_MNEMONIC)
+            .expect("preview");
+        state.apply(AppAction::OpenCreatedWallet {
+            name: opened.name,
+            receive_address: opened.receive_address,
+            account_path: opened.account_path,
+        });
+
+        let small = chipnet_demo_coin(3_000, 1).expect("small");
+        let large = chipnet_demo_coin(9_000, 2).expect("large");
+        let small_out = small.outpoint();
+        let large_out = large.outpoint();
+        let dest = large.address().to_string();
+        state.apply(AppAction::InsertCoin(small));
+        state.apply(AppAction::InsertCoin(large));
+
+        // Naming a coin spends that coin.
+        state.apply(AppAction::PrepareSend {
+            destination: dest.clone(),
+            amount_sats: 2_000,
+            coin: Some(large_out),
+        });
+        assert_eq!(
+            state.spend.as_ref().map(|plan| plan.selected),
+            Some(large_out)
+        );
+
+        // A coin that cannot cover it is refused by name, and the previous
+        // plan is not left standing as if it were the new one.
+        state.apply(AppAction::PrepareSend {
+            destination: dest.clone(),
+            amount_sats: 5_000,
+            coin: Some(small_out),
+        });
+        assert!(state
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.contains("does not cover")));
+
+        // Freezing removes it from coin control as well as from automatic
+        // selection -- the freeze is the reservation, not a UI filter.
+        state.apply(AppAction::FreezeCoin(large_out));
+        state.apply(AppAction::PrepareSend {
+            destination: dest,
+            amount_sats: 2_000,
+            coin: Some(large_out),
+        });
+        assert!(state
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.contains("frozen")));
     }
 
     #[test]
@@ -3209,6 +3277,7 @@ mod tests {
         state.apply(AppAction::PrepareSend {
             destination: dest,
             amount_sats: 4_000,
+            coin: None,
         });
         let plan = state.spend.as_ref().expect("hardware spend planned");
         assert_eq!(plan.kind, SpendKind::HardwareUnsignedPsbt);
