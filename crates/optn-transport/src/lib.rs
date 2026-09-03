@@ -247,6 +247,9 @@ pub enum WireActionKind {
     },
     DisconnectHardware,
     HideWalletIdentity,
+    SetStealthSats {
+        sats: u64,
+    },
     SetServer {
         kind: String,
         entry: String,
@@ -345,6 +348,9 @@ pub struct WireState {
     pub spend: Option<WireSpendPlan>,
     #[serde(default)]
     pub hardware: WireHardwareSession,
+    /// RPA stealth sats, kept apart from the coin list.
+    #[serde(default)]
+    pub stealth_sats: u64,
     #[serde(default)]
     pub create_step: WireCreateStep,
     #[serde(default)]
@@ -867,6 +873,7 @@ impl From<AppAction> for WireAction {
             },
             AppAction::DisconnectHardware => WireActionKind::DisconnectHardware,
             AppAction::HideWalletIdentity => WireActionKind::HideWalletIdentity,
+            AppAction::SetStealthSats(sats) => WireActionKind::SetStealthSats { sats },
             AppAction::SetServer { kind, entry } => WireActionKind::SetServer {
                 kind: kind.id().to_string(),
                 entry,
@@ -1028,6 +1035,7 @@ impl TryFrom<WireAction> for AppAction {
             },
             WireActionKind::DisconnectHardware => Self::DisconnectHardware,
             WireActionKind::HideWalletIdentity => Self::HideWalletIdentity,
+            WireActionKind::SetStealthSats { sats } => Self::SetStealthSats(sats),
             WireActionKind::SetServer { kind, entry } => Self::SetServer {
                 // An unknown kind is refused rather than defaulted: writing a
                 // node host into the Electrum slot would be silently wrong.
@@ -1159,6 +1167,7 @@ impl From<&AppState> for WireState {
             wallet: value.wallet.as_ref().map(WireOpenedWallet::from),
             spend: value.spend.as_ref().map(WireSpendPlan::from),
             hardware: WireHardwareSession::from(&value.hardware),
+            stealth_sats: value.stealth_sats,
             create_step: value.create_step.into(),
             import_step: value.import_step.into(),
             settings_focus: value.settings_focus.map(settings_row_id).map(str::to_owned),
@@ -1306,6 +1315,7 @@ impl TryFrom<WireState> for AppState {
             // A decoded snapshot never arrives already revealed: the eye
             // toggle is authorised per session, not carried on the wire.
             identity_revealed: false,
+            stealth_sats: value.stealth_sats,
             // Overrides live host-side; a snapshot does not carry them, so a
             // decoded state starts from the network defaults.
             servers: ServerOverrides::new(),

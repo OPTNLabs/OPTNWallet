@@ -136,10 +136,11 @@ pub fn draw(state: &AppState) -> Screen {
         AppRoute::WalletHome => {
             let coins = coins_view_model(state);
             lines.extend(wallet_chrome(state));
-            lines.push(format!(
-                "total {}",
-                format_bch(coins.spendable_sats + coins.reserved_sats)
-            ));
+            let totals = optn_app::portfolio_totals(state);
+            lines.push(format!("total {}", format_bch(totals.total_sats())));
+            if let Some(split) = totals.split_label() {
+                lines.push(split);
+            }
             if let Some(wallet) = state.wallet.as_ref() {
                 lines.push(format!("wallet: {}", wallet.name));
                 lines.push(format!("receive: {}", wallet.receive_address));

@@ -9,10 +9,12 @@
 mod flow;
 pub mod identity;
 pub mod networks;
+pub mod portfolio;
 pub use identity::{wallet_identity, RevealedIdentity, WalletIdentity, WalletTypeLabel};
 pub use networks::{
     network_settings_view_model, NetworkOption, NetworkSettingsViewModel, PlannedNetwork,
 };
+pub use portfolio::{stealth_sats_from_record, PortfolioTotals};
 pub mod servers;
 pub use servers::{NetworkServers, ServerKind, ServerOverrides};
 mod lock;
@@ -303,6 +305,9 @@ pub struct AppState {
     /// Whether Settings is currently showing the identifying wallet fields.
     /// Cleared by locking, so a reveal never outlives the unlocked session.
     pub identity_revealed: bool,
+    /// RPA stealth sats. Deliberately not in `coins`: they are a separate
+    /// pool, added to the portfolio total rather than counted as UTXOs.
+    pub stealth_sats: u64,
     pub create_step: CreateStep,
     pub import_step: ImportStep,
     pub settings_focus: Option<SettingsRowId>,
@@ -386,6 +391,7 @@ impl AppState {
             hardware: HardwareSessionState::new(),
             servers: ServerOverrides::new(),
             identity_revealed: false,
+            stealth_sats: 0,
             create_step: CreateStep::Reveal,
             import_step: ImportStep::Words,
             settings_focus: None,
@@ -470,6 +476,8 @@ pub enum AppAction {
     DisconnectHardware,
     /// Hide the identifying wallet fields again. Needs no authorisation.
     HideWalletIdentity,
+    /// Record the RPA stealth balance a scan found.
+    SetStealthSats(u64),
     /// Point one endpoint at a user-run server. An empty entry clears it.
     SetServer {
         kind: ServerKind,
@@ -643,6 +651,7 @@ impl AppState {
                 self.coins.clear();
                 self.pledges.clear();
                 self.spend = None;
+                self.stealth_sats = 0;
                 Some(AppEvent::NetworkChanged(network))
             }
             AppAction::OpenHelp if !self.help_open => {
@@ -782,6 +791,13 @@ impl AppState {
                 self.route = AppRoute::WalletHome;
                 self.lock.mark_unlocked();
                 Some(AppEvent::WalletOpened)
+            }
+            AppAction::SetStealthSats(sats) => {
+                if self.stealth_sats == sats {
+                    return None;
+                }
+                self.stealth_sats = sats;
+                Some(AppEvent::CoinsChanged)
             }
             AppAction::HideWalletIdentity => {
                 if !self.identity_revealed {
@@ -1382,6 +1398,15 @@ pub struct CoinsViewModel {
     pub spendable_sats: u64,
     pub reserved_sats: u64,
     pub coins: Vec<Coin>,
+}
+
+/// The portfolio total, with the stealth pool kept separate from the UTXOs.
+pub fn portfolio_totals(state: &AppState) -> PortfolioTotals {
+    PortfolioTotals {
+        spendable_sats: state.coins.spendable_sats(),
+        reserved_sats: state.coins.reserved_sats(),
+        stealth_sats: state.stealth_sats,
+    }
 }
 
 pub fn coins_view_model(state: &AppState) -> CoinsViewModel {
@@ -2876,6 +2901,53 @@ mod tests {
             );
             assert!(!item.label().is_empty());
         }
+    }
+
+    #[test]
+    fn the_portfolio_total_adds_stealth_without_counting_it_as_a_utxo() {
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        state.apply(AppAction::SetNetwork(Network::Chipnet));
+        let opened = seed_wallet_preview(Network::Chipnet, "rpa", BIP39_TEST_VECTOR_MNEMONIC)
+            .expect("preview");
+        state.apply(AppAction::OpenCreatedWallet {
+            name: opened.name,
+            receive_address: opened.receive_address,
+            account_path: opened.account_path,
+        });
+        state.apply(AppAction::InsertCoin(
+            chipnet_demo_coin(100_000, 1).expect("coin"),
+        ));
+
+        // Without stealth the total is just the UTXOs, and no split is shown.
+        let plain = portfolio_totals(&state);
+        assert_eq!(plain.total_sats(), 100_000);
+        assert!(!plain.shows_split());
+
+        assert_eq!(
+            state.reduce(AppAction::SetStealthSats(50_000)),
+            Some(AppEvent::CoinsChanged)
+        );
+        let totals = portfolio_totals(&state);
+        assert_eq!(
+            totals.utxo_sats(),
+            100_000,
+            "stealth must not be counted as a UTXO"
+        );
+        assert_eq!(totals.total_sats(), 150_000, "but it is part of the total");
+        assert_eq!(
+            totals.split_label().as_deref(),
+            Some("0.00100000 BCH spendable + 0.00050000 BCH stealth")
+        );
+
+        // Coin control still only sees UTXOs; stealth is not spendable here.
+        assert_eq!(coins_view_model(&state).spendable_sats, 100_000);
+
+        // Setting the same value twice is not an event.
+        assert_eq!(state.reduce(AppAction::SetStealthSats(50_000)), None);
+
+        // Stealth belongs to a chain like any other balance.
+        state.apply(AppAction::SetNetwork(Network::Mainnet));
+        assert_eq!(portfolio_totals(&state).stealth_sats, 0);
     }
 
     #[test]
