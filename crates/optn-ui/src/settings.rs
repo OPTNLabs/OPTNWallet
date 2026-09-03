@@ -12,7 +12,7 @@ use crate::{dispatch_action, UiTransport};
 use leptos::prelude::*;
 use optn_app::{
     app_lock_view_model, settings_view_model, AppAction, AppState, AutoLockMinutes, FeatureFlag,
-    Network, SettingsRowId, ThemeMode, UiSkin, WalletKind,
+    HardwareVendor, LedgerLink, Network, SettingsRowId, ThemeMode, UiSkin, WalletKind,
 };
 
 /// Every theme mode, in the product's documented order.
@@ -198,6 +198,9 @@ fn SettingsRow(
                     </button>
                 }.into_any(),
                 SettingsRowId::Servers => view! { <NodeSection state=state /> }.into_any(),
+                SettingsRowId::Device => view! {
+                    <DeviceSection transport=transport state=state />
+                }.into_any(),
                 SettingsRowId::CashFusion => view! {
                     <button
                         class="secondary"
@@ -450,5 +453,112 @@ fn AppLockSection(transport: UiTransport, state: RwSignal<AppState>) -> impl Int
         >
             "Lock now"
         </button>
+    }
+}
+
+/// The connected signer, and every field the session holds.
+///
+/// Rendered only where a device can be reached, because the row itself is
+/// only offered there.
+#[component]
+fn DeviceSection(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
+    let session = move || settings_view_model(&state.get()).hardware;
+
+    view! {
+        <div class="device-section">
+            <div class="choice-list" role="radiogroup" aria-label="Hardware device">
+                {move || {
+                    let chosen = session().vendor;
+                    HardwareVendor::USB_DEVICES
+                        .iter()
+                        .map(|vendor| {
+                            let vendor = *vendor;
+                            view! {
+                                <button
+                                    class="network-choice"
+                                    class:active=move || session().vendor == Some(vendor)
+                                    type="button"
+                                    role="radio"
+                                    aria-checked=if chosen == Some(vendor) { "true" } else { "false" }
+                                    data-testid=format!("device-{}", vendor.id())
+                                    on:click=move |_| dispatch_action(
+                                        transport,
+                                        state,
+                                        AppAction::SelectHardwareVendor(Some(vendor)),
+                                    )
+                                >
+                                    <div>
+                                        <p class="source-title">{vendor.label()}</p>
+                                    </div>
+                                    <Show when=move || session().vendor == Some(vendor)>
+                                        <span class="ok">"Selected"</span>
+                                    </Show>
+                                </button>
+                            }
+                        })
+                        .collect_view()
+                }}
+            </div>
+
+            <Show when=move || session().vendor.is_some()>
+                <dl class="preview-grid">
+                    <div>
+                        <dt>"Status"</dt>
+                        <dd data-testid="device-status">
+                            {move || if session().connected { "Connected" } else { "Not connected" }}
+                        </dd>
+                    </div>
+                    <div>
+                        <dt>"Device"</dt>
+                        <dd>{move || session().device_label.unwrap_or_else(|| "-".into())}</dd>
+                    </div>
+                </dl>
+
+                // Ledger is the only vendor with a wire to choose.
+                <Show when=move || session().offers_link_choice()>
+                    <div class="choice-list" role="radiogroup" aria-label="Ledger connection">
+                        {move || {
+                            let current = session().ledger_link;
+                            [LedgerLink::Usb, LedgerLink::Bluetooth]
+                                .into_iter()
+                                .map(|link| view! {
+                                    <button
+                                        class="network-choice"
+                                        class:active=move || session().ledger_link == link
+                                        type="button"
+                                        role="radio"
+                                        aria-checked=if current == link { "true" } else { "false" }
+                                        data-testid=format!(
+                                            "ledger-link-{}",
+                                            link.label().to_lowercase()
+                                        )
+                                        on:click=move |_| dispatch_action(
+                                            transport,
+                                            state,
+                                            AppAction::SetLedgerLink(link),
+                                        )
+                                    >
+                                        <div><p class="source-title">{link.label()}</p></div>
+                                    </button>
+                                })
+                                .collect_view()
+                        }}
+                    </div>
+                </Show>
+
+                <button
+                    class="secondary"
+                    type="button"
+                    data-testid="device-forget"
+                    on:click=move |_| dispatch_action(
+                        transport,
+                        state,
+                        AppAction::SelectHardwareVendor(None),
+                    )
+                >
+                    "Forget this device"
+                </button>
+            </Show>
+        </div>
     }
 }

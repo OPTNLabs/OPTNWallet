@@ -1391,6 +1391,7 @@ fn settings_row_id(row: SettingsRowId) -> &'static str {
         SettingsRowId::AppLock => "app-lock",
         SettingsRowId::RebuildWallet => "rebuild-wallet",
         SettingsRowId::Servers => "servers",
+        SettingsRowId::Device => "device",
         SettingsRowId::CashFusion => "cash-fusion",
     }
 }
@@ -1405,6 +1406,7 @@ fn parse_settings_row(row: &str) -> Result<SettingsRowId, TransportError> {
         "app-lock" => Ok(SettingsRowId::AppLock),
         "rebuild-wallet" => Ok(SettingsRowId::RebuildWallet),
         "servers" => Ok(SettingsRowId::Servers),
+        "device" => Ok(SettingsRowId::Device),
         "cash-fusion" => Ok(SettingsRowId::CashFusion),
         other => Err(TransportError::InvalidData(format!(
             "unknown settings row '{other}'"

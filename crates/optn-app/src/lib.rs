@@ -1433,6 +1433,7 @@ pub enum SettingsRowId {
     AppLock,
     RebuildWallet,
     Servers,
+    Device,
     CashFusion,
 }
 
@@ -1447,6 +1448,7 @@ impl SettingsRowId {
             Self::AppLock => "App lock",
             Self::RebuildWallet => "Rebuild Wallet",
             Self::Servers => "Servers",
+            Self::Device => "Hardware device",
             Self::CashFusion => "CashFusion",
         }
     }
@@ -1461,6 +1463,7 @@ impl SettingsRowId {
             Self::AppLock => "Auto-lock · Password on send",
             Self::RebuildWallet => "Wipe chain data and resync from network (keeps seed)",
             Self::Servers => "Electrum · Block explorer · Transaction fees",
+            Self::Device => "Connected signer, its label, and how it is reached",
             Self::CashFusion => "Privacy mixing on desktop",
         }
     }
@@ -1480,6 +1483,8 @@ pub struct SettingsViewModel {
     pub electrum_endpoint: String,
     /// Whether this network has any user-set server.
     pub servers_are_custom: bool,
+    /// The device session, so Settings can show every field it holds.
+    pub hardware: HardwareSessionState,
     pub show_cash_fusion: bool,
     pub rows: Vec<SettingsRowId>,
 }
@@ -1498,6 +1503,14 @@ pub fn settings_view_model(state: &AppState) -> SettingsViewModel {
         SettingsRowId::RebuildWallet,
         SettingsRowId::Servers,
     ]);
+    // Only where a device can actually be reached; a row that can never do
+    // anything is worse than no row.
+    if state
+        .features
+        .enabled(state.surface, FeatureFlag::HardwareWallet)
+    {
+        rows.push(SettingsRowId::Device);
+    }
     let show_cash_fusion = state
         .features
         .enabled(state.surface, FeatureFlag::CashFusion);
@@ -1524,6 +1537,7 @@ pub fn settings_view_model(state: &AppState) -> SettingsViewModel {
         electrum_host: state.network.default_host(),
         electrum_endpoint: state.servers.effective_electrum(state.network),
         servers_are_custom: !state.servers.for_network(state.network).is_empty(),
+        hardware: state.hardware.clone(),
         show_cash_fusion,
         rows,
     }
@@ -2796,6 +2810,49 @@ mod tests {
                 "{item:?} must report itself active on its own route"
             );
             assert!(!item.label().is_empty());
+        }
+    }
+
+    #[test]
+    fn settings_shows_every_device_field_where_a_device_can_be_reached() {
+        // Fields that exist in state but never reach Settings are fields the
+        // port dropped. All five are asserted through the view model.
+        let mut desktop = AppState::for_surface(AppSurface::Desktop);
+        assert!(settings_view_model(&desktop)
+            .rows
+            .contains(&SettingsRowId::Device));
+
+        desktop.apply(AppAction::SelectHardwareVendor(Some(
+            HardwareVendor::Ledger,
+        )));
+        desktop.apply(AppAction::SetLedgerLink(LedgerLink::Bluetooth));
+        desktop.apply(AppAction::HardwareConnected {
+            label: "Nano X".into(),
+            account_xpub: "xpub-under-test".into(),
+        });
+
+        let vm = settings_view_model(&desktop);
+        assert_eq!(vm.hardware.vendor, Some(HardwareVendor::Ledger));
+        assert!(vm.hardware.connected);
+        assert_eq!(vm.hardware.device_label.as_deref(), Some("Nano X"));
+        assert_eq!(vm.hardware.account_xpub.as_deref(), Some("xpub-under-test"));
+        assert_eq!(vm.hardware.ledger_link, LedgerLink::Bluetooth);
+        assert!(vm.hardware.offers_link_choice());
+
+        // A row that could never do anything is worse than no row, so it is
+        // absent wherever no device is reachable.
+        for surface in [
+            AppSurface::Android,
+            AppSurface::Ios,
+            AppSurface::Web,
+            AppSurface::Extension,
+        ] {
+            assert!(
+                !settings_view_model(&AppState::for_surface(surface))
+                    .rows
+                    .contains(&SettingsRowId::Device),
+                "{surface:?} cannot reach a device"
+            );
         }
     }
 
