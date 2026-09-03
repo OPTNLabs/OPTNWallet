@@ -290,11 +290,12 @@ Honest list; none of these are claimed as done.
 
 | From | What is missing | Why |
 |---|---|---|
-| #26, #18, #12 | CashFusion's Nostr layer — NIP-17/NIP-44 gift wraps, kind `12230` announcements, rendezvous, blame | Needs a Nostr crate; a dependency decision |
+| #26, #18, #12 | The Nostr **transport** — NIP-17 gift wraps, kind `12230` announcements, rendezvous, blame routing | NIP-44 v2, the ciphertext under all of it, is ported and tested; relays and event plumbing are transport work |
 | #12 | Tor-only enforcement for remote fusion, and the covert-socket schedule | Transport-layer, not yet ported |
 | #6 | Wallet pack **encryption** — PBKDF2 600k + AES-256-GCM | The two-file format, the pairing rules and the no-secrets invariant are ported; the cipher needs `aes-gcm`, and this crate holds no password |
 | #6 | The add-on **host** — mounting the frame, the SDK dispatch, the consent prompt | The sandbox rule, the sixteen capabilities, the trust tiers and the rate limiter are ported; mounting a frame is a shell's job |
 | #61 | Live chipnet round-trip of the Rust RPA path | No live-network tests from here |
+| — | NIP-44 interop against the published vectors | The implementation is internally consistent and its properties are tested; agreement with other clients is not yet observed |
 | #34 #60 | UR frame generation from the encoded PSBT | The bytes are produced and verified; the fountain-code framing is not |
 
 The parity matrix (`xtask parity`) remains the running count of what is and is
