@@ -172,6 +172,78 @@ Wallet, transaction, crypto, protocol, and application-state logic remain unchan
 10. Use shell plugins or thin native FFI where pure-Rust support is not production-ready.
 11. Keep web/extension on the same application/domain contracts through WASM.
 
+## Apple provider (58 Opals) — contract present, adoption blocked
+
+The 58 Opals Swift stack is an *optional* Apple-native provider and an
+independent BCH reference. It is not a second wallet.
+
+```text
+optn-platform
+      ↓
+optn_platform::apple::AppleProvider     capability contract
+      ↓
+Swift Apple adapter
+      ├── native Apple APIs
+      └── optional Opal packages
+```
+
+Rust stays the single authoritative implementation of BCH truth — transaction,
+PSBT, CashTokens, RPA, signing policy, CashFusion, application state. Nothing
+across this boundary returns a wallet decision; it returns a platform
+capability result. `xtask architecture` fails the build if any Opal package
+name appears in `optn-core`, `optn-app` or `optn-runtime`.
+
+### Why nothing is wired up
+
+Verified against upstream on 2026-09-03 — re-check before implementing, these
+move:
+
+| Package | Tag | Platforms | Note |
+| --- | --- | --- | --- |
+| OpalBase | v0.4.1 | macOS 26 / iOS 26 | developer preview; depends on five siblings by `branch: "develop"` |
+| SwiftFulcrum | v0.8.0 | macOS 26 / iOS 26 | most mature; depends on OpalDiagnostics by SemVer |
+| OpalCrypto | v0.2.0 | macOS 26 / iOS 26 | upstream: "do not use this preview for production key handling" |
+| OpalFusion | v0.1.0 | macOS 26 / iOS 26 | initial scaffold |
+| OpalHedge | v0.1.0 | macOS 26 / iOS 26 | |
+| OpalDiagnostics | v0.2.0 | macOS 26 / iOS 26 | |
+
+Two blockers, both product decisions rather than implementation details:
+
+1. **Deployment target.** OPTN's iOS minimum is **14.0**
+   (`ios/App/App.xcodeproj`). Every Opal package requires iOS 26 / macOS 26 and
+   Swift tools 6.2, so adopting one raises the product minimum by twelve major
+   versions and drops every device below it. The minimum is not to be raised to
+   consume a dependency.
+2. **Reproducibility.** `OpalBase/Package.swift` pulls SwiftFulcrum,
+   OpalCrypto, OpalFusion, OpalHedge and OpalDiagnostics by
+   `branch: "develop"`. Pinning OpalBase to a tag therefore still does not give
+   a reproducible build, because its transitive dependencies move. SwiftFulcrum
+   and OpalCrypto do use SemVer for OpalDiagnostics, so SwiftFulcrum alone is
+   pinnable — it is the only package that could be adopted reproducibly today.
+
+`AppleProvider::availability` encodes both: it refuses on `OsTooOld` before a
+call is made, and on `NotReproducible` when a release build asks for a provider
+whose dependencies float.
+
+### Crypto boundary
+
+OpalCrypto's own README states secret-scalar operations have not completed
+constant-time hardening or security review. It must not see production seed,
+private-key or signing material. `ReferenceVector` therefore offers only
+deterministic public-material behaviour — CashAddr, public derivation, account
+xPub, transaction serialization, sighash, CashToken encoding, Fulcrum response
+parsing — and `needs_secret_material()` is false for every one of them, so a
+differential test cannot become the reason a preview library sees a key.
+
+### Differential testing
+
+Where Opal implements the same deterministic behaviour it is useful as an
+*independent oracle*, which is worth more than porting its code. But agreement
+between two implementations is not proof: both can share a wrong assumption.
+`DifferentialOutcome::passed()` requires each side to match the canonical
+vector as well as each other, and `agrees_but_unanchored()` names the failure
+mode explicitly.
+
 ## Version policy
 
 Use current stable Rust and reviewed stable framework/tool releases. Regenerate and

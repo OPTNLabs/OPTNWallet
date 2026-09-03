@@ -9,6 +9,8 @@
 
 use std::{future::Future, pin::Pin};
 
+pub mod apple;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Capability {
     SecureStorage,
