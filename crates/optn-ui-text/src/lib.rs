@@ -34,7 +34,7 @@ use optn_app::{
     history_view_model, onboarding_actions, product_nav, settings_view_model, AppAction, AppRoute,
     AppState, OnboardingAction, WalletKind,
 };
-use optn_transport::{AppTransport, TransportError};
+use optn_transport::{AppTransport, Renderer, TransportError};
 
 /// Poll an already-ready future to completion.
 ///
@@ -190,6 +190,12 @@ pub fn draw(state: &AppState) -> Screen {
                 if vm.hardware.offers_link_choice() {
                     lines.push(format!("link: {}", vm.hardware.ledger_link.label()));
                 }
+                // Already resolved by the application: a renderer must not
+                // hold the "not chosen falls back to the wallet's" rule.
+                lines.push(format!("device path: {}", vm.hardware_derivation_path));
+                if let Some(warning) = vm.hardware_path_warning.as_deref() {
+                    lines.push(format!("note: {warning}"));
+                }
             }
             for row in vm.rows {
                 actions.push(row.title().to_string());
@@ -299,9 +305,83 @@ impl<T: AppTransport> TextRenderer<T> {
     }
 }
 
+/// The host seam. Satisfying it is what makes this renderer swappable *for*
+/// another rather than merely similar to one: a host written against
+/// `optn_transport::run` drives this or the egui renderer without knowing
+/// which it has.
+impl<T: AppTransport> Renderer<T> for TextRenderer<T> {
+    fn attach(transport: T) -> Result<Self, TransportError> {
+        Self::attach(transport)
+    }
+
+    fn dispatch(&mut self, action: AppAction) -> Result<(), TransportError> {
+        self.dispatch(action)
+    }
+
+    fn state(&self) -> &AppState {
+        &self.state
+    }
+
+    fn painted(&self) -> Vec<String> {
+        let screen = self.screen();
+        let mut painted = Vec::with_capacity(screen.lines.len() + screen.actions.len() + 1);
+        painted.push(screen.title);
+        painted.extend(screen.lines);
+        painted.extend(screen.actions);
+        painted
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// The one line a host changes to swap renderers.
+    ///
+    /// Everything below is written against `optn_transport::run` and never
+    /// names a renderer again. The same block exists in the other renderer's
+    /// crate with this line pointing at that one, and asserts the same facts.
+    type Ui<T> = TextRenderer<T>;
+
+    /// A wallet being opened and looked at, as actions alone.
+    fn script() -> Vec<AppAction> {
+        let opened = seed_wallet_preview(Network::Chipnet, "swap", BIP39_TEST_VECTOR_MNEMONIC)
+            .expect("preview");
+        vec![
+            AppAction::SetNetwork(Network::Chipnet),
+            AppAction::OpenCreatedWallet {
+                name: opened.name,
+                receive_address: opened.receive_address,
+                account_path: opened.account_path,
+            },
+            AppAction::SetStealthSats(50_000),
+        ]
+    }
+
+    #[test]
+    fn a_host_drives_this_renderer_without_naming_it() {
+        // The host is `optn_transport::run`, shared and unchanged. Swapping
+        // renderers is the `Ui` alias above and nothing else -- no different
+        // host, no different actions, no different assertions.
+        let transport = LocalTransport::new(AppState::for_surface(AppSurface::Desktop));
+        let painted = optn_transport::run::<_, Ui<_>>(transport, &script()).expect("run");
+
+        // The same facts, from the same view models, whichever renderer drew.
+        // Asserted on the screen as a whole rather than on exact fragments:
+        // two renderers are entitled to lay one fact out differently -- this
+        // one writes "wallet: swap", the other just "swap" -- and a host that
+        // demanded identical strings would be testing the drawing, not the
+        // seam.
+        let screen = painted.join("\n");
+        assert!(screen.contains("swap"), "the wallet name: {painted:?}");
+        assert!(
+            screen.contains("stealth"),
+            "the RPA split reaches any renderer: {painted:?}"
+        );
+        for tab in ["Home", "Assets", "Actions", "Explore", "Settings"] {
+            assert!(screen.contains(tab), "missing {tab}: {painted:?}");
+        }
+    }
+
     use optn_app::{
         seed_wallet_preview, AccountPath, AppSurface, Network, BIP39_TEST_VECTOR_MNEMONIC,
     };

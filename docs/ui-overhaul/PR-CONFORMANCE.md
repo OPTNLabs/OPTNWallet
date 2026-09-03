@@ -256,6 +256,34 @@ the workflows.
 
 ---
 
+## The renderer swap, as a measured claim
+
+"Swappable" is a claim with a number in it. `optn_transport::run::<_, Ui<_>>`
+is a host that never names a renderer; `TextRenderer` and `EguiRenderer` both
+implement `optn_transport::Renderer`; and each crate carries the same 46-line
+host block — same script, same assertions — differing only in
+
+```rust
+type Ui<T> = TextRenderer<T>;   // or EguiRenderer<T>
+```
+
+`xtask architecture` extracts both blocks and fails if they differ on more than
+that one line, or if the line that differs is not the alias. Checked by drifting
+an assertion in one crate and watching the guard name it. A Dioxus renderer
+joins by implementing the same three methods — `attach`, `dispatch`, `painted` —
+and nothing in the host changes.
+
+## Hardware fields
+
+The device fields are complete against `hardwareWalletSlice.ts`: `type`
+(including Keystone), `connected`, `xpub`, `deviceLabel`, `ledgerTransport`,
+and `derivationPath`. The last was the one genuinely missing, and it arrived
+without the sentinel: React encoded "not chosen" as the mainnet literal
+`m/44'/145'/0'`, which every reader had to compare against exactly.
+`Option<AccountPath>` says it with nothing to compare, `effective_path` resolves
+the fallback once, and an account this network never scans is reported rather
+than corrected. All three renderers show it.
+
 ## Still open
 
 Honest list; none of these are claimed as done.

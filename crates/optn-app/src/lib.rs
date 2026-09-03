@@ -504,6 +504,9 @@ pub enum AppAction {
     SelectHardwareVendor(Option<HardwareVendor>),
     /// Ledger only: USB or Bluetooth. Ignored by every other vendor.
     SetLedgerLink(LedgerLink),
+    /// The account the device should derive from. `None` clears the choice and
+    /// returns the device to the wallet's own account.
+    SetHardwareDerivationPath(Option<AccountPath>),
     /// A device answered. Public material only.
     HardwareConnected {
         label: String,
@@ -881,6 +884,19 @@ impl AppState {
                     return None;
                 }
                 self.hardware.ledger_link = link;
+                Some(AppEvent::HardwareSessionChanged)
+            }
+            AppAction::SetHardwareDerivationPath(account) => {
+                if self.hardware.vendor.is_none() {
+                    return self.reject("Choose a device first.".into());
+                }
+                if self.hardware.derivation_path == account {
+                    return None;
+                }
+                self.hardware.derivation_path = account;
+                // The exported account belonged to the old path. Keeping it
+                // would show one account's xPub beside another's path.
+                self.hardware.account_xpub = None;
                 Some(AppEvent::HardwareSessionChanged)
             }
             AppAction::HardwareConnected {
@@ -1629,6 +1645,16 @@ pub struct SettingsViewModel {
     pub servers_are_custom: bool,
     /// The device session, so Settings can show every field it holds.
     pub hardware: HardwareSessionState,
+    /// The account the device will actually derive from, already resolved.
+    ///
+    /// A renderer shows this without holding the fallback rule, which is what
+    /// stopped the React screens from each having to compare against the
+    /// sentinel and one of them forgetting.
+    pub hardware_derivation_path: String,
+    /// Set when the device's chosen account is one this network never scans.
+    ///
+    /// A warning, not a correction: the path may be exactly what was meant.
+    pub hardware_path_warning: Option<String>,
     pub show_cash_fusion: bool,
     pub rows: Vec<SettingsRowId>,
 }
@@ -1681,6 +1707,21 @@ pub fn settings_view_model(state: &AppState) -> SettingsViewModel {
         electrum_host: state.network.default_host(),
         electrum_endpoint: state.servers.effective_electrum(state.network),
         servers_are_custom: !state.servers.for_network(state.network).is_empty(),
+        hardware_derivation_path: {
+            let wallet_account = state
+                .wallet
+                .as_ref()
+                .and_then(|wallet| parse_account_path(&wallet.account_path).ok())
+                .unwrap_or_else(|| AccountPath::default_for(state.network));
+            state.hardware.effective_path(wallet_account).path()
+        },
+        hardware_path_warning: state.hardware.path_warning(state.network).map(|account| {
+            format!(
+                "{} is not an account this wallet scans on {}. It is kept as chosen.",
+                account.path(),
+                state.network
+            )
+        }),
         hardware: state.hardware.clone(),
         show_cash_fusion,
         rows,
@@ -1792,6 +1833,18 @@ pub struct HardwareSessionState {
     pub device_label: Option<String>,
     /// The account xPub last exported from it. Public material only.
     pub account_xpub: Option<String>,
+    /// The account the device was told to use, when the user chose one.
+    ///
+    /// `None` means they never did, and the wallet's own account is used
+    /// instead. The React slice had to express that with a sentinel --
+    /// `UNSET_DERIVATION_PATH = "m/44'/145'/0'"` -- and every reader had to
+    /// compare against that exact literal, with a comment warning that "an
+    /// equal-looking expression here would silently stop matching if either
+    /// side moved". The sentinel is also a *mainnet* path, so a reader that
+    /// forgot the comparison showed `…/145'/…` to a chipnet wallet.
+    ///
+    /// `Option` says the same thing with nothing to compare against.
+    pub derivation_path: Option<AccountPath>,
     /// Ledger only; ignored by every other vendor.
     pub ledger_link: LedgerLink,
 }
@@ -1804,6 +1857,7 @@ impl HardwareSessionState {
             connected: false,
             device_label: None,
             account_xpub: None,
+            derivation_path: None,
             ledger_link: LedgerLink::Usb,
         }
     }
@@ -1813,6 +1867,24 @@ impl HardwareSessionState {
         matches!(self.vendor, Some(HardwareVendor::Ledger))
     }
 
+    /// The account this device will actually derive from.
+    ///
+    /// The wallet's own when the user never chose one, which is what keeps a
+    /// mainnet literal off a chipnet wallet's settings screen.
+    pub fn effective_path(&self, wallet_account: AccountPath) -> AccountPath {
+        self.derivation_path.unwrap_or(wallet_account)
+    }
+
+    /// A chosen account that this network would never scan.
+    ///
+    /// Returned rather than corrected: the path may be exactly what the user
+    /// meant, and silently swapping it is how a device signs for an account
+    /// nobody asked for. `None` when there is nothing to warn about.
+    pub fn path_warning(&self, network: Network) -> Option<AccountPath> {
+        self.derivation_path
+            .filter(|account| !account.is_scanned_for(network))
+    }
+
     /// Forget the attachment but keep the chosen device, as
     /// `disconnectHardwareWallet` does: the wallet still knows what it is,
     /// it just is not talking to it.
@@ -1820,6 +1892,8 @@ impl HardwareSessionState {
         self.connected = false;
         self.device_label = None;
         self.account_xpub = None;
+        // The chosen account survives: unplugging a device does not undo a
+        // setting, and re-plugging it should not silently derive elsewhere.
     }
 }
 
@@ -3745,6 +3819,108 @@ mod tests {
         ] {
             assert!(surface.can_spend(), "{surface:?} is a full wallet");
         }
+    }
+
+    #[test]
+    fn a_device_with_no_chosen_account_follows_the_wallet_rather_than_a_literal() {
+        // The React slice expressed "not chosen" as UNSET_DERIVATION_PATH,
+        // which is the string "m/44'/145'/0'" -- a *mainnet* path. Every reader
+        // had to compare against that exact literal, under a comment warning
+        // that an equal-looking expression would silently stop matching. A
+        // reader that forgot showed 145' to a chipnet wallet.
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        state.apply(AppAction::SetNetwork(Network::Chipnet));
+        state.apply(AppAction::SelectHardwareVendor(Some(
+            HardwareVendor::Keystone,
+        )));
+
+        let wallet_account = AccountPath::default_for(Network::Chipnet);
+        assert_eq!(state.hardware.derivation_path, None, "nothing chosen yet");
+        assert_eq!(
+            state.hardware.effective_path(wallet_account),
+            wallet_account,
+            "an unchosen device derives where the wallet does"
+        );
+        assert_eq!(
+            state.hardware.effective_path(wallet_account).coin_type(),
+            1,
+            "and that is chipnet's coin type, not the sentinel's 145"
+        );
+        assert_eq!(state.hardware.path_warning(Network::Chipnet), None);
+
+        // Choosing one is respected exactly.
+        let chosen = AccountPath::new(145, 2).expect("in range");
+        state.apply(AppAction::SetHardwareDerivationPath(Some(chosen)));
+        assert_eq!(state.hardware.derivation_path, Some(chosen));
+        assert_eq!(state.hardware.effective_path(wallet_account), chosen);
+
+        // Clearing it goes back to the wallet's, with nothing to compare
+        // against and no literal to drift.
+        state.apply(AppAction::SetHardwareDerivationPath(None));
+        assert_eq!(state.hardware.derivation_path, None);
+        assert_eq!(
+            state.hardware.effective_path(wallet_account),
+            wallet_account
+        );
+    }
+
+    #[test]
+    fn a_chosen_account_this_network_never_scans_is_reported_not_corrected() {
+        // Silently swapping it is how a device signs for an account nobody
+        // asked for; saying nothing is how a stale mainnet path rides onto
+        // chipnet unflagged. So it is surfaced and left alone.
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        state.apply(AppAction::SelectHardwareVendor(Some(
+            HardwareVendor::Ledger,
+        )));
+        let odd = AccountPath::new(9999, 0).expect("in range");
+        state.apply(AppAction::SetHardwareDerivationPath(Some(odd)));
+
+        assert_eq!(state.hardware.path_warning(Network::Chipnet), Some(odd));
+        assert_eq!(state.hardware.path_warning(Network::Mainnet), Some(odd));
+        assert_eq!(
+            state.hardware.derivation_path,
+            Some(odd),
+            "reported, and still exactly what the user chose"
+        );
+
+        // A path either network scans raises nothing.
+        state.apply(AppAction::SetHardwareDerivationPath(Some(
+            AccountPath::default_for(Network::Mainnet),
+        )));
+        assert_eq!(state.hardware.path_warning(Network::Mainnet), None);
+    }
+
+    #[test]
+    fn changing_the_account_drops_the_xpub_that_belonged_to_the_old_one() {
+        // Otherwise settings shows one account's xPub beside another's path.
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        state.apply(AppAction::SelectHardwareVendor(Some(
+            HardwareVendor::Trezor,
+        )));
+        state.apply(AppAction::HardwareConnected {
+            label: "Trezor Model T".into(),
+            account_xpub: "xpub-for-account-0".into(),
+        });
+        assert!(state.hardware.account_xpub.is_some());
+
+        state.apply(AppAction::SetHardwareDerivationPath(Some(
+            AccountPath::new(145, 1).expect("in range"),
+        )));
+        assert_eq!(state.hardware.account_xpub, None);
+        // The device is still chosen and still attached; only its export is
+        // stale.
+        assert_eq!(state.hardware.vendor, Some(HardwareVendor::Trezor));
+        assert!(state.hardware.connected);
+
+        // And unplugging does not undo the setting: re-plugging must not
+        // silently derive somewhere else.
+        state.apply(AppAction::DisconnectHardware);
+        assert_eq!(
+            state.hardware.derivation_path,
+            Some(AccountPath::new(145, 1).expect("in range"))
+        );
+        assert!(!state.hardware.connected);
     }
 
     #[test]

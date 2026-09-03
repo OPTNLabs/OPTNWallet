@@ -20,6 +20,8 @@
 //! and armv7 cross builds.
 
 use egui::{RichText, Ui};
+use optn_transport::{block_on_ready, AppTransport, Renderer, TransportError};
+
 use optn_app::{
     coins_view_model, format_bch, onboarding_actions, portfolio_totals, product_nav,
     settings_view_model, AppAction, AppRoute, AppState, OnboardingAction,
@@ -136,16 +138,149 @@ fn settings(ui: &mut Ui, state: &AppState, intent: &mut FrameIntent) {
             }
         ));
     }
+    if vm.hardware.vendor.is_some() {
+        // Resolved application-side, so this renderer holds no fallback rule.
+        ui.label(format!("device path: {}", vm.hardware_derivation_path));
+        if let Some(warning) = vm.hardware_path_warning.as_deref() {
+            ui.label(RichText::new(warning).strong());
+        }
+    }
     if ui.button("Toggle theme").clicked() {
         intent.raise(AppAction::ToggleTheme);
+    }
+}
+
+/// This renderer, attached to a transport and holding the state it last drew.
+///
+/// egui is immediate mode, so there is no widget tree to keep -- only the
+/// `Context`, which owns the retained interaction state a real toolkit needs
+/// between frames, and the snapshot the next frame will be built from.
+pub struct EguiRenderer<T: AppTransport> {
+    transport: T,
+    state: AppState,
+    ctx: egui::Context,
+    /// The viewport a host gives this renderer. Fixed here because there is no
+    /// window to ask.
+    viewport: egui::Rect,
+}
+
+impl<T: AppTransport> EguiRenderer<T> {
+    /// Build one frame and return what egui laid out, as text.
+    fn frame(&self) -> Vec<String> {
+        let input = egui::RawInput {
+            screen_rect: Some(self.viewport),
+            ..Default::default()
+        };
+        let output = self.ctx.run_ui(input, |ui| {
+            let _ = draw(ui, &self.state);
+        });
+        let mut painted = Vec::new();
+        for clipped in &output.shapes {
+            collect_text(&clipped.shape, &mut painted);
+        }
+        // egui panics if a texture delta is dropped unapplied, and there is no
+        // painter here to apply one to.
+        output.drop_without_applying_deltas();
+        painted
+    }
+}
+
+fn collect_text(shape: &egui::epaint::Shape, out: &mut Vec<String>) {
+    match shape {
+        egui::epaint::Shape::Text(text) => out.push(text.galley.text().to_owned()),
+        egui::epaint::Shape::Vec(shapes) => {
+            for inner in shapes {
+                collect_text(inner, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The host seam, satisfied by a renderer built on a real GUI toolkit.
+///
+/// The same trait `optn-ui-text` implements with no framework at all. A host
+/// written against `optn_transport::run` drives either one, which is what makes
+/// swapping them a type rather than a migration.
+impl<T: AppTransport> Renderer<T> for EguiRenderer<T> {
+    fn attach(transport: T) -> Result<Self, TransportError> {
+        let state = block_on_ready(transport.snapshot())?;
+        Ok(Self {
+            transport,
+            state,
+            ctx: egui::Context::default(),
+            viewport: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(520.0, 800.0)),
+        })
+    }
+
+    fn dispatch(&mut self, action: AppAction) -> Result<(), TransportError> {
+        block_on_ready(self.transport.dispatch(action))?;
+        self.state = block_on_ready(self.transport.snapshot())?;
+        Ok(())
+    }
+
+    fn state(&self) -> &AppState {
+        &self.state
+    }
+
+    fn painted(&self) -> Vec<String> {
+        self.frame()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// The one line a host changes to swap renderers.
+    ///
+    /// Everything below is written against `optn_transport::run` and never
+    /// names a renderer again. The same block exists in the other renderer's
+    /// crate with this line pointing at that one, and asserts the same facts.
+    type Ui<T> = EguiRenderer<T>;
+
+    /// A wallet being opened and looked at, as actions alone.
+    fn script() -> Vec<AppAction> {
+        let opened = seed_wallet_preview(Network::Chipnet, "swap", BIP39_TEST_VECTOR_MNEMONIC)
+            .expect("preview");
+        vec![
+            AppAction::SetNetwork(Network::Chipnet),
+            AppAction::OpenCreatedWallet {
+                name: opened.name,
+                receive_address: opened.receive_address,
+                account_path: opened.account_path,
+            },
+            AppAction::SetStealthSats(50_000),
+        ]
+    }
+
+    #[test]
+    fn a_host_drives_this_renderer_without_naming_it() {
+        // The host is `optn_transport::run`, shared and unchanged. Swapping
+        // renderers is the `Ui` alias above and nothing else -- no different
+        // host, no different actions, no different assertions.
+        let transport = LocalTransport::new(AppState::for_surface(AppSurface::Desktop));
+        let painted = optn_transport::run::<_, Ui<_>>(transport, &script()).expect("run");
+
+        // The same facts, from the same view models, whichever renderer drew.
+        // Asserted on the screen as a whole rather than on exact fragments:
+        // two renderers are entitled to lay one fact out differently -- this
+        // one writes "wallet: swap", the other just "swap" -- and a host that
+        // demanded identical strings would be testing the drawing, not the
+        // seam.
+        let screen = painted.join("\n");
+        assert!(screen.contains("swap"), "the wallet name: {painted:?}");
+        assert!(
+            screen.contains("stealth"),
+            "the RPA split reaches any renderer: {painted:?}"
+        );
+        for tab in ["Home", "Assets", "Actions", "Explore", "Settings"] {
+            assert!(screen.contains(tab), "missing {tab}: {painted:?}");
+        }
+    }
+
     use egui::{vec2, Context, Event, Modifiers, PointerButton, Pos2, RawInput, Rect};
     use optn_app::{seed_wallet_preview, AppSurface, Network, BIP39_TEST_VECTOR_MNEMONIC};
+    use optn_transport::LocalTransport;
 
     /// A pinned viewport, so layout is identical on every machine.
     fn viewport() -> RawInput {
@@ -348,6 +483,48 @@ mod tests {
         assert!(
             text.iter().any(|t| t.contains("fulcrum.example:50002")),
             "the override, not the default: {text:?}"
+        );
+        // The device's account reaches a third renderer already resolved. This
+        // wallet chose nothing, so it must show the wallet's own account -- and
+        // this renderer holds no rule that could produce that.
+        assert!(
+            text.iter()
+                .any(|t| t.contains("device path: m/44'/145'/0'")),
+            "the resolved account must reach every renderer: {text:?}"
+        );
+    }
+
+    #[test]
+    fn a_device_account_this_network_never_scans_is_flagged_in_every_renderer() {
+        // The warning is the application's, and it has to survive the swap: a
+        // renderer that quietly dropped it would leave a stale account signing
+        // with nothing on screen to say so.
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        state.apply(AppAction::SetNetwork(Network::Chipnet));
+        state.apply(AppAction::SelectHardwareVendor(Some(
+            optn_app::HardwareVendor::Keystone,
+        )));
+        state.apply(AppAction::SetHardwareDerivationPath(Some(
+            optn_app::AccountPath::new(9999, 0).expect("in range"),
+        )));
+        let opened = seed_wallet_preview(Network::Chipnet, "hw", BIP39_TEST_VECTOR_MNEMONIC)
+            .expect("preview");
+        state.apply(AppAction::OpenCreatedWallet {
+            name: opened.name,
+            receive_address: opened.receive_address,
+            account_path: opened.account_path,
+        });
+        state.apply(AppAction::Navigate(AppRoute::Settings));
+
+        let text = painted_text(&state);
+        assert!(
+            text.iter().any(|t| t.contains("m/44'/9999'/0'")),
+            "the chosen account is kept as chosen: {text:?}"
+        );
+        assert!(
+            text.iter()
+                .any(|t| t.contains("is not an account this wallet scans")),
+            "and the warning travels with it: {text:?}"
         );
     }
 

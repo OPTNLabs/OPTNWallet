@@ -512,7 +512,29 @@ fn DeviceSection(transport: UiTransport, state: RwSignal<AppState>) -> impl Into
                         <dt>"Device"</dt>
                         <dd>{move || session().device_label.unwrap_or_else(|| "-".into())}</dd>
                     </div>
+                    <div>
+                        <dt>"Account"</dt>
+                        // Resolved by the application. A device with no chosen
+                        // account derives where the wallet does, and this screen
+                        // does not hold that rule -- the React one had to compare
+                        // against a mainnet sentinel string in three places.
+                        <dd class="mono" data-testid="device-path">
+                            {move || settings_view_model(&state.get()).hardware_derivation_path}
+                        </dd>
+                    </div>
                 </dl>
+
+                <Show when=move || {
+                    settings_view_model(&state.get()).hardware_path_warning.is_some()
+                }>
+                    <p class="warn" data-testid="device-path-warning">
+                        {move || {
+                            settings_view_model(&state.get())
+                                .hardware_path_warning
+                                .unwrap_or_default()
+                        }}
+                    </p>
+                </Show>
 
                 // Ledger is the only vendor with a wire to choose.
                 <Show when=move || session().offers_link_choice()>

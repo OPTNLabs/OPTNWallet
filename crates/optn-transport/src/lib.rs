@@ -7,13 +7,16 @@
 //! crate; only these typed contracts are shared.
 
 use optn_app::{
-    AppAction, AppEvent, AppLockState, AppRoute, AppState, AppSurface, AuthScope, AutoLockMinutes,
-    CampaignOutput, Coin, ConnectState, CreateStep, FeatureFlag, FeatureFlags, FlipstarterPledge,
-    FreezeReason, HardwareSessionState, HardwareSetupPreview, HardwareVendor, ImportStep,
-    LedgerLink, MultisigSetupPreview, MultisigStep, Network, OpenedWallet, Outpoint, PledgeStatus,
-    ServerKind, ServerOverrides, SettingsRowId, SpendKind, SpendPlan, ThemeMode, UiSkin,
-    WalletKind, WatchOnlyKind, WatchOnlySetupPreview,
+    parse_account_path, AppAction, AppEvent, AppLockState, AppRoute, AppState, AppSurface,
+    AuthScope, AutoLockMinutes, CampaignOutput, Coin, ConnectState, CreateStep, FeatureFlag,
+    FeatureFlags, FlipstarterPledge, FreezeReason, HardwareSessionState, HardwareSetupPreview,
+    HardwareVendor, ImportStep, LedgerLink, MultisigSetupPreview, MultisigStep, Network,
+    OpenedWallet, Outpoint, PledgeStatus, ServerKind, ServerOverrides, SettingsRowId, SpendKind,
+    SpendPlan, ThemeMode, UiSkin, WalletKind, WatchOnlyKind, WatchOnlySetupPreview,
 };
+pub mod host;
+pub use host::{block_on_ready, run, Renderer};
+
 use serde::{Deserialize, Serialize};
 use std::{
     collections::VecDeque,
@@ -242,6 +245,10 @@ pub enum WireActionKind {
     SetLedgerLink {
         bluetooth: bool,
     },
+    SetHardwareDerivationPath {
+        #[serde(default)]
+        account_path: Option<String>,
+    },
     HardwareConnected {
         label: String,
         account_xpub: String,
@@ -434,6 +441,12 @@ pub struct WireHardwareSession {
     pub device_label: Option<String>,
     #[serde(default)]
     pub account_xpub: Option<String>,
+    /// The account the user chose for the device, if they chose one.
+    ///
+    /// Absent rather than a sentinel path: an older frame that never carried
+    /// this field decodes as "not chosen", which is the same thing it meant.
+    #[serde(default)]
+    pub derivation_path: Option<String>,
     /// Ledger only. `false` is USB.
     #[serde(default)]
     pub ledger_bluetooth: bool,
@@ -446,6 +459,7 @@ impl From<&HardwareSessionState> for WireHardwareSession {
             connected: value.connected,
             device_label: value.device_label.clone(),
             account_xpub: value.account_xpub.clone(),
+            derivation_path: value.derivation_path.map(|account| account.path()),
             ledger_bluetooth: matches!(value.ledger_link, LedgerLink::Bluetooth),
         }
     }
@@ -465,6 +479,16 @@ impl TryFrom<WireHardwareSession> for HardwareSessionState {
             connected: value.connected,
             device_label: value.device_label,
             account_xpub: value.account_xpub,
+            derivation_path: value
+                .derivation_path
+                .map(|path| {
+                    parse_account_path(&path).map_err(|error| {
+                        TransportError::InvalidData(format!(
+                            "hardware derivation path '{path}': {error}"
+                        ))
+                    })
+                })
+                .transpose()?,
             ledger_link: if value.ledger_bluetooth {
                 LedgerLink::Bluetooth
             } else {
@@ -867,6 +891,11 @@ impl From<AppAction> for WireAction {
             AppAction::SetLedgerLink(link) => WireActionKind::SetLedgerLink {
                 bluetooth: matches!(link, LedgerLink::Bluetooth),
             },
+            AppAction::SetHardwareDerivationPath(account) => {
+                WireActionKind::SetHardwareDerivationPath {
+                    account_path: account.map(|account| account.path()),
+                }
+            }
             AppAction::HardwareConnected {
                 label,
                 account_xpub,
@@ -1029,6 +1058,19 @@ impl TryFrom<WireAction> for AppAction {
             } else {
                 LedgerLink::Usb
             }),
+            WireActionKind::SetHardwareDerivationPath { account_path } => {
+                Self::SetHardwareDerivationPath(
+                    account_path
+                        .map(|path| {
+                            parse_account_path(&path).map_err(|error| {
+                                TransportError::InvalidData(format!(
+                                    "hardware derivation path '{path}': {error}"
+                                ))
+                            })
+                        })
+                        .transpose()?,
+                )
+            }
             WireActionKind::HardwareConnected {
                 label,
                 account_xpub,
