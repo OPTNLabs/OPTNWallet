@@ -17,6 +17,22 @@ status = "started"
 security_weight = 7
 
 [[component]]
+# Optional Apple-native provider and independent BCH reference (58 Opals).
+# Blocked, with evidence, not merely unstarted: every Opal package requires
+# macOS 26 / iOS 26 while OPTN's iOS deployment target is 14.0
+# (ios/App/App.xcodeproj), so adopting one raises the product minimum by
+# twelve major versions. OpalBase additionally pulls five sibling packages by
+# `branch = "develop"`, so pinning its tag still does not give a reproducible
+# build. The contract lives in optn-platform::apple and stays unimplemented
+# until those two are resolved.
+name = "apple-provider"
+current = "none"
+target = "rust-contract-plus-swift-adapter"
+layer = "platform"
+status = "blocked"
+security_weight = 6
+
+[[component]]
 name = "platform-contracts"
 current = "mixed"
 target = "rust"

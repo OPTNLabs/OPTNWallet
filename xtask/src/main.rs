@@ -7,6 +7,22 @@ use std::{
 
 const FRAMEWORK_NAMES: &[&str] = &["leptos", "tauri", "dioxus", "capacitor"];
 
+/// Apple/Swift packages that may only be reached through a platform provider.
+///
+/// The 58 Opals stack is an optional Apple-native provider and an independent
+/// BCH reference. It must never become a dependency of the crates that hold
+/// wallet truth: if OpalBase could be reached from `optn-core`, `optn-app` or
+/// `optn-runtime`, there would be two authoritative implementations and no
+/// rule for which one wins. Any adapter belongs behind `optn-platform`.
+const APPLE_PROVIDER_NAMES: &[&str] = &[
+    "opalbase",
+    "swiftfulcrum",
+    "opalcrypto",
+    "opalfusion",
+    "opalhedge",
+    "opaldiagnostics",
+];
+
 fn main() {
     let command = env::args().nth(1).unwrap_or_else(|| "architecture".into());
     match command.as_str() {
@@ -48,6 +64,27 @@ fn architecture() {
             if text.contains(framework) {
                 failures.push(format!(
                     "{} contains forbidden framework dependency '{framework}'",
+                    manifest.display()
+                ));
+            }
+        }
+    }
+
+    // Wallet truth stays in Rust. An Apple provider is reached through
+    // optn-platform's contracts, so the packages behind it must not appear in
+    // the crates that own domain, application or runtime state.
+    let wallet_truth_manifests = [
+        root.join("crates/optn-core/Cargo.toml"),
+        root.join("crates/optn-app/Cargo.toml"),
+        root.join("crates/optn-runtime/Cargo.toml"),
+    ];
+    for manifest in wallet_truth_manifests {
+        let text = read(&manifest).to_lowercase();
+        for package in APPLE_PROVIDER_NAMES {
+            if text.contains(package) {
+                failures.push(format!(
+                    "{} depends on Apple provider package '{package}'; wallet truth stays in \
+                     Rust and Apple adapters belong behind optn-platform",
                     manifest.display()
                 ));
             }
