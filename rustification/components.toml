@@ -98,7 +98,7 @@ security_weight = 8
 
 [[component]]
 name = "nfc-contactless"
-current = "platform-specific-or-absent"
+current = "apple-corenfc-tag-io-unavailable-without-session"
 target = "rust-protocols-thin-native-nfc-adapters"
 layer = "platform-provider"
 status = "started"
@@ -106,7 +106,7 @@ security_weight = 8
 
 [[component]]
 name = "apple-native-provider"
-current = "typed-swiftpm-contract-keychain-storage"
+current = "typed-swiftpm-keychain-and-corenfc-stubs"
 target = "thin-native-apple-capability-adapters-behind-optn-platform"
 layer = "platform-provider"
 status = "started"
