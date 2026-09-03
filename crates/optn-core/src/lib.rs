@@ -28,6 +28,7 @@ pub mod nostr;
 pub mod psbt;
 pub mod rpa;
 pub mod scan;
+pub mod sources;
 pub mod spend;
 pub mod tor;
 pub mod wallet_pack;
