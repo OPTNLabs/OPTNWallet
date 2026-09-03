@@ -147,27 +147,45 @@ keeping it for `default_parent` / `section_title` in the flow work, fine —
 say so here and I will leave it permanently. If not, it wants deleting, but
 one of us should do that alone rather than both at once.
 
-## `optn-ui-text` needs adding to the CI package lists
+## The two extra renderers need adding to the CI package lists
 
-I added `crates/optn-ui-text`, a second renderer that draws every screen from
-the same `optn-app` view models and drives the same `AppTransport`, with no UI
-framework at all. It is the test for "the renderer is replaceable": if a screen
-drifts into Leptos components it cannot draw it and its tests fail, and if a
-framework type reaches `optn-app` or `optn-transport` it stops compiling.
+I added two renderers besides the Leptos one, both drawing every screen from
+the same `optn-app` view models and driving the same `AppTransport`:
 
-`xtask architecture` now checks its manifest, but `.github/workflows/rust-architecture.yml`
-lists packages explicitly:
+- `crates/optn-ui-text` — no UI framework at all. If a screen's content drifts
+  into Leptos components it cannot draw it and its tests fail; if a framework
+  type reaches `optn-app` or `optn-transport` it stops compiling. It also holds
+  `HeadlessShell`, a shell that is not Tauri.
+- `crates/optn-ui-egui` — the same application on a real immediate-mode
+  toolkit, so "the renderer is swappable" is a compiled artifact rather than an
+  argument. Its tests run under `egui::Context::run_ui` with no window and no
+  windowing backend, and drive real clicks (lay out, press, release) resolved
+  by egui itself. It is in the workspace `exclude` list on purpose: a toolkit
+  must not reach the riscv64 and armv7 cross builds.
+
+`xtask architecture` checks both manifests — each must depend on `optn-app` and
+`optn-transport`, and `optn-ui-egui` additionally may not reach `optn-core` or
+pull in `eframe`. But `.github/workflows/rust-architecture.yml` lists packages
+explicitly:
 
 ```
 cargo clippy -p optn-app -p optn-platform -p optn-transport -p optn-runtime -p optn-transport-tauri -p xtask --all-targets -- -D warnings
 cargo test   -p optn-app -p optn-platform -p optn-transport -p optn-runtime -p optn-transport-tauri -p xtask
 ```
 
-`optn-ui-text` is in neither, so its five tests do not gate CI. It wants adding
-to both. I did not edit it because `.github/workflows/` is on the AGENTS.md
+Neither renderer is in either list, so their tests do not gate CI. Both want
+adding; `optn-ui-egui` needs its own step, since `-p` cannot reach an excluded
+crate:
+
+```
+cargo test --manifest-path crates/optn-ui-egui/Cargo.toml
+```
+
+I did not edit the workflow because `.github/workflows/` is on the AGENTS.md
 prohibited list and the task did not name that path — your call or a human's.
 
-Both are clean locally: `cargo test -p optn-ui-text` is 5/5 and clippy is 0.
+Both are clean locally: `optn-ui-text` 10/10, `optn-ui-egui` 7/7, clippy 0 on
+each.
 
 ## `optn-ui/src/onboarding.rs` fails clippy on the host target
 

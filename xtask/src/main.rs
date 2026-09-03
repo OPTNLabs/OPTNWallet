@@ -59,7 +59,7 @@ fn architecture() {
 
     let mut failures = Vec::new();
     for manifest in neutral_manifests {
-        let text = read(&manifest).to_lowercase();
+        let text = manifest_body(&read(&manifest)).to_lowercase();
         for framework in FRAMEWORK_NAMES {
             if text.contains(framework) {
                 failures.push(format!(
@@ -79,7 +79,7 @@ fn architecture() {
         root.join("crates/optn-runtime/Cargo.toml"),
     ];
     for manifest in wallet_truth_manifests {
-        let text = read(&manifest).to_lowercase();
+        let text = manifest_body(&read(&manifest)).to_lowercase();
         for package in APPLE_PROVIDER_NAMES {
             if text.contains(package) {
                 failures.push(format!(
@@ -110,13 +110,65 @@ fn architecture() {
         &mut failures,
     );
     for framework in FRAMEWORK_NAMES {
-        if text_ui_manifest.to_lowercase().contains(framework) {
+        if manifest_body(&text_ui_manifest)
+            .to_lowercase()
+            .contains(framework)
+        {
             failures.push(format!(
                 "crates/optn-ui-text depends on '{framework}'; it exists to prove a renderer \
                  needs only optn-app and optn-transport, so a framework there defeats it"
             ));
         }
     }
+
+    // A third renderer, on a real GUI toolkit, is the argument that the
+    // renderer seam is a seam and not a Leptos-shaped hole. It only carries
+    // that weight while egui is the *only* thing it adds: the moment it needs
+    // optn-core, or a second UI framework, swapping toolkits stops being one
+    // crate and becomes a migration again.
+    let egui_ui_manifest = read(&root.join("crates/optn-ui-egui/Cargo.toml"));
+    require_dependency(
+        "crates/optn-ui-egui",
+        &egui_ui_manifest,
+        "optn-app",
+        &mut failures,
+    );
+    require_dependency(
+        "crates/optn-ui-egui",
+        &egui_ui_manifest,
+        "optn-transport",
+        &mut failures,
+    );
+    forbid_dependencies(
+        "crates/optn-ui-egui",
+        &egui_ui_manifest,
+        &[
+            "optn-core",
+            "optn-runtime",
+            "optn-platform",
+            "optn-platform-native",
+        ],
+        &mut failures,
+    );
+    for framework in FRAMEWORK_NAMES {
+        if manifest_body(&egui_ui_manifest)
+            .to_lowercase()
+            .contains(framework)
+        {
+            failures.push(format!(
+                "crates/optn-ui-egui depends on '{framework}'; it renders on egui alone, and a \
+                 second framework there would mean the toolkits are not interchangeable"
+            ));
+        }
+    }
+    // eframe would drag in winit and a GPU backend, and the tests would stop
+    // being runnable on a machine with no display.
+    forbid_dependencies(
+        "crates/optn-ui-egui",
+        &egui_ui_manifest,
+        &["eframe"],
+        &mut failures,
+    );
 
     let ui_manifest = read(&root.join("crates/optn-ui/Cargo.toml"));
     require_dependency("crates/optn-ui", &ui_manifest, "optn-app", &mut failures);
@@ -233,8 +285,23 @@ fn architecture() {
     std::process::exit(1);
 }
 
+/// A manifest with its comments removed.
+///
+/// These guards match on manifest text, and a comment that names a crate is
+/// not a dependency on it: a note explaining that a crate deliberately does
+/// *not* pull something in would otherwise read as pulling it in. Stripping
+/// comments also stops a comment from satisfying `require_dependency`, which
+/// is the more dangerous direction of the same mistake.
+fn manifest_body(manifest: &str) -> String {
+    manifest
+        .lines()
+        .map(|line| line.split_once('#').map_or(line, |(before, _)| before))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn require_dependency(scope: &str, manifest: &str, dependency: &str, failures: &mut Vec<String>) {
-    if !manifest.contains(dependency) {
+    if !manifest_body(manifest).contains(dependency) {
         failures.push(format!(
             "{scope} must depend on '{dependency}' to preserve the intended boundary"
         ));
@@ -247,8 +314,9 @@ fn forbid_dependencies(
     dependencies: &[&str],
     failures: &mut Vec<String>,
 ) {
+    let body = manifest_body(manifest);
     for dependency in dependencies {
-        if manifest.contains(dependency) {
+        if body.contains(dependency) {
             failures.push(format!(
                 "{scope} contains forbidden dependency '{dependency}'"
             ));
