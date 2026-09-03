@@ -9,9 +9,10 @@
 use optn_app::{
     AppAction, AppEvent, AppLockState, AppRoute, AppState, AppSurface, AuthScope, AutoLockMinutes,
     CampaignOutput, Coin, CreateStep, FeatureFlag, FeatureFlags, FlipstarterPledge, FreezeReason,
-    HardwareSetupPreview, HardwareVendor, ImportStep, MultisigSetupPreview, MultisigStep, Network,
-    OpenedWallet, Outpoint, PledgeStatus, SettingsRowId, SpendKind, SpendPlan, ThemeMode, UiSkin,
-    WalletKind, WatchOnlyKind, WatchOnlySetupPreview,
+    HardwareSessionState, HardwareSetupPreview, HardwareVendor, ImportStep, LedgerLink,
+    MultisigSetupPreview, MultisigStep, Network, OpenedWallet, Outpoint, PledgeStatus,
+    SettingsRowId, SpendKind, SpendPlan, ThemeMode, UiSkin, WalletKind, WatchOnlyKind,
+    WatchOnlySetupPreview,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -228,6 +229,18 @@ pub enum WireActionKind {
         receive_token_address: String,
         change_address: String,
     },
+    SelectHardwareVendor {
+        #[serde(default)]
+        vendor: Option<String>,
+    },
+    SetLedgerLink {
+        bluetooth: bool,
+    },
+    HardwareConnected {
+        label: String,
+        account_xpub: String,
+    },
+    DisconnectHardware,
     OpenMultisigWallet {
         wallet_name: String,
         policy: String,
@@ -314,6 +327,8 @@ pub struct WireState {
     #[serde(default)]
     pub spend: Option<WireSpendPlan>,
     #[serde(default)]
+    pub hardware: WireHardwareSession,
+    #[serde(default)]
     pub create_step: WireCreateStep,
     #[serde(default)]
     pub import_step: WireImportStep,
@@ -383,6 +398,58 @@ pub enum WireWalletKind {
     Hardware,
 }
 
+/// The device session, mirrored for renderers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct WireHardwareSession {
+    /// Vendor id, or absent when no device is chosen.
+    #[serde(default)]
+    pub vendor: Option<String>,
+    #[serde(default)]
+    pub connected: bool,
+    #[serde(default)]
+    pub device_label: Option<String>,
+    #[serde(default)]
+    pub account_xpub: Option<String>,
+    /// Ledger only. `false` is USB.
+    #[serde(default)]
+    pub ledger_bluetooth: bool,
+}
+
+impl From<&HardwareSessionState> for WireHardwareSession {
+    fn from(value: &HardwareSessionState) -> Self {
+        Self {
+            vendor: value.vendor.map(|v| v.id().to_string()),
+            connected: value.connected,
+            device_label: value.device_label.clone(),
+            account_xpub: value.account_xpub.clone(),
+            ledger_bluetooth: matches!(value.ledger_link, LedgerLink::Bluetooth),
+        }
+    }
+}
+
+impl TryFrom<WireHardwareSession> for HardwareSessionState {
+    type Error = TransportError;
+
+    fn try_from(value: WireHardwareSession) -> Result<Self, Self::Error> {
+        Ok(Self {
+            vendor: match value.vendor {
+                None => None,
+                Some(id) => Some(HardwareVendor::from_id(&id).ok_or_else(|| {
+                    TransportError::InvalidData(format!("unknown hardware vendor '{id}'"))
+                })?),
+            },
+            connected: value.connected,
+            device_label: value.device_label,
+            account_xpub: value.account_xpub,
+            ledger_link: if value.ledger_bluetooth {
+                LedgerLink::Bluetooth
+            } else {
+                LedgerLink::Usb
+            },
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WireOpenedWallet {
     pub kind: WireWalletKind,
@@ -433,6 +500,7 @@ pub enum WireEventKind {
     FlipstarterPledgesChanged,
     NoticeChanged,
     WalletOpened,
+    HardwareSessionChanged,
     SpendPrepared,
     WalletRebuilt,
     FlowChanged,
@@ -761,6 +829,20 @@ impl From<AppAction> for WireAction {
                 receive_token_address: preview.receive_token_address,
                 change_address: preview.change_address,
             },
+            AppAction::SelectHardwareVendor(vendor) => WireActionKind::SelectHardwareVendor {
+                vendor: vendor.map(|v| v.id().to_string()),
+            },
+            AppAction::SetLedgerLink(link) => WireActionKind::SetLedgerLink {
+                bluetooth: matches!(link, LedgerLink::Bluetooth),
+            },
+            AppAction::HardwareConnected {
+                label,
+                account_xpub,
+            } => WireActionKind::HardwareConnected {
+                label,
+                account_xpub,
+            },
+            AppAction::DisconnectHardware => WireActionKind::DisconnectHardware,
             AppAction::OpenMultisigWallet(preview) => WireActionKind::OpenMultisigWallet {
                 wallet_name: preview.wallet_name,
                 policy: preview.policy,
@@ -887,6 +969,29 @@ impl TryFrom<WireAction> for AppAction {
                 receive_token_address,
                 change_address,
             }),
+            WireActionKind::SelectHardwareVendor { vendor } => Self::SelectHardwareVendor(
+                // An unknown id is refused rather than decoded as some other
+                // device; None genuinely means "forget the device".
+                match vendor {
+                    None => None,
+                    Some(id) => Some(HardwareVendor::from_id(&id).ok_or_else(|| {
+                        TransportError::InvalidData(format!("unknown hardware vendor '{id}'"))
+                    })?),
+                },
+            ),
+            WireActionKind::SetLedgerLink { bluetooth } => Self::SetLedgerLink(if bluetooth {
+                LedgerLink::Bluetooth
+            } else {
+                LedgerLink::Usb
+            }),
+            WireActionKind::HardwareConnected {
+                label,
+                account_xpub,
+            } => Self::HardwareConnected {
+                label,
+                account_xpub,
+            },
+            WireActionKind::DisconnectHardware => Self::DisconnectHardware,
             WireActionKind::OpenMultisigWallet {
                 wallet_name,
                 policy,
@@ -988,6 +1093,7 @@ impl From<&AppState> for WireState {
             notice: value.notice.clone(),
             wallet: value.wallet.as_ref().map(WireOpenedWallet::from),
             spend: value.spend.as_ref().map(WireSpendPlan::from),
+            hardware: WireHardwareSession::from(&value.hardware),
             create_step: value.create_step.into(),
             import_step: value.import_step.into(),
             settings_focus: value.settings_focus.map(settings_row_id).map(str::to_owned),
@@ -1129,6 +1235,7 @@ impl TryFrom<WireState> for AppState {
             notice: value.notice,
             wallet: value.wallet.map(OpenedWallet::from),
             spend: value.spend.map(SpendPlan::try_from).transpose()?,
+            hardware: HardwareSessionState::try_from(value.hardware)?,
             create_step: value.create_step.into(),
             import_step: value.import_step.into(),
             settings_focus: value
@@ -1172,6 +1279,7 @@ impl From<AppEvent> for WireEvent {
             AppEvent::FlipstarterPledgesChanged => WireEventKind::FlipstarterPledgesChanged,
             AppEvent::NoticeChanged => WireEventKind::NoticeChanged,
             AppEvent::WalletOpened => WireEventKind::WalletOpened,
+            AppEvent::HardwareSessionChanged => WireEventKind::HardwareSessionChanged,
             AppEvent::SpendPrepared => WireEventKind::SpendPrepared,
             AppEvent::WalletRebuilt => WireEventKind::WalletRebuilt,
             AppEvent::FlowChanged => WireEventKind::FlowChanged,
@@ -1207,6 +1315,7 @@ impl TryFrom<WireEvent> for AppEvent {
             WireEventKind::FlipstarterPledgesChanged => Self::FlipstarterPledgesChanged,
             WireEventKind::NoticeChanged => Self::NoticeChanged,
             WireEventKind::WalletOpened => Self::WalletOpened,
+            WireEventKind::HardwareSessionChanged => Self::HardwareSessionChanged,
             WireEventKind::SpendPrepared => Self::SpendPrepared,
             WireEventKind::WalletRebuilt => Self::WalletRebuilt,
             WireEventKind::FlowChanged => Self::FlowChanged,

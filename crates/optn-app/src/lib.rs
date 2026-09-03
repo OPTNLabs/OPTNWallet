@@ -286,6 +286,9 @@ pub struct AppState {
     pub notice: Option<String>,
     pub wallet: Option<OpenedWallet>,
     pub spend: Option<SpendPlan>,
+    /// The connected device, if any. Separate from the opened wallet: a
+    /// wallet remembers which device it belongs to while nothing is plugged in.
+    pub hardware: HardwareSessionState,
     pub create_step: CreateStep,
     pub import_step: ImportStep,
     pub settings_focus: Option<SettingsRowId>,
@@ -359,6 +362,7 @@ impl AppState {
             notice: None,
             wallet: None,
             spend: None,
+            hardware: HardwareSessionState::new(),
             create_step: CreateStep::Reveal,
             import_step: ImportStep::Words,
             settings_focus: None,
@@ -430,6 +434,17 @@ pub enum AppAction {
     OpenWatchOnlyWallet(WatchOnlySetupPreview),
     OpenHardwareWallet(HardwareSetupPreview),
     OpenMultisigWallet(MultisigSetupPreview),
+    /// Choose which device to talk to. `None` forgets the device entirely.
+    SelectHardwareVendor(Option<HardwareVendor>),
+    /// Ledger only: USB or Bluetooth. Ignored by every other vendor.
+    SetLedgerLink(LedgerLink),
+    /// A device answered. Public material only.
+    HardwareConnected {
+        label: String,
+        account_xpub: String,
+    },
+    /// Forget the attachment, keep the chosen device.
+    DisconnectHardware,
     PrepareSend {
         destination: String,
         amount_sats: u64,
@@ -489,6 +504,7 @@ pub enum AppEvent {
     FlipstarterPledgesChanged,
     NoticeChanged,
     WalletOpened,
+    HardwareSessionChanged,
     SpendPrepared,
     WalletRebuilt,
     FlowChanged,
@@ -718,6 +734,46 @@ impl AppState {
                 self.route = AppRoute::WalletHome;
                 self.lock.mark_unlocked();
                 Some(AppEvent::WalletOpened)
+            }
+            AppAction::SelectHardwareVendor(vendor) => {
+                if self.hardware.vendor == vendor {
+                    return None;
+                }
+                // Changing device invalidates whatever the last one said.
+                self.hardware.disconnect();
+                self.hardware.vendor = vendor;
+                if vendor != Some(HardwareVendor::Ledger) {
+                    // The wire choice is Ledger's; do not leave a stale
+                    // Bluetooth preference sitting on a Trezor.
+                    self.hardware.ledger_link = LedgerLink::Usb;
+                }
+                Some(AppEvent::HardwareSessionChanged)
+            }
+            AppAction::SetLedgerLink(link) => {
+                if !self.hardware.offers_link_choice() || self.hardware.ledger_link == link {
+                    return None;
+                }
+                self.hardware.ledger_link = link;
+                Some(AppEvent::HardwareSessionChanged)
+            }
+            AppAction::HardwareConnected {
+                label,
+                account_xpub,
+            } => {
+                if self.hardware.vendor.is_none() {
+                    return self.reject("Choose a device first.".into());
+                }
+                self.hardware.connected = true;
+                self.hardware.device_label = Some(label);
+                self.hardware.account_xpub = Some(account_xpub);
+                Some(AppEvent::HardwareSessionChanged)
+            }
+            AppAction::DisconnectHardware => {
+                if !self.hardware.connected && self.hardware.device_label.is_none() {
+                    return None;
+                }
+                self.hardware.disconnect();
+                Some(AppEvent::HardwareSessionChanged)
             }
             AppAction::OpenMultisigWallet(preview) => {
                 // Multisig is a watch-only wallet: this device holds public
@@ -1546,6 +1602,17 @@ pub struct HardwareSessionState {
 }
 
 impl HardwareSessionState {
+    /// No device chosen. `const` so `AppState::for_surface` stays const.
+    pub const fn new() -> Self {
+        Self {
+            vendor: None,
+            connected: false,
+            device_label: None,
+            account_xpub: None,
+            ledger_link: LedgerLink::Usb,
+        }
+    }
+
     /// Whether the Ledger wire choice should even be offered.
     pub fn offers_link_choice(&self) -> bool {
         matches!(self.vendor, Some(HardwareVendor::Ledger))
@@ -2696,6 +2763,72 @@ mod tests {
             );
             assert!(!item.label().is_empty());
         }
+    }
+
+    #[test]
+    fn the_device_session_is_driven_by_typed_actions() {
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        assert_eq!(state.hardware, HardwareSessionState::new());
+
+        // Connecting before choosing a device is refused rather than
+        // inventing a vendor.
+        state.apply(AppAction::HardwareConnected {
+            label: "Nano X".into(),
+            account_xpub: "xpub-under-test".into(),
+        });
+        assert!(!state.hardware.connected);
+        assert!(state.notice.is_some());
+
+        assert_eq!(
+            state.reduce(AppAction::SelectHardwareVendor(Some(
+                HardwareVendor::Ledger
+            ))),
+            Some(AppEvent::HardwareSessionChanged)
+        );
+        assert!(state.hardware.offers_link_choice());
+        assert_eq!(
+            state.reduce(AppAction::SetLedgerLink(LedgerLink::Bluetooth)),
+            Some(AppEvent::HardwareSessionChanged)
+        );
+        assert_eq!(state.hardware.ledger_link, LedgerLink::Bluetooth);
+
+        state.apply(AppAction::HardwareConnected {
+            label: "Nano X".into(),
+            account_xpub: "xpub-under-test".into(),
+        });
+        assert!(state.hardware.connected);
+        assert_eq!(state.hardware.device_label.as_deref(), Some("Nano X"));
+
+        // Switching device drops the previous device's answers, and clears a
+        // Bluetooth preference that means nothing to a Trezor.
+        state.apply(AppAction::SelectHardwareVendor(Some(
+            HardwareVendor::Trezor,
+        )));
+        assert!(!state.hardware.connected, "a Trezor is not the Ledger");
+        assert_eq!(state.hardware.account_xpub, None);
+        assert_eq!(state.hardware.ledger_link, LedgerLink::Usb);
+        assert!(!state.hardware.offers_link_choice());
+        assert_eq!(
+            state.reduce(AppAction::SetLedgerLink(LedgerLink::Bluetooth)),
+            None
+        );
+
+        // Disconnect keeps the device, forgets the attachment.
+        state.apply(AppAction::HardwareConnected {
+            label: "Model T".into(),
+            account_xpub: "xpub-two".into(),
+        });
+        assert_eq!(
+            state.reduce(AppAction::DisconnectHardware),
+            Some(AppEvent::HardwareSessionChanged)
+        );
+        assert_eq!(state.hardware.vendor, Some(HardwareVendor::Trezor));
+        assert!(!state.hardware.connected);
+        assert_eq!(state.reduce(AppAction::DisconnectHardware), None);
+
+        // Forgetting the device entirely.
+        state.apply(AppAction::SelectHardwareVendor(None));
+        assert_eq!(state.hardware, HardwareSessionState::new());
     }
 
     #[test]
