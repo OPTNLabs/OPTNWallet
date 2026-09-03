@@ -142,6 +142,9 @@ pub struct WireCoin {
     pub label: Option<String>,
     #[serde(default)]
     pub freeze: Option<WireFreezeReason>,
+    /// Local CashFusion round count. Never on-chain.
+    #[serde(default)]
+    pub fuse_depth: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -708,6 +711,7 @@ impl From<&Coin> for WireCoin {
             address: value.address().to_owned(),
             label: value.label().map(str::to_owned),
             freeze: value.freeze().map(WireFreezeReason::from),
+            fuse_depth: value.fuse_depth(),
         }
     }
 }
@@ -722,6 +726,7 @@ impl TryFrom<WireCoin> for Coin {
             .map_err(|error| TransportError::InvalidData(error.to_string()))?;
         coin.set_label(value.label);
         coin.restore_freeze(value.freeze.map(FreezeReason::from));
+        let coin = coin.with_fuse_depth(value.fuse_depth);
         Ok(coin)
     }
 }

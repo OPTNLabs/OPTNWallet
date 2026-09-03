@@ -467,6 +467,11 @@ fn CoinRow(
     let label = coin.label().unwrap_or("").to_owned();
     let has_label = !label.is_empty();
     let amount = format_bch(coin.value_sats());
+    // Local wallet record, never on-chain, so it is a chip rather than
+    // anything presented as verifiable.
+    let fusion = coin.fusion_label();
+    let fused = fusion.clone().unwrap_or_default();
+    let is_fused = fusion.is_some();
     let out_text = outpoint.to_string();
     let freeze_or_unfreeze = move |_| {
         if frozen {
@@ -481,7 +486,14 @@ fn CoinRow(
             <tr>
                 <td class="mono">{out_text}</td>
                 <td>{amount}</td>
-                <td>{status}</td>
+                <td>
+                    {status}
+                    <Show when=move || is_fused>
+                        <span class="fusion-chip" data-testid="fusion-chip">
+                            {fused.clone()}
+                        </span>
+                    </Show>
+                </td>
                 <td>
                     <button class="secondary" type="button" on:click=freeze_or_unfreeze>
                         {if frozen { "Unfreeze" } else { "Freeze" }}
@@ -494,7 +506,14 @@ fn CoinRow(
         view! {
             <article class="source-row stacked">
                 <div>
-                    <p class="source-title">{amount}</p>
+                    <p class="source-title">
+                        {amount}
+                        <Show when=move || is_fused>
+                            <span class="fusion-chip" data-testid="fusion-chip">
+                                {fused.clone()}
+                            </span>
+                        </Show>
+                    </p>
                     <p class="muted">{status}</p>
                     <p class="mono">{out_text}</p>
                     <Show when=move || has_label>

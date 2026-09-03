@@ -1057,3 +1057,16 @@ h1 {
 .derivation-picker .choice-list {
   margin: 0;
 }
+
+/* Local CashFusion marker. Never on-chain -- a wallet record only. */
+.fusion-chip {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 0.4rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  vertical-align: middle;
+  color: var(--accent-text);
+  background: var(--accent);
+}
