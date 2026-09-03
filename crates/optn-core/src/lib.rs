@@ -23,6 +23,7 @@ pub mod fusion;
 pub mod hd;
 pub mod multisig;
 pub mod network;
+pub mod psbt;
 pub mod rpa;
 pub mod scan;
 pub mod spend;
