@@ -91,6 +91,33 @@ fn architecture() {
         }
     }
 
+    // A second renderer keeps the first one honest. If a screen's content
+    // drifts into Leptos components, optn-ui-text cannot draw it and its tests
+    // fail; if a UI framework leaks into optn-app or optn-transport, it stops
+    // compiling. Both only work while it depends on those two and nothing
+    // else, so that is checked rather than trusted.
+    let text_ui_manifest = read(&root.join("crates/optn-ui-text/Cargo.toml"));
+    require_dependency(
+        "crates/optn-ui-text",
+        &text_ui_manifest,
+        "optn-app",
+        &mut failures,
+    );
+    require_dependency(
+        "crates/optn-ui-text",
+        &text_ui_manifest,
+        "optn-transport",
+        &mut failures,
+    );
+    for framework in FRAMEWORK_NAMES {
+        if text_ui_manifest.to_lowercase().contains(framework) {
+            failures.push(format!(
+                "crates/optn-ui-text depends on '{framework}'; it exists to prove a renderer \
+                 needs only optn-app and optn-transport, so a framework there defeats it"
+            ));
+        }
+    }
+
     let ui_manifest = read(&root.join("crates/optn-ui/Cargo.toml"));
     require_dependency("crates/optn-ui", &ui_manifest, "optn-app", &mut failures);
     require_dependency(

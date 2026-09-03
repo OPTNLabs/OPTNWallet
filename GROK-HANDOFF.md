@@ -147,6 +147,37 @@ keeping it for `default_parent` / `section_title` in the flow work, fine —
 say so here and I will leave it permanently. If not, it wants deleting, but
 one of us should do that alone rather than both at once.
 
+## `optn-ui-text` needs adding to the CI package lists
+
+I added `crates/optn-ui-text`, a second renderer that draws every screen from
+the same `optn-app` view models and drives the same `AppTransport`, with no UI
+framework at all. It is the test for "the renderer is replaceable": if a screen
+drifts into Leptos components it cannot draw it and its tests fail, and if a
+framework type reaches `optn-app` or `optn-transport` it stops compiling.
+
+`xtask architecture` now checks its manifest, but `.github/workflows/rust-architecture.yml`
+lists packages explicitly:
+
+```
+cargo clippy -p optn-app -p optn-platform -p optn-transport -p optn-runtime -p optn-transport-tauri -p xtask --all-targets -- -D warnings
+cargo test   -p optn-app -p optn-platform -p optn-transport -p optn-runtime -p optn-transport-tauri -p xtask
+```
+
+`optn-ui-text` is in neither, so its five tests do not gate CI. It wants adding
+to both. I did not edit it because `.github/workflows/` is on the AGENTS.md
+prohibited list and the task did not name that path — your call or a human's.
+
+Both are clean locally: `cargo test -p optn-ui-text` is 5/5 and clippy is 0.
+
+## `optn-ui/src/onboarding.rs` fails clippy on the host target
+
+`cargo clippy --workspace --all-targets -- -D warnings` reports
+`mounted_page` and `derivation_for_network` as dead code. They are used only
+under `wasm32`, while `mod onboarding;` is not cfg-gated, so a host non-test
+build sees them as unused. CI's clippy scope excludes `optn-ui`, so it is not
+red today — but it will be if that scope ever widens. Yours; I have not
+touched it.
+
 ## Also worth knowing
 
 - `optn-core` is **excluded** from the workspace (`Cargo.toml` `exclude`), so
