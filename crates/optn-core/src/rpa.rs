@@ -15,6 +15,11 @@
 //! compressed keys; upstream PR #3225 calls that unintentional. We follow the
 //! spec, matching the desktop wallet's `RpaService.ts`.
 //!
+//! The name shown to a user is **Cash Code**. The wire prefix does not
+//! follow it: codes are still emitted as `cashcode:` / `cashcodetest:` and
+//! legacy `paycode:` strings are still accepted, because renaming a prefix
+//! would invalidate every code already handed out.
+//!
 //! Codes are emitted as `cashcode:` / `cashcodetest:`. Legacy `paycode:` /
 //! `paycodetest:` strings are still accepted as send targets so codes already
 //! handed out keep working; nothing here ever emits one.
@@ -304,7 +309,7 @@ pub fn send_block_reason(code: &Cashcode) -> Option<String> {
     // is "a necessity for version 2, 4, 6 and 8".
     if code.version == 0x02 || code.version == 0x06 {
         return Some(
-            "this code is marked offline-only: the recipient expects payment \
+            "this Cash Code is marked offline-only: the recipient expects payment \
              details out of band, not on-chain"
                 .to_string(),
         );
@@ -315,7 +320,7 @@ pub fn send_block_reason(code: &Cashcode) -> Option<String> {
     // and reads as an internal error rather than a declined code.
     if code.prefix_bits == 0 {
         return Some(
-            "this code carries no scan prefix, so the recipient is not watching \
+            "this Cash Code carries no scan prefix, so the recipient is not watching \
              the chain for it"
                 .to_string(),
         );
@@ -328,7 +333,7 @@ pub fn send_block_reason(code: &Cashcode) -> Option<String> {
 pub fn grind_string(scan_pubkey: &[u8; 33], prefix_bits: u8) -> Result<String> {
     if !matches!(prefix_bits, 4 | 8 | 12 | 16) {
         return Err(CliError::Usage(format!(
-            "unsupported RPA prefix size: {prefix_bits} bits"
+            "unsupported Cash Code prefix size: {prefix_bits} bits"
         )));
     }
     let chars = (prefix_bits / 4) as usize;
