@@ -25,6 +25,7 @@ pub mod hd;
 pub mod multisig;
 pub mod network;
 pub mod nostr;
+pub mod nostr_identity;
 pub mod psbt;
 pub mod rpa;
 pub mod scan;
