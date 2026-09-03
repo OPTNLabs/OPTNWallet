@@ -15,8 +15,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  apple-provider:
-    name: Apple native and Opal reference
+  apple-native:
+    name: Apple native provider (iOS 14)
     runs-on: macos-26
     timeout-minutes: 30
     steps:
@@ -34,29 +34,100 @@ jobs:
       - name: Test native Apple provider
         run: swift test --package-path apple/OPTNAppleProvider
 
-      - name: Resolve pinned Opal reference dependencies
-        run: swift package --package-path apple/OPTNOpalReference resolve
-
-      - name: Verify immutable upstream pins
-        run: |
-          grep -Fq '611a53f2047660e0dd221f75526ce11335be901a' apple/OPTNOpalReference/Package.swift
-          grep -Fq '8c42eeb40d64776789e70694e4e5006d2afa400c' apple/OPTNOpalReference/Package.swift
-          ! grep -Eq 'branch:|OpalBase|OpalCrypto|OpalFusion|OpalHedge' apple/OPTNOpalReference/Package.swift
-
-      - name: Test Opal reference boundary
-        run: swift test --package-path apple/OPTNOpalReference
-
-      - name: Compile native provider for iOS simulator
+      - name: Compile native provider for iOS 14 simulator
         working-directory: apple/OPTNAppleProvider
         run: |
           xcodebuild \
             -scheme OPTNAppleProvider \
             -sdk iphonesimulator \
             -destination 'generic/platform=iOS Simulator' \
-            -derivedDataPath "$RUNNER_TEMP/optn-apple-provider-ios" \
+            -derivedDataPath "$RUNNER_TEMP/optn-apple-provider-ios14" \
+            IPHONEOS_DEPLOYMENT_TARGET=14.0 \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             build
+
+  apple-opal-gated:
+    name: Apple Opal flavor (GATED, not iOS 14 parity)
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Toolchain evidence
+        run: |
+          swift --version
+          xcodebuild -version
+          xcrun --sdk iphonesimulator --show-sdk-version
+
+      - name: Static Opal supply-chain gate
+        run: |
+          set -euo pipefail
+          {
+            echo '## Apple Opal flavor'
+            echo
+            echo '- OPTN product floor: iOS 14.0 (`ios/App/App.xcodeproj` `IPHONEOS_DEPLOYMENT_TARGET`)'
+            echo '- OpalBase git tags: v0.1.1, v0.2.0, v0.2.1, v0.3.0, v0.4.0, v0.4.1'
+            echo '- OpalBase v0.4.1: swift-tools-version 6.2; platforms macOS(.v26), iOS(.v26); siblings `branch: "develop"`'
+            echo '- OpalBase develop: swift-tools-version 6.4; same v26 platforms; also `branch: develop` siblings'
+            echo '- GitHub Releases for OpalBase is empty; tags exist on the git remote: https://github.com/58opals/OpalBase'
+            echo '- Status on iOS 14 product: **GATED** (not product parity)'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          opal='apple/OPTNOpalReference/Package.swift'
+          native='apple/OPTNAppleProvider/Package.swift'
+          grep -Fq '611a53f2047660e0dd221f75526ce11335be901a' "$opal"
+          grep -Fq '8c42eeb40d64776789e70694e4e5006d2afa400c' "$opal"
+          grep -Fq '.macOS(.v26)' "$opal"
+          grep -Fq '.iOS(.v26)' "$opal"
+          grep -Fq 'OPAL_APPLE26_REFERENCE' "$opal"
+          if grep -Eq 'branch:' "$opal"; then
+            echo 'Opal reference must not consume moving develop branches' >&2
+            exit 1
+          fi
+          if grep -Eq 'OpalBase|OpalCrypto|OpalFusion|OpalHedge' "$opal"; then
+            echo 'Opal reference must not link preview/secret-authority packages' >&2
+            exit 1
+          fi
+          if grep -Eqi 'opalbase|opalcrypto|opalfusion|opalhedge|opaldiagnostics|swiftfulcrum' "$native"; then
+            echo 'Native iOS 14 provider must not depend on Opal packages' >&2
+            exit 1
+          fi
+          echo 'GATED: Opal Apple26 flavor is isolated from the iOS 14 product.'
+
+      - name: Prove Opal flavor cannot enter the iOS 14 product
+        working-directory: apple/OPTNOpalReference
+        run: |
+          set +e
+          xcodebuild \
+            -scheme OPTNOpalReference \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/optn-opal-ios14" \
+            IPHONEOS_DEPLOYMENT_TARGET=14.0 \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build > "$RUNNER_TEMP/opal-ios14.log" 2>&1
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo 'UNEXPECTED: Opal Apple26 flavor built with IPHONEOS_DEPLOYMENT_TARGET=14.0' >&2
+            echo 'That would be fake-green product parity. Failing the gate.' >&2
+            exit 1
+          fi
+          echo "GATED: Opal flavor did not build for OPTN iOS 14.0 (xcodebuild exit ${status})."
+          echo "This is expected and is not iOS 14 product parity."
+          echo >> "$GITHUB_STEP_SUMMARY"
+          echo "GATED: Opal xcodebuild with IPHONEOS_DEPLOYMENT_TARGET=14.0 exited ${status}." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Resolve pinned Opal reference dependencies
+        run: swift package --package-path apple/OPTNOpalReference resolve
+
+      - name: Test Opal Apple26 reference flavor
+        run: swift test --package-path apple/OPTNOpalReference
 
       - name: Compile Opal reference for iOS 26 simulator
         working-directory: apple/OPTNOpalReference
@@ -65,7 +136,7 @@ jobs:
             -scheme OPTNOpalReference \
             -sdk iphonesimulator \
             -destination 'generic/platform=iOS Simulator' \
-            -derivedDataPath "$RUNNER_TEMP/optn-opal-reference-ios" \
+            -derivedDataPath "$RUNNER_TEMP/optn-opal-reference-ios26" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             build
