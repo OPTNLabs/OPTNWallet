@@ -127,8 +127,25 @@ with `HardwareDeviceKind = 'ledger' | 'trezor' | 'onekey'`,
 against that exact literal and, on a match, falls back to the wallet's own path.
 It must stay network-blind or a stale mainnet path leaks onto chipnet unflagged.
 
-I have landed the vendor list, transports and reachability
-(`optn-platform`), but not `connected` / `deviceLabel` / `ledgerTransport`.
+**Landed since this note was written** — the table above is now complete:
+`connected`, `device_label`, `account_xpub` and `ledger_link` are on
+`HardwareSessionState`, and `derivation_path` is there as
+`Option<AccountPath>`.
+
+That last one is the interesting difference from the React slice. There,
+"not chosen" was `UNSET_DERIVATION_PATH = "m/44'/145'/0'"` — a *mainnet*
+literal used as a sentinel, which every reader had to compare against
+exactly, under a comment warning that an equal-looking expression would
+silently stop matching. A reader that forgot showed `145'` to a chipnet
+wallet. `Option` says the same thing with nothing to compare against, and
+`effective_path(wallet_account)` resolves the fallback once so no screen
+holds the rule. A chosen account this network never scans is reported
+through `path_warning` rather than corrected — silently swapping it is how
+a device signs for an account nobody asked for.
+
+It reaches all three renderers: `data-testid="device-path"` in Leptos,
+`device path:` in the text renderer, and an assertion in the egui one that
+the resolved account and its warning both survive the swap.
 
 ## `AppRoute::HardwareWallet` — we are undoing each other
 
@@ -169,6 +186,22 @@ outlives its reason silently accepts the vulnerability's return.
 
 I did not edit the workflow -- prohibited path -- so the four `--ignore` flags
 are still there.
+
+## Swapping renderers is now literally one line, and guarded
+
+`optn_transport::run::<_, Ui<_>>` is a host that never names a renderer.
+`TextRenderer` and `EguiRenderer` both implement `optn_transport::Renderer`,
+and each crate carries the *same* 46-line host block — same script, same
+assertions — differing only in:
+
+```rust
+type Ui<T> = TextRenderer<T>;   // or EguiRenderer<T>
+```
+
+`xtask architecture` extracts both blocks and fails if they differ on more
+than that one line, or if the differing line is not the alias. Verified by
+drifting an assertion in one and watching it name the line. A Dioxus renderer
+joins by implementing the same three methods; nothing in the host changes.
 
 ## The two extra renderers need adding to the CI package lists
 

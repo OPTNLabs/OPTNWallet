@@ -260,6 +260,52 @@ fn architecture() {
         &mut failures,
     );
 
+    // "The renderer is swappable" is a claim with a number in it: one line.
+    // Both renderer crates carry the same host block -- the same script through
+    // the same `optn_transport::run`, asserting the same facts -- and the only
+    // line that may differ between them is the `type Ui<T> = ...` alias naming
+    // the renderer. Checked rather than stated, because a claim about a diff
+    // stops being true the moment someone edits one side.
+    let text_host = host_block(&read(&root.join("crates/optn-ui-text/src/lib.rs")));
+    let egui_host = host_block(&read(&root.join("crates/optn-ui-egui/src/lib.rs")));
+    match (text_host, egui_host) {
+        (Some(text), Some(egui)) => {
+            let differences: Vec<(usize, &str, &str)> = text
+                .iter()
+                .zip(egui.iter())
+                .enumerate()
+                .filter(|(_, (a, b))| a != b)
+                .map(|(index, (a, b))| (index, a.as_str(), b.as_str()))
+                .collect();
+            if text.len() != egui.len() {
+                failures.push(format!(
+                    "the two renderers' host blocks are {} and {} lines; swapping renderers must \
+                     be one line, so they have to stay the same block",
+                    text.len(),
+                    egui.len()
+                ));
+            } else if differences.len() != 1 {
+                failures.push(format!(
+                    "the two renderers' host blocks differ on {} lines; only the `type Ui` alias \
+                     may differ, or swapping renderers is not one line: {:?}",
+                    differences.len(),
+                    differences
+                ));
+            } else if !differences[0].1.trim_start().starts_with("type Ui<T> =") {
+                failures.push(format!(
+                    "the one line that differs between the renderers' host blocks is not the \
+                     renderer alias: {:?}",
+                    differences[0]
+                ));
+            }
+        }
+        _ => failures.push(
+            "one of the renderer crates has no host block; the swap is only demonstrated while \
+             both drive optn_transport::run through the same script"
+                .into(),
+        ),
+    }
+
     let ui_manifest = read(&root.join("crates/optn-ui/Cargo.toml"));
     require_dependency("crates/optn-ui", &ui_manifest, "optn-app", &mut failures);
     require_dependency(
@@ -373,6 +419,24 @@ fn architecture() {
         eprintln!("architecture boundary violation: {failure}");
     }
     std::process::exit(1);
+}
+
+/// The shared host block a renderer crate carries, if it carries one.
+///
+/// Bounded by the `type Ui` alias that opens it and the end of the test that
+/// uses it, so it is the block a reader would compare by hand.
+fn host_block(source: &str) -> Option<Vec<String>> {
+    const OPENS: &str = "/// The one line a host changes to swap renderers.";
+    let start = source.find(OPENS)?;
+    let head = &source[start..];
+    let loop_at = head.find("for tab in")?;
+    let end = head[loop_at..].find("\n    }\n")? + loop_at + "\n    }\n".len();
+    Some(
+        head[..end]
+            .lines()
+            .map(|line| line.trim_end().to_string())
+            .collect(),
+    )
 }
 
 /// A manifest with its comments removed.
