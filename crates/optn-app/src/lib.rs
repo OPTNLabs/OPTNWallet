@@ -7,6 +7,8 @@
 //! belongs in this crate.
 
 mod flow;
+pub mod servers;
+pub use servers::{NetworkServers, ServerKind, ServerOverrides};
 mod lock;
 
 pub use flow::{
@@ -289,6 +291,8 @@ pub struct AppState {
     /// The connected device, if any. Separate from the opened wallet: a
     /// wallet remembers which device it belongs to while nothing is plugged in.
     pub hardware: HardwareSessionState,
+    /// Per-network server overrides. Absent means the network default.
+    pub servers: ServerOverrides,
     pub create_step: CreateStep,
     pub import_step: ImportStep,
     pub settings_focus: Option<SettingsRowId>,
@@ -363,6 +367,7 @@ impl AppState {
             wallet: None,
             spend: None,
             hardware: HardwareSessionState::new(),
+            servers: ServerOverrides::new(),
             create_step: CreateStep::Reveal,
             import_step: ImportStep::Words,
             settings_focus: None,
@@ -445,6 +450,13 @@ pub enum AppAction {
     },
     /// Forget the attachment, keep the chosen device.
     DisconnectHardware,
+    /// Point one endpoint at a user-run server. An empty entry clears it.
+    SetServer {
+        kind: ServerKind,
+        entry: String,
+    },
+    /// Drop every override for the selected network.
+    UseNetworkDefaultServers,
     PrepareSend {
         destination: String,
         amount_sats: u64,
@@ -505,6 +517,7 @@ pub enum AppEvent {
     NoticeChanged,
     WalletOpened,
     HardwareSessionChanged,
+    ServersChanged,
     SpendPrepared,
     WalletRebuilt,
     FlowChanged,
@@ -734,6 +747,21 @@ impl AppState {
                 self.route = AppRoute::WalletHome;
                 self.lock.mark_unlocked();
                 Some(AppEvent::WalletOpened)
+            }
+            AppAction::SetServer { kind, entry } => {
+                // Scoped to the selected network, so a chipnet host cannot be
+                // written into mainnet's slot.
+                match self.servers.set(self.network, kind, &entry) {
+                    Ok(_) => Some(AppEvent::ServersChanged),
+                    Err(message) => self.reject(message),
+                }
+            }
+            AppAction::UseNetworkDefaultServers => {
+                if self.servers.use_network_default(self.network) {
+                    Some(AppEvent::ServersChanged)
+                } else {
+                    None
+                }
             }
             AppAction::SelectHardwareVendor(vendor) => {
                 if self.hardware.vendor == vendor {
@@ -1448,6 +1476,10 @@ pub struct SettingsViewModel {
     pub receive_address: Option<String>,
     pub derivation_path: String,
     pub electrum_host: &'static str,
+    /// The endpoint actually in force: an override, or the network default.
+    pub electrum_endpoint: String,
+    /// Whether this network has any user-set server.
+    pub servers_are_custom: bool,
     pub show_cash_fusion: bool,
     pub rows: Vec<SettingsRowId>,
 }
@@ -1490,6 +1522,8 @@ pub fn settings_view_model(state: &AppState) -> SettingsViewModel {
             .map(|wallet| wallet.account_path.clone())
             .unwrap_or_else(|| AccountPath::default_for(state.network).to_string()),
         electrum_host: state.network.default_host(),
+        electrum_endpoint: state.servers.effective_electrum(state.network),
+        servers_are_custom: !state.servers.for_network(state.network).is_empty(),
         show_cash_fusion,
         rows,
     }
@@ -2763,6 +2797,74 @@ mod tests {
             );
             assert!(!item.label().is_empty());
         }
+    }
+
+    #[test]
+    fn a_server_override_follows_the_selected_network() {
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        assert!(!settings_view_model(&state).servers_are_custom);
+
+        // Set a mainnet server, then switch network. The chipnet settings
+        // must not inherit it: a chipnet Fulcrum answering mainnet queries
+        // returns empty results indistinguishable from an empty wallet.
+        assert_eq!(
+            state.reduce(AppAction::SetServer {
+                kind: ServerKind::Electrum,
+                entry: "main.example:50002".into(),
+            }),
+            Some(AppEvent::ServersChanged)
+        );
+        assert_eq!(
+            settings_view_model(&state).electrum_endpoint,
+            "main.example:50002"
+        );
+
+        state.apply(AppAction::SetNetwork(Network::Chipnet));
+        let chipnet = settings_view_model(&state);
+        assert!(!chipnet.servers_are_custom, "chipnet inherits nothing");
+        assert_eq!(
+            chipnet.electrum_endpoint,
+            format!(
+                "{}:{}",
+                Network::Chipnet.default_host(),
+                Network::Chipnet.default_port()
+            )
+        );
+
+        // Back on mainnet the override is still there.
+        state.apply(AppAction::SetNetwork(Network::Mainnet));
+        assert!(settings_view_model(&state).servers_are_custom);
+    }
+
+    #[test]
+    fn an_unusable_server_is_refused_with_a_notice_and_changes_nothing() {
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        // Remote plaintext Electrum: the server would be told every address
+        // in the wallet.
+        state.apply(AppAction::SetServer {
+            kind: ServerKind::Electrum,
+            entry: "ws://fulcrum.example:50003".into(),
+        });
+        assert!(state
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.contains("every address")));
+        assert!(!settings_view_model(&state).servers_are_custom);
+
+        // Use network default is a no-op when nothing is set, rather than a
+        // spurious event.
+        assert_eq!(state.reduce(AppAction::UseNetworkDefaultServers), None);
+
+        state.apply(AppAction::SetServer {
+            kind: ServerKind::Peer,
+            entry: "node.example:8333".into(),
+        });
+        assert!(settings_view_model(&state).servers_are_custom);
+        assert_eq!(
+            state.reduce(AppAction::UseNetworkDefaultServers),
+            Some(AppEvent::ServersChanged)
+        );
+        assert!(!settings_view_model(&state).servers_are_custom);
     }
 
     #[test]

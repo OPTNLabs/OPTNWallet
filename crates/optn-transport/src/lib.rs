@@ -10,9 +10,9 @@ use optn_app::{
     AppAction, AppEvent, AppLockState, AppRoute, AppState, AppSurface, AuthScope, AutoLockMinutes,
     CampaignOutput, Coin, CreateStep, FeatureFlag, FeatureFlags, FlipstarterPledge, FreezeReason,
     HardwareSessionState, HardwareSetupPreview, HardwareVendor, ImportStep, LedgerLink,
-    MultisigSetupPreview, MultisigStep, Network, OpenedWallet, Outpoint, PledgeStatus,
-    SettingsRowId, SpendKind, SpendPlan, ThemeMode, UiSkin, WalletKind, WatchOnlyKind,
-    WatchOnlySetupPreview,
+    MultisigSetupPreview, MultisigStep, Network, OpenedWallet, Outpoint, PledgeStatus, ServerKind,
+    ServerOverrides, SettingsRowId, SpendKind, SpendPlan, ThemeMode, UiSkin, WalletKind,
+    WatchOnlyKind, WatchOnlySetupPreview,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -241,6 +241,11 @@ pub enum WireActionKind {
         account_xpub: String,
     },
     DisconnectHardware,
+    SetServer {
+        kind: String,
+        entry: String,
+    },
+    UseNetworkDefaultServers,
     OpenMultisigWallet {
         wallet_name: String,
         policy: String,
@@ -501,6 +506,7 @@ pub enum WireEventKind {
     NoticeChanged,
     WalletOpened,
     HardwareSessionChanged,
+    ServersChanged,
     SpendPrepared,
     WalletRebuilt,
     FlowChanged,
@@ -843,6 +849,11 @@ impl From<AppAction> for WireAction {
                 account_xpub,
             },
             AppAction::DisconnectHardware => WireActionKind::DisconnectHardware,
+            AppAction::SetServer { kind, entry } => WireActionKind::SetServer {
+                kind: kind.id().to_string(),
+                entry,
+            },
+            AppAction::UseNetworkDefaultServers => WireActionKind::UseNetworkDefaultServers,
             AppAction::OpenMultisigWallet(preview) => WireActionKind::OpenMultisigWallet {
                 wallet_name: preview.wallet_name,
                 policy: preview.policy,
@@ -992,6 +1003,19 @@ impl TryFrom<WireAction> for AppAction {
                 account_xpub,
             },
             WireActionKind::DisconnectHardware => Self::DisconnectHardware,
+            WireActionKind::SetServer { kind, entry } => Self::SetServer {
+                // An unknown kind is refused rather than defaulted: writing a
+                // node host into the Electrum slot would be silently wrong.
+                kind: ServerKind::ALL
+                    .iter()
+                    .copied()
+                    .find(|candidate| candidate.id() == kind)
+                    .ok_or_else(|| {
+                        TransportError::InvalidData(format!("unknown server kind '{kind}'"))
+                    })?,
+                entry,
+            },
+            WireActionKind::UseNetworkDefaultServers => Self::UseNetworkDefaultServers,
             WireActionKind::OpenMultisigWallet {
                 wallet_name,
                 policy,
@@ -1236,6 +1260,9 @@ impl TryFrom<WireState> for AppState {
             wallet: value.wallet.map(OpenedWallet::from),
             spend: value.spend.map(SpendPlan::try_from).transpose()?,
             hardware: HardwareSessionState::try_from(value.hardware)?,
+            // Overrides live host-side; a snapshot does not carry them, so a
+            // decoded state starts from the network defaults.
+            servers: ServerOverrides::new(),
             create_step: value.create_step.into(),
             import_step: value.import_step.into(),
             settings_focus: value
@@ -1280,6 +1307,7 @@ impl From<AppEvent> for WireEvent {
             AppEvent::NoticeChanged => WireEventKind::NoticeChanged,
             AppEvent::WalletOpened => WireEventKind::WalletOpened,
             AppEvent::HardwareSessionChanged => WireEventKind::HardwareSessionChanged,
+            AppEvent::ServersChanged => WireEventKind::ServersChanged,
             AppEvent::SpendPrepared => WireEventKind::SpendPrepared,
             AppEvent::WalletRebuilt => WireEventKind::WalletRebuilt,
             AppEvent::FlowChanged => WireEventKind::FlowChanged,
@@ -1316,6 +1344,7 @@ impl TryFrom<WireEvent> for AppEvent {
             WireEventKind::NoticeChanged => Self::NoticeChanged,
             WireEventKind::WalletOpened => Self::WalletOpened,
             WireEventKind::HardwareSessionChanged => Self::HardwareSessionChanged,
+            WireEventKind::ServersChanged => Self::ServersChanged,
             WireEventKind::SpendPrepared => Self::SpendPrepared,
             WireEventKind::WalletRebuilt => Self::WalletRebuilt,
             WireEventKind::FlowChanged => Self::FlowChanged,
