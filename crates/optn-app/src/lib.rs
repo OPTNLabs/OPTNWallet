@@ -111,6 +111,31 @@ pub enum AppSurface {
     Extension,
 }
 
+impl AppSurface {
+    /// Whether this surface may build and submit a transaction at all.
+    ///
+    /// The browser extension is a **read-only viewer**, and the release that
+    /// introduced it made that a fail-closed boundary rather than a hidden
+    /// button: "spending/signing routes and lifecycle services are not mounted,
+    /// and transaction submission fails closed". It ships without a secure key
+    /// lifecycle designed for a popup, so a build that merely *looks* unable to
+    /// spend is the thing that was ruled out.
+    ///
+    /// Hiding Actions from the popup's navigation is not this rule. Navigation
+    /// is a renderer's business, and a renderer cannot be trusted with a
+    /// security boundary -- which is the whole reason the application owns the
+    /// decision and every renderer asks.
+    pub const fn can_spend(self) -> bool {
+        !matches!(self, Self::Extension)
+    }
+
+    /// The other half of the same sentence, for a caller that reads better this
+    /// way.
+    pub const fn is_viewer_only(self) -> bool {
+        !self.can_spend()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FeatureFlag {
     CashFusion,
@@ -917,6 +942,10 @@ impl AppState {
                 amount_sats,
                 coin,
             } => {
+                if self.surface.is_viewer_only() {
+                    return self
+                        .reject("this build can view a wallet but not spend from it".into());
+                }
                 let Some(wallet) = self.wallet.as_ref() else {
                     return self.reject("open a wallet first".into());
                 };
@@ -1104,6 +1133,12 @@ impl AppState {
     fn authorize(&mut self, scope: AuthScope, now_ms: u64) -> Option<AppEvent> {
         if self.wallet.is_none() {
             return self.reject("open a wallet first".into());
+        }
+        // Fail closed on the signing half too, not only on building the
+        // transaction: a viewer that can authorise a spend is a viewer that
+        // spends as soon as anything downstream forgets to check.
+        if scope == AuthScope::Spend && self.surface.is_viewer_only() {
+            return self.reject("this build can view a wallet but not spend from it".into());
         }
         self.lock.observe(now_ms);
         let kind = self.wallet.as_ref().map(|wallet| wallet.kind);
@@ -3635,6 +3670,63 @@ mod tests {
         assert_eq!(state.route, AppRoute::Landing);
         assert!(state.wallet.is_none());
         assert!(!state.lock.spend_auth_still_valid(50));
+    }
+
+    #[test]
+    fn the_extension_viewer_fails_closed_on_spending_rather_than_hiding_it() {
+        // The browser build ships without a key lifecycle designed for a popup,
+        // so the release that introduced it made "cannot spend" a boundary the
+        // application enforces, not a button the shell leaves out. Hiding
+        // Actions from the popup navigation is presentation; a renderer cannot
+        // be trusted with a security rule, which is why this is asserted
+        // against the application and not against a screen.
+        let mut viewer = AppState::for_surface(AppSurface::Extension);
+        open_chipnet_seed(&mut viewer, "popup");
+        assert!(viewer.surface.is_viewer_only());
+
+        // A destination this wallet itself produced, so the refusal cannot be
+        // mistaken for "that address is malformed".
+        let destination = viewer
+            .wallet
+            .as_ref()
+            .map(|wallet| wallet.receive_address.clone())
+            .expect("a wallet is open");
+        viewer.apply(AppAction::PrepareSend {
+            destination,
+            amount_sats: 1_000,
+            coin: None,
+        });
+        assert_eq!(
+            viewer.notice.as_deref(),
+            Some("this build can view a wallet but not spend from it"),
+            "a viewer must refuse to build a spend"
+        );
+        assert!(viewer.spend.is_none());
+        assert_ne!(viewer.route, AppRoute::Send);
+
+        // And the signing half refuses too, so nothing downstream can proceed
+        // on an authorisation it should never have been given.
+        viewer.notice = None;
+        viewer.apply(AppAction::AuthorizeSpend { now_ms: 1_000 });
+        assert_eq!(
+            viewer.notice.as_deref(),
+            Some("this build can view a wallet but not spend from it"),
+            "a viewer must refuse to authorise a spend"
+        );
+        assert_eq!(
+            viewer.lock.prompt, None,
+            "and must not prompt for one either"
+        );
+
+        // The surfaces that do own a key lifecycle are unaffected.
+        for surface in [
+            AppSurface::Desktop,
+            AppSurface::Android,
+            AppSurface::Ios,
+            AppSurface::Web,
+        ] {
+            assert!(surface.can_spend(), "{surface:?} is a full wallet");
+        }
     }
 
     #[test]
