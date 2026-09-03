@@ -8,7 +8,11 @@
 
 mod flow;
 pub mod identity;
+pub mod networks;
 pub use identity::{wallet_identity, RevealedIdentity, WalletIdentity, WalletTypeLabel};
+pub use networks::{
+    network_settings_view_model, NetworkOption, NetworkSettingsViewModel, PlannedNetwork,
+};
 pub mod servers;
 pub use servers::{NetworkServers, ServerKind, ServerOverrides};
 mod lock;
@@ -629,6 +633,16 @@ impl AppState {
             }
             AppAction::SetNetwork(network) if self.network != network => {
                 self.network = network;
+                // Coins belong to a chain. Keeping them across a switch would
+                // count chipnet coins as a mainnet balance and let a spend
+                // plan select one, so the derived state is cleared exactly as
+                // the settings copy promises: switching "clears the active
+                // network records ... and resynchronizes receive/change
+                // addresses". The wallet itself stays open; it has not become
+                // a different wallet, only an unsynced one.
+                self.coins.clear();
+                self.pledges.clear();
+                self.spend = None;
                 Some(AppEvent::NetworkChanged(network))
             }
             AppAction::OpenHelp if !self.help_open => {
@@ -2862,6 +2876,49 @@ mod tests {
             );
             assert!(!item.label().is_empty());
         }
+    }
+
+    #[test]
+    fn switching_network_drops_coins_that_belong_to_the_other_chain() {
+        // Coins belong to a chain. Carrying them across a switch would count
+        // chipnet coins as a mainnet balance, and let a send plan pick one.
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        state.apply(AppAction::SetNetwork(Network::Chipnet));
+        let opened = seed_wallet_preview(Network::Chipnet, "switcher", BIP39_TEST_VECTOR_MNEMONIC)
+            .expect("preview");
+        let receive = opened.receive_address.clone();
+        state.apply(AppAction::OpenCreatedWallet {
+            name: opened.name,
+            receive_address: opened.receive_address,
+            account_path: opened.account_path,
+        });
+
+        let coin = chipnet_demo_coin(9_000, 1).expect("coin");
+        let dest = coin.address().to_string();
+        state.apply(AppAction::InsertCoin(coin));
+        state.apply(AppAction::PrepareSend {
+            destination: dest,
+            amount_sats: 1_000,
+            coin: None,
+        });
+        assert_eq!(coins_view_model(&state).spendable_sats, 9_000);
+        assert!(state.spend.is_some());
+
+        state.apply(AppAction::SetNetwork(Network::Mainnet));
+        assert_eq!(
+            coins_view_model(&state).spendable_sats,
+            0,
+            "chipnet coins must not be counted as a mainnet balance"
+        );
+        assert!(state.spend.is_none(), "a stale plan must not survive");
+        assert!(state.pledges.is_empty());
+
+        // The wallet is still open and is still the same wallet -- unsynced,
+        // not re-identified.
+        assert_eq!(
+            state.wallet.as_ref().map(|w| w.receive_address.clone()),
+            Some(receive)
+        );
     }
 
     #[test]
