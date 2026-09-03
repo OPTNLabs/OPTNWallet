@@ -29,6 +29,7 @@ pub mod psbt;
 pub mod rpa;
 pub mod scan;
 pub mod spend;
+pub mod tor;
 pub mod wallet_pack;
 pub mod watch_only;
 
