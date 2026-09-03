@@ -105,39 +105,67 @@ migration is evaluated.
 
 ## Apple-native provider and Opal reference split
 
-Apple integration is now represented by two committed SwiftPM packages rather
-than generated Xcode/Tauri project files:
+Apple integration is represented by two committed SwiftPM packages rather than
+generated Xcode/Tauri project files. Rust `optn-platform` owns the capability
+traits (Keychain/Secure Enclave, CoreNFC presentment, diagnostics) without
+Opal types in the domain.
 
 ```
 apple/OPTNAppleProvider
-    typed ApplePlatformProvider contract
-    native Apple capability adapters
-    current concrete adapters: Keychain opaque-byte storage; CoreNFC tag I/O
+    typed ApplePlatformProvider contract (no Opal types)
+    iOS 14 / macOS 11 SwiftPM floor matching the product, not raising it
+    native adapters: Keychain opaque-byte storage; CoreNFC tag I/O;
+    Secure Enclave availability; os_log diagnostics
     contactless presentment stub (unavailable without NFC & SE entitlement)
 
 apple/OPTNOpalReference
-    reference/conformance build only
-    macOS 26 / iOS 26 gated
+    optional Apple26 flavor, compile flag OPAL_APPLE26_REFERENCE
+    platforms macOS(.v26), iOS(.v26) — GATED off the iOS 14 product
     SwiftFulcrum v0.8.0 -> 611a53f2047660e0dd221f75526ce11335be901a
     OpalDiagnostics v0.2.0 -> 8c42eeb40d64776789e70694e4e5006d2afa400c
+    does not link OpalBase / OpalCrypto / OpalFusion / OpalHedge
 ```
 
-The native package deliberately has no Opal dependency and does not set a newer
-Apple deployment floor. The committed Capacitor project remains iOS 14.0.
-CoreNFC adapters compile against that iOS 14 floor and keep NDEF/TAPSIGNER
-protocol in Rust; they return unavailable until a host drives a real session.
-Contactless presentment is Apple NFC & SE Platform, not Tap to Pay / ProximityReader.
+The committed Capacitor project remains iOS 14.0
+(`ios/App/App.xcodeproj` `IPHONEOS_DEPLOYMENT_TARGET = 14.0`). This work does
+not raise OPTN iOS or macOS minimums. CoreNFC adapters compile against that
+iOS 14 floor and keep NDEF/TAPSIGNER protocol in Rust; they return unavailable
+until a host drives a real session. Contactless presentment is Apple NFC & SE
+Platform, not Tap to Pay / ProximityReader.
 
-The Opal reference package is a separate Apple-26-only build flavor. It links
-only the mature networking/diagnostics references. It does **not** link
-OpalBase, OpalCrypto, OpalFusion, or OpalHedge, and it exposes no seed,
-private-key, transaction-authoring, signing, persistence, or wallet-state API.
+### OpalBase supply chain (verified 2026-09-03, public git only)
 
-The Rust-side `AppleProviderPolicy` mirrors the trust boundary: reference
-providers are secret-free and no Apple provider can own wallet state. CI and
-`cargo run -p xtask -- architecture` enforce the dependency firewall.
+Public evidence, no private mirrors:
 
-This is an implementation foothold, not a parity claim. The Swift package is
+- Tags on https://github.com/58opals/OpalBase : `v0.1.1`, `v0.2.0`, `v0.2.1`,
+  `v0.3.0`, `v0.4.0`, `v0.4.1`. The GitHub Releases page is empty; the tags
+  still exist on the git remote.
+- OpalBase **v0.4.1** `Package.swift`: `swift-tools-version: 6.2`; platforms
+  `macOS(.v26)`, `iOS(.v26)`; dependencies SwiftFulcrum, OpalCrypto,
+  OpalFusion, OpalHedge, OpalDiagnostics all `branch: "develop"`.
+- A tagged OpalBase is therefore **not** a closed SemVer graph. Pinning
+  `v0.4.1` still pulls moving `develop` siblings.
+- OpalBase **develop**: `swift-tools-version: 6.4`; same v26 platforms; also
+  `branch: "develop"` siblings.
+
+**GATE:** OpalBase is not a default SwiftPM dependency of the iOS 14 product.
+The optional Apple26 flavor is isolated in `apple/OPTNOpalReference` behind
+`OPAL_APPLE26_REFERENCE` and v26 platforms. Production secrets must never be
+routed through OpalCrypto. OpalFusion must not replace crates Fusion
+(`optn-core` CashFusion).
+
+`AppleProviderPolicy` mirrors the trust boundary: reference providers are
+secret-free and no Apple provider can own wallet state. CI (`Apple Provider`)
+and `cargo run -p xtask -- architecture` plus `cargo test -p xtask` enforce
+the firewall against `optn-core`, `optn-app`, and `optn-runtime`. If the Opal
+flavor cannot build on iOS 14, that job reports **GATED**, not fake-green
+parity. Native iOS 14 targets are not skipped when they fail.
+
+Differential BCH vectors against Opal are **blocked until** a gated flavor
+with a closed SemVer graph exists. Cheap iOS 14 coverage is native-only
+(Keychain / CoreNFC / Secure Enclave descriptor tests), not Opal.
+
+This is an implementation foothold, not a parity claim. The Swift packages are
 not yet wired into the production Tauri/Capacitor host, so no Apple product
 feature moves from unit/none evidence to E2E/device evidence solely because
 these packages compile.
