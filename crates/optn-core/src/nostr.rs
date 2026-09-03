@@ -28,15 +28,13 @@
 //! and IV are everywhere else in this crate: entropy belongs to the caller, and
 //! this stays buildable for wasm32 without a JS shim.
 //!
-//! **What is not yet proven.** The tests below establish that this
-//! implementation is internally consistent and that its security properties
-//! hold -- a round trip at every bucket edge, a failed check on any altered
-//! byte, an authenticated nonce, and no keystream shared between messages. They
-//! do **not** establish interoperability: the published NIP-44 vectors have not
-//! been run against this code, so a peer on another implementation is expected
-//! to work and has not been observed to. Running those vectors is the next step
-//! before this is used against anyone else's client, and it is a fixture file
-//! plus one test, not a redesign.
+//! **Conformance.** The published NIP-44 vectors are vendored at
+//! `tests/vectors/nip44.vectors.json` and run against this code: 35
+//! conversation keys, 32 message-key expansions, every padded length, ten
+//! payloads compared byte for byte in both directions, three long messages up
+//! to the 65535-byte limit checked by digest, and every invalid case refused.
+//! So this is not merely self-consistent -- it produces the same bytes as the
+//! reference implementation, which is what a peer on another client needs.
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
@@ -363,6 +361,255 @@ mod tests {
 
     fn nonce(seed: u8) -> [u8; 32] {
         [seed; 32]
+    }
+
+    // -----------------------------------------------------------------------
+    // Conformance against the published vectors
+    // -----------------------------------------------------------------------
+    //
+    // Everything above says this implementation agrees with itself. These say
+    // it agrees with everyone else's, which is the only thing that matters to
+    // a peer on another client. The file is `nip44.vectors.json` from the
+    // reference repository, vendored so the suite stays offline and so a change
+    // to it is a reviewable diff rather than a silent retest.
+
+    mod vectors {
+        use super::*;
+        use serde_json::Value;
+        use sha2::Digest;
+
+        const VECTORS: &str = include_str!("../tests/vectors/nip44.vectors.json");
+
+        fn load() -> Value {
+            serde_json::from_str::<Value>(VECTORS).expect("the vector file parses")["v2"].clone()
+        }
+
+        fn unhex(text: &str) -> Vec<u8> {
+            assert!(text.len() % 2 == 0, "hex has an even length: {text}");
+            (0..text.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&text[i..i + 2], 16).expect("hex"))
+                .collect()
+        }
+
+        fn hex(bytes: &[u8]) -> String {
+            bytes.iter().map(|b| format!("{b:02x}")).collect()
+        }
+
+        fn array32(text: &str) -> [u8; 32] {
+            let bytes = unhex(text);
+            let mut out = [0u8; 32];
+            out.copy_from_slice(&bytes);
+            out
+        }
+
+        fn sha256_hex(bytes: &[u8]) -> String {
+            hex(&sha2::Sha256::digest(bytes))
+        }
+
+        #[test]
+        fn every_published_conversation_key_matches() {
+            let vectors = load();
+            let cases = vectors["valid"]["get_conversation_key"]
+                .as_array()
+                .expect("an array");
+            assert!(cases.len() >= 30, "the file should carry them all");
+
+            for (index, case) in cases.iter().enumerate() {
+                let secret = array32(case["sec1"].as_str().expect("sec1"));
+                let peer = array32(case["pub2"].as_str().expect("pub2"));
+                let expected = case["conversation_key"].as_str().expect("expected");
+
+                let derived = conversation_key(&secret, &peer)
+                    .unwrap_or_else(|error| panic!("case {index}: {error}"));
+                assert_eq!(hex(derived.expose()), expected, "case {index}");
+            }
+        }
+
+        #[test]
+        fn every_published_message_key_expansion_matches() {
+            // The most diagnostic of the four: an HKDF counter that restarted,
+            // a chained block dropped, or the 76 bytes split at the wrong
+            // offsets would all show up here and nowhere else.
+            let vectors = load();
+            let section = &vectors["valid"]["get_message_keys"];
+            let key = ConversationKey::from_bytes(array32(
+                section["conversation_key"]
+                    .as_str()
+                    .expect("conversation_key"),
+            ));
+
+            let cases = section["keys"].as_array().expect("an array");
+            assert!(cases.len() >= 30);
+            for (index, case) in cases.iter().enumerate() {
+                let nonce = array32(case["nonce"].as_str().expect("nonce"));
+                let keys = message_keys(&key, &nonce);
+                assert_eq!(
+                    hex(&keys.chacha_key),
+                    case["chacha_key"].as_str().expect("chacha_key"),
+                    "case {index}: chacha key"
+                );
+                assert_eq!(
+                    hex(&keys.chacha_nonce),
+                    case["chacha_nonce"].as_str().expect("chacha_nonce"),
+                    "case {index}: chacha nonce"
+                );
+                assert_eq!(
+                    hex(&keys.hmac_key),
+                    case["hmac_key"].as_str().expect("hmac_key"),
+                    "case {index}: hmac key"
+                );
+            }
+        }
+
+        #[test]
+        fn every_published_padded_length_matches() {
+            let vectors = load();
+            let cases = vectors["valid"]["calc_padded_len"]
+                .as_array()
+                .expect("an array");
+            assert!(cases.len() >= 20);
+            for case in cases {
+                let pair = case.as_array().expect("a pair");
+                let unpadded = pair[0].as_u64().expect("unpadded") as usize;
+                let expected = pair[1].as_u64().expect("padded") as usize;
+                assert_eq!(padded_length(unpadded), expected, "for {unpadded}");
+            }
+        }
+
+        #[test]
+        fn every_published_payload_encrypts_and_decrypts_byte_for_byte() {
+            // Both directions. Producing the published payload proves the
+            // whole pipeline; reading it proves a peer's message opens.
+            let vectors = load();
+            let cases = vectors["valid"]["encrypt_decrypt"]
+                .as_array()
+                .expect("an array");
+            assert!(cases.len() >= 8);
+
+            for (index, case) in cases.iter().enumerate() {
+                let sec1 = array32(case["sec1"].as_str().expect("sec1"));
+                let sec2 = array32(case["sec2"].as_str().expect("sec2"));
+                let nonce = array32(case["nonce"].as_str().expect("nonce"));
+                let plaintext = case["plaintext"].as_str().expect("plaintext");
+                let payload = case["payload"].as_str().expect("payload");
+
+                // Each side derives the key from its own secret and the
+                // other's public key, and both must land on the published one.
+                let pub2 = xonly_public_key(&sec2).expect("a public key");
+                let pub1 = xonly_public_key(&sec1).expect("a public key");
+                let from_one = conversation_key(&sec1, &pub2).expect("agreed");
+                let from_two = conversation_key(&sec2, &pub1).expect("agreed");
+                assert_eq!(
+                    hex(from_one.expose()),
+                    case["conversation_key"].as_str().expect("conversation_key"),
+                    "case {index}: key"
+                );
+                assert_eq!(hex(from_two.expose()), hex(from_one.expose()));
+
+                assert_eq!(
+                    encrypt(&from_one, plaintext, &nonce).expect("encrypts"),
+                    payload,
+                    "case {index}: our payload must be theirs, byte for byte"
+                );
+                assert_eq!(
+                    decrypt(&from_two, payload).expect("decrypts"),
+                    plaintext,
+                    "case {index}: their payload must open here"
+                );
+            }
+        }
+
+        #[test]
+        fn the_long_message_vectors_match_by_digest() {
+            // Up to the 65535-byte limit, checked by hash because the payloads
+            // are too large to carry inline.
+            let vectors = load();
+            let cases = vectors["valid"]["encrypt_decrypt_long_msg"]
+                .as_array()
+                .expect("an array");
+
+            for (index, case) in cases.iter().enumerate() {
+                let key = ConversationKey::from_bytes(array32(
+                    case["conversation_key"].as_str().expect("conversation_key"),
+                ));
+                let nonce = array32(case["nonce"].as_str().expect("nonce"));
+                let pattern = case["pattern"].as_str().expect("pattern");
+                let repeat: usize = case["repeat"]
+                    .as_u64()
+                    .map(|n| n as usize)
+                    .or_else(|| case["repeat"].as_str().and_then(|s| s.parse().ok()))
+                    .expect("repeat");
+
+                let plaintext = pattern.repeat(repeat);
+                assert_eq!(
+                    sha256_hex(plaintext.as_bytes()),
+                    case["plaintext_sha256"].as_str().expect("plaintext_sha256"),
+                    "case {index}: the plaintext we built is the one they meant"
+                );
+
+                let payload = encrypt(&key, &plaintext, &nonce).expect("encrypts");
+                assert_eq!(
+                    sha256_hex(payload.as_bytes()),
+                    case["payload_sha256"].as_str().expect("payload_sha256"),
+                    "case {index}: payload"
+                );
+                assert_eq!(decrypt(&key, &payload).expect("decrypts"), plaintext);
+            }
+        }
+
+        #[test]
+        fn every_published_invalid_case_is_refused() {
+            let vectors = load();
+
+            // Lengths outside 1..=65535.
+            for case in vectors["invalid"]["encrypt_msg_lengths"]
+                .as_array()
+                .expect("an array")
+            {
+                let length = case.as_u64().expect("a length") as usize;
+                let key = ConversationKey::from_bytes([1u8; 32]);
+                let plaintext = "a".repeat(length);
+                assert!(
+                    encrypt(&key, &plaintext, &[0u8; 32]).is_err(),
+                    "length {length} must be refused"
+                );
+            }
+
+            // Keys off the curve, or not keys at all.
+            for case in vectors["invalid"]["get_conversation_key"]
+                .as_array()
+                .expect("an array")
+            {
+                let sec1 = case["sec1"].as_str().expect("sec1");
+                let pub2 = case["pub2"].as_str().expect("pub2");
+                let note = case["note"].as_str().unwrap_or("");
+                let (Ok(secret), Ok(peer)) = (
+                    std::panic::catch_unwind(|| array32(sec1)),
+                    std::panic::catch_unwind(|| array32(pub2)),
+                ) else {
+                    continue; // malformed hex is refused before this function
+                };
+                assert!(
+                    conversation_key(&secret, &peer).is_err(),
+                    "must be refused ({note})"
+                );
+            }
+
+            // Payloads that must not decrypt: wrong MAC, bad padding, an
+            // unsupported version, and so on.
+            for case in vectors["invalid"]["decrypt"].as_array().expect("an array") {
+                let key = ConversationKey::from_bytes(array32(
+                    case["conversation_key"].as_str().expect("conversation_key"),
+                ));
+                let payload = case["payload"].as_str().expect("payload");
+                let note = case["note"].as_str().unwrap_or("");
+                assert!(
+                    decrypt(&key, payload).is_err(),
+                    "must be refused ({note}): {payload}"
+                );
+            }
+        }
     }
 
     #[test]

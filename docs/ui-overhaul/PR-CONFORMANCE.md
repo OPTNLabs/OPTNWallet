@@ -294,7 +294,6 @@ Honest list; none of these are claimed as done.
 | #12 | Tor-only enforcement for remote fusion, and the covert-socket schedule | Transport-layer, not yet ported |
 | #6 | The add-on **host** — mounting the frame, the SDK dispatch, the consent prompt | The sandbox rule, the sixteen capabilities, the trust tiers and the rate limiter are ported; mounting a frame is a shell's job |
 | #61 | Live chipnet round-trip of the Rust RPA path | No live-network tests from here |
-| — | NIP-44 interop against the published vectors | The implementation is internally consistent and its properties are tested; agreement with other clients is not yet observed |
 | #34 #60 | UR frame generation from the encoded PSBT | The bytes are produced and verified; the fountain-code framing is not |
 
 The parity matrix (`xtask parity`) remains the running count of what is and is
