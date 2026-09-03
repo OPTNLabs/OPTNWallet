@@ -471,6 +471,7 @@ fn CoinRow(
         Some(FreezeReason::User) => "Frozen".into(),
         Some(FreezeReason::FlipstarterPledge) => "Flipstarter pledge".into(),
         Some(FreezeReason::Authhead) => "Authhead".into(),
+        Some(FreezeReason::FusionInFlight) => "Fusing".into(),
     };
     let label = coin.label().unwrap_or("").to_owned();
     let has_label = !label.is_empty();
