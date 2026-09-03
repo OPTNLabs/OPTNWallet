@@ -24,6 +24,7 @@ pub mod hd;
 pub mod multisig;
 pub mod network;
 pub mod rpa;
+pub mod scan;
 pub mod spend;
 pub mod watch_only;
 
