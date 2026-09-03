@@ -293,9 +293,9 @@ Honest list; none of these are claimed as done.
 | #26, #18, #12 | CashFusion's Nostr layer — NIP-17/NIP-44 gift wraps, kind `12230` announcements, rendezvous, blame | Needs a Nostr crate; a dependency decision |
 | #12 | Tor-only enforcement for remote fusion, and the covert-socket schedule | Transport-layer, not yet ported |
 | #6 | Wallet pack export (PBKDF2 600k + AES-256-GCM) | Needs `aes-gcm` + `pbkdf2` and an entropy source; `optn-core` has no RNG on purpose |
-| #34, #60 | PSBT **encoding** and UR frame generation | The policy and the verifier are ported; producing the bytes is not |
 | #6 | Addon sandbox — the `iframe sandbox="allow-scripts"` boundary with no `allow-same-origin` | The registry work is not started; this boundary is the thing it must not lose |
 | #61 | Live chipnet round-trip of the Rust RPA path | No live-network tests from here |
+| #34 #60 | UR frame generation from the encoded PSBT | The bytes are produced and verified; the fountain-code framing is not |
 
 The parity matrix (`xtask parity`) remains the running count of what is and is
 not ported; this document covers only what the merged PRs *settled*, which is a
