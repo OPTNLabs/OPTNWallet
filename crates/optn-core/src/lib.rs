@@ -13,6 +13,7 @@
 
 pub mod cashaddr;
 pub mod coins;
+pub mod endpoint;
 pub mod error;
 pub mod flipstarter;
 pub mod fundme;
