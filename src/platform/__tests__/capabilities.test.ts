@@ -109,16 +109,19 @@ describe('cross-platform capability contract', () => {
     expect(hasCapability('hardwareWallet')).toBe(false);
   });
 
-  it('enables watch-only wallets on every surface; hide it by flipping the flag', () => {
+  it('keeps watch-only on native product surfaces only', () => {
     expect(CAPABILITIES.watchOnlyWallet.enabledOn).toEqual({
       desktop: true,
       android: true,
       ios: true,
-      web: true,
-      extension: true,
+      web: false,
+      extension: false,
     });
-    for (const surface of APP_SURFACES) {
+    for (const surface of ['desktop', 'android', 'ios'] as const) {
       expect(hasCapability('watchOnlyWallet', surface)).toBe(true);
+    }
+    for (const surface of ['web', 'extension'] as const) {
+      expect(hasCapability('watchOnlyWallet', surface)).toBe(false);
     }
   });
 
