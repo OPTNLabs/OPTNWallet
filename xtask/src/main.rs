@@ -27,6 +27,7 @@ fn main() {
     let command = env::args().nth(1).unwrap_or_else(|| "architecture".into());
     match command.as_str() {
         "architecture" => architecture(),
+        "audit" => audit(),
         "parity" => {
             let production_ready = env::args().any(|arg| arg == "--production-ready");
             let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -40,6 +41,95 @@ fn main() {
             std::process::exit(2);
         }
     }
+}
+
+/// Advisories accepted for now, with a reason and an expiry.
+///
+/// A baseline is not a dismissal: failing on an advisory that is already on
+/// `dev` only makes the job permanently red and teaches everyone to ignore it.
+/// But a mute that outlives its reason is worse than no mute at all, because it
+/// silently accepts the vulnerability's *return*, so each entry is dropped as
+/// its fix lands.
+///
+/// It is empty because all four entries the release workflow carries have
+/// landed, which was checked rather than assumed:
+///
+/// - RUSTSEC-2026-0194 / 0195 (quick-xml <0.41): every lock file now resolves
+///   quick-xml 0.41.0.
+/// - RUSTSEC-2026-0185 (quinn-proto 0.11.14): now 0.11.17 everywhere.
+/// - RUSTSEC-2026-0235 (rkyv 0.7.46): rkyv appears in no lock file at all.
+///
+/// `cargo audit` with no ignores exits clean across all five lock files, so
+/// `.github/workflows/security-analysis.yml` can drop its four `--ignore`
+/// flags. Until it does, those four are muted there for no remaining reason.
+const BASELINE_ADVISORIES: &[&str] = &[];
+
+/// Audit every Rust lock file in the repository.
+///
+/// The workflow's audit step runs `cargo audit` in `src-tauri` alone, so the
+/// desktop shell is checked and the crates the wallet's logic actually lives in
+/// -- the workspace, the CLI, the protocol core -- are not. That is the same
+/// shape of hole the release verification had: a job that reports success
+/// while leaving most of the tree unexamined.
+///
+/// Lock files are **discovered** rather than listed, so a new crate is covered
+/// the day it appears instead of the day someone remembers to add it. A missing
+/// `cargo-audit` is a failure, never a skip, for the same reason.
+fn audit() {
+    let root = repo_root();
+    let mut lock_files: Vec<PathBuf> = walk_files(&root)
+        .into_iter()
+        .filter(|path| path.file_name().is_some_and(|name| name == "Cargo.lock"))
+        .collect();
+    lock_files.sort();
+
+    if lock_files.is_empty() {
+        eprintln!("dependency audit: no Cargo.lock found, which cannot be right");
+        std::process::exit(1);
+    }
+
+    let mut failures = Vec::new();
+    for lock in &lock_files {
+        let relative = lock.strip_prefix(&root).unwrap_or(lock);
+        println!("dependency audit: {}", relative.display());
+        let mut command = std::process::Command::new("cargo");
+        command.arg("audit").arg("--file").arg(lock);
+        for advisory in BASELINE_ADVISORIES {
+            command.arg("--ignore").arg(advisory);
+        }
+        match command.status() {
+            Ok(status) if status.success() => {}
+            Ok(status) => failures.push(format!("{} ({status})", relative.display())),
+            Err(error) => {
+                eprintln!(
+                    "dependency audit: could not run cargo-audit ({error}). Install it with \
+                     `cargo install cargo-audit --locked`; a missing tool is a failed audit, not \
+                     a skipped one."
+                );
+                std::process::exit(1);
+            }
+        }
+    }
+
+    if failures.is_empty() {
+        println!(
+            "dependency audit: PASS ({} lock files, {} baselined advisories)",
+            lock_files.len(),
+            BASELINE_ADVISORIES.len()
+        );
+    } else {
+        for failure in &failures {
+            eprintln!("dependency audit failed: {failure}");
+        }
+        std::process::exit(1);
+    }
+}
+
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("xtask must live below workspace root")
+        .to_path_buf()
 }
 
 fn architecture() {

@@ -1084,6 +1084,16 @@ impl AppState {
         self.spend = None;
         self.coins.clear();
         self.pledges.clear();
+        // The RPA pool is wallet balance too, and it is the half that does not
+        // live in the UTXO set -- so clearing the coins alone left a locked
+        // wallet still showing a portfolio total. PR #6 made "no wallet is open
+        // unless its key is cached" an invariant precisely so a closed wallet
+        // cannot keep driving the UI.
+        self.stealth_sats = 0;
+        // The exported account belongs to the wallet that was open. The device
+        // stays chosen and stays plugged in, but carrying one wallet's xPub
+        // into the next one would attribute an identity to the wrong wallet.
+        self.hardware.account_xpub = None;
         self.notice = None;
         self.settings_focus = None;
         self.return_to = None;
@@ -3625,5 +3635,35 @@ mod tests {
         assert_eq!(state.route, AppRoute::Landing);
         assert!(state.wallet.is_none());
         assert!(!state.lock.spend_auth_still_valid(50));
+    }
+
+    #[test]
+    fn a_locked_wallet_reports_no_balance_of_any_kind() {
+        // "No wallet is open unless its key is cached" is the invariant the
+        // per-wallet security model rests on, and a balance is what makes a
+        // closed wallet look open. Clearing the coins is not enough: the RPA
+        // pool is the half of the total that is deliberately not a UTXO, so it
+        // has to be cleared by name or a locked wallet still shows a total.
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        open_chipnet_seed(&mut state, "locked-balance");
+        state.apply(AppAction::SetStealthSats(50_000));
+        state.apply(AppAction::SelectHardwareVendor(Some(
+            HardwareVendor::Trezor,
+        )));
+        state.hardware.account_xpub = Some("xpub-from-the-device".into());
+        assert!(portfolio_totals(&state).total_sats() > 0);
+
+        state.apply(AppAction::LockWallet);
+
+        let totals = portfolio_totals(&state);
+        assert_eq!(totals.stealth_sats, 0, "the stealth pool is wallet balance");
+        assert_eq!(totals.total_sats(), 0);
+        assert!(!state.identity_revealed);
+        assert_eq!(
+            state.hardware.account_xpub, None,
+            "one wallet's exported account must not follow the user into the next one"
+        );
+        // The device itself stays chosen: it is still plugged in.
+        assert_eq!(state.hardware.vendor, Some(HardwareVendor::Trezor));
     }
 }
