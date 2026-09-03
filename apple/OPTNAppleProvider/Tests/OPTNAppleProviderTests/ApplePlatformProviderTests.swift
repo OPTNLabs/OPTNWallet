@@ -65,5 +65,23 @@ final class ApplePlatformProviderTests: XCTestCase {
             )
         )
     }
-}
 
+    func testSecureEnclaveNeverAcceptsWalletAuthority() {
+        let provider = AppleSecureEnclave()
+        XCTAssertEqual(provider.descriptor.id, "apple-secure-enclave")
+        XCTAssertEqual(provider.descriptor.role, .nativeCapability)
+        XCTAssertEqual(provider.descriptor.secretMaterialPolicy, .forbidden)
+        XCTAssertEqual(provider.descriptor.deploymentFloor.iOSMajor, 14)
+        XCTAssertFalse(provider.descriptor.ownsWalletState)
+        XCTAssertTrue(provider.descriptor.capabilities.contains(.secureEnclave))
+    }
+
+    func testNativeDiagnosticsAreOsLogNotOpal() {
+        let provider = AppleOsLogDiagnostics()
+        XCTAssertEqual(provider.descriptor.id, "apple-oslog-diagnostics")
+        XCTAssertEqual(provider.descriptor.secretMaterialPolicy, .forbidden)
+        XCTAssertFalse(provider.descriptor.ownsWalletState)
+        XCTAssertTrue(provider.descriptor.capabilities.contains(.diagnostics))
+        provider.record(event: "chipnet-native-diagnostics")
+    }
+}

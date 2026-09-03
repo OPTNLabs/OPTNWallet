@@ -5,6 +5,7 @@ import Security
 
 public enum AppleProviderCapability: String, CaseIterable, Codable, Sendable {
     case secureStorage
+    case secureEnclave
     case biometrics
     case qrScanner
     case notifications
