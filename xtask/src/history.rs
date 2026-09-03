@@ -98,8 +98,8 @@ pub fn check(root: &Path, failures: &mut Vec<String>) {
     // Rustification must not accidentally erase. Their presence here makes the
     // historical contract machine-checked without making CI depend on GitHub.
     for required in [
-        4_u32, 5, 6, 9, 10, 11, 13, 16, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 50, 53,
-        56, 58, 60, 61, 62,
+        4_u32, 5, 6, 9, 10, 11, 13, 16, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 50, 53, 56, 58, 60,
+        61, 62,
     ] {
         match ledger.pr.iter().find(|entry| entry.number == required) {
             Some(entry) if entry.outcome == "merged" => {}

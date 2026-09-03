@@ -1736,9 +1736,7 @@ mod tests {
                 enabled: false,
             });
             assert!(!onboarding_view_model(&state).show_watch_only);
-            assert!(
-                !onboarding_actions(&state).contains(&OnboardingAction::CreateWatchOnlyWallet)
-            );
+            assert!(!onboarding_actions(&state).contains(&OnboardingAction::CreateWatchOnlyWallet));
             state.apply(AppAction::Navigate(AppRoute::WatchOnlyWallet));
             assert_ne!(state.route, AppRoute::WatchOnlyWallet);
         }
@@ -1781,7 +1779,10 @@ mod tests {
             let actions = onboarding_actions(&AppState::for_surface(surface));
             assert_eq!(
                 actions,
-                vec![OnboardingAction::CreateWallet, OnboardingAction::ImportWallet],
+                vec![
+                    OnboardingAction::CreateWallet,
+                    OnboardingAction::ImportWallet
+                ],
                 "{surface:?} must keep native Watch Only out of the product surface"
             );
         }
@@ -2322,9 +2323,16 @@ mod tests {
                     OnboardingAction::CreateWatchOnlyWallet,
                 ]
             } else {
-                &[OnboardingAction::CreateWallet, OnboardingAction::ImportWallet]
+                &[
+                    OnboardingAction::CreateWallet,
+                    OnboardingAction::ImportWallet,
+                ]
             };
-            assert_eq!(&actions[..expected_prefix.len()], expected_prefix, "{surface:?}");
+            assert_eq!(
+                &actions[..expected_prefix.len()],
+                expected_prefix,
+                "{surface:?}"
+            );
             let mut off = AppState::for_surface(surface);
             off.apply(AppAction::SetFeatureEnabled {
                 flag: FeatureFlag::WatchOnly,
