@@ -110,6 +110,40 @@ fn architecture() {
             ));
         }
     }
+    if opal_reference_manifest.contains("branch:") {
+        failures
+            .push("apple/OPTNOpalReference must not consume moving develop branches".to_string());
+    }
+    if !opal_reference_manifest.contains("OPAL_APPLE26_REFERENCE") {
+        failures.push(
+            "apple/OPTNOpalReference must isolate the Apple26 flavor behind OPAL_APPLE26_REFERENCE"
+                .to_string(),
+        );
+    }
+
+    // Opal packages must not appear in wallet/application/runtime authority,
+    // including source — not only Cargo.toml.
+    for crate_name in ["optn-core", "optn-app", "optn-runtime"] {
+        let crate_dir = root.join("crates").join(crate_name);
+        for path in walk_files(&crate_dir) {
+            let is_rust_or_toml = path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext == "rs" || ext == "toml");
+            if !is_rust_or_toml {
+                continue;
+            }
+            let text = read(&path).to_lowercase();
+            for dependency in APPLE_REFERENCE_DEPENDENCIES {
+                if text.contains(dependency) {
+                    failures.push(format!(
+                        "{} contains forbidden Apple/Opal name '{dependency}'",
+                        path.display()
+                    ));
+                }
+            }
+        }
+    }
 
     let ui_manifest = read(&root.join("crates/optn-ui/Cargo.toml"));
     require_dependency("crates/optn-ui", &ui_manifest, "optn-app", &mut failures);
@@ -279,4 +313,62 @@ fn walk_files(root: &Path) -> Vec<PathBuf> {
         }
     }
     files
+}
+
+#[cfg(test)]
+mod apple_firewall_tests {
+    use super::*;
+
+    fn workspace_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask lives below workspace root")
+            .to_path_buf()
+    }
+
+    #[test]
+    fn optn_core_app_runtime_cargo_tomls_do_not_name_opal_packages() {
+        let root = workspace_root();
+        for crate_name in ["optn-core", "optn-app", "optn-runtime"] {
+            let text =
+                read(&root.join("crates").join(crate_name).join("Cargo.toml")).to_lowercase();
+            for dependency in APPLE_REFERENCE_DEPENDENCIES {
+                assert!(
+                    !text.contains(dependency),
+                    "{crate_name} Cargo.toml must not mention {dependency}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn opal_reference_is_v26_gated_without_moving_branches_or_secret_packages() {
+        let manifest = read(&workspace_root().join("apple/OPTNOpalReference/Package.swift"));
+        assert!(manifest.contains(".iOS(.v26)"));
+        assert!(manifest.contains(".macOS(.v26)"));
+        assert!(manifest.contains("OPAL_APPLE26_REFERENCE"));
+        assert!(
+            !manifest.contains("branch:"),
+            "Opal reference must not pin moving develop"
+        );
+        for forbidden in ["OpalBase", "OpalCrypto", "OpalFusion", "OpalHedge"] {
+            assert!(
+                !manifest.contains(forbidden),
+                "Opal reference must not link {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn native_apple_provider_does_not_depend_on_opal() {
+        let manifest =
+            read(&workspace_root().join("apple/OPTNAppleProvider/Package.swift")).to_lowercase();
+        for dependency in APPLE_REFERENCE_DEPENDENCIES {
+            assert!(
+                !manifest.contains(dependency),
+                "native Apple provider must not depend on {dependency}"
+            );
+        }
+        assert!(manifest.contains(".ios(.v14)"));
+    }
 }

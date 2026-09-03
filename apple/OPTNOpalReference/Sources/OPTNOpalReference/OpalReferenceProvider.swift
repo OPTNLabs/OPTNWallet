@@ -1,3 +1,7 @@
+#if !OPAL_APPLE26_REFERENCE
+#error("OPTNOpalReference is the Apple 26 gated flavor and must be built with OPAL_APPLE26_REFERENCE")
+#endif
+
 import OPTNAppleProvider
 import OpalDiagnostics
 import SwiftFulcrum

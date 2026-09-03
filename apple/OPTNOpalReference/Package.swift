@@ -31,6 +31,9 @@ let package = Package(
                 "OPTNAppleProvider",
                 .product(name: "SwiftFulcrum", package: "SwiftFulcrum"),
                 .product(name: "OpalDiagnostics", package: "OpalDiagnostics")
+            ],
+            swiftSettings: [
+                .define("OPAL_APPLE26_REFERENCE")
             ]
         ),
         .testTarget(
