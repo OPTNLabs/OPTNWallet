@@ -5,11 +5,17 @@
 //! loop can ask a question: by the time anything is wrong, the device has been
 //! put away. So the rules live here, next to the parser that can check them.
 //!
-//! **Every input must carry `PSBT_IN_SIGHASH_TYPE`, and it must be `0xc1`.**
-//! SeedCash falls back to `0x41` when the field is absent, and a signature over
-//! the wrong sighash is only rejected at broadcast — long after the device is
-//! back in its drawer. A missing field is therefore refused just as firmly as a
-//! wrong one: silence is what makes the fallback dangerous.
+//! **Every input must carry `PSBT_IN_SIGHASH_TYPE`, and every input must carry
+//! the same one.** The value is a choice among six, and `0x41`
+//! (`ALL | FORKID`) is the default because that is what SeedCash signs with.
+//! An absent field is refused: SeedCash would fall back to `0x41` and produce a
+//! signature that happens to be right, but the user would have approved nothing
+//! in particular, and a signed PSBT coming back is checked against the
+//! commitment they *did* approve. Silence is not a commitment.
+//!
+//! The advanced modes commit to fewer fields of the transaction, which is
+//! occasionally what an informed user wants and never what a default should
+//! do.
 //!
 //! **Mainnet is refused by the encoder, not by convention.** The air-gap path
 //! is chipnet-only while it is being proven, and "we agreed not to" is not a
@@ -43,15 +49,52 @@ pub const IN_SIGHASH_TYPE: u8 = 0x03;
 /// Per-input key type holding a pubkey's fingerprint and derivation path.
 pub const IN_BIP32_DERIVATION: u8 = 0x06;
 
+/// `SIGHASH_ALL | SIGHASH_FORKID`.
+///
+/// The default, and what SeedCash signs with. An air-gapped send uses this
+/// unless the user deliberately chose otherwise.
+pub const SIGHASH_ALL_FORKID: u32 = 0x41;
 /// `SIGHASH_ALL | SIGHASH_FORKID | SIGHASH_ANYONECANPAY`.
-///
-/// The only sighash this wallet will hand to an air-gapped signer.
-pub const WATCH_ONLY_SIGHASH: u32 = 0xc1;
+pub const SIGHASH_ALL_FORKID_ANYONECANPAY: u32 = 0xc1;
 
-/// The value SeedCash assumes when the field is missing: `ALL | FORKID`.
+/// The sighash an air-gapped send uses when nobody chose one.
+pub const WATCH_ONLY_SIGHASH: u32 = SIGHASH_ALL_FORKID;
+
+/// Every sighash this wallet will hand to an air-gapped signer.
 ///
-/// Named so the refusal can say what would have happened instead.
-pub const SEEDCASH_FALLBACK_SIGHASH: u32 = 0x41;
+/// Three base types, each with and without `ANYONECANPAY`, and `FORKID` set
+/// throughout because Bitcoin Cash requires it. The first is the default; the
+/// rest commit to fewer fields of the transaction and exist for someone who
+/// knows why they want that.
+pub const SUPPORTED_SIGHASHES: &[u32] = &[
+    SIGHASH_ALL_FORKID,
+    0x42, // NONE | FORKID
+    0x43, // SINGLE | FORKID
+    SIGHASH_ALL_FORKID_ANYONECANPAY,
+    0xc2, // NONE | FORKID | ANYONECANPAY
+    0xc3, // SINGLE | FORKID | ANYONECANPAY
+];
+
+/// A human name for one of the supported sighashes.
+pub fn sighash_label(value: u32) -> Option<&'static str> {
+    match value {
+        0x41 => Some("All (recommended)"),
+        0x42 => Some("None"),
+        0x43 => Some("Single"),
+        0xc1 => Some("All + Anyone Can Pay"),
+        0xc2 => Some("None + Anyone Can Pay"),
+        0xc3 => Some("Single + Anyone Can Pay"),
+        _ => None,
+    }
+}
+
+/// Whether this sighash commits to fewer fields than the default.
+///
+/// What a warning beside the control has to be driven by, rather than a screen
+/// deciding for itself which of six values is the safe one.
+pub fn sighash_is_advanced(value: u32) -> bool {
+    SUPPORTED_SIGHASHES.contains(&value) && value != SIGHASH_ALL_FORKID
+}
 
 /// What to stamp when the wallet has no fingerprint of its own.
 pub const ABSENT_FINGERPRINT: [u8; 4] = [0, 0, 0, 0];
@@ -66,7 +109,7 @@ pub const ABSENT_FINGERPRINT: [u8; 4] = [0, 0, 0, 0];
 pub struct SeedCashQr;
 
 impl SeedCashQr {
-    /// UR fragment size, in bytes.
+    /// UR fragment size, in bytes. The default: easiest to scan, most frames.
     pub const CHUNK_SIZE: usize = 50;
     /// Quiet-zone padding, in modules.
     pub const PADDING: u32 = 8;
@@ -74,6 +117,25 @@ impl SeedCashQr {
     pub const PIXELS: u32 = 640;
     /// Error-correction level. Low, because density is the binding constraint.
     pub const ERROR_CORRECTION: char = 'L';
+
+    /// The fragment sizes a user may pick between.
+    ///
+    /// A trade the device makes, not one this wallet can make for it: a denser
+    /// QR is fewer frames and a shorter wait, but some cameras cannot read it,
+    /// and the failure looks like a camera that simply will not focus.
+    pub const FRAGMENT_OPTIONS: &'static [usize] = &[50, 100, 200, 400, 450];
+
+    /// What to call a fragment size on screen.
+    pub fn fragment_label(fragment: usize) -> Option<&'static str> {
+        match fragment {
+            50 => Some("Easiest to scan (more frames)"),
+            100 => Some("Balanced"),
+            200 => Some("High density (fewer frames)"),
+            400 => Some("Highest density (fewest frames)"),
+            450 => Some("Maximum density (fewest frames)"),
+            _ => None,
+        }
+    }
 }
 
 /// A pubkey's origin, as an input's BIP32 derivation record.
@@ -254,27 +316,29 @@ pub fn check_watch_only(raw: &[u8], network: Network) -> Result<Psbt> {
             "a PSBT with no inputs cannot be signed".into(),
         ));
     }
+    let mut agreed: Option<u32> = None;
     for (index, input) in psbt.inputs.iter().enumerate() {
-        match input.sighash_type {
-            Some(WATCH_ONLY_SIGHASH) => {}
-            Some(SEEDCASH_FALLBACK_SIGHASH) => {
+        let Some(sighash) = input.sighash_type else {
+            return Err(CliError::Protocol(format!(
+                "input {index} carries no sighash type. SeedCash would fall back to 0x41, so the \
+                 signature might well be right -- but the user would have approved nothing in \
+                 particular, and a signature coming back is checked against what they approved"
+            )));
+        };
+        check_sighash(sighash)
+            .map_err(|error| CliError::Protocol(format!("input {index}: {error}")))?;
+        match agreed {
+            None => agreed = Some(sighash),
+            // One commitment per transaction. Inputs signed under different
+            // sighashes commit to different pictures of the same transaction,
+            // and no single approval covers that.
+            Some(first) if first != sighash => {
                 return Err(CliError::Protocol(format!(
-                    "input {index} asks for sighash 0x41; this wallet signs air-gapped with \
-                     0xc1 (ALL|FORKID|ANYONECANPAY) only"
+                    "input {index} asks for sighash {sighash:#04x} while input 0 asks for \
+                     {first:#04x}; every input commits to the same one"
                 )))
             }
-            Some(other) => {
-                return Err(CliError::Protocol(format!(
-                    "input {index} asks for sighash {other:#04x}; only 0xc1 is accepted"
-                )))
-            }
-            None => {
-                return Err(CliError::Protocol(format!(
-                    "input {index} carries no sighash type. SeedCash would fall back to 0x41 and \
-                     the wrong signature is only caught at broadcast, so an absent field is \
-                     refused here"
-                )))
-            }
+            Some(_) => {}
         }
     }
     Ok(psbt)
@@ -526,9 +590,10 @@ pub struct GlobalXpub {
 /// Whether a sighash may be handed to an air-gapped signer.
 ///
 /// Two separate refusals, because they fail differently. Without FORKID the
-/// signature is not valid on Bitcoin Cash at all and the failure appears at
-/// broadcast, after the user has already walked the transaction through a
-/// device. With `0x41` it is a valid signature over the wrong thing.
+/// signature is not valid on Bitcoin Cash at all, and the failure appears at
+/// broadcast — after the user has already walked the transaction through a
+/// device and put it away. A flag combination outside the supported six is
+/// something no signer here has agreed to produce.
 pub fn check_sighash(value: u32) -> Result<()> {
     if value & SIGHASH_FORKID_BIT == 0 {
         return Err(CliError::Usage(format!(
@@ -536,25 +601,40 @@ pub fn check_sighash(value: u32) -> Result<()> {
              rejected at broadcast, long after the device has signed"
         )));
     }
-    if value != WATCH_ONLY_SIGHASH {
+    if !SUPPORTED_SIGHASHES.contains(&value) {
         return Err(CliError::Usage(format!(
-            "sighash {value:#04x} is not accepted; this wallet signs air-gapped with 0xc1 \
-             (ALL|FORKID|ANYONECANPAY) only, and omitting the field lets SeedCash fall back to \
-             0x41"
+            "{value:#04x} is not a supported BCH sighash; this wallet signs with one of {}",
+            SUPPORTED_SIGHASHES
+                .iter()
+                .map(|value| format!("{value:#04x}"))
+                .collect::<Vec<_>>()
+                .join(", ")
         )));
     }
     Ok(())
 }
 
-/// Build the PSBT an air-gapped signer is shown.
+/// Build the PSBT an air-gapped signer is shown, with the default sighash.
 ///
-/// The sighash is not a parameter. Every input gets `0xc1`, because that is the
-/// only value this wallet's verifier accepts and a builder that could produce
-/// anything else would be a second place for the rule to be wrong.
+/// The overwhelmingly common case, and the one a caller should reach for
+/// without thinking about it.
 pub fn encode_unsigned(
     inputs: &[PsbtInputSpec],
     outputs: &[PsbtOutputSpec],
     global_xpubs: &[GlobalXpub],
+) -> Result<Vec<u8>> {
+    encode_unsigned_with_sighash(inputs, outputs, global_xpubs, WATCH_ONLY_SIGHASH)
+}
+
+/// The same, with a sighash the user deliberately chose.
+///
+/// Validated here rather than trusted, so a screen offering the choice cannot
+/// widen the set by passing something else through.
+pub fn encode_unsigned_with_sighash(
+    inputs: &[PsbtInputSpec],
+    outputs: &[PsbtOutputSpec],
+    global_xpubs: &[GlobalXpub],
+    sighash: u32,
 ) -> Result<Vec<u8>> {
     if inputs.is_empty() {
         return Err(CliError::Usage("a PSBT needs at least one input".into()));
@@ -562,7 +642,7 @@ pub fn encode_unsigned(
     if outputs.is_empty() {
         return Err(CliError::Usage("a PSBT needs at least one output".into()));
     }
-    check_sighash(WATCH_ONLY_SIGHASH)?;
+    check_sighash(sighash)?;
 
     let mut out = PSBT_MAGIC.to_vec();
 
@@ -617,11 +697,9 @@ pub fn encode_unsigned(
                 record(&mut out, &[IN_WITNESS_UTXO], &value);
             }
         }
-        record(
-            &mut out,
-            &[IN_SIGHASH_TYPE],
-            &WATCH_ONLY_SIGHASH.to_le_bytes(),
-        );
+        // The same on every input: a signer commits to one, and a signature
+        // coming back is checked against the one the user approved.
+        record(&mut out, &[IN_SIGHASH_TYPE], &sighash.to_le_bytes());
         if let Some(script) = input.redeem_script.as_ref() {
             record(&mut out, &[IN_REDEEM_SCRIPT], script);
         }
@@ -816,37 +894,86 @@ mod tests {
         // The rule this module exists for. A wrong sighash is not caught by the
         // device, or by this wallet at signing time -- only by the network, at
         // broadcast, long after the device has been put away.
-        let ok = check_watch_only(
-            &psbt_with_sighash(Some(WATCH_ONLY_SIGHASH)),
-            Network::Chipnet,
-        )
-        .expect("0xc1 is the one we sign with");
-        assert_eq!(ok.inputs.len(), 1);
-        assert_eq!(ok.inputs[0].sighash_type, Some(0xc1));
+        // Six are supported: three base types, each with and without
+        // ANYONECANPAY, FORKID throughout because Bitcoin Cash requires it.
+        for supported in SUPPORTED_SIGHASHES {
+            let ok = check_watch_only(&psbt_with_sighash(Some(*supported)), Network::Chipnet)
+                .unwrap_or_else(|error| panic!("{supported:#04x} is supported: {error}"));
+            assert_eq!(ok.inputs[0].sighash_type, Some(*supported));
+            assert!(sighash_label(*supported).is_some());
+        }
 
-        let fallback = check_watch_only(
-            &psbt_with_sighash(Some(SEEDCASH_FALLBACK_SIGHASH)),
-            Network::Chipnet,
-        )
-        .expect_err("0x41 must be refused");
-        assert!(fallback.to_string().contains("0x41"), "{fallback}");
+        // The default is the one SeedCash signs with, and it is the only one
+        // that is not an advanced choice.
+        assert_eq!(WATCH_ONLY_SIGHASH, SIGHASH_ALL_FORKID);
+        assert_eq!(WATCH_ONLY_SIGHASH, 0x41);
+        assert!(!sighash_is_advanced(SIGHASH_ALL_FORKID));
+        for advanced in [0x42, 0x43, 0xc1, 0xc2, 0xc3] {
+            assert!(sighash_is_advanced(advanced), "{advanced:#04x}");
+        }
 
-        let odd = check_watch_only(&psbt_with_sighash(Some(0x01)), Network::Chipnet)
-            .expect_err("and so must anything else");
-        assert!(odd.to_string().contains("only 0xc1"), "{odd}");
+        // A flag combination outside the six is refused. 0x61 sets a bit that
+        // means nothing, which is exactly how a plausible-looking sighash gets
+        // through a hand-written check.
+        let odd = check_watch_only(&psbt_with_sighash(Some(0x61)), Network::Chipnet)
+            .expect_err("0x61 is not one of them");
+        assert!(
+            odd.to_string().contains("not a supported BCH sighash"),
+            "{odd}"
+        );
+        assert!(
+            !sighash_is_advanced(0x61),
+            "unsupported is not merely advanced"
+        );
+    }
+
+    #[test]
+    fn every_input_commits_to_the_same_sighash() {
+        // Inputs signed under different sighashes commit to different pictures
+        // of the same transaction, and no single approval covers that.
+        let mut out = PSBT_MAGIC.to_vec();
+        let tx = {
+            // Two inputs, one output.
+            let mut tx = Vec::new();
+            tx.extend_from_slice(&2u32.to_le_bytes());
+            tx.push(2);
+            for vout in 0..2u32 {
+                tx.extend_from_slice(&[9u8; 32]);
+                tx.extend_from_slice(&vout.to_le_bytes());
+                tx.push(0);
+                tx.extend_from_slice(&0xffff_fffeu32.to_le_bytes());
+            }
+            tx.push(1);
+            tx.extend_from_slice(&50_000u64.to_le_bytes());
+            tx.push(1);
+            tx.push(0x51);
+            tx.extend_from_slice(&0u32.to_le_bytes());
+            tx
+        };
+        out.extend_from_slice(&field(&[GLOBAL_UNSIGNED_TX], &tx));
+        out.push(0x00);
+        for sighash in [SIGHASH_ALL_FORKID, SIGHASH_ALL_FORKID_ANYONECANPAY] {
+            out.extend_from_slice(&field(&[IN_SIGHASH_TYPE], &sighash.to_le_bytes()));
+            out.push(0x00);
+        }
+        out.push(0x00);
+
+        let error = check_watch_only(&out, Network::Chipnet).expect_err("mixed must be refused");
+        assert!(error.to_string().contains("every input commits"), "{error}");
     }
 
     #[test]
     fn an_absent_sighash_field_is_refused_because_silence_is_the_dangerous_case() {
-        // SeedCash falls back to 0x41 when the field is missing, so leaving it
-        // out is not "unspecified", it is "0x41, silently".
+        // SeedCash falls back to 0x41, so the signature might well come back
+        // correct -- but the user would have approved nothing in particular,
+        // and a returning signature is checked against what they approved.
         let error = check_watch_only(&psbt_with_sighash(None), Network::Chipnet)
             .expect_err("a missing field must not pass");
         let message = error.to_string();
         assert!(message.contains("no sighash type"), "{message}");
         assert!(
-            message.contains("0x41"),
-            "the reason must name it: {message}"
+            message.contains("approved"),
+            "the reason is the commitment, not the value: {message}"
         );
     }
 
@@ -1003,16 +1130,42 @@ mod tests {
             .iter()
             .all(|input| input.sighash_type == Some(WATCH_ONLY_SIGHASH)));
 
-        // And the rule itself refuses the two ways it is usually got wrong,
-        // with different reasons because they fail differently.
+        // A caller may choose, and the choice is validated here rather than by
+        // the screen offering it -- so a screen cannot widen the set by passing
+        // something else through.
+        let chosen = encode_unsigned_with_sighash(
+            &[spec_input()],
+            &[spec_output()],
+            &[],
+            SIGHASH_ALL_FORKID_ANYONECANPAY,
+        )
+        .expect("a supported choice");
+        assert_eq!(
+            parse(&chosen).expect("parses").inputs[0].sighash_type,
+            Some(SIGHASH_ALL_FORKID_ANYONECANPAY)
+        );
+        assert!(
+            encode_unsigned_with_sighash(&[spec_input()], &[spec_output()], &[], 0x61).is_err(),
+            "an unsupported one is refused before any bytes are written"
+        );
+
+        // And the two ways it is usually got wrong fail differently, so the
+        // reasons say different things.
         let no_forkid = check_sighash(0x01).expect_err("no FORKID bit");
         assert!(
             no_forkid.to_string().contains("SIGHASH_FORKID"),
             "{no_forkid}"
         );
-        let fallback = check_sighash(SEEDCASH_FALLBACK_SIGHASH).expect_err("0x41");
-        assert!(fallback.to_string().contains("0xc1"), "{fallback}");
-        assert!(check_sighash(WATCH_ONLY_SIGHASH).is_ok());
+        let unsupported = check_sighash(0x61).expect_err("a stray bit");
+        assert!(
+            unsupported
+                .to_string()
+                .contains("not a supported BCH sighash"),
+            "{unsupported}"
+        );
+        for supported in SUPPORTED_SIGHASHES {
+            assert!(check_sighash(*supported).is_ok(), "{supported:#04x}");
+        }
     }
 
     #[test]
@@ -1173,5 +1326,18 @@ mod tests {
         assert_eq!(SeedCashQr::PADDING, 8);
         assert_eq!(SeedCashQr::PIXELS, 640);
         assert_eq!(SeedCashQr::ERROR_CORRECTION, 'L');
+
+        // Density is the user's trade to make: fewer frames is a shorter wait,
+        // but some cameras cannot read a dense code, and the failure looks like
+        // a camera that will not focus. The default is the easiest to scan.
+        assert_eq!(SeedCashQr::FRAGMENT_OPTIONS, &[50, 100, 200, 400, 450]);
+        assert_eq!(SeedCashQr::FRAGMENT_OPTIONS[0], SeedCashQr::CHUNK_SIZE);
+        for fragment in SeedCashQr::FRAGMENT_OPTIONS {
+            assert!(
+                SeedCashQr::fragment_label(*fragment).is_some(),
+                "every option a screen offers needs a name: {fragment}"
+            );
+        }
+        assert_eq!(SeedCashQr::fragment_label(77), None);
     }
 }
