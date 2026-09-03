@@ -37,6 +37,11 @@ base64 = { version = "0.22", default-features = false, features = ["alloc", "std
 # move rather than a new party to trust, and both are pure Rust and wasm-safe.
 # Default features are just `cipher`, the trait the stream API lives behind.
 chacha20 = "0.10"
+# The wallet pack's cipher. AES-GCM is not something to hand-roll: GHASH is a
+# GF(2^128) multiply whose naive form is table-driven and therefore timing
+# sensitive. PBKDF2 rides on the hmac already here.
+aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 subtle = { version = "2", default-features = false }
 serde = { version = "1", default-features = false, features = ["derive", "std"] }
 serde_json = { version = "1", default-features = false, features = ["std"] }

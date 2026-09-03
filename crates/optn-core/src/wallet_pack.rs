@@ -26,7 +26,13 @@
 //! name the user typed into the save dialog is the one they meant, so
 //! [`wallet_name_from_path`] prefers the filename stem.
 
+use std::fmt;
+
+use aes_gcm::aead::Aead;
+use aes_gcm::{Aes256Gcm, KeyInit};
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::error::{CliError, Result};
 
@@ -312,6 +318,100 @@ pub fn wallet_name_from_path(path: &str) -> Option<&str> {
     (!stem.is_empty()).then_some(stem)
 }
 
+// ---------------------------------------------------------------------------
+// The cipher
+// ---------------------------------------------------------------------------
+
+/// PBKDF2 rounds for a wallet password.
+///
+/// Six hundred thousand, matching what the desktop wallet already writes. The
+/// number is the whole defence: a wallet password is chosen by a person, so the
+/// only thing standing between a stolen file and its contents is how long each
+/// guess takes. It is a constant rather than a parameter because a caller that
+/// could lower it would be a caller that could quietly disable it.
+pub const PBKDF2_ROUNDS: u32 = 600_000;
+
+/// Bytes of salt a derivation needs.
+pub const SALT_LEN: usize = 16;
+/// Bytes of nonce AES-GCM needs.
+pub const NONCE_LEN: usize = 12;
+
+/// A key derived from a wallet password.
+///
+/// Zeroized on drop, and its `Debug` says nothing: this key decrypts the
+/// wallet's cold data, and a log line carrying it would outlive the session it
+/// came from.
+#[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
+pub struct PackKey([u8; 32]);
+
+impl PackKey {
+    pub const fn expose(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl fmt::Debug for PackKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("PackKey(<redacted>)")
+    }
+}
+
+/// Derive the pack key from a password and the wallet's stored salt.
+///
+/// The salt is the wallet's own, so two wallets sharing a password still get
+/// different keys and neither file opens the other.
+pub fn derive_key(password: &str, salt: &[u8]) -> Result<PackKey> {
+    derive_key_with_rounds(password, salt, PBKDF2_ROUNDS)
+}
+
+/// The same derivation at a stated cost.
+///
+/// Only for tests and for reading a file written under an older cost. Never
+/// call it to write one: [`derive_key`] is the rounds this wallet uses.
+pub fn derive_key_with_rounds(password: &str, salt: &[u8], rounds: u32) -> Result<PackKey> {
+    if salt.len() < SALT_LEN {
+        return Err(CliError::Usage(format!(
+            "a pack salt is at least {SALT_LEN} bytes, got {}",
+            salt.len()
+        )));
+    }
+    if rounds == 0 {
+        return Err(CliError::Usage("a key derivation needs rounds".into()));
+    }
+    let mut key = [0u8; 32];
+    pbkdf2::pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, rounds, &mut key);
+    Ok(PackKey(key))
+}
+
+/// Encrypt a serialised cold archive.
+///
+/// The nonce must never repeat under one key. It is a parameter because this
+/// crate has no randomness, and reusing one under AES-GCM does not merely leak
+/// the plaintext: it leaks the authentication key, and with it the ability to
+/// forge.
+pub fn seal(key: &PackKey, nonce: &[u8; NONCE_LEN], plaintext: &[u8]) -> Result<Vec<u8>> {
+    let cipher = Aes256Gcm::new_from_slice(key.expose())
+        .map_err(|_| CliError::Internal("a pack key is 32 bytes".into()))?;
+    cipher
+        .encrypt(nonce.into(), plaintext)
+        .map_err(|_| CliError::Internal("could not encrypt the archive".into()))
+}
+
+/// Decrypt one, or say why not.
+///
+/// A wrong password and a tampered file are the same answer on purpose: any
+/// other arrangement tells whoever has the file which of the two they got
+/// right, and that turns a guessing attack into a search.
+pub fn open(key: &PackKey, nonce: &[u8; NONCE_LEN], ciphertext: &[u8]) -> Result<Vec<u8>> {
+    let cipher = Aes256Gcm::new_from_slice(key.expose())
+        .map_err(|_| CliError::Internal("a pack key is 32 bytes".into()))?;
+    cipher.decrypt(nonce.into(), ciphertext).map_err(|_| {
+        CliError::Usage(
+            "could not open this file: the password is wrong, or the file has been altered".into(),
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -484,6 +584,115 @@ mod tests {
         let mut foreign = envelope;
         foreign.format = "someone-elses-archive".into();
         assert!(!foreign.is_supported());
+    }
+
+    /// A cheap derivation, for tests only. The shipped cost is deliberately
+    /// slow, which is the point of it.
+    fn test_key(password: &str, salt: &[u8]) -> PackKey {
+        derive_key_with_rounds(password, salt, 32).expect("derives")
+    }
+
+    #[test]
+    fn a_pack_round_trips_and_the_key_never_prints_itself() {
+        let salt = [9u8; SALT_LEN];
+        let nonce = [3u8; NONCE_LEN];
+        let key = test_key("correct horse battery staple", &salt);
+
+        let archive = archive();
+        archive.carries_no_secrets().expect("clean");
+        let plaintext = serde_json::to_vec(&archive).expect("encodes");
+
+        let sealed = seal(&key, &nonce, &plaintext).expect("seals");
+        assert_ne!(
+            sealed, plaintext,
+            "the file is not the archive in the clear"
+        );
+        assert!(
+            sealed.len() > plaintext.len(),
+            "and it carries an authentication tag"
+        );
+
+        let opened = open(&key, &nonce, &sealed).expect("opens");
+        let back: ColdArchive = serde_json::from_slice(&opened).expect("decodes");
+        assert_eq!(back, archive);
+
+        // The key opens the whole of a wallet's cold data, so a log line
+        // carrying it would outlive the session it came from.
+        assert_eq!(format!("{key:?}"), "PackKey(<redacted>)");
+    }
+
+    #[test]
+    fn a_wrong_password_and_a_tampered_file_give_the_same_answer() {
+        // Deliberately indistinguishable. Any other arrangement tells whoever
+        // holds the file which of the two they got right, which turns guessing
+        // into a search.
+        let salt = [9u8; SALT_LEN];
+        let nonce = [3u8; NONCE_LEN];
+        let key = test_key("right", &salt);
+        let sealed = seal(&key, &nonce, b"the archive").expect("seals");
+
+        let wrong_password = open(&test_key("wrong", &salt), &nonce, &sealed)
+            .expect_err("a wrong password must not open it");
+
+        let mut altered = sealed.clone();
+        altered[0] ^= 0x01;
+        let tampered = open(&key, &nonce, &altered).expect_err("a changed byte must not open it");
+
+        assert_eq!(wrong_password.to_string(), tampered.to_string());
+        assert!(wrong_password.to_string().contains("password is wrong"));
+
+        // The tag covers the whole file, not just its start.
+        let mut truncated = sealed;
+        truncated.pop();
+        assert!(open(&key, &nonce, &truncated).is_err());
+    }
+
+    #[test]
+    fn each_wallets_salt_keeps_one_password_from_opening_two_files() {
+        // Two wallets can share a password, and the salt is what stops one
+        // file's key opening the other's.
+        let password = "the same password";
+        let first = test_key(password, &[1u8; SALT_LEN]);
+        let second = test_key(password, &[2u8; SALT_LEN]);
+        assert_ne!(first.expose(), second.expose());
+
+        let nonce = [3u8; NONCE_LEN];
+        let sealed = seal(&first, &nonce, b"wallet one").expect("seals");
+        assert!(open(&second, &nonce, &sealed).is_err());
+    }
+
+    #[test]
+    fn the_derivation_cost_is_a_constant_a_caller_cannot_lower() {
+        // A wallet password is chosen by a person, so how long each guess takes
+        // is the whole defence. A caller able to lower it is a caller able to
+        // quietly disable it, which is why the shipped path takes no rounds
+        // argument at all.
+        assert_eq!(PBKDF2_ROUNDS, 600_000);
+
+        // The escape hatch exists for tests and for reading an older file, and
+        // it still refuses the values that mean "no derivation".
+        assert!(derive_key_with_rounds("p", &[0u8; SALT_LEN], 0).is_err());
+        // A short salt is refused too: it is what makes one wallet's key
+        // different from another's.
+        assert!(derive_key_with_rounds("p", &[0u8; SALT_LEN - 1], 32).is_err());
+        assert!(derive_key_with_rounds("p", &[0u8; SALT_LEN], 32).is_ok());
+    }
+
+    #[test]
+    fn the_envelope_carries_what_is_needed_to_open_it_and_nothing_more() {
+        // The salt has to travel with the file -- it is not a secret -- but the
+        // password never does, and neither does the key.
+        let salt = [9u8; SALT_LEN];
+        let nonce = [3u8; NONCE_LEN];
+        let key = test_key("a password", &salt);
+        let sealed = seal(&key, &nonce, b"the archive").expect("seals");
+
+        let hex = |bytes: &[u8]| -> String { bytes.iter().map(|b| format!("{b:02x}")).collect() };
+        let envelope = EncryptedColdArchive::new(7, hex(&salt), hex(&sealed));
+        let json = serde_json::to_string(&envelope).expect("encodes");
+        assert!(!json.contains("a password"), "{json}");
+        assert!(!json.contains(&hex(key.expose())), "{json}");
+        assert!(json.contains(&hex(&salt)), "the salt travels with the file");
     }
 
     #[test]
