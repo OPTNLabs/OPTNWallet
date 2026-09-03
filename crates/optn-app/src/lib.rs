@@ -8,6 +8,8 @@
 
 mod flow;
 pub mod identity;
+pub mod menu;
+pub use menu::{menu_bar, MenuCommand, MenuEntry, MenuSection};
 pub mod networks;
 pub mod portfolio;
 pub use identity::{wallet_identity, RevealedIdentity, WalletIdentity, WalletTypeLabel};
