@@ -43,7 +43,6 @@ pub struct ProviderDescriptor {
     pub capabilities: &'static [Capability],
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppleProviderRole {
     /// Thin adapter to an Apple OS capability. It may store opaque secret bytes
@@ -871,10 +870,7 @@ mod apple_provider_policy_tests {
     fn reference_oracle_is_secret_free_and_never_authoritative() {
         let policy = AppleProviderPolicy::reference(OPAL_APPLE_DEPLOYMENT_FLOOR);
         assert_eq!(policy.role, AppleProviderRole::ReferenceOracle);
-        assert_eq!(
-            policy.secret_material,
-            AppleSecretMaterialPolicy::Forbidden
-        );
+        assert_eq!(policy.secret_material, AppleSecretMaterialPolicy::Forbidden);
         assert!(!policy.owns_wallet_state());
     }
 
