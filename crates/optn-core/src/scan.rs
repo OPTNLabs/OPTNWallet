@@ -41,6 +41,8 @@ use crate::network::Network;
 pub const CASHCONNECT_URI_SCHEME: &str = "bch-cc-v1:";
 /// The scheme a WalletConnect pairing URI carries.
 pub const WALLETCONNECT_URI_SCHEME: &str = "wc:";
+/// The scheme a WizardConnect pairing URI carries.
+pub const WIZARDCONNECT_URI_SCHEME: &str = "wiz://";
 /// The prefix a chunked merchant proposal QR stream carries.
 pub const MERCHANT_PROPOSAL_PREFIX: &str = "qrstream/1/";
 
@@ -161,6 +163,8 @@ pub enum ScannedPayload {
     CashConnect { uri: String },
     /// A WalletConnect pairing URI, likewise reported whole.
     WalletConnect { uri: String },
+    /// A WizardConnect pairing URI, likewise reported whole.
+    WizardConnect { uri: String },
     /// The first chunk of a chunked merchant proposal.
     MerchantProposal { initial_payload: String },
     /// A private key to sweep.
@@ -201,6 +205,11 @@ pub fn is_cashconnect_uri(value: &str) -> bool {
 /// A WalletConnect pairing URI, matched case-insensitively for the same reason.
 pub fn is_walletconnect_uri(value: &str) -> bool {
     has_scheme(value, WALLETCONNECT_URI_SCHEME)
+}
+
+/// A WizardConnect pairing URI, matched case-insensitively for the same reason.
+pub fn is_wizardconnect_uri(value: &str) -> bool {
+    has_scheme(value, WIZARDCONNECT_URI_SCHEME)
 }
 
 fn has_scheme(value: &str, scheme: &str) -> bool {
@@ -455,6 +464,12 @@ pub fn classify_scanned_payload(input: &str, network: Network) -> ScannedPayload
         };
     }
 
+    if is_wizardconnect_uri(scanned) {
+        return ScannedPayload::WizardConnect {
+            uri: scanned.to_string(),
+        };
+    }
+
     if is_merchant_proposal(scanned) {
         return ScannedPayload::MerchantProposal {
             initial_payload: scanned.to_string(),
@@ -597,10 +612,42 @@ mod tests {
             classify_scanned_payload("BCH-CC-V1://relay.example/abc", Network::Mainnet),
             ScannedPayload::CashConnect { .. }
         ));
+        assert!(matches!(
+            classify_scanned_payload("WIZ://relay.example/abc", Network::Mainnet),
+            ScannedPayload::WizardConnect { .. }
+        ));
         // A bare scheme is not a URI, and neither is a scheme with a space in
         // it -- that is two things pasted together.
         assert!(!is_walletconnect_uri("wc:"));
         assert!(!is_cashconnect_uri("bch-cc-v1: and then some prose"));
+    }
+
+    #[test]
+    fn every_connection_scheme_is_matched_before_the_paper_wallet_rule() {
+        // All three pairing URIs end in base58-ish text after a colon, which is
+        // exactly what the paper-wallet rule reads. Each one is checked here,
+        // not just the first, because adding a fourth scheme below the key
+        // check is how this would come back.
+        for (uri, expected) in [
+            (
+                format!("bch-cc-v1://relay.example/{WIF_COMPRESSED}"),
+                "cashconnect",
+            ),
+            (format!("wc:{WIF_COMPRESSED}@2"), "walletconnect"),
+            (
+                format!("wiz://relay.example/{WIF_COMPRESSED}"),
+                "wizardconnect",
+            ),
+        ] {
+            let payload = classify_scanned_payload(&uri, Network::Chipnet);
+            let kind = match payload {
+                ScannedPayload::CashConnect { .. } => "cashconnect",
+                ScannedPayload::WalletConnect { .. } => "walletconnect",
+                ScannedPayload::WizardConnect { .. } => "wizardconnect",
+                other => panic!("{uri} became {other:?}"),
+            };
+            assert_eq!(kind, expected, "{uri}");
+        }
     }
 
     #[test]

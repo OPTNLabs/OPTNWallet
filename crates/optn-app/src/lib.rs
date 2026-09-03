@@ -6,9 +6,13 @@
 //! adapters may subscribe to typed events. No UI or native-shell framework
 //! belongs in this crate.
 
+pub mod connect;
 mod flow;
 pub mod identity;
 pub mod menu;
+pub use connect::{
+    most_urgent, ApprovalBlock, ConnectProtocol, ConnectRequest, ConnectState, RequestKind,
+};
 pub use menu::{
     menu_bar, MenuBarSection, MenuCommand, MenuEntry, MenuPlatform, MenuSection, NativeRole,
     NATIVE_EDIT_KEYS,
@@ -338,6 +342,8 @@ pub struct AppState {
     /// RPA stealth sats. Deliberately not in `coins`: they are a separate
     /// pool, added to the portfolio total rather than counted as UTXOs.
     pub stealth_sats: u64,
+    /// The connect control and whatever a paired session is waiting on.
+    pub connect: ConnectState,
     pub create_step: CreateStep,
     pub import_step: ImportStep,
     pub settings_focus: Option<SettingsRowId>,
@@ -422,6 +428,7 @@ impl AppState {
             servers: ServerOverrides::new(),
             identity_revealed: false,
             stealth_sats: 0,
+            connect: ConnectState::new(),
             create_step: CreateStep::Reveal,
             import_step: ImportStep::Words,
             settings_focus: None,
@@ -682,6 +689,10 @@ impl AppState {
                 self.pledges.clear();
                 self.spend = None;
                 self.stealth_sats = 0;
+                // A paired session is bound to the chain it paired on. A
+                // request carried across the switch would be answered against
+                // coins that are not the ones it was built from.
+                self.connect.cancel_all();
                 Some(AppEvent::NetworkChanged(network))
             }
             AppAction::OpenHelp if !self.help_open => {
@@ -1122,6 +1133,10 @@ impl AppState {
         // unless its key is cached" an invariant precisely so a closed wallet
         // cannot keep driving the UI.
         self.stealth_sats = 0;
+        // A request belongs to the session that raised it, and that session
+        // belonged to this wallet. Carrying one across the lock would ask the
+        // next wallet to sign something it never saw.
+        self.connect.cancel_all();
         // The exported account belongs to the wallet that was open. The device
         // stays chosen and stays plugged in, but carrying one wallet's xPub
         // into the next one would attribute an identity to the wrong wallet.
@@ -3730,6 +3745,38 @@ mod tests {
         ] {
             assert!(surface.can_spend(), "{surface:?} is a full wallet");
         }
+    }
+
+    #[test]
+    fn locking_or_switching_chains_cancels_a_paired_sessions_request() {
+        // A request belongs to the session that raised it, and that session to
+        // one wallet on one chain. Carried across either boundary it would be
+        // answered by a wallet that never saw it, against coins it was not
+        // built from.
+        let pending = ConnectRequest {
+            protocol: ConnectProtocol::CashConnect,
+            kind: RequestKind::SignTransaction,
+            origin: "example.dapp".into(),
+            id: "req-1".into(),
+        };
+
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        open_chipnet_seed(&mut state, "paired");
+        assert!(state.connect.raise(pending.clone()));
+        state.apply(AppAction::LockWallet);
+        assert!(
+            state.connect.request.is_none(),
+            "a lock must not leave a signature request up"
+        );
+
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        open_chipnet_seed(&mut state, "paired");
+        assert!(state.connect.raise(pending));
+        state.apply(AppAction::SetNetwork(Network::Mainnet));
+        assert!(
+            state.connect.request.is_none(),
+            "a chain switch must not leave one up either"
+        );
     }
 
     #[test]
