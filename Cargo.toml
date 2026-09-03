@@ -8,6 +8,7 @@ members = [
   "crates/optn-transport",
   "crates/optn-transport-tauri",
   "crates/optn-ui",
+  "crates/optn-ui-text",
   "xtask",
 ]
 exclude = [
@@ -23,6 +24,7 @@ default-members = [
   "crates/optn-transport",
   "crates/optn-transport-tauri",
   "crates/optn-ui",
+  "crates/optn-ui-text",
   "xtask",
 ]
 
