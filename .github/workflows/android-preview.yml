@@ -383,58 +383,7 @@ jobs:
               instrumentation_exit=${PIPESTATUS[0]}
               set -e
               if grep -q '^INSTRUMENTATION_FAILED:' "$instrumentation_log" ||
-                ! grep -q '^INSTRUMENTATION_CODE: -1
-          done
-
-      # assembleDebug builds every flavour, so both APKs should exist. Nothing
-      # checked that: the upload was one artifact over a glob with no
-      # if-no-files-found, so an F-Droid variant that stopped building would
-      # have left the preview green with the Play APK alone in the artifact.
-      # That is the same shape of hole the release had.
-      - name: Verify both store flavours built
-        run: |
-          missing=0
-          for flavour in play fdroid; do
-            if find android -type f -path "*/outputs/apk/${flavour}/debug/*.apk" -print -quit \
-              | grep -q .; then
-              echo "  ok       ${flavour} debug APK"
-            else
-              echo "::error::${flavour} debug APK was not produced"
-              missing=1
-            fi
-          done
-          exit "$missing"
-
-      # F-Droid's inclusion policy covers dependencies, not just the
-      # application. ML Kit is proprietary and arrives with Play Services, a
-      # native barcode engine and TensorFlow Lite models — roughly 20 MB of
-      # closed binaries. android/app/build.gradle excludes it and every scan
-      # goes through ZXing instead; nothing else would notice if that
-      # exclusion were dropped, because the app would keep working.
-      - name: Verify no proprietary barcode scanner is bundled
-        run: |
-          mapfile -t apks < <(find android -type f -path '*/outputs/apk/*/debug/*.apk' | sort)
-          if [ "${#apks[@]}" -eq 0 ]; then
-            echo '::error::no debug APKs to inspect'
-            exit 1
-          fi
-          bash scripts/assert-no-proprietary-scanner.sh "${apks[@]}"
-
-      - name: Upload Play debug APK
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: app-debug-play
-          path: android/**/outputs/apk/play/debug/*.apk
-          if-no-files-found: error
-
-      - name: Upload F-Droid debug APK
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: app-debug-fdroid
-          path: android/**/outputs/apk/fdroid/debug/*.apk
-          if-no-files-found: error
-          retention-days: 14
- "$instrumentation_log"; then
+                ! grep -q '^INSTRUMENTATION_CODE: -1$' "$instrumentation_log"; then
                 echo "::error::Android instrumentation ${method} failed on the $flavour flavour"
                 echo 'Android instrumentation output:'
                 cat "$instrumentation_log" || true
