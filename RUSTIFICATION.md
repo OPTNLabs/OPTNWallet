@@ -112,7 +112,8 @@ than generated Xcode/Tauri project files:
 apple/OPTNAppleProvider
     typed ApplePlatformProvider contract
     native Apple capability adapters
-    current concrete adapter: Keychain opaque-byte storage
+    current concrete adapters: Keychain opaque-byte storage; CoreNFC tag I/O
+    contactless presentment stub (unavailable without NFC & SE entitlement)
 
 apple/OPTNOpalReference
     reference/conformance build only
@@ -123,6 +124,9 @@ apple/OPTNOpalReference
 
 The native package deliberately has no Opal dependency and does not set a newer
 Apple deployment floor. The committed Capacitor project remains iOS 14.0.
+CoreNFC adapters compile against that iOS 14 floor and keep NDEF/TAPSIGNER
+protocol in Rust; they return unavailable until a host drives a real session.
+Contactless presentment is Apple NFC & SE Platform, not Tap to Pay / ProximityReader.
 
 The Opal reference package is a separate Apple-26-only build flavor. It links
 only the mature networking/diagnostics references. It does **not** link
