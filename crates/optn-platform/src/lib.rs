@@ -19,6 +19,9 @@ pub enum Capability {
     FileSystem,
     DeepLinks,
     HardwareWallet,
+    NfcTagIo,
+    NfcIso7816,
+    ContactlessPresentment,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +94,49 @@ pub trait FileSystem {
 
 pub trait DeepLinks {
     fn initial_url<'a>(&'a self) -> PlatformFuture<'a, Option<String>>;
+}
+
+/// NFC technologies understood by native adapters.
+///
+/// Parsing/encoding of wallet payloads belongs in Rust domain crates. Swift and
+/// Kotlin should only own the OS session and transport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NfcTechnology {
+    Ndef,
+    Iso7816,
+    Iso15693,
+    Mifare,
+    Felica,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NfcMessage {
+    pub technology: NfcTechnology,
+    pub payload: Vec<u8>,
+}
+
+/// Read/write an external NFC tag. This is the CoreNFC/Android reader-writer
+/// direction, not card emulation and not merchant Tap to Pay.
+pub trait NfcTagIo {
+    fn read<'a>(&'a self) -> PlatformFuture<'a, NfcMessage>;
+    fn write<'a>(&'a self, message: &'a NfcMessage) -> PlatformFuture<'a, ()>;
+}
+
+/// ISO-7816 APDU transport for NFC signing cards.
+///
+/// The Rust signer/protocol state machine owns commands and validation. A thin
+/// native adapter owns CoreNFC/Android IsoDep and forwards opaque APDU bytes.
+pub trait NfcIso7816 {
+    fn transceive<'a>(&'a self, command_apdu: &'a [u8]) -> PlatformFuture<'a, Vec<u8>>;
+}
+
+/// Phone-as-credential contactless presentment.
+///
+/// On iOS this maps to Apple's entitled NFC & Secure Element APIs, not the
+/// ProximityReader merchant-acquiring API. Keeping it separate prevents wallet
+/// payment semantics from becoming coupled to Apple's framework.
+pub trait ContactlessPresentment {
+    fn present<'a>(&'a self, credential_id: &'a str) -> PlatformFuture<'a, ()>;
 }
 
 /// Raw APDU/HID exchange. Adapters own USB; application code should prefer
