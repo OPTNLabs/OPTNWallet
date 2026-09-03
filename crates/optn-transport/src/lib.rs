@@ -8,11 +8,11 @@
 
 use optn_app::{
     AppAction, AppEvent, AppLockState, AppRoute, AppState, AppSurface, AuthScope, AutoLockMinutes,
-    CampaignOutput, Coin, CreateStep, FeatureFlag, FeatureFlags, FlipstarterPledge, FreezeReason,
-    HardwareSessionState, HardwareSetupPreview, HardwareVendor, ImportStep, LedgerLink,
-    MultisigSetupPreview, MultisigStep, Network, OpenedWallet, Outpoint, PledgeStatus, ServerKind,
-    ServerOverrides, SettingsRowId, SpendKind, SpendPlan, ThemeMode, UiSkin, WalletKind,
-    WatchOnlyKind, WatchOnlySetupPreview,
+    CampaignOutput, Coin, ConnectState, CreateStep, FeatureFlag, FeatureFlags, FlipstarterPledge,
+    FreezeReason, HardwareSessionState, HardwareSetupPreview, HardwareVendor, ImportStep,
+    LedgerLink, MultisigSetupPreview, MultisigStep, Network, OpenedWallet, Outpoint, PledgeStatus,
+    ServerKind, ServerOverrides, SettingsRowId, SpendKind, SpendPlan, ThemeMode, UiSkin,
+    WalletKind, WatchOnlyKind, WatchOnlySetupPreview,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -1319,6 +1319,10 @@ impl TryFrom<WireState> for AppState {
             // toggle is authorised per session, not carried on the wire.
             identity_revealed: false,
             stealth_sats: value.stealth_sats,
+            // Sessions and their pending requests are host-side and live: a
+            // decoded snapshot must never arrive carrying a signature request,
+            // or a stale frame could put an approval in front of the user.
+            connect: ConnectState::new(),
             // Overrides live host-side; a snapshot does not carry them, so a
             // decoded state starts from the network defaults.
             servers: ServerOverrides::new(),
