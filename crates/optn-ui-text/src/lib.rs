@@ -24,6 +24,8 @@
 //! `LocalTransport`'s futures are already-ready, and taking a runtime
 //! dependency would weaken the point this crate exists to make.
 
+pub mod shell;
+
 use std::future::Future;
 use std::task::{Context, Poll, Waker};
 
@@ -134,7 +136,6 @@ pub fn draw(state: &AppState) -> Screen {
             state.route.section_title().to_string()
         }
         AppRoute::WalletHome => {
-            let coins = coins_view_model(state);
             lines.extend(wallet_chrome(state));
             let totals = optn_app::portfolio_totals(state);
             lines.push(format!("total {}", format_bch(totals.total_sats())));
