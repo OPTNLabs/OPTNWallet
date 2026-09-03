@@ -62,7 +62,6 @@ fn architecture() {
         }
     }
 
-
     // Apple-native/reference packages are adapters only. They must never become
     // dependencies of the Rust wallet/application/runtime authority.
     for manifest in [
