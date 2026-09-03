@@ -4,9 +4,9 @@ use crate::{dispatch_action, UiTransport};
 use leptos::prelude::*;
 use optn_app::{
     chipnet_demo_coin, coins_view_model, flipstarter_view_model, format_bch, fundme_view_model,
-    history_view_model, product_nav, sample_chipnet_campaign_blob, AppAction, AppRoute, AppState,
-    Coin, FreezeReason, HistoryEntry, HistoryKind, Network, Outpoint, PledgeStatus, ProductNavItem,
-    SpendKind, WalletKind,
+    history_view_model, portfolio_totals, product_nav, sample_chipnet_campaign_blob, AppAction,
+    AppRoute, AppState, Coin, FreezeReason, HistoryEntry, HistoryKind, Network, Outpoint,
+    PledgeStatus, ProductNavItem, SpendKind, WalletKind,
 };
 
 fn now_ms() -> u64 {
@@ -153,11 +153,19 @@ pub fn WalletHome(transport: UiTransport, state: RwSignal<AppState>) -> impl Int
                             .unwrap_or_else(|| "Wallet".into())
                     }}</p>
                     <h1 class="balance">
-                        {move || format_bch(
-                            coins_view_model(&state.get()).spendable_sats
-                                + coins_view_model(&state.get()).reserved_sats
-                        )}
+                        {move || format_bch(portfolio_totals(&state.get()).total_sats())}
                     </h1>
+                    // Shown only when there is stealth to account for, so an
+                    // ordinary wallet is not told about a pool it has none of.
+                    <Show when=move || portfolio_totals(&state.get()).shows_split()>
+                        <p class="muted" data-testid="stealth-split">
+                            {move || {
+                                portfolio_totals(&state.get())
+                                    .split_label()
+                                    .unwrap_or_default()
+                            }}
+                        </p>
+                    </Show>
                     <p class="mono">
                         {move || {
                             state
