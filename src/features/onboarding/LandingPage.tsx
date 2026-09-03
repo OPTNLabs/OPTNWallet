@@ -7,11 +7,7 @@ import Popup from '../../components/transaction/Popup';
 import { MdSunny, MdModeNight } from 'react-icons/md';
 import { useI18n } from '../../i18n/useI18n';
 import LanguagePicker from '../../components/LanguagePicker';
-import {
-  currentSurface,
-  offersWatchOnly,
-  type Surface,
-} from '../../platform/capabilities';
+import type { Surface } from '../../platform/capabilities';
 import { ROUTE_PATHS } from '../../navigation/routes';
 
 const ThemeModeSwitch = () => {
@@ -52,7 +48,7 @@ type LandingPageProps = {
 
 const LandingPage = ({ surface }: LandingPageProps) => {
   const [showHelp, setShowHelp] = useState(false);
-  const resolvedSurface = surface ?? currentSurface();
+  void surface;
   const { t } = useI18n();
 
   return (
@@ -102,15 +98,13 @@ const LandingPage = ({ surface }: LandingPageProps) => {
             >
               {t('onboarding.importWallet')}
             </Link>
-            {offersWatchOnly(resolvedSurface) && (
-              <Link
-                to={ROUTE_PATHS.watchOnlyWallet}
-                data-testid="watch-only-landing-action"
-                className="wallet-btn-secondary w-full sm:w-auto py-3 px-10 rounded-lg sm:mx-2 sm:my-2 shadow-md"
-              >
-                {t('onboarding.createWatchOnly')}
-              </Link>
-            )}
+            <Link
+              to={ROUTE_PATHS.watchOnlyWallet}
+              data-testid="watch-only-landing-action"
+              className="wallet-btn-secondary w-full sm:w-auto py-3 px-10 rounded-lg sm:mx-2 sm:my-2 shadow-md"
+            >
+              {t('onboarding.createWatchOnly')}
+            </Link>
           </div>
         </div>
       </main>
