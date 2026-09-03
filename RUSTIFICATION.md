@@ -10,6 +10,7 @@ OPTN currently uses:
 - **optn-app** for framework-neutral application state and actions
 - **optn-transport** for renderer-to-application communication contracts
 - **optn-platform** for OS capability contracts and provider metadata
+- **optn-platform-apple** for the Apple NativeFfi provider; optional Opal stays gated
 
 Leptos, Tauri, IPC, and individual OS integration libraries are implementation
 choices, not architectural dependencies.
@@ -69,6 +70,9 @@ Notifications
 FileSystem
 DeepLinks
 HardwareWallet
+NfcTagIo
+NfcIso7816
+ContactlessPresentment
 ```
 
 Providers declare their type:
@@ -182,6 +186,8 @@ optn-transport → Leptos/Tauri/Dioxus/Capacitor
 optn-runtime   → Leptos/Tauri/Dioxus/Capacitor
 optn-ui        → optn-core directly
 optn-ui        → optn-runtime directly
+optn-platform-apple must not depend on optn-core/optn-app/optn-runtime
+Opal packages     must not depend on optn-core/optn-app/optn-runtime
 ```
 
 This is enforced by:
@@ -239,6 +245,24 @@ Wallet, transaction, crypto, protocol, and application-state logic remain unchan
 9. Prefer mature pure-Rust capability providers where they improve portability.
 10. Use shell plugins or thin native FFI where pure-Rust support is not production-ready.
 11. Keep web/extension on the same application/domain contracts through WASM.
+
+## Apple provider and Opal
+
+Apple capabilities enter through `optn-platform` ports, then
+`optn-platform-apple` (`ApplePlatformProvider`), then the Swift adapter
+`apple/OptnAppleProvider`. Optional Opal packages are an isolated iOS 26 /
+macOS 26 flavor (`apple/OptnAppleOpalFlavor`), not the shipping wallet.
+
+Evidence that Opal is blocked on shipping surfaces:
+
+- OPTN iOS 14.0: `ios/App/App.xcodeproj/project.pbxproj` and `ios/App/Podfile`
+- OPTN macOS 10.15: Tauri 2.11.5 default; unset in `src-tauri/tauri.conf.json`
+- Opal `v0.4.1` / `develop`: macOS 26 / iOS 26 (Swift tools 6.2 tagged, 6.4 develop)
+
+Do not raise OPTN minimums to satisfy Opal. Do not route production secrets
+through OpalCrypto. Fusion stays authoritative Rust. SwiftFulcrum may be used
+as a chipnet oracle in the isolated flavor. Canonical vectors live in
+`test-vectors/bch-oracle-cashaddr.json`. See `apple/README.md`.
 
 ## Version policy
 

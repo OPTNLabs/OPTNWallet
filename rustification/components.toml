@@ -119,3 +119,11 @@ target = "closed-semver-apple-reference-then-differential-oracle"
 layer = "platform-provider"
 status = "started"
 security_weight = 8
+
+[[component]]
+name = "apple-capability-providers"
+current = "native-ffi-crate-behind-optn-platform"
+target = "optn-platform-then-swift-then-optional-opal"
+layer = "platform-provider"
+status = "started"
+security_weight = 8
