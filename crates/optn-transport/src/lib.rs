@@ -1395,21 +1395,26 @@ mod tests {
     }
 
     #[test]
-    fn android_wire_snapshot_keeps_watch_only_on_the_landing() {
-        for surface in [
-            AppSurface::Desktop,
-            AppSurface::Android,
-            AppSurface::Ios,
-            AppSurface::Web,
-            AppSurface::Extension,
-        ] {
+    fn wire_snapshot_preserves_native_watch_only_surface_policy() {
+        for surface in [AppSurface::Desktop, AppSurface::Android, AppSurface::Ios] {
             let state = AppState::for_surface(surface);
             let restored = AppState::try_from(WireState::from(&state)).expect("wire state");
             assert_eq!(restored.surface, surface);
             assert!(
                 optn_app::onboarding_actions(&restored)
                     .contains(&optn_app::OnboardingAction::CreateWatchOnlyWallet),
-                "{surface:?} Watch Only stays on the landing when the flag is true"
+                "{surface:?} Watch Only stays on the native landing after a wire round-trip"
+            );
+        }
+
+        for surface in [AppSurface::Web, AppSurface::Extension] {
+            let state = AppState::for_surface(surface);
+            let restored = AppState::try_from(WireState::from(&state)).expect("wire state");
+            assert_eq!(restored.surface, surface);
+            assert!(
+                !optn_app::onboarding_actions(&restored)
+                    .contains(&optn_app::OnboardingAction::CreateWatchOnlyWallet),
+                "{surface:?} must not gain native Watch Only through serialization"
             );
         }
     }
