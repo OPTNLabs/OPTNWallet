@@ -6,6 +6,14 @@ use std::{
 };
 
 const FRAMEWORK_NAMES: &[&str] = &["leptos", "tauri", "dioxus", "capacitor"];
+const APPLE_REFERENCE_DEPENDENCIES: &[&str] = &[
+    "opalbase",
+    "opalcrypto",
+    "opalfusion",
+    "opalhedge",
+    "opaldiagnostics",
+    "swiftfulcrum",
+];
 
 fn main() {
     let command = env::args().nth(1).unwrap_or_else(|| "architecture".into());
@@ -51,6 +59,56 @@ fn architecture() {
                     manifest.display()
                 ));
             }
+        }
+    }
+
+
+    // Apple-native/reference packages are adapters only. They must never become
+    // dependencies of the Rust wallet/application/runtime authority.
+    for manifest in [
+        root.join("crates/optn-core/Cargo.toml"),
+        root.join("crates/optn-app/Cargo.toml"),
+        root.join("crates/optn-runtime/Cargo.toml"),
+    ] {
+        let text = read(&manifest).to_lowercase();
+        for dependency in APPLE_REFERENCE_DEPENDENCIES {
+            if text.contains(dependency) {
+                failures.push(format!(
+                    "{} contains forbidden Apple reference dependency '{dependency}'",
+                    manifest.display()
+                ));
+            }
+        }
+    }
+
+    let apple_native_manifest = read(&root.join("apple/OPTNAppleProvider/Package.swift"));
+    let apple_native_lower = apple_native_manifest.to_lowercase();
+    for dependency in APPLE_REFERENCE_DEPENDENCIES {
+        if apple_native_lower.contains(dependency) {
+            failures.push(format!(
+                "apple/OPTNAppleProvider must stay native-only; found '{dependency}'"
+            ));
+        }
+    }
+
+    let opal_reference_manifest = read(&root.join("apple/OPTNOpalReference/Package.swift"));
+    for required in [
+        "611a53f2047660e0dd221f75526ce11335be901a",
+        "8c42eeb40d64776789e70694e4e5006d2afa400c",
+        ".macOS(.v26)",
+        ".iOS(.v26)",
+    ] {
+        if !opal_reference_manifest.contains(required) {
+            failures.push(format!(
+                "apple/OPTNOpalReference is missing required pinned/gated value '{required}'"
+            ));
+        }
+    }
+    for forbidden in ["OpalBase", "OpalCrypto", "OpalFusion", "OpalHedge"] {
+        if opal_reference_manifest.contains(forbidden) {
+            failures.push(format!(
+                "apple/OPTNOpalReference must not link preview/secret-authority package '{forbidden}'"
+            ));
         }
     }
 
