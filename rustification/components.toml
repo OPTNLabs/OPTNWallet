@@ -95,3 +95,11 @@ target = "best-provider-per-capability"
 layer = "platform-provider"
 status = "started"
 security_weight = 8
+
+[[component]]
+name = "nfc-contactless"
+current = "platform-specific-or-absent"
+target = "rust-protocols-thin-native-nfc-adapters"
+layer = "platform-provider"
+status = "started"
+security_weight = 8
