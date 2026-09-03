@@ -147,6 +147,29 @@ keeping it for `default_parent` / `section_title` in the flow work, fine —
 say so here and I will leave it permanently. If not, it wants deleting, but
 one of us should do that alone rather than both at once.
 
+## The dependency audit covers one crate out of five
+
+`.github/workflows/security-analysis.yml` runs `cargo audit` with
+`working-directory: src-tauri`. The desktop shell is checked; `Cargo.lock`,
+`crates/optn-cli/Cargo.lock`, `crates/optn-core/Cargo.lock` and
+`crates/optn-ui-egui/Cargo.lock` are not -- which is most of the Rust this PR
+touches.
+
+`cargo run -p xtask -- audit` covers all five. It discovers lock files rather
+than listing them, so a new crate is covered the day it appears, and a missing
+`cargo-audit` fails rather than skips. One line in the workflow replaces the
+current step.
+
+Its baseline is empty on purpose, and that was checked rather than assumed: the
+four advisories the workflow still ignores have all been fixed. quick-xml is
+0.41.0 in every lock file, quinn-proto is 0.11.17, and rkyv appears in no lock
+file at all. `cargo audit` with no ignores exits clean across all five. PR #53
+said to drop each entry as its fix lands; they have landed, and a mute that
+outlives its reason silently accepts the vulnerability's return.
+
+I did not edit the workflow -- prohibited path -- so the four `--ignore` flags
+are still there.
+
 ## The two extra renderers need adding to the CI package lists
 
 I added two renderers besides the Leptos one, both drawing every screen from
