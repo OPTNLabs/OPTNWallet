@@ -572,12 +572,12 @@ pub fn scan_transaction(
     Ok(matches)
 }
 
-type ParsedInput = (String, u32, Vec<u8>);
-type ParsedOutput = (u64, Vec<u8>);
-type ParsedTransaction = (Vec<ParsedInput>, Vec<ParsedOutput>);
+pub(crate) type ParsedInput = (String, u32, Vec<u8>);
+pub(crate) type ParsedOutput = (u64, Vec<u8>);
+pub(crate) type ParsedTransaction = (Vec<ParsedInput>, Vec<ParsedOutput>);
 
 /// Inputs as (display txid, vout, scriptSig) and outputs as (value, script).
-fn parse_transaction(raw: &[u8]) -> Result<ParsedTransaction> {
+pub(crate) fn parse_transaction(raw: &[u8]) -> Result<ParsedTransaction> {
     let mut i = 0usize;
     let need = |i: usize, n: usize| -> Result<()> {
         match i.checked_add(n) {
