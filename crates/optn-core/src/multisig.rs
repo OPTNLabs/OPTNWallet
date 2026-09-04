@@ -20,7 +20,9 @@ use crate::cashaddr::{Address, AddressKind};
 use crate::error::{CliError, Result};
 use crate::hd::{hash160, AccountPath};
 use crate::network::Network;
-use crate::watch_only::{normalize_master_fingerprint, parse_account_xpub, PublicAddressPreview};
+use crate::watch_only::{
+    normalize_master_fingerprint, parse_multisig_account_xpub, PublicAddressPreview,
+};
 
 pub const OP_CHECKMULTISIG: u8 = 0xae;
 /// `OP_1` is 0x51; `OP_n` is `0x50 + n` for n in 1..=16.
@@ -173,7 +175,7 @@ pub fn multisig_preview(
         // malformed one would break PSBT key origins later, and finding that
         // out at signing time is far worse than finding it out here.
         normalize_master_fingerprint(cosigner.master_fingerprint.as_deref().unwrap_or(""))?;
-        accounts.push(parse_account_xpub(&cosigner.account_xpub)?);
+        accounts.push(parse_multisig_account_xpub(&cosigner.account_xpub)?);
     }
 
     // Duplicate keys would make an "m of n" that is really "m of fewer": two
@@ -355,7 +357,7 @@ pub fn descriptor_set(
                 index + 1
             ))
                 })?;
-        let xpub = parse_account_xpub(&cosigner.account_xpub)
+        let xpub = parse_multisig_account_xpub(&cosigner.account_xpub)
             .map(|_| cosigner.account_xpub.trim().to_string())?;
         keys.push((
             format!("{fingerprint}{xpub}"),
@@ -660,7 +662,7 @@ fn parse_descriptor_key(part: &str, index: usize) -> Result<(DescriptorKey, Vec<
 
     // The xPub itself is validated by the same parser the local path uses, so
     // a descriptor cannot introduce a key the wallet would otherwise refuse.
-    parse_account_xpub(xpub)?;
+    parse_multisig_account_xpub(xpub)?;
 
     Ok((
         DescriptorKey {
@@ -847,9 +849,38 @@ pub struct BsmsKeyRecord {
     pub key: DescriptorKey,
     /// Free text, at most 80 characters per the spec.
     pub description: String,
-    /// DER-encoded ECDSA signature over [`Self::preimage`].
-    pub signature_der: Vec<u8>,
+    /// The signature over [`Self::preimage`], in whichever encoding it arrived.
+    pub signature: BsmsSignature,
 }
+
+/// How a key record's signature was written.
+///
+/// Two encodings are in use and a reader that knows only one is a reader that
+/// rejects real records.
+///
+/// BIP-129 says "the signature should follow BIP-0322, legacy format
+/// accepted", and every record in the BIP's own test vectors uses that legacy
+/// format: base64, 65 bytes, a header byte carrying the recovery id and then
+/// r and s. That is what `signmessage` has produced since Bitcoin-Qt.
+///
+/// Paytaca writes DER hex instead -- `secp256k1.signMessageHashDER` in
+/// `bsms.js`. Also a valid ECDSA signature over the same digest, just written
+/// differently.
+///
+/// Both are accepted. Neither is guessed at: the two are told apart by shape,
+/// and a string that is neither is refused rather than coerced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BsmsSignature {
+    /// 65 bytes, base64: header, then r and s. BIP-129's own vectors.
+    Recoverable(Vec<u8>),
+    /// DER, hex-encoded. What Paytaca writes.
+    Der(Vec<u8>),
+}
+
+/// A legacy signed-message signature is a header byte plus r and s.
+const RECOVERABLE_SIGNATURE_LEN: usize = 65;
+/// Header bytes Bitcoin's legacy signing has ever produced.
+const RECOVERABLE_HEADER_RANGE: std::ops::RangeInclusive<u8> = 27..=34;
 
 impl BsmsKeyRecord {
     /// The four lines the signature covers.
@@ -910,12 +941,31 @@ impl BsmsKeyRecord {
     pub fn verify_signature(&self) -> Result<()> {
         use k256::ecdsa::signature::hazmat::PrehashVerifier;
 
-        let account = parse_account_xpub(&self.key.account_xpub)?;
+        let account = parse_multisig_account_xpub(&self.key.account_xpub)?;
         let verifying = k256::ecdsa::VerifyingKey::from_sec1_bytes(&account.to_bytes())
             .map_err(|e| CliError::Usage(format!("that record's key is not usable: {e}")))?;
-        let signature = k256::ecdsa::Signature::from_der(&self.signature_der).map_err(|e| {
-            CliError::Usage(format!("that record's signature is not valid DER: {e}"))
-        })?;
+        let signature = match &self.signature {
+            BsmsSignature::Der(der) => k256::ecdsa::Signature::from_der(der).map_err(|e| {
+                CliError::Usage(format!("that record's signature is not valid DER: {e}"))
+            })?,
+            BsmsSignature::Recoverable(bytes) => {
+                // The header byte carries the recovery id, which is only
+                // needed to *derive* the public key. The record already names
+                // the key, so r and s are verified against it directly and the
+                // header is checked for plausibility rather than used.
+                if !RECOVERABLE_HEADER_RANGE.contains(&bytes[0]) {
+                    return Err(CliError::Usage(format!(
+                        "that signature's header byte is {}, which no legacy signer produces",
+                        bytes[0]
+                    )));
+                }
+                k256::ecdsa::Signature::from_slice(&bytes[1..]).map_err(|e| {
+                    CliError::Usage(format!(
+                        "that record's signature is not a valid r,s pair: {e}"
+                    ))
+                })?
+            }
+        };
 
         verifying
             .verify_prehash(&self.signing_digest(), &signature)
@@ -1003,19 +1053,39 @@ pub fn parse_bsms_key_record(text: &str) -> Result<BsmsKeyRecord> {
             )
         })?
         .trim();
-    let signature_der = decode_hex(signature_hex)
-        .ok_or_else(|| CliError::Usage("that record's signature is not hex".into()))?;
-    if signature_der.is_empty() {
-        return Err(CliError::Usage("that record's signature is empty".into()));
-    }
+    let signature = parse_bsms_signature(signature_hex)?;
 
     Ok(BsmsKeyRecord {
         version: version.to_string(),
         token,
         key,
         description,
-        signature_der,
+        signature,
     })
+}
+
+/// Read a signature in either encoding the ecosystem writes.
+///
+/// Base64 first, because that is what BIP-129's own vectors use and its
+/// alphabet overlaps hex's -- a 65-byte base64 string is never valid hex of
+/// the right length, so trying it first cannot misread a DER one.
+fn parse_bsms_signature(text: &str) -> Result<BsmsSignature> {
+    use base64::Engine as _;
+
+    if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(text) {
+        if bytes.len() == RECOVERABLE_SIGNATURE_LEN {
+            return Ok(BsmsSignature::Recoverable(bytes));
+        }
+    }
+
+    match decode_hex(text) {
+        Some(der) if !der.is_empty() => Ok(BsmsSignature::Der(der)),
+        _ => Err(CliError::Usage(
+            "that record's signature is neither a 65-byte base64 legacy signature nor DER hex, \
+             so nothing proves the sender holds the key they offered"
+                .into(),
+        )),
+    }
 }
 
 /// BIP-129 caps the description at 80 characters.
@@ -1407,7 +1477,7 @@ mod tests {
                 account_xpub: xpub.clone(),
             },
             description: description.to_string(),
-            signature_der: Vec::new(),
+            signature: BsmsSignature::Der(Vec::new()),
         };
 
         let (signature, _): (k256::ecdsa::Signature, _) = signing
@@ -1422,6 +1492,79 @@ mod tests {
 
         let record = format!("BSMS 1.0\n00\n[4c9a1f7b/44'/1'/0']{xpub}\n{description}\n{der}");
         (record, xpub)
+    }
+
+    /// BIP-129's own key records, from its Test Vectors section.
+    ///
+    /// Every test above signs a record here and verifies it, which proves the
+    /// digest is built consistently but not that it is built *correctly* --
+    /// two mistakes that cancel look exactly like success. These records were
+    /// produced by someone else's signer against the published specification,
+    /// so verifying them is the first evidence that this reads what the rest
+    /// of the ecosystem writes.
+    ///
+    /// NO_ENCRYPTION mode, the xPub pair. Both use the legacy base64
+    /// signature BIP-129 calls for, not the DER hex Paytaca writes.
+    const BIP129_SIGNER_1: &str = concat!(
+        "BSMS 1.0\n",
+        "00\n",
+        "[1cf0bf7e/48'/0'/0'/2']xpub6FL8FhxNNUVnG64YurPd16AfGyvFLhh7S2uSsDqR3Qfcm6o9jtcMYwh6DvmcBF9qozxNQmTCVvWtxLpKTnhVLN3Pgnu2D3pAoXYFgVyd8Yz\n",
+        "Signer 1 key\n",
+        "IB7v+qi1b+Xrwm/3bF+Rjl8QbIJ/FMQ40kUsOOQo1SqUWn5QlFWbBD8BKPRetfo1L1N7DmYjVscZNsmMrqRJGWw="
+    );
+
+    const BIP129_SIGNER_2: &str = concat!(
+        "BSMS 1.0\n",
+        "00\n",
+        "[4fc1dd4a/48'/0'/0'/2']xpub6EebMbEps7ZcV3FYEnddRsvrFWDrt2tiPmCeM7pPXQEmphvq9ZfJ1LWFUDjf3vxCeBuPrfyGrMazWUsYsetrnHatQZVLJH7LsgCjtMqdzgj\n",
+        "Signer 2 key\n",
+        "HzUa4Z76PFHMl54flIIF3XKiHZ+KbWjjxCEG5G3ZqZSqTd6OgTiFFLqq9PXJXdfYm6/cnL8IVWQgjFF9DQhIqQs="
+    );
+
+    #[test]
+    fn the_bip_129_key_record_vectors_are_read_and_verify() {
+        for (label, raw, fingerprint, path) in [
+            ("signer 1", BIP129_SIGNER_1, "1cf0bf7e", "m/48'/0'/0'/2'"),
+            ("signer 2", BIP129_SIGNER_2, "4fc1dd4a", "m/48'/0'/0'/2'"),
+        ] {
+            let record = parse_bsms_key_record(raw)
+                .unwrap_or_else(|error| panic!("{label} must parse: {error}"));
+
+            assert_eq!(record.version, "1.0", "{label}");
+            assert_eq!(record.token, "00", "{label}");
+            assert_eq!(record.key.master_fingerprint, fingerprint, "{label}");
+            assert_eq!(record.key.account_path, path, "{label}");
+            assert!(
+                matches!(record.signature, BsmsSignature::Recoverable(_)),
+                "{label}: BIP-129's vectors are base64 legacy signatures"
+            );
+
+            record
+                .verify_signature()
+                .unwrap_or_else(|error| panic!("{label} must verify: {error}"));
+        }
+    }
+
+    #[test]
+    fn a_bip_129_vector_stops_verifying_once_it_is_edited() {
+        // The vectors verifying is only worth something if a changed one does
+        // not. This is the substitution BIP-129's round one exists to catch.
+        let swapped = BIP129_SIGNER_1.replace(
+            "xpub6FL8FhxNNUVnG64YurPd16AfGyvFLhh7S2uSsDqR3Qfcm6o9jtcMYwh6DvmcBF9qozxNQmTCVvWtxLpKTnhVLN3Pgnu2D3pAoXYFgVyd8Yz",
+            "xpub6EebMbEps7ZcV3FYEnddRsvrFWDrt2tiPmCeM7pPXQEmphvq9ZfJ1LWFUDjf3vxCeBuPrfyGrMazWUsYsetrnHatQZVLJH7LsgCjtMqdzgj",
+        );
+        assert_ne!(swapped, BIP129_SIGNER_1);
+        assert!(parse_bsms_key_record(&swapped)
+            .expect("still parses")
+            .verify_signature()
+            .is_err());
+
+        // The description is inside the signed preimage too.
+        let reworded = BIP129_SIGNER_1.replace("Signer 1 key", "Signer 9 key");
+        assert!(parse_bsms_key_record(&reworded)
+            .expect("still parses")
+            .verify_signature()
+            .is_err());
     }
 
     #[test]

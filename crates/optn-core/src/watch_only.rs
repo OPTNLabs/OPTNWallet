@@ -64,6 +64,36 @@ pub fn parse_account_xpub(raw: &str) -> Result<XPub> {
     Ok(xpub)
 }
 
+/// The same, for a cosigner in a multisig wallet.
+///
+/// Multisig accounts are one level deeper than single-sig ones. BIP-48 puts
+/// the script type there -- `m/48'/coin'/account'/script_type'` -- and it is
+/// what Sparrow, Specter, Keystone and BIP-129's own test vectors all use.
+/// Requiring depth 3 here rejected every one of them, including the records
+/// published in the specification this wallet claims to read.
+///
+/// Depth 4 is admitted, and nothing else is. The hardened check stays for both
+/// depths and is the part that matters: an unhardened or shallower key is a
+/// leaf or a branch rather than an account, and deriving `/branch/index` from
+/// one produces addresses that look right and belong to a different wallet.
+pub fn parse_multisig_account_xpub(raw: &str) -> Result<XPub> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(CliError::Usage("enter a valid BCH account xPub".into()));
+    }
+    let xpub: XPub = trimmed
+        .parse()
+        .map_err(|_| CliError::Usage("enter a valid BIP32 public key".into()))?;
+    let attrs = xpub.attrs();
+    if !matches!(attrs.depth, 3 | 4) || !attrs.child_number.is_hardened() {
+        return Err(CliError::Usage(
+            "use a hardened account xPub: depth 3 for BIP44, or depth 4 for a BIP48 multisig              account"
+                .into(),
+        ));
+    }
+    Ok(xpub)
+}
+
 fn child_index(number: ChildNumber) -> u32 {
     u32::from(number) & !ChildNumber::HARDENED_FLAG
 }

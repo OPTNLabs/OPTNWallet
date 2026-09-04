@@ -326,7 +326,8 @@ mod tests {
     ];
     const VECTOR_1_SCRIPT: &str = "522102fe6f0a5a297eb38c391581c4413e084773ea23954d93f7753db7dc0adc188b2f2102ff12471208c14bd580709cb2358d98975247d8765f92bc25eab3b2763ed605f852ae";
     const VECTOR_1_CHIPNET_ADDRESS: &str = "bchtest:ppttar4f8yf0xa592s4z4pj22cq03zn82syer0akm8";
-    const VECTOR_1_CHIPNET_TOKEN_ADDRESS: &str = "bchtest:rpttar4f8yf0xa592s4z4pj22cq03zn82srns3nsy5";
+    const VECTOR_1_CHIPNET_TOKEN_ADDRESS: &str =
+        "bchtest:rpttar4f8yf0xa592s4z4pj22cq03zn82srns3nsy5";
 
     #[test]
     fn bip67_vector_1_is_sorted_and_encoded_canonically() {
