@@ -359,6 +359,8 @@ pub enum HardwareVendor {
     OneKey,
     /// Air-gapped signer driven entirely by animated QR.
     Keystone,
+    /// A card, not a box. Tap-to-sign over NFC and nothing else.
+    Tangem,
     Mock,
 }
 
@@ -368,8 +370,13 @@ impl HardwareVendor {
     /// `Mock` is deliberately absent: it exists for tests and adapters without
     /// USB, and offering it in the product would let someone "connect" a
     /// signer that cannot hold a key.
-    pub const OFFERED: &'static [Self] =
-        &[Self::Ledger, Self::Trezor, Self::OneKey, Self::Keystone];
+    pub const OFFERED: &'static [Self] = &[
+        Self::Ledger,
+        Self::Trezor,
+        Self::OneKey,
+        Self::Keystone,
+        Self::Tangem,
+    ];
 
     /// The cabled devices. Keystone is excluded on purpose: it is air-gapped,
     /// and the React shell keeps it out of `HardwareDeviceKind` for the same
@@ -383,6 +390,7 @@ impl HardwareVendor {
             Self::Trezor => "Trezor",
             Self::OneKey => "OneKey",
             Self::Keystone => "Keystone",
+            Self::Tangem => "Tangem",
             Self::Mock => "Mock signer",
         }
     }
@@ -394,6 +402,7 @@ impl HardwareVendor {
             Self::Trezor => "trezor",
             Self::OneKey => "onekey",
             Self::Keystone => "keystone",
+            Self::Tangem => "tangem",
             Self::Mock => "mock",
         }
     }
@@ -406,6 +415,7 @@ impl HardwareVendor {
             Self::Trezor,
             Self::OneKey,
             Self::Keystone,
+            Self::Tangem,
             Self::Mock,
         ]
         .into_iter()
@@ -453,6 +463,16 @@ impl HardwareVendor {
             // usual channel and microSD is the alternative for anyone who
             // would rather not hold a phone up to a screen.
             Self::Keystone => &[HardwareTransport::Camera, HardwareTransport::MicroSd],
+            // NFC and nothing else. A Tangem is a card: it has no battery, no
+            // screen and no port, so there is nothing to plug in and nothing
+            // to pair. That single transport is what keeps it off the desktop
+            // and out of the extension -- neither can tap a card -- without
+            // any rule naming those surfaces.
+            //
+            // It is also why Tangem needs native code where the others do not:
+            // both of Tangem's JavaScript bridges are archived, so the only
+            // supported route is their Swift and Kotlin SDKs.
+            Self::Tangem => &[HardwareTransport::Nfc],
             // The mock needs no transport; it is in-process.
             Self::Mock => &[],
         }
@@ -487,7 +507,10 @@ impl HardwareVendor {
     /// can hand you an SD card, and only one of them is a computer.
     pub const fn holds_firmware(self) -> bool {
         match self {
-            Self::Ledger | Self::Trezor | Self::OneKey | Self::Keystone => true,
+            // Tangem is a card rather than a box, and the rule still decides
+            // it correctly: it runs its own firmware and the seed is generated
+            // on the card and never leaves it. Shape is not the test.
+            Self::Ledger | Self::Trezor | Self::OneKey | Self::Keystone | Self::Tangem => true,
             // In-process test double. It is not a device at all.
             Self::Mock => false,
         }
@@ -911,13 +934,17 @@ mod tests {
                 HardwareVendor::Ledger,
                 HardwareVendor::Trezor,
                 HardwareVendor::OneKey,
-                HardwareVendor::Keystone
+                HardwareVendor::Keystone,
+                HardwareVendor::Tangem
             ]
         );
         assert!(!HardwareVendor::OFFERED.contains(&HardwareVendor::Mock));
 
         let ids: Vec<&str> = HardwareVendor::OFFERED.iter().map(|v| v.id()).collect();
-        assert_eq!(ids, vec!["ledger", "trezor", "onekey", "keystone"]);
+        assert_eq!(
+            ids,
+            vec!["ledger", "trezor", "onekey", "keystone", "tangem"]
+        );
         for vendor in HardwareVendor::OFFERED {
             assert!(!vendor.label().is_empty());
         }
@@ -946,6 +973,14 @@ mod tests {
             ..TransportSupport::NONE
         };
         for vendor in HardwareVendor::OFFERED {
+            // Tangem needs a tap, and this shell has no reader. The point of
+            // the model is that the exception falls out of the transport
+            // lists rather than being written down per platform.
+            if *vendor == HardwareVendor::Tangem {
+                assert!(!vendor.is_reachable_with(desktop));
+                assert!(vendor.unreachable_reason(desktop).is_some());
+                continue;
+            }
             assert!(
                 vendor.is_reachable_with(desktop),
                 "{vendor:?} should be reachable on desktop"

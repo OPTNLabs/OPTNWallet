@@ -1961,11 +1961,23 @@ pub fn transport_support(surface: AppSurface) -> TransportSupport {
             ..TransportSupport::NONE
         },
         // A popup can ask for WebHID and WebUSB, which is a device dance it
-        // can complete. It has no camera permission, so nothing air-gapped
-        // works here -- the xPub gets pasted instead.
+        // can complete, and it can ask for a camera too.
+        //
+        // The camera was left out here on the assumption that an extension
+        // cannot have one. MetaMask disproves it: its extension connects a
+        // Keystone by scanning animated QR with the computer's webcam, and
+        // Keystone's own documentation says the QR protocol "can only be used
+        // when a camera (webcam) is installed on the computer". Since an
+        // extension is where people expect to reach for a hardware wallet,
+        // getting this wrong would hide the one device that needs no driver,
+        // no cable and no vendor daemon.
+        //
+        // Still no NFC: a browser has no card-tap API, which is why a Tangem
+        // does not appear here and a Keystone does.
         AppSurface::Extension => TransportSupport {
             web_hid: true,
             web_usb: true,
+            camera: true,
             ..TransportSupport::NONE
         },
     }
@@ -2358,6 +2370,102 @@ mod tests {
         AppSurface::Web,
         AppSurface::Extension,
     ];
+
+    #[test]
+    fn the_device_picker_is_the_device_and_the_platform_together() {
+        use optn_platform::{HardwareTransport as T, HardwareVendor as V};
+
+        // The whole model in one table: what a user is offered is the
+        // intersection of what the device can do and what the runtime has.
+        // Neither list mentions the other, which is why a new device needs no
+        // per-surface rule and a new surface needs no per-device rule.
+        let methods = |vendor: V, surface: AppSurface| -> Vec<T> {
+            vendor.connection_methods(transport_support(surface))
+        };
+
+        // Trezor: a cable and a radio on Android, radio only on iOS, because
+        // iOS gives an app no USB path to a wallet.
+        assert_eq!(
+            methods(V::Trezor, AppSurface::Android),
+            vec![T::NativeUsb, T::NativeBle]
+        );
+        assert_eq!(methods(V::Trezor, AppSurface::Ios), vec![T::NativeBle]);
+
+        // OneKey on an iPhone: three ways in and not a cable among them.
+        assert_eq!(
+            methods(V::OneKey, AppSurface::Ios),
+            vec![T::NativeBle, T::Nfc, T::Camera]
+        );
+        // ...and no NFC on a desktop, because no laptop has a reader. The
+        // device still supports it; the machine does not.
+        assert!(!methods(V::OneKey, AppSurface::Desktop).contains(&T::Nfc));
+        assert!(methods(V::OneKey, AppSurface::Desktop).contains(&T::NativeUsb));
+
+        // Tangem is a card. NFC or nothing, so it appears on phones and
+        // nowhere else -- not on a desktop, and not in an extension, because
+        // a browser cannot tap a card.
+        for phone in [AppSurface::Android, AppSurface::Ios] {
+            assert_eq!(methods(V::Tangem, phone), vec![T::Nfc], "{phone:?}");
+        }
+        for no_nfc in [AppSurface::Desktop, AppSurface::Web, AppSurface::Extension] {
+            assert!(
+                methods(V::Tangem, no_nfc).is_empty(),
+                "{no_nfc:?} cannot tap a card"
+            );
+        }
+
+        // Keystone is the opposite: a camera is all it needs, so it reaches
+        // every surface including the extension, where every cable and radio
+        // path is closed. That is what MetaMask does with a Keystone, and it
+        // is the widest reach of any device here.
+        for surface in ALL_SURFACES {
+            assert!(
+                methods(V::Keystone, surface).contains(&T::Camera),
+                "{surface:?} must be able to reach a Keystone"
+            );
+        }
+        // Its second channel needs a card slot, which only a desktop has.
+        assert!(methods(V::Keystone, AppSurface::Desktop).contains(&T::MicroSd));
+        assert!(!methods(V::Keystone, AppSurface::Ios).contains(&T::MicroSd));
+
+        // No surface offers a transport it does not have.
+        for surface in ALL_SURFACES {
+            let support = transport_support(surface);
+            for vendor in V::OFFERED {
+                for transport in vendor.connection_methods(support) {
+                    assert!(
+                        support.provides(transport),
+                        "{surface:?} offered {transport:?} for {vendor:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_card_is_a_hardware_wallet_and_reachable_only_by_tap() {
+        use optn_platform::{HardwareTransport as T, HardwareVendor as V};
+
+        // Firmware is the line, not shape and not transport. A Tangem has no
+        // screen, no battery and no port, and it is still a hardware wallet:
+        // it runs its own firmware and the seed is made on the card.
+        assert!(V::Tangem.holds_firmware());
+        assert!(V::OFFERED.contains(&V::Tangem));
+
+        // One transport, and it is the one no desktop and no browser has.
+        assert_eq!(V::Tangem.transports(), &[T::Nfc]);
+        assert!(
+            !V::USB_DEVICES.contains(&V::Tangem),
+            "there is nothing to plug in"
+        );
+
+        // Multisig stays behind an advanced control here as everywhere else.
+        assert!(!V::Tangem.multisig_is_default());
+
+        // Round-trips over the wire rather than arriving decoded as a Ledger.
+        assert_eq!(V::from_id(V::Tangem.id()), Some(V::Tangem));
+        assert_eq!(V::Tangem.id(), "tangem");
+    }
 
     #[test]
     fn watch_only_is_offered_on_every_surface_and_switchable_on_each() {
@@ -3728,20 +3836,32 @@ mod tests {
 
         let desktop = transport_support(AppSurface::Desktop);
         for vendor in HardwareVendor::OFFERED {
-            assert!(vendor.is_reachable_with(desktop), "{vendor:?} on desktop");
+            // Tangem is the exception, and the model produces it rather than
+            // being told: a card is reached by tap, and no laptop taps.
+            let expected = *vendor != HardwareVendor::Tangem;
+            assert_eq!(
+                vendor.is_reachable_with(desktop),
+                expected,
+                "{vendor:?} on desktop"
+            );
         }
 
         // A browser has WebHID but no native USB, and still reaches a Ledger.
         assert!(HardwareVendor::Ledger.is_reachable_with(transport_support(AppSurface::Web)));
 
-        // A popup can do a WebHID dance but has no camera, so an air-gapped
-        // device is out of reach there and says why.
+        // A popup can do a WebHID dance and can also ask for a camera, so the
+        // air-gapped device is reachable there too. This is what MetaMask
+        // does with a Keystone, and the extension is where people reach for a
+        // hardware wallet, so it would be the worst place to get wrong.
         let popup = transport_support(AppSurface::Extension);
         assert!(HardwareVendor::Ledger.is_reachable_with(popup));
-        assert!(!HardwareVendor::Keystone.is_reachable_with(popup));
-        assert!(HardwareVendor::Keystone
-            .unreachable_reason(popup)
-            .is_some_and(|reason| reason.contains("camera")));
+        assert!(HardwareVendor::Keystone.is_reachable_with(popup));
+        assert!(HardwareVendor::Keystone.unreachable_reason(popup).is_none());
+
+        // A card still is not, because a browser cannot tap one, and the
+        // reason says so instead of failing silently.
+        assert!(!HardwareVendor::Tangem.is_reachable_with(popup));
+        assert!(HardwareVendor::Tangem.unreachable_reason(popup).is_some());
     }
 
     #[test]
