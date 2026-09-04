@@ -173,21 +173,43 @@ one key swapped, a threshold edited — produces a different address, and the
 mismatch is the only warning anyone gets. `BsmsRecord::verify_first_address`
 runs it; skipping it would make the line decoration.
 
-### Not implemented yet, and why it is worth knowing
+### Round 1: key records, and the check that makes them worth reading
 
-- **Round-1 key records are not parsed or verified.** Reading them is the other
-  half of interop: it is what lets this wallet *join* a setup rather than only
-  open the result of one. The signature is the security-relevant part — a record
-  whose signature does not verify means a cosigner's key was substituted.
-- **Their signing has an Electron Cash compatibility detail we would have to
-  match.** `bsms.js` signs the legacy `\x18Bitcoin Signed Message:\n` preimage
-  with the message length as a **CompactSize varint**, and says so in a comment:
-  "Adopting Electron Cash's message len encoding to accomodate longer messages
-  … Mainnet-js just uses the length as is". Then double-SHA256 and ECDSA DER.
-  Getting that wrong produces signatures that verify nowhere.
-- **Encrypted records are not handled.** BSMS allows a token; Paytaca encrypts
-  round 2 with AES-256-GCM and round 1 with ECIES. Only `token 00` — plaintext —
-  is read here.
+Both rounds are implemented now. `parse_bsms_key_record` reads the five-line
+key record, and `BsmsKeyRecord::verify_signature` does what BIP-129 requires of
+a coordinator — "verifies that the included `SIG` is valid given the `KEY`".
+
+That check is the reason round one carries a signature at all. Without it,
+anyone who can edit a record in transit swaps a cosigner's xPub for their own,
+and the wallet everyone then agrees to is one that attacker can spend from.
+Reading these records *without* verifying them would be worse than not reading
+them, because it would look like participation.
+
+The signature covers the first four lines, made with the private key of the
+xPub the record carries: the legacy Bitcoin signed-message prefix, a CompactSize
+length, then double-SHA256 and ECDSA DER. The test signs a record with the
+matching account key and verifies it, so the digest is exercised in both
+directions rather than asserted — and swapping the key or editing the
+description both fail.
+
+**The Electron Cash length quirk turns out not to reach a key record.**
+`bsms.js` warns about it: *"Adopting Electron Cash's message len encoding to
+accomodate longer messages … Mainnet-js just uses the length as is"*. The two
+encodings differ only above 252 bytes, and BIP-129 caps the description at 80
+characters, so a maximal key record — description, xPub and origin — is
+**224 bytes**. They always agree here, which means this interoperates with a
+signer of either persuasion. The test pins that number, so if the format ever
+grows past the boundary it fails loudly rather than silently. CompactSize is
+written anyway, being correct at every length.
+
+### Still not implemented
+
+- **Encrypted records.** BSMS allows a token; Paytaca encrypts round 2 with
+  AES-256-GCM and round 1 with ECIES. Only `token 00` — plaintext — is read, and
+  an encrypted record is refused by name rather than mis-parsed as corrupt.
+- **Nothing has been exchanged with a running Paytaca.** All of the above is
+  checked against their source and against BIP-129, not against a record their
+  app produced.
 
 ## One difference worth knowing
 
