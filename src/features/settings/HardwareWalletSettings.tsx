@@ -55,14 +55,13 @@ const DEVICES: {
   {
     type: 'trezor',
     label: 'Trezor',
-    subtitle: 'Desktop: native USB HID (Trezor One). Browser: Connect-web',
+    subtitle: 'Desktop: native USB HID (Trezor One). Browser: not yet wired',
     connectionType: 'usb-bridge',
-    sdkNote:
-      'Desktop: @trezor/protobuf + hidapi · Browser: @trezor/connect-web',
+    sdkNote: 'Desktop: @trezor/protobuf + hidapi · Browser: @trezor/transport',
     steps: [
       'Desktop app: plug in Trezor One over USB (Model T/Safe WebUSB coming later)',
       'Unlock with PIN on the device',
-      'Browser build still uses Trezor Connect / Suite Bridge',
+      'Browser: being rebuilt on @trezor/transport WebUSB — use the desktop app for now',
     ],
   },
   {
