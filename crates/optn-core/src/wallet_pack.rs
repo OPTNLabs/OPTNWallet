@@ -622,6 +622,71 @@ mod tests {
     }
 
     #[test]
+    fn the_derivation_buffer_contributes_nothing_to_the_key() {
+        // CodeQL reads `let mut key = [0u8; 32]` in derive_key_with_rounds as a
+        // hard-coded cryptographic value. It is an output buffer: pbkdf2_hmac
+        // writes all 32 bytes and never reads them. That is a claim worth
+        // proving rather than asserting, and there are two independent ways to
+        // prove it.
+        //
+        // One: the output matches a PBKDF2-HMAC-SHA256 implementation nobody
+        // here wrote. These are Python's hashlib.pbkdf2_hmac for the same
+        // password, salt and rounds. If the zeroed buffer were an input, the
+        // two could not agree.
+        const SALT: &[u8] = b"0123456789abcdef";
+        for (rounds, expected) in [
+            (
+                1_u32,
+                "b20410ffded3d9e108e29c53805b5d0a0be84d0fe9016074291854d56a4ec3c6",
+            ),
+            (
+                600_000,
+                "6c4a646aad10d067add5fb79d9078a16da83d50f81670a8e7593b249e6d94936",
+            ),
+        ] {
+            let key = derive_key_with_rounds("correct horse battery staple", SALT, rounds)
+                .expect("derives");
+            assert_eq!(hex(key.expose()), expected, "{rounds} rounds");
+        }
+
+        // An empty password is still the password, not a skipped derivation.
+        let empty = derive_key_with_rounds("", SALT, 1000).expect("derives");
+        assert_eq!(
+            hex(empty.expose()),
+            "d52a3016f73233c5a658a1399b0d6613a4b35a14eb424235a332df163429bd8e"
+        );
+
+        // Two: the output depends on the password and the salt and on nothing
+        // else. Same inputs give the same key; either input changed gives a
+        // different one.
+        let again =
+            derive_key_with_rounds("correct horse battery staple", SALT, 1).expect("derives");
+        let first =
+            derive_key_with_rounds("correct horse battery staple", SALT, 1).expect("derives");
+        assert_eq!(first.expose(), again.expose());
+        assert_ne!(
+            first.expose(),
+            derive_key_with_rounds("correct horse battery stapleX", SALT, 1)
+                .expect("derives")
+                .expose()
+        );
+        assert_ne!(
+            first.expose(),
+            derive_key_with_rounds("correct horse battery staple", b"fedcba9876543210", 1)
+                .expect("derives")
+                .expose()
+        );
+
+        // And it is not the buffer leaking through: an all-zero key would mean
+        // pbkdf2 never wrote.
+        assert_ne!(first.expose(), &[0u8; 32]);
+    }
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    #[test]
     fn a_wrong_password_and_a_tampered_file_give_the_same_answer() {
         // Deliberately indistinguishable. Any other arrangement tells whoever
         // holds the file which of the two they got right, which turns guessing
