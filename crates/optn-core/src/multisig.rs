@@ -16,7 +16,7 @@ use bip32::{ChildNumber, XPub};
 
 use crate::cashaddr::{Address, AddressKind};
 use crate::error::{CliError, Result};
-use crate::hd::hash160;
+use crate::hd::{hash160, AccountPath};
 use crate::network::Network;
 use crate::watch_only::{normalize_master_fingerprint, parse_account_xpub, PublicAddressPreview};
 
@@ -213,6 +213,170 @@ pub fn multisig_preview(
     })
 }
 
+// ---------------------------------------------------------------------------
+// Descriptors, so the wallet is not the only thing that can open it
+// ---------------------------------------------------------------------------
+
+/// The characters a descriptor may contain, in checksum order.
+const DESCRIPTOR_INPUT_CHARSET: &str =
+    "0123456789()[],'/*abcdefgh@:$%{}IJKLMNOPQRSTUVWXYZ&+-.;<=>?!^_|~ijklmnopqrstuvwxyzABCDEFGH`#\"\\ ";
+/// The alphabet the eight checksum characters are drawn from.
+const DESCRIPTOR_CHECKSUM_CHARSET: &[u8] = b"qpzry9x8gf2tvdw0s3jn54khce6mua7l";
+
+/// BIP-380 checksum polynomial.
+fn descriptor_polymod(chk: u64, value: u64) -> u64 {
+    const GENERATOR: [u64; 5] = [
+        0x00f5_dee5_1989,
+        0x00a9_fdca_3312,
+        0x001b_ab10_e32d,
+        0x0037_06b1_677a,
+        0x0064_4d62_6ffd,
+    ];
+    let top = chk >> 35;
+    let mut chk = ((chk & 0x07_ffff_ffff) << 5) ^ value;
+    for (bit, generator) in GENERATOR.iter().enumerate() {
+        if (top >> bit) & 1 == 1 {
+            chk ^= generator;
+        }
+    }
+    chk
+}
+
+/// The eight-character checksum a descriptor carries after `#`.
+///
+/// Not decoration. A descriptor is a long string of base58 that people copy
+/// between wallets by hand or by QR, and a single wrong character yields a
+/// different, valid-looking wallet whose addresses nobody can spend from. The
+/// checksum is what turns that into an error message.
+///
+/// `None` when the descriptor contains a character the format does not allow.
+pub fn descriptor_checksum(descriptor: &str) -> Option<String> {
+    let mut chk: u64 = 1;
+    let mut groups: Vec<u64> = Vec::with_capacity(3);
+
+    for character in descriptor.chars() {
+        let position = DESCRIPTOR_INPUT_CHARSET
+            .chars()
+            .position(|c| c == character)? as u64;
+        chk = descriptor_polymod(chk, position & 31);
+        groups.push(position >> 5);
+        if groups.len() == 3 {
+            chk = descriptor_polymod(chk, groups[0] * 9 + groups[1] * 3 + groups[2]);
+            groups.clear();
+        }
+    }
+    match groups.len() {
+        1 => chk = descriptor_polymod(chk, groups[0]),
+        2 => chk = descriptor_polymod(chk, groups[0] * 3 + groups[1]),
+        _ => {}
+    }
+    for _ in 0..8 {
+        chk = descriptor_polymod(chk, 0);
+    }
+    chk ^= 1;
+
+    Some(
+        (0..8)
+            .map(|index| {
+                let symbol = (chk >> (5 * (7 - index))) & 31;
+                DESCRIPTOR_CHECKSUM_CHARSET[symbol as usize] as char
+            })
+            .collect(),
+    )
+}
+
+/// A descriptor with its checksum appended.
+pub fn with_descriptor_checksum(descriptor: &str) -> Result<String> {
+    let checksum = descriptor_checksum(descriptor).ok_or_else(|| {
+        CliError::Internal("descriptor contains a character the format does not allow".into())
+    })?;
+    Ok(format!("{descriptor}#{checksum}"))
+}
+
+/// The receive and change descriptors for a policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DescriptorSet {
+    /// `sh(sortedmulti(...))` over branch 0, checksummed.
+    pub receive: String,
+    /// The same over branch 1.
+    pub change: String,
+}
+
+/// Export the policy as BIP-380 / BIP-383 descriptors.
+///
+/// This is what makes a wallet created here openable somewhere else, and a
+/// wallet created elsewhere openable here. `sh(sortedmulti(...))` is the same
+/// thing this module builds natively: P2SH over BIP-67-sorted keys, which is
+/// exactly what `sortedmulti` means. So the descriptor is a translation rather
+/// than a second implementation, and a wallet loaded from one in Electron
+/// Cash, Sparrow or anything else arrives at the same addresses.
+///
+/// Every cosigner needs a master fingerprint here, even though the script does
+/// not use one: a descriptor without key origins can be loaded but not signed
+/// against, because a signer cannot tell which key in it is its own.
+///
+/// The order of the keys *in the text* is canonical -- fingerprint then xPub --
+/// so two wallets describing the same policy produce the same string. It is
+/// deliberately not the script order: `sortedmulti` sorts per derived address,
+/// which is the whole point of BIP-67 and cannot be done once at the top.
+pub fn descriptor_set(
+    required: u8,
+    cosigners: &[Cosigner],
+    account: AccountPath,
+) -> Result<DescriptorSet> {
+    if cosigners.len() < 2 {
+        return Err(CliError::Usage(
+            "a multisig wallet needs at least two cosigners".into(),
+        ));
+    }
+    if required == 0 || usize::from(required) > cosigners.len() {
+        return Err(CliError::Usage(format!(
+            "threshold {required} is outside 1..={}",
+            cosigners.len()
+        )));
+    }
+
+    // `m/44'/145'/0'` becomes `44'/145'/0'`: a key origin carries the path
+    // below the master, and the leading `m/` is the master itself.
+    let origin_path = account.path();
+    let origin_path = origin_path.strip_prefix("m/").unwrap_or(&origin_path);
+
+    let mut keys: Vec<(String, String)> = Vec::with_capacity(cosigners.len());
+    for (index, cosigner) in cosigners.iter().enumerate() {
+        let fingerprint =
+            normalize_master_fingerprint(cosigner.master_fingerprint.as_deref().unwrap_or(""))?
+                .ok_or_else(|| {
+                    CliError::Usage(format!(
+                "cosigner {} needs a master fingerprint before the wallet can be exported: a \
+                 descriptor without key origins loads but cannot be signed against, because a \
+                 signer cannot tell which key is its own",
+                index + 1
+            ))
+                })?;
+        let xpub = parse_account_xpub(&cosigner.account_xpub)
+            .map(|_| cosigner.account_xpub.trim().to_string())?;
+        keys.push((
+            format!("{fingerprint}{xpub}"),
+            format!("[{fingerprint}/{origin_path}]{xpub}"),
+        ));
+    }
+    keys.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let body = |branch: u32| {
+        let listed = keys
+            .iter()
+            .map(|(_, key)| format!("{key}/{branch}/*"))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!("sh(sortedmulti({required},{listed}))")
+    };
+
+    Ok(DescriptorSet {
+        receive: with_descriptor_checksum(&body(0))?,
+        change: with_descriptor_checksum(&body(1))?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,6 +402,110 @@ mod tests {
             account_xpub: account_xpub(account),
             master_fingerprint: None,
         }
+    }
+
+    /// Two cosigners with fingerprints, for the descriptor tests.
+    fn two_cosigners() -> Vec<Cosigner> {
+        let wallet = crate::hd::Wallet::from_mnemonic(crate::hd::BIP39_TEST_VECTOR_MNEMONIC, "")
+            .expect("mnemonic");
+        vec![
+            Cosigner {
+                name: "Ada".into(),
+                account_xpub: wallet.account_xpub(Network::Chipnet, 0).expect("xpub"),
+                master_fingerprint: Some("4c9a1f7b".into()),
+            },
+            Cosigner {
+                name: "Bo".into(),
+                account_xpub: wallet.account_xpub(Network::Chipnet, 1).expect("xpub"),
+                master_fingerprint: Some("0f1e2d3c".into()),
+            },
+        ]
+    }
+    #[test]
+    fn the_descriptor_checksum_matches_the_published_vector() {
+        // From BIP-380 itself. A wrong implementation here would produce
+        // descriptors every other wallet rejects, and the failure would look
+        // like the other wallet being broken.
+        assert_eq!(
+            with_descriptor_checksum("raw(deadbeef)").expect("valid"),
+            "raw(deadbeef)#89f8spxm"
+        );
+
+        // A character outside the charset is refused rather than checksummed
+        // into something that looks fine.
+        assert_eq!(descriptor_checksum("raw(deadbeef)\u{00e9}"), None);
+    }
+
+    #[test]
+    fn a_policy_exports_as_something_another_wallet_can_open() {
+        // sortedmulti is BIP-67 by another name, so the descriptor is a
+        // translation of what this module already builds rather than a second
+        // implementation of it.
+        let cosigners = two_cosigners();
+        let account = AccountPath::new(145, 0).expect("in range");
+        let set = descriptor_set(2, &cosigners, account).expect("exports");
+
+        assert!(
+            set.receive.starts_with("sh(sortedmulti(2,"),
+            "{}",
+            set.receive
+        );
+        assert!(set.receive.contains("/0/*"), "receive is branch 0");
+        assert!(set.change.contains("/1/*"), "change is branch 1");
+        assert_ne!(set.receive, set.change);
+
+        // Key origins are present and carry the path below the master.
+        assert!(
+            set.receive.contains("[4c9a1f7b/44'/145'/0']"),
+            "{}",
+            set.receive
+        );
+        assert!(!set.receive.contains("[4c9a1f7b/m/"), "no leading m/");
+
+        // Both halves are checksummed, and the checksum verifies.
+        for descriptor in [&set.receive, &set.change] {
+            let (body, checksum) = descriptor.rsplit_once('#').expect("checksummed");
+            assert_eq!(checksum.len(), 8);
+            assert_eq!(descriptor_checksum(body).as_deref(), Some(checksum));
+        }
+    }
+
+    #[test]
+    fn the_text_order_is_canonical_so_two_wallets_agree_on_the_string() {
+        // Not the script order -- sortedmulti sorts per derived address, which
+        // is what BIP-67 is for and cannot be done once at the top. This is so
+        // the same policy described twice reads identically.
+        let account = AccountPath::new(145, 0).expect("in range");
+        let forwards = two_cosigners();
+        let mut backwards = forwards.clone();
+        backwards.reverse();
+
+        assert_eq!(
+            descriptor_set(2, &forwards, account).expect("exports"),
+            descriptor_set(2, &backwards, account).expect("exports"),
+            "entry order must not change the descriptor"
+        );
+    }
+
+    #[test]
+    fn a_cosigner_without_a_fingerprint_cannot_be_exported() {
+        // The script does not use one, so the wallet works locally. A
+        // descriptor without key origins loads elsewhere and then cannot be
+        // signed against, because a signer cannot find its own key in it --
+        // which is a worse outcome than refusing the export.
+        let mut cosigners = two_cosigners();
+        cosigners[1].master_fingerprint = None;
+        let account = AccountPath::new(145, 0).expect("in range");
+
+        let error = descriptor_set(2, &cosigners, account).expect_err("no fingerprint");
+        assert!(error.to_string().contains("master fingerprint"), "{error}");
+        assert!(
+            error.to_string().contains("cannot tell which key"),
+            "{error}"
+        );
+
+        // And it still builds addresses perfectly well without one.
+        assert!(multisig_preview(Network::Chipnet, 2, &cosigners).is_ok());
     }
 
     #[test]
