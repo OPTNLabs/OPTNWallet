@@ -29,7 +29,12 @@ for (const section of ['dependencies', 'devDependencies']) {
     if (locked[name] !== version) {
       errors.push(`${section}.${name} is out of sync with package-lock.json`);
     }
-    if (/^(?:\*|latest|next|file:|git\+|https?:)/i.test(version)) {
+    if (/^(?:\*|latest|next|git\+|https?:)/i.test(version)) {
+      errors.push(
+        `${section}.${name} uses an unreviewable dependency spec: ${version}`
+      );
+    }
+    if (/^file:/i.test(version) && !version.startsWith('file:vendor/')) {
       errors.push(
         `${section}.${name} uses an unreviewable dependency spec: ${version}`
       );

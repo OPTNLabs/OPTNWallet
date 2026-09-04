@@ -36,12 +36,21 @@ export type ScannedQrPayload =
       uri: string;
     }
   | {
+      kind: 'wizardconnect';
+      scannedValue: string;
+      uri: string;
+    }
+  | {
       kind: 'unknown';
       scannedValue: string;
     };
 
 export function isWalletConnectUri(value: string): boolean {
   return value.trim().toLowerCase().startsWith('wc:');
+}
+
+export function isWizardUri(value: string): boolean {
+  return value.trim().toLowerCase().startsWith('wiz://');
 }
 
 export function extractWifCandidates(value: string): string[] {
@@ -84,6 +93,10 @@ export function classifyScannedQrPayload(
 
   if (isWalletConnectUri(scannedValue)) {
     return { kind: 'walletconnect', scannedValue, uri: scannedValue };
+  }
+
+  if (isWizardUri(scannedValue)) {
+    return { kind: 'wizardconnect', scannedValue, uri: scannedValue };
   }
 
   if (/^qrstream\/1\/[A-Za-z0-9+/=_-]+$/i.test(scannedValue)) {

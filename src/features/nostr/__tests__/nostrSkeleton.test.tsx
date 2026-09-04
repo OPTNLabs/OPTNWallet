@@ -10,6 +10,7 @@ import { NostrChatRoute } from '../NostrChatRoute';
 import { P2pFusionTransportPreview } from '../P2pFusionTransportPreview';
 import { normalizeRelayDraft } from '../nostrRelayDraft';
 import { I18nProvider } from '../../../i18n/I18nProvider';
+import { WalletConfirmProvider } from '../../../components/WalletConfirmDialog';
 import experimentalReducer, {
   setNostrChatEnabled,
 } from '../../../state/slices/experimentalSlice';
@@ -25,7 +26,9 @@ function renderWithStore(ui: React.ReactElement) {
   });
   return renderToStaticMarkup(
     <Provider store={store}>
-      <I18nProvider>{ui}</I18nProvider>
+      <I18nProvider>
+        <WalletConfirmProvider>{ui}</WalletConfirmProvider>
+      </I18nProvider>
     </Provider>
   );
 }
@@ -37,6 +40,7 @@ describe('Nostr UI safety', () => {
     expect(html).toContain('Nostr chat');
     expect(html).toContain('End-to-end encrypted DMs using NIP-17.');
     expect(html).toContain('Nostr identity');
+    expect(html).toContain('Display name');
     expect(html).toContain('wss://');
   });
 

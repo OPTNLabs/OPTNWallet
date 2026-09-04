@@ -1,0 +1,224 @@
+import { checkCanSendApplicationMessages, ClientState, getOwnLeafNode, processProposal } from "./clientState.js"
+import { LeafNodeExtension } from "./extension.js"
+import { LeafNodeTBSUpdate, signLeafNodeUpdate } from "./leafNode.js"
+import { leafNodeSources } from "./leafNodeSource.js"
+import { MlsFramedMessage } from "./message.js"
+import { protectProposal, protectApplicationData } from "./messageProtection.js"
+import { protectProposalPublic } from "./messageProtectionPublic.js"
+import { Proposal } from "./proposal.js"
+import { defaultProposalTypes } from "./defaultProposalType.js"
+import { selfRemoveProposalType } from "./selfRemove.js"
+import { addUnappliedProposal } from "./unappliedProposals.js"
+import { protocolVersions } from "./protocolVersion.js"
+import { wireformats } from "./wireformat.js"
+import type { MlsContext } from "./mlsContext.js"
+import { resolveClientConfig } from "./clientConfig.js"
+import { InternalError } from "./mlsError.js"
+
+/** @public */
+export interface CreateMessageResult {
+  newState: ClientState
+  message: MlsFramedMessage
+  consumed: Uint8Array[]
+}
+
+/** @public */
+export async function createProposal(params: {
+  context: MlsContext
+  state: ClientState
+  wireAsPublicMessage?: boolean
+  proposal: Proposal
+  authenticatedData?: Uint8Array
+}): Promise<CreateMessageResult> {
+  const context = params.context
+  const state = params.state
+  const cs = context.cipherSuite
+  const ad = params.authenticatedData ?? new Uint8Array()
+  const clientConfig = resolveClientConfig(context.clientConfig)
+
+  const publicMessage = params.wireAsPublicMessage ?? false
+  const proposal = params.proposal
+
+  if (publicMessage) {
+    const result = await protectProposalPublic(
+      state.signaturePrivateKey,
+      state.keySchedule.membershipKey,
+      state.groupContext,
+      ad,
+      proposal,
+      state.privatePath.leafIndex,
+      cs,
+    )
+    const newState = await processProposal(
+      state,
+      {
+        content: result.publicMessage.content,
+        auth: result.publicMessage.auth,
+        wireformat: wireformats.mls_public_message,
+      },
+      proposal,
+      cs.hash,
+    )
+    return {
+      newState,
+      message: {
+        wireformat: wireformats.mls_public_message,
+        version: protocolVersions.mls10,
+        publicMessage: result.publicMessage,
+      },
+      consumed: [],
+    }
+  } else {
+    const result = await protectProposal(
+      state.signaturePrivateKey,
+      state.keySchedule.senderDataSecret,
+      proposal,
+      ad,
+      state.groupContext,
+      state.secretTree,
+      state.privatePath.leafIndex,
+      clientConfig.paddingConfig,
+      cs,
+    )
+
+    const newState = {
+      ...state,
+      secretTree: result.newSecretTree,
+      unappliedProposals: addUnappliedProposal(
+        result.proposalRef,
+        state.unappliedProposals,
+        proposal,
+        state.privatePath.leafIndex,
+      ),
+    }
+
+    return {
+      newState,
+      message: {
+        wireformat: wireformats.mls_private_message,
+        version: protocolVersions.mls10,
+        privateMessage: result.privateMessage,
+      },
+      consumed: result.consumed,
+    }
+  }
+}
+
+/**
+ * Creates a `self_remove` proposal: the caller proposes their own removal for
+ * another member to commit. Framed as a PublicMessage (draft-ietf-mls-extensions
+ * / MIP-03) so the leaving member is the recorded MLS sender and the proposal can
+ * be committed by reference. The committer cannot be the sender (RFC 9420 §12.2),
+ * so this proposal advances no epoch on its own.
+ *
+ * @public
+ */
+export async function createSelfRemoveProposal(params: {
+  context: MlsContext
+  state: ClientState
+  authenticatedData?: Uint8Array
+}): Promise<CreateMessageResult> {
+  return createProposal({
+    context: params.context,
+    state: params.state,
+    wireAsPublicMessage: true,
+    proposal: { proposalType: selfRemoveProposalType },
+    authenticatedData: params.authenticatedData,
+  })
+}
+
+/** @public */
+export interface CreateUpdateProposalResult extends CreateMessageResult {
+  /**
+   * HPKE keypair for the proposer's new leaf. The proposer MUST install the
+   * private key into `state.privatePath` (via `updateLeafKey`) only when the
+   * commit that applies this proposal is handled, because commits that do not
+   * include the proposal leave the proposer's leaf public key unchanged. The
+   * public key lets the caller detect which of those two outcomes occurred by
+   * comparing it to the post-commit tree's own-leaf public key.
+   */
+  newLeafKeypair: { hpkePublicKey: Uint8Array; hpkePrivateKey: Uint8Array }
+}
+
+/** @public */
+export async function createUpdateProposal(params: {
+  context: MlsContext
+  state: ClientState
+  wireAsPublicMessage?: boolean
+  authenticatedData?: Uint8Array
+  leafNodeExtensions?: LeafNodeExtension[]
+}): Promise<CreateUpdateProposalResult> {
+  const { context, state } = params
+  const cs = context.cipherSuite
+  const ownLeaf = getOwnLeafNode(state)
+  if (ownLeaf === undefined) throw new InternalError("No own leaf node found for update proposal")
+
+  const leafSecret = cs.rng.randomBytes(cs.kdf.size)
+  const leafKeypair = await cs.hpke.deriveKeyPair(leafSecret)
+  const hpkePublicKey = await cs.hpke.exportPublicKey(leafKeypair.publicKey)
+  const hpkePrivateKey = await cs.hpke.exportPrivateKey(leafKeypair.privateKey)
+
+  const tbs: LeafNodeTBSUpdate = {
+    leafNodeSource: leafNodeSources.update,
+    hpkePublicKey,
+    signaturePublicKey: ownLeaf.signaturePublicKey,
+    credential: ownLeaf.credential,
+    capabilities: ownLeaf.capabilities,
+    extensions: params.leafNodeExtensions ?? ownLeaf.extensions,
+    groupId: state.groupContext.groupId,
+    leafIndex: state.privatePath.leafIndex,
+  }
+  const leafNode = await signLeafNodeUpdate(tbs, state.signaturePrivateKey, cs.signature)
+  const proposal: Proposal = {
+    proposalType: defaultProposalTypes.update,
+    update: { leafNode },
+  }
+  const result = await createProposal({
+    context,
+    state,
+    wireAsPublicMessage: params.wireAsPublicMessage,
+    authenticatedData: params.authenticatedData,
+    proposal,
+  })
+  return { ...result, newLeafKeypair: { hpkePublicKey, hpkePrivateKey } }
+}
+
+/** @public */
+export async function createApplicationMessage(params: {
+  context: MlsContext
+  state: ClientState
+  message: Uint8Array
+  authenticatedData?: Uint8Array
+}): Promise<CreateMessageResult> {
+  const context = params.context
+  const state = params.state
+  const cs = context.cipherSuite
+  const ad = params.authenticatedData ?? new Uint8Array()
+  const clientConfig = resolveClientConfig(context.clientConfig)
+
+  const message = params.message
+
+  checkCanSendApplicationMessages(state)
+
+  const result = await protectApplicationData(
+    state.signaturePrivateKey,
+    state.keySchedule.senderDataSecret,
+    message,
+    ad,
+    state.groupContext,
+    state.secretTree,
+    state.privatePath.leafIndex,
+    clientConfig.paddingConfig,
+    cs,
+  )
+
+  return {
+    newState: { ...state, secretTree: result.newSecretTree },
+    message: {
+      version: protocolVersions.mls10,
+      wireformat: wireformats.mls_private_message,
+      privateMessage: result.privateMessage,
+    },
+    consumed: result.consumed,
+  }
+}

@@ -1,0 +1,98 @@
+import { CodecError } from "../mlsError.js"
+
+/** @public */
+export type Decoder<T> = (b: Uint8Array, offset: number) => [T, number] | undefined
+
+/** @public */
+export function decode<T>(dec: Decoder<T>, t: Uint8Array, maxInputSize: number = 64000000): T | undefined {
+  if (t.length > maxInputSize)
+    throw new CodecError("Payload larger than max allowed size, increase maxInputSize if you want to decode this")
+  return dec(t, 0)?.[0]
+}
+
+export function mapDecoder<T, U>(dec: Decoder<T>, f: (t: T) => U): Decoder<U> {
+  return (b, offset) => {
+    const x = dec(b, offset)
+    if (x !== undefined) {
+      const [t, l] = x
+      return [f(t), l]
+    }
+  }
+}
+
+export function mapDecodersOption<T extends unknown[], R>(
+  rsDecoder: { [K in keyof T]: Decoder<T[K]> },
+  f: (...args: T) => R | undefined,
+): Decoder<R> {
+  return (b, offset) => {
+    const initial = mapDecoders(rsDecoder, f)(b, offset)
+    if (initial === undefined) return undefined
+    else {
+      const [r, len] = initial
+      return r !== undefined ? [r, len] : undefined
+    }
+  }
+}
+
+export function mapDecoders<T extends unknown[], R>(
+  rsDecoder: { [K in keyof T]: Decoder<T[K]> },
+  f: (...args: T) => R,
+): Decoder<R> {
+  const n = rsDecoder.length
+  return (b, offset) => {
+    const values = new Array<unknown>(n)
+    let cursor = offset
+    for (let i = 0; i < n; i++) {
+      const decoded = rsDecoder[i]!(b, cursor)
+      if (decoded === undefined) return undefined
+      values[i] = decoded[0]
+      cursor += decoded[1]
+    }
+    return [f(...(values as T)), cursor - offset]
+  }
+}
+
+export function mapDecoderOption<T, U>(dec: Decoder<T>, f: (t: T) => U | undefined): Decoder<U> {
+  return (b, offset) => {
+    const x = dec(b, offset)
+    if (x !== undefined) {
+      const [t, l] = x
+      const u = f(t)
+      return u !== undefined ? [u, l] : undefined
+    }
+  }
+}
+
+export function flatMapDecoder<T, U>(dec: Decoder<T>, f: (t: T) => Decoder<U>): Decoder<U> {
+  return flatMapDecoderAndMap(dec, f, (_t, u) => u)
+}
+
+export function orDecoder<T, U>(decT: Decoder<T>, decU: Decoder<U>): Decoder<T | U> {
+  return (b, offset) => {
+    const t = decT(b, offset)
+    return t ? t : decU(b, offset)
+  }
+}
+
+function flatMapDecoderAndMap<T, U, V>(dec: Decoder<T>, f: (t: T) => Decoder<U>, g: (t: T, u: U) => V): Decoder<V> {
+  return (b, offset) => {
+    const decodedT = dec(b, offset)
+    if (decodedT !== undefined) {
+      const [t, len] = decodedT
+      const rUDecoder = f(t)
+      const decodedU = rUDecoder(b, offset + len)
+      if (decodedU !== undefined) {
+        const [u, len2] = decodedU
+        return [g(t, u), len + len2]
+      }
+    }
+  }
+}
+
+export function succeedDecoder<T>(t: T): Decoder<T> {
+  return () => [t, 0] as const
+}
+
+export function failDecoder<T>(): Decoder<T> {
+  return () => undefined
+}

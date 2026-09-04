@@ -28,7 +28,7 @@ const FORBIDDEN_IMPORT_RE =
 
 /** Named imports that only exist on the social/chat path. */
 const FORBIDDEN_SYMBOL_RE =
-  /\b(myIdentity|deriveNostrIdentity|NOSTR_DERIVATION_PATH)\b/;
+  /\b(myIdentity|deriveNostrIdentity|NOSTR_DERIVATION_PATH|loadNostrAccountSeed|nip06AccountSeed)\b/;
 
 function isFusionSourceFile(name: string): boolean {
   if (!name.endsWith('.ts') && !name.endsWith('.tsx')) return false;
@@ -100,7 +100,9 @@ describe('CashFusion identity isolation', () => {
   it('finds fusion source files to audit', () => {
     // Guard against an empty walk (wrong root) silently passing the suite.
     expect(files.length).toBeGreaterThanOrEqual(15);
-    const rel = files.map((f) => relative(DESKTOP_ROOT, f).split(sep).join('/'));
+    const rel = files.map((f) =>
+      relative(DESKTOP_ROOT, f).split(sep).join('/')
+    );
     expect(rel.some((p) => p.endsWith('FusionP2pService.ts'))).toBe(true);
     expect(rel.some((p) => p.includes('nostr/fusionTransport.ts'))).toBe(true);
     expect(rel.some((p) => p.includes('nostr/fusion.ts'))).toBe(true);

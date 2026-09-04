@@ -104,6 +104,7 @@ jobs:
       - name: Android emulator smoke tests
         run: |
           set -eu
+          source scripts/stop-child-process.sh
 
           emulator_serial=emulator-5554
           emulator_log="$RUNNER_TEMP/android-emulator.log"
@@ -154,7 +155,9 @@ jobs:
               tail -n 120 "$emulator_log" || true
             fi
             adb_with_timeout -s "$emulator_serial" emu kill >/dev/null 2>&1 || true
-            wait "$emulator_pid" 2>/dev/null || true
+            # `adb emu kill` occasionally leaves qemu alive. An unbounded wait
+            # then consumes the entire job timeout after every test has passed.
+            stop_child_process "$emulator_pid"
             trap - EXIT
             exit "$exit_code"
           }

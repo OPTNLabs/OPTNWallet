@@ -1,0 +1,191 @@
+import {
+  uint32Decoder,
+  uint64Decoder,
+  uint8Decoder,
+  uint32Encoder,
+  uint64Encoder,
+  uint8Encoder,
+} from "./codec/number.js"
+import { Decoder, flatMapDecoder, mapDecoder, mapDecoderOption, mapDecoders } from "./codec/tlsDecoder.js"
+import { contramapBufferEncoders, Encoder } from "./codec/tlsEncoder.js"
+import { varLenDataDecoder, varLenDataEncoder } from "./codec/variableLength.js"
+import { ContentTypeValue, contentTypeEncoder, contentTypeDecoder } from "./contentType.js"
+import { CiphersuiteImpl } from "./crypto/ciphersuite.js"
+import { expandWithLabel } from "./crypto/kdf.js"
+import { numberToEnum } from "./util/enumHelpers.js"
+
+/** @public */
+export const senderTypes = {
+  member: 1,
+  external: 2,
+  new_member_proposal: 3,
+  new_member_commit: 4,
+} as const
+
+/** @public */
+export type SenderTypeName = keyof typeof senderTypes
+/** @public */
+export type SenderTypeValue = (typeof senderTypes)[SenderTypeName]
+
+export const senderTypeEncoder: Encoder<SenderTypeValue> = uint8Encoder
+
+export const senderTypeDecoder: Decoder<SenderTypeValue> = mapDecoderOption(uint8Decoder, numberToEnum(senderTypes))
+
+/** @public */
+export interface SenderMember {
+  senderType: typeof senderTypes.member
+  leafIndex: number
+}
+
+/** @public */
+export type SenderNonMember = SenderExternal | SenderNewMemberProposal | SenderNewMemberCommit
+
+/** @public */
+export interface SenderExternal {
+  senderType: typeof senderTypes.external
+  senderIndex: number
+}
+
+/** @public */
+export interface SenderNewMemberProposal {
+  senderType: typeof senderTypes.new_member_proposal
+}
+
+/** @public */
+export interface SenderNewMemberCommit {
+  senderType: typeof senderTypes.new_member_commit
+}
+
+/** @public */
+export type Sender = SenderMember | SenderNonMember
+
+export const senderEncoder: Encoder<Sender> = (s) => {
+  switch (s.senderType) {
+    case senderTypes.member:
+      return contramapBufferEncoders(
+        [senderTypeEncoder, uint32Encoder],
+        (s: SenderMember) => [s.senderType, s.leafIndex] as const,
+      )(s)
+    case senderTypes.external:
+      return contramapBufferEncoders(
+        [senderTypeEncoder, uint32Encoder],
+        (s: SenderExternal) => [s.senderType, s.senderIndex] as const,
+      )(s)
+    case senderTypes.new_member_proposal:
+    case senderTypes.new_member_commit:
+      return senderTypeEncoder(s.senderType)
+  }
+}
+
+export const senderDecoder: Decoder<Sender> = flatMapDecoder(senderTypeDecoder, (senderType): Decoder<Sender> => {
+  switch (senderType) {
+    case senderTypes.member:
+      return mapDecoder(uint32Decoder, (leafIndex) => ({
+        senderType,
+        leafIndex,
+      }))
+    case senderTypes.external:
+      return mapDecoder(uint32Decoder, (senderIndex) => ({
+        senderType,
+        senderIndex,
+      }))
+    case senderTypes.new_member_proposal:
+      return mapDecoder(
+        () => [undefined, 0],
+        () => ({
+          senderType,
+        }),
+      )
+    case senderTypes.new_member_commit:
+      return mapDecoder(
+        () => [undefined, 0],
+        () => ({
+          senderType,
+        }),
+      )
+  }
+})
+
+export function getSenderLeafNodeIndex(sender: Sender): number | undefined {
+  return sender.senderType === senderTypes.member ? sender.leafIndex : undefined
+}
+
+export interface SenderData {
+  leafIndex: number
+  generation: number
+  reuseGuard: ReuseGuard
+}
+
+export type ReuseGuard = Uint8Array & { length: 4 }
+
+export const reuseGuardEncoder: Encoder<ReuseGuard> = (g) => [
+  4,
+  (offset, buffer) => {
+    const view = new Uint8Array(buffer, offset, 4)
+    view.set(g, 0)
+  },
+]
+
+export const reuseGuardDecoder: Decoder<ReuseGuard> = (b, offset) => {
+  return [b.subarray(offset, offset + 4) as ReuseGuard, 4]
+}
+
+export const senderDataEncoder: Encoder<SenderData> = contramapBufferEncoders(
+  [uint32Encoder, uint32Encoder, reuseGuardEncoder],
+  (s) => [s.leafIndex, s.generation, s.reuseGuard] as const,
+)
+
+export const senderDataDecoder: Decoder<SenderData> = mapDecoders(
+  [uint32Decoder, uint32Decoder, reuseGuardDecoder],
+  (leafIndex, generation, reuseGuard) => ({
+    leafIndex,
+    generation,
+    reuseGuard,
+  }),
+)
+
+export interface SenderDataAAD {
+  groupId: Uint8Array
+  epoch: bigint
+  contentType: ContentTypeValue
+}
+
+export const senderDataAADEncoder: Encoder<SenderDataAAD> = contramapBufferEncoders(
+  [varLenDataEncoder, uint64Encoder, contentTypeEncoder],
+  (aad) => [aad.groupId, aad.epoch, aad.contentType] as const,
+)
+
+export const senderDataAADDecoder: Decoder<SenderDataAAD> = mapDecoders(
+  [varLenDataDecoder, uint64Decoder, contentTypeDecoder],
+  (groupId, epoch, contentType) => ({
+    groupId,
+    epoch,
+    contentType,
+  }),
+)
+
+function sampleCiphertext(cs: CiphersuiteImpl, ciphertext: Uint8Array): Uint8Array {
+  return ciphertext.length < cs.kdf.size ? ciphertext : ciphertext.subarray(0, cs.kdf.size)
+}
+
+export async function expandSenderDataKey(
+  cs: CiphersuiteImpl,
+  senderDataSecret: Uint8Array,
+  ciphertext: Uint8Array,
+): Promise<Uint8Array> {
+  const ciphertextSample = sampleCiphertext(cs, ciphertext)
+  const keyLength = cs.hpke.keyLength
+
+  return await expandWithLabel(senderDataSecret, "key", ciphertextSample, keyLength, cs.kdf)
+}
+
+export async function expandSenderDataNonce(
+  cs: CiphersuiteImpl,
+  senderDataSecret: Uint8Array,
+  ciphertext: Uint8Array,
+): Promise<Uint8Array> {
+  const ciphertextSample = sampleCiphertext(cs, ciphertext)
+  const keyLength = cs.hpke.nonceLength
+
+  return await expandWithLabel(senderDataSecret, "nonce", ciphertextSample, keyLength, cs.kdf)
+}

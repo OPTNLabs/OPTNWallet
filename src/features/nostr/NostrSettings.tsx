@@ -14,9 +14,19 @@ import {
   removeNostrRelay,
 } from '../../state/slices/experimentalSlice';
 import {
-  myIdentity,
   checkRelayStatus,
+  fetchProfile,
+  fetchPublishedDisplayName,
+  myIdentity,
+  publishDisplayName,
+  publishMyProfile,
 } from '../../platform/desktop/nostr/chat';
+import {
+  claimExtraMlsDeviceSlot,
+  loadMlsDeviceIndex,
+  publishMlsKeyPackage,
+} from '../../platform/desktop/nostr/mls';
+import { useWalletConfirm } from '../../components/WalletConfirmDialog';
 // Import from source of truth (not re-export) so Remove never desyncs from list.
 import { isDefaultNostrRelay } from '../../platform/desktop/nostr/defaultRelays';
 import { useI18n } from '../../i18n/useI18n';
@@ -24,12 +34,17 @@ import { useI18n } from '../../i18n/useI18n';
 export const NostrSettings: React.FC = () => {
   const dispatch = useDispatch();
   const { t } = useI18n();
+  const confirm = useWalletConfirm();
   const enabled = useSelector(selectNostrChatEnabled);
   const relays = useSelector(selectNostrRelays);
   const walletId = useSelector((s: RootState) => s.wallet_id.currentWalletId);
 
   const [npub, setNpub] = useState<string | null>(null);
+  const [pubkey, setPubkey] = useState<string | null>(null);
   const [idErr, setIdErr] = useState<string | null>(null);
+  const [displayName, setDisplayName] = useState('');
+  const [profileMsg, setProfileMsg] = useState<string | null>(null);
+  const [mlsDeviceIndex, setMlsDeviceIndex] = useState(0);
   const [relayDraft, setRelayDraft] = useState('');
   const [draftError, setDraftError] = useState('');
   const [relayStatus, setRelayStatus] = useState<Record<string, boolean>>({});
@@ -40,9 +55,19 @@ export const NostrSettings: React.FC = () => {
   useEffect(() => {
     if (!enabled || walletId <= 0) return;
     myIdentity(walletId)
-      .then((id) => setNpub(id.npub))
+      .then(async (id) => {
+        setNpub(id.npub);
+        setPubkey(id.pubkey);
+        const slot = await loadMlsDeviceIndex(id.pubkey);
+        setMlsDeviceIndex(slot);
+        const [mine, publishedName] = await Promise.all([
+          fetchProfile(id.pubkey, relays),
+          fetchPublishedDisplayName(relays, id.pubkey),
+        ]);
+        setDisplayName(publishedName || mine.name || '');
+      })
       .catch((e) => setIdErr(e instanceof Error ? e.message : String(e)));
-  }, [enabled, walletId]);
+  }, [enabled, walletId, relays]);
 
   // Auto health probe: on open, on interval, on tab focus — not only Sync click.
   // We cannot keep third-party relays "up"; we only re-measure reachability.
@@ -134,6 +159,75 @@ export const NostrSettings: React.FC = () => {
                 <div className="mt-3 rounded-lg border border-[var(--wallet-border)] px-3 py-2 font-mono text-[10px] break-all wallet-text-strong">
                   {npub ?? idErr ?? t('nostr.deriving')}
                 </div>
+                <input
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  placeholder={t('chat.displayName')}
+                  className="wallet-input mt-3 w-full text-xs"
+                />
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void (async () => {
+                        setProfileMsg(null);
+                        try {
+                          await Promise.all([
+                            publishMyProfile(
+                              walletId,
+                              { name: displayName || undefined },
+                              relays
+                            ),
+                            displayName
+                              ? publishDisplayName(walletId, displayName, relays)
+                              : Promise.resolve(),
+                          ]);
+                          setProfileMsg(t('chat.profilePublished'));
+                        } catch (e) {
+                          setProfileMsg(
+                            e instanceof Error ? e.message : String(e)
+                          );
+                        }
+                      })();
+                    }}
+                    className="wallet-btn-primary px-3 py-1 text-xs"
+                  >
+                    {t('chat.publishProfile')}
+                  </button>
+                  {mlsDeviceIndex === 0 ? (
+                    <button
+                      type="button"
+                      className="rounded-lg border border-[var(--wallet-border)] px-2 py-1 text-[10px] font-semibold wallet-text-strong"
+                      onClick={() => {
+                        if (!pubkey) return;
+                        void (async () => {
+                          const ok = await confirm(
+                            'Only on the new install. This device becomes a separate MLS leaf (slot 1). Do not tap this on your first device.'
+                          );
+                          if (!ok) return;
+                          try {
+                            const slot = await claimExtraMlsDeviceSlot(pubkey);
+                            setMlsDeviceIndex(slot);
+                            await publishMlsKeyPackage(walletId, relays);
+                          } catch (e) {
+                            setProfileMsg(
+                              e instanceof Error ? e.message : String(e)
+                            );
+                          }
+                        })();
+                      }}
+                    >
+                      Extra device
+                    </button>
+                  ) : (
+                    <span className="text-[10px] wallet-muted">
+                      Device {mlsDeviceIndex}
+                    </span>
+                  )}
+                </div>
+                {profileMsg ? (
+                  <p className="mt-2 text-[10px] wallet-muted">{profileMsg}</p>
+                ) : null}
               </div>
             </div>
           </section>

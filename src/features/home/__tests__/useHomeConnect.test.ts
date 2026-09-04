@@ -27,11 +27,13 @@ describe('Home connect popup', () => {
     expect(desktopHomeSource).toContain('homeConnect.openPopup');
   });
 
-  it('pairs CashConnect and WalletConnect on Home so approve overlays can show', () => {
+  it('pairs CashConnect, WalletConnect, and Wizard on Home so approve overlays can show', () => {
     expect(hookSource).toContain('pairCashConnectThunk');
     expect(hookSource).toContain('wcPair');
-    expect(hookSource).toContain('kind === \'cashconnect\'');
-    expect(hookSource).toContain('kind === \'walletconnect\'');
+    expect(hookSource).toContain('wizardConnectPair');
+    expect(hookSource).toContain("kind === 'cashconnect'");
+    expect(hookSource).toContain("kind === 'walletconnect'");
+    expect(hookSource).toContain("kind === 'wizardconnect'");
     expect(hookSource).toContain('setPopupOpen(false)');
   });
 });

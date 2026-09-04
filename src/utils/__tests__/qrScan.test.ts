@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { Network } from '../../state/slices/networkSlice';
-import { classifyScannedQrPayload, isWalletConnectUri } from '../qrScan';
+import {
+  classifyScannedQrPayload,
+  isWalletConnectUri,
+  isWizardUri,
+} from '../qrScan';
 
 const MAINNET_ADDRESS =
   'bitcoincash:qrx6fypj230kpgvghmyje089sphvl4jnfqq4aduatz';
@@ -21,6 +25,16 @@ describe('classifyScannedQrPayload', () => {
     expect(isWalletConnectUri(uri)).toBe(true);
     expect(classifyScannedQrPayload(uri, Network.MAINNET)).toEqual({
       kind: 'walletconnect',
+      scannedValue: uri,
+      uri,
+    });
+  });
+
+  it('classifies Wizard URIs', () => {
+    const uri = 'wiz://pair?session=abc';
+    expect(isWizardUri(uri)).toBe(true);
+    expect(classifyScannedQrPayload(uri, Network.MAINNET)).toEqual({
+      kind: 'wizardconnect',
       scannedValue: uri,
       uri,
     });
