@@ -1,11 +1,10 @@
-// Watch-only send workspace: coin control -> unsigned PSBT -> animated QR ->
+// Watch-only send workspace: coin control -> unsigned PSBT -> QR ->
 // import signed PSBT -> verify -> broadcast.
 //
-// This is the air-gapped half of the flow. Nothing here signs: the wallet
-// carries public keys only, the signer is a different device (SeedCash) that
-// never sees this machine's network. Every signature that comes back is
-// verified locally before the transaction is broadcast, and a transaction that
-// does not byte-for-byte match the approved one is never broadcast.
+// Desktop remains the air-gapped watch-only half of the flow. The isolated
+// mobile multisig branch can also sign with the active standard wallet, but
+// every signature still returns through the same local verification and merge
+// boundary before broadcast.
 
 import {
   useEffect,
@@ -18,20 +17,34 @@ import {
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 
-import { cashAddressToLockingBytecode, hexToBin } from '@bitauth/libauth';
+import {
+  binToHex,
+  cashAddressToLockingBytecode,
+  decodeTransaction,
+  hash256,
+  hexToBin,
+  lockingBytecodeToCashAddress,
+} from '@bitauth/libauth';
 import { QRCodeSVG } from 'qrcode.react';
 
 import WalletScreen from '../../components/ui/WalletScreen';
 import { selectWalletId } from '../../state/slices/walletSlice';
 import type { RootState } from '../../state/store';
 import type { UTXO } from '../../types/types';
+import { useI18n } from '../../i18n/useI18n';
 import { coinDepth } from '../../platform/desktop/fusionCoinDepth';
 import { useFusionDepthRevision } from '../../platform/desktop/useFusionDepthRevision';
 import { outpointKey } from '../../platform/desktop/CoinLabelService';
 import { FusionBadge } from '../../components/FusionBadge';
 import KeyService from '../../services/KeyService';
 import UTXOService from '../../services/UTXOService';
-import TransactionService from '../../services/TransactionService';
+import TransactionService, {
+  releaseMultisigOutboundLocks,
+  type BroadcastState,
+} from '../../services/TransactionService';
+import { txBytesFromHex } from '../../apis/TransactionManager/feePolicy';
+import { refreshMultisigWalletUtxos } from '../../services/WalletUtxoRefreshService';
+import { copyToClipboard } from '../../utils/clipboard';
 import WalletManager from '../../apis/WalletManager/WalletManager';
 import useSharedTokenMetadata from '../../hooks/useSharedTokenMetadata';
 import {
@@ -45,20 +58,33 @@ import type { NftParseInfo } from '../../services/nftParsing/nftParsing';
 
 import {
   buildWatchOnlyPsbt,
+  estimateFinalTransactionBytes,
+  feeForTransactionBytes,
+  multisigCosignerDerivations,
+  type WatchOnlyBuildOutput,
   type WatchOnlyInputSpec,
   type WatchOnlyProposal,
 } from '../../services/psbt/watchOnlySend';
 import { getBchAccountPath } from '../../services/HdWalletService';
-import { inspectImportedPsbt } from '../../services/psbt/watchOnlyImport';
+import {
+  inspectImportedPsbt,
+  mergeImportedSignatures,
+} from '../../services/psbt/watchOnlyImport';
 import { fetchParentTransactions } from '../../services/psbt/parentTransactions';
 import {
   deriveMultisigAddress,
+  createMultisigDescriptorSet,
   type MultisigPolicy,
 } from '../../services/psbt/multisigWallet';
 import { watchOnlyMultisigPolicy } from '../../platform/desktop/onboarding/watchOnlyWallet';
-import { decodePsbt, SIGHASH_ALL_FORKID } from '../../services/psbt/psbtBch';
+import {
+  decodePsbt,
+  SIGHASH_ALL_FORKID,
+  type ParsedPsbt,
+} from '../../services/psbt/psbtBch';
 import {
   cosignerStatuses,
+  formatBip32Path,
   mergePsbts,
   parseMultisigRedeemScript,
   type CosignerStatus,
@@ -67,7 +93,9 @@ import {
   encodePsbtToUrFrames,
   DEFAULT_UR_FRAGMENT_LENGTH,
   UR_FRAGMENT_LENGTH_OPTIONS,
+  encodePsbtToQrDisplay,
   UrPsbtScanner,
+  type UrFrames,
   PSBT_UR_QR_DISPLAY_SIZE,
   PSBT_UR_QR_ERROR_LEVEL,
   PSBT_UR_QR_MARGIN_MODULES,
@@ -79,11 +107,35 @@ import {
 } from '../../platform/desktop/onboarding/watchOnlyWallet';
 import { CameraQrScanner } from '../../platform/desktop/CameraQrScanner';
 import { isDesktopPlatform } from '../../utils/platform';
+import { QrScanDialog } from '../multisig/QrScanDialog';
+import { loadMultisigPolicy } from '../../services/multisig/MultisigStorageService';
+import {
+  advanceMultisigSpendSession,
+  createMultisigSpendSession,
+  listMultisigSpendSessions,
+  type MultisigSpendSession,
+} from '../../services/multisig/MultisigSpendSessionService';
+import { signMultisigPsbtLocally } from '../../services/multisig/MultisigSignerService';
+import MultisigBroadcastReview from '../multisig/MultisigBroadcastReview';
 
 type WatchOnlySendLocationState = {
   returnTo?: string;
   recipient?: string;
   amountBch?: string;
+  multisigSpendMode?: MultisigSpendMode;
+};
+
+type MultisigSpendMode = 'resume' | 'new';
+
+type WatchOnlySendProps = {
+  mobile?: boolean;
+  returnTo?: string;
+  /** Route-scoped multisig ID; leaves the standard Redux wallet untouched. */
+  walletIdOverride?: number;
+  /** Keep the shared multisig navigation visually consistent with app flows. */
+  backButtonVariant?: 'secondary' | 'danger';
+  /** Use the isolated multisig confirmation surface for this coordinator. */
+  presentation?: 'watch-only' | 'multisig';
 };
 
 type KeyRow = {
@@ -120,6 +172,7 @@ const QR_DENSITY_LABELS: Record<
   400: 'Highest density (fewest frames)',
   450: 'Maximum density (fewest frames)',
 };
+const MULTISIG_FEE_RATE_SAT_PER_BYTE = 1;
 
 const satsToBch = (sats: bigint): string => {
   const bch = Number(sats) / 1e8;
@@ -129,7 +182,38 @@ const satsToBch = (sats: bigint): string => {
 const shortTxid = (txid: string): string =>
   txid.length > 18 ? `${txid.slice(0, 8)}…${txid.slice(-8)}` : txid;
 
-const SEND_STEPS = ['Prepare', 'Sign', 'Broadcast'] as const;
+function validateBroadcastRelayFee(
+  rawTxHex: string,
+  inputSumSats: bigint,
+  feeRateSatPerByte?: number
+): void {
+  const decoded = decodeTransaction(hexToBin(rawTxHex));
+  if (typeof decoded === 'string') {
+    throw new Error('The signed transaction could not be decoded locally.');
+  }
+  const outputSumSats = decoded.outputs.reduce(
+    (sum, output) => sum + output.valueSatoshis,
+    0n
+  );
+  const feePaid = inputSumSats - outputSumSats;
+  const requiredFee = feeForTransactionBytes(
+    txBytesFromHex(rawTxHex),
+    feeRateSatPerByte
+  );
+  if (feePaid < requiredFee) {
+    throw new Error(
+      `The signed transaction fee is too low for BCH relay policy ` +
+        `(${feePaid.toString()} sats paid; at least ${requiredFee.toString()} ` +
+        'sats are required). Rebuild the spend to recalculate the multisig fee.'
+    );
+  }
+}
+
+const SEND_STEPS = [
+  'Prepare',
+  'Collect signatures',
+  'Ready to broadcast',
+] as const;
 
 /**
  * Where the user is in the air-gapped round trip.
@@ -141,31 +225,159 @@ const SEND_STEPS = ['Prepare', 'Sign', 'Broadcast'] as const;
  * what the screen is actually doing.
  */
 const StepBar: FC<{ current: 1 | 2 | 3 }> = ({ current }) => (
-  <ol className="flex items-center gap-1.5" aria-label="Progress">
+  <ol className="flex items-center gap-1.5" aria-label="Spend progress">
     {SEND_STEPS.map((label, index) => {
       const position = index + 1;
       const done = position < current;
       const active = position === current;
       return (
-        <li key={label} className="flex flex-1 items-center gap-1.5">
+        <li key={label} className="min-w-0 flex-1">
           <span
             aria-current={active ? 'step' : undefined}
-            className={`flex-1 rounded-md px-2 py-1 text-center text-[11px] font-semibold ${
+            className={`flex min-h-8 items-center justify-center gap-1 rounded-md border px-1.5 py-1 text-center text-[10px] font-semibold leading-tight ${
               active
-                ? 'bg-[var(--wallet-accent)] text-black'
+                ? 'border-[var(--wallet-accent)] bg-[var(--wallet-accent)]/10 text-[var(--wallet-accent-strong)]'
                 : done
-                  ? 'border border-emerald-500/40 text-emerald-400'
-                  : 'border border-[var(--wallet-border)] wallet-muted'
+                  ? 'border-emerald-500/40 text-emerald-400'
+                  : 'border-[var(--wallet-border)] wallet-muted'
             }`}
           >
-            {done ? '✓ ' : ''}
-            {label}
+            <span aria-hidden="true">{done ? '✓' : position}</span>
+            <span className="truncate">{label}</span>
           </span>
         </li>
       );
     })}
   </ol>
 );
+
+function restoreProposalFromPsbt(
+  parsed: ParsedPsbt,
+  availableInputs: SpendableInput[],
+  network: string
+): {
+  proposal: WatchOnlyProposal;
+  feeSats: bigint;
+  changeSats: bigint;
+  inputSumSats: bigint;
+  recipient: string;
+  amountSats: bigint;
+  changeAddress: string;
+  changeAddressIndex: number;
+} {
+  const inputs: SpendableInput[] = parsed.inputs.map((input, inputIndex) => {
+    if (!input.previousTxid || input.outpointIndex === null) {
+      throw new Error(`Saved proposal input ${inputIndex} is incomplete.`);
+    }
+    const txid = binToHex(input.previousTxid);
+    const available = availableInputs.find(
+      (candidate) =>
+        candidate.txid.toLowerCase() === txid.toLowerCase() &&
+        candidate.vout === input.outpointIndex
+    );
+    if (!available) {
+      throw new Error(
+        `Saved proposal input ${inputIndex} is no longer in the multisig UTXO inventory.`
+      );
+    }
+    if (!input.spentLockingBytecode || input.spentSatoshis === null) {
+      throw new Error(
+        `Saved proposal input ${inputIndex} is missing spent-output state.`
+      );
+    }
+    const redeemScript = input.redeemScript
+      ? toHex(input.redeemScript)
+      : undefined;
+    const scriptPolicy = input.redeemScript
+      ? parseMultisigRedeemScript(input.redeemScript)
+      : null;
+    return {
+      ...available,
+      txid,
+      vout: input.outpointIndex,
+      satoshis: input.spentSatoshis,
+      lockingBytecodeHex: toHex(input.spentLockingBytecode),
+      publicKeyHex: input.derivations[0]
+        ? toHex(input.derivations[0].publicKey)
+        : available.publicKeyHex,
+      redeemScriptHex: redeemScript,
+      requiredSignatures: scriptPolicy?.requiredSignatures,
+      cosignerDerivations: input.derivations.map((derivation) => ({
+        publicKeyHex: toHex(derivation.publicKey),
+        masterFingerprintHex: binToHex(derivation.masterFingerprint),
+        derivationPath: formatBip32Path(derivation.derivationPath),
+      })),
+      previousTransactionHex: input.nonWitnessUtxo
+        ? toHex(input.nonWitnessUtxo)
+        : undefined,
+      token: input.token ?? undefined,
+    };
+  });
+
+  const outputs: WatchOnlyBuildOutput[] = parsed.outputs.map((output) => ({
+    lockingBytecodeHex: toHex(output.lockingBytecode ?? new Uint8Array()),
+    satoshis: output.satoshis ?? 0n,
+    isChange: output.redeemScript !== null,
+    token: output.token ?? undefined,
+  }));
+  const inputSumSats = inputs.reduce((sum, input) => sum + input.satoshis, 0n);
+  const outputSumSats = outputs.reduce(
+    (sum, output) => sum + output.satoshis,
+    0n
+  );
+  const changeOutputs = outputs.filter((output) => output.isChange);
+  const recipientOutputs = outputs.filter((output) => !output.isChange);
+  const prefix = network === 'mainnet' ? 'bitcoincash' : 'bchtest';
+  const addressFor = (output: WatchOnlyBuildOutput): string => {
+    const encoded = lockingBytecodeToCashAddress({
+      bytecode: hexToBin(output.lockingBytecodeHex),
+      prefix,
+    });
+    return typeof encoded === 'string' ? '' : encoded.address;
+  };
+  const changeOutput = changeOutputs[0];
+  const changeDerivation = parsed.outputs.find(
+    (output) => output.redeemScript !== null && output.derivations.length > 0
+  )?.derivations[0];
+  const lastPathIndex = changeDerivation
+    ? changeDerivation.derivationPath[
+        changeDerivation.derivationPath.length - 1
+      ]
+    : undefined;
+  const sighashType = parsed.inputs[0]?.requestedSighashType;
+  if (
+    sighashType === null ||
+    sighashType === undefined ||
+    parsed.inputs.some((input) => input.requestedSighashType !== sighashType)
+  ) {
+    throw new Error(
+      'Saved multisig proposal is missing one consistent sighash type.'
+    );
+  }
+
+  return {
+    proposal: {
+      rawUnsignedHex: binToHex(parsed.unsignedTransaction),
+      inputs,
+      outputs,
+      sighashType,
+    },
+    feeSats: inputSumSats - outputSumSats,
+    changeSats: changeOutputs.reduce(
+      (sum, output) => sum + output.satoshis,
+      0n
+    ),
+    inputSumSats,
+    recipient: recipientOutputs.map(addressFor).find(Boolean) ?? '',
+    amountSats: recipientOutputs.reduce(
+      (sum, output) => sum + output.satoshis,
+      0n
+    ),
+    changeAddress: changeOutput ? addressFor(changeOutput) : '',
+    changeAddressIndex:
+      lastPathIndex !== undefined && lastPathIndex >= 0 ? lastPathIndex : 0,
+  };
+}
 
 const toHex = (bytes: Uint8Array): string =>
   Array.from(bytes)
@@ -180,14 +392,23 @@ type ProposalState = {
   inputSumSats: bigint;
 };
 
-export const WatchOnlySend: FC = () => {
+export const WatchOnlySend: FC<WatchOnlySendProps> = ({
+  mobile = false,
+  returnTo,
+  walletIdOverride,
+  backButtonVariant = 'secondary',
+  presentation = 'watch-only',
+}) => {
   const navigate = useNavigate();
   const location = useLocation();
-  const walletId = useSelector(selectWalletId);
+  const { t } = useI18n();
+  const standardWalletId = useSelector(selectWalletId);
   const currentNetwork = useSelector(
     (state: RootState) => state.network.currentNetwork
   );
-  const fusionDepthRev = useFusionDepthRevision(walletId || 0);
+  const fusionDepthRev = useFusionDepthRevision(
+    walletIdOverride ?? standardWalletId ?? 0
+  );
 
   const [recipient, setRecipient] = useState('');
   const [amountSats, setAmountSats] = useState<bigint | null>(null);
@@ -206,19 +427,22 @@ export const WatchOnlySend: FC = () => {
     null
   );
   const [busy, setBusy] = useState(true);
+  const [networkRefreshing, setNetworkRefreshing] = useState(false);
+  const [networkRefreshFailed, setNetworkRefreshFailed] = useState(false);
+  const [refreshNonce, setRefreshNonce] = useState(0);
   const [error, setError] = useState('');
+  const [conflictingTxids, setConflictingTxids] = useState<string[]>([]);
 
   const [proposalState, setProposalState] = useState<ProposalState | null>(
     null
   );
 
-  const [frames, setFrames] = useState<ReturnType<
-    typeof encodePsbtToUrFrames
-  > | null>(null);
+  const [frames, setFrames] = useState<UrFrames | null>(null);
   const [qrUri, setQrUri] = useState('');
   const [urFragmentLength, setUrFragmentLength] = useState(
     DEFAULT_UR_FRAGMENT_LENGTH
   );
+  const [qrMode, setQrMode] = useState<'static' | 'stream'>('static');
 
   const [importText, setImportText] = useState('');
   const [scannerOpen, setScannerOpen] = useState(false);
@@ -242,9 +466,43 @@ export const WatchOnlySend: FC = () => {
   const [importErrors, setImportErrors] = useState<string[]>([]);
   const verdict = useMemo<ReturnType<typeof inspectImportedPsbt> | null>(() => {
     if (!mergedPsbt || !proposalState) return null;
-    return inspectImportedPsbt(mergedPsbt, proposalState.proposal);
+    const inspected = inspectImportedPsbt(mergedPsbt, proposalState.proposal);
+    if (inspected.state !== 'complete') return inspected;
+    try {
+      return {
+        ...inspected,
+        // Signature inspection deliberately stops at cryptographic proof.
+        // Construct the final BCH transaction only after that proof passes so
+        // the broadcast gate has a transaction-bound raw payload to review.
+        rawTxHex: mergeImportedSignatures(mergedPsbt, proposalState.proposal),
+      };
+    } catch (cause) {
+      return {
+        ...inspected,
+        state: 'invalid',
+        reason:
+          cause instanceof Error
+            ? `Signatures are present, but final transaction assembly failed: ${cause.message}`
+            : 'Signatures are present, but final transaction assembly failed.',
+      };
+    }
   }, [mergedPsbt, proposalState]);
   const [broadcastTxid, setBroadcastTxid] = useState('');
+  const [broadcastState, setBroadcastState] =
+    useState<BroadcastState>('broadcasted');
+  const [broadcastArmed, setBroadcastArmed] = useState(false);
+  const [qrTextCopied, setQrTextCopied] = useState(false);
+  const [localSignConfirmed, setLocalSignConfirmed] = useState(false);
+  const [coordinatorSessionId, setCoordinatorSessionId] = useState('');
+  const [restoredSession, setRestoredSession] = useState(false);
+  const [multisigSpendMode, setMultisigSpendMode] =
+    useState<MultisigSpendMode | null>(null);
+  const [pendingSession, setPendingSession] =
+    useState<MultisigSpendSession | null>(null);
+  const [pendingSpendCheck, setPendingSpendCheck] = useState<
+    'idle' | 'checking' | 'error'
+  >('checking');
+  const [pendingSpendCheckNonce, setPendingSpendCheckNonce] = useState(0);
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const frameIndexRef = useRef(0);
@@ -256,10 +514,34 @@ export const WatchOnlySend: FC = () => {
   );
 
   const currentWalletId = useMemo(() => {
-    if (walletId) return walletId;
+    if (walletIdOverride && walletIdOverride > 0) return walletIdOverride;
+    if (standardWalletId) return standardWalletId;
     const fromReturnTo = locationState?.returnTo?.split('/').pop();
     return fromReturnTo ? Number(fromReturnTo) : null;
-  }, [walletId, locationState]);
+  }, [locationState, standardWalletId, walletIdOverride]);
+  const policyNetwork = multisigPolicy?.network ?? currentNetwork;
+  const multisigPresentation = presentation === 'multisig';
+
+  useEffect(() => {
+    setMultisigSpendMode(locationState?.multisigSpendMode ?? null);
+  }, [locationState]);
+
+  const persistCoordinatorSession = async (psbtBytes: Uint8Array) => {
+    if (!mobile || !multisigPolicy || !currentWalletId) return null;
+    const parsed = decodePsbt(psbtBytes);
+    const policyId = createMultisigDescriptorSet(
+      multisigPolicy,
+      policyNetwork
+    ).policyId;
+    const session = await createMultisigSpendSession({
+      walletId: currentWalletId,
+      policyId,
+      unsignedTxHash: binToHex(hash256(parsed.unsignedTransaction)),
+      psbtBytes,
+    });
+    setCoordinatorSessionId(session.sessionId);
+    return session;
+  };
 
   const nftCategories = useMemo(() => {
     const categories = new Set<string>();
@@ -341,6 +623,8 @@ export const WatchOnlySend: FC = () => {
     let cancelled = false;
     const load = async () => {
       setBusy(true);
+      setNetworkRefreshing(false);
+      setNetworkRefreshFailed(false);
       setError('');
       try {
         if (!currentWalletId) {
@@ -355,15 +639,25 @@ export const WatchOnlySend: FC = () => {
           metadata?.derivation_path ?? getBchAccountPath(currentNetwork)
         );
 
-        const stored = await watchOnlyMasterFingerprint(currentWalletId);
-        if (stored) {
-          setFingerprint(stored);
+        // Mobile multisig uses the shared policy tables. The legacy desktop
+        // fingerprint lives in wallets.master_fingerprint, which is not part
+        // of the mobile schema and must never be queried for this route.
+        const policy = mobile
+          ? await loadMultisigPolicy(currentWalletId)
+          : (await watchOnlyMultisigPolicy(currentWalletId)) ??
+            (await loadMultisigPolicy(currentWalletId));
+        if (cancelled) return;
+        setMultisigPolicy(policy);
+        if (!mobile) {
+          const stored = await watchOnlyMasterFingerprint(currentWalletId);
+          if (stored) {
+            setFingerprint(stored);
+          }
         }
 
-        const [utxoResult, keys] = await Promise.all([
-          UTXOService.fetchAllWalletUtxos(currentWalletId),
-          KeyService.retrieveKeys(currentWalletId),
-        ]);
+        const keys = await KeyService.retrieveKeys(currentWalletId);
+        const utxoResult =
+          await UTXOService.fetchAllWalletUtxos(currentWalletId);
         const keyByAddress = new Map<string, KeyRow>();
         for (const key of keys as KeyRow[]) {
           if (key?.address && !keyByAddress.has(key.address)) {
@@ -372,80 +666,102 @@ export const WatchOnlySend: FC = () => {
         }
 
         // A multisig wallet's coins are not owned by any single key, so its
-        // inputs need the redeem script, the threshold and every cosigner's
-        // derivation — without them the PSBT describes a P2PKH spend of a P2SH
-        // coin and no device can sign it. The script is re-derived from the
-        // stored policy rather than read back from the keys table, so it can
-        // never disagree with the address it unlocks.
-        const policy = await watchOnlyMultisigPolicy(currentWalletId);
-        if (cancelled) return;
-        setMultisigPolicy(policy);
+        // inputs need the redeem script, threshold and every cosigner's
+        // derivation. Re-derive that public material from the policy for both
+        // cached and freshly refreshed UTXOs.
+        const applyInventory = (allUtxos: UTXO[]) => {
+          const spendable: SpendableInput[] = [];
+          const derivedCache = new Map<
+            string,
+            ReturnType<typeof deriveMultisigAddress>
+          >();
+          for (const utxo of allUtxos) {
+            const key = keyByAddress.get(utxo.address);
+            if (!key) continue;
+            const script = cashAddressToLockingBytecode(utxo.address);
+            if (typeof script === 'string') continue;
+            const branchIndex = key.changeIndex === 1 ? 1 : 0;
 
-        const spendable: SpendableInput[] = [];
-        for (const utxo of utxoResult.allUtxos) {
-          const key = keyByAddress.get(utxo.address);
-          if (!key) continue;
-          const script = cashAddressToLockingBytecode(utxo.address);
-          if (typeof script === 'string') continue;
-          const branchIndex = key.changeIndex === 1 ? 1 : 0;
+            if (policy) {
+              const cacheKey = `${branchIndex}/${key.addressIndex}`;
+              const derived =
+                derivedCache.get(cacheKey) ??
+                deriveMultisigAddress(policy, branchIndex, key.addressIndex);
+              derivedCache.set(cacheKey, derived);
+              spendable.push({
+                txid: utxo.tx_hash,
+                vout: utxo.tx_pos,
+                satoshis: BigInt(utxo.amount ?? 0),
+                lockingBytecodeHex: toHex(Uint8Array.from(script.bytecode)),
+                // No single key owns this coin; the first sorted cosigner key
+                // is only a display placeholder. Spending uses all derivations.
+                publicKeyHex: toHex(derived.sortedPublicKeys[0]),
+                branchIndex,
+                addressIndex: key.addressIndex,
+                redeemScriptHex: toHex(derived.redeemScript),
+                requiredSignatures: policy.m,
+                cosignerDerivations: multisigCosignerDerivations(
+                  policy,
+                  derived.derivedCosigners,
+                  branchIndex,
+                  key.addressIndex,
+                  getBchAccountPath(currentNetwork)
+                ),
+                utxo,
+              });
+              continue;
+            }
 
-          if (policy) {
-            const derived = deriveMultisigAddress(
-              policy,
-              branchIndex,
-              key.addressIndex
-            );
+            if (!key.publicKey || key.publicKey.length === 0) continue;
             spendable.push({
               txid: utxo.tx_hash,
               vout: utxo.tx_pos,
               satoshis: BigInt(utxo.amount ?? 0),
               lockingBytecodeHex: toHex(Uint8Array.from(script.bytecode)),
-              // No single key owns this coin; the first sorted cosigner key is
-              // only a placeholder for display. Spending uses the derivations.
-              publicKeyHex: toHex(derived.sortedPublicKeys[0]),
+              publicKeyHex: toHex(key.publicKey),
               branchIndex,
               addressIndex: key.addressIndex,
-              redeemScriptHex: toHex(derived.redeemScript),
-              requiredSignatures: policy.m,
-              cosignerDerivations: policy.signers.map((signer, index) => ({
-                publicKeyHex: toHex(derived.sortedPublicKeys[index]),
-                // Zeros where a cosigner has not supplied one: the signature
-                // comes from the path, and a wrong-looking fingerprint only
-                // costs that device its "these coins are mine" review line.
-                masterFingerprintHex: signer.masterFingerprintHex ?? '00000000',
-                derivationPath: `${
-                  signer.accountPath ?? getBchAccountPath(currentNetwork)
-                }/${branchIndex}/${key.addressIndex}`,
-              })),
               utxo,
             });
-            continue;
           }
+          spendable.sort((a, b) => Number(a.satoshis - b.satoshis));
+          if (cancelled) return;
+          setInputs(spendable);
 
-          if (!key.publicKey || key.publicKey.length === 0) continue;
-          spendable.push({
-            txid: utxo.tx_hash,
-            vout: utxo.tx_pos,
-            satoshis: BigInt(utxo.amount ?? 0),
-            lockingBytecodeHex: toHex(Uint8Array.from(script.bytecode)),
-            publicKeyHex: toHex(key.publicKey),
-            branchIndex,
-            addressIndex: key.addressIndex,
-            utxo,
-          });
-        }
-        spendable.sort((a, b) => Number(a.satoshis - b.satoshis));
+          const keysForChange = Array.from(keyByAddress.values()).filter(
+            (key) => key.changeIndex === 1
+          );
+          if (keysForChange[0]) {
+            setChangeAddress(keysForChange[0].address);
+            setChangeAddressIndex(keysForChange[0].addressIndex);
+          }
+        };
+
         if (cancelled) return;
-        setInputs(spendable);
-
-        const keysForChange = Array.from(keyByAddress.values()).filter(
-          (key) => key.changeIndex === 1
-        );
-        if (keysForChange[0]) {
-          setChangeAddress(keysForChange[0].address);
-          // Kept because multisig change has to be rebuilt from the policy at
-          // this exact index, and the address string alone cannot say which.
-          setChangeAddressIndex(keysForChange[0].addressIndex);
+        applyInventory(utxoResult.allUtxos);
+        if (mobile && policy) {
+          // Do not hold the entire send workspace hostage to Electrum. The
+          // cached inventory is shown now; only the refresh remains active.
+          setBusy(false);
+          setNetworkRefreshing(true);
+          try {
+            const refreshed = await refreshMultisigWalletUtxos(currentWalletId);
+            if (!cancelled) {
+              applyInventory(Object.values(refreshed).flat());
+              setNetworkRefreshFailed(false);
+            }
+          } catch (refreshError) {
+            if (!cancelled) {
+              setNetworkRefreshFailed(true);
+              setError(
+                refreshError instanceof Error
+                  ? `Network refresh unavailable; showing saved multisig inventory. ${refreshError.message}`
+                  : 'Network refresh unavailable; showing saved multisig inventory.'
+              );
+            }
+          } finally {
+            if (!cancelled) setNetworkRefreshing(false);
+          }
         }
       } catch (err) {
         if (!cancelled) {
@@ -463,7 +779,105 @@ export const WatchOnlySend: FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [currentWalletId, currentNetwork]);
+  }, [currentWalletId, currentNetwork, mobile, refreshNonce]);
+
+  useEffect(() => {
+    if (
+      !mobile ||
+      !currentWalletId ||
+      !multisigPolicy ||
+      proposalState ||
+      multisigSpendMode === 'new'
+    ) {
+      return;
+    }
+    setPendingSpendCheck('checking');
+    let cancelled = false;
+    const restore = async () => {
+      try {
+        const policyId = createMultisigDescriptorSet(
+          multisigPolicy,
+          policyNetwork
+        ).policyId;
+        const sessions = await listMultisigSpendSessions(currentWalletId);
+        const pending = sessions.find(
+          (session) => session.policyId === policyId
+        );
+        if (cancelled) return;
+        if (!pending) {
+          setPendingSession(null);
+          setPendingSpendCheck('idle');
+          setMultisigSpendMode('new');
+          return;
+        }
+        setPendingSession(pending);
+        setPendingSpendCheck('idle');
+        if (multisigSpendMode !== 'resume') return;
+        // A resumed proposal may be waiting for the background network scan
+        // to repopulate the local UTXO inventory. Keep the session selected
+        // and let this effect retry when inputs arrive.
+        if (inputs.length === 0) return;
+        const parsed = decodePsbt(pending.psbtBytes);
+        const restored = restoreProposalFromPsbt(
+          parsed,
+          inputs,
+          policyNetwork ?? 'chipnet'
+        );
+        if (cancelled) return;
+        setCoordinatorSessionId(pending.sessionId);
+        setRestoredSession(true);
+        setProposalState({
+          psbtBytes: pending.psbtBytes,
+          proposal: restored.proposal,
+          feeSats: restored.feeSats,
+          changeSats: restored.changeSats,
+          inputSumSats: restored.inputSumSats,
+        });
+        setMergedPsbt(pending.psbtBytes);
+        setSelected(
+          new Set(
+            restored.proposal.inputs.map(
+              (input) => `${input.txid}:${input.vout}`
+            )
+          )
+        );
+        setRecipient(restored.recipient);
+        setAmountSats(restored.amountSats);
+        setAmountText(satsToBch(restored.amountSats));
+        setChangeAddress(restored.changeAddress);
+        setChangeAddressIndex(restored.changeAddressIndex);
+        setImportErrors([]);
+        const display = encodePsbtToQrDisplay(pending.psbtBytes);
+        frameIndexRef.current = 0;
+        frameCountRef.current = display.count;
+        setFrames(display.frames);
+        setQrMode(display.mode);
+        setQrUri(display.uri);
+      } catch (cause) {
+        if (!cancelled) {
+          setPendingSpendCheck('error');
+          setError(
+            cause instanceof Error
+              ? `Could not restore the pending multisig spend: ${cause.message}`
+              : 'Could not restore the pending multisig spend.'
+          );
+        }
+      }
+    };
+    void restore();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    currentNetwork,
+    currentWalletId,
+    inputs,
+    mobile,
+    multisigPolicy,
+    multisigSpendMode,
+    pendingSpendCheckNonce,
+    proposalState,
+  ]);
 
   useEffect(() => {
     return () => {
@@ -498,6 +912,41 @@ export const WatchOnlySend: FC = () => {
     [selectedInputs]
   );
 
+  const bchOnlyInputs = useMemo(
+    () => inputs.filter((input) => !input.token && !input.utxo.token),
+    [inputs]
+  );
+  const tokenInputCount = inputs.length - bchOnlyInputs.length;
+  const maxSendable = useMemo(() => {
+    if (!multisigPolicy || bchOnlyInputs.length === 0 || !recipient.trim()) {
+      return null;
+    }
+    const destination = cashAddressToLockingBytecode(recipient.trim());
+    if (typeof destination === 'string') return null;
+    try {
+      // Send-all has no change output. The fee is calculated from the same
+      // conservative final P2SH size used by the builder, at exactly 1 sat/B.
+      const estimatedBytes = estimateFinalTransactionBytes(bchOnlyInputs, [
+        {
+          bytecode: Uint8Array.from(destination.bytecode),
+          satoshis: 0n,
+        },
+      ]);
+      const feeSats = feeForTransactionBytes(
+        estimatedBytes,
+        MULTISIG_FEE_RATE_SAT_PER_BYTE
+      );
+      const availableSats = bchOnlyInputs.reduce(
+        (sum, input) => sum + input.satoshis,
+        0n
+      );
+      const amountSats = availableSats - feeSats;
+      return amountSats > 0n ? { amountSats, feeSats } : null;
+    } catch {
+      return null;
+    }
+  }, [bchOnlyInputs, multisigPolicy, recipient]);
+
   const toggleInput = (key: string) => {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -518,20 +967,65 @@ export const WatchOnlySend: FC = () => {
   };
 
   const startQrFrames = (psbt: Uint8Array, fragmentLength: number) => {
+    if (!desktopQr) {
+      const display = encodePsbtToQrDisplay(psbt);
+      frameIndexRef.current = 0;
+      frameCountRef.current = display.count;
+      setFrames(display.frames);
+      setQrMode(display.mode);
+      setQrUri(display.uri);
+      return;
+    }
     const frameSource = encodePsbtToUrFrames(psbt, fragmentLength);
     frameIndexRef.current = 0;
     frameCountRef.current = frameSource.count;
     setFrames(frameSource);
+    setQrMode('stream');
     setQrUri(frameSource.next());
+  };
+
+  const formatBchInput = (satoshis: bigint): string => {
+    const whole = satoshis / 100_000_000n;
+    const fraction = (satoshis % 100_000_000n)
+      .toString()
+      .padStart(8, '0')
+      .replace(/0+$/, '');
+    return fraction ? `${whole}.${fraction}` : whole.toString();
+  };
+
+  const handleSendAll = () => {
+    if (!multisigPolicy) return;
+    if (!recipient.trim()) {
+      setError(
+        'Enter the destination first so the send-all fee can be calculated.'
+      );
+      return;
+    }
+    if (!maxSendable) {
+      setError(
+        'The available BCH does not cover the 1 sat/byte transaction fee.'
+      );
+      return;
+    }
+    setSelected(
+      new Set(bchOnlyInputs.map((input) => `${input.txid}:${input.vout}`))
+    );
+    setAmountSats(maxSendable.amountSats);
+    setAmountText(formatBchInput(maxSendable.amountSats));
+    setError('');
   };
 
   const handleBuild = async () => {
     setError('');
+    setConflictingTxids([]);
+    setRestoredSession(false);
     setProposalState(null);
     setFrames(null);
     setMergedPsbt(null);
     setImportErrors([]);
     setBroadcastTxid('');
+    setBroadcastState('broadcasted');
+    setBroadcastArmed(false);
     if (selectedInputs.length === 0) {
       setError('Select at least one coin (coin control).');
       return;
@@ -593,22 +1087,23 @@ export const WatchOnlySend: FC = () => {
         masterFingerprint: fingerprint
           ? masterFingerprintBytes(fingerprint)
           : null,
+        feeRateSatPerByte: multisigPolicy
+          ? MULTISIG_FEE_RATE_SAT_PER_BYTE
+          : undefined,
         ...(changeMultisig && multisigPolicy
           ? {
               changeRedeemScriptHex: toHex(changeMultisig.redeemScript),
-              changeDerivations: multisigPolicy.signers.map(
-                (signer, index) => ({
-                  publicKeyHex: toHex(changeMultisig.sortedPublicKeys[index]),
-                  masterFingerprintHex:
-                    signer.masterFingerprintHex ?? '00000000',
-                  derivationPath: `${
-                    signer.accountPath ?? getBchAccountPath(currentNetwork)
-                  }/${changeBranch}/${changeAddressIndex}`,
-                })
+              changeDerivations: multisigCosignerDerivations(
+                multisigPolicy,
+                changeMultisig.derivedCosigners,
+                changeBranch,
+                changeAddressIndex,
+                getBchAccountPath(currentNetwork)
               ),
             }
           : {}),
       });
+      await persistCoordinatorSession(result.psbtBytes);
       const proposal: WatchOnlyProposal = {
         rawUnsignedHex: result.rawUnsignedHex,
         inputs: inputsWithParents,
@@ -642,17 +1137,31 @@ export const WatchOnlySend: FC = () => {
    * building toward the threshold. A return that conflicts with the approved
    * transaction is refused and reported, never silently replacing it.
    */
-  const importAndMerge = (psbt: Uint8Array) => {
+  const importAndMerge = async (psbt: Uint8Array) => {
     setBroadcastTxid('');
+    setBroadcastState('broadcasted');
+    setBroadcastArmed(false);
     if (!proposalState) {
       setError('Build the unsigned transaction first.');
       return;
     }
+    setBusy(true);
     try {
       const base = mergedPsbt ?? proposalState.psbtBytes;
       const outcome = mergePsbts([base, psbt]);
       if (outcome.results.some((result) => result.combined)) {
-        setMergedPsbt(outcome.merged);
+        const nextPsbt = outcome.merged;
+        await persistCoordinatorSession(nextPsbt);
+        setMergedPsbt(nextPsbt);
+        // Carry the accumulated signatures to the next cosigner. Reusing the
+        // original unsigned frames would restart the threshold flow.
+        const nextFrames = encodePsbtToQrDisplay(nextPsbt);
+        frameIndexRef.current = 0;
+        frameCountRef.current = nextFrames.count;
+        setFrames(nextFrames.frames);
+        setQrMode(nextFrames.mode);
+        setQrUri(nextFrames.uri);
+        setImportText('');
         setImportErrors(
           outcome.results
             .filter((result) => !result.combined)
@@ -671,6 +1180,61 @@ export const WatchOnlySend: FC = () => {
           ? err.message
           : 'Could not merge the signed transaction.'
       );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleLocalSign = async () => {
+    if (!mobile || !multisigPolicy || !proposalState || !currentWalletId) {
+      return;
+    }
+    if (!standardWalletId || standardWalletId === currentWalletId) {
+      setError(
+        'Open this multisig policy alongside the standard mnemonic wallet for this device.'
+      );
+      return;
+    }
+    if (!localSignConfirmed) {
+      setError('Review the transaction and confirm before signing.');
+      return;
+    }
+
+    setBusy(true);
+    setError('');
+    try {
+      const activePsbt = mergedPsbt ?? proposalState.psbtBytes;
+      const parsed = decodePsbt(activePsbt);
+      const policyId = createMultisigDescriptorSet(
+        multisigPolicy,
+        policyNetwork
+      ).policyId;
+      const session = await createMultisigSpendSession({
+        walletId: currentWalletId,
+        policyId,
+        unsignedTxHash: binToHex(hash256(parsed.unsignedTransaction)),
+        psbtBytes: activePsbt,
+      });
+      const result = await signMultisigPsbtLocally({
+        policyWalletId: currentWalletId,
+        signerWalletId: standardWalletId,
+        sessionId: session.sessionId,
+        policyId,
+        unsignedTxHash: binToHex(hash256(parsed.unsignedTransaction)),
+        psbtBytes: activePsbt,
+        authorize: async () => undefined,
+      });
+      if (result.signedInputIndexes.length === 0) {
+        throw new Error('This device is not a remaining signer for any input.');
+      }
+      setLocalSignConfirmed(false);
+      await importAndMerge(result.psbtBytes);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Could not sign with this device.'
+      );
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -779,6 +1343,11 @@ export const WatchOnlySend: FC = () => {
     urScannerRef.current = null;
   };
 
+  const handleCopyQrText = async () => {
+    if (!qrUri) return;
+    setQrTextCopied(await copyToClipboard(qrUri));
+  };
+
   const handleScanFrame = (text: string) => {
     if (!proposalState) {
       setError('Build the unsigned transaction first.');
@@ -814,8 +1383,24 @@ export const WatchOnlySend: FC = () => {
     ) {
       return;
     }
+    try {
+      validateBroadcastRelayFee(
+        verdict.rawTxHex,
+        proposalState.inputSumSats,
+        multisigPolicy ? MULTISIG_FEE_RATE_SAT_PER_BYTE : undefined
+      );
+    } catch (feeError) {
+      setBroadcastArmed(false);
+      setError(
+        feeError instanceof Error
+          ? feeError.message
+          : 'The signed transaction fee is too low for BCH relay policy. Rebuild the spend before broadcasting.'
+      );
+      return;
+    }
     setBusy(true);
     setError('');
+    setConflictingTxids([]);
     try {
       const res = await TransactionService.sendTransaction(
         verdict.rawTxHex,
@@ -823,17 +1408,41 @@ export const WatchOnlySend: FC = () => {
           (input) => (input as SpendableInput).utxo
         ),
         {
-          source: 'watch-only',
-          sourceLabel: 'Watch-only send (air-gapped)',
+          walletId: currentWalletId ?? undefined,
+          multisig: Boolean(multisigPolicy),
+          source: mobile ? 'multisig' : 'watch-only',
+          sourceLabel: mobile
+            ? 'Mobile multisig send'
+            : 'Watch-only send (air-gapped)',
           recipientSummary: recipient.trim(),
           amountSummary: satsToBch(amountSats ?? 0n),
         }
       );
       if (res.errorMessage) {
+        setBroadcastArmed(false);
+        setConflictingTxids(res.conflictingTxids ?? []);
         setError(res.errorMessage);
         return;
       }
-      setBroadcastTxid(res.txid ?? '');
+      if (!res.txid) {
+        throw new Error('Broadcast failed with no txid returned.');
+      }
+      setBroadcastTxid(res.txid);
+      setBroadcastState(res.broadcastState ?? 'broadcasted');
+      setBroadcastArmed(false);
+      if (coordinatorSessionId) {
+        try {
+          await advanceMultisigSpendSession({
+            sessionId: coordinatorSessionId,
+            stage: 'submitted',
+            rawTxHex: verdict.rawTxHex,
+          });
+        } catch {
+          setError(
+            'The transaction was broadcast, but the local session status could not be saved.'
+          );
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Broadcast failed.');
     } finally {
@@ -841,8 +1450,36 @@ export const WatchOnlySend: FC = () => {
     }
   };
 
+  const handleReleaseConflictingMultisigLock = async () => {
+    if (!mobile || !currentWalletId || conflictingTxids.length === 0) return;
+    setBusy(true);
+    setError('');
+    try {
+      const released = await releaseMultisigOutboundLocks(
+        currentWalletId,
+        conflictingTxids
+      );
+      setConflictingTxids([]);
+      setBroadcastArmed(false);
+      setRefreshNonce((value) => value + 1);
+      setError(
+        released.length > 0
+          ? 'The old local multisig spend lock was released. Review the current transaction again before broadcasting.'
+          : 'The old multisig spend lock was already cleared. Refresh the shared-wallet coins and try again.'
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Could not release the old multisig spend lock.'
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleBack = () => {
-    navigate(locationState?.returnTo ?? '/home');
+    navigate(returnTo ?? locationState?.returnTo ?? '/home');
   };
 
   const frameNumber =
@@ -850,7 +1487,8 @@ export const WatchOnlySend: FC = () => {
       ? (frameIndexRef.current % frameCountRef.current) + 1
       : 0;
 
-  const step: 1 | 2 | 3 = broadcastTxid ? 3 : proposalState ? 2 : 1;
+  const step: 1 | 2 | 3 =
+    broadcastTxid || verdict?.state === 'complete' ? 3 : proposalState ? 2 : 1;
 
   /**
    * Return to editing. Any signature already collected was made over the exact
@@ -860,13 +1498,25 @@ export const WatchOnlySend: FC = () => {
   const handleEditProposal = () => {
     setProposalState(null);
     setFrames(null);
+    setQrMode('static');
     setQrUri('');
     setMergedPsbt(null);
     setImportErrors([]);
     setImportText('');
     setBroadcastTxid('');
+    setBroadcastState('broadcasted');
+    setBroadcastArmed(false);
+    setConflictingTxids([]);
+    setLocalSignConfirmed(false);
+    setRestoredSession(false);
+    setMultisigSpendMode('new');
     setError('');
   };
+
+  const pendingChoiceOpen =
+    mobile && !!multisigPolicy && !proposalState && multisigSpendMode === null;
+  const spendFormEnabled =
+    !mobile || !multisigPolicy || multisigSpendMode !== null;
 
   return (
     <WalletScreen
@@ -878,28 +1528,107 @@ export const WatchOnlySend: FC = () => {
           : 'max-w-md'
       }
       scrollable={false}
+      fitParent={mobile}
+      reserveBottomNavSpace={mobile}
     >
       <div className="flex h-full min-h-0 flex-col gap-4">
         <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={handleBack}
-            className="wallet-btn-secondary px-3 py-1.5 text-sm"
+            className={
+              backButtonVariant === 'danger'
+                ? 'wallet-btn-danger px-4 py-2'
+                : 'wallet-btn-secondary px-3 py-1.5 text-sm'
+            }
           >
             Back
           </button>
           <h1 className="text-lg font-bold wallet-text-strong">
-            Watch-only Send
+            {mobile ? 'Mobile multisig send' : 'Watch-only Send'}
           </h1>
         </div>
 
         <StepBar current={step} />
+
+        {networkRefreshing && (
+          <p className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-xs wallet-muted">
+            Refreshing shared-wallet coins from the network. Saved coins remain
+            visible while this completes.
+          </p>
+        )}
+
+        {restoredSession && proposalState && (
+          <p className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
+            Pending multisig spend restored. Continue signing below or use the
+            broadcast review after the threshold is complete.
+          </p>
+        )}
+
+        {multisigSpendMode === 'resume' && pendingSession && !proposalState && (
+          <p className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-xs wallet-muted">
+            Pending spend selected. Waiting for the shared-wallet coin inventory
+            before restoring it.
+          </p>
+        )}
 
         <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain pr-1 space-y-4">
           {busy ? (
             <p className="text-sm wallet-muted">Loading coins…</p>
           ) : (
             <>
+              {pendingChoiceOpen && (
+                <section className="wallet-card space-y-3 p-4">
+                  <p className="text-sm font-semibold wallet-text-strong">
+                    Choose multisig spend
+                  </p>
+                  {pendingSession ? (
+                    <>
+                      <p className="text-xs leading-relaxed wallet-muted">
+                        A pending unsigned or partially signed spend is saved
+                        for this policy. Resume it to keep collecting
+                        signatures, or start a separate spend without deleting
+                        the pending one.
+                      </p>
+                      <button
+                        type="button"
+                        className="wallet-btn-primary w-full py-2 text-sm font-semibold"
+                        onClick={() => setMultisigSpendMode('resume')}
+                      >
+                        Resume pending spend
+                      </button>
+                      <button
+                        type="button"
+                        className="wallet-btn-secondary w-full py-2 text-sm font-semibold"
+                        onClick={() => setMultisigSpendMode('new')}
+                      >
+                        Create new spend
+                      </button>
+                    </>
+                  ) : pendingSpendCheck === 'checking' ? (
+                    <p className="text-xs wallet-muted">
+                      Checking for pending spends…
+                    </p>
+                  ) : pendingSpendCheck === 'error' ? (
+                    <>
+                      <p className="text-xs text-red-400">
+                        Could not check the saved multisig spend sessions.
+                      </p>
+                      <button
+                        type="button"
+                        className="wallet-btn-secondary w-full py-2 text-sm"
+                        onClick={() => {
+                          setPendingSpendCheckNonce((value) => value + 1);
+                          setError('');
+                        }}
+                      >
+                        Retry pending spend check
+                      </button>
+                    </>
+                  ) : null}
+                </section>
+              )}
+
               {/* Once built, the form and coin list step aside for a summary of
                   what is being signed — the user's attention belongs on the QR
                   and the device, not on controls that no longer apply. */}
@@ -918,6 +1647,7 @@ export const WatchOnlySend: FC = () => {
                         {selectedInputs.length === 1 ? '' : 's'} · fee{' '}
                         {satsToBch(proposalState.feeSats)} BCH · change{' '}
                         {satsToBch(proposalState.changeSats)} BCH
+                        {multisigPolicy ? ' · 1 sat/byte' : ''}
                       </p>
                     </div>
                     {!broadcastTxid && (
@@ -935,7 +1665,7 @@ export const WatchOnlySend: FC = () => {
 
               {/* Step 1: coin control */}
               <section
-                className={`wallet-card space-y-2 p-4 ${step === 1 ? '' : 'hidden'}`}
+                className={`wallet-card space-y-2 p-4 ${step === 1 && spendFormEnabled ? '' : 'hidden'}`}
               >
                 <div className="flex items-center justify-between">
                   <p className="text-sm font-semibold wallet-text-strong">
@@ -946,10 +1676,24 @@ export const WatchOnlySend: FC = () => {
                   </span>
                 </div>
                 {inputs.length === 0 ? (
-                  <p className="text-xs wallet-muted">
-                    No spendable BCH coins found. Sync the wallet and make sure
-                    it holds BCH (not only tokens).
-                  </p>
+                  <div className="space-y-2">
+                    <p className="text-xs wallet-muted">
+                      No spendable BCH coins found. Refresh the multisig address
+                      inventory and make sure it holds BCH (not only tokens).
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setRefreshNonce((value) => value + 1)}
+                      className="wallet-btn-secondary w-full py-2 text-xs"
+                      disabled={busy || networkRefreshing}
+                    >
+                      {networkRefreshing
+                        ? 'Refreshing…'
+                        : mobile
+                          ? 'Refresh multisig coins'
+                          : 'Reload coins'}
+                    </button>
+                  </div>
                 ) : (
                   <div className="max-h-64 space-y-1.5 overflow-y-auto">
                     {inputs.map((input) => {
@@ -974,18 +1718,19 @@ export const WatchOnlySend: FC = () => {
                               {satsToBch(input.satoshis)} BCH ·{' '}
                               {input.branchIndex === 1 ? 'change' : 'receive'}#
                               {input.addressIndex}
-                              {walletId > 0 && (
-                                <FusionBadge
-                                  depth={(() => {
-                                    void fusionDepthRev;
-                                    return coinDepth(
-                                      walletId,
-                                      outpointKey(input.txid, input.vout)
-                                    );
-                                  })()}
-                                  className="ml-1.5"
-                                />
-                              )}
+                              {currentWalletId !== null &&
+                                currentWalletId > 0 && (
+                                  <FusionBadge
+                                    depth={(() => {
+                                      void fusionDepthRev;
+                                      return coinDepth(
+                                        currentWalletId ?? 0,
+                                        outpointKey(input.txid, input.vout)
+                                      );
+                                    })()}
+                                    className="ml-1.5"
+                                  />
+                                )}
                             </span>
                             {(() => {
                               const card = nftCardsByOutpoint.get(key);
@@ -1022,7 +1767,7 @@ export const WatchOnlySend: FC = () => {
 
               {/* Step 2: destination + amount */}
               <section
-                className={`wallet-card space-y-3 p-4 ${step === 1 ? '' : 'hidden'}`}
+                className={`wallet-card space-y-3 p-4 ${step === 1 && spendFormEnabled ? '' : 'hidden'}`}
               >
                 <label className="block space-y-1 text-sm wallet-text-strong">
                   Destination (cashaddr)
@@ -1081,28 +1826,93 @@ export const WatchOnlySend: FC = () => {
                     )}
                   </div>
                 )}
+                {multisigPolicy && (
+                  <div className="space-y-2 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-sm font-semibold wallet-text-strong">
+                        Multisig fee policy
+                      </p>
+                      <span className="rounded-full border border-emerald-500/40 px-2 py-1 text-[10px] font-semibold text-emerald-300">
+                        1 sat/byte
+                      </span>
+                    </div>
+                    <p className="text-xs leading-relaxed wallet-muted">
+                      Send all available BCH to the destination and leave out
+                      the transaction fee. CashToken coins are kept separate.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={handleSendAll}
+                      className="wallet-btn-secondary w-full py-2 text-sm font-semibold"
+                      disabled={
+                        busy ||
+                        networkRefreshing ||
+                        networkRefreshFailed ||
+                        bchOnlyInputs.length === 0 ||
+                        !maxSendable
+                      }
+                    >
+                      Send all available BCH
+                    </button>
+                    {!recipient.trim() ? (
+                      <p className="text-[11px] wallet-muted">
+                        Enter a destination first to calculate the send-all
+                        amount and fee.
+                      </p>
+                    ) : maxSendable ? (
+                      <p className="text-[11px] wallet-muted">
+                        Estimated fee: {satsToBch(maxSendable.feeSats)} BCH ·{' '}
+                        sends {satsToBch(maxSendable.amountSats)} BCH
+                      </p>
+                    ) : (
+                      <p className="text-[11px] text-amber-300">
+                        The available BCH cannot cover the 1 sat/byte fee, or
+                        the destination is not valid for this network.
+                      </p>
+                    )}
+                    {tokenInputCount > 0 && (
+                      <p className="text-[11px] text-amber-300">
+                        {tokenInputCount} CashToken coin
+                        {tokenInputCount === 1 ? '' : 's'} will not be included
+                        in send-all.
+                      </p>
+                    )}
+                  </div>
+                )}
                 <div className="flex items-center justify-between text-xs wallet-muted">
                   <span>
                     Change → {changeAddress ? shortTxid(changeAddress) : '…'}
                   </span>
                   {proposalState && (
-                    <span>Fee {satsToBch(proposalState.feeSats)} BCH</span>
+                    <span>
+                      Fee {satsToBch(proposalState.feeSats)} BCH
+                      {multisigPolicy ? ' · 1 sat/byte' : ''}
+                    </span>
                   )}
                 </div>
                 <button
                   type="button"
                   onClick={() => void handleBuild()}
                   className="wallet-btn-primary w-full py-2 font-semibold disabled:opacity-50"
+                  disabled={busy || networkRefreshing || networkRefreshFailed}
                 >
-                  Build unsigned transaction
+                  {networkRefreshing
+                    ? 'Waiting for network refresh…'
+                    : networkRefreshFailed
+                      ? 'Network refresh required'
+                      : 'Build unsigned transaction'}
                 </button>
               </section>
 
-              {/* Step 3: animated QR export */}
-              {proposalState && frames && (
+              {/* Step 3: static QR for ordinary PSBTs, stream for larger ones */}
+              {proposalState && qrUri && verdict?.state !== 'complete' && (
                 <section className="wallet-card space-y-3 p-4">
                   <p className="text-sm font-semibold wallet-text-strong">
-                    Scan this with SeedCash (air-gapped)
+                    {mobile
+                      ? mergedPsbt
+                        ? 'Scan this partially signed PSBT with the next cosigner'
+                        : 'Scan this unsigned PSBT with the first cosigner'
+                      : 'Scan this with SeedCash (air-gapped)'}
                   </p>
                   <div
                     className={`mx-auto rounded-md bg-white ${
@@ -1124,8 +1934,9 @@ export const WatchOnlySend: FC = () => {
                     />
                   </div>
                   <p className="text-center text-xs wallet-muted">
-                    Frame {frameNumber} / {frameCountRef.current} · hold the
-                    camera steady, the code loops
+                    {qrMode === 'stream'
+                      ? `Frame ${frameNumber} / ${frameCountRef.current} · hold the camera steady, the code loops`
+                      : 'Static QR · hold the camera steady'}
                   </p>
                   {desktopQr && (
                     <>
@@ -1203,6 +2014,57 @@ export const WatchOnlySend: FC = () => {
                   )}
                   <button
                     type="button"
+                    onClick={() => void handleCopyQrText()}
+                    className="wallet-btn-secondary w-full py-2 text-sm"
+                  >
+                    {qrTextCopied
+                      ? 'Copied QR text'
+                      : qrMode === 'stream'
+                        ? 'Copy current frame text'
+                        : 'Copy QR text'}
+                  </button>
+                  {qrMode === 'stream' && (
+                    <p className="text-xs wallet-muted">
+                      This copies the frame currently displayed. Animated UR
+                      transfers still require all frames.
+                    </p>
+                  )}
+                  {mobile && multisigPolicy && (
+                    <div className="space-y-2 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-3">
+                      <p className="text-sm font-semibold wallet-text-strong">
+                        Sign with this device
+                      </p>
+                      <p className="text-xs wallet-muted">
+                        Use this device&apos;s standard mnemonic wallet as its
+                        matching cosigner. The signature is verified and added
+                        to this exact PSBT before the next QR is shown.
+                      </p>
+                      <label className="flex items-start gap-2 text-xs wallet-muted">
+                        <input
+                          type="checkbox"
+                          checked={localSignConfirmed}
+                          onChange={(event) =>
+                            setLocalSignConfirmed(event.target.checked)
+                          }
+                          className="mt-0.5 accent-[var(--wallet-accent)]"
+                        />
+                        <span>
+                          I reviewed the destination, amount, fee, change, and
+                          token state, and authorize this device to sign.
+                        </span>
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => void handleLocalSign()}
+                        className="wallet-btn-primary w-full py-2 text-sm font-semibold disabled:opacity-50"
+                        disabled={!localSignConfirmed || busy}
+                      >
+                        {busy ? 'Signing…' : 'Sign with this device'}
+                      </button>
+                    </div>
+                  )}
+                  <button
+                    type="button"
                     onClick={openScanner}
                     className="wallet-btn-secondary w-full py-2 text-sm"
                   >
@@ -1241,19 +2103,25 @@ export const WatchOnlySend: FC = () => {
                       Verify pasted result
                     </button>
                   </details>
-                  {scannerOpen && (
-                    <CameraQrScanner
-                      onResult={handleScanFrame}
-                      onClose={closeScanner}
-                      continuous
-                      progress={scanProgress}
-                      statusText={
-                        scanFrames === 0
-                          ? 'Point the camera at the signed QR on the signer.'
-                          : `${scanFrames} frames read - ${Math.round(scanProgress * 100)}% recovered`
-                      }
-                    />
-                  )}
+                  {scannerOpen &&
+                    (mobile ? (
+                      <QrScanDialog
+                        onFrame={handleScanFrame}
+                        onClose={closeScanner}
+                      />
+                    ) : (
+                      <CameraQrScanner
+                        onResult={handleScanFrame}
+                        onClose={closeScanner}
+                        continuous
+                        progress={scanProgress}
+                        statusText={
+                          scanFrames === 0
+                            ? 'Point the camera at the signed QR on the signer.'
+                            : `${scanFrames} frames read - ${Math.round(scanProgress * 100)}% recovered`
+                        }
+                      />
+                    ))}
                 </section>
               )}
 
@@ -1305,7 +2173,7 @@ export const WatchOnlySend: FC = () => {
               )}
 
               {/* Step 5: verification verdict */}
-              {verdict && (
+              {verdict && !broadcastTxid && (
                 <section
                   className={`wallet-card space-y-2 p-4 ${
                     verdict.state === 'complete'
@@ -1317,7 +2185,9 @@ export const WatchOnlySend: FC = () => {
                   }`}
                 >
                   <p className="text-sm font-semibold wallet-text-strong">
-                    Signed transaction check
+                    {verdict.state === 'complete'
+                      ? 'Ready to broadcast'
+                      : 'Signed transaction check'}
                   </p>
                   <p className="text-xs leading-relaxed wallet-muted">
                     {verdict.reason}
@@ -1329,26 +2199,125 @@ export const WatchOnlySend: FC = () => {
                       </p>
                       <button
                         type="button"
-                        onClick={() => void handleBroadcast()}
+                        onClick={() => setBroadcastArmed(true)}
                         disabled={busy}
                         className="wallet-btn-primary w-full py-2 font-semibold disabled:opacity-50"
                       >
-                        {busy ? 'Broadcasting…' : 'Broadcast'}
+                        Review and confirm broadcast
                       </button>
+                      {!multisigPresentation && broadcastArmed && (
+                        <div className="space-y-2 rounded-xl border border-amber-500/50 bg-amber-500/10 p-3">
+                          <p className="text-xs leading-relaxed wallet-muted">
+                            Confirm the destination, amount, fee, and change
+                            above. Broadcasting is irreversible.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => void handleBroadcast()}
+                            disabled={busy}
+                            className="wallet-btn-primary w-full py-2 font-semibold disabled:opacity-50"
+                          >
+                            {busy ? 'Broadcasting…' : 'Broadcast transaction'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setBroadcastArmed(false)}
+                            disabled={busy}
+                            className="wallet-btn-secondary w-full py-2 text-xs"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      )}
                     </>
-                  )}
-                  {broadcastTxid && (
-                    <p className="text-xs text-emerald-400">
-                      Broadcast ✓ {broadcastTxid.slice(0, 24)}…
-                    </p>
                   )}
                 </section>
               )}
 
+              {multisigPresentation &&
+                verdict?.state === 'complete' &&
+                verdict.rawTxHex &&
+                proposalState &&
+                multisigPolicy && (
+                  <MultisigBroadcastReview
+                    open={broadcastArmed}
+                    recipient={recipient}
+                    amountSats={amountSats ?? 0n}
+                    inputSumSats={proposalState.inputSumSats}
+                    feeSats={proposalState.feeSats}
+                    outputs={proposalState.proposal.outputs}
+                    selectedInputs={selectedInputs.map((input) => input.utxo)}
+                    rawTxHex={verdict.rawTxHex}
+                    network={policyNetwork}
+                    policyId={
+                      createMultisigDescriptorSet(multisigPolicy, policyNetwork)
+                        .policyId
+                    }
+                    threshold={multisigPolicy.threshold ?? multisigPolicy.m}
+                    signerCount={multisigPolicy.signers.length}
+                    isSending={busy}
+                    onClose={() => setBroadcastArmed(false)}
+                    onConfirmSend={() => void handleBroadcast()}
+                  />
+                )}
+
+              {broadcastTxid && (
+                <section
+                  role="status"
+                  aria-live="polite"
+                  className="mt-3 shrink-0 rounded-2xl border p-4 text-sm shadow-sm wallet-success-panel"
+                >
+                  <div className="mb-1 font-semibold wallet-text-strong">
+                    {broadcastState === 'submitted'
+                      ? t('send.submitted')
+                      : t('send.sent')}
+                  </div>
+                  {broadcastState === 'submitted' && (
+                    <div className="mb-2 wallet-muted">
+                      {t('send.keepTxid')}
+                    </div>
+                  )}
+                  <div className="break-all font-mono wallet-text-strong">
+                    {broadcastTxid}
+                  </div>
+                </section>
+              )}
+
               {error && (
-                <p role="alert" className="text-xs text-red-400">
-                  {error}
-                </p>
+                <>
+                  <p role="alert" className="text-xs text-red-400">
+                    {error}
+                  </p>
+                  {mobile && conflictingTxids.length > 0 && (
+                    <section className="space-y-2 rounded-xl border border-amber-500/60 bg-amber-500/10 p-3">
+                      <p className="text-sm font-semibold text-amber-200">
+                        Previous multisig spend still reserved
+                      </p>
+                      <p className="text-xs leading-relaxed wallet-muted">
+                        Release this local lock only after confirming that the
+                        previous transaction was rejected or is absent from the
+                        network. An unresolved transaction may still confirm.
+                      </p>
+                      <div className="space-y-1 font-mono text-[10px] text-amber-100">
+                        {conflictingTxids.map((txid) => (
+                          <p key={txid} className="break-all">
+                            {txid}
+                          </p>
+                        ))}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void handleReleaseConflictingMultisigLock()
+                        }
+                        disabled={busy}
+                        className="wallet-btn-secondary w-full py-2 text-xs disabled:opacity-50"
+                      >
+                        Release rejected spend lock
+                      </button>
+                    </section>
+                  )}
+                </>
               )}
             </>
           )}

@@ -28,6 +28,7 @@ import { useTheme } from '../../app/theme/useTheme';
 import { ROUTE_PATHS, transactionsRoute } from '../../navigation/routes';
 import { OptnKeyManager } from './OptnKeyManager';
 import WalletManager from '../../apis/WalletManager/WalletManager';
+import { WalletType } from '../../types/wallet';
 import { openWalletPickerWindow } from './walletWindow';
 import {
   refreshWalletOpenClaim,
@@ -632,9 +633,15 @@ export function useMenuBar(): void {
     const buildMenu = async () => {
       // Saved wallets for quick-open. Network is a runtime setting, not a fixed
       // wallet property, so it is deliberately NOT shown here.
-      let wallets: Array<{ id: number; wallet_name: string }> = [];
+      let wallets: Array<{
+        id: number;
+        wallet_name: string;
+        walletType: string;
+      }> = [];
       try {
-        wallets = (await WalletManager().getAllWallets()) as typeof wallets;
+        wallets = (await WalletManager().getAllWallets()).filter(
+          (wallet) => wallet.walletType !== WalletType.MULTISIG
+        ) as typeof wallets;
       } catch {
         wallets = [];
       }

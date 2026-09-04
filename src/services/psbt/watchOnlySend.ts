@@ -14,6 +14,7 @@
 import {
   binToHex,
   cashAddressToLockingBytecode,
+  decodeCashAddress,
   encodeTransaction,
   hexToBin,
 } from '@bitauth/libauth';
@@ -22,11 +23,21 @@ import { DUST } from '../../utils/constants';
 import { relayFeeForBytes } from '../../apis/TransactionManager/feePolicy';
 import {
   encodeUnsignedPsbt,
+  psbtTokenToTransactionToken,
   SIGHASH_ALL_FORKID,
   type PsbtInputSpec,
   type PsbtOutputSpec,
+  type PsbtTokenSpec,
 } from './psbtBch';
-import { p2shLockingBytecodeFor } from './psbtMultisig';
+import {
+  parseMultisigRedeemScript,
+  p2shLockingBytecodeFor,
+} from './psbtMultisig';
+import {
+  stableCosignerId,
+  type MultisigDerivedCosigner,
+  type MultisigPolicy,
+} from './multisigWallet';
 
 /**
  * A UTXO chosen by coin control, with the public-key derivation needed for the
@@ -70,6 +81,8 @@ export interface WatchOnlyInputSpec {
     /** Full path from the master key, e.g. m/44'/145'/0'/0/0. */
     derivationPath: string;
   }[];
+  /** Authoritative token state read from the complete parent transaction. */
+  token?: PsbtTokenSpec;
 }
 
 export interface WatchOnlyBuildParams {
@@ -92,12 +105,58 @@ export interface WatchOnlyBuildParams {
   changeDerivations?: WatchOnlyInputSpec['cosignerDerivations'];
   /** BCH signature commitments. Defaults to ALL|FORKID (0x41). */
   sighashType?: number;
+  recipientToken?: PsbtTokenSpec;
+  changeToken?: PsbtTokenSpec;
+  /** Explicit authority for a token transition; omitted means preserve state. */
+  tokenIntent?:
+    | 'preserve'
+    | 'mutable-commitment'
+    | 'minting-capability'
+    | 'burn';
+  /** Optional per-byte fee override; omitted uses the wallet relay-margin policy. */
+  feeRateSatPerByte?: number;
+}
+
+export type WatchOnlyCosignerDerivation = NonNullable<
+  WatchOnlyInputSpec['cosignerDerivations']
+>[number];
+
+/**
+ * Pair each policy cosigner with that cosigner's derived key. The derived
+ * keys are BIP-67 sorted for the redeem script, so their array position must
+ * never be used as the cosigner identity.
+ */
+export function multisigCosignerDerivations(
+  policy: MultisigPolicy,
+  derivedCosigners: MultisigDerivedCosigner[],
+  branchIndex: 0 | 1,
+  addressIndex: number,
+  fallbackAccountPath: string
+): WatchOnlyCosignerDerivation[] {
+  return policy.signers.map((signer, index) => {
+    const cosignerId =
+      signer.id?.trim() || stableCosignerId(signer.xpub.trim());
+    const derived = derivedCosigners.find(
+      (candidate) => candidate.cosignerId === cosignerId
+    );
+    if (!derived) {
+      throw new Error(
+        `Could not map derived key for cosigner ${index + 1} at ${branchIndex}/${addressIndex}.`
+      );
+    }
+    return {
+      publicKeyHex: binToHex(derived.publicKey),
+      masterFingerprintHex: signer.masterFingerprintHex ?? '00000000',
+      derivationPath: `${signer.accountPath ?? fallbackAccountPath}/${branchIndex}/${addressIndex}`,
+    };
+  });
 }
 
 export interface WatchOnlyBuildOutput {
   lockingBytecodeHex: string;
   satoshis: bigint;
   isChange: boolean;
+  token?: PsbtTokenSpec;
 }
 
 export interface WatchOnlyBuildResult {
@@ -133,6 +192,157 @@ export interface WatchOnlyProposal {
   sighashType: number;
 }
 
+function tokenAmount(token: PsbtTokenSpec | undefined): bigint {
+  return token?.amount ?? 0n;
+}
+
+function tokenKey(token: PsbtTokenSpec): string {
+  return binToHex(token.category);
+}
+
+function tokenIdentity(token: PsbtTokenSpec): string {
+  return `${tokenKey(token)}:${token.capability ?? 0}:${binToHex(
+    token.commitment ?? new Uint8Array()
+  )}`;
+}
+
+function assertTokenAddress(address: string, label: string): void {
+  const decoded = decodeCashAddress(address);
+  if (typeof decoded === 'string') {
+    throw new Error(`${label} is not a valid CashAddr.`);
+  }
+  if (decoded.type !== 'p2shWithTokens' && decoded.type !== 'p2pkhWithTokens') {
+    throw new Error(`${label} must be token-aware when it carries CashTokens.`);
+  }
+}
+
+function validateTokenPlan(
+  inputs: WatchOnlyInputSpec[],
+  recipientToken: PsbtTokenSpec | undefined,
+  changeToken: PsbtTokenSpec | undefined,
+  recipient: string,
+  changeAddress: string,
+  intent: WatchOnlyBuildParams['tokenIntent'] = 'preserve'
+): void {
+  const inputTokens = inputs
+    .map((input) => input.token)
+    .filter(Boolean) as PsbtTokenSpec[];
+  const outputTokens = [recipientToken, changeToken].filter(
+    Boolean
+  ) as PsbtTokenSpec[];
+  if (inputTokens.length === 0 && outputTokens.length === 0) return;
+  if (inputTokens.length === 0) {
+    throw new Error(
+      'Token outputs cannot be created without token-bearing inputs.'
+    );
+  }
+  if (!recipientToken && !changeToken) {
+    throw new Error(
+      'Token-bearing inputs require an explicit recipient or change token output.'
+    );
+  }
+  if (recipientToken) assertTokenAddress(recipient, 'Token recipient');
+  if (changeToken) assertTokenAddress(changeAddress, 'Token change');
+
+  const inputFungible = new Map<string, bigint>();
+  const outputFungible = new Map<string, bigint>();
+  for (const token of inputTokens) {
+    const key = tokenKey(token);
+    inputFungible.set(key, (inputFungible.get(key) ?? 0n) + tokenAmount(token));
+  }
+  for (const token of outputTokens) {
+    const key = tokenKey(token);
+    outputFungible.set(
+      key,
+      (outputFungible.get(key) ?? 0n) + tokenAmount(token)
+    );
+  }
+  for (const [category, amount] of inputFungible) {
+    const outputAmount = outputFungible.get(category) ?? 0n;
+    if (
+      outputAmount > amount ||
+      (outputAmount !== amount && intent !== 'burn')
+    ) {
+      throw new Error(
+        `Token category ${category} is not conserved between inputs and outputs.`
+      );
+    }
+  }
+  for (const category of outputFungible.keys()) {
+    if (!inputFungible.has(category)) {
+      throw new Error(`Token category ${category} is not present in an input.`);
+    }
+  }
+
+  const inputNfts = new Map<string, number>();
+  const outputNfts = new Map<string, number>();
+  for (const token of inputTokens) {
+    if (token.capability === undefined && token.commitment === undefined)
+      continue;
+    const key = tokenIdentity(token);
+    inputNfts.set(key, (inputNfts.get(key) ?? 0) + 1);
+  }
+  for (const token of outputTokens) {
+    if (token.capability === undefined && token.commitment === undefined)
+      continue;
+    const key = tokenIdentity(token);
+    outputNfts.set(key, (outputNfts.get(key) ?? 0) + 1);
+  }
+  if (inputNfts.size > 0 && intent === 'mutable-commitment') {
+    if (
+      inputNfts.size !== 1 ||
+      outputNfts.size !== 1 ||
+      inputTokens.length !== 1 ||
+      outputTokens.length !== 1 ||
+      inputTokens[0].capability !== 1 ||
+      outputTokens[0].capability !== 1 ||
+      tokenKey(inputTokens[0]) !== tokenKey(outputTokens[0])
+    ) {
+      throw new Error(
+        'Mutable NFT commitment changes require one mutable NFT input and one mutable NFT output.'
+      );
+    }
+    if (tokenIdentity(inputTokens[0]) === tokenIdentity(outputTokens[0])) {
+      throw new Error(
+        'Mutable NFT commitment intent must change the commitment.'
+      );
+    }
+    return;
+  }
+  if (inputNfts.size > 0 && intent === 'minting-capability') {
+    if (
+      inputNfts.size !== 1 ||
+      outputNfts.size !== 1 ||
+      inputTokens.length !== 1 ||
+      outputTokens.length !== 1 ||
+      inputTokens[0].capability !== 2 ||
+      tokenKey(inputTokens[0]) !== tokenKey(outputTokens[0])
+    ) {
+      throw new Error(
+        'Minting capability transitions require one minting NFT input and one same-category NFT output.'
+      );
+    }
+    if (tokenIdentity(inputTokens[0]) === tokenIdentity(outputTokens[0])) {
+      throw new Error(
+        'Minting capability intent must change the NFT capability.'
+      );
+    }
+    return;
+  }
+  for (const [identity, count] of inputNfts) {
+    if (outputNfts.get(identity) !== count) {
+      throw new Error(
+        `NFT ${identity} must have exactly one valid continuation per input.`
+      );
+    }
+  }
+  for (const identity of outputNfts.keys()) {
+    if (!inputNfts.has(identity)) {
+      throw new Error(`NFT ${identity} is not present in an input.`);
+    }
+  }
+}
+
 const HARDENED_INDEX = 0x80000000;
 
 /** Sighash type the signer is asked for — the watch-only contract. */
@@ -147,6 +357,110 @@ export function p2pkhInputBytes(): number {
 
 export function p2pkhOutputBytes(): number {
   return 8 + 1 + 25;
+}
+
+function pushDataBytes(payloadLength: number): number {
+  if (!Number.isSafeInteger(payloadLength) || payloadLength < 0) {
+    throw new Error('Push-data length must be a non-negative safe integer.');
+  }
+  return payloadLength <= 75
+    ? 1 + payloadLength
+    : payloadLength <= 0xff
+      ? 2 + payloadLength
+      : payloadLength <= 0xffff
+        ? 3 + payloadLength
+        : 5 + payloadLength;
+}
+
+/**
+ * Conservative final unlocking-script size for one input.
+ *
+ * The PSBT is built before signatures exist, so multisig inputs are sized for
+ * the largest supported ECDSA signature and the largest Schnorr checkbits
+ * push. This deliberately overestimates the usual Schnorr transaction by a
+ * few bytes, which is preferable to producing a transaction below the relay
+ * floor after signatures are merged.
+ */
+export function estimateUnlockingScriptBytes(
+  input: WatchOnlyInputSpec
+): number {
+  if (!input.redeemScriptHex) return P2PKH_UNLOCK_BYTES;
+
+  const redeemScript = hexToBin(input.redeemScriptHex);
+  const policy = parseMultisigRedeemScript(redeemScript);
+  if (!policy) {
+    throw new Error('Multisig input has an invalid redeem script.');
+  }
+  const required = input.requiredSignatures ?? policy.requiredSignatures;
+  if (
+    !Number.isSafeInteger(required) ||
+    required < 1 ||
+    required > policy.totalSignatures
+  ) {
+    throw new Error('Multisig input has an invalid required signature count.');
+  }
+
+  // Schnorr checkbits are fixed-width bytes pushed as one stack element. The
+  // ECDSA OP_0 dummy is smaller, so this is a safe upper bound for either
+  // supported signature algorithm.
+  const checkbitsDummyBytes = 1 + Math.ceil(policy.totalSignatures / 8);
+  return (
+    checkbitsDummyBytes +
+    required * pushDataBytes(73) +
+    pushDataBytes(redeemScript.length)
+  );
+}
+
+type FeeEstimateOutput = {
+  bytecode: Uint8Array;
+  satoshis: bigint;
+  token?: PsbtTokenSpec;
+};
+
+/** Size the final transaction shape, including P2SH unlocks and CashTokens. */
+export function estimateFinalTransactionBytes(
+  inputs: WatchOnlyInputSpec[],
+  outputs: FeeEstimateOutput[]
+): number {
+  const encoded = encodeTransaction({
+    version: 2,
+    inputs: inputs.map((input) => ({
+      outpointTransactionHash: hexToBin(input.txid),
+      outpointIndex: input.vout,
+      unlockingBytecode: new Uint8Array(estimateUnlockingScriptBytes(input)),
+      sequenceNumber: 0xffffffff,
+    })),
+    outputs: outputs.map((output) => ({
+      lockingBytecode: output.bytecode,
+      valueSatoshis: output.satoshis,
+      ...(output.token
+        ? { token: psbtTokenToTransactionToken(output.token) }
+        : {}),
+    })),
+    locktime: 0,
+  });
+  return encoded.length;
+}
+
+/** Calculate a fee at an explicit rate without changing the global wallet policy. */
+export function feeForTransactionBytes(
+  bytes: number,
+  feeRateSatPerByte?: number
+): bigint {
+  if (!Number.isSafeInteger(bytes) || bytes < 0) {
+    throw new Error(
+      'Transaction byte size must be a non-negative safe integer.'
+    );
+  }
+  if (feeRateSatPerByte === undefined) return relayFeeForBytes(bytes);
+  if (!Number.isFinite(feeRateSatPerByte) || feeRateSatPerByte <= 0) {
+    throw new Error('Fee rate must be a positive number of satoshis per byte.');
+  }
+  const fee = Math.ceil(bytes * feeRateSatPerByte);
+  if (!Number.isSafeInteger(fee)) {
+    throw new Error('Fee calculation exceeded the safe integer range.');
+  }
+  return BigInt(fee);
 }
 
 export function estimateUnsignedSize(
@@ -243,6 +557,7 @@ function inputSpecToPsbt(
     previousTransaction: input.previousTransactionHex
       ? hexToBin(input.previousTransactionHex)
       : undefined,
+    token: input.token,
     derivations,
     sequence: 0xffffffff,
   };
@@ -295,6 +610,14 @@ export function buildWatchOnlyPsbt(
 
   const recipientBytecode = addressToLockingBytecode(params.recipient);
   const changeBytecode = addressToLockingBytecode(params.changeAddress);
+  validateTokenPlan(
+    params.inputs,
+    params.recipientToken,
+    params.changeToken,
+    params.recipient,
+    params.changeAddress,
+    params.tokenIntent
+  );
   const inputSum = params.inputs.reduce(
     (sum, input) => sum + input.satoshis,
     0n
@@ -302,18 +625,24 @@ export function buildWatchOnlyPsbt(
 
   // Fee depends on whether a change output survives; iterate to a fixed point
   // (never more than twice in practice).
-  let outputs: { bytecode: Uint8Array; satoshis: bigint; isChange: boolean }[] =
-    [
-      {
-        bytecode: recipientBytecode,
-        satoshis: params.amountSats,
-        isChange: false,
-      },
-    ];
+  let outputs: {
+    bytecode: Uint8Array;
+    satoshis: bigint;
+    isChange: boolean;
+    token?: PsbtTokenSpec;
+  }[] = [
+    {
+      bytecode: recipientBytecode,
+      satoshis: params.amountSats,
+      isChange: false,
+      token: params.recipientToken,
+    },
+  ];
   let changeSats = 0n;
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const fee = relayFeeForBytes(
-      estimateUnsignedSize(params.inputs.length, outputs.length)
+    const fee = feeForTransactionBytes(
+      estimateFinalTransactionBytes(params.inputs, outputs),
+      params.feeRateSatPerByte
     );
     const leftover = inputSum - params.amountSats - fee;
     if (leftover < 0n) {
@@ -324,11 +653,12 @@ export function buildWatchOnlyPsbt(
       );
     }
     const nextChange = leftover >= DUST ? leftover : 0n;
-    const withChange = [
+    const withChange: typeof outputs = [
       {
         bytecode: recipientBytecode,
         satoshis: params.amountSats,
         isChange: false,
+        token: params.recipientToken,
       },
     ];
     if (nextChange > 0n) {
@@ -336,6 +666,7 @@ export function buildWatchOnlyPsbt(
         bytecode: changeBytecode,
         satoshis: nextChange,
         isChange: true,
+        token: params.changeToken,
       });
     }
     if (withChange.length === outputs.length && nextChange === changeSats) {
@@ -352,6 +683,11 @@ export function buildWatchOnlyPsbt(
         'output or choose All (Recommended).'
     );
   }
+  if (params.changeToken && changeSats === 0n) {
+    throw new Error(
+      'Token change cannot be placed in a zero-satoshi output. Select more BCH or a smaller amount.'
+    );
+  }
   const psbtInputs: PsbtInputSpec[] = params.inputs.map((input) => ({
     ...inputSpecToPsbt(input, params.accountPath),
     masterFingerprint,
@@ -359,6 +695,7 @@ export function buildWatchOnlyPsbt(
   const changeOutput: PsbtOutputSpec = {
     lockingBytecode: changeBytecode,
     satoshis: changeSats,
+    token: params.changeToken,
   };
   if (!!params.changeRedeemScriptHex !== !!params.changeDerivations) {
     throw new Error(
@@ -391,9 +728,17 @@ export function buildWatchOnlyPsbt(
   const psbtOutputs: PsbtOutputSpec[] = outputs.map((output) =>
     output.isChange
       ? changeOutput
-      : { lockingBytecode: output.bytecode, satoshis: output.satoshis }
+      : {
+          lockingBytecode: output.bytecode,
+          satoshis: output.satoshis,
+          token: params.recipientToken,
+        }
   );
-  const psbtBytes = encodeUnsignedPsbt(psbtInputs, psbtOutputs, sighashType);
+  const psbtBytes = encodeUnsignedPsbt(
+    psbtInputs,
+    psbtOutputs,
+    sighashType
+  );
   const rawUnsigned = encodeTransaction({
     version: 2,
     inputs: params.inputs.map((input) => ({
@@ -405,6 +750,11 @@ export function buildWatchOnlyPsbt(
     outputs: outputs.map((output) => ({
       lockingBytecode: output.bytecode,
       valueSatoshis: output.satoshis,
+      ...(output.isChange && params.changeToken
+        ? { token: psbtTokenToTransactionToken(params.changeToken) }
+        : !output.isChange && params.recipientToken
+          ? { token: psbtTokenToTransactionToken(params.recipientToken) }
+          : {}),
     })),
     locktime: 0,
   });
@@ -416,6 +766,7 @@ export function buildWatchOnlyPsbt(
       lockingBytecodeHex: binToHex(output.bytecode),
       satoshis: output.satoshis,
       isChange: output.isChange,
+      token: output.token,
     })),
     feeSats,
     changeSats,

@@ -16,13 +16,25 @@ import {
   secp256k1,
   type CompilationContextBch,
 } from '@bitauth/libauth';
-import { decodePsbt, encodeUnsignedPsbt } from '../psbtBch';
-import { buildWatchOnlyPsbt, type WatchOnlyProposal } from '../watchOnlySend';
+import { decodePsbt, encodeUnsignedPsbt, type PsbtTokenSpec } from '../psbtBch';
+import {
+  buildWatchOnlyPsbt,
+  estimateFinalTransactionBytes,
+  feeForTransactionBytes,
+  multisigCosignerDerivations,
+  type WatchOnlyProposal,
+} from '../watchOnlySend';
 import { makeParentTransaction } from './parentFixture';
 import {
   inspectImportedPsbt,
   mergeImportedSignatures,
 } from '../watchOnlyImport';
+import {
+  buildMultisigRedeemScript,
+  p2shLockingBytecodeFor,
+} from '../psbtMultisig';
+import type { MultisigPolicy } from '../multisigWallet';
+import { relayFeeForBytes } from '../../../apis/TransactionManager/feePolicy';
 
 const HARDENED = 0x80000000;
 const FINGERPRINT = Uint8Array.from([0xaa, 0xbb, 0xcc, 0xdd]);
@@ -75,6 +87,11 @@ const recipientAddress = encodeCashAddress({
   type: 'p2pkh',
 }).address;
 const changeAddress = addressFor(publicKey, 'bchtest');
+const tokenChangeAddress = encodeCashAddress({
+  payload: hash160(publicKey),
+  prefix: 'bchtest',
+  type: 'p2pkhWithTokens',
+}).address;
 
 function makeInput(
   overrides: Partial<{
@@ -209,12 +226,120 @@ function wrapSignedPsbt(
     proposal.outputs.map((output) => ({
       lockingBytecode: hexToBin(output.lockingBytecodeHex),
       satoshis: output.satoshis,
+      token: output.token,
     })),
     proposal.sighashType
   );
 }
 
 describe('buildWatchOnlyPsbt', () => {
+  it('allows a BCH recipient when only the change output carries tokens', () => {
+    const token: PsbtTokenSpec = {
+      category: new Uint8Array(32).fill(0x42),
+      amount: 7n,
+    };
+    const result = buildWatchOnlyPsbt({
+      inputs: [{ ...makeInput(), token }],
+      recipient: recipientAddress,
+      amountSats: 30_000n,
+      changeAddress: tokenChangeAddress,
+      accountPath: ACCOUNT_PATH,
+      masterFingerprint: FINGERPRINT,
+      changeToken: token,
+      tokenIntent: 'preserve',
+    });
+
+    expect(result.outputs[0].token).toBeUndefined();
+    expect(result.outputs.find((output) => output.isChange)?.token).toEqual(
+      token
+    );
+  });
+
+  it('keeps fingerprints paired with cosigners after BIP-67 sorting', () => {
+    const keyA = Uint8Array.from([2, ...new Uint8Array(32).fill(0x11)]);
+    const keyB = Uint8Array.from([3, ...new Uint8Array(32).fill(0x22)]);
+    const policy: MultisigPolicy = {
+      name: 'Shared',
+      m: 2,
+      accountPath: ACCOUNT_PATH,
+      signers: [
+        {
+          id: 'alice',
+          name: 'Alice',
+          xpub: 'xpub-alice',
+          masterFingerprintHex: 'aabbccdd',
+          accountPath: ACCOUNT_PATH,
+        },
+        {
+          id: 'bob',
+          name: 'Bob',
+          xpub: 'xpub-bob',
+          masterFingerprintHex: '11223344',
+          accountPath: ACCOUNT_PATH,
+        },
+      ],
+    };
+    const derivations = multisigCosignerDerivations(
+      policy,
+      [
+        {
+          cosignerId: 'bob',
+          publicKey: keyB,
+          sortedPosition: 0,
+          derivationPath: `${ACCOUNT_PATH}/0/7`,
+        },
+        {
+          cosignerId: 'alice',
+          publicKey: keyA,
+          sortedPosition: 1,
+          derivationPath: `${ACCOUNT_PATH}/0/7`,
+        },
+      ],
+      0,
+      7,
+      ACCOUNT_PATH
+    );
+
+    expect(derivations).toEqual([
+      {
+        publicKeyHex: binToHex(keyA),
+        masterFingerprintHex: 'aabbccdd',
+        derivationPath: `${ACCOUNT_PATH}/0/7`,
+      },
+      {
+        publicKeyHex: binToHex(keyB),
+        masterFingerprintHex: '11223344',
+        derivationPath: `${ACCOUNT_PATH}/0/7`,
+      },
+    ]);
+  });
+
+  it('uses an explicit 1 sat/byte fee rate when requested', () => {
+    const input = makeInput();
+    const result = buildWatchOnlyPsbt({
+      inputs: [input],
+      recipient: recipientAddress,
+      amountSats: 30_000n,
+      changeAddress,
+      accountPath: ACCOUNT_PATH,
+      masterFingerprint: FINGERPRINT,
+      feeRateSatPerByte: 1,
+    });
+    const estimatedFinalBytes = estimateFinalTransactionBytes(
+      [input],
+      result.outputs.map((output) => ({
+        bytecode: hexToBin(output.lockingBytecodeHex),
+        satoshis: output.satoshis,
+        token: output.token,
+      }))
+    );
+
+    expect(feeForTransactionBytes(estimatedFinalBytes, 1)).toBe(
+      BigInt(estimatedFinalBytes)
+    );
+    expect(result.feeSats).toBe(BigInt(estimatedFinalBytes));
+  });
+
   it('builds an unsigned PSBT with correct change and fee', () => {
     const result = buildWatchOnlyPsbt({
       inputs: [makeInput()],
@@ -274,6 +399,55 @@ describe('buildWatchOnlyPsbt', () => {
         sighashType: 0x43,
       })
     ).toThrow(/SIGHASH_SINGLE.*matching output/i);
+  });
+
+  it('sizes multisig inputs for their final P2SH unlocking script', () => {
+    const secondPrivateKey = Uint8Array.from(new Uint8Array(32).fill(0x21));
+    const secondPublicKey =
+      secp256k1.derivePublicKeyCompressed(secondPrivateKey);
+    const redeemScript = buildMultisigRedeemScript(
+      [publicKey, secondPublicKey],
+      2
+    );
+    const lockingBytecode = p2shLockingBytecodeFor(redeemScript);
+    const parent = makeParentTransaction({
+      lockingBytecode,
+      satoshis: 100_000n,
+      seed: 0x55,
+    });
+    const input = {
+      txid: parent.txid,
+      vout: 0,
+      satoshis: 100_000n,
+      lockingBytecodeHex: binToHex(lockingBytecode),
+      publicKeyHex: binToHex(publicKey),
+      branchIndex: 0 as const,
+      addressIndex: 0,
+      previousTransactionHex: parent.hex,
+      redeemScriptHex: binToHex(redeemScript),
+      requiredSignatures: 2,
+    };
+    const result = buildWatchOnlyPsbt({
+      inputs: [input],
+      recipient: recipientAddress,
+      amountSats: 50_000n,
+      changeAddress,
+      accountPath: ACCOUNT_PATH,
+      masterFingerprint: FINGERPRINT,
+    });
+
+    const estimatedFinalBytes = estimateFinalTransactionBytes(
+      [input],
+      result.outputs.map((output) => ({
+        bytecode: hexToBin(output.lockingBytecodeHex),
+        satoshis: output.satoshis,
+        token: output.token,
+      }))
+    );
+    expect(result.feeSats).toBe(relayFeeForBytes(estimatedFinalBytes));
+    // A P2PKH-sized estimate would underpay this 2-of-2 transaction by more
+    // than one hundred sats and can trigger BCHN's code-66 relay rejection.
+    expect(result.feeSats).toBeGreaterThan(300n);
   });
 
   it('omits change below dust (leftover goes to fee)', () => {
@@ -454,6 +628,57 @@ describe('watch-only import verification', () => {
       masterFingerprint: FINGERPRINT,
     });
     expect(built.signerRecognisesInputs).toBe(true);
+  });
+
+  it('keeps CashToken outputs in the final raw transaction after signature merge', () => {
+    const token: PsbtTokenSpec = {
+      category: new Uint8Array(32).fill(0x42),
+      amount: 7n,
+    };
+    const input = makeInput();
+    const unsigned = encodeUnsignedPsbt(
+      [
+        {
+          txid: input.txid,
+          vout: input.vout,
+          satoshis: input.satoshis,
+          lockingBytecode: hexToBin(input.lockingBytecodeHex),
+          publicKey: publicKey,
+          masterFingerprint: FINGERPRINT,
+          derivationPath: [HARDENED | 44, HARDENED | 145, HARDENED, 1, 0],
+          previousTransaction: hexToBin(input.previousTransactionHex!),
+        },
+      ],
+      [
+        {
+          lockingBytecode: hexToBin(input.lockingBytecodeHex),
+          satoshis: 49_000n,
+          token,
+        },
+      ]
+    );
+    const parsed = decodePsbt(unsigned);
+    const proposal: WatchOnlyProposal = {
+      rawUnsignedHex: binToHex(parsed.unsignedTransaction),
+      inputs: [input],
+      outputs: [
+        {
+          lockingBytecodeHex: input.lockingBytecodeHex,
+          satoshis: 49_000n,
+          isChange: false,
+          token,
+        },
+      ],
+      sighashType: 0x41,
+    };
+    const signed = wrapSignedPsbt(proposal, [signInput(proposal, 0)]);
+    const raw = mergeImportedSignatures(signed, proposal);
+    const decoded = decodeTransaction(hexToBin(raw));
+    expect(typeof decoded).not.toBe('string');
+    if (typeof decoded !== 'string') {
+      expect(decoded.outputs[0].token?.category).toEqual(token.category);
+      expect(decoded.outputs[0].token?.amount).toBe(7n);
+    }
   });
 
   it('accepts a DER signature as well as a Schnorr one', () => {

@@ -56,12 +56,14 @@ function tinySecp256k1SyncLoaderPlugin(): Plugin {
 
 export default defineConfig(({ mode }) => {
   const BROWSER_CONDITIONS = ['browser', 'module', 'import', 'default'];
+  const webCacheDir =
+    process.env.OPTN_VITE_CACHE_DIR ?? 'node_modules/.vite-web';
 
   return {
     base: mode === 'development' ? '/' : './',
     // Keep the browser optimizer independent from the desktop/Tauri optimizer.
     // Both dev servers may run at the same time during integration testing.
-    cacheDir: resolvePath(__dirname, 'node_modules/.vite-web'),
+    cacheDir: resolvePath(__dirname, webCacheDir),
     // Vite 8 / rolldown enforces stricter CommonJS interop, which makes some CJS
     // default imports resolve to a namespace object → React "element type is invalid"
     // (#130) → blank screen. Restore Rollup's permissive interop.

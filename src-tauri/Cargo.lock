@@ -2987,6 +2987,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
+name = "optn-multisig-core"
+version = "1.7.3"
+dependencies = [
+ "k256",
+ "ripemd",
+ "sha2",
+]
+
+[[package]]
 name = "optn-wallet-desktop"
 version = "1.7.3"
 dependencies = [
@@ -3001,6 +3010,7 @@ dependencies = [
  "log",
  "num-bigint",
  "once_cell",
+ "optn-multisig-core",
  "prost",
  "prost-build",
  "protox",

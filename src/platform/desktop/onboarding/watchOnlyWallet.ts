@@ -308,7 +308,7 @@ export async function watchOnlyMultisigPolicy(
   const dbService = DatabaseService();
   await dbService.ensureDatabaseStarted();
   const db = dbService.getDatabase();
-  if (!db) return null;
+    if (!db) return null;
 
   const query = db.prepare(
     'SELECT multisig_policy FROM wallets WHERE id = ? AND walletType = ?'

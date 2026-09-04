@@ -180,4 +180,28 @@ describe('DesktopLandingPage UI', () => {
       screen.getByRole('button', { name: 'Watch-only preview' })
     ).toBeInTheDocument();
   });
+
+  it('does not expose the internal mobile multisig wallet in the desktop picker', async () => {
+    mocks.getAllWallets.mockResolvedValue([
+      {
+        id: 7,
+        wallet_name: 'Demo Wallet',
+        networkType: 'mainnet',
+        walletType: 'standard',
+      },
+      {
+        id: 8,
+        wallet_name: 'Mobile Internal Policy',
+        networkType: 'mainnet',
+        walletType: 'multisig',
+      },
+    ]);
+
+    render(<DesktopLandingPage />);
+
+    expect(await screen.findByText('Demo Wallet')).toBeInTheDocument();
+    expect(
+      screen.queryByText('Mobile Internal Policy')
+    ).not.toBeInTheDocument();
+  });
 });

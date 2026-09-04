@@ -3,6 +3,8 @@ export const ROUTE_PATHS = {
   landing: '/landing',
   createWallet: '/createwallet',
   importWallet: '/importwallet',
+  multisigSetup: '/multisig/setup',
+  multisigWorkspace: '/multisig/:wallet_id/*',
   home: '/home/:wallet_id',
   assets: '/assets',
   actions: '/actions',
@@ -48,6 +50,24 @@ export function homeRoute(walletId: string | number | null | undefined) {
   return `/home/${walletId ?? ''}`;
 }
 
-export function transactionsRoute(walletId: string | number | null | undefined) {
+export type MultisigRouteSection =
+  | 'home'
+  | 'receive'
+  | 'send'
+  | 'sign'
+  | 'policy';
+
+/** Routes for the multisig workspace are intentionally separate from the regular wallet UI. */
+export function multisigRoute(
+  walletId: string | number | null | undefined,
+  section: MultisigRouteSection = 'home'
+) {
+  const base = `/multisig/${walletId ?? ''}`;
+  return section === 'home' ? base : `${base}/${section}`;
+}
+
+export function transactionsRoute(
+  walletId: string | number | null | undefined
+) {
   return `/transactions/${walletId ?? ''}`;
 }

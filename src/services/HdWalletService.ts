@@ -448,6 +448,24 @@ export async function deriveHdPublicKeyAtPath(
   }
 }
 
+/** Derive the BIP32 master fingerprint without exposing the root key. */
+export async function deriveMasterFingerprint(
+  mnemonic: string,
+  passphrase: string
+): Promise<Uint8Array> {
+  const seed = Uint8Array.from(
+    await bip39.mnemonicToSeed(mnemonic, passphrase)
+  );
+  const rootNode = deriveHdPrivateNodeFromSeed(seed, { assumeValidity: true });
+  try {
+    const rootPublicNode = deriveHdPublicNode(rootNode);
+    return Uint8Array.from(hash160(rootPublicNode.publicKey).slice(0, 4));
+  } finally {
+    zeroize(seed);
+    zeroize(rootNode.privateKey);
+  }
+}
+
 export async function deriveHdPrivateKeyAtPath(
   mnemonic: string,
   passphrase: string,
