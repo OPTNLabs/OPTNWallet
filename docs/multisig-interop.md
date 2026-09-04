@@ -202,14 +202,63 @@ signer of either persuasion. The test pins that number, so if the format ever
 grows past the boundary it fails loudly rather than silently. CompactSize is
 written anyway, being correct at every length.
 
-### Still not implemented
+### Anchored against the specification's own vectors
 
-- **Encrypted records.** BSMS allows a token; Paytaca encrypts round 2 with
-  AES-256-GCM and round 1 with ECIES. Only `token 00` — plaintext — is read, and
-  an encrypted record is refused by name rather than mis-parsed as corrupt.
-- **Nothing has been exchanged with a running Paytaca.** All of the above is
-  checked against their source and against BIP-129, not against a record their
-  app produced.
+BIP-129 publishes test vectors, and running them found two things this got
+wrong — neither of which its own tests could have caught, because a test that
+signs a record and then verifies it proves the digest is built *consistently*,
+not correctly. Two mistakes that cancel look exactly like success.
+
+**Signatures come in two encodings.** The BIP says the signature "should follow
+BIP-0322, legacy format accepted", and every record in its vectors uses that
+legacy form: base64, 65 bytes, a recovery header then r and s. Paytaca writes
+DER hex instead (`signMessageHashDER`). Both are read now; anything that is
+neither is refused rather than coerced.
+
+**Multisig accounts sit one level deeper than single-sig ones.** BIP-48 puts
+the script type at `m/48'/coin'/account'/script_type'`, which is what Sparrow,
+Specter, Keystone and BIP-129's vectors all use. This required depth 3, so it
+rejected all of them — including the records printed in the specification —
+with "use a hardened BIP44 account xPub at depth 3". Paytaca uses
+`m/44'/145'/0'`, depth 3, which is exactly why nothing here ever hit it. The
+multisig path now takes depth 3 or 4; watch-only single-sig still requires 3,
+because depth 4 there would be wrong.
+
+### Encryption
+
+Implemented, and every parameter is pinned by the published vector rather than
+read off the prose. Two phrases were genuinely ambiguous — `Salt = TOKEN`, and
+`HMAC(..., hex-encoded TOKEN || Data)` — and the vector resolves them
+**differently**:
+
+| Input | Reading | How it was settled |
+| --- | --- | --- |
+| PBKDF2 salt | the token's **raw bytes** | only this reproduces the published `ENCRYPTION_KEY` |
+| MAC prefix | the token's **hex spelling**, ASCII | only this reproduces the published `MAC` |
+
+That asymmetry is the specification's own. Guessing either way yields files no
+other wallet can open, and nothing in the text tells you which is meant.
+
+The test reproduces every published value in turn — derived key, HMAC key, tag,
+IV, then the whole encrypted file byte for byte — and decrypts the published
+file back to a record whose signature verifies.
+
+Decryption checks the tag over the decrypted plaintext, in constant time,
+*before* returning anything. AES-CTR will "decrypt" any bytes handed to it, so
+without that check an altered record produces plausible text rather than an
+error, and a swapped key would read as though the sender wrote it.
+
+Note this is BIP-129's scheme, **not Paytaca's**: `bsms.js` uses AES-256-GCM for
+round 2 and ECIES for round 1. Interoperating with their encrypted flow would be
+separate work; their plaintext flow, which is what they default to, works.
+
+### Still not proven
+
+- **Nothing has been exchanged with a running Paytaca.** Everything here is
+  checked against their source, against BIP-129, and against the BIP's vectors —
+  not against a file one of their apps produced.
+- **Their encrypted records use a different scheme** to the one implemented, as
+  above.
 
 ## One difference worth knowing
 
