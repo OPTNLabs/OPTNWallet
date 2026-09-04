@@ -113,11 +113,44 @@ pub enum HardwareTransport {
     NativeUsb,
     WebHid,
     WebUsb,
+    /// Bluetooth Low Energy owned by the shell, as a phone app has.
+    NativeBle,
     WebBle,
+    /// Near-field, tap-to-sign. A phone thing; no desktop offers it.
+    Nfc,
     /// Air-gapped animated QR (UR). No cable at all.
     Camera,
+    /// Air-gapped by card: the device writes a file, the wallet reads it.
+    ///
+    /// Keystone's second air-gap channel, for anyone who would rather not hold
+    /// a phone up to a screen. Air-gapped in the same sense the camera is --
+    /// nothing is connected -- but it needs a card reader rather than a lens.
+    MicroSd,
     /// Cross-origin vendor connect page.
     Iframe,
+}
+
+impl HardwareTransport {
+    /// Whether this transport keeps the device disconnected.
+    ///
+    /// The two air-gap channels. A device reachable *only* by these is an
+    /// air-gapped wallet and belongs in that section; one that merely offers
+    /// them among others does not.
+    pub const fn is_air_gapped(self) -> bool {
+        matches!(self, Self::Camera | Self::MicroSd)
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::NativeUsb | Self::WebUsb => "USB",
+            Self::WebHid => "USB (WebHID)",
+            Self::NativeBle | Self::WebBle => "Bluetooth",
+            Self::Nfc => "NFC",
+            Self::Camera => "QR",
+            Self::MicroSd => "microSD",
+            Self::Iframe => "Vendor page",
+        }
+    }
 }
 
 /// What this runtime can actually offer.
@@ -126,8 +159,11 @@ pub struct TransportSupport {
     pub native_usb: bool,
     pub web_hid: bool,
     pub web_usb: bool,
+    pub native_ble: bool,
     pub web_ble: bool,
+    pub nfc: bool,
     pub camera: bool,
+    pub micro_sd: bool,
     pub iframe: bool,
 }
 
@@ -137,8 +173,11 @@ impl TransportSupport {
         native_usb: false,
         web_hid: false,
         web_usb: false,
+        native_ble: false,
         web_ble: false,
+        nfc: false,
         camera: false,
+        micro_sd: false,
         iframe: false,
     };
 
@@ -147,7 +186,10 @@ impl TransportSupport {
             HardwareTransport::NativeUsb => self.native_usb,
             HardwareTransport::WebHid => self.web_hid,
             HardwareTransport::WebUsb => self.web_usb,
+            HardwareTransport::NativeBle => self.native_ble,
             HardwareTransport::WebBle => self.web_ble,
+            HardwareTransport::Nfc => self.nfc,
+            HardwareTransport::MicroSd => self.micro_sd,
             HardwareTransport::Camera => self.camera,
             HardwareTransport::Iframe => self.iframe,
         }
@@ -216,23 +258,78 @@ impl HardwareVendor {
 
     /// Transports this device can be driven over, in preference order.
     ///
-    /// Ported from the React shell's `DEVICE_TRANSPORTS`. Keystone is camera
-    /// only — it never touches a cable, which is why "hardware wallets are
-    /// desktop only" is the wrong gate for it.
+    /// What the *device* is capable of, before any platform is considered.
+    /// What a user is actually offered is the intersection with what the
+    /// runtime provides — see [`connection_methods`].
+    ///
+    /// Checked against vendor documentation rather than assumed, because
+    /// offering a connection a device does not have sends someone to buy a
+    /// cable that was never going to work.
     pub const fn transports(self) -> &'static [HardwareTransport] {
         match self {
+            // Nano X adds Bluetooth to the USB every model has.
             Self::Ledger => &[
                 HardwareTransport::NativeUsb,
                 HardwareTransport::WebHid,
+                HardwareTransport::NativeBle,
                 HardwareTransport::WebBle,
             ],
-            Self::Trezor | Self::OneKey => {
-                &[HardwareTransport::NativeUsb, HardwareTransport::Iframe]
-            }
-            Self::Keystone => &[HardwareTransport::Camera],
+            Self::Trezor => &[
+                HardwareTransport::NativeUsb,
+                HardwareTransport::WebUsb,
+                HardwareTransport::NativeBle,
+                HardwareTransport::Iframe,
+            ],
+            // "Bluetooth, USB, NFC, or QR codes", per OneKey's own
+            // documentation. Air-gap is a *mode* that disables the other
+            // three, not the only thing the device can do -- which is why it
+            // belongs among hardware wallets rather than in the air-gap
+            // section, and why it can be reached on a phone that has only NFC.
+            Self::OneKey => &[
+                HardwareTransport::NativeUsb,
+                HardwareTransport::WebUsb,
+                HardwareTransport::NativeBle,
+                HardwareTransport::Nfc,
+                HardwareTransport::Camera,
+            ],
+            // Air-gapped and nothing else. Its USB-C charges the battery and
+            // flashes firmware; no transaction ever crosses it. QR is the
+            // usual channel and microSD is the alternative for anyone who
+            // would rather not hold a phone up to a screen.
+            Self::Keystone => &[HardwareTransport::Camera, HardwareTransport::MicroSd],
             // The mock needs no transport; it is in-process.
             Self::Mock => &[],
         }
+    }
+
+    /// Whether every way to reach this device keeps it disconnected.
+    ///
+    /// This is what decides which section a device appears in. Keystone is
+    /// air-gapped and nothing else, so it sits under Airgap. OneKey can sign
+    /// over QR too, but it also speaks USB, Bluetooth and NFC, so air-gap is
+    /// one of its options rather than what it is — and it belongs with the
+    /// hardware wallets.
+    pub fn is_air_gapped_only(self) -> bool {
+        !self.transports().is_empty()
+            && self
+                .transports()
+                .iter()
+                .all(|transport| transport.is_air_gapped())
+    }
+
+    /// The ways this device can be reached on this runtime, in preference
+    /// order.
+    ///
+    /// The intersection, and the list a picker shows. It is not a property of
+    /// the device or of the platform alone: a Trezor offers USB and Bluetooth
+    /// on Android and Bluetooth only on iOS, because that is where the two
+    /// lists overlap.
+    pub fn connection_methods(self, support: TransportSupport) -> Vec<HardwareTransport> {
+        self.transports()
+            .iter()
+            .copied()
+            .filter(|&transport| support.provides(transport))
+            .collect()
     }
 
     /// Whether this runtime can reach the device at all.
@@ -669,18 +766,25 @@ mod tests {
             assert_eq!(vendor.unreachable_reason(desktop), None);
         }
 
-        // A phone has a camera and no USB stack. Keystone is air-gapped, so it
-        // works there even though the cabled devices do not — treating
-        // "hardware" as one desktop-only switch would wrongly hide it.
-        let phone = TransportSupport {
+        // A camera and nothing else. Keystone is air-gapped so it works, and
+        // so does OneKey -- it can sign over QR as well as over a cable, which
+        // is exactly why it is not in the air-gap section. Treating "hardware"
+        // as one desktop-only switch would wrongly hide both.
+        let camera_only = TransportSupport {
             camera: true,
             ..TransportSupport::NONE
         };
-        assert!(HardwareVendor::Keystone.is_reachable_with(phone));
-        for vendor in HardwareVendor::USB_DEVICES {
-            assert!(!vendor.is_reachable_with(phone), "{vendor:?}");
+        assert!(HardwareVendor::Keystone.is_reachable_with(camera_only));
+        assert!(
+            HardwareVendor::OneKey.is_reachable_with(camera_only),
+            "OneKey signs over QR too"
+        );
+
+        // The genuinely cable-or-radio-only devices do not, and say so.
+        for vendor in [HardwareVendor::Ledger, HardwareVendor::Trezor] {
+            assert!(!vendor.is_reachable_with(camera_only), "{vendor:?}");
             assert!(vendor
-                .unreachable_reason(phone)
+                .unreachable_reason(camera_only)
                 .is_some_and(|reason| reason.contains("not your cable")));
         }
 
