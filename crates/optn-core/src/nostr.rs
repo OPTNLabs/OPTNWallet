@@ -306,8 +306,12 @@ pub fn decrypt(key: &ConversationKey, payload: &str) -> Result<String> {
         )));
     }
 
-    let mut nonce = [0u8; 32];
-    nonce.copy_from_slice(&raw[1..33]);
+    // The length check above proves there are at least 33 bytes, so this
+    // cannot fail. Saying that with a slice conversion states the invariant
+    // where a zeroed buffer filled afterwards only implies it.
+    let nonce: [u8; 32] = raw[1..33]
+        .try_into()
+        .expect("the payload was checked to be at least 66 bytes");
     let ciphertext = &raw[33..raw.len() - 32];
     let claimed = &raw[raw.len() - 32..];
 
