@@ -13,7 +13,7 @@
 //! no code path that would let it.
 //!
 //! Validation lives in `optn_core::endpoint`, which refuses a plaintext
-//! `ws://` to anything but loopback.
+//! WebSocket to anything but loopback.
 
 use optn_core::endpoint::{
     parse_electrum_endpoint, parse_peer_endpoint, DEFAULT_WSS_PORT, NODE_HINT_PORT,
@@ -313,6 +313,7 @@ mod tests {
             .set(
                 Network::Mainnet,
                 ServerKind::Electrum,
+                // nosemgrep: javascript.lang.security.detect-insecure-websocket.detect-insecure-websocket -- a JavaScript rule on Rust; this code is what refuses remote ws://
                 "ws://fulcrum.example:50003",
             )
             .unwrap_err();
@@ -323,6 +324,7 @@ mod tests {
             .set(
                 Network::Mainnet,
                 ServerKind::Electrum,
+                // nosemgrep: javascript.lang.security.detect-insecure-websocket.detect-insecure-websocket -- a JavaScript rule on Rust; this code is what refuses remote ws://
                 "ws://127.0.0.1:50003"
             )
             .is_ok());
