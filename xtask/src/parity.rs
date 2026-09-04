@@ -303,10 +303,21 @@ fn collect_source_drift(root: &Path, matrix: &Matrix, failures: &mut Vec<String>
     // Ledger, Trezor and OneKey variously speak USB, Bluetooth and NFC, Android
     // supports USB host mode, and Keystone needs only a camera. What is missing
     // is the library, per platform.
-    for platform in ["android", "ios", "web", "extension"] {
+    for platform in ["android", "ios"] {
         if hardware.policy.get(platform).map(String::as_str) != Some("na") {
             failures.push(format!(
                 "hardware_wallet {platform} must stay na until that platform's vendor                  integration exists"
+            ));
+        }
+    }
+    // The browsers drive three of the five devices today -- Ledger over
+    // WebHID, OneKey through its own web SDK, Keystone by camera -- so they
+    // are pass rather than na. An `na` reappearing here means the extension
+    // quietly lost the place people reach for a hardware wallet.
+    for platform in ["web", "extension"] {
+        if hardware.policy.get(platform).map(String::as_str) != Some("pass") {
+            failures.push(format!(
+                "hardware_wallet {platform} must be pass: a Ledger, a OneKey and a Keystone                  are all reachable there"
             ));
         }
     }

@@ -34,23 +34,36 @@ export const CAPABILITIES: Readonly<Record<Capability, CapabilitySpec>> = {
     },
     whenAbsent: 'explain',
   },
+  // Hardware follows the integrations, not the shell. A browser tab and an
+  // extension popup can each drive three of the five devices today: a Ledger
+  // over WebHID, a OneKey through its own web SDK, and a Keystone by camera.
+  // The extension is where people reach for a hardware wallet, so leaving it
+  // off there was the wrong default for a wallet meant to stand in for
+  // MetaMask on Bitcoin Cash.
+  //
+  // The phones stay off because no native plugin exists yet -- not because a
+  // phone cannot reach a device. Android holds a cable, both have radios and
+  // NFC, and a Tangem is a phone-only device.
   hardwareWallet: {
     enabledOn: {
       desktop: true,
       android: false,
       ios: false,
-      web: false,
-      extension: false,
+      web: true,
+      extension: true,
     },
     whenAbsent: 'explain',
   },
+  // Keystone needs no vendor library, no cable and no driver -- only a
+  // camera -- so it reaches every surface that offers hardware at all. It is
+  // the device MetaMask's extension connects by scanning animated QR.
   keystone: {
     enabledOn: {
       desktop: true,
       android: false,
       ios: false,
-      web: false,
-      extension: false,
+      web: true,
+      extension: true,
     },
     whenAbsent: 'explain',
   },

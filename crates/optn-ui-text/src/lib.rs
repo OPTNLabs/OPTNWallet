@@ -573,28 +573,38 @@ mod tests {
 
     #[test]
     fn the_surface_capability_matrix_holds_in_any_renderer() {
-        // Hardware is desktop-only and Watch Only is everywhere. A renderer
-        // cannot widen that, because the list comes from the application.
-        let desktop = renderer(AppSurface::Desktop);
-        assert!(desktop
-            .screen()
-            .actions
-            .contains(&"connect-hardware-wallet".into()));
+        // Watch Only is everywhere and hardware follows the integrations. A
+        // renderer cannot widen either, because both lists come from the
+        // application -- which is the point of checking it from in here.
+        for surface in [AppSurface::Desktop, AppSurface::Web, AppSurface::Extension] {
+            let actions = renderer(surface).screen().actions;
+            assert!(
+                actions.contains(&"connect-hardware-wallet".into()),
+                "{surface:?} can drive a device"
+            );
+        }
+
+        for surface in [AppSurface::Android, AppSurface::Ios] {
+            let ui = renderer(surface);
+            let actions = ui.screen().actions;
+            assert!(
+                !actions.contains(&"connect-hardware-wallet".into()),
+                "{surface:?} has no device integration yet"
+            );
+        }
 
         for surface in [
+            AppSurface::Desktop,
             AppSurface::Android,
             AppSurface::Ios,
             AppSurface::Web,
             AppSurface::Extension,
         ] {
-            let ui = renderer(surface);
-            let actions = ui.screen().actions;
             assert!(
-                !actions.contains(&"connect-hardware-wallet".into()),
-                "{surface:?} has no USB"
-            );
-            assert!(
-                actions.contains(&"watch-only-landing-action".into()),
+                renderer(surface)
+                    .screen()
+                    .actions
+                    .contains(&"watch-only-landing-action".into()),
                 "{surface:?} keeps Watch Only"
             );
         }

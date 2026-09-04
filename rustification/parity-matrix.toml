@@ -96,9 +96,10 @@ evidence = { windows = "unit", linux = "unit", macos = "unit", android = "unit",
 [[feature]]
 id = "hardware_wallet"
 name = "Hardware wallet"
-policy = { windows = "pass", linux = "pass", macos = "pass", android = "na", ios = "na", web = "na", extension = "na" }
-evidence = { windows = "unit", linux = "unit", macos = "unit", android = "hidden", ios = "hidden", web = "hidden", extension = "hidden" }
-na_reason = { android = "USB hardware wallets are desktop-only", ios = "USB hardware wallets are desktop-only", web = "USB hardware wallets are desktop-only", extension = "USB hardware wallets are desktop-only" }
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "na", ios = "na", web = "pass", extension = "pass" }
+evidence = { windows = "unit", linux = "unit", macos = "unit", android = "hidden", ios = "hidden", web = "unit", extension = "unit" }
+evidence_refs = { web = "crates/optn-app/src/lib.rs::hardware_vendors_for", extension = "crates/optn-app/src/lib.rs::hardware_vendors_for" }
+na_reason = { android = "No native device plugin yet; a phone can reach a device, the integration is unwritten", ios = "No native device plugin yet; Bluetooth and NFC are available, the integration is unwritten" }
 
 [[feature]]
 id = "rpa"
