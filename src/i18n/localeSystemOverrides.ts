@@ -70,9 +70,9 @@ export const localeSystemOverrides: Partial<
     'experimental.rpaTitle': 'Endereços de pagamento reutilizáveis (RPA)',
     'experimental.rpaBadge': 'BCH RPA',
     'experimental.rpaDescription':
-      'Gera um Paycode estático (paycode:q...) que você pode compartilhar publicamente. Remetentes derivam um endereço exclusivo para cada pagamento via ECDH — sem transação de notificação e sem inchaço da cadeia. Fundos furtivos recebidos aparecem separadamente como “BCH furtivo”. A varredura exige um servidor compatível com Fulcrum-RPA.',
+      'Gera um Cash Code estático (cashcode:q...) que você pode compartilhar publicamente. Remetentes derivam um endereço exclusivo para cada pagamento via ECDH — sem transação de notificação e sem inchaço da cadeia. Fundos furtivos recebidos aparecem separadamente como “BCH furtivo”. A varredura exige um servidor compatível com Fulcrum-RPA.',
     'experimental.rpaWarning':
-      'Enviar para Paycodes exige grinding de assinatura (ainda não implementado). Recebimento e varredura estão disponíveis.',
+      'Enviar para Cash Codes exige grinding de assinatura (ainda não implementado). Recebimento e varredura estão disponíveis.',
     'experimental.privacy': 'Privacidade',
     'experimental.cashFusionDescription':
       'CashFusion é um protocolo de privacidade sem custódia que combina seus UTXOs com os de outros usuários para quebrar o vínculo do histórico de transações. Conecte-se a um servidor CashFusion para participar. Seus fundos nunca ficam em risco — o protocolo não exige confiança.',
@@ -173,9 +173,9 @@ export const localeSystemOverrides: Partial<
     'experimental.rpaTitle': 'Địa chỉ thanh toán tái sử dụng (RPA)',
     'experimental.rpaBadge': 'BCH RPA',
     'experimental.rpaDescription':
-      'Tạo Paycode tĩnh (paycode:q...) để chia sẻ công khai. Người gửi dẫn xuất địa chỉ dùng một lần cho mỗi khoản thanh toán qua ECDH — không có giao dịch thông báo và không làm phình chuỗi. Tiền ẩn nhận được hiển thị riêng là “BCH ẩn”. Quét cần máy chủ hỗ trợ Fulcrum-RPA.',
+      'Tạo Cash Code tĩnh (cashcode:q...) để chia sẻ công khai. Người gửi dẫn xuất địa chỉ dùng một lần cho mỗi khoản thanh toán qua ECDH — không có giao dịch thông báo và không làm phình chuỗi. Tiền ẩn nhận được hiển thị riêng là “BCH ẩn”. Quét cần máy chủ hỗ trợ Fulcrum-RPA.',
     'experimental.rpaWarning':
-      'Gửi tới Paycode cần signature grinding (chưa triển khai). Có thể nhận và quét.',
+      'Gửi tới Cash Code cần signature grinding (chưa triển khai). Có thể nhận và quét.',
     'experimental.privacy': 'Riêng tư',
     'experimental.cashFusionDescription':
       'CashFusion là giao thức riêng tư không lưu ký, kết hợp UTXO của bạn với người khác để phá liên kết lịch sử giao dịch. Kết nối máy chủ CashFusion để tham gia. Tiền của bạn không gặp rủi ro — giao thức không cần tin cậy.',
@@ -272,9 +272,9 @@ export const localeSystemOverrides: Partial<
     'experimental.rpaTitle': '可重複使用的付款地址（RPA）',
     'experimental.rpaBadge': 'BCH RPA',
     'experimental.rpaDescription':
-      '產生可公開分享的靜態 Paycode（paycode:q...）。寄件者透過 ECDH 為每筆付款導出唯一的一次性地址，不需通知交易，也不會增加鏈上負擔。收到的隱密資金會單獨顯示為「隱密 BCH」。掃描需要支援 Fulcrum-RPA 的伺服器。',
+      '產生可公開分享的靜態 Cash Code（cashcode:q...）。寄件者透過 ECDH 為每筆付款導出唯一的一次性地址，不需通知交易，也不會增加鏈上負擔。收到的隱密資金會單獨顯示為「隱密 BCH」。掃描需要支援 Fulcrum-RPA 的伺服器。',
     'experimental.rpaWarning':
-      '傳送至 Paycode 需要簽章 grinding（尚未實作）。接收與掃描可用。',
+      '傳送至 Cash Code 需要簽章 grinding（尚未實作）。接收與掃描可用。',
     'experimental.privacy': '隱私',
     'experimental.cashFusionDescription':
       'CashFusion 是非託管隱私協定，將您的 UTXO 與其他使用者的 UTXO 結合，以打破交易歷史連結。連線至 CashFusion 伺服器即可參與。資金不會承受風險，協定不需要信任。',
@@ -378,9 +378,9 @@ export const localeSystemOverrides: Partial<
     'experimental.rpaTitle': 'Adresses de paiement réutilisables (RPA)',
     'experimental.rpaBadge': 'BCH RPA',
     'experimental.rpaDescription':
-      'Génère un Paycode statique (paycode:q...) partageable publiquement. Les expéditeurs dérivent une adresse unique par paiement via ECDH, sans transaction de notification ni surcharge de la chaîne. Les fonds furtifs reçus apparaissent séparément comme « BCH furtif ». Le scan nécessite un serveur compatible Fulcrum-RPA.',
+      'Génère un Cash Code statique (cashcode:q...) partageable publiquement. Les expéditeurs dérivent une adresse unique par paiement via ECDH, sans transaction de notification ni surcharge de la chaîne. Les fonds furtifs reçus apparaissent séparément comme « BCH furtif ». Le scan nécessite un serveur compatible Fulcrum-RPA.',
     'experimental.rpaWarning':
-      'L’envoi vers des Paycodes exige du signature grinding (non implémenté). La réception et le scan sont disponibles.',
+      'L’envoi vers des Cash Codes exige du signature grinding (non implémenté). La réception et le scan sont disponibles.',
     'experimental.privacy': 'Confidentialité',
     'experimental.cashFusionDescription':
       'CashFusion est un protocole de confidentialité non dépositaire qui combine vos UTXO avec ceux d’autres utilisateurs afin de rompre le lien de l’historique des transactions. Connectez-vous à un serveur CashFusion pour participer. Vos fonds ne sont jamais en danger : le protocole ne repose pas sur la confiance.',
@@ -484,9 +484,9 @@ export const localeSystemOverrides: Partial<
     'experimental.rpaTitle': '재사용 가능한 결제 주소(RPA)',
     'experimental.rpaBadge': 'BCH RPA',
     'experimental.rpaDescription':
-      '공개적으로 공유할 수 있는 정적 Paycode(paycode:q...)를 생성합니다. 송금자는 ECDH로 결제마다 고유한 일회성 주소를 파생합니다. 알림 트랜잭션이나 체인 부풀림이 없습니다. 받은 스텔스 자금은 “스텔스 BCH”로 따로 표시됩니다. 스캔에는 Fulcrum-RPA 서버가 필요합니다.',
+      '공개적으로 공유할 수 있는 정적 Cash Code(cashcode:q...)를 생성합니다. 송금자는 ECDH로 결제마다 고유한 일회성 주소를 파생합니다. 알림 트랜잭션이나 체인 부풀림이 없습니다. 받은 스텔스 자금은 “스텔스 BCH”로 따로 표시됩니다. 스캔에는 Fulcrum-RPA 서버가 필요합니다.',
     'experimental.rpaWarning':
-      'Paycode로 보내려면 서명 grinding이 필요하며 아직 구현되지 않았습니다. 수신과 스캔은 사용할 수 있습니다.',
+      'Cash Code로 보내려면 서명 grinding이 필요하며 아직 구현되지 않았습니다. 수신과 스캔은 사용할 수 있습니다.',
     'experimental.privacy': '개인정보 보호',
     'experimental.cashFusionDescription':
       'CashFusion은 다른 사용자의 UTXO와 내 UTXO를 결합해 거래 기록의 연결을 끊는 비수탁 개인정보 프로토콜입니다. 참여하려면 CashFusion 서버에 연결하세요. 프로토콜은 신뢰가 필요 없으므로 자금은 위험하지 않습니다.',
@@ -592,9 +592,9 @@ export const localeSystemOverrides: Partial<
     'experimental.rpaTitle': '再利用可能な支払いアドレス（RPA）',
     'experimental.rpaBadge': 'BCH RPA',
     'experimental.rpaDescription':
-      '公開共有できる静的 Paycode（paycode:q...）を生成します。送信者は ECDH で支払いごとの固有の使い捨てアドレスを導出します。通知トランザクションもチェーンの肥大化もありません。受け取ったステルス資金は「ステルス BCH」として別に表示されます。スキャンには Fulcrum-RPA 対応サーバーが必要です。',
+      '公開共有できる静的 Cash Code（cashcode:q...）を生成します。送信者は ECDH で支払いごとの固有の使い捨てアドレスを導出します。通知トランザクションもチェーンの肥大化もありません。受け取ったステルス資金は「ステルス BCH」として別に表示されます。スキャンには Fulcrum-RPA 対応サーバーが必要です。',
     'experimental.rpaWarning':
-      'Paycode への送信には署名 grinding が必要ですが、まだ実装されていません。受取とスキャンは利用できます。',
+      'Cash Code への送信には署名 grinding が必要ですが、まだ実装されていません。受取とスキャンは利用できます。',
     'experimental.privacy': 'プライバシー',
     'experimental.cashFusionDescription':
       'CashFusion は、他のユーザーの UTXO と組み合わせて取引履歴のリンクを切る非カストディアルなプライバシープロトコルです。参加するには CashFusion サーバーに接続します。信頼不要のプロトコルなので資金が危険にさらされることはありません。',
@@ -697,9 +697,9 @@ export const localeSystemOverrides: Partial<
     'experimental.rpaTitle': 'Повторно используемые платёжные адреса (RPA)',
     'experimental.rpaBadge': 'BCH RPA',
     'experimental.rpaDescription':
-      'Создаёт статический Paycode (paycode:q...), которым можно делиться публично. Отправители выводят уникальный одноразовый адрес для каждого платежа через ECDH — без транзакции уведомления и раздувания цепочки. Полученные скрытые средства отображаются отдельно как «Скрытый BCH». Для сканирования нужен сервер Fulcrum-RPA.',
+      'Создаёт статический Cash Code (cashcode:q...), которым можно делиться публично. Отправители выводят уникальный одноразовый адрес для каждого платежа через ECDH — без транзакции уведомления и раздувания цепочки. Полученные скрытые средства отображаются отдельно как «Скрытый BCH». Для сканирования нужен сервер Fulcrum-RPA.',
     'experimental.rpaWarning':
-      'Отправка на Paycode требует signature grinding (ещё не реализовано). Получение и сканирование доступны.',
+      'Отправка на Cash Code требует signature grinding (ещё не реализовано). Получение и сканирование доступны.',
     'experimental.privacy': 'Конфиденциальность',
     'experimental.cashFusionDescription':
       'CashFusion — некастодиальный протокол конфиденциальности, который объединяет ваши UTXO с UTXO других пользователей и разрывает связи истории транзакций. Подключитесь к серверу CashFusion для участия. Средства не подвергаются риску: протокол не требует доверия.',
@@ -802,9 +802,9 @@ export const localeSystemOverrides: Partial<
     'experimental.rpaTitle': 'Adireshin biyan kuɗi da za a sake amfani (RPA)',
     'experimental.rpaBadge': 'BCH RPA',
     'experimental.rpaDescription':
-      'Yana ƙirƙirar Paycode na dindindin (paycode:q...) da za ka iya raba a fili. Masu aikawa suna samo adireshi na sau ɗaya na musamman ga kowane biyan kuɗi ta ECDH — babu cinikin sanarwa ko kumburin sarka. Kuɗin ɓoye da aka karɓa suna bayyana daban a matsayin “BCH na ɓoye”. Dubawa na buƙatar server mai Fulcrum-RPA.',
+      'Yana ƙirƙirar Cash Code na dindindin (cashcode:q...) da za ka iya raba a fili. Masu aikawa suna samo adireshi na sau ɗaya na musamman ga kowane biyan kuɗi ta ECDH — babu cinikin sanarwa ko kumburin sarka. Kuɗin ɓoye da aka karɓa suna bayyana daban a matsayin “BCH na ɓoye”. Dubawa na buƙatar server mai Fulcrum-RPA.',
     'experimental.rpaWarning':
-      'Aika zuwa Paycode yana buƙatar signature grinding (ba a aiwatar ba tukuna). Karɓa da dubawa suna samuwa.',
+      'Aika zuwa Cash Code yana buƙatar signature grinding (ba a aiwatar ba tukuna). Karɓa da dubawa suna samuwa.',
     'experimental.privacy': 'Sirri',
     'experimental.cashFusionDescription':
       'CashFusion yarjejeniya ce ta sirri marar riƙon kuɗi wadda ke haɗa UTXO ɗinka da na wasu don karya alaƙar tarihin ciniki. Haɗa CashFusion server don shiga. Kuɗinka ba sa cikin haɗari — yarjejeniyar ba ta buƙatar amincewa.',
