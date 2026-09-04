@@ -25,6 +25,7 @@ fn vendor_hint(vendor: HardwareVendor) -> &'static str {
         HardwareVendor::Trezor => "Confirm the export on the device screen",
         HardwareVendor::OneKey => "Confirm the export on the device screen",
         HardwareVendor::Keystone => "Air-gapped: show the account QR on the device",
+        HardwareVendor::Tangem => "Hold the card against the phone until it reads",
         HardwareVendor::Mock => "Test signer, not for real funds",
     }
 }
