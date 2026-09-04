@@ -377,6 +377,278 @@ pub fn descriptor_set(
     })
 }
 
+/// The longest descriptor this will look at.
+///
+/// Bounded because the input is someone else's file. BIP-380's checksum
+/// guarantees it catches up to four errors in a descriptor of 501 characters
+/// or fewer, and a 4-of-N with key origins is longer than that -- so the cap
+/// is generous rather than 501, and the weaker guarantee on long descriptors
+/// is a fact about the format rather than something to enforce away.
+const MAX_DESCRIPTOR_LEN: usize = 10_000;
+
+/// A cosigner as a descriptor described it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DescriptorKey {
+    pub master_fingerprint: String,
+    /// The account path, as `m/44'/145'/0'`.
+    pub account_path: String,
+    pub account_xpub: String,
+}
+
+/// What a `sh(sortedmulti(...))` descriptor said.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedDescriptor {
+    pub required: u8,
+    pub keys: Vec<DescriptorKey>,
+    /// 0 for receive, 1 for change.
+    pub branch: u32,
+    /// Whether the input carried a checksum that verified.
+    ///
+    /// A descriptor without one is accepted, because the format makes it
+    /// optional -- but the caller should say so, since an unchecked descriptor
+    /// is a wallet nobody proved was typed correctly.
+    pub checksum_verified: bool,
+}
+
+/// Read a multisig descriptor someone else produced.
+///
+/// This is the hostile-input direction. Getting it wrong does not fail loudly:
+/// a descriptor misread produces a *valid* wallet at addresses that are not
+/// the ones the money is at, and the symptom is an empty balance. So the rule
+/// throughout is to refuse anything not understood exactly, rather than to
+/// interpret generously.
+///
+/// Accepted: `sh(sortedmulti(m, key, key, ...))`, optionally checksummed.
+/// Everything else is refused with the reason, including several things that
+/// look close enough to be dangerous.
+pub fn parse_descriptor(input: &str) -> Result<ParsedDescriptor> {
+    let input = input.trim();
+    if input.is_empty() {
+        return Err(CliError::Usage("no descriptor was given".into()));
+    }
+    if input.len() > MAX_DESCRIPTOR_LEN {
+        return Err(CliError::Usage(format!(
+            "that descriptor is {} characters; the longest accepted is {MAX_DESCRIPTOR_LEN}",
+            input.len()
+        )));
+    }
+
+    // The checksum first, because it is the cheapest way to catch a mistyped
+    // key and everything after this trusts the characters.
+    let (body, checksum_verified) = match input.rsplit_once('#') {
+        Some((body, checksum)) => {
+            let expected = descriptor_checksum(body).ok_or_else(|| {
+                CliError::Usage(
+                    "that descriptor contains a character the format does not allow".into(),
+                )
+            })?;
+            if expected != checksum {
+                return Err(CliError::Usage(format!(
+                    "that descriptor's checksum does not match: it reads '{checksum}' and should \
+                     be '{expected}'. One character is wrong somewhere, and loading it anyway \
+                     would build a different wallet."
+                )));
+            }
+            (body, true)
+        }
+        None => (input, false),
+    };
+
+    // Only P2SH. Bitcoin Cash has no witness scripts, so a wsh() or tr()
+    // descriptor is not a BCH wallet at all -- it is a Bitcoin one, and
+    // opening it here would present someone else's addresses as ours.
+    let inner = body
+        .strip_prefix("sh(")
+        .and_then(|rest| rest.strip_suffix(')'))
+        .ok_or_else(|| {
+            if body.starts_with("wsh(") || body.starts_with("tr(") {
+                CliError::Usage(
+                    "that is a SegWit or Taproot descriptor. Bitcoin Cash has neither, so this \
+                     describes a Bitcoin wallet rather than a Bitcoin Cash one."
+                        .into(),
+                )
+            } else {
+                CliError::Usage(
+                    "only sh(sortedmulti(...)) multisig descriptors can be opened here".into(),
+                )
+            }
+        })?;
+
+    // sortedmulti, never multi. They differ only in whether the keys are
+    // sorted per address, and they produce *different addresses* from the same
+    // keys -- so reading one as the other silently points the wallet at an
+    // empty set.
+    let args = inner
+        .strip_prefix("sortedmulti(")
+        .and_then(|rest| rest.strip_suffix(')'))
+        .ok_or_else(|| {
+            if inner.starts_with("multi(") {
+                CliError::Usage(
+                    "that descriptor uses multi(), which keeps the keys in the order written. \
+                     This wallet builds sortedmulti() addresses (BIP-67), and the two produce \
+                     different addresses from the same keys -- so it is not the same wallet."
+                        .into(),
+                )
+            } else {
+                CliError::Usage(
+                    "only sh(sortedmulti(...)) multisig descriptors can be opened here".into(),
+                )
+            }
+        })?;
+
+    let mut parts = args.split(',');
+    let threshold = parts
+        .next()
+        .ok_or_else(|| CliError::Usage("that descriptor has no threshold".into()))?
+        .trim();
+    let required: u8 = threshold
+        .parse()
+        .map_err(|_| CliError::Usage(format!("'{threshold}' is not a threshold this can read")))?;
+
+    let mut keys = Vec::new();
+    let mut branch: Option<u32> = None;
+    for (index, part) in parts.enumerate() {
+        let (key, key_branch) = parse_descriptor_key(part.trim(), index)?;
+        match branch {
+            None => branch = Some(key_branch),
+            // Every key must be on the same branch, or the descriptor
+            // describes receive addresses for one cosigner and change for
+            // another, which is not a wallet.
+            Some(known) if known != key_branch => {
+                return Err(CliError::Usage(format!(
+                    "cosigner {} is on branch {key_branch} while the first is on branch {known}; \
+                     every key in one descriptor shares a branch",
+                    index + 1
+                )))
+            }
+            Some(_) => {}
+        }
+        keys.push(key);
+    }
+
+    if keys.len() < 2 {
+        return Err(CliError::Usage(
+            "a multisig descriptor needs at least two cosigners".into(),
+        ));
+    }
+    if keys.len() > MAX_COSIGNERS {
+        return Err(CliError::Usage(format!(
+            "that descriptor has {} cosigners; a script can encode at most {MAX_COSIGNERS}",
+            keys.len()
+        )));
+    }
+    if required == 0 || usize::from(required) > keys.len() {
+        return Err(CliError::Usage(format!(
+            "threshold {required} is outside 1..={}",
+            keys.len()
+        )));
+    }
+
+    // Two cosigners with one key is a wallet fewer people control than it
+    // appears to. The same refusal the local path makes.
+    let mut seen: Vec<&str> = keys.iter().map(|key| key.account_xpub.as_str()).collect();
+    seen.sort_unstable();
+    let before = seen.len();
+    seen.dedup();
+    if seen.len() != before {
+        return Err(CliError::Usage(
+            "that descriptor lists the same key twice; each cosigner needs a distinct one".into(),
+        ));
+    }
+
+    Ok(ParsedDescriptor {
+        required,
+        keys,
+        branch: branch.unwrap_or(0),
+        checksum_verified,
+    })
+}
+
+/// One `[fingerprint/path]xpub/branch/*` key expression.
+fn parse_descriptor_key(part: &str, index: usize) -> Result<(DescriptorKey, u32)> {
+    let position = index + 1;
+    let rest = part.strip_prefix('[').ok_or_else(|| {
+        CliError::Usage(format!(
+            "cosigner {position} has no key origin. A descriptor without one loads but cannot be \
+             signed against, because a signer cannot tell which key is its own."
+        ))
+    })?;
+    let (origin, key_and_path) = rest.split_once(']').ok_or_else(|| {
+        CliError::Usage(format!("cosigner {position}'s key origin is not closed"))
+    })?;
+
+    let (fingerprint, origin_path) = origin.split_once('/').ok_or_else(|| {
+        CliError::Usage(format!(
+            "cosigner {position}'s key origin has no derivation path"
+        ))
+    })?;
+    let fingerprint = normalize_master_fingerprint(fingerprint)?.ok_or_else(|| {
+        CliError::Usage(format!(
+            "cosigner {position} has an empty master fingerprint"
+        ))
+    })?;
+
+    // The key's own derivation follows the xpub. Everything after the first
+    // '/' is the branch and the wildcard.
+    let (xpub, derivation) = key_and_path.split_once('/').ok_or_else(|| {
+        CliError::Usage(format!(
+            "cosigner {position} has no branch after its key: expected something like /0/*"
+        ))
+    })?;
+
+    // Hardened derivation below an xpub is impossible -- it needs the private
+    // key -- so a descriptor asking for it is malformed rather than merely
+    // unsupported.
+    if derivation.contains('\'') || derivation.contains('h') || derivation.contains('H') {
+        return Err(CliError::Usage(format!(
+            "cosigner {position} asks for hardened derivation below its xPub, which needs the \
+             private key. A public descriptor cannot do that."
+        )));
+    }
+    let (branch_text, wildcard) = derivation.split_once('/').unwrap_or((derivation, ""));
+    if wildcard != "*" {
+        return Err(CliError::Usage(format!(
+            "cosigner {position} does not end in /*, so it names one address rather than a wallet"
+        )));
+    }
+    let branch: u32 = branch_text.parse().map_err(|_| {
+        CliError::Usage(format!(
+            "cosigner {position}'s branch '{branch_text}' is not a number"
+        ))
+    })?;
+
+    // The xPub itself is validated by the same parser the local path uses, so
+    // a descriptor cannot introduce a key the wallet would otherwise refuse.
+    parse_account_xpub(xpub)?;
+
+    Ok((
+        DescriptorKey {
+            master_fingerprint: fingerprint,
+            account_path: format!("m/{origin_path}"),
+            account_xpub: xpub.to_string(),
+        },
+        branch,
+    ))
+}
+
+impl ParsedDescriptor {
+    /// The cosigners, ready for [`multisig_preview`].
+    ///
+    /// Names are positional: a descriptor carries no names, and inventing ones
+    /// that look like people's would be worse than saying so.
+    pub fn cosigners(&self) -> Vec<Cosigner> {
+        self.keys
+            .iter()
+            .enumerate()
+            .map(|(index, key)| Cosigner {
+                name: format!("Cosigner {}", index + 1),
+                account_xpub: key.account_xpub.clone(),
+                master_fingerprint: Some(key.master_fingerprint.clone()),
+            })
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -421,6 +693,177 @@ mod tests {
             },
         ]
     }
+    #[test]
+    fn a_descriptor_this_wallet_wrote_reads_back_as_the_same_wallet() {
+        // The round trip is the real test of both halves: whatever the text
+        // means, it has to mean the same thing to us twice.
+        let cosigners = two_cosigners();
+        let account = AccountPath::new(145, 0).expect("in range");
+        let set = descriptor_set(2, &cosigners, account).expect("exports");
+
+        let parsed = parse_descriptor(&set.receive).expect("parses");
+        assert_eq!(parsed.required, 2);
+        assert_eq!(parsed.branch, 0);
+        assert!(parsed.checksum_verified);
+        assert_eq!(parsed.keys.len(), 2);
+        assert_eq!(parsed.keys[0].account_path, "m/44'/145'/0'");
+
+        // And the addresses agree, which is the thing that actually matters.
+        let original = multisig_preview(Network::Chipnet, 2, &cosigners).expect("preview");
+        let reopened = multisig_preview(Network::Chipnet, 2, &parsed.cosigners()).expect("preview");
+        assert_eq!(original.receive.address, reopened.receive.address);
+        assert_eq!(original.change.address, reopened.change.address);
+
+        assert_eq!(parse_descriptor(&set.change).expect("parses").branch, 1);
+    }
+
+    #[test]
+    fn a_mistyped_descriptor_is_refused_rather_than_opened_as_another_wallet() {
+        // The failure this protects against is silent: a misread descriptor
+        // builds a valid wallet at addresses the money is not at, and the
+        // symptom is an empty balance.
+        let cosigners = two_cosigners();
+        let account = AccountPath::new(145, 0).expect("in range");
+        let set = descriptor_set(2, &cosigners, account).expect("exports");
+
+        let mut broken: Vec<char> = set.receive.chars().collect();
+        let spot = 20;
+        broken[spot] = if broken[spot] == 'q' { 'p' } else { 'q' };
+        let broken: String = broken.into_iter().collect();
+
+        let error = parse_descriptor(&broken).expect_err("must not open");
+        assert!(
+            error.to_string().contains("checksum does not match"),
+            "{error}"
+        );
+        assert!(error.to_string().contains("different wallet"), "{error}");
+    }
+
+    #[test]
+    fn multi_is_not_sortedmulti_and_saying_so_is_the_whole_point() {
+        // They differ only in whether the keys are sorted per address, and
+        // produce different addresses from the same keys. Reading one as the
+        // other points the wallet at an empty set.
+        let cosigners = two_cosigners();
+        let account = AccountPath::new(145, 0).expect("in range");
+        let sorted = descriptor_set(2, &cosigners, account).expect("exports");
+        let body = sorted.receive.rsplit_once('#').expect("checksummed").0;
+        let unsorted = body.replace("sortedmulti(", "multi(");
+        let unsorted = with_descriptor_checksum(&unsorted).expect("checksums");
+
+        let error = parse_descriptor(&unsorted).expect_err("must not open");
+        assert!(error.to_string().contains("multi()"), "{error}");
+        assert!(error.to_string().contains("different addresses"), "{error}");
+    }
+
+    #[test]
+    fn a_bitcoin_descriptor_is_refused_as_being_for_another_chain() {
+        // Bitcoin Cash has no witness scripts, so wsh() and tr() are not BCH
+        // wallets. Opening one would present someone else's addresses as ours.
+        for foreign in [
+            "wsh(sortedmulti(2,[4c9a1f7b/48'/0'/0'/2']xpub661MyMwAqRbcF/0/*))",
+            "tr(xpub661MyMwAqRbcF)",
+        ] {
+            let error = parse_descriptor(foreign).expect_err("wrong chain");
+            assert!(
+                error.to_string().contains("Bitcoin Cash has neither")
+                    || error.to_string().contains("sortedmulti"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_key_expression_has_to_be_exactly_what_it_claims() {
+        let account = AccountPath::new(145, 0).expect("in range");
+        let good = descriptor_set(2, &two_cosigners(), account).expect("exports");
+        let body = good
+            .receive
+            .rsplit_once('#')
+            .expect("checksummed")
+            .0
+            .to_string();
+
+        // No key origin: loads elsewhere and cannot be signed against.
+        let no_origin = body.replace("[4c9a1f7b/44'/145'/0']", "");
+        assert!(parse_descriptor(&no_origin).is_err());
+
+        // Hardened below the xPub needs the private key, so it is malformed
+        // rather than merely unsupported.
+        let hardened = body.replace("/0/*", "/0'/*");
+        let error = parse_descriptor(&hardened).expect_err("hardened");
+        assert!(
+            error.to_string().contains("needs the private key"),
+            "{error}"
+        );
+
+        // A key naming one address rather than a range is not a wallet.
+        let single = body.replace("/0/*", "/0/7");
+        assert!(parse_descriptor(&single).is_err());
+
+        // Mixed branches describe receive for one cosigner and change for
+        // another, which is not a wallet either.
+        let mixed = body.replacen("/0/*", "/1/*", 1);
+        let error = parse_descriptor(&mixed).expect_err("mixed branches");
+        assert!(error.to_string().contains("shares a branch"), "{error}");
+    }
+
+    #[test]
+    fn the_same_refusals_apply_however_the_policy_arrives() {
+        // A descriptor must not be a way around the checks the local path
+        // makes -- otherwise "import" becomes the hole.
+        let account = AccountPath::new(145, 0).expect("in range");
+        let body = descriptor_set(2, &two_cosigners(), account)
+            .expect("exports")
+            .receive
+            .rsplit_once('#')
+            .expect("checksummed")
+            .0
+            .to_string();
+
+        // Threshold above the cosigner count.
+        let impossible = body.replace("sortedmulti(2,", "sortedmulti(5,");
+        assert!(parse_descriptor(&impossible).is_err());
+
+        // Zero threshold.
+        let zero = body.replace("sortedmulti(2,", "sortedmulti(0,");
+        assert!(parse_descriptor(&zero).is_err());
+
+        // The same key twice is a wallet fewer people control than it looks.
+        let keys: Vec<&str> = body
+            .strip_prefix("sh(sortedmulti(2,")
+            .and_then(|rest| rest.strip_suffix("))"))
+            .expect("shape")
+            .split(',')
+            .collect();
+        let duplicated = format!("sh(sortedmulti(2,{},{}))", keys[0], keys[0]);
+        let error = parse_descriptor(&duplicated).expect_err("duplicate key");
+        assert!(error.to_string().contains("same key twice"), "{error}");
+
+        // And nothing enormous is parsed at all.
+        assert!(parse_descriptor(&"a".repeat(MAX_DESCRIPTOR_LEN + 1)).is_err());
+        assert!(parse_descriptor("").is_err());
+    }
+
+    #[test]
+    fn a_descriptor_without_a_checksum_opens_but_says_it_was_unchecked() {
+        // The format makes the checksum optional, so refusing would lock out
+        // legitimate wallets. Reporting it lets the caller say the wallet was
+        // never proved to be typed correctly.
+        let account = AccountPath::new(145, 0).expect("in range");
+        let body = descriptor_set(2, &two_cosigners(), account)
+            .expect("exports")
+            .receive
+            .rsplit_once('#')
+            .expect("checksummed")
+            .0
+            .to_string();
+
+        let parsed = parse_descriptor(&body).expect("opens");
+        assert!(!parsed.checksum_verified, "and the caller can tell");
+        assert_eq!(parsed.required, 2);
+    }
+
     #[test]
     fn the_descriptor_checksum_matches_the_published_vector() {
         // From BIP-380 itself. A wrong implementation here would produce
