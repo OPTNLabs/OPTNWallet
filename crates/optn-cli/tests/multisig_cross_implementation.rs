@@ -78,7 +78,10 @@ fn both_sort_to_bip67_order_rather_than_input_order() {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect();
-    assert!(hex.find(KEY_B) < hex.find(KEY_A), "BIP-67 order, not input order");
+    assert!(
+        hex.find(KEY_B) < hex.find(KEY_A),
+        "BIP-67 order, not input order"
+    );
 }
 
 #[test]
