@@ -77,30 +77,48 @@ python electron-cash --chipnet addressconvert 2N19tNw3Ss4L9QDERtCw7FhXb6jBsYmeXN
 }
 ```
 
-## Electron Cash does not sort, and that is the useful part
+## Electron Cash sorts — but not in `createmultisig`, which is why this works
 
-`createmultisig` builds the script in the order it is given.
-`electroncash/transaction.py`:
+An earlier version of this document said "Electron Cash does not sort". That is
+wrong about the wallet and right only about the helper, and the difference
+matters enough to correct.
+
+`multisig_script()` in `electroncash/transaction.py` builds the script in the
+order it is handed:
 
 ```python
 def multisig_script(public_keys, m):
+    n = len(public_keys)
+    assert n <= 15
     keylist = [push_script(k) for k in public_keys]
-    return op_m + ''.join(keylist) + op_n + OP_CHECKMULTISIG
 ```
 
-Handing it the same two keys reversed produces a **different address**:
+But the wallet never calls it with an arbitrary order. `get_sorted_pubkeys()`
+sorts first, and is called on every signing and serialisation path
+(`transaction.py` lines 404, 537, 595, 973):
+
+```python
+# Note: this function is CRITICAL to get the correct order of pubkeys in
+# multisignatures; avoid changing.
+pubkeys, x_pubkeys = zip(*sorted(zip(pubkeys, x_pubkeys)))
+```
+
+That sorts on the derived public keys, per input — which is BIP-67, applied per
+address, exactly as `optn_core::multisig` does. So the two agree by construction
+rather than by luck.
+
+What the raw helper gives us is a *test instrument*. Because `createmultisig`
+does no sorting, handing it keys in a chosen order isolates script construction
+— push encoding, `OP_m`/`OP_n`, `OP_CHECKMULTISIG`, hash160, the P2SH wrap —
+from the sort, so agreement on one is not covering for a mistake in the other.
+Handing it the same two keys reversed produces a different address:
 
 | Key order | Address |
 | --- | --- |
 | `02fe…`, `02ff…` (BIP-67 order) | `2N19tNw3Ss4L9QDERtCw7FhXb6jBsYmeXNu` |
 | `02ff…`, `02fe…` (as entered) | `2NAuwhxNprDtAvaJiSTow1pC88fKnFTHseR` |
 
-That is BIP-67's whole reason to exist, demonstrated rather than asserted: the
-same cosigners in a different order are a different wallet unless something
-sorts. It also isolates the comparison usefully — Electron Cash agreeing with
-us on the *script construction* (push encoding, `OP_m`/`OP_n`,
-`OP_CHECKMULTISIG`, hash160, P2SH) is checked separately from our sorting being
-right, rather than the two being tested together and covering for each other.
+which is BIP-67's reason to exist, demonstrated rather than asserted.
 
 ## What this proves, and what it does not
 
