@@ -30,7 +30,8 @@ changes.
 1. Prefer a maintained package with a compatible license and published
    integrity metadata.
 2. Keep direct specs reviewable; do not use `latest`, wildcard, URL, or Git
-   references in `package.json`.
+   references in `package.json`. An in-tree `file:vendor/...` pin is allowed
+   when npm does not publish the required MLS-extensions-draft APIs.
 3. Put runtime packages in `dependencies` and test/build-only packages in
    `devDependencies`.
 4. For crypto, wallet transport, transaction, and native packages, include a

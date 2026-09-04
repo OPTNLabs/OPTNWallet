@@ -1,0 +1,98 @@
+{
+  "name": "ts-mls",
+  "version": "2.0.0-rc.14",
+  "description": "Pinned external ts-mls fork for Paytaca wire compatibility",
+  "homepage": "https://github.com/LukaJCB/ts-mls#readme",
+  "bugs": {
+    "url": "https://github.com/LukaJCB/ts-mls/issues"
+  },
+  "main": "src/index.ts",
+  "types": "dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "files": [
+    "dist/src/**/*.d.ts",
+    "src/"
+  ],
+  "sideEffects": false,
+  "dependencies": {
+    "@hpke/chacha20poly1305": "1.8.0",
+    "@hpke/core": "1.9.0",
+    "@hpke/dhkem-x448": "1.8.0",
+    "@hpke/hybridkem-x-wing": "0.7.0",
+    "@hpke/ml-kem": "0.3.0",
+    "@noble/ciphers": "2.2.0",
+    "@noble/curves": "2.2.0",
+    "@noble/hashes": "2.2.0",
+    "@noble/post-quantum": "0.6.1"
+  },
+  "peerDependencies": {
+    "@hpke/chacha20poly1305": "1.8.0",
+    "@hpke/dhkem-x448": "1.8.0",
+    "@hpke/hybridkem-x-wing": "0.7.0",
+    "@hpke/ml-kem": "0.3.0",
+    "@noble/ciphers": "2.2.0",
+    "@noble/curves": "2.2.0",
+    "@noble/post-quantum": "0.6.1"
+  },
+  "peerDependenciesMeta": {
+    "@hpke/chacha20poly1305": {
+      "optional": true
+    },
+    "@hpke/hybridkem-x-wing": {
+      "optional": true
+    },
+    "@hpke/ml-kem": {
+      "optional": true
+    },
+    "@hpke/dhkem-x448": {
+      "optional": true
+    },
+    "@noble/curves": {
+      "optional": true
+    },
+    "@noble/post-quantum": {
+      "optional": true
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LukaJCB/ts-mls.git"
+  },
+  "license": "MIT",
+  "author": "lukajcb",
+  "type": "module",
+  "keywords": [
+    "mls",
+    "messaging-layer-security",
+    "rfc9420",
+    "hpke",
+    "pqc",
+    "post-quantum",
+    "elliptic",
+    "curve",
+    "cryptography",
+    "ed25519",
+    "p256",
+    "p384",
+    "p521",
+    "ed448",
+    "x25519",
+    "ed25519",
+    "ml-kem",
+    "ml-dsa",
+    "slh-dsa",
+    "kyber",
+    "dilithium",
+    "sphincs",
+    "fips203",
+    "fips204",
+    "fips205",
+    "edwards"
+  ]
+}

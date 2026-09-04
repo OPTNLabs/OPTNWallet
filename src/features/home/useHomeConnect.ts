@@ -13,6 +13,10 @@ import {
   wcPair,
 } from '../../state/slices/walletconnectSlice';
 import {
+  initWizardConnect,
+  wizardConnectPair,
+} from '../../state/slices/wizardconnectSlice';
+import {
   getBarcodeScannerErrorMessage,
   scanBarcodeSafely,
 } from '../../utils/barcodeScanner';
@@ -37,7 +41,8 @@ export function useHomeConnect() {
     (state: RootState) =>
       state.cashconnect.pendingAction ??
       state.walletconnect.pendingSignTx ??
-      state.walletconnect.pendingSignMsg
+      state.walletconnect.pendingSignMsg ??
+      state.wizardconnect.pendingSignRequest
   );
 
   const [popupOpen, setPopupOpen] = useState(false);
@@ -118,8 +123,19 @@ export function useHomeConnect() {
         return true;
       }
 
+      if (parsed.kind === 'wizardconnect') {
+        if (!currentWalletId || currentWalletId <= 0) {
+          throw new Error('No active wallet');
+        }
+        setPopupOpen(false);
+        await dispatch(initWizardConnect(currentWalletId)).unwrap();
+        await dispatch(wizardConnectPair(parsed.uri)).unwrap();
+        setUri('');
+        return true;
+      }
+
       await Toast.show({
-        text: 'Not a supported address, CashConnect invite, or WalletConnect URI.',
+        text: 'Not a supported address, CashConnect invite, WalletConnect URI, or Wizard URI.',
       });
       return false;
     },
