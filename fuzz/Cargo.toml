@@ -27,3 +27,17 @@ path = "fuzz_targets/rpa_decode.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "descriptor_parse"
+path = "fuzz_targets/descriptor_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bsms_parse"
+path = "fuzz_targets/bsms_parse.rs"
+test = false
+doc = false
+bench = false

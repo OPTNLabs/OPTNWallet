@@ -2325,6 +2325,129 @@ mod tests {
         assert_eq!(state.reduce(AppAction::Navigate(AppRoute::Landing)), None);
     }
 
+    /// Two cosigners with fingerprints, built from the shared test mnemonic.
+    ///
+    /// The descriptor tests live in optn-core beside the parser; these live
+    /// here because optn-core carries no dev-dependencies on purpose -- it is
+    /// excluded from the workspace, verified by Kani and built for wasm, and
+    /// keeping it dependency-free is worth more than test proximity.
+    fn descriptor_cosigners() -> Vec<optn_core::multisig::Cosigner> {
+        let wallet =
+            optn_core::hd::Wallet::from_mnemonic(BIP39_TEST_VECTOR_MNEMONIC, "").expect("mnemonic");
+        vec![
+            optn_core::multisig::Cosigner {
+                name: "Ada".into(),
+                account_xpub: wallet.account_xpub(Network::Chipnet, 0).expect("xpub"),
+                master_fingerprint: Some("4c9a1f7b".into()),
+            },
+            optn_core::multisig::Cosigner {
+                name: "Bo".into(),
+                account_xpub: wallet.account_xpub(Network::Chipnet, 1).expect("xpub"),
+                master_fingerprint: Some("0f1e2d3c".into()),
+            },
+        ]
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(256))]
+
+        /// A descriptor is text another wallet wrote, so the inputs that
+        /// matter are the ones nobody thought to write a test for.
+        ///
+        /// Misreading one does not fail loudly: it yields a *valid* wallet at
+        /// addresses the money is not at, and the symptom is an empty balance.
+        /// So the property is not "it parses" but "whatever parses is a
+        /// wallet the type's promises still hold for".
+        #[test]
+        fn arbitrary_text_is_refused_rather_than_misread(raw in ".{0,300}") {
+            if let Ok(parsed) = optn_core::multisig::parse_descriptor(&raw) {
+                proptest::prop_assert!(parsed.keys.len() >= 2);
+                proptest::prop_assert!(parsed.required > 0);
+                proptest::prop_assert!(usize::from(parsed.required) <= parsed.keys.len());
+                proptest::prop_assert!(!parsed.branches.is_empty());
+            }
+        }
+
+        /// The same for a whole BSMS record, which arrives as a file.
+        #[test]
+        fn arbitrary_text_is_not_a_setup_record(raw in ".{0,500}") {
+            if let Ok(record) = optn_core::multisig::parse_bsms_record(&raw) {
+                proptest::prop_assert_eq!(record.version.as_str(), "1.0");
+                proptest::prop_assert!(!record.path_restrictions.is_empty());
+                proptest::prop_assert!(!record.first_address.trim().is_empty());
+            }
+        }
+
+        /// One byte changed in a real descriptor is where a parser actually
+        /// breaks. The shape is still right, so it gets much further in
+        /// before meeting whatever the mutation broke.
+        ///
+        /// The failure to rule out is not a crash. It is a mutated descriptor
+        /// parsing happily into a *different* wallet, which is the case that
+        /// looks like an empty balance instead of an error.
+        #[test]
+        fn a_single_changed_byte_never_yields_a_different_wallet(
+            position in 0usize..512,
+            byte in proptest::prelude::any::<u8>(),
+        ) {
+            let account = AccountPath::new(145, 0).expect("in range");
+            let good = optn_core::multisig::descriptor_set(2, &descriptor_cosigners(), account)
+                .expect("exports")
+                .receive;
+
+            let mut bytes = good.clone().into_bytes();
+            let at = position % bytes.len();
+            bytes[at] = byte;
+            let Ok(mutated) = String::from_utf8(bytes) else {
+                return Ok(());
+            };
+            proptest::prop_assume!(mutated != good);
+
+            if let Ok(parsed) = optn_core::multisig::parse_descriptor(&mutated) {
+                let original =
+                    optn_core::multisig::parse_descriptor(&good).expect("the real one parses");
+                proptest::prop_assert_eq!(
+                    parsed.keys,
+                    original.keys,
+                    "a mutated descriptor parsed into different keys"
+                );
+                proptest::prop_assert_eq!(parsed.required, original.required);
+            }
+        }
+
+        /// Truncation is the other thing that happens to a file: a short read,
+        /// a half-finished download, a copy that missed the last line.
+        ///
+        /// A cut inside the fourth line still leaves four lines, so the record
+        /// parses -- and then fails verification, because the address no
+        /// longer matches the policy. That is the fourth line doing its job.
+        /// What must never happen is a truncated record that both parses and
+        /// verifies, because that is a short read becoming a wallet.
+        #[test]
+        fn truncation_never_produces_a_usable_setup(cut in 0usize..400) {
+            let account = AccountPath::new(145, 0).expect("in range");
+            let body = optn_core::multisig::descriptor_set(2, &descriptor_cosigners(), account)
+                .expect("exports")
+                .receive;
+            let body = body.rsplit_once('#').expect("checksummed").0;
+            let multipath = body.replace("/0/*", "/<0;1>/*");
+            let full = format!(
+                "BSMS 1.0\n{multipath}\n/0/*,/1/*\nbchtest:pr09rncy7wrmcz4qvp36w4y3xcsfk38m559jqz3kz4"
+            );
+
+            let at = cut % full.len();
+            let truncated = &full[..at];
+            proptest::prop_assume!(truncated != full);
+
+            if let Ok(record) = optn_core::multisig::parse_bsms_record(truncated) {
+                proptest::prop_assert!(
+                    record.verify_first_address(Network::Chipnet).is_err(),
+                    "a truncated record verified, so a short read becomes a wallet"
+                );
+            }
+        }
+    }
+
     proptest::proptest! {
         #[test]
         fn arbitrary_action_sequences_keep_view_model_consistent(
