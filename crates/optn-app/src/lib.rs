@@ -141,6 +141,30 @@ impl AppSurface {
     pub const fn is_viewer_only(self) -> bool {
         !self.can_spend()
     }
+
+    /// Whether this surface offers Watch Only onboarding.
+    ///
+    /// True everywhere today, and written out per surface rather than as a
+    /// blanket `true` so withdrawing it from one platform later is a single
+    /// line here instead of a restructure.
+    ///
+    /// Watch Only is the air-gap entry point, not a reduced kind of wallet, so
+    /// the default is to offer it. It needs no transport -- an account xPub can
+    /// be pasted -- which is why it reaches surfaces that can neither open a
+    /// USB device nor a camera.
+    #[allow(
+        clippy::match_like_matches_macro,
+        reason = "the per-surface shape is the feature; today's values all being true is not"
+    )]
+    pub const fn offers_watch_only(self) -> bool {
+        match self {
+            Self::Desktop => true,
+            Self::Android => true,
+            Self::Ios => true,
+            Self::Web => true,
+            Self::Extension => true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -159,14 +183,23 @@ pub struct FeatureFlags {
 }
 
 impl FeatureFlags {
-    /// Hardware wallets and CashFusion are desktop-only flags.
-    /// Watch Only is allowed on every surface; a false override hides it.
+    /// Which surfaces may offer a flag at all, before any user override.
+    ///
+    /// Hardware and CashFusion are desktop-only because both need something
+    /// the other shells do not have: a USB transport, and a long-lived
+    /// background process.
+    ///
+    /// Watch Only is different in kind and is offered everywhere. It is how an
+    /// air-gapped device is added -- SeedCash and Keystone both arrive through
+    /// it -- and unlike hardware it needs no transport at all, because an
+    /// account xPub can be pasted. A popup with no camera and no USB can still
+    /// watch a cold wallet, which is exactly the case for the extension.
     pub const fn surface_allows(surface: AppSurface, flag: FeatureFlag) -> bool {
         match flag {
             FeatureFlag::CashFusion | FeatureFlag::HardwareWallet => {
                 matches!(surface, AppSurface::Desktop)
             }
-            FeatureFlag::WatchOnly => true,
+            FeatureFlag::WatchOnly => surface.offers_watch_only(),
         }
     }
 
@@ -3762,6 +3795,80 @@ mod tests {
         assert_eq!(state.route, AppRoute::Landing);
         assert!(state.wallet.is_none());
         assert!(!state.lock.spend_auth_still_valid(50));
+    }
+
+    #[test]
+    fn watch_only_is_offered_on_every_surface_because_it_is_the_airgap_door() {
+        // Watch Only is how an air-gapped device is added -- SeedCash and
+        // Keystone both arrive through it -- so it is not a reduced kind of
+        // wallet to be rationed by platform. It also needs no transport: an
+        // account xPub can be pasted, which is why it reaches a popup that can
+        // open neither a USB device nor a camera.
+        for surface in [
+            AppSurface::Desktop,
+            AppSurface::Android,
+            AppSurface::Ios,
+            AppSurface::Web,
+            AppSurface::Extension,
+        ] {
+            assert!(surface.offers_watch_only(), "{surface:?}");
+            assert!(
+                FeatureFlags::surface_allows(surface, FeatureFlag::WatchOnly),
+                "{surface:?} must be allowed to offer Watch Only"
+            );
+            let state = AppState::for_surface(surface);
+            assert!(
+                onboarding_actions(&state).contains(&OnboardingAction::CreateWatchOnlyWallet),
+                "{surface:?} must actually offer it on the landing page"
+            );
+        }
+
+        // The contrast that makes the rule a rule rather than a preference:
+        // hardware needs a USB transport, so it is desktop-only. The two are
+        // gated on different things, not on the same "is this a real platform"
+        // instinct.
+        for surface in [
+            AppSurface::Android,
+            AppSurface::Ios,
+            AppSurface::Web,
+            AppSurface::Extension,
+        ] {
+            assert!(
+                !FeatureFlags::surface_allows(surface, FeatureFlag::HardwareWallet),
+                "{surface:?} has no USB"
+            );
+            assert!(
+                surface.offers_watch_only(),
+                "{surface:?} still watches a cold wallet"
+            );
+        }
+    }
+
+    #[test]
+    fn withdrawing_watch_only_from_a_surface_is_one_line() {
+        // The switch exists so a platform can be turned off later without a
+        // restructure. A user override already hides it per install; this is
+        // the build-level half, and today every surface answers true.
+        let hidden = FeatureFlags {
+            watch_only: Some(false),
+            ..FeatureFlags::default()
+        };
+        assert!(!hidden.enabled(AppSurface::Extension, FeatureFlag::WatchOnly));
+
+        // With no override it is on, everywhere.
+        let defaults = FeatureFlags::default();
+        for surface in [
+            AppSurface::Desktop,
+            AppSurface::Android,
+            AppSurface::Ios,
+            AppSurface::Web,
+            AppSurface::Extension,
+        ] {
+            assert!(
+                defaults.enabled(surface, FeatureFlag::WatchOnly),
+                "{surface:?}"
+            );
+        }
     }
 
     #[test]
