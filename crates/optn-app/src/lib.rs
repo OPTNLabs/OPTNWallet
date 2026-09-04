@@ -1871,16 +1871,34 @@ pub use optn_core::multisig::{Cosigner, MultisigPreview, MAX_COSIGNERS};
 /// camera, on phones.
 pub fn transport_support(surface: AppSurface) -> TransportSupport {
     match surface {
+        // A cable, a radio, a camera and a card reader. The desktop has the
+        // most of any surface, but not NFC: no laptop offers it.
         AppSurface::Desktop => TransportSupport {
             native_usb: true,
+            native_ble: true,
             camera: true,
+            micro_sd: true,
             iframe: true,
             ..TransportSupport::NONE
         },
-        AppSurface::Android | AppSurface::Ios => TransportSupport {
+        // A phone with USB host mode, a radio, NFC and a camera -- everything
+        // except a card slot.
+        AppSurface::Android => TransportSupport {
+            native_usb: true,
+            native_ble: true,
+            nfc: true,
             camera: true,
             ..TransportSupport::NONE
         },
+        // iOS gives an app no USB path to a wallet, so Bluetooth and NFC are
+        // the wired-equivalents here, plus the camera.
+        AppSurface::Ios => TransportSupport {
+            native_ble: true,
+            nfc: true,
+            camera: true,
+            ..TransportSupport::NONE
+        },
+        // A browser tab has the web transports and a camera, and no NFC.
         AppSurface::Web => TransportSupport {
             web_hid: true,
             web_usb: true,
@@ -1889,8 +1907,14 @@ pub fn transport_support(surface: AppSurface) -> TransportSupport {
             iframe: true,
             ..TransportSupport::NONE
         },
-        // A popup has no room for a device dance and no camera permission.
-        AppSurface::Extension => TransportSupport::NONE,
+        // A popup can ask for WebHID and WebUSB, which is a device dance it
+        // can complete. It has no camera permission, so nothing air-gapped
+        // works here -- the xPub gets pasted instead.
+        AppSurface::Extension => TransportSupport {
+            web_hid: true,
+            web_usb: true,
+            ..TransportSupport::NONE
+        },
     }
 }
 
@@ -3630,10 +3654,13 @@ mod tests {
     #[test]
     fn transports_decide_reachability_so_keystone_survives_on_a_phone() {
         // The old capability matrix collapsed every device into one
-        // desktop-only switch. Keystone needs a camera, not a cable.
+        // desktop-only switch. Reachability is the device and the platform
+        // together.
         let phone = transport_support(AppSurface::Android);
         assert!(HardwareVendor::Keystone.is_reachable_with(phone));
-        assert!(!HardwareVendor::Ledger.is_reachable_with(phone));
+        // A Nano X speaks Bluetooth, and a phone has a radio, so it is
+        // reachable there -- which the old model denied.
+        assert!(HardwareVendor::Ledger.is_reachable_with(phone));
 
         let desktop = transport_support(AppSurface::Desktop);
         for vendor in HardwareVendor::OFFERED {
@@ -3643,12 +3670,78 @@ mod tests {
         // A browser has WebHID but no native USB, and still reaches a Ledger.
         assert!(HardwareVendor::Ledger.is_reachable_with(transport_support(AppSurface::Web)));
 
-        // A popup reaches nothing, and says why rather than blaming the cable.
+        // A popup can do a WebHID dance but has no camera, so an air-gapped
+        // device is out of reach there and says why.
         let popup = transport_support(AppSurface::Extension);
+        assert!(HardwareVendor::Ledger.is_reachable_with(popup));
         assert!(!HardwareVendor::Keystone.is_reachable_with(popup));
         assert!(HardwareVendor::Keystone
             .unreachable_reason(popup)
             .is_some_and(|reason| reason.contains("camera")));
+    }
+
+    #[test]
+    fn the_connection_methods_offered_are_the_device_and_the_platform_together() {
+        // Neither list alone decides it. A Trezor speaks USB and Bluetooth; a
+        // phone has both and an iPhone has only the radio, so the same device
+        // offers two methods on Android and one on iOS.
+        let android = transport_support(AppSurface::Android);
+        let ios = transport_support(AppSurface::Ios);
+
+        let trezor_android = HardwareVendor::Trezor.connection_methods(android);
+        assert!(trezor_android.contains(&HardwareTransport::NativeUsb));
+        assert!(trezor_android.contains(&HardwareTransport::NativeBle));
+
+        let trezor_ios = HardwareVendor::Trezor.connection_methods(ios);
+        assert_eq!(trezor_ios, vec![HardwareTransport::NativeBle]);
+
+        // OneKey is the interesting one: USB, Bluetooth, NFC or QR. On an
+        // iPhone that is radio, tap and camera -- three ways in, on the
+        // platform with no cable at all.
+        let onekey_ios = HardwareVendor::OneKey.connection_methods(ios);
+        assert!(onekey_ios.contains(&HardwareTransport::NativeBle));
+        assert!(onekey_ios.contains(&HardwareTransport::Nfc));
+        assert!(onekey_ios.contains(&HardwareTransport::Camera));
+        assert!(!onekey_ios.contains(&HardwareTransport::NativeUsb));
+
+        // No desktop has NFC, so the tap option simply is not offered there.
+        let desktop = transport_support(AppSurface::Desktop);
+        assert!(!HardwareVendor::OneKey
+            .connection_methods(desktop)
+            .contains(&HardwareTransport::Nfc));
+
+        // And every method offered has a name to put on a button.
+        for vendor in HardwareVendor::OFFERED {
+            for method in vendor.connection_methods(desktop) {
+                assert!(!method.label().is_empty(), "{vendor:?} {method:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn which_section_a_device_appears_in_follows_from_how_it_can_be_reached() {
+        // Keystone signs over QR and microSD and nothing else -- its USB-C
+        // charges the battery and flashes firmware, and no transaction crosses
+        // it. So it is air-gapped, full stop, and belongs under Airgap.
+        assert!(HardwareVendor::Keystone.is_air_gapped_only());
+        for method in HardwareVendor::Keystone.transports() {
+            assert!(method.is_air_gapped(), "{method:?}");
+        }
+        assert!(HardwareVendor::Keystone
+            .transports()
+            .contains(&HardwareTransport::MicroSd));
+
+        // OneKey can sign over QR too, but it also speaks USB, Bluetooth and
+        // NFC. Air-gap is one of its options rather than what it is, so it
+        // belongs with the hardware wallets.
+        assert!(!HardwareVendor::OneKey.is_air_gapped_only());
+        assert!(HardwareVendor::OneKey
+            .transports()
+            .contains(&HardwareTransport::Camera));
+
+        for vendor in [HardwareVendor::Ledger, HardwareVendor::Trezor] {
+            assert!(!vendor.is_air_gapped_only(), "{vendor:?}");
+        }
     }
 
     #[test]
