@@ -170,7 +170,13 @@
     "protobufjs": "^8.7.0",
     "ip-address": "10.4.0",
     "serialize-javascript": "^7.0.5",
-    "valibot": "1.4.2"
+    "valibot": "1.4.2",
+    "@ledgerhq/device-management-kit": {
+      "uuid": "^11.1.1"
+    },
+    "@ledgerhq/device-transport-kit-web-hid": {
+      "uuid": "^11.1.1"
+    }
   },
   "devDependencies": {
     "@capacitor/cli": "^7.6.8",
