@@ -27,7 +27,10 @@ import {
   lockingBytecodeToCashAddress,
 } from '@bitauth/libauth';
 
-import { buildWatchOnlyPsbt } from '../watchOnlySend';
+import {
+  buildWatchOnlyPsbt,
+  multisigCosignerDerivations,
+} from '../watchOnlySend';
 import { inspectImportedPsbt, mergeImportedSignatures } from '../watchOnlyImport';
 import { mergePsbts } from '../psbtMultisig';
 import { deriveMultisigAddress, type MultisigPolicy } from '../multisigWallet';
@@ -39,7 +42,10 @@ const ACCOUNT_PATH = "m/44'/145'/0'";
 const describeLive = process.env.RUN_SEEDCASH_LIVE ? describe : describe.skip;
 
 function seedcash(args: string[]): string {
-  return execFileSync('python', [SIGNER, ...args], { cwd: CWD, encoding: 'utf8' });
+  return execFileSync('python', [SIGNER, ...args], {
+    cwd: CWD,
+    encoding: 'utf8',
+  });
 }
 
 describeLive('SeedCash 2-of-3 round trip', () => {
@@ -73,7 +79,9 @@ describeLive('SeedCash 2-of-3 round trip', () => {
           sequenceNumber: 0xffffffff,
         },
       ],
-      outputs: [{ lockingBytecode: spent.lockingBytecode, valueSatoshis: satoshis }],
+      outputs: [
+        { lockingBytecode: spent.lockingBytecode, valueSatoshis: satoshis },
+      ],
       locktime: 0,
     });
     const txid = binToHex(hash256(parent).slice().reverse());
@@ -99,11 +107,13 @@ describeLive('SeedCash 2-of-3 round trip', () => {
         previousTransactionHex: binToHex(parent),
         redeemScriptHex: binToHex(spent.redeemScript),
         requiredSignatures: 2,
-        cosignerDerivations: policy.signers.map((signer, index) => ({
-          publicKeyHex: binToHex(spent.sortedPublicKeys[index]),
-          masterFingerprintHex: signer.masterFingerprintHex!,
-          derivationPath: `${ACCOUNT_PATH}/0/0`,
-        })),
+        cosignerDerivations: multisigCosignerDerivations(
+          policy,
+          spent.derivedCosigners,
+          0,
+          0,
+          ACCOUNT_PATH
+        ),
       },
     ];
 
@@ -119,11 +129,13 @@ describeLive('SeedCash 2-of-3 round trip', () => {
       accountPath: ACCOUNT_PATH,
       masterFingerprint: hexToBin(keys[0].fingerprint),
       changeRedeemScriptHex: binToHex(change.redeemScript),
-      changeDerivations: policy.signers.map((signer, index) => ({
-        publicKeyHex: binToHex(change.sortedPublicKeys[index]),
-        masterFingerprintHex: signer.masterFingerprintHex!,
-        derivationPath: `${ACCOUNT_PATH}/1/0`,
-      })),
+      changeDerivations: multisigCosignerDerivations(
+        policy,
+        change.derivedCosigners,
+        1,
+        0,
+        ACCOUNT_PATH
+      ),
     });
 
     // Two independent devices sign the SAME unsigned transaction, each
@@ -147,6 +159,7 @@ describeLive('SeedCash 2-of-3 round trip', () => {
       rawUnsignedHex: built.rawUnsignedHex,
       inputs,
       outputs: built.outputs,
+      sighashType: built.sighashType,
     };
     const inspected = inspectImportedPsbt(merged.merged, proposal);
     expect(inspected.state).toBe('complete');

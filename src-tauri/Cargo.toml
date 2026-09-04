@@ -23,6 +23,7 @@ prost-build = "0.13"
 protox = "0.7"
 
 [dependencies]
+optn-multisig-core = { path = "../crates/optn-multisig-core" }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"

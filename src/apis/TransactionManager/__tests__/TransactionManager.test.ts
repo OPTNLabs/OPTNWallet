@@ -137,6 +137,28 @@ describe('TransactionManager', () => {
     expect(fail.errorMessage).toContain('broadcast failed');
   });
 
+  it('uses an explicit wallet scope for route-owned broadcast tracking', async () => {
+    const sendTransaction = vi.fn().mockResolvedValue('txid-scoped');
+
+    mockedTxBuilderHelper.mockReturnValue({
+      sendTransaction,
+      buildTransaction: vi.fn(),
+    } as never);
+
+    const tm = TransactionManager();
+    await tm.sendTransaction('00ac', 42);
+
+    expect(mockedOutboundTracker.trackAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({ walletId: 42 })
+    );
+    expect(mockedOutboundTracker.markState).toHaveBeenCalledWith(
+      expect.any(String),
+      'broadcasted',
+      null,
+      42
+    );
+  });
+
   it('sendTransaction retries the same raw tx after an ambiguous broadcast failure', async () => {
     const sendTransaction = vi
       .fn()

@@ -23,7 +23,7 @@ import {
   takeStashedCashConnectInvite,
 } from '../services/cashconnect/cashconnectDeepLink';
 import { toErrorMessage } from '../utils/errorHandling';
-import { isNativePlatform } from '../utils/platform';
+import { isDesktopPlatform, isNativePlatform } from '../utils/platform';
 import {
   checkAndDisconnectExpiredSessions,
   syncWalletConnectSessions,
@@ -59,6 +59,7 @@ import {
   refreshWalletTransactionHistory,
 } from '../services/WalletHistoryRefreshService';
 import { loadStoredWalletSpecialActivities } from '../services/WalletSpecialActivityService';
+import { migrateLegacyMultisigWallet } from '../services/multisig/MultisigStorageService';
 
 let bcmrWarmupStarted = false;
 
@@ -268,6 +269,7 @@ export function useWizardConnectSessionWatch(
 
 interface WalletNetworkBootstrapDependencies {
   loadWalletMetadata: (walletId: number) => Promise<WalletMetadata | null>;
+  migrateLegacyMultisigWallet?: typeof migrateLegacyMultisigWallet;
   ensureFreshConnection: () => Promise<unknown>;
   publishStoredHistory: typeof publishStoredWalletHistory;
   refreshHistory: typeof refreshWalletTransactionHistory;
@@ -286,6 +288,7 @@ export async function bootstrapWalletNetwork(
   isCancelled: () => boolean = () => false,
   dependencies: WalletNetworkBootstrapDependencies = {
     loadWalletMetadata: (id) => WalletManager().getWalletMetadata(id),
+    migrateLegacyMultisigWallet,
     ensureFreshConnection: () => ElectrumServer().ensureFreshConnection(),
     publishStoredHistory: publishStoredWalletHistory,
     refreshHistory: refreshWalletTransactionHistory,
@@ -294,6 +297,17 @@ export async function bootstrapWalletNetwork(
       store.getState().wallet_id.sessionGeneration ?? 0,
   }
 ): Promise<void> {
+  // Legacy desktop multisig policies belong to the desktop watch-only/air-gap
+  // implementation. The common/mobile lifecycle may migrate a legacy row when
+  // it explicitly opens that data, but desktop must never rewrite the row into
+  // the internal mobile wallet type while the desktop wizard is using it.
+  if (!isDesktopPlatform()) {
+    try {
+      await dependencies.migrateLegacyMultisigWallet?.(walletId);
+    } catch (error) {
+      console.warn('Legacy multisig migration was not completed:', error);
+    }
+  }
   const walletInfo = await dependencies.loadWalletMetadata(walletId);
   const resolvedNetwork =
     walletInfo?.networkType === Network.MAINNET

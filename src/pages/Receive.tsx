@@ -928,7 +928,7 @@ const Receive: React.FC = () => {
               </div>
             </SectionCard>
           )}
-          {/* RPA Paycode at the bottom of the receive list (UI preference). */}
+          {/* RPA Cash Code at the bottom of the receive list (UI preference). */}
           <RpaReceiveCard walletId={currentWalletId} />
         </div>
 

@@ -828,7 +828,7 @@
 "onboarding.walletSavedIdFailed","Wallet was saved, but its wallet ID could not be resolved.","지갑은 저장했지만 지갑 ID를 확인할 수 없습니다.","translated"
 "onboarding.walletSetup","Wallet Setup","지갑 설정","translated"
 "onboarding.walletSetupDescription","Choose the network and address path this wallet will use.","이 지갑에서 사용할 네트워크와 주소 경로를 선택하세요.","translated"
-"onboarding.welcomeAlt","Smart BCH Wallet","Smart BCH 지갑","stable-term"
+"onboarding.welcomeAlt","OPTN Wallet","OPTN 지갑","stable-term"
 "onboarding.word","Word","단어","translated"
 "onboarding.wordCountLabel","Phrase length","문구 길이","translated"
 "onboarding.wordPlaceholder","word","단어","translated"

@@ -33,10 +33,10 @@ function setAddressDiscoveryState(inProgress: boolean): void {
   store.dispatch(setAddressDiscoveryInProgress(inProgress));
 }
 
-function getPrefix(): string {
+function getPrefix(networkOverride?: Network): string {
   try {
-    const state = store.getState();
-    return selectCurrentNetwork(state) === Network.MAINNET
+    const network = networkOverride ?? selectCurrentNetwork(store.getState());
+    return network === Network.MAINNET
       ? 'bitcoincash'
       : 'bchtest';
   } catch {
@@ -266,6 +266,14 @@ type UTXOFetchOptions = {
    * in the call; kept for API compatibility with Manual Sync / open callers.
    */
   force?: boolean;
+  /** Network selected by the wallet policy when the route is not Redux-active. */
+  network?: Network;
+  /**
+   * Use the network response as the wallet inventory. Route-scoped multisig
+   * dashboards use this because outbound tracker projections belong to spend
+   * locking, not to the chain-authoritative balance display.
+   */
+  chainAuthoritative?: boolean;
   /**
    * Reported as Electrum batch chunks complete so the UI can show real,
    * in-flight UTXO progress instead of a coarse coarse phase jump (which made
@@ -301,7 +309,8 @@ const UTXOService = {
     options: UTXOFetchOptions = {}
   ): Promise<Record<string, UTXO[]>> {
     try {
-      const currentNetwork = selectCurrentNetwork(store.getState());
+      const currentNetwork =
+        options.network ?? selectCurrentNetwork(store.getState());
       let discoveredAddresses: string[] = [];
       if (options.discover !== false) {
         activeAddressDiscoveryRuns += 1;
@@ -383,8 +392,9 @@ const UTXOService = {
           options.onProgress?.(uniqueAddresses.length, uniqueAddresses.length);
           // Still strip outbound-spent coins so a soft-fail after broadcast
           // cannot re-surface pre-fusion inputs as spendable balance.
-          const reservedOutpoints =
-            await collectReservedOutboundOutpointKeys(walletId);
+          const reservedOutpoints = options.chainAuthoritative
+            ? new Set<string>()
+            : await collectReservedOutboundOutpointKeys(walletId);
           const fromDb: Record<string, UTXO[]> = {};
           for (const address of uniqueAddresses) {
             fromDb[address] = [
@@ -418,9 +428,10 @@ const UTXOService = {
         walletId,
         uniqueAddresses
       );
-      const reservedOutpoints =
-        await collectReservedOutboundOutpointKeys(walletId);
-      const prefix = getPrefix();
+      const reservedOutpoints = options.chainAuthoritative
+        ? new Set<string>()
+        : await collectReservedOutboundOutpointKeys(walletId);
+      const prefix = getPrefix(currentNetwork);
       const formattedByAddress: Record<string, UTXO[]> = {};
 
       for (const address of uniqueAddresses) {
@@ -465,17 +476,21 @@ const UTXOService = {
         }));
       }
 
-      const pendingOwnedUtxos = await collectPendingOutboundOwnedUtxos(
-        walletId,
-        uniqueAddresses
-      );
-      for (const pending of pendingOwnedUtxos) {
-        if (reservedOutpoints.has(outpointKey(pending))) continue;
-        const existing = formattedByAddress[pending.address] ?? [];
-        if (
-          !existing.some((utxo) => outpointKey(utxo) === outpointKey(pending))
-        ) {
-          formattedByAddress[pending.address] = [...existing, pending];
+      if (!options.chainAuthoritative) {
+        const pendingOwnedUtxos = await collectPendingOutboundOwnedUtxos(
+          walletId,
+          uniqueAddresses
+        );
+        for (const pending of pendingOwnedUtxos) {
+          if (reservedOutpoints.has(outpointKey(pending))) continue;
+          const existing = formattedByAddress[pending.address] ?? [];
+          if (
+            !existing.some(
+              (utxo) => outpointKey(utxo) === outpointKey(pending)
+            )
+          ) {
+            formattedByAddress[pending.address] = [...existing, pending];
+          }
         }
       }
 

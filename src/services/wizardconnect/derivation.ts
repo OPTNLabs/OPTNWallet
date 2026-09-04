@@ -1,7 +1,6 @@
 import { DerivationPath } from '@wizardconnect/wallet';
 import { Network } from '../../state/slices/networkSlice';
 import {
-  createDeterministicRuntimePrivateKey,
   derivePrivateKeyAtPath,
   derivePublicKeyFromHdPublicKey,
   getBchBranchPath,
@@ -43,15 +42,4 @@ export async function derivePrivateKeyForPath(
 
 export function derivePublicKeyFromXpub(xpub: string, index: bigint): Uint8Array {
   return derivePublicKeyFromHdPublicKey(xpub, index);
-}
-
-export function createDeterministicRuntimeRelayKey(
-  uri: string,
-  walletId: number
-): Uint8Array {
-  return createDeterministicRuntimePrivateKey(
-    'wizardconnect',
-    String(walletId),
-    uri
-  );
 }

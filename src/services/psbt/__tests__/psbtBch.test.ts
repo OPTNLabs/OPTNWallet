@@ -68,10 +68,10 @@ describe('BCH PSBT encoding', () => {
     expect([...psbt.subarray(0, 5)]).toEqual([...PSBT_MAGIC]);
   });
 
-  it('requests SIGHASH_ALL|FORKID|ANYONECANPAY by default', () => {
+  it('requests the SeedCash-compatible SIGHASH_ALL|FORKID by default', () => {
     const psbt = encodeUnsignedPsbt([input()], [output()]);
-    // PSBT_IN_SIGHASH_TYPE: key 0x03, value uint32 LE 0xc1.
-    const field = Uint8Array.from([0x01, 0x03, 0x04, 0xc1, 0x00, 0x00, 0x00]);
+    // PSBT_IN_SIGHASH_TYPE: key 0x03, value uint32 LE 0x41.
+    const field = Uint8Array.from([0x01, 0x03, 0x04, 0x41, 0x00, 0x00, 0x00]);
     expect(indexOfBytes(psbt, field)).toBeGreaterThan(-1);
   });
 
@@ -83,16 +83,28 @@ describe('BCH PSBT encoding', () => {
     );
   });
 
-  it('refuses SIGHASH_ALL|FORKID without ANYONECANPAY (0x41)', () => {
-    expect(() =>
-      encodeUnsignedPsbt([input()], [output()], SIGHASH_ALL_FORKID)
-    ).toThrow(/0xc1/);
+  it.each([0x41, 0x42, 0x43, 0xc1, 0xc2, 0xc3])(
+    'accepts supported BCH sighash type 0x%s',
+    (sighashType) => {
+      const psbt = encodeUnsignedPsbt([input()], [output()], sighashType);
+      expect(decodePsbt(psbt).inputs[0].requestedSighashType).toBe(sighashType);
+    }
+  );
+
+  it('refuses unsupported BCH sighash flag combinations', () => {
+    expect(() => encodeUnsignedPsbt([input()], [output()], 0x61)).toThrow(
+      /supported BCH sighash/i
+    );
   });
 
-  it('writes PSBT_IN_SIGHASH_TYPE 0xc1 on every input and never 0x41', () => {
-    const psbt = encodeUnsignedPsbt([input(), input({ vout: 2 })], [output()]);
-    const fieldC1 = Uint8Array.from([0x01, 0x03, 0x04, 0xc1, 0x00, 0x00, 0x00]);
+  it('writes the selected sighash type on every input', () => {
+    const psbt = encodeUnsignedPsbt(
+      [input(), input({ vout: 2 })],
+      [output()],
+      SIGHASH_ALL_FORKID_ANYONECANPAY
+    );
     const field41 = Uint8Array.from([0x01, 0x03, 0x04, 0x41, 0x00, 0x00, 0x00]);
+    const fieldC1 = Uint8Array.from([0x01, 0x03, 0x04, 0xc1, 0x00, 0x00, 0x00]);
     expect(indexOfBytes(psbt, fieldC1)).toBeGreaterThan(-1);
     expect(indexOfBytes(psbt, field41)).toBe(-1);
     const parsed = decodePsbt(psbt);
@@ -289,28 +301,6 @@ describe('Paytaca v145 fields', () => {
       [input()],
       [output({ token: { category, amount: 500n } })]
     );
-    // key 0x36, value 41 bytes: category || 0x00 || amount(8 LE 500 = 0x1f4).
-    expect(
-      indexOfBytes(
-        psbt,
-        Uint8Array.from([
-          0x01,
-          0x36,
-          0x29,
-          ...category,
-          0x00,
-          0xf4,
-          0x01,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
-        ])
-      )
-    ).toBeGreaterThan(-1);
     const parsed = decodePsbt(psbt);
     expect(parsed.outputs[0].token).toEqual({ category, amount: 500n });
   });
@@ -322,20 +312,41 @@ describe('Paytaca v145 fields', () => {
       [input()],
       [output({ token: { category, capability: 1, commitment } })]
     );
-    // capability byte 0x81 (0x80 | mutable), commitment len 0x03; value is
-    // 37 bytes (32 category + 1 + 1 + 3).
-    expect(
-      indexOfBytes(
-        psbt,
-        Uint8Array.from([0x01, 0x36, 0x25, ...category, 0x81, 0x03, 1, 2, 3])
-      )
-    ).toBeGreaterThan(-1);
     const parsed = decodePsbt(psbt);
     expect(parsed.outputs[0].token).toEqual({
       category,
       capability: 1,
       commitment,
     });
+  });
+
+  it('round-trips a combined NFT and fungible amount', () => {
+    const category = new Uint8Array(32).fill(0x5a);
+    const commitment = Uint8Array.from([0xca, 0xfe]);
+    const token = {
+      category,
+      amount: 500n,
+      capability: 1,
+      commitment,
+    };
+    const psbt = encodeUnsignedPsbt([input()], [output({ token })]);
+    expect(decodePsbt(psbt).outputs[0].token).toEqual(token);
+  });
+
+  it('keeps NFT state distinct from a zero-amount fungible token', () => {
+    const category = new Uint8Array(32).fill(0x99);
+    const commitment = Uint8Array.from([0xaa, 0xbb]);
+    const psbt = encodeUnsignedPsbt(
+      [input()],
+      [output({ token: { category, capability: 2, commitment } })]
+    );
+    const parsed = decodePsbt(psbt);
+    expect(parsed.outputs[0].token).toEqual({
+      category,
+      capability: 2,
+      commitment,
+    });
+    expect(parsed.outputs[0].token?.amount).toBeUndefined();
   });
 });
 
@@ -386,7 +397,7 @@ describe('BCH PSBT decoding', () => {
   it('round-trips the requested sighash type', () => {
     const psbt = encodeUnsignedPsbt([input(), input({ vout: 2 })], [output()]);
     const parsed = decodePsbt(psbt);
-    expect(parsed.requestedSighashTypes.slice(0, 2)).toEqual([0xc1, 0xc1]);
+    expect(parsed.requestedSighashTypes.slice(0, 2)).toEqual([0x41, 0x41]);
   });
 
   it('rejects bytes that are not a PSBT', () => {

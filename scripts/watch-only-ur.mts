@@ -25,7 +25,7 @@ import { pathToFileURL } from 'node:url';
 
 import {
   decodePsbt,
-  SIGHASH_ALL_FORKID_ANYONECANPAY,
+  isSupportedBchSighashType,
 } from '../src/services/psbt/psbtBch';
 import {
   DEFAULT_UR_FRAGMENT_LENGTH,
@@ -76,7 +76,7 @@ export const USAGE =
   '          unless --out is given.\n' +
   '  verify  [--in <file>]\n' +
   '          Report PSBT_IN_SIGHASH_TYPE for every input. Exits non-zero\n' +
-  '          unless every one is 0xc1.\n' +
+  '          unless every input carries one consistent supported BCH type.\n' +
   '  vectors [--file <path>]\n' +
   '          Re-encode the committed vectors and compare frame for frame.\n' +
   '\n' +
@@ -221,21 +221,23 @@ function verify(argv: string[], out: NodeJS.WritableStream): void {
   parsed.inputs.forEach((input, index) => {
     const type = input.requestedSighashType;
     const shown = type === null ? 'absent' : `0x${type.toString(16)}`;
-    const ok = type === SIGHASH_ALL_FORKID_ANYONECANPAY;
+    const ok = type !== null && isSupportedBchSighashType(type);
     out.write(`  input ${index}  sighash ${shown}  ${ok ? 'ok' : 'WRONG'}\n`);
   });
 
   try {
     assertWatchOnlySighash(psbt);
   } catch (error) {
-    // SeedCash falls back to 0x41 when the field is absent, and a signature
-    // over the wrong sighash is only rejected at broadcast — long after the
-    // device has been put away.
+    // A missing, unsupported, or mixed type would only fail after the device
+    // has been put away, so reject it before transport.
     throw new CliFailure(
       error instanceof Error ? error.message : String(error)
     );
   }
-  out.write('every input carries 0xc1 (ALL|FORKID|ANYONECANPAY)\n');
+  const requested = parsed.inputs[0]?.requestedSighashType;
+  out.write(
+    `every input carries supported BCH sighash 0x${requested?.toString(16)}\n`
+  );
 }
 
 function vectors(argv: string[], out: NodeJS.WritableStream): void {

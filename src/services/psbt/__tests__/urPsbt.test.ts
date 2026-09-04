@@ -3,6 +3,7 @@ import { URDecoder } from '@ngraveio/bc-ur';
 import { describe, expect, it } from 'vitest';
 import {
   UrPsbtScanner,
+  encodePsbtToQrDisplay,
   encodePsbtToSingleUr,
   encodePsbtToUrFrames,
   extractPsbtFromUrCbor,
@@ -48,6 +49,23 @@ describe('UR crypto-psbt transport', () => {
     expect(PSBT_UR_QR_MARGIN_MODULES).toBe(8);
     expect(PSBT_UR_QR_DISPLAY_SIZE).toBeGreaterThanOrEqual(400);
     expect(PSBT_UR_QR_ERROR_LEVEL).toBe('L');
+  });
+
+  it('uses one static QR for an ordinary PSBT', () => {
+    const display = encodePsbtToQrDisplay(psbt());
+    expect(display.mode).toBe('static');
+    expect(display.count).toBe(1);
+    expect(display.frames).toBeNull();
+    expect(display.uri).toBe(encodePsbtToSingleUr(psbt()));
+  });
+
+  it('reserves streaming for payloads above static QR capacity', () => {
+    const large = new Uint8Array(1_600);
+    large.set([0x70, 0x73, 0x62, 0x74, 0xff]);
+    const display = encodePsbtToQrDisplay(large);
+    expect(display.mode).toBe('stream');
+    expect(display.count).toBeGreaterThan(1);
+    expect(display.frames).not.toBeNull();
   });
 
   it('emits ur:crypto-psbt frames', () => {

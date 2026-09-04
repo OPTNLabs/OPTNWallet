@@ -29,6 +29,20 @@ function createDatabase(SQL: Awaited<ReturnType<typeof initSqlJs>>): Database {
       amount INTEGER,
       UNIQUE(wallet_id, address, tx_hash, tx_pos)
     );
+    CREATE TABLE multisig_addresses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      wallet_id INTEGER NOT NULL,
+      address TEXT NOT NULL,
+      FOREIGN KEY(wallet_id) REFERENCES wallets(id)
+    );
+    CREATE TABLE multisig_address_keys (
+      wallet_id INTEGER NOT NULL,
+      address_id INTEGER NOT NULL,
+      cosigner_id TEXT NOT NULL,
+      FOREIGN KEY(wallet_id) REFERENCES wallets(id),
+      FOREIGN KEY(address_id) REFERENCES multisig_addresses(id),
+      PRIMARY KEY(wallet_id, address_id, cosigner_id)
+    );
   `);
   db.run(
     "INSERT INTO wallets (id, wallet_name, networkType) VALUES (1, 'wallet5', 'chipnet'), (4, 'wallet6', 'chipnet')"
@@ -41,6 +55,12 @@ function createDatabase(SQL: Awaited<ReturnType<typeof initSqlJs>>): Database {
   );
   db.run(
     "INSERT INTO UTXOs (wallet_id, address, tx_hash, tx_pos, amount) VALUES (1, 'bchtest:q5-old', 'spent', 0, 10), (4, 'bchtest:q6-old', 'keep', 0, 20)"
+  );
+  db.run(
+    "INSERT INTO multisig_addresses (id, wallet_id, address) VALUES (7, 1, 'bchtest:p5-old')"
+  );
+  db.run(
+    "INSERT INTO multisig_address_keys (wallet_id, address_id, cosigner_id) VALUES (1, 7, 'cosigner-1')"
   );
   return db;
 }
@@ -113,6 +133,32 @@ describe('mergeWalletScope', () => {
       [1, 'fusion', 125000],
       [4, 'keep', 20],
     ]);
+
+    base.close();
+    localWallet5.close();
+    latestShared.close();
+  });
+
+  it('remaps multisig address keys when regenerated address IDs change', async () => {
+    const SQL = await initSqlJs();
+    const base = createDatabase(SQL);
+    const localWallet5 = new SQL.Database(base.export());
+    const latestShared = new SQL.Database(base.export());
+    latestShared.run('PRAGMA foreign_keys = ON');
+
+    const { mergeWalletScope } = await import('../DatabaseMerge');
+    mergeWalletScope(latestShared, localWallet5, 1);
+
+    expect(
+      columnValues(
+        latestShared,
+        `SELECT multisig_addresses.id, multisig_address_keys.address_id
+           FROM multisig_addresses
+           JOIN multisig_address_keys
+             ON multisig_address_keys.address_id = multisig_addresses.id
+          WHERE multisig_addresses.wallet_id = 1`
+      )
+    ).toEqual([[8, 8]]);
 
     base.close();
     localWallet5.close();

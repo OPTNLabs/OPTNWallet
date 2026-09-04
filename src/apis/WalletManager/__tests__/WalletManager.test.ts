@@ -203,6 +203,34 @@ describe('WalletManager', () => {
     expect(walletId).toBe(42);
   });
 
+  it('does not resolve a multisig row as the standard mnemonic wallet', async () => {
+    const selectStmt = makeStmt([
+      {
+        id: '77',
+        mnemonic: '',
+        passphrase: '',
+        networkType: Network.MAINNET,
+        walletType: WalletType.MULTISIG,
+      },
+    ]);
+    const db = { prepare: vi.fn(() => selectStmt) };
+
+    mockedDatabaseService.mockImplementation(
+      () =>
+        ({
+          ensureDatabaseStarted: vi.fn(async () => {}),
+          getDatabase: vi.fn(() => db),
+        }) as never
+    );
+
+    const walletId = await WalletManager().setWalletId('', '', {
+      networkType: Network.MAINNET,
+      walletType: WalletType.STANDARD,
+    });
+
+    expect(walletId).toBeNull();
+  });
+
   it('setWalletId ignores wallets on a different network when lookup is provided', async () => {
     const selectStmt = makeStmt([
       {

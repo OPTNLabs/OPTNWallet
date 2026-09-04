@@ -1,4 +1,5 @@
-// UR (crypto-psbt) transport — the animated-QR channel to an air-gapped signer.
+// UR (crypto-psbt) transport — a static QR for small payloads and an
+// animated-QR channel for larger payloads.
 //
 // SeedCash and Keystone both use type `crypto-psbt`, but they do not put the
 // same bytes in the UR CBOR field:
@@ -45,6 +46,12 @@ export function isPsbtUrFragmentLength(
 }
 
 /**
+ * User-selectable UR fragment lengths. Lower values make larger, easier-to-scan
+ * QR modules and take more animation frames; higher values do the reverse.
+ */
+export const UR_FRAGMENT_LENGTH_OPTIONS = [50, 100, 200, 400, 450] as const;
+
+/**
  * Quiet-zone modules around the displayed QR (qrcode.react `marginSize`).
  * Paytaca PstQrDialog e66cafa9d-era used padding=8; later densified to 4.
  * More padding, not denser modules: SeedCash cameras need the extra border.
@@ -60,6 +67,13 @@ export const PSBT_UR_QR_DISPLAY_SIZE = 640;
 
 /** Keep L. Q/H add modules and densify the same UR payload. */
 export const PSBT_UR_QR_ERROR_LEVEL = 'L' as const;
+
+/**
+ * Keep ordinary PSBTs in one QR at the mobile display size. The value is a
+ * character limit for the rendered UR, not a PSBT byte limit: UR framing adds
+ * its own header and encoding overhead. Larger payloads use fountain frames.
+ */
+export const DEFAULT_STATIC_UR_MAX_CHARACTERS = 2_400;
 
 const PSBT_MAGIC = Uint8Array.of(0x70, 0x73, 0x62, 0x74, 0xff);
 
@@ -88,6 +102,13 @@ export interface UrFrames {
   count: number;
 }
 
+export type PsbtQrDisplay = {
+  mode: 'static' | 'stream';
+  uri: string;
+  frames: UrFrames | null;
+  count: number;
+};
+
 function toSeedCashUr(psbt: Uint8Array): UR {
   return new UR(Buffer.from(psbt), 'crypto-psbt');
 }
@@ -109,6 +130,32 @@ export function encodePsbtToUrFrames(
 export function encodePsbtToSingleUr(psbt: Uint8Array): string {
   if (psbt.length === 0) throw new Error('Cannot encode an empty PSBT.');
   return UREncoder.encodeSinglePart(toSeedCashUr(psbt)).toUpperCase();
+}
+
+/**
+ * Choose the least cumbersome QR transport for a PSBT. Small unsigned and
+ * partially signed PSBTs stay as one static QR; only payloads that would make
+ * the phone-sized QR unreasonably dense use the animated stream.
+ */
+export function encodePsbtToQrDisplay(
+  psbt: Uint8Array,
+  staticMaxCharacters: number = DEFAULT_STATIC_UR_MAX_CHARACTERS
+): PsbtQrDisplay {
+  let single: string | null = null;
+  try {
+    const candidate = encodePsbtToSingleUr(psbt);
+    if (candidate.length <= staticMaxCharacters) single = candidate;
+  } catch {
+    // The single-frame encoder has its own maximum capacity. Fall through to
+    // the streaming encoder for larger PSBTs.
+  }
+
+  if (single !== null) {
+    return { mode: 'static', uri: single, frames: null, count: 1 };
+  }
+
+  const frames = encodePsbtToUrFrames(psbt);
+  return { mode: 'stream', uri: frames.next(), frames, count: frames.count };
 }
 
 export interface UrScanProgress {

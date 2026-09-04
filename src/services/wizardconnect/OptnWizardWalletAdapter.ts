@@ -3,10 +3,11 @@ import type { SignTransactionRequest } from '@wizardconnect/core';
 import WalletManager from '../../apis/WalletManager/WalletManager';
 import KeyService from '../KeyService';
 import { Network } from '../../state/slices/networkSlice';
+import { derivePublicKeyFromXpub } from './derivation';
 import {
-  createDeterministicRuntimeRelayKey,
-  derivePublicKeyFromXpub,
-} from './derivation';
+  getOrCreateRuntimeRelayKey,
+  hydrateRelayKeys,
+} from './relayKeyStore';
 import { signWizardConnectTransaction } from './signing';
 import { deriveRpaGateXpub } from '../RpaService';
 import { store } from '../../state/store';
@@ -29,7 +30,6 @@ export class OptnWizardWalletAdapter implements WalletAdapter {
   walletName: string;
   walletIcon: string;
 
-  private relayKeys = new Map<string, Uint8Array>();
   private snapshot: WalletSnapshot;
 
   private constructor(snapshot: WalletSnapshot) {
@@ -83,6 +83,7 @@ export class OptnWizardWalletAdapter implements WalletAdapter {
       }
     }
 
+    await hydrateRelayKeys(walletId);
     return new OptnWizardWalletAdapter({
       walletId,
       walletName: walletInfo.wallet_name || 'OPTN Wallet',
@@ -96,14 +97,7 @@ export class OptnWizardWalletAdapter implements WalletAdapter {
   }
 
   getRelayPrivateKey(uri: string): Uint8Array {
-    const existing = this.relayKeys.get(uri);
-    if (existing) {
-      return existing;
-    }
-
-    const generated = createDeterministicRuntimeRelayKey(uri, this.snapshot.walletId);
-    this.relayKeys.set(uri, generated);
-    return generated;
+    return getOrCreateRuntimeRelayKey(this.snapshot.walletId, uri);
   }
 
   getPublicKey(path: DerivationPath, index: bigint): Uint8Array {
