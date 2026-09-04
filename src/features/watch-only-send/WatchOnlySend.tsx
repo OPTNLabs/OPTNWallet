@@ -344,12 +344,25 @@ function restoreProposalFromPsbt(
         changeDerivation.derivationPath.length - 1
       ]
     : undefined;
+  const sighashType = parsed.inputs[0]?.requestedSighashType;
+  if (
+    sighashType === null ||
+    sighashType === undefined ||
+    parsed.inputs.some(
+      (input) => input.requestedSighashType !== sighashType
+    )
+  ) {
+    throw new Error(
+      'Saved multisig proposal is missing one consistent sighash type.'
+    );
+  }
 
   return {
     proposal: {
       rawUnsignedHex: binToHex(parsed.unsignedTransaction),
       inputs,
       outputs,
+      sighashType,
     },
     feeSats: inputSumSats - outputSumSats,
     changeSats: changeOutputs.reduce(

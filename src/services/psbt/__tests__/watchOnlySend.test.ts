@@ -669,6 +669,7 @@ describe('watch-only import verification', () => {
           token,
         },
       ],
+      sighashType: 0x41,
     };
     const signed = wrapSignedPsbt(proposal, [signInput(proposal, 0)]);
     const raw = mergeImportedSignatures(signed, proposal);
