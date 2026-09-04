@@ -16,13 +16,13 @@ use crate::scan::can_scan;
 use crate::{dispatch_action, UiTransport};
 use leptos::prelude::*;
 use optn_app::{
-    classify_scanned_account, watch_only_setup_preview, AccountPath, AirgapSigner, AppAction,
+    classify_scanned_account, watch_only_setup_preview, AccountPath, AirgapDevice, AppAction,
     AppState, ScannedAccount, WatchOnlySetupPreview, AIRGAP_SUBTITLE, AIRGAP_TITLE,
 };
 
 #[component]
 pub fn AirgapSection(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
-    let chosen = RwSignal::new(None::<AirgapSigner>);
+    let chosen = RwSignal::new(None::<AirgapDevice>);
     let wallet_name = RwSignal::new(String::new());
     let fingerprint = RwSignal::new(String::new());
     let account = RwSignal::new(AccountPath::default_for(state.get_untracked().network));
@@ -131,7 +131,7 @@ pub fn AirgapSection(transport: UiTransport, state: RwSignal<AppState>) -> impl 
             <div class="choice-list" role="radiogroup" aria-label="Air-gapped signer">
                 {move || {
                     let selected = chosen.get();
-                    AirgapSigner::OFFERED
+                    AirgapDevice::OFFERED
                         .iter()
                         .map(|signer| {
                             let signer = *signer;
