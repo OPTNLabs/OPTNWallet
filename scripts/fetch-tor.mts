@@ -173,6 +173,45 @@ function setLinuxRpath(binary) {
   }
 }
 
+/**
+ * Ad-hoc sign the staged Mach-O files so dyld will load them.
+ *
+ * The Expert Bundle ships tor and libevent unsigned. macOS on Apple Silicon
+ * refuses to load an unsigned dylib, and the failure surfaces as the tor
+ * binary not starting at all:
+ *
+ *   dyld: Library not loaded: @executable_path/libevent-2.1.7.dylib
+ *   Reason: ... (missing code signature in .../libevent-2.1.7.dylib)
+ *
+ * `codesign --sign -` is an ad-hoc signature: it establishes no identity and
+ * makes no trust claim, it only gives the loader the code directory it now
+ * insists on. The bundle's authenticity is established earlier and separately,
+ * by the pinned SHA256 against Tor Browser's signed checksum manifest, so this
+ * neither adds nor weakens that guarantee. A real Developer ID signature is
+ * applied later by the release pipeline over the whole app.
+ *
+ * This is the same shape of problem as setLinuxRpath above: a bundle staged
+ * as-is is not yet loadable on the host that has to run it.
+ */
+function adhocSignStagedMachO(outDir, names) {
+  if (process.platform !== 'darwin') return;
+  for (const name of names) {
+    if (!/(\.dylib$|^tor$)/.test(name)) continue;
+    const file = join(outDir, name);
+    try {
+      execFileSync(
+        'codesign',
+        ['--force', '--sign', '-', '--timestamp=none', file],
+        { stdio: 'pipe' }
+      );
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`Unable to ad-hoc sign staged ${name}: ${detail}`);
+    }
+  }
+  console.log(`[fetch-tor] ad-hoc signed: ${names.join(', ')}`);
+}
+
 /** Run the staged binary on matching-host builds to prove it can load. */
 function verifyStagedTorExecutable(target, binary) {
   if (inferTarget() !== target) return;
@@ -408,6 +447,12 @@ async function main() {
   if (!existsSync(join(outDir, torBinary))) {
     throw new Error('staging failed: binary missing');
   }
+  // Libraries before the executable that loads them: signing tor first would
+  // be undone as soon as its dependencies changed.
+  adhocSignStagedMachO(outDir, [
+    ...staged.filter((name) => name.endsWith('.dylib')),
+    ...staged.filter((name) => !name.endsWith('.dylib')),
+  ]);
   verifyStagedTorExecutable(target, join(outDir, torBinary));
   console.log(readFileSync(markerPath, 'utf8').trim());
 }
