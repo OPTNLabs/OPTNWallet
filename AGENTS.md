@@ -8,8 +8,11 @@ and transaction correctness above convenience.
 
 ## Rustification architecture
 
-Before Rustification or UI-shell work, read `RUSTIFICATION.md` and
-`rustification/components.toml`.
+Before Rustification or UI-shell work, read `RUSTIFICATION.md`,
+`rustification/components.toml`, `rustification/closed-pr-history.toml`, and
+`docs/rustification/closed-pr-design-invariants.md`. Closed PR history records
+product/security decisions that must not disappear merely because the renderer
+or implementation language changes.
 
 Framework boundary rules are architectural invariants:
 

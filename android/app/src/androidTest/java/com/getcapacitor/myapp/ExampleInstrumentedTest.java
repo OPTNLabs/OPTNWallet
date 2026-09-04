@@ -3,12 +3,9 @@ package com.getcapacitor.myapp;
 import static org.junit.Assert.*;
 
 import android.content.Context;
-import android.os.ParcelFileDescriptor;
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
-import java.io.FileInputStream;
-import java.io.InputStream;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -102,7 +99,7 @@ public class ExampleInstrumentedTest {
     }
 
     @Test
-    public void androidLanding_watchOnlyLifecycle() throws Exception {
+    public void androidLanding_watchOnlyCreate() throws Exception {
         // Chipnet account tpub from the BIP39 all-abandon mnemonic at m/44'/1'/0'.
         // Public key material only; this test never imports a seed.
         final String chipnetAccountTpub =
@@ -145,13 +142,24 @@ public class ExampleInstrumentedTest {
                 "Watch-only wallet was not created from the packaged Android app",
                 45_000L
             );
+            waitForJavascriptTrue(
+                scenario,
+                noSeedSigningScript(),
+                "New watch-only wallet exposed a seed-signing path"
+            );
         } finally {
             scenario.close();
         }
+    }
 
-        forceStopApp();
-
-        scenario = ActivityScenario.launch(MainActivity.class);
+    @Test
+    public void androidLanding_watchOnlyRelaunch() throws Exception {
+        // CI runs this in a new instrumentation invocation after the create
+        // test exits and the workflow force-stops the target app. Android's
+        // runner treats killing the target inside a live instrumentation
+        // session as a process crash, so process-death persistence must span
+        // two invocations rather than one test method.
+        ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class);
         try {
             waitForJavascriptTrue(
                 scenario,
@@ -229,24 +237,6 @@ public class ExampleInstrumentedTest {
                 ignored -> {}
             )
         );
-    }
-
-    private void forceStopApp() throws Exception {
-        String packageName =
-            InstrumentationRegistry.getInstrumentation().getTargetContext().getPackageName();
-        ParcelFileDescriptor descriptor =
-            InstrumentationRegistry.getInstrumentation()
-                .getUiAutomation()
-                .executeShellCommand("am force-stop " + packageName);
-        try (InputStream output = new FileInputStream(descriptor.getFileDescriptor())) {
-            byte[] buffer = new byte[1024];
-            while (output.read(buffer) != -1) {
-                // Drain the shell command so force-stop finishes before relaunch.
-            }
-        } finally {
-            descriptor.close();
-        }
-        Thread.sleep(2_000L);
     }
 
     private String noSeedSigningScript() {

@@ -1,3 +1,5 @@
+mod apple;
+mod history;
 mod parity;
 
 use std::{
@@ -6,21 +8,13 @@ use std::{
 };
 
 const FRAMEWORK_NAMES: &[&str] = &["leptos", "tauri", "dioxus", "capacitor"];
-
-/// Apple/Swift packages that may only be reached through a platform provider.
-///
-/// The 58 Opals stack is an optional Apple-native provider and an independent
-/// BCH reference. It must never become a dependency of the crates that hold
-/// wallet truth: if OpalBase could be reached from `optn-core`, `optn-app` or
-/// `optn-runtime`, there would be two authoritative implementations and no
-/// rule for which one wins. Any adapter belongs behind `optn-platform`.
-const APPLE_PROVIDER_NAMES: &[&str] = &[
+const APPLE_REFERENCE_DEPENDENCIES: &[&str] = &[
     "opalbase",
-    "swiftfulcrum",
     "opalcrypto",
     "opalfusion",
     "opalhedge",
     "opaldiagnostics",
+    "swiftfulcrum",
 ];
 
 fn main() {
@@ -143,11 +137,13 @@ fn architecture() {
         root.join("crates/optn-app/Cargo.toml"),
         root.join("crates/optn-platform/Cargo.toml"),
         root.join("crates/optn-platform-native/Cargo.toml"),
+        root.join("crates/optn-platform-apple/Cargo.toml"),
         root.join("crates/optn-runtime/Cargo.toml"),
         root.join("crates/optn-transport/Cargo.toml"),
     ];
 
     let mut failures = Vec::new();
+    history::check(&root, &mut failures);
     for manifest in neutral_manifests {
         let text = manifest_body(&read(&manifest)).to_lowercase();
         for framework in FRAMEWORK_NAMES {
@@ -163,18 +159,19 @@ fn architecture() {
     // Wallet truth stays in Rust. An Apple provider is reached through
     // optn-platform's contracts, so the packages behind it must not appear in
     // the crates that own domain, application or runtime state.
-    let wallet_truth_manifests = [
+    for manifest in [
         root.join("crates/optn-core/Cargo.toml"),
         root.join("crates/optn-app/Cargo.toml"),
         root.join("crates/optn-runtime/Cargo.toml"),
-    ];
-    for manifest in wallet_truth_manifests {
+    ] {
+        // Comments stripped: naming a package while explaining why it is
+        // absent is not depending on it.
         let text = manifest_body(&read(&manifest)).to_lowercase();
-        for package in APPLE_PROVIDER_NAMES {
-            if text.contains(package) {
+        for dependency in APPLE_REFERENCE_DEPENDENCIES {
+            if text.contains(dependency) {
                 failures.push(format!(
-                    "{} depends on Apple provider package '{package}'; wallet truth stays in \
-                     Rust and Apple adapters belong behind optn-platform",
+                    "{} depends on Apple provider package '{dependency}'; wallet truth stays \
+                     in Rust and Apple adapters belong behind optn-platform",
                     manifest.display()
                 ));
             }
@@ -207,6 +204,16 @@ fn architecture() {
             failures.push(format!(
                 "crates/optn-ui-text depends on '{framework}'; it exists to prove a renderer \
                  needs only optn-app and optn-transport, so a framework there defeats it"
+            ));
+        }
+    }
+
+    let apple_native_manifest = read(&root.join("apple/OPTNAppleProvider/Package.swift"));
+    let apple_native_lower = apple_native_manifest.to_lowercase();
+    for dependency in APPLE_REFERENCE_DEPENDENCIES {
+        if apple_native_lower.contains(dependency) {
+            failures.push(format!(
+                "apple/OPTNAppleProvider must stay native-only; found '{dependency}'"
             ));
         }
     }
@@ -306,6 +313,66 @@ fn architecture() {
         ),
     }
 
+    let opal_reference_manifest = read(&root.join("apple/OPTNOpalReference/Package.swift"));
+    for required in [
+        "611a53f2047660e0dd221f75526ce11335be901a",
+        "8c42eeb40d64776789e70694e4e5006d2afa400c",
+        ".macOS(.v26)",
+        ".iOS(.v26)",
+    ] {
+        if !opal_reference_manifest.contains(required) {
+            failures.push(format!(
+                "apple/OPTNOpalReference is missing required pinned/gated value '{required}'"
+            ));
+        }
+    }
+    for forbidden in ["OpalBase", "OpalCrypto", "OpalFusion", "OpalHedge"] {
+        if opal_reference_manifest.contains(forbidden) {
+            failures.push(format!(
+                "apple/OPTNOpalReference must not link preview/secret-authority package '{forbidden}'"
+            ));
+        }
+    }
+    if opal_reference_manifest.contains("branch:") {
+        failures
+            .push("apple/OPTNOpalReference must not consume moving develop branches".to_string());
+    }
+    if !opal_reference_manifest.contains("OPAL_APPLE26_REFERENCE") {
+        failures.push(
+            "apple/OPTNOpalReference must isolate the Apple26 flavor behind OPAL_APPLE26_REFERENCE"
+                .to_string(),
+        );
+    }
+
+    // Opal packages must not appear in wallet/application/runtime authority,
+    // including source — not only Cargo.toml.
+    for crate_name in ["optn-core", "optn-app", "optn-runtime"] {
+        let crate_dir = root.join("crates").join(crate_name);
+        for path in walk_files(&crate_dir) {
+            let is_rust_or_toml = path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext == "rs" || ext == "toml");
+            if !is_rust_or_toml {
+                continue;
+            }
+            // Code only. Explaining in a comment why a package is absent is
+            // not depending on it, and a test that names the implementation it
+            // compares against is using the word as data. Both were failing
+            // this before, which would have made the guard something to work
+            // around rather than something to keep.
+            let text = rust_code_only(&read(&path)).to_lowercase();
+            for dependency in APPLE_REFERENCE_DEPENDENCIES {
+                if text.contains(dependency) {
+                    failures.push(format!(
+                        "{} refers to Apple/Opal package '{dependency}' in code; wallet truth                          stays in Rust and Apple adapters belong behind optn-platform",
+                        path.display()
+                    ));
+                }
+            }
+        }
+    }
+
     let ui_manifest = read(&root.join("crates/optn-ui/Cargo.toml"));
     require_dependency("crates/optn-ui", &ui_manifest, "optn-app", &mut failures);
     require_dependency(
@@ -392,6 +459,29 @@ fn architecture() {
         &mut failures,
     );
 
+    let apple_manifest = read(&root.join("crates/optn-platform-apple/Cargo.toml"));
+    require_dependency(
+        "crates/optn-platform-apple",
+        &apple_manifest,
+        "optn-platform",
+        &mut failures,
+    );
+    forbid_dependencies(
+        "crates/optn-platform-apple",
+        &apple_manifest,
+        &[
+            "optn-core",
+            "optn-app",
+            "optn-runtime",
+            "optn-transport",
+            "optn-ui",
+            "optn-platform-native",
+        ],
+        &mut failures,
+    );
+
+    apple::check(&root, &mut failures);
+
     // The Rust renderer may use HTML/CSS build assets, but application/source
     // logic under optn-ui must remain Rust. Reference-wallet TypeScript/Vue is
     // a behavior oracle, not a migration destination.
@@ -446,6 +536,92 @@ fn host_block(source: &str) -> Option<Vec<String>> {
 /// *not* pull something in would otherwise read as pulling it in. Stripping
 /// comments also stops a comment from satisfying `require_dependency`, which
 /// is the more dangerous direction of the same mistake.
+/// Rust source with comments and string literals removed.
+///
+/// A forbidden-name scan over raw source cannot tell a dependency from a
+/// sentence about one. Naming a package in a doc comment that explains why it
+/// is not used, or in a test label naming the implementation being compared
+/// against, is not a dependency -- and failing the build for it teaches people
+/// to reword prose instead of to keep the boundary. What a Rust file cannot do
+/// without naming it in code is *use* the crate, so code is what is checked.
+fn rust_code_only(source: &str) -> String {
+    let bytes: Vec<char> = source.chars().collect();
+    let mut out = String::with_capacity(source.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        let current = bytes[index];
+        let next = bytes.get(index + 1).copied();
+        match (current, next) {
+            ('/', Some('/')) => {
+                while index < bytes.len() && bytes[index] != '\n' {
+                    index += 1;
+                }
+            }
+            ('/', Some('*')) => {
+                // Rust block comments nest, so a depth counter is needed
+                // rather than a search for the first `*/`.
+                let mut depth = 1;
+                index += 2;
+                while index < bytes.len() && depth > 0 {
+                    match (bytes[index], bytes.get(index + 1).copied()) {
+                        ('/', Some('*')) => {
+                            depth += 1;
+                            index += 2;
+                        }
+                        ('*', Some('/')) => {
+                            depth -= 1;
+                            index += 2;
+                        }
+                        _ => index += 1,
+                    }
+                }
+            }
+            ('r', Some('"')) | ('r', Some('#')) => {
+                // A raw string: r"..", r#".."#, r##".."##.
+                let mut hashes = 0;
+                let mut scan = index + 1;
+                while bytes.get(scan) == Some(&'#') {
+                    hashes += 1;
+                    scan += 1;
+                }
+                if bytes.get(scan) != Some(&'"') {
+                    out.push(current);
+                    index += 1;
+                    continue;
+                }
+                index = scan + 1;
+                loop {
+                    if index >= bytes.len() {
+                        break;
+                    }
+                    if bytes[index] == '"'
+                        && (0..hashes).all(|offset| bytes.get(index + 1 + offset) == Some(&'#'))
+                    {
+                        index += 1 + hashes;
+                        break;
+                    }
+                    index += 1;
+                }
+            }
+            ('"', _) => {
+                index += 1;
+                while index < bytes.len() && bytes[index] != '"' {
+                    if bytes[index] == '\\' {
+                        index += 1;
+                    }
+                    index += 1;
+                }
+                index += 1;
+            }
+            _ => {
+                out.push(current);
+                index += 1;
+            }
+        }
+    }
+    out
+}
+
 fn manifest_body(manifest: &str) -> String {
     manifest
         .lines()
@@ -508,4 +684,108 @@ fn walk_files(root: &Path) -> Vec<PathBuf> {
         }
     }
     files
+}
+
+#[cfg(test)]
+mod apple_firewall_tests {
+    use super::*;
+
+    #[test]
+    fn the_source_scan_reads_code_and_not_prose() {
+        // A guard that fails on the word teaches people to reword the sentence.
+        // A guard that fails on the import is one worth keeping, so this checks
+        // both halves: prose passes, code does not.
+        let prose = r##"
+            //! SwiftFulcrum is an independent implementation, named here to
+            //! explain why nothing in this crate reaches for it.
+            /* opalbase /* nested */ is likewise only discussed */
+            fn label() -> &'static str { "SwiftFulcrum" }
+            fn raw() -> &'static str { r#"opalcrypto"# }
+        "##;
+        let stripped = rust_code_only(prose).to_lowercase();
+        for dependency in APPLE_REFERENCE_DEPENDENCIES {
+            assert!(
+                !stripped.contains(dependency),
+                "'{dependency}' survived stripping: {stripped}"
+            );
+        }
+
+        // The thing the guard exists for. A crate cannot be used without being
+        // named in code, so these must all still be caught.
+        for code in [
+            "use swiftfulcrum::Client;",
+            "extern crate opalbase;",
+            "let x = opalcrypto::sign(seed);",
+            "fn f(p: opalfusion::Round) {}",
+        ] {
+            let stripped = rust_code_only(code).to_lowercase();
+            assert!(
+                APPLE_REFERENCE_DEPENDENCIES
+                    .iter()
+                    .any(|dependency| stripped.contains(dependency)),
+                "a real dependency slipped through: {code}"
+            );
+        }
+
+        // An escaped quote must not end the literal early and leave the rest of
+        // the string looking like code.
+        let escaped = r#"let s = "a \" swiftfulcrum"; let t = 1;"#;
+        assert!(!rust_code_only(escaped)
+            .to_lowercase()
+            .contains("swiftfulcrum"));
+        assert!(rust_code_only(escaped).contains("let t = 1;"));
+    }
+
+    fn workspace_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask lives below workspace root")
+            .to_path_buf()
+    }
+
+    #[test]
+    fn optn_core_app_runtime_cargo_tomls_do_not_name_opal_packages() {
+        let root = workspace_root();
+        for crate_name in ["optn-core", "optn-app", "optn-runtime"] {
+            let text =
+                read(&root.join("crates").join(crate_name).join("Cargo.toml")).to_lowercase();
+            for dependency in APPLE_REFERENCE_DEPENDENCIES {
+                assert!(
+                    !text.contains(dependency),
+                    "{crate_name} Cargo.toml must not mention {dependency}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn opal_reference_is_v26_gated_without_moving_branches_or_secret_packages() {
+        let manifest = read(&workspace_root().join("apple/OPTNOpalReference/Package.swift"));
+        assert!(manifest.contains(".iOS(.v26)"));
+        assert!(manifest.contains(".macOS(.v26)"));
+        assert!(manifest.contains("OPAL_APPLE26_REFERENCE"));
+        assert!(
+            !manifest.contains("branch:"),
+            "Opal reference must not pin moving develop"
+        );
+        for forbidden in ["OpalBase", "OpalCrypto", "OpalFusion", "OpalHedge"] {
+            assert!(
+                !manifest.contains(forbidden),
+                "Opal reference must not link {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn native_apple_provider_does_not_depend_on_opal() {
+        let manifest =
+            read(&workspace_root().join("apple/OPTNAppleProvider/Package.swift")).to_lowercase();
+        for dependency in APPLE_REFERENCE_DEPENDENCIES {
+            assert!(
+                !manifest.contains(dependency),
+                "native Apple provider must not depend on {dependency}"
+            );
+        }
+        assert!(manifest.contains(".ios(.v14)"));
+    }
 }

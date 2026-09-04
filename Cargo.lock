@@ -2002,6 +2002,13 @@ name = "optn-platform"
 version = "1.7.3"
 
 [[package]]
+name = "optn-platform-apple"
+version = "1.7.3"
+dependencies = [
+ "optn-platform",
+]
+
+[[package]]
 name = "optn-platform-native"
 version = "1.7.3"
 dependencies = [

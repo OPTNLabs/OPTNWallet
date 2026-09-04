@@ -230,6 +230,10 @@ fn collect_source_drift(root: &Path, matrix: &Matrix, failures: &mut Vec<String>
         );
     }
 
+    // Every platform, with no exception for the shells that have no camera and
+    // no USB: watching a cold wallet needs neither. This is the one feature in
+    // the matrix that is deliberately uniform, so an `na` appearing here is a
+    // platform quietly losing the air-gap door rather than a gap being noted.
     for platform in [
         "windows",
         "linux",
@@ -274,14 +278,12 @@ fn collect_source_drift(root: &Path, matrix: &Matrix, failures: &mut Vec<String>
 
     let capabilities =
         fs::read_to_string(root.join("src/platform/capabilities.ts")).unwrap_or_default();
-    for (surface, expected) in [
-        ("desktop", true),
-        ("android", true),
-        ("ios", true),
-        ("web", true),
-        ("extension", true),
-    ] {
-        if !capability_enabled(&capabilities, "watchOnlyWallet", surface, expected) {
+    // Watch Only is offered on every surface. It needs no transport at all --
+    // an account xPub can be pasted -- so the shells with no camera and no USB
+    // can still watch a cold wallet. The table is how a platform switches it
+    // off, not how it earns it.
+    for surface in ["desktop", "android", "ios", "web", "extension"] {
+        if !capability_enabled(&capabilities, "watchOnlyWallet", surface, true) {
             failures.push(format!(
                 "src/platform/capabilities.ts watchOnlyWallet.{surface} drifted from the parity matrix"
             ));
@@ -296,17 +298,25 @@ fn collect_source_drift(root: &Path, matrix: &Matrix, failures: &mut Vec<String>
         failures.push("matrix is missing hardware_wallet".into());
         return;
     };
+    // Hardware stays na off desktop because the vendor integrations only exist
+    // there yet -- not because the other platforms cannot reach a device.
+    // Ledger, Trezor and OneKey variously speak USB, Bluetooth and NFC, Android
+    // supports USB host mode, and Keystone needs only a camera. What is missing
+    // is the library, per platform.
     for platform in ["android", "ios", "web", "extension"] {
         if hardware.policy.get(platform).map(String::as_str) != Some("na") {
             failures.push(format!(
-                "hardware_wallet {platform} must stay na (desktop USB only)"
+                "hardware_wallet {platform} must stay na until that platform's vendor                  integration exists"
             ));
         }
     }
 }
 
 fn capability_enabled(source: &str, capability: &str, surface: &str, expected: bool) -> bool {
-    let Some(start) = source.find(capability) else {
+    // The table entry, not the first mention: the capability name also appears
+    // in the union type above it, and anchoring there made the window's reach
+    // depend on how long the comments in between happened to be.
+    let Some(start) = source.find(&format!("{capability}: {{")) else {
         return false;
     };
     let window = source.get(start..start.saturating_add(800)).unwrap_or("");

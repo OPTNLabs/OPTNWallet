@@ -1,0 +1,40 @@
+# Reviewed SemVer tags for the isolated Opal flavor.
+# Do not follow moving `develop` in Apple release builds.
+#
+# Supply-chain fact: OpalBase v0.4.1 Package.swift still uses
+#   .package(url: "https://github.com/58opals/<pkg>.git", branch: "develop")
+# for SwiftFulcrum, OpalCrypto, OpalFusion, OpalHedge, and OpalDiagnostics.
+# Its Package.resolved records those develop revisions. OPTN pins tags below
+# instead of inheriting that moving graph.
+
+[optn]
+ios_deployment_target = "14.0"
+ios_evidence = "ios/App/App.xcodeproj/project.pbxproj IPHONEOS_DEPLOYMENT_TARGET = 14.0"
+macos_deployment_target = "10.15"
+macos_evidence = "src-tauri/tauri.conf.json does not set bundle.macOS.minimumSystemVersion; Tauri 2.11.5 floor is 10.15"
+
+[opal]
+ios_deployment_target = "26"
+macos_deployment_target = "26"
+swift_tools_tagged = "6.2"
+swift_tools_develop = "6.4"
+inspected = "2026-09-03"
+
+[pins]
+# Isolated flavor dependencies (exact tags).
+SwiftFulcrum = { tag = "v0.8.0", sha = "611a53f2047660e0dd221f75526ce11335be901a", url = "https://github.com/58opals/SwiftFulcrum.git" }
+OpalDiagnostics = { tag = "v0.2.0", url = "https://github.com/58opals/OpalDiagnostics.git" }
+
+# Recorded, not linked into OPTN. Do not route production secrets through OpalCrypto.
+OpalBase = { tag = "v0.4.1", sha = "606c188fea5a139a178fa38d962c61b80baa3a27", url = "https://github.com/58opals/OpalBase.git", linked = false }
+OpalCrypto = { tag = "v0.2.0", sha = "9903d6fc6fb90f2a4e8e8a27319db9e2049ae5af", url = "https://github.com/58opals/OpalCrypto.git", linked = false, reason = "secret-scalar ops not constant-time reviewed" }
+OpalFusion = { tag = "v0.1.0", sha = "808635ae5db8dcd5abfdbc83347099d6c751d405", url = "https://github.com/58opals/OpalFusion.git", linked = false, reason = "early scaffold; Fusion stays Rust" }
+OpalHedge = { tag = "v0.1.0", sha = "4abb1d4481d7026c1616563a2e4aab12b434d0f4", url = "https://github.com/58opals/OpalHedge.git", linked = false }
+
+[opalbase_v0_4_1_package_resolved_develop_revisions]
+# What OpalBase v0.4.1 itself tracked on develop. Not OPTN pins.
+SwiftFulcrum = "0777e384a05beed9491ac50b8ce11858d061f04f"
+OpalCrypto = "8171809112037fa4ffc877ebfe587ae068ac75b4"
+OpalDiagnostics = "c3556731176e2be04c90d5542cf7049c8abe1f79"
+OpalFusion = "d39ca2827278bd2be39543a78f31466b360d90d0"
+OpalHedge = "24f1627ae716438c3ddee314c0f3006bc79bf088"

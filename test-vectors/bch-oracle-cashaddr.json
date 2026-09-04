@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "id": "bch-oracle-cashaddr",
+  "network": "chipnet-and-mainnet-spec",
+  "authority": "CashAddr specification example plus OPTN chipnet prefix round-trip. Canonical protocol vector; agreement of two implementations is never sole proof.",
+  "notes": "Public CashAddr spec material only.",
+  "cases": [
+    {
+      "id": "spec-p2pkh-mainnet",
+      "address": "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a",
+      "prefix": "bitcoincash",
+      "kind": "p2pkh",
+      "hash160": "76a04053bda0a88bda5177b86a15c3b29f559873",
+      "script_pubkey": "76a91476a04053bda0a88bda5177b86a15c3b29f55987388ac"
+    },
+    {
+      "id": "spec-p2pkh-chipnet-prefix",
+      "hash160": "76a04053bda0a88bda5177b86a15c3b29f559873",
+      "kind": "p2pkh",
+      "prefix": "bchtest",
+      "address": "bchtest:qpm2qsznhks23z7629mms6s4cwef74vcwvqcw003ap"
+    }
+  ]
+}

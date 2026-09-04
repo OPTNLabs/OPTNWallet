@@ -375,4 +375,24 @@ mod tests {
         let err = Address::decode("bitcoincash:").unwrap_err();
         assert!(err.contains("empty"), "unexpected error: {err}");
     }
+
+    #[test]
+    fn canonical_oracle_vectors_match_rust_encoder() {
+        let raw = include_str!("../../../test-vectors/bch-oracle-cashaddr.json");
+        assert!(raw.contains("bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a"));
+        let spec =
+            Address::decode("bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a").unwrap();
+        assert_eq!(hex(&spec.hash), SPEC_HASH160);
+        let chip = Address::from_hash("bchtest", spec.kind, spec.hash).encode();
+        assert_eq!(spec.encode(), SPEC_P2PKH);
+        assert!(chip.starts_with("bchtest:"), "{chip}");
+        assert_ne!(chip, SPEC_P2PKH);
+        assert!(
+            raw.contains(&chip),
+            "vector file must include rust-encoded chipnet address {chip}"
+        );
+        for forbidden in ["mnemonic", "xprv", "seed phrase"] {
+            assert!(!raw.to_lowercase().contains(forbidden), "{forbidden}");
+        }
+    }
 }
