@@ -15,6 +15,7 @@ pub mod addon;
 pub mod airgap;
 pub mod cashaddr;
 pub mod coins;
+pub mod conformance;
 pub mod discovery;
 pub mod endpoint;
 pub mod error;
