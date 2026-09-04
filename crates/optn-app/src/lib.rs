@@ -1857,9 +1857,7 @@ pub fn watch_only_setup_preview(
 /// does not keep its own list.
 pub use optn_platform::{HardwareTransport, HardwareVendor, TransportSupport};
 
-pub use optn_core::airgap::{
-    classify_scanned_account, AirgapDevice, ScannedAccount, AIRGAP_SUBTITLE, AIRGAP_TITLE,
-};
+pub use optn_core::airgap::{classify_scanned_account, AccountEntry, ScannedAccount};
 pub use optn_core::multisig::{Cosigner, MultisigPreview, MAX_COSIGNERS};
 
 /// Transports a surface can be relied on to provide.
@@ -1871,8 +1869,14 @@ pub use optn_core::multisig::{Cosigner, MultisigPreview, MAX_COSIGNERS};
 /// camera, on phones.
 pub fn transport_support(surface: AppSurface) -> TransportSupport {
     match surface {
-        // A cable, a radio, a camera and a card reader. The desktop has the
-        // most of any surface, but not NFC: no laptop offers it.
+        // A cable, a radio, a camera and a card reader.
+        //
+        // Not NFC. No laptop has a reader built in, and the ones people add
+        // arrive over USB -- which means trusting an arbitrary USB device to
+        // sit in the path between the wallet and a signing device. That is a
+        // meaningful thing to be wrong about, so the reader is not probed for
+        // and the option is not offered. Someone who owns one can still use
+        // the cable.
         AppSurface::Desktop => TransportSupport {
             native_usb: true,
             native_ble: true,

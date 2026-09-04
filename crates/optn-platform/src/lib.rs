@@ -304,17 +304,48 @@ impl HardwareVendor {
 
     /// Whether every way to reach this device keeps it disconnected.
     ///
-    /// This is what decides which section a device appears in. Keystone is
-    /// air-gapped and nothing else, so it sits under Airgap. OneKey can sign
-    /// over QR too, but it also speaks USB, Bluetooth and NFC, so air-gap is
-    /// one of its options rather than what it is — and it belongs with the
-    /// hardware wallets.
+    /// A fact about transports, and useful for what a screen says -- "this
+    /// device never connects" is worth telling someone. It is deliberately
+    /// *not* what decides which section a device appears in; see
+    /// [`Self::holds_firmware`].
     pub fn is_air_gapped_only(self) -> bool {
         !self.transports().is_empty()
             && self
                 .transports()
                 .iter()
                 .all(|transport| transport.is_air_gapped())
+    }
+
+    /// Whether this is a device with its own firmware.
+    ///
+    /// **This is what separates a hardware wallet from a watch-only wallet**,
+    /// and it is the only thing that does. Not the transport: Keystone signs
+    /// only over QR and microSD and is still a hardware wallet, because it
+    /// runs firmware, has a screen, and holds a seed. A seed signer hands over
+    /// an xPub and holds no firmware, so it is a watch-only wallet however it
+    /// delivers the key -- QR, a file, a card, or typed.
+    ///
+    /// Drawing the line at air-gap instead put Keystone and a seed signer in
+    /// one section on the grounds that neither uses a cable, which is a
+    /// resemblance rather than a likeness. The card made that obvious: both
+    /// can hand you an SD card, and only one of them is a computer.
+    pub const fn holds_firmware(self) -> bool {
+        match self {
+            Self::Ledger | Self::Trezor | Self::OneKey | Self::Keystone => true,
+            // In-process test double. It is not a device at all.
+            Self::Mock => false,
+        }
+    }
+
+    /// Whether multisig with this device is offered up front.
+    ///
+    /// Never. Every vendor supports it and every vendor does it differently --
+    /// Keystone documents its own flow -- and a cosigner set entered wrongly
+    /// produces an address nobody can spend from. It belongs behind an
+    /// advanced control on each device rather than beside "connect", where it
+    /// would be picked by someone who wanted an ordinary wallet.
+    pub const fn multisig_is_default(self) -> bool {
+        false
     }
 
     /// The ways this device can be reached on this runtime, in preference

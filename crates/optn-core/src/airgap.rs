@@ -1,26 +1,23 @@
 //! Adding an account the wallet can watch but not spend from.
 //!
-//! Two categories, and they are genuinely different things rather than a list
-//! of brands:
+//! A watch-only wallet is an account xPub the wallet watches and cannot spend
+//! from. Where the xPub came from is not its business: a seed signer, another
+//! wallet's export, a piece of paper.
 //!
-//! **Watch only wallets.** An account xPub arrives and the wallet watches it.
-//! Where the xPub came from is not the wallet's business — a seed signer with
-//! no firmware, another wallet's export, a piece of paper. SeedCash is one of
-//! these and gets no special case: it hands over a bare base58 xPub, so the
-//! master fingerprint is typed and the account path is chosen, which is
-//! exactly what the generic path already does for anything else. Enumerating
-//! it as a device would imply the wallet cares which seed signer produced the
-//! key, and it does not.
+//! **The line between this and a hardware wallet is firmware, not the cable.**
+//! A seed signer holds none -- it hands over a key and has no screen to
+//! confirm on -- so it is a watch-only wallet however it delivers that key:
+//! typed, scanned, from a file, or off an SD card. A device that runs
+//! firmware, shows you the transaction and holds the seed is a hardware wallet
+//! even when it never connects to anything; Keystone signs only over QR and
+//! microSD and is still one, and it belongs in that section.
 //!
-//! **Air-gapped hardware wallets.** Devices with firmware that never touch a
-//! cable and never see a PSBT here: the account arrives as a QR and later
-//! spends go back out as one. Keystone is the one supported today; others
-//! exist. These are worth naming individually because their exports differ —
-//! Keystone's BC-UR carries the key *and* its origin, so the fingerprint and
-//! the full derivation path come with it and nothing is typed.
+//! Drawing the line at air-gap instead put Keystone and a seed signer together
+//! on the grounds that neither uses a cable. The SD card made the mistake
+//! visible: both can hand you a card, and only one of them is a computer.
 //!
-//! Both categories accept the same three ways in: typed, uploaded from a file,
-//! or scanned. That is [`AccountEntry`], shared rather than duplicated.
+//! So there is no device list here. What remains is how an account arrives --
+//! [`AccountEntry`] -- and what a scanned payload turns out to be.
 //!
 //! This module only classifies a scanned payload. Decoding BC-UR needs a
 //! CBOR/bytewords decoder this crate does not have yet, so a UR is reported
@@ -47,53 +44,6 @@ impl ScannedAccount {
     /// Whether this payload can be turned into a wallet right now.
     pub const fn is_usable(&self) -> bool {
         matches!(self, Self::Xpub(_))
-    }
-}
-
-/// Which air-gapped device produced a payload, for the picker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum AirgapDevice {
-    /// Keystone, over BC-UR. Its export carries its own origin.
-    Keystone,
-}
-
-impl AirgapDevice {
-    /// The devices this section offers.
-    ///
-    /// One today. A seed signer is deliberately not in here: it has no
-    /// firmware and exports a plain xPub, so it is a watch-only wallet and
-    /// belongs in that section rather than among devices.
-    pub const OFFERED: &'static [Self] = &[Self::Keystone];
-
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Keystone => "Keystone",
-        }
-    }
-
-    pub const fn id(self) -> &'static str {
-        match self {
-            Self::Keystone => "keystone",
-        }
-    }
-
-    /// One line under the name in the picker.
-    pub const fn description(self) -> &'static str {
-        match self {
-            Self::Keystone => {
-                "Scan account QR (path + fingerprint). Send & receive airgap — \
-                 not USB, not PSBT."
-            }
-        }
-    }
-
-    /// Whether the device's export carries its own origin (fingerprint and
-    /// derivation path). False means the user supplies them.
-    ///
-    /// A per-device property rather than a category one: another air-gapped
-    /// device may well export a bare key, and it would still be a device.
-    pub const fn carries_origin(self) -> bool {
-        matches!(self, Self::Keystone)
     }
 }
 
@@ -132,15 +82,6 @@ impl AccountEntry {
         matches!(self, Self::Scanned)
     }
 }
-
-/// Headline for the air-gapped hardware section.
-///
-/// The shipped copy from the wallet this was ported from. The section holds
-/// devices with firmware; a seed signer is a watch-only wallet and appears in
-/// that section above.
-pub const AIRGAP_TITLE: &str = "Airgap";
-/// The line under it.
-pub const AIRGAP_SUBTITLE: &str = "Not PSBT. Device stays offline; send & receive over QR airgap.";
 
 /// Identify a scanned payload without decoding it.
 pub fn classify_scanned_account(payload: &str) -> Result<ScannedAccount> {
@@ -297,16 +238,20 @@ mod tests {
     }
 
     #[test]
-    fn a_seed_signer_is_not_a_device_and_is_not_offered_as_one() {
-        // SeedCash has no firmware and exports a plain xPub, so it is a
-        // watch-only wallet like any other. Listing it among devices would
-        // imply the wallet cares which seed signer produced a key, and it does
-        // not -- the generic watch-only path already types the fingerprint and
-        // chooses the account path, which is the whole of what it needs.
-        assert_eq!(AirgapDevice::OFFERED, &[AirgapDevice::Keystone]);
-        for device in AirgapDevice::OFFERED {
-            assert_ne!(device.id(), "seedcash");
-            assert_ne!(device.label(), "SeedCash");
+    fn firmware_is_the_line_and_a_card_does_not_move_it() {
+        // A seed signer can hand over an xPub on an SD card and it is still a
+        // watch-only wallet: it runs no firmware, shows nothing, holds no
+        // seed of its own that this wallet drives. Keystone can hand over the
+        // same card and is a hardware wallet. The card is not the difference.
+        //
+        // There is no device list in this module any more, which is the whole
+        // point: a watch-only wallet has no brand to choose.
+        let by_card = ScannedAccount::Xpub("xpub-from-a-card".into());
+        assert!(by_card.is_usable(), "however it arrived");
+
+        // The three ways in are shared, and none of them names a device.
+        for entry in AccountEntry::ALL {
+            assert!(!entry.label().is_empty());
         }
     }
 
@@ -337,28 +282,5 @@ mod tests {
             2,
             "two ways in survive a build with no camera"
         );
-    }
-
-    #[test]
-    fn the_offered_devices_read_the_way_the_product_says() {
-        assert_eq!(AirgapDevice::OFFERED, &[AirgapDevice::Keystone]);
-        assert_eq!(AIRGAP_TITLE, "Airgap");
-        assert_eq!(
-            AIRGAP_SUBTITLE,
-            "Not PSBT. Device stays offline; send & receive over QR airgap."
-        );
-        assert_eq!(
-            AirgapDevice::Keystone.description(),
-            "Scan account QR (path + fingerprint). Send & receive airgap — not USB, not PSBT."
-        );
-        // Keystone's export carries its own origin, so nothing is typed. A
-        // watch-only wallet is the other case -- the key arrives alone and the
-        // fingerprint and path are supplied here -- and that is the generic
-        // path, not a device with this flag turned off.
-        assert!(AirgapDevice::Keystone.carries_origin());
-        for device in AirgapDevice::OFFERED {
-            assert!(!device.label().is_empty());
-            assert!(!device.description().is_empty());
-        }
     }
 }

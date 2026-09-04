@@ -1,28 +1,30 @@
 #![cfg(target_arch = "wasm32")]
 
-//! The Airgap section of Watch Only.
+//! Scanning an account into a Watch Only wallet.
 //!
-//! Sits below the single-sig and multisig inputs, as in the React wallet:
-//! pick a signer, press Enter, the camera opens, and the account arrives by
-//! QR. The device never touches a cable and never sees a PSBT.
+//! Sits below the single-sig and multisig inputs: press Scan, the camera
+//! opens, and an account xPub arrives by QR.
 //!
-//! SeedCash sends the bare xPub, so its account path is chosen here and the
-//! fingerprint is optional. Keystone sends BC-UR carrying its own origin, so
-//! nothing is typed — once the decoder exists. Until then a Keystone scan is
-//! reported precisely rather than half-parsed into a plausible wrong key.
+//! There is no device to pick. A watch-only wallet is an xPub and nothing
+//! else, and which seed signer produced it is not this screen's business --
+//! the fingerprint is optional and the account path is chosen here, which is
+//! what any of them need. A device that runs firmware is a hardware wallet
+//! and lives in that section, however it happens to talk.
+//!
+//! A BC-UR payload is reported precisely rather than half-parsed into a
+//! plausible wrong key, because the decoder does not exist yet.
 
 use crate::derivation::DerivationPicker;
 use crate::scan::can_scan;
 use crate::{dispatch_action, UiTransport};
 use leptos::prelude::*;
 use optn_app::{
-    classify_scanned_account, watch_only_setup_preview, AccountPath, AirgapDevice, AppAction,
-    AppState, ScannedAccount, WatchOnlySetupPreview, AIRGAP_SUBTITLE, AIRGAP_TITLE,
+    classify_scanned_account, watch_only_setup_preview, AccountPath, AppAction, AppState,
+    ScannedAccount, WatchOnlySetupPreview,
 };
 
 #[component]
 pub fn AirgapSection(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
-    let chosen = RwSignal::new(None::<AirgapDevice>);
     let wallet_name = RwSignal::new(String::new());
     let fingerprint = RwSignal::new(String::new());
     let account = RwSignal::new(AccountPath::default_for(state.get_untracked().network));
@@ -32,12 +34,8 @@ pub fn AirgapSection(transport: UiTransport, state: RwSignal<AppState>) -> impl 
     let preview = RwSignal::new(None::<WatchOnlySetupPreview>);
     let busy = RwSignal::new(false);
 
-    let default_name = move || match chosen.get() {
-        // The React flow names a Keystone wallet after the device when the
-        // user has not typed one.
-        Some(signer) => signer.label().to_owned(),
-        None => "Airgap wallet".to_owned(),
-    };
+    // No device produced this name, because no device was picked.
+    let default_name = move || "Scanned wallet".to_owned();
 
     let start_scan = move || {
         if busy.get_untracked() {
@@ -124,47 +122,13 @@ pub fn AirgapSection(transport: UiTransport, state: RwSignal<AppState>) -> impl 
     view! {
         <section class="airgap-section" data-testid="airgap-section">
             <div class="panel-head">
-                <span class="field-label">{AIRGAP_TITLE}</span>
+                <span class="field-label">"Scan an account"</span>
             </div>
-            <p class="muted">{AIRGAP_SUBTITLE}</p>
+            <p class="muted">
+                "Point the camera at the account QR. The wallet watches it and cannot spend from it."
+            </p>
 
-            <div class="choice-list" role="radiogroup" aria-label="Air-gapped signer">
-                {move || {
-                    let selected = chosen.get();
-                    AirgapDevice::OFFERED
-                        .iter()
-                        .map(|signer| {
-                            let signer = *signer;
-                            view! {
-                                <button
-                                    class="network-choice"
-                                    class:active=move || chosen.get() == Some(signer)
-                                    type="button"
-                                    role="radio"
-                                    aria-checked=if selected == Some(signer) { "true" } else { "false" }
-                                    data-testid=format!("airgap-{}", signer.id())
-                                    on:click=move |_| {
-                                        chosen.set(Some(signer));
-                                        preview.set(None);
-                                        error.set(None);
-                                        status.set(None);
-                                    }
-                                >
-                                    <div>
-                                        <p class="source-title">{signer.label()}</p>
-                                        <p class="muted">{signer.description()}</p>
-                                    </div>
-                                    <Show when=move || chosen.get() == Some(signer)>
-                                        <span class="ok">"Selected"</span>
-                                    </Show>
-                                </button>
-                            }
-                        })
-                        .collect_view()
-                }}
-            </div>
 
-            <Show when=move || chosen.get().is_some()>
                 <form class="watch-only-form" on:submit=validate>
                     <Show
                         when=move || can_scan(state)
@@ -201,7 +165,7 @@ pub fn AirgapSection(transport: UiTransport, state: RwSignal<AppState>) -> impl 
                     // SeedCash sends the key alone, so its origin is supplied
                     // here. Keystone's export carries both, so once decoding
                     // lands these stop being asked for.
-                    <Show when=move || chosen.get().is_some_and(|s| !s.carries_origin())>
+                    <Show when=move || true>
                         <label class="field">
                             <span>"Master fingerprint (optional)"</span>
                             <input
@@ -223,7 +187,7 @@ pub fn AirgapSection(transport: UiTransport, state: RwSignal<AppState>) -> impl 
                         </label>
                     </Show>
 
-                    <Show when=move || chosen.get().is_some_and(|s| !s.carries_origin())>
+                    <Show when=move || true>
                         <DerivationPicker state=state selected=account error=error />
                     </Show>
 
@@ -257,7 +221,6 @@ pub fn AirgapSection(transport: UiTransport, state: RwSignal<AppState>) -> impl 
                         "Validate account"
                     </button>
                 </form>
-            </Show>
 
             <Show when=move || preview.get().is_some()>
                 <section class="watch-preview" aria-live="polite">
@@ -267,7 +230,7 @@ pub fn AirgapSection(transport: UiTransport, state: RwSignal<AppState>) -> impl 
                             <h2>{move || preview.get().map(|p| p.wallet_name).unwrap_or_default()}</h2>
                         </div>
                         <span class="success-badge">
-                            {move || chosen.get().map(|s| s.label()).unwrap_or_default()}
+                            "Scanned account"
                         </span>
                     </div>
                     <dl class="preview-grid">
