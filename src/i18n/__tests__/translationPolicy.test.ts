@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   classifyTranslation,
+  isStableTermValue,
   placeholderMismatch,
   placeholders,
 } from '../translationPolicy';
@@ -35,6 +36,11 @@ describe('translation policy', () => {
     expect(
       classifyTranslation('app.language', 'Language', 'Language', 'fr')
     ).toBe('needs-review');
+  });
+
+  it('treats Cash Code, not the legacy Paycode label, as the stable UI term', () => {
+    expect(isStableTermValue('Cash Code')).toBe(true);
+    expect(isStableTermValue('Paycode')).toBe(false);
   });
 
   it('keeps add-on and internal boundaries explicit', () => {

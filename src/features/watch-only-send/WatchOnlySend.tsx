@@ -7,7 +7,14 @@
 // verified locally before the transaction is broadcast, and a transaction that
 // does not byte-for-byte match the approved one is never broadcast.
 
-import { useEffect, useMemo, useRef, useState, type FC } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type FC,
+} from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 
@@ -49,7 +56,7 @@ import {
   type MultisigPolicy,
 } from '../../services/psbt/multisigWallet';
 import { watchOnlyMultisigPolicy } from '../../platform/desktop/onboarding/watchOnlyWallet';
-import { decodePsbt } from '../../services/psbt/psbtBch';
+import { decodePsbt, SIGHASH_ALL_FORKID } from '../../services/psbt/psbtBch';
 import {
   cosignerStatuses,
   mergePsbts,
@@ -58,16 +65,20 @@ import {
 } from '../../services/psbt/psbtMultisig';
 import {
   encodePsbtToUrFrames,
+  DEFAULT_UR_FRAGMENT_LENGTH,
+  UR_FRAGMENT_LENGTH_OPTIONS,
   UrPsbtScanner,
   PSBT_UR_QR_DISPLAY_SIZE,
   PSBT_UR_QR_ERROR_LEVEL,
   PSBT_UR_QR_MARGIN_MODULES,
 } from '../../services/psbt/urPsbt';
+import { parsePsbtBytes } from '../../services/psbt/watchOnlyUrEncode';
 import {
   masterFingerprintBytes,
   watchOnlyMasterFingerprint,
 } from '../../platform/desktop/onboarding/watchOnlyWallet';
 import { CameraQrScanner } from '../../platform/desktop/CameraQrScanner';
+import { isDesktopPlatform } from '../../utils/platform';
 
 type WatchOnlySendLocationState = {
   returnTo?: string;
@@ -88,6 +99,27 @@ type SpendableInput = WatchOnlyInputSpec & {
 };
 
 const FRAME_INTERVAL_MS = 800;
+const MAX_SIGNED_PSBT_FILE_BYTES = 5 * 1024 * 1024;
+
+const SIGHASH_OPTIONS = [
+  { value: 0x41, label: 'All (Recommended)' },
+  { value: 0x42, label: 'None' },
+  { value: 0x43, label: 'Single' },
+  { value: 0xc1, label: 'All + Anyone Can Pay' },
+  { value: 0xc2, label: 'None + Anyone Can Pay' },
+  { value: 0xc3, label: 'Single + Anyone Can Pay' },
+] as const;
+
+const QR_DENSITY_LABELS: Record<
+  (typeof UR_FRAGMENT_LENGTH_OPTIONS)[number],
+  string
+> = {
+  50: 'Easiest to scan (more frames)',
+  100: 'Balanced',
+  200: 'High density (fewer frames)',
+  400: 'Highest density (fewest frames)',
+  450: 'Maximum density (fewest frames)',
+};
 
 const satsToBch = (sats: bigint): string => {
   const bch = Number(sats) / 1e8;
@@ -168,6 +200,8 @@ export const WatchOnlySend: FC = () => {
   const [accountPath, setAccountPath] = useState(() =>
     getBchAccountPath(currentNetwork)
   );
+  const [sighashType, setSighashType] = useState(SIGHASH_ALL_FORKID);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [multisigPolicy, setMultisigPolicy] = useState<MultisigPolicy | null>(
     null
   );
@@ -182,6 +216,9 @@ export const WatchOnlySend: FC = () => {
     typeof encodePsbtToUrFrames
   > | null>(null);
   const [qrUri, setQrUri] = useState('');
+  const [urFragmentLength, setUrFragmentLength] = useState(
+    DEFAULT_UR_FRAGMENT_LENGTH
+  );
 
   const [importText, setImportText] = useState('');
   const [scannerOpen, setScannerOpen] = useState(false);
@@ -480,6 +517,14 @@ export const WatchOnlySend: FC = () => {
     }
   };
 
+  const startQrFrames = (psbt: Uint8Array, fragmentLength: number) => {
+    const frameSource = encodePsbtToUrFrames(psbt, fragmentLength);
+    frameIndexRef.current = 0;
+    frameCountRef.current = frameSource.count;
+    setFrames(frameSource);
+    setQrUri(frameSource.next());
+  };
+
   const handleBuild = async () => {
     setError('');
     setProposalState(null);
@@ -544,6 +589,7 @@ export const WatchOnlySend: FC = () => {
         amountSats,
         changeAddress,
         accountPath,
+        sighashType,
         masterFingerprint: fingerprint
           ? masterFingerprintBytes(fingerprint)
           : null,
@@ -567,6 +613,7 @@ export const WatchOnlySend: FC = () => {
         rawUnsignedHex: result.rawUnsignedHex,
         inputs: inputsWithParents,
         outputs: result.outputs,
+        sighashType: result.sighashType,
       };
       setProposalState({
         psbtBytes: result.psbtBytes,
@@ -575,11 +622,7 @@ export const WatchOnlySend: FC = () => {
         changeSats: result.changeSats,
         inputSumSats: result.inputSumSats,
       });
-      const frameSource = encodePsbtToUrFrames(result.psbtBytes);
-      frameIndexRef.current = 0;
-      frameCountRef.current = frameSource.count;
-      setFrames(frameSource);
-      setQrUri(frameSource.next());
+      startQrFrames(result.psbtBytes, urFragmentLength);
     } catch (err) {
       setError(
         err instanceof Error
@@ -631,22 +674,23 @@ export const WatchOnlySend: FC = () => {
     }
   };
 
+  const psbtFromUrText = (text: string): Uint8Array | null => {
+    const scanner = new UrPsbtScanner();
+    for (const part of text.split(/[\s,;]+/)) {
+      if (!part.trim()) continue;
+      const progress = scanner.receive(part.trim());
+      if (progress.complete && progress.psbt) return progress.psbt;
+    }
+    return null;
+  };
+
   const handleImportText = () => {
     if (!proposalState) {
       setError('Build the unsigned transaction first.');
       return;
     }
     try {
-      const scanner = new UrPsbtScanner();
-      let psbt: Uint8Array | null = null;
-      for (const line of importText.split(/[\s,;]+/)) {
-        if (!line.trim()) continue;
-        const progress = scanner.receive(line.trim());
-        if (progress.complete && progress.psbt) {
-          psbt = progress.psbt;
-          break;
-        }
-      }
+      const psbt = psbtFromUrText(importText);
       if (!psbt) {
         setError(
           'Not enough frames scanned. Scan every frame of the signer screen (it loops).'
@@ -662,6 +706,66 @@ export const WatchOnlySend: FC = () => {
       );
     }
   };
+
+  const handleImportFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    if (!proposalState) {
+      setError('Build the unsigned transaction first.');
+      return;
+    }
+    if (file.size > MAX_SIGNED_PSBT_FILE_BYTES) {
+      setError('Signed PSBT files must be 5 MB or smaller.');
+      return;
+    }
+
+    setError('');
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      try {
+        const psbt = parsePsbtBytes(bytes);
+        decodePsbt(psbt);
+        importAndMerge(psbt);
+        return;
+      } catch {
+        // Some signers export a text file containing the animated UR frames.
+        // Try that transport only after confirming the file is not a PSBT.
+      }
+
+      const psbt = psbtFromUrText(new TextDecoder().decode(bytes));
+      if (!psbt) {
+        throw new Error(
+          'The file is not a binary, hex, base64, or complete UR signed PSBT.'
+        );
+      }
+      importAndMerge(psbt);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Could not read the PSBT file.'
+      );
+    }
+  };
+
+  const changeQrDensity = (next: number) => {
+    if (!proposalState) return;
+    setUrFragmentLength(next);
+    startQrFrames(proposalState.psbtBytes, next);
+  };
+
+  const densityIndex = UR_FRAGMENT_LENGTH_OPTIONS.indexOf(
+    urFragmentLength as (typeof UR_FRAGMENT_LENGTH_OPTIONS)[number]
+  );
+  const densityAt = densityIndex < 0 ? 0 : densityIndex;
+  const canDecreaseDensity = densityAt > 0;
+  const canIncreaseDensity = densityAt < UR_FRAGMENT_LENGTH_OPTIONS.length - 1;
+  const stepQrDensity = (delta: -1 | 1) => {
+    const next = UR_FRAGMENT_LENGTH_OPTIONS[densityAt + delta];
+    if (next == null) return;
+    changeQrDensity(next);
+  };
+  const desktopQr = isDesktopPlatform();
 
   const openScanner = () => {
     urScannerRef.current = new UrPsbtScanner();
@@ -741,7 +845,10 @@ export const WatchOnlySend: FC = () => {
     navigate(locationState?.returnTo ?? '/home');
   };
 
-  const frameNumber = (frameIndexRef.current % frameCountRef.current) + 1;
+  const frameNumber =
+    frameCountRef.current > 0
+      ? (frameIndexRef.current % frameCountRef.current) + 1
+      : 0;
 
   const step: 1 | 2 | 3 = broadcastTxid ? 3 : proposalState ? 2 : 1;
 
@@ -763,7 +870,13 @@ export const WatchOnlySend: FC = () => {
 
   return (
     <WalletScreen
-      maxWidthClassName={frames ? 'max-w-2xl' : 'max-w-md'}
+      maxWidthClassName={
+        frames
+          ? desktopQr
+            ? 'max-w-[min(calc(100vw-1rem),64rem)]'
+            : 'max-w-none px-1'
+          : 'max-w-md'
+      }
       scrollable={false}
     >
       <div className="flex h-full min-h-0 flex-col gap-4">
@@ -933,6 +1046,41 @@ export const WatchOnlySend: FC = () => {
                     className="wallet-input w-full rounded-md px-3 py-2"
                   />
                 </label>
+                <button
+                  type="button"
+                  onClick={() => setShowAdvanced((open) => !open)}
+                  className="text-left text-sm font-semibold wallet-text-strong underline-offset-2 hover:underline"
+                  aria-expanded={showAdvanced}
+                >
+                  {showAdvanced ? 'Hide advanced' : 'Advanced'}
+                </button>
+                {showAdvanced && (
+                  <div className="space-y-2">
+                    <label className="block space-y-1 text-sm wallet-text-strong">
+                      Sighash type
+                      <select
+                        value={sighashType}
+                        onChange={(event) =>
+                          setSighashType(Number(event.target.value))
+                        }
+                        className="wallet-input w-full rounded-md px-3 py-2"
+                      >
+                        {SIGHASH_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    {sighashType !== SIGHASH_ALL_FORKID && (
+                      <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                        Advanced sighash modes commit to fewer transaction
+                        fields. Only use this when the BCH script or signing
+                        policy explicitly requires it.
+                      </p>
+                    )}
+                  </div>
+                )}
                 <div className="flex items-center justify-between text-xs wallet-muted">
                   <span>
                     Change → {changeAddress ? shortTxid(changeAddress) : '…'}
@@ -956,19 +1104,75 @@ export const WatchOnlySend: FC = () => {
                   <p className="text-sm font-semibold wallet-text-strong">
                     Scan this with SeedCash (air-gapped)
                   </p>
-                  <div className="mx-auto w-full max-w-[min(100%,70svh)] rounded-md bg-white p-2">
+                  <div
+                    className={`mx-auto rounded-md bg-white ${
+                      desktopQr
+                        ? 'w-full max-w-[min(100%,calc(100svh-14rem))] p-1'
+                        : 'w-full max-w-none p-0'
+                    }`}
+                  >
                     <QRCodeSVG
                       value={qrUri}
                       size={PSBT_UR_QR_DISPLAY_SIZE}
-                      marginSize={PSBT_UR_QR_MARGIN_MODULES}
+                      marginSize={desktopQr ? PSBT_UR_QR_MARGIN_MODULES : 1}
                       level={PSBT_UR_QR_ERROR_LEVEL}
-                      className="h-auto w-full max-w-full"
+                      className={
+                        desktopQr
+                          ? 'h-auto w-full max-w-full'
+                          : 'h-auto w-full max-w-none'
+                      }
                     />
                   </div>
                   <p className="text-center text-xs wallet-muted">
                     Frame {frameNumber} / {frameCountRef.current} · hold the
                     camera steady, the code loops
                   </p>
+                  {desktopQr && (
+                    <>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          aria-label="Decrease QR density"
+                          onClick={() => stepQrDensity(-1)}
+                          disabled={!canDecreaseDensity}
+                          className="wallet-btn-secondary min-h-11 min-w-11 px-3 text-lg font-semibold disabled:opacity-50"
+                        >
+                          −
+                        </button>
+                        <p className="flex-1 text-center text-sm wallet-text-strong">
+                          {urFragmentLength} —{' '}
+                          {QR_DENSITY_LABELS[
+                            urFragmentLength as keyof typeof QR_DENSITY_LABELS
+                          ] ?? 'Custom'}
+                        </p>
+                        <button
+                          type="button"
+                          aria-label="Increase QR density"
+                          onClick={() => stepQrDensity(1)}
+                          disabled={!canIncreaseDensity}
+                          className="wallet-btn-secondary min-h-11 min-w-11 px-3 text-lg font-semibold disabled:opacity-50"
+                        >
+                          +
+                        </button>
+                      </div>
+                      <p className="text-center text-[11px] wallet-muted">
+                        Desktop only. Higher density packs more into each frame
+                        and restarts scan progress on the signing device.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          changeQrDensity(DEFAULT_UR_FRAGMENT_LENGTH)
+                        }
+                        disabled={
+                          urFragmentLength === DEFAULT_UR_FRAGMENT_LENGTH
+                        }
+                        className="wallet-btn-secondary w-full py-2 text-sm disabled:opacity-50"
+                      >
+                        Reset to easiest scan
+                      </button>
+                    </>
+                  )}
                   <button
                     type="button"
                     onClick={() => setQrFullscreen(true)}
@@ -982,14 +1186,14 @@ export const WatchOnlySend: FC = () => {
                       aria-modal="true"
                       aria-label="Animated QR code, full screen"
                       onClick={() => setQrFullscreen(false)}
-                      className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-4 bg-white p-3"
+                      className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-2 bg-white p-1"
                     >
                       <QRCodeSVG
                         value={qrUri}
                         size={PSBT_UR_QR_DISPLAY_SIZE}
                         marginSize={PSBT_UR_QR_MARGIN_MODULES}
                         level={PSBT_UR_QR_ERROR_LEVEL}
-                        className="h-auto w-[min(96vw,88svh)] max-w-none"
+                        className="h-auto w-[min(98vw,94svh)] max-w-none"
                       />
                       <p className="text-center text-sm text-black">
                         Frame {frameNumber} / {frameCountRef.current} · tap
@@ -1004,6 +1208,19 @@ export const WatchOnlySend: FC = () => {
                   >
                     Scan the signed result
                   </button>
+                  <label className="wallet-btn-secondary block w-full cursor-pointer py-2 text-center text-sm">
+                    Import signed PSBT file
+                    <input
+                      type="file"
+                      accept=".psbt,.txt,.hex,application/octet-stream,text/plain"
+                      onChange={(event) => void handleImportFile(event)}
+                      className="sr-only"
+                    />
+                  </label>
+                  <p className="text-center text-[11px] wallet-muted">
+                    Use the signer&apos;s exported PSBT file. A screenshot of
+                    one animated frame is not a complete PSBT.
+                  </p>
                   <details className="text-xs">
                     <summary className="cursor-pointer wallet-muted">
                       Or paste the UR text

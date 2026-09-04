@@ -219,9 +219,9 @@ export const remainingTranslations = {
     'experimental.rpaTitle': 'Reusable Payment Addresses (RPA)',
     'experimental.rpaBadge': 'BCH RPA',
     'experimental.rpaDescription':
-      "Generates a static paycode (paycode:q...) that you can share publicly. Senders derive a unique one-time address for each payment via ECDH — no notification transaction, no chain bloat. Received stealth funds appear separately as 'Stealth BCH'. Scanning requires a Fulcrum-RPA capable server.",
+      "Generates a static Cash Code (cashcode:q...) that you can share publicly. Senders derive a unique one-time address for each payment via ECDH — no notification transaction, no chain bloat. Received stealth funds appear separately as 'Stealth BCH'. Scanning requires a Fulcrum-RPA capable server.",
     'experimental.rpaWarning':
-      'Sending to paycodes requires signature grinding (not yet implemented). Receiving and scanning are available.',
+      'Sending to Cash Codes requires signature grinding (not yet implemented). Receiving and scanning are available.',
     'experimental.privacy': 'Privacy',
     'experimental.cashFusionDescription':
       'CashFusion is a non-custodial privacy protocol that combines your UTXOs with those of other users in a way that breaks transaction history linkage. Connect to a CashFusion server to participate. Your funds are never at risk — the protocol is trustless.',
@@ -850,16 +850,16 @@ export const remainingTranslations = {
     'camera.cancel': 'Cancel',
     'walkthrough.label': 'Walkthrough',
     'error.somethingWrong': 'Something went wrong.',
-    'rpa.copySuccess': 'Paycode copied!',
+    'rpa.copySuccess': 'Cash Code copied!',
     'rpa.copyFailed': 'Copy failed.',
     'rpa.walletUnavailable': 'Wallet not available',
     'rpa.derivationFailed':
-      'Paycode derivation failed. Unlock your wallet and try again.',
-    'rpa.title': 'RPA Paycode',
-    'rpa.deriving': 'Deriving paycode…',
+      'Cash Code derivation failed. Unlock your wallet and try again.',
+    'rpa.title': 'Cash Code',
+    'rpa.deriving': 'Deriving Cash Code…',
     'rpa.shareDescription':
-      'Share this paycode with senders. Each payment creates a unique stealth address — no link between payments on-chain.',
-    'rpa.paycode': 'Paycode',
+      'Share this Cash Code with senders. Each payment creates a unique stealth address — no link between payments on-chain.',
+    'rpa.paycode': 'Cash Code',
     'rpa.howWorks': 'How it works',
     'rpa.noNotification': 'No notification tx.',
     'rpa.noNotificationText':
@@ -1260,9 +1260,9 @@ export const remainingTranslations = {
     'experimental.rpaTitle': 'Direcciones de pago reutilizables (RPA)',
     'experimental.rpaBadge': 'BCH RPA',
     'experimental.rpaDescription':
-      "Genera un código de pago estático (paycode:q...) que puedes compartir públicamente. Los remitentes derivan una dirección única de un solo uso para cada pago mediante ECDH, sin transacción de notificación ni sobrecarga en la cadena. Los fondos ocultos recibidos aparecen aparte como 'BCH oculto'. El escaneo requiere un servidor compatible con Fulcrum-RPA.",
+      "Genera un Cash Code estático (cashcode:q...) que puedes compartir públicamente. Los remitentes derivan una dirección única de un solo uso para cada pago mediante ECDH, sin transacción de notificación ni sobrecarga en la cadena. Los fondos ocultos recibidos aparecen aparte como 'BCH oculto'. El escaneo requiere un servidor compatible con Fulcrum-RPA.",
     'experimental.rpaWarning':
-      'Enviar a códigos de pago requiere búsqueda de firmas (aún no implementada). Recibir y escanear están disponibles.',
+      'Enviar a un Cash Code requiere búsqueda de firmas (aún no implementada). Recibir y escanear están disponibles.',
     'experimental.privacy': 'Privacidad',
     'experimental.cashFusionDescription':
       'CashFusion es un protocolo de privacidad sin custodia que combina tus UTXO con los de otros usuarios para romper los vínculos del historial entre entradas y salidas. Conéctate a un servidor CashFusion para participar. Tus fondos nunca están en riesgo: el protocolo no requiere confianza.',
@@ -1336,8 +1336,10 @@ export const remainingTranslations = {
     'chat.emptyPrivateGroups': 'Aún no hay grupos privados.',
     'chat.emptyOpenGroups': 'Aún no hay grupos MLS abiertos.',
     'chat.encryptedPrivateGroup': 'Grupo MLS privado · envuelto',
-    'chat.encryptedOpenGroup': 'Grupo MLS abierto · cifrado de extremo a extremo',
-    'chat.invalidPubkey': 'Introduce un npub o una clave pública hex de 64 caracteres.',
+    'chat.encryptedOpenGroup':
+      'Grupo MLS abierto · cifrado de extremo a extremo',
+    'chat.invalidPubkey':
+      'Introduce un npub o una clave pública hex de 64 caracteres.',
     'chat.groupMembers': 'Miembros',
     'chat.inviteMember': 'Invitar',
     'chat.kickMember': 'Quitar del grupo',
@@ -1799,16 +1801,16 @@ export const remainingTranslations = {
     'camera.cancel': 'Cancelar',
     'walkthrough.label': 'Guía',
     'error.somethingWrong': 'Algo salió mal.',
-    'rpa.copySuccess': '¡Código de pago copiado!',
+    'rpa.copySuccess': '¡Cash Code copiado!',
     'rpa.copyFailed': 'No se pudo copiar.',
     'rpa.walletUnavailable': 'Billetera no disponible',
     'rpa.derivationFailed':
-      'No se pudo derivar el código de pago. Desbloquea la billetera e inténtalo de nuevo.',
-    'rpa.title': 'Código de pago RPA',
-    'rpa.deriving': 'Derivando código de pago…',
+      'No se pudo derivar el Cash Code. Desbloquea la billetera e inténtalo de nuevo.',
+    'rpa.title': 'Cash Code',
+    'rpa.deriving': 'Derivando Cash Code…',
     'rpa.shareDescription':
-      'Comparte este código con los remitentes. Cada pago crea una dirección oculta única, sin vínculos entre pagos en la cadena.',
-    'rpa.paycode': 'Código de pago',
+      'Comparte este Cash Code con los remitentes. Cada pago crea una dirección oculta única, sin vínculos entre pagos en la cadena.',
+    'rpa.paycode': 'Cash Code',
     'rpa.howWorks': 'Cómo funciona',
     'rpa.noNotification': 'Sin tx de notificación.',
     'rpa.noNotificationText':
@@ -2302,9 +2304,9 @@ export const remainingTranslations = {
     'experimental.rpaTitle': '可复用支付地址（RPA）',
     'experimental.rpaBadge': 'BCH RPA',
     'experimental.rpaDescription':
-      '生成可公开分享的静态支付码（paycode:q...）。发送方通过 ECDH 为每笔付款推导唯一的一次性地址，不需要通知交易，也不会增加链上负担。收到的隐匿资金会单独显示为“隐匿 BCH”。扫描需要支持 Fulcrum-RPA 的服务器。',
+      '生成可公开分享的静态 Cash Code（cashcode:q...）。发送方通过 ECDH 为每笔付款推导唯一的一次性地址，不需要通知交易，也不会增加链上负担。收到的隐匿资金会单独显示为“隐匿 BCH”。扫描需要支持 Fulcrum-RPA 的服务器。',
     'experimental.rpaWarning':
-      '向支付码发送需要签名穷举（尚未实现）。接收和扫描功能可用。',
+      '向 Cash Code 发送需要签名穷举（尚未实现）。接收和扫描功能可用。',
     'experimental.privacy': '隐私',
     'experimental.cashFusionDescription':
       'CashFusion 是一种非托管隐私协议，将你的 UTXO 与其他用户的 UTXO 组合，以打断输入与输出之间的交易历史关联。连接 CashFusion 服务器即可参与。协议无需信任，资金不会面临托管风险。',
@@ -2787,15 +2789,15 @@ export const remainingTranslations = {
     'camera.cancel': '取消',
     'walkthrough.label': '操作指南',
     'error.somethingWrong': '出现问题。',
-    'rpa.copySuccess': '支付码已复制！',
+    'rpa.copySuccess': 'Cash Code 已复制！',
     'rpa.copyFailed': '复制失败。',
     'rpa.walletUnavailable': '钱包不可用',
-    'rpa.derivationFailed': '支付码派生失败。请解锁钱包后重试。',
-    'rpa.title': 'RPA 支付码',
-    'rpa.deriving': '正在派生支付码…',
+    'rpa.derivationFailed': 'Cash Code 派生失败。请解锁钱包后重试。',
+    'rpa.title': 'Cash Code',
+    'rpa.deriving': '正在派生 Cash Code…',
     'rpa.shareDescription':
-      '将此支付码分享给付款方。每笔付款都会创建唯一的隐匿地址，链上不会关联各笔付款。',
-    'rpa.paycode': '支付码',
+      '将此 Cash Code 分享给付款方。每笔付款都会创建唯一的隐匿地址，链上不会关联各笔付款。',
+    'rpa.paycode': 'Cash Code',
     'rpa.howWorks': '工作原理',
     'rpa.noNotification': '无通知交易。',
     'rpa.noNotificationText':

@@ -100,7 +100,7 @@ const baseTranslations = {
     'onboarding.helpDescription':
       'Create a wallet for the first time or restore one you already have.',
     'onboarding.toggleTheme': 'Toggle theme',
-    'onboarding.welcomeAlt': 'Smart BCH Wallet',
+    'onboarding.welcomeAlt': 'OPTN Wallet',
     'onboarding.closeHelp': 'Close help',
     'onboarding.poweredBy': 'Powered with Bitcoin Covenants for Bitcoin Cash',
     'onboarding.helpCreateTitle': 'Create Wallet',
@@ -269,7 +269,7 @@ const baseTranslations = {
     'onboarding.helpDescription':
       'Crea una billetera por primera vez o restaura una que ya tienes.',
     'onboarding.toggleTheme': 'Cambiar tema',
-    'onboarding.welcomeAlt': 'Billetera Smart BCH',
+    'onboarding.welcomeAlt': 'Billetera OPTN',
     'onboarding.closeHelp': 'Cerrar ayuda',
     'onboarding.poweredBy':
       'Impulsada por covenants de Bitcoin para Bitcoin Cash',
@@ -435,7 +435,7 @@ const baseTranslations = {
     'onboarding.helpTitle': '开始使用',
     'onboarding.helpDescription': '创建新钱包，或恢复已有钱包。',
     'onboarding.toggleTheme': '切换主题',
-    'onboarding.welcomeAlt': 'Smart BCH 钱包',
+    'onboarding.welcomeAlt': 'OPTN 钱包',
     'onboarding.closeHelp': '关闭帮助',
     'onboarding.poweredBy': '由 Bitcoin Cash 的 Bitcoin Covenant 提供支持',
     'onboarding.helpCreateTitle': '创建钱包',

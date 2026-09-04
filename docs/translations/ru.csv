@@ -828,7 +828,7 @@
 "onboarding.walletSavedIdFailed","Wallet was saved, but its wallet ID could not be resolved.","Кошелёк сохранён, но не удалось определить его ID.","translated"
 "onboarding.walletSetup","Wallet Setup","Настройка кошелька","translated"
 "onboarding.walletSetupDescription","Choose the network and address path this wallet will use.","Выберите сеть и путь адресов, которые будет использовать этот кошелёк.","translated"
-"onboarding.welcomeAlt","Smart BCH Wallet","Кошелёк Smart BCH","stable-term"
+"onboarding.welcomeAlt","OPTN Wallet","Кошелёк OPTN","stable-term"
 "onboarding.word","Word","Слово","translated"
 "onboarding.wordCountLabel","Phrase length","Длина фразы","translated"
 "onboarding.wordPlaceholder","word","слово","translated"

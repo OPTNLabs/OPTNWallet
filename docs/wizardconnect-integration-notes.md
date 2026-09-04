@@ -173,16 +173,21 @@ The active file `src/pages/onboarding/CreateWalletPage.tsx` does not look like t
 
 ## 6. Persist session-safe state only
 
-We should persist:
+Relay identity keys are CSPRNG per pairing, encrypted with
+`SecretCryptoService`, and restored on adapter create. See
+[Nostr identity isolation](./nostr-identity-isolation.md).
 
-- connection metadata
-- relay identity key if reconnection is required across app restarts
-- peer pubkey and session identifiers if the library expects them
+We persist:
+
+- encrypted relay identity key per wallet + pairing (hash of the URI, never the raw URI)
+- connection metadata the library already keeps in memory for the live session
 
 We should not persist:
 
-- unnecessary plaintext secrets
+- plaintext relay private keys
+- the pairing URI (it contains the short shared secret)
 - duplicated xpub caches if they can be reconstructed safely
+- chat NIP-06 keys or CashFusion round keys in this store
 
 ## Risks And Open Questions
 
@@ -190,10 +195,9 @@ We should not persist:
 2. The docs are clearly dapp-heavy and wallet integration examples are minimal, so we should verify package maturity before committing to a full production rollout.
 3. Message signing support is not documented the same way transaction signing is. We should assume transaction signing only unless the library or source confirms otherwise.
 4. The relay default is external infrastructure. We should decide whether OPTN is comfortable depending on that relay or wants a configurable/self-hosted path.
-5. Relay identity key lifecycle needs a deliberate decision:
-   - per connection
-   - per wallet
-   - per installed app session
+5. Relay identity key lifecycle (decided): CSPRNG per dapp pairing, encrypted
+   persist, restore on app restart. Not URI-derived. Not HD-derived from the
+   seed. Seed-only reinstall requires scanning the pairing URI again.
 
 ## Recommended Build Order
 

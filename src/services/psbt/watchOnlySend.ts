@@ -2,7 +2,7 @@
 //
 // The online watch-only wallet builds the unsigned transaction and carries it
 // to an air-gapped signer as a PSBT (v145, BIP32 derivation metadata per
-// input, SIGHASH_ALL|FORKID|ANYONECANPAY = 0xc1). No private key ever enters
+// input, with an explicit BCH sighash type). No private key ever enters
 // this code path: the signer is a different device (SeedCash).
 //
 // Fee policy is the same relay-margin policy the signed path uses
@@ -22,7 +22,7 @@ import { DUST } from '../../utils/constants';
 import { relayFeeForBytes } from '../../apis/TransactionManager/feePolicy';
 import {
   encodeUnsignedPsbt,
-  SIGHASH_ALL_FORKID_ANYONECANPAY,
+  SIGHASH_ALL_FORKID,
   type PsbtInputSpec,
   type PsbtOutputSpec,
 } from './psbtBch';
@@ -90,6 +90,8 @@ export interface WatchOnlyBuildParams {
    */
   changeRedeemScriptHex?: string;
   changeDerivations?: WatchOnlyInputSpec['cosignerDerivations'];
+  /** BCH signature commitments. Defaults to ALL|FORKID (0x41). */
+  sighashType?: number;
 }
 
 export interface WatchOnlyBuildOutput {
@@ -118,6 +120,8 @@ export interface WatchOnlyBuildResult {
    * transaction the device cannot confirm belongs to them. Warn, do not block.
    */
   signerRecognisesInputs: boolean;
+  /** Exact sighash requested on every input and required on import. */
+  sighashType: number;
 }
 
 /** What the signer is asked to authorise — everything the import binds to. */
@@ -125,12 +129,14 @@ export interface WatchOnlyProposal {
   rawUnsignedHex: string;
   inputs: WatchOnlyInputSpec[];
   outputs: WatchOnlyBuildOutput[];
+  /** Exact sighash the user approved and the signer must return. */
+  sighashType: number;
 }
 
 const HARDENED_INDEX = 0x80000000;
 
 /** Sighash type the signer is asked for — the watch-only contract. */
-export const WATCH_ONLY_SIGHASH_TYPE = SIGHASH_ALL_FORKID_ANYONECANPAY;
+export const WATCH_ONLY_SIGHASH_TYPE = SIGHASH_ALL_FORKID;
 
 /** The unlocking script shape is fixed here: P2PKH with an ECDSA signature. */
 export const P2PKH_UNLOCK_BYTES = 108;
@@ -147,7 +153,14 @@ export function estimateUnsignedSize(
   inputCount: number,
   outputCount: number
 ): number {
-  return 4 + 1 + 1 + 4 + inputCount * p2pkhInputBytes() + outputCount * p2pkhOutputBytes();
+  return (
+    4 +
+    1 +
+    1 +
+    4 +
+    inputCount * p2pkhInputBytes() +
+    outputCount * p2pkhOutputBytes()
+  );
 }
 
 function addressToLockingBytecode(address: string): Uint8Array {
@@ -158,10 +171,16 @@ function addressToLockingBytecode(address: string): Uint8Array {
   return Uint8Array.from(result.bytecode);
 }
 
-function pathToDerivation(accountPath: string, branch: 0 | 1, index: number): number[] {
+function pathToDerivation(
+  accountPath: string,
+  branch: 0 | 1,
+  index: number
+): number[] {
   const match = /^m\/44'\/(\d+)'\/(\d+)'$/.exec(accountPath.trim());
   if (!match) {
-    throw new Error("Derivation path must match m/44'/coinType'/accountIndex'.");
+    throw new Error(
+      "Derivation path must match m/44'/coinType'/accountIndex'."
+    );
   }
   return [
     HARDENED_INDEX | 44,
@@ -211,11 +230,13 @@ function inputSpecToPsbt(
     vout: input.vout,
     satoshis: input.satoshis,
     lockingBytecode: hexToBin(input.lockingBytecodeHex),
-    publicKey: derivations
-      ? new Uint8Array()
-      : hexToBin(input.publicKeyHex),
+    publicKey: derivations ? new Uint8Array() : hexToBin(input.publicKeyHex),
     masterFingerprint: new Uint8Array(4),
-    derivationPath: pathToDerivation(accountPath, input.branchIndex, input.addressIndex),
+    derivationPath: pathToDerivation(
+      accountPath,
+      input.branchIndex,
+      input.addressIndex
+    ),
     redeemScript: input.redeemScriptHex
       ? hexToBin(input.redeemScriptHex)
       : undefined,
@@ -243,6 +264,7 @@ export function buildWatchOnlyPsbt(
   if (params.amountSats <= 0n) {
     throw new Error('Amount must be greater than 0.');
   }
+  const sighashType = params.sighashType ?? WATCH_ONLY_SIGHASH_TYPE;
   // The master fingerprint is NOT required to produce a signable, valid
   // transaction, and it is not derivable from the account xPub. SeedCash's
   // `sign_psbt_with_xpriv` reads only the *path* out of the 0x06 record
@@ -280,9 +302,14 @@ export function buildWatchOnlyPsbt(
 
   // Fee depends on whether a change output survives; iterate to a fixed point
   // (never more than twice in practice).
-  let outputs: { bytecode: Uint8Array; satoshis: bigint; isChange: boolean }[] = [
-    { bytecode: recipientBytecode, satoshis: params.amountSats, isChange: false },
-  ];
+  let outputs: { bytecode: Uint8Array; satoshis: bigint; isChange: boolean }[] =
+    [
+      {
+        bytecode: recipientBytecode,
+        satoshis: params.amountSats,
+        isChange: false,
+      },
+    ];
   let changeSats = 0n;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const fee = relayFeeForBytes(
@@ -298,7 +325,11 @@ export function buildWatchOnlyPsbt(
     }
     const nextChange = leftover >= DUST ? leftover : 0n;
     const withChange = [
-      { bytecode: recipientBytecode, satoshis: params.amountSats, isChange: false },
+      {
+        bytecode: recipientBytecode,
+        satoshis: params.amountSats,
+        isChange: false,
+      },
     ];
     if (nextChange > 0n) {
       withChange.push({
@@ -315,6 +346,12 @@ export function buildWatchOnlyPsbt(
   }
 
   const feeSats = inputSum - params.amountSats - changeSats;
+  if ((sighashType & 0x1f) === 0x03 && params.inputs.length > outputs.length) {
+    throw new Error(
+      'SIGHASH_SINGLE requires a matching output for every input. Add an ' +
+        'output or choose All (Recommended).'
+    );
+  }
   const psbtInputs: PsbtInputSpec[] = params.inputs.map((input) => ({
     ...inputSpecToPsbt(input, params.accountPath),
     masterFingerprint,
@@ -352,13 +389,11 @@ export function buildWatchOnlyPsbt(
     changeOutput.derivations = changeDerivations;
   }
   const psbtOutputs: PsbtOutputSpec[] = outputs.map((output) =>
-    output.isChange ? changeOutput : { lockingBytecode: output.bytecode, satoshis: output.satoshis }
+    output.isChange
+      ? changeOutput
+      : { lockingBytecode: output.bytecode, satoshis: output.satoshis }
   );
-  const psbtBytes = encodeUnsignedPsbt(
-    psbtInputs,
-    psbtOutputs,
-    WATCH_ONLY_SIGHASH_TYPE
-  );
+  const psbtBytes = encodeUnsignedPsbt(psbtInputs, psbtOutputs, sighashType);
   const rawUnsigned = encodeTransaction({
     version: 2,
     inputs: params.inputs.map((input) => ({
@@ -387,5 +422,6 @@ export function buildWatchOnlyPsbt(
     inputSumSats: inputSum,
     masterFingerprint: fingerprintKnown ? masterFingerprint : null,
     signerRecognisesInputs: fingerprintKnown,
+    sighashType,
   };
 }

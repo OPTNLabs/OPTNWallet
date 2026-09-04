@@ -44,6 +44,10 @@ Technical documentation for contributors and third-party integrators.
   - Nostr contract-system connector (Connections & features).
 - [Nostr chat tiers](./nostr-chat-tiers.md)
   - DM vs private/open MLS; in-chat photos stay inside the wrap (no CDN URL).
+- [Nostr identity isolation](./nostr-identity-isolation.md)
+  - Chat vs P2P CashFusion vs WizardConnect keys: generate, persist, never mix.
+- [WizardConnect integration notes](./wizardconnect-integration-notes.md)
+  - Wallet adapter, xpubs, signing, and relay identity storage.
 - [CashScript Contract Systems](./cashscript-contract-systems.md)
   - BCH covenant design patterns, state-machine rules, and testing checklist.
 - [Custody Vault Design Notes](./custody-vault-design-notes.md)
@@ -61,6 +65,7 @@ Technical documentation for contributors and third-party integrators.
 ## Suggested Reading Paths
 
 - If you are integrating a dApp: `Integration Guide` -> `WalletConnect` section.
+- If you are working on WizardConnect, chat, or P2P fusion keys: `Nostr identity isolation`.
 - If you are embedding custom wallet app logic: `Integration Guide` -> `Addon Development Guide` -> `Addon SDK Reference`.
 - If you are contributing to core wallet internals: `Wallet Architecture` first.
 - If you are working on Nostr chat: [Nostr chat tiers](./nostr-chat-tiers.md)

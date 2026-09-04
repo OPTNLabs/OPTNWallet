@@ -173,22 +173,40 @@ function setLinuxRpath(binary) {
   }
 }
 
-/** macOS 26+ refuses to load unsigned Expert Bundle dylibs. */
-function adHocSignMacosBundle(target, directory, names) {
-  if (process.platform !== 'darwin' || !String(target).startsWith('macos')) {
-    return;
+/**
+ * Apple Silicon checks code signatures while loading a dynamically linked
+ * executable. Preview builds have no Developer ID credentials, so ad-hoc sign
+ * every Mach-O from the extracted Tor bundle before the smoke check. Release
+ * builds sign these files again with the configured identity later.
+ */
+function signMacosTorFiles(target, directory = outDir) {
+  if (process.platform !== 'darwin' || !target.startsWith('macos-')) return;
+
+  let count = 0;
+  for (const name of bundleFileNames(directory)) {
+    const filePath = join(directory, name);
+    const description = execFileSync('file', ['-b', filePath], {
+      encoding: 'utf8',
+    });
+    if (!/Mach-O/.test(description)) continue;
+
+    execFileSync(
+      'codesign',
+      ['--force', '--timestamp=none', '--sign', '-', filePath],
+      { stdio: 'inherit' }
+    );
+    count += 1;
   }
-  const files = names ?? readdirSync(directory);
-  for (const name of files) {
-    if (name !== 'tor' && !name.endsWith('.dylib')) continue;
-    execFileSync('codesign', ['--force', '--sign', '-', join(directory, name)]);
+
+  if (count === 0) {
+    throw new Error('macOS Tor staging found no Mach-O files to sign');
   }
+  console.log(`[fetch-tor] ad-hoc signed ${count} macOS Tor files`);
 }
 
 /** Run the staged binary on matching-host builds to prove it can load. */
 function verifyStagedTorExecutable(target, binary) {
   if (inferTarget() !== target) return;
-  adHocSignMacosBundle(target, dirname(binary));
   let output;
   try {
     output = execFileSync(binary, ['--version'], { encoding: 'utf8' });
@@ -351,6 +369,7 @@ async function main() {
     const stagedVersion = marker[0];
     const stagedTarget = marker.slice(1).join(' ');
     if (stagedVersion === artifact.version && stagedTarget === target) {
+      signMacosTorFiles(target);
       verifyStagedTorExecutable(target, join(outDir, torBinary));
       console.log(
         `[fetch-tor] Tor already staged (${readFileSync(markerPath, 'utf8').trim()})`
@@ -413,6 +432,7 @@ async function main() {
     join(outDir, 'geoip6')
   );
   writeFileSync(markerPath, `${artifact.version} ${target}\n`);
+  signMacosTorFiles(target);
 
   rmSync(temporaryDirectory, { recursive: true, force: true });
   console.log(
@@ -421,7 +441,7 @@ async function main() {
   if (!existsSync(join(outDir, torBinary))) {
     throw new Error('staging failed: binary missing');
   }
-  adHocSignMacosBundle(target, outDir, staged);
+  signMacosTorFiles(target);
   verifyStagedTorExecutable(target, join(outDir, torBinary));
   console.log(readFileSync(markerPath, 'utf8').trim());
 }

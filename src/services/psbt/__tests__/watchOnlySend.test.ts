@@ -1,5 +1,5 @@
 // End-to-end watch-only send tests: build an unsigned PSBT from coin control,
-// sign it exactly like SeedCash would (0xc1 sighash), and verify/merge the
+// sign it exactly like SeedCash would (0x41 sighash), and verify/merge the
 // result. A real secp256k1 key signs, so the verification path is exercised
 // cryptographically, not just structurally.
 
@@ -29,9 +29,9 @@ const FINGERPRINT = Uint8Array.from([0xaa, 0xbb, 0xcc, 0xdd]);
 const ACCOUNT_PATH = "m/44'/145'/0'";
 
 const privateKey = Uint8Array.from([
-  0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c,
-  0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
-  0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
+  0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+  0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a,
+  0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
 ]);
 const publicKey = secp256k1.derivePublicKeyCompressed(privateKey);
 
@@ -58,7 +58,10 @@ function p2pkhScript(pubKey: Uint8Array): Uint8Array {
   return script;
 }
 
-function addressFor(pubKey: Uint8Array, prefix: 'bitcoincash' | 'bchtest'): string {
+function addressFor(
+  pubKey: Uint8Array,
+  prefix: 'bitcoincash' | 'bchtest'
+): string {
   return encodeCashAddress({
     payload: hash160(pubKey),
     prefix,
@@ -106,7 +109,8 @@ function makeInput(
 
 function buildProposal(
   inputs: ReturnType<typeof makeInput>[],
-  amountSats: bigint
+  amountSats: bigint,
+  sighashType = 0x41
 ): WatchOnlyProposal {
   const result = buildWatchOnlyPsbt({
     inputs,
@@ -115,16 +119,18 @@ function buildProposal(
     changeAddress,
     accountPath: ACCOUNT_PATH,
     masterFingerprint: FINGERPRINT,
+    sighashType,
   });
   return {
     rawUnsignedHex: result.rawUnsignedHex,
     inputs,
     outputs: result.outputs,
+    sighashType: result.sighashType,
   };
 }
 
 /**
- * Sign like SeedCash: Schnorr signature + trailing sighash byte, 0xc1.
+ * Sign like SeedCash: Schnorr signature + trailing requested sighash byte.
  *
  * SeedCash's `sign_tx_input` takes `use_schnorr: bool = True` and returns
  * `sign_schnorr_bch(...) + bytes([hash_type])`, so Schnorr is what actually
@@ -134,7 +140,7 @@ function buildProposal(
 function signInput(
   proposal: WatchOnlyProposal,
   inputIndex: number,
-  sighashType = 0xc1,
+  sighashType = proposal.sighashType,
   key = privateKey,
   algorithm: 'schnorr' | 'der' = 'schnorr'
 ): Uint8Array {
@@ -191,7 +197,11 @@ function wrapSignedPsbt(
         ? {
             ...base,
             partialSignatures: [
-              { inputIndex: index, publicKey: hexToBin(input.publicKeyHex), signature: sig },
+              {
+                inputIndex: index,
+                publicKey: hexToBin(input.publicKeyHex),
+                signature: sig,
+              },
             ],
           }
         : base;
@@ -200,7 +210,7 @@ function wrapSignedPsbt(
       lockingBytecode: hexToBin(output.lockingBytecodeHex),
       satoshis: output.satoshis,
     })),
-    0xc1
+    proposal.sighashType
   );
 }
 
@@ -218,7 +228,9 @@ describe('buildWatchOnlyPsbt', () => {
     expect(result.feeSats).toBeGreaterThan(0n);
     expect(result.changeSats).toBeGreaterThan(0n);
     expect(result.inputSumSats).toBe(50_000n);
-    expect(result.inputSumSats - result.feeSats - 30_000n).toBe(result.changeSats);
+    expect(result.inputSumSats - result.feeSats - 30_000n).toBe(
+      result.changeSats
+    );
     expect(result.outputs).toHaveLength(2);
     expect(result.outputs[1].isChange).toBe(true);
 
@@ -228,8 +240,40 @@ describe('buildWatchOnlyPsbt', () => {
     expect(parsed.inputs).toHaveLength(1);
     expect(parsed.outputs).toHaveLength(2);
     expect(parsed.inputs[0].spentSatoshis).toBe(50_000n);
-    expect(parsed.inputs[0].requestedSighashType).toBe(0xc1);
+    expect(parsed.inputs[0].requestedSighashType).toBe(0x41);
+    expect(result.sighashType).toBe(0x41);
     expect(parsed.inputs[0].derivations).toHaveLength(1);
+  });
+
+  it('carries an explicitly selected BCH sighash type into every input', () => {
+    const result = buildWatchOnlyPsbt({
+      inputs: [makeInput()],
+      recipient: recipientAddress,
+      amountSats: 30_000n,
+      changeAddress,
+      accountPath: ACCOUNT_PATH,
+      masterFingerprint: FINGERPRINT,
+      sighashType: 0xc1,
+    });
+
+    expect(result.sighashType).toBe(0xc1);
+    expect(decodePsbt(result.psbtBytes).inputs[0].requestedSighashType).toBe(
+      0xc1
+    );
+  });
+
+  it('rejects SIGHASH_SINGLE when an input has no matching output', () => {
+    expect(() =>
+      buildWatchOnlyPsbt({
+        inputs: [makeInput(), makeInput({ seed: 0x22 })],
+        recipient: recipientAddress,
+        amountSats: 99_500n,
+        changeAddress,
+        accountPath: ACCOUNT_PATH,
+        masterFingerprint: FINGERPRINT,
+        sighashType: 0x43,
+      })
+    ).toThrow(/SIGHASH_SINGLE.*matching output/i);
   });
 
   it('omits change below dust (leftover goes to fee)', () => {
@@ -394,6 +438,7 @@ describe('watch-only import verification', () => {
       rawUnsignedHex: built.rawUnsignedHex,
       inputs: [input],
       outputs: built.outputs,
+      sighashType: built.sighashType,
     };
     const signed = wrapSignedPsbt(proposal, [signInput(proposal, 0)]);
     expect(inspectImportedPsbt(signed, proposal).state).toBe('complete');
@@ -417,7 +462,7 @@ describe('watch-only import verification', () => {
     // built with `signatureAlgorithm: 'ecdsa'`, and BCH tells the two apart by
     // length alone — 64 bytes is Schnorr, anything else is parsed as DER.
     const proposal = buildProposal([makeInput()], 30_000n);
-    const der = signInput(proposal, 0, 0xc1, privateKey, 'der');
+    const der = signInput(proposal, 0, proposal.sighashType, privateKey, 'der');
     expect(der.length - 1).not.toBe(64);
 
     const signed = wrapSignedPsbt(proposal, [der]);
@@ -426,14 +471,16 @@ describe('watch-only import verification', () => {
 
   it('rejects a signature with the wrong sighash type', () => {
     const proposal = buildProposal([makeInput()], 30_000n);
-    const signed = wrapSignedPsbt(proposal, [signInput(proposal, 0, 0x41)]);
+    const signed = wrapSignedPsbt(proposal, [signInput(proposal, 0, 0xc1)]);
     expect(inspectImportedPsbt(signed, proposal).state).toBe('invalid');
   });
 
   it('rejects a signature made with a different key', () => {
     const proposal = buildProposal([makeInput()], 30_000n);
     const otherKey = Uint8Array.from([0xff, ...new Uint8Array(31).fill(0xee)]);
-    const signed = wrapSignedPsbt(proposal, [signInput(proposal, 0, 0xc1, otherKey)]);
+    const signed = wrapSignedPsbt(proposal, [
+      signInput(proposal, 0, proposal.sighashType, otherKey),
+    ]);
     expect(inspectImportedPsbt(signed, proposal).state).toBe('invalid');
   });
 });

@@ -68,10 +68,10 @@ describe('BCH PSBT encoding', () => {
     expect([...psbt.subarray(0, 5)]).toEqual([...PSBT_MAGIC]);
   });
 
-  it('requests SIGHASH_ALL|FORKID|ANYONECANPAY by default', () => {
+  it('requests the SeedCash-compatible SIGHASH_ALL|FORKID by default', () => {
     const psbt = encodeUnsignedPsbt([input()], [output()]);
-    // PSBT_IN_SIGHASH_TYPE: key 0x03, value uint32 LE 0xc1.
-    const field = Uint8Array.from([0x01, 0x03, 0x04, 0xc1, 0x00, 0x00, 0x00]);
+    // PSBT_IN_SIGHASH_TYPE: key 0x03, value uint32 LE 0x41.
+    const field = Uint8Array.from([0x01, 0x03, 0x04, 0x41, 0x00, 0x00, 0x00]);
     expect(indexOfBytes(psbt, field)).toBeGreaterThan(-1);
   });
 
@@ -83,16 +83,28 @@ describe('BCH PSBT encoding', () => {
     );
   });
 
-  it('refuses SIGHASH_ALL|FORKID without ANYONECANPAY (0x41)', () => {
-    expect(() =>
-      encodeUnsignedPsbt([input()], [output()], SIGHASH_ALL_FORKID)
-    ).toThrow(/0xc1/);
+  it.each([0x41, 0x42, 0x43, 0xc1, 0xc2, 0xc3])(
+    'accepts supported BCH sighash type 0x%s',
+    (sighashType) => {
+      const psbt = encodeUnsignedPsbt([input()], [output()], sighashType);
+      expect(decodePsbt(psbt).inputs[0].requestedSighashType).toBe(sighashType);
+    }
+  );
+
+  it('refuses unsupported BCH sighash flag combinations', () => {
+    expect(() => encodeUnsignedPsbt([input()], [output()], 0x61)).toThrow(
+      /supported BCH sighash/i
+    );
   });
 
-  it('writes PSBT_IN_SIGHASH_TYPE 0xc1 on every input and never 0x41', () => {
-    const psbt = encodeUnsignedPsbt([input(), input({ vout: 2 })], [output()]);
-    const fieldC1 = Uint8Array.from([0x01, 0x03, 0x04, 0xc1, 0x00, 0x00, 0x00]);
+  it('writes the selected sighash type on every input', () => {
+    const psbt = encodeUnsignedPsbt(
+      [input(), input({ vout: 2 })],
+      [output()],
+      SIGHASH_ALL_FORKID_ANYONECANPAY
+    );
     const field41 = Uint8Array.from([0x01, 0x03, 0x04, 0x41, 0x00, 0x00, 0x00]);
+    const fieldC1 = Uint8Array.from([0x01, 0x03, 0x04, 0xc1, 0x00, 0x00, 0x00]);
     expect(indexOfBytes(psbt, fieldC1)).toBeGreaterThan(-1);
     expect(indexOfBytes(psbt, field41)).toBe(-1);
     const parsed = decodePsbt(psbt);
@@ -386,7 +398,7 @@ describe('BCH PSBT decoding', () => {
   it('round-trips the requested sighash type', () => {
     const psbt = encodeUnsignedPsbt([input(), input({ vout: 2 })], [output()]);
     const parsed = decodePsbt(psbt);
-    expect(parsed.requestedSighashTypes.slice(0, 2)).toEqual([0xc1, 0xc1]);
+    expect(parsed.requestedSighashTypes.slice(0, 2)).toEqual([0x41, 0x41]);
   });
 
   it('rejects bytes that are not a PSBT', () => {
