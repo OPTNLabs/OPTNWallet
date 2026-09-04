@@ -1,0 +1,359 @@
+import { uint16Decoder, uint32Decoder, uint16Encoder, uint32Encoder } from "./codec/number.js"
+import { Decoder, flatMapDecoder, mapDecoder, mapDecoders, orDecoder, succeedDecoder } from "./codec/tlsDecoder.js"
+import { contramapBufferEncoder, contramapBufferEncoders, Encoder } from "./codec/tlsEncoder.js"
+import { varLenDataDecoder, varLenTypeDecoder, varLenDataEncoder, varLenTypeEncoder } from "./codec/variableLength.js"
+import { extensionEncoder, GroupContextExtension, groupContextExtensionDecoder } from "./extension.js"
+import { keyPackageDecoder, keyPackageEncoder, KeyPackage } from "./keyPackage.js"
+import { pskIdDecoder, pskIdEncoder, PskId } from "./presharedkey.js"
+import {
+  decodeDefaultProposalTypeValue,
+  defaultProposalTypeValueEncoder,
+  defaultProposalTypes,
+  isDefaultProposalTypeValue,
+} from "./defaultProposalType.js"
+import { protocolVersionDecoder, protocolVersionEncoder, ProtocolVersionValue } from "./protocolVersion.js"
+import { leafNodeUpdateDecoder, leafNodeEncoder, LeafNodeUpdate } from "./leafNode.js"
+import {
+  AppDataUpdate,
+  appDataUpdateDecoder,
+  appDataUpdateEncoder,
+  appDataUpdateProposalType,
+} from "./appDataUpdate.js"
+import { selfRemoveProposalType } from "./selfRemove.js"
+import { UsageError } from "./mlsError.js"
+
+/** @public */
+export interface Add {
+  keyPackage: KeyPackage
+}
+
+export const addEncoder: Encoder<Add> = contramapBufferEncoder(keyPackageEncoder, (a) => a.keyPackage)
+export const addDecoder: Decoder<Add> = mapDecoder(keyPackageDecoder, (keyPackage) => ({ keyPackage }))
+
+/** @public */
+export interface Update {
+  leafNode: LeafNodeUpdate
+}
+
+export const updateEncoder: Encoder<Update> = contramapBufferEncoder(leafNodeEncoder, (u) => u.leafNode)
+export const updateDecoder: Decoder<Update> = mapDecoder(leafNodeUpdateDecoder, (leafNode) => ({ leafNode }))
+
+/** @public */
+export interface Remove {
+  removed: number
+}
+
+export const removeEncoder: Encoder<Remove> = contramapBufferEncoder(uint32Encoder, (r) => r.removed)
+export const removeDecoder: Decoder<Remove> = mapDecoder(uint32Decoder, (removed) => ({ removed }))
+
+/** @public */
+export interface PSK {
+  preSharedKeyId: PskId
+}
+
+export const pskEncoder: Encoder<PSK> = contramapBufferEncoder(pskIdEncoder, (p) => p.preSharedKeyId)
+export const pskDecoder: Decoder<PSK> = mapDecoder(pskIdDecoder, (preSharedKeyId) => ({ preSharedKeyId }))
+
+/** @public */
+export interface Reinit {
+  groupId: Uint8Array
+  version: ProtocolVersionValue
+  cipherSuite: number
+  extensions: GroupContextExtension[]
+}
+
+export const reinitEncoder: Encoder<Reinit> = contramapBufferEncoders(
+  [varLenDataEncoder, protocolVersionEncoder, uint16Encoder, varLenTypeEncoder(extensionEncoder)],
+  (r) => [r.groupId, r.version, r.cipherSuite, r.extensions] as const,
+)
+
+export const reinitDecoder: Decoder<Reinit> = mapDecoders(
+  [varLenDataDecoder, protocolVersionDecoder, uint16Decoder, varLenTypeDecoder(groupContextExtensionDecoder)],
+  (groupId, version, cipherSuite, extensions) => ({ groupId, version, cipherSuite, extensions }),
+)
+
+/** @public */
+export interface ExternalInit {
+  kemOutput: Uint8Array
+}
+
+export const externalInitEncoder: Encoder<ExternalInit> = contramapBufferEncoder(varLenDataEncoder, (e) => e.kemOutput)
+export const externalInitDecoder: Decoder<ExternalInit> = mapDecoder(varLenDataDecoder, (kemOutput) => ({ kemOutput }))
+
+/** @public */
+export interface GroupContextExtensions {
+  extensions: GroupContextExtension[]
+}
+
+export const groupContextExtensionsEncoder: Encoder<GroupContextExtensions> = contramapBufferEncoder(
+  varLenTypeEncoder(extensionEncoder),
+  (g) => g.extensions,
+)
+
+export const groupContextExtensionsDecoder: Decoder<GroupContextExtensions> = mapDecoder(
+  varLenTypeDecoder(groupContextExtensionDecoder),
+  (extensions) => ({ extensions }),
+)
+
+/** @public */
+export interface ProposalAdd {
+  proposalType: typeof defaultProposalTypes.add
+  add: Add
+}
+
+/** @public */
+export interface ProposalUpdate {
+  proposalType: typeof defaultProposalTypes.update
+  update: Update
+}
+
+/** @public */
+export interface ProposalRemove {
+  proposalType: typeof defaultProposalTypes.remove
+  remove: Remove
+}
+
+/** @public */
+export interface ProposalPSK {
+  proposalType: typeof defaultProposalTypes.psk
+  psk: PSK
+}
+
+/** @public */
+export interface ProposalReinit {
+  proposalType: typeof defaultProposalTypes.reinit
+  reinit: Reinit
+}
+
+/** @public */
+export interface ProposalExternalInit {
+  proposalType: typeof defaultProposalTypes.external_init
+  externalInit: ExternalInit
+}
+
+/** @public */
+export interface ProposalGroupContextExtensions {
+  proposalType: typeof defaultProposalTypes.group_context_extensions
+  groupContextExtensions: GroupContextExtensions
+}
+
+/**
+ * The `app_data_update` proposal defined in draft-ietf-mls-extensions-09. Updates the
+ * `app_data_dictionary` GroupContext extension when committed.
+ *
+ * @public
+ */
+export interface ProposalAppDataUpdate {
+  proposalType: typeof appDataUpdateProposalType
+  appDataUpdate: AppDataUpdate
+}
+
+/**
+ * The `self_remove` proposal defined in draft-ietf-mls-extensions. The body is
+ * empty — the leaving member is the proposal's MLS sender — so it MUST be
+ * committed by reference (preserving the sender) by another member.
+ *
+ * @public
+ */
+export interface ProposalSelfRemove {
+  proposalType: typeof selfRemoveProposalType
+}
+
+/** @public */
+export interface ProposalCustom {
+  proposalType: number
+  proposalData: Uint8Array
+}
+
+/** @public */
+export type DefaultProposal =
+  | ProposalAdd
+  | ProposalUpdate
+  | ProposalRemove
+  | ProposalPSK
+  | ProposalReinit
+  | ProposalExternalInit
+  | ProposalGroupContextExtensions
+
+/** @public */
+export type Proposal = DefaultProposal | ProposalAppDataUpdate | ProposalSelfRemove | ProposalCustom
+
+/** @public */
+export function isDefaultProposal(p: Proposal): p is DefaultProposal {
+  return isDefaultProposalTypeValue(p.proposalType)
+}
+
+/** @public */
+export function isAppDataUpdateProposal(p: Proposal): p is ProposalAppDataUpdate {
+  return p.proposalType === appDataUpdateProposalType && "appDataUpdate" in p
+}
+
+/** @public */
+export function isSelfRemoveProposal(p: Proposal): p is ProposalSelfRemove {
+  return p.proposalType === selfRemoveProposalType && !("proposalData" in p)
+}
+
+/** @public */
+export function isCustomProposal(p: Proposal): p is ProposalCustom {
+  return !isDefaultProposal(p) && !isAppDataUpdateProposal(p) && !isSelfRemoveProposal(p)
+}
+
+const proposalAddEncoder: Encoder<ProposalAdd> = contramapBufferEncoders(
+  [defaultProposalTypeValueEncoder, addEncoder],
+  (p) => [p.proposalType, p.add] as const,
+)
+
+const proposalUpdateEncoder: Encoder<ProposalUpdate> = contramapBufferEncoders(
+  [defaultProposalTypeValueEncoder, updateEncoder],
+  (p) => [p.proposalType, p.update] as const,
+)
+
+const proposalRemoveEncoder: Encoder<ProposalRemove> = contramapBufferEncoders(
+  [defaultProposalTypeValueEncoder, removeEncoder],
+  (p) => [p.proposalType, p.remove] as const,
+)
+
+const proposalPSKEncoder: Encoder<ProposalPSK> = contramapBufferEncoders(
+  [defaultProposalTypeValueEncoder, pskEncoder],
+  (p) => [p.proposalType, p.psk] as const,
+)
+
+const proposalReinitEncoder: Encoder<ProposalReinit> = contramapBufferEncoders(
+  [defaultProposalTypeValueEncoder, reinitEncoder],
+  (p) => [p.proposalType, p.reinit] as const,
+)
+
+const proposalExternalInitEncoder: Encoder<ProposalExternalInit> = contramapBufferEncoders(
+  [defaultProposalTypeValueEncoder, externalInitEncoder],
+  (p) => [p.proposalType, p.externalInit] as const,
+)
+
+const proposalGroupContextExtensionsEncoder: Encoder<ProposalGroupContextExtensions> = contramapBufferEncoders(
+  [defaultProposalTypeValueEncoder, groupContextExtensionsEncoder],
+  (p) => [p.proposalType, p.groupContextExtensions] as const,
+)
+
+const proposalAppDataUpdateEncoder: Encoder<ProposalAppDataUpdate> = contramapBufferEncoders(
+  [uint16Encoder, appDataUpdateEncoder],
+  (p) => [p.proposalType, p.appDataUpdate] as const,
+)
+
+const proposalCustomEncoder: Encoder<ProposalCustom> = contramapBufferEncoders(
+  [uint16Encoder, varLenDataEncoder],
+  (p) => [p.proposalType, p.proposalData] as const,
+)
+
+// self_remove has an empty body: just the proposal type, no length-prefixed data.
+const proposalSelfRemoveEncoder: Encoder<ProposalSelfRemove> = contramapBufferEncoder(
+  uint16Encoder,
+  (p) => p.proposalType,
+)
+
+export const proposalEncoder: Encoder<Proposal> = (p) => {
+  if (isAppDataUpdateProposal(p)) return proposalAppDataUpdateEncoder(p)
+
+  if (!isDefaultProposal(p)) {
+    if (isSelfRemoveProposal(p)) return proposalSelfRemoveEncoder(p)
+    if (p.proposalType === appDataUpdateProposalType)
+      throw new UsageError("Cannot encode custom proposal with the app_data_update proposal type")
+    return proposalCustomEncoder(p)
+  }
+
+  switch (p.proposalType) {
+    case defaultProposalTypes.add:
+      return proposalAddEncoder(p)
+    case defaultProposalTypes.update:
+      return proposalUpdateEncoder(p)
+    case defaultProposalTypes.remove:
+      return proposalRemoveEncoder(p)
+    case defaultProposalTypes.psk:
+      return proposalPSKEncoder(p)
+    case defaultProposalTypes.reinit:
+      return proposalReinitEncoder(p)
+    case defaultProposalTypes.external_init:
+      return proposalExternalInitEncoder(p)
+    case defaultProposalTypes.group_context_extensions:
+      return proposalGroupContextExtensionsEncoder(p)
+  }
+}
+
+const proposalAddDecoder: Decoder<ProposalAdd> = mapDecoder(addDecoder, (add) => ({
+  proposalType: defaultProposalTypes.add,
+  add,
+}))
+
+const proposalUpdateDecoder: Decoder<ProposalUpdate> = mapDecoder(updateDecoder, (update) => ({
+  proposalType: defaultProposalTypes.update,
+  update,
+}))
+
+const proposalRemoveDecoder: Decoder<ProposalRemove> = mapDecoder(removeDecoder, (remove) => ({
+  proposalType: defaultProposalTypes.remove,
+  remove,
+}))
+
+const proposalPSKDecoder: Decoder<ProposalPSK> = mapDecoder(pskDecoder, (psk) => ({
+  proposalType: defaultProposalTypes.psk,
+  psk,
+}))
+
+const proposalReinitDecoder: Decoder<ProposalReinit> = mapDecoder(reinitDecoder, (reinit) => ({
+  proposalType: defaultProposalTypes.reinit,
+  reinit,
+}))
+
+const proposalExternalInitDecoder: Decoder<ProposalExternalInit> = mapDecoder(externalInitDecoder, (externalInit) => ({
+  proposalType: defaultProposalTypes.external_init,
+  externalInit,
+}))
+
+const proposalGroupContextExtensionsDecoder: Decoder<ProposalGroupContextExtensions> = mapDecoder(
+  groupContextExtensionsDecoder,
+  (groupContextExtensions) => ({
+    proposalType: defaultProposalTypes.group_context_extensions,
+    groupContextExtensions,
+  }),
+)
+
+const proposalAppDataUpdateDecoder: Decoder<ProposalAppDataUpdate> = mapDecoder(
+  appDataUpdateDecoder,
+  (appDataUpdate) => ({
+    proposalType: appDataUpdateProposalType,
+    appDataUpdate,
+  }),
+)
+
+function proposalCustomDecoder(proposalType: number): Decoder<ProposalCustom> {
+  return mapDecoder(varLenDataDecoder, (proposalData) => ({ proposalType, proposalData }))
+}
+
+// self_remove has an empty body, so it decodes from zero further bytes.
+const proposalSelfRemoveDecoder: Decoder<ProposalSelfRemove> = succeedDecoder({
+  proposalType: selfRemoveProposalType,
+})
+
+export const proposalDecoder: Decoder<Proposal> = orDecoder(
+  flatMapDecoder(decodeDefaultProposalTypeValue, (proposalType): Decoder<Proposal> => {
+    switch (proposalType) {
+      case defaultProposalTypes.add:
+        return proposalAddDecoder
+      case defaultProposalTypes.update:
+        return proposalUpdateDecoder
+      case defaultProposalTypes.remove:
+        return proposalRemoveDecoder
+      case defaultProposalTypes.psk:
+        return proposalPSKDecoder
+      case defaultProposalTypes.reinit:
+        return proposalReinitDecoder
+      case defaultProposalTypes.external_init:
+        return proposalExternalInitDecoder
+      case defaultProposalTypes.group_context_extensions:
+        return proposalGroupContextExtensionsDecoder
+    }
+  }),
+  flatMapDecoder(uint16Decoder, (n): Decoder<Proposal> => {
+    if (n === appDataUpdateProposalType) return proposalAppDataUpdateDecoder
+    if (n === selfRemoveProposalType) return proposalSelfRemoveDecoder
+    return proposalCustomDecoder(n)
+  }),
+)

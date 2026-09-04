@@ -441,6 +441,7 @@ async function main() {
   if (!existsSync(join(outDir, torBinary))) {
     throw new Error('staging failed: binary missing');
   }
+  signMacosTorFiles(target);
   verifyStagedTorExecutable(target, join(outDir, torBinary));
   console.log(readFileSync(markerPath, 'utf8').trim());
 }

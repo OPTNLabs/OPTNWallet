@@ -84,6 +84,18 @@ describe('release workflow', () => {
     }
   });
 
+  it('pins AppImage tooling to immutable release asset IDs', () => {
+    expect(desktopPreviewWorkflow).not.toContain(
+      '/releases/download/continuous/'
+    );
+    expect(desktopPreviewWorkflow).toContain(
+      '/releases/assets/$appimage_plugin_asset_id'
+    );
+    expect(desktopPreviewWorkflow).toContain(
+      "--header 'Accept: application/octet-stream'"
+    );
+  });
+
   it('builds and publishes both browser-extension archives', () => {
     expect(workflow).toMatch(/^\s{2}extension:\s*$/m);
     expect(workflow).toContain('npm run build:extension:chrome');
