@@ -24,6 +24,7 @@ pub mod fundme;
 pub mod fusion;
 pub mod hd;
 pub mod multisig;
+pub mod multisig_session;
 pub mod network;
 pub mod nostr;
 pub mod nostr_identity;
