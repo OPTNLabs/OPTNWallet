@@ -37,7 +37,7 @@ const DEVICES: {
   type: HardwareWalletType;
   label: string;
   subtitle: string;
-  connectionType: 'usb-bridge' | 'usb-ble' | 'qr' | 'software';
+  connectionType: 'usb-bridge' | 'usb-ble' | 'qr' | 'nfc' | 'software';
   sdkNote: string;
   steps: string[];
   /** Not wired to a real signing path yet — selectable in the UI but cannot
@@ -95,6 +95,19 @@ const DEVICES: {
     subtitle: 'Air-gapped QR signing — not yet supported',
     connectionType: 'qr',
     sdkNote: '@keystonehq/sdk + bc-ur-registry-btc',
+    steps: [],
+    disabled: true,
+  },
+  {
+    type: 'tangem',
+    label: 'Tangem',
+    subtitle: 'Tap-to-sign card — phone only, not yet supported',
+    connectionType: 'nfc',
+    // Both JavaScript bridges are archived (tangem-sdk-react-native and
+    // tangem-sdk-cordova, last pushed 2025-07-23; the Cordova package on npm
+    // has not been published since 2023). The supported route is a native
+    // plugin over their Swift and Kotlin SDKs.
+    sdkNote: 'tangem-sdk-ios (Swift) · tangem-sdk-android (Kotlin) — native only',
     steps: [],
     disabled: true,
   },

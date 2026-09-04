@@ -2193,17 +2193,15 @@ pub struct HardwareViewModel {
 /// - **Tangem** has no integration anywhere yet, and both of its JavaScript
 ///   bridges are archived, so it needs native code on each phone.
 pub const fn hardware_integration_ready(vendor: HardwareVendor, surface: AppSurface) -> bool {
-    match (vendor, surface) {
-        (HardwareVendor::Keystone, _) => true,
-        (HardwareVendor::Ledger, AppSurface::Desktop | AppSurface::Web | AppSurface::Extension) => {
-            true
-        }
-        (HardwareVendor::OneKey, AppSurface::Desktop | AppSurface::Web | AppSurface::Extension) => {
-            true
-        }
-        (HardwareVendor::Trezor, AppSurface::Desktop) => true,
-        _ => false,
-    }
+    matches!(
+        (vendor, surface),
+        (HardwareVendor::Keystone, _)
+            | (
+                HardwareVendor::Ledger | HardwareVendor::OneKey,
+                AppSurface::Desktop | AppSurface::Web | AppSurface::Extension
+            )
+            | (HardwareVendor::Trezor, AppSurface::Desktop)
+    )
 }
 
 /// The devices to show on this surface, in the order they are listed.
