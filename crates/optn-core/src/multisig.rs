@@ -400,8 +400,13 @@ pub struct DescriptorKey {
 pub struct ParsedDescriptor {
     pub required: u8,
     pub keys: Vec<DescriptorKey>,
-    /// 0 for receive, 1 for change.
-    pub branch: u32,
+    /// The branches this descriptor covers: 0 is receive, 1 is change.
+    ///
+    /// One entry for an ordinary descriptor. Two for a BIP-389 multipath one,
+    /// which writes `<0;1>/*` and means receive and change in a single string.
+    /// That is the form Paytaca's BSMS records use, so refusing it would mean
+    /// being unable to read the setup of the wallet we interoperate with most.
+    pub branches: Vec<u32>,
     /// Whether the input carried a checksum that verified.
     ///
     /// A descriptor without one is accepted, because the format makes it
@@ -506,18 +511,18 @@ pub fn parse_descriptor(input: &str) -> Result<ParsedDescriptor> {
         .map_err(|_| CliError::Usage(format!("'{threshold}' is not a threshold this can read")))?;
 
     let mut keys = Vec::new();
-    let mut branch: Option<u32> = None;
+    let mut branches: Option<Vec<u32>> = None;
     for (index, part) in parts.enumerate() {
-        let (key, key_branch) = parse_descriptor_key(part.trim(), index)?;
-        match branch {
-            None => branch = Some(key_branch),
-            // Every key must be on the same branch, or the descriptor
+        let (key, key_branches) = parse_descriptor_key(part.trim(), index)?;
+        match &branches {
+            None => branches = Some(key_branches),
+            // Every key must cover the same branches, or the descriptor
             // describes receive addresses for one cosigner and change for
             // another, which is not a wallet.
-            Some(known) if known != key_branch => {
+            Some(known) if *known != key_branches => {
                 return Err(CliError::Usage(format!(
-                    "cosigner {} is on branch {key_branch} while the first is on branch {known}; \
-                     every key in one descriptor shares a branch",
+                    "cosigner {} covers branches {key_branches:?} while the first covers \
+                     {known:?}; every key in one descriptor shares them",
                     index + 1
                 )))
             }
@@ -559,13 +564,16 @@ pub fn parse_descriptor(input: &str) -> Result<ParsedDescriptor> {
     Ok(ParsedDescriptor {
         required,
         keys,
-        branch: branch.unwrap_or(0),
+        branches: branches.unwrap_or_else(|| vec![0]),
         checksum_verified,
     })
 }
 
 /// One `[fingerprint/path]xpub/branch/*` key expression.
-fn parse_descriptor_key(part: &str, index: usize) -> Result<(DescriptorKey, u32)> {
+///
+/// The branch may be a single number or a BIP-389 multipath `<0;1>`, so this
+/// returns however many branches the expression covers.
+fn parse_descriptor_key(part: &str, index: usize) -> Result<(DescriptorKey, Vec<u32>)> {
     let position = index + 1;
     let rest = part.strip_prefix('[').ok_or_else(|| {
         CliError::Usage(format!(
@@ -611,11 +619,42 @@ fn parse_descriptor_key(part: &str, index: usize) -> Result<(DescriptorKey, u32)
             "cosigner {position} does not end in /*, so it names one address rather than a wallet"
         )));
     }
-    let branch: u32 = branch_text.parse().map_err(|_| {
-        CliError::Usage(format!(
-            "cosigner {position}'s branch '{branch_text}' is not a number"
-        ))
-    })?;
+    // BIP-389 multipath: `<0;1>` is receive and change in one string, and it
+    // is what Paytaca's BSMS records carry -- so this is an ordinary form to
+    // meet rather than an exotic one.
+    let listed = match branch_text
+        .strip_prefix('<')
+        .and_then(|rest| rest.strip_suffix('>'))
+    {
+        Some(inner) => {
+            let listed: Vec<&str> = inner.split(';').collect();
+            if listed.len() < 2 {
+                return Err(CliError::Usage(format!(
+                    "cosigner {position} writes a multipath of one branch, which is just a branch"
+                )));
+            }
+            listed
+        }
+        None => vec![branch_text],
+    };
+
+    let mut branches = Vec::with_capacity(listed.len());
+    for text in listed {
+        let text = text.trim();
+        let branch: u32 = text.parse().map_err(|_| {
+            CliError::Usage(format!(
+                "cosigner {position}'s branch '{text}' is not a number"
+            ))
+        })?;
+        // A repeated branch would derive the same address twice and call it
+        // two wallets.
+        if branches.contains(&branch) {
+            return Err(CliError::Usage(format!(
+                "cosigner {position} lists branch {branch} twice"
+            )));
+        }
+        branches.push(branch);
+    }
 
     // The xPub itself is validated by the same parser the local path uses, so
     // a descriptor cannot introduce a key the wallet would otherwise refuse.
@@ -627,7 +666,7 @@ fn parse_descriptor_key(part: &str, index: usize) -> Result<(DescriptorKey, u32)
             account_path: format!("m/{origin_path}"),
             account_xpub: xpub.to_string(),
         },
-        branch,
+        branches,
     ))
 }
 
@@ -647,6 +686,129 @@ impl ParsedDescriptor {
             })
             .collect()
     }
+}
+
+/// A BSMS 1.0 round-two record: a multisig setup, as one file.
+///
+/// BIP-129, and what Paytaca exchanges when a multisig wallet is being agreed
+/// (`src/lib/multisig/bsms.js`). Four lines:
+///
+/// ```text
+/// BSMS 1.0
+/// sh(sortedmulti(2,[fp/44'/145'/0']xpub/<0;1>/*,...))
+/// /0/*,/1/*
+/// bchtest:...
+/// ```
+///
+/// The fourth line is the interesting one. It is the first receive address the
+/// policy produces, and it is there so the *receiving* side can derive that
+/// address itself and compare. A cosigner sent a subtly different policy -- one
+/// key swapped, a threshold edited in transit -- gets a mismatch here instead
+/// of a wallet that quietly watches the wrong addresses. The format carries its
+/// own conformance check, and [`BsmsRecord::verify_first_address`] is what
+/// makes it worth having.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BsmsRecord {
+    pub version: String,
+    pub descriptor: ParsedDescriptor,
+    /// The allowed derivation paths, as written: `/0/*`, `/1/*`.
+    pub path_restrictions: Vec<String>,
+    /// The first receive address, as the sender derived it.
+    pub first_address: String,
+}
+
+impl BsmsRecord {
+    /// Derive the first receive address ourselves and compare.
+    ///
+    /// The whole point of the fourth line. Skipping this check makes it
+    /// decoration; running it is what turns a policy altered in transit into an
+    /// error rather than a wallet watching an empty set of addresses.
+    pub fn verify_first_address(&self, network: Network) -> Result<()> {
+        let cosigners = self.descriptor.cosigners();
+        let preview = multisig_preview(network, self.descriptor.required, &cosigners)?;
+        if preview.receive.address != self.first_address {
+            return Err(CliError::Usage(format!(
+                "this setup's first address does not match the policy it carries. It says {}, \
+                 and these keys produce {}. Something changed between the sender and here, so \
+                 the wallet is not the one they described.",
+                self.first_address, preview.receive.address
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Read a BSMS 1.0 record.
+///
+/// Hostile input, like any descriptor: a setup file arrives from someone else's
+/// wallet, and misreading it produces a wallet watching addresses the money is
+/// not at.
+pub fn parse_bsms_record(text: &str) -> Result<BsmsRecord> {
+    let mut lines = text.trim().lines();
+
+    let header = lines
+        .next()
+        .ok_or_else(|| CliError::Usage("that file is empty".into()))?
+        .trim();
+    let version = header.strip_prefix("BSMS ").ok_or_else(|| {
+        CliError::Usage(
+            "that does not start with a BSMS version line, so it is not a multisig setup record"
+                .into(),
+        )
+    })?;
+    let version = version.trim();
+    if version != "1.0" {
+        return Err(CliError::Usage(format!(
+            "this reads BSMS 1.0 records; that one says {version}"
+        )));
+    }
+
+    let descriptor = parse_descriptor(
+        lines
+            .next()
+            .ok_or_else(|| CliError::Usage("that record has no descriptor".into()))?
+            .trim(),
+    )?;
+
+    let path_restrictions: Vec<String> = lines
+        .next()
+        .ok_or_else(|| CliError::Usage("that record has no path restrictions".into()))?
+        .trim()
+        .split(',')
+        .map(|part| part.trim().to_string())
+        .filter(|part| !part.is_empty())
+        .collect();
+    if path_restrictions.is_empty() {
+        return Err(CliError::Usage(
+            "that record has no path restrictions".into(),
+        ));
+    }
+
+    let first_address = lines
+        .next()
+        .ok_or_else(|| {
+            CliError::Usage(
+                "that record has no first address, so nothing can check the policy survived the \
+                 trip"
+                    .into(),
+            )
+        })?
+        .trim()
+        .to_string();
+    if first_address.is_empty() {
+        return Err(CliError::Usage(
+            "that record's first address is blank, so nothing can check the policy survived the \
+             trip"
+                .into(),
+        ));
+    }
+
+    Ok(BsmsRecord {
+        version: version.to_string(),
+        descriptor,
+        path_restrictions,
+        first_address,
+    })
 }
 
 #[cfg(test)]
@@ -676,6 +838,12 @@ mod tests {
         }
     }
 
+    /// The first receive address the two test cosigners produce as a 2-of-2.
+    ///
+    /// Pinned rather than derived in the test, so a change to derivation breaks
+    /// this instead of quietly agreeing with itself.
+    const BSMS_FIRST_ADDRESS: &str = "bchtest:pr09rncy7wrmcz4qvp36w4y3xcsfk38m559jqz3kz4";
+
     /// Two cosigners with fingerprints, for the descriptor tests.
     fn two_cosigners() -> Vec<Cosigner> {
         let wallet = crate::hd::Wallet::from_mnemonic(crate::hd::BIP39_TEST_VECTOR_MNEMONIC, "")
@@ -703,7 +871,7 @@ mod tests {
 
         let parsed = parse_descriptor(&set.receive).expect("parses");
         assert_eq!(parsed.required, 2);
-        assert_eq!(parsed.branch, 0);
+        assert_eq!(parsed.branches, vec![0]);
         assert!(parsed.checksum_verified);
         assert_eq!(parsed.keys.len(), 2);
         assert_eq!(parsed.keys[0].account_path, "m/44'/145'/0'");
@@ -714,7 +882,10 @@ mod tests {
         assert_eq!(original.receive.address, reopened.receive.address);
         assert_eq!(original.change.address, reopened.change.address);
 
-        assert_eq!(parse_descriptor(&set.change).expect("parses").branch, 1);
+        assert_eq!(
+            parse_descriptor(&set.change).expect("parses").branches,
+            vec![1]
+        );
     }
 
     #[test]
@@ -805,7 +976,12 @@ mod tests {
         // another, which is not a wallet either.
         let mixed = body.replacen("/0/*", "/1/*", 1);
         let error = parse_descriptor(&mixed).expect_err("mixed branches");
-        assert!(error.to_string().contains("shares a branch"), "{error}");
+        assert!(
+            error
+                .to_string()
+                .contains("every key in one descriptor shares"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -911,6 +1087,143 @@ mod tests {
             assert_eq!(checksum.len(), 8);
             assert_eq!(descriptor_checksum(body).as_deref(), Some(checksum));
         }
+    }
+
+    /// A BSMS record in Paytaca's shape, over the same two cosigners.
+    ///
+    /// Multipath `<0;1>/*`, `sh(sortedmulti(...))`, `/0/*,/1/*` -- built the way
+    /// `paytaca-app`'s `BsmsDescriptor.toString()` builds it, so what is being
+    /// tested is their format rather than a convenient version of it.
+    fn paytaca_shaped_record(first_address: &str) -> String {
+        let account = AccountPath::new(145, 0).expect("in range");
+        let set = descriptor_set(2, &two_cosigners(), account).expect("exports");
+        let body = set.receive.rsplit_once('#').expect("checksummed").0;
+        let multipath = body.replace("/0/*", "/<0;1>/*");
+        format!("BSMS 1.0\n{multipath}\n/0/*,/1/*\n{first_address}")
+    }
+
+    #[test]
+    fn a_multipath_descriptor_is_read_rather_than_refused() {
+        // BIP-389. `<0;1>/*` is receive and change in one string, and it is
+        // what Paytaca writes -- so refusing it would mean being unable to open
+        // a wallet agreed with the wallet we interoperate with most.
+        let account = AccountPath::new(145, 0).expect("in range");
+        let set = descriptor_set(2, &two_cosigners(), account).expect("exports");
+        let body = set.receive.rsplit_once('#').expect("checksummed").0;
+        let multipath = body.replace("/0/*", "/<0;1>/*");
+
+        let parsed = parse_descriptor(&multipath).expect("multipath parses");
+        assert_eq!(parsed.branches, vec![0, 1], "receive and change, in order");
+        assert_eq!(parsed.required, 2);
+        assert_eq!(parsed.keys.len(), 2);
+
+        // And the keys are the same ones the single-branch form carries, so
+        // the two spellings describe one wallet rather than two.
+        let single = parse_descriptor(&set.receive).expect("parses");
+        assert_eq!(parsed.keys, single.keys);
+
+        // A single-branch descriptor still reports one branch.
+        assert_eq!(single.branches, vec![0]);
+    }
+
+    #[test]
+    fn a_malformed_multipath_is_refused_rather_than_guessed_at() {
+        let account = AccountPath::new(145, 0).expect("in range");
+        let set = descriptor_set(2, &two_cosigners(), account).expect("exports");
+        let body = set.receive.rsplit_once('#').expect("checksummed").0;
+
+        // One branch in multipath brackets is just a branch written oddly, and
+        // accepting it would mean accepting a form no wallet emits.
+        let error = parse_descriptor(&body.replace("/0/*", "/<0>/*")).expect_err("one branch");
+        assert!(
+            error.to_string().contains("multipath of one branch"),
+            "{error}"
+        );
+
+        // The same branch twice would derive one address and call it two.
+        let error = parse_descriptor(&body.replace("/0/*", "/<0;0>/*")).expect_err("repeated");
+        assert!(error.to_string().contains("twice"), "{error}");
+
+        // Still not a number.
+        let error = parse_descriptor(&body.replace("/0/*", "/<0;x>/*")).expect_err("not a number");
+        assert!(error.to_string().contains("is not a number"), "{error}");
+
+        // And cosigners that disagree about which branches they cover are not
+        // one wallet, whichever spelling they disagree in.
+        let mixed = body.replacen("/0/*", "/<0;1>/*", 1);
+        let error = parse_descriptor(&mixed).expect_err("mixed");
+        assert!(
+            error
+                .to_string()
+                .contains("every key in one descriptor shares"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_bsms_record_is_read_whole() {
+        let record = parse_bsms_record(&paytaca_shaped_record(BSMS_FIRST_ADDRESS)).expect("reads");
+
+        assert_eq!(record.version, "1.0");
+        assert_eq!(record.path_restrictions, vec!["/0/*", "/1/*"]);
+        assert_eq!(record.first_address, BSMS_FIRST_ADDRESS);
+        assert_eq!(record.descriptor.required, 2);
+        assert_eq!(record.descriptor.branches, vec![0, 1]);
+
+        // Trailing whitespace and a trailing newline are how files arrive.
+        let padded = format!("  {}  \n", paytaca_shaped_record(BSMS_FIRST_ADDRESS));
+        assert_eq!(parse_bsms_record(&padded).expect("reads"), record);
+    }
+
+    #[test]
+    fn the_first_address_is_checked_against_the_policy_rather_than_trusted() {
+        // The reason BSMS carries a fourth line at all. A policy altered in
+        // transit -- a key swapped, a threshold edited -- produces a different
+        // first address, and the mismatch is the only warning anyone gets.
+        let record = parse_bsms_record(&paytaca_shaped_record(BSMS_FIRST_ADDRESS)).expect("reads");
+        record
+            .verify_first_address(Network::Chipnet)
+            .expect("the record describes the wallet it claims to");
+
+        // Now the same policy with the address of a *different* wallet, which
+        // is what an altered record looks like from here.
+        let tampered = parse_bsms_record(&paytaca_shaped_record(
+            "bchtest:ppttar4f8yf0xa592s4z4pj22cq03zn82syer0akm8",
+        ))
+        .expect("reads");
+        let error = tampered
+            .verify_first_address(Network::Chipnet)
+            .expect_err("must not accept an address the policy does not produce");
+        assert!(error.to_string().contains("does not match"), "{error}");
+        assert!(error.to_string().contains("Something changed"), "{error}");
+
+        // Mainnet derives different addresses, so the record does not verify
+        // against the wrong network either.
+        assert!(record.verify_first_address(Network::Mainnet).is_err());
+    }
+
+    #[test]
+    fn a_record_missing_the_check_is_refused() {
+        let full = paytaca_shaped_record(BSMS_FIRST_ADDRESS);
+        let lines: Vec<&str> = full.lines().collect();
+
+        // No fourth line: nothing can check the policy survived the trip, so
+        // the record is not usable even though the descriptor in it parses.
+        let truncated = lines[..3].join("\n");
+        let error = parse_bsms_record(&truncated).expect_err("no first address");
+        assert!(error.to_string().contains("first address"), "{error}");
+
+        // A blank one is the same thing, spelled differently.
+        let blank = format!("{}\n   ", lines[..3].join("\n"));
+        assert!(parse_bsms_record(&blank).is_err());
+
+        // Wrong header, and a version this does not know.
+        assert!(parse_bsms_record("BSMS 2.0\nx\ny\nz").is_err());
+        let error =
+            parse_bsms_record(&full.replace("BSMS 1.0", "BSMS 1.0.1")).expect_err("version");
+        assert!(error.to_string().contains("BSMS 1.0"), "{error}");
+        assert!(parse_bsms_record(&full.replace("BSMS 1.0\n", "")).is_err());
+        assert!(parse_bsms_record("").is_err());
     }
 
     #[test]
