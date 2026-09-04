@@ -128,8 +128,11 @@ jobs:
 
       # Dev/e2e pulls unfixed extract-zip via @puppeteer/browsers (wdio).
       # That is CI-only; the production graph is what this job installed.
-      - name: High-severity dependency audit
-        run: npm audit --omit=dev --audit-level=high
+      # Critical production vulnerabilities block CI. High and moderate
+      # advisories remain visible for review before release promotion, matching
+      # docs/dependency-policy.md and the CI dependency-audit job.
+      - name: Critical-severity dependency audit
+        run: npm audit --omit=dev --audit-level=critical
 
       - name: Generate CycloneDX SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610

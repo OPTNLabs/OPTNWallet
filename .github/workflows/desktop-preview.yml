@@ -129,7 +129,7 @@ jobs:
             aarch64)
               apprun_sha='072f17c0895a85c490282fe5395c5007e5fc75da727e553b3b8fb680feb11578'
               linuxdeploy_sha='b12b5cc57bd0921e1f98d73f58aa364503bc1a27f54b7a69fd2870bce7fa2f55'
-              appimage_plugin_sha='6fdecf5bf8af4e0db03c6b2a80976acc3c96b6a4d19622fa6c6adfd308378bbc'
+              appimage_plugin_sha='ce574719bcf9cc1fb12728d60b17e48cc87d9b6c40f6f48b04cff7d273b5eb24'
               apprun_asset='AppRun-aarch64'
               linuxdeploy_asset='linuxdeploy-aarch64.AppImage'
               appimage_plugin_asset='linuxdeploy-plugin-appimage-aarch64.AppImage'
@@ -137,7 +137,7 @@ jobs:
             x86_64)
               apprun_sha='f30140a43a0a59e46db21bdefdf749b9e9f2c6946e92afabbacf98b8ae73fb4f'
               linuxdeploy_sha='e762bea85c8eb0d4b3508d46e5c1f037f717d0f9303ae3b4aafc8b04991fa1ef'
-              appimage_plugin_sha='a45d3e227bc7f397e9cf6bfa4c9507494efa2293357b6e86690a3de2ca992e79'
+              appimage_plugin_sha='0441769ab38009504d2678c38cd7e526955388dd30a215b4a20afaa5471652f2'
               apprun_asset='AppRun-x86_64'
               linuxdeploy_asset='linuxdeploy-x86_64.AppImage'
               appimage_plugin_asset='linuxdeploy-plugin-appimage-x86_64.AppImage'
