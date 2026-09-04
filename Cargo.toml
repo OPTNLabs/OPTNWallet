@@ -2,6 +2,12 @@
 resolver = "2"
 members = [
   "crates/optn-app",
+  # #65's deterministic multisig core. A member rather than an exclusion:
+  # it has no lock file of its own and three pure dependencies, so there is
+  # nothing to keep it out for -- and being a member is what puts it under
+  # the workspace's clippy and tests. optn-core is excluded for reasons this
+  # crate does not share: its own lock file, Kani proofs, and a wasm build.
+  "crates/optn-multisig-core",
   "crates/optn-platform",
   "crates/optn-platform-native",
   "crates/optn-platform-apple",
