@@ -14,6 +14,13 @@
 //! wallet. Production seed, private-key, and signing paths must not route
 //! through OpalCrypto. CashFusion stays authoritative Rust.
 
+// The Apple capability contract, the differential-testing types and the
+// SwiftFulcrum/Electrum routing. Written while this crate did not exist yet,
+// so it landed in optn-platform; it belongs here, where the doc above already
+// says Apple lives. optn-platform stays provider-agnostic, which is the
+// boundary the architecture check exists to keep.
+pub mod apple;
+
 use optn_platform::{
     Biometrics, Capability, CapabilityProvider, ContactlessPresentment, NfcIso7816, NfcMessage,
     NfcTagIo, PlatformError, PlatformFuture, PlatformResult, ProviderDescriptor, ProviderKind,

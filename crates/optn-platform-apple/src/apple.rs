@@ -34,7 +34,7 @@
 //! contract exists and stays unimplemented rather than the minimum being
 //! quietly raised.
 
-use crate::{PlatformFuture, PlatformResult};
+use optn_platform::{PlatformFuture, PlatformResult};
 
 /// Which Apple capability an adapter provides.
 ///
