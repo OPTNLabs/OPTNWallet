@@ -1694,11 +1694,19 @@ mod tests {
 
     #[test]
     fn this_agrees_with_optn_multisig_core_byte_for_byte() {
-        // PR #65 adds `optn-multisig-core`, a second Rust implementation of
-        // this same derivation, and it merges before #63. Two implementations
-        // that disagree would put a wallet's coins at an address it does not
-        // watch, so these are *its* published vectors run against this code --
-        // not vectors generated here, which would only prove self-consistency.
+        // `optn-multisig-core` is a second Rust implementation of this same
+        // derivation, merged in #65. Two implementations that disagree would
+        // put a wallet's coins at an address it does not watch, so these are
+        // *its* published vectors run against this code -- not vectors
+        // generated here, which would only prove self-consistency.
+        //
+        // These are transcribed, and transcription only proves the copy was
+        // accurate. Now that both crates are in the tree, the two are also
+        // run against each other directly in
+        // crates/optn-cli/tests/multisig_cross_implementation.rs, which is the
+        // only crate depending on both. This test stays because optn-core
+        // carries no dev-dependencies and should still fail on its own if the
+        // derivation moves.
         //
         // From crates/optn-multisig-core/src/lib.rs, VECTOR_1.
         const KEY_A: &str = "02ff12471208c14bd580709cb2358d98975247d8765f92bc25eab3b2763ed605f8";
