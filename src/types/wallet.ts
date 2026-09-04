@@ -3,6 +3,7 @@ import { Network } from '../state/slices/networkSlice';
 export enum WalletType {
   STANDARD = 'standard',
   QUANTUMROOT = 'quantumroot',
+  MULTISIG = 'multisig',
 }
 
 /**

@@ -30,6 +30,7 @@ use clap::{Parser, Subcommand};
 use serde_json::{json, Value};
 
 use bip39::{Language, Mnemonic};
+use optn_multisig_core::{inspect_p2sh20, Network as MultisigNetwork};
 
 use cashaddr::Address;
 use electrum::Client;
@@ -293,6 +294,14 @@ enum Command {
         #[command(subcommand)]
         action: ContractCommand,
     },
+    /// Inspect a deterministic shared P2SH20 multisig policy from public keys.
+    ///
+    /// This is read-only: it neither derives keys nor accesses a wallet,
+    /// network, keychain, or transaction state.
+    Multisig {
+        #[command(subcommand)]
+        action: MultisigCommand,
+    },
     /// Describe every command, what it may do, and the active policy.
     ///
     /// Meant to be read by an agent harness rather than a person. `--help` is
@@ -444,6 +453,19 @@ enum ContractCommand {
 }
 
 #[derive(Subcommand)]
+enum MultisigCommand {
+    /// Validate public keys and produce the BIP-67 redeem script and P2SH20 addresses.
+    Inspect {
+        /// Signatures required by the policy.
+        #[arg(long)]
+        threshold: u8,
+        /// One compressed secp256k1 public key, as hex. Repeat for every cosigner.
+        #[arg(long = "pubkey", required = true)]
+        public_keys: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum KeychainCommand {
     /// Store a phrase, read from OPTN_MNEMONIC or stdin.
     ///
@@ -575,6 +597,7 @@ fn command_name(command: &Command) -> &'static str {
         Command::History { .. } => "history",
         Command::Discover { .. } => "discover",
         Command::Contract { .. } => "contract",
+        Command::Multisig { .. } => "multisig",
         Command::Console { .. } => "console",
         Command::Quantumroot { .. } => "quantumroot",
         Command::Serve { .. } => "serve",
@@ -653,6 +676,31 @@ async fn run(cli: &Cli) -> Result<Value> {
                 "scripthash": parsed.electrum_scripthash(),
             }))
         }
+        Command::Multisig { action } => match action {
+            MultisigCommand::Inspect {
+                threshold,
+                public_keys,
+            } => {
+                let network = match cli.network {
+                    Network::Mainnet => MultisigNetwork::Mainnet,
+                    Network::Chipnet => MultisigNetwork::Chipnet,
+                };
+                let public_key_refs = public_keys.iter().map(String::as_str).collect::<Vec<_>>();
+                let inspection = inspect_p2sh20(network, *threshold, &public_key_refs)
+                    .map_err(|error| CliError::Usage(error.to_string()))?;
+                Ok(json!({
+                    "ok": true,
+                    "network": cli.network.to_string(),
+                    "threshold": inspection.threshold,
+                    "total_signatures": inspection.total_signatures,
+                    "sorted_public_keys": inspection.sorted_public_keys.iter().map(|key| hex(key)).collect::<Vec<_>>(),
+                    "redeem_script": hex(&inspection.redeem_script),
+                    "locking_script": hex(&inspection.locking_script),
+                    "address": inspection.address,
+                    "token_address": inspection.token_address,
+                }))
+            }
+        },
         Command::Tx { txid, verbose } => {
             if txid.len() != 64 || !txid.chars().all(|c| c.is_ascii_hexdigit()) {
                 return Err(CliError::Usage(format!(

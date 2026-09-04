@@ -8,10 +8,8 @@
 //     explicit input/output counts, per-input 0x0e/0x0f/0x10). SeedCash skips
 //     the globals it does not know and parses by the counts, so it tolerates
 //     v145. A signer written against plain BIP174 may not.
-//   * Sighash. Issue #8 asks for ALL|FORKID|ANYONECANPAY (0xc1). Upstream
-//     SeedCash always signs 0x41 and only reads PSBT_IN_SIGHASH_TYPE on a
-//     patched build. A signature over the wrong sighash is well-formed and
-//     simply does not validate.
+//   * Sighash. Current SeedCash signs ALL|FORKID (0x41). A signature over a
+//     different requested sighash is well-formed but must be rejected.
 //   * Spent-output field. SeedCash's WITNESS_UTXO path keeps the compact-size
 //     prefix and signs a script one byte longer than the one being verified,
 //     so it must be given NON_WITNESS_UTXO — the whole parent transaction.
@@ -66,8 +64,8 @@ export interface SignerProfile {
   signingCaveat?: string;
 }
 
-export const SIGHASH_ALL_FORKID = 0x41;
-export const SIGHASH_ALL_FORKID_ANYONECANPAY = 0xc1;
+export { SIGHASH_ALL_FORKID, SIGHASH_ALL_FORKID_ANYONECANPAY } from './psbtBch';
+import { SIGHASH_ALL_FORKID } from './psbtBch';
 
 export const SIGNER_PROFILES: SignerProfile[] = [
   {
@@ -78,7 +76,7 @@ export const SIGNER_PROFILES: SignerProfile[] = [
     suppliesMasterFingerprint: false,
     suppliesAccountPath: false,
     psbtVersion: 145,
-    sighashType: SIGHASH_ALL_FORKID_ANYONECANPAY,
+    sighashType: SIGHASH_ALL_FORKID,
     requiresParentTransaction: true,
     // Round-tripped against SeedCash's own signing code: single-sig and 2-of-3
     // both finalize and execute on libauth's BCH VM.
@@ -94,7 +92,7 @@ export const SIGNER_PROFILES: SignerProfile[] = [
     // Left at the shared dialect until a device says otherwise. Guessing plain
     // BIP174 here would be a different untested assumption, not a safer one.
     psbtVersion: 145,
-    sighashType: SIGHASH_ALL_FORKID_ANYONECANPAY,
+    sighashType: SIGHASH_ALL_FORKID,
     requiresParentTransaction: true,
     signingVerified: false,
     signingCaveat:

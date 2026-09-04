@@ -57,9 +57,9 @@ describe('watch-only UR test vectors', () => {
         expect(hex(progress.psbt as Uint8Array)).toBe(vector.psbtHex);
       });
 
-      it('carries sighash 0xc1 on every input', () => {
-        // SeedCash falls back to 0x41 when PSBT_IN_SIGHASH_TYPE is absent, and
-        // a signature over the wrong sighash is only rejected at broadcast.
+      it('carries the supported 0x41 BCH default on every input', () => {
+        // Current SeedCash signs 0x41. The field remains explicit so import can
+        // reject any signer that returns a different commitment.
         expect(() => assertWatchOnlySighash(psbt)).not.toThrow();
       });
 

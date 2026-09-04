@@ -4,6 +4,7 @@ import initSqlJs, { Database } from 'sql.js';
 import {
   createTables,
   createTransactionDetailsTable,
+  createMultisigTables,
 } from '../../utils/schema/schema';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
 import { logError } from '../../utils/errorHandling';
@@ -26,6 +27,7 @@ import {
   deleteWalletScope,
   mergeGlobalChanges,
   mergeWalletScope,
+  remapWalletScopeId,
   snapshotGlobalTables,
   walletScopeFingerprint,
   type GlobalTableSnapshot,
@@ -263,6 +265,12 @@ const migrations: Array<(db: Database) => Promise<void>> = [
       db.run('ALTER TABLE wallets ADD COLUMN network_cleanup_network TEXT;');
     }
   },
+  async (db) => {
+    // Multisig is a shared wallet capability. Keep its policy, address
+    // inventory, derived-key mapping, and resumable PSBT sessions in the
+    // common database so desktop and Capacitor/mobile use the same model.
+    createMultisigTables(db);
+  },
   // Add future migrations here as needed
 ];
 
@@ -274,14 +282,17 @@ function databaseVersion(database: Database): number {
 async function applyPendingMigrations(database: Database): Promise<boolean> {
   const currentVersion = databaseVersion(database);
   let changed = false;
-  for (let version = currentVersion + 1; version <= migrations.length; version++) {
+  for (
+    let version = currentVersion + 1;
+    version <= migrations.length;
+    version++
+  ) {
     await migrations[version - 1](database);
     database.run(`PRAGMA user_version = ${version};`);
     changed = true;
   }
   return changed;
 }
-
 
 function walletIds(database: Database): number[] {
   const ids: number[] = [];
@@ -787,10 +798,7 @@ const persistNewWalletToFile = async (
             );
           }
           persistedWalletId = nextAvailableWalletId(latest, localDatabase);
-          localDatabase.run('UPDATE wallets SET id = ? WHERE id = ?', [
-            persistedWalletId,
-            localWalletId,
-          ]);
+          remapWalletScopeId(localDatabase, localWalletId, persistedWalletId);
         }
 
         mergeWalletScope(latest, localDatabase, persistedWalletId);
@@ -863,6 +871,11 @@ const clearDatabase = async (): Promise<void> => {
       DROP TABLE IF EXISTS instantiated_contracts;
       DROP TABLE IF EXISTS bcmr;
       DROP TABLE IF EXISTS bcmr_tokens;
+      DROP TABLE IF EXISTS multisig_spend_sessions;
+      DROP TABLE IF EXISTS multisig_address_keys;
+      DROP TABLE IF EXISTS multisig_addresses;
+      DROP TABLE IF EXISTS multisig_cosigners;
+      DROP TABLE IF EXISTS multisig_policies;
     `);
     // Reset schema version to 0
     db.run('PRAGMA user_version = 0;');

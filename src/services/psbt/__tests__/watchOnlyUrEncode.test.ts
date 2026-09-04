@@ -7,6 +7,7 @@ import {
 } from '../psbtBch';
 import {
   assertChipnetNetwork,
+  assertWatchOnlySighash,
   encodeWatchOnlyUrFrames,
   parsePsbtBytes,
   parseWatchOnlyUrFragmentLength,
@@ -14,6 +15,8 @@ import {
 import {
   DEFAULT_UR_FRAGMENT_LENGTH,
   PSBT_UR_FRAGMENT_LENGTHS,
+  encodePsbtToUrFrames,
+  UR_FRAGMENT_LENGTH_OPTIONS,
   UrPsbtScanner,
 } from '../urPsbt';
 
@@ -51,6 +54,7 @@ describe('watch-only UR encode (CLI/GUI shared)', () => {
     const frames = encodeWatchOnlyUrFrames(psbt);
     expect(frames.length).toBeGreaterThan(0);
     expect(DEFAULT_UR_FRAGMENT_LENGTH).toBe(50);
+    expect(UR_FRAGMENT_LENGTH_OPTIONS).toEqual([50, 100, 200, 400, 450]);
     expect(frames.every((frame) => /^UR:CRYPTO-PSBT\//i.test(frame))).toBe(
       true
     );
@@ -91,6 +95,24 @@ describe('watch-only UR encode (CLI/GUI shared)', () => {
       /fragment length/
     );
   });
+  it.each(UR_FRAGMENT_LENGTH_OPTIONS)(
+    'round-trips a PSBT at density %i',
+    (fragmentLength) => {
+      const psbt = encodeUnsignedPsbt([input()], [output()]);
+      const encoder = encodePsbtToUrFrames(psbt, fragmentLength);
+      const scanner = new UrPsbtScanner();
+      let progress = scanner.receive(encoder.next());
+      for (
+        let index = 1;
+        index < encoder.count && !progress.complete;
+        index += 1
+      ) {
+        progress = scanner.receive(encoder.next());
+      }
+      expect(progress.complete).toBe(true);
+      expect(progress.psbt).toEqual(psbt);
+    }
+  );
 
   it('refuses mainnet', () => {
     expect(() => assertChipnetNetwork('mainnet')).toThrow(/Chipnet/);
@@ -103,10 +125,10 @@ describe('watch-only UR encode (CLI/GUI shared)', () => {
   });
 });
 
-describe('watch-only UR encode rejects non-0xc1', () => {
-  it('cannot be called with 0x41 because encodeUnsignedPsbt refuses it', () => {
-    expect(() =>
-      encodeUnsignedPsbt([input()], [output()], SIGHASH_ALL_FORKID)
-    ).toThrow(/0xc1/);
+describe('watch-only UR sighash contract', () => {
+  it('accepts the SeedCash-compatible 0x41 default', () => {
+    const psbt = encodeUnsignedPsbt([input()], [output()], SIGHASH_ALL_FORKID);
+    expect(() => assertWatchOnlySighash(psbt)).not.toThrow();
+    expect(encodeWatchOnlyUrFrames(psbt).length).toBeGreaterThan(0);
   });
 });

@@ -185,6 +185,14 @@ pub const SKILLS: &[Skill] = &[
         requires_confirmation: false,
     },
     Skill {
+        name: "multisig",
+        capability: Capability::Read,
+        summary: "Validate public cosigner keys and derive a shared P2SH20 multisig script and addresses. No wallet or network access.",
+        needs_wallet: false,
+        needs_network: false,
+        requires_confirmation: false,
+    },
+    Skill {
         // Handles the vault seed and produces signatures. It broadcasts
         // nothing, but an LM-OTS key that signs twice can be forged against,
         // so this sits above a plain read.

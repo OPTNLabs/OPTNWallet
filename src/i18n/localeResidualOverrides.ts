@@ -86,7 +86,7 @@ export const localeResidualOverrides: Partial<
     'settingsRows.faucet': 'Chipnet Faucet',
     'settingsPanels.faucet': 'Chipnet Faucet',
     'nftConfig.commitment': 'NFT 커밋먼트',
-    'rpa.title': 'RPA Paycode',
+    'rpa.title': 'RPA Cash Code',
     'qrSigning.payload': '페이로드',
   },
   ja: {
@@ -95,11 +95,11 @@ export const localeResidualOverrides: Partial<
     'settingsPanels.faucet': 'Chipnet Faucet',
     'confirm.ok': 'OK',
     'nftConfig.commitment': 'NFT コミットメント',
-    'rpa.title': 'RPA Paycode',
+    'rpa.title': 'RPA Cash Code',
     'qrSigning.payload': 'ペイロード',
   },
   ru: {
-    'rpa.title': 'RPA Paycode',
+    'rpa.title': 'RPA Cash Code',
     'qrSigning.payload': 'Полезная нагрузка',
   },
   'ha-NG': {
@@ -120,7 +120,7 @@ export const localeResidualOverrides: Partial<
     'apps.token': 'Token',
     'txSummary.token': 'token',
     'txSummary.bytes': 'bytes',
-    'onboarding.welcomeAlt': 'Smart BCH Wallet',
+    'onboarding.welcomeAlt': 'OPTN Wallet',
     'qrSigning.payload': 'Abin da aka ɗora',
   },
 };

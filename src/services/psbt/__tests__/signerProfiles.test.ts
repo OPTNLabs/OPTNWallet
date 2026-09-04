@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  SIGHASH_ALL_FORKID_ANYONECANPAY,
+  SIGHASH_ALL_FORKID,
   SIGNER_PROFILES,
   signerProfile,
   verifiedSigners,
@@ -18,7 +18,7 @@ describe('signer profiles', () => {
     for (const profile of SIGNER_PROFILES) {
       expect(profile.sighashType).toBe(WATCH_ONLY_SIGHASH_TYPE);
     }
-    expect(WATCH_ONLY_SIGHASH_TYPE).toBe(SIGHASH_ALL_FORKID_ANYONECANPAY);
+    expect(WATCH_ONLY_SIGHASH_TYPE).toBe(SIGHASH_ALL_FORKID);
   });
 
   it('requires the parent transaction everywhere the builder does', () => {
@@ -33,7 +33,9 @@ describe('signer profiles', () => {
     // SeedCash has been driven end to end against its own signing code.
     // Keystone has not been near a device, and saying so in data is what stops
     // the UI implying parity it has not earned.
-    expect(verifiedSigners().map((profile) => profile.id)).toEqual(['seedcash']);
+    expect(verifiedSigners().map((profile) => profile.id)).toEqual([
+      'seedcash',
+    ]);
   });
 
   it('makes every unverified signer explain itself', () => {

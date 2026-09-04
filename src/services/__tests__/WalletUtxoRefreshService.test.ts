@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { Network } from '../../state/slices/networkSlice';
 import {
   cacheWalletUtxoSnapshot,
   clearCachedWalletUtxoSnapshot,
@@ -15,6 +16,12 @@ const dispatchMock = vi.fn();
 const runWalletUtxoRefreshMock = vi.fn(
   async (_walletId: number, task: () => Promise<unknown>) => await task()
 );
+const runWalletUtxoRefreshExclusiveMock = vi.fn(
+  async (_walletId: number, task: () => Promise<unknown>) => await task()
+);
+const loadMultisigPolicyMock = vi.fn();
+const listMultisigAddressInventoryMock = vi.fn();
+const ensureMultisigAddressInventoryMock = vi.fn();
 
 vi.mock('../../state/store', () => ({
   store: { getState: getStateMock, dispatch: dispatchMock },
@@ -42,6 +49,13 @@ vi.mock('../ElectrumService', () => ({
 
 vi.mock('../RefreshCoordinator', () => ({
   runWalletUtxoRefresh: runWalletUtxoRefreshMock,
+  runWalletUtxoRefreshExclusive: runWalletUtxoRefreshExclusiveMock,
+}));
+
+vi.mock('../multisig/MultisigStorageService', () => ({
+  loadMultisigPolicy: loadMultisigPolicyMock,
+  listMultisigAddressInventory: listMultisigAddressInventoryMock,
+  ensureMultisigAddressInventory: ensureMultisigAddressInventoryMock,
 }));
 
 function deferred<T>() {
@@ -73,6 +87,26 @@ describe('fetchActiveWalletUtxos', () => {
     runWalletUtxoRefreshMock.mockImplementation(
       async (_walletId: number, task: () => Promise<unknown>) => await task()
     );
+    runWalletUtxoRefreshExclusiveMock.mockImplementation(
+      async (_walletId: number, task: () => Promise<unknown>) => await task()
+    );
+    loadMultisigPolicyMock.mockResolvedValue({
+      network: Network.CHIPNET,
+    });
+    listMultisigAddressInventoryMock.mockResolvedValue([
+      {
+        address: 'bchtest:qmultisig0',
+        tokenAddress: 'bchtest:pMultisig0',
+        branch: 0,
+        index: 0,
+      },
+      {
+        address: 'bchtest:qmultisig1',
+        tokenAddress: 'bchtest:pMultisig1',
+        branch: 1,
+        index: 0,
+      },
+    ]);
   });
 
   it('fetches only addresses owned or tracked by the requested wallet', async () => {
@@ -312,6 +346,43 @@ describe('fetchActiveWalletUtxos', () => {
     unsubscribe();
     await refreshActiveWalletUtxos(6);
     expect(listener).toHaveBeenCalledOnce();
+  });
+
+  it('refreshes a route-scoped multisig inventory without requiring the active wallet', async () => {
+    fetchAndStoreUTXOsManyMock.mockResolvedValue({
+      'bchtest:qmultisig0': [
+        {
+          address: 'bchtest:qmultisig0',
+          tx_hash: 'c'.repeat(64),
+          tx_pos: 0,
+          height: 0,
+          value: 123_000,
+        },
+      ],
+      'bchtest:qmultisig1': [],
+    });
+    const { refreshMultisigWalletUtxos } = await import(
+      '../WalletUtxoRefreshService'
+    );
+
+    await expect(refreshMultisigWalletUtxos(42)).resolves.toEqual({
+      'bchtest:qmultisig0': expect.any(Array),
+      'bchtest:qmultisig1': [],
+    });
+    expect(runWalletUtxoRefreshExclusiveMock).toHaveBeenCalledWith(
+      42,
+      expect.any(Function)
+    );
+    expect(fetchAndStoreUTXOsManyMock).toHaveBeenCalledWith(
+      42,
+      ['bchtest:qmultisig0', 'bchtest:qmultisig1'],
+      {
+        discover: false,
+        force: true,
+        network: Network.CHIPNET,
+        chainAuthoritative: true,
+      }
+    );
   });
 
   it('rejects a joined older refresh so the caller can schedule a trailing fetch', async () => {

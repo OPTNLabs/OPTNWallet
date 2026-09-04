@@ -171,7 +171,7 @@ export const StealthBalanceCard: React.FC<StealthBalanceCardProps> = ({
 
       <div className="space-y-1.5">
         <label className="block text-[10px] wallet-muted">
-          Chipnet Electrum cannot find paycode payments. Paste the sender txid:
+          Chipnet Electrum cannot find Cash Code payments. Paste the sender txid:
         </label>
         <div className="flex gap-2">
           <input

@@ -29,6 +29,8 @@ type ReviewCardProps = {
   /** Optional live status (hardware: "Confirm on Ledger…"). */
   sendStatus?: string;
   isHardwareWallet?: boolean;
+  /** Optional policy context shown by isolated transaction surfaces. */
+  reviewContext?: string;
   onClose: () => void;
   onConfirmSend: () => void;
 };
@@ -49,6 +51,7 @@ export function ReviewCard({
   isSending,
   sendStatus = '',
   isHardwareWallet = false,
+  reviewContext,
   onClose,
   onConfirmSend,
 }: ReviewCardProps) {
@@ -251,6 +254,11 @@ export function ReviewCard({
               {t('receive.close')}
             </button>
           </div>
+          {reviewContext && (
+            <div className="mt-3 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-card-bg)] px-3 py-2 text-xs wallet-muted">
+              {reviewContext}
+            </div>
+          )}
         </div>
 
         <div className="p-4 space-y-4 max-h-[56vh] overflow-y-auto">

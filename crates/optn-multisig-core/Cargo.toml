@@ -1,0 +1,17 @@
+[package]
+name = "optn-multisig-core"
+version = "1.7.3"
+description = "Stateless BCH multisig derivation primitives for OPTN Wallet"
+authors = ["OPTNLabs"]
+license = "GPL-3.0"
+repository = "https://github.com/OPTNLabs/OPTNWallet"
+edition = "2021"
+rust-version = "1.77.2"
+
+[dependencies]
+# All three are already pinned by both consumers. They are pure Rust and keep
+# this deterministic core free from Tauri, OS, network, and native toolchain
+# dependencies.
+k256 = { version = "0.13", default-features = false, features = ["arithmetic"] }
+ripemd = "0.1"
+sha2 = "0.10"

@@ -97,4 +97,40 @@ describe('wallet network bootstrap', () => {
     finishHistory?.();
     await history;
   });
+
+  it('does not migrate desktop legacy multisig rows during desktop bootstrap', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
+    const migrateLegacyMultisigWallet = vi.fn(async () => ({
+      walletId: 7,
+      status: 'migrated' as const,
+    }));
+
+    try {
+      await bootstrapWalletNetwork(
+        7,
+        vi.fn() as never,
+        () => false,
+        {
+          loadWalletMetadata: vi.fn(async () => ({
+            id: 7,
+            wallet_name: 'desktop multisig',
+            networkType: Network.CHIPNET,
+            walletType: 'watch-only' as const,
+            balance: 0,
+            derivation_path: "m/44'/145'/0'",
+            derivation_path_source: 'default' as const,
+          })),
+          migrateLegacyMultisigWallet,
+          ensureFreshConnection: vi.fn(async () => {}),
+          publishStoredHistory: vi.fn(async () => 0),
+          refreshHistory: vi.fn(async () => {}),
+          loadStoredSpecialActivities: vi.fn(async () => []),
+        }
+      );
+
+      expect(migrateLegacyMultisigWallet).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

@@ -35,6 +35,11 @@ export const BASIC_ACTIONS: ActionConfig[] = [
 
 export const ADVANCED_ACTIONS: ActionConfig[] = [
   {
+    title: 'Multisig Setup',
+    description: 'Create or import a shared xpub multisig wallet',
+    to: '/multisig/setup',
+  },
+  {
     title: 'Quantumroot',
     description: 'Quantum-ready vaults',
     to: '/quantumroot',

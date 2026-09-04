@@ -98,7 +98,7 @@ const document = {
     'regenerate deliberately and say why in the commit.',
   urType: 'crypto-psbt',
   network: 'chipnet',
-  sighashType: '0xc1 (SIGHASH_ALL | FORKID | ANYONECANPAY) on every input',
+  sighashType: '0x41 (SIGHASH_ALL | FORKID) on every input',
   fragmentLength: DEFAULT_UR_FRAGMENT_LENGTH,
   vectors,
 };

@@ -10,7 +10,8 @@ export async function enrichTrackedAttempt(
   spentInputs?: UTXO[],
   options?: SendTransactionOptions
 ): Promise<void> {
-  const currentWalletId = store.getState().wallet_id.currentWalletId ?? null;
+  const currentWalletId =
+    options?.walletId ?? store.getState().wallet_id.currentWalletId ?? null;
   await OutboundTransactionTracker.trackAttempt({
     rawTx: rawTX,
     walletId: currentWalletId,
@@ -27,8 +28,12 @@ export async function enrichTrackedAttempt(
   });
 }
 
-export async function collectRefreshAddresses(spentInputs?: UTXO[]): Promise<string[]> {
-  const currentWalletId = store.getState().wallet_id.currentWalletId ?? null;
+export async function collectRefreshAddresses(
+  spentInputs?: UTXO[],
+  walletId?: number | null
+): Promise<string[]> {
+  const currentWalletId =
+    walletId ?? store.getState().wallet_id.currentWalletId ?? null;
   const addrs = new Set<string>(
     spentInputs?.map((u) => u.address).filter(Boolean) ?? []
   );

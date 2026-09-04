@@ -13,6 +13,7 @@ This `README` is the high-level entrypoint. Technical implementation and integra
 - [Integration Guide](./docs/integration-guide.md)
 - [Addon Development Guide](./docs/addon-development-guide.md)
 - [Addon SDK Reference](./docs/addons-sdk.md)
+- [Nostr identity isolation](./docs/nostr-identity-isolation.md)
 
 ## For Third-Party Developers
 
@@ -89,6 +90,23 @@ See [Build and Release Scripts](./docs/build-and-release.md) for Android APK/AAB
 - Website: https://www.optnwallet.com/
 - Source: https://github.com/OPTNLabs/OPTNWallet
 
+## Nostr identities
+
+Chat, P2P CashFusion, and WizardConnect all speak Nostr. They use **different
+keys**. Do not reuse one job's identity for another.
+
+| Job | Key | Lifetime | Why |
+| --- | --- | --- | --- |
+| Chat | NIP-06 from seed (`m/44'/1237'/0'/0/0`) | Long-lived, re-derived | Contacts must find the same `npub` after restore |
+| P2P CashFusion | Fresh throwaway secp256k1 key every round | Dies with the round | Unlinkability. Never the wallet or chat identity |
+| WizardConnect | CSPRNG per dapp pairing, encrypted at rest | Survives app restart / process death. Not recovered from seed-only reinstall | The dapp recognizes this pairing, not chat or a mix round |
+
+WizardConnect relay keys are generated with `crypto.getRandomValues` and stored
+as ciphertext. They are not derived from the `wiz://` pairing URI (the dapp
+already has that URI). After a seed-only restore, the user scans again.
+
+Full rules: [docs/nostr-identity-isolation.md](./docs/nostr-identity-isolation.md).
+
 ## P2P CashFusion Architecture
 
 OPTN's P2P CashFusion transport is a serverless CoinJoin protocol inspired by
@@ -141,7 +159,8 @@ described below.
 - Chat and fusion do not share identities: chat gift-wraps target the user's
   persistent Nostr identity, while fusion gift-wraps target per-round public
   keys. Recipient tags keep the subscriptions separate even though both use
-  kind `1059`.
+  kind `1059`. WizardConnect is a third identity (CSPRNG per pairing). See
+  [Nostr identities](#nostr-identities).
 
 These layers reduce linkage by relay-visible identity and connection. They do
 not claim to defeat a global observer correlating timing across every relay and

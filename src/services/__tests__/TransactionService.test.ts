@@ -8,6 +8,7 @@ const removeMock = vi.fn();
 const retrieveKeysMock = vi.fn();
 const requestRefreshMock = vi.fn();
 const reservedFusionOutpointsMock = vi.fn();
+const refreshMultisigWalletUtxosMock = vi.fn();
 
 vi.mock('../../apis/TransactionManager/TransactionManager', () => ({
   default: () => ({
@@ -45,6 +46,10 @@ vi.mock('../WalletBackendSyncService', () => ({
   default: { observeTransaction: vi.fn() },
 }));
 
+vi.mock('../WalletUtxoRefreshService', () => ({
+  refreshMultisigWalletUtxos: refreshMultisigWalletUtxosMock,
+}));
+
 vi.mock('../../platform/desktop/fusionRoundState', () => ({
   reservedOutpoints: (...args: unknown[]) =>
     reservedFusionOutpointsMock(...args),
@@ -69,6 +74,7 @@ describe('TransactionService.sendTransaction', () => {
     listActiveMock.mockResolvedValue([]);
     retrieveKeysMock.mockResolvedValue([]);
     reservedFusionOutpointsMock.mockReturnValue(new Set());
+    refreshMultisigWalletUtxosMock.mockResolvedValue({});
   });
 
   it('clears any pending outbound record when broadcast returns an error', async () => {
@@ -85,6 +91,26 @@ describe('TransactionService.sendTransaction', () => {
     expect(trackAttemptMock).not.toHaveBeenCalled();
     expect(removeMock).toHaveBeenCalledWith('tracked:00aa', 11);
     expect(requestRefreshMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps rejected multisig spends route-scoped and refreshes their coins', async () => {
+    sendTransactionMock.mockResolvedValue({
+      txid: null,
+      errorMessage: 'Broadcast rejected for insufficient fee.',
+    });
+
+    const { default: TransactionService } = await import('../TransactionService');
+
+    const result = await TransactionService.sendTransaction('00ab', undefined, {
+      walletId: 42,
+      multisig: true,
+    });
+
+    expect(result.errorMessage).toContain('insufficient fee');
+    expect(sendTransactionMock).toHaveBeenCalledWith('00ab', 42);
+    expect(removeMock).toHaveBeenCalledWith('tracked:00ab', 42);
+    expect(removeMock).toHaveBeenCalledWith('tracked:00ab', 11);
+    expect(refreshMultisigWalletUtxosMock).toHaveBeenCalledWith(42);
   });
 
   it('allows a new send when the syncing transaction reserved different inputs', async () => {
@@ -139,7 +165,55 @@ describe('TransactionService.sendTransaction', () => {
     );
 
     expect(result.errorMessage).toContain('already using one of these UTXOs');
+    expect(result.conflictingTxids).toEqual(['old']);
     expect(sendTransactionMock).not.toHaveBeenCalled();
+  });
+
+  it('does not let a deterministic rejected record block a retry', async () => {
+    listActiveMock.mockResolvedValue([
+      {
+        txid: 'rejected',
+        lastError: 'Broadcast rejected for insufficient fee.',
+        spentOutpoints: [{ tx_hash: 'same-input', tx_pos: 2 }],
+      },
+    ]);
+    sendTransactionMock.mockResolvedValue({
+      txid: 'new-txid',
+      errorMessage: null,
+      broadcastState: 'broadcasted',
+    });
+
+    const { default: TransactionService } = await import('../TransactionService');
+    const result = await TransactionService.sendTransaction(
+      '00ce',
+      [
+        {
+          tx_hash: 'same-input',
+          tx_pos: 2,
+          address: 'bchtest:qsame',
+          value: 50_000,
+        } as never,
+      ]
+    );
+
+    expect(result.txid).toBe('new-txid');
+    expect(sendTransactionMock).toHaveBeenCalledWith('00ce');
+  });
+
+  it('releases only explicitly selected multisig locks in their wallet scope', async () => {
+    listActiveMock.mockResolvedValue([
+      { txid: 'old-multisig-tx', spentOutpoints: [] },
+      { txid: 'keep-this-tx', spentOutpoints: [] },
+    ]);
+
+    const { releaseMultisigOutboundLocks } = await import('../TransactionService');
+    const released = await releaseMultisigOutboundLocks(42, [
+      'OLD-MULTISIG-TX',
+    ]);
+
+    expect(released).toEqual(['old-multisig-tx']);
+    expect(removeMock).toHaveBeenCalledWith('old-multisig-tx', 42);
+    expect(removeMock).not.toHaveBeenCalledWith('keep-this-tx', 42);
   });
 
   it('does not broadcast an input reserved by an in-flight Fusion round', async () => {

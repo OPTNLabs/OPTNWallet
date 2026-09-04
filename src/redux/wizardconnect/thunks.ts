@@ -3,6 +3,7 @@ import { Toast } from '@capacitor/toast';
 import type { RootState } from '../../state/store';
 import { selectLocale } from '../../state/slices/preferencesSlice';
 import { translate } from '../../i18n/translate';
+import { getOrCreatePersistedRelayKey } from '../../services/wizardconnect/relayKeyStore';
 
 export const wizardConnectPair = createAsyncThunk(
   'wizardconnect/pair',
@@ -10,6 +11,10 @@ export const wizardConnectPair = createAsyncThunk(
     const state = getState() as RootState;
     const manager = state.wizardconnect.manager;
     if (!manager) throw new Error('WizardConnect not initialized');
+    const walletId = state.wizardconnect.initializedWalletId;
+    if (walletId != null) {
+      await getOrCreatePersistedRelayKey(walletId, uri);
+    }
     const connectionId = manager.connect(uri);
     await Toast.show({
       text: translate(selectLocale(state), 'wizard.pairingStarted'),

@@ -2,7 +2,7 @@
 
 This is the offline half of the Issue #8 air-gapped flow, driven directly
 instead of through the device UI. OPTN builds the PSBT, this signs it with
-SeedCash's own `sign_psbt_with_xpriv`, and OPTN then verifies and finalizes
+SeedCash's own wallet signer, and OPTN then verifies and finalizes
 what comes back. If the two sides disagree about signature algorithm, sighash
 type or derivation metadata, this is where it shows up.
 
@@ -23,15 +23,24 @@ hardware_shim.install()
 
 
 def _signer_imports():
-    """Import the signing API exposed by the pinned SeedCash revision."""
+    """SeedCash moved signing out of psbt_parser; keep both layouts working."""
     from seedcash.models.bip39 import Bip39  # noqa: E402
     from seedcash.models.psbt_parser import PSBTParser, parse_psbt  # noqa: E402
     from seedcash.models.wallet import Wallet  # noqa: E402
-    return Bip39, PSBTParser, parse_psbt, Wallet
+
+    sign_psbt_with_xpriv = None
+    try:
+        from seedcash.models.psbt_parser import sign_psbt_with_xpriv  # noqa: E402
+    except ImportError:
+        try:
+            from seedcash.models.psbt_signer import sign_psbt_with_xpriv  # noqa: E402
+        except ImportError:
+            pass
+    return Bip39, PSBTParser, parse_psbt, sign_psbt_with_xpriv, Wallet
 
 
-Bip39, PSBTParser, parse_psbt, Wallet = (
-    (None, None, None, None)
+Bip39, PSBTParser, parse_psbt, sign_psbt_with_xpriv, Wallet = (
+    (None, None, None, None, None)
     if len(sys.argv) >= 2 and sys.argv[1] == "decode-ur"
     else _signer_imports()
 )
@@ -49,6 +58,33 @@ def build_wallet() -> Wallet:
     return wallet_from(TEST_MNEMONIC)
 
 
+def parse_for_wallet(psbt_bytes: bytearray, wallet: Wallet):
+    """Construct either the current or legacy SeedCash parser."""
+    try:
+        return PSBTParser(psbt_bytes, wallet_fingerprint=wallet._fingerprint)
+    except TypeError:
+        return PSBTParser(psbt_bytes)
+
+
+def sign_with_wallet(psbt_bytes: bytearray, wallet: Wallet) -> bytearray:
+    """Use SeedCash's current public signer, with legacy compatibility."""
+    parser = parse_for_wallet(psbt_bytes, wallet)
+    if hasattr(wallet, "sign_psbt"):
+        return wallet.sign_psbt(parser)
+    if sign_psbt_with_xpriv is None:
+        raise RuntimeError("This SeedCash checkout has no supported PSBT signer.")
+
+    signed = psbt_bytes
+    for input_index in range(parser.num_inputs):
+        signed = sign_psbt_with_xpriv(
+            signed,
+            wallet._xpriv,
+            input_index=input_index,
+            account_path=ACCOUNT_PATH,
+        )
+    return signed
+
+
 def emit_keys() -> None:
     wallet = build_wallet()
     print(
@@ -62,7 +98,8 @@ def emit_keys() -> None:
     )
 
 
-def _partial_signature_count(psbt_bytes: bytes | bytearray) -> int:
+def _partial_signature_count(psbt_bytes) -> int:
+    """How many PSBT_IN_PARTIAL_SIG (0x02) entries the inputs carry."""
     return sum(
         1
         for input_map in parse_psbt(bytes(psbt_bytes))["inputs"]
@@ -76,11 +113,33 @@ def sign(unsigned_path: str, signed_path: str) -> None:
     with open(unsigned_path, "r", encoding="utf-8") as handle:
         psbt_bytes = bytearray.fromhex(handle.read().strip())
 
+    # Parse first, exactly as the device does before showing the review screen.
+    # `_wallet_pubkeys_in_map` is the function that decides whether SeedCash
+    # claims an input as its own — if it returns nothing, the device shows the
+    # transaction as somebody else's and refuses to sign, which is the failure
+    # this check is here to surface loudly.
+    parser = parse_for_wallet(psbt_bytes, wallet)
+    if hasattr(PSBTParser, "_wallet_pubkeys_in_map"):
+        fingerprint_bytes = bytes.fromhex(wallet._fingerprint)
+        claimed = [
+            index
+            for index, input_map in enumerate(parse_psbt(psbt_bytes)["inputs"])
+            if PSBTParser._wallet_pubkeys_in_map(input_map, fingerprint_bytes)
+        ]
+        if not claimed:
+            raise SystemExit(
+                "SeedCash did not recognise any input as its own. The PSBT is "
+                "missing or misencoding PSBT_IN_BIP32_DERIVATION (0x06)."
+            )
+
     before = _partial_signature_count(psbt_bytes)
-    parser = PSBTParser(psbt_bytes)
-    signed = wallet.sign_psbt(parser)
-    after = _partial_signature_count(signed)
-    if after <= before:
+    signed = sign_with_wallet(psbt_bytes, wallet)
+
+    # The post-condition to the check above. That one asks whether SeedCash
+    # recognises an input; this asks whether it actually signed one. A signer
+    # that returns the PSBT untouched looks like success to every caller, and
+    # the round trip would "pass" having proved nothing.
+    if _partial_signature_count(signed) <= before:
         raise SystemExit(
             "SeedCash returned the PSBT without adding a partial signature. "
             "Check BIP32 derivation metadata and signer ownership."
@@ -110,18 +169,18 @@ def emit_cosigner_keys(count: int) -> None:
 
 
 def sign_as(index: int, unsigned_path: str, signed_path: str) -> None:
-    """Sign every owned input as one deterministic multisig cosigner."""
+    """Sign every input as one cosigner of a multisig wallet.
+
+    SeedCash reads the redeem script from PSBT_IN_REDEEM_SCRIPT (0x04) and uses
+    it as the scriptCode, which is what makes P2SH multisig work at all here.
+    It takes the derivation path from the 0x06 records — every cosigner shares
+    the same path, so it derives its own key at that path from its own xpriv.
+    """
     wallet = wallet_from(cosigner_mnemonic(index))
     with open(unsigned_path, "r", encoding="utf-8") as handle:
         psbt = bytearray.fromhex(handle.read().strip())
 
-    before = _partial_signature_count(psbt)
-    signed = wallet.sign_psbt(PSBTParser(psbt))
-    after = _partial_signature_count(signed)
-    if after <= before:
-        raise SystemExit(
-            f"SeedCash cosigner {index} returned no new partial signature."
-        )
+    signed = sign_with_wallet(psbt, wallet)
 
     with open(signed_path, "w", encoding="utf-8") as handle:
         handle.write(bytes(signed).hex())

@@ -506,13 +506,13 @@ export default function useSimpleSend() {
       if (rpaPaycode) {
         if (isHardwareWallet) {
           setError(
-            'Sending to a paycode is not available on hardware wallets. Use a software wallet.'
+            'Sending to a Cash Code is not available on hardware wallets. Use a software wallet.'
           );
           setMode('error');
           return;
         }
         if (assetType !== 'bch') {
-          setError('Paycodes only accept BCH, not tokens.');
+          setError('Cash Codes only accept BCH, not tokens.');
           setMode('error');
           return;
         }
@@ -588,7 +588,7 @@ export default function useSimpleSend() {
               'spend'
             );
             if (!priv) {
-              setError('Could not unlock a selected coin to pay this paycode.');
+              setError('Could not unlock a selected coin to pay this Cash Code.');
               setMode('error');
               return;
             }
@@ -837,7 +837,7 @@ export default function useSimpleSend() {
       : null;
     if (rpaPaycode && isHardwareWallet) {
       setError(
-        'Sending to a paycode is not available on hardware wallets. Use a software wallet.'
+        'Sending to a Cash Code is not available on hardware wallets. Use a software wallet.'
       );
       setMode('error');
       return;

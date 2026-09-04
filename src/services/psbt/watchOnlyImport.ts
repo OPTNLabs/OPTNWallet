@@ -5,7 +5,7 @@
 // anything is broadcast, this module
 //   1. binds the returned PSBT to the exact unsigned transaction that was
 //      approved (byte-for-byte),
-//   2. checks the requested sighash type was honoured (0xc1),
+//   2. checks the exact user-approved sighash type was honoured,
 //   3. cryptographically verifies every partial signature against the
 //      public key and the BCH signing serialization for the spent output,
 //   4. merges the signatures into a final raw transaction.
@@ -24,10 +24,10 @@ import {
 
 import {
   decodePsbt,
+  psbtTokenToTransactionToken,
   sighashTypeOf,
   verifyBchSignature,
   SCHNORR_SIGNATURE_LENGTH,
-  SIGHASH_ALL_FORKID_ANYONECANPAY,
   type PsbtSignature,
 } from './psbtBch';
 import {
@@ -64,7 +64,7 @@ function verifyPartialSignature(
 ): boolean {
   const type = sighashTypeOf(signature.signature);
   if (type === null) return false;
-  if (type !== SIGHASH_ALL_FORKID_ANYONECANPAY) return false;
+  if (type !== proposal.sighashType) return false;
 
   const input = proposal.inputs[signature.inputIndex];
   if (!input) return false;
@@ -90,16 +90,15 @@ function verifyPartialSignature(
     sourceOutputs: proposal.inputs.map((candidate) => ({
       lockingBytecode: hexToBin(candidate.lockingBytecodeHex),
       valueSatoshis: candidate.satoshis,
-      token: noTokens,
+      token: candidate.token
+        ? psbtTokenToTransactionToken(candidate.token)
+        : noTokens,
     })),
   };
-  const serialization = generateSigningSerializationBch(
-    context,
-    {
-      coveredBytecode,
-      signingSerializationType: Uint8Array.from([type]),
-    }
-  );
+  const serialization = generateSigningSerializationBch(context, {
+    coveredBytecode,
+    signingSerializationType: Uint8Array.from([type]),
+  });
   const messageHash = hash256(serialization);
   return verifyBchSignature(
     signature.signature.subarray(0, -1),
@@ -134,7 +133,22 @@ export function inspectImportedPsbt(
   if (parsed.inputs.length !== proposal.inputs.length) {
     return {
       state: 'rejected',
-      reason: 'The returned PSBT has a different number of inputs than approved.',
+      reason:
+        'The returned PSBT has a different number of inputs than approved.',
+      signedInputCount: 0,
+      totalInputCount: proposal.inputs.length,
+    };
+  }
+
+  if (
+    parsed.inputs.some(
+      (input) => input.requestedSighashType !== proposal.sighashType
+    )
+  ) {
+    return {
+      state: 'rejected',
+      reason:
+        'The returned PSBT requests a different sighash type than the one approved. Do not broadcast.',
       signedInputCount: 0,
       totalInputCount: proposal.inputs.length,
     };
@@ -155,7 +169,7 @@ export function inspectImportedPsbt(
     const type = sighashTypeOf(signature.signature);
     return (
       type === null ||
-      type !== SIGHASH_ALL_FORKID_ANYONECANPAY ||
+      type !== proposal.sighashType ||
       !verifyPartialSignature(signature, proposal, parsed.unsignedTransaction)
     );
   });
@@ -181,7 +195,8 @@ export function inspectImportedPsbt(
   if (signedInputCount < proposal.inputs.length) {
     return {
       state: 'partially-signed',
-      reason: `Signed ${signedInputCount} of ${proposal.inputs.length} inputs. ` +
+      reason:
+        `Signed ${signedInputCount} of ${proposal.inputs.length} inputs. ` +
         'Return it to the device for the remaining signatures.',
       signedInputCount,
       totalInputCount: proposal.inputs.length,
@@ -231,8 +246,7 @@ function buildUnlockScript(
   }
 
   const schnorrCount = signatures.filter(
-    (candidate) =>
-      candidate.signature.length - 1 === SCHNORR_SIGNATURE_LENGTH
+    (candidate) => candidate.signature.length - 1 === SCHNORR_SIGNATURE_LENGTH
   ).length;
   if (schnorrCount !== 0 && schnorrCount !== signatures.length) {
     throw new Error(
@@ -244,9 +258,7 @@ function buildUnlockScript(
 
   const dummy =
     schnorrCount === signatures.length
-      ? pushMinimal(
-          schnorrCheckBits(multisig.keyPositions, multisig.totalKeys)
-        )
+      ? pushMinimal(schnorrCheckBits(multisig.keyPositions, multisig.totalKeys))
       : Uint8Array.of(OP_0);
 
   const parts = [dummy];
@@ -296,7 +308,9 @@ export function mergeImportedSignatures(
         hexToBin(proposalInput.redeemScriptHex)
       );
       if (!policy) {
-        throw new Error(`Input ${index} has an invalid multisig redeem script.`);
+        throw new Error(
+          `Input ${index} has an invalid multisig redeem script.`
+        );
       }
       // CHECKMULTISIG reads signatures in redeem-script key order; take the
       // first `required` verified signatures in that order.
@@ -344,6 +358,9 @@ export function mergeImportedSignatures(
     outputs: proposal.outputs.map((output) => ({
       lockingBytecode: hexToBin(output.lockingBytecodeHex),
       valueSatoshis: output.satoshis,
+      ...(output.token
+        ? { token: psbtTokenToTransactionToken(output.token) }
+        : {}),
     })),
     locktime: 0,
   });

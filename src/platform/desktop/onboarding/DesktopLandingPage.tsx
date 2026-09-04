@@ -49,6 +49,15 @@ interface WalletRow {
   walletType: ExtendedWalletType;
 }
 
+/**
+ * The common/mobile multisig wallet is intentionally not a desktop wallet
+ * picker entry. Desktop multisig remains the legacy watch-only/air-gap flow so
+ * its existing password gate and external signer compatibility stay intact.
+ */
+function desktopWalletRows(rows: WalletRow[]): WalletRow[] {
+  return rows.filter((row) => row.walletType !== WalletType.MULTISIG);
+}
+
 type LandingNavigationState = {
   openWalletId?: unknown;
   importWalletFile?: unknown;
@@ -124,7 +133,7 @@ const DesktopLandingPage = () => {
     void (async () => {
       const manager = WalletManager();
       const rows = await manager.getAllWallets();
-      setWallets(rows as WalletRow[]);
+      setWallets(desktopWalletRows(rows as WalletRow[]));
     })();
   }, []);
 
@@ -209,7 +218,7 @@ const DesktopLandingPage = () => {
       // brand new wallet could inherit a deleted one's auto-fuse setting.
       clearWalletFusionPolicy(id);
       const rows = await WalletManager().getAllWallets();
-      setWallets(rows as WalletRow[]);
+      setWallets(desktopWalletRows(rows as WalletRow[]));
       setDeletingId(null);
       window.dispatchEvent(new CustomEvent('optn:wallets-changed'));
     } catch (err) {
@@ -258,7 +267,7 @@ const DesktopLandingPage = () => {
         isWalletWindowOpen
       );
       const rows = await WalletManager().getAllWallets();
-      setWallets(rows as WalletRow[]);
+      setWallets(desktopWalletRows(rows as WalletRow[]));
       if (attempt.status === 'held') {
         await focusWalletWindow(attempt.windowLabel);
         setView('list');
@@ -506,7 +515,7 @@ const DesktopLandingPage = () => {
       }
       // Refresh list so a newly created HW wallet shows next time.
       const rows = await WalletManager().getAllWallets();
-      setWallets(rows as WalletRow[]);
+      setWallets(desktopWalletRows(rows as WalletRow[]));
       window.dispatchEvent(new CustomEvent('optn:wallets-changed'));
       finishOpen(result.walletId, attempt.value);
     } catch (err) {

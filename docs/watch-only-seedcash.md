@@ -18,7 +18,9 @@ flow. It is **implemented**, not a plan.
 4. Gap-limit discovery, receive, balance, history, UTXOs, and coin control
    work with no signing path.
 5. Send builds a binary Paytaca-compatible PSBT (global version `145`,
-   sighash `ALL | FORKID | ANYONECANPAY` = `0xc1`).
+   default sighash `ALL | FORKID` = `0x41`). Advanced sighash choices are
+   behind **Advanced**. QR density +/− is desktop-only; mobile fills more of
+   the screen with the animated QR.
 6. Export is multipart `ur:crypto-psbt` (PSBT bytes, not JSON).
 7. SeedCash reviews and signs offline, then returns `ur:crypto-psbt`.
 8. Import binds the signed PSBT to the approved unsigned transaction,
@@ -38,15 +40,15 @@ chipnet address (and the reverse).
 
 ## Code map
 
-| Concern | Where |
-| --- | --- |
-| Watch-only type + xPub | `watchOnlyWallet.ts`, desktop wallet schema |
-| Optional fingerprint | `master_fingerprint` column; `saveWatchOnlyMasterFingerprint` |
-| PSBTv145 | `psbtBch.ts` |
-| Multisig (Paytaca `OP_m … OP_CHECKMULTISIG`) | `psbtMultisig.ts` |
-| UR export/import | `urPsbt.ts` |
-| Send workspace | `WatchOnlySend.tsx` via `SendRoute` |
-| NFT parse (Cashonize-style) | `nftParsing.ts`, BCMR fallback |
+| Concern                                      | Where                                                         |
+| -------------------------------------------- | ------------------------------------------------------------- |
+| Watch-only type + xPub                       | `watchOnlyWallet.ts`, desktop wallet schema                   |
+| Optional fingerprint                         | `master_fingerprint` column; `saveWatchOnlyMasterFingerprint` |
+| PSBTv145                                     | `psbtBch.ts`                                                  |
+| Multisig (Paytaca `OP_m … OP_CHECKMULTISIG`) | `psbtMultisig.ts`                                             |
+| UR export/import                             | `urPsbt.ts`                                                   |
+| Send workspace                               | `WatchOnlySend.tsx` via `SendRoute`                           |
+| NFT parse (Cashonize-style)                  | `nftParsing.ts`, BCMR fallback                                |
 
 Do not mix wallets. A compromised test-phrase wallet is not the same as a
 watch-only xPub that actually holds funds.

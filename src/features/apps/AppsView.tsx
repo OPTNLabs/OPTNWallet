@@ -55,6 +55,7 @@ const AppsView = () => {
   const [cards, setCards] = useState<AppCard[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>('All');
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let mounted = true;
@@ -62,6 +63,7 @@ const AppsView = () => {
     (async () => {
       try {
         setError(null);
+        setLoading(true);
         const reg = AddonsRegistry();
         await reg.init();
         const manifests: AddonManifest[] = reg.getAddons();
@@ -138,6 +140,8 @@ const AppsView = () => {
         if (mounted) {
           setError(e instanceof Error ? e.message : String(e));
         }
+      } finally {
+        if (mounted) setLoading(false);
       }
     })();
 
@@ -195,7 +199,19 @@ const AppsView = () => {
 
         <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain pr-1 space-y-3">
           <div className="space-y-2.5">
-            {filteredCards.length > 0 ? (
+            {loading && cards.length === 0 ? (
+              <div aria-busy="true" aria-live="polite">
+                {Array.from({ length: 3 }, (_, index) => (
+                  <div
+                    key={index}
+                    className="h-28 animate-pulse rounded-2xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)]"
+                  />
+                ))}
+                <p className="text-center text-sm wallet-muted">
+                  {t('apps.loadingApp')}
+                </p>
+              </div>
+            ) : filteredCards.length > 0 ? (
               filteredCards.map((app) => (
                 <ActionTile
                   key={app.id}

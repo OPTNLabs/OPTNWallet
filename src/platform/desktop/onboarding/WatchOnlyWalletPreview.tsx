@@ -74,6 +74,7 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
   const [network, setNetwork] = useState(Network.MAINNET);
   const [walletName, setWalletName] = useState('');
   const [accountXpub, setAccountXpub] = useState('');
+  const [masterFingerprint, setMasterFingerprint] = useState('');
   const [scanning, setScanning] = useState(false);
   const [password, setPassword] = useState('');
   const [passwordConfirm, setPasswordConfirm] = useState('');
@@ -156,6 +157,7 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
         accountXpub,
         network,
         accountPath: getBchAccountPath(network),
+        masterFingerprint,
       });
       await protectWatchOnlyWithPassword(walletId, password);
       onCreated(walletId);
@@ -560,6 +562,25 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
                   placeholder={t('watchOnly.xpubPlaceholder')}
                   className="wallet-input w-full resize-none rounded-md px-3 py-2 font-mono text-xs"
                 />
+              </label>
+              <label className="block space-y-1 text-sm wallet-text-strong">
+                Master fingerprint (optional)
+                <input
+                  value={masterFingerprint}
+                  onChange={(event) => {
+                    setMasterFingerprint(event.target.value);
+                    setError('');
+                  }}
+                  maxLength={8}
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="8 hex characters, e.g. 4C9A1F7B"
+                  className="wallet-input w-full rounded-md px-3 py-2 font-mono uppercase"
+                />
+                <span className="block text-[11px] font-normal leading-relaxed wallet-muted">
+                  Shown by the signing device. Saved with this watch-only wallet
+                  and used automatically in future signing requests.
+                </span>
               </label>
               <div className="flex gap-2">
                 <button

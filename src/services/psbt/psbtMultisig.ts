@@ -31,9 +31,10 @@ import {
 import {
   decodePsbt,
   encodeUnsignedPsbt,
+  psbtTokenToTransactionToken,
   sighashTypeOf,
   verifyBchSignature,
-  SIGHASH_ALL_FORKID_ANYONECANPAY,
+  SIGHASH_ALL_FORKID,
   type ParsedPsbt,
   type ParsedPsbtInput,
   type PsbtInputSpec,
@@ -65,7 +66,9 @@ export function sortPublicKeysBip67(publicKeys: Uint8Array[]): Uint8Array[] {
 
 function opcodeForSmallInteger(value: number): number {
   if (value < 1 || value > 16) {
-    throw new Error(`Multisig thresholds must be between 1 and 16 (got ${value}).`);
+    throw new Error(
+      `Multisig thresholds must be between 1 and 16 (got ${value}).`
+    );
   }
   return 0x50 + value; // OP_1 (0x51) .. OP_16 (0x60)
 }
@@ -89,6 +92,11 @@ export function buildMultisigRedeemScript(
   if (publicKeys.length === 0) {
     throw new Error('A multisig redeem script needs at least one public key.');
   }
+  if (publicKeys.length > 15) {
+    throw new Error(
+      "P2SH multisig supports at most 15 compressed public keys under BCH's 520-byte push limit."
+    );
+  }
   if (requiredSignatures < 1 || requiredSignatures > publicKeys.length) {
     throw new Error(
       `Required signatures must be between 1 and ${publicKeys.length}.`
@@ -100,9 +108,17 @@ export function buildMultisigRedeemScript(
   ];
   for (const key of sorted) parts.push(push33(key));
   parts.push(
-    Uint8Array.from([opcodeForSmallInteger(publicKeys.length), OP_CHECKMULTISIG])
+    Uint8Array.from([
+      opcodeForSmallInteger(publicKeys.length),
+      OP_CHECKMULTISIG,
+    ])
   );
   const total = parts.reduce((sum, part) => sum + part.length, 0);
+  if (total > 520) {
+    throw new Error(
+      "The multisig redeem script exceeds BCH's 520-byte push limit."
+    );
+  }
   const out = new Uint8Array(total);
   let offset = 0;
   for (const part of parts) {
@@ -162,12 +178,7 @@ export function isMultisigRedeemScript(script: Uint8Array): boolean {
 /** P2SH20 locking script for a redeem script (HASH160 <hash> EQUAL). */
 export function p2shLockingBytecodeFor(redeemScript: Uint8Array): Uint8Array {
   const hash = hash160(redeemScript);
-  return new Uint8Array([
-    OP_HASH160,
-    0x14,
-    ...hash,
-    OP_EQUAL,
-  ]);
+  return new Uint8Array([OP_HASH160, 0x14, ...hash, OP_EQUAL]);
 }
 
 /** Script push for one payload: direct length byte, or PUSHDATA1 for longer data. */
@@ -299,7 +310,7 @@ function verifySignatureForPsbt(
   parsedInput: ParsedPsbtInput
 ): boolean {
   const type = sighashTypeOf(signature.signature);
-  if (type === null || type !== SIGHASH_ALL_FORKID_ANYONECANPAY) return false;
+  if (type === null || type !== parsedInput.requestedSighashType) return false;
 
   const coveredBytecode =
     parsedInput.redeemScript ?? parsedInput.spentLockingBytecode;
@@ -309,15 +320,13 @@ function verifySignatureForPsbt(
   const decoded = decodeTransaction(parsed.unsignedTransaction);
   if (typeof decoded === 'string') return false;
 
-  // Token-carrying inputs are outside the air-gapped multisig scope; the
-  // spent output is treated as token-free, exactly like the import verifier.
   const context: CompilationContextBch = {
     transaction: decoded as CompilationContextBch['transaction'],
     inputIndex: signature.inputIndex,
     sourceOutputs: parsed.inputs.map((input) => ({
       lockingBytecode: input.spentLockingBytecode ?? new Uint8Array(),
       valueSatoshis: input.spentSatoshis ?? 0n,
-      token: NO_TOKENS,
+      token: input.token ? psbtTokenToTransactionToken(input.token) : NO_TOKENS,
     })),
   };
   const serialization = generateSigningSerializationBch(context, {
@@ -344,7 +353,7 @@ function encodeFromParsed(
   const requested = parsed.requestedSighashTypes.filter(
     (type): type is number => type !== null
   );
-  let sighashType = SIGHASH_ALL_FORKID_ANYONECANPAY;
+  let sighashType = SIGHASH_ALL_FORKID;
   if (requested.length > 0) {
     if (requested.some((type) => type !== requested[0])) {
       throw new Error(
@@ -368,9 +377,10 @@ function encodeFromParsed(
       vout: input.outpointIndex,
       satoshis: input.spentSatoshis,
       lockingBytecode: input.spentLockingBytecode,
+      previousTransaction: input.nonWitnessUtxo ?? undefined,
+      token: input.token ?? undefined,
       redeemScript: input.redeemScript ?? undefined,
-      derivations:
-        input.derivations.length > 0 ? input.derivations : undefined,
+      derivations: input.derivations.length > 0 ? input.derivations : undefined,
       sequence: input.sequence ?? 0xffffffff,
       partialSignatures: Array.from(signatures.values()).filter(
         (signature) => signature.inputIndex === index
@@ -383,13 +393,11 @@ function encodeFromParsed(
     satoshis: output.satoshis ?? 0n,
     redeemScript: output.redeemScript ?? undefined,
     token: output.token ?? undefined,
-    derivations:
-      output.derivations.length > 0 ? output.derivations : undefined,
+    derivations: output.derivations.length > 0 ? output.derivations : undefined,
   }));
 
   return encodeUnsignedPsbt(inputs, outputs, sighashType, {
-    globalXpubs:
-      parsed.globalXpubs.length > 0 ? parsed.globalXpubs : undefined,
+    globalXpubs: parsed.globalXpubs.length > 0 ? parsed.globalXpubs : undefined,
   });
 }
 
@@ -448,16 +456,23 @@ export function mergePsbts(psbts: Uint8Array[]): PsbtMergeOutcome {
             `Redeem script mismatch between base input and target input at index ${inputIndex}.`
           );
         }
+        if (
+          candidateInput.requestedSighashType !== baseInput.requestedSighashType
+        ) {
+          throw new Error(
+            `Sighash type mismatch between base input and target input at index ${inputIndex}.`
+          );
+        }
         for (const signature of candidateInput.partialSignatures) {
           if (!verifySignatureForPsbt(signature, candidate, candidateInput)) {
             throw new Error(
               `Failed signature verification on PSBT at index ${i}, input ${inputIndex}.`
             );
           }
-          signatureUnion.set(
-            `${inputIndex}:${binToHex(signature.publicKey)}`,
-            { ...signature, inputIndex }
-          );
+          signatureUnion.set(`${inputIndex}:${binToHex(signature.publicKey)}`, {
+            ...signature,
+            inputIndex,
+          });
         }
       }
       results.push({ index: i, combined: true });
@@ -465,8 +480,7 @@ export function mergePsbts(psbts: Uint8Array[]): PsbtMergeOutcome {
       results.push({
         index: i,
         combined: false,
-        error:
-          error instanceof Error ? error.message : 'Could not merge PSBT.',
+        error: error instanceof Error ? error.message : 'Could not merge PSBT.',
       });
     }
   }

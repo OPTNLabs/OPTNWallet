@@ -33,9 +33,11 @@
 import {
   binToHex,
   decodeTransaction,
+  encodeTokenPrefix as encodeCashTokenPrefix,
   encodeTransaction,
   hash256,
   hexToBin,
+  readTokenPrefix,
   secp256k1,
 } from '@bitauth/libauth';
 
@@ -83,6 +85,22 @@ export const SIGHASH_ALL_FORKID = 0x41;
 
 const SIGHASH_FORKID_BIT = 0x40;
 
+/** Legacy BCH sighash modes supported by SeedCash-compatible PSBT signing. */
+export const SUPPORTED_BCH_SIGHASH_TYPES = [
+  0x41, // ALL | FORKID
+  0x42, // NONE | FORKID
+  0x43, // SINGLE | FORKID
+  0xc1, // ALL | FORKID | ANYONECANPAY
+  0xc2, // NONE | FORKID | ANYONECANPAY
+  0xc3, // SINGLE | FORKID | ANYONECANPAY
+] as const;
+
+export function isSupportedBchSighashType(sighashType: number): boolean {
+  return (SUPPORTED_BCH_SIGHASH_TYPES as readonly number[]).includes(
+    sighashType
+  );
+}
+
 export interface PsbtDerivation {
   /** Compressed public key (33 bytes) that must sign this input. */
   publicKey: Uint8Array;
@@ -108,6 +126,12 @@ export interface PsbtInputSpec {
    * where no device is involved.
    */
   previousTransaction?: Uint8Array;
+  /**
+   * Expected CashToken state for the spent output. When present, a complete
+   * parent transaction is mandatory and the value is checked against it; the
+   * parent remains authoritative after decoding.
+   */
+  token?: PsbtTokenSpec;
   /** Compressed public key (33 bytes) that must sign this input. */
   publicKey?: Uint8Array;
   /** Master key fingerprint (4 bytes) — how a signer claims the input. */
@@ -135,7 +159,7 @@ export interface PsbtInputSpec {
 export interface PsbtTokenSpec {
   /** Token category id, 32 bytes. */
   category: Uint8Array;
-  /** Fungible token amount (8-byte little-endian). */
+  /** Fungible token amount. */
   amount?: bigint;
   /** NFT capability: 0 = none, 1 = mutable, 2 = minting. */
   capability?: number;
@@ -155,6 +179,75 @@ export interface PsbtOutputSpec {
   redeemScript?: Uint8Array;
   /** CashToken carried by this output, encoded as a v145 token prefix. */
   token?: PsbtTokenSpec;
+}
+
+function capabilityNumber(capability: 'none' | 'mutable' | 'minting'): number {
+  if (capability === 'mutable') return 1;
+  if (capability === 'minting') return 2;
+  return 0;
+}
+
+/** Convert our compact PSBT token shape to libauth's transaction output shape. */
+export function psbtTokenToTransactionToken(token: PsbtTokenSpec) {
+  const capability: 'none' | 'mutable' | 'minting' =
+    token.capability === 1
+      ? 'mutable'
+      : token.capability === 2
+        ? 'minting'
+        : 'none';
+  return {
+    category: token.category,
+    amount: token.amount ?? 0n,
+    ...(token.capability !== undefined || token.commitment !== undefined
+      ? {
+          nft: {
+            capability,
+            commitment: token.commitment ?? new Uint8Array(),
+          },
+        }
+      : {}),
+  };
+}
+
+function transactionTokenToPsbtToken(
+  token:
+    | {
+        category: Uint8Array;
+        amount: bigint;
+        nft?: {
+          capability: 'none' | 'mutable' | 'minting';
+          commitment: Uint8Array;
+        };
+      }
+    | undefined
+): PsbtTokenSpec | null {
+  if (!token) return null;
+  return {
+    category: Uint8Array.from(token.category),
+    ...(token.amount > 0n || !token.nft ? { amount: token.amount } : {}),
+    ...(token.nft
+      ? {
+          capability: capabilityNumber(token.nft.capability),
+          commitment: Uint8Array.from(token.nft.commitment),
+        }
+      : {}),
+  };
+}
+
+function tokensEqual(
+  left: PsbtTokenSpec | null | undefined,
+  right: PsbtTokenSpec | null | undefined
+): boolean {
+  if (!left || !right) return !left && !right;
+  const bytesEqual = (a: Uint8Array | undefined, b: Uint8Array | undefined) =>
+    a?.length === b?.length &&
+    (a ?? []).every((value, index) => value === b?.[index]);
+  return (
+    bytesEqual(left.category, right.category) &&
+    (left.amount ?? 0n) === (right.amount ?? 0n) &&
+    (left.capability ?? 0) === (right.capability ?? 0) &&
+    bytesEqual(left.commitment, right.commitment)
+  );
 }
 
 /**
@@ -236,55 +329,52 @@ function readUint64LE(bytes: Uint8Array): bigint {
 }
 
 /**
- * CHIP-2022-02 token prefix, as written by Paytaca's `encodeTokenPrefix`:
- * fungible tokens are `category(32) || 0x00 || amount(8 LE)`, NFTs are
- * `category(32) || (0x80 | capability) || compactUint(length) || commitment`.
+ * Encode the CashTokens prefix used by Paytaca for PSBT_OUT_CASHTOKEN.
+ * Reuse libauth's consensus-compatible codec so the PSBT field and unsigned
+ * transaction cannot disagree for combined NFT + fungible-token outputs.
  */
 function encodeTokenPrefix(token: PsbtTokenSpec): Uint8Array {
   if (token.category.length !== 32) {
     throw new Error('Token category must be 32 bytes.');
   }
-  if (token.amount !== undefined && token.amount !== null) {
-    if (token.amount < 0n) throw new Error('Token amounts cannot be negative.');
-    return concat([
-      token.category,
-      Uint8Array.from([0x00]),
-      uint64LE(token.amount),
-    ]);
+  if (token.amount !== undefined && token.amount < 0n) {
+    throw new Error('Token amounts cannot be negative.');
   }
-  const capability = token.capability ?? 0;
-  if (!Number.isInteger(capability) || capability < 0 || capability > 2) {
+  if (
+    token.capability !== undefined &&
+    (!Number.isInteger(token.capability) ||
+      token.capability < 0 ||
+      token.capability > 2)
+  ) {
     throw new Error(
       'NFT capability must be 0 (none), 1 (mutable), or 2 (minting).'
     );
   }
-  const commitment = token.commitment ?? Uint8Array.of();
-  return concat([
-    token.category,
-    Uint8Array.from([0x80 | capability]),
-    varInt(commitment.length),
-    commitment,
-  ]);
+
+  const encoded = encodeCashTokenPrefix(psbtTokenToTransactionToken(token));
+  if (encoded.length === 0) {
+    throw new Error(
+      'Token prefix must encode an NFT or a positive fungible amount.'
+    );
+  }
+  return encoded;
 }
 
 function decodeTokenPrefix(bytes: Uint8Array): PsbtTokenSpec {
-  if (bytes.length < 33) throw new Error('Token prefix is too short.');
-  const category = bytes.subarray(0, 32);
-  const marker = bytes[32];
-  if (marker === 0x00) {
-    if (bytes.length !== 41)
-      throw new Error('FT token prefix must be 41 bytes.');
-    return { category, amount: readUint64LE(bytes.subarray(33, 41)) };
+  const decoded = readTokenPrefix({ bin: bytes, index: 0 });
+  if (typeof decoded === 'string') {
+    throw new Error(`Invalid CashToken prefix: ${decoded}`);
   }
-  if ((marker & 0x80) === 0 || (marker & 0x7f) > 2) {
-    throw new Error('Token prefix has an invalid capability byte.');
-  }
-  const commitmentReader = new Reader(bytes.subarray(33));
-  const length = commitmentReader.varInt();
-  const commitment = commitmentReader.take(length);
-  if (!commitmentReader.done)
+  if (decoded.position.index !== bytes.length) {
     throw new Error('Token prefix has trailing bytes.');
-  return { category, capability: marker & 0x7f, commitment };
+  }
+  const decodedToken = decoded.result.token;
+  if (!decodedToken) {
+    throw new Error('PSBT CashToken field does not contain a token prefix.');
+  }
+  const token = transactionTokenToPsbtToken(decodedToken);
+  if (!token) throw new Error('Could not decode CashToken prefix.');
+  return token;
 }
 
 /** One `<keylen><key><valuelen><value>` record. */
@@ -325,6 +415,9 @@ function unsignedTransaction(
     outputs: outputs.map((output) => ({
       lockingBytecode: output.lockingBytecode,
       valueSatoshis: output.satoshis,
+      ...(output.token
+        ? { token: psbtTokenToTransactionToken(output.token) }
+        : {}),
     })),
     locktime: 0,
   });
@@ -333,15 +426,14 @@ function unsignedTransaction(
 /**
  * Encode an unsigned PSBT for an air-gapped signer.
  *
- * Every input carries PSBT_IN_SIGHASH_TYPE = 0xc1
- * (SIGHASH_ALL|FORKID|ANYONECANPAY). Omitting the field or using 0x41 is
- * not allowed: SeedCash falls back to 0x41 when the field is missing, and
- * those signatures fail import.
+ * Every input explicitly carries the selected BCH PSBT_IN_SIGHASH_TYPE.
+ * SIGHASH_ALL|FORKID (0x41) is the safe default and matches SeedCash's
+ * current signer. Advanced modes must be selected explicitly by the user.
  */
 export function encodeUnsignedPsbt(
   inputs: PsbtInputSpec[],
   outputs: PsbtOutputSpec[],
-  sighashType: number = SIGHASH_ALL_FORKID_ANYONECANPAY,
+  sighashType: number = SIGHASH_ALL_FORKID,
   options: PsbtEncodeOptions = {}
 ): Uint8Array {
   if (inputs.length === 0) throw new Error('A PSBT needs at least one input.');
@@ -353,11 +445,18 @@ export function encodeUnsignedPsbt(
     // the transaction through a hardware device.
     throw new Error('BCH sighash types must include SIGHASH_FORKID (0x40).');
   }
-  if (sighashType !== SIGHASH_ALL_FORKID_ANYONECANPAY) {
+  if (!isSupportedBchSighashType(sighashType)) {
     throw new Error(
-      'PSBT_IN_SIGHASH_TYPE must be SIGHASH_ALL|FORKID|ANYONECANPAY (0xc1); ' +
-        'omitting it or using 0x41 is not allowed.'
+      `Unsupported BCH sighash type 0x${sighashType.toString(16)}. ` +
+        'Choose ALL, NONE, or SINGLE with FORKID, optionally with ANYONECANPAY.'
     );
+  }
+  for (const [index, input] of inputs.entries()) {
+    if (input.token && !input.previousTransaction) {
+      throw new Error(
+        `Token-bearing input ${index} requires its complete parent transaction.`
+      );
+    }
   }
 
   const globalFields: Uint8Array[] = [
@@ -443,10 +542,7 @@ export function encodeUnsignedPsbt(
               input.lockingBytecode,
             ])
           ),
-      record(
-        Uint8Array.from([PSBT_IN_SIGHASH_TYPE]),
-        uint32LE(SIGHASH_ALL_FORKID_ANYONECANPAY)
-      ),
+      record(Uint8Array.from([PSBT_IN_SIGHASH_TYPE]), uint32LE(sighashType)),
       ...(input.redeemScript
         ? [record(Uint8Array.from([PSBT_IN_REDEEM_SCRIPT]), input.redeemScript)]
         : []),
@@ -562,6 +658,8 @@ export interface ParsedPsbtInput {
   spentSatoshis: bigint | null;
   /** Locking script of the output being spent. */
   spentLockingBytecode: Uint8Array | null;
+  /** CashToken state of the spent parent output, if any. */
+  token: PsbtTokenSpec | null;
   /** Raw parent transaction, when the input carried NON_WITNESS_UTXO. */
   nonWitnessUtxo: Uint8Array | null;
   redeemScript: Uint8Array | null;
@@ -666,6 +764,7 @@ function parseInputMap(
     sequence: null,
     spentSatoshis: null,
     spentLockingBytecode: null,
+    token: null,
     nonWitnessUtxo: null,
     redeemScript: null,
     requestedSighashType: null,
@@ -925,6 +1024,13 @@ function resolveNonWitnessUtxos(
     }
     input.spentSatoshis = spent.valueSatoshis;
     input.spentLockingBytecode = spent.lockingBytecode;
+    const actualToken = transactionTokenToPsbtToken(spent.token);
+    if (input.token && !tokensEqual(input.token, actualToken)) {
+      throw new Error(
+        `Input ${index} token state disagrees with its parent transaction.`
+      );
+    }
+    input.token = actualToken;
   });
 }
 

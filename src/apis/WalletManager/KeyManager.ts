@@ -90,6 +90,7 @@ export default function KeyManager() {
     getXpubsForAccountPath,
     deriveAddressFromXpub,
     retrieveKeys,
+    withWalletSeedMaterial,
     createKeys,
     fetchAddressPrivateKey,
     deriveQuantumrootVaultForWallet,
@@ -143,6 +144,25 @@ export default function KeyManager() {
       networkType,
       derivationPath,
     };
+  }
+
+  /**
+   * Run a narrowly-scoped operation with decrypted seed material. Callers do
+   * not receive a mnemonic/xprv API surface, and the service clears its local
+   * references as soon as the operation completes.
+   */
+  async function withWalletSeedMaterial<T>(
+    wallet_id: number,
+    operation: (material: Awaited<ReturnType<typeof getWalletSeedMaterial>>) =>
+      Promise<T>
+  ): Promise<T> {
+    const material = await getWalletSeedMaterial(wallet_id);
+    try {
+      return await operation(material);
+    } finally {
+      material.mnemonic = '';
+      material.passphrase = '';
+    }
   }
 
   async function getXpubs(

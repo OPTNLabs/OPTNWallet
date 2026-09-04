@@ -58,6 +58,9 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
   const currentNetwork = useSelector(
     (state: RootState) => state.network.currentNetwork
   );
+  const utxoSnapshotInitialized = useSelector(
+    (state: RootState) => state.utxos.initialized
+  );
   const bchUsdQuote = useSelector(
     (state: RootState) => state.priceFeed['BCH-USD']?.price
   );
@@ -87,7 +90,10 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
   );
 
   useFetchWalletData(
-    currentWalletId,
+    // The shared worker publishes Redux before this route mounts. Keep the
+    // legacy query only for a cold route where no authoritative snapshot is
+    // available yet; otherwise it repeats the wallet-wide SQL/contract pass.
+    utxoSnapshotInitialized ? null : currentWalletId,
     setWalletAddresses,
     setWalletContractAddresses,
     setWalletUtxos,
@@ -97,8 +103,8 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
   );
 
   // The shared worker already refreshes every tracked address and publishes
-  // the authoritative Redux UTXO snapshot. Assets must not start a second
-  // wallet-wide listunspent pass just because its route mounted.
+  // the authoritative Redux UTXO snapshot. The local fallback above is only
+  // for the cold-start window before that snapshot is initialized.
 
   const entries = useMemo(() => {
     const tokenTotals: Record<

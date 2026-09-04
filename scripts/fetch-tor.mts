@@ -174,42 +174,34 @@ function setLinuxRpath(binary) {
 }
 
 /**
- * Ad-hoc sign the staged Mach-O files so dyld will load them.
- *
- * The Expert Bundle ships tor and libevent unsigned. macOS on Apple Silicon
- * refuses to load an unsigned dylib, and the failure surfaces as the tor
- * binary not starting at all:
- *
- *   dyld: Library not loaded: @executable_path/libevent-2.1.7.dylib
- *   Reason: ... (missing code signature in .../libevent-2.1.7.dylib)
- *
- * `codesign --sign -` is an ad-hoc signature: it establishes no identity and
- * makes no trust claim, it only gives the loader the code directory it now
- * insists on. The bundle's authenticity is established earlier and separately,
- * by the pinned SHA256 against Tor Browser's signed checksum manifest, so this
- * neither adds nor weakens that guarantee. A real Developer ID signature is
- * applied later by the release pipeline over the whole app.
- *
- * This is the same shape of problem as setLinuxRpath above: a bundle staged
- * as-is is not yet loadable on the host that has to run it.
+ * Apple Silicon checks code signatures while loading a dynamically linked
+ * executable. Preview builds have no Developer ID credentials, so ad-hoc sign
+ * every Mach-O from the extracted Tor bundle before the smoke check. Release
+ * builds sign these files again with the configured identity later.
  */
-function adhocSignStagedMachO(outDir, names) {
-  if (process.platform !== 'darwin') return;
-  for (const name of names) {
-    if (!/(\.dylib$|^tor$)/.test(name)) continue;
-    const file = join(outDir, name);
-    try {
-      execFileSync(
-        'codesign',
-        ['--force', '--sign', '-', '--timestamp=none', file],
-        { stdio: 'pipe' }
-      );
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      throw new Error(`Unable to ad-hoc sign staged ${name}: ${detail}`);
-    }
+function signMacosTorFiles(target, directory = outDir) {
+  if (process.platform !== 'darwin' || !target.startsWith('macos-')) return;
+
+  let count = 0;
+  for (const name of bundleFileNames(directory)) {
+    const filePath = join(directory, name);
+    const description = execFileSync('file', ['-b', filePath], {
+      encoding: 'utf8',
+    });
+    if (!/Mach-O/.test(description)) continue;
+
+    execFileSync(
+      'codesign',
+      ['--force', '--timestamp=none', '--sign', '-', filePath],
+      { stdio: 'inherit' }
+    );
+    count += 1;
   }
-  console.log(`[fetch-tor] ad-hoc signed: ${names.join(', ')}`);
+
+  if (count === 0) {
+    throw new Error('macOS Tor staging found no Mach-O files to sign');
+  }
+  console.log(`[fetch-tor] ad-hoc signed ${count} macOS Tor files`);
 }
 
 /** Run the staged binary on matching-host builds to prove it can load. */
@@ -377,6 +369,7 @@ async function main() {
     const stagedVersion = marker[0];
     const stagedTarget = marker.slice(1).join(' ');
     if (stagedVersion === artifact.version && stagedTarget === target) {
+      signMacosTorFiles(target);
       verifyStagedTorExecutable(target, join(outDir, torBinary));
       console.log(
         `[fetch-tor] Tor already staged (${readFileSync(markerPath, 'utf8').trim()})`
@@ -439,6 +432,7 @@ async function main() {
     join(outDir, 'geoip6')
   );
   writeFileSync(markerPath, `${artifact.version} ${target}\n`);
+  signMacosTorFiles(target);
 
   rmSync(temporaryDirectory, { recursive: true, force: true });
   console.log(
@@ -447,12 +441,6 @@ async function main() {
   if (!existsSync(join(outDir, torBinary))) {
     throw new Error('staging failed: binary missing');
   }
-  // Libraries before the executable that loads them: signing tor first would
-  // be undone as soon as its dependencies changed.
-  adhocSignStagedMachO(outDir, [
-    ...staged.filter((name) => name.endsWith('.dylib')),
-    ...staged.filter((name) => !name.endsWith('.dylib')),
-  ]);
   verifyStagedTorExecutable(target, join(outDir, torBinary));
   console.log(readFileSync(markerPath, 'utf8').trim());
 }

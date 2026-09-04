@@ -386,6 +386,55 @@ describe('UTXOService', () => {
     });
   });
 
+  it('uses the network UTXO set for chain-authoritative multisig refreshes', async () => {
+    getUTXOsManyMock.mockResolvedValue({
+      'bitcoincash:q1': [
+        {
+          tx_hash: 'chain-input',
+          tx_pos: 0,
+          value: 1_000_000,
+          height: 100,
+        },
+      ],
+    });
+    listReservedOutpointsMock.mockResolvedValue([
+      { tx_hash: 'chain-input', tx_pos: 0 },
+    ]);
+    listActiveMock.mockResolvedValue([
+      {
+        txid: 'rejected-change',
+        rawTx: 'feedface',
+        state: 'broadcasted',
+        spentOutpoints: [{ tx_hash: 'chain-input', tx_pos: 0 }],
+      },
+    ]);
+    decodeTransactionMock.mockReturnValue({
+      outputs: [
+        {
+          lockingBytecode: new Uint8Array([0x51]),
+          valueSatoshis: 9_750n,
+        },
+      ],
+    });
+
+    const { default: UTXOService } = await import('../UTXOService');
+    const result = await UTXOService.fetchAndStoreUTXOsMany(
+      11,
+      ['bitcoincash:q1'],
+      { discover: false, chainAuthoritative: true }
+    );
+
+    expect(result['bitcoincash:q1']).toEqual([
+      expect.objectContaining({
+        tx_hash: 'chain-input',
+        tx_pos: 0,
+        value: 1_000_000,
+      }),
+    ]);
+    expect(listReservedOutpointsMock).not.toHaveBeenCalled();
+    expect(listActiveMock).not.toHaveBeenCalled();
+  });
+
   it('preserves existing UTXOs when Electrum omits an address from a partial failure', async () => {
     fetchUTXOsFromDatabaseMock.mockResolvedValue({
       utxosMap: {

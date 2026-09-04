@@ -3,12 +3,14 @@ import {
   ROUTE_ALIAS_MAP,
   ROUTE_PATHS,
   homeRoute,
+  multisigRoute,
   transactionsRoute,
 } from '../routes';
 
 describe('route inventory', () => {
   it('keeps the canonical wallet routes and explicit redirects in one place', () => {
     expect(ROUTE_PATHS.home).toBe('/home/:wallet_id');
+    expect(ROUTE_PATHS.multisigWorkspace).toBe('/multisig/:wallet_id/*');
     expect(ROUTE_PATHS.transactions).toBe('/transactions/:wallet_id');
     expect(ROUTE_ALIAS_MAP).toEqual([
       {
@@ -32,6 +34,11 @@ describe('route inventory', () => {
 
   it('builds canonical wallet-scoped paths from the shared helpers', () => {
     expect(homeRoute(42)).toBe('/home/42');
+    expect(multisigRoute(42)).toBe('/multisig/42');
+    expect(multisigRoute(42, 'receive')).toBe('/multisig/42/receive');
+    expect(multisigRoute(42, 'send')).toBe('/multisig/42/send');
+    expect(multisigRoute(42, 'sign')).toBe('/multisig/42/sign');
+    expect(multisigRoute(42, 'policy')).toBe('/multisig/42/policy');
     expect(transactionsRoute(42)).toBe('/transactions/42');
   });
 });

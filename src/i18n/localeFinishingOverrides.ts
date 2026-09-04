@@ -219,7 +219,7 @@ export const localeFinishingOverrides: Partial<
     'settingsRows.faucet': 'Chipnet Faucet',
     'settingsPanels.faucet': 'Chipnet Faucet',
     'nftConfig.commitment': 'NFT 承諾',
-    'rpa.title': 'RPA Paycode',
+    'rpa.title': 'RPA Cash Code',
     'actions.quantumrootBadge': 'Beta production',
     'walkthrough.label': '逐步導覽',
   },
@@ -444,7 +444,7 @@ export const localeFinishingOverrides: Partial<
     'send.tokenLabel': '토큰',
     'send.token': '토큰',
     'nftConfig.commitment': 'NFT 커밋먼트',
-    'rpa.title': 'RPA Paycode',
+    'rpa.title': 'RPA Cash Code',
     'walkthrough.label': '단계별 안내',
     'priceFeed.loading': '로드 중…',
   },
@@ -568,7 +568,7 @@ export const localeFinishingOverrides: Partial<
     'send.token': 'トークン',
     'nftConfig.commitment': 'NFT コミットメント',
     'nostr.relays': 'リレー',
-    'rpa.title': 'RPA Paycode',
+    'rpa.title': 'RPA Cash Code',
     'walkthrough.label': 'ステップガイド',
     'priceFeed.loading': '読み込み中…',
   },
@@ -613,7 +613,7 @@ export const localeFinishingOverrides: Partial<
     'history.unavailable': 'Недоступна',
     'history.confirmations': 'Подтверждений: {count}',
     'history.output': 'Выход',
-    'onboarding.welcomeAlt': 'Кошелёк Smart BCH',
+    'onboarding.welcomeAlt': 'Кошелёк OPTN',
     'onboarding.helpCreateDescription':
       'Выберите этот вариант, чтобы создать новый кошелёк с новой сид-фразой на этом устройстве.',
     'onboarding.helpImportDescription':
@@ -734,7 +734,7 @@ export const localeFinishingOverrides: Partial<
     'history.unavailable': 'Ba ya samuwa',
     'history.confirmations': 'tabbatarwa {count}',
     'history.output': 'Fitarwa',
-    'onboarding.welcomeAlt': 'Smart BCH Wallet',
+    'onboarding.welcomeAlt': 'OPTN Wallet',
     'onboarding.helpCreateDescription':
       'Yi amfani da wannan idan kana son ƙirƙirar sabon wallet da sabuwar kalmar iri a wannan na’ura.',
     'onboarding.helpImportDescription':

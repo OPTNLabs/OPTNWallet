@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import OutboundTransactionTracker, {
   OUTBOUND_RELEASE_DELAY_MS,
   type OutboundTransactionRecord,
@@ -16,23 +23,43 @@ export default function useOutboundTransactions(
 ) {
   const [records, setRecords] = useState<OutboundTransactionRecord[]>([]);
   const [reconciling, setReconciling] = useState(false);
+  const currentWalletIdRef = useRef(walletId);
+  const refreshingWalletIdsRef = useRef(new Set<number>());
 
-  const load = useCallback(async () => {
-    setRecords(await OutboundTransactionTracker.listActive(walletId));
+  useLayoutEffect(() => {
+    currentWalletIdRef.current = walletId;
+    setRecords([]);
   }, [walletId]);
 
+  const load = useCallback(
+    async (walletIdToLoad = walletId) => {
+      const active =
+        await OutboundTransactionTracker.listActive(walletIdToLoad);
+      if (currentWalletIdRef.current === walletIdToLoad) setRecords(active);
+    },
+    [walletId]
+  );
+
   const refresh = useCallback(async () => {
-    if (!walletId || walletId <= 0 || reconciling) return;
+    if (
+      !walletId ||
+      walletId <= 0 ||
+      refreshingWalletIdsRef.current.has(walletId)
+    ) {
+      return;
+    }
+    refreshingWalletIdsRef.current.add(walletId);
     setReconciling(true);
     try {
       await runOutboundReconcile(walletId, () =>
         reconcileOutboundTransactions(walletId)
       );
-      await load();
+      await load(walletId);
     } finally {
-      setReconciling(false);
+      refreshingWalletIdsRef.current.delete(walletId);
+      setReconciling(refreshingWalletIdsRef.current.size > 0);
     }
-  }, [load, reconciling, walletId]);
+  }, [load, walletId]);
 
   const release = useCallback(
     async (txid: string) => {
@@ -40,10 +67,7 @@ export default function useOutboundTransactions(
       await runOutboundReconcile(walletId, () =>
         reconcileOutboundTransactions(walletId)
       );
-      const record = await OutboundTransactionTracker.getByTxid(
-        txid,
-        walletId
-      );
+      const record = await OutboundTransactionTracker.getByTxid(txid, walletId);
       if (!record) {
         await load();
         return true;

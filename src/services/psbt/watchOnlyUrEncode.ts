@@ -1,4 +1,4 @@
-import { SIGHASH_ALL_FORKID_ANYONECANPAY, decodePsbt } from './psbtBch';
+import { decodePsbt, isSupportedBchSighashType } from './psbtBch';
 import {
   DEFAULT_UR_FRAGMENT_LENGTH,
   PSBT_UR_FRAGMENT_LENGTHS,
@@ -27,24 +27,28 @@ export function assertChipnetNetwork(
 }
 
 /**
- * SeedCash falls back to 0x41 when PSBT_IN_SIGHASH_TYPE is missing.
- * Every input must carry 0xc1 (ALL|FORKID|ANYONECANPAY).
+ * Every input must carry the same supported BCH sighash type. Missing or mixed
+ * commitments are refused before a QR is shown to the signer.
  */
 export function assertWatchOnlySighash(psbt: Uint8Array): void {
   const parsed = decodePsbt(psbt);
   if (parsed.inputs.length === 0) {
     throw new Error('PSBT has no inputs.');
   }
+  const expected = parsed.inputs[0].requestedSighashType;
   parsed.inputs.forEach((input, index) => {
     if (input.requestedSighashType === null) {
-      throw new Error(
-        `PSBT input ${index} omits PSBT_IN_SIGHASH_TYPE; 0xc1 is required.`
-      );
+      throw new Error(`PSBT input ${index} omits PSBT_IN_SIGHASH_TYPE.`);
     }
-    if (input.requestedSighashType !== SIGHASH_ALL_FORKID_ANYONECANPAY) {
+    if (!isSupportedBchSighashType(input.requestedSighashType)) {
       const hex = `0x${input.requestedSighashType.toString(16)}`;
       throw new Error(
-        `PSBT input ${index} has PSBT_IN_SIGHASH_TYPE ${hex}, not 0xc1.`
+        `PSBT input ${index} has unsupported BCH sighash type ${hex}.`
+      );
+    }
+    if (input.requestedSighashType !== expected) {
+      throw new Error(
+        `PSBT input ${index} requests a different sighash type than input 0.`
       );
     }
   });

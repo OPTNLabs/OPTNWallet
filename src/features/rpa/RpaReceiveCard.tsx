@@ -1,5 +1,5 @@
 // RPA receive card — shown in the Receive screen when RPA is enabled.
-// Displays the BCH Reusable Payment Address (paycode) in CashAddr format.
+// Displays the BCH Reusable Payment Address (Cash Code) in CashAddr format.
 // No notification transactions — the protocol uses signature grinding instead.
 
 import React, { useEffect, useState } from 'react';
@@ -123,8 +123,8 @@ export const RpaReceiveCard: React.FC<RpaReceiveCardProps> = ({ walletId }) => {
                   type="button"
                   className="rounded-2xl border border-[rgba(0,0,0,0.08)] bg-white p-2 shadow-sm transition-transform duration-200 hover:scale-[1.01] focus:outline-none focus:ring-2 focus:ring-[var(--wallet-accent)] focus:ring-offset-2"
                   onClick={() => void handleCopy(paycode)}
-                  aria-label="Copy paycode"
-                  title="Tap to copy paycode"
+                  aria-label="Copy Cash Code"
+                  title="Tap to copy Cash Code"
                 >
                   <QRCodeSVG
                     value={paycode}
@@ -140,7 +140,7 @@ export const RpaReceiveCard: React.FC<RpaReceiveCardProps> = ({ walletId }) => {
                 </p>
               </div>
 
-              {/* Paycode string */}
+              {/* Cash Code string */}
               <div className="space-y-1">
                 <p className="text-[10px] font-semibold wallet-muted uppercase tracking-wide">
                   {t('rpa.paycode')}

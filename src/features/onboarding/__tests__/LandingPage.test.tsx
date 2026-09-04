@@ -1,9 +1,25 @@
 /** @vitest-environment jsdom */
 
+// The landing page's watch-only door.
+//
+// Two things are checked here and they are gated on different facts. Watch
+// Only is offered on every surface, because it needs no transport at all — an
+// account xPub can be pasted, so a popup with no camera and no USB can still
+// watch a cold wallet. Hardware is off where the vendor integration does not
+// exist yet, which is work rather than a limit of the platform.
+
 import React from 'react';
 import '@testing-library/jest-dom/vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('../../../app/theme/useTheme', () => ({
+  useTheme: () => ({
+    mode: 'dark',
+    setMode: vi.fn(),
+    toggleMode: vi.fn(),
+  }),
+}));
 
 vi.mock('react-router-dom', () => ({
   Link: ({
@@ -16,39 +32,36 @@ vi.mock('react-router-dom', () => ({
   }) => React.createElement('a', { ...props, href: to }, children),
 }));
 
-vi.mock('../../../app/theme/useTheme', () => ({
-  useTheme: () => ({ mode: 'dark', toggleMode: vi.fn() }),
-}));
-
 vi.mock('../../../i18n/useI18n', () => ({
   useI18n: () => ({
     t: (key: string) => {
-      const messages: Record<string, string> = {
-        'app.help': 'Help',
+      const translations: Record<string, string> = {
         'onboarding.toggleTheme': 'Toggle theme',
-        'onboarding.welcomeAlt': 'OPTN Wallet',
-        'onboarding.poweredBy':
-          'Powered with Bitcoin Covenants for Bitcoin Cash',
+        'app.help': 'Help',
+        'onboarding.welcomeAlt': 'Welcome',
+        'onboarding.poweredBy': 'OPTN Wallet',
         'onboarding.createWallet': 'Create Wallet',
         'onboarding.importWallet': 'Import Wallet',
         'onboarding.createWatchOnly': 'Create Watch-Only Wallet',
+        'onboarding.closeHelp': 'Close',
+        'onboarding.helpTitle': 'Help',
+        'onboarding.helpDescription': 'Help body',
+        'onboarding.helpCreateTitle': 'Create',
+        'onboarding.helpCreateDescription': 'Create a wallet',
+        'onboarding.helpImportTitle': 'Import',
+        'onboarding.helpImportDescription': 'Import a wallet',
+        'onboarding.helpNetworkTitle': 'Network',
+        'onboarding.helpNetworkDescription': 'Choose a network',
+        'watchOnly.description':
+          'Inspect public BCH addresses without importing any private keys.',
       };
-      return messages[key] ?? key;
+      return translations[key] ?? key;
     },
   }),
 }));
 
 vi.mock('../../../components/LanguagePicker', () => ({
-  default: () => React.createElement('div', null, 'English'),
-}));
-
-vi.mock('../../../components/ui/WalkthroughPanel', () => ({
-  default: () => null,
-}));
-
-vi.mock('../../../components/transaction/Popup', () => ({
-  default: ({ children }: { children: React.ReactNode }) =>
-    React.createElement('div', null, children),
+  default: () => React.createElement('div', null, 'Language'),
 }));
 
 import LandingPage from '../LandingPage';
@@ -70,9 +83,10 @@ describe('onboarding watch-only capability', () => {
     expect(
       screen.getByRole('link', { name: 'Import Wallet' })
     ).toBeInTheDocument();
-    expect(
-      screen.getByTestId('watch-only-landing-action')
-    ).toHaveAttribute('href', '/watch-only');
+    expect(screen.getByTestId('watch-only-landing-action')).toHaveAttribute(
+      'href',
+      '/watch-only'
+    );
   });
 
   it.each(['desktop', 'android', 'ios', 'web', 'extension'] as const)(
@@ -107,4 +121,19 @@ describe('onboarding watch-only capability', () => {
       ).not.toBeInTheDocument();
     }
   );
+
+  it('offers exactly one watch-only control, not two doing different things', () => {
+    // The merge briefly produced both: a Link to /watch-only and a button
+    // opening a desktop-only inline preview of the same flow, sharing a
+    // label. WatchOnlyWalletPage now serves every surface, so the route is
+    // the single door and this is what stops the duplicate returning.
+    render(<LandingPage surface="desktop" />);
+
+    expect(
+      screen.getAllByRole('link', { name: 'Create Watch-Only Wallet' })
+    ).toHaveLength(1);
+    expect(
+      screen.queryByRole('button', { name: 'Create Watch-Only Wallet' })
+    ).not.toBeInTheDocument();
+  });
 });
