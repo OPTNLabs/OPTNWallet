@@ -273,14 +273,13 @@ macOS 26 flavor (`apple/OPTNOpalReference`), not the shipping wallet. The 58
 Opals Swift stack is an *optional* Apple-native provider and an independent BCH
 reference. It is not a second wallet.
 
-> **Two Apple modules exist right now.** `crates/optn-platform-apple` holds the
-> pinned revisions and the deployment-target evidence;
-> `crates/optn-platform/src/apple.rs` holds the capability contract, the
-> differential-testing types and the SwiftFulcrum/Electrum routing. They were
-> written in parallel and neither contains the other. The layering says the
-> second should fold into the first, so that `optn-platform` stays
-> provider-agnostic — that move is not made here, and is called out rather than
-> left to be discovered.
+Apple code lives in `crates/optn-platform-apple` and nowhere else. The
+capability contract, the differential-testing types and the
+SwiftFulcrum/Electrum routing were written before that crate existed, so they
+landed in `optn-platform` and were briefly duplicated across the two after the
+merge. They have been folded into the Apple crate, which is where its own doc
+comment already said Apple belongs, leaving `optn-platform`
+provider-agnostic — the boundary `xtask architecture` exists to keep.
 
 Rust stays the single authoritative implementation of BCH truth — transaction,
 PSBT, CashTokens, RPA, signing policy, CashFusion, application state. Nothing
