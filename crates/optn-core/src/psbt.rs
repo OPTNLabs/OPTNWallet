@@ -118,11 +118,17 @@ impl SeedCashQr {
     /// Error-correction level. Low, because density is the binding constraint.
     pub const ERROR_CORRECTION: char = 'L';
 
-    /// The fragment sizes a user may pick between.
+    /// The fragment sizes a user may pick between on a full-size screen.
     ///
     /// A trade the device makes, not one this wallet can make for it: a denser
     /// QR is fewer frames and a shorter wait, but some cameras cannot read it,
     /// and the failure looks like a camera that simply will not focus.
+    ///
+    /// A phone gets [`MOBILE_FRAGMENT_OPTIONS`] instead -- a shorter, lower
+    /// list. The two are deliberately different rather than one being right:
+    /// this set is what the air-gap work settled on for a desktop, and the
+    /// mobile set is Paytaca's, measured against a fleet of phones we do not
+    /// have.
     pub const FRAGMENT_OPTIONS: &'static [usize] = &[50, 100, 200, 400, 450];
 
     /// What to call a fragment size on screen.
@@ -135,6 +141,61 @@ impl SeedCashQr {
             450 => Some("Maximum density (fewest frames)"),
             _ => None,
         }
+    }
+}
+
+/// How fast the animated QR advances, in milliseconds per frame.
+///
+/// Paytaca's values, adopted whole because they were measured against a real
+/// fleet of phones and we have no data of our own. Slower is not worse: a
+/// camera that cannot keep up drops frames and the transfer stalls at 60%,
+/// which reads to the user as the wallet being broken rather than as the
+/// animation being too quick.
+///
+/// This is the one setting here that does **not** change a byte. The frames
+/// are identical whatever the speed; only how long each is on screen changes.
+pub struct QrAnimation;
+
+impl QrAnimation {
+    pub const SLOW: u32 = 450;
+    pub const NORMAL: u32 = 300;
+    pub const FAST: u32 = 100;
+
+    /// Offered slowest first, as the control reads left to right.
+    pub const OPTIONS: &'static [u32] = &[Self::SLOW, Self::NORMAL, Self::FAST];
+
+    /// The default. Middle of the range, per Paytaca's own default.
+    pub const DEFAULT: u32 = Self::NORMAL;
+
+    pub fn label(interval_ms: u32) -> Option<&'static str> {
+        match interval_ms {
+            Self::SLOW => Some("Slow"),
+            Self::NORMAL => Some("Normal"),
+            Self::FAST => Some("Fast"),
+            _ => None,
+        }
+    }
+}
+
+/// The fragment sizes Paytaca offers on a phone.
+///
+/// Fewer and lower than the desktop set, and that is the point: a phone fleet
+/// is thousands of different cameras, and the ones that fail are not the ones
+/// anyone testing owns. Paytaca's note was that they expect to adjust the
+/// *minimum* values for low-end devices, so treating this list as settled
+/// would be a mistake -- it is their current best answer, not a constant.
+pub const MOBILE_FRAGMENT_OPTIONS: &[usize] = &[50, 150, 250];
+
+/// What to call a mobile fragment size.
+///
+/// Three plain words rather than the desktop set's descriptions, because the
+/// control is a row of labels on a small screen.
+pub fn mobile_fragment_label(fragment: usize) -> Option<&'static str> {
+    match fragment {
+        50 => Some("Low"),
+        150 => Some("Medium"),
+        250 => Some("High"),
+        _ => None,
     }
 }
 
@@ -1315,6 +1376,61 @@ mod tests {
             path: Vec::new(),
         };
         assert!(encode_unsigned(&[spec_input()], &[spec_output()], &[wrong]).is_err());
+    }
+
+    #[test]
+    fn a_phone_is_offered_a_shorter_lower_list_than_a_desktop() {
+        // Not because one list is right. A phone fleet is thousands of
+        // cameras, and the ones that fail are not the ones anyone testing
+        // owns, so the mobile set is Paytaca's -- measured against a fleet we
+        // do not have.
+        assert_eq!(MOBILE_FRAGMENT_OPTIONS, &[50, 150, 250]);
+        assert!(MOBILE_FRAGMENT_OPTIONS.len() < SeedCashQr::FRAGMENT_OPTIONS.len());
+
+        let mobile_max = MOBILE_FRAGMENT_OPTIONS.iter().max().expect("some");
+        let desktop_max = SeedCashQr::FRAGMENT_OPTIONS.iter().max().expect("some");
+        assert!(
+            mobile_max < desktop_max,
+            "a phone is not asked to read the densest code"
+        );
+
+        // Both start at the same floor: the size a SeedCash camera was
+        // actually observed to read.
+        assert_eq!(MOBILE_FRAGMENT_OPTIONS[0], SeedCashQr::FRAGMENT_OPTIONS[0]);
+        assert_eq!(MOBILE_FRAGMENT_OPTIONS[0], SeedCashQr::CHUNK_SIZE);
+
+        // Every option a control shows needs a word to put on it.
+        for fragment in MOBILE_FRAGMENT_OPTIONS {
+            assert!(mobile_fragment_label(*fragment).is_some(), "{fragment}");
+        }
+        assert_eq!(
+            mobile_fragment_label(400),
+            None,
+            "a desktop size is not offered"
+        );
+    }
+
+    #[test]
+    fn animation_speed_changes_nothing_about_the_bytes() {
+        // The one setting here that is purely presentational: the frames are
+        // identical whatever the speed, and only their time on screen changes.
+        // Worth stating, because every other number in this module is load
+        // bearing.
+        let raw = encode_unsigned(&[spec_input()], &[spec_output()], &[]).expect("encodes");
+        let again = encode_unsigned(&[spec_input()], &[spec_output()], &[]).expect("encodes");
+        assert_eq!(raw, again);
+
+        assert_eq!(QrAnimation::OPTIONS, &[450, 300, 100]);
+        assert_eq!(QrAnimation::DEFAULT, QrAnimation::NORMAL);
+        assert_eq!(QrAnimation::DEFAULT, 300);
+        for interval in QrAnimation::OPTIONS {
+            assert!(QrAnimation::label(*interval).is_some(), "{interval}");
+        }
+        assert_eq!(QrAnimation::label(200), None);
+
+        // Slowest first, because that is how the control reads.
+        assert!(QrAnimation::SLOW > QrAnimation::NORMAL);
+        assert!(QrAnimation::NORMAL > QrAnimation::FAST);
     }
 
     #[test]

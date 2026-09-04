@@ -1542,6 +1542,52 @@ pub fn product_nav(state: &AppState) -> Vec<ProductNavItem> {
     }
 }
 
+/// The animated-QR fragment sizes this surface offers.
+///
+/// A desktop gets the full range; a phone gets Paytaca's shorter, lower list.
+/// The split is not a judgement about screens -- it is that a phone fleet is
+/// thousands of different cameras, and the ones that fail belong to people who
+/// are not in the room when it is tested. Paytaca measured theirs against such
+/// a fleet and expect to lower the minimum further for weaker devices, so the
+/// mobile list is their current answer rather than a constant.
+///
+/// The extension has no camera and shows no scanner at all. It is given the
+/// mobile list for the case where a shell later grants one, rather than an
+/// empty list that would read as "no options" instead of "no scanner".
+pub fn qr_fragment_options(surface: AppSurface) -> &'static [usize] {
+    match surface {
+        AppSurface::Desktop | AppSurface::Web => SeedCashQr::FRAGMENT_OPTIONS,
+        AppSurface::Android | AppSurface::Ios | AppSurface::Extension => MOBILE_FRAGMENT_OPTIONS,
+    }
+}
+
+/// What to call a fragment size on this surface.
+///
+/// A desktop has room for "Highest density (fewest frames)"; a phone gets one
+/// word. The same numbers where they overlap, different words, because the
+/// control is a different size.
+pub fn qr_fragment_label(surface: AppSurface, fragment: usize) -> Option<&'static str> {
+    match surface {
+        AppSurface::Desktop | AppSurface::Web => SeedCashQr::fragment_label(fragment),
+        AppSurface::Android | AppSurface::Ios | AppSurface::Extension => {
+            mobile_fragment_label(fragment)
+        }
+    }
+}
+
+/// The fragment size to start on.
+///
+/// The lowest the surface offers, on every one. It is the size a SeedCash
+/// camera was observed to read, and starting denser to save a few seconds is a
+/// trade made against whoever's device cannot manage it -- who then has no way
+/// to know that turning the density down is the fix.
+pub fn default_qr_fragment(surface: AppSurface) -> usize {
+    qr_fragment_options(surface)
+        .first()
+        .copied()
+        .unwrap_or(SeedCashQr::CHUNK_SIZE)
+}
+
 /// Chipnet faucet used by the TS wallet settings row.
 pub const CHIPNET_FAUCET_URL: &str = "https://tbch.googol.cash/";
 
@@ -1859,6 +1905,9 @@ pub use optn_platform::{HardwareTransport, HardwareVendor, TransportSupport};
 
 pub use optn_core::airgap::{classify_scanned_account, AccountEntry, ScannedAccount};
 pub use optn_core::multisig::{Cosigner, MultisigPreview, MAX_COSIGNERS};
+pub use optn_core::psbt::{
+    mobile_fragment_label, QrAnimation, SeedCashQr, MOBILE_FRAGMENT_OPTIONS,
+};
 
 /// Transports a surface can be relied on to provide.
 ///
@@ -4034,6 +4083,52 @@ mod tests {
         assert!(web.provides(HardwareTransport::WebHid));
         assert!(web.provides(HardwareTransport::WebUsb));
         assert!(web.provides(HardwareTransport::WebBle));
+    }
+
+    #[test]
+    fn a_phone_gets_the_conservative_qr_options_and_a_desktop_gets_them_all() {
+        // Not a judgement about screens. A phone fleet is thousands of
+        // cameras, and the ones that fail belong to people who are not in the
+        // room when it is tested -- so the mobile list is the one measured
+        // against such a fleet, and it is shorter and lower.
+        for surface in [AppSurface::Desktop, AppSurface::Web] {
+            assert_eq!(qr_fragment_options(surface), SeedCashQr::FRAGMENT_OPTIONS);
+        }
+        for surface in [AppSurface::Android, AppSurface::Ios] {
+            assert_eq!(qr_fragment_options(surface), MOBILE_FRAGMENT_OPTIONS);
+            assert!(
+                qr_fragment_options(surface).len() < SeedCashQr::FRAGMENT_OPTIONS.len(),
+                "{surface:?} gets fewer choices, not more"
+            );
+        }
+
+        // Both start at the size a SeedCash camera was observed to read.
+        // Starting denser saves a few seconds and costs someone whose device
+        // cannot make it -- and they have no way to know the density is why.
+        for surface in [
+            AppSurface::Desktop,
+            AppSurface::Android,
+            AppSurface::Ios,
+            AppSurface::Web,
+            AppSurface::Extension,
+        ] {
+            assert_eq!(default_qr_fragment(surface), SeedCashQr::CHUNK_SIZE);
+            // Every option a control offers has a word for its label, and the
+            // words differ by surface even where the numbers do not.
+            for fragment in qr_fragment_options(surface) {
+                assert!(
+                    qr_fragment_label(surface, *fragment).is_some(),
+                    "{surface:?} {fragment}"
+                );
+            }
+        }
+
+        // A desktop describes the trade; a phone gets one word for it.
+        assert_eq!(
+            qr_fragment_label(AppSurface::Desktop, 50),
+            Some("Easiest to scan (more frames)")
+        );
+        assert_eq!(qr_fragment_label(AppSurface::Android, 50), Some("Low"));
     }
 
     #[test]
