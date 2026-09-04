@@ -338,7 +338,7 @@ fn key_origin(index: usize, key: &[u8], value: &[u8]) -> Result<KeyOrigin> {
                 "input {index}: a derivation key needs a 33-byte compressed pubkey"
             ))
         })?;
-    if value.len() < 4 || (value.len() - 4) % 4 != 0 {
+    if value.len() < 4 || !(value.len() - 4).is_multiple_of(4) {
         return Err(CliError::Protocol(format!(
             "input {index}: a derivation record is a 4-byte fingerprint then whole path steps, \
              got {} bytes",
@@ -348,8 +348,10 @@ fn key_origin(index: usize, key: &[u8], value: &[u8]) -> Result<KeyOrigin> {
     let mut fingerprint = [0u8; 4];
     fingerprint.copy_from_slice(&value[..4]);
     let path = value[4..]
-        .chunks_exact(4)
-        .map(|step| u32::from_le_bytes([step[0], step[1], step[2], step[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|step| u32::from_le_bytes(*step))
         .collect();
     Ok(KeyOrigin {
         pubkey,
@@ -865,7 +867,13 @@ fn origin_value(fingerprint: [u8; 4], path: &[u32]) -> Vec<u8> {
     value
 }
 
-fn compact_size(value: u64) -> Vec<u8> {
+/// Bitcoin's CompactSize length prefix.
+///
+/// Shared with `multisig`, which needs it for the legacy signed-message
+/// preimage BSMS key records are signed over. One encoder, because two would
+/// eventually disagree about the 0xfd boundary and produce signatures that
+/// verify nowhere.
+pub(crate) fn compact_size(value: u64) -> Vec<u8> {
     match value {
         0..=0xfc => vec![value as u8],
         0xfd..=0xffff => {
@@ -1428,9 +1436,17 @@ mod tests {
         }
         assert_eq!(QrAnimation::label(200), None);
 
-        // Slowest first, because that is how the control reads.
-        assert!(QrAnimation::SLOW > QrAnimation::NORMAL);
-        assert!(QrAnimation::NORMAL > QrAnimation::FAST);
+        // Slowest first, because that is how the control reads. Asserted
+        // over the list rather than between the constants: comparing two
+        // consts is folded away at compile time, so it proved nothing about
+        // the order the control actually shows.
+        assert!(
+            QrAnimation::OPTIONS
+                .windows(2)
+                .all(|pair| pair[0] > pair[1]),
+            "the speeds must be listed slowest first: {:?}",
+            QrAnimation::OPTIONS
+        );
     }
 
     #[test]

@@ -14,6 +14,8 @@
 
 use bip32::{ChildNumber, XPub};
 
+use sha2::{Digest, Sha256};
+
 use crate::cashaddr::{Address, AddressKind};
 use crate::error::{CliError, Result};
 use crate::hd::{hash160, AccountPath};
@@ -811,6 +813,224 @@ pub fn parse_bsms_record(text: &str) -> Result<BsmsRecord> {
     })
 }
 
+/// The legacy signed-message prefix, as Bitcoin has always spelled it.
+///
+/// The leading `\x18` is the length of the text that follows, and is part of
+/// the constant rather than computed, because that is how every implementation
+/// writes it.
+pub const BITCOIN_SIGNED_MESSAGE_PREFIX: &[u8] = b"\x18Bitcoin Signed Message:\n";
+
+/// A BSMS 1.0 round-one key record: one cosigner offering their key.
+///
+/// BIP-129's first round. Five lines:
+///
+/// ```text
+/// BSMS 1.0
+/// 00                                    <- token; 00 means unencrypted
+/// [0f1e2d3c/44'/145'/0']xpub6C...       <- key descriptor
+/// Ada's phone                           <- description, at most 80 characters
+/// 3045022100...                         <- signature over the four lines above
+/// ```
+///
+/// The signature is the point. BIP-129 requires the coordinator to check "that
+/// the included `SIG` is valid given the `KEY`", and that check is what stops a
+/// substitution attack: without it, anyone who can edit a record in transit can
+/// replace a cosigner's key with their own, and the resulting wallet is one
+/// they can spend from. Reading these records without verifying them would be
+/// worse than not reading them, because it would look like participation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BsmsKeyRecord {
+    pub version: String,
+    /// Hex token. `00` means the record is not encrypted.
+    pub token: String,
+    /// The cosigner's key, with its origin.
+    pub key: DescriptorKey,
+    /// Free text, at most 80 characters per the spec.
+    pub description: String,
+    /// DER-encoded ECDSA signature over [`Self::preimage`].
+    pub signature_der: Vec<u8>,
+}
+
+impl BsmsKeyRecord {
+    /// The four lines the signature covers.
+    pub fn preimage(&self) -> String {
+        format!(
+            "BSMS {}\n{}\n[{}/{}]{}\n{}",
+            self.version,
+            self.token,
+            self.key.master_fingerprint,
+            self.key
+                .account_path
+                .strip_prefix("m/")
+                .unwrap_or(&self.key.account_path),
+            self.key.account_xpub,
+            self.description
+        )
+    }
+
+    /// The digest actually signed: double SHA-256 of the prefixed preimage.
+    ///
+    /// The length is a **CompactSize**, not a single byte. Paytaca says why in
+    /// its own comment -- "Adopting Electron Cash's message len encoding to
+    /// accomodate longer messages, i.e. varsize int … Mainnet-js just uses the
+    /// length as is" -- and the two encodings agree only below 253 bytes.
+    ///
+    /// For a key record they always agree, and that is worth stating rather
+    /// than leaving as a hazard to worry about: BIP-129 caps the description
+    /// at 80 characters, and a record carrying that, an xPub and an origin
+    /// comes to 224 bytes. The test pins that number, so if the format ever
+    /// grows past 252 the divergence stops being theoretical and something
+    /// fails loudly here.
+    ///
+    /// CompactSize is used anyway. It is what Electron Cash, Paytaca and the
+    /// rest of the ecosystem write, it is correct at every length, and picking
+    /// the encoding that only works for short messages would be choosing to be
+    /// wrong later.
+    pub fn signing_digest(&self) -> [u8; 32] {
+        let message = self.preimage();
+        let body = message.as_bytes();
+
+        let mut buffer = Vec::with_capacity(BITCOIN_SIGNED_MESSAGE_PREFIX.len() + body.len() + 9);
+        buffer.extend_from_slice(BITCOIN_SIGNED_MESSAGE_PREFIX);
+        buffer.extend_from_slice(&crate::psbt::compact_size(body.len() as u64));
+        buffer.extend_from_slice(body);
+
+        let digest = Sha256::digest(Sha256::digest(&buffer));
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&digest);
+        out
+    }
+
+    /// Check the signature against the key the record itself carries.
+    ///
+    /// This proves the sender held the private key for the xPub they offered.
+    /// It does **not** prove they are who they say they are -- nothing in the
+    /// record does -- so it is a defence against a key swapped in transit, not
+    /// against a cosigner who was the wrong person from the start.
+    pub fn verify_signature(&self) -> Result<()> {
+        use k256::ecdsa::signature::hazmat::PrehashVerifier;
+
+        let account = parse_account_xpub(&self.key.account_xpub)?;
+        let verifying = k256::ecdsa::VerifyingKey::from_sec1_bytes(&account.to_bytes())
+            .map_err(|e| CliError::Usage(format!("that record's key is not usable: {e}")))?;
+        let signature = k256::ecdsa::Signature::from_der(&self.signature_der).map_err(|e| {
+            CliError::Usage(format!("that record's signature is not valid DER: {e}"))
+        })?;
+
+        verifying
+            .verify_prehash(&self.signing_digest(), &signature)
+            .map_err(|_| {
+                CliError::Usage(
+                    "that key record's signature does not match the key it carries. Someone \
+                     changed the record between the sender and here, and the key in it is not \
+                     the one they signed for."
+                        .into(),
+                )
+            })
+    }
+}
+
+/// Read a BSMS 1.0 round-one key record.
+pub fn parse_bsms_key_record(text: &str) -> Result<BsmsKeyRecord> {
+    let mut lines = text.trim().lines();
+
+    let header = lines
+        .next()
+        .ok_or_else(|| CliError::Usage("that file is empty".into()))?
+        .trim();
+    let version = header
+        .strip_prefix("BSMS ")
+        .ok_or_else(|| {
+            CliError::Usage(
+                "that does not start with a BSMS version line, so it is not a key record".into(),
+            )
+        })?
+        .trim();
+    if version != "1.0" {
+        return Err(CliError::Usage(format!(
+            "this reads BSMS 1.0 records; that one says {version}"
+        )));
+    }
+
+    let token = lines
+        .next()
+        .ok_or_else(|| CliError::Usage("that record has no token".into()))?
+        .trim()
+        .to_string();
+    if token.is_empty() || !token.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(CliError::Usage(format!(
+            "'{token}' is not a hex token; BSMS uses 00 for an unencrypted record"
+        )));
+    }
+    if token != "00" {
+        return Err(CliError::Usage(
+            "that key record is encrypted. Only unencrypted records (token 00) are read here; \
+             BSMS encrypts round one with ECIES."
+                .into(),
+        ));
+    }
+
+    let descriptor_line = lines
+        .next()
+        .ok_or_else(|| CliError::Usage("that record has no key descriptor".into()))?
+        .trim();
+    // Reuse the key-expression parser, which already refuses a missing origin,
+    // an unclosed bracket, hardened derivation below an xPub and a key this
+    // wallet would not otherwise accept. A key record carries no branch, so a
+    // wildcard is appended to meet the same parser rather than writing a
+    // second, laxer one.
+    let (key, _) = parse_descriptor_key(&format!("{descriptor_line}/0/*"), 0)?;
+
+    let description = lines
+        .next()
+        .ok_or_else(|| CliError::Usage("that record has no description line".into()))?
+        .trim()
+        .to_string();
+    if description.chars().count() > BSMS_MAX_DESCRIPTION_CHARS {
+        return Err(CliError::Usage(format!(
+            "that record's description is {} characters; BSMS allows {BSMS_MAX_DESCRIPTION_CHARS}",
+            description.chars().count()
+        )));
+    }
+
+    let signature_hex = lines
+        .next()
+        .ok_or_else(|| {
+            CliError::Usage(
+                "that record has no signature, so nothing proves the sender holds the key they \
+                 offered"
+                    .into(),
+            )
+        })?
+        .trim();
+    let signature_der = decode_hex(signature_hex)
+        .ok_or_else(|| CliError::Usage("that record's signature is not hex".into()))?;
+    if signature_der.is_empty() {
+        return Err(CliError::Usage("that record's signature is empty".into()));
+    }
+
+    Ok(BsmsKeyRecord {
+        version: version.to_string(),
+        token,
+        key,
+        description,
+        signature_der,
+    })
+}
+
+/// BIP-129 caps the description at 80 characters.
+pub const BSMS_MAX_DESCRIPTION_CHARS: usize = 80;
+
+fn decode_hex(text: &str) -> Option<Vec<u8>> {
+    if !text.len().is_multiple_of(2) || text.is_empty() {
+        return None;
+    }
+    (0..text.len())
+        .step_by(2)
+        .map(|index| u8::from_str_radix(text.get(index..index + 2)?, 16).ok())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1158,6 +1378,169 @@ mod tests {
                 .contains("every key in one descriptor shares"),
             "{error}"
         );
+    }
+
+    /// Sign a key record the way BSMS does, so the digest is exercised in both
+    /// directions rather than only asserted.
+    ///
+    /// The wallet crate never signs a key record in production -- a cosigner's
+    /// own device does -- so this lives in the test, and it is what makes
+    /// `verify_signature` a claim about bytes rather than about intent.
+    fn signed_key_record(description: &str) -> (String, String) {
+        use k256::ecdsa::signature::hazmat::PrehashSigner;
+
+        let wallet = crate::hd::Wallet::from_mnemonic(crate::hd::BIP39_TEST_VECTOR_MNEMONIC, "")
+            .expect("mnemonic");
+        let xpub = wallet.account_xpub(Network::Chipnet, 0).expect("xpub");
+        // The private key for that exact account, which is the key BIP-129
+        // says signs: "the private key associated with the public key or XPUB".
+        let signing = wallet
+            .signing_key("m/44'/1'/0'")
+            .expect("account signing key");
+
+        let unsigned = BsmsKeyRecord {
+            version: "1.0".into(),
+            token: "00".into(),
+            key: DescriptorKey {
+                master_fingerprint: "4c9a1f7b".into(),
+                account_path: "m/44'/1'/0'".into(),
+                account_xpub: xpub.clone(),
+            },
+            description: description.to_string(),
+            signature_der: Vec::new(),
+        };
+
+        let (signature, _): (k256::ecdsa::Signature, _) = signing
+            .sign_prehash(&unsigned.signing_digest())
+            .expect("signs");
+        let der: String = signature
+            .to_der()
+            .as_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+
+        let record = format!("BSMS 1.0\n00\n[4c9a1f7b/44'/1'/0']{xpub}\n{description}\n{der}");
+        (record, xpub)
+    }
+
+    #[test]
+    fn a_key_record_round_trips_and_its_signature_verifies() {
+        let (text, xpub) = signed_key_record("Ada's phone");
+        let record = parse_bsms_key_record(&text).expect("reads");
+
+        assert_eq!(record.version, "1.0");
+        assert_eq!(record.token, "00");
+        assert_eq!(record.description, "Ada's phone");
+        assert_eq!(record.key.account_xpub, xpub);
+        assert_eq!(record.key.master_fingerprint, "4c9a1f7b");
+        assert_eq!(record.key.account_path, "m/44'/1'/0'");
+
+        // The preimage is the four lines above the signature, exactly.
+        assert_eq!(
+            record.preimage(),
+            format!("BSMS 1.0\n00\n[4c9a1f7b/44'/1'/0']{xpub}\nAda's phone")
+        );
+
+        record
+            .verify_signature()
+            .expect("a record signed by its own key verifies");
+    }
+
+    #[test]
+    fn a_substituted_key_is_caught_which_is_why_the_signature_is_there() {
+        // BIP-129's reason for round one carrying a signature at all: without
+        // it, anyone who can edit a record in transit swaps in their own key
+        // and the wallet that results is one they can spend from.
+        let (text, _) = signed_key_record("Ada's phone");
+        let wallet = crate::hd::Wallet::from_mnemonic(crate::hd::BIP39_TEST_VECTOR_MNEMONIC, "")
+            .expect("mnemonic");
+        let attacker = wallet.account_xpub(Network::Chipnet, 7).expect("xpub");
+
+        let original = parse_bsms_key_record(&text).expect("reads");
+        let swapped = text.replace(&original.key.account_xpub, &attacker);
+        assert_ne!(swapped, text, "the swap has to change something");
+
+        let tampered = parse_bsms_key_record(&swapped).expect("still parses");
+        let error = tampered
+            .verify_signature()
+            .expect_err("a swapped key must not verify");
+        assert!(
+            error.to_string().contains("does not match the key"),
+            "{error}"
+        );
+        assert!(error.to_string().contains("changed the record"), "{error}");
+
+        // Editing the description is caught too: it is inside the preimage.
+        let reworded = text.replace("Ada's phone", "Ada's laptop");
+        assert!(parse_bsms_key_record(&reworded)
+            .expect("parses")
+            .verify_signature()
+            .is_err());
+    }
+
+    #[test]
+    fn a_key_record_never_reaches_the_length_where_encodings_diverge() {
+        // Written first as "a maximal record crosses 253 bytes, which is what
+        // proves CompactSize was implemented". It does not: a record with the
+        // full 80-character description BIP-129 allows, an xPub and an origin
+        // comes to 224 bytes, and both length encodings are a single byte
+        // there.
+        //
+        // So the Electron Cash / mainnet-js divergence Paytaca warns about
+        // cannot affect a key record, and this wallet interoperates with a
+        // signer of either persuasion. That is a better thing to know than the
+        // hazard it was mistaken for, and it is pinned here so that it stops
+        // being true loudly rather than quietly if the format grows.
+        let (text, _) = signed_key_record(&"x".repeat(BSMS_MAX_DESCRIPTION_CHARS));
+        let record = parse_bsms_key_record(&text).expect("reads");
+        assert_eq!(record.preimage().len(), 224);
+        assert!(
+            record.preimage().len() <= 0xfc,
+            "a key record has grown past the CompactSize boundary: the length prefix now              differs between Electron Cash and mainnet-js signers, and this must be checked              against a real one rather than assumed"
+        );
+        record
+            .verify_signature()
+            .expect("a maximal record verifies");
+
+        // The encoder itself is right on both sides of the boundary, which is
+        // what makes the choice safe when a longer message does come along.
+        assert_eq!(crate::psbt::compact_size(0xfc), vec![0xfc]);
+        assert_eq!(crate::psbt::compact_size(0xfd), vec![0xfd, 0xfd, 0x00]);
+
+        // One character over the spec is refused.
+        let (too_long, _) = signed_key_record(&"x".repeat(BSMS_MAX_DESCRIPTION_CHARS + 1));
+        let error = parse_bsms_key_record(&too_long).expect_err("over the cap");
+        assert!(error.to_string().contains("BSMS allows 80"), "{error}");
+    }
+
+    #[test]
+    fn a_key_record_is_refused_rather_than_half_read() {
+        let (good, _) = signed_key_record("Ada's phone");
+
+        // An encrypted record is named as such rather than failing on the
+        // descriptor line, because "token 01" is a different situation from a
+        // corrupt file.
+        let encrypted = good.replacen("\n00\n", "\n01\n", 1);
+        let error = parse_bsms_key_record(&encrypted).expect_err("encrypted");
+        assert!(error.to_string().contains("encrypted"), "{error}");
+        assert!(error.to_string().contains("ECIES"), "{error}");
+
+        // A missing signature is the whole point of the record.
+        let unsigned = good.rsplit_once('\n').expect("has lines").0.to_string();
+        let error = parse_bsms_key_record(&unsigned).expect_err("no signature");
+        assert!(error.to_string().contains("nothing proves"), "{error}");
+
+        // Not hex, and not a version this reads.
+        assert!(parse_bsms_key_record(&good.replace("BSMS 1.0", "BSMS 2.0")).is_err());
+        assert!(parse_bsms_key_record("").is_err());
+        let (base, _) = signed_key_record("Ada's phone");
+        let bad_sig = base.rsplit_once('\n').expect("lines").0.to_string() + "\nnothex";
+        assert!(parse_bsms_key_record(&bad_sig).is_err());
+
+        // A key descriptor with no origin cannot be signed against later.
+        let no_origin = good.replace("[4c9a1f7b/44'/1'/0']", "");
+        assert!(parse_bsms_key_record(&no_origin).is_err());
     }
 
     #[test]
