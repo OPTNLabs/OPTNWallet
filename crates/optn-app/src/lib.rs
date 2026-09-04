@@ -165,6 +165,37 @@ impl AppSurface {
             Self::Extension => true,
         }
     }
+
+    /// Whether this surface offers hardware-wallet onboarding.
+    ///
+    /// Desktop only today, and the reason matters because it is not the one it
+    /// looks like. This is **not** "the other platforms cannot reach a device":
+    ///
+    /// - Ledger, Trezor and OneKey variously speak USB, Bluetooth and NFC, and
+    ///   the Ledger wire choice is already modelled per wallet.
+    /// - Android supports USB host mode, so a phone can hold a cable device.
+    /// - Keystone needs only a camera, which every phone has, and
+    ///   `transport_support` already says so.
+    ///
+    /// What is missing is the *integration*, and it differs per platform and
+    /// per vendor: a browser extension may need a TypeScript library or a wasm
+    /// build where an Android app needs a native plugin and the desktop shell
+    /// owns USB in Rust. That is a research question, not a settled one, so
+    /// this is switched off where the work has not been done rather than
+    /// claimed impossible.
+    #[allow(
+        clippy::match_like_matches_macro,
+        reason = "each surface is its own decision to make as the integrations land"
+    )]
+    pub const fn offers_hardware_wallet(self) -> bool {
+        match self {
+            Self::Desktop => true,
+            Self::Android => false,
+            Self::Ios => false,
+            Self::Web => false,
+            Self::Extension => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -185,9 +216,17 @@ pub struct FeatureFlags {
 impl FeatureFlags {
     /// Which surfaces may offer a flag at all, before any user override.
     ///
-    /// Hardware and CashFusion are desktop-only because both need something
-    /// the other shells do not have: a USB transport, and a long-lived
-    /// background process.
+    /// CashFusion is desktop-only because it needs a long-lived background
+    /// process the other shells do not have.
+    ///
+    /// Hardware is desktop-only for a different and less permanent reason: the
+    /// vendor integrations only exist there yet. It is *not* that the other
+    /// platforms cannot reach a device. Ledger, Trezor and OneKey variously
+    /// speak USB, Bluetooth and NFC; Android supports USB host mode; and
+    /// Keystone needs only a camera, which every phone has. What differs per
+    /// platform is the library — a browser extension may need TypeScript or
+    /// wasm where an Android app needs something else again — and that is
+    /// unresearched rather than decided. See `offers_hardware_wallet`.
     ///
     /// Watch Only is different in kind and is offered everywhere. It is how an
     /// air-gapped device is added -- SeedCash and Keystone both arrive through
@@ -196,9 +235,8 @@ impl FeatureFlags {
     /// watch a cold wallet, which is exactly the case for the extension.
     pub const fn surface_allows(surface: AppSurface, flag: FeatureFlag) -> bool {
         match flag {
-            FeatureFlag::CashFusion | FeatureFlag::HardwareWallet => {
-                matches!(surface, AppSurface::Desktop)
-            }
+            FeatureFlag::CashFusion => matches!(surface, AppSurface::Desktop),
+            FeatureFlag::HardwareWallet => surface.offers_hardware_wallet(),
             FeatureFlag::WatchOnly => surface.offers_watch_only(),
         }
     }
@@ -1005,13 +1043,21 @@ impl AppState {
                 amount_sats,
                 coin,
             } => {
-                if self.surface.is_viewer_only() {
-                    return self
-                        .reject("this build can view a wallet but not spend from it".into());
-                }
                 let Some(wallet) = self.wallet.as_ref() else {
                     return self.reject("open a wallet first".into());
                 };
+                // A viewer may still build an *unsigned* PSBT. Nothing is spent
+                // by doing so: a watch-only wallet holds no key, the signing
+                // happens on an air-gapped device, and refusing here would mean
+                // a seed signer could not be used from a popup for no reason
+                // beyond the build it was opened in. What a viewer must not do
+                // is sign, and a wallet that could sign is refused below.
+                if self.surface.is_viewer_only()
+                    && wallet.spending_capability() == SpendingCapability::Seed
+                {
+                    return self
+                        .reject("this build can view a wallet but not spend from it".into());
+                }
                 match prepare_spend_with(
                     &self.coins,
                     self.network,
@@ -3795,6 +3841,102 @@ mod tests {
         assert_eq!(state.route, AppRoute::Landing);
         assert!(state.wallet.is_none());
         assert!(!state.lock.spend_auth_still_valid(50));
+    }
+
+    #[test]
+    fn a_viewer_may_build_an_unsigned_psbt_for_an_airgapped_signer() {
+        // Watch Only is the air-gap door, and a seed signer should be usable
+        // from every platform that offers it. Building an unsigned PSBT spends
+        // nothing: the wallet holds no key, and the signing happens on a device
+        // that never touches this build. What a viewer must not do is sign.
+        let mut viewer = AppState::for_surface(AppSurface::Extension);
+        viewer.apply(AppAction::SetNetwork(Network::Chipnet));
+        let wallet =
+            optn_core::hd::Wallet::from_mnemonic(BIP39_TEST_VECTOR_MNEMONIC, "").expect("mnemonic");
+        let xpub = wallet.account_xpub(Network::Chipnet, 0).expect("xpub");
+        let preview = watch_only_setup_preview(Network::Chipnet, "cold", &xpub, "4c9a1f7b")
+            .expect("watch preview");
+        let destination = preview.receive_address.clone();
+        viewer.apply(AppAction::OpenWatchOnlyWallet(preview));
+        assert_eq!(
+            viewer.wallet.as_ref().map(|w| w.spending_capability()),
+            Some(SpendingCapability::WatchOnly)
+        );
+
+        viewer.apply(AppAction::InsertCoin(
+            chipnet_demo_coin(100_000, 4).expect("a coin to spend"),
+        ));
+        viewer.notice = None;
+        viewer.apply(AppAction::PrepareSend {
+            destination,
+            amount_sats: 10_000,
+            coin: None,
+        });
+
+        let plan = viewer
+            .spend
+            .as_ref()
+            .unwrap_or_else(|| panic!("a viewer must still build one: {:?}", viewer.notice));
+        assert_eq!(
+            plan.kind,
+            SpendKind::WatchOnlyUnsignedPsbt,
+            "unsigned, for a device to sign"
+        );
+
+        // And a wallet that *could* sign is still refused on this build, which
+        // is the boundary the read-only browser build actually needs.
+        let mut seeded = AppState::for_surface(AppSurface::Extension);
+        open_chipnet_seed(&mut seeded, "hot");
+        let hot_destination = seeded
+            .wallet
+            .as_ref()
+            .map(|w| w.receive_address.clone())
+            .expect("a wallet");
+        seeded.apply(AppAction::PrepareSend {
+            destination: hot_destination,
+            amount_sats: 1_000,
+            coin: None,
+        });
+        assert_eq!(
+            seeded.notice.as_deref(),
+            Some("this build can view a wallet but not spend from it")
+        );
+        assert!(seeded.spend.is_none());
+    }
+
+    #[test]
+    fn hardware_is_off_where_the_integration_is_missing_not_where_a_cable_is() {
+        // The reason is not "these platforms cannot reach a device". Android
+        // supports USB host mode, Ledger and OneKey speak Bluetooth, and
+        // Keystone needs only a camera -- which transport_support already says
+        // every phone has. What is missing is the per-platform integration, so
+        // the switch is off where the work has not been done rather than where
+        // it is impossible.
+        assert!(AppSurface::Desktop.offers_hardware_wallet());
+        for surface in [
+            AppSurface::Android,
+            AppSurface::Ios,
+            AppSurface::Web,
+            AppSurface::Extension,
+        ] {
+            assert!(!surface.offers_hardware_wallet(), "{surface:?} today");
+        }
+
+        // The evidence that it is not a transport question: a phone can already
+        // reach an air-gapped device, and the model says so.
+        for surface in [AppSurface::Android, AppSurface::Ios] {
+            assert!(
+                transport_support(surface).provides(HardwareTransport::Camera),
+                "{surface:?} has a camera, so Keystone is reachable"
+            );
+        }
+        // And the web surface has three device transports the desktop shell
+        // does not, which is the opposite of the story a "desktop needs USB"
+        // rule would tell.
+        let web = transport_support(AppSurface::Web);
+        assert!(web.provides(HardwareTransport::WebHid));
+        assert!(web.provides(HardwareTransport::WebUsb));
+        assert!(web.provides(HardwareTransport::WebBle));
     }
 
     #[test]
