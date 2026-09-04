@@ -1034,6 +1034,8 @@ fn host_app_surface() -> optn_app::AppSurface {
     {
         optn_app::AppSurface::Desktop
     }
+}
+
 /// Public, deterministic multisig material shared with the cross-compilable
 /// CLI. This command intentionally accepts no wallet, seed, private key,
 /// session, or network endpoint: callers provide already-derived public keys
