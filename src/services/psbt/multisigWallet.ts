@@ -28,17 +28,29 @@ import {
   deriveHdPathRelative,
 } from '@bitauth/libauth';
 
+import { Network } from '../../state/slices/networkSlice';
+import {
+  alignHdPublicKeyNetwork,
+  getBchAccountPath,
+  normalizeBchAccountPath,
+} from '../HdWalletService';
+import { sha256 } from '../../utils/hash';
+
 import {
   buildMultisigRedeemScript,
   p2shLockingBytecodeFor,
-  sortPublicKeysBip67,
 } from './psbtMultisig';
 
 /** Paytaca's file extension for an exported multisig wallet. */
 export const PMWIF_EXTENSION = '.pmwif';
 
 /** Upper bound from OP_CHECKMULTISIG itself. */
-export const MAX_COSIGNERS = 20;
+/**
+ * P2SH pushes the redeem script as one element and BCH enforces the 520-byte
+ * script-element limit. With compressed public keys that limits us to 15
+ * cosigners, even though OP_CHECKMULTISIG itself can encode more.
+ */
+export const MAX_COSIGNERS = 15;
 
 export interface MultisigCosigner {
   /** Display name, e.g. "Alice's SeedCash". */
@@ -53,13 +65,27 @@ export interface MultisigCosigner {
   masterFingerprintHex?: string;
   /** Account path this xPub was exported at. */
   accountPath?: string;
+  /** Stable public cosigner identifier used across derived-key reorderings. */
+  id?: string;
+  /** New descriptor-facing label; `name` remains for .pmwif compatibility. */
+  label?: string;
 }
 
 export interface MultisigPolicy {
   name: string;
   /** Signatures required. */
   m: number;
+  /** Descriptor-facing alias for `m`; legacy policies use only `m`. */
+  threshold?: number;
   signers: MultisigCosigner[];
+  /** Shared descriptor schema version. Legacy .pmwif policies omit this. */
+  schemaVersion?: 1;
+  /** BCH network for canonical descriptor generation. */
+  network?: Network;
+  /** Shared account path; signer paths must match when present. */
+  accountPath?: string;
+  /** Descriptor policy revision. Address rotation does not change it. */
+  policyRevision?: number;
 }
 
 const FINGERPRINT_PATTERN = /^[0-9a-fA-F]{8}$/;
@@ -88,7 +114,19 @@ export function validateMultisigPolicy(policy: MultisigPolicy): void {
       `Signatures required must be between 1 and ${n} (got ${policy.m}).`
     );
   }
+  if (policy.threshold !== undefined && policy.threshold !== policy.m) {
+    throw new Error(
+      'Multisig threshold and required signature count disagree.'
+    );
+  }
+  if (
+    policy.policyRevision !== undefined &&
+    (!Number.isSafeInteger(policy.policyRevision) || policy.policyRevision < 0)
+  ) {
+    throw new Error('Multisig policy revision must be a non-negative integer.');
+  }
   const seen = new Set<string>();
+  const seenIds = new Set<string>();
   policy.signers.forEach((signer, index) => {
     const xpub = signer.xpub.trim();
     if (!xpub) throw new Error(`Cosigner ${index + 1} has no xPub.`);
@@ -99,6 +137,14 @@ export function validateMultisigPolicy(policy: MultisigPolicy): void {
       );
     }
     seen.add(xpub);
+    if (signer.id) {
+      const id = signer.id.trim();
+      if (!id) throw new Error(`Cosigner ${index + 1} has an empty ID.`);
+      if (seenIds.has(id)) {
+        throw new Error(`Cosigner ${index + 1} repeats a cosigner ID.`);
+      }
+      seenIds.add(id);
+    }
     if (typeof decodeHdPublicKey(xpub) === 'string') {
       throw new Error(`Cosigner ${index + 1} has an xPub that cannot be read.`);
     }
@@ -112,6 +158,151 @@ export function validateMultisigPolicy(policy: MultisigPolicy): void {
       );
     }
   });
+}
+
+export function stableCosignerId(xpub: string): string {
+  return `xpub:${sha256.text(xpub).slice(0, 16)}`;
+}
+
+/**
+ * Convert legacy Paytaca/desktop policy data into the strict descriptor model.
+ * Missing fingerprints remain a hard error because a descriptor exported to a
+ * signer must identify the master key origin unambiguously.
+ */
+export function normalizeMultisigPolicy(
+  policy: MultisigPolicy,
+  network: Network = policy.network ?? Network.MAINNET
+): CanonicalMultisigPolicy {
+  validateMultisigPolicy(policy);
+  const accountPath = normalizeBchAccountPath(
+    policy.accountPath ??
+      policy.signers.find((signer) => signer.accountPath)?.accountPath ??
+      getBchAccountPath(network)
+  );
+  const alignedXpubs = new Set<string>();
+  const cosigners = policy.signers.map((signer, index) => {
+    const xpub = alignHdPublicKeyNetwork(network, signer.xpub.trim());
+    if (alignedXpubs.has(xpub)) {
+      throw new Error(
+        `Cosigner ${index + 1} duplicates another xPub after network normalization.`
+      );
+    }
+    alignedXpubs.add(xpub);
+    const decoded = decodeHdPublicKey(xpub);
+    if (typeof decoded === 'string') {
+      throw new Error(`Cosigner ${index + 1} has an unreadable xPub.`);
+    }
+    if (decoded.node.depth !== 3) {
+      throw new Error(
+        `Cosigner ${index + 1} must provide an account-level xPub at ${accountPath}.`
+      );
+    }
+    const signerPath = normalizeBchAccountPath(
+      signer.accountPath ?? accountPath
+    );
+    if (signerPath !== accountPath) {
+      throw new Error(
+        `Cosigner ${index + 1} uses ${signerPath}; all cosigners must use ${accountPath}.`
+      );
+    }
+    const fingerprint = signer.masterFingerprintHex?.trim().toLowerCase();
+    if (!fingerprint || !FINGERPRINT_PATTERN.test(fingerprint)) {
+      throw new Error(
+        `Cosigner ${index + 1} needs an 8-character master fingerprint before descriptor export.`
+      );
+    }
+    return {
+      id: signer.id?.trim() || stableCosignerId(xpub),
+      label:
+        signer.label?.trim() || signer.name.trim() || `Cosigner ${index + 1}`,
+      xpub,
+      masterFingerprintHex: fingerprint,
+      accountPath,
+    };
+  });
+  const ids = new Set<string>();
+  for (const cosigner of cosigners) {
+    if (ids.has(cosigner.id)) throw new Error('Cosigner IDs must be unique.');
+    ids.add(cosigner.id);
+  }
+  return {
+    schemaVersion: 1,
+    name: policy.name.trim(),
+    network,
+    threshold: policy.m,
+    accountPath,
+    policyRevision: policy.policyRevision ?? 0,
+    cosigners,
+  };
+}
+
+function descriptorKeyOrigin(cosigner: CanonicalMultisigCosigner): string {
+  return `[${cosigner.masterFingerprintHex}/${cosigner.accountPath.slice(2)}]${cosigner.xpub}`;
+}
+
+function descriptorBody(
+  policy: CanonicalMultisigPolicy,
+  branch: 0 | 1
+): string {
+  const keys = [...policy.cosigners]
+    .sort((a, b) => {
+      const left = `${a.masterFingerprintHex}${a.xpub}`;
+      const right = `${b.masterFingerprintHex}${b.xpub}`;
+      return left < right ? -1 : left > right ? 1 : 0;
+    })
+    .map((cosigner) => `${descriptorKeyOrigin(cosigner)}/${branch}/*`);
+  return `sh(sortedmulti(${policy.threshold},${keys.join(',')}))`;
+}
+
+/** Generate canonical BIP-380/BIP-383 receive and change descriptors. */
+export function createMultisigDescriptorSet(
+  policy: MultisigPolicy,
+  network: Network = policy.network ?? Network.MAINNET
+): MultisigDescriptorSet {
+  const canonical = normalizeMultisigPolicy(policy, network);
+  const receiveBody = descriptorBody(canonical, 0);
+  const changeBody = descriptorBody(canonical, 1);
+  const receive = addDescriptorChecksum(receiveBody);
+  const change = addDescriptorChecksum(changeBody);
+  const policyMaterial = JSON.stringify({
+    descriptorFormat: 'bip380+bip383',
+    network: canonical.network,
+    threshold: canonical.threshold,
+    accountPath: canonical.accountPath,
+    receive: receiveBody,
+    change: changeBody,
+    policyRevision: canonical.policyRevision,
+  });
+  return {
+    receive,
+    change,
+    policyId: binToHex(sha256.hash(new TextEncoder().encode(policyMaterial))),
+  };
+}
+
+/**
+ * Expand one concrete child index for BCHN's current descriptor parser. BCHN
+ * supports `multi` but not `sortedmulti` or descriptor checksums, so concrete
+ * public keys are already sorted before this string is emitted.
+ */
+export function createBchnScanDescriptor(
+  policy: MultisigPolicy,
+  branch: 0 | 1,
+  addressIndex: number,
+  network: Network = policy.network ?? Network.MAINNET
+): string {
+  if (!Number.isSafeInteger(addressIndex) || addressIndex < 0) {
+    throw new Error('BCHN scan address index must be a non-negative integer.');
+  }
+  const canonical = normalizeMultisigPolicy(policy, network);
+  const derived = deriveMultisigAddress(
+    { ...policy, network, accountPath: canonical.accountPath },
+    branch,
+    addressIndex
+  );
+  return `sh(multi(${canonical.threshold},${derived.sortedPublicKeys
+    .map(binToHex)
+    .join(',')}))`;
 }
 
 /** Cosigners still missing the fingerprint a signer needs to claim inputs. */
@@ -132,8 +323,211 @@ export interface MultisigAddress {
   lockingBytecode: Uint8Array;
   /** Each cosigner's key at this path, in redeem-script order. */
   sortedPublicKeys: Uint8Array[];
+  /** Derived cosigners with their authoritative redeem-script positions. */
+  derivedCosigners: MultisigDerivedCosigner[];
   /** Relative path used, e.g. `0/3`. */
   relativePath: string;
+}
+
+export interface MultisigDerivedCosigner {
+  cosignerId: string;
+  publicKey: Uint8Array;
+  sortedPosition: number;
+  derivationPath: string;
+}
+
+export interface CanonicalMultisigCosigner {
+  id: string;
+  label: string;
+  xpub: string;
+  masterFingerprintHex: string;
+  accountPath: string;
+}
+
+export interface CanonicalMultisigPolicy {
+  schemaVersion: 1;
+  name: string;
+  network: Network;
+  threshold: number;
+  accountPath: string;
+  policyRevision: number;
+  cosigners: CanonicalMultisigCosigner[];
+}
+
+export interface MultisigDescriptorSet {
+  receive: string;
+  change: string;
+  policyId: string;
+}
+
+export interface MultisigManifest {
+  format: 'optn-multisig-manifest';
+  schemaVersion: 1;
+  policy: CanonicalMultisigPolicy;
+  descriptors: MultisigDescriptorSet;
+}
+
+const DESCRIPTOR_INPUT_CHARSET =
+  `0123456789()[],'/*abcdefgh@:$%{}IJKLMNOPQRSTUVWXYZ&+-.;<=>?!^_|~` +
+  'ijklmnopqrstuvwxyzABCDEFGH`#"\\ ';
+const DESCRIPTOR_CHECKSUM_CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
+const DESCRIPTOR_GENERATOR = [
+  0xf5dee51989n,
+  0xa9fdca3312n,
+  0x1bab10e32dn,
+  0x3706b1677an,
+  0x644d626ffdn,
+] as const;
+
+function descriptorPolymod(symbols: number[]): bigint {
+  let checksum = 1n;
+  for (const value of symbols) {
+    const top = checksum >> 35n;
+    checksum = ((checksum & 0x7ffffffffn) << 5n) ^ BigInt(value);
+    for (let i = 0; i < 5; i += 1) {
+      if (((top >> BigInt(i)) & 1n) !== 0n) {
+        checksum ^= DESCRIPTOR_GENERATOR[i];
+      }
+    }
+  }
+  return checksum;
+}
+
+function descriptorExpand(payload: string): number[] {
+  const groups: number[] = [];
+  const symbols: number[] = [];
+  for (const character of payload) {
+    const value = DESCRIPTOR_INPUT_CHARSET.indexOf(character);
+    if (value < 0) throw new Error('Descriptor contains an invalid character.');
+    symbols.push(value & 31);
+    groups.push(value >> 5);
+    if (groups.length === 3) {
+      symbols.push(groups[0] * 9 + groups[1] * 3 + groups[2]);
+      groups.length = 0;
+    }
+  }
+  if (groups.length === 1) symbols.push(groups[0]);
+  if (groups.length === 2) symbols.push(groups[0] * 3 + groups[1]);
+  return symbols;
+}
+
+/** BIP-380 descriptor checksum, exported for manifest and QR validation. */
+export function addDescriptorChecksum(payload: string): string {
+  const checksum =
+    descriptorPolymod([...descriptorExpand(payload), 0, 0, 0, 0, 0, 0, 0, 0]) ^
+    1n;
+  let encoded = '';
+  for (let i = 0; i < 8; i += 1) {
+    encoded +=
+      DESCRIPTOR_CHECKSUM_CHARSET[
+        Number((checksum >> BigInt(5 * (7 - i))) & 31n)
+      ];
+  }
+  return `${payload}#${encoded}`;
+}
+
+export function verifyDescriptorChecksum(descriptor: string): boolean {
+  const separator = descriptor.lastIndexOf('#');
+  if (separator < 0 || descriptor.length - separator !== 9) return false;
+  const payload = descriptor.slice(0, separator);
+  const checksum = descriptor.slice(separator + 1);
+  if (
+    !checksum.split('').every((c) => DESCRIPTOR_CHECKSUM_CHARSET.includes(c))
+  ) {
+    return false;
+  }
+  const symbols = [
+    ...descriptorExpand(payload),
+    ...checksum.split('').map((c) => DESCRIPTOR_CHECKSUM_CHARSET.indexOf(c)),
+  ];
+  return descriptorPolymod(symbols) === 1n;
+}
+
+function canonicalPolicyToLegacy(
+  canonical: CanonicalMultisigPolicy
+): MultisigPolicy {
+  return {
+    schemaVersion: 1,
+    name: canonical.name,
+    m: canonical.threshold,
+    threshold: canonical.threshold,
+    network: canonical.network,
+    accountPath: canonical.accountPath,
+    policyRevision: canonical.policyRevision,
+    signers: canonical.cosigners.map((cosigner) => ({
+      id: cosigner.id,
+      label: cosigner.label,
+      name: cosigner.label,
+      xpub: cosigner.xpub,
+      masterFingerprintHex: cosigner.masterFingerprintHex,
+      accountPath: cosigner.accountPath,
+    })),
+  };
+}
+
+/** Export one self-contained manifest for QR, file, or manual text exchange. */
+export function serializeMultisigManifest(policy: MultisigPolicy): string {
+  const canonical = normalizeMultisigPolicy(
+    policy,
+    policy.network ?? Network.MAINNET
+  );
+  const descriptors = createMultisigDescriptorSet(policy, canonical.network);
+  const manifest: MultisigManifest = {
+    format: 'optn-multisig-manifest',
+    schemaVersion: 1,
+    policy: canonical,
+    descriptors,
+  };
+  return JSON.stringify(manifest);
+}
+
+/** Import and cryptographically cross-check a complete descriptor manifest. */
+export function parseMultisigManifest(
+  serialized: string,
+  expectedNetwork?: Network
+): MultisigPolicy {
+  let value: unknown;
+  try {
+    value = JSON.parse(serialized);
+  } catch {
+    throw new Error('The multisig manifest is not valid JSON.');
+  }
+  if (!value || typeof value !== 'object') {
+    throw new Error('The multisig manifest must be a JSON object.');
+  }
+  const manifest = value as Partial<MultisigManifest>;
+  if (
+    manifest.format !== 'optn-multisig-manifest' ||
+    manifest.schemaVersion !== 1
+  ) {
+    throw new Error('Unsupported multisig manifest format or schema version.');
+  }
+  if (!manifest.policy || !manifest.descriptors) {
+    throw new Error(
+      'The multisig manifest is missing its policy or descriptors.'
+    );
+  }
+  if (
+    expectedNetwork !== undefined &&
+    manifest.policy.network !== expectedNetwork
+  ) {
+    throw new Error('The multisig manifest belongs to a different network.');
+  }
+  const policy = canonicalPolicyToLegacy(manifest.policy);
+  const regenerated = createMultisigDescriptorSet(
+    policy,
+    manifest.policy.network
+  );
+  if (
+    manifest.descriptors.receive !== regenerated.receive ||
+    manifest.descriptors.change !== regenerated.change ||
+    manifest.descriptors.policyId !== regenerated.policyId
+  ) {
+    throw new Error(
+      'The multisig manifest policy and descriptors do not agree.'
+    );
+  }
+  return policy;
 }
 
 /**
@@ -151,7 +545,7 @@ export function deriveMultisigAddress(
   validateMultisigPolicy(policy);
   const relativePath = `${branchIndex}/${addressIndex}`;
 
-  const publicKeys = policy.signers.map((signer, index) => {
+  const derivedCosigners = policy.signers.map((signer, index) => {
     const decoded = decodeHdPublicKey(signer.xpub.trim());
     if (typeof decoded === 'string') {
       throw new Error(`Cosigner ${index + 1} has an xPub that cannot be read.`);
@@ -162,15 +556,37 @@ export function deriveMultisigAddress(
         `Could not derive ${relativePath} for cosigner ${index + 1}.`
       );
     }
-    return child.publicKey;
+    return {
+      cosignerId: signer.id?.trim() || stableCosignerId(signer.xpub.trim()),
+      publicKey: Uint8Array.from(child.publicKey),
+      sortedPosition: -1,
+      derivationPath: policy.accountPath
+        ? `${normalizeBchAccountPath(policy.accountPath)}/${relativePath}`
+        : `m/${relativePath}`,
+    };
   });
 
-  const sortedPublicKeys = sortPublicKeysBip67(publicKeys);
+  const sortedCosigners = [...derivedCosigners].sort((a, b) => {
+    const length = Math.min(a.publicKey.length, b.publicKey.length);
+    for (let i = 0; i < length; i += 1) {
+      if (a.publicKey[i] !== b.publicKey[i]) {
+        return a.publicKey[i] - b.publicKey[i];
+      }
+    }
+    return a.publicKey.length - b.publicKey.length;
+  });
+  sortedCosigners.forEach((cosigner, position) => {
+    cosigner.sortedPosition = position;
+  });
+  const sortedPublicKeys = sortedCosigners.map(
+    (cosigner) => cosigner.publicKey
+  );
   const redeemScript = buildMultisigRedeemScript(sortedPublicKeys, policy.m);
   return {
     redeemScript,
     lockingBytecode: p2shLockingBytecodeFor(redeemScript),
     sortedPublicKeys,
+    derivedCosigners: sortedCosigners,
     relativePath,
   };
 }

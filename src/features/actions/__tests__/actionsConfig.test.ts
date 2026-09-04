@@ -7,4 +7,12 @@ describe('Actions configuration', () => {
       expect.objectContaining({ title: 'QR Signing Demo' })
     );
   });
+
+  it('surfaces multisig setup under Advanced Actions', () => {
+    expect(ADVANCED_ACTIONS).toContainEqual({
+      title: 'Multisig Setup',
+      description: 'Create or import a shared xpub multisig wallet',
+      to: '/multisig/setup',
+    });
+  });
 });

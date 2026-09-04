@@ -22,6 +22,7 @@ import { ADVANCED_ACTIONS, BASIC_ACTIONS } from './actionsConfig';
 import { selectQuantumrootEnabled } from '../../state/slices/experimentalSlice';
 import { useI18n } from '../../i18n/useI18n';
 import type { TranslationKey } from '../../i18n/resources';
+import { isDesktopPlatform } from '../../utils/platform';
 
 type ActionsMode = 'basic' | 'advanced';
 
@@ -93,6 +94,8 @@ function getBasicActionIcon(title: string) {
 
 function getAdvancedActionIcon(title: string) {
   switch (title) {
+    case 'Multisig Setup':
+      return <FaQrcode />;
     case 'Quantumroot':
       return <FaBitcoin />;
     case 'Transaction Builder':
@@ -112,10 +115,13 @@ const Actions: React.FC = () => {
     (state: RootState) => state.wallet_id.currentWalletId
   );
   const quantumrootEnabled = useSelector(selectQuantumrootEnabled);
+  const desktop = isDesktopPlatform();
   // Quantumroot is on by default; hide its action when the user disables it in
   // Experimental settings. Additive + backward-compatible (no effect when on).
   const advancedActions = ADVANCED_ACTIONS.filter(
-    (a) => quantumrootEnabled || a.to !== '/quantumroot'
+    (a) =>
+      (quantumrootEnabled || a.to !== '/quantumroot') &&
+      (!desktop || a.to !== '/multisig/setup')
   );
 
   const handleGenerateNewAddress = async () => {

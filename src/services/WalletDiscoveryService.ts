@@ -1,4 +1,9 @@
 import KeyService from './KeyService';
+import {
+  ensureMultisigAddressInventory,
+  listMultisigAddressInventory,
+  loadMultisigPolicy,
+} from './multisig/MultisigStorageService';
 import { logError } from '../utils/errorHandling';
 import { Network } from '../state/slices/networkSlice';
 import {
@@ -176,6 +181,55 @@ async function getCandidateBatch(
   return batch;
 }
 
+async function getMultisigCandidateBatch(
+  walletId: number,
+  startIndex: number
+): Promise<
+  {
+    address: string;
+    addressIndex: number;
+    changeIndex: number;
+    pairedChangeAddress: string | null;
+  }[]
+> {
+  const policy = await loadMultisigPolicy(walletId);
+  if (!policy) throw new Error('Multisig policy is not ready for discovery.');
+  await ensureMultisigAddressInventory(
+    walletId,
+    startIndex + ADDRESS_BATCH_SIZE - 1
+  );
+  const inventory = await listMultisigAddressInventory(walletId);
+  const inventoryByPath = new Map(
+    inventory.map((entry) => [`${entry.branch}/${entry.index}`, entry] as const)
+  );
+  const batch: {
+    address: string;
+    addressIndex: number;
+    changeIndex: number;
+    pairedChangeAddress: string | null;
+  }[] = [];
+  for (let offset = 0; offset < ADDRESS_BATCH_SIZE; offset += 1) {
+    const addressIndex = startIndex + offset;
+    const receive = inventoryByPath.get(`0/${addressIndex}`);
+    const change = inventoryByPath.get(`1/${addressIndex}`);
+    if (!receive || !change)
+      throw new Error('Multisig discovery inventory is incomplete.');
+    batch.push({
+      address: receive.address,
+      addressIndex,
+      changeIndex: 0,
+      pairedChangeAddress: change.address,
+    });
+    batch.push({
+      address: change.address,
+      addressIndex,
+      changeIndex: 1,
+      pairedChangeAddress: null,
+    });
+  }
+  return batch;
+}
+
 /**
  * Derive the same ordinary BCH branches used by wallet discovery without
  * touching the database. Cauldron activity uses this read-only inventory too,
@@ -200,6 +254,37 @@ export async function deriveWalletAddressCandidates(
     count < 1
   ) {
     throw new Error('Wallet address scan range is invalid.');
+  }
+
+  const multisigPolicy = await loadMultisigPolicy(walletId);
+  if (multisigPolicy) {
+    await ensureMultisigAddressInventory(walletId, startIndex + count - 1);
+    const inventory = await listMultisigAddressInventory(walletId);
+    const inventoryByPath = new Map(
+      inventory.map(
+        (entry) => [`${entry.branch}/${entry.index}`, entry] as const
+      )
+    );
+    const candidates: WalletDerivedAddressCandidate[] = [];
+    for (let offset = 0; offset < count; offset += 1) {
+      const addressIndex = startIndex + offset;
+      for (const [branchName, branchIndex] of [
+        ['receive', 0],
+        ['change', 1],
+      ] as const) {
+        const address = inventoryByPath.get(`${branchIndex}/${addressIndex}`);
+        if (!address)
+          throw new Error('Multisig address inventory is incomplete.');
+        candidates.push({
+          address: address.address,
+          tokenAddress: address.tokenAddress,
+          addressIndex,
+          changeIndex: branchIndex,
+          branchName,
+        });
+      }
+    }
+    return candidates;
   }
 
   const xpubs = await KeyService.getWalletXpubs(
@@ -238,6 +323,10 @@ async function expandDiscovery(
   network: Network,
   batchHasUsage: WalletBatchUsageChecker
 ): Promise<string[]> {
+  const multisigPolicy = await loadMultisigPolicy(walletId);
+  if (multisigPolicy) {
+    return expandMultisigDiscovery(walletId, batchHasUsage);
+  }
   const keys = await KeyService.retrieveKeys(walletId);
   const knownAddresses = new Set(keys.map((key) => key.address));
   const recoveredAddresses: string[] = [];
@@ -347,9 +436,84 @@ async function expandDiscovery(
   }
 
   const persistedInventory = keyInventory(
-    recoveredAddresses.length > 0
-      ? await KeyService.retrieveKeys(walletId)
-      : keys
+    await KeyService.retrieveKeys(walletId)
+  );
+  state[stateKey(walletId)] = {
+    nextBatchStart: batchStart,
+    consecutiveUnusedBatches,
+    lastDiscoveredAt: Date.now(),
+    ...persistedInventory,
+  };
+  writeState(state);
+  return recoveredAddresses;
+}
+
+async function expandMultisigDiscovery(
+  walletId: number,
+  batchHasUsage: WalletBatchUsageChecker
+): Promise<string[]> {
+  const keys = await KeyService.retrieveKeys(walletId);
+  const knownAddresses = new Set(keys.map((key) => key.address));
+  const recoveredAddresses: string[] = [];
+  const state = readState();
+  const inventory = keyInventory(keys);
+  const savedState = state[stateKey(walletId)];
+  const stateMatchesInventory =
+    savedState?.knownKeyCount === inventory.knownKeyCount &&
+    savedState.highestKnownIndex === inventory.highestKnownIndex;
+  let batchStart = Math.max(
+    inventory.highestKnownIndex >= 0
+      ? getBatchStart(inventory.highestKnownIndex)
+      : 0,
+    stateMatchesInventory && Number.isSafeInteger(savedState?.nextBatchStart)
+      ? getBatchStart(savedState.nextBatchStart)
+      : 0
+  );
+  let consecutiveUnusedBatches =
+    stateMatchesInventory &&
+    Number.isSafeInteger(savedState?.consecutiveUnusedBatches) &&
+    savedState.consecutiveUnusedBatches >= 0
+      ? savedState.consecutiveUnusedBatches
+      : 0;
+  let batchesProcessed = 0;
+
+  while (
+    batchesProcessed < MAX_BATCHES_PER_PASS &&
+    consecutiveUnusedBatches < MAX_EMPTY_BATCHES
+  ) {
+    const batch = await getMultisigCandidateBatch(walletId, batchStart);
+    const used = new Set(await batchHasUsage(walletId, batch));
+    batchesProcessed += 1;
+    batchStart += ADDRESS_BATCH_SIZE;
+    if (used.size > 0) {
+      let recoveredInBatch = false;
+      for (const candidate of batch) {
+        if (!used.has(candidate.address)) continue;
+        if (!knownAddresses.has(candidate.address)) {
+          // ensureMultisigAddressInventory has already persisted both the
+          // descriptor-backed row and the compatibility index atomically.
+          knownAddresses.add(candidate.address);
+          recoveredAddresses.push(candidate.address);
+          recoveredInBatch = true;
+        }
+        if (
+          candidate.pairedChangeAddress &&
+          !knownAddresses.has(candidate.pairedChangeAddress)
+        ) {
+          knownAddresses.add(candidate.pairedChangeAddress);
+          recoveredAddresses.push(candidate.pairedChangeAddress);
+          recoveredInBatch = true;
+        }
+      }
+      consecutiveUnusedBatches = 0;
+      if (recoveredInBatch) break;
+      continue;
+    }
+    consecutiveUnusedBatches += 1;
+  }
+
+  const persistedInventory = keyInventory(
+    await KeyService.retrieveKeys(walletId)
   );
   state[stateKey(walletId)] = {
     nextBatchStart: batchStart,

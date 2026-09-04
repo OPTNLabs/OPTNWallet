@@ -21,11 +21,12 @@ import {
   getBchAccountPath,
   deriveHdPublicKeyAtPath,
 } from '../../services/HdWalletService';
+import { deriveLocalWalletCosignerMetadata } from '../../services/WalletPublicMetadataService';
 import { isDesktopPlatform } from '../../utils/platform';
 import DeviceIntegrityService from '../../services/DeviceIntegrityService';
 import { WATCH_ONLY_WALLET_TYPE } from '../../platform/desktop/onboarding/watchOnlyWallet';
 import { HARDWARE_WALLET_TYPE } from '../../platform/desktop/onboarding/hardwareWallet';
-import type { ExtendedWalletType } from '../../types/wallet';
+import { WalletType, type ExtendedWalletType } from '../../types/wallet';
 import { copyToClipboard } from '../../utils/clipboard';
 
 type WalletInfoSnapshot = {
@@ -33,6 +34,8 @@ type WalletInfoSnapshot = {
   /** Local SQLite id for this machine only (not portable across PCs). */
   internalId: number;
   walletType: string;
+  /** Only seed-backed single-key wallets can reveal a recovery phrase here. */
+  seedBacked: boolean;
   network: string;
   /** Absolute .optn path when known; else relative AppData path; else null. */
   walletFilePath: string | null;
@@ -50,6 +53,12 @@ function typeLabel(t: string | null | undefined): string {
   if (t === HARDWARE_WALLET_TYPE) return 'Hardware';
   if (t === 'quantumroot') return 'Quantumroot';
   return 'Standard';
+}
+
+function isSeedBackedWalletType(
+  t: string | null | undefined
+): t is WalletType.STANDARD | WalletType.QUANTUMROOT {
+  return t === WalletType.STANDARD || t === WalletType.QUANTUMROOT;
 }
 
 function hashXpub(xpub: string): string {
@@ -149,7 +158,8 @@ async function loadSnapshot(
   walletId: number,
   network: Parameters<typeof getBchAccountPath>[0],
   reduxPath: string,
-  walletType: ExtendedWalletType | string
+  walletType: ExtendedWalletType | string,
+  revealSeedIdentity = false
 ): Promise<WalletInfoSnapshot> {
   const meta = await WalletManager().getWalletMetadata(walletId);
   const name =
@@ -159,9 +169,23 @@ async function loadSnapshot(
     (reduxPath && reduxPath.trim()) ||
     getBchAccountPath(network);
   const cols = await readDesktopColumns(walletId);
+  const resolvedWalletType = meta?.walletType ?? walletType;
   let accountXpub = cols.accountXpub;
   if (!accountXpub) {
     accountXpub = await deriveAccountXpubFromSeed(walletId, network, path);
+  }
+  let masterFingerprint = cols.masterFingerprint;
+  if (
+    !masterFingerprint &&
+    revealSeedIdentity &&
+    isSeedBackedWalletType(resolvedWalletType)
+  ) {
+    try {
+      const publicMetadata = await deriveLocalWalletCosignerMetadata(walletId);
+      masterFingerprint = publicMetadata.masterFingerprintHex;
+    } catch {
+      // Keep the identity field unavailable if the seed cannot be unlocked.
+    }
   }
   const firstReceive = await loadFirstReceive(walletId);
 
@@ -184,13 +208,14 @@ async function loadSnapshot(
   return {
     name,
     internalId: walletId,
-    walletType: typeLabel(meta?.walletType ?? walletType),
+    walletType: typeLabel(resolvedWalletType),
+    seedBacked: isSeedBackedWalletType(resolvedWalletType),
     network: meta?.networkType ?? network,
     walletFilePath,
     walletFileMissing,
     derivationPath: path,
     accountXpub,
-    masterFingerprint: cols.masterFingerprint,
+    masterFingerprint,
     walletHash: accountXpub ? hashXpub(accountXpub) : null,
     firstReceive,
   };
@@ -312,35 +337,50 @@ export const WalletInfoSettings: React.FC = () => {
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
   const [nameMsg, setNameMsg] = useState('');
+  const [mnemonic, setMnemonic] = useState<string | null>(null);
+  const [mnemonicBusy, setMnemonicBusy] = useState(false);
 
-  const reload = useCallback(async () => {
-    if (!walletId || walletId <= 0) {
-      setInfo(null);
-      return;
-    }
-    setBusy(true);
-    setError('');
-    try {
-      const snap = await loadSnapshot(walletId, network, reduxPath, walletType);
-      setInfo(snap);
-      setNameDraft(snap.name);
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : 'Could not load wallet info.'
-      );
-    } finally {
-      setBusy(false);
-    }
-  }, [walletId, network, reduxPath, walletType]);
+  const reload = useCallback(
+    async (revealSeedIdentity = false) => {
+      if (!walletId || walletId <= 0) {
+        setInfo(null);
+        return;
+      }
+      setBusy(true);
+      setError('');
+      try {
+        const snap = await loadSnapshot(
+          walletId,
+          network,
+          reduxPath,
+          walletType,
+          revealSeedIdentity
+        );
+        setInfo(snap);
+        setNameDraft(snap.name);
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : 'Could not load wallet info.'
+        );
+      } finally {
+        setBusy(false);
+      }
+    },
+    [walletId, network, reduxPath, walletType]
+  );
 
   useEffect(() => {
     void reload();
     setRevealed(false);
+    setMnemonic(null);
   }, [reload]);
 
   // Hide secrets when leaving the panel / switching wallet.
   useEffect(() => {
-    return () => setRevealed(false);
+    return () => {
+      setRevealed(false);
+      setMnemonic(null);
+    };
   }, [walletId]);
 
   const toggleReveal = async () => {
@@ -353,13 +393,13 @@ export const WalletInfoSettings: React.FC = () => {
     setError('');
     try {
       if (await tryBiometricReveal(walletId)) {
-        await reload();
+        await reload(true);
         setRevealed(true);
         return;
       }
       // Same Confirm-password card as Send (AppLockGate / integrity modal).
       await DeviceIntegrityService.assertDeviceIntegrity('xpub_reveal');
-      await reload();
+      await reload(true);
       setRevealed(true);
     } catch (err) {
       const msg =
@@ -370,6 +410,49 @@ export const WalletInfoSettings: React.FC = () => {
       setBusy(false);
     }
   };
+
+  const revealMnemonic = async () => {
+    if (!walletId || !info?.seedBacked || mnemonicBusy) return;
+    setMnemonicBusy(true);
+    setError('');
+    try {
+      await DeviceIntegrityService.assertDeviceIntegrity(
+        'recovery_phrase_reveal'
+      );
+      const walletInfo = await WalletManager().getWalletInfo(walletId);
+      const value =
+        walletInfo && typeof walletInfo.mnemonic === 'string'
+          ? walletInfo.mnemonic.trim()
+          : '';
+      if (!value || value.startsWith('enc:')) {
+        throw new Error('Recovery phrase is unavailable for this wallet.');
+      }
+      const words = value.split(/\s+/).filter(Boolean);
+      if (
+        words.length !== 12 &&
+        words.length !== 15 &&
+        words.length !== 18 &&
+        words.length !== 21 &&
+        words.length !== 24
+      ) {
+        throw new Error(
+          'Recovery phrase is invalid or unavailable for this wallet.'
+        );
+      }
+      setMnemonic(words.join(' '));
+    } catch (err) {
+      const msg =
+        err instanceof Error
+          ? err.message
+          : 'Could not reveal recovery phrase.';
+      if (/cancelled|canceled|timed out/i.test(msg)) return;
+      setError(msg);
+    } finally {
+      setMnemonicBusy(false);
+    }
+  };
+
+  const hideMnemonic = () => setMnemonic(null);
 
   const saveName = async () => {
     if (!walletId) return;
@@ -399,8 +482,8 @@ export const WalletInfoSettings: React.FC = () => {
       <div>
         <p className="text-sm font-semibold wallet-text-strong">Wallet info</p>
         <p className="text-xs wallet-muted mt-1">
-          Name, type, and network are always visible. Only xPub and related
-          identity fields use the eye lock (password or biometric).
+          Name, type, and network are always visible. xPub, recovery phrase, and
+          related identity fields use the eye lock (password or biometric).
         </p>
       </div>
 
@@ -586,6 +669,60 @@ export const WalletInfoSettings: React.FC = () => {
               </div>
             )}
           </div>
+
+          {info.seedBacked && (
+            <div className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-3 space-y-3">
+              <div>
+                <p className="text-sm font-semibold wallet-text-strong">
+                  Recovery phrase
+                </p>
+                <p className="text-xs wallet-muted mt-1">
+                  Reveal only when you need to verify or back up this wallet.
+                </p>
+              </div>
+
+              {!mnemonic ? (
+                <button
+                  type="button"
+                  disabled={busy || mnemonicBusy}
+                  onClick={() => void revealMnemonic()}
+                  className="wallet-btn-danger w-full py-2 text-sm font-semibold disabled:opacity-50"
+                >
+                  {mnemonicBusy ? 'Checking…' : 'Reveal recovery phrase'}
+                </button>
+              ) : (
+                <>
+                  <div className="wallet-card p-4 grid grid-cols-2 gap-y-2 gap-x-3 text-sm">
+                    {mnemonic.split(/\s+/).map((word, index) => (
+                      <div
+                        key={`${index}-${word}`}
+                        className="wallet-text-strong"
+                      >
+                        {index + 1}. {word}
+                      </div>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={hideMnemonic}
+                    className="wallet-btn-primary w-full py-2 text-sm font-semibold"
+                  >
+                    Hide recovery phrase
+                  </button>
+                </>
+              )}
+
+              <div className="text-center">
+                <p className="font-bold underline text-base wallet-danger-text">
+                  Warning
+                </p>
+                <p className="text-xs mt-1 wallet-muted">
+                  Displaying your mnemonic backup phrase can compromise your
+                  funds. Ensure you keep it secure.
+                </p>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

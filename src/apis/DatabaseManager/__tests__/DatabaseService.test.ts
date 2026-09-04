@@ -76,6 +76,7 @@ describe('DatabaseService', () => {
     vi.doMock('../../../utils/schema/schema', () => ({
       createTables,
       createTransactionDetailsTable,
+      createMultisigTables: vi.fn(),
     }));
 
     const initSqlJs = vi.fn(async () => ({
@@ -106,6 +107,7 @@ describe('DatabaseService', () => {
     vi.doMock('../../../utils/schema/schema', () => ({
       createTables: vi.fn(),
       createTransactionDetailsTable: vi.fn(),
+      createMultisigTables: vi.fn(),
     }));
     vi.doMock('sql.js', () => ({
       default: vi.fn(async () => ({
@@ -131,6 +133,7 @@ describe('DatabaseService', () => {
     vi.doMock('../../../utils/schema/schema', () => ({
       createTables: vi.fn(),
       createTransactionDetailsTable: vi.fn(),
+      createMultisigTables: vi.fn(),
     }));
 
     vi.doMock('sql.js', () => ({
@@ -164,6 +167,7 @@ describe('DatabaseService', () => {
     vi.doMock('../../../utils/schema/schema', () => ({
       createTables: vi.fn(),
       createTransactionDetailsTable: vi.fn(),
+      createMultisigTables: vi.fn(),
     }));
 
     vi.doMock('sql.js', () => ({
@@ -199,6 +203,7 @@ describe('DatabaseService', () => {
     vi.doMock('../../../utils/schema/schema', () => ({
       createTables: vi.fn(),
       createTransactionDetailsTable: vi.fn(),
+      createMultisigTables: vi.fn(),
     }));
 
     vi.doMock('sql.js', () => ({

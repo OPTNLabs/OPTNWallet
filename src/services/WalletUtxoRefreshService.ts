@@ -6,6 +6,11 @@ import { invalidateUTXOCache, primeUTXOCache } from './ElectrumService';
 import KeyService from './KeyService';
 import QuantumrootTrackingService from './QuantumrootTrackingService';
 import {
+  ensureMultisigAddressInventory,
+  listMultisigAddressInventory,
+  loadMultisigPolicy,
+} from './multisig/MultisigStorageService';
+import {
   runWalletUtxoRefresh,
   runWalletUtxoRefreshExclusive,
 } from './RefreshCoordinator';
@@ -297,4 +302,37 @@ export async function refreshActiveWalletUtxos(
   walletId: number
 ): Promise<boolean> {
   return (await reconcileActiveWalletUtxos(walletId)) !== null;
+}
+
+/**
+ * Refresh a multisig policy without changing the app's active standard wallet.
+ *
+ * The normal UTXO worker is intentionally scoped to the Redux-active mnemonic
+ * wallet. Multisig workspaces therefore need this explicit route-scoped path.
+ */
+export async function refreshMultisigWalletUtxos(
+  walletId: number
+): Promise<Record<string, UTXO[]>> {
+  return await runWalletUtxoRefreshExclusive(walletId, async () => {
+    const policy = await loadMultisigPolicy(walletId);
+    if (!policy) throw new Error('Multisig policy is unavailable.');
+
+    let inventory = await listMultisigAddressInventory(walletId);
+    if (inventory.length === 0) {
+      // A valid policy should normally have its initial gap window already
+      // materialized. Repair an incomplete setup before scanning, without
+      // reserving or advancing an address cursor.
+      await ensureMultisigAddressInventory(walletId, 19);
+      inventory = await listMultisigAddressInventory(walletId);
+    }
+    if (inventory.length === 0) return {};
+
+    const addresses = inventory.map((entry) => entry.address);
+    return await UTXOService.fetchAndStoreUTXOsMany(walletId, addresses, {
+      discover: false,
+      force: true,
+      network: policy.network,
+      chainAuthoritative: true,
+    });
+  });
 }

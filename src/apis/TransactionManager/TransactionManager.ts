@@ -199,14 +199,20 @@ export default function TransactionManager() {
     return stored;
   }
 
-  async function sendTransaction(rawTX: string): Promise<{
+  async function sendTransaction(
+    rawTX: string,
+    walletIdOverride?: number | null
+  ): Promise<{
     txid: string | null;
     errorMessage: string | null;
     broadcastState?: 'broadcasted' | 'submitted';
   }> {
     const txBuilder = TransactionBuilderHelper();
     const derivedTxid = deriveTxidFromRawTx(rawTX);
-    const walletId = store.getState().wallet_id.currentWalletId ?? null;
+    const walletId =
+      walletIdOverride === undefined
+        ? (store.getState().wallet_id.currentWalletId ?? null)
+        : walletIdOverride;
     const priorAttempt = derivedTxid
       ? await OutboundTransactionTracker.getByTxid(derivedTxid, walletId)
       : null;

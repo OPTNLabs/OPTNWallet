@@ -32,6 +32,7 @@ function toNumber(value: unknown): number {
  */
 function normalizeWalletType(raw: unknown): ExtendedWalletType {
   if (raw === WalletType.QUANTUMROOT) return WalletType.QUANTUMROOT;
+  if (raw === WalletType.MULTISIG) return WalletType.MULTISIG;
   if (raw === 'watch-only') return 'watch-only';
   // Desktop USB hardware keystore (Ledger etc.) — public keys on disk, signs on device.
   if (raw === 'hardware') return 'hardware';
@@ -313,10 +314,7 @@ export default function WalletManager() {
             : row.networkType === Network.CHIPNET
               ? Network.CHIPNET
               : null;
-        const rowWalletType =
-          row.walletType === WalletType.QUANTUMROOT
-            ? WalletType.QUANTUMROOT
-            : WalletType.STANDARD;
+        const rowWalletType = normalizeWalletType(row.walletType);
         const networkMatches =
           lookup?.networkType === undefined ||
           rowNetwork === lookup.networkType;
@@ -396,10 +394,7 @@ export default function WalletManager() {
             : row.networkType === Network.CHIPNET
               ? Network.CHIPNET
               : null;
-        const rowWalletType =
-          row.walletType === WalletType.QUANTUMROOT
-            ? WalletType.QUANTUMROOT
-            : WalletType.STANDARD;
+        const rowWalletType = normalizeWalletType(row.walletType);
         const networkMatches =
           lookup?.networkType === undefined ||
           rowNetwork === lookup.networkType;
