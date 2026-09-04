@@ -21,6 +21,20 @@
 //! The URI still has a job: its hash names the stored key. Hashed, never raw,
 //! so a pairing URI does not sit in storage in the clear.
 //!
+//! **The chat identity is deliberately behind a replaceable boundary.** Today
+//! it is NIP-06 from the wallet's own mnemonic, which means an `npub` is a
+//! deterministic function of a wallet seed — anyone who learns both learns
+//! that they belong together, and the identity cannot move to another wallet
+//! any more than the seed can. That is the cost of contacts being able to find
+//! you again after a restore.
+//!
+//! A better scheme would let an identity move between wallets the way coins
+//! do, without being welded to one seed. [`AccountScheme`] is a union with one
+//! member so that arriving is a new variant rather than a hunt through
+//! callers, and [`AccountScheme::is_portable`] is the property that would
+//! change — stated now so the difference is visible before anything depends on
+//! today's answer.
+//!
 //! No key is generated here. This crate holds no randomness; it says what a
 //! caller must have generated and refuses what it must not have.
 
@@ -33,6 +47,66 @@ use crate::error::{CliError, Result};
 /// Coin type 1237 is Nostr's. The path is fixed because a contact who saved
 /// your `npub` has to find the same one after you restore from your seed.
 pub const CHAT_NIP06_PATH: &str = "m/44'/1237'/0'/0/0";
+
+/// Nostr's SLIP-44 coin type.
+pub const NIP06_COIN_TYPE: u32 = 1237;
+/// The address index the chat identity itself lives at.
+pub const NIP06_IDENTITY_INDEX: u32 = 0;
+
+/// A NIP-06 path: `m/44'/1237'/<account>'/0/<index>`.
+///
+/// One tree carries the chat identity at index 0 and each MLS device leaf
+/// after it, so a restored wallet republishes the same key package rather than
+/// appearing as a new device to everyone it has ever spoken to.
+pub fn nip06_path(account: u32, index: u32) -> String {
+    format!("m/44'/{NIP06_COIN_TYPE}'/{account}'/0/{index}")
+}
+
+/// The index an MLS device leaf sits at. Device 0 is index 1.
+pub const fn mls_index(device: u32) -> u32 {
+    device + 1
+}
+
+/// How a wallet produces its Nostr account key.
+///
+/// One member today. A migration is a new variant here, which is the whole
+/// reason this is an enum rather than an assumption spread through callers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum AccountScheme {
+    /// NIP-06 from the wallet's BIP39 mnemonic.
+    Nip06Bip39,
+}
+
+impl AccountScheme {
+    pub const ALL: &'static [Self] = &[Self::Nip06Bip39];
+
+    /// The tag this scheme is stored under.
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Nip06Bip39 => "nip06-bip39",
+        }
+    }
+
+    /// Whether an identity under this scheme could move to another wallet.
+    ///
+    /// False for NIP-06: the key *is* the seed at a path, so the identity is
+    /// the wallet. A scheme that let someone carry an identity between wallets
+    /// the way they carry coins would answer true, and this is the property
+    /// that tells the two apart.
+    pub const fn is_portable(self) -> bool {
+        match self {
+            Self::Nip06Bip39 => false,
+        }
+    }
+
+    /// Whether knowing the identity tells you which wallet it belongs to.
+    ///
+    /// The other side of the same coin, and the reason a replacement is wanted:
+    /// under NIP-06 an `npub` and a wallet are the same secret in two forms.
+    pub const fn links_identity_to_wallet(self) -> bool {
+        !self.is_portable()
+    }
+}
 
 /// The prefix of the derivation this module exists to forbid.
 const FORBIDDEN_URI_DERIVATION_PREFIX: &str = "wizardconnect:";
@@ -57,16 +131,28 @@ pub enum NostrJob {
     FusionRound,
     /// One dapp pairing over WizardConnect.
     WizardPairing,
+    /// One MLS device leaf, for private groups.
+    ///
+    /// Seed-derived like chat and on the same tree, one index along per device,
+    /// so a restored wallet republishes the same key package instead of
+    /// appearing as a stranger to every group it was in.
+    MlsDevice,
 }
 
 impl NostrJob {
-    pub const ALL: &'static [Self] = &[Self::Chat, Self::FusionRound, Self::WizardPairing];
+    pub const ALL: &'static [Self] = &[
+        Self::Chat,
+        Self::FusionRound,
+        Self::WizardPairing,
+        Self::MlsDevice,
+    ];
 
     pub const fn label(self) -> &'static str {
         match self {
             Self::Chat => "chat",
             Self::FusionRound => "a CashFusion round",
             Self::WizardPairing => "a WizardConnect pairing",
+            Self::MlsDevice => "an MLS device",
         }
     }
 
@@ -77,6 +163,10 @@ impl NostrJob {
             },
             Self::FusionRound => KeySource::FreshPerUse,
             Self::WizardPairing => KeySource::CsprngPersisted,
+            // The same tree as chat, one index along per device.
+            Self::MlsDevice => KeySource::SeedDerived {
+                path: MLS_DEVICE_0_PATH,
+            },
         }
     }
 
@@ -89,6 +179,7 @@ impl NostrJob {
             Self::FusionRound => false,
             // Stored encrypted, so a session can reconnect.
             Self::WizardPairing => true,
+            Self::MlsDevice => true,
         }
     }
 
@@ -98,7 +189,7 @@ impl NostrJob {
     /// seed alone -- the dapp's QR has to be scanned again, which is the
     /// correct outcome: a new install is a new pairing.
     pub const fn recoverable_from_seed(self) -> bool {
-        matches!(self, Self::Chat)
+        matches!(self, Self::Chat | Self::MlsDevice)
     }
 
     /// Whether this job's key may ever be derived from the wallet's seed.
@@ -108,14 +199,20 @@ impl NostrJob {
     /// pairing derived from it would survive a reinstall the dapp should not
     /// recognise.
     pub const fn may_derive_from_seed(self) -> bool {
-        matches!(self, Self::Chat)
+        matches!(self, Self::Chat | Self::MlsDevice)
     }
 }
+
+/// The path MLS device 0 derives at.
+pub const MLS_DEVICE_0_PATH: &str = "m/44'/1237'/0'/0/1";
 
 /// Whether two jobs may share a key. They may not.
 ///
 /// Stated as a function rather than left implicit, so the answer is the same
-/// everywhere and a caller cannot reason its way to an exception.
+/// everywhere and a caller cannot reason its way to an exception. Chat and an
+/// MLS device share a *tree* -- they are the same seed at neighbouring indices
+/// -- and still not a key: one is the secp256k1 identity contacts know, the
+/// other an Ed25519 leaf in a group.
 pub const fn may_share_key(a: NostrJob, b: NostrJob) -> bool {
     // A job shares a key with itself and nothing else.
     matches!(
@@ -123,6 +220,7 @@ pub const fn may_share_key(a: NostrJob, b: NostrJob) -> bool {
         (NostrJob::Chat, NostrJob::Chat)
             | (NostrJob::FusionRound, NostrJob::FusionRound)
             | (NostrJob::WizardPairing, NostrJob::WizardPairing)
+            | (NostrJob::MlsDevice, NostrJob::MlsDevice)
     )
 }
 
@@ -264,6 +362,43 @@ mod tests {
     }
 
     #[test]
+    fn the_chat_identity_is_behind_a_boundary_because_it_should_not_be_the_wallet() {
+        // Today an npub is the wallet seed at a path, so the two are the same
+        // secret in two forms: learn one and you have linked the other. That is
+        // the price of contacts finding you again after a restore, and it is
+        // what a portable scheme would buy back.
+        assert_eq!(AccountScheme::Nip06Bip39.id(), "nip06-bip39");
+        assert!(!AccountScheme::Nip06Bip39.is_portable());
+        assert!(AccountScheme::Nip06Bip39.links_identity_to_wallet());
+
+        // One member today. A migration is a new variant, which is the reason
+        // this is an enum at all rather than an assumption in every caller.
+        assert_eq!(AccountScheme::ALL.len(), 1);
+        for scheme in AccountScheme::ALL {
+            assert!(scheme.is_portable() != scheme.links_identity_to_wallet());
+        }
+    }
+
+    #[test]
+    fn chat_and_the_mls_devices_share_one_tree_at_neighbouring_indices() {
+        // A restored wallet must republish the same key package, or it appears
+        // as a stranger to every group it was in.
+        assert_eq!(nip06_path(0, NIP06_IDENTITY_INDEX), CHAT_NIP06_PATH);
+        assert_eq!(nip06_path(0, mls_index(0)), MLS_DEVICE_0_PATH);
+        assert_eq!(MLS_DEVICE_0_PATH, "m/44'/1237'/0'/0/1");
+
+        // Device 0 is index 1; each extra device is one further along.
+        assert_eq!(mls_index(0), 1);
+        assert_eq!(mls_index(1), 2);
+        assert_eq!(nip06_path(0, mls_index(2)), "m/44'/1237'/0'/0/3");
+
+        // Neighbouring indices, still never the same key -- one is the
+        // secp256k1 identity contacts know, the other an Ed25519 group leaf.
+        assert!(!may_share_key(NostrJob::Chat, NostrJob::MlsDevice));
+        assert_ne!(CHAT_NIP06_PATH, MLS_DEVICE_0_PATH);
+    }
+
+    #[test]
     fn only_chat_comes_back_from_the_seed() {
         // A contact who saved your npub has to find the same one after a
         // restore, so chat is seed-derived at a fixed path.
@@ -292,6 +427,11 @@ mod tests {
         assert!(NostrJob::WizardPairing.survives_restart());
         assert!(!NostrJob::WizardPairing.recoverable_from_seed());
         assert!(!NostrJob::WizardPairing.may_derive_from_seed());
+
+        // An MLS device is the one other job that must come back from the seed,
+        // for the same reason chat does: the group has to recognise it.
+        assert!(NostrJob::MlsDevice.recoverable_from_seed());
+        assert!(NostrJob::MlsDevice.may_derive_from_seed());
     }
 
     #[test]
