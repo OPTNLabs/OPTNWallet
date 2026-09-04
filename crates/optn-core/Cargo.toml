@@ -41,6 +41,12 @@ chacha20 = "0.10"
 # GF(2^128) multiply whose naive form is table-driven and therefore timing
 # sensitive. PBKDF2 rides on the hmac already here.
 aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
+# BSMS (BIP-129) encrypts its setup records with AES-256-CTR, not GCM, so
+# the block cipher and the counter mode are needed by name. Both already
+# resolve in this tree -- aes-gcm builds on exactly these -- so declaring
+# them adds nothing to the dependency graph, only the ability to say them.
+aes = { version = "0.8", default-features = false }
+ctr = { version = "0.9", default-features = false }
 pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 subtle = { version = "2", default-features = false }
 serde = { version = "1", default-features = false, features = ["derive", "std"] }

@@ -1976,11 +1976,13 @@ dependencies = [
 name = "optn-core"
 version = "1.7.3"
 dependencies = [
+ "aes 0.8.4",
  "aes-gcm",
  "base64",
  "bip32",
  "bip39",
  "chacha20",
+ "ctr",
  "getrandom 0.2.17",
  "hmac 0.12.1",
  "js-sys",

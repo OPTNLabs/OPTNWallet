@@ -1012,13 +1012,15 @@ pub fn parse_bsms_key_record(text: &str) -> Result<BsmsKeyRecord> {
             "'{token}' is not a hex token; BSMS uses 00 for an unencrypted record"
         )));
     }
-    if token != "00" {
-        return Err(CliError::Usage(
-            "that key record is encrypted. Only unencrypted records (token 00) are read here; \
-             BSMS encrypts round one with ECIES."
-                .into(),
-        ));
-    }
+    // Any hex token is fine here. The token identifies the session, not this
+    // text: a record that arrived encrypted has already been through
+    // bsms_decrypt by the time it reaches this function, and it still carries
+    // the token it was sealed under -- BIP-129's own encrypted vector decrypts
+    // to a record whose second line is a54044308ceac9b7. `00` means the record
+    // was never encrypted at all.
+    //
+    // This refused anything but 00, which was right only while there was no
+    // decryption to hand the envelope off to.
 
     let descriptor_line = lines
         .next()
@@ -1099,6 +1101,133 @@ fn decode_hex(text: &str) -> Option<Vec<u8>> {
         .step_by(2)
         .map(|index| u8::from_str_radix(text.get(index..index + 2)?, 16).ok())
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// BSMS encryption (BIP-129 STANDARD / EXTENDED)
+// ---------------------------------------------------------------------------
+
+/// The password BIP-129 fixes for its key derivation. Not a secret; the
+/// secret is the token.
+const BSMS_KDF_PASSWORD: &[u8] = b"No SPOF";
+/// PBKDF2 rounds, from the specification.
+const BSMS_KDF_ROUNDS: u32 = 2048;
+
+/// Derive the encryption key from a session token.
+///
+/// `PBKDF2(PRF = SHA512, Password = "No SPOF", Salt = TOKEN, c = 2048,
+/// dkLen = 32)`.
+///
+/// The salt is the token's **raw bytes**, and that is not a guess: the
+/// specification publishes a token and the key it produces, and only the raw
+/// reading reproduces it. The hex spelling of the same token yields a
+/// different key entirely, which is the sort of detail that turns into two
+/// wallets that cannot read each other's files.
+pub fn bsms_encryption_key(token: &[u8]) -> [u8; 32] {
+    let mut key = [0u8; 32];
+    pbkdf2::pbkdf2_hmac::<sha2::Sha512>(BSMS_KDF_PASSWORD, token, BSMS_KDF_ROUNDS, &mut key);
+    key
+}
+
+/// The record's authentication tag, whose first 16 bytes are also the IV.
+///
+/// `HMAC-SHA256(SHA256(DKey), hex-encoded TOKEN || Data)`.
+///
+/// Note the asymmetry with the key derivation above: the salt there is the
+/// token's raw bytes, while the prefix here is its **hex spelling**, as ASCII.
+/// Both readings are pinned by the published vector rather than chosen.
+///
+/// Deriving the IV from the MAC means the IV is a function of the plaintext,
+/// so two different records never share one under the same token -- and a
+/// record edited in transit changes its own IV, which is why the tag has to be
+/// checked before the plaintext is trusted.
+pub fn bsms_mac(encryption_key: &[u8; 32], token: &[u8], data: &[u8]) -> [u8; 32] {
+    use hmac::Mac as _;
+
+    let hmac_key = Sha256::digest(encryption_key);
+    let mut mac =
+        hmac::Hmac::<Sha256>::new_from_slice(&hmac_key).expect("HMAC accepts a key of any length");
+    mac.update(hex_lower(token).as_bytes());
+    mac.update(data);
+
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&mac.finalize().into_bytes());
+    out
+}
+
+fn bsms_apply_ctr(encryption_key: &[u8; 32], iv: &[u8; 16], buffer: &mut [u8]) {
+    use aes::cipher::{KeyIvInit as _, StreamCipher as _};
+
+    let mut cipher = ctr::Ctr128BE::<aes::Aes256>::new(encryption_key.into(), iv.into());
+    cipher.apply_keystream(buffer);
+}
+
+/// Encrypt a BSMS record, producing the hex `MAC || ciphertext` that is sent.
+pub fn bsms_encrypt(token: &[u8], plaintext: &str) -> Result<String> {
+    if token.is_empty() {
+        return Err(CliError::Usage(
+            "an encrypted BSMS session needs a token; 00 means no encryption".into(),
+        ));
+    }
+    let key = bsms_encryption_key(token);
+    let mac = bsms_mac(&key, token, plaintext.as_bytes());
+
+    let mut iv = [0u8; 16];
+    iv.copy_from_slice(&mac[..16]);
+
+    let mut buffer = plaintext.as_bytes().to_vec();
+    bsms_apply_ctr(&key, &iv, &mut buffer);
+
+    Ok(format!("{}{}", hex_lower(&mac), hex_lower(&buffer)))
+}
+
+/// Decrypt a BSMS record and check its tag before returning anything.
+///
+/// The tag is recomputed over the *decrypted* plaintext and compared in
+/// constant time. That ordering is the point: AES-CTR is a stream cipher and
+/// will happily "decrypt" anything, so without this check a tampered file
+/// produces plausible-looking text rather than an error, and a record whose
+/// threshold or key was altered would be read as though the sender wrote it.
+pub fn bsms_decrypt(token: &[u8], encrypted_hex: &str) -> Result<String> {
+    use subtle::ConstantTimeEq as _;
+
+    if token.is_empty() {
+        return Err(CliError::Usage(
+            "an encrypted BSMS record needs the session token to open it".into(),
+        ));
+    }
+    let raw = decode_hex(encrypted_hex.trim())
+        .ok_or_else(|| CliError::Usage("that encrypted record is not hex".into()))?;
+    if raw.len() <= 32 {
+        return Err(CliError::Usage(
+            "that encrypted record is too short to hold a tag and a record".into(),
+        ));
+    }
+
+    let (claimed_mac, ciphertext) = raw.split_at(32);
+    let key = bsms_encryption_key(token);
+
+    let mut iv = [0u8; 16];
+    iv.copy_from_slice(&claimed_mac[..16]);
+
+    let mut buffer = ciphertext.to_vec();
+    bsms_apply_ctr(&key, &iv, &mut buffer);
+
+    let expected = bsms_mac(&key, token, &buffer);
+    if expected.ct_eq(claimed_mac).unwrap_u8() != 1 {
+        return Err(CliError::Usage(
+            "that encrypted record's tag does not match what is inside it. Either the token is \
+             not the one it was sealed with, or the record was changed in transit."
+                .into(),
+        ));
+    }
+
+    String::from_utf8(buffer)
+        .map_err(|_| CliError::Usage("that record decrypted to something that is not text".into()))
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[cfg(test)]
@@ -1521,6 +1650,144 @@ mod tests {
         "HzUa4Z76PFHMl54flIIF3XKiHZ+KbWjjxCEG5G3ZqZSqTd6OgTiFFLqq9PXJXdfYm6/cnL8IVWQgjFF9DQhIqQs="
     );
 
+    /// BIP-129's STANDARD encryption vector, in full.
+    ///
+    /// This is the strongest evidence in the module. Every parameter of the
+    /// scheme is pinned by numbers someone else published: the derived key,
+    /// the HMAC key, the tag, the IV, and the exact ciphertext. Two readings
+    /// of the specification were plausible and only one reproduces these, so
+    /// the ambiguity was settled by arithmetic rather than by choosing.
+    const V_TOKEN_HEX: &str = "a54044308ceac9b7";
+    const V_ENCRYPTION_KEY: &str =
+        "7673ffd9efd70336a5442eda0b31457f7b6cdf7b42fe17f274434df55efa9839";
+    const V_HMAC_KEY: &str = "3d4c422806ba8964c9ee45070cd675c024d96648a0ddb4001325818c84951de2";
+    const V_MAC: &str = "fbdbdb64e6a8231c342131d9f13dcd5a954b4c5021658fa5afcb3fc74dc82706";
+
+    fn bip129_standard_plaintext() -> String {
+        [
+            "BSMS 1.0",
+            "a54044308ceac9b7",
+            "[b7868815/48'/0'/0'/2']xpub6FA5rfxJc94K1kNtxRby1hoHwi7YDyTWwx1KUR3FwskaF6HzCbZMz3zQwGnCqdiFeMTPV3YneTGS2YQPiuNYsSvtggWWMQpEJD4jXU7ZzEh",
+            "Signer 1 key",
+            "H8DYht5P6ko0bQqDV6MtUxpzBSK+aVHxbvMavA5byvLrOlCEGmO1WFR7k2wu42J6dxXD8vrmDQSnGq5MTMMbZ98=",
+        ]
+        .join("\n")
+    }
+
+    /// signer_1_key.dat: the whole encrypted file, MAC then ciphertext.
+    const V_ENCRYPTED: &str = concat!(
+        "fbdbdb64e6a8231c342131d9f13dcd5a954b4c5021658fa5afcb3fc74dc82706",
+        "53f491cfd1431c292d922ea5a5dec3eb8ddaa6ed38ae109e7b040f0f23013e89a89b4d27476761a01197a3277850b2bc",
+        "1621ae626efe65f2081eec6eb571c4f787bf1c49d061b43f70fd73cb3f37fa591d2400973ac0644c8941a83f1d4155e9",
+        "8f01fa2fdeb9f86c2e2413154fd18566a28fb0d9d8bd6172efabcfa6dab09ee7029bf3dd43376df52c118a6d291ec168",
+        "f4ec7f7df951dfc6135fd8cb4b234da62eaea6017dfe5ca418f083e02e3aba2962ba313ba17b6468c7672fb218329a9f",
+        "3fe4e4887fb87dac57c63ebff0e715a44498d18de8afc10e1cfeb46a1fc65ce871fef8a43b289305433a90c342d025aa",
+        "4c19454fcfbcf911e9e2f928d5affd0536a6ddc2e816"
+    );
+
+    /// Lowercase hex, for comparing against the published values.
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    fn v_token() -> Vec<u8> {
+        decode_hex(V_TOKEN_HEX).expect("token hex")
+    }
+
+    #[test]
+    fn the_bip_129_encryption_vector_reproduces_every_published_value() {
+        let token = v_token();
+
+        // The salt is the token's raw bytes. Its hex spelling gives a
+        // different key, and the published one says which is meant.
+        let key = bsms_encryption_key(&token);
+        assert_eq!(hex(&key), V_ENCRYPTION_KEY, "derived encryption key");
+
+        // The HMAC key is a plain SHA-256 of that.
+        assert_eq!(hex(&Sha256::digest(key)), V_HMAC_KEY, "HMAC key");
+
+        // ...while the MAC prefixes the token's *hex* spelling. The asymmetry
+        // is the specification's, and this is what proves it was read right.
+        let plaintext = bip129_standard_plaintext();
+        let mac = bsms_mac(&key, &token, plaintext.as_bytes());
+        assert_eq!(hex(&mac), V_MAC, "record MAC");
+        assert_eq!(
+            hex(&mac[..16]),
+            &V_MAC[..32],
+            "the IV is the MAC's first 16 bytes"
+        );
+
+        // And the whole file, byte for byte.
+        assert_eq!(
+            bsms_encrypt(&token, &plaintext).expect("encrypts"),
+            V_ENCRYPTED,
+            "MAC || ciphertext"
+        );
+    }
+
+    #[test]
+    fn the_published_file_decrypts_back_to_the_published_record() {
+        let token = v_token();
+        let opened = bsms_decrypt(&token, V_ENCRYPTED).expect("decrypts");
+        assert_eq!(opened, bip129_standard_plaintext());
+
+        // And it is a real key record, not merely text that round-tripped.
+        let record = parse_bsms_key_record(&opened).expect("parses");
+        assert_eq!(record.token, V_TOKEN_HEX);
+        assert_eq!(record.key.master_fingerprint, "b7868815");
+        record
+            .verify_signature()
+            .expect("the decrypted record's signature verifies");
+    }
+
+    #[test]
+    fn a_tampered_or_wrongly_keyed_record_is_refused_before_it_is_read() {
+        let token = v_token();
+
+        // AES-CTR will "decrypt" anything, so without the tag check a changed
+        // file yields plausible text instead of an error. Flip one ciphertext
+        // byte and the answer must be a refusal, not a record.
+        let mut bytes = decode_hex(V_ENCRYPTED).expect("hex");
+        let last = bytes.len() - 1;
+        bytes[last] ^= 0x01;
+        let tampered = hex(&bytes);
+        let error = bsms_decrypt(&token, &tampered).expect_err("must refuse");
+        assert!(error.to_string().contains("does not match"), "{error}");
+
+        // The wrong token fails the same way, and says so without guessing
+        // which of the two it was.
+        let wrong = decode_hex("a54044308ceac9b8").expect("hex");
+        assert!(bsms_decrypt(&wrong, V_ENCRYPTED).is_err());
+
+        // Too short to hold a tag, not hex, and no token at all.
+        assert!(bsms_decrypt(&token, "abcd").is_err());
+        assert!(bsms_decrypt(&token, "nothex").is_err());
+        assert!(bsms_decrypt(&[], V_ENCRYPTED).is_err());
+        assert!(bsms_encrypt(&[], "BSMS 1.0").is_err());
+    }
+
+    #[test]
+    fn encryption_round_trips_records_the_vector_does_not_cover() {
+        // The vector fixes one record. This covers the shapes around it:
+        // empty-ish, long, and non-ASCII, since a description may be anything.
+        let token = v_token();
+        for plaintext in [
+            "BSMS 1.0",
+            &"x".repeat(1000),
+            "BSMS 1.0\n00\nkey\ndescription with an em dash \u{2014} and \u{00e9}\nsig",
+        ] {
+            let sealed = bsms_encrypt(&token, plaintext).expect("encrypts");
+            assert_eq!(bsms_decrypt(&token, &sealed).expect("decrypts"), plaintext);
+        }
+
+        // The IV comes from the MAC, so different plaintexts under one token
+        // never share a keystream -- the property that makes reusing the
+        // token safe at all.
+        let one = bsms_encrypt(&token, "record one").expect("encrypts");
+        let two = bsms_encrypt(&token, "record two").expect("encrypts");
+        assert_ne!(&one[..32], &two[..32], "different records, different IVs");
+    }
+
     #[test]
     fn the_bip_129_key_record_vectors_are_read_and_verify() {
         for (label, raw, fingerprint, path) in [
@@ -1661,13 +1928,33 @@ mod tests {
     fn a_key_record_is_refused_rather_than_half_read() {
         let (good, _) = signed_key_record("Ada's phone");
 
-        // An encrypted record is named as such rather than failing on the
-        // descriptor line, because "token 01" is a different situation from a
-        // corrupt file.
-        let encrypted = good.replacen("\n00\n", "\n01\n", 1);
-        let error = parse_bsms_key_record(&encrypted).expect_err("encrypted");
-        assert!(error.to_string().contains("encrypted"), "{error}");
-        assert!(error.to_string().contains("ECIES"), "{error}");
+        // A non-zero token is a session identifier, not a refusal. This read
+        // it as "the record is encrypted" while there was no decryption to
+        // hand the envelope to; bsms_decrypt owns that layer now, so what
+        // reaches here is plaintext carrying whichever token it was sealed
+        // under.
+        let session = good.replacen(
+            "
+00
+",
+            "
+a54044308ceac9b7
+",
+            1,
+        );
+        let record = parse_bsms_key_record(&session).expect("a session token is not an error");
+        assert_eq!(record.token, "a54044308ceac9b7");
+
+        // A token that is not hex still is one.
+        let nonsense = good.replacen(
+            "
+00
+", "
+zz
+", 1,
+        );
+        let error = parse_bsms_key_record(&nonsense).expect_err("not hex");
+        assert!(error.to_string().contains("hex token"), "{error}");
 
         // A missing signature is the whole point of the record.
         let unsigned = good.rsplit_once('\n').expect("has lines").0.to_string();
