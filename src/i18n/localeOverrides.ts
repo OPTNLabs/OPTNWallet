@@ -1794,9 +1794,9 @@ export const localeOverrides = {
     'experimental.rpaTitle': 'عناوين الدفع القابلة لإعادة الاستخدام (RPA)',
     'experimental.rpaBadge': 'BCH RPA',
     'experimental.rpaDescription':
-      'ينشئ paycode ثابتًا يمكنك مشاركته علنًا. يشتق المرسلون عنوانًا فريدًا لكل دفعة عبر ECDH.',
+      'ينشئ Cash Code ثابتًا (cashcode:q...) يمكنك مشاركته علنًا. يشتق المرسلون عنوانًا فريدًا لكل دفعة عبر ECDH.',
     'experimental.rpaWarning':
-      'يتطلب الإرسال إلى paycode طحن التوقيع (غير مطبق بعد). الاستلام والفحص متاحان.',
+      'يتطلب الإرسال إلى Cash Code طحن التوقيع (غير مطبق بعد). الاستلام والفحص متاحان.',
     'experimental.privacy': 'الخصوصية',
     'experimental.cashFusionDescription':
       'CashFusion بروتوكول خصوصية غير وصائي يجمع UTXOs الخاصة بك مع أموال مستخدمين آخرين لفصل سجل المعاملات.',
@@ -1817,16 +1817,16 @@ export const localeOverrides = {
     'qr.scan': 'مسح QR',
     'qr.scanning': 'جارٍ المسح…',
     'qr.walletUpdateProgress': 'تقدم تحديث المحفظة',
-    'rpa.copySuccess': 'تم نسخ paycode!',
+    'rpa.copySuccess': 'تم نسخ Cash Code!',
     'rpa.copyFailed': 'فشل النسخ.',
     'rpa.walletUnavailable': 'المحفظة غير متاحة',
     'rpa.derivationFailed':
-      'فشل اشتقاق paycode. ألغِ قفل المحفظة وحاول مرة أخرى.',
-    'rpa.title': 'Paycode RPA',
-    'rpa.deriving': 'جارٍ اشتقاق paycode…',
+      'فشل اشتقاق Cash Code. ألغِ قفل المحفظة وحاول مرة أخرى.',
+    'rpa.title': 'Cash Code',
+    'rpa.deriving': 'جارٍ اشتقاق Cash Code…',
     'rpa.shareDescription':
-      'شارك paycode مع المرسلين. تنشئ كل دفعة عنوانًا خفيًا فريدًا دون رابط على السلسلة بين الدفعات.',
-    'rpa.paycode': 'رمز الدفع',
+      'شارك Cash Code مع المرسلين. تنشئ كل دفعة عنوانًا خفيًا فريدًا دون رابط على السلسلة بين الدفعات.',
+    'rpa.paycode': 'Cash Code',
     'rpa.howWorks': 'طريقة العمل',
     'rpa.noNotification': 'لا توجد معاملة إشعار.',
     'rpa.noNotificationText':
