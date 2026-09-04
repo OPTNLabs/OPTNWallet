@@ -28,6 +28,12 @@ import { URRegistryDecoder } from '@keystonehq/bc-ur-registry';
 export const DEFAULT_UR_FRAGMENT_LENGTH = 50;
 
 /**
+ * User-selectable UR fragment lengths. Lower values make larger, easier-to-scan
+ * QR modules and take more animation frames; higher values do the reverse.
+ */
+export const UR_FRAGMENT_LENGTH_OPTIONS = [50, 100, 200, 400, 450] as const;
+
+/**
  * Quiet-zone modules around the displayed QR (qrcode.react `marginSize`).
  * Paytaca PstQrDialog e66cafa9d-era used padding=8; later densified to 4.
  * More padding, not denser modules: SeedCash cameras need the extra border.

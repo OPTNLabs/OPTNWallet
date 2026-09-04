@@ -54,4 +54,18 @@ describe('WatchOnlySend workspace', () => {
     expect(html).not.toContain('Signer options');
     expect(html).not.toContain('no master fingerprint set');
   });
+
+  it('keeps sighash behind Advanced and omits desktop QR density on mobile', () => {
+    const html = renderToStaticMarkup(
+      <Provider store={store}>
+        <StaticRouter location="/send">
+          <WatchOnlySend />
+        </StaticRouter>
+      </Provider>
+    );
+
+    expect(html).not.toContain('Sighash type');
+    expect(html).not.toContain('Increase QR density');
+    expect(html).not.toContain('Decrease QR density');
+  });
 });

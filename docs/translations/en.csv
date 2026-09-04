@@ -828,7 +828,7 @@
 "onboarding.walletSavedIdFailed","Wallet was saved, but its wallet ID could not be resolved.","translated"
 "onboarding.walletSetup","Wallet Setup","translated"
 "onboarding.walletSetupDescription","Choose the network and address path this wallet will use.","translated"
-"onboarding.welcomeAlt","Smart BCH Wallet","stable-term"
+"onboarding.welcomeAlt","OPTN Wallet","stable-term"
 "onboarding.word","Word","translated"
 "onboarding.wordCountLabel","Phrase length","translated"
 "onboarding.wordPlaceholder","word","translated"

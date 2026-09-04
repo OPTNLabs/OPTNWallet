@@ -2,7 +2,7 @@
 
 This is the offline half of the Issue #8 air-gapped flow, driven directly
 instead of through the device UI. OPTN builds the PSBT, this signs it with
-SeedCash's own `sign_psbt_with_xpriv`, and OPTN then verifies and finalizes
+SeedCash's own wallet signer, and OPTN then verifies and finalizes
 what comes back. If the two sides disagree about signature algorithm, sighash
 type or derivation metadata, this is where it shows up.
 
@@ -28,10 +28,14 @@ def _signer_imports():
     from seedcash.models.psbt_parser import PSBTParser, parse_psbt  # noqa: E402
     from seedcash.models.wallet import Wallet  # noqa: E402
 
+    sign_psbt_with_xpriv = None
     try:
         from seedcash.models.psbt_parser import sign_psbt_with_xpriv  # noqa: E402
     except ImportError:
-        from seedcash.models.psbt_signer import sign_psbt_with_xpriv  # noqa: E402
+        try:
+            from seedcash.models.psbt_signer import sign_psbt_with_xpriv  # noqa: E402
+        except ImportError:
+            pass
     return Bip39, PSBTParser, parse_psbt, sign_psbt_with_xpriv, Wallet
 
 
@@ -52,6 +56,33 @@ def wallet_from(mnemonic: str) -> Wallet:
 
 def build_wallet() -> Wallet:
     return wallet_from(TEST_MNEMONIC)
+
+
+def parse_for_wallet(psbt_bytes: bytearray, wallet: Wallet):
+    """Construct either the current or legacy SeedCash parser."""
+    try:
+        return PSBTParser(psbt_bytes, wallet_fingerprint=wallet._fingerprint)
+    except TypeError:
+        return PSBTParser(psbt_bytes)
+
+
+def sign_with_wallet(psbt_bytes: bytearray, wallet: Wallet) -> bytearray:
+    """Use SeedCash's current public signer, with legacy compatibility."""
+    parser = parse_for_wallet(psbt_bytes, wallet)
+    if hasattr(wallet, "sign_psbt"):
+        return wallet.sign_psbt(parser)
+    if sign_psbt_with_xpriv is None:
+        raise RuntimeError("This SeedCash checkout has no supported PSBT signer.")
+
+    signed = psbt_bytes
+    for input_index in range(parser.num_inputs):
+        signed = sign_psbt_with_xpriv(
+            signed,
+            wallet._xpriv,
+            input_index=input_index,
+            account_path=ACCOUNT_PATH,
+        )
+    return signed
 
 
 def emit_keys() -> None:
@@ -77,26 +108,21 @@ def sign(unsigned_path: str, signed_path: str) -> None:
     # claims an input as its own — if it returns nothing, the device shows the
     # transaction as somebody else's and refuses to sign, which is the failure
     # this check is here to surface loudly.
-    parser = PSBTParser(psbt_bytes, wallet_fingerprint=wallet._fingerprint)
-    fingerprint_bytes = bytes.fromhex(wallet._fingerprint)
-    claimed = [
-        index
-        for index, input_map in enumerate(parse_psbt(psbt_bytes)["inputs"])
-        if PSBTParser._wallet_pubkeys_in_map(input_map, fingerprint_bytes)
-    ]
-    if not claimed:
-        raise SystemExit(
-            "SeedCash did not recognise any input as its own. The PSBT is "
-            "missing or misencoding PSBT_IN_BIP32_DERIVATION (0x06) for "
-            f"fingerprint {wallet._fingerprint}."
-        )
+    parser = parse_for_wallet(psbt_bytes, wallet)
+    if hasattr(PSBTParser, "_wallet_pubkeys_in_map"):
+        fingerprint_bytes = bytes.fromhex(wallet._fingerprint)
+        claimed = [
+            index
+            for index, input_map in enumerate(parse_psbt(psbt_bytes)["inputs"])
+            if PSBTParser._wallet_pubkeys_in_map(input_map, fingerprint_bytes)
+        ]
+        if not claimed:
+            raise SystemExit(
+                "SeedCash did not recognise any input as its own. The PSBT is "
+                "missing or misencoding PSBT_IN_BIP32_DERIVATION (0x06)."
+            )
 
-    signed = sign_psbt_with_xpriv(psbt_bytes, wallet._xpriv, account_path=ACCOUNT_PATH)
-    # sign_psbt_with_xpriv signs one input; the device loops every input.
-    for index in range(1, parser.num_inputs):
-        signed = sign_psbt_with_xpriv(
-            signed, wallet._xpriv, input_index=index, account_path=ACCOUNT_PATH
-        )
+    signed = sign_with_wallet(psbt_bytes, wallet)
 
     with open(signed_path, "w", encoding="utf-8") as handle:
         handle.write(bytes(signed).hex())
@@ -133,11 +159,7 @@ def sign_as(index: int, unsigned_path: str, signed_path: str) -> None:
     with open(unsigned_path, "r", encoding="utf-8") as handle:
         psbt = bytearray.fromhex(handle.read().strip())
 
-    signed = psbt
-    for input_index in range(parse_psbt(psbt)["input_count"]):
-        signed = sign_psbt_with_xpriv(
-            signed, wallet._xpriv, input_index=input_index, account_path=ACCOUNT_PATH
-        )
+    signed = sign_with_wallet(psbt, wallet)
 
     with open(signed_path, "w", encoding="utf-8") as handle:
         handle.write(bytes(signed).hex())

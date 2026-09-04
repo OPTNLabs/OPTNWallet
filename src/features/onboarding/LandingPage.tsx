@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
+import { useDispatch } from 'react-redux';
 import { useTheme } from '../../app/theme/useTheme';
 import { ONBOARDING_WELCOME_IMAGE } from './constants';
 import WalkthroughPanel from '../../components/ui/WalkthroughPanel';
@@ -7,6 +8,16 @@ import Popup from '../../components/transaction/Popup';
 import { MdSunny, MdModeNight } from 'react-icons/md';
 import { useI18n } from '../../i18n/useI18n';
 import LanguagePicker from '../../components/LanguagePicker';
+import { WatchOnlyWalletPreview } from '../../platform/desktop/onboarding/WatchOnlyWalletPreview';
+import { openWatchOnlyWallet } from '../../platform/desktop/DesktopWalletManager';
+import {
+  setWalletDerivationPath,
+  setWalletId,
+  setWalletNetwork,
+  setWalletType,
+} from '../../state/slices/walletSlice';
+import { Network, setNetwork } from '../../state/slices/networkSlice';
+import { homeRoute } from '../../navigation/routes';
 
 const ThemeModeSwitch = () => {
   const { mode, toggleMode } = useTheme();
@@ -41,7 +52,56 @@ const ThemeModeSwitch = () => {
 
 const LandingPage = () => {
   const [showHelp, setShowHelp] = useState(false);
+  const [watchOnly, setWatchOnly] = useState(false);
+  const [openError, setOpenError] = useState('');
   const { t } = useI18n();
+  const dispatch = useDispatch();
+  const navigate = useNavigate();
+
+  const handleWatchOnlyCreated = async (walletId: number) => {
+    setOpenError('');
+    try {
+      const info = await openWatchOnlyWallet(walletId);
+      if (!info) {
+        setOpenError('Wallet created, but could not open it.');
+        setWatchOnly(false);
+        return;
+      }
+      dispatch(setWalletId(walletId));
+      dispatch(setWalletNetwork(info.networkType ?? Network.MAINNET));
+      dispatch(setWalletType(info.walletType ?? 'watch-only'));
+      if (info.derivation_path) {
+        dispatch(
+          setWalletDerivationPath({
+            path: info.derivation_path,
+            source:
+              info.derivation_path_source === 'custom' ? 'custom' : 'default',
+          })
+        );
+      }
+      dispatch(setNetwork(info.networkType ?? Network.MAINNET));
+      navigate(homeRoute(walletId));
+    } catch (err) {
+      setOpenError(
+        err instanceof Error
+          ? err.message
+          : 'Wallet created, but could not open it.'
+      );
+      setWatchOnly(false);
+    }
+  };
+
+  if (watchOnly) {
+    return (
+      <WatchOnlyWalletPreview
+        onBack={() => {
+          setOpenError('');
+          setWatchOnly(false);
+        }}
+        onCreated={(walletId) => void handleWatchOnlyCreated(walletId)}
+      />
+    );
+  }
 
   return (
     <section className="min-h-[100dvh] wallet-surface flex flex-col justify-center items-center px-4 relative">
@@ -91,6 +151,21 @@ const LandingPage = () => {
               {t('onboarding.importWallet')}
             </Link>
           </div>
+          <button
+            type="button"
+            onClick={() => {
+              setOpenError('');
+              setWatchOnly(true);
+            }}
+            className="wallet-btn-secondary py-3 px-10 rounded-lg mx-2 my-2 shadow-md"
+          >
+            {t('onboarding.createWatchOnly')}
+          </button>
+          {openError ? (
+            <p role="alert" className="mt-2 text-xs text-red-400">
+              {openError}
+            </p>
+          ) : null}
         </div>
       </main>
 
@@ -114,6 +189,10 @@ const LandingPage = () => {
               {
                 title: t('onboarding.helpNetworkTitle'),
                 description: t('onboarding.helpNetworkDescription'),
+              },
+              {
+                title: t('onboarding.createWatchOnly'),
+                description: t('watchOnly.description'),
               },
             ]}
             numbered={false}

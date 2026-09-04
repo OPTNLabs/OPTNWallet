@@ -83,6 +83,22 @@ export const SIGHASH_ALL_FORKID = 0x41;
 
 const SIGHASH_FORKID_BIT = 0x40;
 
+/** Legacy BCH sighash modes supported by SeedCash-compatible PSBT signing. */
+export const SUPPORTED_BCH_SIGHASH_TYPES = [
+  0x41, // ALL | FORKID
+  0x42, // NONE | FORKID
+  0x43, // SINGLE | FORKID
+  0xc1, // ALL | FORKID | ANYONECANPAY
+  0xc2, // NONE | FORKID | ANYONECANPAY
+  0xc3, // SINGLE | FORKID | ANYONECANPAY
+] as const;
+
+export function isSupportedBchSighashType(sighashType: number): boolean {
+  return (SUPPORTED_BCH_SIGHASH_TYPES as readonly number[]).includes(
+    sighashType
+  );
+}
+
 export interface PsbtDerivation {
   /** Compressed public key (33 bytes) that must sign this input. */
   publicKey: Uint8Array;
@@ -333,15 +349,14 @@ function unsignedTransaction(
 /**
  * Encode an unsigned PSBT for an air-gapped signer.
  *
- * Every input carries PSBT_IN_SIGHASH_TYPE = 0xc1
- * (SIGHASH_ALL|FORKID|ANYONECANPAY). Omitting the field or using 0x41 is
- * not allowed: SeedCash falls back to 0x41 when the field is missing, and
- * those signatures fail import.
+ * Every input explicitly carries the selected BCH PSBT_IN_SIGHASH_TYPE.
+ * SIGHASH_ALL|FORKID (0x41) is the safe default and matches SeedCash's
+ * current signer. Advanced modes must be selected explicitly by the user.
  */
 export function encodeUnsignedPsbt(
   inputs: PsbtInputSpec[],
   outputs: PsbtOutputSpec[],
-  sighashType: number = SIGHASH_ALL_FORKID_ANYONECANPAY,
+  sighashType: number = SIGHASH_ALL_FORKID,
   options: PsbtEncodeOptions = {}
 ): Uint8Array {
   if (inputs.length === 0) throw new Error('A PSBT needs at least one input.');
@@ -353,10 +368,10 @@ export function encodeUnsignedPsbt(
     // the transaction through a hardware device.
     throw new Error('BCH sighash types must include SIGHASH_FORKID (0x40).');
   }
-  if (sighashType !== SIGHASH_ALL_FORKID_ANYONECANPAY) {
+  if (!isSupportedBchSighashType(sighashType)) {
     throw new Error(
-      'PSBT_IN_SIGHASH_TYPE must be SIGHASH_ALL|FORKID|ANYONECANPAY (0xc1); ' +
-        'omitting it or using 0x41 is not allowed.'
+      `Unsupported BCH sighash type 0x${sighashType.toString(16)}. ` +
+        'Choose ALL, NONE, or SINGLE with FORKID, optionally with ANYONECANPAY.'
     );
   }
 
@@ -443,10 +458,7 @@ export function encodeUnsignedPsbt(
               input.lockingBytecode,
             ])
           ),
-      record(
-        Uint8Array.from([PSBT_IN_SIGHASH_TYPE]),
-        uint32LE(SIGHASH_ALL_FORKID_ANYONECANPAY)
-      ),
+      record(Uint8Array.from([PSBT_IN_SIGHASH_TYPE]), uint32LE(sighashType)),
       ...(input.redeemScript
         ? [record(Uint8Array.from([PSBT_IN_REDEEM_SCRIPT]), input.redeemScript)]
         : []),

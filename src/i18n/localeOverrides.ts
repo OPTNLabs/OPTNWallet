@@ -89,7 +89,7 @@ export const localeOverrides = {
     'onboarding.helpDescription':
       'Crie uma carteira pela primeira vez ou restaure uma que você já possui.',
     'onboarding.toggleTheme': 'Alternar tema',
-    'onboarding.welcomeAlt': 'Carteira Smart BCH',
+    'onboarding.welcomeAlt': 'Carteira OPTN',
     'onboarding.closeHelp': 'Fechar ajuda',
     'onboarding.poweredBy':
       'Desenvolvida com Bitcoin Covenants para Bitcoin Cash',
@@ -346,7 +346,7 @@ export const localeOverrides = {
     'onboarding.helpTitle': 'Bắt đầu',
     'onboarding.helpDescription': 'Tạo ví lần đầu hoặc khôi phục ví bạn đã có.',
     'onboarding.toggleTheme': 'Đổi giao diện',
-    'onboarding.welcomeAlt': 'Ví Smart BCH',
+    'onboarding.welcomeAlt': 'Ví OPTN',
     'onboarding.closeHelp': 'Đóng trợ giúp',
     'onboarding.poweredBy':
       'Được hỗ trợ bởi Bitcoin Covenants cho Bitcoin Cash',
@@ -600,7 +600,7 @@ export const localeOverrides = {
     'onboarding.helpTitle': '開始使用',
     'onboarding.helpDescription': '建立新錢包，或復原已有的錢包。',
     'onboarding.toggleTheme': '切換主題',
-    'onboarding.welcomeAlt': 'Smart BCH 錢包',
+    'onboarding.welcomeAlt': 'OPTN 錢包',
     'onboarding.closeHelp': '關閉說明',
     'onboarding.poweredBy': '由 Bitcoin Cash 的 Bitcoin Covenants 提供支援',
     'onboarding.helpCreateTitle': '建立錢包',
@@ -856,7 +856,7 @@ export const localeOverrides = {
     'onboarding.helpDescription':
       'أنشئ محفظة لأول مرة أو استعد محفظة لديك بالفعل.',
     'onboarding.toggleTheme': 'تبديل المظهر',
-    'onboarding.welcomeAlt': 'محفظة Smart BCH',
+    'onboarding.welcomeAlt': 'محفظة OPTN',
     'onboarding.closeHelp': 'إغلاق المساعدة',
     'onboarding.poweredBy': 'مدعومة بـ Bitcoin Covenants لـ Bitcoin Cash',
     'onboarding.helpCreateTitle': 'إنشاء محفظة',
@@ -2867,7 +2867,7 @@ export const localeOverrides = {
     'onboarding.helpDescription':
       'Créez un portefeuille pour la première fois ou restaurez-en un existant.',
     'onboarding.toggleTheme': 'Changer de thème',
-    'onboarding.welcomeAlt': 'Portefeuille Smart BCH',
+    'onboarding.welcomeAlt': 'Portefeuille OPTN',
     'onboarding.closeHelp': 'Fermer l’aide',
     'onboarding.poweredBy':
       'Propulsé par les covenants Bitcoin pour Bitcoin Cash',
@@ -3195,7 +3195,7 @@ export const localeOverrides = {
     'onboarding.helpDescription':
       '처음 지갑을 만들거나 기존 지갑을 복원하세요.',
     'onboarding.toggleTheme': '테마 전환',
-    'onboarding.welcomeAlt': 'Smart BCH 지갑',
+    'onboarding.welcomeAlt': 'OPTN 지갑',
     'onboarding.closeHelp': '도움말 닫기',
     'onboarding.poweredBy': 'Bitcoin Cash를 위한 Bitcoin Covenant 기반',
     'onboarding.helpCreateTitle': '지갑 만들기',
@@ -3518,7 +3518,7 @@ export const localeOverrides = {
     'onboarding.helpDescription':
       '初めてウォレットを作成するか、既存のウォレットを復元します。',
     'onboarding.toggleTheme': 'テーマを切り替え',
-    'onboarding.welcomeAlt': 'Smart BCH ウォレット',
+    'onboarding.welcomeAlt': 'OPTN ウォレット',
     'onboarding.closeHelp': 'ヘルプを閉じる',
     'onboarding.poweredBy': 'Bitcoin Cash のための Bitcoin Covenant を採用',
     'onboarding.helpCreateTitle': 'ウォレットを作成',
@@ -3846,7 +3846,7 @@ export const localeOverrides = {
     'onboarding.helpDescription':
       'Создайте новый кошелёк или восстановите существующий.',
     'onboarding.toggleTheme': 'Сменить тему',
-    'onboarding.welcomeAlt': 'Smart BCH Wallet',
+    'onboarding.welcomeAlt': 'OPTN Wallet',
     'onboarding.closeHelp': 'Закрыть помощь',
     'onboarding.poweredBy': 'Работает на Bitcoin Covenants для Bitcoin Cash',
     'onboarding.helpCreateTitle': 'Создать кошелёк',
@@ -4177,7 +4177,7 @@ export const localeOverrides = {
     'onboarding.helpDescription':
       'Ƙirƙiri sabon walat ko dawo da wanda kuke da shi.',
     'onboarding.toggleTheme': 'Canza salo',
-    'onboarding.welcomeAlt': 'Smart BCH Wallet',
+    'onboarding.welcomeAlt': 'OPTN Wallet',
     'onboarding.closeHelp': 'Rufe taimako',
     'onboarding.poweredBy':
       'Bitcoin Covenants ne ke ƙarfafa shi don Bitcoin Cash',

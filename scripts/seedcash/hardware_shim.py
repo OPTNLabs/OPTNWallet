@@ -8,11 +8,11 @@ whole point: this harness is evidence about the real signer, not about a
 reimplementation of it.
 """
 
+import os
 import sys
 import types
+from pathlib import Path
 from unittest.mock import MagicMock
-
-SEEDCASH_SRC = r"D:\OPTN wallet work\seedcash\src"
 
 HARDWARE_MODULES = [
     "RPi",
@@ -29,12 +29,20 @@ HARDWARE_MODULES = [
 ]
 
 
-def install(seedcash_src: str = SEEDCASH_SRC) -> None:
+def install(seedcash_src: str | None = None) -> None:
+    source = seedcash_src or os.environ.get("SEEDCASH_SRC")
+    if not source:
+        raise RuntimeError(
+            "Set SEEDCASH_SRC to the official SeedCash repository's src directory."
+        )
+    source_path = str(Path(source).resolve())
+    if not Path(source_path, "seedcash").is_dir():
+        raise RuntimeError(f"SEEDCASH_SRC does not contain seedcash/: {source_path}")
     for name in HARDWARE_MODULES:
         if name not in sys.modules:
             module = MagicMock()
             module.__name__ = name
             module.__spec__ = types.SimpleNamespace(name=name)
             sys.modules[name] = module
-    if seedcash_src not in sys.path:
-        sys.path.insert(0, seedcash_src)
+    if source_path not in sys.path:
+        sys.path.insert(0, source_path)

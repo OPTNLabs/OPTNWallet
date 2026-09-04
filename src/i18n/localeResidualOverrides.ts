@@ -120,7 +120,7 @@ export const localeResidualOverrides: Partial<
     'apps.token': 'Token',
     'txSummary.token': 'token',
     'txSummary.bytes': 'bytes',
-    'onboarding.welcomeAlt': 'Smart BCH Wallet',
+    'onboarding.welcomeAlt': 'OPTN Wallet',
     'qrSigning.payload': 'Abin da aka ɗora',
   },
 };

@@ -2,7 +2,7 @@
 //
 // Every other test here signs with our own secp256k1 calls, which proves our
 // verifier agrees with itself. This one hands the PSBT bytes to SeedCash's
-// actual `sign_psbt_with_xpriv` (via scripts/seedcash/sign_psbt.py) and feeds
+// actual wallet signer (via scripts/seedcash/sign_psbt.py) and feeds
 // the result back through import + finalize, then executes the finished
 // transaction on libauth's BCH VM. That is the only way to catch the class of
 // bug where both sides are internally consistent and disagree with each other
@@ -31,7 +31,10 @@ import {
 } from '@bitauth/libauth';
 
 import { buildWatchOnlyPsbt } from '../watchOnlySend';
-import { inspectImportedPsbt, mergeImportedSignatures } from '../watchOnlyImport';
+import {
+  inspectImportedPsbt,
+  mergeImportedSignatures,
+} from '../watchOnlyImport';
 
 const SIGNER = join(process.cwd(), 'scripts', 'seedcash', 'sign_psbt.py');
 const CWD = join(process.cwd(), 'scripts', 'seedcash');
@@ -127,6 +130,7 @@ describeLive('SeedCash round trip', () => {
       rawUnsignedHex: built.rawUnsignedHex,
       inputs,
       outputs: built.outputs,
+      sighashType: built.sighashType,
     };
 
     const dir = mkdtempSync(join(tmpdir(), 'seedcash-'));
