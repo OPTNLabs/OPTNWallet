@@ -93,6 +93,28 @@ impl OsVersion {
     }
 }
 
+/// Which Apple platform is running.
+///
+/// Both are named because their minimums differ and are set independently
+/// upstream. Checking an iPhone against a macOS floor is the kind of mistake
+/// that only shows up on a device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ApplePlatform {
+    MacOs,
+    Ios,
+}
+
+impl ApplePlatform {
+    pub const ALL: &'static [Self] = &[Self::MacOs, Self::Ios];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::MacOs => "macOS",
+            Self::Ios => "iOS",
+        }
+    }
+}
+
 /// What an Apple adapter says about itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppleProviderDescriptor {
@@ -108,6 +130,16 @@ pub struct AppleProviderDescriptor {
     /// False means some dependency floats on a branch, so two builds of the
     /// same commit can differ. A release build must refuse those.
     pub reproducible: bool,
+}
+
+impl AppleProviderDescriptor {
+    /// The lowest OS this adapter runs on, for the platform in hand.
+    pub const fn minimum_for(&self, platform: ApplePlatform) -> OsVersion {
+        match platform {
+            ApplePlatform::MacOs => self.minimum_macos,
+            ApplePlatform::Ios => self.minimum_ios,
+        }
+    }
 }
 
 /// Why a capability is unavailable. Each needs a different fix, so they are
@@ -134,10 +166,15 @@ pub trait AppleProvider {
     fn descriptor(&self) -> AppleProviderDescriptor;
 
     /// Whether this capability can be used on a given OS, and why not.
+    ///
+    /// The platform is a parameter because macOS and iOS minimums are set
+    /// separately upstream, and checking an iPhone against the macOS floor
+    /// would only be caught on a device.
     fn availability(
         &self,
         capability: AppleCapability,
-        running_macos: OsVersion,
+        platform: ApplePlatform,
+        running: OsVersion,
         require_reproducible: bool,
     ) -> Result<(), AppleUnavailable> {
         let descriptor = self.descriptor();
@@ -147,11 +184,9 @@ pub trait AppleProvider {
         if require_reproducible && !descriptor.reproducible {
             return Err(AppleUnavailable::NotReproducible);
         }
-        if running_macos < descriptor.minimum_macos {
-            return Err(AppleUnavailable::OsTooOld {
-                required: descriptor.minimum_macos,
-                running: running_macos,
-            });
+        let required = descriptor.minimum_for(platform);
+        if running < required {
+            return Err(AppleUnavailable::OsTooOld { required, running });
         }
         Ok(())
     }
@@ -254,6 +289,122 @@ pub trait ReferenceImplementation {
     ) -> PlatformFuture<'a, String>;
 }
 
+/// Whether this build may prefer the Swift path at all.
+///
+/// The reversal switch. Set it to `false` and every surface returns to the
+/// Rust client, whatever the OS says and whatever provider is passed in —
+/// one line, no call sites touched, which is the point of routing every
+/// decision through [`chain_client`].
+pub const PREFER_SWIFT_FULCRUM: bool = true;
+
+/// Which implementation talks to a Fulcrum server on this device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChainClient {
+    /// The wallet's own Electrum client. Works everywhere, always available.
+    Rust,
+    /// SwiftFulcrum, through the Apple provider.
+    SwiftFulcrum,
+}
+
+impl ChainClient {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Rust => "the Rust Electrum client",
+            Self::SwiftFulcrum => "SwiftFulcrum",
+        }
+    }
+}
+
+/// Decide which client to use, and why the other was not.
+///
+/// Total by construction: every refusal returns [`ChainClient::Rust`], so
+/// there is no device on which the wallet has no way to reach a server. That
+/// is what makes adopting the Swift path safe — it can only ever be an
+/// upgrade on a device that qualifies, never a requirement.
+///
+/// The reason is returned alongside so a diagnostics screen can say which path
+/// is live and what ruled the other out, rather than leaving it to be guessed
+/// from behaviour.
+pub fn chain_client(
+    provider: &dyn AppleProvider,
+    platform: ApplePlatform,
+    running: OsVersion,
+    require_reproducible: bool,
+) -> (ChainClient, Option<AppleUnavailable>) {
+    chain_client_with_preference(
+        PREFER_SWIFT_FULCRUM,
+        provider,
+        platform,
+        running,
+        require_reproducible,
+    )
+}
+
+/// The same decision with the preference supplied.
+///
+/// [`chain_client`] is this with [`PREFER_SWIFT_FULCRUM`] filled in. Split so
+/// the switched-off behaviour is exercised by a test rather than asserted
+/// about a constant, which proves nothing and leaves the other branch
+/// unreachable.
+pub fn chain_client_with_preference(
+    prefer_swift: bool,
+    provider: &dyn AppleProvider,
+    platform: ApplePlatform,
+    running: OsVersion,
+    require_reproducible: bool,
+) -> (ChainClient, Option<AppleUnavailable>) {
+    if !prefer_swift {
+        // Nothing was refused, because nothing was asked: the provider is not
+        // consulted at all, so no descriptor and no OS version can route
+        // around the switch.
+        return (ChainClient::Rust, None);
+    }
+    match provider.availability(
+        AppleCapability::FulcrumReference,
+        platform,
+        running,
+        require_reproducible,
+    ) {
+        Ok(()) => (ChainClient::SwiftFulcrum, None),
+        Err(reason) => (ChainClient::Rust, Some(reason)),
+    }
+}
+
+/// The SwiftFulcrum adapter, as upstream describes itself.
+///
+/// Facts verified against the upstream manifest rather than assumed, and they
+/// move — re-check before relying on them. SwiftFulcrum is the only package in
+/// the Opal stack that pins its dependency by SemVer rather than by
+/// `branch: "develop"`, which is why this one is `reproducible: true` while
+/// an OpalBase-backed adapter would not be.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SwiftFulcrumProvider;
+
+impl SwiftFulcrumProvider {
+    /// The tag these facts were read from.
+    pub const UPSTREAM_TAG: &'static str = "v0.8.0";
+}
+
+impl AppleProvider for SwiftFulcrumProvider {
+    fn descriptor(&self) -> AppleProviderDescriptor {
+        AppleProviderDescriptor {
+            id: "swiftfulcrum",
+            backing: AppleBacking::Opal,
+            // Connectivity only. It is a reference implementation of a
+            // protocol, never a second wallet state model.
+            capabilities: &[AppleCapability::FulcrumReference],
+            minimum_macos: OsVersion::new(26, 0),
+            minimum_ios: OsVersion::new(26, 0),
+            reproducible: true,
+        }
+    }
+
+    fn log_event<'a>(&'a self, _category: &'a str, _message: &'a str) -> PlatformFuture<'a, ()> {
+        // Diagnostics are OpalDiagnostics' job, not this adapter's.
+        Box::pin(async { PlatformResult::Ok(()) })
+    }
+}
+
 /// A provider for builds with no Apple adapter, which is every non-Apple host
 /// and, today, Apple too.
 #[derive(Debug, Default, Clone, Copy)]
@@ -280,6 +431,147 @@ impl AppleProvider for UnavailableAppleProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_device_below_the_minimum_gets_the_rust_client_rather_than_nothing() {
+        // The rule the whole adoption rests on: the Swift path can only ever
+        // be an upgrade on a device that qualifies, never a requirement. Every
+        // refusal lands on Rust, so there is no device where the wallet cannot
+        // reach a server.
+        let provider = SwiftFulcrumProvider;
+
+        let (client, reason) = chain_client(
+            &provider,
+            ApplePlatform::MacOs,
+            OsVersion::new(26, 0),
+            false,
+        );
+        assert_eq!(client, ChainClient::SwiftFulcrum);
+        assert_eq!(reason, None);
+
+        // macOS 15 is below the floor. Note this is not a hypothetical: macOS
+        // 26 supports only four Intel Macs, and it is the last release to
+        // support Intel at all, so those machines stay on this path for good.
+        let (client, reason) = chain_client(
+            &provider,
+            ApplePlatform::MacOs,
+            OsVersion::new(15, 0),
+            false,
+        );
+        assert_eq!(client, ChainClient::Rust);
+        assert_eq!(
+            reason,
+            Some(AppleUnavailable::OsTooOld {
+                required: OsVersion::new(26, 0),
+                running: OsVersion::new(15, 0),
+            })
+        );
+    }
+
+    #[test]
+    fn ios_is_checked_against_the_ios_floor_and_not_the_macos_one() {
+        // The two minimums are set separately upstream, so checking an iPhone
+        // against the macOS floor is a mistake that only shows up on a device.
+        let provider = SwiftFulcrumProvider;
+        let descriptor = provider.descriptor();
+        assert_eq!(
+            descriptor.minimum_for(ApplePlatform::Ios),
+            OsVersion::new(26, 0)
+        );
+        assert_eq!(
+            descriptor.minimum_for(ApplePlatform::MacOs),
+            OsVersion::new(26, 0)
+        );
+
+        // iOS 14 is OPTN's own deployment target, and it is twelve majors below
+        // what any Opal package needs.
+        let (client, _) = chain_client(&provider, ApplePlatform::Ios, OsVersion::new(14, 0), false);
+        assert_eq!(client, ChainClient::Rust);
+        let (client, _) = chain_client(&provider, ApplePlatform::Ios, OsVersion::new(26, 0), false);
+        assert_eq!(client, ChainClient::SwiftFulcrum);
+    }
+
+    #[test]
+    fn swiftfulcrum_is_the_one_opal_package_a_release_build_may_use() {
+        // It pins its dependency by SemVer; OpalBase pulls five siblings by
+        // branch, so two builds of the same commit can differ. A release build
+        // refuses those and this one passes.
+        let provider = SwiftFulcrumProvider;
+        assert!(provider.descriptor().reproducible);
+        let (client, reason) =
+            chain_client(&provider, ApplePlatform::MacOs, OsVersion::new(26, 0), true);
+        assert_eq!(client, ChainClient::SwiftFulcrum, "{reason:?}");
+
+        // And it offers connectivity only. It is a reference implementation of
+        // a protocol, never a second wallet state model, so asking it for a key
+        // is refused on the capability rather than on the OS.
+        assert_eq!(
+            provider.availability(
+                AppleCapability::SecureEnclave,
+                ApplePlatform::MacOs,
+                OsVersion::new(26, 0),
+                false
+            ),
+            Err(AppleUnavailable::CapabilityMissing(
+                AppleCapability::SecureEnclave
+            ))
+        );
+    }
+
+    #[test]
+    fn one_line_reverses_the_whole_thing() {
+        // The reversal switch. `PREFER_SWIFT_FULCRUM = false` returns every
+        // surface to the Rust client without a call site changing, which is
+        // why every decision goes through chain_client rather than each caller
+        // asking the provider itself.
+        //
+        // With it off, even a device that qualifies on every count gets Rust
+        // -- and with no reason attached, because nothing was refused: the
+        // provider was never asked.
+        let qualifying = (ApplePlatform::MacOs, OsVersion::new(26, 0));
+        let (client, reason) = chain_client_with_preference(
+            false,
+            &SwiftFulcrumProvider,
+            qualifying.0,
+            qualifying.1,
+            false,
+        );
+        assert_eq!(client, ChainClient::Rust);
+        assert_eq!(reason, None, "nothing was refused; it was never asked");
+
+        // The same device with the switch on takes the Swift path, so the
+        // switch is what decided it and not the device.
+        let (client, _) = chain_client_with_preference(
+            true,
+            &SwiftFulcrumProvider,
+            qualifying.0,
+            qualifying.1,
+            false,
+        );
+        assert_eq!(client, ChainClient::SwiftFulcrum);
+
+        // And the shipped entry point follows the constant.
+        let (shipped, _) = chain_client(&SwiftFulcrumProvider, qualifying.0, qualifying.1, false);
+        assert_eq!(
+            shipped,
+            if PREFER_SWIFT_FULCRUM {
+                ChainClient::SwiftFulcrum
+            } else {
+                ChainClient::Rust
+            }
+        );
+
+        // A build with no adapter at all is the same answer by a different
+        // route, which is what every non-Apple host gets.
+        let (client, reason) = chain_client(
+            &UnavailableAppleProvider,
+            ApplePlatform::MacOs,
+            OsVersion::new(26, 0),
+            false,
+        );
+        assert_eq!(client, ChainClient::Rust);
+        assert!(reason.is_some(), "and it says why");
+    }
 
     /// Stands in for a Swift adapter built on the current Opal packages.
     struct OpalPreviewProvider;
@@ -315,8 +607,12 @@ mod tests {
         // OPTN targets iOS 14; Opal requires 26. The boundary says so before
         // anything calls it, instead of the product minimum being raised.
         let provider = OpalPreviewProvider;
-        let verdict =
-            provider.availability(AppleCapability::Diagnostics, OsVersion::new(14, 0), false);
+        let verdict = provider.availability(
+            AppleCapability::Diagnostics,
+            ApplePlatform::MacOs,
+            OsVersion::new(14, 0),
+            false,
+        );
         assert_eq!(
             verdict,
             Err(AppleUnavailable::OsTooOld {
@@ -327,7 +623,12 @@ mod tests {
 
         // On a new enough OS the capability is available for a debug build.
         assert!(provider
-            .availability(AppleCapability::Diagnostics, OsVersion::new(26, 0), false)
+            .availability(
+                AppleCapability::Diagnostics,
+                ApplePlatform::MacOs,
+                OsVersion::new(26, 0),
+                false
+            )
             .is_ok());
     }
 
@@ -338,7 +639,12 @@ mod tests {
         // same commit can differ. Pinning OpalBase to a tag does not fix it.
         let provider = OpalPreviewProvider;
         assert_eq!(
-            provider.availability(AppleCapability::Diagnostics, OsVersion::new(26, 0), true),
+            provider.availability(
+                AppleCapability::Diagnostics,
+                ApplePlatform::MacOs,
+                OsVersion::new(26, 0),
+                true
+            ),
             Err(AppleUnavailable::NotReproducible)
         );
     }
@@ -347,7 +653,12 @@ mod tests {
     fn a_capability_the_adapter_lacks_is_named_not_guessed() {
         let provider = OpalPreviewProvider;
         assert_eq!(
-            provider.availability(AppleCapability::SecureEnclave, OsVersion::new(26, 0), false),
+            provider.availability(
+                AppleCapability::SecureEnclave,
+                ApplePlatform::MacOs,
+                OsVersion::new(26, 0),
+                false
+            ),
             Err(AppleUnavailable::CapabilityMissing(
                 AppleCapability::SecureEnclave
             ))
@@ -359,7 +670,12 @@ mod tests {
         let provider = UnavailableAppleProvider;
         for capability in AppleCapability::ALL {
             assert_eq!(
-                provider.availability(*capability, OsVersion::new(26, 0), false),
+                provider.availability(
+                    *capability,
+                    ApplePlatform::MacOs,
+                    OsVersion::new(26, 0),
+                    false
+                ),
                 Err(AppleUnavailable::CapabilityMissing(*capability))
             );
         }
