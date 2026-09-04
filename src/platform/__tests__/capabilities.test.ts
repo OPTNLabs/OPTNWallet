@@ -30,11 +30,14 @@ const APP_SURFACES: Surface[] = [
   'extension',
 ];
 
-const DESKTOP_ONLY: Capability[] = [
-  'hardwareWallet',
-  'keystone',
-  'cashFusion',
-];
+// CashFusion alone. It needs a long-lived background process no other shell
+// has, which is a fact about the shell rather than work left undone.
+const DESKTOP_ONLY: Capability[] = ['cashFusion'];
+
+// Hardware and Keystone follow the integrations: a browser drives a Ledger
+// over WebHID, a OneKey through its own web SDK, and a Keystone by camera.
+// The phones wait on a native plugin.
+const DEVICE_SURFACES: Capability[] = ['hardwareWallet', 'keystone'];
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -82,6 +85,17 @@ describe('cross-platform capability contract', () => {
     }
   });
 
+  it('offers devices wherever an integration exists, phones excepted', () => {
+    for (const capability of DEVICE_SURFACES) {
+      for (const surface of ['desktop', 'web', 'extension'] as const) {
+        expect(hasCapability(capability, surface)).toBe(true);
+      }
+      for (const surface of ['android', 'ios'] as const) {
+        expect(hasCapability(capability, surface)).toBe(false);
+      }
+    }
+  });
+
   it('does not classify a native shell as web when the bridge reports web', () => {
     vi.unstubAllEnvs();
     isNativePlatformMock.mockReturnValue(true);
@@ -123,7 +137,9 @@ describe('cross-platform capability contract', () => {
     });
     for (const surface of APP_SURFACES) {
       expect(hasCapability('watchOnlyWallet', surface)).toBe(true);
-      expect(hasCapability('hardwareWallet', surface)).toBe(surface === 'desktop');
+      expect(hasCapability('hardwareWallet', surface)).toBe(
+        surface !== 'android' && surface !== 'ios'
+      );
     }
   });
 

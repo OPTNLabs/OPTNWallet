@@ -190,10 +190,19 @@ impl AppSurface {
     pub const fn offers_hardware_wallet(self) -> bool {
         match self {
             Self::Desktop => true,
+            // A browser tab and an extension popup both reach three of the
+            // five devices today: a Ledger over WebHID, a OneKey through its
+            // own web SDK, and a Keystone by camera. The extension is where
+            // people reach for a hardware wallet -- it is what they do with
+            // MetaMask -- so switching it off there was the wrong default.
+            Self::Web => true,
+            Self::Extension => true,
+            // No native plugin on either yet. Not a claim that a phone cannot
+            // reach a device: an Android can hold a cable, both have radios,
+            // both have NFC, and a Tangem is a phone-only device. The work is
+            // simply not done.
             Self::Android => false,
             Self::Ios => false,
-            Self::Web => false,
-            Self::Extension => false,
         }
     }
 }
@@ -2160,6 +2169,63 @@ pub struct HardwareViewModel {
     pub available: bool,
 }
 
+/// Whether this wallet can actually drive that device on that surface.
+///
+/// The third thing a picker needs, and the one that was missing. The device's
+/// own transports say what it can do; [`transport_support`] says what the
+/// runtime offers; this says whether the code to join them exists yet. All
+/// three are needed, because a device that is reachable in principle and has
+/// no integration still fails when someone taps it -- which is worse than not
+/// offering it, since the user goes looking for a cable that was never the
+/// problem.
+///
+/// Read off the services rather than aspirations:
+///
+/// - **Ledger** ships browser transports of its own, `hw-transport-webhid` and
+///   `hw-transport-web-ble`, plus the native path on desktop.
+/// - **OneKey** has `@onekeyfe/hd-web-sdk` for browsers and shares Trezor's
+///   native session on desktop, being a Trezor derivative.
+/// - **Keystone** needs no vendor library at all. It is animated QR, so it
+///   works wherever there is a camera and nothing else has to be true.
+/// - **Trezor** is desktop-only right now. Its browser path went out with
+///   `@trezor/connect-web`, whose dependency chain carried the whole Stellar
+///   SDK, and is being rebuilt on `@trezor/transport`.
+/// - **Tangem** has no integration anywhere yet, and both of its JavaScript
+///   bridges are archived, so it needs native code on each phone.
+pub const fn hardware_integration_ready(vendor: HardwareVendor, surface: AppSurface) -> bool {
+    match (vendor, surface) {
+        (HardwareVendor::Keystone, _) => true,
+        (HardwareVendor::Ledger, AppSurface::Desktop | AppSurface::Web | AppSurface::Extension) => {
+            true
+        }
+        (HardwareVendor::OneKey, AppSurface::Desktop | AppSurface::Web | AppSurface::Extension) => {
+            true
+        }
+        (HardwareVendor::Trezor, AppSurface::Desktop) => true,
+        _ => false,
+    }
+}
+
+/// The devices to show on this surface, in the order they are listed.
+///
+/// Three filters, and each removes something the others cannot see: the
+/// surface has to offer hardware at all, the device has to be reachable on
+/// this runtime, and the integration has to exist. A Tangem drops out on a
+/// desktop because no laptop taps a card; a Trezor drops out in a browser
+/// because the code is not written yet. Neither needs a rule naming it.
+pub fn hardware_vendors_for(surface: AppSurface) -> Vec<HardwareVendor> {
+    if !surface.offers_hardware_wallet() {
+        return Vec::new();
+    }
+    let support = transport_support(surface);
+    HardwareVendor::OFFERED
+        .iter()
+        .copied()
+        .filter(|vendor| vendor.is_reachable_with(support))
+        .filter(|vendor| hardware_integration_ready(*vendor, surface))
+        .collect()
+}
+
 pub fn hardware_view_model(state: &AppState) -> HardwareViewModel {
     let available = state
         .features
@@ -2167,10 +2233,13 @@ pub fn hardware_view_model(state: &AppState) -> HardwareViewModel {
     HardwareViewModel {
         layout: state.layout(),
         network: state.network,
-        // No vendor list when the capability is off, so a renderer cannot
-        // paint a device picker on a surface that has no USB.
+        // Only the devices this surface can actually drive. An empty list
+        // is the honest answer when the flag is off, and a short list is the
+        // honest answer when only some devices are reachable -- painting all
+        // five everywhere sent people to buy a cable that was never going to
+        // help.
         vendors: if available {
-            HardwareVendor::OFFERED.to_vec()
+            hardware_vendors_for(state.surface)
         } else {
             Vec::new()
         },
@@ -2482,15 +2551,15 @@ mod tests {
             (AppSurface::Desktop, true, true),
             (AppSurface::Android, true, false),
             (AppSurface::Ios, true, false),
-            (AppSurface::Web, true, false),
-            (AppSurface::Extension, true, false),
+            (AppSurface::Web, true, true),
+            (AppSurface::Extension, true, true),
         ];
         for (surface, watch_only, hardware) in expected {
             let vm = onboarding_view_model(&AppState::for_surface(surface));
             assert_eq!(vm.show_watch_only, watch_only, "{surface:?}");
             assert_eq!(
                 vm.show_hardware_wallet, hardware,
-                "{surface:?} hardware stays a desktop-only flag"
+                "{surface:?} hardware follows the integrations, not the shell"
             );
         }
 
@@ -2554,9 +2623,15 @@ mod tests {
                 !none.enabled(surface, FeatureFlag::CashFusion),
                 "{surface:?} must hide CashFusion"
             );
-            assert!(
-                !none.enabled(surface, FeatureFlag::HardwareWallet),
-                "{surface:?} must hide hardware wallets"
+            // Hardware is no longer one of these. CashFusion needs a
+            // long-lived background process the other shells do not have,
+            // which is a fact about the shell; hardware needs an integration
+            // per vendor, which is work. Only the browsers have that work
+            // done, so only the phones hide it.
+            assert_eq!(
+                none.enabled(surface, FeatureFlag::HardwareWallet),
+                surface.offers_hardware_wallet(),
+                "{surface:?}"
             );
         }
     }
@@ -3552,18 +3627,13 @@ mod tests {
         assert!(vm.hardware.offers_link_choice());
 
         // A row that could never do anything is worse than no row, so it is
-        // absent wherever no device is reachable.
-        for surface in [
-            AppSurface::Android,
-            AppSurface::Ios,
-            AppSurface::Web,
-            AppSurface::Extension,
-        ] {
+        // absent wherever no device can be driven yet.
+        for surface in [AppSurface::Android, AppSurface::Ios] {
             assert!(
                 !settings_view_model(&AppState::for_surface(surface))
                     .rows
                     .contains(&SettingsRowId::Device),
-                "{surface:?} cannot reach a device"
+                "{surface:?} has no device integration yet"
             );
         }
     }
@@ -3929,14 +3999,22 @@ mod tests {
     }
 
     #[test]
-    fn hardware_is_a_desktop_capability_end_to_end() {
-        // Desktop offers it; every other surface refuses the route and the
-        // open, so a renderer bug cannot strand funds behind a device the
-        // surface cannot reach.
+    fn hardware_is_a_capability_of_the_surfaces_that_can_drive_a_device() {
+        // The phones refuse the route and the open, so a renderer bug cannot
+        // strand funds behind a device the surface cannot reach.
         let desktop = AppState::for_surface(AppSurface::Desktop);
         let vm = hardware_view_model(&desktop);
         assert!(vm.available);
-        assert_eq!(vm.vendors, HardwareVendor::OFFERED.to_vec());
+        // Not every offered device: a Tangem is a card, and no laptop taps.
+        assert_eq!(
+            vm.vendors,
+            vec![
+                HardwareVendor::Ledger,
+                HardwareVendor::Trezor,
+                HardwareVendor::OneKey,
+                HardwareVendor::Keystone
+            ]
+        );
         assert!(!vm.vendors.contains(&HardwareVendor::Mock));
         // Devices are reached through Watch Only, matching the React shell:
         // the desktop watch-only card is where a device, a cosigner set, or a
@@ -3952,18 +4030,30 @@ mod tests {
             Some("#/watch-only")
         );
 
-        // Off desktop the section offers nothing, so a renderer cannot paint
-        // a device picker where no device can be reached.
-        for surface in [
-            AppSurface::Android,
-            AppSurface::Ios,
-            AppSurface::Web,
-            AppSurface::Extension,
-        ] {
+        // On a phone the section offers nothing, so a renderer cannot paint
+        // a device picker where no device can be driven yet.
+        for surface in [AppSurface::Android, AppSurface::Ios] {
             let state = AppState::for_surface(surface);
             let vm = hardware_view_model(&state);
             assert!(!vm.available, "{surface:?}");
             assert!(vm.vendors.is_empty(), "{surface:?} must offer no devices");
+        }
+
+        // A browser offers the three it can actually drive, and no Trezor
+        // until its transport is rebuilt, and no Tangem because a browser
+        // cannot tap a card.
+        for surface in [AppSurface::Web, AppSurface::Extension] {
+            let vm = hardware_view_model(&AppState::for_surface(surface));
+            assert!(vm.available, "{surface:?}");
+            assert_eq!(
+                vm.vendors,
+                vec![
+                    HardwareVendor::Ledger,
+                    HardwareVendor::OneKey,
+                    HardwareVendor::Keystone
+                ],
+                "{surface:?}"
+            );
         }
     }
 
@@ -4190,12 +4280,11 @@ mod tests {
         // the switch is off where the work has not been done rather than where
         // it is impossible.
         assert!(AppSurface::Desktop.offers_hardware_wallet());
-        for surface in [
-            AppSurface::Android,
-            AppSurface::Ios,
-            AppSurface::Web,
-            AppSurface::Extension,
-        ] {
+        // The browsers can drive a Ledger over WebHID, a OneKey through its
+        // own web SDK, and a Keystone by camera, so they offer it too.
+        assert!(AppSurface::Web.offers_hardware_wallet());
+        assert!(AppSurface::Extension.offers_hardware_wallet());
+        for surface in [AppSurface::Android, AppSurface::Ios] {
             assert!(!surface.offers_hardware_wallet(), "{surface:?} today");
         }
 
@@ -4292,15 +4381,10 @@ mod tests {
         // hardware needs a USB transport, so it is desktop-only. The two are
         // gated on different things, not on the same "is this a real platform"
         // instinct.
-        for surface in [
-            AppSurface::Android,
-            AppSurface::Ios,
-            AppSurface::Web,
-            AppSurface::Extension,
-        ] {
+        for surface in [AppSurface::Android, AppSurface::Ios] {
             assert!(
                 !FeatureFlags::surface_allows(surface, FeatureFlag::HardwareWallet),
-                "{surface:?} has no USB"
+                "{surface:?} has no device integration yet"
             );
             assert!(
                 surface.offers_watch_only(),
