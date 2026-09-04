@@ -65,9 +65,11 @@ describe('WatchOnlySend workspace', () => {
   it('keeps sighash behind Advanced and omits desktop QR density on mobile', () => {
     const html = renderToStaticMarkup(
       <Provider store={store}>
-        <StaticRouter location="/send">
-          <WatchOnlySend />
-        </StaticRouter>
+        <I18nProvider>
+          <StaticRouter location="/send">
+            <WatchOnlySend />
+          </StaticRouter>
+        </I18nProvider>
       </Provider>
     );
 

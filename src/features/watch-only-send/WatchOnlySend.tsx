@@ -348,9 +348,7 @@ function restoreProposalFromPsbt(
   if (
     sighashType === null ||
     sighashType === undefined ||
-    parsed.inputs.some(
-      (input) => input.requestedSighashType !== sighashType
-    )
+    parsed.inputs.some((input) => input.requestedSighashType !== sighashType)
   ) {
     throw new Error(
       'Saved multisig proposal is missing one consistent sighash type.'

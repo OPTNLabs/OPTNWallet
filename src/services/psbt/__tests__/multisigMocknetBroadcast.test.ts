@@ -33,11 +33,10 @@ import {
   inspectImportedPsbt,
   mergeImportedSignatures,
 } from '../watchOnlyImport';
-import { encodeUnsignedPsbt } from '../psbtBch';
+import { encodeUnsignedPsbt, SIGHASH_ALL_FORKID } from '../psbtBch';
 import { makeParentTransaction } from './parentFixture';
 
 const ACCOUNT_PATH = "m/44'/145'/0'";
-const SIGHASH_ALL_FORKID_ANYONECANPAY = 0xc1;
 const SEED_BYTES = [0x01, 0x02, 0x03];
 const FINGERPRINTS = ['aabbcc01', 'aabbcc02', 'aabbcc03'];
 
@@ -97,16 +96,13 @@ function signInput(
   };
   const serialization = generateSigningSerializationBch(context, {
     coveredBytecode: redeemScript,
-    signingSerializationType: Uint8Array.of(SIGHASH_ALL_FORKID_ANYONECANPAY),
+    signingSerializationType: Uint8Array.of(SIGHASH_ALL_FORKID),
   });
   const signature = secp256k1.signMessageHashSchnorr(
     privateKey,
     hash256(serialization)
   );
-  return concat([
-    signature as Uint8Array,
-    Uint8Array.of(SIGHASH_ALL_FORKID_ANYONECANPAY),
-  ]);
+  return concat([signature as Uint8Array, Uint8Array.of(SIGHASH_ALL_FORKID)]);
 }
 
 describe('multisig descriptor to CashScript mocknet broadcast', () => {
@@ -276,7 +272,7 @@ describe('multisig descriptor to CashScript mocknet broadcast', () => {
                 }
               : {}),
           })),
-          SIGHASH_ALL_FORKID_ANYONECANPAY
+          proposal.sighashType
         );
       });
 
@@ -285,6 +281,7 @@ describe('multisig descriptor to CashScript mocknet broadcast', () => {
       rawUnsignedHex: proposal.rawUnsignedHex,
       inputs: [input],
       outputs: proposal.outputs,
+      sighashType: proposal.sighashType,
     });
     expect(inspected.state).toBe('complete');
 
@@ -292,6 +289,7 @@ describe('multisig descriptor to CashScript mocknet broadcast', () => {
       rawUnsignedHex: proposal.rawUnsignedHex,
       inputs: [input],
       outputs: proposal.outputs,
+      sighashType: proposal.sighashType,
     });
     const transaction = decodeTransaction(hexToBin(rawTransactionHex));
     if (typeof transaction === 'string') throw new Error(transaction);
