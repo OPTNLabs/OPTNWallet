@@ -952,6 +952,51 @@ mod tests {
     }
 
     #[test]
+    fn this_agrees_with_electron_cash_byte_for_byte() {
+        // An implementation nobody here wrote. Electron Cash 4.4.5 was asked
+        // for the same 2-of-2 on chipnet and returned the same redeem script
+        // and the same address; the commands and output are in
+        // docs/multisig-interop.md.
+        //
+        // Its createmultisig does *not* sort -- multisig_script keeps the order
+        // it is given -- so the keys are handed over already BIP-67 sorted.
+        // That is deliberate: it checks our script construction against theirs
+        // without our sorting and their lack of it covering for each other.
+        const SORTED_KEYS: [&str; 2] = [
+            "02fe6f0a5a297eb38c391581c4413e084773ea23954d93f7753db7dc0adc188b2f",
+            "02ff12471208c14bd580709cb2358d98975247d8765f92bc25eab3b2763ed605f8",
+        ];
+        const EC_REDEEM_SCRIPT: &str = "522102fe6f0a5a297eb38c391581c4413e084773ea23954d93f7753db7dc0adc188b2f2102ff12471208c14bd580709cb2358d98975247d8765f92bc25eab3b2763ed605f852ae";
+        const EC_CASHADDR: &str = "bchtest:ppttar4f8yf0xa592s4z4pj22cq03zn82syer0akm8";
+
+        fn key(hex: &str) -> [u8; 33] {
+            let bytes: Vec<u8> = (0..hex.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("hex"))
+                .collect();
+            let mut out = [0u8; 33];
+            out.copy_from_slice(&bytes);
+            out
+        }
+
+        let script = redeem_script(2, &[key(SORTED_KEYS[0]), key(SORTED_KEYS[1])]).expect("2-of-2");
+        let script_hex: String = script.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(
+            script_hex, EC_REDEEM_SCRIPT,
+            "Electron Cash builds this script"
+        );
+        assert_eq!(p2sh_address(Network::Chipnet, &script, false), EC_CASHADDR);
+
+        // And handing it the keys the other way round still lands here,
+        // because this sorts and Electron Cash does not. Reversed, its own
+        // answer is a different address entirely -- which is what BIP-67 is
+        // for, and why the sort cannot be skipped.
+        let reversed =
+            redeem_script(2, &[key(SORTED_KEYS[1]), key(SORTED_KEYS[0])]).expect("2-of-2");
+        assert_eq!(reversed, script, "input order must not reach the script");
+    }
+
+    #[test]
     fn this_agrees_with_optn_multisig_core_byte_for_byte() {
         // PR #65 adds `optn-multisig-core`, a second Rust implementation of
         // this same derivation, and it merges before #63. Two implementations
