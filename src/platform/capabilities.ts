@@ -19,6 +19,11 @@ export type CapabilitySpec = {
 };
 
 export const CAPABILITIES: Readonly<Record<Capability, CapabilitySpec>> = {
+  // Watch Only is the door an air-gapped device comes through, and unlike
+  // hardware it needs no transport at all: an account xPub can be pasted. A
+  // popup with no camera and no USB can still watch a cold wallet, which is
+  // exactly the extension's case. So it is on everywhere, and this table is
+  // how a platform turns it off rather than how it earns it.
   watchOnlyWallet: {
     enabledOn: {
       desktop: true,

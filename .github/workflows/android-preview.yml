@@ -282,7 +282,6 @@ jobs:
             fi
             printf '%s' "$found"
           }
-          instrumentation_log="$RUNNER_TEMP/android-instrumentation.log"
           install_timeout_seconds=900
           install_apk() {
             apk_path="$1"
@@ -373,22 +372,42 @@ jobs:
             # timeout above.
             sleep 5
 
-            set +e
-            timeout 540s adb -s "$emulator_serial" shell am instrument -w -r \
-              optn.wallet.app.test/androidx.test.runner.AndroidJUnitRunner \
-              | tee "$instrumentation_log"
-            instrumentation_exit=${PIPESTATUS[0]}
-            set -e
-            if grep -q '^INSTRUMENTATION_FAILED:' "$instrumentation_log" ||
-              ! grep -q '^INSTRUMENTATION_CODE: -1$' "$instrumentation_log"; then
-              echo "::error::instrumentation tests failed on the $flavour flavour"
-              echo 'Android instrumentation output:'
-              cat "$instrumentation_log" || true
-              echo 'Android logcat:'
-              adb_with_timeout -s "$emulator_serial" logcat -d -t 400 || true
-              exit 1
-            fi
-            test "$instrumentation_exit" -eq 0
+            run_instrumentation() {
+              method="$1"
+              instrumentation_log="$RUNNER_TEMP/android-instrumentation-${flavour}-${method}.log"
+              set +e
+              timeout 240s adb -s "$emulator_serial" shell am instrument -w -r \
+                -e class "com.getcapacitor.myapp.ExampleInstrumentedTest#${method}" \
+                optn.wallet.app.test/androidx.test.runner.AndroidJUnitRunner \
+                | tee "$instrumentation_log"
+              instrumentation_exit=${PIPESTATUS[0]}
+              set -e
+              if grep -q '^INSTRUMENTATION_FAILED:' "$instrumentation_log" ||
+                ! grep -q '^INSTRUMENTATION_CODE: -1$' "$instrumentation_log"; then
+                echo "::error::Android instrumentation ${method} failed on the $flavour flavour"
+                echo 'Android instrumentation output:'
+                cat "$instrumentation_log" || true
+                echo 'Android logcat:'
+                adb_with_timeout -s "$emulator_serial" logcat -d -t 400 || true
+                exit 1
+              fi
+              test "$instrumentation_exit" -eq 0
+            }
+
+            run_instrumentation useAppContext
+            run_instrumentation mainActivity_launchesInExpectedPackage
+            run_instrumentation androidLanding_exposesAndOpensWatchOnlyWallet
+            run_instrumentation androidLanding_watchOnlyCreate
+
+            # Process-death persistence cannot be exercised by force-stopping
+            # the target from inside AndroidJUnitRunner: the runner correctly
+            # reports that as a target-process crash. End the create invocation,
+            # kill the app from the host, then start a fresh instrumentation
+            # process to prove the persisted watch-only wallet survives.
+            adb_with_timeout -s "$emulator_serial" shell am force-stop optn.wallet.app
+            sleep 3
+            run_instrumentation androidLanding_watchOnlyRelaunch
+
             echo "::endgroup::"
           done
 

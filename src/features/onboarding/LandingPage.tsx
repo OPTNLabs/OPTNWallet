@@ -53,6 +53,7 @@ type LandingPageProps = {
 const LandingPage = ({ surface }: LandingPageProps) => {
   const [showHelp, setShowHelp] = useState(false);
   const resolvedSurface = surface ?? currentSurface();
+  const showWatchOnly = offersWatchOnly(resolvedSurface);
   const { t } = useI18n();
 
   return (
@@ -102,7 +103,7 @@ const LandingPage = ({ surface }: LandingPageProps) => {
             >
               {t('onboarding.importWallet')}
             </Link>
-            {offersWatchOnly(resolvedSurface) && (
+            {showWatchOnly && (
               <Link
                 to={ROUTE_PATHS.watchOnlyWallet}
                 data-testid="watch-only-landing-action"

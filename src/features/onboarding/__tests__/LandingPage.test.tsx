@@ -75,7 +75,7 @@ describe('onboarding watch-only capability', () => {
     ).toHaveAttribute('href', '/watch-only');
   });
 
-  it.each(['android', 'ios', 'web', 'extension', 'desktop'] as const)(
+  it.each(['desktop', 'android', 'ios', 'web', 'extension'] as const)(
     'shows watch-only alongside create and import on %s',
     (surface) => {
       render(<LandingPage surface={surface} />);
@@ -92,4 +92,19 @@ describe('onboarding watch-only capability', () => {
     }
   );
 
+  it.each(['android', 'ios', 'web', 'extension'] as const)(
+    'keeps hardware off %s, where the vendor integration does not exist yet',
+    (surface) => {
+      render(<LandingPage surface={surface} />);
+
+      // Watch-only is still here. The two are separate doors: one needs a
+      // vendor integration, the other needs somewhere to paste an xPub.
+      expect(
+        screen.getByRole('link', { name: 'Create Watch-Only Wallet' })
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole('link', { name: /hardware/i })
+      ).not.toBeInTheDocument();
+    }
+  );
 });

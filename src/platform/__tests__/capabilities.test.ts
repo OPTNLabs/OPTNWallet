@@ -109,7 +109,11 @@ describe('cross-platform capability contract', () => {
     expect(hasCapability('hardwareWallet')).toBe(false);
   });
 
-  it('enables watch-only wallets on every surface; hide it by flipping the flag', () => {
+  it('offers watch-only on every surface, hardware only where integrated', () => {
+    // Watch-only needs no transport -- an account xPub can be pasted -- so a
+    // popup with no camera and no USB can still watch a cold wallet. Hardware
+    // is the one that varies, and only because the vendor integrations do not
+    // exist off desktop yet.
     expect(CAPABILITIES.watchOnlyWallet.enabledOn).toEqual({
       desktop: true,
       android: true,
@@ -119,6 +123,7 @@ describe('cross-platform capability contract', () => {
     });
     for (const surface of APP_SURFACES) {
       expect(hasCapability('watchOnlyWallet', surface)).toBe(true);
+      expect(hasCapability('hardwareWallet', surface)).toBe(surface === 'desktop');
     }
   });
 

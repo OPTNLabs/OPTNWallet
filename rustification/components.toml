@@ -111,3 +111,35 @@ target = "best-provider-per-capability"
 layer = "platform-provider"
 status = "started"
 security_weight = 8
+
+[[component]]
+name = "nfc-contactless"
+current = "apple-corenfc-tag-io-unavailable-without-session"
+target = "rust-protocols-thin-native-nfc-adapters"
+layer = "platform-provider"
+status = "started"
+security_weight = 8
+
+[[component]]
+name = "apple-native-provider"
+current = "typed-swiftpm-keychain-corenfc-secure-enclave-oslog"
+target = "thin-native-apple-capability-adapters-behind-optn-platform"
+layer = "platform-provider"
+status = "started"
+security_weight = 9
+
+[[component]]
+name = "apple-opal-reference"
+current = "gated-apple26-no-opalbase-unclosed-semver-v0.4.1"
+target = "closed-semver-apple-reference-then-differential-oracle"
+layer = "platform-provider"
+status = "started"
+security_weight = 8
+
+[[component]]
+name = "apple-capability-providers"
+current = "native-ffi-crate-behind-optn-platform"
+target = "optn-platform-then-swift-then-optional-opal"
+layer = "platform-provider"
+status = "started"
+security_weight = 8

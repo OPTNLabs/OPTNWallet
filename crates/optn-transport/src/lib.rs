@@ -1758,7 +1758,12 @@ mod tests {
     }
 
     #[test]
-    fn android_wire_snapshot_keeps_watch_only_on_the_landing() {
+    fn wire_snapshot_preserves_the_watch_only_switch_on_every_surface() {
+        // Watch Only is offered everywhere -- it needs no transport, so a shell
+        // with no camera and no USB can still watch a cold wallet -- and each
+        // platform switches it off with a flag. What serialization could break
+        // is either half: a surface silently losing the offer, or a surface
+        // that switched it off silently regaining it.
         for surface in [
             AppSurface::Desktop,
             AppSurface::Android,
@@ -1772,7 +1777,19 @@ mod tests {
             assert!(
                 optn_app::onboarding_actions(&restored)
                     .contains(&optn_app::OnboardingAction::CreateWatchOnlyWallet),
-                "{surface:?} Watch Only stays on the landing when the flag is true"
+                "{surface:?} Watch Only stays on the landing after a wire round-trip"
+            );
+
+            let mut off = AppState::for_surface(surface);
+            off.apply(optn_app::AppAction::SetFeatureEnabled {
+                flag: optn_app::FeatureFlag::WatchOnly,
+                enabled: false,
+            });
+            let restored = AppState::try_from(WireState::from(&off)).expect("wire state");
+            assert!(
+                !optn_app::onboarding_actions(&restored)
+                    .contains(&optn_app::OnboardingAction::CreateWatchOnlyWallet),
+                "{surface:?} must not regain Watch Only through serialization"
             );
         }
     }
