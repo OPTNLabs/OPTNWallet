@@ -1998,6 +1998,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "optn-multisig-core"
+version = "1.7.3"
+dependencies = [
+ "k256",
+ "ripemd",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "optn-platform"
 version = "1.7.3"
 
