@@ -1858,7 +1858,7 @@ pub fn watch_only_setup_preview(
 pub use optn_platform::{HardwareTransport, HardwareVendor, TransportSupport};
 
 pub use optn_core::airgap::{
-    classify_scanned_account, AirgapSigner, ScannedAccount, AIRGAP_SUBTITLE, AIRGAP_TITLE,
+    classify_scanned_account, AirgapDevice, ScannedAccount, AIRGAP_SUBTITLE, AIRGAP_TITLE,
 };
 pub use optn_core::multisig::{Cosigner, MultisigPreview, MAX_COSIGNERS};
 
