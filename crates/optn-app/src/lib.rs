@@ -3504,6 +3504,7 @@ mod tests {
         // in the wallet.
         state.apply(AppAction::SetServer {
             kind: ServerKind::Electrum,
+            // nosemgrep: javascript.lang.security.detect-insecure-websocket.detect-insecure-websocket -- a JavaScript rule on Rust; this code is what refuses remote ws://
             entry: "ws://fulcrum.example:50003".into(),
         });
         assert!(state
