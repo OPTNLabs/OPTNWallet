@@ -48,6 +48,51 @@ impl FeeRate {
     }
 }
 
+/// The existing application-wide fee choice. This is wallet policy, not a
+/// chain-provider mode: changing Fulcrum/BIP37/RPC routes must not mutate it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FeeMode {
+    Auto,
+    Custom,
+}
+
+/// App-wide user fee policy.
+///
+/// `auto` accepts a recommendation from the wallet/runtime; `custom` uses the
+/// user's requested rate. The final rate is always clamped to the active relay
+/// minimum supplied by chain policy. Keeping the floor as an input means this
+/// type does not freeze a network policy constant into wallet preferences.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FeePreferences {
+    pub mode: FeeMode,
+    pub custom_rate: FeeRate,
+}
+
+impl FeePreferences {
+    pub const fn new(mode: FeeMode, custom_rate: FeeRate) -> Self {
+        Self { mode, custom_rate }
+    }
+
+    pub const fn auto(custom_rate: FeeRate) -> Self {
+        Self::new(FeeMode::Auto, custom_rate)
+    }
+
+    pub const fn custom(custom_rate: FeeRate) -> Self {
+        Self::new(FeeMode::Custom, custom_rate)
+    }
+
+    /// Resolve one final wallet-owned rate. A provider estimate is advisory
+    /// input to Auto; neither that provider nor the selected transport owns the
+    /// preference or may bypass the relay floor.
+    pub const fn resolve(self, auto_rate: FeeRate, relay_minimum: FeeRate) -> FeeRate {
+        let requested = match self.mode {
+            FeeMode::Auto => auto_rate,
+            FeeMode::Custom => self.custom_rate,
+        };
+        requested.max(relay_minimum)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -67,12 +112,35 @@ mod tests {
     }
 
     #[test]
-    fn max_is_a_relay_floor_primitive() {
+    fn custom_below_relay_minimum_is_clamped() {
         let relay = FeeRate::from_satoshis_per_kb(1000);
-        assert_eq!(FeeRate::from_satoshis_per_kb(500).max(relay), relay);
+        let preferences = FeePreferences::custom(FeeRate::from_satoshis_per_kb(500));
         assert_eq!(
-            FeeRate::from_satoshis_per_kb(1500).max(relay),
-            FeeRate::from_satoshis_per_kb(1500)
+            preferences.resolve(FeeRate::from_satoshis_per_kb(2500), relay),
+            relay
+        );
+    }
+
+    #[test]
+    fn custom_above_floor_is_preserved() {
+        let requested = FeeRate::from_satoshis_per_kb(1700);
+        let preferences = FeePreferences::custom(requested);
+        assert_eq!(
+            preferences.resolve(
+                FeeRate::from_satoshis_per_kb(2500),
+                FeeRate::from_satoshis_per_kb(1000)
+            ),
+            requested
+        );
+    }
+
+    #[test]
+    fn auto_is_also_clamped_to_relay_minimum() {
+        let relay = FeeRate::from_satoshis_per_kb(1000);
+        let preferences = FeePreferences::auto(FeeRate::from_satoshis_per_kb(1100));
+        assert_eq!(
+            preferences.resolve(FeeRate::from_satoshis_per_kb(250), relay),
+            relay
         );
     }
 }
