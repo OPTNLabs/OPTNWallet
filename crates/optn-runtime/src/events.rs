@@ -11,9 +11,18 @@ pub type EventFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ChainEventEr
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChainEventKind {
-    TransactionSeen { txid: Hash32, raw: Option<Vec<u8>> },
-    BlockSeen { hash: Hash32, raw: Option<Vec<u8>> },
-    DoubleSpendProofSeen { proof_hash: Option<Hash32>, raw: Option<Vec<u8>> },
+    TransactionSeen {
+        txid: Hash32,
+        raw: Option<Vec<u8>>,
+    },
+    BlockSeen {
+        hash: Hash32,
+        raw: Option<Vec<u8>>,
+    },
+    DoubleSpendProofSeen {
+        proof_hash: Option<Hash32>,
+        raw: Option<Vec<u8>>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

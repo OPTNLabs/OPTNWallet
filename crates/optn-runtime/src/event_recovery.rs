@@ -39,7 +39,9 @@ impl<R> EventRecoveryGate<R>
 where
     R: GapRecovery,
 {
-    pub const fn new(recoverer: R) -> Self { Self { recoverer } }
+    pub const fn new(recoverer: R) -> Self {
+        Self { recoverer }
+    }
 
     pub async fn process(&self, event: ChainEventEnvelope) -> RecoveryDecision {
         let Some(gap) = event.gap.clone() else {
@@ -61,7 +63,11 @@ mod tests {
 
     struct MockRecovery(Result<(), String>);
     impl GapRecovery for MockRecovery {
-        fn recover<'a>(&'a self, _gap: &'a SequenceGap, _event: &'a ChainEventEnvelope) -> RecoveryFuture<'a> {
+        fn recover<'a>(
+            &'a self,
+            _gap: &'a SequenceGap,
+            _event: &'a ChainEventEnvelope,
+        ) -> RecoveryFuture<'a> {
             let result = self.0.clone();
             Box::pin(async move { result })
         }
@@ -74,27 +80,47 @@ mod tests {
             topic: "rawtx".into(),
             sequence: Some(9),
             gap,
-            event: ChainEventKind::TransactionSeen { txid: [1; 32], raw: None },
+            event: ChainEventKind::TransactionSeen {
+                txid: [1; 32],
+                raw: None,
+            },
         }
     }
 
     #[tokio::test]
     async fn continuous_event_needs_no_recovery() {
         let gate = EventRecoveryGate::new(MockRecovery(Err("must not run".into())));
-        assert!(matches!(gate.process(event(None)).await, RecoveryDecision::Ready(_)));
+        assert!(matches!(
+            gate.process(event(None)).await,
+            RecoveryDecision::Ready(_)
+        ));
     }
 
     #[tokio::test]
     async fn gap_is_recovered_before_event_is_ready() {
-        let gap = SequenceGap { topic: "rawtx".into(), expected: 8, actual: 9 };
+        let gap = SequenceGap {
+            topic: "rawtx".into(),
+            expected: 8,
+            actual: 9,
+        };
         let gate = EventRecoveryGate::new(MockRecovery(Ok(())));
-        assert!(matches!(gate.process(event(Some(gap))).await, RecoveryDecision::Recovered(_)));
+        assert!(matches!(
+            gate.process(event(Some(gap))).await,
+            RecoveryDecision::Recovered(_)
+        ));
     }
 
     #[tokio::test]
     async fn failed_recovery_holds_event() {
-        let gap = SequenceGap { topic: "rawtx".into(), expected: 8, actual: 9 };
+        let gap = SequenceGap {
+            topic: "rawtx".into(),
+            expected: 8,
+            actual: 9,
+        };
         let gate = EventRecoveryGate::new(MockRecovery(Err("refresh failed".into())));
-        assert!(matches!(gate.process(event(Some(gap))).await, RecoveryDecision::Held { .. }));
+        assert!(matches!(
+            gate.process(event(Some(gap))).await,
+            RecoveryDecision::Held { .. }
+        ));
     }
 }

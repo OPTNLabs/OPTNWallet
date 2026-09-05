@@ -81,12 +81,9 @@ impl ShvMmrHeaderVerifier {
     ) -> Result<Self, ShvMmrError> {
         let parsed = verify_declared_pow(&checkpoint_header.0)?;
         let leaf_count = u64::from(checkpoint_height) + 1;
-        let accumulator = MmrAccumulator::bootstrap_from_last_leaf_proof(
-            leaf_count,
-            parsed.hash,
-            proof,
-        )
-        .ok_or(ShvMmrError::InvalidCheckpointProof)?;
+        let accumulator =
+            MmrAccumulator::bootstrap_from_last_leaf_proof(leaf_count, parsed.hash, proof)
+                .ok_or(ShvMmrError::InvalidCheckpointProof)?;
         let actual = accumulator.root();
         if actual != trusted_commitment {
             return Err(ShvMmrError::CheckpointCommitmentMismatch {
