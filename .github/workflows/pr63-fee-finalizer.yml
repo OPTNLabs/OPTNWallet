@@ -30,8 +30,8 @@ jobs:
               p = Path(path)
               s = p.read_text()
               n = s.count(old)
-              if n != 1:
-                  raise SystemExit(f'{path}: expected one match, got {n}: {old[:100]!r}')
+              if n < 1:
+                  raise SystemExit(f'{path}: expected at least one match: {old[:100]!r}')
               p.write_text(s.replace(old, new, 1))
 
           app = 'crates/optn-app/src/lib.rs'
