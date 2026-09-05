@@ -29,6 +29,10 @@ import { QRCodeSVG } from 'qrcode.react';
 
 import WalletScreen from '../../components/ui/WalletScreen';
 import { selectWalletId } from '../../state/slices/walletSlice';
+import {
+  selectCustomFeeSatPerByte,
+  selectFeeMode,
+} from '../../state/slices/preferencesSlice';
 import type { RootState } from '../../state/store';
 import type { UTXO } from '../../types/types';
 import { useI18n } from '../../i18n/useI18n';
@@ -43,7 +47,10 @@ import TransactionService, {
   type BroadcastState,
 } from '../../services/TransactionService';
 import { txBytesFromHex } from '../../apis/TransactionManager/feePolicy';
-import { refreshMultisigWalletUtxos } from '../../services/WalletUtxoRefreshService';
+import {
+  refreshMultisigWalletUtxos,
+  refreshWatchOnlyWalletUtxos,
+} from '../../services/WalletUtxoRefreshService';
 import { copyToClipboard } from '../../utils/clipboard';
 import WalletManager from '../../apis/WalletManager/WalletManager';
 import useSharedTokenMetadata from '../../hooks/useSharedTokenMetadata';
@@ -60,6 +67,7 @@ import {
   buildWatchOnlyPsbt,
   estimateFinalTransactionBytes,
   feeForTransactionBytes,
+  resolveWatchOnlyFeeRate,
   multisigCosignerDerivations,
   type WatchOnlyBuildOutput,
   type WatchOnlyInputSpec,
@@ -172,7 +180,34 @@ const QR_DENSITY_LABELS: Record<
   400: 'Highest density (fewest frames)',
   450: 'Maximum density (fewest frames)',
 };
-const MULTISIG_FEE_RATE_SAT_PER_BYTE = 1;
+/**
+ * Fee rates offered per send, in satoshis per byte.
+ *
+ * `null` means "whatever the wallet is set to", which is the default and the
+ * only entry that is not a number: Settings already carries a fee mode and a
+ * custom rate that every other send path honours, and a watch-only send that
+ * quietly used its own number would be the one screen disagreeing with the
+ * rest of the wallet.
+ *
+ * The named rates above it are a per-send override, not a new policy — they
+ * are clamped to the relay minimum by `requiredFeeForBytes` in exactly the
+ * same way Settings' custom rate is, so nothing here can build a transaction
+ * the network will not relay.
+ */
+const FEE_RATE_CHOICES: ReadonlyArray<{
+  rate: number | null;
+  label: string;
+  hint: string;
+}> = [
+  {
+    rate: null,
+    label: 'Wallet default',
+    hint: 'Follows Settings, like every other send in this wallet.',
+  },
+  { rate: 1.1, label: 'Economy', hint: 'The relay minimum. Cheapest that propagates.' },
+  { rate: 2, label: 'Standard', hint: 'A little headroom over the floor.' },
+  { rate: 5, label: 'Priority', hint: 'For when a backend is fussy about its rolling minimum.' },
+];
 
 const satsToBch = (sats: bigint): string => {
   const bch = Number(sats) / 1e8;
@@ -406,6 +441,32 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
   const currentNetwork = useSelector(
     (state: RootState) => state.network.currentNetwork
   );
+
+  // The wallet's own fee setting, the same pair `useSimpleSend` reads. Taking
+  // it from here rather than defining a default locally is the point: a
+  // watch-only send now costs what a signed send from this wallet costs.
+  const walletFeeMode = useSelector(selectFeeMode);
+  const walletCustomFeeSatPerByte = useSelector(selectCustomFeeSatPerByte);
+
+  /** Per-send override; `null` follows the wallet. */
+  const [feeRateOverride, setFeeRateOverride] = useState<number | null>(null);
+
+  /**
+   * The rate this send will actually use.
+   *
+   * `undefined` means "no explicit rate", which the builder resolves through
+   * the shared relay policy — the wallet default. That is deliberately the
+   * same value the rest of the app lands on, so the two cannot drift.
+   */
+  const feeRateSatPerByte = useMemo<number | undefined>(
+    () =>
+      resolveWatchOnlyFeeRate(
+        feeRateOverride,
+        walletFeeMode,
+        walletCustomFeeSatPerByte
+      ),
+    [feeRateOverride, walletFeeMode, walletCustomFeeSatPerByte]
+  );
   const fusionDepthRev = useFusionDepthRevision(
     walletIdOverride ?? standardWalletId ?? 0
   );
@@ -448,7 +509,6 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
   const [scannerOpen, setScannerOpen] = useState(false);
   // The QR is bounded by the card it sits in, and a signer reads it faster
   // the larger it is. Testers asked for the whole window, so this gives it.
-  const [qrFullscreen, setQrFullscreen] = useState(false);
   // One decoder for the whole scan, not one per frame. An animated UR spans
   // dozens of frames, so a decoder rebuilt on each arrival discards every part
   // it has already seen and can never complete a multi-part signed PSBT --
@@ -739,29 +799,46 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
 
         if (cancelled) return;
         applyInventory(utxoResult.allUtxos);
-        if (mobile && policy) {
-          // Do not hold the entire send workspace hostage to Electrum. The
-          // cached inventory is shown now; only the refresh remains active.
-          setBusy(false);
-          setNetworkRefreshing(true);
-          try {
-            const refreshed = await refreshMultisigWalletUtxos(currentWalletId);
-            if (!cancelled) {
-              applyInventory(Object.values(refreshed).flat());
-              setNetworkRefreshFailed(false);
-            }
-          } catch (refreshError) {
-            if (!cancelled) {
-              setNetworkRefreshFailed(true);
-              setError(
-                refreshError instanceof Error
-                  ? `Network refresh unavailable; showing saved multisig inventory. ${refreshError.message}`
-                  : 'Network refresh unavailable; showing saved multisig inventory.'
-              );
-            }
-          } finally {
-            if (!cancelled) setNetworkRefreshing(false);
+
+        // `fetchAllWalletUtxos` reads the database and nothing else, so what is
+        // on screen at this point is a cache. It used to be the *only* thing
+        // this screen had on desktop: the refresh below was gated on
+        // `mobile && policy`, so a desktop watch-only wallet whose cache was
+        // empty or stale showed no coins, could not build a spend, and offered
+        // no way to fix it from here. `refreshActiveWalletUtxos` does not help
+        // -- it is scoped to the Redux-active mnemonic wallet, which a
+        // watch-only wallet never is.
+        //
+        // Both surfaces refresh now, each through its own route-scoped path.
+        // The failure stays non-fatal on purpose: the cached inventory is
+        // already drawn, and a signer that is offline should still be able to
+        // look at what it has.
+        setBusy(false);
+        setNetworkRefreshing(true);
+        try {
+          const refreshed =
+            policy && mobile
+              ? await refreshMultisigWalletUtxos(currentWalletId)
+              : await refreshWatchOnlyWalletUtxos(
+                  currentWalletId,
+                  currentNetwork
+                );
+          if (!cancelled) {
+            applyInventory(Object.values(refreshed).flat());
+            setNetworkRefreshFailed(false);
           }
+        } catch (refreshError) {
+          if (!cancelled) {
+            setNetworkRefreshFailed(true);
+            const saved = policy ? 'saved multisig inventory' : 'saved coins';
+            setError(
+              refreshError instanceof Error
+                ? `Network refresh unavailable; showing ${saved}. ${refreshError.message}`
+                : `Network refresh unavailable; showing ${saved}.`
+            );
+          }
+        } finally {
+          if (!cancelled) setNetworkRefreshing(false);
         }
       } catch (err) {
         if (!cancelled) {
@@ -932,10 +1009,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
           satoshis: 0n,
         },
       ]);
-      const feeSats = feeForTransactionBytes(
-        estimatedBytes,
-        MULTISIG_FEE_RATE_SAT_PER_BYTE
-      );
+      const feeSats = feeForTransactionBytes(estimatedBytes, feeRateSatPerByte);
       const availableSats = bchOnlyInputs.reduce(
         (sum, input) => sum + input.satoshis,
         0n
@@ -1087,9 +1161,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
         masterFingerprint: fingerprint
           ? masterFingerprintBytes(fingerprint)
           : null,
-        feeRateSatPerByte: multisigPolicy
-          ? MULTISIG_FEE_RATE_SAT_PER_BYTE
-          : undefined,
+        feeRateSatPerByte,
         ...(changeMultisig && multisigPolicy
           ? {
               changeRedeemScriptHex: toHex(changeMultisig.redeemScript),
@@ -1363,13 +1435,22 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
         closeScanner();
       }
     } catch (err) {
+      // Only a genuinely finished-but-wrong scan reaches here now: the payload
+      // decoded and is not a crypto-psbt, or the fountain decoder completed
+      // unsuccessfully. A single unreadable frame no longer throws -- the
+      // scanner counts it and carries on, because a camera reading an animated
+      // QR misreads frames constantly and that is not an error condition.
+      //
+      // The old comment here said a bad frame "poisons the decoder", and that
+      // was not true: the decoder keeps every part it has already accepted and
+      // recovers from later frames. Closing on the first misread meant the
+      // larger the transfer, the less likely it could ever complete -- which is
+      // precisely the signed-PSBT direction people reported failing.
       setError(
         err instanceof Error
           ? err.message
           : 'Could not read the signed transaction.'
       );
-      // A frame that poisons the decoder leaves it unusable, so the next scan
-      // starts from a clean one rather than inheriting the failure.
       closeScanner();
     }
   };
@@ -1387,7 +1468,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
       validateBroadcastRelayFee(
         verdict.rawTxHex,
         proposalState.inputSumSats,
-        multisigPolicy ? MULTISIG_FEE_RATE_SAT_PER_BYTE : undefined
+        feeRateSatPerByte
       );
     } catch (feeError) {
       setBroadcastArmed(false);
@@ -1791,6 +1872,51 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
                     className="wallet-input w-full rounded-md px-3 py-2"
                   />
                 </label>
+                {/*
+                  Fee is a first-class control, not an advanced one. An
+                  air-gapped send is expensive in effort -- build, show, scan,
+                  sign, scan back -- so discovering the fee was wrong after all
+                  that costs the whole round trip.
+                */}
+                <fieldset className="space-y-1">
+                  <legend className="text-sm wallet-text-strong">
+                    Fee rate
+                  </legend>
+                  <div
+                    className="flex flex-wrap gap-2"
+                    role="radiogroup"
+                    aria-label="Fee rate"
+                  >
+                    {FEE_RATE_CHOICES.map((choice) => {
+                      const active = feeRateOverride === choice.rate;
+                      return (
+                        <button
+                          key={choice.label}
+                          type="button"
+                          role="radio"
+                          aria-checked={active}
+                          onClick={() => setFeeRateOverride(choice.rate)}
+                          className={`min-h-11 flex-1 rounded-md px-3 py-2 text-sm ${
+                            active
+                              ? 'wallet-btn-primary font-semibold'
+                              : 'wallet-btn-secondary'
+                          }`}
+                        >
+                          {choice.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="text-xs wallet-muted">
+                    {feeRateOverride === null
+                      ? walletFeeMode === 'custom'
+                        ? `Following Settings: ${walletCustomFeeSatPerByte} sat/byte.`
+                        : 'Following Settings: automatic, at the relay minimum.'
+                      : `${feeRateOverride} sat/byte for this send only.`}{' '}
+                    Every rate is raised to the relay minimum if it falls below
+                    it, so a transaction built here can always propagate.
+                  </p>
+                </fieldset>
                 <button
                   type="button"
                   onClick={() => setShowAdvanced((open) => !open)}
@@ -1914,11 +2040,25 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
                         : 'Scan this unsigned PSBT with the first cosigner'
                       : 'Scan this with SeedCash (air-gapped)'}
                   </p>
+                  {/*
+                    No padding around the code on either surface. There are two
+                    different whites here and only one of them does anything:
+                    the QR's own quiet zone (`marginSize` below) is what a
+                    camera needs to find the finder patterns, and it is inside
+                    the SVG. A second white ring outside it just eats the space
+                    the code could have used.
+
+                    Desktop expands in place rather than behind a button. The
+                    cap is the viewport height less the surrounding chrome, so
+                    the code is as large as the window allows without pushing
+                    the density control off screen -- which is what the old
+                    full-screen modal existed to work around.
+                  */}
                   <div
-                    className={`mx-auto rounded-md bg-white ${
+                    className={`mx-auto rounded-md bg-white p-0 ${
                       desktopQr
-                        ? 'w-full max-w-[min(100%,calc(100svh-14rem))] p-1'
-                        : 'w-full max-w-none p-0'
+                        ? 'w-full max-w-[min(100%,calc(100svh-11rem))]'
+                        : 'w-full max-w-none'
                     }`}
                   >
                     <QRCodeSVG
@@ -1984,34 +2124,15 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
                       </button>
                     </>
                   )}
-                  <button
-                    type="button"
-                    onClick={() => setQrFullscreen(true)}
-                    className="wallet-btn-secondary w-full py-2 text-sm"
-                  >
-                    Show full screen
-                  </button>
-                  {qrFullscreen && (
-                    <div
-                      role="dialog"
-                      aria-modal="true"
-                      aria-label="Animated QR code, full screen"
-                      onClick={() => setQrFullscreen(false)}
-                      className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-2 bg-white p-1"
-                    >
-                      <QRCodeSVG
-                        value={qrUri}
-                        size={PSBT_UR_QR_DISPLAY_SIZE}
-                        marginSize={PSBT_UR_QR_MARGIN_MODULES}
-                        level={PSBT_UR_QR_ERROR_LEVEL}
-                        className="h-auto w-[min(98vw,94svh)] max-w-none"
-                      />
-                      <p className="text-center text-sm text-black">
-                        Frame {frameNumber} / {frameCountRef.current} · tap
-                        anywhere to close
-                      </p>
-                    </div>
-                  )}
+                  {/*
+                    The full-screen button is gone. It existed because the code
+                    was drawn smaller than it needed to be, and an overlay that
+                    covered the whole window was the workaround; the code above
+                    now expands in place, so the workaround has nothing left to
+                    work around. The modal was also the piece testers reported
+                    breaking the screen -- an animated QR rendered twice, in two
+                    places, driven by one timer.
+                  */}
                   <button
                     type="button"
                     onClick={() => void handleCopyQrText()}
@@ -2063,30 +2184,55 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
                       </button>
                     </div>
                   )}
+                  {/*
+                    Everything above this line is the code going *out* to the
+                    signer. Everything below is the signed result coming *back*.
+                    They were one undifferentiated column of identical grey
+                    buttons, so a control that changed what you were showing
+                    looked exactly like one that received the answer -- which is
+                    what testers meant by "the user can get a bit lost".
+                  */}
+                  <div
+                    className="mt-1 border-t border-[var(--wallet-border)] pt-3"
+                    role="separator"
+                  />
+                  <p className="text-sm font-semibold wallet-text-strong">
+                    Then bring the signed result back
+                  </p>
                   <button
                     type="button"
                     onClick={openScanner}
-                    className="wallet-btn-secondary w-full py-2 text-sm"
+                    className="wallet-btn-primary w-full py-2.5 text-sm font-semibold"
                   >
                     Scan the signed result
                   </button>
-                  <label className="wallet-btn-secondary block w-full cursor-pointer py-2 text-center text-sm">
-                    Import signed PSBT file
-                    <input
-                      type="file"
-                      accept=".psbt,.txt,.hex,application/octet-stream,text/plain"
-                      onChange={(event) => void handleImportFile(event)}
-                      className="sr-only"
-                    />
-                  </label>
                   <p className="text-center text-[11px] wallet-muted">
-                    Use the signer&apos;s exported PSBT file. A screenshot of
-                    one animated frame is not a complete PSBT.
+                    Point the camera at the signer&apos;s screen. This is the
+                    usual way.
                   </p>
+                  {/*
+                    The other two routes exist for signers that write a file or
+                    for a stuck camera. They are real, so they stay -- but as
+                    one collapsed row rather than as buttons the same size and
+                    colour as the one almost everyone wants.
+                  */}
                   <details className="text-xs">
                     <summary className="cursor-pointer wallet-muted">
-                      Or paste the UR text
+                      No camera? Import a file or paste the UR text
                     </summary>
+                    <label className="wallet-btn-secondary mt-2 block w-full cursor-pointer py-2 text-center text-sm">
+                      Import signed PSBT file
+                      <input
+                        type="file"
+                        accept=".psbt,.txt,.hex,application/octet-stream,text/plain"
+                        onChange={(event) => void handleImportFile(event)}
+                        className="sr-only"
+                      />
+                    </label>
+                    <p className="mt-1 text-center text-[11px] wallet-muted">
+                      Use the signer&apos;s exported PSBT file. A screenshot of
+                      one animated frame is not a complete PSBT.
+                    </p>
                     <textarea
                       value={importText}
                       onChange={(event) => setImportText(event.target.value)}

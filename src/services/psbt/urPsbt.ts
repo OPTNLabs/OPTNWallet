@@ -158,6 +158,14 @@ export interface UrScanProgress {
 export class UrPsbtScanner {
   private decoder = new URRegistryDecoder();
 
+  /** Frames the camera handed us that were not readable. Diagnostic only. */
+  private damaged = 0;
+
+  /** How many frames were unreadable so far. Zero on a clean scan. */
+  get damagedFrames(): number {
+    return this.damaged;
+  }
+
   /** Feed one scanned frame. Returns the progress after it. */
   receive(frame: string): UrScanProgress {
     const text = frame.trim();
@@ -166,7 +174,26 @@ export class UrPsbtScanner {
     // poison the decoder and force the user to start over.
     if (!/^ur:/i.test(text)) return this.progress();
 
-    this.decoder.receivePart(text.toLowerCase());
+    try {
+      this.decoder.receivePart(text.toLowerCase());
+    } catch {
+      // A half-caught frame throws out of the bytewords decoder -- "Invalid
+      // Bytewords: value not in lookup table" is the usual one. This is
+      // **normal** while a camera reads an animated QR: the shutter catches a
+      // frame mid-repaint and gets something that still scans as a QR but is
+      // not a whole UR part.
+      //
+      // It is not fatal, and the decoder is not poisoned by it: the fountain
+      // decoder keeps every part it has already accepted, so dropping this one
+      // and carrying on still recovers the payload from later frames. That is
+      // asserted against frames SeedCash's own encoder produced.
+      //
+      // This matters most on exactly the transfer that was reported failing.
+      // A *signed* PSBT is larger than the unsigned one, so it needs more
+      // frames, so the chance of at least one bad read approaches certainty --
+      // which made the longest transfers the least likely to ever finish.
+      this.damaged += 1;
+    }
     return this.progress();
   }
 

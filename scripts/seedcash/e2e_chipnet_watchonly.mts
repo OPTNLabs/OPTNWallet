@@ -87,32 +87,89 @@ function electrumScripthash(lockingBytecode: Uint8Array): string {
   return Buffer.from(digest).reverse().toString('hex');
 }
 
+/** Enough to cover the send plus a one-input, two-output transaction's fee. */
+const MIN_UTXO_SATS = Number(SEND_SATS) + 2_000;
+
+/** Gap window to search on each branch. */
+const SCAN_DEPTH = 10;
+
 async function main() {
   const acc = decodeHdPublicKey(XPUB);
   if (typeof acc === 'string') throw new Error(acc);
-  const child = deriveHdPathRelative(acc.node, '0/0');
-  if (typeof child === 'string') throw new Error(child);
-  const publicKey = child.publicKey;
-  const lockingBytecode = p2pkhScript(publicKey);
-  const address = encodeCashAddress({
-    payload: hash160(publicKey),
-    prefix: 'bchtest',
-    type: 'p2pkh',
-  }).address;
-  const sh = electrumScripthash(lockingBytecode);
 
-  console.log('1) address', address);
+  // Search the gap window on both branches rather than only 0/0.
+  //
+  // This used to derive one address and give up if nothing was on it, which
+  // made the script fail for the most ordinary reason there is: the coin
+  // landed somewhere else in the wallet. It also demanded 50,000 sats to
+  // spend 10,000, so a perfectly usable coin was rejected for being small.
+  type Candidate = {
+    branchIndex: 0 | 1;
+    addressIndex: number;
+    publicKey: Uint8Array;
+    lockingBytecode: Uint8Array;
+    address: string;
+    utxo: { tx_hash: string; tx_pos: number; value: number };
+  };
 
-  const utxos = (await electrum('blockchain.scripthash.listunspent', [sh])) as {
-    tx_hash: string;
-    tx_pos: number;
-    value: number;
-    token_data?: unknown;
-  }[];
-  const plain = (utxos || []).filter((u) => !u.token_data && u.value > 50_000);
-  if (!plain.length) throw new Error('no plain BCH UTXO large enough');
-  plain.sort((a, b) => b.value - a.value);
-  const utxo = plain[0];
+  const searched: string[] = [];
+  let found: Candidate | null = null;
+
+  outer: for (const branchIndex of [0, 1] as const) {
+    for (let addressIndex = 0; addressIndex < SCAN_DEPTH; addressIndex += 1) {
+      const child = deriveHdPathRelative(
+        acc.node,
+        `${branchIndex}/${addressIndex}`
+      );
+      if (typeof child === 'string') continue;
+      const lockingBytecode = p2pkhScript(child.publicKey);
+      const addr = encodeCashAddress({
+        payload: hash160(child.publicKey),
+        prefix: 'bchtest',
+        type: 'p2pkh',
+      }).address;
+      if (branchIndex === 0 && addressIndex === 0) searched.push(addr);
+
+      const utxos = (await electrum('blockchain.scripthash.listunspent', [
+        electrumScripthash(lockingBytecode),
+      ])) as {
+        tx_hash: string;
+        tx_pos: number;
+        value: number;
+        token_data?: unknown;
+      }[];
+      // Token UTXOs are skipped: spending one here would destroy the token.
+      const plain = (utxos || [])
+        .filter((u) => !u.token_data && u.value >= MIN_UTXO_SATS)
+        .sort((a, b) => b.value - a.value);
+      if (plain.length) {
+        found = {
+          branchIndex,
+          addressIndex,
+          publicKey: child.publicKey,
+          lockingBytecode,
+          address: addr,
+          utxo: plain[0],
+        };
+        break outer;
+      }
+    }
+  }
+
+  if (!found) {
+    throw new Error(
+      `No spendable chipnet coin of at least ${MIN_UTXO_SATS} sats in ` +
+        `${SCAN_DEPTH} addresses on either branch.\n` +
+        `Fund this wallet and run again:\n  ${searched[0]}\n` +
+        `(token-only coins are skipped on purpose -- spending one would ` +
+        `destroy the token)`
+    );
+  }
+
+  const { publicKey, lockingBytecode, address, utxo } = found;
+  console.log(
+    `1) address ${address}  (${found.branchIndex}/${found.addressIndex})`
+  );
   console.log('2) UTXO', utxo.tx_hash + ':' + utxo.tx_pos, utxo.value, 'sats');
 
   const parentHex = (await electrum('blockchain.transaction.get', [
@@ -128,8 +185,11 @@ async function main() {
       satoshis: BigInt(utxo.value),
       lockingBytecodeHex: binToHex(lockingBytecode),
       publicKeyHex: binToHex(publicKey),
-      branchIndex: 0 as const,
-      addressIndex: 0,
+      // Whichever address the coin was actually found on. Hardcoding 0/0 here
+      // would hand SeedCash a derivation path that does not match the key the
+      // coin is locked to, and every signature would come back invalid.
+      branchIndex: found.branchIndex,
+      addressIndex: found.addressIndex,
       previousTransactionHex: parentHex,
     },
   ];
@@ -185,6 +245,22 @@ async function main() {
   });
   console.log('7) BCH VM', ok);
   if (ok !== true) process.exit(2);
+
+  // Everything above is reversible: it reads the chain, builds, signs and
+  // verifies against consensus rules without leaving a trace. Step 8 is not.
+  // Gating it means this script can be run as a check -- which is most of what
+  // anyone wants from it -- instead of only as a spend.
+  if (!process.env.OPTN_E2E_BROADCAST) {
+    console.log(
+      '8) broadcast skipped. Everything up to and including the BCH VM check ' +
+        'passed. Set OPTN_E2E_BROADCAST=1 to put this transaction on chipnet.'
+    );
+    console.log('   raw tx bytes:', rawTxHex.length / 2);
+    console.log(
+      'NOTE: hardware camera not used — SeedCash Python emulator signed.'
+    );
+    return;
+  }
 
   console.log('8) broadcasting…');
   const txid = (await electrum('blockchain.transaction.broadcast', [
