@@ -421,15 +421,9 @@ mod tests {
             SpendingCapability::WatchOnly,
             SpendingCapability::Hardware,
         ] {
-            let plan = prepare_spend_with_fee(
-                &coins,
-                Network::Chipnet,
-                &dest(),
-                5_000,
-                capability,
-                rate,
-            )
-            .expect("prepare");
+            let plan =
+                prepare_spend_with_fee(&coins, Network::Chipnet, &dest(), 5_000, capability, rate)
+                    .expect("prepare");
             assert_eq!(plan.fee_rate, rate);
             assert_eq!(plan.fee_for_serialized_bytes(250), 425);
         }
