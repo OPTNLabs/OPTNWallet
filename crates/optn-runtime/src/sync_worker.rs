@@ -8,11 +8,9 @@
 use crate::chain::{ProtocolFamily, SourceId};
 use crate::chain_service::{
     CapabilityRoute, ChainOperation, ChainPayload, ChainRequest, ChainService, ChainServiceError,
-    ChainTip, ObservedTransaction,
+    ChainTip, ObservedTransaction, WalletInterest,
 };
-use crate::reconciliation::{
-    ReconciliationDecision, ReconciliationState,
-};
+use crate::reconciliation::{ReconciliationDecision, ReconciliationState};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WalletNetworkSnapshot {
@@ -65,8 +63,6 @@ impl ProgressiveSyncWorker {
     pub fn reconciliation(&self) -> &ReconciliationState<WalletNetworkSnapshot> { &self.reconciliation }
     pub fn reconciliation_mut(&mut self) -> &mut ReconciliationState<WalletNetworkSnapshot> { &mut self.reconciliation }
 
-    /// Replace the in-memory state with a previously persisted known-good
-    /// reconciliation state before network work starts.
     pub fn restore(&mut self, state: ReconciliationState<WalletNetworkSnapshot>) {
         self.reconciliation = state;
     }
@@ -74,17 +70,13 @@ impl ProgressiveSyncWorker {
     pub async fn refresh(
         &mut self,
         service: &mut ChainService,
-        interests: Vec<Vec<u8>>,
+        interests: Vec<WalletInterest>,
         from_height: Option<u32>,
     ) -> Result<SyncOutcome, ProgressiveSyncError> {
         let routes = service.routes_for_operation(ChainOperation::WalletRefresh);
         if routes.is_empty() { return Err(ProgressiveSyncError::NoWalletRoute); }
 
         for route in routes {
-            // BIP37 and compact-filter scans require a chain cursor before the
-            // wallet-discovery phase. Keep that prerequisite on this exact
-            // endpoint; do not let a co-located RPC provider fill another
-            // provider's private cursor by accident.
             if matches!(route.protocol, ProtocolFamily::Bip37 | ProtocolFamily::Neutrino) {
                 if let Err(error) = self.prime_headers_on_same_route(service, &route).await {
                     self.reconciliation.record_failure(format!("header prerequisite failed: {error:?}"));
@@ -135,7 +127,10 @@ impl ProgressiveSyncWorker {
 
         let mut start = self.config.header_start_height.max(1);
         for _ in 0..self.config.max_header_batches {
-            let request = ChainRequest::HeaderSync { start_height: start, count: self.config.header_batch_size.max(1) };
+            let request = ChainRequest::HeaderSync {
+                start_height: start,
+                count: self.config.header_batch_size.max(1),
+            };
             let observation = service.execute_on_route(&header_route, &request).await.map_err(ProgressiveSyncError::Chain)?;
             let ChainPayload::Headers { start_height, headers } = observation.value else {
                 return Err(ProgressiveSyncError::UnexpectedPayload);
@@ -143,11 +138,7 @@ impl ProgressiveSyncWorker {
             if headers.is_empty() { return Ok(()); }
             let returned = u32::try_from(headers.len()).map_err(|_| ProgressiveSyncError::HeaderSafetyLimit)?;
             start = start_height.checked_add(returned).ok_or(ProgressiveSyncError::HeaderSafetyLimit)?;
-            if returned < self.config.header_batch_size.max(1) {
-                // Standard P2P/Electrum semantics: a short final batch reached
-                // the current tip. Avoid an unnecessary extra round trip.
-                return Ok(());
-            }
+            if returned < self.config.header_batch_size.max(1) { return Ok(()); }
         }
         Err(ProgressiveSyncError::HeaderSafetyLimit)
     }
@@ -161,14 +152,13 @@ mod tests {
         ConnectionPolicy, Endpoint, EndpointKind, Evidence, ProviderHealth, SourceCatalog,
         SourceDisposition, SourceOrigin,
     };
-    use crate::chain_service::{BackendObservation, ChainBackend, ChainBackendError, ChainFuture};
+    use crate::chain_service::{BackendObservation, ChainBackend, ChainFuture};
     use std::sync::Arc;
 
     struct WalletBackend { id: SourceId, caps: CapabilitySet }
     impl ChainBackend for WalletBackend {
         fn source_id(&self)->&SourceId{&self.id}
         fn protocol(&self)->ProtocolFamily{ProtocolFamily::Electrum}
-        fn endpoint(&self)->Option<&Endpoint>{None}
         fn capabilities(&self)->&CapabilitySet{&self.caps}
         fn health(&self)->ProviderHealth{ProviderHealth::Healthy}
         fn supports(&self,op:ChainOperation)->bool{matches!(op,ChainOperation::WalletRefresh)}

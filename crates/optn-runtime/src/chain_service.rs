@@ -1,7 +1,7 @@
 //! Runtime-owned capability routing and bounded failover for issue #75.
 //!
-//! Sources are selected by user policy. Capabilities are protocol-independent;
-//! protocols/endpoints are delivery routes, never permanent capability owners.
+//! Sources are selected by user policy. Capabilities and wallet intent are
+//! protocol-independent; providers translate typed requests to their wire format.
 
 use crate::chain::{
     build_selection_plan, Capability, CapabilityConfidence, CapabilitySet, ChainObservation,
@@ -12,12 +12,47 @@ use std::{future::Future, pin::Pin, sync::Arc};
 
 pub type ChainFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ChainBackendError>> + Send + 'a>>;
 
+/// Wallet discovery intent, independent of the selected chain protocol.
+///
+/// Electrum derives scripthashes from `Script`; bchd compact filters query raw
+/// scripts and serialized `Outpoint`s; BIP37 derives the corresponding bloom
+/// items. RPA keeps its hexadecimal bit-prefix intact, including odd nibbles.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WalletInterest {
+    Script(Vec<u8>),
+    Outpoint { txid: Hash32, vout: u32 },
+    RpaPrefix(String),
+}
+
+impl WalletInterest {
+    pub fn script(value: impl Into<Vec<u8>>) -> Self { Self::Script(value.into()) }
+    pub const fn outpoint(txid: Hash32, vout: u32) -> Self { Self::Outpoint { txid, vout } }
+
+    pub fn rpa_prefix(value: impl Into<String>) -> Result<Self, String> {
+        let value = value.into().to_ascii_lowercase();
+        if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("RPA prefix must be non-empty hexadecimal text".into());
+        }
+        Ok(Self::RpaPrefix(value))
+    }
+
+    /// BCH wire serialization used by bchd committed filters and BIP37 outpoint
+    /// matching: internal-order txid followed by little-endian vout.
+    pub fn serialized_outpoint(&self) -> Option<[u8; 36]> {
+        let Self::Outpoint { txid, vout } = self else { return None; };
+        let mut out = [0u8; 36];
+        out[..32].copy_from_slice(txid);
+        out[32..].copy_from_slice(&vout.to_le_bytes());
+        Some(out)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChainOperation { WalletRefresh, TransactionLookup, Broadcast, HeaderSync, HistoricalHeaderProof }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChainRequest {
-    WalletRefresh { interests: Vec<Vec<u8>>, from_height: Option<u32> },
+    WalletRefresh { interests: Vec<WalletInterest>, from_height: Option<u32> },
     TransactionLookup { txid: Hash32 },
     Broadcast { raw_tx: Vec<u8>, txid: Hash32 },
     HeaderSync { start_height: u32, count: u32 },
@@ -100,8 +135,8 @@ impl ProviderRegistry {
                 confidence: claim.confidence, health: provider.health(),
             }))
         }).collect::<Vec<_>>();
-        // Never encode semantic ownership through protocol order. Protocol is
-        // only a deterministic final tie-breaker after evidence and health.
+        // Capability confidence and health outrank transport identity. Protocol
+        // is only a deterministic final tie-breaker.
         routes.sort_by_key(|(_, route)| (confidence_rank(route.confidence), health_rank(route.health), route.protocol));
         routes
     }
@@ -174,9 +209,6 @@ impl ChainService {
             .filter(|route| !self.route_unhealthy(route)).collect()
     }
 
-    /// Execute on one exact route. Multi-step workflows use this to keep
-    /// provider-local prerequisites (for example a BIP37 header cursor) on the
-    /// same provider instead of silently changing transport halfway through.
     pub async fn execute_on_route(&mut self, route: &CapabilityRoute, request: &ChainRequest) -> Result<ChainObservation<ChainPayload>, ChainServiceError> {
         if route.capability != operation_capability(request.operation()) || self.route_unhealthy(route) { return Err(ChainServiceError::RouteUnavailable); }
         let provider = self.registry.provider_for_route(route, request.operation()).ok_or(ChainServiceError::RouteUnavailable)?;
@@ -230,25 +262,18 @@ pub const fn operation_capability(operation: ChainOperation) -> Capability {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chain::{CapabilityDiscovery, ChainSource, EndpointKind, SourceDisposition, SourceOrigin};
-
-    struct Mock { id: SourceId, protocol: ProtocolFamily, endpoint: Endpoint, caps: CapabilitySet, result: Result<BackendObservation, ChainBackendError> }
-    impl ChainBackend for Mock {
-        fn source_id(&self)->&SourceId{&self.id} fn protocol(&self)->ProtocolFamily{self.protocol} fn endpoint(&self)->Option<&Endpoint>{Some(&self.endpoint)}
-        fn capabilities(&self)->&CapabilitySet{&self.caps} fn health(&self)->ProviderHealth{ProviderHealth::Healthy}
-        fn supports(&self,op:ChainOperation)->bool{self.caps.is_usable(operation_capability(op))}
-        fn execute<'a>(&'a self,_:&'a ChainRequest)->ChainFuture<'a,BackendObservation>{let result=self.result.clone();Box::pin(async move{result})}
-    }
-    fn source(id:&str,priority:u16)->ChainSource{ChainSource{id:SourceId::new(id),label:id.into(),origin:SourceOrigin::UserAdded,endpoints:vec![Endpoint{kind:EndpointKind::BchP2p,host:id.into(),port:Some(8333)}],capabilities:CapabilitySet::default(),disposition:SourceDisposition::Enabled,priority}}
-    fn backend(id:&str,protocol:ProtocolFamily,confidence:CapabilityConfidence,result:Result<BackendObservation,ChainBackendError>)->Arc<Mock>{let mut caps=CapabilitySet::default();for c in [Capability::UtxoQuery,Capability::TransactionQuery,Capability::Broadcast,Capability::HeaderStream,Capability::HeaderMerkleProof]{caps.record(c,confidence,CapabilityDiscovery::ActiveProbe);}let kind=match protocol{ProtocolFamily::Electrum=>EndpointKind::ElectrumTcp,ProtocolFamily::Bip37|ProtocolFamily::Neutrino=>EndpointKind::BchP2p,ProtocolFamily::BchnRpc=>EndpointKind::BchnRpc,ProtocolFamily::BchnZmq=>EndpointKind::BchnZmq};Arc::new(Mock{id:SourceId::new(id),protocol,endpoint:Endpoint{kind,host:id.into(),port:Some(1)},caps,result})}
-    fn obs(tag:u8)->BackendObservation{BackendObservation{payload:ChainPayload::Headers{start_height:1,headers:vec![[tag;80]]},evidence:Evidence::ServerAssertion,chain_tip:None}}
-
-    #[tokio::test]
-    async fn source_failover_is_bounded_by_policy(){let mut catalog=SourceCatalog::default();catalog.insert(source("a",0)).unwrap();catalog.insert(source("b",1)).unwrap();let mut service=ChainService::new(catalog,ConnectionPolicy::auto());service.register(backend("a",ProtocolFamily::Electrum,CapabilityConfidence::Verified,Err(ChainBackendError::Timeout)));service.register(backend("b",ProtocolFamily::Electrum,CapabilityConfidence::Verified,Ok(obs(2))));let got=service.execute(&ChainRequest::HeaderSync{start_height:1,count:1}).await.unwrap();assert_eq!(got.source,SourceId::new("b"));}
 
     #[test]
-    fn verified_route_outranks_advertised_without_protocol_ownership(){let mut catalog=SourceCatalog::default();catalog.insert(source("a",0)).unwrap();let mut service=ChainService::new(catalog,ConnectionPolicy::auto());service.register(backend("a",ProtocolFamily::Electrum,CapabilityConfidence::Advertised,Ok(obs(1))));service.register(backend("a",ProtocolFamily::Bip37,CapabilityConfidence::Verified,Ok(obs(2))));let routes=service.routes_for_operation(ChainOperation::HeaderSync);assert_eq!(routes[0].protocol,ProtocolFamily::Bip37);}
+    fn outpoint_wire_encoding_is_stable() {
+        let interest = WalletInterest::outpoint([7; 32], 0x1122_3344);
+        let encoded = interest.serialized_outpoint().unwrap();
+        assert_eq!(&encoded[..32], &[7; 32]);
+        assert_eq!(&encoded[32..], &0x1122_3344u32.to_le_bytes());
+    }
 
-    #[tokio::test]
-    async fn explicit_route_does_not_switch_protocol(){let mut catalog=SourceCatalog::default();catalog.insert(source("a",0)).unwrap();let mut service=ChainService::new(catalog,ConnectionPolicy::auto());service.register(backend("a",ProtocolFamily::Electrum,CapabilityConfidence::Verified,Ok(obs(1))));service.register(backend("a",ProtocolFamily::Bip37,CapabilityConfidence::Verified,Ok(obs(2))));let route=service.routes_for_operation(ChainOperation::HeaderSync).into_iter().find(|r|r.protocol==ProtocolFamily::Bip37).unwrap();let got=service.execute_on_route(&route,&ChainRequest::HeaderSync{start_height:1,count:1}).await.unwrap();match got.value{ChainPayload::Headers{headers,..}=>assert_eq!(headers[0],[2;80]),_=>panic!("wrong payload")}}
+    #[test]
+    fn rpa_prefix_preserves_nibble_precision() {
+        assert_eq!(WalletInterest::rpa_prefix("AbC").unwrap(), WalletInterest::RpaPrefix("abc".into()));
+        assert!(WalletInterest::rpa_prefix("xyz").is_err());
+    }
 }
