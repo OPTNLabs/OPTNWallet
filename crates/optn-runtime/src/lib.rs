@@ -12,6 +12,10 @@
 /// Provider-neutral BCH chain-source, capability, policy, sync, and evidence
 /// scaffolding. The canonical architecture is tracked in OPTNLabs/OPTNWallet#75.
 pub mod chain;
+/// Versioned user-network overlay and bootstrap-refresh migration scaffolding.
+pub mod network_config;
+/// Framework-neutral authenticated wallet-update state/provider scaffolding.
+pub mod update;
 
 use optn_app::{AppAction, AppEvent, AppState};
 use optn_transport::{AppTransport, TransportError, TransportFuture};
