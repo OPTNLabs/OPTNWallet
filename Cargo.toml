@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
   "crates/optn-app",
+  "crates/optn-chain-bchn",
   "crates/optn-chain-electrum",
   # #65's deterministic multisig core. A member rather than an exclusion:
   # it has no lock file of its own and three pure dependencies, so there is
@@ -27,6 +28,7 @@ exclude = [
 ]
 default-members = [
   "crates/optn-app",
+  "crates/optn-chain-bchn",
   "crates/optn-chain-electrum",
   "crates/optn-platform",
   "crates/optn-platform-native",
