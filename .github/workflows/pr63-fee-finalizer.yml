@@ -1,0 +1,109 @@
+name: PR63 fee integration finalizer
+
+on:
+  push:
+    branches: [agent/rpa-shared-vectors]
+    paths:
+      - .github/workflows/pr63-fee-finalizer.yml
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: github.repository == 'CyberAshven/OPTNWallet'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/rpa-shared-vectors
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Apply fee-policy integration
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              s = p.read_text()
+              if old not in s:
+                  raise SystemExit(f'missing expected snippet in {path}: {old[:120]!r}')
+              if s.count(old) != 1:
+                  raise SystemExit(f'expected one occurrence in {path}, got {s.count(old)}')
+              p.write_text(s.replace(old, new, 1))
+
+          app = 'crates/optn-app/src/lib.rs'
+          replace_once(app,
+              'pub use optn_core::fee::{FeeRate, RELAY_MINIMUM_FEE_RATE};',
+              'pub use optn_core::fee::{\n    FeeMode, FeePreferences, FeeRate, DEFAULT_CUSTOM_FEE_RATE, RELAY_MINIMUM_FEE_RATE,\n};')
+          replace_once(app,
+              '    pub spend: Option<SpendPlan>,\n',
+              '    pub spend: Option<SpendPlan>,\n    /// App-wide fee policy. Providers may advise Auto, but never own this preference.\n    pub fee_preferences: FeePreferences,\n')
+          replace_once(app,
+              '            spend: None,\n            hardware: HardwareSessionState::new(),',
+              '            spend: None,\n            fee_preferences: FeePreferences::app_default(),\n            hardware: HardwareSessionState::new(),')
+          replace_once(app,
+              '    SetSkin(UiSkin),\n    SetNetwork(Network),',
+              '    SetSkin(UiSkin),\n    SetFeeMode(FeeMode),\n    SetCustomFeeRate(FeeRate),\n    SetNetwork(Network),')
+          replace_once(app,
+              '    SkinChanged(UiSkin),\n    NetworkChanged(Network),',
+              '    SkinChanged(UiSkin),\n    FeePreferencesChanged(FeePreferences),\n    NetworkChanged(Network),')
+          replace_once(app,
+              '            AppAction::SetSkin(skin) if self.skin != skin => {\n                self.skin = skin;\n                Some(AppEvent::SkinChanged(skin))\n            }\n            AppAction::SetNetwork(network) if self.network != network => {',
+              '            AppAction::SetSkin(skin) if self.skin != skin => {\n                self.skin = skin;\n                Some(AppEvent::SkinChanged(skin))\n            }\n            AppAction::SetFeeMode(mode) if self.fee_preferences.mode != mode => {\n                self.fee_preferences.mode = mode;\n                Some(AppEvent::FeePreferencesChanged(self.fee_preferences))\n            }\n            AppAction::SetCustomFeeRate(rate) if self.fee_preferences.custom_rate != rate => {\n                self.fee_preferences.custom_rate = rate;\n                Some(AppEvent::FeePreferencesChanged(self.fee_preferences))\n            }\n            AppAction::SetNetwork(network) if self.network != network => {')
+          replace_once(app,
+              '            AppAction::SetNetwork(_)\n            | AppAction::SetTheme(_)\n            | AppAction::SetSkin(_)\n            | AppAction::OpenHelp',
+              '            AppAction::SetNetwork(_)\n            | AppAction::SetTheme(_)\n            | AppAction::SetSkin(_)\n            | AppAction::SetFeeMode(_)\n            | AppAction::SetCustomFeeRate(_)\n            | AppAction::OpenHelp')
+          replace_once(app,
+              '                match prepare_spend_with(\n                    &self.coins,\n                    self.network,\n                    &destination,\n                    amount_sats,\n                    wallet.spending_capability(),\n                    coin,\n                ) {',
+              '                let fee_rate = self.fee_preferences.resolve(\n                    RELAY_MINIMUM_FEE_RATE,\n                    RELAY_MINIMUM_FEE_RATE,\n                );\n                match prepare_spend_with_fee_and_coin(\n                    &self.coins,\n                    self.network,\n                    &destination,\n                    amount_sats,\n                    wallet.spending_capability(),\n                    fee_rate,\n                    coin,\n                ) {')
+          with Path(app).open('a') as f:
+              f.write('''\n\n#[cfg(test)]\nmod fee_policy_integration_regression {\n    use super::*;\n\n    #[test]\n    fn app_fee_policy_is_resolved_before_spend_planning_and_clamped() {\n        let mut state = AppState::default();\n        state.apply(AppAction::SetFeeMode(FeeMode::Custom));\n        state.apply(AppAction::SetCustomFeeRate(FeeRate::from_satoshis_per_kb(500)));\n        assert_eq!(\n            state.fee_preferences.resolve(RELAY_MINIMUM_FEE_RATE, RELAY_MINIMUM_FEE_RATE),\n            RELAY_MINIMUM_FEE_RATE\n        );\n        state.apply(AppAction::SetCustomFeeRate(FeeRate::from_satoshis_per_kb(1700)));\n        assert_eq!(state.fee_preferences.custom_rate.satoshis_per_kb(), 1700);\n    }\n}\n''')
+
+          transport = 'crates/optn-transport/src/lib.rs'
+          replace_once(transport,
+              '    FeatureFlags, FeeRate, FlipstarterPledge, FreezeReason, HardwareSessionState,',
+              '    FeatureFlags, FeeMode, FeePreferences, FeeRate, FlipstarterPledge, FreezeReason, HardwareSessionState,')
+          replace_once(transport,
+              'pub enum WireNetwork {\n    Mainnet,\n    Chipnet,\n}\n',
+              'pub enum WireNetwork {\n    Mainnet,\n    Chipnet,\n}\n\n#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]\n#[serde(rename_all = "snake_case")]\npub enum WireFeeMode {\n    #[default]\n    Auto,\n    Custom,\n}\n\nimpl From<FeeMode> for WireFeeMode {\n    fn from(value: FeeMode) -> Self {\n        match value { FeeMode::Auto => Self::Auto, FeeMode::Custom => Self::Custom }\n    }\n}\n\nimpl From<WireFeeMode> for FeeMode {\n    fn from(value: WireFeeMode) -> Self {\n        match value { WireFeeMode::Auto => Self::Auto, WireFeeMode::Custom => Self::Custom }\n    }\n}\n')
+          replace_once(transport,
+              '    SetSkin(WireSkin),\n    SetNetwork(WireNetwork),',
+              '    SetSkin(WireSkin),\n    SetFeeMode(WireFeeMode),\n    SetCustomFeeRate { satoshis_per_kb: u64 },\n    SetNetwork(WireNetwork),')
+          replace_once(transport,
+              '    pub network: WireNetwork,\n    pub help_open: bool,',
+              '    pub network: WireNetwork,\n    #[serde(default)]\n    pub fee_mode: WireFeeMode,\n    #[serde(default = "default_custom_fee_rate")]\n    pub custom_fee_satoshis_per_kb: u64,\n    pub help_open: bool,')
+          replace_once(transport,
+              'fn default_true() -> bool {',
+              'fn default_custom_fee_rate() -> u64 {\n    1100\n}\n\nfn default_true() -> bool {')
+          replace_once(transport,
+              '            AppAction::SetSkin(skin) => WireActionKind::SetSkin(skin.into()),\n            AppAction::SetNetwork(network) => WireActionKind::SetNetwork(network.into()),',
+              '            AppAction::SetSkin(skin) => WireActionKind::SetSkin(skin.into()),\n            AppAction::SetFeeMode(mode) => WireActionKind::SetFeeMode(mode.into()),\n            AppAction::SetCustomFeeRate(rate) => WireActionKind::SetCustomFeeRate {\n                satoshis_per_kb: rate.satoshis_per_kb(),\n            },\n            AppAction::SetNetwork(network) => WireActionKind::SetNetwork(network.into()),')
+          replace_once(transport,
+              '            WireActionKind::SetSkin(skin) => Self::SetSkin(skin.into()),\n            WireActionKind::SetNetwork(network) => Self::SetNetwork(network.into()),',
+              '            WireActionKind::SetSkin(skin) => Self::SetSkin(skin.into()),\n            WireActionKind::SetFeeMode(mode) => Self::SetFeeMode(mode.into()),\n            WireActionKind::SetCustomFeeRate { satoshis_per_kb } => {\n                Self::SetCustomFeeRate(FeeRate::from_satoshis_per_kb(satoshis_per_kb))\n            }\n            WireActionKind::SetNetwork(network) => Self::SetNetwork(network.into()),')
+          replace_once(transport,
+              '            skin: value.skin.into(),\n            network: value.network.into(),',
+              '            skin: value.skin.into(),\n            network: value.network.into(),\n            fee_mode: value.fee_preferences.mode.into(),\n            custom_fee_satoshis_per_kb: value.fee_preferences.custom_rate.satoshis_per_kb(),')
+          replace_once(transport,
+              '            skin: value.skin.into(),\n            network: value.network.into(),\n            help_open: value.help_open,',
+              '            skin: value.skin.into(),\n            network: value.network.into(),\n            fee_preferences: FeePreferences::new(\n                value.fee_mode.into(),\n                FeeRate::from_satoshis_per_kb(value.custom_fee_satoshis_per_kb),\n            ),\n            help_open: value.help_open,')
+
+      - name: Format
+        run: cargo fmt --all
+      - name: Test Rust workspace
+        run: cargo test --workspace --all-targets
+      - name: Check Leptos WASM renderer
+        run: cargo check -p optn-ui --target wasm32-unknown-unknown
+      - name: Commit validated permanent changes
+        shell: bash
+        run: |
+          rm .github/workflows/pr63-fee-finalizer.yml
+          git add -A
+          git config user.name "PR63 validation bot"
+          git config user.email "actions@users.noreply.github.com"
+          git commit -m "feat(app): make fee preferences authoritative end to end"
+          git push origin HEAD:agent/rpa-shared-vectors
