@@ -20,10 +20,10 @@ pub enum ExplorerObject<'a> {
 }
 
 /// Pure selector so every shell/renderer observes the same privacy boundary.
-pub fn select_explorer<'a>(
+pub fn select_explorer(
     policy: ExplorerPolicy,
-    endpoints: &'a [ExplorerEndpoint],
-) -> Result<&'a ExplorerEndpoint, ExplorerRouteError> {
+    endpoints: &[ExplorerEndpoint],
+) -> Result<&ExplorerEndpoint, ExplorerRouteError> {
     if matches!(policy, ExplorerPolicy::Disabled) {
         return Err(ExplorerRouteError::Disabled);
     }

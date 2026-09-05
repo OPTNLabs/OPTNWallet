@@ -16,9 +16,10 @@ pub struct VerifiedRelease {
     pub download_size: Option<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum UpdateState {
     Unsupported,
+    #[default]
     Idle,
     Checking,
     UpToDate,
@@ -30,12 +31,6 @@ pub enum UpdateState {
     },
     ReadyToInstall(VerifiedRelease),
     Failed(UpdateFailure),
-}
-
-impl Default for UpdateState {
-    fn default() -> Self {
-        Self::Idle
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
