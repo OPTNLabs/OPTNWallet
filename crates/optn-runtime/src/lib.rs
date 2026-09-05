@@ -12,6 +12,8 @@
 /// Provider-neutral BCH chain-source, capability, policy, sync, and evidence
 /// scaffolding. The canonical architecture is tracked in OPTNLabs/OPTNWallet#75.
 pub mod chain;
+/// Runtime-owned operation-aware provider selection and bounded failover.
+pub mod chain_service;
 /// Versioned user-network overlay and bootstrap-refresh migration scaffolding.
 pub mod network_config;
 /// Framework-neutral authenticated wallet-update state/provider scaffolding.
@@ -51,9 +53,6 @@ pub struct AppRuntimeDriver {
 }
 
 /// Zero-IPC transport for renderers hosted in the same Rust process.
-///
-/// Native renderers can use this directly. Tauri/WASM and remote shells can
-/// implement the same `AppTransport` contract without changing optn-app.
 pub struct DirectTransport {
     runtime: AppRuntime,
     events: Mutex<broadcast::Receiver<AppEvent>>,
@@ -126,13 +125,6 @@ impl AppRuntime {
         runtime
     }
 
-    /// Hand an action to the driver.
-    ///
-    /// The error deliberately does not carry the action back. Tokio's
-    /// `SendError<AppAction>` returns the whole action by value, which makes
-    /// every `Result` on this call as large as the biggest `AppAction`
-    /// variant, and no caller wants the action back — they all map this to
-    /// "the runtime is gone".
     pub async fn dispatch(&self, action: AppAction) -> Result<(), RuntimeStopped> {
         self.action_tx
             .send(action)
@@ -160,8 +152,6 @@ impl AppRuntimeDriver {
                 continue;
             };
 
-            // Publish the authoritative snapshot before the event so a
-            // subscriber reacting to the event can immediately read it.
             self.state_tx.send_replace(self.state.clone());
             let _ = self.event_tx.send(event);
         }
