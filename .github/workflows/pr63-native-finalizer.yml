@@ -25,7 +25,7 @@ jobs:
       - name: Install Tauri Linux build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libusb-1.0-0-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libusb-1.0-0-dev libudev-dev
       - name: Apply native chain integration
         shell: python
         run: |
@@ -93,6 +93,39 @@ jobs:
         run: |
           cargo fmt --all
           cargo fmt --manifest-path src-tauri/Cargo.toml
+      - name: Report Rust source footprint
+        shell: python
+        run: |
+          from collections import defaultdict
+          from pathlib import Path
+
+          roots = [Path('crates'), Path('src-tauri/src'), Path('xtask'), Path('src')]
+          code_exts = {'.rs', '.ts', '.tsx', '.js', '.jsx', '.css', '.html', '.swift', '.kt', '.kts'}
+          counts = defaultdict(lambda: [0, 0])
+          for root in roots:
+              if not root.exists():
+                  continue
+              for path in root.rglob('*'):
+                  if not path.is_file() or path.suffix.lower() not in code_exts:
+                      continue
+                  try:
+                      lines = len(path.read_text(errors='ignore').splitlines())
+                  except OSError:
+                      continue
+                  ext = path.suffix.lower()
+                  counts[ext][0] += 1
+                  counts[ext][1] += lines
+          rust_files, rust_lines = counts['.rs']
+          total_files = sum(v[0] for v in counts.values())
+          total_lines = sum(v[1] for v in counts.values())
+          print(f'RUST_SOURCE_FILES={rust_files}')
+          print(f'RUST_SOURCE_LINES={rust_lines}')
+          print(f'COUNTED_SOURCE_FILES={total_files}')
+          print(f'COUNTED_SOURCE_LINES={total_lines}')
+          if total_lines:
+              print(f'RUST_SOURCE_LINE_SHARE={rust_lines * 100 / total_lines:.2f}%')
+          for ext, (files, lines) in sorted(counts.items(), key=lambda item: item[1][1], reverse=True):
+              print(f'{ext or "<none>"}: files={files} lines={lines}')
       - name: Test provider/runtime workspace
         run: cargo test --workspace --all-targets
       - name: Check Leptos WASM renderer
