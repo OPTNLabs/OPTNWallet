@@ -1,7 +1,8 @@
 //! Settings → Network: network choice plus issue #75 source-policy view models.
 //!
 //! The renderer receives typed rows/actions. It does not own source selection,
-//! health, failover, or persistence; those remain in `optn-runtime`.
+//! health, failover, capability routing, or persistence; those remain in
+//! `optn-runtime`.
 
 use crate::Network;
 
@@ -107,7 +108,7 @@ pub enum CapabilityConfidenceView {
     Rejected,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ChainProtocolView {
     FulcrumElectrum,
     Bip37,
@@ -128,22 +129,83 @@ impl ChainProtocolView {
     }
 }
 
+/// What an endpoint can do. This is deliberately independent from how that
+/// capability is transported: RPA may be Electrum-backed today and node/RPC
+/// backed later without creating a new application feature or source type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ChainCapabilityView {
+    FastHistory,
+    ScriptSubscriptions,
+    UtxoQuery,
+    TransactionQuery,
+    Broadcast,
+    HeaderStream,
+    HeaderMerkleProof,
+    TransactionMerkleProof,
+    Bip37BloomFiltering,
+    CompactFilters,
+    RpaIndex,
+    CashTokenIndex,
+    BcmrResolver,
+    GraphQueries,
+    RawMempoolEvents,
+    RawBlockEvents,
+    DoubleSpendProofs,
+    FullNodeValidation,
+}
+
+impl ChainCapabilityView {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::FastHistory => "Fast history",
+            Self::ScriptSubscriptions => "Script subscriptions",
+            Self::UtxoQuery => "UTXO query",
+            Self::TransactionQuery => "Transaction query",
+            Self::Broadcast => "Broadcast",
+            Self::HeaderStream => "Headers",
+            Self::HeaderMerkleProof => "Header proof",
+            Self::TransactionMerkleProof => "Transaction proof",
+            Self::Bip37BloomFiltering => "BIP37 filtering",
+            Self::CompactFilters => "Compact filters",
+            Self::RpaIndex => "RPA index",
+            Self::CashTokenIndex => "CashToken index",
+            Self::BcmrResolver => "BCMR resolver",
+            Self::GraphQueries => "Indexed graph queries",
+            Self::RawMempoolEvents => "Mempool events",
+            Self::RawBlockEvents => "Block events",
+            Self::DoubleSpendProofs => "DSProof",
+            Self::FullNodeValidation => "Full-node validation",
+        }
+    }
+}
+
+/// One advertised/verified route for a capability on a source. Normal UI should
+/// present the source as one combined card and may collapse duplicate capability
+/// rows; protocol/provenance remain available for diagnostics and future routing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapabilityBadgeView {
+    pub capability: ChainCapabilityView,
     pub protocol: ChainProtocolView,
     pub confidence: CapabilityConfidenceView,
     /// Human-readable provenance such as `NODE_BLOOM`, `SFNodeCF`,
-    /// `server.features`, or `active probe`.
+    /// `server.features`, an Electrum extension, or `active probe`.
     pub provenance: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetworkSourceRow {
     pub id: String,
+    /// User/source-defined label. "Home Server" is merely an example name for
+    /// an infrastructure group; it is never the generic label for every source.
     pub label: String,
+    /// Combined summary for the source, e.g. node + Fulcrum + RPC + ZMQ when
+    /// those endpoints belong to one configured infrastructure source.
     pub endpoint_summary: String,
     pub origin: SourceOriginView,
     pub disposition: SourceDispositionView,
+    /// Route-level capability observations. The normal source card displays the
+    /// combined capability set; the runtime still knows which protocol supplies
+    /// each capability.
     pub capabilities: Vec<CapabilityBadgeView>,
     pub preferred_rank: Option<usize>,
     pub latency_ms: Option<u32>,
@@ -156,6 +218,25 @@ impl NetworkSourceRow {
     /// and own-infrastructure records are removable because the user created them.
     pub const fn expected_removable(origin: SourceOriginView) -> bool {
         !matches!(origin, SourceOriginView::Bootstrap)
+    }
+
+    /// Capabilities shown on the combined source card, independent of which
+    /// endpoint/protocol currently supplies each one.
+    pub fn combined_capabilities(&self) -> Vec<ChainCapabilityView> {
+        let mut capabilities = self
+            .capabilities
+            .iter()
+            .filter(|badge| {
+                matches!(
+                    badge.confidence,
+                    CapabilityConfidenceView::Advertised | CapabilityConfidenceView::Verified
+                )
+            })
+            .map(|badge| badge.capability)
+            .collect::<Vec<_>>();
+        capabilities.sort_unstable();
+        capabilities.dedup();
+        capabilities
     }
 }
 
@@ -274,5 +355,37 @@ mod tests {
             SourceScopeView::Selected(vec!["a".into()]),
             SourceScopeView::Selected(vec!["a".into(), "b".into()])
         );
+    }
+
+    #[test]
+    fn one_source_card_combines_the_same_capability_from_multiple_routes() {
+        let row = NetworkSourceRow {
+            id: "mine".into(),
+            label: "Lab infrastructure".into(),
+            endpoint_summary: "BCH node + Fulcrum".into(),
+            origin: SourceOriginView::MyInfrastructure,
+            disposition: SourceDispositionView::Enabled,
+            capabilities: vec![
+                CapabilityBadgeView {
+                    capability: ChainCapabilityView::RpaIndex,
+                    protocol: ChainProtocolView::FulcrumElectrum,
+                    confidence: CapabilityConfidenceView::Verified,
+                    provenance: Some("server.features".into()),
+                },
+                CapabilityBadgeView {
+                    capability: ChainCapabilityView::RpaIndex,
+                    protocol: ChainProtocolView::BchnRpc,
+                    confidence: CapabilityConfidenceView::Advertised,
+                    provenance: Some("future node capability".into()),
+                },
+            ],
+            preferred_rank: None,
+            latency_ms: None,
+            height: None,
+            removable: true,
+        };
+
+        assert_eq!(row.label, "Lab infrastructure");
+        assert_eq!(row.combined_capabilities(), vec![ChainCapabilityView::RpaIndex]);
     }
 }
