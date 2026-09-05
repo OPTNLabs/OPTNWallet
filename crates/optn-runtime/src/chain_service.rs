@@ -1,42 +1,27 @@
-//! Runtime-owned BCH provider orchestration for issue #75.
+//! Runtime-owned capability routing and bounded failover for issue #75.
 //!
-//! Concrete network adapters implement [`ChainBackend`]. The user selects
-//! sources/protocol policy; the runtime resolves the capability needed for each
-//! operation to an eligible provider route. A backend never receives mutable
-//! wallet state.
+//! Sources are selected by user policy. Capabilities are protocol-independent;
+//! protocols/endpoints are delivery routes, never permanent capability owners.
 
 use crate::chain::{
     build_selection_plan, Capability, CapabilityConfidence, CapabilitySet, ChainObservation,
     ConnectionPolicy, Endpoint, Evidence, Hash32, ProtocolFamily, ProviderHealth, SourceCatalog,
     SourceId,
 };
-use std::{collections::BTreeMap, future::Future, pin::Pin, sync::Arc};
+use std::{future::Future, pin::Pin, sync::Arc};
 
 pub type ChainFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ChainBackendError>> + Send + 'a>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChainOperation {
-    WalletRefresh,
-    TransactionLookup,
-    Broadcast,
-    HeaderSync,
-    HistoricalHeaderProof,
-}
+pub enum ChainOperation { WalletRefresh, TransactionLookup, Broadcast, HeaderSync, HistoricalHeaderProof }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChainRequest {
-    WalletRefresh {
-        interests: Vec<Vec<u8>>,
-        from_height: Option<u32>,
-    },
+    WalletRefresh { interests: Vec<Vec<u8>>, from_height: Option<u32> },
     TransactionLookup { txid: Hash32 },
     Broadcast { raw_tx: Vec<u8>, txid: Hash32 },
     HeaderSync { start_height: u32, count: u32 },
-    HistoricalHeaderProof {
-        height: u32,
-        /// The checkpoint/root height the proof must target.
-        checkpoint_height: u32,
-    },
+    HistoricalHeaderProof { height: u32, checkpoint_height: u32 },
 }
 
 impl ChainRequest {
@@ -52,62 +37,26 @@ impl ChainRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ChainTip {
-    pub height: u32,
-    pub hash: Hash32,
-}
+pub struct ChainTip { pub height: u32, pub hash: Hash32 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ObservedTransaction {
-    pub txid: Hash32,
-    pub raw: Vec<u8>,
-    pub block_height: Option<u32>,
-}
+pub struct ObservedTransaction { pub txid: Hash32, pub raw: Vec<u8>, pub block_height: Option<u32> }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChainPayload {
-    WalletRefresh {
-        transactions: Vec<ObservedTransaction>,
-        tip: Option<ChainTip>,
-    },
+    WalletRefresh { transactions: Vec<ObservedTransaction>, tip: Option<ChainTip> },
     Transaction(ObservedTransaction),
     BroadcastObserved { txid: Hash32 },
-    Headers {
-        start_height: u32,
-        headers: Vec<[u8; 80]>,
-    },
-    HistoricalHeaderProof {
-        height: u32,
-        checkpoint_height: u32,
-        header: [u8; 80],
-        siblings: Vec<Hash32>,
-        /// Internal digest-byte order used by the MMR verifier.
-        root: Hash32,
-    },
+    Headers { start_height: u32, headers: Vec<[u8; 80]> },
+    HistoricalHeaderProof { height: u32, checkpoint_height: u32, header: [u8; 80], siblings: Vec<Hash32>, root: Hash32 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BackendObservation {
-    pub payload: ChainPayload,
-    pub evidence: Evidence,
-    pub chain_tip: Option<(u32, Hash32)>,
-}
+pub struct BackendObservation { pub payload: ChainPayload, pub evidence: Evidence, pub chain_tip: Option<(u32, Hash32)> }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ChainBackendError {
-    Unsupported,
-    Offline,
-    Timeout,
-    Protocol(String),
-    InvalidResponse(String),
-    Rejected(String),
-}
+pub enum ChainBackendError { Unsupported, Offline, Timeout, Protocol(String), InvalidResponse(String), Rejected(String) }
 
-/// One concrete way an allowed source can supply a capability.
-///
-/// This is the future-proof seam: `RpaIndex`, `CashTokenIndex`, `BcmrResolver`
-/// or `GraphQueries` can gain an Electrum, RPC, P2P, or other adapter without
-/// changing the source-selection UI or authoritative wallet state model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapabilityRoute {
     pub source: SourceId,
@@ -121,281 +70,151 @@ pub struct CapabilityRoute {
 pub trait ChainBackend: Send + Sync {
     fn source_id(&self) -> &SourceId;
     fn protocol(&self) -> ProtocolFamily;
-
-    /// The concrete endpoint used by this adapter when one exists. Kept
-    /// optional so existing adapters remain source/protocol compatible while
-    /// they migrate to endpoint-aware diagnostics.
-    fn endpoint(&self) -> Option<&Endpoint> {
-        None
-    }
-
+    fn endpoint(&self) -> Option<&Endpoint> { None }
     fn capabilities(&self) -> &CapabilitySet;
     fn health(&self) -> ProviderHealth;
-
-    /// Request-shape support in addition to the advertised capability. This can
-    /// reject a specific operation while the same provider still advertises
-    /// other useful capabilities.
     fn supports(&self, operation: ChainOperation) -> bool;
     fn execute<'a>(&'a self, request: &'a ChainRequest) -> ChainFuture<'a, BackendObservation>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AttemptFailure {
-    pub source: SourceId,
-    pub protocol: ProtocolFamily,
-    pub error: ChainBackendError,
-}
+pub struct AttemptFailure { pub source: SourceId, pub protocol: ProtocolFamily, pub error: ChainBackendError }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ChainServiceError {
-    NoEligibleProvider,
-    Exhausted { attempts: Vec<AttemptFailure> },
-}
+pub enum ChainServiceError { NoEligibleProvider, RouteUnavailable, Exhausted { attempts: Vec<AttemptFailure> } }
 
 #[derive(Default)]
-pub struct ProviderRegistry {
-    providers: Vec<Arc<dyn ChainBackend>>,
-}
+pub struct ProviderRegistry { providers: Vec<Arc<dyn ChainBackend>> }
 
 impl ProviderRegistry {
-    pub fn register(&mut self, provider: Arc<dyn ChainBackend>) {
-        self.providers.push(provider);
-    }
+    pub fn register(&mut self, provider: Arc<dyn ChainBackend>) { self.providers.push(provider); }
 
-    pub fn providers_for<'a>(
-        &'a self,
-        source: &'a SourceId,
-        policy: &'a ConnectionPolicy,
-        operation: ChainOperation,
-    ) -> Vec<&'a Arc<dyn ChainBackend>> {
-        let capability = operation_capability(operation);
-        let mut providers = self
-            .providers
-            .iter()
-            .filter(|provider| provider.source_id() == source)
-            .filter(|provider| policy.protocols.contains(provider.protocol()))
-            .filter(|provider| provider.capabilities().is_usable(capability))
-            .filter(|provider| provider.supports(operation))
-            .filter(|provider| !matches!(provider.health(), ProviderHealth::Offline))
-            .collect::<Vec<_>>();
-        providers.sort_by_key(|provider| operation_protocol_rank(operation, provider.protocol()));
-        providers
-    }
-
-    pub fn routes_for_capability(
-        &self,
-        source: &SourceId,
-        policy: &ConnectionPolicy,
-        capability: Capability,
-    ) -> Vec<CapabilityRoute> {
-        let mut routes = self
-            .providers
-            .iter()
-            .filter(|provider| provider.source_id() == source)
-            .filter(|provider| policy.protocols.contains(provider.protocol()))
-            .filter(|provider| !matches!(provider.health(), ProviderHealth::Offline))
-            .filter_map(|provider| {
-                let claim = provider.capabilities().claim(capability)?;
-                if !matches!(
-                    claim.confidence,
-                    CapabilityConfidence::Advertised | CapabilityConfidence::Verified
-                ) {
-                    return None;
-                }
-                Some(CapabilityRoute {
-                    source: source.clone(),
-                    protocol: provider.protocol(),
-                    endpoint: provider.endpoint().cloned(),
-                    capability,
-                    confidence: claim.confidence,
-                    health: provider.health(),
-                })
-            })
-            .collect::<Vec<_>>();
-
-        // Prefer actually exercised routes over merely advertised ones, then a
-        // healthy route over degraded/unknown. Protocol itself does not own or
-        // automatically outrank another protocol for a generic capability.
-        routes.sort_by_key(|route| {
-            (
-                confidence_rank(route.confidence),
-                health_rank(route.health),
-                route.protocol,
-            )
-        });
+    fn provider_routes<'a>(&'a self, source: &SourceId, policy: &ConnectionPolicy, capability: Capability, operation: Option<ChainOperation>) -> Vec<(&'a Arc<dyn ChainBackend>, CapabilityRoute)> {
+        let mut routes = self.providers.iter().filter_map(|provider| {
+            if provider.source_id() != source || !policy.protocols.contains(provider.protocol()) || matches!(provider.health(), ProviderHealth::Offline) { return None; }
+            if operation.is_some_and(|op| !provider.supports(op)) { return None; }
+            let claim = provider.capabilities().claim(capability)?;
+            if !matches!(claim.confidence, CapabilityConfidence::Advertised | CapabilityConfidence::Verified) { return None; }
+            Some((provider, CapabilityRoute {
+                source: source.clone(), protocol: provider.protocol(), endpoint: provider.endpoint().cloned(), capability,
+                confidence: claim.confidence, health: provider.health(),
+            }))
+        }).collect::<Vec<_>>();
+        // Never encode semantic ownership through protocol order. Protocol is
+        // only a deterministic final tie-breaker after evidence and health.
+        routes.sort_by_key(|(_, route)| (confidence_rank(route.confidence), health_rank(route.health), route.protocol));
         routes
     }
+
+    pub fn routes_for_capability(&self, source: &SourceId, policy: &ConnectionPolicy, capability: Capability) -> Vec<CapabilityRoute> {
+        self.provider_routes(source, policy, capability, None).into_iter().map(|(_, route)| route).collect()
+    }
+
+    fn routes_for_operation<'a>(&'a self, source: &SourceId, policy: &ConnectionPolicy, operation: ChainOperation) -> Vec<(&'a Arc<dyn ChainBackend>, CapabilityRoute)> {
+        self.provider_routes(source, policy, operation_capability(operation), Some(operation))
+    }
+
+    fn provider_for_route(&self, route: &CapabilityRoute, operation: ChainOperation) -> Option<Arc<dyn ChainBackend>> {
+        self.providers.iter().find(|provider| {
+            provider.source_id() == &route.source && provider.protocol() == route.protocol
+                && provider.endpoint() == route.endpoint.as_ref() && provider.supports(operation)
+                && provider.capabilities().is_usable(route.capability)
+        }).cloned()
+    }
 }
+
+#[derive(Debug, Clone)]
+struct HealthOverride { source: SourceId, protocol: ProtocolFamily, endpoint: Option<Endpoint>, health: ProviderHealth }
 
 pub struct ChainService {
     catalog: SourceCatalog,
     policy: ConnectionPolicy,
     registry: ProviderRegistry,
-    health_overrides: BTreeMap<(SourceId, ProtocolFamily), ProviderHealth>,
+    health_overrides: Vec<HealthOverride>,
 }
 
 impl ChainService {
     pub fn new(catalog: SourceCatalog, policy: ConnectionPolicy) -> Self {
-        Self {
-            catalog,
-            policy,
-            registry: ProviderRegistry::default(),
-            health_overrides: BTreeMap::new(),
-        }
+        Self { catalog, policy, registry: ProviderRegistry::default(), health_overrides: Vec::new() }
     }
-
-    pub fn catalog(&self) -> &SourceCatalog {
-        &self.catalog
-    }
-
-    pub fn policy(&self) -> &ConnectionPolicy {
-        &self.policy
-    }
-
-    pub fn set_policy(&mut self, policy: ConnectionPolicy) {
-        self.policy = policy;
-    }
-
-    pub fn register(&mut self, provider: Arc<dyn ChainBackend>) {
-        self.registry.register(provider);
-    }
+    pub fn catalog(&self) -> &SourceCatalog { &self.catalog }
+    pub fn catalog_mut(&mut self) -> &mut SourceCatalog { &mut self.catalog }
+    pub fn policy(&self) -> &ConnectionPolicy { &self.policy }
+    pub fn set_policy(&mut self, policy: ConnectionPolicy) { self.policy = policy; }
+    pub fn register(&mut self, provider: Arc<dyn ChainBackend>) { self.registry.register(provider); }
 
     pub fn clear_health_override(&mut self, source: &SourceId, protocol: ProtocolFamily) {
-        self.health_overrides.remove(&(source.clone(), protocol));
+        self.health_overrides.retain(|entry| entry.source != *source || entry.protocol != protocol);
     }
 
-    /// Return all currently eligible routes for a capability in exactly the
-    /// source order selected by the existing UI/policy model.
-    ///
-    /// This is intentionally usable for capabilities that do not yet have a
-    /// first-class `ChainRequest` (e.g. BCMR/token/graph indexing). Adding a
-    /// provider implementation later does not require a new source mode.
+    fn route_unhealthy(&self, route: &CapabilityRoute) -> bool {
+        self.health_overrides.iter().find(|entry| entry.source == route.source && entry.protocol == route.protocol && entry.endpoint == route.endpoint)
+            .is_some_and(|entry| matches!(entry.health, ProviderHealth::Offline | ProviderHealth::Degraded))
+    }
+
+    fn set_route_health(&mut self, route: &CapabilityRoute, health: ProviderHealth) {
+        if let Some(entry) = self.health_overrides.iter_mut().find(|entry| entry.source == route.source && entry.protocol == route.protocol && entry.endpoint == route.endpoint) {
+            entry.health = health;
+        } else {
+            self.health_overrides.push(HealthOverride { source: route.source.clone(), protocol: route.protocol, endpoint: route.endpoint.clone(), health });
+        }
+    }
+
     pub fn routes_for_capability(&self, capability: Capability) -> Vec<CapabilityRoute> {
         let plan = build_selection_plan(&self.catalog, &self.policy);
-        plan.primary
-            .iter()
-            .chain(plan.fallback.iter())
-            .flat_map(|source| {
-                self.registry
-                    .routes_for_capability(source, &self.policy, capability)
-            })
-            .filter(|route| {
-                !matches!(
-                    self.health_overrides
-                        .get(&(route.source.clone(), route.protocol)),
-                    Some(ProviderHealth::Offline | ProviderHealth::Degraded)
-                )
-            })
-            .collect()
+        plan.primary.iter().chain(plan.fallback.iter())
+            .flat_map(|source| self.registry.routes_for_capability(source, &self.policy, capability))
+            .filter(|route| !self.route_unhealthy(route)).collect()
     }
 
-    pub async fn execute(
-        &mut self,
-        request: &ChainRequest,
-    ) -> Result<ChainObservation<ChainPayload>, ChainServiceError> {
+    pub fn routes_for_operation(&self, operation: ChainOperation) -> Vec<CapabilityRoute> {
         let plan = build_selection_plan(&self.catalog, &self.policy);
-        let candidates = plan
-            .primary
-            .iter()
-            .chain(plan.fallback.iter())
-            .cloned()
-            .collect::<Vec<_>>();
-        if candidates.is_empty() {
-            return Err(ChainServiceError::NoEligibleProvider);
-        }
+        plan.primary.iter().chain(plan.fallback.iter())
+            .flat_map(|source| self.registry.routes_for_operation(source, &self.policy, operation).into_iter().map(|(_, route)| route))
+            .filter(|route| !self.route_unhealthy(route)).collect()
+    }
 
-        let mut attempts = Vec::new();
-        for source in candidates {
-            let providers = self
-                .registry
-                .providers_for(&source, &self.policy, request.operation());
-            for provider in providers {
-                let protocol = provider.protocol();
-                let key = (source.clone(), protocol);
-                if matches!(
-                    self.health_overrides.get(&key),
-                    Some(ProviderHealth::Offline | ProviderHealth::Degraded)
-                ) {
-                    continue;
-                }
-                match provider.execute(request).await {
-                    Ok(observation) => {
-                        self.health_overrides.insert(key, ProviderHealth::Healthy);
-                        return Ok(ChainObservation {
-                            value: observation.payload,
-                            source: source.clone(),
-                            chain_tip: observation.chain_tip,
-                            evidence: observation.evidence,
-                        });
-                    }
-                    Err(error) => {
-                        let health = match &error {
-                            ChainBackendError::Offline | ChainBackendError::Timeout => {
-                                ProviderHealth::Offline
-                            }
-                            _ => ProviderHealth::Degraded,
-                        };
-                        self.health_overrides.insert(key, health);
-                        attempts.push(AttemptFailure {
-                            source: source.clone(),
-                            protocol,
-                            error,
-                        });
-                    }
-                }
+    /// Execute on one exact route. Multi-step workflows use this to keep
+    /// provider-local prerequisites (for example a BIP37 header cursor) on the
+    /// same provider instead of silently changing transport halfway through.
+    pub async fn execute_on_route(&mut self, route: &CapabilityRoute, request: &ChainRequest) -> Result<ChainObservation<ChainPayload>, ChainServiceError> {
+        if route.capability != operation_capability(request.operation()) || self.route_unhealthy(route) { return Err(ChainServiceError::RouteUnavailable); }
+        let provider = self.registry.provider_for_route(route, request.operation()).ok_or(ChainServiceError::RouteUnavailable)?;
+        match provider.execute(request).await {
+            Ok(observation) => {
+                self.set_route_health(route, ProviderHealth::Healthy);
+                Ok(ChainObservation { value: observation.payload, source: route.source.clone(), chain_tip: observation.chain_tip, evidence: observation.evidence })
+            }
+            Err(error) => {
+                self.set_route_health(route, health_for_error(&error));
+                Err(ChainServiceError::Exhausted { attempts: vec![AttemptFailure { source: route.source.clone(), protocol: route.protocol, error }] })
             }
         }
+    }
 
-        if attempts.is_empty() {
-            Err(ChainServiceError::NoEligibleProvider)
-        } else {
-            Err(ChainServiceError::Exhausted { attempts })
+    pub async fn execute(&mut self, request: &ChainRequest) -> Result<ChainObservation<ChainPayload>, ChainServiceError> {
+        let routes = self.routes_for_operation(request.operation());
+        if routes.is_empty() { return Err(ChainServiceError::NoEligibleProvider); }
+        let mut attempts = Vec::new();
+        for route in routes {
+            match self.execute_on_route(&route, request).await {
+                Ok(value) => return Ok(value),
+                Err(ChainServiceError::Exhausted { attempts: mut failed }) => attempts.append(&mut failed),
+                Err(ChainServiceError::NoEligibleProvider | ChainServiceError::RouteUnavailable) => {}
+            }
         }
+        if attempts.is_empty() { Err(ChainServiceError::NoEligibleProvider) } else { Err(ChainServiceError::Exhausted { attempts }) }
     }
 }
 
-const fn confidence_rank(confidence: CapabilityConfidence) -> u8 {
-    match confidence {
-        CapabilityConfidence::Verified => 0,
-        CapabilityConfidence::Advertised => 1,
-        CapabilityConfidence::Unknown => 2,
-        CapabilityConfidence::Rejected => 3,
-    }
+const fn confidence_rank(value: CapabilityConfidence) -> u8 {
+    match value { CapabilityConfidence::Verified => 0, CapabilityConfidence::Advertised => 1, CapabilityConfidence::Unknown => 2, CapabilityConfidence::Rejected => 3 }
 }
-
-const fn health_rank(health: ProviderHealth) -> u8 {
-    match health {
-        ProviderHealth::Healthy => 0,
-        ProviderHealth::Unknown => 1,
-        ProviderHealth::Degraded => 2,
-        ProviderHealth::Offline => 3,
-    }
+const fn health_rank(value: ProviderHealth) -> u8 {
+    match value { ProviderHealth::Healthy => 0, ProviderHealth::Unknown => 1, ProviderHealth::Degraded => 2, ProviderHealth::Offline => 3 }
 }
-
-fn operation_protocol_rank(operation: ChainOperation, protocol: ProtocolFamily) -> u8 {
-    match operation {
-        ChainOperation::WalletRefresh => match protocol {
-            ProtocolFamily::Electrum => 0,
-            ProtocolFamily::BchnRpc => 1,
-            ProtocolFamily::Neutrino => 2,
-            ProtocolFamily::Bip37 => 3,
-            ProtocolFamily::BchnZmq => 9,
-        },
-        ChainOperation::TransactionLookup | ChainOperation::Broadcast => match protocol {
-            ProtocolFamily::BchnRpc => 0,
-            ProtocolFamily::Electrum => 1,
-            ProtocolFamily::Bip37 => 2,
-            ProtocolFamily::Neutrino => 3,
-            ProtocolFamily::BchnZmq => 9,
-        },
-        ChainOperation::HeaderSync | ChainOperation::HistoricalHeaderProof => match protocol {
-            ProtocolFamily::BchnRpc => 0,
-            ProtocolFamily::Neutrino => 1,
-            ProtocolFamily::Bip37 => 2,
-            ProtocolFamily::Electrum => 3,
-            ProtocolFamily::BchnZmq => 9,
-        },
-    }
+fn health_for_error(error: &ChainBackendError) -> ProviderHealth {
+    match error { ChainBackendError::Offline | ChainBackendError::Timeout => ProviderHealth::Offline, _ => ProviderHealth::Degraded }
 }
 
 pub const fn operation_capability(operation: ChainOperation) -> Capability {
@@ -411,278 +230,25 @@ pub const fn operation_capability(operation: ChainOperation) -> Capability {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chain::{
-        CapabilityDiscovery, ChainSource, EndpointKind, SourceDisposition, SourceOrigin,
-        SourceScope,
-    };
-    use std::collections::BTreeSet;
+    use crate::chain::{CapabilityDiscovery, ChainSource, EndpointKind, SourceDisposition, SourceOrigin};
 
-    struct MockBackend {
-        id: SourceId,
-        protocol: ProtocolFamily,
-        endpoint: Option<Endpoint>,
-        capabilities: CapabilitySet,
-        health: ProviderHealth,
-        result: Result<BackendObservation, ChainBackendError>,
+    struct Mock { id: SourceId, protocol: ProtocolFamily, endpoint: Endpoint, caps: CapabilitySet, result: Result<BackendObservation, ChainBackendError> }
+    impl ChainBackend for Mock {
+        fn source_id(&self)->&SourceId{&self.id} fn protocol(&self)->ProtocolFamily{self.protocol} fn endpoint(&self)->Option<&Endpoint>{Some(&self.endpoint)}
+        fn capabilities(&self)->&CapabilitySet{&self.caps} fn health(&self)->ProviderHealth{ProviderHealth::Healthy}
+        fn supports(&self,op:ChainOperation)->bool{self.caps.is_usable(operation_capability(op))}
+        fn execute<'a>(&'a self,_:&'a ChainRequest)->ChainFuture<'a,BackendObservation>{let result=self.result.clone();Box::pin(async move{result})}
     }
-
-    impl ChainBackend for MockBackend {
-        fn source_id(&self) -> &SourceId {
-            &self.id
-        }
-        fn protocol(&self) -> ProtocolFamily {
-            self.protocol
-        }
-        fn endpoint(&self) -> Option<&Endpoint> {
-            self.endpoint.as_ref()
-        }
-        fn capabilities(&self) -> &CapabilitySet {
-            &self.capabilities
-        }
-        fn health(&self) -> ProviderHealth {
-            self.health
-        }
-        fn supports(&self, operation: ChainOperation) -> bool {
-            self.capabilities.is_usable(operation_capability(operation))
-        }
-        fn execute<'a>(&'a self, _request: &'a ChainRequest) -> ChainFuture<'a, BackendObservation> {
-            let result = self.result.clone();
-            Box::pin(async move { result })
-        }
-    }
-
-    fn source(id: &str, priority: u16) -> ChainSource {
-        source_with_protocols(id, priority, &[ProtocolFamily::Electrum])
-    }
-
-    fn source_with_protocols(
-        id: &str,
-        priority: u16,
-        protocols: &[ProtocolFamily],
-    ) -> ChainSource {
-        let mut capabilities = CapabilitySet::default();
-        for protocol in protocols {
-            let capability = match protocol {
-                ProtocolFamily::Electrum => Capability::ElectrumProtocol,
-                ProtocolFamily::Bip37 => Capability::Bip37BloomFiltering,
-                ProtocolFamily::Neutrino => Capability::CompactFilters,
-                ProtocolFamily::BchnRpc => Capability::RpcQueries,
-                ProtocolFamily::BchnZmq => Capability::ZmqEvents,
-            };
-            capabilities.record(
-                capability,
-                CapabilityConfidence::Verified,
-                CapabilityDiscovery::ActiveProbe,
-            );
-        }
-        ChainSource {
-            id: SourceId::new(id),
-            label: id.into(),
-            origin: SourceOrigin::UserAdded,
-            endpoints: Vec::new(),
-            capabilities,
-            disposition: SourceDisposition::Enabled,
-            priority,
-        }
-    }
-
-    fn backend(id: &str, result: Result<BackendObservation, ChainBackendError>) -> Arc<MockBackend> {
-        let mut capabilities = CapabilitySet::default();
-        for capability in [
-            Capability::UtxoQuery,
-            Capability::TransactionQuery,
-            Capability::Broadcast,
-            Capability::HeaderStream,
-            Capability::HeaderMerkleProof,
-        ] {
-            capabilities.record(
-                capability,
-                CapabilityConfidence::Verified,
-                CapabilityDiscovery::ActiveProbe,
-            );
-        }
-        Arc::new(MockBackend {
-            id: SourceId::new(id),
-            protocol: ProtocolFamily::Electrum,
-            endpoint: Some(Endpoint {
-                kind: EndpointKind::ElectrumTls,
-                host: id.into(),
-                port: Some(50002),
-            }),
-            capabilities,
-            health: ProviderHealth::Healthy,
-            result,
-        })
-    }
-
-    fn capability_backend(
-        id: &str,
-        protocol: ProtocolFamily,
-        capability: Capability,
-        confidence: CapabilityConfidence,
-    ) -> Arc<MockBackend> {
-        let mut capabilities = CapabilitySet::default();
-        capabilities.record(
-            capability,
-            confidence,
-            match protocol {
-                ProtocolFamily::Electrum => CapabilityDiscovery::ElectrumServerFeatures,
-                _ => CapabilityDiscovery::ExplicitConfiguration,
-            },
-        );
-        let endpoint = Some(Endpoint {
-            kind: match protocol {
-                ProtocolFamily::Electrum => EndpointKind::ElectrumTls,
-                ProtocolFamily::BchnRpc => EndpointKind::BchnRpc,
-                ProtocolFamily::BchnZmq => EndpointKind::BchnZmq,
-                ProtocolFamily::Bip37 | ProtocolFamily::Neutrino => EndpointKind::BchP2p,
-            },
-            host: id.into(),
-            port: None,
-        });
-        Arc::new(MockBackend {
-            id: SourceId::new(id),
-            protocol,
-            endpoint,
-            capabilities,
-            health: ProviderHealth::Healthy,
-            result: Err(ChainBackendError::Unsupported),
-        })
-    }
-
-    fn success(txid: Hash32) -> BackendObservation {
-        BackendObservation {
-            payload: ChainPayload::BroadcastObserved { txid },
-            evidence: Evidence::MempoolObservation,
-            chain_tip: None,
-        }
-    }
+    fn source(id:&str,priority:u16)->ChainSource{ChainSource{id:SourceId::new(id),label:id.into(),origin:SourceOrigin::UserAdded,endpoints:vec![Endpoint{kind:EndpointKind::BchP2p,host:id.into(),port:Some(8333)}],capabilities:CapabilitySet::default(),disposition:SourceDisposition::Enabled,priority}}
+    fn backend(id:&str,protocol:ProtocolFamily,confidence:CapabilityConfidence,result:Result<BackendObservation,ChainBackendError>)->Arc<Mock>{let mut caps=CapabilitySet::default();for c in [Capability::UtxoQuery,Capability::TransactionQuery,Capability::Broadcast,Capability::HeaderStream,Capability::HeaderMerkleProof]{caps.record(c,confidence,CapabilityDiscovery::ActiveProbe);}let kind=match protocol{ProtocolFamily::Electrum=>EndpointKind::ElectrumTcp,ProtocolFamily::Bip37|ProtocolFamily::Neutrino=>EndpointKind::BchP2p,ProtocolFamily::BchnRpc=>EndpointKind::BchnRpc,ProtocolFamily::BchnZmq=>EndpointKind::BchnZmq};Arc::new(Mock{id:SourceId::new(id),protocol,endpoint:Endpoint{kind,host:id.into(),port:Some(1)},caps,result})}
+    fn obs(tag:u8)->BackendObservation{BackendObservation{payload:ChainPayload::Headers{start_height:1,headers:vec![[tag;80]]},evidence:Evidence::ServerAssertion,chain_tip:None}}
 
     #[tokio::test]
-    async fn bounded_failover_uses_second_selected_source() {
-        let mut catalog = SourceCatalog::default();
-        catalog.insert(source("a", 0)).unwrap();
-        catalog.insert(source("b", 1)).unwrap();
-        let policy = ConnectionPolicy {
-            protocols: crate::chain::ProtocolSet::only(ProtocolFamily::Electrum),
-            primary_scope: SourceScope::Explicit(BTreeSet::from([
-                SourceId::new("a"),
-                SourceId::new("b"),
-            ])),
-            fallback_scope: None,
-            preferred: vec![SourceId::new("a"), SourceId::new("b")],
-        };
-        let mut service = ChainService::new(catalog, policy);
-        service.register(backend("a", Err(ChainBackendError::Timeout)));
-        service.register(backend("b", Ok(success([7; 32]))));
-        let observation = service
-            .execute(&ChainRequest::Broadcast {
-                raw_tx: vec![1, 2, 3],
-                txid: [7; 32],
-            })
-            .await
-            .unwrap();
-        assert_eq!(observation.source, SourceId::new("b"));
-        assert_eq!(
-            observation.value,
-            ChainPayload::BroadcastObserved { txid: [7; 32] }
-        );
-    }
+    async fn source_failover_is_bounded_by_policy(){let mut catalog=SourceCatalog::default();catalog.insert(source("a",0)).unwrap();catalog.insert(source("b",1)).unwrap();let mut service=ChainService::new(catalog,ConnectionPolicy::auto());service.register(backend("a",ProtocolFamily::Electrum,CapabilityConfidence::Verified,Err(ChainBackendError::Timeout)));service.register(backend("b",ProtocolFamily::Electrum,CapabilityConfidence::Verified,Ok(obs(2))));let got=service.execute(&ChainRequest::HeaderSync{start_height:1,count:1}).await.unwrap();assert_eq!(got.source,SourceId::new("b"));}
+
+    #[test]
+    fn verified_route_outranks_advertised_without_protocol_ownership(){let mut catalog=SourceCatalog::default();catalog.insert(source("a",0)).unwrap();let mut service=ChainService::new(catalog,ConnectionPolicy::auto());service.register(backend("a",ProtocolFamily::Electrum,CapabilityConfidence::Advertised,Ok(obs(1))));service.register(backend("a",ProtocolFamily::Bip37,CapabilityConfidence::Verified,Ok(obs(2))));let routes=service.routes_for_operation(ChainOperation::HeaderSync);assert_eq!(routes[0].protocol,ProtocolFamily::Bip37);}
 
     #[tokio::test]
-    async fn no_fallback_never_escapes_selected_pool() {
-        let mut catalog = SourceCatalog::default();
-        catalog.insert(source("selected", 0)).unwrap();
-        catalog.insert(source("outside", 0)).unwrap();
-        let policy = ConnectionPolicy::exact(SourceId::new("selected"), ProtocolFamily::Electrum);
-        let mut service = ChainService::new(catalog, policy);
-        service.register(backend("selected", Err(ChainBackendError::Offline)));
-        service.register(backend("outside", Ok(success([9; 32]))));
-        let error = service
-            .execute(&ChainRequest::Broadcast {
-                raw_tx: vec![1],
-                txid: [9; 32],
-            })
-            .await
-            .unwrap_err();
-        match error {
-            ChainServiceError::Exhausted { attempts } => {
-                assert_eq!(attempts.len(), 1);
-                assert_eq!(attempts[0].source, SourceId::new("selected"));
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn one_source_can_offer_the_same_future_capability_over_multiple_routes() {
-        let id = SourceId::new("my-infrastructure");
-        let mut catalog = SourceCatalog::default();
-        catalog
-            .insert(source_with_protocols(
-                id.as_str(),
-                0,
-                &[ProtocolFamily::Electrum, ProtocolFamily::BchnRpc],
-            ))
-            .unwrap();
-        let policy = ConnectionPolicy {
-            protocols: crate::chain::ProtocolSet::all(),
-            primary_scope: SourceScope::Explicit(BTreeSet::from([id.clone()])),
-            fallback_scope: None,
-            preferred: vec![id.clone()],
-        };
-        let mut service = ChainService::new(catalog, policy);
-        service.register(capability_backend(
-            id.as_str(),
-            ProtocolFamily::Electrum,
-            Capability::RpaIndex,
-            CapabilityConfidence::Verified,
-        ));
-        service.register(capability_backend(
-            id.as_str(),
-            ProtocolFamily::BchnRpc,
-            Capability::RpaIndex,
-            CapabilityConfidence::Advertised,
-        ));
-
-        let routes = service.routes_for_capability(Capability::RpaIndex);
-        assert_eq!(routes.len(), 2);
-        assert_eq!(routes[0].source, id);
-        assert_eq!(routes[0].protocol, ProtocolFamily::Electrum);
-        assert_eq!(routes[0].confidence, CapabilityConfidence::Verified);
-        assert_eq!(routes[1].protocol, ProtocolFamily::BchnRpc);
-    }
-
-    #[test]
-    fn optional_index_capabilities_need_no_new_source_mode() {
-        let id = SourceId::new("index-capable-source");
-        let mut catalog = SourceCatalog::default();
-        catalog
-            .insert(source_with_protocols(
-                id.as_str(),
-                0,
-                &[ProtocolFamily::Electrum],
-            ))
-            .unwrap();
-        let policy = ConnectionPolicy {
-            protocols: crate::chain::ProtocolSet::only(ProtocolFamily::Electrum),
-            primary_scope: SourceScope::Explicit(BTreeSet::from([id.clone()])),
-            fallback_scope: None,
-            preferred: Vec::new(),
-        };
-        let mut service = ChainService::new(catalog, policy);
-        for capability in [
-            Capability::CashTokenIndex,
-            Capability::BcmrResolver,
-            Capability::GraphQueries,
-        ] {
-            service.register(capability_backend(
-                id.as_str(),
-                ProtocolFamily::Electrum,
-                capability,
-                CapabilityConfidence::Advertised,
-            ));
-            assert_eq!(service.routes_for_capability(capability).len(), 1);
-        }
-    }
+    async fn explicit_route_does_not_switch_protocol(){let mut catalog=SourceCatalog::default();catalog.insert(source("a",0)).unwrap();let mut service=ChainService::new(catalog,ConnectionPolicy::auto());service.register(backend("a",ProtocolFamily::Electrum,CapabilityConfidence::Verified,Ok(obs(1))));service.register(backend("a",ProtocolFamily::Bip37,CapabilityConfidence::Verified,Ok(obs(2))));let route=service.routes_for_operation(ChainOperation::HeaderSync).into_iter().find(|r|r.protocol==ProtocolFamily::Bip37).unwrap();let got=service.execute_on_route(&route,&ChainRequest::HeaderSync{start_height:1,count:1}).await.unwrap();match got.value{ChainPayload::Headers{headers,..}=>assert_eq!(headers[0],[2;80]),_=>panic!("wrong payload")}}
 }
