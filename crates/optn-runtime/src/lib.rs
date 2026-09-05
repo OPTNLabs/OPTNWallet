@@ -14,6 +14,8 @@
 pub mod chain;
 /// Runtime-owned operation-aware provider selection and bounded failover.
 pub mod chain_service;
+/// Provider-neutral SHV/MMR header verification using the pure optn-core accumulator.
+pub mod header_verifier;
 /// Versioned user-network overlay and bootstrap-refresh migration scaffolding.
 pub mod network_config;
 /// Framework-neutral authenticated wallet-update state/provider scaffolding.
