@@ -186,6 +186,22 @@ async function main() {
   console.log('7) BCH VM', ok);
   if (ok !== true) process.exit(2);
 
+  // Everything above is reversible: it reads the chain, builds, signs and
+  // verifies against consensus rules without leaving a trace. Step 8 is not.
+  // Gating it means this script can be run as a check -- which is most of what
+  // anyone wants from it -- instead of only as a spend.
+  if (!process.env.OPTN_E2E_BROADCAST) {
+    console.log(
+      '8) broadcast skipped. Everything up to and including the BCH VM check ' +
+        'passed. Set OPTN_E2E_BROADCAST=1 to put this transaction on chipnet.'
+    );
+    console.log('   raw tx bytes:', rawTxHex.length / 2);
+    console.log(
+      'NOTE: hardware camera not used — SeedCash Python emulator signed.'
+    );
+    return;
+  }
+
   console.log('8) broadcasting…');
   const txid = (await electrum('blockchain.transaction.broadcast', [
     rawTxHex,
