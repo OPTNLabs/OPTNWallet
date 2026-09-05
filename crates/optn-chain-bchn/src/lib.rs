@@ -308,8 +308,9 @@ impl ChainBackend for BchnRpcBackend {
                     start_height,
                     count,
                 } => self.header_sync(*start_height, *count).await,
-                ChainRequest::WalletRefresh { .. }
-                | ChainRequest::HistoricalHeaderProof { .. } => Err(ChainBackendError::Unsupported),
+                ChainRequest::WalletRefresh { .. } | ChainRequest::HistoricalHeaderProof { .. } => {
+                    Err(ChainBackendError::Unsupported)
+                }
             }
         })
     }
@@ -334,9 +335,8 @@ fn parse_blockchain_info(value: &Value) -> Result<BchnInfo, ChainBackendError> {
         .ok_or_else(|| ChainBackendError::InvalidResponse("bestblockhash is missing".into()))?;
     Ok(BchnInfo {
         chain,
-        blocks: u32::try_from(blocks).map_err(|_| {
-            ChainBackendError::InvalidResponse("block height exceeds u32".into())
-        })?,
+        blocks: u32::try_from(blocks)
+            .map_err(|_| ChainBackendError::InvalidResponse("block height exceeds u32".into()))?,
         best_block_hash: decode_display_hash(best)?,
     })
 }

@@ -19,7 +19,14 @@ use optn_runtime::events::{
 use tokio::sync::Mutex;
 use zeromq::{Socket, SocketRecv};
 
-const TOPICS: &[&str] = &["rawtx", "hashtx", "rawblock", "hashblock", "rawds", "hashds"];
+const TOPICS: &[&str] = &[
+    "rawtx",
+    "hashtx",
+    "rawblock",
+    "hashblock",
+    "rawds",
+    "hashds",
+];
 
 #[derive(Debug, Clone)]
 pub struct BchnZmqConfig {

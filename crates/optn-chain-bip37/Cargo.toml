@@ -8,7 +8,7 @@ description = "Portable BCH P2P/BIP37 chain provider for OPTN Wallet"
 [dependencies]
 optn-core = { path = "../optn-core" }
 optn-runtime = { path = "../optn-runtime" }
-serde = { version = "1", features = ["derive"] }
-sha2 = "0.10"
-tokio = { version = "1", features = ["io-util", "net", "rt", "sync", "time"] }
-tokio-socks = "0.5"
+serde = { version = "1.0.229", features = ["derive"] }
+sha2 = "0.10.9"
+tokio = { version = "1.53.1", features = ["io-util", "net", "rt", "sync", "time"] }
+tokio-socks = "0.5.3"

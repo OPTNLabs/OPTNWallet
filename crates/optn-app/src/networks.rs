@@ -273,7 +273,9 @@ pub enum NetworkSourceIntent {
         source_id: String,
         disposition: SourceDispositionView,
     },
-    RemoveUserSource { source_id: String },
+    RemoveUserSource {
+        source_id: String,
+    },
     SetPreferredOrder(Vec<String>),
     SetProtocols(Vec<ChainProtocolView>),
     SetPrimaryScope(SourceScopeView),
@@ -340,9 +342,15 @@ mod tests {
 
     #[test]
     fn source_lifecycle_matches_issue_75() {
-        assert!(!NetworkSourceRow::expected_removable(SourceOriginView::Bootstrap));
-        assert!(NetworkSourceRow::expected_removable(SourceOriginView::UserAdded));
-        assert!(NetworkSourceRow::expected_removable(SourceOriginView::MyInfrastructure));
+        assert!(!NetworkSourceRow::expected_removable(
+            SourceOriginView::Bootstrap
+        ));
+        assert!(NetworkSourceRow::expected_removable(
+            SourceOriginView::UserAdded
+        ));
+        assert!(NetworkSourceRow::expected_removable(
+            SourceOriginView::MyInfrastructure
+        ));
     }
 
     #[test]
@@ -386,6 +394,9 @@ mod tests {
         };
 
         assert_eq!(row.label, "Lab infrastructure");
-        assert_eq!(row.combined_capabilities(), vec![ChainCapabilityView::RpaIndex]);
+        assert_eq!(
+            row.combined_capabilities(),
+            vec![ChainCapabilityView::RpaIndex]
+        );
     }
 }

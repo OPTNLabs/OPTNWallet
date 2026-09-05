@@ -25,8 +25,12 @@ fn murmur3_32(seed: u32, data: &[u8]) -> u32 {
 
     let tail = &data[nblocks * 4..];
     let mut k1 = 0u32;
-    if tail.len() >= 3 { k1 ^= (tail[2] as u32) << 16; }
-    if tail.len() >= 2 { k1 ^= (tail[1] as u32) << 8; }
+    if tail.len() >= 3 {
+        k1 ^= (tail[2] as u32) << 16;
+    }
+    if tail.len() >= 2 {
+        k1 ^= (tail[1] as u32) << 8;
+    }
     if !tail.is_empty() {
         k1 ^= tail[0] as u32;
         k1 = k1.wrapping_mul(C1);
@@ -101,7 +105,10 @@ mod tests {
     use super::*;
 
     fn hex(s: &str) -> Vec<u8> {
-        (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
     }
 
     #[test]
