@@ -4,6 +4,18 @@
 //! the application can represent legacy UI values such as 1.1 sat/B exactly as
 //! 1100 sat/kB. Provider/server estimates are inputs; they never own policy.
 
+/// BCH relay floor used by the existing wallet fee policy: ~1 sat/byte.
+///
+/// Kept in the shared domain layer rather than a provider so changing from
+/// Fulcrum to P2P/RPC cannot silently change the user's transaction policy.
+pub const RELAY_MINIMUM_FEE_RATE: FeeRate = FeeRate::from_satoshis_per_kb(1000);
+
+/// The historical custom editor starts at 1.1 sat/byte.
+///
+/// This value is only the remembered custom choice while Auto is selected; it
+/// does not override the relay-floor Automatic behavior.
+pub const DEFAULT_CUSTOM_FEE_RATE: FeeRate = FeeRate::from_satoshis_per_kb(1100);
+
 /// Exact fee rate in satoshis per 1000 serialized transaction bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FeeRate {
@@ -81,6 +93,12 @@ impl FeePreferences {
         Self::new(FeeMode::Custom, custom_rate)
     }
 
+    /// The legacy app-wide preference: Automatic, with 1.1 sat/B remembered
+    /// for the custom editor if the user switches modes.
+    pub const fn app_default() -> Self {
+        Self::auto(DEFAULT_CUSTOM_FEE_RATE)
+    }
+
     /// Resolve one final wallet-owned rate. A provider estimate is advisory
     /// input to Auto; neither that provider nor the selected transport owns the
     /// preference or may bypass the relay floor.
@@ -93,6 +111,12 @@ impl FeePreferences {
     }
 }
 
+impl Default for FeePreferences {
+    fn default() -> Self {
+        Self::app_default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -102,6 +126,17 @@ mod tests {
         let rate = FeeRate::from_millisatoshi_per_byte(1100);
         assert_eq!(rate.satoshis_per_kb(), 1100);
         assert_eq!(rate.fee_for_bytes(250), 275);
+    }
+
+    #[test]
+    fn app_default_matches_existing_auto_and_custom_editor_values() {
+        let preferences = FeePreferences::app_default();
+        assert_eq!(preferences.mode, FeeMode::Auto);
+        assert_eq!(preferences.custom_rate, DEFAULT_CUSTOM_FEE_RATE);
+        assert_eq!(
+            preferences.resolve(RELAY_MINIMUM_FEE_RATE, RELAY_MINIMUM_FEE_RATE),
+            RELAY_MINIMUM_FEE_RATE
+        );
     }
 
     #[test]
