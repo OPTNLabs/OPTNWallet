@@ -19,11 +19,24 @@ The key separations are:
 - **evidence**: never vote providers 2-of-3; reconcile typed evidence;
 - **SHV/MMR**: a provider-neutral header verification/storage primitive;
 - **ZMQ**: an event/wake-up source, not a sync mode or proof;
-- **explorer routing**: navigation/privacy, not wallet truth.
+- **explorer routing**: navigation/privacy, not wallet truth;
+- **update-safe persistence**: the shipped bootstrap base is separate from the
+  durable user overlay, so upgrades never erase custom nodes, infrastructure,
+  bans/disables, protocol filters, preferred order, or fallback boundaries;
+- **application updates**: executable update trust is separate from BCH source
+  trust and is represented by framework-neutral runtime state/provider contracts.
+
+Related PR #63 scaffolds outside this directory:
+
+- `crates/optn-runtime/src/network_config.rs` — versioned user overlay,
+  bootstrap refresh merge rules, atomic persistence port, and portable
+  network-settings backup type;
+- `crates/optn-runtime/src/update.rs` — authenticated release/update state and
+  shell/platform adapter contract.
 
 ## Implementation order
 
-1. Persist the source catalog and `ConnectionPolicy`.
+1. Persist `NetworkConfigEnvelope`/user overlay and add versioned migrations.
 2. Ingest/normalize bootstrap feeds with provenance and deduplication.
 3. Adapt the existing BIP37 engine behind `ChainProvider` + capability probes.
 4. Adapt native Electrum/Fulcrum behind the same contracts.
@@ -33,7 +46,12 @@ The key separations are:
 7. Implement `ChainObservation` reconciliation and progressive sync workers.
 8. Port SHV/MMR from the authoritative CHIP + Electron Cash reference work.
 9. Add explorer routing and surface the source catalog in the advanced UI.
+10. Add typed app actions/view models for source management and update state.
+11. Add platform-specific updater adapter(s) without moving verification into UI.
+12. Add network-settings export/import for true reinstall/device migration.
 
 Do not move network ownership into Leptos/Tauri code. The renderer may edit the
 policy/catalog through typed actions later, but `optn-runtime` owns selection,
-health, failover, verification, and authoritative state.
+health, failover, verification, migration, and authoritative state. Likewise,
+renderers may display update availability, but they must not authenticate or
+install releases directly.
