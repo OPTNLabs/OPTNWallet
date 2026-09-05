@@ -1,0 +1,16 @@
+[package]
+name = "optn-chain-bchn"
+version = "1.7.3"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Rust-native BCHN RPC provider for OPTN Wallet."
+
+[dependencies]
+optn-core = { path = "../optn-core", version = "=1.7.3" }
+optn-runtime = { path = "../optn-runtime", version = "=1.7.3" }
+hex = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde_json = "1"
+
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["macros", "rt"] }
