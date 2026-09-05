@@ -47,7 +47,10 @@ import TransactionService, {
   type BroadcastState,
 } from '../../services/TransactionService';
 import { txBytesFromHex } from '../../apis/TransactionManager/feePolicy';
-import { refreshMultisigWalletUtxos } from '../../services/WalletUtxoRefreshService';
+import {
+  refreshMultisigWalletUtxos,
+  refreshWatchOnlyWalletUtxos,
+} from '../../services/WalletUtxoRefreshService';
 import { copyToClipboard } from '../../utils/clipboard';
 import WalletManager from '../../apis/WalletManager/WalletManager';
 import useSharedTokenMetadata from '../../hooks/useSharedTokenMetadata';
@@ -796,29 +799,46 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
 
         if (cancelled) return;
         applyInventory(utxoResult.allUtxos);
-        if (mobile && policy) {
-          // Do not hold the entire send workspace hostage to Electrum. The
-          // cached inventory is shown now; only the refresh remains active.
-          setBusy(false);
-          setNetworkRefreshing(true);
-          try {
-            const refreshed = await refreshMultisigWalletUtxos(currentWalletId);
-            if (!cancelled) {
-              applyInventory(Object.values(refreshed).flat());
-              setNetworkRefreshFailed(false);
-            }
-          } catch (refreshError) {
-            if (!cancelled) {
-              setNetworkRefreshFailed(true);
-              setError(
-                refreshError instanceof Error
-                  ? `Network refresh unavailable; showing saved multisig inventory. ${refreshError.message}`
-                  : 'Network refresh unavailable; showing saved multisig inventory.'
-              );
-            }
-          } finally {
-            if (!cancelled) setNetworkRefreshing(false);
+
+        // `fetchAllWalletUtxos` reads the database and nothing else, so what is
+        // on screen at this point is a cache. It used to be the *only* thing
+        // this screen had on desktop: the refresh below was gated on
+        // `mobile && policy`, so a desktop watch-only wallet whose cache was
+        // empty or stale showed no coins, could not build a spend, and offered
+        // no way to fix it from here. `refreshActiveWalletUtxos` does not help
+        // -- it is scoped to the Redux-active mnemonic wallet, which a
+        // watch-only wallet never is.
+        //
+        // Both surfaces refresh now, each through its own route-scoped path.
+        // The failure stays non-fatal on purpose: the cached inventory is
+        // already drawn, and a signer that is offline should still be able to
+        // look at what it has.
+        setBusy(false);
+        setNetworkRefreshing(true);
+        try {
+          const refreshed =
+            policy && mobile
+              ? await refreshMultisigWalletUtxos(currentWalletId)
+              : await refreshWatchOnlyWalletUtxos(
+                  currentWalletId,
+                  currentNetwork
+                );
+          if (!cancelled) {
+            applyInventory(Object.values(refreshed).flat());
+            setNetworkRefreshFailed(false);
           }
+        } catch (refreshError) {
+          if (!cancelled) {
+            setNetworkRefreshFailed(true);
+            const saved = policy ? 'saved multisig inventory' : 'saved coins';
+            setError(
+              refreshError instanceof Error
+                ? `Network refresh unavailable; showing ${saved}. ${refreshError.message}`
+                : `Network refresh unavailable; showing ${saved}.`
+            );
+          }
+        } finally {
+          if (!cancelled) setNetworkRefreshing(false);
         }
       } catch (err) {
         if (!cancelled) {

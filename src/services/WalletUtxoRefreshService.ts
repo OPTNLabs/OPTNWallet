@@ -15,6 +15,8 @@ import {
   runWalletUtxoRefreshExclusive,
 } from './RefreshCoordinator';
 import UTXOService from './UTXOService';
+import type { Network } from '../state/slices/networkSlice';
+import UTXOManager from '../apis/UTXOManager/UTXOManager';
 import {
   cacheWalletUtxoSnapshot,
   getCachedWalletUtxoSnapshot,
@@ -302,6 +304,43 @@ export async function refreshActiveWalletUtxos(
   walletId: number
 ): Promise<boolean> {
   return (await reconcileActiveWalletUtxos(walletId)) !== null;
+}
+
+/**
+ * Refresh a watch-only wallet's coins without changing the active wallet.
+ *
+ * The same gap `refreshMultisigWalletUtxos` fills, for the other half of the
+ * watch-only screen. `refreshActiveWalletUtxos` is scoped to the Redux-active
+ * *mnemonic* wallet, and a watch-only wallet is never that — so a single-sig
+ * watch-only workspace had no route-scoped refresh at all. Its coins came from
+ * `fetchAllWalletUtxos`, which reads the database and nothing else, so a wallet
+ * whose cache was empty or stale showed no coins and could not build a spend,
+ * with no way to fix it from that screen.
+ *
+ * `discover: false` because the addresses are already materialised by the
+ * watch-only import; this refreshes what is known rather than widening the gap
+ * window. `force: true` because the point of pressing refresh is to distrust
+ * the cache.
+ */
+export async function refreshWatchOnlyWalletUtxos(
+  walletId: number,
+  network: Network
+): Promise<Record<string, UTXO[]>> {
+  return await runWalletUtxoRefreshExclusive(walletId, async () => {
+    const manager = await UTXOManager();
+    // `fetchAddressesByWalletId` returns rows, not strings; the database path
+    // takes the rows and the network path takes the addresses.
+    const rows = await manager.fetchAddressesByWalletId(walletId);
+    const addresses = rows.map((row) => row.address).filter(Boolean);
+    if (!addresses.length) return {};
+
+    return await UTXOService.fetchAndStoreUTXOsMany(walletId, addresses, {
+      discover: false,
+      force: true,
+      network,
+      chainAuthoritative: true,
+    });
+  });
 }
 
 /**
