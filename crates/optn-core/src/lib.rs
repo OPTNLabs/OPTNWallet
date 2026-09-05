@@ -19,6 +19,7 @@ pub mod conformance;
 pub mod discovery;
 pub mod endpoint;
 pub mod error;
+pub mod fee;
 pub mod flipstarter;
 pub mod fundme;
 pub mod fusion;
