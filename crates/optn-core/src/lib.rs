@@ -23,6 +23,7 @@ pub mod flipstarter;
 pub mod fundme;
 pub mod fusion;
 pub mod hd;
+pub mod header_hash;
 pub mod header_mmr;
 pub mod multisig;
 pub mod multisig_session;
