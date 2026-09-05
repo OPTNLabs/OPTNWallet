@@ -24,15 +24,17 @@ pub enum ChainOperation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChainRequest {
     WalletRefresh {
-        /// Provider-neutral wallet interests. Adapters may transform these into
-        /// bloom items, compact-filter matches, or Electrum script hashes.
         interests: Vec<Vec<u8>>,
         from_height: Option<u32>,
     },
     TransactionLookup { txid: Hash32 },
     Broadcast { raw_tx: Vec<u8>, txid: Hash32 },
     HeaderSync { start_height: u32, count: u32 },
-    HistoricalHeaderProof { height: u32 },
+    HistoricalHeaderProof {
+        height: u32,
+        /// The checkpoint/root height the proof must target.
+        checkpoint_height: u32,
+    },
 }
 
 impl ChainRequest {
@@ -56,8 +58,6 @@ pub struct ChainTip {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObservedTransaction {
     pub txid: Hash32,
-    /// Keep raw bytes so transaction parsing/validation remains in Rust core;
-    /// never accept a provider-normalized balance as wallet truth.
     pub raw: Vec<u8>,
     pub block_height: Option<u32>,
 }
@@ -76,16 +76,17 @@ pub enum ChainPayload {
     },
     HistoricalHeaderProof {
         height: u32,
+        checkpoint_height: u32,
         header: [u8; 80],
         siblings: Vec<Hash32>,
+        /// Internal digest-byte order used by the MMR verifier.
+        root: Hash32,
     },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackendObservation {
     pub payload: ChainPayload,
-    /// The strongest evidence this response establishes. Additional weaker
-    /// facts may be inferred by reconciliation, but are not provider votes.
     pub evidence: Evidence,
     pub chain_tip: Option<(u32, Hash32)>,
 }
@@ -100,9 +101,6 @@ pub enum ChainBackendError {
     Rejected(String),
 }
 
-/// Concrete Electrum, BIP37, Neutrino, and trusted BCHN RPC adapters implement
-/// this trait. ZMQ remains a separate event source and wakes this service to
-/// retrieve/verify data instead of directly mutating wallet state.
 pub trait ChainBackend: Send + Sync {
     fn source_id(&self) -> &SourceId;
     fn protocol(&self) -> ProtocolFamily;
@@ -149,15 +147,11 @@ impl ProviderRegistry {
             .filter(|provider| provider.supports(operation))
             .filter(|provider| !matches!(provider.health(), ProviderHealth::Offline))
             .collect::<Vec<_>>();
-
         providers.sort_by_key(|provider| operation_protocol_rank(operation, provider.protocol()));
         providers
     }
 }
 
-/// Owns provider selection and bounded failover. The caller reconciles the
-/// returned observation into authoritative state; this service never performs
-/// destructive balance replacement itself.
 pub struct ChainService {
     catalog: SourceCatalog,
     policy: ConnectionPolicy,
@@ -206,7 +200,6 @@ impl ChainService {
             .chain(plan.fallback.iter())
             .cloned()
             .collect::<Vec<_>>();
-
         if candidates.is_empty() {
             return Err(ChainServiceError::NoEligibleProvider);
         }
@@ -225,7 +218,6 @@ impl ChainService {
                 ) {
                     continue;
                 }
-
                 match provider.execute(request).await {
                     Ok(observation) => {
                         self.health_overrides.insert(key, ProviderHealth::Healthy);
@@ -264,8 +256,6 @@ impl ChainService {
 
 fn operation_protocol_rank(operation: ChainOperation, protocol: ProtocolFamily) -> u8 {
     match operation {
-        // Privacy/single-protocol policies remove disallowed transports before
-        // these Auto-mode preferences are considered.
         ChainOperation::WalletRefresh => match protocol {
             ProtocolFamily::Electrum => 0,
             ProtocolFamily::BchnRpc => 1,
@@ -318,18 +308,10 @@ mod tests {
     }
 
     impl ChainBackend for MockBackend {
-        fn source_id(&self) -> &SourceId {
-            &self.id
-        }
-        fn protocol(&self) -> ProtocolFamily {
-            self.protocol
-        }
-        fn capabilities(&self) -> &CapabilitySet {
-            &self.capabilities
-        }
-        fn health(&self) -> ProviderHealth {
-            self.health
-        }
+        fn source_id(&self) -> &SourceId { &self.id }
+        fn protocol(&self) -> ProtocolFamily { self.protocol }
+        fn capabilities(&self) -> &CapabilitySet { &self.capabilities }
+        fn health(&self) -> ProviderHealth { self.health }
         fn supports(&self, operation: ChainOperation) -> bool {
             self.capabilities.is_usable(operation_capability(operation))
         }
@@ -410,8 +392,7 @@ mod tests {
         let policy = ConnectionPolicy {
             protocols: crate::chain::ProtocolSet::only(ProtocolFamily::Electrum),
             primary_scope: SourceScope::Explicit(BTreeSet::from([
-                SourceId::new("a"),
-                SourceId::new("b"),
+                SourceId::new("a"), SourceId::new("b"),
             ])),
             fallback_scope: None,
             preferred: vec![SourceId::new("a"), SourceId::new("b")],
@@ -419,15 +400,10 @@ mod tests {
         let mut service = ChainService::new(catalog, policy);
         service.register(backend("a", Err(ChainBackendError::Timeout)));
         service.register(backend("b", Ok(success([7; 32]))));
-
         let observation = service
-            .execute(&ChainRequest::Broadcast {
-                raw_tx: vec![1, 2, 3],
-                txid: [7; 32],
-            })
+            .execute(&ChainRequest::Broadcast { raw_tx: vec![1, 2, 3], txid: [7; 32] })
             .await
             .unwrap();
-
         assert_eq!(observation.source, SourceId::new("b"));
         assert_eq!(observation.value, ChainPayload::BroadcastObserved { txid: [7; 32] });
     }
@@ -441,12 +417,8 @@ mod tests {
         let mut service = ChainService::new(catalog, policy);
         service.register(backend("selected", Err(ChainBackendError::Offline)));
         service.register(backend("outside", Ok(success([9; 32]))));
-
         let error = service
-            .execute(&ChainRequest::Broadcast {
-                raw_tx: vec![1],
-                txid: [9; 32],
-            })
+            .execute(&ChainRequest::Broadcast { raw_tx: vec![1], txid: [9; 32] })
             .await
             .unwrap_err();
         match error {
