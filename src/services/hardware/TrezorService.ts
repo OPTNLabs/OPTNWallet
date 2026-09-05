@@ -125,12 +125,17 @@ export async function trezorSignTransaction(
   void inputs;
   void outputs;
   if (isDesktopPlatform()) {
-    // Full SignTx multi-round (TxRequest) is large; keep Connect-web parity via
-    // a clear error until the interactive SignTx loop is wired. Connect path
-    // remains for browser. Desktop users can still load xpub / verify address.
+    // Full SignTx multi-round (TxRequest) is large and not wired yet. This
+    // used to tell people to sign in the browser instead, which stopped being
+    // true when @trezor/connect-web was removed -- the browser path throws on
+    // the next line. Naming a route that does not exist is worse than naming
+    // none, so the message now offers only what actually works.
     throw new Error(
-      'Desktop native Trezor signing (SignTx multi-round) is next. ' +
-        'Connect and xpub already use native USB. Use the browser build for signing until then, or continue with software/watch-only.'
+      'Trezor signing is not available yet: the desktop multi-round SignTx ' +
+        'flow is still being written, and there is no browser transport since ' +
+        '@trezor/connect-web was removed for security advisories. Connect and ' +
+        'account export do work over native USB. To spend today, use a ' +
+        'software wallet, or a watch-only wallet with an air-gapped signer.'
     );
   }
 
