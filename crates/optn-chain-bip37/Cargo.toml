@@ -1,0 +1,14 @@
+[package]
+name = "optn-chain-bip37"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Portable BCH P2P/BIP37 chain provider for OPTN Wallet"
+
+[dependencies]
+optn-core = { path = "../optn-core" }
+optn-runtime = { path = "../optn-runtime" }
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+tokio = { version = "1", features = ["io-util", "net", "rt", "sync", "time"] }
+tokio-socks = "0.5"

@@ -3,6 +3,7 @@ resolver = "2"
 members = [
   "crates/optn-app",
   "crates/optn-chain-bchn",
+  "crates/optn-chain-bip37",
   "crates/optn-chain-electrum",
   "crates/optn-chain-zmq",
   # #65's deterministic multisig core. A member rather than an exclusion:
@@ -30,6 +31,7 @@ exclude = [
 default-members = [
   "crates/optn-app",
   "crates/optn-chain-bchn",
+  "crates/optn-chain-bip37",
   "crates/optn-chain-electrum",
   "crates/optn-chain-zmq",
   "crates/optn-platform",
