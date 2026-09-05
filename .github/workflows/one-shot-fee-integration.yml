@@ -22,32 +22,36 @@ jobs:
       - name: Install wasm target
         run: rustup target add wasm32-unknown-unknown
 
-      - name: Apply exact app and UI source patch
-        run: python .github/scripts/apply_fee_integration.py
+      - name: Write permanent app, transport, and UI integration
+        run: python .github/scripts/finalize_fee_sources.py
 
-      - name: Apply exact transport source patch
-        run: python .github/scripts/apply_fee_transport.py
-
-      - name: Format patched Rust
+      - name: Format product Rust
         run: cargo fmt --all
 
-      - name: Test application fee state
+      - name: Validate application state and spend policy
         run: cargo test -p optn-app --lib
 
-      - name: Test transport fee round trips
+      - name: Validate wire round trips
         run: cargo test -p optn-transport --lib
 
-      - name: Check Leptos settings target
+      - name: Validate Leptos settings target
         run: cargo check -p optn-ui --target wasm32-unknown-unknown
+
+      - name: Validate full Rust workspace
+        run: cargo test --workspace --all-targets
 
       - name: Ensure clean patch syntax
         run: git diff --check
 
-      - name: Commit only validated product changes
+      - name: Commit only validated permanent product changes
         run: |
-          git rm .github/workflows/one-shot-fee-integration.yml .github/scripts/apply_fee_integration.py .github/scripts/apply_fee_transport.py
+          git rm .github/workflows/one-shot-fee-integration.yml \
+            .github/scripts/apply_fee_integration.py \
+            .github/scripts/apply_fee_transport.py \
+            .github/scripts/finalize_fee_sources.py
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add crates/optn-app/src/lib.rs crates/optn-transport/src/lib.rs crates/optn-ui/src/settings.rs
-          git commit -m "feat(app): wire fee preferences end to end"
+          git add crates/optn-app/src/lib.rs crates/optn-app/src/servers.rs \
+            crates/optn-transport/src/lib.rs crates/optn-ui/src/settings.rs
+          git commit -m "feat(app): wire fee policy and source-oriented settings end to end"
           git push origin HEAD:agent/rpa-shared-vectors
