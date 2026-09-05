@@ -1,42 +1,17 @@
-//! Settings → Network: choosing one, resyncing, and what is coming.
+//! Settings → Network: network choice plus issue #75 source-policy view models.
 //!
-//! Ported from `NetworkSettings.tsx`, including its exact copy. Two things
-//! about the shape are deliberate:
-//!
-//! **Planned networks are a different type from selectable ones.** Testnet3,
-//! Testnet4 and Regtest are listed so the roadmap is visible, but they are
-//! [`PlannedNetwork`], not [`Network`]. A renderer cannot pass one to
-//! `SetNetwork` because it would not typecheck — the disabled state is a
-//! consequence of the type rather than a flag someone has to remember to
-//! honour. The React version relies on `aria-disabled` and a CSS class, which
-//! is one forgotten conditional away from switching to a network the wallet
-//! cannot talk to.
-//!
-//! **Switching is destructive and says so.** The description is carried
-//! verbatim because it is a warning, not decoration: switching clears the
-//! active network records, derives the network path, and resynchronises
-//! addresses.
+//! The renderer receives typed rows/actions. It does not own source selection,
+//! health, failover, or persistence; those remain in `optn-runtime`.
 
 use crate::Network;
 
-/// The warning shown above the list. Verbatim from `settingsNetwork.description`.
 pub const NETWORK_DESCRIPTION: &str = "Switching networks clears the active network records, \
      derives the network path, and resynchronizes receive/change addresses. \
      Custom paths are preserved across network changes.";
-
-/// `settingsNetwork.reload`.
 pub const RELOAD_LABEL: &str = "Reload and resync current wallet";
-/// `settingsNetwork.reloading`.
 pub const RELOADING_LABEL: &str = "Reloading wallet…";
-/// `settingsNetwork.comingSoon`.
 pub const COMING_SOON_LABEL: &str = "Coming soon";
 
-/// A network the wallet intends to support but cannot yet reach.
-///
-/// Deliberately not a [`Network`]. Adding one here makes it appear in the UI
-/// as a disabled row; it becomes selectable only by moving it into `Network`,
-/// which forces the Electrum endpoints and address parsing to be handled at
-/// the same time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum PlannedNetwork {
     Testnet3,
@@ -56,7 +31,6 @@ impl PlannedNetwork {
     }
 }
 
-/// A network that can actually be selected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NetworkOption {
     pub network: Network,
@@ -65,16 +39,12 @@ pub struct NetworkOption {
     pub active: bool,
 }
 
-/// Everything the Network settings screen needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetworkSettingsViewModel {
     pub description: &'static str,
     pub available: Vec<NetworkOption>,
-    /// Present so the roadmap is visible, and unselectable by type.
     pub coming_soon: &'static [PlannedNetwork],
-    /// A switch or a resync is in flight.
     pub busy: bool,
-    /// Label for the resync control, which changes while it runs.
     pub reload_label: &'static str,
 }
 
@@ -110,6 +80,128 @@ pub fn network_settings_view_model(active: Network, busy: bool) -> NetworkSettin
     }
 }
 
+// ---------------------------------------------------------------------------
+// Issue #75 advanced source selection. These are UI/application vocabulary;
+// runtime types are intentionally not imported here to preserve dependency flow.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceOriginView {
+    Bootstrap,
+    UserAdded,
+    MyInfrastructure,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceDispositionView {
+    Enabled,
+    Disabled,
+    Banned,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapabilityConfidenceView {
+    Unknown,
+    Advertised,
+    Verified,
+    Rejected,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChainProtocolView {
+    FulcrumElectrum,
+    Bip37,
+    Neutrino,
+    BchnRpc,
+    BchnZmq,
+}
+
+impl ChainProtocolView {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::FulcrumElectrum => "Fulcrum / Electrum",
+            Self::Bip37 => "BIP37",
+            Self::Neutrino => "Neutrino",
+            Self::BchnRpc => "BCHN RPC",
+            Self::BchnZmq => "BCHN ZMQ",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapabilityBadgeView {
+    pub protocol: ChainProtocolView,
+    pub confidence: CapabilityConfidenceView,
+    /// Human-readable provenance such as `NODE_BLOOM`, `SFNodeCF`,
+    /// `server.features`, or `active probe`.
+    pub provenance: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetworkSourceRow {
+    pub id: String,
+    pub label: String,
+    pub endpoint_summary: String,
+    pub origin: SourceOriginView,
+    pub disposition: SourceDispositionView,
+    pub capabilities: Vec<CapabilityBadgeView>,
+    pub preferred_rank: Option<usize>,
+    pub latency_ms: Option<u32>,
+    pub height: Option<u32>,
+    pub removable: bool,
+}
+
+impl NetworkSourceRow {
+    /// Bootstrap sources are policy-controlled, not user-deletable. User-added
+    /// and own-infrastructure records are removable because the user created them.
+    pub const fn expected_removable(origin: SourceOriginView) -> bool {
+        !matches!(origin, SourceOriginView::Bootstrap)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SourceScopeView {
+    AllEnabled,
+    PublicEnabled,
+    MyInfrastructure,
+    Selected(Vec<String>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnectionPolicyView {
+    pub protocols: Vec<ChainProtocolView>,
+    pub primary_scope: SourceScopeView,
+    pub fallback_scope: Option<SourceScopeView>,
+    pub preferred: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetworkSourcesViewModel {
+    pub policy: ConnectionPolicyView,
+    pub sources: Vec<NetworkSourceRow>,
+    /// True while runtime is probing/refreshing capabilities. Existing rows stay
+    /// visible instead of disappearing and looking like an empty configuration.
+    pub refreshing: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NetworkSourceIntent {
+    AddPublicSource,
+    AddInfrastructure,
+    SetDisposition {
+        source_id: String,
+        disposition: SourceDispositionView,
+    },
+    RemoveUserSource { source_id: String },
+    SetPreferredOrder(Vec<String>),
+    SetProtocols(Vec<ChainProtocolView>),
+    SetPrimaryScope(SourceScopeView),
+    SetFallbackScope(Option<SourceScopeView>),
+    ResetBootstrapDispositions,
+    ExportNetworkConfiguration,
+    ImportNetworkConfiguration,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,12 +211,8 @@ mod tests {
         let vm = network_settings_view_model(Network::Mainnet, false);
         assert_eq!(
             vm.coming_soon.iter().map(|n| n.label()).collect::<Vec<_>>(),
-            vec!["Testnet3", "Testnet4", "Regtest"],
-            "the roadmap stays visible rather than being hidden"
+            vec!["Testnet3", "Testnet4", "Regtest"]
         );
-        // The guarantee: a planned network is not a Network, so no renderer
-        // can hand one to SetNetwork. The disabled state is the type, not a
-        // flag someone has to remember.
         assert_eq!(vm.available.len(), 2);
         assert!(vm
             .available
@@ -149,12 +237,10 @@ mod tests {
     #[test]
     fn the_copy_matches_the_screen_it_was_ported_from() {
         let vm = network_settings_view_model(Network::Chipnet, false);
-        // A warning, not decoration: switching is destructive.
         assert!(vm.description.contains("clears the active network records"));
         assert!(vm.description.contains("Custom paths are preserved"));
         assert_eq!(vm.reload_label, "Reload and resync current wallet");
         assert_eq!(COMING_SOON_LABEL, "Coming soon");
-
         assert_eq!(vm.available[0].description, "Live BCH network — real funds");
         assert_eq!(
             vm.available[1].description,
@@ -169,5 +255,24 @@ mod tests {
             RELOADING_LABEL
         );
         assert!(network_settings_view_model(Network::Mainnet, true).busy);
+    }
+
+    #[test]
+    fn source_lifecycle_matches_issue_75() {
+        assert!(!NetworkSourceRow::expected_removable(SourceOriginView::Bootstrap));
+        assert!(NetworkSourceRow::expected_removable(SourceOriginView::UserAdded));
+        assert!(NetworkSourceRow::expected_removable(SourceOriginView::MyInfrastructure));
+    }
+
+    #[test]
+    fn selected_one_and_selected_many_share_the_same_scope_type() {
+        assert_eq!(
+            SourceScopeView::Selected(vec!["a".into()]),
+            SourceScopeView::Selected(vec!["a".into()])
+        );
+        assert_ne!(
+            SourceScopeView::Selected(vec!["a".into()]),
+            SourceScopeView::Selected(vec!["a".into(), "b".into()])
+        );
     }
 }
