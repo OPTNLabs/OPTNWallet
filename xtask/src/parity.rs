@@ -174,11 +174,23 @@ fn verdict(feature: &Feature, platform: &str) -> Result<Verdict, String> {
     }
 }
 
+/// Evidence kinds that must name something a reader can open.
+///
+/// `unit` is in this list, and it was the last one added. For a long time the
+/// check covered only the packaged kinds, on the reasoning that a unit test is
+/// cheap and nobody would claim one falsely. Ninety-two cells claimed `unit`
+/// with no reference at all, and one of them -- `spv` -- had no implementation
+/// in any of the fourteen crates and no test in the TypeScript app either. The
+/// claim was not a shortcut; it was wrong, and nothing could see it.
+///
+/// `none` and `hidden` are absent deliberately: both say there is nothing to
+/// point at, which is a claim that checks itself.
+const EVIDENCE_NEEDING_REFS: &[&str] = &["unit", "e2e", "device", "e2e-declared"];
+
 fn collect_ref_failures(root: &Path, feature: &Feature, failures: &mut Vec<String>) {
     for platform in PLATFORMS {
         let evidence = feature.evidence.get(*platform).map(String::as_str);
-        if evidence != Some("e2e") && evidence != Some("device") && evidence != Some("e2e-declared")
-        {
+        if !evidence.is_some_and(|kind| EVIDENCE_NEEDING_REFS.contains(&kind)) {
             continue;
         }
         let Some(reference) = feature.evidence_refs.get(*platform) else {
@@ -413,5 +425,64 @@ mod tests {
             verdict(&feature("pass", "none", None), "android"),
             Ok(Verdict::Fail)
         );
+    }
+
+    #[test]
+    fn a_unit_claim_must_name_a_test_that_exists() {
+        // The check used to skip `unit` entirely, and 92 cells claimed it with
+        // nothing to open. One of them named a feature with no implementation
+        // in any crate. These three cases are what that hole looked like.
+        let root = Path::new(".");
+
+        let mut failures = Vec::new();
+        collect_ref_failures(
+            &root.join("nowhere"),
+            &feature("pass", "unit", None),
+            &mut failures,
+        );
+        assert_eq!(
+            failures.len(),
+            1,
+            "a unit claim with no evidence_refs must fail: {failures:?}"
+        );
+        assert!(
+            failures[0].contains("without evidence_refs"),
+            "{failures:?}"
+        );
+
+        let mut named = feature("pass", "unit", None);
+        named.evidence_refs.insert(
+            "android".into(),
+            "crates/optn-core/src/no-such-file.rs".into(),
+        );
+        let mut failures = Vec::new();
+        collect_ref_failures(root, &named, &mut failures);
+        assert_eq!(failures.len(), 1, "a path that does not exist must fail");
+        assert!(failures[0].contains("path is missing"), "{failures:?}");
+
+        // And a real file whose named test is not in it -- the failure mode a
+        // renamed or deleted test produces, which is the one most likely to
+        // happen quietly.
+        //
+        // Two traps here, both of which this test fell into before it worked.
+        //
+        // The file must be one that cannot contain the token by accident.
+        // Pointing at `parity.rs` looked natural and passed for the wrong
+        // reason: writing the "missing" name here put it *in* the file being
+        // searched, so `contains` found it and the guard stayed silent.
+        //
+        // And it must resolve from `cargo test`'s working directory, which is
+        // the package root -- `xtask/`, not the repository. So this is
+        // `Cargo.toml`, meaning `xtask/Cargo.toml`: a real file that exists and
+        // a manifest that cannot hold a Rust test name.
+        let mut stale = feature("pass", "unit", None);
+        stale.evidence_refs.insert(
+            "android".into(),
+            "Cargo.toml::a_test_name_that_was_never_here".into(),
+        );
+        let mut failures = Vec::new();
+        collect_ref_failures(root, &stale, &mut failures);
+        assert_eq!(failures.len(), 1, "a stale token must fail");
+        assert!(failures[0].contains("not found in"), "{failures:?}");
     }
 }
