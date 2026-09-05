@@ -250,14 +250,28 @@ impl FeatureFlags {
         }
     }
 
+    /// Whether this flag is on here, given the surface's default and any
+    /// explicit choice made over it.
+    ///
+    /// Hardware is **hidden on a phone, not forbidden**. Everything behind it
+    /// ships: the transports are described per device, the integrations are
+    /// listed per surface, and a Keystone is reached by camera, which a phone
+    /// has. What is missing is a native plugin for the cabled devices, so the
+    /// *default* is off -- and a default is something an explicit choice
+    /// overrides. Switching it on reveals exactly the devices that surface can
+    /// actually drive, which on a phone today is the air-gapped one.
+    ///
+    /// The other two clamp instead, and for a reason rather than by symmetry.
+    /// CashFusion needs a long-lived background process a phone shell does not
+    /// have, so turning it on could not make it work. Watch Only is already
+    /// allowed on every surface, so it has no hidden state to reveal. Only
+    /// hardware has somewhere to go when it is switched on.
     pub fn enabled(self, surface: AppSurface, flag: FeatureFlag) -> bool {
-        if !Self::surface_allows(surface, flag) {
-            return false;
-        }
+        let surface_default = Self::surface_allows(surface, flag);
         match flag {
-            FeatureFlag::CashFusion => self.cash_fusion.unwrap_or(true),
-            FeatureFlag::HardwareWallet => self.hardware_wallet.unwrap_or(true),
-            FeatureFlag::WatchOnly => self.watch_only.unwrap_or(true),
+            FeatureFlag::HardwareWallet => self.hardware_wallet.unwrap_or(surface_default),
+            FeatureFlag::CashFusion => surface_default && self.cash_fusion.unwrap_or(true),
+            FeatureFlag::WatchOnly => surface_default && self.watch_only.unwrap_or(true),
         }
     }
 }
@@ -793,7 +807,17 @@ impl AppState {
             }
             AppAction::SetFeatureEnabled { flag, enabled } => {
                 let next = self.features.enabled(self.surface, flag);
-                let wanted = enabled && FeatureFlags::surface_allows(self.surface, flag);
+                // Hardware is the one flag that may be switched on where the
+                // surface default is off -- otherwise the setter would store
+                // `Some(false)` for a request to turn it on, and the toggle
+                // would silently do nothing. The other two clamp, because a
+                // surface that does not allow them has no way to run them.
+                let wanted = match flag {
+                    FeatureFlag::HardwareWallet => enabled,
+                    FeatureFlag::CashFusion | FeatureFlag::WatchOnly => {
+                        enabled && FeatureFlags::surface_allows(self.surface, flag)
+                    }
+                };
                 if next == wanted {
                     return None;
                 }
@@ -2204,17 +2228,21 @@ pub const fn hardware_integration_ready(vendor: HardwareVendor, surface: AppSurf
     )
 }
 
-/// The devices to show on this surface, in the order they are listed.
+/// The devices this surface can actually drive, in the order they are listed.
 ///
-/// Three filters, and each removes something the others cannot see: the
-/// surface has to offer hardware at all, the device has to be reachable on
-/// this runtime, and the integration has to exist. A Tangem drops out on a
-/// desktop because no laptop taps a card; a Trezor drops out in a browser
-/// because the code is not written yet. Neither needs a rule naming it.
+/// Two filters, and each removes something the other cannot see: the device
+/// has to be reachable on this runtime's transports, and the integration has
+/// to exist. A Tangem drops out on a desktop because no laptop taps a card; a
+/// Trezor drops out in a browser because the code is not written yet. Neither
+/// needs a rule naming it.
+///
+/// Deliberately *not* filtered by whether hardware is switched on here. That
+/// is the flag's question and the caller's to ask -- keeping it out means this
+/// answers "what could this surface reach", so a phone whose hardware section
+/// has been switched on gets the devices it can genuinely drive rather than an
+/// empty list. Today that is the Keystone: a camera is a camera, and the
+/// air-gapped device needs no plugin the phone does not have.
 pub fn hardware_vendors_for(surface: AppSurface) -> Vec<HardwareVendor> {
-    if !surface.offers_hardware_wallet() {
-        return Vec::new();
-    }
     let support = transport_support(surface);
     HardwareVendor::OFFERED
         .iter()
@@ -2758,25 +2786,68 @@ mod tests {
     }
 
     #[test]
-    fn hardware_wallet_cannot_be_enabled_off_desktop() {
+    fn hardware_on_a_phone_is_hidden_rather_than_forbidden() {
         let mut state = AppState::default();
         assert_eq!(
             state.reduce(AppAction::SetSurface(AppSurface::Android)),
             Some(AppEvent::SurfaceChanged(AppSurface::Android))
         );
+
+        // What ships: nothing on screen, because the default is off.
         let vm = onboarding_view_model(&state);
-        assert!(!vm.show_hardware_wallet);
+        assert!(!vm.show_hardware_wallet, "off by default on a phone");
         assert!(!vm.show_cash_fusion);
         assert!(vm.show_watch_only);
 
+        // Switching it on is a real toggle, not a no-op. The setter used to
+        // clamp the value to the surface default and store `Some(false)` for
+        // a request to turn it on, so the section could never be reached.
         assert_eq!(
             state.reduce(AppAction::SetFeatureEnabled {
                 flag: FeatureFlag::HardwareWallet,
                 enabled: true,
             }),
+            Some(AppEvent::FeatureFlagChanged {
+                flag: FeatureFlag::HardwareWallet,
+                enabled: true,
+            })
+        );
+        assert_eq!(state.features.hardware_wallet, Some(true));
+        assert!(
+            onboarding_view_model(&state).show_hardware_wallet,
+            "the section appears once it is switched on"
+        );
+
+        // And it shows the device a phone can genuinely drive rather than an
+        // empty list or a lie. Keystone is reached by camera, which needs no
+        // native plugin; the cabled devices have no mobile integration yet and
+        // stay out on their own account, not because the surface hid them.
+        let devices = hardware_view_model(&state).vendors;
+        assert!(
+            devices.contains(&HardwareVendor::Keystone),
+            "a phone has a camera: {devices:?}"
+        );
+        for absent in [
+            HardwareVendor::Ledger,
+            HardwareVendor::Trezor,
+            HardwareVendor::OneKey,
+        ] {
+            assert!(
+                !devices.contains(&absent),
+                "{absent:?} has no mobile integration yet: {devices:?}"
+            );
+        }
+
+        // CashFusion is a veto and stays one: a phone shell has no long-lived
+        // background process, so switching it on could not make it work.
+        assert_eq!(
+            state.reduce(AppAction::SetFeatureEnabled {
+                flag: FeatureFlag::CashFusion,
+                enabled: true,
+            }),
             None
         );
-        assert_eq!(state.features.hardware_wallet, None);
+        assert_eq!(state.features.cash_fusion, None);
 
         state.apply(AppAction::SetSurface(AppSurface::Desktop));
         assert_eq!(
@@ -4498,14 +4569,27 @@ mod tests {
             );
         }
 
-        // The contrast that makes the rule a rule rather than a preference:
-        // hardware needs a USB transport, so it is desktop-only. The two are
-        // gated on different things, not on the same "is this a real platform"
-        // instinct.
+        // The contrast that makes the rule a rule rather than a preference.
+        // Watch Only is *allowed* everywhere, unconditionally, because it needs
+        // no transport at all. Hardware's phone default is off for a different
+        // reason and of a different kind: no native plugin is written for the
+        // cabled devices. That is missing work, not a platform limit -- an
+        // Android holds a cable, both phones have radios and NFC, and Tangem
+        // is phone-only -- which is why it is a default something can override
+        // rather than a veto. The two are gated on different things, not on
+        // the same "is this a real platform" instinct.
         for surface in [AppSurface::Android, AppSurface::Ios] {
             assert!(
                 !FeatureFlags::surface_allows(surface, FeatureFlag::HardwareWallet),
-                "{surface:?} has no device integration yet"
+                "{surface:?} defaults hardware off: no device integration yet"
+            );
+            assert!(
+                FeatureFlags {
+                    hardware_wallet: Some(true),
+                    ..FeatureFlags::default()
+                }
+                .enabled(surface, FeatureFlag::HardwareWallet),
+                "{surface:?} hides hardware rather than forbidding it"
             );
             assert!(
                 surface.offers_watch_only(),

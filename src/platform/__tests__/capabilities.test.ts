@@ -18,6 +18,7 @@ import {
   currentSurface,
   hasCapability,
   offersWatchOnly,
+  setCapabilityOverride,
   type Capability,
   type Surface,
 } from '../capabilities';
@@ -161,6 +162,59 @@ describe('cross-platform capability contract', () => {
     expect(hasCapability('hardwareWallet', 'android')).toBe(false);
     expect(hasCapability('cashFusion', 'desktop')).toBe(true);
     expect(hasCapability('cashFusion', 'android')).toBe(false);
+  });
+
+  it('hides hardware on a phone rather than forbidding it', () => {
+    // What ships. Nothing on screen, because the default is off -- no native
+    // plugin exists for the cabled devices yet.
+    expect(hasCapability('hardwareWallet', 'android')).toBe(false);
+    expect(hasCapability('hardwareWallet', 'ios')).toBe(false);
+
+    // Switching it on is a real toggle. The table value is a default, so an
+    // explicit choice wins over it and the section becomes reachable.
+    setCapabilityOverride('hardwareWallet', true);
+    expect(hasCapability('hardwareWallet', 'android')).toBe(true);
+    expect(hasCapability('hardwareWallet', 'ios')).toBe(true);
+    expect(capabilityAbsence('hardwareWallet', 'android')).toBeNull();
+
+    // And it goes back. `null` is "use the default", not "off".
+    setCapabilityOverride('hardwareWallet', null);
+    expect(hasCapability('hardwareWallet', 'android')).toBe(false);
+  });
+
+  it('does not let the override reach a capability that is a veto', () => {
+    // CashFusion needs a long-lived background process a phone shell does not
+    // have, so turning it on could not make it work. Watch Only is already on
+    // everywhere and has nothing hidden to reveal. Neither is overridable, and
+    // asking anyway must not change what the app reports.
+    setCapabilityOverride('cashFusion', true);
+    setCapabilityOverride('watchOnlyWallet', false);
+    expect(hasCapability('cashFusion', 'android')).toBe(false);
+    expect(hasCapability('watchOnlyWallet', 'android')).toBe(true);
+  });
+
+  it('treats unreadable storage as no override rather than throwing', () => {
+    // A private window, an extension worker, or a browser set to block site
+    // data makes this throw outright. A capability check that throws would
+    // take the landing page with it.
+    const original = globalThis.localStorage;
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      get() {
+        throw new Error('site data blocked');
+      },
+    });
+    try {
+      expect(hasCapability('hardwareWallet', 'desktop')).toBe(true);
+      expect(hasCapability('hardwareWallet', 'android')).toBe(false);
+      expect(() => setCapabilityOverride('hardwareWallet', true)).not.toThrow();
+    } finally {
+      Object.defineProperty(globalThis, 'localStorage', {
+        configurable: true,
+        writable: true,
+        value: original,
+      });
+    }
   });
 
   it('declares only known surfaces and never declares a dead capability', () => {
