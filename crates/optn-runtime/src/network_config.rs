@@ -1,28 +1,24 @@
 //! Durable network-configuration overlay for OPTN's multi-source chain runtime.
 //!
-//! Canonical design: https://github.com/OPTNLabs/OPTNWallet/issues/75
-//!
 //! The shipped/bootstrap catalog is versioned independently from user choices.
-//! Updating the application may replace the bootstrap base, but must never erase
-//! user-added sources, own-infrastructure groups, bans/disables, preferred order,
-//! protocol filters, or fallback boundaries.
+//! Application updates may replace that base, but must not erase user-added
+//! sources, own-infrastructure groups, bans/disables, preferred order, protocol
+//! filters, fallback boundaries, or explorer preference.
 
 use crate::chain::{
-    CatalogError, ChainSource, ConnectionPolicy, Endpoint, SourceCatalog, SourceDisposition, SourceId,
+    CapabilitySet, CatalogError, ChainSource, ConnectionPolicy, Endpoint, EndpointKind,
+    ProtocolFamily, ProtocolSet, SourceCatalog, SourceDisposition, SourceId, SourceOrigin,
+    SourceScope,
 };
-use std::collections::BTreeMap;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 
-/// Increment when the persisted *shape* changes, not when bootstrap nodes change.
 pub const NETWORK_CONFIG_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserNetworkOverlay {
-    /// Public/custom endpoints or grouped own infrastructure entered by the user.
-    /// Bootstrap sources never belong here.
     pub user_sources: Vec<ChainSource>,
-    /// Durable user decisions about bootstrap sources. These survive catalog refreshes.
     pub bootstrap_overrides: BTreeMap<SourceId, SourceDisposition>,
-    /// Protocol filter + primary/fallback scopes + preference order.
     pub connection_policy: ConnectionPolicy,
     /// Optional self-hosted explorer endpoint. Navigation only; never chain truth.
     pub explorer: Option<Endpoint>,
@@ -42,8 +38,6 @@ impl Default for UserNetworkOverlay {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetworkConfigEnvelope {
     pub schema_version: u32,
-    /// Version/revision of the shipped bootstrap base last merged with this overlay.
-    /// This is provenance, not the schema version.
     pub bootstrap_catalog_version_seen: String,
     pub overlay: UserNetworkOverlay,
 }
@@ -73,11 +67,6 @@ impl From<CatalogError> for NetworkConfigError {
     }
 }
 
-/// Merge the *current* shipped bootstrap base with the durable user overlay.
-///
-/// This function intentionally returns a new catalog. Callers can persist the
-/// migrated envelope only after the complete merge/validation succeeds, making
-/// upgrade migration transactional rather than "reset to defaults on error".
 pub fn merge_bootstrap_with_user_overlay(
     bootstrap_base: &SourceCatalog,
     envelope: &NetworkConfigEnvelope,
@@ -90,34 +79,24 @@ pub fn merge_bootstrap_with_user_overlay(
     }
 
     let mut merged = bootstrap_base.clone();
-
-    // Re-apply durable bans/disables to matching bootstrap source IDs. If a
-    // maintainer removed a source from the new base, the stale override is
-    // harmless and can be garbage-collected by a later migration.
     for (id, disposition) in &envelope.overlay.bootstrap_overrides {
         if merged.get(id).is_some() {
             merged.set_disposition(id, *disposition)?;
         }
     }
-
-    // User-created sources always survive a bootstrap refresh. Duplicate stable
-    // IDs are rejected rather than silently replacing a shipped source.
     for source in &envelope.overlay.user_sources {
         merged.insert(source.clone())?;
     }
-
     Ok(merged)
 }
 
-/// Persistence port. Concrete filesystem/key-value implementations belong in a
-/// shell/platform adapter; network policy and migration do not.
+/// Persistence port. Filesystem/key-value implementations live in platform or
+/// shell adapters; migration and merge semantics remain runtime-owned.
 pub trait NetworkConfigStore: Send + Sync {
     fn load(&self) -> Result<Option<NetworkConfigEnvelope>, String>;
     fn store_atomic(&self, value: &NetworkConfigEnvelope) -> Result<(), String>;
 }
 
-/// Portable backup is deliberately only network/preferences data. Seed/private
-/// key material must never be added to this structure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PortableNetworkConfig {
     pub schema_version: u32,
@@ -133,12 +112,405 @@ impl From<&NetworkConfigEnvelope> for PortableNetworkConfig {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Stable portable JSON. Runtime types intentionally do not derive Serialize:
+// capability/health observations are ephemeral and must be re-probed after a
+// restore. Only user intent/endpoints are persisted.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NetworkConfigCodecError {
+    Json(String),
+    UnsupportedSchema { found: u32, current: u32 },
+    InvalidUserSourceOrigin,
+    InvalidEndpoint(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredEnvelope {
+    schema_version: u32,
+    bootstrap_catalog_version_seen: String,
+    overlay: StoredOverlay,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredPortable {
+    schema_version: u32,
+    overlay: StoredOverlay,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredOverlay {
+    user_sources: Vec<StoredSource>,
+    bootstrap_overrides: BTreeMap<String, StoredDisposition>,
+    connection_policy: StoredPolicy,
+    explorer: Option<StoredEndpoint>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredSource {
+    id: String,
+    label: String,
+    origin: StoredUserOrigin,
+    endpoints: Vec<StoredEndpoint>,
+    disposition: StoredDisposition,
+    priority: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum StoredUserOrigin {
+    UserAdded,
+    UserInfrastructure { group: String },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StoredDisposition {
+    Enabled,
+    Disabled,
+    Banned,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredEndpoint {
+    kind: StoredEndpointKind,
+    host: String,
+    port: Option<u16>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StoredEndpointKind {
+    BchP2p,
+    ElectrumTls,
+    ElectrumTcp,
+    BchnRpc,
+    BchnZmq,
+    ExplorerHttp,
+    ExplorerHttps,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredPolicy {
+    protocols: Vec<StoredProtocol>,
+    primary_scope: StoredScope,
+    fallback_scope: Option<StoredScope>,
+    preferred: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StoredProtocol {
+    Electrum,
+    Bip37,
+    Neutrino,
+    BchnRpc,
+    BchnZmq,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum StoredScope {
+    AllEnabled,
+    PublicEnabled,
+    UserInfrastructure,
+    Explicit { source_ids: Vec<String> },
+}
+
+pub fn encode_envelope_json(value: &NetworkConfigEnvelope) -> Result<String, NetworkConfigCodecError> {
+    let stored = StoredEnvelope {
+        schema_version: value.schema_version,
+        bootstrap_catalog_version_seen: value.bootstrap_catalog_version_seen.clone(),
+        overlay: StoredOverlay::from_overlay(&value.overlay)?,
+    };
+    serde_json::to_string_pretty(&stored).map_err(|e| NetworkConfigCodecError::Json(e.to_string()))
+}
+
+pub fn decode_envelope_json(value: &str) -> Result<NetworkConfigEnvelope, NetworkConfigCodecError> {
+    let stored: StoredEnvelope =
+        serde_json::from_str(value).map_err(|e| NetworkConfigCodecError::Json(e.to_string()))?;
+    ensure_schema(stored.schema_version)?;
+    Ok(NetworkConfigEnvelope {
+        schema_version: stored.schema_version,
+        bootstrap_catalog_version_seen: stored.bootstrap_catalog_version_seen,
+        overlay: stored.overlay.into_overlay()?,
+    })
+}
+
+pub fn export_portable_json(value: &PortableNetworkConfig) -> Result<String, NetworkConfigCodecError> {
+    let stored = StoredPortable {
+        schema_version: value.schema_version,
+        overlay: StoredOverlay::from_overlay(&value.overlay)?,
+    };
+    serde_json::to_string_pretty(&stored).map_err(|e| NetworkConfigCodecError::Json(e.to_string()))
+}
+
+pub fn import_portable_json(value: &str) -> Result<PortableNetworkConfig, NetworkConfigCodecError> {
+    let stored: StoredPortable =
+        serde_json::from_str(value).map_err(|e| NetworkConfigCodecError::Json(e.to_string()))?;
+    ensure_schema(stored.schema_version)?;
+    Ok(PortableNetworkConfig {
+        schema_version: stored.schema_version,
+        overlay: stored.overlay.into_overlay()?,
+    })
+}
+
+fn ensure_schema(found: u32) -> Result<(), NetworkConfigCodecError> {
+    if found != NETWORK_CONFIG_SCHEMA_VERSION {
+        return Err(NetworkConfigCodecError::UnsupportedSchema {
+            found,
+            current: NETWORK_CONFIG_SCHEMA_VERSION,
+        });
+    }
+    Ok(())
+}
+
+impl StoredOverlay {
+    fn from_overlay(value: &UserNetworkOverlay) -> Result<Self, NetworkConfigCodecError> {
+        let user_sources = value
+            .user_sources
+            .iter()
+            .map(StoredSource::from_source)
+            .collect::<Result<Vec<_>, _>>()?;
+        let bootstrap_overrides = value
+            .bootstrap_overrides
+            .iter()
+            .map(|(id, disposition)| (id.as_str().to_owned(), (*disposition).into()))
+            .collect();
+        Ok(Self {
+            user_sources,
+            bootstrap_overrides,
+            connection_policy: StoredPolicy::from_policy(&value.connection_policy),
+            explorer: value.explorer.as_ref().map(StoredEndpoint::from_endpoint),
+        })
+    }
+
+    fn into_overlay(self) -> Result<UserNetworkOverlay, NetworkConfigCodecError> {
+        Ok(UserNetworkOverlay {
+            user_sources: self
+                .user_sources
+                .into_iter()
+                .map(StoredSource::into_source)
+                .collect::<Result<Vec<_>, _>>()?,
+            bootstrap_overrides: self
+                .bootstrap_overrides
+                .into_iter()
+                .map(|(id, disposition)| (SourceId::new(id), disposition.into()))
+                .collect(),
+            connection_policy: self.connection_policy.into_policy(),
+            explorer: self
+                .explorer
+                .map(StoredEndpoint::into_endpoint)
+                .transpose()?,
+        })
+    }
+}
+
+impl StoredSource {
+    fn from_source(value: &ChainSource) -> Result<Self, NetworkConfigCodecError> {
+        let origin = match &value.origin {
+            SourceOrigin::UserAdded => StoredUserOrigin::UserAdded,
+            SourceOrigin::UserInfrastructure { group } => StoredUserOrigin::UserInfrastructure {
+                group: group.clone(),
+            },
+            SourceOrigin::Bootstrap { .. } => {
+                return Err(NetworkConfigCodecError::InvalidUserSourceOrigin)
+            }
+        };
+        Ok(Self {
+            id: value.id.as_str().to_owned(),
+            label: value.label.clone(),
+            origin,
+            endpoints: value.endpoints.iter().map(StoredEndpoint::from_endpoint).collect(),
+            disposition: value.disposition.into(),
+            priority: value.priority,
+        })
+    }
+
+    fn into_source(self) -> Result<ChainSource, NetworkConfigCodecError> {
+        let origin = match self.origin {
+            StoredUserOrigin::UserAdded => SourceOrigin::UserAdded,
+            StoredUserOrigin::UserInfrastructure { group } => {
+                SourceOrigin::UserInfrastructure { group }
+            }
+        };
+        Ok(ChainSource {
+            id: SourceId::new(self.id),
+            label: self.label,
+            origin,
+            endpoints: self
+                .endpoints
+                .into_iter()
+                .map(StoredEndpoint::into_endpoint)
+                .collect::<Result<Vec<_>, _>>()?,
+            // Never restore stale advertised/verified capability claims. The
+            // runtime must probe the restored endpoint again.
+            capabilities: CapabilitySet::default(),
+            disposition: self.disposition.into(),
+            priority: self.priority,
+        })
+    }
+}
+
+impl StoredEndpoint {
+    fn from_endpoint(value: &Endpoint) -> Self {
+        Self {
+            kind: value.kind.into(),
+            host: value.host.clone(),
+            port: value.port,
+        }
+    }
+
+    fn into_endpoint(self) -> Result<Endpoint, NetworkConfigCodecError> {
+        if self.host.trim().is_empty() {
+            return Err(NetworkConfigCodecError::InvalidEndpoint(
+                "endpoint host must not be empty".into(),
+            ));
+        }
+        Ok(Endpoint {
+            kind: self.kind.into(),
+            host: self.host,
+            port: self.port,
+        })
+    }
+}
+
+impl StoredPolicy {
+    fn from_policy(value: &ConnectionPolicy) -> Self {
+        let all = [
+            ProtocolFamily::Electrum,
+            ProtocolFamily::Bip37,
+            ProtocolFamily::Neutrino,
+            ProtocolFamily::BchnRpc,
+            ProtocolFamily::BchnZmq,
+        ];
+        Self {
+            protocols: all
+                .into_iter()
+                .filter(|protocol| value.protocols.contains(*protocol))
+                .map(Into::into)
+                .collect(),
+            primary_scope: StoredScope::from_scope(&value.primary_scope),
+            fallback_scope: value.fallback_scope.as_ref().map(StoredScope::from_scope),
+            preferred: value.preferred.iter().map(|id| id.as_str().to_owned()).collect(),
+        }
+    }
+
+    fn into_policy(self) -> ConnectionPolicy {
+        let mut protocols = ProtocolSet::default();
+        for protocol in self.protocols {
+            protocols.insert(protocol.into());
+        }
+        ConnectionPolicy {
+            protocols,
+            primary_scope: self.primary_scope.into_scope(),
+            fallback_scope: self.fallback_scope.map(StoredScope::into_scope),
+            preferred: self.preferred.into_iter().map(SourceId::new).collect(),
+        }
+    }
+}
+
+impl StoredScope {
+    fn from_scope(value: &SourceScope) -> Self {
+        match value {
+            SourceScope::AllEnabled => Self::AllEnabled,
+            SourceScope::PublicEnabled => Self::PublicEnabled,
+            SourceScope::UserInfrastructure => Self::UserInfrastructure,
+            SourceScope::Explicit(ids) => Self::Explicit {
+                source_ids: ids.iter().map(|id| id.as_str().to_owned()).collect(),
+            },
+        }
+    }
+
+    fn into_scope(self) -> SourceScope {
+        match self {
+            Self::AllEnabled => SourceScope::AllEnabled,
+            Self::PublicEnabled => SourceScope::PublicEnabled,
+            Self::UserInfrastructure => SourceScope::UserInfrastructure,
+            Self::Explicit { source_ids } => SourceScope::Explicit(
+                source_ids.into_iter().map(SourceId::new).collect::<BTreeSet<_>>(),
+            ),
+        }
+    }
+}
+
+impl From<SourceDisposition> for StoredDisposition {
+    fn from(value: SourceDisposition) -> Self {
+        match value {
+            SourceDisposition::Enabled => Self::Enabled,
+            SourceDisposition::Disabled => Self::Disabled,
+            SourceDisposition::Banned => Self::Banned,
+        }
+    }
+}
+
+impl From<StoredDisposition> for SourceDisposition {
+    fn from(value: StoredDisposition) -> Self {
+        match value {
+            StoredDisposition::Enabled => Self::Enabled,
+            StoredDisposition::Disabled => Self::Disabled,
+            StoredDisposition::Banned => Self::Banned,
+        }
+    }
+}
+
+impl From<EndpointKind> for StoredEndpointKind {
+    fn from(value: EndpointKind) -> Self {
+        match value {
+            EndpointKind::BchP2p => Self::BchP2p,
+            EndpointKind::ElectrumTls => Self::ElectrumTls,
+            EndpointKind::ElectrumTcp => Self::ElectrumTcp,
+            EndpointKind::BchnRpc => Self::BchnRpc,
+            EndpointKind::BchnZmq => Self::BchnZmq,
+            EndpointKind::ExplorerHttp => Self::ExplorerHttp,
+            EndpointKind::ExplorerHttps => Self::ExplorerHttps,
+        }
+    }
+}
+
+impl From<StoredEndpointKind> for EndpointKind {
+    fn from(value: StoredEndpointKind) -> Self {
+        match value {
+            StoredEndpointKind::BchP2p => Self::BchP2p,
+            StoredEndpointKind::ElectrumTls => Self::ElectrumTls,
+            StoredEndpointKind::ElectrumTcp => Self::ElectrumTcp,
+            StoredEndpointKind::BchnRpc => Self::BchnRpc,
+            StoredEndpointKind::BchnZmq => Self::BchnZmq,
+            StoredEndpointKind::ExplorerHttp => Self::ExplorerHttp,
+            StoredEndpointKind::ExplorerHttps => Self::ExplorerHttps,
+        }
+    }
+}
+
+impl From<ProtocolFamily> for StoredProtocol {
+    fn from(value: ProtocolFamily) -> Self {
+        match value {
+            ProtocolFamily::Electrum => Self::Electrum,
+            ProtocolFamily::Bip37 => Self::Bip37,
+            ProtocolFamily::Neutrino => Self::Neutrino,
+            ProtocolFamily::BchnRpc => Self::BchnRpc,
+            ProtocolFamily::BchnZmq => Self::BchnZmq,
+        }
+    }
+}
+
+impl From<StoredProtocol> for ProtocolFamily {
+    fn from(value: StoredProtocol) -> Self {
+        match value {
+            StoredProtocol::Electrum => Self::Electrum,
+            StoredProtocol::Bip37 => Self::Bip37,
+            StoredProtocol::Neutrino => Self::Neutrino,
+            StoredProtocol::BchnRpc => Self::BchnRpc,
+            StoredProtocol::BchnZmq => Self::BchnZmq,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chain::{
-        BootstrapProject, CapabilitySet, ChainSource, SourceOrigin,
-    };
+    use crate::chain::{BootstrapProject, SourceOrigin};
 
     fn bootstrap(id: &str) -> ChainSource {
         ChainSource {
@@ -160,10 +532,14 @@ mod tests {
             id: SourceId::from(id),
             label: id.into(),
             origin: SourceOrigin::UserAdded,
-            endpoints: Vec::new(),
+            endpoints: vec![Endpoint {
+                kind: EndpointKind::ElectrumTls,
+                host: format!("{id}.example"),
+                port: Some(50002),
+            }],
             capabilities: CapabilitySet::default(),
             disposition: SourceDisposition::Enabled,
-            priority: 0,
+            priority: 7,
         }
     }
 
@@ -228,10 +604,43 @@ mod tests {
     }
 
     #[test]
-    fn portable_backup_contains_the_overlay_not_wallet_secrets() {
-        let envelope = NetworkConfigEnvelope::current("v1", UserNetworkOverlay::default());
+    fn json_round_trip_preserves_user_intent_but_not_ephemeral_capabilities() {
+        let mut overlay = UserNetworkOverlay::default();
+        overlay.user_sources.push(user_source("my-node"));
+        overlay.bootstrap_overrides.insert(
+            SourceId::new("public-bad"),
+            SourceDisposition::Banned,
+        );
+        overlay.connection_policy = ConnectionPolicy::exact(
+            SourceId::new("my-node"),
+            ProtocolFamily::Electrum,
+        );
+        let envelope = NetworkConfigEnvelope::current("catalog-9", overlay);
+        let json = encode_envelope_json(&envelope).unwrap();
+        let restored = decode_envelope_json(&json).unwrap();
+        assert_eq!(restored, envelope);
+        assert!(restored.overlay.user_sources[0].capabilities.claim(Capability::Broadcast).is_none());
+    }
+
+    #[test]
+    fn portable_export_contains_no_wallet_secret_fields() {
+        let mut overlay = UserNetworkOverlay::default();
+        overlay.user_sources.push(user_source("my-node"));
+        let envelope = NetworkConfigEnvelope::current("v1", overlay);
         let portable = PortableNetworkConfig::from(&envelope);
-        assert_eq!(portable.schema_version, NETWORK_CONFIG_SCHEMA_VERSION);
-        assert_eq!(portable.overlay, envelope.overlay);
+        let json = export_portable_json(&portable).unwrap();
+        assert!(!json.contains("seed"));
+        assert!(!json.contains("private_key"));
+        assert!(!json.contains("mnemonic"));
+        assert_eq!(import_portable_json(&json).unwrap(), portable);
+    }
+
+    #[test]
+    fn decoder_rejects_future_schema_instead_of_resetting() {
+        let json = r#"{"schema_version":99,"bootstrap_catalog_version_seen":"x","overlay":{"user_sources":[],"bootstrap_overrides":{},"connection_policy":{"protocols":[],"primary_scope":{"kind":"all_enabled"},"fallback_scope":null,"preferred":[]},"explorer":null}}"#;
+        assert!(matches!(
+            decode_envelope_json(json),
+            Err(NetworkConfigCodecError::UnsupportedSchema { found: 99, .. })
+        ));
     }
 }
