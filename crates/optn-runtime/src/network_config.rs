@@ -6,7 +6,7 @@
 //! filters, fallback boundaries, or explorer preference.
 
 use crate::chain::{
-    CapabilitySet, CatalogError, ChainSource, ConnectionPolicy, Endpoint, EndpointKind,
+    Capability, CapabilitySet, CatalogError, ChainSource, ConnectionPolicy, Endpoint, EndpointKind,
     ProtocolFamily, ProtocolSet, SourceCatalog, SourceDisposition, SourceId, SourceOrigin,
     SourceScope,
 };
