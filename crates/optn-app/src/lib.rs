@@ -38,6 +38,7 @@ pub use lock::{
 };
 
 pub use optn_core::coins::{Coin, CoinSet, FreezeReason, Outpoint};
+pub use optn_core::fee::{FeeRate, RELAY_MINIMUM_FEE_RATE};
 pub use optn_core::flipstarter::{
     chipnet_demo_coin, encode_campaign_blob, sample_chipnet_campaign_blob, Campaign,
     CampaignOutput, FlipstarterPledge, PledgeStatus,
@@ -50,8 +51,8 @@ pub use optn_core::hd::{
 };
 pub use optn_core::network::Network;
 pub use optn_core::spend::{
-    prepare_spend, prepare_spend_with, sign_seed_spend, SpendKind, SpendPlan, SpendingCapability,
-    SIGHASH_ALL_FORKID,
+    prepare_spend, prepare_spend_with, prepare_spend_with_fee, prepare_spend_with_fee_and_coin,
+    sign_seed_spend, SpendKind, SpendPlan, SpendingCapability, SIGHASH_ALL_FORKID,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

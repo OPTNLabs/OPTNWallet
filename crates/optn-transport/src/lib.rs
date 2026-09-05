@@ -9,10 +9,11 @@
 use optn_app::{
     parse_account_path, AppAction, AppEvent, AppLockState, AppRoute, AppState, AppSurface,
     AuthScope, AutoLockMinutes, CampaignOutput, Coin, ConnectState, CreateStep, FeatureFlag,
-    FeatureFlags, FlipstarterPledge, FreezeReason, HardwareSessionState, HardwareSetupPreview,
-    HardwareVendor, ImportStep, LedgerLink, MultisigSetupPreview, MultisigStep, Network,
-    OpenedWallet, Outpoint, PledgeStatus, ServerKind, ServerOverrides, SettingsRowId, SpendKind,
-    SpendPlan, ThemeMode, UiSkin, WalletKind, WatchOnlyKind, WatchOnlySetupPreview,
+    FeatureFlags, FeeRate, FlipstarterPledge, FreezeReason, HardwareSessionState,
+    HardwareSetupPreview, HardwareVendor, ImportStep, LedgerLink, MultisigSetupPreview,
+    MultisigStep, Network, OpenedWallet, Outpoint, PledgeStatus, ServerKind, ServerOverrides,
+    SettingsRowId, SpendKind, SpendPlan, ThemeMode, UiSkin, WalletKind, WatchOnlyKind,
+    WatchOnlySetupPreview, RELAY_MINIMUM_FEE_RATE,
 };
 pub mod host;
 pub use host::{block_on_ready, run, Renderer};
@@ -531,6 +532,13 @@ pub struct WireSpendPlan {
     pub destination: String,
     pub sighash: u8,
     pub kind: WireSpendKind,
+    /// Resolved app fee rate in satoshis per 1000 serialized bytes.
+    #[serde(default = "default_relay_fee_rate_sat_per_kb")]
+    pub fee_rate_sat_per_kb: u64,
+}
+
+fn default_relay_fee_rate_sat_per_kb() -> u64 {
+    RELAY_MINIMUM_FEE_RATE.satoshis_per_kb()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1278,6 +1286,7 @@ impl From<&SpendPlan> for WireSpendPlan {
                 SpendKind::WatchOnlyUnsignedPsbt => WireSpendKind::WatchOnlyUnsignedPsbt,
                 SpendKind::HardwareUnsignedPsbt => WireSpendKind::HardwareUnsignedPsbt,
             },
+            fee_rate_sat_per_kb: value.fee_rate.satoshis_per_kb(),
         }
     }
 }
@@ -1296,6 +1305,7 @@ impl TryFrom<WireSpendPlan> for SpendPlan {
                 WireSpendKind::WatchOnlyUnsignedPsbt => SpendKind::WatchOnlyUnsignedPsbt,
                 WireSpendKind::HardwareUnsignedPsbt => SpendKind::HardwareUnsignedPsbt,
             },
+            fee_rate: FeeRate::from_satoshis_per_kb(value.fee_rate_sat_per_kb),
         })
     }
 }
