@@ -1,0 +1,16 @@
+[package]
+name = "optn-chain-neutrino"
+version = "1.7.3"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "bchd-compatible compact-filter BCH provider for OPTN Wallet."
+
+[dependencies]
+optn-core = { path = "../optn-core", version = "=1.7.3" }
+optn-runtime = { path = "../optn-runtime", version = "=1.7.3" }
+siphasher = "1"
+tokio = { version = "1.53.1", features = ["io-util", "net", "rt", "sync", "time"] }
+tokio-socks = "0.5"
+
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["macros", "rt"] }
