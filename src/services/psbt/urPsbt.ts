@@ -22,11 +22,28 @@ import { URRegistryDecoder } from '@keystonehq/bc-ur-registry';
  * Fragment size, in bytes of the UR payload.
  *
  * Paytaca PstQrDialog e66cafa9d-era used chunkSize=50 (padding=8). SeedCash
- * cameras could read that density. Later Paytaca densified to 200/4 (and a
- * 150/4 attempt); phone cameras fail those. Extra frames only cost seconds;
- * a dense QR that will not scan fails the whole air-gap.
+ * cameras could read that density. OPTN keeps 50 as the safe default and
+ * exposes 100/200/400 as explicit user-selected densities. Extra frames only
+ * cost seconds; a dense QR that will not scan fails the whole air-gap.
  */
-export const DEFAULT_UR_FRAGMENT_LENGTH = 50;
+export const PSBT_UR_FRAGMENT_LENGTHS = [50, 100, 200, 400] as const;
+
+export type PsbtUrFragmentLength =
+  (typeof PSBT_UR_FRAGMENT_LENGTHS)[number];
+
+/**
+ * Conservative default for SeedCash camera compatibility.
+ *
+ * Users may raise the density when their signer camera can resolve it; keeping
+ * 50 as the default preserves the known-good Paytaca-era behavior.
+ */
+export const DEFAULT_UR_FRAGMENT_LENGTH: PsbtUrFragmentLength = 50;
+
+export function isPsbtUrFragmentLength(
+  value: number
+): value is PsbtUrFragmentLength {
+  return (PSBT_UR_FRAGMENT_LENGTHS as readonly number[]).includes(value);
+}
 
 /**
  * User-selectable UR fragment lengths. Lower values make larger, easier-to-scan

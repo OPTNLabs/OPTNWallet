@@ -1,0 +1,166 @@
+name: Rust quality
+
+on:
+  pull_request:
+    branches: [dev, staging, main]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'deny.toml'
+      - 'crates/**/*.rs'
+      - 'crates/**/Cargo.toml'
+      - 'fuzz/**'
+      - 'src-tauri/Cargo.toml'
+      - 'src-tauri/Cargo.lock'
+      - '.github/workflows/rust-quality.yml'
+  push:
+    branches: [dev, staging]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  nextest:
+    name: Rust nextest
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.98.0
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          workspaces: |
+            . -> target
+            crates/optn-core -> target
+
+      - name: Install cargo-nextest 0.9.143
+        run: cargo install cargo-nextest --version 0.9.143 --locked
+
+      - name: Application workspace tests
+        run: cargo nextest run --workspace --exclude optn-ui
+
+      - name: Shared protocol core tests
+        run: cargo nextest run --manifest-path crates/optn-core/Cargo.toml
+
+  dependency-policy:
+    name: Rust dependency policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.98.0
+
+      - name: Install cargo-deny 0.20.2
+        run: cargo install cargo-deny --version 0.20.2 --locked
+
+      - name: Root workspace policy
+        run: cargo deny --manifest-path Cargo.toml check advisories bans licenses sources
+
+      - name: Shared core policy
+        run: cargo deny --manifest-path crates/optn-core/Cargo.toml check advisories bans licenses sources
+
+      - name: Native Tauri policy
+        run: cargo deny --manifest-path src-tauri/Cargo.toml check advisories bans licenses sources
+
+  feature-matrix:
+    name: Rust feature and fuzz compile
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.98.0
+
+      - name: Install nightly for libFuzzer
+        run: rustup toolchain install nightly --profile minimal
+
+      - name: Install pinned cargo tools
+        run: |
+          cargo install cargo-hack --version 0.6.45 --locked
+          cargo install cargo-fuzz --version 0.13.2 --locked
+
+      - name: Application feature matrix
+        run: cargo hack check --workspace --exclude optn-ui --feature-powerset --depth 1
+
+      - name: Shared core feature matrix
+        run: cargo hack check --manifest-path crates/optn-core/Cargo.toml --feature-powerset --depth 1
+
+      - name: Compile CashAddr fuzz target
+        run: cargo +nightly fuzz build --fuzz-dir fuzz cashaddr_decode
+
+      - name: Compile RPA fuzz target
+        run: cargo +nightly fuzz build --fuzz-dir fuzz rpa_decode
+
+  coverage:
+    name: Rust coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust with LLVM tools
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.98.0
+          components: llvm-tools-preview
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          workspaces: |
+            . -> target
+            crates/optn-core -> target
+
+      - name: Install cargo-llvm-cov 0.9.0
+        run: cargo install cargo-llvm-cov --version 0.9.0 --locked
+
+      - name: Application coverage
+        run: |
+          cargo llvm-cov             --workspace             --exclude optn-ui             --exclude xtask             --lcov             --output-path coverage-app.lcov
+
+      - name: Shared core coverage
+        run: |
+          cargo llvm-cov             --manifest-path crates/optn-core/Cargo.toml             --lcov             --output-path coverage-core.lcov
+
+      - name: Application coverage summary
+        run: cargo llvm-cov report --summary-only
+
+      - name: Shared core coverage summary
+        run: cargo llvm-cov report --manifest-path crates/optn-core/Cargo.toml --summary-only
+
+      - name: Upload coverage evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: rust-coverage
+          path: |
+            coverage-app.lcov
+            coverage-core.lcov
+          if-no-files-found: error
+          retention-days: 14

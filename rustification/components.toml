@@ -1,0 +1,145 @@
+schema = 1
+
+[[component]]
+name = "shared-protocol-core"
+current = "rust"
+target = "rust"
+layer = "core"
+status = "in_progress"
+security_weight = 10
+
+[[component]]
+name = "application-state"
+current = "typescript"
+target = "rust"
+layer = "app"
+status = "started"
+security_weight = 7
+
+[[component]]
+# Optional Apple-native provider and independent BCH reference (58 Opals).
+# Blocked, with evidence, not merely unstarted: every Opal package requires
+# macOS 26 / iOS 26 while OPTN's iOS deployment target is 14.0
+# (ios/App/App.xcodeproj), so adopting one raises the product minimum by
+# twelve major versions. OpalBase additionally pulls five sibling packages by
+# `branch = "develop"`, so pinning its tag still does not give a reproducible
+# build. The contract lives in optn-platform::apple and stays unimplemented
+# until those two are resolved.
+name = "apple-provider"
+current = "none"
+target = "rust-contract-plus-swift-adapter"
+layer = "platform"
+status = "blocked"
+security_weight = 6
+
+[[component]]
+name = "platform-contracts"
+current = "mixed"
+target = "rust"
+layer = "platform"
+status = "started"
+security_weight = 8
+
+[[component]]
+name = "ui"
+current = "react-typescript"
+target = "transport-generic-leptos-rust"
+layer = "ui-adapter"
+status = "started"
+security_weight = 1
+
+[[component]]
+name = "native-shell"
+current = "tauri-desktop-capacitor-mobile"
+target = "replaceable-native-shell"
+layer = "shell-adapter"
+status = "started"
+security_weight = 6
+
+[[component]]
+name = "browser-extension"
+current = "react-typescript"
+target = "rust-wasm-ui"
+layer = "ui-adapter"
+status = "planned"
+security_weight = 5
+
+[[component]]
+name = "application-runtime"
+current = "mixed-react-hooks-typescript"
+target = "rust-actions-events-workers"
+layer = "runtime"
+status = "started"
+security_weight = 8
+
+[[component]]
+name = "application-transport"
+current = "local-wasm-direct-rust-versioned-wire"
+target = "renderer-shell-agnostic"
+layer = "transport"
+status = "started"
+security_weight = 8
+
+[[component]]
+name = "tauri-transport-adapter"
+current = "dedicated-rust-wasm-adapter"
+target = "replaceable-shell-transport-provider"
+layer = "transport-adapter"
+status = "started"
+security_weight = 7
+
+[[component]]
+name = "capability-providers"
+current = "tauri-and-direct-rust-mixed"
+target = "provider-per-capability"
+layer = "platform-provider"
+status = "started"
+security_weight = 8
+
+[[component]]
+name = "native-capability-providers"
+current = "clipboard-live-storage-notifications-opt-in"
+target = "capability-by-capability-rust-providers"
+layer = "platform-provider"
+status = "started"
+security_weight = 8
+
+[[component]]
+name = "mobile-capability-providers"
+current = "tauri-shell-plugin-adapters"
+target = "best-provider-per-capability"
+layer = "platform-provider"
+status = "started"
+security_weight = 8
+
+[[component]]
+name = "nfc-contactless"
+current = "apple-corenfc-tag-io-unavailable-without-session"
+target = "rust-protocols-thin-native-nfc-adapters"
+layer = "platform-provider"
+status = "started"
+security_weight = 8
+
+[[component]]
+name = "apple-native-provider"
+current = "typed-swiftpm-keychain-corenfc-secure-enclave-oslog"
+target = "thin-native-apple-capability-adapters-behind-optn-platform"
+layer = "platform-provider"
+status = "started"
+security_weight = 9
+
+[[component]]
+name = "apple-opal-reference"
+current = "gated-apple26-no-opalbase-unclosed-semver-v0.4.1"
+target = "closed-semver-apple-reference-then-differential-oracle"
+layer = "platform-provider"
+status = "started"
+security_weight = 8
+
+[[component]]
+name = "apple-capability-providers"
+current = "native-ffi-crate-behind-optn-platform"
+target = "optn-platform-then-swift-then-optional-opal"
+layer = "platform-provider"
+status = "started"
+security_weight = 8

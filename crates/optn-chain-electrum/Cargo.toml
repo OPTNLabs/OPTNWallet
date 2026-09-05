@@ -1,0 +1,20 @@
+[package]
+name = "optn-chain-electrum"
+version = "1.7.3"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Rust-native Electrum/Fulcrum chain provider for OPTN Wallet."
+
+[dependencies]
+optn-core = { path = "../optn-core", version = "=1.7.3" }
+optn-runtime = { path = "../optn-runtime", version = "=1.7.3" }
+hex = "0.4"
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1.53.1", features = ["net", "io-util", "time", "rt", "sync"] }
+tokio-rustls = { version = "0.26", features = ["ring"] }
+tokio-socks = "0.5"
+webpki-roots = "0.26"
+
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["macros", "rt"] }

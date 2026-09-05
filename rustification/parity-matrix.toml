@@ -1,0 +1,175 @@
+schema = 1
+# Production-ready cells are only allowed to be "pass" or "na".
+# "fail" and "pending" are computed by xtask from policy vs evidence, never authored.
+#
+# policy: pass = must work on that surface; na = deliberately unsupported
+# evidence: none | unit | e2e | e2e-declared | device | hidden
+#   hidden is valid only with policy = na
+#   e2e / device = packaged/device test is referenced and treated as proven
+#   e2e-declared = packaged E2E exists and is referenced, but a passing run
+#                  of this commit's artifact has not yet been claimed
+#   --report integrity accepts pending
+#   --production-ready requires pass+e2e/device or na+hidden
+#   A referenced test file is not proof that the current APK passed CI.
+
+platforms = [
+  "windows",
+  "linux",
+  "macos",
+  "android",
+  "ios",
+  "web",
+  "extension",
+]
+
+[[feature]]
+id = "create_wallet"
+name = "Create wallet"
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "pass", extension = "pass" }
+evidence = { windows = "e2e", linux = "e2e", macos = "unit", android = "unit", ios = "unit", web = "unit", extension = "unit" }
+evidence_refs = { windows = "e2e/specs/create-lock-reopen.spec.ts", linux = "e2e/specs/create-lock-reopen.spec.ts", macos = "crates/optn-core/src/hd.rs::a_mnemonic_derives_deterministically", android = "crates/optn-core/src/hd.rs::a_mnemonic_derives_deterministically", ios = "crates/optn-core/src/hd.rs::a_mnemonic_derives_deterministically", web = "crates/optn-core/src/hd.rs::a_mnemonic_derives_deterministically", extension = "crates/optn-core/src/hd.rs::a_mnemonic_derives_deterministically" }
+
+[[feature]]
+id = "import_seed"
+name = "Import seed"
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "pass", extension = "pass" }
+evidence = { windows = "e2e", linux = "e2e", macos = "unit", android = "unit", ios = "unit", web = "unit", extension = "unit" }
+evidence_refs = { windows = "e2e/specs/onboarding-navigation.spec.ts", linux = "e2e/specs/onboarding-navigation.spec.ts", macos = "crates/optn-core/src/hd.rs::a_passphrase_changes_the_wallet", android = "crates/optn-core/src/hd.rs::a_passphrase_changes_the_wallet", ios = "crates/optn-core/src/hd.rs::a_passphrase_changes_the_wallet", web = "crates/optn-core/src/hd.rs::a_passphrase_changes_the_wallet", extension = "crates/optn-core/src/hd.rs::a_passphrase_changes_the_wallet" }
+
+[[feature]]
+id = "watch_only"
+name = "Watch-only"
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "pass", extension = "pass" }
+evidence = { windows = "e2e", linux = "e2e", macos = "unit", android = "e2e-declared", ios = "unit", web = "unit", extension = "unit" }
+evidence_refs = { windows = "e2e/specs/onboarding-navigation.spec.ts", linux = "e2e/specs/onboarding-navigation.spec.ts", macos = "crates/optn-core/src/watch_only.rs::account_preview_derives_receive_and_change_without_secrets", android = "android/app/src/androidTest/java/com/getcapacitor/myapp/ExampleInstrumentedTest.java::androidLanding_watchOnlyRelaunch", ios = "crates/optn-core/src/watch_only.rs::account_preview_derives_receive_and_change_without_secrets", web = "src/features/onboarding/__tests__/LandingPage.test.tsx", extension = "src/features/onboarding/__tests__/LandingPage.test.tsx" }
+
+[[feature]]
+id = "master_fingerprint"
+name = "Master fingerprint"
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "pass", extension = "pass" }
+evidence = { windows = "unit", linux = "unit", macos = "unit", android = "e2e-declared", ios = "unit", web = "unit", extension = "unit" }
+evidence_refs = { windows = "crates/optn-core/src/watch_only.rs::fingerprint_is_optional_and_canonical", linux = "crates/optn-core/src/watch_only.rs::fingerprint_is_optional_and_canonical", macos = "crates/optn-core/src/watch_only.rs::fingerprint_is_optional_and_canonical", android = "android/app/src/androidTest/java/com/getcapacitor/myapp/ExampleInstrumentedTest.java::androidLanding_watchOnlyCreate", ios = "crates/optn-core/src/watch_only.rs::fingerprint_is_optional_and_canonical", web = "crates/optn-app/src/lib.rs::watch_only_is_offered_on_every_surface_and_switchable_on_each", extension = "crates/optn-app/src/lib.rs::watch_only_is_offered_on_every_surface_and_switchable_on_each" }
+
+[[feature]]
+id = "receive"
+name = "Receive"
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "pass", extension = "pass" }
+evidence = { windows = "unit", linux = "unit", macos = "unit", android = "unit", ios = "unit", web = "unit", extension = "unit" }
+evidence_refs = { windows = "crates/optn-core/src/cashaddr.rs::decodes_the_specification_example", linux = "crates/optn-core/src/cashaddr.rs::decodes_the_specification_example", macos = "crates/optn-core/src/cashaddr.rs::decodes_the_specification_example", android = "crates/optn-core/src/cashaddr.rs::decodes_the_specification_example", ios = "crates/optn-core/src/cashaddr.rs::decodes_the_specification_example", web = "crates/optn-core/src/cashaddr.rs::decodes_the_specification_example", extension = "crates/optn-core/src/cashaddr.rs::decodes_the_specification_example" }
+
+[[feature]]
+id = "send"
+name = "Send"
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "pass", extension = "pass" }
+evidence = { windows = "unit", linux = "unit", macos = "unit", android = "unit", ios = "unit", web = "unit", extension = "unit" }
+evidence_refs = { windows = "crates/optn-core/src/spend.rs::spendable_coin_is_selected_and_frozen_coin_is_not", linux = "crates/optn-core/src/spend.rs::spendable_coin_is_selected_and_frozen_coin_is_not", macos = "crates/optn-core/src/spend.rs::spendable_coin_is_selected_and_frozen_coin_is_not", android = "crates/optn-core/src/spend.rs::spendable_coin_is_selected_and_frozen_coin_is_not", ios = "crates/optn-core/src/spend.rs::spendable_coin_is_selected_and_frozen_coin_is_not", web = "crates/optn-core/src/spend.rs::spendable_coin_is_selected_and_frozen_coin_is_not", extension = "crates/optn-core/src/spend.rs::spendable_coin_is_selected_and_frozen_coin_is_not" }
+
+[[feature]]
+id = "cashtokens"
+name = "CashTokens"
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "pass", extension = "pass" }
+evidence = { windows = "unit", linux = "unit", macos = "unit", android = "unit", ios = "unit", web = "unit", extension = "unit" }
+evidence_refs = { windows = "src/services/__tests__/CashTokensService.test.ts", linux = "src/services/__tests__/CashTokensService.test.ts", macos = "src/services/__tests__/CashTokensService.test.ts", android = "src/services/__tests__/CashTokensService.test.ts", ios = "src/services/__tests__/CashTokensService.test.ts", web = "src/services/__tests__/CashTokensService.test.ts", extension = "src/services/__tests__/CashTokensService.test.ts" }
+
+[[feature]]
+id = "psbt"
+name = "PSBT"
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "pass", extension = "pass" }
+evidence = { windows = "unit", linux = "unit", macos = "unit", android = "unit", ios = "unit", web = "unit", extension = "unit" }
+evidence_refs = { windows = "crates/optn-core/src/psbt.rs::the_only_accepted_air_gap_sighash_is_c1", linux = "crates/optn-core/src/psbt.rs::the_only_accepted_air_gap_sighash_is_c1", macos = "crates/optn-core/src/psbt.rs::the_only_accepted_air_gap_sighash_is_c1", android = "crates/optn-core/src/psbt.rs::the_only_accepted_air_gap_sighash_is_c1", ios = "crates/optn-core/src/psbt.rs::the_only_accepted_air_gap_sighash_is_c1", web = "crates/optn-core/src/psbt.rs::the_only_accepted_air_gap_sighash_is_c1", extension = "crates/optn-core/src/psbt.rs::the_only_accepted_air_gap_sighash_is_c1" }
+
+[[feature]]
+id = "ur_qr"
+name = "UR / animated QR"
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "pass", extension = "pass" }
+evidence = { windows = "unit", linux = "unit", macos = "unit", android = "unit", ios = "unit", web = "unit", extension = "unit" }
+evidence_refs = { windows = "crates/optn-core/src/airgap.rs::the_ur_scheme_is_case_insensitive_because_qr_encodes_uppercase", linux = "crates/optn-core/src/airgap.rs::the_ur_scheme_is_case_insensitive_because_qr_encodes_uppercase", macos = "crates/optn-core/src/airgap.rs::the_ur_scheme_is_case_insensitive_because_qr_encodes_uppercase", android = "crates/optn-core/src/airgap.rs::the_ur_scheme_is_case_insensitive_because_qr_encodes_uppercase", ios = "crates/optn-core/src/airgap.rs::the_ur_scheme_is_case_insensitive_because_qr_encodes_uppercase", web = "crates/optn-core/src/airgap.rs::the_ur_scheme_is_case_insensitive_because_qr_encodes_uppercase", extension = "crates/optn-core/src/airgap.rs::the_ur_scheme_is_case_insensitive_because_qr_encodes_uppercase" }
+
+[[feature]]
+id = "seedcash_roundtrip"
+name = "SeedCash round trip"
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "na", extension = "na" }
+evidence = { windows = "unit", linux = "unit", macos = "unit", android = "unit", ios = "unit", web = "hidden", extension = "hidden" }
+evidence_refs = { windows = "crates/optn-core/src/airgap.rs::a_seedcash_export_is_a_bare_xpub_and_is_usable_now", linux = "crates/optn-core/src/airgap.rs::a_seedcash_export_is_a_bare_xpub_and_is_usable_now", macos = "crates/optn-core/src/airgap.rs::a_seedcash_export_is_a_bare_xpub_and_is_usable_now", android = "crates/optn-core/src/airgap.rs::a_seedcash_export_is_a_bare_xpub_and_is_usable_now", ios = "crates/optn-core/src/airgap.rs::a_seedcash_export_is_a_bare_xpub_and_is_usable_now" }
+na_reason = { web = "air-gap camera/UR signer is not a web capability yet", extension = "air-gap camera/UR signer is not an extension capability yet" }
+
+[[feature]]
+id = "multisig"
+name = "Multisig"
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "pass", extension = "pass" }
+evidence = { windows = "unit", linux = "unit", macos = "unit", android = "unit", ios = "unit", web = "unit", extension = "unit" }
+evidence_refs = { windows = "crates/optn-core/src/multisig.rs::a_descriptor_this_wallet_wrote_reads_back_as_the_same_wallet", linux = "crates/optn-core/src/multisig.rs::a_descriptor_this_wallet_wrote_reads_back_as_the_same_wallet", macos = "crates/optn-core/src/multisig.rs::a_descriptor_this_wallet_wrote_reads_back_as_the_same_wallet", android = "crates/optn-core/src/multisig.rs::a_descriptor_this_wallet_wrote_reads_back_as_the_same_wallet", ios = "crates/optn-core/src/multisig.rs::a_descriptor_this_wallet_wrote_reads_back_as_the_same_wallet", web = "crates/optn-core/src/multisig.rs::a_descriptor_this_wallet_wrote_reads_back_as_the_same_wallet", extension = "crates/optn-core/src/multisig.rs::a_descriptor_this_wallet_wrote_reads_back_as_the_same_wallet" }
+
+[[feature]]
+id = "hardware_wallet"
+name = "Hardware wallet"
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "na", ios = "na", web = "pass", extension = "pass" }
+evidence = { windows = "unit", linux = "unit", macos = "unit", android = "hidden", ios = "hidden", web = "unit", extension = "unit" }
+evidence_refs = { windows = "crates/optn-app/src/lib.rs::hardware_on_a_phone_is_hidden_rather_than_forbidden", linux = "crates/optn-app/src/lib.rs::hardware_on_a_phone_is_hidden_rather_than_forbidden", macos = "crates/optn-app/src/lib.rs::hardware_on_a_phone_is_hidden_rather_than_forbidden", web = "crates/optn-app/src/lib.rs::hardware_vendors_for", extension = "crates/optn-app/src/lib.rs::hardware_vendors_for" }
+na_reason = { android = "No native device plugin yet; a phone can reach a device, the integration is unwritten", ios = "No native device plugin yet; Bluetooth and NFC are available, the integration is unwritten" }
+
+[[feature]]
+id = "rpa"
+name = "RPA"
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "pass", extension = "pass" }
+evidence = { windows = "unit", linux = "unit", macos = "unit", android = "unit", ios = "unit", web = "unit", extension = "unit" }
+evidence_refs = { windows = "crates/optn-core/src/rpa.rs::matches_the_bch_rpa_reference_pubkeys", linux = "crates/optn-core/src/rpa.rs::matches_the_bch_rpa_reference_pubkeys", macos = "crates/optn-core/src/rpa.rs::matches_the_bch_rpa_reference_pubkeys", android = "crates/optn-core/src/rpa.rs::matches_the_bch_rpa_reference_pubkeys", ios = "crates/optn-core/src/rpa.rs::matches_the_bch_rpa_reference_pubkeys", web = "crates/optn-core/src/rpa.rs::matches_the_bch_rpa_reference_pubkeys", extension = "crates/optn-core/src/rpa.rs::matches_the_bch_rpa_reference_pubkeys" }
+
+[[feature]]
+id = "cash_fusion"
+name = "CashFusion"
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "na", ios = "na", web = "na", extension = "na" }
+evidence = { windows = "unit", linux = "unit", macos = "unit", android = "hidden", ios = "hidden", web = "hidden", extension = "hidden" }
+evidence_refs = { windows = "crates/optn-core/src/fusion/vectors.rs::vectors_match_the_implementation", linux = "crates/optn-core/src/fusion/vectors.rs::vectors_match_the_implementation", macos = "crates/optn-core/src/fusion/vectors.rs::vectors_match_the_implementation" }
+na_reason = { android = "CashFusion UI is desktop-only", ios = "CashFusion UI is desktop-only", web = "CashFusion UI is desktop-only", extension = "CashFusion UI is desktop-only" }
+
+[[feature]]
+id = "spv"
+name = "SPV"
+# Evidence corrected from "unit" on the three desktop platforms to "none"
+# everywhere. There was no test to point at: SPV has no implementation in any
+# Rust crate -- nothing matches `spv`, `merkle` or `block_header` across all 14
+# -- and its TypeScript side (`src/platform/desktop/Bip37Backend.ts`,
+# `src/features/settings/Bip37NodeSettings.tsx`) has no test file either. The
+# feature ships; the coverage claim did not exist. Raise this back to "unit"
+# with an `evidence_refs` entry the moment a test does.
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "pass", extension = "pass" }
+evidence = { windows = "none", linux = "none", macos = "none", android = "none", ios = "none", web = "none", extension = "none" }
+
+[[feature]]
+id = "electrum"
+name = "Electrum"
+# The tests are surface-independent -- they exercise the adapter and the
+# helpers, not a shell -- so the four surfaces that read "none" were understating
+# coverage rather than lacking it. Now `unit` on all seven, each pointing at a
+# file that exists.
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "pass", extension = "pass" }
+evidence = { windows = "unit", linux = "unit", macos = "unit", android = "unit", ios = "unit", web = "unit", extension = "unit" }
+evidence_refs = { windows = "src/services/__tests__/ElectrumService.test.ts", linux = "src/services/__tests__/ElectrumService.test.ts", macos = "src/services/__tests__/ElectrumService.test.ts", android = "src/services/__tests__/ElectrumAdapter.test.ts", ios = "src/services/__tests__/ElectrumAdapter.test.ts", web = "src/services/__tests__/electrumHelpers.test.ts", extension = "src/services/__tests__/electrumHelpers.test.ts" }
+
+[[feature]]
+id = "x402"
+name = "x402"
+# x402 lives entirely in `crates/optn-cli` -- `src/x402.rs`, reachable through
+# `optn-cli serve`. No app surface ships the CLI, so the four non-desktop rows
+# claimed `pass` for something a phone or a popup cannot reach. They are `na`
+# with a reason now, which is the honest reading and forces the sentence to be
+# written down. The desktop rows keep `unit` and point at the tests.
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "na", ios = "na", web = "na", extension = "na" }
+evidence = { windows = "unit", linux = "unit", macos = "unit", android = "hidden", ios = "hidden", web = "hidden", extension = "hidden" }
+evidence_refs = { windows = "crates/optn-cli/src/x402.rs::the_bch_option_is_chosen_over_other_chains", linux = "crates/optn-cli/src/x402.rs::the_bch_option_is_chosen_over_other_chains", macos = "crates/optn-cli/src/x402.rs::a_server_with_no_bch_option_is_refused_by_name" }
+na_reason = { android = "x402 is a CLI capability; no mobile surface ships optn-cli", ios = "x402 is a CLI capability; no mobile surface ships optn-cli", web = "x402 is a CLI capability; a browser tab does not ship optn-cli", extension = "x402 is a CLI capability; an extension popup does not ship optn-cli" }
+
+[[feature]]
+id = "nostr"
+name = "Nostr"
+policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "pass", extension = "pass" }
+evidence = { windows = "unit", linux = "unit", macos = "unit", android = "unit", ios = "unit", web = "unit", extension = "unit" }
+evidence_refs = { windows = "crates/optn-core/src/nip44.rs::every_published_conversation_key_matches", linux = "crates/optn-core/src/nip44.rs::every_published_conversation_key_matches", macos = "crates/optn-core/src/nip44.rs::every_published_conversation_key_matches", android = "crates/optn-core/src/nip44.rs::every_published_conversation_key_matches", ios = "crates/optn-core/src/nip44.rs::every_published_conversation_key_matches", web = "crates/optn-core/src/nip44.rs::every_published_conversation_key_matches", extension = "crates/optn-core/src/nip44.rs::every_published_conversation_key_matches" }
+
+[[feature]]
+id = "apple_opal_flavor"
+name = "Opal Apple26 flavor"
+policy = { windows = "na", linux = "na", macos = "na", android = "na", ios = "na", web = "na", extension = "na" }
+evidence = { windows = "hidden", linux = "hidden", macos = "hidden", android = "hidden", ios = "hidden", web = "hidden", extension = "hidden" }
+na_reason = { windows = "Opal is an optional Apple26 flavor, not a Windows product path", linux = "Opal is an optional Apple26 flavor, not a Linux product path", macos = "OpalBase v0.4.1 requires macOS 26 and unclosed develop-branch siblings; GATED until a closed SemVer graph exists", android = "Opal is Apple-only", ios = "OPTN iOS product floor is 14.0; OpalBase v0.4.1 requires iOS 26 and branch develop siblings. GATED, not product parity. Differential vectors blocked until gated flavor.", web = "Opal is Apple-only", extension = "Opal is Apple-only" }

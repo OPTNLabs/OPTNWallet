@@ -6,6 +6,45 @@ OPTN Wallet is security-sensitive BCH wallet software with CashTokens,
 CashScript, desktop, web, Android, and iOS surfaces. Preserve wallet security
 and transaction correctness above convenience.
 
+## Rustification architecture
+
+Before Rustification or UI-shell work, read `RUSTIFICATION.md`,
+`rustification/components.toml`, `rustification/closed-pr-history.toml`, and
+`docs/rustification/closed-pr-design-invariants.md`. Closed PR history records
+product/security decisions that must not disappear merely because the renderer
+or implementation language changes.
+
+Framework boundary rules are architectural invariants:
+
+- `optn-core`, `optn-app`, and `optn-platform` must not depend on Leptos,
+  Tauri, Dioxus, Capacitor, or another UI/native framework.
+- `optn-ui` may depend on `optn-app`, but must not bypass it to reach
+  `optn-core` directly.
+- Tauri-specific code belongs in adapters. Do not move wallet/business logic
+  into Tauri commands or plugins.
+- Leptos-specific signals, routes, and lifecycle types must not leak into
+  `optn-app`.
+- Run `cargo run -p xtask -- architecture` after changing these layers.
+
+## External wallet references
+
+Reference wallets are behavioral and architectural oracles, not implementation-stack templates.
+
+- Cashonize may be used to learn BCH UX, CashTokens behavior, dApp flows, HD/address management,
+  transaction previews, UTXO tools, portfolio behavior, and protocol edge cases.
+- Do **not** import Cashonize's Vue, Pinia, Quasar, Capacitor, Electron, mainnet-js, libauth-JS,
+  WalletConnect-JS, CashConnect-JS, or WizardConnect-JS architecture into the Rust target.
+- For a Cashonize-inspired feature, first characterize behavior and extract test vectors, then place:
+  domain/transaction/protocol logic in `optn-core`, use-cases/state/actions/events in `optn-app`,
+  long-running work in `optn-runtime`, native capability calls behind `optn-platform`, and rendering
+  in Rust/Leptos under `optn-ui`.
+- TypeScript/JavaScript from reference wallets may be used as a parity oracle during migration, but
+  must not become the authoritative implementation for new Rust-target functionality.
+- A temporary JS bridge for a protocol with no Rust implementation requires explicit approval,
+  must sit behind a typed Rust contract, and must have a tracked Rust replacement plan.
+- Preserve upstream license/attribution when code is actually ported rather than independently
+  reimplemented from behavior/specification. See `docs/references/cashonize-rust-port.md`.
+
 ## Working rules
 
 - Inspect the relevant code and tests before editing.

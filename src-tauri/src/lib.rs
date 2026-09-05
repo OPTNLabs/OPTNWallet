@@ -1,11 +1,19 @@
 #[allow(dead_code)] // menu bar is built on the JS side now; kept for reference
+#[cfg(desktop)]
 mod menu;
 
+pub mod app_transport;
+#[cfg(desktop)]
 pub mod clipboard;
 pub mod electrum_tcp;
 pub mod fusion;
+#[cfg(desktop)]
 pub mod hw;
 pub mod nostr_tor;
+#[cfg(desktop)]
+pub mod platform;
+#[cfg(mobile)]
+pub mod platform_mobile;
 pub mod spv;
 
 async fn verified_fusion_proxy<'a>(
@@ -1013,6 +1021,21 @@ async fn optn_cold_file_exists(path: String) -> Result<bool, String> {
     Ok(std::path::Path::new(&path).is_file())
 }
 
+fn host_app_surface() -> optn_app::AppSurface {
+    #[cfg(target_os = "android")]
+    {
+        optn_app::AppSurface::Android
+    }
+    #[cfg(target_os = "ios")]
+    {
+        optn_app::AppSurface::Ios
+    }
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        optn_app::AppSurface::Desktop
+    }
+}
+
 /// Public, deterministic multisig material shared with the cross-compilable
 /// CLI. This command intentionally accepts no wallet, seed, private key,
 /// session, or network endpoint: callers provide already-derived public keys
@@ -1068,16 +1091,30 @@ fn multisig_inspect(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_keyring::init())
-        .plugin(tauri_plugin_biometry::init())
-        .manage(clipboard::ClipboardState::new())
+        .plugin(tauri_plugin_biometry::init());
+
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_keyring::init());
+
+    #[cfg(mobile)]
+    let builder = builder.plugin(tauri_plugin_clipboard_manager::init());
+
+    builder
         .invoke_handler(tauri::generate_handler![
+            app_transport::optn_app_dispatch,
+            app_transport::optn_app_snapshot,
+            #[cfg(desktop)]
             clipboard::clipboard_write_text,
+            #[cfg(desktop)]
             clipboard::clipboard_read_text,
+            #[cfg(mobile)]
+            platform_mobile::clipboard_write_text,
+            #[cfg(mobile)]
+            platform_mobile::clipboard_read_text,
             optn_price_fetch,
             open_external,
             read_wallet_file,
@@ -1111,25 +1148,54 @@ pub fn run() {
             nostr_tor::nostr_tor_open,
             nostr_tor::nostr_tor_send,
             nostr_tor::nostr_tor_close,
+            #[cfg(desktop)]
             hw::session::hw_enumerate,
+            #[cfg(desktop)]
             hw::session::hw_open,
+            #[cfg(desktop)]
             hw::session::hw_close,
+            #[cfg(desktop)]
             hw::session::hw_write,
+            #[cfg(desktop)]
             hw::session::hw_read,
+            #[cfg(desktop)]
             hw::ledger::hw_ledger_open,
+            #[cfg(desktop)]
             hw::ledger::hw_ledger_exchange,
+            #[cfg(desktop)]
             hw::trezor_bridge::trezor_bridge_ping,
+            #[cfg(desktop)]
             hw::trezor_bridge::trezor_bridge_enumerate,
+            #[cfg(desktop)]
             hw::trezor_bridge::trezor_bridge_acquire,
+            #[cfg(desktop)]
             hw::trezor_bridge::trezor_bridge_release,
+            #[cfg(desktop)]
             hw::trezor_bridge::trezor_bridge_call,
+            #[cfg(desktop)]
             hw::trezor_webusb::trezor_webusb_enumerate,
+            #[cfg(desktop)]
             hw::trezor_webusb::trezor_webusb_open,
+            #[cfg(desktop)]
             hw::trezor_webusb::trezor_webusb_close,
+            #[cfg(desktop)]
             hw::trezor_webusb::trezor_webusb_write,
+            #[cfg(desktop)]
             hw::trezor_webusb::trezor_webusb_read,
         ])
         .setup(|app| {
+            use tauri::Manager;
+
+            #[cfg(desktop)]
+            app.manage(optn_platform_native::NativeClipboard::new());
+
+            // The authoritative application runtime is framework-neutral.
+            // Tauri only chooses the executor and stores the handle.
+            let (app_runtime, app_driver) =
+                optn_runtime::AppRuntime::new(optn_app::AppState::for_surface(host_app_surface()));
+            tauri::async_runtime::spawn(app_driver.run());
+            app.manage(app_runtime);
+
             let log_level = if cfg!(debug_assertions) {
                 log::LevelFilter::Debug
             } else {
@@ -1179,6 +1245,16 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_app_surface_matches_the_native_os() {
+        #[cfg(target_os = "android")]
+        assert_eq!(host_app_surface(), optn_app::AppSurface::Android);
+        #[cfg(target_os = "ios")]
+        assert_eq!(host_app_surface(), optn_app::AppSurface::Ios);
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        assert_eq!(host_app_surface(), optn_app::AppSurface::Desktop);
+    }
 
     fn test_fusion_status() -> fusion::FusionServerStatus {
         fusion::FusionServerStatus {

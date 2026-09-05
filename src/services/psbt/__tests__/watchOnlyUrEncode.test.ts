@@ -10,9 +10,11 @@ import {
   assertWatchOnlySighash,
   encodeWatchOnlyUrFrames,
   parsePsbtBytes,
+  parseWatchOnlyUrFragmentLength,
 } from '../watchOnlyUrEncode';
 import {
   DEFAULT_UR_FRAGMENT_LENGTH,
+  PSBT_UR_FRAGMENT_LENGTHS,
   encodePsbtToUrFrames,
   UR_FRAGMENT_LENGTH_OPTIONS,
   UrPsbtScanner,
@@ -66,6 +68,33 @@ describe('watch-only UR encode (CLI/GUI shared)', () => {
     expect([...(last.psbt as Uint8Array)]).toEqual([...psbt]);
   });
 
+  it('supports the 50/100/200/400 density menu and keeps 50 as default', () => {
+    expect(PSBT_UR_FRAGMENT_LENGTHS).toEqual([50, 100, 200, 400]);
+    expect(parseWatchOnlyUrFragmentLength(undefined)).toBe(50);
+
+    const psbt = encodeUnsignedPsbt([input()], [output()]);
+    for (const fragmentLength of PSBT_UR_FRAGMENT_LENGTHS) {
+      const frames = encodeWatchOnlyUrFrames(psbt, fragmentLength);
+      expect(frames.length).toBeGreaterThan(0);
+
+      const scanner = new UrPsbtScanner();
+      let result = scanner.receive(frames[0]);
+      for (let i = 1; i < frames.length && !result.complete; i += 1) {
+        result = scanner.receive(frames[i]);
+      }
+      expect(result.complete, `fragment length ${fragmentLength}`).toBe(true);
+      expect([...(result.psbt as Uint8Array)]).toEqual([...psbt]);
+    }
+  });
+
+  it('rejects arbitrary density values instead of creating untested QR modes', () => {
+    expect(() => parseWatchOnlyUrFragmentLength('75')).toThrow(
+      /50, 100, 200, 400/
+    );
+    expect(() => parseWatchOnlyUrFragmentLength('not-a-number')).toThrow(
+      /fragment length/
+    );
+  });
   it.each(UR_FRAGMENT_LENGTH_OPTIONS)(
     'round-trips a PSBT at density %i',
     (fragmentLength) => {

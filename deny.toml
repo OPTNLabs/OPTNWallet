@@ -1,0 +1,56 @@
+[graph]
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "aarch64-apple-darwin",
+  "x86_64-pc-windows-msvc",
+  "aarch64-linux-android",
+  "aarch64-apple-ios",
+  "wasm32-unknown-unknown",
+]
+all-features = true
+
+[advisories]
+unmaintained = "workspace"
+unsound = "all"
+ignore = [
+  { id = "RUSTSEC-2024-0429", reason = "Tauri 2.11.5 Linux currently depends on GTK/glib 0.18.5; the RustSec fix requires glib >=0.20, outside Tauri's accepted GTK graph. OPTN does not call VariantStrIter directly. Remove this exception as soon as upstream Tauri/WebKitGTK moves to glib >=0.20." },
+  { id = "RUSTSEC-2026-0194", reason = "Existing quick-xml availability issue; tracked in security-analysis.yml until upstream dependency graph can move to >=0.41." },
+  { id = "RUSTSEC-2026-0195", reason = "Existing quick-xml availability issue; tracked in security-analysis.yml until upstream dependency graph can move to >=0.41." },
+  { id = "RUSTSEC-2026-0185", reason = "Existing quinn-proto baseline; the Tauri graph is being upgraded and this exemption must disappear once no affected version remains." },
+  { id = "RUSTSEC-2026-0235", reason = "Existing rkyv baseline. Confidentiality-relevant; do not add new uses and remove this exemption when the dependency can be upgraded." },
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "simplest-path"
+workspace-default-features = "allow"
+external-default-features = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+
+[licenses]
+confidence-threshold = 0.93
+allow = [
+  "0BSD",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "BSL-1.0",
+  "CC0-1.0",
+  "CDLA-Permissive-2.0",
+  "GPL-3.0-only",
+  "GPL-3.0-or-later",
+  "ISC",
+  "MIT",
+  "MPL-2.0",
+  "Unicode-3.0",
+  "Unicode-DFS-2016",
+  "Unlicense",
+  "Zlib",
+]

@@ -21,6 +21,63 @@ describe('hardware transport support', () => {
     vi.unstubAllGlobals();
   });
 
+  it('keeps a Tangem off anything that cannot tap a card', () => {
+    // A card has no port and no radio to pair. One transport decides every
+    // surface question, which is why no rule here names desktop or extension.
+    vi.stubGlobal('window', {});
+    const laptop = detectTransportSupport(chrome);
+    expect(laptop.nfc).toBe(false);
+    expect(unsupportedReason('tangem', laptop)).toMatch(/tapped rather than plugged/i);
+
+    // A phone with Web NFC reaches it, and nothing else changes.
+    vi.stubGlobal('NDEFReader', class {});
+    const phone = detectTransportSupport(chrome);
+    expect(phone.nfc).toBe(true);
+    expect(unsupportedReason('tangem', phone)).toBeNull();
+  });
+
+  it('reaches a Keystone wherever there is a camera, extension included', () => {
+    // What MetaMask does: scan the animated QR with the machine's webcam. No
+    // driver, no cable, no vendor daemon -- so this is the device with the
+    // widest reach, and the popup is exactly where that matters.
+    vi.stubGlobal('window', {});
+    const popup = {
+      hid: {},
+      usb: {},
+      mediaDevices: { getUserMedia: () => {} },
+    } as unknown as Navigator;
+    expect(unsupportedReason('keystone', detectTransportSupport(popup))).toBeNull();
+
+    const noCamera = { hid: {}, usb: {} } as unknown as Navigator;
+    expect(unsupportedReason('keystone', detectTransportSupport(noCamera))).toMatch(
+      /No camera/i
+    );
+  });
+
+  it('no longer claims a browser Trezor, since connect-web was removed', () => {
+    // @trezor/connect-web carried five high-severity advisories through the
+    // Stellar SDK. Until the @trezor/transport WebUSB path is built, a
+    // browser cannot reach a Trezor, and saying otherwise sends someone
+    // hunting for a cable that was never the problem.
+    vi.stubGlobal('window', {});
+    const browser = detectTransportSupport(chrome);
+    expect(browser.nativeUsb).toBe(false);
+
+    // Trezor-specific, and the specificity is the point. The generic USB
+    // message offers "a browser with WebHID" as the way out, which is true for
+    // a Ledger and false for a Trezor -- it has no browser transport at all
+    // right now, so that advice sends someone after a second dead end.
+    const trezor = unsupportedReason('trezor', browser);
+    expect(trezor).toMatch(/only be reached over native USB/i);
+    expect(trezor).toMatch(/no browser can reach it/i);
+    expect(trezor).not.toMatch(/WebHID/i);
+
+    // OneKey still works there through its own web SDK.
+    expect(unsupportedReason('onekey', browser)).toBeNull();
+    // ...and so does a Ledger, over WebHID.
+    expect(unsupportedReason('ledger', browser)).toBeNull();
+  });
+
   it('reports no WebHID in a WebView2-shaped runtime', () => {
     vi.stubGlobal('window', {});
     const support = detectTransportSupport(webview2);

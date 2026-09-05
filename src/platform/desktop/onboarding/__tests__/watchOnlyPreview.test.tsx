@@ -1,8 +1,13 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { StaticRouter } from 'react-router-dom/server';
 import { Provider } from 'react-redux';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as bip39 from 'bip39';
+
+vi.mock('../../../capabilities', () => ({
+  hasCapability: (name: string) =>
+    name === 'watchOnlyWallet' || name === 'hardwareWallet',
+}));
 
 import { Network } from '../../../../state/slices/networkSlice';
 import { I18nProvider } from '../../../../i18n/I18nProvider';

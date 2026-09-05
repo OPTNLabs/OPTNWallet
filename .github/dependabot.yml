@@ -9,6 +9,30 @@ updates:
       default-days: 7
     open-pull-requests-limit: 5
     versioning-strategy: increase
+
+  # Keep all independent Rust dependency graphs current. The root workspace
+  # deliberately excludes optn-core, optn-cli, and src-tauri, so Dependabot
+  # must scan those manifest roots explicitly rather than assuming one Cargo
+  # workspace covers the wallet.
+  - package-ecosystem: cargo
+    directories:
+      - /
+      - /crates/optn-core
+      - /crates/optn-cli
+      - /src-tauri
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 8
+    groups:
+      rust-compatible-updates:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
   - package-ecosystem: github-actions
     directory: /
     target-branch: dev

@@ -219,7 +219,7 @@ pub fn build_round_commit(
     let mut blind_sig_requests = Vec::with_capacity(num_components);
     for (i, r) in rows.iter().enumerate() {
         let msg = sha256(&r.comp_ser);
-        let req = BlindSignatureRequest::new(round_pubkey, &blind_nonce_points[i], msg)?;
+        let req = super::schnorr::new_blind_request(round_pubkey, &blind_nonce_points[i], msg)?;
         blind_sig_requests.push(req.request().to_vec());
         requests.push(req);
     }

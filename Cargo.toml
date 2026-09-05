@@ -1,0 +1,56 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/optn-app",
+  "crates/optn-chain-bchn",
+  "crates/optn-chain-bip37",
+  "crates/optn-chain-electrum",
+  "crates/optn-chain-neutrino",
+  "crates/optn-chain-zmq",
+  # #65's deterministic multisig core. A member rather than an exclusion:
+  # it has no lock file of its own and three pure dependencies, so there is
+  # nothing to keep it out for -- and being a member is what puts it under
+  # the workspace's clippy and tests. optn-core is excluded for reasons this
+  # crate does not share: its own lock file, Kani proofs, and a wasm build.
+  "crates/optn-multisig-core",
+  "crates/optn-platform",
+  "crates/optn-platform-native",
+  "crates/optn-platform-apple",
+  "crates/optn-runtime",
+  "crates/optn-transport",
+  "crates/optn-transport-tauri",
+  "crates/optn-ui",
+  "crates/optn-ui-text",
+  "xtask",
+]
+exclude = [
+  "crates/optn-cli",
+  "crates/optn-ui-egui",
+  "crates/optn-core",
+  "src-tauri",
+]
+default-members = [
+  "crates/optn-app",
+  "crates/optn-chain-bchn",
+  "crates/optn-chain-bip37",
+  "crates/optn-chain-electrum",
+  "crates/optn-chain-neutrino",
+  "crates/optn-chain-zmq",
+  "crates/optn-platform",
+  "crates/optn-platform-native",
+  "crates/optn-platform-apple",
+  "crates/optn-runtime",
+  "crates/optn-transport",
+  "crates/optn-transport-tauri",
+  "crates/optn-ui",
+  "crates/optn-ui-text",
+  "xtask",
+]
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+incremental = false
+opt-level = "s"
+strip = true
