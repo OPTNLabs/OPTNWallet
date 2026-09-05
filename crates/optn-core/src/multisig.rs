@@ -1172,8 +1172,12 @@ pub fn bsms_encrypt(token: &[u8], plaintext: &str) -> Result<String> {
     let key = bsms_encryption_key(token);
     let mac = bsms_mac(&key, token, plaintext.as_bytes());
 
-    let mut iv = [0u8; 16];
-    iv.copy_from_slice(&mac[..16]);
+    // The IV is the tag's first half, per BIP-129. Taken directly rather than
+    // through a zeroed buffer: `mac` is a `[u8; 32]`, so the slice is always
+    // exactly 16 bytes and the conversion cannot fail.
+    let iv: [u8; 16] = mac[..16]
+        .try_into()
+        .expect("the first half of a 32-byte tag is 16 bytes");
 
     let mut buffer = plaintext.as_bytes().to_vec();
     bsms_apply_ctr(&key, &iv, &mut buffer);
@@ -1207,8 +1211,13 @@ pub fn bsms_decrypt(token: &[u8], encrypted_hex: &str) -> Result<String> {
     let (claimed_mac, ciphertext) = raw.split_at(32);
     let key = bsms_encryption_key(token);
 
-    let mut iv = [0u8; 16];
-    iv.copy_from_slice(&claimed_mac[..16]);
+    // Same derivation as the sender's, from the tag the record arrived with.
+    // `split_at(32)` guarantees the length, so this cannot fail either -- and
+    // note the tag is still unverified here: it is checked below, after the
+    // plaintext exists to check it against.
+    let iv: [u8; 16] = claimed_mac[..16]
+        .try_into()
+        .expect("the first half of a 32-byte tag is 16 bytes");
 
     let mut buffer = ciphertext.to_vec();
     bsms_apply_ctr(&key, &iv, &mut buffer);
