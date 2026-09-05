@@ -16,6 +16,9 @@ pub mod bootstrap;
 pub mod chain;
 /// Runtime-owned operation-aware provider selection and bounded failover.
 pub mod chain_service;
+/// Provider-neutral normalized chain event streams. Event delivery is never
+/// treated as proof and sequence gaps are preserved for recovery.
+pub mod events;
 /// Explorer routing is deliberately separate from wallet consensus/state.
 pub mod explorer;
 /// Provider-neutral SHV/MMR header verification using the pure optn-core accumulator.
