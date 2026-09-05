@@ -40,10 +40,10 @@ tauri-plugin-biometry = "=0.2.8"
 # directly. default-features = false drops image-data (and with it the image,
 # core-graphics and windows-sys pulls) since only text is copied;
 # wayland-data-control is NOT default and the Linux AppImage needs it.
-# CashFusion: the protocol is raw TCP+TLS with protobuf framing, which a
-# WebView cannot speak at all — hence a Rust-side client. rustls/tokio are
-# already in the tree transitively via reqwest and tauri; naming them here
-# just makes the direct dependency explicit.
+# CashFusion: the protocol is raw TCP+TLS with protobuf framing, which a WebView
+# cannot speak at all — hence a Rust-side client. rustls/tokio are already in
+# the tree transitively via reqwest and tauri; naming them here just makes the
+# direct dependency explicit.
 prost = "0.13"
 tokio = { version = "1", features = ["net", "io-util", "time", "macros", "rt", "process", "sync"] }
 tokio-rustls = { version = "0.26", features = ["ring"] }
@@ -72,6 +72,13 @@ optn-app = { path = "../crates/optn-app", version = "=1.7.3" }
 optn-platform = { path = "../crates/optn-platform", version = "=1.7.3" }
 optn-runtime = { path = "../crates/optn-runtime", version = "=1.7.3" }
 optn-transport = { path = "../crates/optn-transport", version = "=1.7.3" }
+# Concrete chain transports are shell-owned. Runtime/application crates only see
+# provider-neutral capability/evidence traits.
+optn-chain-electrum = { path = "../crates/optn-chain-electrum", version = "=1.7.3" }
+optn-chain-bip37 = { path = "../crates/optn-chain-bip37", version = "=1.7.3" }
+optn-chain-neutrino = { path = "../crates/optn-chain-neutrino", version = "=1.7.3" }
+optn-chain-bchn = { path = "../crates/optn-chain-bchn", version = "=1.7.3" }
+optn-chain-zmq = { path = "../crates/optn-chain-zmq", version = "=1.7.3" }
 # Secure randomness for one-time nonces/blinding factors (OsRng). NOT the
 # counter+clock token used for Tor circuit isolation — those must never be reused
 # for crypto secrets.
