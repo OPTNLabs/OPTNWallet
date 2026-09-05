@@ -9,11 +9,11 @@
 use optn_app::{
     parse_account_path, AppAction, AppEvent, AppLockState, AppRoute, AppState, AppSurface,
     AuthScope, AutoLockMinutes, CampaignOutput, Coin, ConnectState, CreateStep, FeatureFlag,
-    FeatureFlags, FeeRate, FlipstarterPledge, FreezeReason, HardwareSessionState,
-    HardwareSetupPreview, HardwareVendor, ImportStep, LedgerLink, MultisigSetupPreview,
-    MultisigStep, Network, OpenedWallet, Outpoint, PledgeStatus, ServerKind, ServerOverrides,
-    SettingsRowId, SpendKind, SpendPlan, ThemeMode, UiSkin, WalletKind, WatchOnlyKind,
-    WatchOnlySetupPreview, RELAY_MINIMUM_FEE_RATE,
+    FeatureFlags, FeeMode, FeePreferences, FeeRate, FlipstarterPledge, FreezeReason,
+    HardwareSessionState, HardwareSetupPreview, HardwareVendor, ImportStep, LedgerLink,
+    MultisigSetupPreview, MultisigStep, Network, OpenedWallet, Outpoint, PledgeStatus, ServerKind,
+    ServerOverrides, SettingsRowId, SpendKind, SpendPlan, ThemeMode, UiSkin, WalletKind,
+    WatchOnlyKind, WatchOnlySetupPreview, RELAY_MINIMUM_FEE_RATE,
 };
 pub mod host;
 pub use host::{block_on_ready, run, Renderer};
@@ -110,6 +110,31 @@ pub enum WireNetwork {
     Chipnet,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WireFeeMode {
+    #[default]
+    Auto,
+    Custom,
+}
+
+impl From<FeeMode> for WireFeeMode {
+    fn from(value: FeeMode) -> Self {
+        match value {
+            FeeMode::Auto => Self::Auto,
+            FeeMode::Custom => Self::Custom,
+        }
+    }
+}
+impl From<WireFeeMode> for FeeMode {
+    fn from(value: WireFeeMode) -> Self {
+        match value {
+            WireFeeMode::Auto => Self::Auto,
+            WireFeeMode::Custom => Self::Custom,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WireSurface {
@@ -189,6 +214,10 @@ pub enum WireActionKind {
     ToggleTheme,
     SetTheme(WireTheme),
     SetSkin(WireSkin),
+    SetFeeMode(WireFeeMode),
+    SetCustomFeeRate {
+        satoshis_per_kb: u64,
+    },
     SetNetwork(WireNetwork),
     OpenHelp,
     CloseHelp,
@@ -339,6 +368,10 @@ pub struct WireState {
     #[serde(default)]
     pub skin: WireSkin,
     pub network: WireNetwork,
+    #[serde(default)]
+    pub fee_mode: WireFeeMode,
+    #[serde(default = "default_custom_fee_rate_sat_per_kb")]
+    pub custom_fee_satoshis_per_kb: u64,
     pub help_open: bool,
     pub surface: WireSurface,
     pub cash_fusion: bool,
@@ -541,12 +574,20 @@ fn default_relay_fee_rate_sat_per_kb() -> u64 {
     RELAY_MINIMUM_FEE_RATE.satoshis_per_kb()
 }
 
+fn default_custom_fee_rate_sat_per_kb() -> u64 {
+    optn_app::DEFAULT_CUSTOM_FEE_RATE.satoshis_per_kb()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum WireEventKind {
     RouteChanged(WireRoute),
     ThemeChanged(WireTheme),
     SkinChanged(WireSkin),
+    FeePreferencesChanged {
+        mode: WireFeeMode,
+        custom_fee_satoshis_per_kb: u64,
+    },
     NetworkChanged(WireNetwork),
     HelpVisibilityChanged(bool),
     SurfaceChanged(WireSurface),
@@ -839,6 +880,10 @@ impl From<AppAction> for WireAction {
             AppAction::ToggleTheme => WireActionKind::ToggleTheme,
             AppAction::SetTheme(theme) => WireActionKind::SetTheme(theme.into()),
             AppAction::SetSkin(skin) => WireActionKind::SetSkin(skin.into()),
+            AppAction::SetFeeMode(mode) => WireActionKind::SetFeeMode(mode.into()),
+            AppAction::SetCustomFeeRate(rate) => WireActionKind::SetCustomFeeRate {
+                satoshis_per_kb: rate.satoshis_per_kb(),
+            },
             AppAction::SetNetwork(network) => WireActionKind::SetNetwork(network.into()),
             AppAction::OpenHelp => WireActionKind::OpenHelp,
             AppAction::CloseHelp => WireActionKind::CloseHelp,
@@ -992,6 +1037,10 @@ impl TryFrom<WireAction> for AppAction {
             WireActionKind::ToggleTheme => Self::ToggleTheme,
             WireActionKind::SetTheme(theme) => Self::SetTheme(theme.into()),
             WireActionKind::SetSkin(skin) => Self::SetSkin(skin.into()),
+            WireActionKind::SetFeeMode(mode) => Self::SetFeeMode(mode.into()),
+            WireActionKind::SetCustomFeeRate { satoshis_per_kb } => {
+                Self::SetCustomFeeRate(FeeRate::from_satoshis_per_kb(satoshis_per_kb))
+            }
             WireActionKind::SetNetwork(network) => Self::SetNetwork(network.into()),
             WireActionKind::OpenHelp => Self::OpenHelp,
             WireActionKind::CloseHelp => Self::CloseHelp,
@@ -1203,6 +1252,8 @@ impl From<&AppState> for WireState {
             theme: value.theme.into(),
             skin: value.skin.into(),
             network: value.network.into(),
+            fee_mode: value.fee_preferences.mode.into(),
+            custom_fee_satoshis_per_kb: value.fee_preferences.custom_rate.satoshis_per_kb(),
             help_open: value.help_open,
             surface: value.surface.into(),
             cash_fusion: value
@@ -1320,6 +1371,10 @@ impl TryFrom<WireState> for AppState {
             theme: value.theme.into(),
             skin: value.skin.into(),
             network: value.network.into(),
+            fee_preferences: FeePreferences::new(
+                value.fee_mode.into(),
+                FeeRate::from_satoshis_per_kb(value.custom_fee_satoshis_per_kb),
+            ),
             help_open: value.help_open,
             surface: value.surface.into(),
             features: {
@@ -1410,6 +1465,10 @@ impl From<AppEvent> for WireEvent {
             AppEvent::RouteChanged(route) => WireEventKind::RouteChanged(route.into()),
             AppEvent::ThemeChanged(theme) => WireEventKind::ThemeChanged(theme.into()),
             AppEvent::SkinChanged(skin) => WireEventKind::SkinChanged(skin.into()),
+            AppEvent::FeePreferencesChanged(prefs) => WireEventKind::FeePreferencesChanged {
+                mode: prefs.mode.into(),
+                custom_fee_satoshis_per_kb: prefs.custom_rate.satoshis_per_kb(),
+            },
             AppEvent::NetworkChanged(network) => WireEventKind::NetworkChanged(network.into()),
             AppEvent::HelpVisibilityChanged(open) => WireEventKind::HelpVisibilityChanged(open),
             AppEvent::SurfaceChanged(surface) => WireEventKind::SurfaceChanged(surface.into()),
@@ -1447,6 +1506,13 @@ impl TryFrom<WireEvent> for AppEvent {
             WireEventKind::RouteChanged(route) => Self::RouteChanged(route.into()),
             WireEventKind::ThemeChanged(theme) => Self::ThemeChanged(theme.into()),
             WireEventKind::SkinChanged(skin) => Self::SkinChanged(skin.into()),
+            WireEventKind::FeePreferencesChanged {
+                mode,
+                custom_fee_satoshis_per_kb,
+            } => Self::FeePreferencesChanged(FeePreferences::new(
+                mode.into(),
+                FeeRate::from_satoshis_per_kb(custom_fee_satoshis_per_kb),
+            )),
             WireEventKind::NetworkChanged(network) => Self::NetworkChanged(network.into()),
             WireEventKind::HelpVisibilityChanged(open) => Self::HelpVisibilityChanged(open),
             WireEventKind::SurfaceChanged(surface) => Self::SurfaceChanged(surface.into()),

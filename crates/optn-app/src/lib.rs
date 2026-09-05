@@ -38,7 +38,9 @@ pub use lock::{
 };
 
 pub use optn_core::coins::{Coin, CoinSet, FreezeReason, Outpoint};
-pub use optn_core::fee::{FeeRate, RELAY_MINIMUM_FEE_RATE};
+pub use optn_core::fee::{
+    FeeMode, FeePreferences, FeeRate, DEFAULT_CUSTOM_FEE_RATE, RELAY_MINIMUM_FEE_RATE,
+};
 pub use optn_core::flipstarter::{
     chipnet_demo_coin, encode_campaign_blob, sample_chipnet_campaign_blob, Campaign,
     CampaignOutput, FlipstarterPledge, PledgeStatus,
@@ -426,6 +428,8 @@ pub struct AppState {
     pub notice: Option<String>,
     pub wallet: Option<OpenedWallet>,
     pub spend: Option<SpendPlan>,
+    /// App-wide fee policy. Providers may advise Auto, but never own this preference.
+    pub fee_preferences: FeePreferences,
     /// The connected device, if any. Separate from the opened wallet: a
     /// wallet remembers which device it belongs to while nothing is plugged in.
     pub hardware: HardwareSessionState,
@@ -519,6 +523,7 @@ impl AppState {
             notice: None,
             wallet: None,
             spend: None,
+            fee_preferences: FeePreferences::app_default(),
             hardware: HardwareSessionState::new(),
             servers: ServerOverrides::new(),
             identity_revealed: false,
@@ -561,6 +566,8 @@ pub enum AppAction {
     ToggleTheme,
     SetTheme(ThemeMode),
     SetSkin(UiSkin),
+    SetFeeMode(FeeMode),
+    SetCustomFeeRate(FeeRate),
     SetNetwork(Network),
     OpenHelp,
     CloseHelp,
@@ -675,6 +682,7 @@ pub enum AppEvent {
     RouteChanged(AppRoute),
     ThemeChanged(ThemeMode),
     SkinChanged(UiSkin),
+    FeePreferencesChanged(FeePreferences),
     NetworkChanged(Network),
     HelpVisibilityChanged(bool),
     SurfaceChanged(AppSurface),
@@ -773,6 +781,14 @@ impl AppState {
             AppAction::SetSkin(skin) if self.skin != skin => {
                 self.skin = skin;
                 Some(AppEvent::SkinChanged(skin))
+            }
+            AppAction::SetFeeMode(mode) if self.fee_preferences.mode != mode => {
+                self.fee_preferences.mode = mode;
+                Some(AppEvent::FeePreferencesChanged(self.fee_preferences))
+            }
+            AppAction::SetCustomFeeRate(rate) if self.fee_preferences.custom_rate != rate => {
+                self.fee_preferences.custom_rate = rate;
+                Some(AppEvent::FeePreferencesChanged(self.fee_preferences))
             }
             AppAction::SetNetwork(network) if self.network != network => {
                 self.network = network;
@@ -1092,12 +1108,16 @@ impl AppState {
                     return self
                         .reject("this build can view a wallet but not spend from it".into());
                 }
-                match prepare_spend_with(
+                let fee_rate = self
+                    .fee_preferences
+                    .resolve(RELAY_MINIMUM_FEE_RATE, RELAY_MINIMUM_FEE_RATE);
+                match prepare_spend_with_fee_and_coin(
                     &self.coins,
                     self.network,
                     &destination,
                     amount_sats,
                     wallet.spending_capability(),
+                    fee_rate,
                     coin,
                 ) {
                     Ok(plan) => {
@@ -1201,6 +1221,8 @@ impl AppState {
             AppAction::SetNetwork(_)
             | AppAction::SetTheme(_)
             | AppAction::SetSkin(_)
+            | AppAction::SetFeeMode(_)
+            | AppAction::SetCustomFeeRate(_)
             | AppAction::OpenHelp
             | AppAction::CloseHelp
             | AppAction::SetSurface(_) => None,
@@ -4845,5 +4867,29 @@ mod tests {
         );
         // The device itself stays chosen: it is still plugged in.
         assert_eq!(state.hardware.vendor, Some(HardwareVendor::Trezor));
+    }
+}
+
+#[cfg(test)]
+mod fee_policy_integration_regression {
+    use super::*;
+    #[test]
+    fn app_fee_policy_is_resolved_before_spend_planning_and_clamped() {
+        let mut state = AppState::default();
+        assert_eq!(state.fee_preferences, FeePreferences::app_default());
+        state.reduce(AppAction::SetFeeMode(FeeMode::Custom));
+        state.reduce(AppAction::SetCustomFeeRate(FeeRate::from_satoshis_per_kb(
+            500,
+        )));
+        assert_eq!(
+            state
+                .fee_preferences
+                .resolve(RELAY_MINIMUM_FEE_RATE, RELAY_MINIMUM_FEE_RATE),
+            RELAY_MINIMUM_FEE_RATE
+        );
+        state.reduce(AppAction::SetCustomFeeRate(FeeRate::from_satoshis_per_kb(
+            1700,
+        )));
+        assert_eq!(state.fee_preferences.custom_rate.satoshis_per_kb(), 1700);
     }
 }
