@@ -91,10 +91,19 @@ export function unsupportedReason(
   if (ok) return null;
 
   if (transports.includes('webhid') || transports.includes('native-usb')) {
-    return (
-      'This build cannot reach USB hardware wallets. Use the desktop app ' +
-      '(native USB) or a browser with WebHID. It is not your cable or device.'
-    );
+    // Two different situations wear the same shape. A Ledger has a browser
+    // route this build happens to lack; a Trezor has none at all since
+    // connect-web was removed, so sending someone to "a browser with WebHID"
+    // sends them after a browser that cannot help either. Derived from the
+    // transport list rather than naming a vendor, so a device that gains a
+    // browser route later starts giving the other answer on its own.
+    const hasABrowserRoute = transports.some((t) => t !== 'native-usb');
+    return hasABrowserRoute
+      ? 'This build cannot reach USB hardware wallets. Use the desktop app ' +
+          '(native USB) or a browser with WebHID. It is not your cable or device.'
+      : 'This device can only be reached over native USB, which this build ' +
+          'does not have. Use the desktop app — no browser can reach it yet. ' +
+          'It is not your cable or device.';
   }
   if (transports.includes('camera')) {
     return 'No camera is available, so QR-based signing cannot be used here.';

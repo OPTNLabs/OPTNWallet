@@ -62,7 +62,15 @@ describe('hardware transport support', () => {
     vi.stubGlobal('window', {});
     const browser = detectTransportSupport(chrome);
     expect(browser.nativeUsb).toBe(false);
-    expect(unsupportedReason('trezor', browser)).toMatch(/USB hardware wallets/i);
+
+    // Trezor-specific, and the specificity is the point. The generic USB
+    // message offers "a browser with WebHID" as the way out, which is true for
+    // a Ledger and false for a Trezor -- it has no browser transport at all
+    // right now, so that advice sends someone after a second dead end.
+    const trezor = unsupportedReason('trezor', browser);
+    expect(trezor).toMatch(/only be reached over native USB/i);
+    expect(trezor).toMatch(/no browser can reach it/i);
+    expect(trezor).not.toMatch(/WebHID/i);
 
     // OneKey still works there through its own web SDK.
     expect(unsupportedReason('onekey', browser)).toBeNull();
