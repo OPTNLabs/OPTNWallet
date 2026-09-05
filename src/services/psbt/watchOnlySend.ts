@@ -442,6 +442,44 @@ export function estimateFinalTransactionBytes(
   return encoded.length;
 }
 
+/**
+ * Which fee rate a watch-only send should use.
+ *
+ * Three inputs, one answer, and no view state — the screen only supplies the
+ * numbers. `undefined` out means "no explicit rate", which every caller
+ * resolves through the shared relay policy, so the wallet default is expressed
+ * by *not* naming a rate rather than by naming one here. That matters: a
+ * number invented in this file would be a second fee policy, and the reason
+ * this exists at all is that watch-only had one — a hardcoded 1 sat/byte for
+ * multisig, below the 1.1 relay floor the rest of the wallet uses.
+ *
+ * Precedence is per-send first, then the wallet's setting, then the shared
+ * default. A non-positive or non-finite custom rate falls through rather than
+ * throwing: Settings can hold a half-typed number, and a send screen should
+ * quietly use the default instead of refusing to render.
+ */
+export function resolveWatchOnlyFeeRate(
+  perSendOverride: number | null,
+  walletFeeMode: 'auto' | 'custom',
+  walletCustomFeeSatPerByte: number
+): number | undefined {
+  if (
+    perSendOverride !== null &&
+    Number.isFinite(perSendOverride) &&
+    perSendOverride > 0
+  ) {
+    return perSendOverride;
+  }
+  if (
+    walletFeeMode === 'custom' &&
+    Number.isFinite(walletCustomFeeSatPerByte) &&
+    walletCustomFeeSatPerByte > 0
+  ) {
+    return walletCustomFeeSatPerByte;
+  }
+  return undefined;
+}
+
 /** Calculate a fee at an explicit rate without changing the global wallet policy. */
 export function feeForTransactionBytes(
   bytes: number,

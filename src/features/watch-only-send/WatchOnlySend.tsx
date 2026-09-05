@@ -29,6 +29,10 @@ import { QRCodeSVG } from 'qrcode.react';
 
 import WalletScreen from '../../components/ui/WalletScreen';
 import { selectWalletId } from '../../state/slices/walletSlice';
+import {
+  selectCustomFeeSatPerByte,
+  selectFeeMode,
+} from '../../state/slices/preferencesSlice';
 import type { RootState } from '../../state/store';
 import type { UTXO } from '../../types/types';
 import { useI18n } from '../../i18n/useI18n';
@@ -60,6 +64,7 @@ import {
   buildWatchOnlyPsbt,
   estimateFinalTransactionBytes,
   feeForTransactionBytes,
+  resolveWatchOnlyFeeRate,
   multisigCosignerDerivations,
   type WatchOnlyBuildOutput,
   type WatchOnlyInputSpec,
@@ -172,7 +177,34 @@ const QR_DENSITY_LABELS: Record<
   400: 'Highest density (fewest frames)',
   450: 'Maximum density (fewest frames)',
 };
-const MULTISIG_FEE_RATE_SAT_PER_BYTE = 1;
+/**
+ * Fee rates offered per send, in satoshis per byte.
+ *
+ * `null` means "whatever the wallet is set to", which is the default and the
+ * only entry that is not a number: Settings already carries a fee mode and a
+ * custom rate that every other send path honours, and a watch-only send that
+ * quietly used its own number would be the one screen disagreeing with the
+ * rest of the wallet.
+ *
+ * The named rates above it are a per-send override, not a new policy — they
+ * are clamped to the relay minimum by `requiredFeeForBytes` in exactly the
+ * same way Settings' custom rate is, so nothing here can build a transaction
+ * the network will not relay.
+ */
+const FEE_RATE_CHOICES: ReadonlyArray<{
+  rate: number | null;
+  label: string;
+  hint: string;
+}> = [
+  {
+    rate: null,
+    label: 'Wallet default',
+    hint: 'Follows Settings, like every other send in this wallet.',
+  },
+  { rate: 1.1, label: 'Economy', hint: 'The relay minimum. Cheapest that propagates.' },
+  { rate: 2, label: 'Standard', hint: 'A little headroom over the floor.' },
+  { rate: 5, label: 'Priority', hint: 'For when a backend is fussy about its rolling minimum.' },
+];
 
 const satsToBch = (sats: bigint): string => {
   const bch = Number(sats) / 1e8;
@@ -405,6 +437,32 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
   const standardWalletId = useSelector(selectWalletId);
   const currentNetwork = useSelector(
     (state: RootState) => state.network.currentNetwork
+  );
+
+  // The wallet's own fee setting, the same pair `useSimpleSend` reads. Taking
+  // it from here rather than defining a default locally is the point: a
+  // watch-only send now costs what a signed send from this wallet costs.
+  const walletFeeMode = useSelector(selectFeeMode);
+  const walletCustomFeeSatPerByte = useSelector(selectCustomFeeSatPerByte);
+
+  /** Per-send override; `null` follows the wallet. */
+  const [feeRateOverride, setFeeRateOverride] = useState<number | null>(null);
+
+  /**
+   * The rate this send will actually use.
+   *
+   * `undefined` means "no explicit rate", which the builder resolves through
+   * the shared relay policy — the wallet default. That is deliberately the
+   * same value the rest of the app lands on, so the two cannot drift.
+   */
+  const feeRateSatPerByte = useMemo<number | undefined>(
+    () =>
+      resolveWatchOnlyFeeRate(
+        feeRateOverride,
+        walletFeeMode,
+        walletCustomFeeSatPerByte
+      ),
+    [feeRateOverride, walletFeeMode, walletCustomFeeSatPerByte]
   );
   const fusionDepthRev = useFusionDepthRevision(
     walletIdOverride ?? standardWalletId ?? 0
@@ -932,10 +990,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
           satoshis: 0n,
         },
       ]);
-      const feeSats = feeForTransactionBytes(
-        estimatedBytes,
-        MULTISIG_FEE_RATE_SAT_PER_BYTE
-      );
+      const feeSats = feeForTransactionBytes(estimatedBytes, feeRateSatPerByte);
       const availableSats = bchOnlyInputs.reduce(
         (sum, input) => sum + input.satoshis,
         0n
@@ -1087,9 +1142,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
         masterFingerprint: fingerprint
           ? masterFingerprintBytes(fingerprint)
           : null,
-        feeRateSatPerByte: multisigPolicy
-          ? MULTISIG_FEE_RATE_SAT_PER_BYTE
-          : undefined,
+        feeRateSatPerByte,
         ...(changeMultisig && multisigPolicy
           ? {
               changeRedeemScriptHex: toHex(changeMultisig.redeemScript),
@@ -1396,7 +1449,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
       validateBroadcastRelayFee(
         verdict.rawTxHex,
         proposalState.inputSumSats,
-        multisigPolicy ? MULTISIG_FEE_RATE_SAT_PER_BYTE : undefined
+        feeRateSatPerByte
       );
     } catch (feeError) {
       setBroadcastArmed(false);
@@ -1800,6 +1853,51 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
                     className="wallet-input w-full rounded-md px-3 py-2"
                   />
                 </label>
+                {/*
+                  Fee is a first-class control, not an advanced one. An
+                  air-gapped send is expensive in effort -- build, show, scan,
+                  sign, scan back -- so discovering the fee was wrong after all
+                  that costs the whole round trip.
+                */}
+                <fieldset className="space-y-1">
+                  <legend className="text-sm wallet-text-strong">
+                    Fee rate
+                  </legend>
+                  <div
+                    className="flex flex-wrap gap-2"
+                    role="radiogroup"
+                    aria-label="Fee rate"
+                  >
+                    {FEE_RATE_CHOICES.map((choice) => {
+                      const active = feeRateOverride === choice.rate;
+                      return (
+                        <button
+                          key={choice.label}
+                          type="button"
+                          role="radio"
+                          aria-checked={active}
+                          onClick={() => setFeeRateOverride(choice.rate)}
+                          className={`min-h-11 flex-1 rounded-md px-3 py-2 text-sm ${
+                            active
+                              ? 'wallet-btn-primary font-semibold'
+                              : 'wallet-btn-secondary'
+                          }`}
+                        >
+                          {choice.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="text-xs wallet-muted">
+                    {feeRateOverride === null
+                      ? walletFeeMode === 'custom'
+                        ? `Following Settings: ${walletCustomFeeSatPerByte} sat/byte.`
+                        : 'Following Settings: automatic, at the relay minimum.'
+                      : `${feeRateOverride} sat/byte for this send only.`}{' '}
+                    Every rate is raised to the relay minimum if it falls below
+                    it, so a transaction built here can always propagate.
+                  </p>
+                </fieldset>
                 <button
                   type="button"
                   onClick={() => setShowAdvanced((open) => !open)}
