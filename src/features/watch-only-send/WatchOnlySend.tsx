@@ -506,7 +506,6 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
   const [scannerOpen, setScannerOpen] = useState(false);
   // The QR is bounded by the card it sits in, and a signer reads it faster
   // the larger it is. Testers asked for the whole window, so this gives it.
-  const [qrFullscreen, setQrFullscreen] = useState(false);
   // One decoder for the whole scan, not one per frame. An animated UR spans
   // dozens of frames, so a decoder rebuilt on each arrival discards every part
   // it has already seen and can never complete a multi-part signed PSBT --
@@ -2021,11 +2020,25 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
                         : 'Scan this unsigned PSBT with the first cosigner'
                       : 'Scan this with SeedCash (air-gapped)'}
                   </p>
+                  {/*
+                    No padding around the code on either surface. There are two
+                    different whites here and only one of them does anything:
+                    the QR's own quiet zone (`marginSize` below) is what a
+                    camera needs to find the finder patterns, and it is inside
+                    the SVG. A second white ring outside it just eats the space
+                    the code could have used.
+
+                    Desktop expands in place rather than behind a button. The
+                    cap is the viewport height less the surrounding chrome, so
+                    the code is as large as the window allows without pushing
+                    the density control off screen -- which is what the old
+                    full-screen modal existed to work around.
+                  */}
                   <div
-                    className={`mx-auto rounded-md bg-white ${
+                    className={`mx-auto rounded-md bg-white p-0 ${
                       desktopQr
-                        ? 'w-full max-w-[min(100%,calc(100svh-14rem))] p-1'
-                        : 'w-full max-w-none p-0'
+                        ? 'w-full max-w-[min(100%,calc(100svh-11rem))]'
+                        : 'w-full max-w-none'
                     }`}
                   >
                     <QRCodeSVG
@@ -2091,34 +2104,15 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
                       </button>
                     </>
                   )}
-                  <button
-                    type="button"
-                    onClick={() => setQrFullscreen(true)}
-                    className="wallet-btn-secondary w-full py-2 text-sm"
-                  >
-                    Show full screen
-                  </button>
-                  {qrFullscreen && (
-                    <div
-                      role="dialog"
-                      aria-modal="true"
-                      aria-label="Animated QR code, full screen"
-                      onClick={() => setQrFullscreen(false)}
-                      className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-2 bg-white p-1"
-                    >
-                      <QRCodeSVG
-                        value={qrUri}
-                        size={PSBT_UR_QR_DISPLAY_SIZE}
-                        marginSize={PSBT_UR_QR_MARGIN_MODULES}
-                        level={PSBT_UR_QR_ERROR_LEVEL}
-                        className="h-auto w-[min(98vw,94svh)] max-w-none"
-                      />
-                      <p className="text-center text-sm text-black">
-                        Frame {frameNumber} / {frameCountRef.current} · tap
-                        anywhere to close
-                      </p>
-                    </div>
-                  )}
+                  {/*
+                    The full-screen button is gone. It existed because the code
+                    was drawn smaller than it needed to be, and an overlay that
+                    covered the whole window was the workaround; the code above
+                    now expands in place, so the workaround has nothing left to
+                    work around. The modal was also the piece testers reported
+                    breaking the screen -- an animated QR rendered twice, in two
+                    places, driven by one timer.
+                  */}
                   <button
                     type="button"
                     onClick={() => void handleCopyQrText()}
@@ -2170,30 +2164,55 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
                       </button>
                     </div>
                   )}
+                  {/*
+                    Everything above this line is the code going *out* to the
+                    signer. Everything below is the signed result coming *back*.
+                    They were one undifferentiated column of identical grey
+                    buttons, so a control that changed what you were showing
+                    looked exactly like one that received the answer -- which is
+                    what testers meant by "the user can get a bit lost".
+                  */}
+                  <div
+                    className="mt-1 border-t border-[var(--wallet-border)] pt-3"
+                    role="separator"
+                  />
+                  <p className="text-sm font-semibold wallet-text-strong">
+                    Then bring the signed result back
+                  </p>
                   <button
                     type="button"
                     onClick={openScanner}
-                    className="wallet-btn-secondary w-full py-2 text-sm"
+                    className="wallet-btn-primary w-full py-2.5 text-sm font-semibold"
                   >
                     Scan the signed result
                   </button>
-                  <label className="wallet-btn-secondary block w-full cursor-pointer py-2 text-center text-sm">
-                    Import signed PSBT file
-                    <input
-                      type="file"
-                      accept=".psbt,.txt,.hex,application/octet-stream,text/plain"
-                      onChange={(event) => void handleImportFile(event)}
-                      className="sr-only"
-                    />
-                  </label>
                   <p className="text-center text-[11px] wallet-muted">
-                    Use the signer&apos;s exported PSBT file. A screenshot of
-                    one animated frame is not a complete PSBT.
+                    Point the camera at the signer&apos;s screen. This is the
+                    usual way.
                   </p>
+                  {/*
+                    The other two routes exist for signers that write a file or
+                    for a stuck camera. They are real, so they stay -- but as
+                    one collapsed row rather than as buttons the same size and
+                    colour as the one almost everyone wants.
+                  */}
                   <details className="text-xs">
                     <summary className="cursor-pointer wallet-muted">
-                      Or paste the UR text
+                      No camera? Import a file or paste the UR text
                     </summary>
+                    <label className="wallet-btn-secondary mt-2 block w-full cursor-pointer py-2 text-center text-sm">
+                      Import signed PSBT file
+                      <input
+                        type="file"
+                        accept=".psbt,.txt,.hex,application/octet-stream,text/plain"
+                        onChange={(event) => void handleImportFile(event)}
+                        className="sr-only"
+                      />
+                    </label>
+                    <p className="mt-1 text-center text-[11px] wallet-muted">
+                      Use the signer&apos;s exported PSBT file. A screenshot of
+                      one animated frame is not a complete PSBT.
+                    </p>
                     <textarea
                       value={importText}
                       onChange={(event) => setImportText(event.target.value)}
