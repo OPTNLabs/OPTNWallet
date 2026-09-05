@@ -25,6 +25,33 @@ Both took longer than an allow-list entry. Both left the guard stronger.
 
 ---
 
+## Before any of this: `--workspace` does not run them all
+
+The root `Cargo.toml` **excludes** `crates/optn-core`, `crates/optn-cli`,
+`crates/optn-ui-egui` and `src-tauri`, and `fuzz` declares its own workspace.
+`cargo test --workspace` covers 9 of the 14 crates, so a rule can be updated
+everywhere the workspace reaches and left stale in a crate that is right there
+in the tree.
+
+That is not hypothetical. When hardware was turned on for web and extension,
+the text renderer's copy of the surface-matrix test was updated and
+`optn-ui-egui`'s was not — it still asserted "Web has no USB". It stayed red and
+invisible until someone ran that crate's own tests. The same hole hides
+formatting, Clippy findings and four stale lock files.
+
+```sh
+for d in crates/optn-core crates/optn-cli crates/optn-ui-egui src-tauri fuzz; do
+  (cd "$d" && cargo check --all-targets && cargo test && cargo fmt --all -- --check) \
+    || echo "FAILED: $d"
+done
+```
+
+`optn-ui`'s components are `#[cfg(target_arch = "wasm32")]`, so add
+`cargo check -p optn-ui --target wasm32-unknown-unknown`. A missing match arm
+got through that way.
+
+---
+
 ## `xtask architecture`
 
 ### Framework isolation

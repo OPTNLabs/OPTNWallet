@@ -385,18 +385,41 @@ mod tests {
     #[test]
     fn the_surface_matrix_holds_here_without_this_renderer_knowing_the_rules() {
         // The list is the application's. A renderer cannot widen it, and does
-        // not contain the rule that would let it try.
+        // not contain the rule that would let it try -- which is why this test
+        // reads the painted screen rather than asking a capability function.
+        //
+        // Hardware follows the *integrations*, not the cable. The browsers
+        // drive a Ledger over WebHID, a OneKey through its own web SDK and a
+        // Keystone by camera, so a device is offered there; the phones have no
+        // native plugin yet, so it is not. "Web has no USB" was the old rule
+        // and it was wrong in the place it mattered most -- the extension is
+        // where people reach for a hardware wallet.
+        for surface in [AppSurface::Desktop, AppSurface::Web, AppSurface::Extension] {
+            let text = painted_text(&AppState::for_surface(surface));
+            assert!(
+                text.iter().any(|t| t == "Connect hardware wallet"),
+                "{surface:?} can drive a device: {text:?}"
+            );
+        }
+
+        for surface in [AppSurface::Android, AppSurface::Ios] {
+            let text = painted_text(&AppState::for_surface(surface));
+            assert!(
+                !text.iter().any(|t| t == "Connect hardware wallet"),
+                "{surface:?} has no device integration yet: {text:?}"
+            );
+        }
+
+        // Watch Only takes no transport at all -- an account xPub can be
+        // pasted -- so it is on every surface without exception.
         for surface in [
+            AppSurface::Desktop,
             AppSurface::Android,
             AppSurface::Ios,
             AppSurface::Web,
             AppSurface::Extension,
         ] {
             let text = painted_text(&AppState::for_surface(surface));
-            assert!(
-                !text.iter().any(|t| t == "Connect hardware wallet"),
-                "{surface:?} has no USB: {text:?}"
-            );
             assert!(
                 text.iter().any(|t| t == "Create watch-only wallet"),
                 "{surface:?} keeps Watch Only: {text:?}"
