@@ -1,0 +1,47 @@
+name: One-shot fee integration
+
+on:
+  push:
+    branches:
+      - agent/rpa-shared-vectors
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-commit:
+    if: contains(github.event.head_commit.message, 'activate deterministic fee integration patch')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/rpa-shared-vectors
+          fetch-depth: 0
+
+      - name: Install wasm target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Apply exact source patch
+        run: python .github/scripts/apply_fee_integration.py
+
+      - name: Format patched Rust
+        run: cargo fmt --all
+
+      - name: Test application fee state
+        run: cargo test -p optn-app --lib
+
+      - name: Check Leptos settings target
+        run: cargo check -p optn-ui --target wasm32-unknown-unknown
+
+      - name: Ensure clean patch syntax
+        run: git diff --check
+
+      - name: Commit only validated product changes
+        run: |
+          git rm .github/workflows/one-shot-fee-integration.yml .github/scripts/apply_fee_integration.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/optn-app/src/lib.rs crates/optn-ui/src/settings.rs
+          git commit -m "feat(app): wire fee preferences end to end"
+          git push origin HEAD:agent/rpa-shared-vectors
