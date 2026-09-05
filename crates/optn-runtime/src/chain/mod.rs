@@ -258,6 +258,21 @@ impl EndpointKind {
             Self::ExplorerHttp | Self::ExplorerHttps => None,
         }
     }
+
+    /// Whether this configured endpoint can potentially carry a protocol.
+    ///
+    /// This is intentionally weaker than a capability claim: a BCH P2P socket
+    /// is eligible to be probed for BIP37 or compact filters, but only a
+    /// successful advertisement/probe makes either capability usable.
+    pub const fn can_probe_protocol(self, protocol: ProtocolFamily) -> bool {
+        match self {
+            Self::BchP2p => matches!(protocol, ProtocolFamily::Bip37 | ProtocolFamily::Neutrino),
+            Self::ElectrumTls | Self::ElectrumTcp => matches!(protocol, ProtocolFamily::Electrum),
+            Self::BchnRpc => matches!(protocol, ProtocolFamily::BchnRpc),
+            Self::BchnZmq => matches!(protocol, ProtocolFamily::BchnZmq),
+            Self::ExplorerHttp | Self::ExplorerHttps => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -333,6 +348,13 @@ impl ChainSource {
         !self.is_user_infrastructure()
     }
 
+    /// Candidate eligibility, not proof that the source supports the protocol.
+    ///
+    /// A restored/custom endpoint intentionally has no persisted capability
+    /// claims until it is re-probed. It must still reach the probe stage, so an
+    /// explicit compatible endpoint is enough to keep the source in the
+    /// candidate pool. Execution later requires the provider's advertised or
+    /// verified operation capability.
     pub fn supports_any(&self, protocols: &ProtocolSet) -> bool {
         [
             ProtocolFamily::Electrum,
@@ -343,7 +365,12 @@ impl ChainSource {
         ]
         .into_iter()
         .any(|protocol| {
-            protocols.contains(protocol) && self.capabilities.protocol_supported(protocol)
+            protocols.contains(protocol)
+                && (self.capabilities.protocol_supported(protocol)
+                    || self
+                        .endpoints
+                        .iter()
+                        .any(|endpoint| endpoint.kind.can_probe_protocol(protocol)))
         })
     }
 }
@@ -1013,5 +1040,57 @@ mod tests {
         );
         assert_eq!(EndpointKind::BchP2p.protocol_family(), None);
         assert_eq!(EndpointKind::ExplorerHttps.protocol_family(), None);
+    }
+
+    #[test]
+    fn restored_endpoint_is_candidate_before_capability_reprobe() {
+        let id = SourceId::from("restored");
+        let mut catalog = SourceCatalog::default();
+        catalog
+            .insert(ChainSource {
+                id: id.clone(),
+                label: "My node".into(),
+                origin: SourceOrigin::UserInfrastructure {
+                    group: "lab".into(),
+                },
+                endpoints: vec![Endpoint {
+                    kind: EndpointKind::BchP2p,
+                    host: "node.example".into(),
+                    port: Some(8333),
+                }],
+                capabilities: CapabilitySet::default(),
+                disposition: SourceDisposition::Enabled,
+                priority: 0,
+            })
+            .unwrap();
+
+        let policy = ConnectionPolicy {
+            protocols: ProtocolSet::only(ProtocolFamily::Bip37),
+            primary_scope: SourceScope::Explicit(BTreeSet::from([id.clone()])),
+            fallback_scope: None,
+            preferred: Vec::new(),
+        };
+        let plan = build_selection_plan(&catalog, &policy);
+        assert_eq!(plan.primary, vec![id]);
+    }
+
+    #[test]
+    fn configured_endpoint_does_not_fake_verified_capability() {
+        let source = ChainSource {
+            id: SourceId::from("probe-me"),
+            label: "Probe me".into(),
+            origin: SourceOrigin::UserAdded,
+            endpoints: vec![Endpoint {
+                kind: EndpointKind::ElectrumTls,
+                host: "fulcrum.example".into(),
+                port: Some(50002),
+            }],
+            capabilities: CapabilitySet::default(),
+            disposition: SourceDisposition::Enabled,
+            priority: 0,
+        };
+        assert!(source.supports_any(&ProtocolSet::only(ProtocolFamily::Electrum)));
+        assert!(!source.capabilities.is_usable(Capability::RpaIndex));
+        assert!(!source.capabilities.is_usable(Capability::ElectrumProtocol));
     }
 }
