@@ -56,6 +56,14 @@ pub const NIP44_VERSION: u8 = 2;
 
 /// The HKDF salt that separates this scheme's keys from any other use of the
 /// same ECDH secret.
+///
+/// These eight bytes are the specification's own constant, not a name this
+/// module chose: NIP-44 fixes the salt as `utf8_encode("nip44-v2")`. The
+/// module is called `nip44`, the version constant is `NIP44_VERSION`, and the
+/// binding here is `HKDF_SALT` -- but the *value* is wire-visible and shared
+/// with every other client, so changing these bytes to match our spelling
+/// would derive a different conversation key and silently stop us talking to
+/// anyone. Rename the binding freely; never touch the literal.
 const HKDF_SALT: &[u8] = b"nip44-v2";
 
 /// Shortest and longest plaintext, in bytes.

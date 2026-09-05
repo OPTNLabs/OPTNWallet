@@ -26,7 +26,10 @@ pub mod hd;
 pub mod multisig;
 pub mod multisig_session;
 pub mod network;
-pub mod nostr;
+/// NIP-44 v2 encryption. Named for the NIP it implements, because that is all
+/// it implements -- no events, no relays, no NIP-01. `nostr_identity` is the
+/// module that genuinely spans several NIPs and is named for the subject.
+pub mod nip44;
 pub mod nostr_identity;
 pub mod psbt;
 pub mod rpa;
