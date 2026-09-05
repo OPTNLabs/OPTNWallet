@@ -78,11 +78,7 @@ impl BootstrapCatalog {
     /// The complete multi-feed provenance remains available on this catalog;
     /// `SourceOrigin` receives a deterministic representative only for backward
     /// compatibility with the current source type.
-    pub fn materialize_source(
-        &self,
-        candidate: &BootstrapCandidate,
-        priority: u16,
-    ) -> ChainSource {
+    pub fn materialize_source(&self, candidate: &BootstrapCandidate, priority: u16) -> ChainSource {
         let representative = candidate
             .provenance
             .iter()
@@ -109,7 +105,9 @@ impl BootstrapCatalog {
             host: normalize_host(&endpoint.host),
             port: endpoint.port,
         };
-        self.candidates.get(&key).map(|candidate| &candidate.provenance)
+        self.candidates
+            .get(&key)
+            .map(|candidate| &candidate.provenance)
     }
 }
 
@@ -206,14 +204,13 @@ mod tests {
     fn materialized_source_does_not_pretend_bootstrap_capabilities_are_verified() {
         let mut catalog = BootstrapCatalog::default();
         let endpoint = electrum("example.com");
-        catalog.ingest(
-            endpoint.clone(),
-            BootstrapProject::ElectronCash,
-            "servers",
-        );
+        catalog.ingest(endpoint.clone(), BootstrapProject::ElectronCash, "servers");
         let candidate = catalog.candidates().next().unwrap();
         let source = catalog.materialize_source(candidate, 10);
-        assert!(source.capabilities.claim(crate::chain::Capability::ElectrumProtocol).is_none());
+        assert!(source
+            .capabilities
+            .claim(crate::chain::Capability::ElectrumProtocol)
+            .is_none());
         assert_eq!(catalog.provenance_for(&endpoint).unwrap().len(), 1);
     }
 }

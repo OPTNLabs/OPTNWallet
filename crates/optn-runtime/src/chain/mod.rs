@@ -149,7 +149,10 @@ pub enum CapabilityConfidence {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CapabilityDiscovery {
     /// BCH P2P `version.services`, e.g. NODE_BLOOM/BIP111 or bchd SFNodeCF.
-    P2pServiceBit { bit: u64, name: String },
+    P2pServiceBit {
+        bit: u64,
+        name: String,
+    },
     ElectrumServerVersion,
     ElectrumServerFeatures,
     ElectrumPeerDiscovery,
@@ -188,7 +191,9 @@ impl CapabilitySet {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (Capability, &CapabilityClaim)> {
-        self.0.iter().map(|(capability, claim)| (*capability, claim))
+        self.0
+            .iter()
+            .map(|(capability, claim)| (*capability, claim))
     }
 
     pub fn is_usable(&self, capability: Capability) -> bool {
@@ -582,7 +587,10 @@ pub fn build_selection_plan(catalog: &SourceCatalog, policy: &ConnectionPolicy) 
                 .unwrap_or(usize::MAX);
             (preference, source.priority, source.id.clone())
         });
-        sources.into_iter().map(|source| source.id.clone()).collect()
+        sources
+            .into_iter()
+            .map(|source| source.id.clone())
+            .collect()
     }
 
     let primary = ranked(
@@ -596,7 +604,15 @@ pub fn build_selection_plan(catalog: &SourceCatalog, policy: &ConnectionPolicy) 
     let fallback = policy
         .fallback_scope
         .as_ref()
-        .map(|scope| ranked(catalog, scope, &policy.protocols, &policy.preferred, &primary_set))
+        .map(|scope| {
+            ranked(
+                catalog,
+                scope,
+                &policy.protocols,
+                &policy.preferred,
+                &primary_set,
+            )
+        })
         .unwrap_or_default();
 
     SelectionPlan { primary, fallback }
@@ -645,15 +661,26 @@ pub trait CapabilityProbe: Send + Sync {
 pub enum Evidence {
     ServerAssertion,
     MempoolObservation,
-    HeaderLinked { block_hash: Hash32, height: u32 },
-    HeaderPowVerified { block_hash: Hash32, height: u32 },
-    HeaderMmrProven { block_hash: Hash32, height: u32 },
+    HeaderLinked {
+        block_hash: Hash32,
+        height: u32,
+    },
+    HeaderPowVerified {
+        block_hash: Hash32,
+        height: u32,
+    },
+    HeaderMmrProven {
+        block_hash: Hash32,
+        height: u32,
+    },
     MerkleTransactionIncluded {
         txid: Hash32,
         block_hash: Hash32,
         height: u32,
     },
-    FullNodeValidated { source: SourceId },
+    FullNodeValidated {
+        source: SourceId,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -825,13 +852,19 @@ mod tests {
         catalog
             .set_disposition(&id, SourceDisposition::Banned)
             .unwrap();
-        assert_eq!(catalog.get(&id).unwrap().disposition, SourceDisposition::Banned);
+        assert_eq!(
+            catalog.get(&id).unwrap().disposition,
+            SourceDisposition::Banned
+        );
         assert_eq!(
             catalog.remove(&id),
             Err(CatalogError::BootstrapNotRemovable(id.clone()))
         );
         catalog.reset_bootstrap_dispositions();
-        assert_eq!(catalog.get(&id).unwrap().disposition, SourceDisposition::Enabled);
+        assert_eq!(
+            catalog.get(&id).unwrap().disposition,
+            SourceDisposition::Enabled
+        );
     }
 
     #[test]
