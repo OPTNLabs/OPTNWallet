@@ -11,6 +11,9 @@
 
 /// Provenance-preserving normalization of upstream node/server bootstrap feeds.
 pub mod bootstrap;
+/// Broadcast state tracking. Timeout/offline ambiguity is preserved rather than
+/// collapsed into a false deterministic failure.
+pub mod broadcast;
 /// Provider-neutral BCH chain-source, capability, policy, sync, and evidence
 /// scaffolding. The canonical architecture is tracked in OPTNLabs/OPTNWallet#75.
 pub mod chain;
@@ -19,6 +22,8 @@ pub mod chain_service;
 /// Provider-neutral normalized chain event streams. Event delivery is never
 /// treated as proof and sequence gaps are preserved for recovery.
 pub mod events;
+/// Query-before-apply gate for lossy event-stream sequence gaps.
+pub mod event_recovery;
 /// Explorer routing is deliberately separate from wallet consensus/state.
 pub mod explorer;
 /// Provider-neutral SHV/MMR header verification using the pure optn-core accumulator.
