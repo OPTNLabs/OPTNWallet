@@ -22,14 +22,20 @@ jobs:
       - name: Install wasm target
         run: rustup target add wasm32-unknown-unknown
 
-      - name: Apply exact source patch
+      - name: Apply exact app and UI source patch
         run: python .github/scripts/apply_fee_integration.py
+
+      - name: Apply exact transport source patch
+        run: python .github/scripts/apply_fee_transport.py
 
       - name: Format patched Rust
         run: cargo fmt --all
 
       - name: Test application fee state
         run: cargo test -p optn-app --lib
+
+      - name: Test transport fee round trips
+        run: cargo test -p optn-transport --lib
 
       - name: Check Leptos settings target
         run: cargo check -p optn-ui --target wasm32-unknown-unknown
@@ -39,9 +45,9 @@ jobs:
 
       - name: Commit only validated product changes
         run: |
-          git rm .github/workflows/one-shot-fee-integration.yml .github/scripts/apply_fee_integration.py
+          git rm .github/workflows/one-shot-fee-integration.yml .github/scripts/apply_fee_integration.py .github/scripts/apply_fee_transport.py
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add crates/optn-app/src/lib.rs crates/optn-ui/src/settings.rs
+          git add crates/optn-app/src/lib.rs crates/optn-transport/src/lib.rs crates/optn-ui/src/settings.rs
           git commit -m "feat(app): wire fee preferences end to end"
           git push origin HEAD:agent/rpa-shared-vectors
