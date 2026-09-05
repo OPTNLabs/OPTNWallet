@@ -4,7 +4,9 @@
 //! is separate from raw header PoW: a header can satisfy its own declared
 //! `nBits` while still declaring the wrong network difficulty.
 
-use crate::header_pow::{parse_header, target_from_compact, HeaderPowError, ParsedHeader, HEADER_LEN};
+use crate::header_pow::{
+    parse_header, target_from_compact, HeaderPowError, ParsedHeader, HEADER_LEN,
+};
 use num_bigint::BigUint;
 
 const RBITS: i64 = 16;
@@ -71,8 +73,7 @@ pub fn next_bits(
         return Err(AsertError::InvalidParams);
     }
     let mut target = target_from_compact(anchor.bits).map_err(AsertError::InvalidAnchor)?;
-    let max_target =
-        target_from_compact(params.max_bits).map_err(AsertError::InvalidMaxTarget)?;
+    let max_target = target_from_compact(params.max_bits).map_err(AsertError::InvalidMaxTarget)?;
 
     let height_diff = i64::from(previous_height) - i64::from(anchor.height);
     let time_diff = previous_time
@@ -101,7 +102,11 @@ pub fn next_bits(
 
     let shifts = exponent >> RBITS;
     let fractional = exponent
-        .checked_sub(shifts.checked_mul(RADIX).ok_or(AsertError::ArithmeticRange)?)
+        .checked_sub(
+            shifts
+                .checked_mul(RADIX)
+                .ok_or(AsertError::ArithmeticRange)?,
+        )
         .ok_or(AsertError::ArithmeticRange)?;
     if !(0..RADIX).contains(&fractional) {
         return Err(AsertError::ArithmeticRange);
@@ -111,9 +116,7 @@ pub fn next_bits(
     let polynomial = 195_766_423_245_049u128
         .saturating_mul(e)
         .saturating_add(971_821_376u128.saturating_mul(e.saturating_mul(e)))
-        .saturating_add(
-            5_127u128.saturating_mul(e.saturating_mul(e).saturating_mul(e)),
-        )
+        .saturating_add(5_127u128.saturating_mul(e.saturating_mul(e).saturating_mul(e)))
         .saturating_add(1u128 << 47)
         >> (RBITS * 3);
     let factor = u64::try_from(u128::from(RADIX as u64) + polynomial)
@@ -170,8 +173,8 @@ fn target_to_compact(target: &BigUint, max_target: &BigUint) -> Result<u32, Aser
         return Err(AsertError::ArithmeticRange);
     }
 
-    let mut size = u32::try_from((target.bits() + 7) / 8)
-        .map_err(|_| AsertError::ArithmeticRange)?;
+    let mut size =
+        u32::try_from((target.bits() + 7) / 8).map_err(|_| AsertError::ArithmeticRange)?;
     let compact_value = if size <= 3 {
         target << (8 * (3 - size)) as usize
     } else {

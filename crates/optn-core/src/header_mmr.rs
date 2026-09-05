@@ -112,12 +112,7 @@ impl MmrAccumulator {
     }
 
     /// Verify a proof only to the trusted peak containing `leaf_index`.
-    pub fn verify_proof_to_peak(
-        &self,
-        leaf_index: u64,
-        leaf: Hash32,
-        siblings: &[Hash32],
-    ) -> bool {
+    pub fn verify_proof_to_peak(&self, leaf_index: u64, leaf: Hash32, siblings: &[Hash32]) -> bool {
         if leaf_index >= self.leaf_count {
             return false;
         }
@@ -161,12 +156,7 @@ impl MmrAccumulator {
     /// The left-sibling duplicate rejection is the CVE-2012-2459 ambiguity
     /// protection used by the reference accumulator. Legitimate duplication
     /// produced while bagging appears as a right sibling.
-    pub fn verify_proof_to_root(
-        &self,
-        leaf_index: u64,
-        leaf: Hash32,
-        siblings: &[Hash32],
-    ) -> bool {
+    pub fn verify_proof_to_root(&self, leaf_index: u64, leaf: Hash32, siblings: &[Hash32]) -> bool {
         if leaf_index >= self.leaf_count {
             return false;
         }
@@ -350,14 +340,38 @@ mod tests {
     #[test]
     fn reference_roots_match_bitcoincashautist_accumulator() {
         let expected = [
-            (1u64, "0101010101010101010101010101010101010101010101010101010101010101"),
-            (2, "39ce20bede82c96b8908bec4a157b09c549b3db90b9b474bda9ae9b9030310b4"),
-            (3, "223e023fadf1f053df26988871f893c821c28edf77d64a955e6c2a02d547bdac"),
-            (4, "085aabaef98668701b87c9a1986bdf116726a9949802326b69895697d4e8c812"),
-            (5, "26e2870f72368b3f8baef83fa26282d95d9c194e1f33d90a12932e0f6022e5d3"),
-            (7, "5cda317f9f94e784d7811b9b9884f3082f0baafc8a93a7db6f95f57ea52e9269"),
-            (8, "c1105948cfffba7d4dcf98de63a5eb1e4bd9c0ae1ff9dfcf0f34b9ad7eb758fc"),
-            (11, "00118133e5f9cf9c0da5443ad80ed3c69ec37cead6a6f7926c7452e1278ba554"),
+            (
+                1u64,
+                "0101010101010101010101010101010101010101010101010101010101010101",
+            ),
+            (
+                2,
+                "39ce20bede82c96b8908bec4a157b09c549b3db90b9b474bda9ae9b9030310b4",
+            ),
+            (
+                3,
+                "223e023fadf1f053df26988871f893c821c28edf77d64a955e6c2a02d547bdac",
+            ),
+            (
+                4,
+                "085aabaef98668701b87c9a1986bdf116726a9949802326b69895697d4e8c812",
+            ),
+            (
+                5,
+                "26e2870f72368b3f8baef83fa26282d95d9c194e1f33d90a12932e0f6022e5d3",
+            ),
+            (
+                7,
+                "5cda317f9f94e784d7811b9b9884f3082f0baafc8a93a7db6f95f57ea52e9269",
+            ),
+            (
+                8,
+                "c1105948cfffba7d4dcf98de63a5eb1e4bd9c0ae1ff9dfcf0f34b9ad7eb758fc",
+            ),
+            (
+                11,
+                "00118133e5f9cf9c0da5443ad80ed3c69ec37cead6a6f7926c7452e1278ba554",
+            ),
         ];
 
         let mut mmr = MmrAccumulator::new();

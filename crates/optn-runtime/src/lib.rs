@@ -11,19 +11,16 @@
 
 /// Provenance-preserving normalization of upstream node/server bootstrap feeds.
 pub mod bootstrap;
-/// Broadcast state tracking. Timeout/offline ambiguity is preserved rather than
-/// collapsed into a false deterministic failure.
-pub mod broadcast;
 /// Provider-neutral BCH chain-source, capability, policy, sync, and evidence
 /// scaffolding. The canonical architecture is tracked in OPTNLabs/OPTNWallet#75.
 pub mod chain;
 /// Runtime-owned operation-aware provider selection and bounded failover.
 pub mod chain_service;
+/// Query-before-apply gate for lossy event-stream sequence gaps.
+pub mod event_recovery;
 /// Provider-neutral normalized chain event streams. Event delivery is never
 /// treated as proof and sequence gaps are preserved for recovery.
 pub mod events;
-/// Query-before-apply gate for lossy event-stream sequence gaps.
-pub mod event_recovery;
 /// Explorer routing is deliberately separate from wallet consensus/state.
 pub mod explorer;
 /// Provider-neutral SHV/MMR header verification using the pure optn-core accumulator.
@@ -35,6 +32,9 @@ pub mod network_config;
 pub mod reconciliation;
 /// Progressive capability-route wallet synchronization.
 pub mod sync_worker;
+/// Broadcast state tracking. Timeout/offline ambiguity is preserved rather than
+/// collapsed into a false deterministic failure.
+pub mod tx_broadcast;
 /// Framework-neutral authenticated wallet-update state/provider scaffolding.
 pub mod update;
 
@@ -80,13 +80,21 @@ pub struct DirectTransport {
 impl DirectTransport {
     pub fn new(runtime: AppRuntime) -> Self {
         let events = runtime.subscribe_events();
-        Self { runtime, events: Mutex::new(events) }
+        Self {
+            runtime,
+            events: Mutex::new(events),
+        }
     }
 }
 
 impl AppTransport for DirectTransport {
     fn dispatch<'a>(&'a self, action: AppAction) -> TransportFuture<'a, ()> {
-        Box::pin(async move { self.runtime.dispatch(action).await.map_err(|_| TransportError::Closed) })
+        Box::pin(async move {
+            self.runtime
+                .dispatch(action)
+                .await
+                .map_err(|_| TransportError::Closed)
+        })
     }
 
     fn snapshot<'a>(&'a self) -> TransportFuture<'a, AppState> {
@@ -115,8 +123,17 @@ impl AppRuntime {
         let (event_tx, _) = broadcast::channel(EVENT_CAPACITY);
 
         (
-            Self { action_tx, state_rx, event_tx: event_tx.clone() },
-            AppRuntimeDriver { action_rx, state_tx, event_tx, state: initial_state },
+            Self {
+                action_tx,
+                state_rx,
+                event_tx: event_tx.clone(),
+            },
+            AppRuntimeDriver {
+                action_rx,
+                state_tx,
+                event_tx,
+                state: initial_state,
+            },
         )
     }
 
@@ -128,18 +145,29 @@ impl AppRuntime {
     }
 
     pub async fn dispatch(&self, action: AppAction) -> Result<(), RuntimeStopped> {
-        self.action_tx.send(action).await.map_err(|_| RuntimeStopped)
+        self.action_tx
+            .send(action)
+            .await
+            .map_err(|_| RuntimeStopped)
     }
 
-    pub fn state(&self) -> AppState { self.state_rx.borrow().clone() }
-    pub fn subscribe_state(&self) -> watch::Receiver<AppState> { self.state_rx.clone() }
-    pub fn subscribe_events(&self) -> broadcast::Receiver<AppEvent> { self.event_tx.subscribe() }
+    pub fn state(&self) -> AppState {
+        self.state_rx.borrow().clone()
+    }
+    pub fn subscribe_state(&self) -> watch::Receiver<AppState> {
+        self.state_rx.clone()
+    }
+    pub fn subscribe_events(&self) -> broadcast::Receiver<AppEvent> {
+        self.event_tx.subscribe()
+    }
 }
 
 impl AppRuntimeDriver {
     pub async fn run(mut self) {
         while let Some(action) = self.action_rx.recv().await {
-            let Some(event) = self.state.reduce(action) else { continue; };
+            let Some(event) = self.state.reduce(action) else {
+                continue;
+            };
             self.state_tx.send_replace(self.state.clone());
             let _ = self.event_tx.send(event);
         }
@@ -166,7 +194,10 @@ mod tests {
     async fn runtime_suppresses_no_op_events() {
         let runtime = AppRuntime::spawn(AppState::default());
         let mut events = runtime.subscribe_events();
-        runtime.dispatch(AppAction::Navigate(AppRoute::Landing)).await.unwrap();
+        runtime
+            .dispatch(AppAction::Navigate(AppRoute::Landing))
+            .await
+            .unwrap();
         runtime.dispatch(AppAction::OpenHelp).await.unwrap();
         let event = events.recv().await.unwrap();
         assert_eq!(event, AppEvent::HelpVisibilityChanged(true));
@@ -179,7 +210,10 @@ mod tests {
         let mut state = transport.snapshot().await.unwrap();
         assert_eq!(state.theme, ThemeMode::Green);
         transport.dispatch(AppAction::ToggleTheme).await.unwrap();
-        assert_eq!(transport.next_event().await.unwrap(), Some(AppEvent::ThemeChanged(ThemeMode::Dark)));
+        assert_eq!(
+            transport.next_event().await.unwrap(),
+            Some(AppEvent::ThemeChanged(ThemeMode::Dark))
+        );
         state = transport.snapshot().await.unwrap();
         assert_eq!(state.theme, ThemeMode::Dark);
     }

@@ -27,15 +27,26 @@ impl GcsFilter {
         let mut pos = 0usize;
         let n = read_varint(encoded, &mut pos)?;
         let n = u32::try_from(n).map_err(|_| GcsError::InvalidCount)?;
-        Ok(Self { n, data: encoded.get(pos..).ok_or(GcsError::Truncated)?.to_vec() })
+        Ok(Self {
+            n,
+            data: encoded.get(pos..).ok_or(GcsError::Truncated)?.to_vec(),
+        })
     }
 
-    pub const fn len(&self) -> u32 { self.n }
-    pub const fn is_empty(&self) -> bool { self.n == 0 }
+    pub const fn len(&self) -> u32 {
+        self.n
+    }
+    pub const fn is_empty(&self) -> bool {
+        self.n == 0
+    }
 
     pub fn match_any(&self, block_hash: &[u8; 32], items: &[Vec<u8>]) -> Result<bool, GcsError> {
-        if self.n == 0 || items.is_empty() { return Ok(false); }
-        let modulus = u64::from(self.n).checked_mul(BASIC_M).ok_or(GcsError::Overflow)?;
+        if self.n == 0 || items.is_empty() {
+            return Ok(false);
+        }
+        let modulus = u64::from(self.n)
+            .checked_mul(BASIC_M)
+            .ok_or(GcsError::Overflow)?;
         let mut values = items
             .iter()
             .map(|item| fast_reduce(siphash24(block_hash, item), modulus))
@@ -53,8 +64,12 @@ impl GcsFilter {
             while query_index < values.len() && values[query_index] < filter_value {
                 query_index += 1;
             }
-            if query_index == values.len() { return Ok(false); }
-            if values[query_index] == filter_value { return Ok(true); }
+            if query_index == values.len() {
+                return Ok(false);
+            }
+            if values[query_index] == filter_value {
+                return Ok(true);
+            }
         }
         Ok(false)
     }
@@ -90,7 +105,9 @@ struct BitReader<'a> {
 }
 
 impl<'a> BitReader<'a> {
-    const fn new(bytes: &'a [u8]) -> Self { Self { bytes, bit: 0 } }
+    const fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, bit: 0 }
+    }
 
     fn read_bit(&mut self) -> Result<bool, GcsError> {
         let byte = *self.bytes.get(self.bit / 8).ok_or(GcsError::Truncated)?;
@@ -114,11 +131,15 @@ fn read_varint(data: &[u8], pos: &mut usize) -> Result<u64, GcsError> {
     match first {
         0xfd => {
             let bytes = take(data, pos, 2)?;
-            Ok(u64::from(u16::from_le_bytes(bytes.try_into().expect("fixed slice"))))
+            Ok(u64::from(u16::from_le_bytes(
+                bytes.try_into().expect("fixed slice"),
+            )))
         }
         0xfe => {
             let bytes = take(data, pos, 4)?;
-            Ok(u64::from(u32::from_le_bytes(bytes.try_into().expect("fixed slice"))))
+            Ok(u64::from(u32::from_le_bytes(
+                bytes.try_into().expect("fixed slice"),
+            )))
         }
         0xff => {
             let bytes = take(data, pos, 8)?;
@@ -142,7 +163,9 @@ mod tests {
     #[test]
     fn siphash_matches_standard_empty_vector() {
         let mut key = [0u8; 32];
-        for (index, byte) in key[..16].iter_mut().enumerate() { *byte = index as u8; }
+        for (index, byte) in key[..16].iter_mut().enumerate() {
+            *byte = index as u8;
+        }
         assert_eq!(siphash24(&key, &[]), 0x726f_db47_dd0e_0e31);
     }
 
@@ -156,6 +179,9 @@ mod tests {
     #[test]
     fn truncated_filter_is_rejected_while_decoding_values() {
         let filter = GcsFilter::from_nbytes(&[1]).unwrap();
-        assert_eq!(filter.match_any(&[0; 32], &[b"x".to_vec()]), Err(GcsError::Truncated));
+        assert_eq!(
+            filter.match_any(&[0; 32], &[b"x".to_vec()]),
+            Err(GcsError::Truncated)
+        );
     }
 }

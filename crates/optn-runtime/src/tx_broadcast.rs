@@ -11,19 +11,35 @@ use crate::chain_service::{
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BroadcastState {
-    Prepared { txid: Hash32 },
+    Prepared {
+        txid: Hash32,
+    },
     /// A provider accepted the broadcast call. This is not yet independent
     /// mempool/chain observation.
-    Submitted { txid: Hash32, via: SourceId },
+    Submitted {
+        txid: Hash32,
+        via: SourceId,
+    },
     /// A later chain observation independently found the exact transaction.
-    Observed { txid: Hash32, via: SourceId },
+    Observed {
+        txid: Hash32,
+        via: SourceId,
+    },
     /// Submission may have reached one or more peers, but the runtime cannot
     /// establish acceptance or deterministic rejection.
-    Uncertain { txid: Hash32, attempts: Vec<AttemptFailure> },
+    Uncertain {
+        txid: Hash32,
+        attempts: Vec<AttemptFailure>,
+    },
     /// Every attempted route produced an explicit deterministic rejection.
-    Rejected { txid: Hash32, attempts: Vec<AttemptFailure> },
+    Rejected {
+        txid: Hash32,
+        attempts: Vec<AttemptFailure>,
+    },
     /// No permitted provider can currently broadcast.
-    Unavailable { txid: Hash32 },
+    Unavailable {
+        txid: Hash32,
+    },
 }
 
 impl BroadcastState {
@@ -53,10 +69,16 @@ impl BroadcastCoordinator {
         raw_tx: Vec<u8>,
         txid: Hash32,
     ) -> BroadcastState {
-        match service.execute(&ChainRequest::Broadcast { raw_tx, txid }).await {
+        match service
+            .execute(&ChainRequest::Broadcast { raw_tx, txid })
+            .await
+        {
             Ok(observation) => match observation.value {
                 ChainPayload::BroadcastObserved { txid: observed } if observed == txid => {
-                    BroadcastState::Submitted { txid, via: observation.source }
+                    BroadcastState::Submitted {
+                        txid,
+                        via: observation.source,
+                    }
                 }
                 _ => BroadcastState::Uncertain {
                     txid,
@@ -91,10 +113,16 @@ impl BroadcastCoordinator {
         current: BroadcastState,
     ) -> BroadcastState {
         let txid = current.txid();
-        match service.execute(&ChainRequest::TransactionLookup { txid }).await {
+        match service
+            .execute(&ChainRequest::TransactionLookup { txid })
+            .await
+        {
             Ok(observation) => match observation.value {
                 ChainPayload::Transaction(transaction) if transaction.txid == txid => {
-                    BroadcastState::Observed { txid, via: observation.source }
+                    BroadcastState::Observed {
+                        txid,
+                        via: observation.source,
+                    }
                 }
                 _ => current,
             },
@@ -124,12 +152,23 @@ mod tests {
     }
 
     impl ChainBackend for MockBackend {
-        fn source_id(&self) -> &SourceId { &self.id }
-        fn protocol(&self) -> ProtocolFamily { ProtocolFamily::Electrum }
-        fn capabilities(&self) -> &CapabilitySet { &self.caps }
-        fn health(&self) -> ProviderHealth { ProviderHealth::Healthy }
+        fn source_id(&self) -> &SourceId {
+            &self.id
+        }
+        fn protocol(&self) -> ProtocolFamily {
+            ProtocolFamily::Electrum
+        }
+        fn capabilities(&self) -> &CapabilitySet {
+            &self.caps
+        }
+        fn health(&self) -> ProviderHealth {
+            ProviderHealth::Healthy
+        }
         fn supports(&self, operation: ChainOperation) -> bool {
-            matches!(operation, ChainOperation::Broadcast | ChainOperation::TransactionLookup)
+            matches!(
+                operation,
+                ChainOperation::Broadcast | ChainOperation::TransactionLookup
+            )
         }
         fn execute<'a>(&'a self, request: &'a ChainRequest) -> ChainFuture<'a, BackendObservation> {
             let result = match request {
@@ -144,15 +183,21 @@ mod tests {
     fn service(backend: MockBackend) -> ChainService {
         let id = backend.id.clone();
         let mut catalog = SourceCatalog::default();
-        catalog.insert(ChainSource {
-            id: id.clone(),
-            label: "server".into(),
-            origin: SourceOrigin::UserAdded,
-            endpoints: vec![Endpoint { kind: EndpointKind::ElectrumTcp, host: "server".into(), port: Some(50001) }],
-            capabilities: CapabilitySet::default(),
-            disposition: SourceDisposition::Enabled,
-            priority: 0,
-        }).unwrap();
+        catalog
+            .insert(ChainSource {
+                id: id.clone(),
+                label: "server".into(),
+                origin: SourceOrigin::UserAdded,
+                endpoints: vec![Endpoint {
+                    kind: EndpointKind::ElectrumTcp,
+                    host: "server".into(),
+                    port: Some(50001),
+                }],
+                capabilities: CapabilitySet::default(),
+                disposition: SourceDisposition::Enabled,
+                priority: 0,
+            })
+            .unwrap();
         let mut service = ChainService::new(catalog, ConnectionPolicy::auto());
         service.register(Arc::new(backend));
         service
@@ -161,7 +206,11 @@ mod tests {
     fn caps() -> CapabilitySet {
         let mut caps = CapabilitySet::default();
         for capability in [Capability::Broadcast, Capability::TransactionQuery] {
-            caps.record(capability, CapabilityConfidence::Verified, CapabilityDiscovery::ActiveProbe);
+            caps.record(
+                capability,
+                CapabilityConfidence::Verified,
+                CapabilityDiscovery::ActiveProbe,
+            );
         }
         caps
     }
@@ -174,7 +223,9 @@ mod tests {
             broadcast: Err(ChainBackendError::Timeout),
             lookup: Err(ChainBackendError::Offline),
         };
-        let state = BroadcastCoordinator.submit(&mut service(backend), vec![1], [1; 32]).await;
+        let state = BroadcastCoordinator
+            .submit(&mut service(backend), vec![1], [1; 32])
+            .await;
         assert!(matches!(state, BroadcastState::Uncertain { .. }));
     }
 
@@ -186,7 +237,9 @@ mod tests {
             broadcast: Err(ChainBackendError::Rejected("policy".into())),
             lookup: Err(ChainBackendError::Offline),
         };
-        let state = BroadcastCoordinator.submit(&mut service(backend), vec![1], [1; 32]).await;
+        let state = BroadcastCoordinator
+            .submit(&mut service(backend), vec![1], [1; 32])
+            .await;
         assert!(state.is_terminal_failure());
     }
 
@@ -202,7 +255,11 @@ mod tests {
                 chain_tip: None,
             }),
             lookup: Ok(BackendObservation {
-                payload: ChainPayload::Transaction(ObservedTransaction { txid, raw: vec![1], block_height: None }),
+                payload: ChainPayload::Transaction(ObservedTransaction {
+                    txid,
+                    raw: vec![1],
+                    block_height: None,
+                }),
                 evidence: Evidence::MempoolObservation,
                 chain_tip: None,
             }),

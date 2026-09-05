@@ -6,7 +6,7 @@
 //! filters, fallback boundaries, or explorer preference.
 
 use crate::chain::{
-    Capability, CapabilitySet, CatalogError, ChainSource, ConnectionPolicy, Endpoint, EndpointKind,
+    CapabilitySet, CatalogError, ChainSource, ConnectionPolicy, Endpoint, EndpointKind,
     ProtocolFamily, ProtocolSet, SourceCatalog, SourceDisposition, SourceId, SourceOrigin,
     SourceScope,
 };
@@ -218,7 +218,9 @@ enum StoredScope {
     Explicit { source_ids: Vec<String> },
 }
 
-pub fn encode_envelope_json(value: &NetworkConfigEnvelope) -> Result<String, NetworkConfigCodecError> {
+pub fn encode_envelope_json(
+    value: &NetworkConfigEnvelope,
+) -> Result<String, NetworkConfigCodecError> {
     let stored = StoredEnvelope {
         schema_version: value.schema_version,
         bootstrap_catalog_version_seen: value.bootstrap_catalog_version_seen.clone(),
@@ -238,7 +240,9 @@ pub fn decode_envelope_json(value: &str) -> Result<NetworkConfigEnvelope, Networ
     })
 }
 
-pub fn export_portable_json(value: &PortableNetworkConfig) -> Result<String, NetworkConfigCodecError> {
+pub fn export_portable_json(
+    value: &PortableNetworkConfig,
+) -> Result<String, NetworkConfigCodecError> {
     let stored = StoredPortable {
         schema_version: value.schema_version,
         overlay: StoredOverlay::from_overlay(&value.overlay)?,
@@ -322,7 +326,11 @@ impl StoredSource {
             id: value.id.as_str().to_owned(),
             label: value.label.clone(),
             origin,
-            endpoints: value.endpoints.iter().map(StoredEndpoint::from_endpoint).collect(),
+            endpoints: value
+                .endpoints
+                .iter()
+                .map(StoredEndpoint::from_endpoint)
+                .collect(),
             disposition: value.disposition.into(),
             priority: value.priority,
         })
@@ -393,7 +401,11 @@ impl StoredPolicy {
                 .collect(),
             primary_scope: StoredScope::from_scope(&value.primary_scope),
             fallback_scope: value.fallback_scope.as_ref().map(StoredScope::from_scope),
-            preferred: value.preferred.iter().map(|id| id.as_str().to_owned()).collect(),
+            preferred: value
+                .preferred
+                .iter()
+                .map(|id| id.as_str().to_owned())
+                .collect(),
         }
     }
 
@@ -429,7 +441,10 @@ impl StoredScope {
             Self::PublicEnabled => SourceScope::PublicEnabled,
             Self::UserInfrastructure => SourceScope::UserInfrastructure,
             Self::Explicit { source_ids } => SourceScope::Explicit(
-                source_ids.into_iter().map(SourceId::new).collect::<BTreeSet<_>>(),
+                source_ids
+                    .into_iter()
+                    .map(SourceId::new)
+                    .collect::<BTreeSet<_>>(),
             ),
         }
     }
@@ -551,10 +566,9 @@ mod tests {
 
         let mut overlay = UserNetworkOverlay::default();
         overlay.user_sources.push(user_source("my-node"));
-        overlay.bootstrap_overrides.insert(
-            SourceId::from("bootstrap-a"),
-            SourceDisposition::Banned,
-        );
+        overlay
+            .bootstrap_overrides
+            .insert(SourceId::from("bootstrap-a"), SourceDisposition::Banned);
 
         let merged = merge_bootstrap_with_user_overlay(
             &new_base,
@@ -563,7 +577,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            merged.get(&SourceId::from("bootstrap-a")).unwrap().disposition,
+            merged
+                .get(&SourceId::from("bootstrap-a"))
+                .unwrap()
+                .disposition,
             SourceDisposition::Banned
         );
         assert!(merged.get(&SourceId::from("bootstrap-new")).is_some());
@@ -607,19 +624,19 @@ mod tests {
     fn json_round_trip_preserves_user_intent_but_not_ephemeral_capabilities() {
         let mut overlay = UserNetworkOverlay::default();
         overlay.user_sources.push(user_source("my-node"));
-        overlay.bootstrap_overrides.insert(
-            SourceId::new("public-bad"),
-            SourceDisposition::Banned,
-        );
-        overlay.connection_policy = ConnectionPolicy::exact(
-            SourceId::new("my-node"),
-            ProtocolFamily::Electrum,
-        );
+        overlay
+            .bootstrap_overrides
+            .insert(SourceId::new("public-bad"), SourceDisposition::Banned);
+        overlay.connection_policy =
+            ConnectionPolicy::exact(SourceId::new("my-node"), ProtocolFamily::Electrum);
         let envelope = NetworkConfigEnvelope::current("catalog-9", overlay);
         let json = encode_envelope_json(&envelope).unwrap();
         let restored = decode_envelope_json(&json).unwrap();
         assert_eq!(restored, envelope);
-        assert!(restored.overlay.user_sources[0].capabilities.claim(Capability::Broadcast).is_none());
+        assert!(restored.overlay.user_sources[0]
+            .capabilities
+            .claim(crate::chain::Capability::Broadcast)
+            .is_none());
     }
 
     #[test]
