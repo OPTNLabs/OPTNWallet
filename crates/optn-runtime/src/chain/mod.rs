@@ -2,9 +2,9 @@
 //!
 //! Canonical design: https://github.com/OPTNLabs/OPTNWallet/issues/75
 //!
-//! This module intentionally contains policy/types only. Concrete Electrum,
-//! BIP37, Neutrino, BCHN RPC/ZMQ, SHV/MMR and explorer adapters belong behind
-//! these contracts and must feed one authoritative `optn-runtime` state.
+//! Sources are what users select. Protocols/endpoints are delivery routes.
+//! Capabilities describe what the wallet needs and are intentionally not owned
+//! by whichever protocol happens to implement them first.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -75,6 +75,11 @@ impl ProtocolSet {
     }
 }
 
+/// What OPTN needs from chain/index infrastructure.
+///
+/// A capability is deliberately protocol-independent. For example, `RpaIndex`
+/// may be supplied by a Fulcrum Electrum extension today and by a node RPC/P2P
+/// extension later without changing application state or creating a new mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Capability {
     ElectrumProtocol,
@@ -89,6 +94,9 @@ pub enum Capability {
     Bip37BloomFiltering,
     CompactFilters,
     RpaIndex,
+    CashTokenIndex,
+    BcmrResolver,
+    GraphQueries,
     RawMempoolEvents,
     RawBlockEvents,
     DoubleSpendProofs,
@@ -112,6 +120,9 @@ impl Capability {
             Self::Bip37BloomFiltering => "BIP37",
             Self::CompactFilters => "Neutrino",
             Self::RpaIndex => "RPA index",
+            Self::CashTokenIndex => "CashToken index",
+            Self::BcmrResolver => "BCMR resolver",
+            Self::GraphQueries => "Indexed graph queries",
             Self::RawMempoolEvents => "Raw mempool events",
             Self::RawBlockEvents => "Raw block events",
             Self::DoubleSpendProofs => "DSProof",
@@ -176,6 +187,10 @@ impl CapabilitySet {
         self.0.get(&capability)
     }
 
+    pub fn iter(&self) -> impl Iterator<Item = (Capability, &CapabilityClaim)> {
+        self.0.iter().map(|(capability, claim)| (*capability, claim))
+    }
+
     pub fn is_usable(&self, capability: Capability) -> bool {
         self.claim(capability).is_some_and(|claim| {
             matches!(
@@ -185,6 +200,9 @@ impl CapabilitySet {
         })
     }
 
+    /// Protocol support is a route-level fact used by the current catalog
+    /// scaffold. Feature capabilities such as RPA/BCMR/token indexing are not
+    /// mapped here because they may be offered by more than one protocol.
     pub fn protocol_supported(&self, protocol: ProtocolFamily) -> bool {
         match protocol {
             ProtocolFamily::Electrum => self.is_usable(Capability::ElectrumProtocol),
@@ -230,6 +248,18 @@ pub enum EndpointKind {
     ExplorerHttps,
 }
 
+impl EndpointKind {
+    pub const fn protocol_family(self) -> Option<ProtocolFamily> {
+        match self {
+            Self::BchP2p => None,
+            Self::ElectrumTls | Self::ElectrumTcp => Some(ProtocolFamily::Electrum),
+            Self::BchnRpc => Some(ProtocolFamily::BchnRpc),
+            Self::BchnZmq => Some(ProtocolFamily::BchnZmq),
+            Self::ExplorerHttp | Self::ExplorerHttps => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Endpoint {
     pub kind: EndpointKind,
@@ -271,9 +301,15 @@ pub enum SourceDisposition {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChainSource {
     pub id: SourceId,
+    /// User/bootstrap supplied label. Names such as "Home Server" are examples,
+    /// never generic source names imposed by the runtime.
     pub label: String,
     pub origin: SourceOrigin,
     pub endpoints: Vec<Endpoint>,
+    /// Combined catalog/UI summary of capability claims known for this source.
+    /// Execution must still consult the selected provider/endpoint's own
+    /// capability set; this field does not permanently assign a capability to a
+    /// protocol or endpoint.
     pub capabilities: CapabilitySet,
     pub disposition: SourceDisposition,
     /// Lower values are tried first after explicit user preference.
@@ -345,8 +381,6 @@ impl SourceCatalog {
         self.sources.values()
     }
 
-    /// Remove a user-added or user-infrastructure source.
-    /// Bootstrap records deliberately survive so "reset bootstrap" remains possible.
     pub fn remove(&mut self, id: &SourceId) -> Result<ChainSource, CatalogError> {
         let source = self
             .sources
@@ -371,7 +405,6 @@ impl SourceCatalog {
         Ok(())
     }
 
-    /// Restore shipped/bootstrap entries to enabled without touching user entries.
     pub fn reset_bootstrap_dispositions(&mut self) {
         for source in self.sources.values_mut() {
             if matches!(source.origin, SourceOrigin::Bootstrap { .. }) {
@@ -399,10 +432,6 @@ pub struct BootstrapFeed {
     pub reference: &'static str,
 }
 
-/// Upstream *feed classes*, not a frozen list of trusted endpoints.
-///
-/// Importers should normalize/deduplicate results, retain provenance, then
-/// actively probe capabilities before a source is labeled verified.
 pub const DEFAULT_BOOTSTRAP_FEEDS: &[BootstrapFeed] = &[
     BootstrapFeed {
         project: BootstrapProject::Bchn,
@@ -442,14 +471,10 @@ pub const DEFAULT_BOOTSTRAP_FEEDS: &[BootstrapFeed] = &[
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceScope {
-    /// Bootstrap + custom + user infrastructure, excluding disabled/banned.
     AllEnabled,
-    /// Bootstrap + user-added public/custom sources, excluding own infrastructure.
     PublicEnabled,
-    /// Only endpoints explicitly marked as user-owned infrastructure.
     UserInfrastructure,
-    /// A user-selected pool. One entry means an exact/manual source; multiple
-    /// entries mean automatic failover inside that selected pool.
+    /// One entry means exact/manual; multiple entries mean a selected failover pool.
     Explicit(BTreeSet<SourceId>),
 }
 
@@ -466,14 +491,9 @@ impl SourceScope {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectionPolicy {
-    /// Which protocol families are eligible at all.
     pub protocols: ProtocolSet,
-    /// First candidate pool. Automatic failover occurs inside this pool.
     pub primary_scope: SourceScope,
-    /// Optional second pool after the primary pool is exhausted.
-    /// `None` is the fail-closed/manual behavior.
     pub fallback_scope: Option<SourceScope>,
-    /// Persistent ordered preference inside eligible pools.
     pub preferred: Vec<SourceId>,
 }
 
@@ -508,9 +528,7 @@ impl ConnectionPolicy {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SelectionPlan {
-    /// Ordered candidates in the requested primary scope.
     pub primary: Vec<SourceId>,
-    /// Ordered candidates in fallback scope, excluding primary candidates.
     pub fallback: Vec<SourceId>,
 }
 
@@ -551,15 +569,7 @@ pub fn build_selection_plan(catalog: &SourceCatalog, policy: &ConnectionPolicy) 
     let fallback = policy
         .fallback_scope
         .as_ref()
-        .map(|scope| {
-            ranked(
-                catalog,
-                scope,
-                &policy.protocols,
-                &policy.preferred,
-                &primary_set,
-            )
-        })
+        .map(|scope| ranked(catalog, scope, &policy.protocols, &policy.preferred, &primary_set))
         .unwrap_or_default();
 
     SelectionPlan { primary, fallback }
@@ -580,18 +590,23 @@ pub enum ProviderHealth {
 pub trait ChainProvider: Send + Sync {
     fn source_id(&self) -> &SourceId;
     fn protocol(&self) -> ProtocolFamily;
+    fn endpoint(&self) -> Option<&Endpoint> {
+        None
+    }
     fn capabilities(&self) -> &CapabilitySet;
     fn health(&self) -> ProviderHealth;
 }
 
 pub trait ChainEventSource: Send + Sync {
     fn source_id(&self) -> &SourceId;
+    fn endpoint(&self) -> Option<&Endpoint> {
+        None
+    }
     fn capabilities(&self) -> &CapabilitySet;
     fn health(&self) -> ProviderHealth;
 }
 
 pub trait CapabilityProbe: Send + Sync {
-    /// Return advertised/configured capability claims before active validation.
     fn advertised(&self) -> CapabilitySet;
 }
 
@@ -724,10 +739,6 @@ pub struct ExplorerEndpoint {
     pub user_owned: bool,
 }
 
-// ---------------------------------------------------------------------------
-// Tests lock the semantics agents are expected to preserve.
-// ---------------------------------------------------------------------------
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -792,7 +803,6 @@ mod tests {
             catalog.remove(&id),
             Err(CatalogError::BootstrapNotRemovable(id.clone()))
         );
-
         catalog.reset_bootstrap_dispositions();
         assert_eq!(catalog.get(&id).unwrap().disposition, SourceDisposition::Enabled);
     }
@@ -966,5 +976,42 @@ mod tests {
                 .confidence,
             CapabilityConfidence::Verified
         );
+    }
+
+    #[test]
+    fn indexed_capabilities_are_not_owned_by_one_protocol() {
+        let mut electrum = CapabilitySet::default();
+        electrum.record(
+            Capability::RpaIndex,
+            CapabilityConfidence::Verified,
+            CapabilityDiscovery::ElectrumServerFeatures,
+        );
+        let mut rpc = CapabilitySet::default();
+        rpc.record(
+            Capability::RpaIndex,
+            CapabilityConfidence::Advertised,
+            CapabilityDiscovery::ExplicitConfiguration,
+        );
+
+        assert!(electrum.is_usable(Capability::RpaIndex));
+        assert!(rpc.is_usable(Capability::RpaIndex));
+        assert_eq!(Capability::RpaIndex.label(), "RPA index");
+        assert_eq!(Capability::CashTokenIndex.label(), "CashToken index");
+        assert_eq!(Capability::BcmrResolver.label(), "BCMR resolver");
+        assert_eq!(Capability::GraphQueries.label(), "Indexed graph queries");
+    }
+
+    #[test]
+    fn endpoint_kind_only_describes_route_not_feature_ownership() {
+        assert_eq!(
+            EndpointKind::ElectrumTls.protocol_family(),
+            Some(ProtocolFamily::Electrum)
+        );
+        assert_eq!(
+            EndpointKind::BchnRpc.protocol_family(),
+            Some(ProtocolFamily::BchnRpc)
+        );
+        assert_eq!(EndpointKind::BchP2p.protocol_family(), None);
+        assert_eq!(EndpointKind::ExplorerHttps.protocol_family(), None);
     }
 }
