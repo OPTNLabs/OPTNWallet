@@ -24,9 +24,8 @@ pub enum ChainOperation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChainRequest {
     WalletRefresh {
-        /// Script pubkeys or other provider-neutral wallet interests. Providers
-        /// may internally transform these into bloom items, compact-filter
-        /// matches, or Electrum script hashes.
+        /// Provider-neutral wallet interests. Adapters may transform these into
+        /// bloom items, compact-filter matches, or Electrum script hashes.
         interests: Vec<Vec<u8>>,
         from_height: Option<u32>,
     },
@@ -57,8 +56,8 @@ pub struct ChainTip {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObservedTransaction {
     pub txid: Hash32,
-    /// Raw transaction bytes are retained so parsing/validation remains in the
-    /// Rust domain/core rather than trusting provider-normalized balances.
+    /// Keep raw bytes so transaction parsing/validation remains in Rust core;
+    /// never accept a provider-normalized balance as wallet truth.
     pub raw: Vec<u8>,
     pub block_height: Option<u32>,
 }
@@ -73,7 +72,6 @@ pub enum ChainPayload {
     BroadcastObserved { txid: Hash32 },
     Headers {
         start_height: u32,
-        /// Serialized 80-byte BCH headers.
         headers: Vec<[u8; 80]>,
     },
     HistoricalHeaderProof {
@@ -86,8 +84,10 @@ pub enum ChainPayload {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackendObservation {
     pub payload: ChainPayload,
-    pub evidence: Vec<Evidence>,
-    pub chain_tip: Option<Hash32>,
+    /// The strongest evidence this response establishes. Additional weaker
+    /// facts may be inferred by reconciliation, but are not provider votes.
+    pub evidence: Evidence,
+    pub chain_tip: Option<(u32, Hash32)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,7 +102,7 @@ pub enum ChainBackendError {
 
 /// Concrete Electrum, BIP37, Neutrino, and trusted BCHN RPC adapters implement
 /// this trait. ZMQ remains a separate event source and wakes this service to
-/// retrieve/verify data rather than directly mutating state.
+/// retrieve/verify data instead of directly mutating wallet state.
 pub trait ChainBackend: Send + Sync {
     fn source_id(&self) -> &SourceId;
     fn protocol(&self) -> ProtocolFamily;
@@ -155,16 +155,13 @@ impl ProviderRegistry {
     }
 }
 
-/// Owns provider selection/failover. Authoritative wallet reconciliation lives
-/// above the returned `ChainObservation`; provider data is never applied here
-/// as a balance overwrite.
+/// Owns provider selection and bounded failover. The caller reconciles the
+/// returned observation into authoritative state; this service never performs
+/// destructive balance replacement itself.
 pub struct ChainService {
     catalog: SourceCatalog,
     policy: ConnectionPolicy,
     registry: ProviderRegistry,
-    /// Runtime-local health overrides after failed attempts. This prevents a
-    /// failing backend from being retried repeatedly during the same session;
-    /// a health worker may later clear/update it after a successful probe.
     health_overrides: BTreeMap<(SourceId, ProtocolFamily), ProviderHealth>,
 }
 
@@ -216,11 +213,12 @@ impl ChainService {
 
         let mut attempts = Vec::new();
         for source in candidates {
-            for provider in self
+            let providers = self
                 .registry
-                .providers_for(&source, &self.policy, request.operation())
-            {
-                let key = (source.clone(), provider.protocol());
+                .providers_for(&source, &self.policy, request.operation());
+            for provider in providers {
+                let protocol = provider.protocol();
+                let key = (source.clone(), protocol);
                 if matches!(
                     self.health_overrides.get(&key),
                     Some(ProviderHealth::Offline | ProviderHealth::Degraded)
@@ -234,12 +232,12 @@ impl ChainService {
                         return Ok(ChainObservation {
                             value: observation.payload,
                             source: source.clone(),
-                            evidence: observation.evidence,
                             chain_tip: observation.chain_tip,
+                            evidence: observation.evidence,
                         });
                     }
                     Err(error) => {
-                        let health = match error {
+                        let health = match &error {
                             ChainBackendError::Offline | ChainBackendError::Timeout => {
                                 ProviderHealth::Offline
                             }
@@ -248,7 +246,7 @@ impl ChainService {
                         self.health_overrides.insert(key, health);
                         attempts.push(AttemptFailure {
                             source: source.clone(),
-                            protocol: provider.protocol(),
+                            protocol,
                             error,
                         });
                     }
@@ -266,8 +264,8 @@ impl ChainService {
 
 fn operation_protocol_rank(operation: ChainOperation, protocol: ProtocolFamily) -> u8 {
     match operation {
-        // Auto favors fast indexed history where policy permits it; Privacy or
-        // single-protocol policies remove Electrum before this rank is applied.
+        // Privacy/single-protocol policies remove disallowed transports before
+        // these Auto-mode preferences are considered.
         ChainOperation::WalletRefresh => match protocol {
             ProtocolFamily::Electrum => 0,
             ProtocolFamily::BchnRpc => 1,
@@ -275,14 +273,7 @@ fn operation_protocol_rank(operation: ChainOperation, protocol: ProtocolFamily) 
             ProtocolFamily::Bip37 => 3,
             ProtocolFamily::BchnZmq => 9,
         },
-        ChainOperation::TransactionLookup => match protocol {
-            ProtocolFamily::BchnRpc => 0,
-            ProtocolFamily::Electrum => 1,
-            ProtocolFamily::Bip37 => 2,
-            ProtocolFamily::Neutrino => 3,
-            ProtocolFamily::BchnZmq => 9,
-        },
-        ChainOperation::Broadcast => match protocol {
+        ChainOperation::TransactionLookup | ChainOperation::Broadcast => match protocol {
             ProtocolFamily::BchnRpc => 0,
             ProtocolFamily::Electrum => 1,
             ProtocolFamily::Bip37 => 2,
@@ -299,9 +290,6 @@ fn operation_protocol_rank(operation: ChainOperation, protocol: ProtocolFamily) 
     }
 }
 
-/// Required capabilities for the common operations. Adapters may additionally
-/// gate `supports()` on protocol-specific state (for example a successful
-/// compact-filter probe before enabling Neutrino).
 pub const fn operation_capability(operation: ChainOperation) -> Capability {
     match operation {
         ChainOperation::WalletRefresh => Capability::UtxoQuery,
@@ -409,7 +397,7 @@ mod tests {
     fn success(txid: Hash32) -> BackendObservation {
         BackendObservation {
             payload: ChainPayload::BroadcastObserved { txid },
-            evidence: vec![Evidence::MempoolObservation],
+            evidence: Evidence::MempoolObservation,
             chain_tip: None,
         }
     }
