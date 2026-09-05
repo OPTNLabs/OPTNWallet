@@ -9,6 +9,8 @@
 //! The runtime does not choose an executor for the host. `AppRuntime::new`
 //! returns a driver future which Tauri, tests, or another shell can spawn.
 
+/// Provenance-preserving normalization of upstream node/server bootstrap feeds.
+pub mod bootstrap;
 /// Provider-neutral BCH chain-source, capability, policy, sync, and evidence
 /// scaffolding. The canonical architecture is tracked in OPTNLabs/OPTNWallet#75.
 pub mod chain;
