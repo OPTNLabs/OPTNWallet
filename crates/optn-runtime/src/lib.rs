@@ -9,6 +9,10 @@
 //! The runtime does not choose an executor for the host. `AppRuntime::new`
 //! returns a driver future which Tauri, tests, or another shell can spawn.
 
+/// Provider-neutral BCH chain-source, capability, policy, sync, and evidence
+/// scaffolding. The canonical architecture is tracked in OPTNLabs/OPTNWallet#75.
+pub mod chain;
+
 use optn_app::{AppAction, AppEvent, AppState};
 use optn_transport::{AppTransport, TransportError, TransportFuture};
 use tokio::sync::{broadcast, mpsc, watch, Mutex};
