@@ -26,6 +26,41 @@ Framework boundary rules are architectural invariants:
   `optn-app`.
 - Run `cargo run -p xtask -- architecture` after changing these layers.
 
+## BCH chain-source architecture
+
+Before changing BCH networking, SPV, Electrum/Fulcrum, Neutrino, BCHN RPC/ZMQ,
+SHV/MMR, provider failover, explorer routing, or the Network Sources UI, read:
+
+- canonical architecture issue: https://github.com/OPTNLabs/OPTNWallet/issues/75
+- `crates/optn-runtime/src/chain/README.md`
+- `crates/optn-runtime/src/chain/mod.rs`
+
+Preserve these invariants:
+
+- Do not invent a separate `manual` versus `auto` state machine. Connection
+  behavior is protocol filter + primary source scope + optional fallback scope
+  + ordered preference.
+- One explicit source is an exact/manual connection. Multiple explicit sources
+  are an automatic failover pool.
+- Bootstrap sources may be disabled/banned/re-enabled but are not deleted from
+  the base catalog; user-added/custom and user-owned infrastructure entries are
+  removable.
+- Keep capability `Advertised` distinct from `Verified`. BCH P2P service bits,
+  Electrum metadata, and bootstrap provenance are discovery evidence, not proof
+  that a capability has been exercised successfully.
+- BIP37, Neutrino, Fulcrum/Electrum, BCHN RPC and BCHN ZMQ are provider/event
+  capabilities. SHV/MMR is a provider-neutral verification/storage primitive.
+- ZMQ is an event/wake-up source, not a wallet sync mode or consensus proof.
+- Providers/event sources must emit typed observations into `optn-runtime`;
+  they must not mutate wallet balance/history directly.
+- Never reconcile provider disagreement by simple majority voting.
+- Never cross from user-owned infrastructure to public infrastructure unless
+  the configured fallback policy explicitly permits it.
+- Keep explorer navigation separate from chain truth.
+
+Concrete providers should extend the existing chain scaffold rather than create
+parallel UI-owned networking state or provider-specific wallet state.
+
 ## External wallet references
 
 Reference wallets are behavioral and architectural oracles, not implementation-stack templates.
