@@ -4,6 +4,7 @@ members = [
   "crates/optn-app",
   "crates/optn-chain-bchn",
   "crates/optn-chain-electrum",
+  "crates/optn-chain-zmq",
   # #65's deterministic multisig core. A member rather than an exclusion:
   # it has no lock file of its own and three pure dependencies, so there is
   # nothing to keep it out for -- and being a member is what puts it under
@@ -30,6 +31,7 @@ default-members = [
   "crates/optn-app",
   "crates/optn-chain-bchn",
   "crates/optn-chain-electrum",
+  "crates/optn-chain-zmq",
   "crates/optn-platform",
   "crates/optn-platform-native",
   "crates/optn-platform-apple",
