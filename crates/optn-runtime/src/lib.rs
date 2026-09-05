@@ -28,6 +28,8 @@ pub mod network_config;
 /// Evidence-aware wallet-state reconciliation. Partial/failed providers never
 /// erase a previously known-good snapshot.
 pub mod reconciliation;
+/// Progressive capability-route wallet synchronization.
+pub mod sync_worker;
 /// Framework-neutral authenticated wallet-update state/provider scaffolding.
 pub mod update;
 
@@ -73,21 +75,13 @@ pub struct DirectTransport {
 impl DirectTransport {
     pub fn new(runtime: AppRuntime) -> Self {
         let events = runtime.subscribe_events();
-        Self {
-            runtime,
-            events: Mutex::new(events),
-        }
+        Self { runtime, events: Mutex::new(events) }
     }
 }
 
 impl AppTransport for DirectTransport {
     fn dispatch<'a>(&'a self, action: AppAction) -> TransportFuture<'a, ()> {
-        Box::pin(async move {
-            self.runtime
-                .dispatch(action)
-                .await
-                .map_err(|_| TransportError::Closed)
-        })
+        Box::pin(async move { self.runtime.dispatch(action).await.map_err(|_| TransportError::Closed) })
     }
 
     fn snapshot<'a>(&'a self) -> TransportFuture<'a, AppState> {
@@ -116,17 +110,8 @@ impl AppRuntime {
         let (event_tx, _) = broadcast::channel(EVENT_CAPACITY);
 
         (
-            Self {
-                action_tx,
-                state_rx,
-                event_tx: event_tx.clone(),
-            },
-            AppRuntimeDriver {
-                action_rx,
-                state_tx,
-                event_tx,
-                state: initial_state,
-            },
+            Self { action_tx, state_rx, event_tx: event_tx.clone() },
+            AppRuntimeDriver { action_rx, state_tx, event_tx, state: initial_state },
         )
     }
 
@@ -138,32 +123,18 @@ impl AppRuntime {
     }
 
     pub async fn dispatch(&self, action: AppAction) -> Result<(), RuntimeStopped> {
-        self.action_tx
-            .send(action)
-            .await
-            .map_err(|_| RuntimeStopped)
+        self.action_tx.send(action).await.map_err(|_| RuntimeStopped)
     }
 
-    pub fn state(&self) -> AppState {
-        self.state_rx.borrow().clone()
-    }
-
-    pub fn subscribe_state(&self) -> watch::Receiver<AppState> {
-        self.state_rx.clone()
-    }
-
-    pub fn subscribe_events(&self) -> broadcast::Receiver<AppEvent> {
-        self.event_tx.subscribe()
-    }
+    pub fn state(&self) -> AppState { self.state_rx.borrow().clone() }
+    pub fn subscribe_state(&self) -> watch::Receiver<AppState> { self.state_rx.clone() }
+    pub fn subscribe_events(&self) -> broadcast::Receiver<AppEvent> { self.event_tx.subscribe() }
 }
 
 impl AppRuntimeDriver {
     pub async fn run(mut self) {
         while let Some(action) = self.action_rx.recv().await {
-            let Some(event) = self.state.reduce(action) else {
-                continue;
-            };
-
+            let Some(event) = self.state.reduce(action) else { continue; };
             self.state_tx.send_replace(self.state.clone());
             let _ = self.event_tx.send(event);
         }
@@ -180,9 +151,7 @@ mod tests {
         let runtime = AppRuntime::spawn(AppState::default());
         let mut events = runtime.subscribe_events();
         let state_rx = runtime.subscribe_state();
-
         runtime.dispatch(AppAction::ToggleTheme).await.unwrap();
-
         let event = events.recv().await.unwrap();
         assert_eq!(event, AppEvent::ThemeChanged(ThemeMode::Dark));
         assert_eq!(state_rx.borrow().theme, ThemeMode::Dark);
@@ -192,13 +161,8 @@ mod tests {
     async fn runtime_suppresses_no_op_events() {
         let runtime = AppRuntime::spawn(AppState::default());
         let mut events = runtime.subscribe_events();
-
-        runtime
-            .dispatch(AppAction::Navigate(AppRoute::Landing))
-            .await
-            .unwrap();
+        runtime.dispatch(AppAction::Navigate(AppRoute::Landing)).await.unwrap();
         runtime.dispatch(AppAction::OpenHelp).await.unwrap();
-
         let event = events.recv().await.unwrap();
         assert_eq!(event, AppEvent::HelpVisibilityChanged(true));
     }
@@ -209,13 +173,8 @@ mod tests {
         let transport = DirectTransport::new(runtime);
         let mut state = transport.snapshot().await.unwrap();
         assert_eq!(state.theme, ThemeMode::Green);
-
         transport.dispatch(AppAction::ToggleTheme).await.unwrap();
-        assert_eq!(
-            transport.next_event().await.unwrap(),
-            Some(AppEvent::ThemeChanged(ThemeMode::Dark))
-        );
-
+        assert_eq!(transport.next_event().await.unwrap(), Some(AppEvent::ThemeChanged(ThemeMode::Dark)));
         state = transport.snapshot().await.unwrap();
         assert_eq!(state.theme, ThemeMode::Dark);
     }
@@ -224,9 +183,7 @@ mod tests {
     async fn driver_can_be_spawned_by_the_host_executor() {
         let (runtime, driver) = AppRuntime::new(AppState::default());
         tokio::spawn(driver.run());
-
         runtime.dispatch(AppAction::ToggleTheme).await.unwrap();
-
         let mut state_rx = runtime.subscribe_state();
         state_rx.changed().await.unwrap();
         assert_eq!(state_rx.borrow().theme, ThemeMode::Dark);
