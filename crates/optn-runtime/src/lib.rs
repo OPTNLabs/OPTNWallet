@@ -14,10 +14,15 @@
 pub mod chain;
 /// Runtime-owned operation-aware provider selection and bounded failover.
 pub mod chain_service;
+/// Explorer routing is deliberately separate from wallet consensus/state.
+pub mod explorer;
 /// Provider-neutral SHV/MMR header verification using the pure optn-core accumulator.
 pub mod header_verifier;
 /// Versioned user-network overlay and bootstrap-refresh migration scaffolding.
 pub mod network_config;
+/// Evidence-aware wallet-state reconciliation. Partial/failed providers never
+/// erase a previously known-good snapshot.
+pub mod reconciliation;
 /// Framework-neutral authenticated wallet-update state/provider scaffolding.
 pub mod update;
 
