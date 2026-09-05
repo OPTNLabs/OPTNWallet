@@ -8,6 +8,7 @@
 
 use crate::cashaddr::Address;
 use crate::coins::{Coin, CoinSet, Outpoint};
+use crate::fee::{FeeRate, RELAY_MINIMUM_FEE_RATE};
 use crate::network::Network;
 use std::fmt;
 
@@ -41,11 +42,23 @@ pub struct SpendPlan {
     pub destination: String,
     pub sighash: u8,
     pub kind: SpendKind,
+    /// Final app-owned fee rate selected before provider/broadcast routing.
+    ///
+    /// The transaction builder still computes the exact fee from the final
+    /// serialized byte length. Carrying the rate here ensures seed,
+    /// watch-only/PSBT and hardware paths all build from the same resolved
+    /// application policy, regardless of whether broadcast later uses
+    /// Electrum, P2P or BCHN RPC.
+    pub fee_rate: FeeRate,
 }
 
 impl SpendPlan {
     pub const fn uses_seed_signing(&self) -> bool {
         matches!(self.kind, SpendKind::SeedSpecified)
+    }
+
+    pub const fn fee_for_serialized_bytes(&self, bytes: u64) -> u64 {
+        self.fee_rate.fee_for_bytes(bytes)
     }
 }
 
@@ -134,7 +147,11 @@ impl fmt::Display for SpendError {
 
 impl std::error::Error for SpendError {}
 
-/// Choose a spendable coin and build a Chipnet (or matching-network) send plan.
+/// Choose a spendable coin and build a send plan at the relay-minimum rate.
+///
+/// Kept for compatibility with callers that have not yet supplied the
+/// application preference. New application code should use
+/// [`prepare_spend_with_fee`] after resolving `FeePreferences`.
 pub fn prepare_spend(
     coins: &CoinSet,
     network: Network,
@@ -142,7 +159,34 @@ pub fn prepare_spend(
     amount_sats: u64,
     capability: SpendingCapability,
 ) -> Result<SpendPlan, SpendError> {
-    prepare_spend_with(coins, network, destination, amount_sats, capability, None)
+    prepare_spend_with_fee(
+        coins,
+        network,
+        destination,
+        amount_sats,
+        capability,
+        RELAY_MINIMUM_FEE_RATE,
+    )
+}
+
+/// Build a plan with an explicitly resolved app-wide fee rate.
+pub fn prepare_spend_with_fee(
+    coins: &CoinSet,
+    network: Network,
+    destination: &str,
+    amount_sats: u64,
+    capability: SpendingCapability,
+    fee_rate: FeeRate,
+) -> Result<SpendPlan, SpendError> {
+    prepare_spend_with_fee_and_coin(
+        coins,
+        network,
+        destination,
+        amount_sats,
+        capability,
+        fee_rate,
+        None,
+    )
 }
 
 /// Coin control: build the same plan from a coin the user picked.
@@ -151,12 +195,37 @@ pub fn prepare_spend(
 /// does. Naming a coin means the wallet uses that coin or says why it cannot;
 /// silently substituting another would defeat the entire point of coin
 /// control, which people use to keep specific histories apart.
+///
+/// This compatibility entry point uses the relay-minimum rate. App code with a
+/// resolved `FeePreferences` value should call
+/// [`prepare_spend_with_fee_and_coin`].
 pub fn prepare_spend_with(
     coins: &CoinSet,
     network: Network,
     destination: &str,
     amount_sats: u64,
     capability: SpendingCapability,
+    chosen: Option<Outpoint>,
+) -> Result<SpendPlan, SpendError> {
+    prepare_spend_with_fee_and_coin(
+        coins,
+        network,
+        destination,
+        amount_sats,
+        capability,
+        RELAY_MINIMUM_FEE_RATE,
+        chosen,
+    )
+}
+
+/// Coin control plus an explicitly resolved application fee rate.
+pub fn prepare_spend_with_fee_and_coin(
+    coins: &CoinSet,
+    network: Network,
+    destination: &str,
+    amount_sats: u64,
+    capability: SpendingCapability,
+    fee_rate: FeeRate,
     chosen: Option<Outpoint>,
 ) -> Result<SpendPlan, SpendError> {
     let trimmed = destination.trim();
@@ -226,6 +295,7 @@ pub fn prepare_spend_with(
             SpendingCapability::WatchOnly => SpendKind::WatchOnlyUnsignedPsbt,
             SpendingCapability::Hardware => SpendKind::HardwareUnsignedPsbt,
         },
+        fee_rate,
     })
 }
 
@@ -318,6 +388,7 @@ mod tests {
         .expect("prepare");
         assert_eq!(plan.sighash, SIGHASH_ALL_FORKID);
         assert_eq!(plan.kind, SpendKind::SeedSpecified);
+        assert_eq!(plan.fee_rate, RELAY_MINIMUM_FEE_RATE);
         assert!(plan.uses_seed_signing());
         assert_ne!(plan.selected, frozen_out);
 
@@ -339,6 +410,29 @@ mod tests {
             ),
             Err(SpendError::InsufficientSpendable { .. })
         ));
+    }
+
+    #[test]
+    fn explicit_fee_rate_survives_into_every_spend_kind() {
+        let coins = funded();
+        let rate = FeeRate::from_satoshis_per_kb(1700);
+        for capability in [
+            SpendingCapability::Seed,
+            SpendingCapability::WatchOnly,
+            SpendingCapability::Hardware,
+        ] {
+            let plan = prepare_spend_with_fee(
+                &coins,
+                Network::Chipnet,
+                &dest(),
+                5_000,
+                capability,
+                rate,
+            )
+            .expect("prepare");
+            assert_eq!(plan.fee_rate, rate);
+            assert_eq!(plan.fee_for_serialized_bytes(250), 425);
+        }
     }
 
     #[test]
