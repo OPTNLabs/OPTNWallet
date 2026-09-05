@@ -841,7 +841,7 @@ mod tests {
         let script = hex::decode("76a91462e907b15cbf27d5425399ebf6f0fb50ebb88f1888ac").unwrap();
         assert_eq!(
             electrum_scripthash(&script),
-            "8b01df4e368ea28f8dc0423bcf7a4923e3a10d302c875e47a0cfbf90b5c39161"
+            "8b01df4e368ea28f8dc0423bcf7a4923e3a12d307c875e47a0cfbf90b5c39161"
         )
     }
     #[test]
