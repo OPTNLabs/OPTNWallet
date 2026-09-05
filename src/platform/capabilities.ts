@@ -150,11 +150,91 @@ export function offersWatchOnly(surface: Surface = currentSurface()): boolean {
   return hasCapability('watchOnlyWallet', surface);
 }
 
+/**
+ * The capabilities whose table value is a *default* rather than a veto.
+ *
+ * Hardware is hidden on a phone, not forbidden. Everything behind it ships:
+ * the vendor libraries are installed, the transports are described per device,
+ * and a Keystone is reached by camera, which a phone has. What is missing is a
+ * native plugin for the cabled devices, so the default is off -- and a default
+ * is something an explicit choice overrides.
+ *
+ * Deliberately only this one. CashFusion needs a long-lived background process
+ * a phone shell does not have, so switching it on could not make it work, and
+ * Watch Only is already on everywhere and has nothing to reveal. This mirrors
+ * `FeatureFlags::enabled` in `optn-app`, which draws the same line for the
+ * same reasons.
+ */
+const OVERRIDABLE_CAPABILITIES: ReadonlySet<Capability> = new Set([
+  'hardwareWallet',
+]);
+
+const OVERRIDE_KEY_PREFIX = 'optn.capability.';
+
+/**
+ * The choices in force for this session.
+ *
+ * In memory rather than read through to storage on every check, and that is
+ * the load-bearing part rather than an optimisation: storage is unavailable or
+ * throws outright in several contexts a wallet actually runs in -- a private
+ * window, an extension worker, a browser set to block site data. If the toggle
+ * lived only in storage it would silently do nothing in exactly those places.
+ * Here it always takes effect; storage only decides whether it survives a
+ * restart.
+ */
+const overrides = new Map<Capability, boolean>();
+let overridesLoaded = false;
+
+function loadOverrides(): void {
+  if (overridesLoaded) return;
+  overridesLoaded = true;
+  try {
+    if (typeof localStorage === 'undefined') return;
+    for (const capability of OVERRIDABLE_CAPABILITIES) {
+      const raw = localStorage.getItem(`${OVERRIDE_KEY_PREFIX}${capability}`);
+      if (raw === 'true') overrides.set(capability, true);
+      else if (raw === 'false') overrides.set(capability, false);
+    }
+  } catch {
+    // No stored choice, which lands on the shipped default. A capability
+    // check that threw would take the landing page down with it.
+  }
+}
+
+/** An explicit choice, or null for "use the surface default". */
+function capabilityOverride(capability: Capability): boolean | null {
+  if (!OVERRIDABLE_CAPABILITIES.has(capability)) return null;
+  loadOverrides();
+  return overrides.get(capability) ?? null;
+}
+
+/** Set or clear the explicit choice. `null` restores the surface default. */
+export function setCapabilityOverride(
+  capability: Capability,
+  enabled: boolean | null
+): void {
+  if (!OVERRIDABLE_CAPABILITIES.has(capability)) return;
+  loadOverrides();
+  if (enabled === null) overrides.delete(capability);
+  else overrides.set(capability, enabled);
+  try {
+    if (typeof localStorage === 'undefined') return;
+    const key = `${OVERRIDE_KEY_PREFIX}${capability}`;
+    if (enabled === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, enabled ? 'true' : 'false');
+  } catch {
+    // The choice still holds for this session; it just will not survive a
+    // restart. That is the honest outcome, and better than refusing it.
+  }
+}
+
 export function hasCapability(
   capability: Capability,
   surface: Surface = currentSurface()
 ): boolean {
-  return CAPABILITIES[capability].enabledOn[surface];
+  return (
+    capabilityOverride(capability) ?? CAPABILITIES[capability].enabledOn[surface]
+  );
 }
 
 export function capabilityAbsence(
