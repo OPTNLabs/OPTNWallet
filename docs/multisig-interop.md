@@ -266,9 +266,29 @@ Decryption checks the tag over the decrypted plaintext, in constant time,
 without that check an altered record produces plausible text rather than an
 error, and a swapped key would read as though the sender wrote it.
 
-Note this is BIP-129's scheme, **not Paytaca's**: `bsms.js` uses AES-256-GCM for
-round 2 and ECIES for round 1. Interoperating with their encrypted flow would be
-separate work; their plaintext flow, which is what they default to, works.
+### Paytaca encrypts differently, and it matters less than it looks
+
+`bsms.js` uses AES-256-GCM for round 2 and ECIES for round 1, not BIP-129's
+AES-256-CTR. Paytaca's own account of this, which checks out against their
+source: the encryption belongs to their **coordination server transport**
+(`encryption.js`, `coordination.js`), not to the multisig core. The records
+exchanged for wallet-to-wallet interop are the plaintext ones, so the two
+schemes never have to meet.
+
+Their stated reason — GCM authenticates and CTR does not — is right about bare
+CTR and wrong about BIP-129, which pairs CTR with HMAC-SHA256 and derives the IV
+from that MAC. That construction *is* authenticated; this implementation checks
+the tag before returning anything.
+
+Where the instinct is sound: BIP-129 authenticates the **plaintext**, so a reader
+must decrypt before it can verify, while GCM rejects a bad ciphertext before
+releasing anything. Encrypt-then-MAC is the better ordering and GCM has it. With
+a stream cipher there is no padding oracle, so the practical gap is small, but
+the preference is defensible.
+
+None of which decides it. Keystone, Sparrow, Specter and Coldcard implement
+BIP-129, so conformance is not a question of which construction is nicer — it is
+whether a hardware wallet can read the file. That is why this follows the BIP.
 
 ### Still not proven
 
