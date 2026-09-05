@@ -1363,13 +1363,22 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
         closeScanner();
       }
     } catch (err) {
+      // Only a genuinely finished-but-wrong scan reaches here now: the payload
+      // decoded and is not a crypto-psbt, or the fountain decoder completed
+      // unsuccessfully. A single unreadable frame no longer throws -- the
+      // scanner counts it and carries on, because a camera reading an animated
+      // QR misreads frames constantly and that is not an error condition.
+      //
+      // The old comment here said a bad frame "poisons the decoder", and that
+      // was not true: the decoder keeps every part it has already accepted and
+      // recovers from later frames. Closing on the first misread meant the
+      // larger the transfer, the less likely it could ever complete -- which is
+      // precisely the signed-PSBT direction people reported failing.
       setError(
         err instanceof Error
           ? err.message
           : 'Could not read the signed transaction.'
       );
-      // A frame that poisons the decoder leaves it unusable, so the next scan
-      // starts from a clean one rather than inheriting the failure.
       closeScanner();
     }
   };
