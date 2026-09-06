@@ -10,9 +10,9 @@ on:
       - 'deny.toml'
       - 'crates/**/*.rs'
       - 'crates/**/Cargo.toml'
+      - 'crates/**/Cargo.lock'
       - 'fuzz/**'
-      - 'src-tauri/Cargo.toml'
-      - 'src-tauri/Cargo.lock'
+      - 'src-tauri/**'
       - '.github/workflows/rust-quality.yml'
   push:
     branches: [dev, staging]
