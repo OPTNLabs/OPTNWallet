@@ -137,8 +137,11 @@ impl ElectrumBackend {
             || feature_enabled(&features, "cash_tokens")
             || extension_enabled(&features, "tokens")
         {
+            // Generic CashTokens support means wallet-scoped queries can carry
+            // token_data. It does NOT prove category -> all UTXOs/holders/supply
+            // reverse indexes exist (those are separate granular capabilities).
             capabilities.record(
-                Capability::CashTokenIndex,
+                Capability::CashTokenData,
                 CapabilityConfidence::Advertised,
                 CapabilityDiscovery::ElectrumServerFeatures,
             );

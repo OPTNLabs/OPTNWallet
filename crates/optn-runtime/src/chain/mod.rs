@@ -94,7 +94,25 @@ pub enum Capability {
     Bip37BloomFiltering,
     CompactFilters,
     RpaIndex,
+    /// Wallet-scoped CashToken fields are available on discovered transactions/UTXOs.
+    /// This does not imply category-wide reverse indexing.
+    CashTokenData,
+    /// Generic reverse lookup: which transaction spends this exact outpoint.
+    OutpointSpenderLookup,
+    TokenCategoryUtxos,
+    TokenCategorySupply,
+    TokenCategoryHolders,
+    TokenCategoryTopHolders,
+    TokenNftEnumeration,
+    TokenDiscovery,
+    BcmrAuthchainEvidence,
+    BcmrAuthhead,
+    BcmrRegistryCandidate,
+    /// Compatibility/diagnostic umbrella only. New routing must prefer the
+    /// granular token capabilities above.
     CashTokenIndex,
+    /// Compatibility/diagnostic umbrella only. Local BCMR composition uses
+    /// granular chain evidence plus the metadata transport boundary.
     BcmrResolver,
     GraphQueries,
     RawMempoolEvents,
@@ -120,6 +138,17 @@ impl Capability {
             Self::Bip37BloomFiltering => "BIP37",
             Self::CompactFilters => "Neutrino",
             Self::RpaIndex => "RPA index",
+            Self::CashTokenData => "CashToken wallet data",
+            Self::OutpointSpenderLookup => "Outpoint spender lookup",
+            Self::TokenCategoryUtxos => "Token category UTXOs",
+            Self::TokenCategorySupply => "Token category supply",
+            Self::TokenCategoryHolders => "Token category holders",
+            Self::TokenCategoryTopHolders => "Top token holders",
+            Self::TokenNftEnumeration => "Token NFT enumeration",
+            Self::TokenDiscovery => "Token discovery",
+            Self::BcmrAuthchainEvidence => "BCMR authchain evidence",
+            Self::BcmrAuthhead => "BCMR authhead",
+            Self::BcmrRegistryCandidate => "BCMR registry candidate",
             Self::CashTokenIndex => "CashToken index",
             Self::BcmrResolver => "BCMR resolver",
             Self::GraphQueries => "Indexed graph queries",
@@ -1056,6 +1085,14 @@ mod tests {
         assert!(electrum.is_usable(Capability::RpaIndex));
         assert!(rpc.is_usable(Capability::RpaIndex));
         assert_eq!(Capability::RpaIndex.label(), "RPA index");
+        assert_eq!(
+            Capability::OutpointSpenderLookup.label(),
+            "Outpoint spender lookup"
+        );
+        assert_eq!(
+            Capability::TokenCategoryUtxos.label(),
+            "Token category UTXOs"
+        );
         assert_eq!(Capability::CashTokenIndex.label(), "CashToken index");
         assert_eq!(Capability::BcmrResolver.label(), "BCMR resolver");
         assert_eq!(Capability::GraphQueries.label(), "Indexed graph queries");

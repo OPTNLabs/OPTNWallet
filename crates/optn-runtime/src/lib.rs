@@ -11,6 +11,8 @@
 
 /// Provenance-preserving normalization of upstream node/server bootstrap feeds.
 pub mod bootstrap;
+/// Provider-neutral direct-vs-derived planning for token/BCMR operations.
+pub mod capability_planner;
 /// Provider-neutral BCH chain-source, capability, policy, sync, and evidence
 /// scaffolding. The canonical architecture is tracked in OPTNLabs/OPTNWallet#75.
 pub mod chain;

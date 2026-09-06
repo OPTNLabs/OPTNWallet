@@ -384,6 +384,13 @@ impl ChainService {
             .collect()
     }
 
+    /// Whether the current source/protocol/privacy policy has at least one
+    /// healthy route for this exact capability. Higher-level planners use this
+    /// rather than branching on provider brands.
+    pub fn has_route_for_capability(&self, capability: Capability) -> bool {
+        !self.routes_for_capability(capability).is_empty()
+    }
+
     pub fn routes_for_operation(&self, operation: ChainOperation) -> Vec<CapabilityRoute> {
         let plan = build_selection_plan(&self.catalog, &self.policy);
         plan.primary
