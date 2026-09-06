@@ -93,7 +93,13 @@ jobs:
         run: |
           cargo fmt --all
           cargo fmt --manifest-path src-tauri/Cargo.toml
-      - name: Report Rust source footprint
+
+      - name: Regenerate lockfiles before validation
+        run: |
+          cargo generate-lockfile
+          cargo generate-lockfile --manifest-path src-tauri/Cargo.toml
+
+      - name: Report exact Rust source footprint
         shell: python
         run: |
           from collections import defaultdict
@@ -118,20 +124,72 @@ jobs:
           rust_files, rust_lines = counts['.rs']
           total_files = sum(v[0] for v in counts.values())
           total_lines = sum(v[1] for v in counts.values())
-          print(f'RUST_SOURCE_FILES={rust_files}')
-          print(f'RUST_SOURCE_LINES={rust_lines}')
-          print(f'COUNTED_SOURCE_FILES={total_files}')
-          print(f'COUNTED_SOURCE_LINES={total_lines}')
-          if total_lines:
-              print(f'RUST_SOURCE_LINE_SHARE={rust_lines * 100 / total_lines:.2f}%')
+          rows = [
+              f'RUST_SOURCE_FILES={rust_files}',
+              f'RUST_SOURCE_LINES={rust_lines}',
+              f'COUNTED_SOURCE_FILES={total_files}',
+              f'COUNTED_SOURCE_LINES={total_lines}',
+              f'RUST_SOURCE_LINE_SHARE={rust_lines * 100 / total_lines:.2f}%' if total_lines else 'RUST_SOURCE_LINE_SHARE=0.00%',
+          ]
           for ext, (files, lines) in sorted(counts.items(), key=lambda item: item[1][1], reverse=True):
-              print(f'{ext or "<none>"}: files={files} lines={lines}')
+              rows.append(f'{ext or "<none>"}: files={files} lines={lines}')
+          report = '\n'.join(rows) + '\n'
+          print(report, end='')
+          out = Path('pr63-diagnostics')
+          out.mkdir(exist_ok=True)
+          (out / 'rust-footprint.txt').write_text(report)
+
       - name: Test provider/runtime workspace
-        run: cargo test --workspace --all-targets
+        id: workspace_tests
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --workspace --all-targets 2>&1 | tee pr63-diagnostics/workspace-tests.log
+
       - name: Check Leptos WASM renderer
-        run: cargo check -p optn-ui --target wasm32-unknown-unknown
+        id: wasm_check
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo check -p optn-ui --target wasm32-unknown-unknown 2>&1 | tee pr63-diagnostics/wasm-check.log
+
       - name: Check native Tauri shell with concrete providers
-        run: cargo check --manifest-path src-tauri/Cargo.toml --all-targets
+        id: native_check
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo check --manifest-path src-tauri/Cargo.toml --all-targets 2>&1 | tee pr63-diagnostics/native-check.log
+
+      - name: Upload PR63 validation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: pr63-native-validation
+          path: pr63-diagnostics
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Require every validation gate
+        shell: bash
+        run: |
+          failed=0
+          if [ "${{ steps.workspace_tests.outcome }}" != "success" ]; then
+            echo '::error::workspace tests failed'
+            failed=1
+          fi
+          if [ "${{ steps.wasm_check.outcome }}" != "success" ]; then
+            echo '::error::Leptos WASM check failed'
+            failed=1
+          fi
+          if [ "${{ steps.native_check.outcome }}" != "success" ]; then
+            echo '::error::native Tauri provider check failed'
+            failed=1
+          fi
+          exit "$failed"
+
       - name: Commit validated integration
         shell: bash
         run: |
