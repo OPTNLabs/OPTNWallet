@@ -15,6 +15,7 @@
 
 use std::time::Duration;
 
+use optn_core::header_pow::verify_link;
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -326,8 +327,9 @@ fn nonce() -> u64 {
 // After the handshake, request block headers with `getheaders` and validate the
 // returned chain LINKS to our locator (each header's prev-block == the previous
 // header's hash). A node returns up to 2000 headers per `headers` message, so a
-// full sync-to-tip loops with an updated locator; Phase 2 proves one batch.
-// PoW-target verification is a later phase.
+// full sync-to-tip loops with an updated locator. Each returned header proves
+// its own declared target and predecessor link; network-difficulty transitions
+// and checkpoint authority remain separate validation concerns.
 
 /// Chain start hash (double-SHA256 of the genesis header, internal little-endian
 /// byte order — the form used on the wire and by header_hash). Used as the
@@ -431,24 +433,20 @@ where
     }
     let raws = raws.ok_or("node did not return headers")?;
 
-    // Validate linkage: the first header links to the locator, each subsequent
-    // header to the previous one.
+    // Validate the declared proof of work and linkage: the first header links
+    // to the locator, each subsequent header to the previous one.
     let mut expected_prev = locator;
     let mut out = Vec::with_capacity(raws.len());
     for raw in &raws {
-        let mut prev = [0u8; 32];
-        prev.copy_from_slice(&raw[4..36]);
-        if prev != expected_prev {
-            return Err("header chain does not link to the locator/previous header".into());
-        }
-        let hash = double_sha256(raw);
+        let parsed = verify_link(expected_prev, raw)
+            .map_err(|error| format!("header proof check failed: {error:?}"))?;
         out.push(HeaderInfo {
-            hash: hex_be(&hash),
-            prev_hash: hex_be(&prev),
-            time: u32::from_le_bytes([raw[68], raw[69], raw[70], raw[71]]),
-            bits: u32::from_le_bytes([raw[72], raw[73], raw[74], raw[75]]),
+            hash: hex_be(&parsed.hash),
+            prev_hash: hex_be(&parsed.prev_hash),
+            time: parsed.time,
+            bits: parsed.bits,
         });
-        expected_prev = hash;
+        expected_prev = parsed.hash;
     }
     Ok(out)
 }
@@ -1061,6 +1059,86 @@ mod tests {
         assert_eq!(p[4], 1); // one locator hash
         assert_eq!(&p[5..37], &loc);
         assert_eq!(&p[37..69], &[0u8; 32]); // hash_stop = 0
+    }
+
+    fn mainnet_genesis_header() -> [u8; 80] {
+        let hex = "0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a29ab5f49ffff001d1dac2b7c";
+        (0..hex.len())
+            .step_by(2)
+            .map(|index| u8::from_str_radix(&hex[index..index + 2], 16).unwrap())
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap()
+    }
+
+    fn headers_payload(raw: [u8; 80]) -> Vec<u8> {
+        let mut payload = Vec::with_capacity(82);
+        write_varint(&mut payload, 1);
+        payload.extend_from_slice(&raw);
+        write_varint(&mut payload, 0);
+        payload
+    }
+
+    async fn sync_one_header(raw: [u8; 80], locator: [u8; 32]) -> Result<Vec<HeaderInfo>, String> {
+        let magic = params_for("mainnet").magic;
+        let (mut client, mut server) = tokio::io::duplex(4096);
+        let server_task = tokio::spawn(async move {
+            let (command, _) = read_message(&mut server, magic).await.unwrap();
+            assert_eq!(command, "version");
+            server
+                .write_all(&encode_message(magic, "version", &build_version_payload(1)))
+                .await
+                .unwrap();
+            let (command, _) = read_message(&mut server, magic).await.unwrap();
+            assert_eq!(command, "verack");
+            let (command, payload) = read_message(&mut server, magic).await.unwrap();
+            assert_eq!(command, "getheaders");
+            assert_eq!(payload, build_getheaders_payload(&locator));
+            server
+                .write_all(&encode_message(magic, "headers", &headers_payload(raw)))
+                .await
+                .unwrap();
+        });
+
+        let result = sync_headers_batch(&mut client, magic, locator).await;
+        server_task.await.unwrap();
+        result
+    }
+
+    #[tokio::test]
+    async fn header_batch_accepts_linked_declared_pow() {
+        let headers = sync_one_header(mainnet_genesis_header(), [0; 32])
+            .await
+            .unwrap();
+        assert_eq!(headers.len(), 1);
+        assert_eq!(
+            headers[0].hash,
+            "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"
+        );
+    }
+
+    #[tokio::test]
+    async fn header_batch_rejects_insufficient_work() {
+        let mut header = mainnet_genesis_header();
+        header[72..76].copy_from_slice(&0x0300_0001u32.to_le_bytes());
+        let error = sync_one_header(header, [0; 32]).await.unwrap_err();
+        assert!(error.contains("InsufficientWork"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn header_batch_rejects_invalid_target() {
+        let mut header = mainnet_genesis_header();
+        header[72..76].copy_from_slice(&0x1d80_ffffu32.to_le_bytes());
+        let error = sync_one_header(header, [0; 32]).await.unwrap_err();
+        assert!(error.contains("NegativeTarget"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn header_batch_rejects_wrong_locator() {
+        let error = sync_one_header(mainnet_genesis_header(), [1; 32])
+            .await
+            .unwrap_err();
+        assert!(error.contains("LinkMismatch"), "{error}");
     }
 
     #[test]
