@@ -22,20 +22,17 @@ jobs:
         with:
           toolchain: 1.98.0
           targets: wasm32-unknown-unknown
-      - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          node-version: '20'
-          cache: 'npm'
-      - name: Install Tauri Linux build dependencies
+          node-version: '22'
+          cache: npm
+      - name: Install native build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libusb-1.0-0-dev libudev-dev
-      - name: Install npm dependencies and fetch production Tor bundle
-        run: |
           npm ci
-          npx --no-install tsx scripts/fetch-tor.mts linux-x86_64
-      - name: Apply native chain integration
+          mkdir -p pr63-diagnostics
+      - name: Apply production fixes and native chain integration
         shell: python
         run: |
           from pathlib import Path
@@ -48,15 +45,17 @@ jobs:
                   raise SystemExit(f'{path}: expected one match, got {n}: {old[:120]!r}')
               p.write_text(s.replace(old, new, 1))
 
-          # Compile the shell-owned provider supervisor and keep it synchronized
-          # with authoritative app network/server settings.
+          tor = 'scripts/fetch-tor.mts'
+          rep(tor,
+              '''  signMacosTorFiles(target);\n\n  rmSync(temporaryDirectory, { recursive: true, force: true });''',
+              '''  signMacosTorFiles(target);\n  if (target.startsWith('linux-')) {\n    setLinuxRpath(join(outDir, torBinary));\n  }\n\n  rmSync(temporaryDirectory, { recursive: true, force: true });''')
+
           lib = 'src-tauri/src/lib.rs'
           rep(lib, 'pub mod app_transport;\n', 'pub mod app_transport;\npub mod chain_runtime;\n')
           rep(lib,
               '            tauri::async_runtime::spawn(app_driver.run());\n            app.manage(app_runtime);',
               '            tauri::async_runtime::spawn(app_driver.run());\n            let native_chain = chain_runtime::NativeChainRuntime::spawn(app_runtime.clone());\n            app.manage(native_chain);\n            app.manage(app_runtime);')
 
-          # Keep test-only imports out of native production builds.
           chain = 'src-tauri/src/chain_runtime.rs'
           rep(chain,
               'use optn_app::{AppAction, AppEvent, AppState, ServerKind};',
@@ -65,14 +64,11 @@ jobs:
               '    use super::*;\n    use optn_core::network::Network;',
               '    use super::*;\n    use optn_app::{AppAction, ServerKind};\n    use optn_core::network::Network;')
 
-          # If the caller is already beyond the cached tip, a progressive
-          # refresh is a complete empty delta, not a request to rescan the tip.
           neutrino = 'crates/optn-chain-neutrino/src/lib.rs'
           rep(neutrino,
               '''        let (start, tip) = {\n            let cache = self.headers.lock().await;\n            let Some((&tip_height, &tip_hash)) = cache.by_height.iter().next_back() else {\n                return Err(ChainBackendError::Rejected("header cache is empty".into()));\n            };\n            (\n                from_height.unwrap_or(1).min(tip_height),\n                ChainTip {\n                    height: tip_height,\n                    hash: tip_hash,\n                },\n            )\n        };\n\n        let port = self''',
               '''        let tip = {\n            let cache = self.headers.lock().await;\n            let Some((&tip_height, &tip_hash)) = cache.by_height.iter().next_back() else {\n                return Err(ChainBackendError::Rejected("header cache is empty".into()));\n            };\n            ChainTip {\n                height: tip_height,\n                hash: tip_hash,\n            }\n        };\n        let start = from_height.unwrap_or(1);\n        if start > tip.height {\n            let chain_tip = Some((tip.height, tip.hash));\n            return Ok(BackendObservation {\n                payload: ChainPayload::WalletRefresh {\n                    transactions: Vec::new(),\n                    tip: Some(tip),\n                },\n                evidence: Evidence::ServerAssertion,\n                chain_tip,\n            });\n        }\n\n        let port = self''')
 
-          # Vocabulary must not imply permanent feature ownership by a protocol.
           servers = 'crates/optn-app/src/servers.rs'
           rep(servers,
               '//! string is "Fulcrum host:50002, or a node host:8333": a Fulcrum speaks\n//! Electrum over WebSocket, a node speaks the p2p protocol for BIP37, and an\n//! explorer is a web URL.',
@@ -80,9 +76,7 @@ jobs:
           rep(servers,
               '    /// A full node\'s p2p listener, for BIP37.',
               '    /// A full node\'s BCH P2P listener. Runtime probes its capabilities.')
-          rep(servers,
-              '            Self::Peer => "Node (BIP37)",',
-              '            Self::Peer => "Node (P2P)",')
+          rep(servers, '            Self::Peer => "Node (BIP37)",', '            Self::Peer => "Node (P2P)",')
 
           endpoint = 'crates/optn-core/src/endpoint.rs'
           rep(endpoint,
@@ -98,111 +92,68 @@ jobs:
               '/// Parse a user-typed BIP37 peer: `host:port`, or `host` with `default_port`.',
               '/// Parse a user-typed BCH P2P peer: `host:port`, or `host` with `default_port`.')
 
-      - name: Format Rust
+      - name: Stage and smoke-test production Tor
+        run: npx --no-install tsx scripts/fetch-tor.mts linux-x86_64
+      - name: Format and regenerate lockfiles
         run: |
           cargo fmt --all
           cargo fmt --manifest-path src-tauri/Cargo.toml
-
-      - name: Regenerate lockfiles before validation
-        run: |
           cargo generate-lockfile
           cargo generate-lockfile --manifest-path src-tauri/Cargo.toml
-
       - name: Report exact Rust source footprint
         shell: python
         run: |
           from collections import defaultdict
           from pathlib import Path
-
           roots = [Path('crates'), Path('src-tauri/src'), Path('xtask'), Path('src')]
-          code_exts = {'.rs', '.ts', '.tsx', '.js', '.jsx', '.css', '.html', '.swift', '.kt', '.kts'}
+          exts = {'.rs', '.ts', '.tsx', '.js', '.jsx', '.css', '.html', '.swift', '.kt', '.kts'}
           counts = defaultdict(lambda: [0, 0])
           for root in roots:
-              if not root.exists():
-                  continue
+              if not root.exists(): continue
               for path in root.rglob('*'):
-                  if not path.is_file() or path.suffix.lower() not in code_exts:
-                      continue
-                  try:
-                      lines = len(path.read_text(errors='ignore').splitlines())
-                  except OSError:
-                      continue
-                  ext = path.suffix.lower()
-                  counts[ext][0] += 1
-                  counts[ext][1] += lines
-          rust_files, rust_lines = counts['.rs']
-          total_files = sum(v[0] for v in counts.values())
-          total_lines = sum(v[1] for v in counts.values())
-          rows = [
-              f'RUST_SOURCE_FILES={rust_files}',
-              f'RUST_SOURCE_LINES={rust_lines}',
-              f'COUNTED_SOURCE_FILES={total_files}',
-              f'COUNTED_SOURCE_LINES={total_lines}',
-              f'RUST_SOURCE_LINE_SHARE={rust_lines * 100 / total_lines:.2f}%' if total_lines else 'RUST_SOURCE_LINE_SHARE=0.00%',
-          ]
-          for ext, (files, lines) in sorted(counts.items(), key=lambda item: item[1][1], reverse=True):
-              rows.append(f'{ext or "<none>"}: files={files} lines={lines}')
-          report = '\n'.join(rows) + '\n'
-          print(report, end='')
-          out = Path('pr63-diagnostics')
-          out.mkdir(exist_ok=True)
-          (out / 'rust-footprint.txt').write_text(report)
-
+                  if not path.is_file() or path.suffix.lower() not in exts: continue
+                  lines = len(path.read_text(errors='ignore').splitlines())
+                  counts[path.suffix.lower()][0] += 1
+                  counts[path.suffix.lower()][1] += lines
+          rf, rl = counts['.rs']; tf = sum(v[0] for v in counts.values()); tl = sum(v[1] for v in counts.values())
+          rows = [f'RUST_SOURCE_FILES={rf}', f'RUST_SOURCE_LINES={rl}', f'COUNTED_SOURCE_FILES={tf}', f'COUNTED_SOURCE_LINES={tl}', f'RUST_SOURCE_LINE_SHARE={rl*100/tl:.2f}%']
+          rows += [f'{ext}: files={files} lines={lines}' for ext, (files, lines) in sorted(counts.items(), key=lambda x: x[1][1], reverse=True)]
+          report = '\n'.join(rows) + '\n'; print(report, end=''); Path('pr63-diagnostics/rust-footprint.txt').write_text(report)
       - name: Test provider/runtime workspace
         id: workspace_tests
         continue-on-error: true
         shell: bash
-        run: |
-          set -o pipefail
-          cargo test --workspace --all-targets 2>&1 | tee pr63-diagnostics/workspace-tests.log
-
+        run: set -o pipefail; cargo test --workspace --all-targets 2>&1 | tee pr63-diagnostics/workspace-tests.log
       - name: Check Leptos WASM renderer
         id: wasm_check
         continue-on-error: true
         shell: bash
-        run: |
-          set -o pipefail
-          cargo check -p optn-ui --target wasm32-unknown-unknown 2>&1 | tee pr63-diagnostics/wasm-check.log
-
+        run: set -o pipefail; cargo check -p optn-ui --target wasm32-unknown-unknown 2>&1 | tee pr63-diagnostics/wasm-check.log
       - name: Check native Tauri shell with concrete providers
         id: native_check
         continue-on-error: true
         shell: bash
-        run: |
-          set -o pipefail
-          cargo check --manifest-path src-tauri/Cargo.toml --all-targets 2>&1 | tee pr63-diagnostics/native-check.log
-
+        run: set -o pipefail; cargo check --manifest-path src-tauri/Cargo.toml --all-targets 2>&1 | tee pr63-diagnostics/native-check.log
       - name: Upload PR63 validation evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: pr63-native-validation
+          name: pr63-native-validation-v2
           path: pr63-diagnostics
           if-no-files-found: error
           retention-days: 3
-
       - name: Require every validation gate
         shell: bash
         run: |
           failed=0
-          if [ "${{ steps.workspace_tests.outcome }}" != "success" ]; then
-            echo '::error::workspace tests failed'
-            failed=1
-          fi
-          if [ "${{ steps.wasm_check.outcome }}" != "success" ]; then
-            echo '::error::Leptos WASM check failed'
-            failed=1
-          fi
-          if [ "${{ steps.native_check.outcome }}" != "success" ]; then
-            echo '::error::native Tauri provider check failed'
-            failed=1
-          fi
+          [ "${{ steps.workspace_tests.outcome }}" = success ] || { echo '::error::workspace tests failed'; failed=1; }
+          [ "${{ steps.wasm_check.outcome }}" = success ] || { echo '::error::Leptos WASM check failed'; failed=1; }
+          [ "${{ steps.native_check.outcome }}" = success ] || { echo '::error::native Tauri provider check failed'; failed=1; }
           exit "$failed"
-
       - name: Commit validated integration
         shell: bash
         run: |
-          rm .github/workflows/pr63-native-finalizer.yml
+          rm -f .github/workflows/pr63-native-finalizer.yml .github/workflows/pr63-native-finalizer-v2.yml
           git add -A
           git config user.name "PR63 validation bot"
           git config user.email "actions@users.noreply.github.com"
