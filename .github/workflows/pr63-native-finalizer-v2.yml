@@ -1,0 +1,164 @@
+name: PR63 native chain finalizer v2
+
+on:
+  push:
+    branches: [agent/rpa-shared-vectors]
+    paths:
+      - .github/workflows/pr63-native-finalizer-v2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: github.repository == 'CyberAshven/OPTNWallet'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: agent/rpa-shared-vectors
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.98.0
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libusb-1.0-0-dev libudev-dev
+          npm ci
+          mkdir -p pr63-diagnostics
+      - name: Apply production fixes and native chain integration
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def rep(path, old, new):
+              p = Path(path)
+              s = p.read_text()
+              n = s.count(old)
+              if n != 1:
+                  raise SystemExit(f'{path}: expected one match, got {n}: {old[:120]!r}')
+              p.write_text(s.replace(old, new, 1))
+
+          # The official Linux Expert Bundle carries its shared libraries next
+          # to tor. Teach its ELF loader to search that colocated directory,
+          # matching the source-built Linux ARM path.
+          tor = 'scripts/fetch-tor.mts'
+          rep(tor,
+              '''  signMacosTorFiles(target);\n\n  rmSync(temporaryDirectory, { recursive: true, force: true });''',
+              '''  signMacosTorFiles(target);\n  if (target.startsWith('linux-')) {\n    setLinuxRpath(join(outDir, torBinary));\n  }\n\n  rmSync(temporaryDirectory, { recursive: true, force: true });''')
+
+          lib = 'src-tauri/src/lib.rs'
+          rep(lib, 'pub mod app_transport;\n', 'pub mod app_transport;\npub mod chain_runtime;\n')
+          rep(lib,
+              '            tauri::async_runtime::spawn(app_driver.run());\n            app.manage(app_runtime);',
+              '            tauri::async_runtime::spawn(app_driver.run());\n            let native_chain = chain_runtime::NativeChainRuntime::spawn(app_runtime.clone());\n            app.manage(native_chain);\n            app.manage(app_runtime);')
+
+          chain = 'src-tauri/src/chain_runtime.rs'
+          rep(chain,
+              'use optn_app::{AppAction, AppEvent, AppState, ServerKind};',
+              'use optn_app::{AppEvent, AppState};')
+          rep(chain,
+              '    use super::*;\n    use optn_core::network::Network;',
+              '    use super::*;\n    use optn_app::{AppAction, ServerKind};\n    use optn_core::network::Network;')
+
+          neutrino = 'crates/optn-chain-neutrino/src/lib.rs'
+          rep(neutrino,
+              '''        let (start, tip) = {\n            let cache = self.headers.lock().await;\n            let Some((&tip_height, &tip_hash)) = cache.by_height.iter().next_back() else {\n                return Err(ChainBackendError::Rejected("header cache is empty".into()));\n            };\n            (\n                from_height.unwrap_or(1).min(tip_height),\n                ChainTip {\n                    height: tip_height,\n                    hash: tip_hash,\n                },\n            )\n        };\n\n        let port = self''',
+              '''        let tip = {\n            let cache = self.headers.lock().await;\n            let Some((&tip_height, &tip_hash)) = cache.by_height.iter().next_back() else {\n                return Err(ChainBackendError::Rejected("header cache is empty".into()));\n            };\n            ChainTip {\n                height: tip_height,\n                hash: tip_hash,\n            }\n        };\n        let start = from_height.unwrap_or(1);\n        if start > tip.height {\n            let chain_tip = Some((tip.height, tip.hash));\n            return Ok(BackendObservation {\n                payload: ChainPayload::WalletRefresh {\n                    transactions: Vec::new(),\n                    tip: Some(tip),\n                },\n                evidence: Evidence::ServerAssertion,\n                chain_tip,\n            });\n        }\n\n        let port = self''')
+
+          servers = 'crates/optn-app/src/servers.rs'
+          rep(servers,
+              '//! string is "Fulcrum host:50002, or a node host:8333": a Fulcrum speaks\n//! Electrum over WebSocket, a node speaks the p2p protocol for BIP37, and an\n//! explorer is a web URL.',
+              '//! string is "Fulcrum host:50002, or a node host:8333": Fulcrum speaks\n//! Electrum while a node exposes BCH P2P capabilities such as BIP37 or compact\n//! filters; an explorer is a web URL. Capabilities are not permanently owned by\n//! either route.')
+          rep(servers,
+              '    /// A full node\'s p2p listener, for BIP37.',
+              '    /// A full node\'s BCH P2P listener. Runtime probes its capabilities.')
+          rep(servers, '            Self::Peer => "Node (BIP37)",', '            Self::Peer => "Node (P2P)",')
+
+          endpoint = 'crates/optn-core/src/endpoint.rs'
+          rep(endpoint,
+              '//! User-supplied server endpoints: Electrum/Fulcrum and BIP37 peers.',
+              '//! User-supplied server endpoints: Electrum/Fulcrum and BCH P2P peers.')
+          rep(endpoint,
+              '//! Fulcrum and a BIP37 peer are deliberately separate types.',
+              '//! Fulcrum and a BCH P2P peer are deliberately separate endpoint types.')
+          rep(endpoint,
+              '/// A full node\'s p2p listener, used for BIP37 bloom-filter sync.',
+              '/// A full node\'s BCH P2P listener; runtime capability probes decide how it is used.')
+          rep(endpoint,
+              '/// Parse a user-typed BIP37 peer: `host:port`, or `host` with `default_port`.',
+              '/// Parse a user-typed BCH P2P peer: `host:port`, or `host` with `default_port`.')
+
+      - name: Stage and smoke-test production Tor
+        run: npx --no-install tsx scripts/fetch-tor.mts linux-x86_64
+      - name: Format and regenerate lockfiles
+        run: |
+          cargo fmt --all
+          cargo fmt --manifest-path src-tauri/Cargo.toml
+          cargo generate-lockfile
+          cargo generate-lockfile --manifest-path src-tauri/Cargo.toml
+      - name: Report exact Rust source footprint
+        shell: python
+        run: |
+          from collections import defaultdict
+          from pathlib import Path
+          roots = [Path('crates'), Path('src-tauri/src'), Path('xtask'), Path('src')]
+          exts = {'.rs', '.ts', '.tsx', '.js', '.jsx', '.css', '.html', '.swift', '.kt', '.kts'}
+          counts = defaultdict(lambda: [0, 0])
+          for root in roots:
+              if not root.exists(): continue
+              for path in root.rglob('*'):
+                  if not path.is_file() or path.suffix.lower() not in exts: continue
+                  lines = len(path.read_text(errors='ignore').splitlines())
+                  counts[path.suffix.lower()][0] += 1
+                  counts[path.suffix.lower()][1] += lines
+          rf, rl = counts['.rs']; tf = sum(v[0] for v in counts.values()); tl = sum(v[1] for v in counts.values())
+          rows = [f'RUST_SOURCE_FILES={rf}', f'RUST_SOURCE_LINES={rl}', f'COUNTED_SOURCE_FILES={tf}', f'COUNTED_SOURCE_LINES={tl}', f'RUST_SOURCE_LINE_SHARE={rl*100/tl:.2f}%']
+          rows += [f'{ext}: files={files} lines={lines}' for ext, (files, lines) in sorted(counts.items(), key=lambda x: x[1][1], reverse=True)]
+          report = '\n'.join(rows) + '\n'; print(report, end=''); Path('pr63-diagnostics/rust-footprint.txt').write_text(report)
+      - name: Test provider/runtime workspace
+        id: workspace_tests
+        continue-on-error: true
+        shell: bash
+        run: set -o pipefail; cargo test --workspace --all-targets 2>&1 | tee pr63-diagnostics/workspace-tests.log
+      - name: Check Leptos WASM renderer
+        id: wasm_check
+        continue-on-error: true
+        shell: bash
+        run: set -o pipefail; cargo check -p optn-ui --target wasm32-unknown-unknown 2>&1 | tee pr63-diagnostics/wasm-check.log
+      - name: Check native Tauri shell with concrete providers
+        id: native_check
+        continue-on-error: true
+        shell: bash
+        run: set -o pipefail; cargo check --manifest-path src-tauri/Cargo.toml --all-targets 2>&1 | tee pr63-diagnostics/native-check.log
+      - name: Upload PR63 validation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: pr63-native-validation-v2
+          path: pr63-diagnostics
+          if-no-files-found: error
+          retention-days: 3
+      - name: Require every validation gate
+        shell: bash
+        run: |
+          failed=0
+          [ "${{ steps.workspace_tests.outcome }}" = success ] || { echo '::error::workspace tests failed'; failed=1; }
+          [ "${{ steps.wasm_check.outcome }}" = success ] || { echo '::error::Leptos WASM check failed'; failed=1; }
+          [ "${{ steps.native_check.outcome }}" = success ] || { echo '::error::native Tauri provider check failed'; failed=1; }
+          exit "$failed"
+      - name: Commit validated integration
+        shell: bash
+        run: |
+          rm -f .github/workflows/pr63-native-finalizer.yml .github/workflows/pr63-native-finalizer-v2.yml
+          git add -A
+          git config user.name "PR63 validation bot"
+          git config user.email "actions@users.noreply.github.com"
+          git commit -m "feat(shell): activate capability-routed native chain stack"
+          git push origin HEAD:agent/rpa-shared-vectors
