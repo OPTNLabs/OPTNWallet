@@ -137,8 +137,7 @@ public class ExampleInstrumentedTest {
 
             waitForJavascriptTrue(
                 scenario,
-                "Boolean(![...document.querySelectorAll('h1,h2')].find(" +
-                    "el => el.textContent?.includes('Create Watch-Only Wallet')))",
+                "Boolean(document.querySelector('[data-testid=\"home-receive-action\"]'))",
                 "Watch-only wallet was not created from the packaged Android app",
                 45_000L
             );
@@ -161,11 +160,12 @@ public class ExampleInstrumentedTest {
         // two invocations rather than one test method.
         ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class);
         try {
+            // The mobile home screen does not display the wallet name or its
+            // receive address. Wait for its real action, then prove the saved
+            // public keys and watch-only type through Receive and Send below.
             waitForJavascriptTrue(
                 scenario,
-                "Boolean(document.body.innerText.includes('E2E Watch Only') || " +
-                    "document.body.innerText.includes('Build unsigned transaction') || " +
-                    "document.body.innerText.includes('bchtest:q'))",
+                "Boolean(document.querySelector('[data-testid=\"home-receive-action\"]'))",
                 "Watch-only wallet did not survive Android force-stop and process relaunch",
                 45_000L
             );
@@ -188,6 +188,12 @@ public class ExampleInstrumentedTest {
                 noSeedSigningScript(),
                 "Receive on a watch-only wallet exposed a seed-signing path"
             );
+            waitForJavascriptTrue(
+                scenario,
+                "Boolean(![...document.querySelectorAll('button')].some(" +
+                    "el => el.textContent?.trim() === 'PrivKey'))",
+                "Public-only watch-only wallet offered private-key export"
+            );
 
             openHashRoute(scenario, "/send");
             waitForJavascriptTrue(
@@ -202,6 +208,14 @@ public class ExampleInstrumentedTest {
                 "Boolean(document.querySelector('[data-testid=\"watch-only-build-unsigned\"]') || " +
                     "document.body.innerText.includes('Build unsigned transaction'))",
                 "Watch-only send path did not expose unsigned PSBT construction",
+                45_000L
+            );
+            waitForJavascriptTrue(
+                scenario,
+                "Boolean([...document.querySelectorAll('span')].some(el => " +
+                    "/Change\\s*→\\s*bchtest:/.test(el.textContent || '')) && " +
+                    "!document.body.innerText.includes('no such column'))",
+                "Relaunched watch-only send failed to load its persisted public metadata and change address",
                 45_000L
             );
             waitForJavascriptTrue(

@@ -271,6 +271,26 @@ const migrations: Array<(db: Database) => Promise<void>> = [
     // common database so desktop and Capacitor/mobile use the same model.
     createMultisigTables(db);
   },
+  async (db) => {
+    // Migrate persisted merge targets too: local-only lazy columns otherwise
+    // lose watch-only public metadata during wallet-scoped saves.
+    const columns = new Set<string>();
+    const statement = db.prepare('PRAGMA table_info(wallets);');
+    try {
+      while (statement.step()) {
+        const row = statement.getAsObject() as Record<string, unknown>;
+        if (typeof row.name === 'string') columns.add(row.name);
+      }
+    } finally {
+      statement.free();
+    }
+
+    for (const column of ['account_xpub', 'master_fingerprint', 'multisig_policy']) {
+      if (!columns.has(column)) {
+        db.run(`ALTER TABLE wallets ADD COLUMN ${column} TEXT;`);
+      }
+    }
+  },
   // Add future migrations here as needed
 ];
 
@@ -614,8 +634,15 @@ const resyncDatabaseFromDisk = async (): Promise<void> => {
   // Under the save lock: swapping `db` out from under an in-flight save would
   // export a half-replaced database.
   await withExclusiveSaveLock(async () => {
+    const latest = new SQLModule.Database(savedBytes);
+    try {
+      await applyPendingMigrations(latest);
+    } catch (error) {
+      latest.close();
+      throw error;
+    }
     db?.close();
-    db = new SQLModule.Database(savedBytes);
+    db = latest;
     globalBaseline = snapshotGlobalTables(db);
     replaceWalletBaselines(db);
   });

@@ -35,6 +35,7 @@ import { isDesktopPlatform } from '../utils/platform';
 import { WalletType } from '../types/wallet';
 import { useI18n } from '../i18n/useI18n';
 import { copyToClipboard } from '../utils/clipboard';
+import { canSignLocally } from '../services/watchOnlyWallet';
 
 type QRCodeType = 'address' | 'pubKey' | 'pkh' | 'privkey';
 const PRIVKEY_UNLOCK_TAPS = 10;
@@ -157,6 +158,8 @@ const Receive: React.FC = () => {
   const walletType = useSelector(
     (state: RootState) => state.wallet_id.walletType
   );
+  const canRevealPrivateKey =
+    ALLOW_PRIVATE_KEY_VIEW && canSignLocally(walletType);
   const currentNetwork = useSelector((state: RootState) =>
     selectCurrentNetwork(state)
   );
@@ -439,7 +442,7 @@ const Receive: React.FC = () => {
   }, [selectedAddress]);
 
   const handlePubKeyTabClick = () => {
-    if (!ALLOW_PRIVATE_KEY_VIEW) {
+    if (!canRevealPrivateKey) {
       setQrCodeType('pubKey');
       return;
     }
@@ -461,8 +464,7 @@ const Receive: React.FC = () => {
   // Load WIF only when the user has unlocked the private-key view (password
   // re-prompt is intentional for reveal). Never on plain Receive / address pick.
   useEffect(() => {
-    if (!isPrivKeyUnlocked || !selectedAddress || !ALLOW_PRIVATE_KEY_VIEW)
-      return;
+    if (!isPrivKeyUnlocked || !selectedAddress || !canRevealPrivateKey) return;
     let cancelled = false;
     void (async () => {
       const wif = await fetchAddressWif(selectedAddress, currentNetwork);
@@ -471,7 +473,7 @@ const Receive: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [isPrivKeyUnlocked, selectedAddress, currentNetwork]);
+  }, [canRevealPrivateKey, isPrivKeyUnlocked, selectedAddress, currentNetwork]);
 
   const handleCopy = async (text: string) => {
     try {
@@ -661,7 +663,7 @@ const Receive: React.FC = () => {
   }, [qrCodeType]);
 
   useEffect(() => {
-    if (!ALLOW_PRIVATE_KEY_VIEW || isPrivKeyUnlocked) {
+    if (!canRevealPrivateKey || isPrivKeyUnlocked) {
       setPrivKeyUnlockToastVisible(false);
       return;
     }
@@ -682,7 +684,7 @@ const Receive: React.FC = () => {
     }, 4000);
 
     return () => window.clearTimeout(timer);
-  }, [isPrivKeyUnlocked, pubKeyTapCount, t]);
+  }, [canRevealPrivateKey, isPrivKeyUnlocked, pubKeyTapCount, t]);
 
   const renderAddressTypeToggle = () => {
     return (
@@ -868,26 +870,28 @@ const Receive: React.FC = () => {
           >
             PKH
           </button>
-          <button
-            ref={privkeyTabRef}
-            type="button"
-            className={`min-h-[38px] min-w-[82px] shrink-0 rounded-[14px] px-2 py-1.5 text-[12px] font-bold leading-none whitespace-nowrap ${
-              qrCodeType === 'privkey'
-                ? 'wallet-segment-active'
-                : 'wallet-segment-inactive'
-            }`}
-            onClick={() => {
-              // First open of PrivKey still requires the tap unlock (or we
-              // re-prompt via reveal when WIF is loaded after unlock).
-              if (!isPrivKeyUnlocked) {
-                handlePubKeyTabClick();
-                return;
-              }
-              setQrCodeType('privkey');
-            }}
-          >
-            PrivKey
-          </button>
+          {canRevealPrivateKey && (
+            <button
+              ref={privkeyTabRef}
+              type="button"
+              className={`min-h-[38px] min-w-[82px] shrink-0 rounded-[14px] px-2 py-1.5 text-[12px] font-bold leading-none whitespace-nowrap ${
+                qrCodeType === 'privkey'
+                  ? 'wallet-segment-active'
+                  : 'wallet-segment-inactive'
+              }`}
+              onClick={() => {
+                // First open of PrivKey still requires the tap unlock (or we
+                // re-prompt via reveal when WIF is loaded after unlock).
+                if (!isPrivKeyUnlocked) {
+                  handlePubKeyTabClick();
+                  return;
+                }
+                setQrCodeType('privkey');
+              }}
+            >
+              PrivKey
+            </button>
+          )}
         </div>
       </SectionCard>
     );
