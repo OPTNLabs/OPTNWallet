@@ -151,7 +151,7 @@ pub fn trezor_webusb_open(path: Option<String>) -> Result<u64, String> {
         "No Trezor WebUSB device found. Unlock Safe 5 (PIN), use a data USB cable, close Suite if it holds the device exclusively.".to_string()
     })?;
 
-    let mut handle = dev
+    let handle = dev
         .open()
         .map_err(|e| format!("Cannot open Trezor USB device: {e}. On Windows, WinUSB/libusb drivers may be needed (Zadig) if Suite is not installed."))?;
 

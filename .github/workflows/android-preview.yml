@@ -361,10 +361,26 @@ jobs:
             warm_output="$(timeout 180s adb -s "$emulator_serial" shell am start -W -n \
               optn.wallet.app/.MainActivity 2>&1 | tr -d '\r')" || true
             printf 'Warm-up launch on the %s flavour:\n%s\n' "$flavour" "$warm_output"
+            # am start -W has its own launch timeout. Confirm the activity
+            # actually became foreground before treating that timeout as a
+            # failed launch.
+            warm_activity_ready=
+            warm_activity_deadline=$((SECONDS + 180))
+            while [ "$SECONDS" -lt "$warm_activity_deadline" ]; do
+              warm_activity_state="$(adb_with_timeout -s "$emulator_serial" shell dumpsys \
+                activity activities 2>/dev/null | tr -d '\r')" || true
+              if printf '%s' "$warm_activity_state" | grep -Eq \
+                '(mResumedActivity:|topResumedActivity).*optn\.wallet\.app/(\.|optn\.wallet\.app\.)MainActivity'; then
+                warm_activity_ready=1
+                break
+              fi
+              sleep 2
+            done
             # Asserted, not merely logged: a flavour whose main activity cannot
             # start is exactly what this job exists to catch, and saying so here
             # names the flavour instead of surfacing later as a bare ANR.
-            if ! printf '%s' "$warm_output" | grep -q '^Status: ok'; then
+            if ! printf '%s' "$warm_output" | grep -q '^Status: ok' &&
+              [ "$warm_activity_ready" != '1' ]; then
               echo "::error::MainActivity did not start on the $flavour flavour"
               adb_with_timeout -s "$emulator_serial" logcat -d -t 200 || true
               exit 1

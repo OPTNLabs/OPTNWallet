@@ -2307,11 +2307,13 @@ mod tests {
                     submit_window: Duration::from_millis(20),
                     submit_timeout: Duration::from_millis(500),
                     connect_spares: 2,
-                    comps_at: Duration::from_millis(200),
-                    comps_deadline: Duration::from_millis(700),
-                    sigs_at: Duration::from_millis(900),
-                    sigs_deadline: Duration::from_millis(1_400),
-                    conclusion_at: Duration::from_secs(2),
+                    // This restart path opens 19 local sockets and produces 17
+                    // debug-build signatures before component disclosure.
+                    comps_at: Duration::from_secs(1),
+                    comps_deadline: Duration::from_secs(2),
+                    sigs_at: Duration::from_millis(2_250),
+                    sigs_deadline: Duration::from_secs(3),
+                    conclusion_at: Duration::from_secs(4),
                 },
                 join_inactive_timeout: None,
                 cancel: CancelFlag::new(),

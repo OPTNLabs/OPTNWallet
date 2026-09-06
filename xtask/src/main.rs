@@ -517,8 +517,11 @@ fn architecture() {
 /// uses it, so it is the block a reader would compare by hand.
 fn host_block(source: &str) -> Option<Vec<String>> {
     const OPENS: &str = "/// The one line a host changes to swap renderers.";
-    let start = source.find(OPENS)?;
-    let head = &source[start..];
+    // Source files may be checked out with CRLF on Windows. The architecture
+    // invariant is about Rust structure, not the checkout's line endings.
+    let normalized = source.replace("\r\n", "\n");
+    let start = normalized.find(OPENS)?;
+    let head = &normalized[start..];
     let loop_at = head.find("for tab in")?;
     let end = head[loop_at..].find("\n    }\n")? + loop_at + "\n    }\n".len();
     Some(
@@ -689,6 +692,18 @@ fn walk_files(root: &Path) -> Vec<PathBuf> {
 #[cfg(test)]
 mod apple_firewall_tests {
     use super::*;
+
+    #[test]
+    fn host_block_is_independent_of_checkout_line_endings() {
+        let source = "/// The one line a host changes to swap renderers.\n\
+type Ui<T> = Example<T>;\n\
+for tab in tabs {\n\
+    }\n";
+        assert_eq!(
+            host_block(source),
+            host_block(&source.replace('\n', "\r\n"))
+        );
+    }
 
     #[test]
     fn the_source_scan_reads_code_and_not_prose() {

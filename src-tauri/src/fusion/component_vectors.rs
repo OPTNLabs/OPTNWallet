@@ -174,6 +174,9 @@ mod tests {
     use super::*;
 
     fn stored() -> serde_json::Value {
+        if std::env::var_os("WRITE_FUSION_COMPONENT_VECTORS").is_some() {
+            return build();
+        }
         let raw =
             std::fs::read_to_string(PATH).expect("test-vectors/fusion-components.json exists");
         serde_json::from_str(&raw).expect("test-vectors/fusion-components.json is valid JSON")

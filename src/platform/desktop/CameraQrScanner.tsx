@@ -1,1 +1,1 @@
-export * from '../../components/qr/CameraQrScanner';
+export { CameraQrScanner } from '../../components/qr/CameraQrScanner';

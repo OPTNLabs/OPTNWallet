@@ -552,9 +552,9 @@ impl ChainBackend for NeutrinoBackend {
     }
 }
 
-fn query_items(
-    interests: &[WalletInterest],
-) -> (Vec<Vec<u8>>, Vec<Vec<u8>>, BTreeSet<([u8; 32], u32)>) {
+type QueryItems = (Vec<Vec<u8>>, Vec<Vec<u8>>, BTreeSet<([u8; 32], u32)>);
+
+fn query_items(interests: &[WalletInterest]) -> QueryItems {
     let mut query = Vec::new();
     let mut scripts = Vec::new();
     let mut outpoints = BTreeSet::new();

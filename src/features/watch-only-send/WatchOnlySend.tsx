@@ -877,6 +877,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
     multisigPolicy,
     multisigSpendMode,
     pendingSpendCheckNonce,
+    policyNetwork,
     proposalState,
   ]);
 
