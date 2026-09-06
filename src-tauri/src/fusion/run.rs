@@ -19,7 +19,6 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-
 use k256::elliptic_curve::PrimeField;
 use k256::Scalar;
 use prost::Message;

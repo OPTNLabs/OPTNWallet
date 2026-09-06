@@ -313,19 +313,28 @@ impl NeutrinoBackend {
             ));
         }
 
-        let (start, tip) = {
+        let tip = {
             let cache = self.headers.lock().await;
             let Some((&tip_height, &tip_hash)) = cache.by_height.iter().next_back() else {
                 return Err(ChainBackendError::Rejected("header cache is empty".into()));
             };
-            (
-                from_height.unwrap_or(1).min(tip_height),
-                ChainTip {
-                    height: tip_height,
-                    hash: tip_hash,
-                },
-            )
+            ChainTip {
+                height: tip_height,
+                hash: tip_hash,
+            }
         };
+        let start = from_height.unwrap_or(1);
+        if start > tip.height {
+            let chain_tip = Some((tip.height, tip.hash));
+            return Ok(BackendObservation {
+                payload: ChainPayload::WalletRefresh {
+                    transactions: Vec::new(),
+                    tip: Some(tip),
+                },
+                evidence: Evidence::ServerAssertion,
+                chain_tip,
+            });
+        }
 
         let port = self
             .config

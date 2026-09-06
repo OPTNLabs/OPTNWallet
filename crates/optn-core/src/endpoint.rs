@@ -1,4 +1,4 @@
-//! User-supplied server endpoints: Electrum/Fulcrum and BIP37 peers.
+//! User-supplied server endpoints: Electrum/Fulcrum and BCH P2P peers.
 //!
 //! Ported from the React `ElectrumServer` entry parser, including the rule
 //! that matters most: **an unencrypted WebSocket is only allowed to a
@@ -9,7 +9,7 @@
 //! A bare host defaults to encrypted, never to plaintext — the safe direction
 //! to be wrong in.
 //!
-//! Fulcrum and a BIP37 peer are deliberately separate types. They speak
+//! Fulcrum and a BCH P2P peer are deliberately separate endpoint types. They speak
 //! different protocols on different ports (the wallet's own hint string is
 //! "Fulcrum host:50002, or a node host:8333"), and collapsing them into one
 //! "server" string would make every error message useless.
@@ -64,7 +64,7 @@ impl fmt::Display for ElectrumEndpoint {
     }
 }
 
-/// A full node's p2p listener, used for BIP37 bloom-filter sync.
+/// A full node's BCH P2P listener; runtime capability probes decide how it is used.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerEndpoint {
     host: String,
@@ -215,7 +215,7 @@ pub fn parse_electrum_endpoint(entry: &str, default_port: u16) -> Result<Electru
     }
 }
 
-/// Parse a user-typed BIP37 peer: `host:port`, or `host` with `default_port`.
+/// Parse a user-typed BCH P2P peer: `host:port`, or `host` with `default_port`.
 pub fn parse_peer_endpoint(entry: &str, default_port: u16) -> Result<PeerEndpoint> {
     let entry = entry.trim();
     if entry.is_empty() {

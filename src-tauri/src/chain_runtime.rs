@@ -9,7 +9,7 @@
 //! a node can gain or lose either capability without changing the UI/source
 //! model.
 
-use optn_app::{AppAction, AppEvent, AppState, ServerKind};
+use optn_app::{AppEvent, AppState};
 use optn_chain_bchn::{BchnRpcBackend, BchnRpcConfig, RpcAuth};
 use optn_chain_bip37::{Bip37Backend, Bip37Config};
 use optn_chain_electrum::{ElectrumBackend, ElectrumConfig, ElectrumTransport};
@@ -147,17 +147,15 @@ impl NativeChainRuntime {
     pub async fn rebuild_from_app_state(&self, state: &AppState) {
         let (catalog, policy) = catalog_and_policy_from_app_state(state);
         let secrets = self.secrets.read().await.clone();
-        let replacement = build_native_chain_stack(
-            catalog,
-            policy,
-            &state.network.to_string(),
-            &secrets,
-        )
-        .await;
+        let replacement =
+            build_native_chain_stack(catalog, policy, &state.network.to_string(), &secrets).await;
         *self.stack.write().await = Some(replacement);
     }
 
-    pub async fn with_service<T>(&self, f: impl FnOnce(&Arc<Mutex<ChainService>>) -> T) -> Option<T> {
+    pub async fn with_service<T>(
+        &self,
+        f: impl FnOnce(&Arc<Mutex<ChainService>>) -> T,
+    ) -> Option<T> {
         let guard = self.stack.read().await;
         guard.as_ref().map(|stack| f(&stack.service))
     }
@@ -363,7 +361,9 @@ pub fn catalog_and_policy_from_app_state(state: &AppState) -> (SourceCatalog, Co
     for source in by_host.into_values() {
         // IDs are produced from unique normalized hosts, so duplicate insertion
         // is an internal bug rather than a user-facing condition.
-        catalog.insert(source).expect("host-grouped source ids are unique");
+        catalog
+            .insert(source)
+            .expect("host-grouped source ids are unique");
     }
     (catalog, ConnectionPolicy::auto())
 }
@@ -404,6 +404,7 @@ fn upsert_host_source(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use optn_app::{AppAction, ServerKind};
     use optn_core::network::Network;
 
     #[test]

@@ -1,9 +1,10 @@
 //! Bring your own node, Electrum server and block explorer.
 //!
 //! Three separate things, kept separate on purpose. The wallet's own hint
-//! string is "Fulcrum host:50002, or a node host:8333": a Fulcrum speaks
-//! Electrum over WebSocket, a node speaks the p2p protocol for BIP37, and an
-//! explorer is a web URL. One shared "server" string would make every error
+//! string is "Fulcrum host:50002, or a node host:8333": Fulcrum speaks
+//! Electrum while a node exposes BCH P2P capabilities such as BIP37 or compact
+//! filters; an explorer is a web URL. Capabilities are not permanently owned by
+//! either route. One shared "server" string would make every error
 //! message useless and would let a node host be tried as an Electrum server.
 //!
 //! Overrides are stored **per network**, in separate fields rather than a map
@@ -25,7 +26,7 @@ use optn_core::network::Network;
 pub enum ServerKind {
     /// Fulcrum, over Electrum.
     Electrum,
-    /// A full node's p2p listener, for BIP37.
+    /// A full node's BCH P2P listener. Runtime probes its capabilities.
     Peer,
     /// Web block explorer, for "view this transaction".
     Explorer,
@@ -37,7 +38,7 @@ impl ServerKind {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Electrum => "Electrum server",
-            Self::Peer => "Node (BIP37)",
+            Self::Peer => "Node (P2P)",
             Self::Explorer => "Block explorer",
         }
     }

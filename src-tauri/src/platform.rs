@@ -3,7 +3,9 @@
 //! Keep OS and shell details here. Wallet/application crates must only know the
 //! traits from `optn-platform`.
 
-use optn_platform::{CapabilityProvider, Clipboard as ClipboardPort, PlatformFuture, PlatformResult};
+use optn_platform::{
+    CapabilityProvider, Clipboard as ClipboardPort, PlatformFuture, PlatformResult,
+};
 use optn_platform_native::NativeClipboard;
 use tauri::Manager;
 

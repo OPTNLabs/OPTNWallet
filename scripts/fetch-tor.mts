@@ -433,6 +433,9 @@ async function main() {
   );
   writeFileSync(markerPath, `${artifact.version} ${target}\n`);
   signMacosTorFiles(target);
+  if (target.startsWith('linux-')) {
+    setLinuxRpath(join(outDir, torBinary));
+  }
 
   rmSync(temporaryDirectory, { recursive: true, force: true });
   console.log(

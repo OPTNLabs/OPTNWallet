@@ -3,6 +3,7 @@
 mod menu;
 
 pub mod app_transport;
+pub mod chain_runtime;
 #[cfg(desktop)]
 pub mod clipboard;
 pub mod electrum_tcp;
@@ -1194,6 +1195,8 @@ pub fn run() {
             let (app_runtime, app_driver) =
                 optn_runtime::AppRuntime::new(optn_app::AppState::for_surface(host_app_surface()));
             tauri::async_runtime::spawn(app_driver.run());
+            let native_chain = chain_runtime::NativeChainRuntime::spawn(app_runtime.clone());
+            app.manage(native_chain);
             app.manage(app_runtime);
 
             let log_level = if cfg!(debug_assertions) {

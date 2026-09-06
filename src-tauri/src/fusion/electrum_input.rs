@@ -105,7 +105,9 @@ pub async fn verify_input(
     tokio::time::timeout(REQUEST_TIMEOUT, async {
         let mut stream =
             connect_stream(&endpoint.host, endpoint.port, endpoint.use_ssl, transport).await?;
-        exchange(&mut stream, 1, input).await.map(|(_, result)| result)
+        exchange(&mut stream, 1, input)
+            .await
+            .map(|(_, result)| result)
     })
     .await
     .map_err(|_| "Electrum peer-input lookup timed out".to_string())?
@@ -159,9 +161,8 @@ pub async fn batch_verify_inputs(
         let mut response = Vec::new();
         let mut total_read = 0usize;
         // Read byte-by-byte until newline, enforcing the size limit.
-        let read_result: Result<(), String> = tokio::time::timeout(
-            BATCH_PER_INPUT_TIMEOUT,
-            async {
+        let read_result: Result<(), String> =
+            tokio::time::timeout(BATCH_PER_INPUT_TIMEOUT, async {
                 let mut buf = [0u8; 1];
                 loop {
                     let n = stream
@@ -183,10 +184,9 @@ pub async fn batch_verify_inputs(
                     }
                 }
                 Ok(())
-            },
-        )
-        .await
-        .map_err(|_| "Electrum batch response timed out".to_string())?;
+            })
+            .await
+            .map_err(|_| "Electrum batch response timed out".to_string())?;
         read_result?;
 
         if response.len() > MAX_RESPONSE_BYTES {
@@ -283,7 +283,11 @@ fn parse_listunspent_response(
     Ok(InputLookup::Match)
 }
 
-async fn exchange<S>(stream: &mut S, request_id: u64, input: &pb::InputComponent) -> Result<(u64, InputLookup), String>
+async fn exchange<S>(
+    stream: &mut S,
+    request_id: u64,
+    input: &pb::InputComponent,
+) -> Result<(u64, InputLookup), String>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -327,7 +331,10 @@ where
     }
 
     let display_txid = display_txid(input)?;
-    Ok((parsed.id, parse_listunspent_response(&parsed, &display_txid, input)?))
+    Ok((
+        parsed.id,
+        parse_listunspent_response(&parsed, &display_txid, input)?,
+    ))
 }
 
 #[derive(Debug, Deserialize)]
@@ -569,7 +576,8 @@ mod tests {
         for response in cases {
             let parsed: Result<ListUnspentResponse, _> = serde_json::from_slice(response);
             assert!(
-                parsed.is_err() || parse_listunspent_response(&parsed.unwrap(), &display, &input).is_err(),
+                parsed.is_err()
+                    || parse_listunspent_response(&parsed.unwrap(), &display, &input).is_err(),
                 "accepted {}",
                 String::from_utf8_lossy(response)
             );
@@ -584,7 +592,10 @@ mod tests {
         let err = parse_listunspent_response(&parsed, &display, &input()).unwrap_err();
         assert!(err.contains("-32601"), "unexpected error: {err}");
 
-        assert!(serde_json::from_slice::<ListUnspentResponse>(br#"{"id":1,"result":"not a list"}"#).is_err());
+        assert!(serde_json::from_slice::<ListUnspentResponse>(
+            br#"{"id":1,"result":"not a list"}"#
+        )
+        .is_err());
         assert!(serde_json::from_slice::<ListUnspentResponse>(br#"{"id":1,"result":["#).is_err());
     }
 
