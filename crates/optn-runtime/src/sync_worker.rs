@@ -199,6 +199,7 @@ mod tests {
 
     struct WalletBackend {
         id: SourceId,
+        endpoint: Endpoint,
         caps: CapabilitySet,
     }
     impl ChainBackend for WalletBackend {
@@ -207,6 +208,9 @@ mod tests {
         }
         fn protocol(&self) -> ProtocolFamily {
             ProtocolFamily::Electrum
+        }
+        fn endpoint(&self) -> Option<&Endpoint> {
+            Some(&self.endpoint)
         }
         fn capabilities(&self) -> &CapabilitySet {
             &self.caps
@@ -237,17 +241,18 @@ mod tests {
     #[tokio::test]
     async fn successful_refresh_reconciles_snapshot() {
         let id = SourceId::new("server");
+        let endpoint = Endpoint {
+            kind: EndpointKind::ElectrumTcp,
+            host: "server".into(),
+            port: Some(50001),
+        };
         let mut catalog = SourceCatalog::default();
         catalog
             .insert(ChainSource {
                 id: id.clone(),
                 label: "server".into(),
                 origin: SourceOrigin::UserAdded,
-                endpoints: vec![Endpoint {
-                    kind: EndpointKind::ElectrumTcp,
-                    host: "server".into(),
-                    port: Some(50001),
-                }],
+                endpoints: vec![endpoint.clone()],
                 capabilities: CapabilitySet::default(),
                 disposition: SourceDisposition::Enabled,
                 priority: 0,
@@ -260,7 +265,7 @@ mod tests {
             CapabilityDiscovery::ActiveProbe,
         );
         let mut service = ChainService::new(catalog, ConnectionPolicy::auto());
-        service.register(Arc::new(WalletBackend { id, caps }));
+        service.register(Arc::new(WalletBackend { id, endpoint, caps }));
         let mut worker = ProgressiveSyncWorker::new(ProgressiveSyncConfig::default());
         let outcome = worker.refresh(&mut service, vec![], None).await.unwrap();
         assert_eq!(outcome.decision, ReconciliationDecision::Accepted);

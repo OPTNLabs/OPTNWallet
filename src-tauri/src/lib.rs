@@ -3,7 +3,9 @@
 mod menu;
 
 pub mod app_transport;
+mod appearance;
 pub mod chain_runtime;
+mod network_config;
 #[cfg(desktop)]
 pub mod clipboard;
 pub mod electrum_tcp;
@@ -1190,15 +1192,6 @@ pub fn run() {
             #[cfg(desktop)]
             app.manage(optn_platform_native::NativeClipboard::new());
 
-            // The authoritative application runtime is framework-neutral.
-            // Tauri only chooses the executor and stores the handle.
-            let (app_runtime, app_driver) =
-                optn_runtime::AppRuntime::new(optn_app::AppState::for_surface(host_app_surface()));
-            tauri::async_runtime::spawn(app_driver.run());
-            let native_chain = chain_runtime::NativeChainRuntime::spawn(app_runtime.clone());
-            app.manage(native_chain);
-            app.manage(app_runtime);
-
             let log_level = if cfg!(debug_assertions) {
                 log::LevelFilter::Debug
             } else {
@@ -1234,6 +1227,27 @@ pub fn run() {
                     .timezone_strategy(tauri_plugin_log::TimezoneStrategy::UseLocal)
                     .build(),
             )?;
+            let appearance = appearance::AppearanceStore::new(
+                app.path().app_config_dir()?.join("appearance.json"),
+            );
+            let network_settings =
+                network_config::NetworkSettingsStore::new(app.path().app_config_dir()?);
+            let mut initial_state = optn_app::AppState::for_surface(host_app_surface());
+            if let Err(error) = appearance.restore(&mut initial_state) {
+                log::warn!("Could not restore appearance preferences; using defaults: {error}");
+            }
+            if let Err(error) = network_settings.restore(&mut initial_state) {
+                log::warn!("Could not restore network preferences; keeping the existing file: {error}");
+            }
+            // Restore only non-wallet preferences before publishing the first
+            // authoritative snapshot. Wallet state is never loaded here.
+            let (app_runtime, app_driver) = optn_runtime::AppRuntime::new(initial_state);
+            tauri::async_runtime::spawn(app_driver.run());
+            let native_chain = chain_runtime::NativeChainRuntime::spawn(app_runtime.clone());
+            app.manage(appearance);
+            app.manage(network_settings);
+            app.manage(native_chain);
+            app.manage(app_runtime);
             // Menu bar is built on the frontend in TypeScript
             // (src/platform/desktop/useMenuBar.ts) so File → Open Wallet can list
             // the actual saved wallets from the webview's WASM SQLite DB. The old

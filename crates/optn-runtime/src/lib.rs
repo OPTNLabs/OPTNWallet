@@ -42,7 +42,7 @@ pub mod update;
 
 use optn_app::{AppAction, AppEvent, AppState};
 use optn_transport::{AppTransport, TransportError, TransportFuture};
-use tokio::sync::{broadcast, mpsc, watch, Mutex};
+use tokio::sync::{broadcast, mpsc, oneshot, watch, Mutex};
 
 const ACTION_CAPACITY: usize = 128;
 const EVENT_CAPACITY: usize = 128;
@@ -61,13 +61,13 @@ impl std::error::Error for RuntimeStopped {}
 
 #[derive(Clone)]
 pub struct AppRuntime {
-    action_tx: mpsc::Sender<AppAction>,
+    action_tx: mpsc::Sender<(AppAction, oneshot::Sender<()>)>,
     state_rx: watch::Receiver<AppState>,
     event_tx: broadcast::Sender<AppEvent>,
 }
 
 pub struct AppRuntimeDriver {
-    action_rx: mpsc::Receiver<AppAction>,
+    action_rx: mpsc::Receiver<(AppAction, oneshot::Sender<()>)>,
     state_tx: watch::Sender<AppState>,
     event_tx: broadcast::Sender<AppEvent>,
     state: AppState,
@@ -147,10 +147,12 @@ impl AppRuntime {
     }
 
     pub async fn dispatch(&self, action: AppAction) -> Result<(), RuntimeStopped> {
+        let (applied_tx, applied_rx) = oneshot::channel();
         self.action_tx
-            .send(action)
+            .send((action, applied_tx))
             .await
-            .map_err(|_| RuntimeStopped)
+            .map_err(|_| RuntimeStopped)?;
+        applied_rx.await.map_err(|_| RuntimeStopped)
     }
 
     pub fn state(&self) -> AppState {
@@ -166,12 +168,12 @@ impl AppRuntime {
 
 impl AppRuntimeDriver {
     pub async fn run(mut self) {
-        while let Some(action) = self.action_rx.recv().await {
-            let Some(event) = self.state.reduce(action) else {
-                continue;
-            };
-            self.state_tx.send_replace(self.state.clone());
-            let _ = self.event_tx.send(event);
+        while let Some((action, applied)) = self.action_rx.recv().await {
+            if let Some(event) = self.state.reduce(action) {
+                self.state_tx.send_replace(self.state.clone());
+                let _ = self.event_tx.send(event);
+            }
+            let _ = applied.send(());
         }
     }
 }
@@ -180,6 +182,21 @@ impl AppRuntimeDriver {
 mod tests {
     use super::*;
     use optn_app::{AppRoute, ThemeMode};
+
+    #[tokio::test]
+    async fn dispatch_acknowledges_applied_state_and_no_op_actions() {
+        let runtime = AppRuntime::spawn(AppState::default());
+        runtime
+            .dispatch(AppAction::SetTheme(ThemeMode::Light))
+            .await
+            .unwrap();
+        assert_eq!(runtime.state().theme, ThemeMode::Light);
+        runtime
+            .dispatch(AppAction::SetTheme(ThemeMode::Light))
+            .await
+            .unwrap();
+        assert_eq!(runtime.state().theme, ThemeMode::Light);
+    }
 
     #[tokio::test]
     async fn runtime_reconciles_state_before_emitting_event() {
@@ -224,8 +241,8 @@ mod tests {
     async fn driver_can_be_spawned_by_the_host_executor() {
         let (runtime, driver) = AppRuntime::new(AppState::default());
         tokio::spawn(driver.run());
-        runtime.dispatch(AppAction::ToggleTheme).await.unwrap();
         let mut state_rx = runtime.subscribe_state();
+        runtime.dispatch(AppAction::ToggleTheme).await.unwrap();
         state_rx.changed().await.unwrap();
         assert_eq!(state_rx.borrow().theme, ThemeMode::Dark);
     }

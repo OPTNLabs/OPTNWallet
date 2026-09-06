@@ -12,7 +12,7 @@ use crate::{dispatch_action, UiTransport};
 use leptos::prelude::*;
 use optn_app::{
     app_lock_view_model, settings_view_model, AppAction, AppState, AutoLockMinutes, FeatureFlag,
-    HardwareVendor, LedgerLink, Network, SettingsRowId, ThemeMode, UiSkin, WalletKind,
+    HardwareVendor, LedgerLink, Network, ServerKind, SettingsRowId, ThemeMode, UiSkin, WalletKind,
 };
 
 /// Every theme mode, in the product's documented order.
@@ -197,7 +197,9 @@ fn SettingsRow(
                         "Rebuild wallet"
                     </button>
                 }.into_any(),
-                SettingsRowId::Servers => view! { <NodeSection state=state /> }.into_any(),
+                SettingsRowId::Servers => view! {
+                    <NodeSection transport=transport state=state />
+                }.into_any(),
                 SettingsRowId::Device => view! {
                     <DeviceSection transport=transport state=state />
                 }.into_any(),
@@ -361,22 +363,28 @@ fn NetworkChoice(
     }
 }
 
-/// The node the selected network resolves to.
-///
-/// Read-only for now: the endpoint is the network's documented default, and
-/// nothing in application state overrides it yet. Showing it beats showing
-/// nothing, because "which node am I on" is the first question when a balance
-/// looks wrong.
+fn selected_server_entry(state: &AppState, kind: ServerKind) -> String {
+    state
+        .servers
+        .for_network(state.network)
+        .get(kind)
+        .unwrap_or_default()
+        .to_owned()
+}
+
 #[component]
-fn NodeSection(state: RwSignal<AppState>) -> impl IntoView {
+fn NodeSection(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
     view! {
+        <p class="muted">
+            "Overrides apply only to the selected network. Leave a field blank to use its default."
+        </p>
         <dl class="preview-grid">
             <div>
-                <dt>"Host"</dt>
+                <dt>"Default host"</dt>
                 <dd class="mono">{move || state.get().network.default_host()}</dd>
             </div>
             <div>
-                <dt>"Port"</dt>
+                <dt>"Default port"</dt>
                 <dd class="mono">{move || state.get().network.default_port().to_string()}</dd>
             </div>
             <div class="preview-wide">
@@ -384,9 +392,77 @@ fn NodeSection(state: RwSignal<AppState>) -> impl IntoView {
                 <dd class="mono">{move || format!("{}:", state.get().network.prefix())}</dd>
             </div>
         </dl>
-        <p class="muted">
-            "This wallet uses the network's default Electrum endpoint."
-        </p>
+        <ServerField transport=transport state=state kind=ServerKind::Electrum />
+        <ServerField transport=transport state=state kind=ServerKind::Peer />
+        <ServerField transport=transport state=state kind=ServerKind::Explorer />
+        <button
+            class="secondary"
+            type="button"
+            data-testid="use-network-default-servers"
+            on:click=move |_| dispatch_action(
+                transport,
+                state,
+                AppAction::UseNetworkDefaultServers,
+            )
+        >
+            "Use network default"
+        </button>
+    }
+}
+
+#[component]
+fn ServerField(
+    transport: UiTransport,
+    state: RwSignal<AppState>,
+    kind: ServerKind,
+) -> impl IntoView {
+    let entry = RwSignal::new(selected_server_entry(&state.get_untracked(), kind));
+    let saved_entry = Memo::new(move |_| selected_server_entry(&state.get(), kind));
+    let last_saved_entry = RwSignal::new(saved_entry.get_untracked());
+
+    // Keep the input authoritative after a successful save or a network switch,
+    // while preserving a draft when unrelated state changes.
+    Effect::new(move |_| {
+        let saved = saved_entry.get();
+        if last_saved_entry.get_untracked() != saved {
+            entry.set(saved.clone());
+            last_saved_entry.set(saved);
+        }
+    });
+
+    view! {
+        <form
+            class="watch-only-form"
+            data-testid=format!("server-{}-form", kind.id())
+            on:submit=move |event| {
+                event.prevent_default();
+                dispatch_action(
+                    transport,
+                    state,
+                    AppAction::SetServer {
+                        kind,
+                        entry: entry.get_untracked(),
+                    },
+                );
+            }
+        >
+            <label class="field">
+                <span>{kind.label()}</span>
+                <input
+                    type="text"
+                    spellcheck="false"
+                    autocomplete="off"
+                    autocapitalize="none"
+                    placeholder=kind.hint()
+                    data-testid=format!("server-{}", kind.id())
+                    prop:value=move || entry.get()
+                    on:input=move |event| entry.set(event_target_value(&event))
+                />
+            </label>
+            <button class="secondary" type="submit">
+                "Save"
+            </button>
+        </form>
     }
 }
 

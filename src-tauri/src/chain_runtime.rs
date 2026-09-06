@@ -19,9 +19,8 @@ use optn_core::endpoint::{
     parse_electrum_endpoint, parse_peer_endpoint, DEFAULT_WSS_PORT, NODE_HINT_PORT,
 };
 use optn_runtime::chain::{
-    build_selection_plan, BootstrapProject, CapabilitySet, ChainEventSource, ChainSource,
-    ConnectionPolicy, Endpoint, EndpointKind, ProtocolFamily, SourceCatalog, SourceDisposition,
-    SourceId, SourceOrigin,
+    build_selection_plan, CapabilitySet, ChainEventSource, ChainSource, ConnectionPolicy, Endpoint,
+    EndpointKind, ProtocolFamily, SourceCatalog, SourceDisposition, SourceId, SourceOrigin,
 };
 use optn_runtime::chain_service::ChainService;
 use optn_runtime::events::ChainEventStream;
@@ -323,31 +322,32 @@ pub fn catalog_and_policy_from_app_state(state: &AppState) -> (SourceCatalog, Co
     let mut by_host = BTreeMap::<String, ChainSource>::new();
     let network_servers = state.servers.for_network(state.network);
 
-    let electrum_entry = state.servers.effective_electrum(state.network);
-    if let Ok(parsed) = parse_electrum_endpoint(&electrum_entry, DEFAULT_WSS_PORT) {
-        let custom = network_servers.electrum.is_some();
-        upsert_host_source(
-            &mut by_host,
-            parsed.host(),
-            custom,
-            Endpoint {
-                kind: if parsed.encrypted() {
-                    EndpointKind::ElectrumTls
-                } else {
-                    EndpointKind::ElectrumTcp
+    // A legacy default is not yet a durable source-catalog choice. Do not open
+    // a native provider connection until the user has explicitly configured a
+    // route; bootstrap selection belongs to the persisted policy overlay.
+    if let Some(electrum_entry) = network_servers.electrum.as_deref() {
+        if let Ok(parsed) = parse_electrum_endpoint(electrum_entry, DEFAULT_WSS_PORT) {
+            upsert_user_source(
+                &mut by_host,
+                parsed.host(),
+                Endpoint {
+                    kind: if parsed.encrypted() {
+                        EndpointKind::ElectrumTls
+                    } else {
+                        EndpointKind::ElectrumTcp
+                    },
+                    host: parsed.host().to_owned(),
+                    port: Some(parsed.port()),
                 },
-                host: parsed.host().to_owned(),
-                port: Some(parsed.port()),
-            },
-        );
+            );
+        }
     }
 
     if let Some(peer_entry) = network_servers.peer.as_deref() {
         if let Ok(parsed) = parse_peer_endpoint(peer_entry, NODE_HINT_PORT) {
-            upsert_host_source(
+            upsert_user_source(
                 &mut by_host,
                 parsed.host(),
-                true,
                 Endpoint {
                     kind: EndpointKind::BchP2p,
                     host: parsed.host().to_owned(),
@@ -368,34 +368,21 @@ pub fn catalog_and_policy_from_app_state(state: &AppState) -> (SourceCatalog, Co
     (catalog, ConnectionPolicy::auto())
 }
 
-fn upsert_host_source(
+fn upsert_user_source(
     by_host: &mut BTreeMap<String, ChainSource>,
     host: &str,
-    custom: bool,
     endpoint: Endpoint,
 ) {
     let key = host.trim().trim_end_matches('.').to_ascii_lowercase();
-    let origin = if custom {
-        SourceOrigin::UserAdded
-    } else {
-        SourceOrigin::Bootstrap {
-            project: BootstrapProject::FulcrumPeerNetwork,
-            provenance: "OPTN network default Electrum endpoint".into(),
-        }
-    };
     let entry = by_host.entry(key.clone()).or_insert_with(|| ChainSource {
         id: SourceId::new(format!("host:{key}")),
         label: host.to_owned(),
-        origin: origin.clone(),
+        origin: SourceOrigin::UserAdded,
         endpoints: Vec::new(),
         capabilities: CapabilitySet::default(),
         disposition: SourceDisposition::Enabled,
-        priority: if custom { 0 } else { 100 },
+        priority: 0,
     });
-    if custom {
-        entry.origin = SourceOrigin::UserAdded;
-        entry.priority = 0;
-    }
     if !entry.endpoints.contains(&endpoint) {
         entry.endpoints.push(endpoint);
     }
@@ -434,10 +421,10 @@ mod tests {
     }
 
     #[test]
-    fn default_label_is_the_real_host_not_a_generic_home_server_name() {
+    fn default_state_has_no_native_route_before_a_source_is_configured() {
         let state = AppState::default();
-        let (catalog, _) = catalog_and_policy_from_app_state(&state);
-        let source = catalog.iter().next().expect("default electrum source");
-        assert_eq!(source.label, state.network.default_host());
+        let (catalog, policy) = catalog_and_policy_from_app_state(&state);
+        assert!(catalog.iter().next().is_none());
+        assert!(build_selection_plan(&catalog, &policy).primary.is_empty());
     }
 }

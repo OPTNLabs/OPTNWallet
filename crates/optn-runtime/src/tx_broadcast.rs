@@ -146,9 +146,18 @@ mod tests {
 
     struct MockBackend {
         id: SourceId,
+        endpoint: Endpoint,
         caps: CapabilitySet,
         broadcast: Result<BackendObservation, ChainBackendError>,
         lookup: Result<BackendObservation, ChainBackendError>,
+    }
+
+    fn mock_endpoint() -> Endpoint {
+        Endpoint {
+            kind: EndpointKind::ElectrumTcp,
+            host: "server".into(),
+            port: Some(50001),
+        }
     }
 
     impl ChainBackend for MockBackend {
@@ -157,6 +166,9 @@ mod tests {
         }
         fn protocol(&self) -> ProtocolFamily {
             ProtocolFamily::Electrum
+        }
+        fn endpoint(&self) -> Option<&Endpoint> {
+            Some(&self.endpoint)
         }
         fn capabilities(&self) -> &CapabilitySet {
             &self.caps
@@ -188,11 +200,7 @@ mod tests {
                 id: id.clone(),
                 label: "server".into(),
                 origin: SourceOrigin::UserAdded,
-                endpoints: vec![Endpoint {
-                    kind: EndpointKind::ElectrumTcp,
-                    host: "server".into(),
-                    port: Some(50001),
-                }],
+                endpoints: vec![backend.endpoint.clone()],
                 capabilities: CapabilitySet::default(),
                 disposition: SourceDisposition::Enabled,
                 priority: 0,
@@ -219,6 +227,7 @@ mod tests {
     async fn timeout_is_uncertain_not_rejected() {
         let backend = MockBackend {
             id: SourceId::new("a"),
+            endpoint: mock_endpoint(),
             caps: caps(),
             broadcast: Err(ChainBackendError::Timeout),
             lookup: Err(ChainBackendError::Offline),
@@ -233,6 +242,7 @@ mod tests {
     async fn explicit_rejection_is_terminal() {
         let backend = MockBackend {
             id: SourceId::new("a"),
+            endpoint: mock_endpoint(),
             caps: caps(),
             broadcast: Err(ChainBackendError::Rejected("policy".into())),
             lookup: Err(ChainBackendError::Offline),
@@ -248,6 +258,7 @@ mod tests {
         let txid = [9; 32];
         let backend = MockBackend {
             id: SourceId::new("a"),
+            endpoint: mock_endpoint(),
             caps: caps(),
             broadcast: Ok(BackendObservation {
                 payload: ChainPayload::BroadcastObserved { txid },

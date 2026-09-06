@@ -69,10 +69,11 @@ fn make_transport() -> Rc<dyn AppTransport> {
 fn dispatch_action(transport: UiTransport, state: RwSignal<AppState>, action: AppAction) {
     let transport = transport.get_value();
     leptos::task::spawn_local(async move {
-        if transport.dispatch(action).await.is_ok() {
-            if let Ok(snapshot) = transport.snapshot().await {
-                state.set(snapshot);
-            }
+        // Appearance may be applied even when its durable save fails. Refresh
+        // authoritative state after either result; keep current state if unavailable.
+        let _ = transport.dispatch(action).await;
+        if let Ok(snapshot) = transport.snapshot().await {
+            state.set(snapshot);
         }
     });
 }

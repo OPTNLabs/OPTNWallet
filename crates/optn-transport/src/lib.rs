@@ -11,9 +11,9 @@ use optn_app::{
     AuthScope, AutoLockMinutes, CampaignOutput, Coin, ConnectState, CreateStep, FeatureFlag,
     FeatureFlags, FeeMode, FeePreferences, FeeRate, FlipstarterPledge, FreezeReason,
     HardwareSessionState, HardwareSetupPreview, HardwareVendor, ImportStep, LedgerLink,
-    MultisigSetupPreview, MultisigStep, Network, OpenedWallet, Outpoint, PledgeStatus, ServerKind,
-    ServerOverrides, SettingsRowId, SpendKind, SpendPlan, ThemeMode, UiSkin, WalletKind,
-    WatchOnlyKind, WatchOnlySetupPreview, RELAY_MINIMUM_FEE_RATE,
+    MultisigSetupPreview, MultisigStep, Network, NetworkServers, OpenedWallet, Outpoint,
+    PledgeStatus, ServerKind, ServerOverrides, SettingsRowId, SpendKind, SpendPlan, ThemeMode,
+    UiSkin, WalletKind, WatchOnlyKind, WatchOnlySetupPreview, RELAY_MINIMUM_FEE_RATE,
 };
 pub mod host;
 pub use host::{block_on_ready, run, Renderer};
@@ -108,6 +108,76 @@ pub enum WireSkin {
 pub enum WireNetwork {
     Mainnet,
     Chipnet,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct WireNetworkServers {
+    #[serde(default)]
+    pub electrum: Option<String>,
+    #[serde(default)]
+    pub peer: Option<String>,
+    #[serde(default)]
+    pub explorer: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct WireServerOverrides {
+    #[serde(default)]
+    pub mainnet: WireNetworkServers,
+    #[serde(default)]
+    pub chipnet: WireNetworkServers,
+}
+
+impl From<&NetworkServers> for WireNetworkServers {
+    fn from(value: &NetworkServers) -> Self {
+        Self {
+            electrum: value.electrum.clone(),
+            peer: value.peer.clone(),
+            explorer: value.explorer.clone(),
+        }
+    }
+}
+
+impl From<&ServerOverrides> for WireServerOverrides {
+    fn from(value: &ServerOverrides) -> Self {
+        Self {
+            mainnet: value.for_network(Network::Mainnet).into(),
+            chipnet: value.for_network(Network::Chipnet).into(),
+        }
+    }
+}
+
+impl TryFrom<WireServerOverrides> for ServerOverrides {
+    type Error = TransportError;
+
+    fn try_from(value: WireServerOverrides) -> Result<Self, Self::Error> {
+        let mut overrides = Self::new();
+        restore_network_servers(&mut overrides, Network::Mainnet, value.mainnet)?;
+        restore_network_servers(&mut overrides, Network::Chipnet, value.chipnet)?;
+        Ok(overrides)
+    }
+}
+
+fn restore_network_servers(
+    overrides: &mut ServerOverrides,
+    network: Network,
+    values: WireNetworkServers,
+) -> Result<(), TransportError> {
+    for (kind, entry) in [
+        (ServerKind::Electrum, values.electrum),
+        (ServerKind::Peer, values.peer),
+        (ServerKind::Explorer, values.explorer),
+    ] {
+        if let Some(entry) = entry {
+            overrides.set(network, kind, &entry).map_err(|error| {
+                TransportError::InvalidData(format!(
+                    "invalid {} server override: {error}",
+                    kind.id()
+                ))
+            })?;
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -368,6 +438,8 @@ pub struct WireState {
     #[serde(default)]
     pub skin: WireSkin,
     pub network: WireNetwork,
+    #[serde(default)]
+    pub servers: WireServerOverrides,
     #[serde(default)]
     pub fee_mode: WireFeeMode,
     #[serde(default = "default_custom_fee_rate_sat_per_kb")]
@@ -1252,6 +1324,7 @@ impl From<&AppState> for WireState {
             theme: value.theme.into(),
             skin: value.skin.into(),
             network: value.network.into(),
+            servers: WireServerOverrides::from(&value.servers),
             fee_mode: value.fee_preferences.mode.into(),
             custom_fee_satoshis_per_kb: value.fee_preferences.custom_rate.satoshis_per_kb(),
             help_open: value.help_open,
@@ -1366,6 +1439,7 @@ impl TryFrom<WireState> for AppState {
 
     fn try_from(value: WireState) -> Result<Self, Self::Error> {
         verify_wire_version(value.version)?;
+        let servers = ServerOverrides::try_from(value.servers)?;
         Ok(Self {
             route: value.route.into(),
             theme: value.theme.into(),
@@ -1430,9 +1504,7 @@ impl TryFrom<WireState> for AppState {
             // decoded snapshot must never arrive carrying a signature request,
             // or a stale frame could put an approval in front of the user.
             connect: ConnectState::new(),
-            // Overrides live host-side; a snapshot does not carry them, so a
-            // decoded state starts from the network defaults.
-            servers: ServerOverrides::new(),
+            servers,
             create_step: value.create_step.into(),
             import_step: value.import_step.into(),
             settings_focus: value
@@ -1831,6 +1903,62 @@ mod tests {
             AppRoute::from(WireRoute::from(AppRoute::History)),
             AppRoute::History
         );
+    }
+
+    #[test]
+    fn wire_round_trip_preserves_network_scoped_server_overrides() {
+        let mut state = AppState::default();
+        state
+            .servers
+            .set(Network::Mainnet, ServerKind::Electrum, "main.example:50002")
+            .unwrap();
+        state
+            .servers
+            .set(
+                Network::Mainnet,
+                ServerKind::Explorer,
+                "https://main.example/",
+            )
+            .unwrap();
+        state
+            .servers
+            .set(Network::Chipnet, ServerKind::Peer, "chip.example:8333")
+            .unwrap();
+
+        let encoded = serde_json::to_string(&WireState::from(&state)).unwrap();
+        let decoded: WireState = serde_json::from_str(&encoded).unwrap();
+
+        assert_eq!(
+            decoded.servers.mainnet.electrum.as_deref(),
+            Some("main.example:50002")
+        );
+        assert_eq!(
+            decoded.servers.mainnet.explorer.as_deref(),
+            Some("https://main.example")
+        );
+        assert_eq!(
+            decoded.servers.chipnet.peer.as_deref(),
+            Some("chip.example:8333")
+        );
+        assert!(decoded.servers.chipnet.electrum.is_none());
+
+        let restored = AppState::try_from(decoded).unwrap();
+        assert_eq!(restored.servers, state.servers);
+    }
+
+    #[test]
+    fn legacy_wire_snapshot_decodes_with_empty_server_overrides() {
+        let mut snapshot = serde_json::to_value(WireState::from(&AppState::default())).unwrap();
+        snapshot
+            .as_object_mut()
+            .expect("wire snapshot object")
+            .remove("servers");
+
+        let decoded: WireState = serde_json::from_value(snapshot).unwrap();
+        assert_eq!(decoded.servers, WireServerOverrides::default());
+
+        let restored = AppState::try_from(decoded).unwrap();
+        assert_eq!(restored.servers, ServerOverrides::new());
     }
 
     #[test]

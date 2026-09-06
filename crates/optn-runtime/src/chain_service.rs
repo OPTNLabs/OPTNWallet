@@ -164,6 +164,8 @@ pub struct CapabilityRoute {
 pub trait ChainBackend: Send + Sync {
     fn source_id(&self) -> &SourceId;
     fn protocol(&self) -> ProtocolFamily;
+    /// Execution requires an endpoint currently owned by this source in the catalog.
+    /// Backends without an endpoint are not eligible for routed I/O.
     fn endpoint(&self) -> Option<&Endpoint> {
         None
     }
@@ -286,6 +288,7 @@ impl ProviderRegistry {
                 provider.source_id() == &route.source
                     && provider.protocol() == route.protocol
                     && provider.endpoint() == route.endpoint.as_ref()
+                    && !matches!(provider.health(), ProviderHealth::Offline)
                     && provider.supports(operation)
                     && provider.capabilities().is_usable(route.capability)
             })
@@ -338,7 +341,15 @@ impl ChainService {
             .retain(|entry| entry.source != *source || entry.protocol != protocol);
     }
 
-    fn route_unhealthy(&self, route: &CapabilityRoute) -> bool {
+    fn route_unavailable(&self, route: &CapabilityRoute) -> bool {
+        if !self.catalog.get(&route.source).is_some_and(|source| {
+            route.endpoint.as_ref().is_some_and(|endpoint| {
+                endpoint.kind.can_probe_protocol(route.protocol)
+                    && source.endpoints.contains(endpoint)
+            })
+        }) {
+            return true;
+        }
         self.health_overrides
             .iter()
             .find(|entry| {
@@ -380,7 +391,7 @@ impl ChainService {
                 self.registry
                     .routes_for_capability(source, &self.policy, capability)
             })
-            .filter(|route| !self.route_unhealthy(route))
+            .filter(|route| !self.route_unavailable(route))
             .collect()
     }
 
@@ -402,7 +413,7 @@ impl ChainService {
                     .into_iter()
                     .map(|(_, route)| route)
             })
-            .filter(|route| !self.route_unhealthy(route))
+            .filter(|route| !self.route_unavailable(route))
             .collect()
     }
 
@@ -411,8 +422,16 @@ impl ChainService {
         route: &CapabilityRoute,
         request: &ChainRequest,
     ) -> Result<ChainObservation<ChainPayload>, ChainServiceError> {
-        if route.capability != operation_capability(request.operation())
-            || self.route_unhealthy(route)
+        // Routes are public snapshots, not authorization to bypass current policy.
+        if !self
+            .routes_for_operation(request.operation())
+            .iter()
+            .any(|current| {
+                current.source == route.source
+                    && current.protocol == route.protocol
+                    && current.endpoint == route.endpoint
+                    && current.capability == route.capability
+            })
         {
             return Err(ChainServiceError::RouteUnavailable);
         }
@@ -507,6 +526,267 @@ pub const fn operation_capability(operation: ChainOperation) -> Capability {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chain::{
+        CapabilityDiscovery, ChainSource, EndpointKind, SourceDisposition, SourceOrigin,
+        SourceScope,
+    };
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    struct CountingBackend {
+        source: SourceId,
+        endpoint: Endpoint,
+        capabilities: CapabilitySet,
+        calls: AtomicUsize,
+        offline: AtomicBool,
+    }
+
+    impl ChainBackend for CountingBackend {
+        fn source_id(&self) -> &SourceId {
+            &self.source
+        }
+        fn protocol(&self) -> ProtocolFamily {
+            ProtocolFamily::Electrum
+        }
+        fn endpoint(&self) -> Option<&Endpoint> {
+            Some(&self.endpoint)
+        }
+        fn capabilities(&self) -> &CapabilitySet {
+            &self.capabilities
+        }
+        fn health(&self) -> ProviderHealth {
+            if self.offline.load(Ordering::SeqCst) {
+                ProviderHealth::Offline
+            } else {
+                ProviderHealth::Healthy
+            }
+        }
+        fn supports(&self, operation: ChainOperation) -> bool {
+            operation == ChainOperation::HeaderSync
+        }
+        fn execute<'a>(&'a self, _: &'a ChainRequest) -> ChainFuture<'a, BackendObservation> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async {
+                Ok(BackendObservation {
+                    payload: ChainPayload::Headers {
+                        start_height: 1,
+                        headers: vec![],
+                    },
+                    evidence: Evidence::ServerAssertion,
+                    chain_tip: None,
+                })
+            })
+        }
+    }
+
+    fn routed_service() -> (ChainService, Arc<CountingBackend>, CapabilityRoute) {
+        let mut capabilities = CapabilitySet::default();
+        capabilities.record(
+            Capability::HeaderStream,
+            CapabilityConfidence::Verified,
+            CapabilityDiscovery::ActiveProbe,
+        );
+        let backend = Arc::new(CountingBackend {
+            source: SourceId::new("server"),
+            endpoint: Endpoint {
+                kind: EndpointKind::ElectrumTcp,
+                host: "server.invalid".into(),
+                port: Some(50001),
+            },
+            capabilities,
+            calls: AtomicUsize::new(0),
+            offline: AtomicBool::new(false),
+        });
+        let mut catalog = SourceCatalog::default();
+        catalog
+            .insert(ChainSource {
+                id: backend.source.clone(),
+                label: "server".into(),
+                origin: SourceOrigin::UserAdded,
+                endpoints: vec![backend.endpoint.clone()],
+                capabilities: CapabilitySet::default(),
+                disposition: SourceDisposition::Enabled,
+                priority: 0,
+            })
+            .unwrap();
+        let mut service = ChainService::new(catalog, ConnectionPolicy::auto());
+        service.register(backend.clone());
+        let route = service
+            .routes_for_operation(ChainOperation::HeaderSync)
+            .remove(0);
+        (service, backend, route)
+    }
+
+    const HEADER_REQUEST: ChainRequest = ChainRequest::HeaderSync {
+        start_height: 1,
+        count: 1,
+    };
+
+    #[tokio::test]
+    async fn stale_route_rechecks_source_disposition_before_io() {
+        for disposition in [SourceDisposition::Banned, SourceDisposition::Disabled] {
+            let (mut service, backend, route) = routed_service();
+            service
+                .catalog_mut()
+                .set_disposition(&route.source, disposition)
+                .unwrap();
+            assert_eq!(
+                service.execute_on_route(&route, &HEADER_REQUEST).await,
+                Err(ChainServiceError::RouteUnavailable),
+                "{disposition:?}"
+            );
+            assert_eq!(backend.calls.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn stale_route_rechecks_policy_before_io() {
+        for policy in [
+            ConnectionPolicy::own_infrastructure(),
+            ConnectionPolicy::exact(SourceId::new("other"), ProtocolFamily::Electrum),
+            ConnectionPolicy::exact(SourceId::new("server"), ProtocolFamily::Bip37),
+        ] {
+            let (mut service, backend, route) = routed_service();
+            service.set_policy(policy);
+            assert_eq!(
+                service.execute_on_route(&route, &HEADER_REQUEST).await,
+                Err(ChainServiceError::RouteUnavailable)
+            );
+            assert_eq!(backend.calls.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn stale_route_rechecks_configured_endpoint_before_io() {
+        let (mut service, backend, route) = routed_service();
+        service
+            .catalog_mut()
+            .get_mut(&route.source)
+            .unwrap()
+            .endpoints[0]
+            .host = "replacement.invalid".into();
+        assert!(service
+            .routes_for_operation(ChainOperation::HeaderSync)
+            .is_empty());
+        assert!(service
+            .routes_for_capability(Capability::HeaderStream)
+            .is_empty());
+        assert_eq!(
+            service.execute_on_route(&route, &HEADER_REQUEST).await,
+            Err(ChainServiceError::RouteUnavailable)
+        );
+        assert_eq!(backend.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn removed_source_or_changed_endpoint_rejects_before_io() {
+        for change in 0..4 {
+            let (mut service, backend, route) = routed_service();
+            match change {
+                0 => {
+                    service.catalog_mut().remove(&route.source).unwrap();
+                }
+                1 => service
+                    .catalog_mut()
+                    .get_mut(&route.source)
+                    .unwrap()
+                    .endpoints
+                    .clear(),
+                2 => {
+                    service
+                        .catalog_mut()
+                        .get_mut(&route.source)
+                        .unwrap()
+                        .endpoints[0]
+                        .port = Some(50002)
+                }
+                _ => {
+                    service
+                        .catalog_mut()
+                        .get_mut(&route.source)
+                        .unwrap()
+                        .endpoints[0]
+                        .kind = EndpointKind::BchP2p
+                }
+            }
+            assert!(service
+                .routes_for_capability(Capability::HeaderStream)
+                .is_empty());
+            assert_eq!(
+                service.execute_on_route(&route, &HEADER_REQUEST).await,
+                Err(ChainServiceError::RouteUnavailable)
+            );
+            assert_eq!(
+                service.execute(&HEADER_REQUEST).await,
+                Err(ChainServiceError::NoEligibleProvider)
+            );
+            assert_eq!(backend.calls.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn forged_route_rejects_before_io() {
+        for change in 0..5 {
+            let (mut service, backend, mut route) = routed_service();
+            match change {
+                0 => route.source = SourceId::new("other"),
+                1 => route.endpoint = None,
+                2 => route.endpoint.as_mut().unwrap().host = "other.invalid".into(),
+                3 => route.protocol = ProtocolFamily::Bip37,
+                _ => route.capability = Capability::Broadcast,
+            }
+            assert_eq!(
+                service.execute_on_route(&route, &HEADER_REQUEST).await,
+                Err(ChainServiceError::RouteUnavailable)
+            );
+            assert_eq!(backend.calls.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn stale_route_rechecks_health_before_io() {
+        let (mut service, backend, route) = routed_service();
+        backend.offline.store(true, Ordering::SeqCst);
+        assert_eq!(
+            service.execute_on_route(&route, &HEADER_REQUEST).await,
+            Err(ChainServiceError::RouteUnavailable)
+        );
+        backend.offline.store(false, Ordering::SeqCst);
+        for health in [ProviderHealth::Offline, ProviderHealth::Degraded] {
+            service.set_route_health(&route, health);
+            assert_eq!(
+                service.execute_on_route(&route, &HEADER_REQUEST).await,
+                Err(ChainServiceError::RouteUnavailable)
+            );
+        }
+        assert_eq!(backend.calls.load(Ordering::SeqCst), 0);
+        service.clear_health_override(&route.source, route.protocol);
+        assert!(service
+            .execute_on_route(&route, &HEADER_REQUEST)
+            .await
+            .is_ok());
+        assert_eq!(backend.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn allowed_fallback_route_ignores_cached_confidence_and_health() {
+        let (mut service, backend, mut route) = routed_service();
+        let mut policy = ConnectionPolicy::own_infrastructure();
+        policy.fallback_scope = Some(SourceScope::PublicEnabled);
+        service.set_policy(policy);
+        route.confidence = CapabilityConfidence::Advertised;
+        route.health = ProviderHealth::Unknown;
+        assert!(service
+            .execute_on_route(&route, &HEADER_REQUEST)
+            .await
+            .is_ok());
+        assert_eq!(backend.calls.load(Ordering::SeqCst), 1);
+        service.set_policy(ConnectionPolicy::own_infrastructure());
+        assert_eq!(
+            service.execute_on_route(&route, &HEADER_REQUEST).await,
+            Err(ChainServiceError::RouteUnavailable)
+        );
+        assert_eq!(backend.calls.load(Ordering::SeqCst), 1);
+    }
 
     #[test]
     fn outpoint_wire_encoding_is_stable() {
