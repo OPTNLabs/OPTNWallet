@@ -5,14 +5,12 @@
 //! overlays remain on disk and reject writes rather than being silently lost.
 
 use crate::chain_runtime::catalog_and_policy_from_app_state;
-use optn_app::{AppState, NetworkServers, ServerKind, ServerOverrides};
+use optn_app::{AppState, NetworkServers, ServerKind};
 use optn_core::network::Network;
-use optn_runtime::chain::{
-    ConnectionPolicy, Endpoint, EndpointKind, SourceDisposition, SourceOrigin,
-};
+use optn_runtime::chain::{Endpoint, EndpointKind};
 use optn_runtime::network_config::{
-    decode_envelope_json, encode_envelope_json, NetworkConfigEnvelope, NetworkConfigStore,
-    UserNetworkOverlay,
+    decode_envelope_json, encode_envelope_json, legacy_network_servers_from_overlay,
+    NetworkConfigEnvelope, NetworkConfigStore, UserNetworkOverlay,
 };
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
@@ -88,7 +86,7 @@ impl NetworkSettingsStore {
             let Some(envelope) = self.file_for(network).load()? else {
                 continue;
             };
-            let servers = network_servers_from_overlay(&envelope.overlay)?;
+            let servers = legacy_network_servers_from_overlay(&envelope.overlay)?;
             apply_servers(&mut restored, network, &servers)?;
         }
         *state = restored;
@@ -102,7 +100,7 @@ impl NetworkSettingsStore {
         let file = self.file_for(network);
         let catalog_version = match file.load()? {
             Some(existing) => {
-                network_servers_from_overlay(&existing.overlay)?;
+                legacy_network_servers_from_overlay(&existing.overlay)?;
                 existing.bootstrap_catalog_version_seen
             }
             None => LEGACY_CATALOG_VERSION.into(),
@@ -144,69 +142,6 @@ fn envelope_from_state(
     ))
 }
 
-fn network_servers_from_overlay(overlay: &UserNetworkOverlay) -> Result<NetworkServers, String> {
-    if !overlay.bootstrap_overrides.is_empty()
-        || overlay.connection_policy != ConnectionPolicy::auto()
-    {
-        return Err(
-            "this network configuration uses source policy features the current settings screen cannot edit"
-                .into(),
-        );
-    }
-
-    let mut servers = NetworkServers::new();
-    for source in &overlay.user_sources {
-        if !matches!(&source.origin, SourceOrigin::UserAdded)
-            || source.disposition != SourceDisposition::Enabled
-            || source.priority != 0
-        {
-            return Err(
-                "this network configuration has a source the current settings screen cannot represent"
-                    .into(),
-            );
-        }
-        for endpoint in &source.endpoints {
-            let (kind, entry) = match endpoint.kind {
-                EndpointKind::ElectrumTls => (
-                    ServerKind::Electrum,
-                    host_port(&endpoint.host, required_port(endpoint)?)?,
-                ),
-                EndpointKind::ElectrumTcp => {
-                    return Err(
-                        "this network configuration has a plaintext Electrum endpoint the current settings screen cannot represent"
-                            .into(),
-                    )
-                }
-                EndpointKind::BchP2p => (
-                    ServerKind::Peer,
-                    host_port(&endpoint.host, required_port(endpoint)?)?,
-                ),
-                _ => {
-                    return Err(
-                        "this network configuration has an endpoint the current settings screen cannot represent"
-                            .into(),
-                    )
-                }
-            };
-            set_once(&mut servers, kind, entry)?;
-        }
-    }
-    if let Some(explorer) = &overlay.explorer {
-        if explorer.kind != EndpointKind::ExplorerHttps {
-            return Err(
-                "this network configuration has a non-HTTPS explorer the current settings screen cannot represent"
-                    .into(),
-            );
-        }
-        set_once(
-            &mut servers,
-            ServerKind::Explorer,
-            format!("https://{}", host_port_optional(&explorer.host, explorer.port)?),
-        )?;
-    }
-    Ok(servers)
-}
-
 fn apply_servers(
     state: &mut AppState,
     network: Network,
@@ -223,60 +158,6 @@ fn apply_servers(
         }
     }
     Ok(())
-}
-
-fn set_once(
-    servers: &mut NetworkServers,
-    kind: ServerKind,
-    value: String,
-) -> Result<(), String> {
-    if servers.get(kind).is_some() {
-        return Err(
-            "this network configuration has multiple endpoints of one kind, which the current settings screen cannot represent"
-                .into(),
-        );
-    }
-    let mut validated = ServerOverrides::new();
-    validated
-        .set(Network::Mainnet, kind, &value)
-        .map_err(|error| format!("invalid persisted {} endpoint: {error}", kind.id()))?;
-    let value = validated
-        .for_network(Network::Mainnet)
-        .get(kind)
-        .expect("validated endpoint was stored")
-        .to_owned();
-    match kind {
-        ServerKind::Electrum => servers.electrum = Some(value),
-        ServerKind::Peer => servers.peer = Some(value),
-        ServerKind::Explorer => servers.explorer = Some(value),
-    }
-    Ok(())
-}
-
-fn required_port(endpoint: &Endpoint) -> Result<u16, String> {
-    endpoint
-        .port
-        .ok_or_else(|| "this network configuration has an endpoint without a port".into())
-}
-
-fn host_port(host: &str, port: u16) -> Result<String, String> {
-    Ok(format!("{}:{port}", host_port_optional(host, None)?))
-}
-
-fn host_port_optional(host: &str, port: Option<u16>) -> Result<String, String> {
-    let host = host.trim();
-    if host.is_empty() || host.contains(['/', '\\', '@', '?', '#', ' ']) {
-        return Err("this network configuration has an invalid endpoint host".into());
-    }
-    let host = if host.contains(':') && !host.starts_with('[') {
-        format!("[{host}]")
-    } else {
-        host.to_owned()
-    };
-    Ok(match port {
-        Some(port) => format!("{host}:{port}"),
-        None => host,
-    })
 }
 
 fn explorer_endpoint(entry: &str) -> Result<Endpoint, String> {
@@ -337,6 +218,7 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use optn_runtime::chain::{ConnectionPolicy, SourceDisposition, SourceOrigin};
 
     struct TestDirectory(PathBuf);
 

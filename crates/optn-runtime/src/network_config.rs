@@ -10,6 +10,8 @@ use crate::chain::{
     ProtocolFamily, ProtocolSet, SourceCatalog, SourceDisposition, SourceId, SourceOrigin,
     SourceScope,
 };
+use optn_app::{NetworkServers, ServerKind, ServerOverrides};
+use optn_core::network::Network;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -88,6 +90,129 @@ pub fn merge_bootstrap_with_user_overlay(
         merged.insert(source.clone())?;
     }
     Ok(merged)
+}
+
+/// Decode the one-Electrum/one-peer/one-explorer settings shape used by the
+/// current desktop settings UI.
+///
+/// A richer overlay must not be flattened by a surface that cannot faithfully
+/// enforce its policy. Callers therefore receive an error rather than a public
+/// default when the file contains advanced source selection.
+pub fn legacy_network_servers_from_overlay(
+    overlay: &UserNetworkOverlay,
+) -> Result<NetworkServers, String> {
+    if !overlay.bootstrap_overrides.is_empty()
+        || overlay.connection_policy != ConnectionPolicy::auto()
+    {
+        return Err(
+            "this network configuration uses source policy features this surface cannot enforce"
+                .into(),
+        );
+    }
+
+    let mut servers = NetworkServers::new();
+    for source in &overlay.user_sources {
+        if !matches!(&source.origin, SourceOrigin::UserAdded)
+            || source.disposition != SourceDisposition::Enabled
+            || source.priority != 0
+        {
+            return Err(
+                "this network configuration has a source this surface cannot represent".into(),
+            );
+        }
+        for endpoint in &source.endpoints {
+            let (kind, entry) = match endpoint.kind {
+                EndpointKind::ElectrumTls => (
+                    ServerKind::Electrum,
+                    host_port(&endpoint.host, required_port(endpoint)?)?,
+                ),
+                EndpointKind::ElectrumTcp => {
+                    return Err(
+                        "this network configuration has a plaintext Electrum endpoint this surface cannot represent"
+                            .into(),
+                    )
+                }
+                EndpointKind::BchP2p => (
+                    ServerKind::Peer,
+                    host_port(&endpoint.host, required_port(endpoint)?)?,
+                ),
+                _ => {
+                    return Err(
+                        "this network configuration has an endpoint this surface cannot represent"
+                            .into(),
+                    )
+                }
+            };
+            set_once(&mut servers, kind, entry)?;
+        }
+    }
+    if let Some(explorer) = &overlay.explorer {
+        if explorer.kind != EndpointKind::ExplorerHttps {
+            return Err(
+                "this network configuration has a non-HTTPS explorer this surface cannot represent"
+                    .into(),
+            );
+        }
+        set_once(
+            &mut servers,
+            ServerKind::Explorer,
+            format!(
+                "https://{}",
+                host_port_optional(&explorer.host, explorer.port)?
+            ),
+        )?;
+    }
+    Ok(servers)
+}
+
+fn set_once(servers: &mut NetworkServers, kind: ServerKind, value: String) -> Result<(), String> {
+    if servers.get(kind).is_some() {
+        return Err(
+            "this network configuration has multiple endpoints of one kind, which this surface cannot represent"
+                .into(),
+        );
+    }
+    let mut validated = ServerOverrides::new();
+    validated
+        .set(Network::Mainnet, kind, &value)
+        .map_err(|error| format!("invalid persisted {} endpoint: {error}", kind.id()))?;
+    let value = validated
+        .for_network(Network::Mainnet)
+        .get(kind)
+        .expect("validated endpoint was stored")
+        .to_owned();
+    match kind {
+        ServerKind::Electrum => servers.electrum = Some(value),
+        ServerKind::Peer => servers.peer = Some(value),
+        ServerKind::Explorer => servers.explorer = Some(value),
+    }
+    Ok(())
+}
+
+fn required_port(endpoint: &Endpoint) -> Result<u16, String> {
+    endpoint
+        .port
+        .ok_or_else(|| "this network configuration has an endpoint without a port".into())
+}
+
+fn host_port(host: &str, port: u16) -> Result<String, String> {
+    Ok(format!("{}:{port}", host_port_optional(host, None)?))
+}
+
+fn host_port_optional(host: &str, port: Option<u16>) -> Result<String, String> {
+    let host = host.trim();
+    if host.is_empty() || host.contains(['/', '\\', '@', '?', '#', ' ']) {
+        return Err("this network configuration has an invalid endpoint host".into());
+    }
+    let host = if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]")
+    } else {
+        host.to_owned()
+    };
+    Ok(match port {
+        Some(port) => format!("{host}:{port}"),
+        None => host,
+    })
 }
 
 /// Persistence port. Filesystem/key-value implementations live in platform or
@@ -556,6 +681,30 @@ mod tests {
             disposition: SourceDisposition::Enabled,
             priority: 7,
         }
+    }
+
+    #[test]
+    fn legacy_server_bridge_preserves_the_desktop_electrum_override() {
+        let mut source = user_source("desktop-fulcrum");
+        source.priority = 0;
+        let mut overlay = UserNetworkOverlay::default();
+        overlay.user_sources.push(source);
+
+        let servers = legacy_network_servers_from_overlay(&overlay).unwrap();
+        assert_eq!(
+            servers.electrum.as_deref(),
+            Some("desktop-fulcrum.example:50002")
+        );
+    }
+
+    #[test]
+    fn legacy_server_bridge_refuses_policy_it_cannot_enforce() {
+        let overlay = UserNetworkOverlay {
+            connection_policy: ConnectionPolicy::own_infrastructure(),
+            ..Default::default()
+        };
+
+        assert!(legacy_network_servers_from_overlay(&overlay).is_err());
     }
 
     #[test]

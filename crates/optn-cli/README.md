@@ -78,7 +78,15 @@ and signs without broadcasting so you can inspect the result first.
 ## Networks
 
 `--network mainnet` (default) or `--network chipnet`. The network selects the
-default Electrum server and is checked against the address prefix.
+selected Electrum server and is checked against the address prefix. With no
+`--host`, `--port`, or `--no-tls` override, the CLI reads the same network-
+scoped settings file as the desktop wallet. It uses the normal app-config
+directory plus `com.optilabs.wallet`, or an explicit `--network-config-dir`
+or `OPTN_NETWORK_CONFIG_DIR` for scripts and portable profiles.
+
+If that shared file contains a richer source policy the current direct-Electrum
+CLI cannot enforce, it refuses the command instead of silently falling back to
+a public server. Explicit endpoint flags remain a deliberate override.
 
 That check matters more than it looks. Querying mainnet for a `bchtest:`
 address does not fail — the server simply reports no history, which reads

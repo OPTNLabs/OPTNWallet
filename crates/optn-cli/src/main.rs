@@ -15,6 +15,7 @@ mod electrum;
 mod keychain;
 mod lmots;
 mod msgsign;
+mod network_settings;
 mod serve;
 mod skills;
 mod token;
@@ -28,6 +29,7 @@ pub(crate) use optn_core::{cashaddr, error, hd, network, rpa};
 
 use clap::{Parser, Subcommand};
 use serde_json::{json, Value};
+use std::path::{Path, PathBuf};
 
 use bip39::{Language, Mnemonic};
 use optn_multisig_core::{inspect_p2sh20, Network as MultisigNetwork};
@@ -60,6 +62,12 @@ struct Cli {
     /// Connect without TLS. Only useful against a local server.
     #[arg(long, global = true)]
     no_tls: bool,
+
+    /// Directory holding the desktop wallet's persisted network settings.
+    /// Defaults to the normal app config directory; OPTN_NETWORK_CONFIG_DIR
+    /// provides the same override for scripts.
+    #[arg(long, global = true, value_name = "DIR")]
+    network_config_dir: Option<PathBuf>,
 
     /// Which stored wallet to use, when more than one is in the keychain.
     ///
@@ -608,17 +616,55 @@ fn command_name(command: &Command) -> &'static str {
     }
 }
 
+fn client_for(cli: &Cli) -> Result<Client> {
+    if cli.host.is_some() || cli.port.is_some() || cli.no_tls {
+        return Ok(Client::new(
+            cli.host
+                .clone()
+                .unwrap_or_else(|| cli.network.default_host().to_string()),
+            cli.port.unwrap_or_else(|| cli.network.default_port()),
+            !cli.no_tls,
+            cli.timeout,
+        ));
+    }
+
+    let endpoint =
+        network_settings::shared_electrum(cli.network, cli.network_config_dir.as_deref())
+            .map_err(CliError::Usage)?;
+    Ok(match endpoint {
+        Some(endpoint) => Client::new(
+            endpoint.host().to_owned(),
+            endpoint.port(),
+            endpoint.encrypted(),
+            cli.timeout,
+        ),
+        None => Client::new(
+            cli.network.default_host().to_owned(),
+            cli.network.default_port(),
+            true,
+            cli.timeout,
+        ),
+    })
+}
+
+fn append_network_config_dir(base: &mut Vec<String>, directory: Option<&Path>) -> Result<()> {
+    let Some(directory) = directory else {
+        return Ok(());
+    };
+    let directory = directory.to_str().ok_or_else(|| {
+        CliError::Usage("--network-config-dir must be valid Unicode for console and serve".into())
+    })?;
+    base.push("--network-config-dir".into());
+    base.push(directory.into());
+    Ok(())
+}
+
 async fn run(cli: &Cli) -> Result<Value> {
     // Before anything else, including opening a connection. A refusal should
     // cost nothing and reveal nothing about the wallet.
     skills::enforce(skills::Policy::from_env()?, command_name(&cli.command))?;
 
-    let host = cli
-        .host
-        .clone()
-        .unwrap_or_else(|| cli.network.default_host().to_string());
-    let port = cli.port.unwrap_or_else(|| cli.network.default_port());
-    let client = Client::new(host, port, !cli.no_tls, cli.timeout);
+    let client = client_for(cli)?;
 
     match &cli.command {
         Command::Ping => {
@@ -1535,6 +1581,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 base.push("--profile".to_string());
                 base.push(cli.profile.clone());
             }
+            append_network_config_dir(&mut base, cli.network_config_dir.as_deref())?;
             let policy = skills::Policy::from_env()?;
 
             eprintln!("optn console — {} ({})", cli.network, policy.ceiling());
@@ -1638,6 +1685,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 base_args.push("--profile".to_string());
                 base_args.push(cli.profile.clone());
             }
+            append_network_config_dir(&mut base_args, cli.network_config_dir.as_deref())?;
 
             let config = std::sync::Arc::new(serve::Config {
                 address,
