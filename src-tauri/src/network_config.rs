@@ -171,10 +171,12 @@ fn network_servers_from_overlay(overlay: &UserNetworkOverlay) -> Result<NetworkS
                     ServerKind::Electrum,
                     host_port(&endpoint.host, required_port(endpoint)?)?,
                 ),
-                EndpointKind::ElectrumTcp => (
-                    ServerKind::Electrum,
-                    format!("ws://{}", host_port(&endpoint.host, required_port(endpoint)?)?),
-                ),
+                EndpointKind::ElectrumTcp => {
+                    return Err(
+                        "this network configuration has a plaintext Electrum endpoint the current settings screen cannot represent"
+                            .into(),
+                    )
+                }
                 EndpointKind::BchP2p => (
                     ServerKind::Peer,
                     host_port(&endpoint.host, required_port(endpoint)?)?,
@@ -427,33 +429,42 @@ mod tests {
     }
 
     #[test]
-    fn invalid_persisted_endpoint_is_not_loaded_or_overwritten() {
-        let directory = TestDirectory::new();
-        let store = directory.store();
-        let mut overlay = UserNetworkOverlay::default();
-        overlay.user_sources.push(optn_runtime::chain::ChainSource {
-            id: optn_runtime::chain::SourceId::new("host:bad.example"),
-            label: "bad.example".into(),
-            origin: SourceOrigin::UserAdded,
-            endpoints: vec![Endpoint {
+    fn unrepresentable_persisted_endpoints_are_not_loaded_or_overwritten() {
+        for endpoint in [
+            Endpoint {
                 kind: EndpointKind::ElectrumTls,
                 host: "bad.example".into(),
                 port: Some(0),
-            }],
-            capabilities: Default::default(),
-            disposition: SourceDisposition::Enabled,
-            priority: 0,
-        });
-        store
-            .mainnet
-            .store_atomic(&NetworkConfigEnvelope::current("bad", overlay))
-            .unwrap();
-        let before = fs::read(&store.mainnet.path).unwrap();
+            },
+            Endpoint {
+                kind: EndpointKind::ElectrumTcp,
+                host: "127.0.0.1".into(),
+                port: Some(50003),
+            },
+        ] {
+            let directory = TestDirectory::new();
+            let store = directory.store();
+            let mut overlay = UserNetworkOverlay::default();
+            overlay.user_sources.push(optn_runtime::chain::ChainSource {
+                id: optn_runtime::chain::SourceId::new("host:bad.example"),
+                label: "bad.example".into(),
+                origin: SourceOrigin::UserAdded,
+                endpoints: vec![endpoint],
+                capabilities: Default::default(),
+                disposition: SourceDisposition::Enabled,
+                priority: 0,
+            });
+            store
+                .mainnet
+                .store_atomic(&NetworkConfigEnvelope::current("bad", overlay))
+                .unwrap();
+            let before = fs::read(&store.mainnet.path).unwrap();
 
-        let mut state = AppState::default();
-        assert!(store.restore(&mut state).is_err());
-        assert!(store.save_for_network(&state, Network::Mainnet).is_err());
-        assert_eq!(fs::read(&store.mainnet.path).unwrap(), before);
+            let mut state = AppState::default();
+            assert!(store.restore(&mut state).is_err());
+            assert!(store.save_for_network(&state, Network::Mainnet).is_err());
+            assert_eq!(fs::read(&store.mainnet.path).unwrap(), before);
+        }
     }
 
     #[test]
