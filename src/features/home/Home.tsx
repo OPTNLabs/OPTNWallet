@@ -27,6 +27,7 @@ import {
   fetchActiveWalletUtxos,
   isActiveWalletSession,
 } from '../../services/WalletUtxoRefreshService';
+import { refreshWalletTransactionHistory } from '../../services/WalletHistoryRefreshService';
 import { refreshUTXOWorkerSubscriptions } from '../../workers/UTXOWorkerService';
 import { logError } from '../../utils/errorHandling';
 import { Network } from '../../state/slices/networkSlice';
@@ -95,6 +96,9 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
   const fusionDepthRev = useFusionDepthRevision(Number(currentWalletId) || 0);
   const fetchingUTXOsRedux = useSelector(
     (state: RootState) => state.utxos.fetchingUTXOs
+  );
+  const sessionGeneration = useSelector(
+    (state: RootState) => state.wallet_id.sessionGeneration ?? 0
   );
   const addressDiscoveryInProgress = useSelector(
     (state: RootState) => state.utxos.addressDiscoveryInProgress
@@ -170,6 +174,16 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
       }
       await refreshUTXOWorkerSubscriptions();
 
+      // Keep Recent Activity aligned with the refreshed balance. Desktop Sync
+      // already uses this shared full-history pass; Capacitor must not leave a
+      // received payment invisible until the Transactions screen is opened.
+      await refreshWalletTransactionHistory({
+        walletId: currentWalletId,
+        dispatch,
+        sessionGeneration,
+        force: true,
+      });
+
       // Continue the full HD address scan after the known-address balance is
       // visible. UTXOService exposes its discovery state to the UI while this
       // follow-up work runs.
@@ -209,7 +223,13 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
       // Always clear Syncing for this click — even if the session ended mid-flight.
       dispatch(setFetchingUTXOs(false));
     }
-  }, [currentWalletId, dbService, dispatch, fetchingUTXOsRedux]);
+  }, [
+    currentWalletId,
+    dbService,
+    dispatch,
+    fetchingUTXOsRedux,
+    sessionGeneration,
+  ]);
 
   useEffect(() => {
     if (viewerOnly || !currentWalletId || fetchingUTXOsRedux) return;
