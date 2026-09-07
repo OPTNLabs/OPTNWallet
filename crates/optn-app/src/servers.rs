@@ -151,6 +151,25 @@ impl ServerOverrides {
         Ok(Some(canonical))
     }
 
+    /// Replace one network's complete override set after validating every
+    /// supplied endpoint. This prevents a newly selected backend from leaving
+    /// a stale route of another kind behind.
+    pub fn replace(&mut self, network: Network, servers: NetworkServers) -> Result<bool, String> {
+        let mut validated = Self::new();
+        for kind in ServerKind::ALL {
+            if let Some(entry) = servers.get(*kind) {
+                validated.set(network, *kind, entry)?;
+            }
+        }
+        let replacement = validated.for_network(network).clone();
+        let current = self.for_network_mut(network);
+        if *current == replacement {
+            return Ok(false);
+        }
+        *current = replacement;
+        Ok(true)
+    }
+
     /// Drop every override for one network — "Use network default".
     ///
     /// Scoped to one network so resetting chipnet cannot wipe a mainnet
@@ -354,6 +373,48 @@ mod tests {
             "clearing one field must not clear another"
         );
         assert!(!servers.for_network(Network::Mainnet).is_empty());
+    }
+
+    #[test]
+    fn replace_is_atomic_and_scoped_to_one_network() {
+        let mut servers = ServerOverrides::new();
+        servers
+            .set(Network::Mainnet, ServerKind::Electrum, "old.example:50002")
+            .unwrap();
+        servers
+            .set(Network::Chipnet, ServerKind::Electrum, "chip.example:50002")
+            .unwrap();
+
+        assert!(servers
+            .replace(
+                Network::Mainnet,
+                NetworkServers {
+                    peer: Some("node.example:8333".into()),
+                    ..NetworkServers::new()
+                },
+            )
+            .unwrap());
+        assert_eq!(servers.for_network(Network::Mainnet).electrum, None);
+        assert_eq!(
+            servers.for_network(Network::Mainnet).peer.as_deref(),
+            Some("node.example:8333")
+        );
+        assert_eq!(
+            servers.for_network(Network::Chipnet).electrum.as_deref(),
+            Some("chip.example:50002")
+        );
+
+        let before = servers.clone();
+        assert!(servers
+            .replace(
+                Network::Mainnet,
+                NetworkServers {
+                    peer: Some("wss://node.example:8333".into()),
+                    ..NetworkServers::new()
+                },
+            )
+            .is_err());
+        assert_eq!(servers, before);
     }
 
     #[test]

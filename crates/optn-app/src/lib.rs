@@ -627,6 +627,13 @@ pub enum AppAction {
     },
     /// Drop every override for the selected network.
     UseNetworkDefaultServers,
+    /// Replace every override for one specified network after validating the
+    /// complete set. This is used by legacy renderer adapters that select one
+    /// backend at a time.
+    ReplaceNetworkServers {
+        network: Network,
+        servers: NetworkServers,
+    },
     PrepareSend {
         destination: String,
         amount_sats: u64,
@@ -984,6 +991,13 @@ impl AppState {
                     Some(AppEvent::ServersChanged)
                 } else {
                     None
+                }
+            }
+            AppAction::ReplaceNetworkServers { network, servers } => {
+                match self.servers.replace(network, servers) {
+                    Ok(true) => Some(AppEvent::ServersChanged),
+                    Ok(false) => None,
+                    Err(message) => self.reject(message),
                 }
             }
             AppAction::SelectHardwareVendor(vendor) => {

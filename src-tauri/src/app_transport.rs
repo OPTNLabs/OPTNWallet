@@ -31,7 +31,9 @@ async fn dispatch_action(
 ) -> Result<(), String> {
     let persists_network = matches!(
         &action,
-        optn_app::AppAction::SetServer { .. } | optn_app::AppAction::UseNetworkDefaultServers
+        optn_app::AppAction::SetServer { .. }
+            | optn_app::AppAction::UseNetworkDefaultServers
+            | optn_app::AppAction::ReplaceNetworkServers { .. }
     );
     if persists_network || matches!(&action, optn_app::AppAction::SetNetwork(_)) {
         let _guard = network_settings.write_lock.lock().await;
@@ -75,12 +77,19 @@ async fn dispatch_network_settings(
 ) -> Result<(), String> {
     let before = runtime.state();
     let mut candidate = before.clone();
-    if matches!(
-        candidate.reduce(action.clone()),
-        Some(optn_app::AppEvent::ServersChanged)
-    ) {
+    let saved_network = match &action {
+        optn_app::AppAction::ReplaceNetworkServers { network, .. } => *network,
+        _ => before.network,
+    };
+    let event = candidate.reduce(action.clone());
+    if matches!(event, Some(optn_app::AppEvent::NoticeChanged)) {
+        return Err(candidate
+            .notice
+            .unwrap_or_else(|| "Network setting was not applied".into()));
+    }
+    if matches!(event, Some(optn_app::AppEvent::ServersChanged)) {
         network_settings
-            .save_for_network(&candidate, before.network)
+            .save_for_network(&candidate, saved_network)
             .map_err(|error| {
                 format!("Network setting was not applied because it could not be saved: {error}")
             })?;
@@ -223,5 +232,41 @@ mod tests {
             restored.servers.for_network(Network::Mainnet).electrum.as_deref(),
             Some("main.example:50002")
         );
+    }
+
+    #[tokio::test]
+    async fn replacing_an_inactive_network_saves_that_network_without_switching() {
+        use crate::appearance::tests::TestDirectory;
+        use crate::network_config::NetworkSettingsStore;
+        use optn_app::{AppAction, AppState, NetworkServers};
+        use optn_core::network::Network;
+
+        let directory = TestDirectory::new();
+        let appearance = directory.store();
+        let network_settings = NetworkSettingsStore::new(directory.0.clone());
+        let runtime = optn_runtime::AppRuntime::spawn(AppState::default());
+        dispatch_action(
+            &runtime,
+            &appearance,
+            &network_settings,
+            AppAction::ReplaceNetworkServers {
+                network: Network::Chipnet,
+                servers: NetworkServers {
+                    peer: Some("chip.example:8333".into()),
+                    ..NetworkServers::new()
+                },
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(runtime.state().network, Network::Mainnet);
+        let mut restored = AppState::default();
+        network_settings.restore(&mut restored).unwrap();
+        assert_eq!(
+            restored.servers.for_network(Network::Chipnet).peer.as_deref(),
+            Some("chip.example:8333")
+        );
+        assert!(restored.servers.for_network(Network::Mainnet).is_empty());
     }
 }

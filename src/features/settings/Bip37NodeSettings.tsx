@@ -20,6 +20,7 @@ import {
   setBackend,
   BACKEND_CHANGED_EVENT,
 } from '../../platform/desktop/backendSelection';
+import { persistDesktopBackend } from '../../platform/desktop/networkSettingsBridge';
 import { useI18n } from '../../i18n/useI18n';
 import { formatNumber } from '../../i18n/format';
 
@@ -54,6 +55,7 @@ export const Bip37NodeRow: React.FC<{
   const { locale, t } = useI18n();
   const [state, setState] = useState<ProbeState>({ status: 'idle' });
   const [sync, setSync] = useState<SyncState>({ status: 'idle' });
+  const [selectionError, setSelectionError] = useState('');
   const walletId = useSelector(selectWalletId);
   const label = getNodeLabel(network, target);
 
@@ -106,6 +108,16 @@ export const Bip37NodeRow: React.FC<{
     }
   };
 
+  const selectNode = async () => {
+    setSelectionError('');
+    try {
+      await persistDesktopBackend(network, { kind: 'node', target });
+      setBackend(network, { kind: 'node', target });
+    } catch (err) {
+      setSelectionError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
   return (
     <div
       className={`rounded-xl border px-3 py-2 text-xs ${
@@ -128,7 +140,7 @@ export const Bip37NodeRow: React.FC<{
           </span>
         ) : (
           <button
-            onClick={() => setBackend(network, { kind: 'node', target })}
+            onClick={() => void selectNode()}
             title={t('bip37.useNodeTitle')}
             className="rounded-lg border border-[var(--wallet-border)] px-2 py-1 text-[10px] font-semibold wallet-text-strong hover:border-[var(--wallet-accent)]/60"
           >
@@ -186,6 +198,11 @@ export const Bip37NodeRow: React.FC<{
       {state.status === 'fail' && (
         <p className="mt-1.5 text-[10px] text-red-400/90 leading-relaxed break-all">
           {state.error}
+        </p>
+      )}
+      {selectionError && (
+        <p className="mt-1.5 text-[10px] text-red-400/90 leading-relaxed break-all">
+          {selectionError}
         </p>
       )}
 

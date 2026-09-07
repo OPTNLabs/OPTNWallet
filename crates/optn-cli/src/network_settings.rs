@@ -56,6 +56,12 @@ pub fn shared_electrum(
             path.display()
         )
     })?;
+    if servers.peer.is_some() {
+        return Err(
+            "shared network settings include a direct BCH P2P route that this Electrum-only CLI cannot enforce"
+                .into(),
+        );
+    }
     let Some(entry) = servers.electrum else {
         return Ok(None);
     };
@@ -166,6 +172,30 @@ mod tests {
         let directory = TestDirectory::new();
         let overlay = UserNetworkOverlay {
             connection_policy: ConnectionPolicy::own_infrastructure(),
+            ..Default::default()
+        };
+        directory.write(Network::Mainnet, overlay);
+
+        assert!(shared_electrum(Network::Mainnet, Some(&directory.0)).is_err());
+    }
+
+    #[test]
+    fn refuses_a_direct_peer_route_instead_of_using_a_public_electrum_server() {
+        let directory = TestDirectory::new();
+        let overlay = UserNetworkOverlay {
+            user_sources: vec![ChainSource {
+                id: SourceId::new("desktop-peer"),
+                label: "Desktop peer".into(),
+                origin: SourceOrigin::UserAdded,
+                endpoints: vec![Endpoint {
+                    kind: EndpointKind::BchP2p,
+                    host: "peer.example".into(),
+                    port: Some(8333),
+                }],
+                capabilities: CapabilitySet::default(),
+                disposition: SourceDisposition::Enabled,
+                priority: 0,
+            }],
             ..Default::default()
         };
         directory.write(Network::Mainnet, overlay);

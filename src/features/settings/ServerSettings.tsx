@@ -40,6 +40,7 @@ import {
   BACKEND_CHANGED_EVENT,
   type Backend,
 } from '../../platform/desktop/backendSelection';
+import { persistDesktopBackend } from '../../platform/desktop/networkSettingsBridge';
 import { isDesktopPlatform } from '../../utils/platform';
 import { useI18n } from '../../i18n/useI18n';
 
@@ -171,11 +172,16 @@ export const ServerSettings: React.FC = () => {
     const adapter = getElectrumAdapter();
     try {
       const target = autoMode ? undefined : customServer.trim() || undefined;
-      if (!autoMode && customServer.trim()) {
-        saveUserServer(customServer.trim());
+      const selectedBackend: Backend = target
+        ? { kind: 'server', target }
+        : { kind: 'auto' };
+      await persistDesktopBackend(currentNetwork, selectedBackend);
+      if (target) {
+        saveUserServer(target);
       } else {
         saveUserServer('');
       }
+      setBackend(currentNetwork, selectedBackend);
       await adapter.reconnect(target);
       refreshCurrent();
       setStatus(t('server.connected'));
@@ -207,8 +213,36 @@ export const ServerSettings: React.FC = () => {
     setError('');
     setStatus('');
     try {
+      await persistDesktopBackend(currentNetwork, {
+        kind: 'server',
+        target: server,
+      });
       saveUserServer(server);
+      setBackend(currentNetwork, { kind: 'server', target: server });
       await getElectrumAdapter().reconnect(server);
+      refreshCurrent();
+      setStatus(t('server.connected'));
+      setTimeout(() => setStatus(''), 3000);
+    } catch (err) {
+      setError(
+        `${t('server.connectionFailed')}: ${err instanceof Error ? err.message : String(err)}`
+      );
+    } finally {
+      setConnecting(false);
+    }
+  };
+
+  const resetBackendToAuto = async () => {
+    setConnecting(true);
+    setError('');
+    setStatus('');
+    try {
+      await persistDesktopBackend(currentNetwork, { kind: 'auto' });
+      saveUserServer('');
+      setCustomServer('');
+      setAutoMode(true);
+      setBackend(currentNetwork, { kind: 'auto' });
+      await getElectrumAdapter().reconnect();
       refreshCurrent();
       setStatus(t('server.connected'));
       setTimeout(() => setStatus(''), 3000);
@@ -255,7 +289,8 @@ export const ServerSettings: React.FC = () => {
         </div>
         {backend.kind !== 'auto' && (
           <button
-            onClick={() => setBackend(currentNetwork, { kind: 'auto' })}
+            onClick={() => void resetBackendToAuto()}
+            disabled={connecting}
             className="shrink-0 rounded-lg border border-[var(--wallet-border)] px-2.5 py-1 text-[10px] font-semibold wallet-text-strong hover:border-[var(--wallet-accent)]/60"
           >
             {t('server.useAuto')}
