@@ -5,23 +5,223 @@
 //! route. Route-local prerequisites (BIP37/Neutrino header cursors) stay on the
 //! same endpoint via `ChainService::execute_on_route`.
 
-use crate::chain::{ProtocolFamily, SourceId};
+use crate::chain::{BlockHeaderBytes, HeaderVerifier, ProtocolFamily, SourceId};
 use crate::chain_service::{
     CapabilityRoute, ChainOperation, ChainPayload, ChainRequest, ChainService, ChainServiceError,
     ChainTip, ObservedTransaction, WalletInterest,
 };
-use crate::reconciliation::{ReconciliationDecision, ReconciliationState};
+use crate::header_verifier::{ShvMmrError, ShvMmrHeaderVerifier};
+use crate::reconciliation::{evidence_strength, ReconciliationDecision, ReconciliationState};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WalletNetworkSnapshot {
+    /// Runtime-derived public account scope; never supplied by a provider.
+    pub hd: Option<optn_core::watch_only::HdAddressBook>,
+    pub interests: Vec<WalletInterest>,
     pub transactions: Vec<ObservedTransaction>,
     pub tip: Option<ChainTip>,
 }
 
+impl WalletNetworkSnapshot {
+    /// Project the complete supplied script scope into coin records atomically.
+    /// Hosts must additionally bind this snapshot to the active wallet session.
+    pub fn reconcile_coins(
+        &self,
+        network: optn_core::network::Network,
+        addresses: &[String],
+        coins: &mut optn_core::coins::CoinSet,
+    ) -> optn_core::error::Result<()> {
+        use optn_core::{
+            coins::{Coin, Outpoint},
+            error::CliError,
+        };
+        let watched = wallet_scripts(network, addresses, coins)?;
+        if self.interests.iter().any(|interest| match interest {
+            WalletInterest::Script(script) => !watched.contains_key(script),
+            _ => true,
+        }) {
+            return Err(CliError::Protocol(
+                "coin projection requires an exact nonempty script scope".into(),
+            ));
+        }
+        for script in watched.keys() {
+            if !self
+                .interests
+                .contains(&WalletInterest::Script(script.clone()))
+            {
+                return Err(CliError::Protocol(
+                    "coin projection has an unscanned script".into(),
+                ));
+            }
+        }
+        self.validate_script_scope(watched.keys().next().expect("nonempty scope"))?;
+        let scripts = watched.keys().cloned().collect::<Vec<_>>();
+        let outputs = optn_core::tx::unspent_outputs(
+            self.transactions.iter().map(|tx| tx.raw.as_slice()),
+            &scripts,
+        )?;
+        let replacement = outputs
+            .into_iter()
+            .map(|output| {
+                let address = watched
+                    .get(&output.output.script_pubkey)
+                    .expect("projection matches watched scripts");
+                let mut display = output.txid;
+                display.reverse();
+                Coin::from_observation(
+                    Outpoint::new(display, output.vout),
+                    output.output.value,
+                    address.clone(),
+                    output.output.token,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| CliError::Protocol(error.to_string()))?;
+        coins
+            .replace_chain_outputs(replacement)
+            .map_err(|error| CliError::Protocol(error.to_string()))
+    }
+
+    fn validate_script_scope(&self, script: &[u8]) -> optn_core::error::Result<()> {
+        use optn_core::error::CliError;
+        if !self.interests.iter().any(|interest| {
+            matches!(interest,
+            WalletInterest::Script(watched) if watched == script)
+        }) {
+            return Err(CliError::Protocol(
+                "script was not covered by this wallet snapshot".into(),
+            ));
+        }
+        let mut heights = std::collections::BTreeMap::new();
+        for transaction in &self.transactions {
+            if heights
+                .insert(transaction.txid, transaction.block_height)
+                .is_some_and(|previous| previous != transaction.block_height)
+            {
+                return Err(CliError::Protocol(
+                    "conflicting transaction heights in snapshot".into(),
+                ));
+            }
+            if optn_core::header_hash::sha256d(&transaction.raw) != transaction.txid {
+                return Err(CliError::Protocol(
+                    "snapshot transaction identity mismatch".into(),
+                ));
+            }
+            if transaction.block_height.is_some_and(|height| {
+                height == 0 || !self.tip.as_ref().is_some_and(|tip| height <= tip.height)
+            }) {
+                return Err(CliError::Protocol(
+                    "snapshot transaction height exceeds its chain scope".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Locally derived outputs, including token data. These are not a claim
+    /// that the outputs are mature, confirmed, or permitted for spending.
+    pub fn script_outputs(
+        &self,
+        script: &[u8],
+    ) -> optn_core::error::Result<Vec<optn_core::tx::UnspentOutput>> {
+        self.validate_script_scope(script)?;
+        optn_core::tx::unspent_outputs(
+            self.transactions.iter().map(|tx| tx.raw.as_slice()),
+            &[script.to_vec()],
+        )
+    }
+
+    /// Script history includes spent and zero-value outputs. A UTXO-only query
+    /// cannot decide an HD unused gap or the next receive/change index.
+    pub(crate) fn used_scripts(
+        &self,
+    ) -> optn_core::error::Result<std::collections::BTreeSet<Vec<u8>>> {
+        let first = self
+            .interests
+            .iter()
+            .find_map(|interest| match interest {
+                WalletInterest::Script(script) => Some(script),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                optn_core::error::CliError::Protocol("HD snapshot has no scripts".into())
+            })?;
+        self.validate_script_scope(first)?;
+        let mut used = std::collections::BTreeSet::new();
+        for tx in &self.transactions {
+            for output in optn_core::tx::decode(&tx.raw)?.outputs {
+                used.insert(output.script_pubkey);
+            }
+        }
+        Ok(used)
+    }
+
+    /// Derive confirmed balance and pending delta from this snapshot's exact
+    /// script scope. Provider heights remain assertions until independently proven.
+    pub fn script_balance(&self, script: &[u8]) -> optn_core::error::Result<(i64, i64)> {
+        use optn_core::error::CliError;
+        self.validate_script_scope(script)?;
+        let total = |confirmed_only: bool| -> optn_core::error::Result<i64> {
+            let outputs = optn_core::tx::unspent_outputs(
+                self.transactions
+                    .iter()
+                    .filter(|transaction| !confirmed_only || transaction.block_height.is_some())
+                    .map(|transaction| transaction.raw.as_slice()),
+                &[script.to_vec()],
+            )?;
+            outputs.into_iter().try_fold(0i64, |sum, output| {
+                i64::try_from(output.output.value)
+                    .ok()
+                    .and_then(|value| sum.checked_add(value))
+                    .ok_or_else(|| {
+                        CliError::Protocol("wallet balance exceeds supported range".into())
+                    })
+            })
+        };
+        let confirmed = total(true)?;
+        let unconfirmed = total(false)?
+            .checked_sub(confirmed)
+            .ok_or_else(|| CliError::Protocol("pending balance exceeds supported range".into()))?;
+        Ok((confirmed, unconfirmed))
+    }
+}
+
+/// Validate host-supplied discovery scope against the selected chain and all
+/// retained coins. The host must obtain addresses from its wallet address book.
+pub(crate) fn wallet_scripts(
+    network: optn_core::network::Network,
+    addresses: &[String],
+    coins: &optn_core::coins::CoinSet,
+) -> optn_core::error::Result<std::collections::BTreeMap<Vec<u8>, String>> {
+    use optn_core::{cashaddr::Address, error::CliError};
+    let mut watched = std::collections::BTreeMap::new();
+    for address in addresses {
+        let parsed = Address::decode(address).map_err(CliError::Protocol)?;
+        if parsed.prefix != network.prefix() {
+            return Err(CliError::Protocol(
+                "projection address belongs to another network".into(),
+            ));
+        }
+        watched.insert(parsed.script_pubkey(), parsed.encode());
+    }
+    if watched.is_empty() {
+        return Err(CliError::Protocol("wallet script scope is empty".into()));
+    }
+    for coin in coins.iter() {
+        let parsed = Address::decode(coin.address()).map_err(CliError::Protocol)?;
+        if parsed.prefix != network.prefix() || !watched.contains_key(&parsed.script_pubkey()) {
+            return Err(CliError::Protocol(
+                "partial or cross-network projection cannot replace wallet coins".into(),
+            ));
+        }
+    }
+    Ok(watched)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProgressiveSyncConfig {
-    /// First header after the locally trusted/persisted cursor. Fresh BIP37
-    /// providers currently seed height 0 (genesis), so the cold-start default is 1.
+    /// Legacy startup hint. Verified sync derives its cursor from the trusted
+    /// accumulator instead; this field cannot override that cursor.
     pub header_start_height: u32,
     pub header_batch_size: u32,
     /// Safety bound against a malicious peer that never terminates header sync.
@@ -52,6 +252,11 @@ pub enum ProgressiveSyncError {
         protocol: ProtocolFamily,
     },
     HeaderSafetyLimit,
+    MissingTrustedHeaderVerifier,
+    MissingRefreshBaseline,
+    InconsistentRefreshScope,
+    HeaderVerification(ShvMmrError),
+    InvalidHeaderRange,
     Chain(ChainServiceError),
     UnexpectedPayload,
     Exhausted,
@@ -60,6 +265,7 @@ pub enum ProgressiveSyncError {
 pub struct ProgressiveSyncWorker {
     config: ProgressiveSyncConfig,
     reconciliation: ReconciliationState<WalletNetworkSnapshot>,
+    header_verifier: Option<ShvMmrHeaderVerifier>,
 }
 
 impl ProgressiveSyncWorker {
@@ -67,7 +273,25 @@ impl ProgressiveSyncWorker {
         Self {
             config,
             reconciliation: ReconciliationState::default(),
+            header_verifier: None,
         }
+    }
+
+    /// The host supplies a trusted checkpoint and the selected network's
+    /// difficulty context. Provider responses must never choose either.
+    pub fn with_header_verifier(
+        mut self,
+        verifier: ShvMmrHeaderVerifier,
+    ) -> Result<Self, ProgressiveSyncError> {
+        if !verifier.has_difficulty_context() || verifier.state().is_err() {
+            return Err(ProgressiveSyncError::MissingTrustedHeaderVerifier);
+        }
+        self.header_verifier = Some(verifier);
+        Ok(self)
+    }
+
+    pub fn header_verifier(&self) -> Option<&ShvMmrHeaderVerifier> {
+        self.header_verifier.as_ref()
     }
 
     pub fn reconciliation(&self) -> &ReconciliationState<WalletNetworkSnapshot> {
@@ -84,11 +308,35 @@ impl ProgressiveSyncWorker {
     pub async fn refresh(
         &mut self,
         service: &mut ChainService,
-        interests: Vec<WalletInterest>,
+        mut interests: Vec<WalletInterest>,
         from_height: Option<u32>,
     ) -> Result<SyncOutcome, ProgressiveSyncError> {
+        interests.sort();
+        interests.dedup();
+        let incremental_start = from_height.filter(|height| *height > 0);
+        if let Some(start) = incremental_start {
+            let Some(previous) = &self.reconciliation.authoritative else {
+                self.reconciliation
+                    .record_failure("incremental refresh requires a complete baseline");
+                return Err(ProgressiveSyncError::MissingRefreshBaseline);
+            };
+            if previous.value.interests != interests
+                || !previous
+                    .value
+                    .tip
+                    .as_ref()
+                    .is_some_and(|tip| u64::from(start) <= u64::from(tip.height) + 1)
+            {
+                self.reconciliation.record_failure(
+                    "incremental refresh scope differs from its baseline or leaves a height gap",
+                );
+                return Err(ProgressiveSyncError::InconsistentRefreshScope);
+            }
+        }
         let routes = service.routes_for_operation(ChainOperation::WalletRefresh);
         if routes.is_empty() {
+            self.reconciliation
+                .record_failure("no wallet route is available under the current policy");
             return Err(ProgressiveSyncError::NoWalletRoute);
         }
 
@@ -116,11 +364,69 @@ impl ProgressiveSyncWorker {
                             .record_failure("wallet route returned unexpected payload");
                         continue;
                     };
-                    let snapshot = WalletNetworkSnapshot { transactions, tip };
+                    if matches!(
+                        route.protocol,
+                        ProtocolFamily::Bip37 | ProtocolFamily::Neutrino
+                    ) {
+                        let verified_tip = self.header_verifier.as_ref().and_then(|verifier| {
+                            Some((verifier.state().ok()?.height, verifier.last_hash()?))
+                        });
+                        let reported_tip = tip.as_ref().map(|tip| (tip.height, tip.hash));
+                        if verified_tip.is_none()
+                            || reported_tip != verified_tip
+                            || observation.chain_tip != verified_tip
+                        {
+                            self.reconciliation.record_failure(
+                                "wallet snapshot does not match the verified header tip",
+                            );
+                            continue;
+                        }
+                    }
+                    let mut evidence = observation.evidence;
+                    let transactions = if let Some(start) = incremental_start {
+                        if !tip
+                            .as_ref()
+                            .is_some_and(|tip| tip.height >= start.saturating_sub(1))
+                        {
+                            self.reconciliation.record_failure(
+                                "incremental refresh does not cover its requested height",
+                            );
+                            continue;
+                        }
+                        let mut merged = std::collections::BTreeMap::new();
+                        if let Some(previous) = &self.reconciliation.authoritative {
+                            // The new scan covers only the suffix. It cannot upgrade
+                            // evidence for the retained prefix, even when that prefix
+                            // contains no known transactions.
+                            if evidence_strength(&previous.evidence) < evidence_strength(&evidence)
+                            {
+                                evidence = previous.evidence.clone();
+                            }
+                            for transaction in &previous.value.transactions {
+                                // A block scan's omission does not prove mempool eviction.
+                                // Pending entries need explicit conflict/eviction evidence.
+                                if transaction.block_height.is_none_or(|height| height < start) {
+                                    merged.insert(transaction.txid, transaction.clone());
+                                }
+                            }
+                        }
+                        for transaction in transactions {
+                            merged.insert(transaction.txid, transaction);
+                        }
+                        merged.into_values().collect()
+                    } else {
+                        transactions
+                    };
+                    let snapshot = WalletNetworkSnapshot {
+                        hd: None,
+                        interests: interests.clone(),
+                        transactions,
+                        tip,
+                    };
                     let decision = self.reconciliation.reconcile_candidate(
                         snapshot,
                         observation.source,
-                        observation.evidence,
+                        evidence,
                         observation.chain_tip,
                         true,
                     );
@@ -140,6 +446,12 @@ impl ProgressiveSyncWorker {
         service: &mut ChainService,
         wallet_route: &CapabilityRoute,
     ) -> Result<(), ProgressiveSyncError> {
+        // Work on a candidate so a failed route cannot poison another route's
+        // trusted cursor. Publish only after the complete bounded header pass.
+        let mut verifier = self
+            .header_verifier
+            .clone()
+            .ok_or(ProgressiveSyncError::MissingTrustedHeaderVerifier)?;
         let header_route = service
             .routes_for_operation(ChainOperation::HeaderSync)
             .into_iter()
@@ -153,7 +465,12 @@ impl ProgressiveSyncWorker {
                 protocol: wallet_route.protocol,
             })?;
 
-        let mut start = self.config.header_start_height.max(1);
+        let mut start = verifier
+            .state()
+            .map_err(ProgressiveSyncError::HeaderVerification)?
+            .height
+            .checked_add(1)
+            .ok_or(ProgressiveSyncError::HeaderSafetyLimit)?;
         for _ in 0..self.config.max_header_batches {
             let request = ChainRequest::HeaderSync {
                 start_height: start,
@@ -170,15 +487,30 @@ impl ProgressiveSyncWorker {
             else {
                 return Err(ProgressiveSyncError::UnexpectedPayload);
             };
+            if start_height != start
+                || headers.len() > self.config.header_batch_size.max(1) as usize
+            {
+                return Err(ProgressiveSyncError::InvalidHeaderRange);
+            }
             if headers.is_empty() {
+                self.header_verifier = Some(verifier);
                 return Ok(());
             }
             let returned = u32::try_from(headers.len())
                 .map_err(|_| ProgressiveSyncError::HeaderSafetyLimit)?;
+            verifier
+                .extend(
+                    &headers
+                        .into_iter()
+                        .map(BlockHeaderBytes)
+                        .collect::<Vec<_>>(),
+                )
+                .map_err(ProgressiveSyncError::HeaderVerification)?;
             start = start_height
                 .checked_add(returned)
                 .ok_or(ProgressiveSyncError::HeaderSafetyLimit)?;
             if returned < self.config.header_batch_size.max(1) {
+                self.header_verifier = Some(verifier);
                 return Ok(());
             }
         }
@@ -187,7 +519,7 @@ impl ProgressiveSyncWorker {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::chain::{
         Capability, CapabilityConfidence, CapabilityDiscovery, CapabilitySet, ChainSource,
@@ -201,13 +533,17 @@ mod tests {
         id: SourceId,
         endpoint: Endpoint,
         caps: CapabilitySet,
+        protocol: ProtocolFamily,
+        headers: Vec<[u8; 80]>,
+        header_height_offset: u32,
+        wallet_evidence: Evidence,
     }
     impl ChainBackend for WalletBackend {
         fn source_id(&self) -> &SourceId {
             &self.id
         }
         fn protocol(&self) -> ProtocolFamily {
-            ProtocolFamily::Electrum
+            self.protocol
         }
         fn endpoint(&self) -> Option<&Endpoint> {
             Some(&self.endpoint)
@@ -219,10 +555,33 @@ mod tests {
             ProviderHealth::Healthy
         }
         fn supports(&self, op: ChainOperation) -> bool {
-            matches!(op, ChainOperation::WalletRefresh)
+            matches!(
+                op,
+                ChainOperation::WalletRefresh | ChainOperation::HeaderSync
+            )
         }
-        fn execute<'a>(&'a self, _: &'a ChainRequest) -> ChainFuture<'a, BackendObservation> {
+        fn execute<'a>(&'a self, request: &'a ChainRequest) -> ChainFuture<'a, BackendObservation> {
             Box::pin(async move {
+                if let ChainRequest::HeaderSync {
+                    start_height,
+                    count,
+                } = request
+                {
+                    return Ok(BackendObservation {
+                        payload: ChainPayload::Headers {
+                            start_height: start_height + self.header_height_offset,
+                            headers: self
+                                .headers
+                                .iter()
+                                .skip((*start_height - 1) as usize)
+                                .take(*count as usize)
+                                .copied()
+                                .collect(),
+                        },
+                        evidence: Evidence::ServerAssertion,
+                        chain_tip: None,
+                    });
+                }
                 Ok(BackendObservation {
                     payload: ChainPayload::WalletRefresh {
                         transactions: vec![],
@@ -231,18 +590,30 @@ mod tests {
                             hash: [7; 32],
                         }),
                     },
-                    evidence: Evidence::ServerAssertion,
+                    evidence: self.wallet_evidence.clone(),
                     chain_tip: Some((7, [7; 32])),
                 })
             })
         }
     }
 
-    #[tokio::test]
-    async fn successful_refresh_reconciles_snapshot() {
+    pub(crate) fn wallet_service(protocol: ProtocolFamily) -> ChainService {
+        service_with_headers(protocol, vec![], 0, Evidence::ServerAssertion)
+    }
+
+    fn service_with_headers(
+        protocol: ProtocolFamily,
+        headers: Vec<[u8; 80]>,
+        header_height_offset: u32,
+        wallet_evidence: Evidence,
+    ) -> ChainService {
         let id = SourceId::new("server");
         let endpoint = Endpoint {
-            kind: EndpointKind::ElectrumTcp,
+            kind: if protocol == ProtocolFamily::Electrum {
+                EndpointKind::ElectrumTcp
+            } else {
+                EndpointKind::BchP2p
+            },
             host: "server".into(),
             port: Some(50001),
         };
@@ -264,8 +635,443 @@ mod tests {
             CapabilityConfidence::Verified,
             CapabilityDiscovery::ActiveProbe,
         );
+        caps.record(
+            Capability::HeaderStream,
+            CapabilityConfidence::Verified,
+            CapabilityDiscovery::ActiveProbe,
+        );
         let mut service = ChainService::new(catalog, ConnectionPolicy::auto());
-        service.register(Arc::new(WalletBackend { id, endpoint, caps }));
+        service.register(Arc::new(WalletBackend {
+            id,
+            endpoint,
+            caps,
+            protocol,
+            headers,
+            header_height_offset,
+            wallet_evidence,
+        }));
+        service
+    }
+
+    // Synthetic low-difficulty chain, used only to exercise verifier wiring.
+    // These parameters and checkpoint must never be used for a real network.
+    fn header_fixture() -> (ShvMmrHeaderVerifier, Vec<[u8; 80]>) {
+        use optn_core::asert::{next_bits, AsertAnchor, AsertParams};
+        use optn_core::header_pow::verify_declared_pow;
+        let params = AsertParams {
+            half_life: 172800,
+            ideal_block_time: 600,
+            max_bits: 0x207fffff,
+        };
+        let anchor = AsertAnchor {
+            height: 0,
+            bits: params.max_bits,
+            prev_time: 0,
+        };
+        let mut previous_hash = [0; 32];
+        let mut headers = Vec::new();
+        for height in 0u32..=2 {
+            let mut header = [0u8; 80];
+            header[0..4].copy_from_slice(&1u32.to_le_bytes());
+            header[4..36].copy_from_slice(&previous_hash);
+            header[68..72].copy_from_slice(&((height + 1) * 600).to_le_bytes());
+            let bits = if height == 0 {
+                params.max_bits
+            } else {
+                next_bits(params, anchor, height - 1, i64::from(height * 600)).unwrap()
+            };
+            header[72..76].copy_from_slice(&bits.to_le_bytes());
+            let mut valid = None;
+            for nonce in 0u32..10000 {
+                header[76..80].copy_from_slice(&nonce.to_le_bytes());
+                if let Ok(parsed) = verify_declared_pow(&header) {
+                    valid = Some(parsed.hash);
+                    break;
+                }
+            }
+            previous_hash = valid.expect("bounded test header mining");
+            headers.push(header);
+        }
+        let checkpoint = BlockHeaderBytes(headers.remove(0));
+        let commitment = crate::header_verifier::header_leaf(&checkpoint);
+        let verifier = ShvMmrHeaderVerifier::from_checkpoint_proof(
+            0,
+            checkpoint,
+            &[],
+            commitment,
+            crate::chain::CheckpointProvenance::ShippedReviewed,
+        )
+        .unwrap()
+        .with_asert(params, anchor);
+        (verifier, headers)
+    }
+
+    #[tokio::test]
+    async fn header_pass_verifies_multiple_batches_and_keeps_cursor_on_rejection() {
+        for protocol in [ProtocolFamily::Bip37, ProtocolFamily::Neutrino] {
+            let (verifier, headers) = header_fixture();
+            let mut expected = verifier.clone();
+            expected
+                .extend(
+                    &headers
+                        .iter()
+                        .copied()
+                        .map(BlockHeaderBytes)
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap();
+            let initial = verifier.state().unwrap();
+            let (tip_header, tip_proof) = expected.tip_checkpoint_proof().unwrap();
+            let checkpoint = expected.checkpoint();
+            let restored = ShvMmrHeaderVerifier::from_checkpoint_proof(
+                checkpoint.height,
+                tip_header.clone(),
+                tip_proof,
+                checkpoint.commitment,
+                checkpoint.provenance,
+            )
+            .unwrap();
+            assert_eq!(restored.state().unwrap(), expected.state().unwrap());
+            assert_eq!(restored.last_hash(), expected.last_hash());
+            assert_eq!(restored.last_time(), expected.last_time());
+            let config = ProgressiveSyncConfig {
+                header_batch_size: 1,
+                ..Default::default()
+            };
+            let mut worker = ProgressiveSyncWorker::new(config)
+                .with_header_verifier(verifier.clone())
+                .unwrap();
+            let mut service =
+                service_with_headers(protocol, headers.clone(), 0, Evidence::ServerAssertion);
+            let route = service
+                .routes_for_operation(ChainOperation::WalletRefresh)
+                .remove(0);
+            worker
+                .prime_headers_on_same_route(&mut service, &route)
+                .await
+                .unwrap();
+            assert_eq!(
+                worker.header_verifier().unwrap().state().unwrap(),
+                expected.state().unwrap()
+            );
+            // Retrying begins at the verified cursor, not the legacy config hint.
+            worker
+                .prime_headers_on_same_route(&mut service, &route)
+                .await
+                .unwrap();
+            assert_eq!(
+                worker.header_verifier().unwrap().state().unwrap(),
+                expected.state().unwrap()
+            );
+
+            let mut bad_headers = headers.clone();
+            bad_headers[1][4] ^= 1;
+            let mut rejected = ProgressiveSyncWorker::new(config)
+                .with_header_verifier(verifier.clone())
+                .unwrap();
+            let mut bad_service =
+                service_with_headers(protocol, bad_headers, 0, Evidence::ServerAssertion);
+            assert!(rejected
+                .prime_headers_on_same_route(&mut bad_service, &route)
+                .await
+                .is_err());
+            assert_eq!(
+                rejected.header_verifier().unwrap().state().unwrap(),
+                initial
+            );
+
+            let mut gap_service =
+                service_with_headers(protocol, headers, 1, Evidence::ServerAssertion);
+            assert_eq!(
+                rejected
+                    .prime_headers_on_same_route(&mut gap_service, &route)
+                    .await,
+                Err(ProgressiveSyncError::InvalidHeaderRange)
+            );
+            assert_eq!(
+                rejected.header_verifier().unwrap().state().unwrap(),
+                initial
+            );
+
+            // This backend advertises wallet tip 7 even though only headers
+            // through height 2 were verified. It cannot become wallet truth.
+            assert_eq!(
+                worker.refresh(&mut service, vec![], None).await,
+                Err(ProgressiveSyncError::Exhausted)
+            );
+            assert!(worker.reconciliation().authoritative.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn p2p_refresh_cannot_accept_a_snapshot_without_trusted_headers() {
+        for protocol in [ProtocolFamily::Bip37, ProtocolFamily::Neutrino] {
+            let mut service = wallet_service(protocol);
+            let mut worker = ProgressiveSyncWorker::new(ProgressiveSyncConfig::default());
+            assert_eq!(
+                worker.refresh(&mut service, vec![], None).await,
+                Err(ProgressiveSyncError::Exhausted)
+            );
+            assert!(worker.reconciliation().authoritative.is_none());
+        }
+    }
+
+    #[test]
+    fn empty_verifier_cannot_enable_verified_sync() {
+        let verifier =
+            ShvMmrHeaderVerifier::empty(crate::chain::CheckpointProvenance::ShippedReviewed);
+        assert!(matches!(
+            ProgressiveSyncWorker::new(ProgressiveSyncConfig::default())
+                .with_header_verifier(verifier),
+            Err(ProgressiveSyncError::MissingTrustedHeaderVerifier)
+        ));
+    }
+
+    #[tokio::test]
+    async fn incremental_refresh_preserves_baseline_and_refuses_scope_gaps() {
+        let mut service = wallet_service(ProtocolFamily::Electrum);
+        let mut worker = ProgressiveSyncWorker::new(ProgressiveSyncConfig::default());
+        let interests = vec![WalletInterest::script(vec![0x51])];
+        assert_eq!(
+            worker
+                .refresh(&mut service, interests.clone(), Some(5))
+                .await,
+            Err(ProgressiveSyncError::MissingRefreshBaseline)
+        );
+        let confirmed = ObservedTransaction {
+            txid: [1; 32],
+            raw: vec![1],
+            block_height: Some(1),
+        };
+        let pending = ObservedTransaction {
+            txid: [2; 32],
+            raw: vec![2],
+            block_height: None,
+        };
+        worker.reconciliation_mut().reconcile_candidate(
+            WalletNetworkSnapshot {
+                hd: None,
+                interests: interests.clone(),
+                transactions: vec![confirmed.clone(), pending.clone()],
+                tip: Some(ChainTip {
+                    height: 6,
+                    hash: [6; 32],
+                }),
+            },
+            SourceId::new("server"),
+            Evidence::ServerAssertion,
+            Some((6, [6; 32])),
+            true,
+        );
+        let outcome = worker
+            .refresh(&mut service, interests.clone(), Some(5))
+            .await
+            .unwrap();
+        assert_eq!(outcome.decision, ReconciliationDecision::Accepted);
+        let baseline = worker.reconciliation().authoritative.clone().unwrap();
+        assert_eq!(baseline.value.transactions, vec![confirmed, pending]);
+        assert_eq!(
+            worker.refresh(&mut service, interests, Some(9)).await,
+            Err(ProgressiveSyncError::InconsistentRefreshScope)
+        );
+        assert_eq!(
+            worker
+                .refresh(
+                    &mut service,
+                    vec![WalletInterest::script(vec![0x52])],
+                    Some(5)
+                )
+                .await,
+            Err(ProgressiveSyncError::InconsistentRefreshScope)
+        );
+        assert_eq!(
+            worker.reconciliation().authoritative.as_ref(),
+            Some(&baseline)
+        );
+    }
+
+    #[tokio::test]
+    async fn incremental_evidence_cannot_upgrade_the_unscanned_prefix() {
+        let mut service = wallet_service(ProtocolFamily::Electrum);
+        let mut worker = ProgressiveSyncWorker::new(ProgressiveSyncConfig::default());
+        let interests = vec![WalletInterest::script(vec![0x51])];
+        worker
+            .refresh(&mut service, interests.clone(), None)
+            .await
+            .unwrap();
+        let stronger = Evidence::FullNodeValidated {
+            source: SourceId::new("server"),
+        };
+        let mut stronger_service =
+            service_with_headers(ProtocolFamily::Electrum, vec![], 0, stronger.clone());
+        worker
+            .refresh(&mut stronger_service, interests.clone(), Some(5))
+            .await
+            .unwrap();
+        assert_eq!(
+            worker
+                .reconciliation()
+                .authoritative
+                .as_ref()
+                .unwrap()
+                .evidence,
+            Evidence::ServerAssertion
+        );
+        assert_eq!(
+            worker.reconciliation().sync.verification,
+            crate::chain::VerificationState::Discovered
+        );
+        // A complete rescan can establish stronger evidence for the entire scope.
+        worker
+            .refresh(&mut stronger_service, interests, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            worker
+                .reconciliation()
+                .authoritative
+                .as_ref()
+                .unwrap()
+                .evidence,
+            stronger
+        );
+    }
+
+    #[test]
+    fn coin_projection_keeps_zero_value_tokens_and_refuses_partial_replacement() {
+        use optn_core::{
+            cashaddr::{Address, AddressKind},
+            coins::{Coin, CoinSet, FreezeReason, Outpoint},
+            network::Network,
+        };
+        let address = Address::from_hash("bchtest", AddressKind::P2pkh, [1; 20]);
+        let script = address.script_pubkey();
+        let token = optn_core::token::TokenData::fungible([9; 32], 42);
+        let mut field = token.encode_prefix().unwrap();
+        field.extend_from_slice(&script);
+        // Serialization fixture only; no proof or spendability claim.
+        let mut raw = vec![2, 0, 0, 0, 0, 2];
+        for (value, field) in [(1000u64, script.clone()), (0, field)] {
+            raw.extend_from_slice(&value.to_le_bytes());
+            raw.extend_from_slice(&optn_core::tx::varint(field.len() as u64));
+            raw.extend_from_slice(&field);
+        }
+        raw.extend_from_slice(&[0; 4]);
+        let txid = optn_core::header_hash::sha256d(&raw);
+        let snapshot = WalletNetworkSnapshot {
+            hd: None,
+            interests: vec![WalletInterest::script(script)],
+            transactions: vec![ObservedTransaction {
+                txid,
+                raw,
+                block_height: Some(1),
+            }],
+            tip: Some(ChainTip {
+                height: 7,
+                hash: [7; 32],
+            }),
+        };
+        let mut display = txid;
+        display.reverse();
+        let outpoint = Outpoint::new(display, 0);
+        let mut coins = CoinSet::new();
+        coins
+            .insert(
+                Coin::new(outpoint, 222, address.encode())
+                    .unwrap()
+                    .with_label("local")
+                    .with_fuse_depth(2),
+            )
+            .unwrap();
+        coins.freeze(outpoint, FreezeReason::User).unwrap();
+        snapshot
+            .reconcile_coins(Network::Chipnet, &[address.encode()], &mut coins)
+            .unwrap();
+        let first = coins.get(outpoint).unwrap();
+        assert_eq!(first.value_sats(), 1000);
+        assert_eq!(first.label(), Some("local"));
+        assert_eq!(first.fuse_depth(), 2);
+        assert_eq!(first.freeze(), Some(FreezeReason::User));
+        let zero = coins.get(Outpoint::new(display, 1)).unwrap();
+        assert_eq!(zero.value_sats(), 0);
+        assert_eq!(zero.token(), Some(&token));
+        assert!(!zero.is_spendable());
+        let wire = serde_json::to_string(&optn_transport::WireCoin::from(zero)).unwrap();
+        let restored =
+            Coin::try_from(serde_json::from_str::<optn_transport::WireCoin>(&wire).unwrap())
+                .unwrap();
+        assert_eq!(&restored, zero);
+        coins
+            .insert(
+                Coin::new(
+                    Outpoint::new([8; 32], 0),
+                    1000,
+                    Address::from_hash("bchtest", AddressKind::P2pkh, [2; 20]).encode(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let before = coins.clone();
+        assert!(snapshot
+            .reconcile_coins(Network::Chipnet, &[address.encode()], &mut coins)
+            .is_err());
+        assert!(snapshot
+            .reconcile_coins(Network::Mainnet, &[address.encode()], &mut coins)
+            .is_err());
+        assert_eq!(coins, before);
+    }
+
+    #[test]
+    fn script_balance_projects_pending_spends_and_checks_scope() {
+        // Serialization fixtures, not mined or spendable transactions.
+        let mut parent = vec![1, 0, 0, 0, 0, 1];
+        parent.extend_from_slice(&1000u64.to_le_bytes());
+        parent.extend_from_slice(&[1, 0x51, 0, 0, 0, 0]);
+        let parent_id = optn_core::header_hash::sha256d(&parent);
+        let mut child = vec![1, 0, 0, 0, 1];
+        child.extend_from_slice(&parent_id);
+        child.extend_from_slice(&[0, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff, 1]);
+        child.extend_from_slice(&900u64.to_le_bytes());
+        child.extend_from_slice(&[1, 0x52, 0, 0, 0, 0]);
+        let mut snapshot = WalletNetworkSnapshot {
+            hd: None,
+            interests: vec![WalletInterest::script(vec![0x51])],
+            transactions: vec![
+                ObservedTransaction {
+                    txid: optn_core::header_hash::sha256d(&child),
+                    raw: child,
+                    block_height: None,
+                },
+                ObservedTransaction {
+                    txid: parent_id,
+                    raw: parent,
+                    block_height: Some(2),
+                },
+            ],
+            tip: Some(ChainTip {
+                height: 7,
+                hash: [7; 32],
+            }),
+        };
+        assert_eq!(snapshot.script_balance(&[0x51]).unwrap(), (1000, -1000));
+        assert!(snapshot.script_outputs(&[0x51]).unwrap().is_empty());
+        let mut duplicate = snapshot.transactions[1].clone();
+        duplicate.block_height = None;
+        snapshot.transactions.push(duplicate);
+        assert!(snapshot.script_balance(&[0x51]).is_err());
+        assert!(snapshot.script_outputs(&[0x51]).is_err());
+        snapshot.transactions.pop();
+        assert!(snapshot.script_balance(&[0x52]).is_err());
+        snapshot.transactions[1].block_height = Some(8);
+        assert!(snapshot.script_balance(&[0x51]).is_err());
+        snapshot.transactions[1].block_height = Some(2);
+        snapshot.transactions[1].txid = [9; 32];
+        assert!(snapshot.script_balance(&[0x51]).is_err());
+    }
+
+    #[tokio::test]
+    async fn successful_refresh_reconciles_snapshot() {
+        let mut service = wallet_service(ProtocolFamily::Electrum);
         let mut worker = ProgressiveSyncWorker::new(ProgressiveSyncConfig::default());
         let outcome = worker.refresh(&mut service, vec![], None).await.unwrap();
         assert_eq!(outcome.decision, ReconciliationDecision::Accepted);
@@ -282,5 +1088,14 @@ mod tests {
                 .height,
             7
         );
+        let retained = worker.reconciliation().authoritative.clone();
+        *service.catalog_mut() = SourceCatalog::default();
+        assert_eq!(
+            worker.refresh(&mut service, vec![], None).await,
+            Err(ProgressiveSyncError::NoWalletRoute)
+        );
+        assert_eq!(worker.reconciliation().authoritative, retained);
+        assert!(!worker.reconciliation().sync.history_fresh);
+        assert!(!worker.reconciliation().sync.utxos_fresh);
     }
 }

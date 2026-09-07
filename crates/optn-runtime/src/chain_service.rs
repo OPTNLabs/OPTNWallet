@@ -18,7 +18,7 @@ pub type ChainFuture<'a, T> =
 /// Electrum derives scripthashes from `Script`; bchd compact filters query raw
 /// scripts and serialized `Outpoint`s; BIP37 derives the corresponding bloom
 /// items. RPA keeps its hexadecimal bit-prefix intact, including odd nibbles.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum WalletInterest {
     Script(Vec<u8>),
     Outpoint { txid: Hash32, vout: u32 },
@@ -305,20 +305,53 @@ struct HealthOverride {
 }
 
 pub struct ChainService {
+    revocation: ChainRevocation,
     catalog: SourceCatalog,
     policy: ConnectionPolicy,
     registry: ProviderRegistry,
     health_overrides: Vec<HealthOverride>,
 }
 
+/// Irreversible lifetime of a host-owned source stack. Kept outside its service
+/// mutex so retiring a policy can cancel work that currently holds that mutex.
+#[derive(Debug, Clone)]
+pub struct ChainRevocation(tokio::sync::watch::Sender<bool>);
+
+impl Default for ChainRevocation {
+    fn default() -> Self {
+        Self(tokio::sync::watch::channel(false).0)
+    }
+}
+
+impl ChainRevocation {
+    pub fn revoke(&self) {
+        self.0.send_replace(true);
+    }
+    pub fn is_revoked(&self) -> bool {
+        *self.0.borrow()
+    }
+    async fn cancelled(&self) {
+        let mut state = self.0.subscribe();
+        while !*state.borrow_and_update() {
+            if state.changed().await.is_err() {
+                break;
+            }
+        }
+    }
+}
+
 impl ChainService {
     pub fn new(catalog: SourceCatalog, policy: ConnectionPolicy) -> Self {
         Self {
+            revocation: ChainRevocation::default(),
             catalog,
             policy,
             registry: ProviderRegistry::default(),
             health_overrides: Vec::new(),
         }
+    }
+    pub fn revocation(&self) -> ChainRevocation {
+        self.revocation.clone()
     }
     pub fn catalog(&self) -> &SourceCatalog {
         &self.catalog
@@ -342,6 +375,9 @@ impl ChainService {
     }
 
     fn route_unavailable(&self, route: &CapabilityRoute) -> bool {
+        if self.revocation.is_revoked() {
+            return true;
+        }
         if !self.catalog.get(&route.source).is_some_and(|source| {
             route.endpoint.as_ref().is_some_and(|endpoint| {
                 endpoint.kind.can_probe_protocol(route.protocol)
@@ -439,7 +475,28 @@ impl ChainService {
             .registry
             .provider_for_route(route, request.operation())
             .ok_or(ChainServiceError::RouteUnavailable)?;
-        match provider.execute(request).await {
+        let response = tokio::select! {
+            biased;
+            // A broadcast may already have reached the peer. Preserve timeout
+            // ambiguity instead of pretending the request was never attempted.
+            _ = self.revocation.cancelled() => Err(ChainBackendError::Timeout),
+            result = provider.execute(request) => result,
+        };
+        let response = response.and_then(|observation| {
+            if self.revocation.is_revoked() { return Err(ChainBackendError::Timeout); }
+            if let ChainRequest::TransactionLookup { txid } = request {
+                match &observation.payload {
+                    ChainPayload::Transaction(transaction)
+                        if transaction.txid == *txid
+                            && optn_core::header_hash::sha256d(&transaction.raw) == *txid => {}
+                    _ => return Err(ChainBackendError::InvalidResponse(
+                        "transaction lookup returned bytes or identity inconsistent with the request".into(),
+                    )),
+                }
+            }
+            Ok(observation)
+        });
+        match response {
             Ok(observation) => {
                 self.set_route_health(route, ProviderHealth::Healthy);
                 Ok(ChainObservation {
@@ -538,6 +595,8 @@ mod tests {
         capabilities: CapabilitySet,
         calls: AtomicUsize,
         offline: AtomicBool,
+        hold: AtomicBool,
+        entered: tokio::sync::Notify,
     }
 
     impl ChainBackend for CountingBackend {
@@ -561,11 +620,18 @@ mod tests {
             }
         }
         fn supports(&self, operation: ChainOperation) -> bool {
-            operation == ChainOperation::HeaderSync
+            matches!(
+                operation,
+                ChainOperation::HeaderSync | ChainOperation::Broadcast
+            )
         }
         fn execute<'a>(&'a self, _: &'a ChainRequest) -> ChainFuture<'a, BackendObservation> {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async {
+            Box::pin(async move {
+                if self.hold.load(Ordering::SeqCst) {
+                    self.entered.notify_one();
+                    std::future::pending::<()>().await;
+                }
                 Ok(BackendObservation {
                     payload: ChainPayload::Headers {
                         start_height: 1,
@@ -585,6 +651,11 @@ mod tests {
             CapabilityConfidence::Verified,
             CapabilityDiscovery::ActiveProbe,
         );
+        capabilities.record(
+            Capability::Broadcast,
+            CapabilityConfidence::Verified,
+            CapabilityDiscovery::ActiveProbe,
+        );
         let backend = Arc::new(CountingBackend {
             source: SourceId::new("server"),
             endpoint: Endpoint {
@@ -595,6 +666,8 @@ mod tests {
             capabilities,
             calls: AtomicUsize::new(0),
             offline: AtomicBool::new(false),
+            hold: AtomicBool::new(false),
+            entered: tokio::sync::Notify::new(),
         });
         let mut catalog = SourceCatalog::default();
         catalog
@@ -620,6 +693,40 @@ mod tests {
         start_height: 1,
         count: 1,
     };
+
+    #[tokio::test]
+    async fn revoked_service_cancels_io_and_preserves_broadcast_uncertainty() {
+        use crate::tx_broadcast::{BroadcastCoordinator, BroadcastState};
+        let (mut service, backend, route) = routed_service();
+        let lifetime = service.revocation();
+        backend.hold.store(true, Ordering::SeqCst);
+        let task = tokio::spawn(async move {
+            let result = BroadcastCoordinator
+                .submit(&mut service, vec![1], [1; 32])
+                .await;
+            (service, result)
+        });
+        backend.entered.notified().await;
+        lifetime.revoke();
+        let (mut service, result) = tokio::time::timeout(std::time::Duration::from_secs(1), task)
+            .await
+            .expect("revocation cancels blocked provider I/O")
+            .unwrap();
+        assert!(matches!(result, BroadcastState::Uncertain { attempts, .. }
+            if attempts.len() == 1 && attempts[0].error == ChainBackendError::Timeout));
+        assert_eq!(
+            service.execute_on_route(&route, &HEADER_REQUEST).await,
+            Err(ChainServiceError::RouteUnavailable)
+        );
+        assert!(service
+            .routes_for_operation(ChainOperation::HeaderSync)
+            .is_empty());
+        assert_eq!(
+            backend.calls.load(Ordering::SeqCst),
+            1,
+            "retired handles cannot start more requests"
+        );
+    }
 
     #[tokio::test]
     async fn stale_route_rechecks_source_disposition_before_io() {

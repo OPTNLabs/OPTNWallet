@@ -50,6 +50,8 @@ pub struct ElectrumConfig {
     pub source_id: SourceId,
     pub endpoint: Endpoint,
     pub transport: ElectrumTransport,
+    /// Host-selected chain identity in internal hash byte order.
+    pub expected_genesis: [u8; 32],
     pub client_name: String,
     pub protocol_min: String,
     pub protocol_max: String,
@@ -57,11 +59,17 @@ pub struct ElectrumConfig {
 }
 
 impl ElectrumConfig {
-    pub fn new(source_id: SourceId, endpoint: Endpoint, transport: ElectrumTransport) -> Self {
+    pub fn new(
+        source_id: SourceId,
+        endpoint: Endpoint,
+        transport: ElectrumTransport,
+        expected_genesis: [u8; 32],
+    ) -> Self {
         Self {
             source_id,
             endpoint,
             transport,
+            expected_genesis,
             client_name: CLIENT_NAME.into(),
             protocol_min: PROTOCOL_MIN.into(),
             protocol_max: PROTOCOL_MAX.into(),
@@ -92,6 +100,7 @@ impl ElectrumBackend {
         let mut session = Session::connect(&config).await?;
         let (software, protocol) = session.negotiate(&config).await?;
         let features = session.call("server.features", json!([])).await?;
+        validate_genesis(&features, config.expected_genesis)?;
         let peers = session
             .call("server.peers.subscribe", json!([]))
             .await
@@ -213,6 +222,8 @@ impl ElectrumBackend {
     async fn session(&self) -> Result<Session, ChainBackendError> {
         let mut session = Session::connect(&self.config).await?;
         session.negotiate(&self.config).await?;
+        let features = session.call("server.features", json!([])).await?;
+        validate_genesis(&features, self.config.expected_genesis)?;
         Ok(session)
     }
 
@@ -221,6 +232,13 @@ impl ElectrumBackend {
         interests: &[WalletInterest],
         from_height: Option<u32>,
     ) -> Result<BackendObservation, ChainBackendError> {
+        if interests.iter().any(|interest| match interest {
+            WalletInterest::Outpoint { .. } => true,
+            WalletInterest::RpaPrefix(_) => !self.capabilities.is_usable(Capability::RpaIndex),
+            WalletInterest::Script(_) => false,
+        }) {
+            return Err(ChainBackendError::Unsupported);
+        }
         let mut session = self.session().await?;
         let tip = parse_tip(
             &session
@@ -251,9 +269,6 @@ impl ElectrumBackend {
                 }
                 WalletInterest::RpaPrefix(prefix) => {
                     validate_rpa_prefix(prefix)?;
-                    if !self.capabilities.is_usable(Capability::RpaIndex) {
-                        continue;
-                    }
                     let start = from_height
                         .unwrap_or_else(|| rpa_starting_height(&self.server_info.features));
                     let history = session
@@ -645,9 +660,15 @@ async fn connect_tls(
 ) -> Result<tokio_rustls::client::TlsStream<TcpStream>, ChainBackendError> {
     let mut roots = RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    let config = ClientConfig::builder()
-        .with_root_certificates(roots)
-        .with_no_client_auth();
+    // A host may enable another Rustls provider through unrelated dependencies.
+    // Select ours explicitly rather than panic on process-wide feature unification.
+    let config = ClientConfig::builder_with_provider(Arc::new(
+        tokio_rustls::rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .map_err(|error| ChainBackendError::Protocol(format!("TLS configuration: {error}")))?
+    .with_root_certificates(roots)
+    .with_no_client_auth();
     let connector = TlsConnector::from(Arc::new(config));
     let server_name = ServerName::try_from(host.to_owned()).map_err(|_| {
         ChainBackendError::Rejected("Electrum TLS endpoint has an invalid DNS name".into())
@@ -814,6 +835,20 @@ fn parse_header_hex(value: &str) -> Result<[u8; 80], ChainBackendError> {
         ChainBackendError::InvalidResponse(format!("header must be 80 bytes, got {}", bytes.len()))
     })
 }
+fn validate_genesis(features: &Value, expected: [u8; 32]) -> Result<(), ChainBackendError> {
+    let advertised = features["genesis_hash"].as_str().ok_or_else(|| {
+        ChainBackendError::InvalidResponse("server omitted its chain genesis identity".into())
+    })?;
+    if decode_display_hash(advertised)? != expected {
+        return Err(ChainBackendError::InvalidResponse(
+            "server genesis differs from the selected chain".into(),
+        ));
+    }
+    // A matching genesis is a network-mismatch guard, not consensus proof:
+    // forks sharing genesis still require trusted post-fork checkpoints.
+    Ok(())
+}
+
 fn decode_display_hash(value: &str) -> Result<[u8; 32], ChainBackendError> {
     let mut bytes = hex::decode(value)
         .map_err(|e| ChainBackendError::InvalidResponse(format!("invalid hash hex: {e}")))?;
@@ -839,6 +874,162 @@ fn map_io(_: std::io::Error) -> ChainBackendError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn tls_configuration_reaches_handshake_without_global_provider_setup() {
+        use tokio::io::AsyncReadExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let peer = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut hello = [0; 5];
+            stream.read_exact(&mut hello).await.unwrap();
+            // Deliberately invalid TLS. It must return an error, never panic
+            // before the handshake or silently accept a plaintext endpoint.
+            stream.write_all(b"HTTP/1.1 200 OK\r\n\r\n").await.unwrap();
+        });
+        let stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        assert!(matches!(
+            connect_tls("localhost", stream, Duration::from_secs(2)).await,
+            Err(ChainBackendError::Protocol(_))
+        ));
+        peer.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn transaction_lookup_crosses_real_wire_adapter_and_shared_service() {
+        use optn_runtime::chain::{
+            ChainSource, ConnectionPolicy, SourceCatalog, SourceDisposition, SourceOrigin,
+        };
+        use optn_runtime::chain_service::ChainService;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        // Opaque byte fixtures exercise identity checking, not BCH validity.
+        let raw = vec![1u8, 2, 3];
+        let txid = sha256d(&raw);
+        let expected_id = display_hash(txid);
+        let response_hex = hex::encode(&raw);
+        let server = tokio::spawn(async move {
+            let mut lookups = 0;
+            for connection in 0..5 {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut stream = BufReader::new(stream);
+                let mut first = true;
+                loop {
+                    let mut line = String::new();
+                    if stream.read_line(&mut line).await.unwrap() == 0 {
+                        break;
+                    }
+                    let request: Value = serde_json::from_str(&line).unwrap();
+                    let method = request["method"].as_str().unwrap();
+                    if first {
+                        assert_eq!(method, "server.version");
+                        first = false;
+                    }
+                    let result = match method {
+                        "server.version" => json!(["local-test", "1.6"]),
+                        "server.features" => match connection {
+                            3 => json!({"genesis_hash": hex::encode([8; 32])}),
+                            4 => json!({}),
+                            _ => json!({"genesis_hash": hex::encode([9; 32])}),
+                        },
+                        "server.peers.subscribe" => json!([]),
+                        "blockchain.transaction.get" => {
+                            assert_eq!(request["params"][0], expected_id);
+                            assert_eq!(request["params"][1], false);
+                            lookups += 1;
+                            if lookups == 1 {
+                                json!(response_hex)
+                            } else {
+                                json!("ff")
+                            }
+                        }
+                        other => panic!("unexpected request: {other}"),
+                    };
+                    let response = json!({"id": request["id"], "result": result, "error": null});
+                    stream
+                        .get_mut()
+                        .write_all(format!("{response}\n").as_bytes())
+                        .await
+                        .unwrap();
+                }
+            }
+            assert_eq!(lookups, 2);
+        });
+        timeout(Duration::from_secs(5), async {
+            let id = SourceId::new("local-query");
+            let endpoint = Endpoint {
+                kind: EndpointKind::ElectrumTcp,
+                host: "127.0.0.1".into(),
+                port: Some(port),
+            };
+            let backend = ElectrumBackend::connect(ElectrumConfig::new(
+                id.clone(),
+                endpoint.clone(),
+                ElectrumTransport::Tcp,
+                [9; 32],
+            ))
+            .await
+            .unwrap();
+            let mut catalog = SourceCatalog::default();
+            for interests in [
+                vec![
+                    WalletInterest::script(vec![0x51]),
+                    WalletInterest::outpoint(txid, 0),
+                ],
+                vec![
+                    WalletInterest::script(vec![0x51]),
+                    WalletInterest::rpa_prefix("ab").unwrap(),
+                ],
+            ] {
+                assert_eq!(
+                    backend.wallet_refresh(&interests, None).await,
+                    Err(ChainBackendError::Unsupported)
+                );
+            }
+            catalog
+                .insert(ChainSource {
+                    id: id.clone(),
+                    label: "Local test".into(),
+                    origin: SourceOrigin::UserAdded,
+                    endpoints: vec![endpoint],
+                    capabilities: CapabilitySet::default(),
+                    disposition: SourceDisposition::Enabled,
+                    priority: 0,
+                })
+                .unwrap();
+            let mut service = ChainService::new(
+                catalog,
+                ConnectionPolicy::exact(id.clone(), ProtocolFamily::Electrum),
+            );
+            let backend = Arc::new(backend);
+            service.register(backend.clone());
+            let observation = service
+                .execute(&ChainRequest::TransactionLookup { txid })
+                .await
+                .unwrap();
+            assert_eq!(observation.source, id);
+            let ChainPayload::Transaction(transaction) = observation.value else {
+                panic!("wrong payload");
+            };
+            assert_eq!(transaction.raw, raw);
+            assert_eq!(transaction.txid, txid);
+            assert!(service
+                .execute(&ChainRequest::TransactionLookup { txid })
+                .await
+                .is_err());
+            // Reconnects must recheck chain identity before revealing the txid.
+            for _ in 0..2 {
+                assert!(matches!(
+                    backend.transaction_lookup(txid).await,
+                    Err(ChainBackendError::InvalidResponse(_))
+                ));
+            }
+            server.await.unwrap();
+        })
+        .await
+        .expect("bounded loopback adapter test");
+    }
     #[test]
     fn scripthash_matches_protocol_byte_order() {
         let script = hex::decode("76a91462e907b15cbf27d5425399ebf6f0fb50ebb88f1888ac").unwrap();

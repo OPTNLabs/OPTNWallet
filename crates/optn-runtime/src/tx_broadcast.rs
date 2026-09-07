@@ -255,7 +255,7 @@ mod tests {
 
     #[tokio::test]
     async fn exact_lookup_promotes_to_observed() {
-        let txid = [9; 32];
+        let txid = optn_core::header_hash::sha256d(&[1]);
         let backend = MockBackend {
             id: SourceId::new("a"),
             endpoint: mock_endpoint(),
@@ -280,5 +280,31 @@ mod tests {
         let submitted = coordinator.submit(&mut service, vec![1], txid).await;
         let observed = coordinator.observe(&mut service, submitted).await;
         assert!(matches!(observed, BroadcastState::Observed { .. }));
+    }
+
+    #[tokio::test]
+    async fn substituted_lookup_bytes_cannot_confirm_a_broadcast() {
+        let txid = optn_core::header_hash::sha256d(&[1]);
+        let backend = MockBackend {
+            id: SourceId::new("substitution"),
+            endpoint: mock_endpoint(),
+            caps: caps(),
+            broadcast: Err(ChainBackendError::Timeout),
+            lookup: Ok(BackendObservation {
+                payload: ChainPayload::Transaction(ObservedTransaction {
+                    txid,
+                    raw: vec![2],
+                    block_height: None,
+                }),
+                evidence: Evidence::MempoolObservation,
+                chain_tip: None,
+            }),
+        };
+        let mut service = service(backend);
+        let submitted = BroadcastCoordinator
+            .submit(&mut service, vec![1], txid)
+            .await;
+        let observed = BroadcastCoordinator.observe(&mut service, submitted).await;
+        assert!(matches!(observed, BroadcastState::Uncertain { .. }));
     }
 }

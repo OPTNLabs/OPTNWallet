@@ -46,7 +46,7 @@ tauri-plugin-biometry = "=0.2.8"
 # direct dependency explicit.
 prost = "0.13"
 tokio = { version = "1", features = ["net", "io-util", "time", "macros", "rt", "process", "sync"] }
-tokio-rustls = { version = "0.26", features = ["ring"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging", "tls12"] }
 webpki-roots = "0.26"
 # Tor is reached as a SOCKS5 proxy (the same way Electron Cash does it) — we do
 # not bundle or supervise a Tor daemon.
@@ -74,14 +74,9 @@ optn-runtime = { path = "../crates/optn-runtime", version = "=1.7.3" }
 optn-transport = { path = "../crates/optn-transport", version = "=1.7.3" }
 # Concrete chain transports are shell-owned. Runtime/application crates only see
 # provider-neutral capability/evidence traits.
-optn-chain-electrum = { path = "../crates/optn-chain-electrum", version = "=1.7.3" }
-optn-chain-bip37 = { path = "../crates/optn-chain-bip37", version = "=1.7.3" }
-optn-chain-neutrino = { path = "../crates/optn-chain-neutrino", version = "=1.7.3" }
-optn-chain-bchn = { path = "../crates/optn-chain-bchn", version = "=1.7.3" }
-optn-chain-zmq = { path = "../crates/optn-chain-zmq", version = "=1.7.3" }
-# Secure randomness for one-time nonces/blinding factors (OsRng). NOT the
-# counter+clock token used for Tor circuit isolation — those must never be reused
-# for crypto secrets.
+optn-chain-native = { path = "../crates/optn-chain-native", version = "=1.7.3" }
+# Secure randomness remains shell-owned for CashFusion nonces and blinding
+# material. Chain-route isolation randomness moved to optn-chain-native.
 rand_core = { version = "0.6", features = ["getrandom"] }
 # BCH Schnorr's Jacobi-symbol convention needs a Legendre test y^((p-1)/2) mod p
 # over the field prime. num-bigint gives a clear, correct modpow for it (k256's

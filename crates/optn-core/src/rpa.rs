@@ -604,7 +604,18 @@ pub(crate) fn parse_transaction(raw: &[u8]) -> Result<ParsedTransaction> {
         let mut buf = [0u8; 8];
         buf[..n].copy_from_slice(&raw[*i..*i + n]);
         *i += n;
-        Ok(u64::from_le_bytes(buf))
+        let value = u64::from_le_bytes(buf);
+        let minimum = match first {
+            0xfd => 0xfd,
+            0xfe => 0x10000,
+            _ => 0x100000000,
+        };
+        if value < minimum {
+            return Err(CliError::Protocol(
+                "transaction uses non-canonical CompactSize".into(),
+            ));
+        }
+        Ok(value)
     };
 
     need(i, 4)?;
@@ -655,6 +666,10 @@ pub(crate) fn parse_transaction(raw: &[u8]) -> Result<ParsedTransaction> {
         let script_end = i + len;
         outputs.push((u64::from_le_bytes(v), raw[i..script_end].to_vec()));
         i = script_end;
+    }
+    need(i, 4)?; // locktime
+    if i + 4 != raw.len() {
+        return Err(CliError::Protocol("transaction has trailing bytes".into()));
     }
     Ok((inputs, outputs))
 }
@@ -941,6 +956,32 @@ mod tests {
         raw.extend_from_slice(&u64::MAX.to_le_bytes());
 
         assert!(parse_transaction(&raw).is_err());
+    }
+
+    #[test]
+    fn transaction_parser_requires_locktime_exact_length_and_canonical_counts() {
+        let mut raw = 2u32.to_le_bytes().to_vec();
+        raw.push(1);
+        raw.extend_from_slice(&[0u8; 36]);
+        raw.push(0);
+        raw.extend_from_slice(&u32::MAX.to_le_bytes());
+        raw.push(1);
+        raw.extend_from_slice(&1000u64.to_le_bytes());
+        raw.extend_from_slice(&[1, 0x51]);
+        raw.extend_from_slice(&0u32.to_le_bytes());
+        assert!(parse_transaction(&raw).is_ok());
+        for end in 0..raw.len() {
+            assert!(
+                parse_transaction(&raw[..end]).is_err(),
+                "truncation at {end}"
+            );
+        }
+        let mut trailing = raw.clone();
+        trailing.push(0);
+        assert!(parse_transaction(&trailing).is_err());
+        let mut noncanonical = raw;
+        noncanonical.splice(4..5, [0xfd, 1, 0]);
+        assert!(parse_transaction(&noncanonical).is_err());
     }
 }
 

@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod onboarding;
+mod qr;
 
 #[cfg(target_arch = "wasm32")]
 use leptos::prelude::*;

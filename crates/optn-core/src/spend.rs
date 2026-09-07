@@ -83,6 +83,7 @@ pub enum SpendError {
         available: u64,
     },
     FrozenCoin,
+    TokenCoin,
     /// Coin control: the chosen coin is not in this wallet.
     UnknownCoin,
     /// Coin control: the chosen coin does not cover the amount. Distinct from
@@ -120,6 +121,7 @@ impl fmt::Display for SpendError {
                 )
             }
             Self::FrozenCoin => write!(f, "frozen coins cannot be selected for a send"),
+            Self::TokenCoin => write!(f, "token-bearing coins require a token-aware transfer"),
             Self::UnknownCoin => write!(f, "that coin is not in this wallet"),
             Self::CoinTooSmall { needed, coin_value } => write!(
                 f,
@@ -252,9 +254,7 @@ pub fn prepare_spend_with_fee_and_coin(
         // one or explain why it cannot -- never quietly substitute another.
         Some(outpoint) => {
             let coin = coins.get(outpoint).ok_or(SpendError::UnknownCoin)?;
-            if coin.is_reserved() {
-                return Err(SpendError::FrozenCoin);
-            }
+            assert_coin_is_spendable(coin)?;
             if coin.value_sats() < amount_sats {
                 return Err(SpendError::CoinTooSmall {
                     needed: amount_sats,
@@ -278,9 +278,7 @@ pub fn prepare_spend_with_fee_and_coin(
                     needed: amount_sats,
                     available,
                 })?;
-            if coin.is_reserved() {
-                return Err(SpendError::FrozenCoin);
-            }
+            assert_coin_is_spendable(coin)?;
             coin
         }
     };
@@ -338,7 +336,9 @@ pub fn sign_seed_spend(
 }
 
 pub fn assert_coin_is_spendable(coin: &Coin) -> Result<(), SpendError> {
-    if coin.is_reserved() {
+    if coin.token().is_some() {
+        Err(SpendError::TokenCoin)
+    } else if coin.is_reserved() {
         Err(SpendError::FrozenCoin)
     } else {
         Ok(())
@@ -524,6 +524,43 @@ mod tests {
             ),
             Err(SpendError::UnknownCoin)
         );
+    }
+
+    #[test]
+    fn token_custody_survives_unfreeze_and_blocks_plain_bch_spends() {
+        let coin = chipnet_demo_coin(8000, 1)
+            .unwrap()
+            .with_token(crate::token::TokenData::fungible([9; 32], 42));
+        let outpoint = coin.outpoint();
+        let mut coins = CoinSet::new();
+        coins.insert(coin).unwrap();
+        coins.freeze(outpoint, FreezeReason::User).unwrap();
+        coins.unfreeze(outpoint).unwrap();
+        let coin = coins.get(outpoint).unwrap();
+        assert!(!coin.is_spendable());
+        assert!(!coin.is_fusable(3));
+        assert_eq!(coins.reserved_sats(), 8000);
+        assert_eq!(
+            prepare_spend_with(
+                &coins,
+                Network::Chipnet,
+                &dest(),
+                1000,
+                SpendingCapability::Seed,
+                Some(outpoint)
+            ),
+            Err(SpendError::TokenCoin)
+        );
+        assert!(matches!(
+            prepare_spend(
+                &coins,
+                Network::Chipnet,
+                &dest(),
+                1000,
+                SpendingCapability::Seed
+            ),
+            Err(SpendError::InsufficientSpendable { .. })
+        ));
     }
 
     #[test]

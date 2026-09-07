@@ -252,7 +252,9 @@ impl CapabilitySet {
 // Source catalog and lifecycle
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct SourceId(String);
 
 impl SourceId {
@@ -416,7 +418,7 @@ pub enum CatalogError {
     BootstrapNotRemovable(SourceId),
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SourceCatalog {
     sources: BTreeMap<SourceId, ChainSource>,
 }
@@ -686,7 +688,7 @@ pub trait CapabilityProbe: Send + Sync {
 // Evidence and synchronization state
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Evidence {
     ServerAssertion,
     MempoolObservation,

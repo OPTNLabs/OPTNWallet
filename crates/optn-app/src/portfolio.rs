@@ -17,7 +17,7 @@ use crate::format_bch;
 pub struct PortfolioTotals {
     /// Ordinary spendable UTXOs.
     pub spendable_sats: u64,
-    /// UTXOs held by a freeze or a pledge.
+    /// UTXOs held by a freeze, a pledge, or token custody protection.
     pub reserved_sats: u64,
     /// RPA stealth funds. Never part of the UTXO totals above.
     pub stealth_sats: u64,

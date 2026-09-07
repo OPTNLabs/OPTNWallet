@@ -56,6 +56,7 @@ pub use optn_core::spend::{
     prepare_spend, prepare_spend_with, prepare_spend_with_fee, prepare_spend_with_fee_and_coin,
     sign_seed_spend, SpendKind, SpendPlan, SpendingCapability, SIGHASH_ALL_FORKID,
 };
+pub use optn_core::token::TokenData;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThemeMode {
@@ -677,7 +678,8 @@ pub enum AppAction {
     AuthorizeChat {
         now_ms: u64,
     },
-    /// Shell already verified the password. Grants the current prompt.
+    /// Trusted state transition after password verification. A renderer intent
+    /// cannot assert this; the host verifier must bind it to its unlock session.
     ConfirmAuth {
         now_ms: u64,
     },
@@ -710,6 +712,22 @@ pub enum AppEvent {
 }
 
 impl AppState {
+    /// Reduce an interface request, which cannot certify observations or a
+    /// successful password check. Native runtime and local WASM transports use
+    /// the same boundary. `reduce` also serves trusted model/worker fixtures.
+    pub fn reduce_intent(&mut self, action: AppAction) -> Option<AppEvent> {
+        match action {
+            AppAction::InsertCoin(_) | AppAction::SetStealthSats(_) => self.reject(
+                "Wallet observations must come from the shared sync service.".into(),
+            ),
+            AppAction::ConfirmAuth { .. } => self.reject(
+                "Password verification is unavailable in this interface. Authorization was not granted."
+                    .into(),
+            ),
+            action => self.reduce(action),
+        }
+    }
+
     /// Apply one typed action and return the observable domain/application event
     /// produced by the state transition. No event is emitted for a no-op.
     pub fn reduce(&mut self, action: AppAction) -> Option<AppEvent> {
@@ -957,12 +975,7 @@ impl AppState {
                     multisig_policy: None,
                     account_xpub: Some(preview.account_xpub),
                 });
-                self.spend = None;
-                self.notice = None;
-                self.return_to = None;
-                self.route = AppRoute::WalletHome;
-                self.lock.mark_unlocked();
-                Some(AppEvent::WalletOpened)
+                self.finish_wallet_open()
             }
             AppAction::SetStealthSats(sats) => {
                 if self.stealth_sats == sats {
@@ -1070,12 +1083,7 @@ impl AppState {
                     // A shared wallet has a cosigner set, not one account key.
                     account_xpub: None,
                 });
-                self.spend = None;
-                self.notice = None;
-                self.return_to = None;
-                self.route = AppRoute::WalletHome;
-                self.lock.mark_unlocked();
-                Some(AppEvent::WalletOpened)
+                self.finish_wallet_open()
             }
             AppAction::OpenHardwareWallet(preview) => {
                 // Same gate as the route: a surface without USB must not end
@@ -1095,12 +1103,7 @@ impl AppState {
                     multisig_policy: None,
                     account_xpub: Some(preview.account_xpub),
                 });
-                self.spend = None;
-                self.notice = None;
-                self.return_to = None;
-                self.route = AppRoute::WalletHome;
-                self.lock.mark_unlocked();
-                Some(AppEvent::WalletOpened)
+                self.finish_wallet_open()
             }
             AppAction::PrepareSend {
                 destination,
@@ -1272,8 +1275,21 @@ impl AppState {
             // this crate does not keep.
             account_xpub: None,
         });
+        self.finish_wallet_open()
+    }
+
+    fn finish_wallet_open(&mut self) -> Option<AppEvent> {
+        // Opening can replace a wallet without passing through LockWallet.
+        // No balance, approval, or revealed identity belongs to both sessions.
+        self.coins.clear();
+        self.pledges.clear();
+        self.stealth_sats = 0;
         self.spend = None;
+        self.connect.cancel_all();
+        self.identity_revealed = false;
+        self.hardware.account_xpub = None;
         self.notice = None;
+        self.settings_focus = None;
         self.return_to = None;
         self.route = AppRoute::WalletHome;
         self.lock.mark_unlocked();
@@ -1328,7 +1344,6 @@ impl AppState {
         match self.lock.decide(scope, now_ms, kind) {
             AuthDecision::Allow => {
                 if scope == AuthScope::Spend {
-                    self.lock.mark_spend_auth(now_ms);
                     Some(AppEvent::SpendAuthorized)
                 } else {
                     None
@@ -4375,6 +4390,16 @@ mod tests {
         assert_eq!(state.lock.prompt, None, "first send after unlock is free");
         assert_eq!(
             state.reduce(AppAction::AuthorizeSpend {
+                now_ms: 1_000 + SPEND_AUTH_TTL_MS - 1,
+            }),
+            Some(AppEvent::SpendAuthorized)
+        );
+        assert_eq!(
+            state.lock.last_spend_auth_ms, 1_000,
+            "using an existing approval must not extend password approval"
+        );
+        assert_eq!(
+            state.reduce(AppAction::AuthorizeSpend {
                 now_ms: 1_000 + SPEND_AUTH_TTL_MS,
             }),
             Some(AppEvent::AuthRequired)
@@ -4851,6 +4876,71 @@ mod tests {
             state.connect.request.is_none(),
             "a chain switch must not leave one up either"
         );
+    }
+
+    #[test]
+    fn every_wallet_open_discards_the_previous_wallet_session() {
+        let wallet = optn_core::hd::Wallet::from_mnemonic(BIP39_TEST_VECTOR_MNEMONIC, "").unwrap();
+        let xpub = wallet.account_xpub(Network::Chipnet, 0).unwrap();
+        let preview = watch_only_setup_preview(Network::Chipnet, "next", &xpub, "").unwrap();
+        let cosigners = (0..2)
+            .map(|account| Cosigner {
+                name: String::new(),
+                account_xpub: wallet.account_xpub(Network::Chipnet, account).unwrap(),
+                master_fingerprint: None,
+            })
+            .collect::<Vec<_>>();
+        let actions = [
+            AppAction::OpenCreatedWallet {
+                name: "next".into(),
+                receive_address: preview.receive_address.clone(),
+                account_path: preview.account_path.clone(),
+            },
+            AppAction::OpenImportedWallet {
+                name: "next".into(),
+                receive_address: preview.receive_address.clone(),
+                account_path: preview.account_path.clone(),
+            },
+            AppAction::OpenWatchOnlyWallet(preview),
+            AppAction::OpenHardwareWallet(
+                hardware_setup_preview(Network::Chipnet, HardwareVendor::Trezor, "next", &xpub, "")
+                    .unwrap(),
+            ),
+            AppAction::OpenMultisigWallet(
+                multisig_setup_preview(Network::Chipnet, "next", 2, &cosigners).unwrap(),
+            ),
+        ];
+        for action in actions {
+            let mut state = AppState::for_surface(AppSurface::Desktop);
+            open_chipnet_seed(&mut state, "previous");
+            state.apply(AppAction::InsertCoin(chipnet_demo_coin(10_000, 1).unwrap()));
+            state.apply(AppAction::SetStealthSats(50_000));
+            state.identity_revealed = true;
+            state.hardware.account_xpub = Some("old-account".into());
+            assert!(state.connect.raise(ConnectRequest {
+                protocol: ConnectProtocol::CashConnect,
+                kind: RequestKind::SignTransaction,
+                origin: "example.dapp".into(),
+                id: "old-request".into(),
+            }));
+            // Rejected onboarding must leave the existing wallet intact.
+            state.apply(AppAction::OpenImportedWallet {
+                name: "".into(),
+                receive_address: "".into(),
+                account_path: "".into(),
+            });
+            assert_eq!(state.wallet.as_ref().unwrap().name, "previous");
+            assert_eq!(portfolio_totals(&state).total_sats(), 60_000);
+            assert_eq!(state.reduce(action), Some(AppEvent::WalletOpened));
+            assert_eq!(state.wallet.as_ref().unwrap().name, "next");
+            assert_eq!(portfolio_totals(&state).total_sats(), 0);
+            assert!(state.pledges.is_empty());
+            assert!(state.spend.is_none());
+            assert!(state.connect.request.is_none());
+            assert!(!state.identity_revealed);
+            assert!(state.hardware.account_xpub.is_none());
+            assert_eq!(state.route, AppRoute::WalletHome);
+        }
     }
 
     #[test]

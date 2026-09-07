@@ -6,69 +6,29 @@
 
 use crate::chain_runtime::catalog_and_policy_from_app_state;
 use optn_app::{AppState, NetworkServers, ServerKind};
+use optn_chain_native::network_config::NetworkConfigFile;
 use optn_core::network::Network;
-use optn_runtime::chain::{Endpoint, EndpointKind};
+use optn_runtime::chain::{ConnectionPolicy, Endpoint, EndpointKind, SourceCatalog};
 use optn_runtime::network_config::{
-    decode_envelope_json, encode_envelope_json, legacy_network_servers_from_overlay,
-    NetworkConfigEnvelope, NetworkConfigStore, UserNetworkOverlay,
+    legacy_network_servers_from_overlay,
+    resolve_chain_selection as resolve_persisted_chain_selection, NetworkConfigEnvelope,
+    NetworkConfigStore, UserNetworkOverlay,
 };
 use std::collections::BTreeMap;
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::path::PathBuf;
+use std::sync::Arc;
 
-const MAX_BYTES: u64 = 128 * 1024;
 const LEGACY_CATALOG_VERSION: &str = "legacy-server-overrides-v1";
-static TEMP_ID: AtomicU64 = AtomicU64::new(0);
-
-struct NetworkConfigFile {
-    path: PathBuf,
-}
-
-impl NetworkConfigFile {
-    fn new(path: PathBuf) -> Self {
-        Self { path }
-    }
-}
-
-impl NetworkConfigStore for NetworkConfigFile {
-    fn load(&self) -> Result<Option<NetworkConfigEnvelope>, String> {
-        let file = match File::open(&self.path) {
-            Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error.to_string()),
-        };
-        let mut bytes = Vec::new();
-        file.take(MAX_BYTES + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|error| error.to_string())?;
-        if bytes.len() as u64 > MAX_BYTES {
-            return Err("network configuration file is too large".into());
-        }
-        decode_envelope_json(
-            std::str::from_utf8(&bytes)
-                .map_err(|_| "network configuration is not UTF-8".to_string())?,
-        )
-        .map(Some)
-        .map_err(|error| format!("invalid network configuration: {error:?}"))
-    }
-
-    fn store_atomic(&self, value: &NetworkConfigEnvelope) -> Result<(), String> {
-        let bytes =
-            encode_envelope_json(value).map_err(|error| format!("encode network config: {error:?}"))?;
-        write_atomically(&self.path, bytes.as_bytes()).map_err(|error| error.to_string())
-    }
-}
 
 /// Tauri-owned files, one per chain network because the runtime envelope has no
 /// network discriminator.
+#[derive(Clone)]
 pub struct NetworkSettingsStore {
     mainnet: NetworkConfigFile,
     chipnet: NetworkConfigFile,
     // A network edit snapshots the selected network before saving, then
     // publishes it. Serialize that sequence with network switches.
-    pub(crate) write_lock: tokio::sync::Mutex<()>,
+    pub(crate) write_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl NetworkSettingsStore {
@@ -76,7 +36,7 @@ impl NetworkSettingsStore {
         Self {
             mainnet: NetworkConfigFile::new(directory.join("network-mainnet.json")),
             chipnet: NetworkConfigFile::new(directory.join("network-chipnet.json")),
-            write_lock: tokio::sync::Mutex::new(()),
+            write_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -86,11 +46,33 @@ impl NetworkSettingsStore {
             let Some(envelope) = self.file_for(network).load()? else {
                 continue;
             };
-            let servers = legacy_network_servers_from_overlay(&envelope.overlay)?;
-            apply_servers(&mut restored, network, &servers)?;
+            // The legacy reducer state can render only one Electrum endpoint
+            // and one P2P endpoint. A richer persisted policy is still valid
+            // and is used by `NativeChainRuntime`; never reject or flatten it
+            // merely because this compatibility view cannot display it.
+            if let Ok(servers) = legacy_network_servers_from_overlay(&envelope.overlay) {
+                apply_servers(&mut restored, network, &servers)?;
+            }
         }
         *state = restored;
         Ok(())
+    }
+
+    /// Resolve the exact persisted catalog and policy for the selected
+    /// network. The shipped bootstrap catalog is not mounted yet, so both
+    /// native hosts start from the same empty base and retain only durable user
+    /// intent. Missing files deliberately preserve the legacy app-state bridge.
+    pub fn chain_selection(
+        &self,
+        network: Network,
+    ) -> Result<Option<(SourceCatalog, ConnectionPolicy)>, String> {
+        self.file_for(network)
+            .load()?
+            .map(|envelope| {
+                resolve_persisted_chain_selection(&SourceCatalog::default(), &envelope)
+                    .map_err(|error| format!("invalid network configuration: {error:?}"))
+            })
+            .transpose()
     }
 
     /// Validate and atomically save the selected network before its reducer
@@ -98,14 +80,17 @@ impl NetworkSettingsStore {
     /// here so this compatibility bridge cannot overwrite it.
     pub fn save_for_network(&self, state: &AppState, network: Network) -> Result<(), String> {
         let file = self.file_for(network);
-        let catalog_version = match file.load()? {
-            Some(existing) => {
-                legacy_network_servers_from_overlay(&existing.overlay)?;
-                existing.bootstrap_catalog_version_seen
-            }
-            None => LEGACY_CATALOG_VERSION.into(),
-        };
-        file.store_atomic(&envelope_from_state(state, network, catalog_version)?)
+        file.update(|existing| {
+            let catalog_version = match existing {
+                Some(existing) => {
+                    legacy_network_servers_from_overlay(&existing.overlay)?;
+                    existing.bootstrap_catalog_version_seen
+                }
+                None => LEGACY_CATALOG_VERSION.into(),
+            };
+            envelope_from_state(state, network, catalog_version)
+        })
+        .map(|_| ())
     }
 
     fn file_for(&self, network: Network) -> &NetworkConfigFile {
@@ -183,41 +168,13 @@ fn explorer_endpoint(entry: &str) -> Result<Endpoint, String> {
     })
 }
 
-fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let directory = path.parent().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "network configuration directory is unavailable",
-        )
-    })?;
-    fs::create_dir_all(directory)?;
-    let temporary = path.with_extension(format!(
-        "tmp-{}-{}",
-        std::process::id(),
-        TEMP_ID.fetch_add(1, Ordering::Relaxed)
-    ));
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)?;
-    let result = (|| {
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        drop(file);
-        fs::rename(&temporary, path)?;
-        #[cfg(unix)]
-        File::open(directory)?.sync_all()?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    result
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static TEMP_ID: AtomicU64 = AtomicU64::new(0);
     use optn_runtime::chain::{ConnectionPolicy, SourceDisposition, SourceOrigin};
 
     struct TestDirectory(PathBuf);
@@ -271,15 +228,27 @@ mod tests {
         let mut restored = AppState::default();
         store.restore(&mut restored).unwrap();
         assert_eq!(
-            restored.servers.for_network(Network::Mainnet).electrum.as_deref(),
+            restored
+                .servers
+                .for_network(Network::Mainnet)
+                .electrum
+                .as_deref(),
             Some("main.example:50002")
         );
         assert_eq!(
-            restored.servers.for_network(Network::Chipnet).peer.as_deref(),
+            restored
+                .servers
+                .for_network(Network::Chipnet)
+                .peer
+                .as_deref(),
             Some("chip.example:8333")
         );
         assert_eq!(
-            restored.servers.for_network(Network::Chipnet).explorer.as_deref(),
+            restored
+                .servers
+                .for_network(Network::Chipnet)
+                .explorer
+                .as_deref(),
             Some("https://explorer.example")
         );
         assert!(restored
@@ -299,7 +268,7 @@ mod tests {
         };
         let envelope = NetworkConfigEnvelope::current("advanced", overlay);
         store.mainnet.store_atomic(&envelope).unwrap();
-        let before = fs::read(&store.mainnet.path).unwrap();
+        let before = fs::read(directory.0.join("network-mainnet.json")).unwrap();
 
         let mut state = AppState::default();
         state
@@ -307,46 +276,81 @@ mod tests {
             .set(Network::Mainnet, ServerKind::Electrum, "main.example:50002")
             .unwrap();
         assert!(store.save_for_network(&state, Network::Mainnet).is_err());
-        assert_eq!(fs::read(&store.mainnet.path).unwrap(), before);
+        assert_eq!(
+            fs::read(directory.0.join("network-mainnet.json")).unwrap(),
+            before
+        );
     }
 
     #[test]
-    fn unrepresentable_persisted_endpoints_are_not_loaded_or_overwritten() {
-        for endpoint in [
-            Endpoint {
+    fn invalid_persisted_endpoint_is_rejected_before_any_host_uses_it() {
+        let directory = TestDirectory::new();
+        let store = directory.store();
+        let mut overlay = UserNetworkOverlay::default();
+        overlay.user_sources.push(optn_runtime::chain::ChainSource {
+            id: optn_runtime::chain::SourceId::new("host:bad.example"),
+            label: "bad.example".into(),
+            origin: SourceOrigin::UserAdded,
+            endpoints: vec![Endpoint {
                 kind: EndpointKind::ElectrumTls,
                 host: "bad.example".into(),
                 port: Some(0),
+            }],
+            capabilities: Default::default(),
+            disposition: SourceDisposition::Enabled,
+            priority: 0,
+        });
+        let invalid = NetworkConfigEnvelope::current("bad", overlay);
+        assert!(store.mainnet.store_atomic(&invalid).is_err());
+        // Simulate a corrupt external file independently of the validated writer.
+        fs::write(
+            directory.0.join("network-mainnet.json"),
+            optn_runtime::network_config::encode_envelope_json(&invalid).unwrap(),
+        )
+        .unwrap();
+
+        assert!(store.chain_selection(Network::Mainnet).is_err());
+        assert!(store.restore(&mut AppState::default()).is_err());
+    }
+
+    #[test]
+    fn rich_persisted_selection_drives_native_runtime_without_legacy_reduction() {
+        let directory = TestDirectory::new();
+        let store = directory.store();
+        let mut overlay = UserNetworkOverlay::default();
+        overlay.user_sources.push(optn_runtime::chain::ChainSource {
+            id: optn_runtime::chain::SourceId::new("local-peer"),
+            label: "Local node".into(),
+            origin: SourceOrigin::UserInfrastructure {
+                group: "lab".into(),
             },
-            Endpoint {
+            endpoints: vec![Endpoint {
                 kind: EndpointKind::ElectrumTcp,
                 host: "127.0.0.1".into(),
                 port: Some(50003),
-            },
-        ] {
-            let directory = TestDirectory::new();
-            let store = directory.store();
-            let mut overlay = UserNetworkOverlay::default();
-            overlay.user_sources.push(optn_runtime::chain::ChainSource {
-                id: optn_runtime::chain::SourceId::new("host:bad.example"),
-                label: "bad.example".into(),
-                origin: SourceOrigin::UserAdded,
-                endpoints: vec![endpoint],
-                capabilities: Default::default(),
-                disposition: SourceDisposition::Enabled,
-                priority: 0,
-            });
-            store
-                .mainnet
-                .store_atomic(&NetworkConfigEnvelope::current("bad", overlay))
-                .unwrap();
-            let before = fs::read(&store.mainnet.path).unwrap();
+            }],
+            capabilities: Default::default(),
+            disposition: SourceDisposition::Enabled,
+            priority: 0,
+        });
+        overlay.connection_policy = ConnectionPolicy::own_infrastructure();
+        store
+            .mainnet
+            .store_atomic(&NetworkConfigEnvelope::current("advanced", overlay.clone()))
+            .unwrap();
+        let before = fs::read(directory.0.join("network-mainnet.json")).unwrap();
 
-            let mut state = AppState::default();
-            assert!(store.restore(&mut state).is_err());
-            assert!(store.save_for_network(&state, Network::Mainnet).is_err());
-            assert_eq!(fs::read(&store.mainnet.path).unwrap(), before);
-        }
+        let mut state = AppState::default();
+        store.restore(&mut state).unwrap();
+        let (catalog, policy) = store.chain_selection(Network::Mainnet).unwrap().unwrap();
+        assert_eq!(policy, overlay.connection_policy);
+        assert_eq!(catalog.iter().count(), 1);
+        assert!(state.servers.for_network(Network::Mainnet).is_empty());
+        assert!(store.save_for_network(&state, Network::Mainnet).is_err());
+        assert_eq!(
+            fs::read(directory.0.join("network-mainnet.json")).unwrap(),
+            before
+        );
     }
 
     #[test]
@@ -356,10 +360,14 @@ mod tests {
         let mut saved = AppState::default();
         saved
             .servers
-            .set(Network::Mainnet, ServerKind::Electrum, "saved.example:50002")
+            .set(
+                Network::Mainnet,
+                ServerKind::Electrum,
+                "saved.example:50002",
+            )
             .unwrap();
         store.save_for_network(&saved, Network::Mainnet).unwrap();
-        fs::write(&store.chipnet.path, b"{").unwrap();
+        fs::write(directory.0.join("network-chipnet.json"), b"{").unwrap();
 
         let mut state = AppState::default();
         state
@@ -368,7 +376,11 @@ mod tests {
             .unwrap();
         assert!(store.restore(&mut state).is_err());
         assert_eq!(
-            state.servers.for_network(Network::Mainnet).electrum.as_deref(),
+            state
+                .servers
+                .for_network(Network::Mainnet)
+                .electrum
+                .as_deref(),
             Some("kept.example:50002")
         );
     }

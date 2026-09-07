@@ -80,6 +80,29 @@ impl MmrAccumulator {
             .expect("MMR leaf count overflow");
     }
 
+    /// Proof to the new root for a leaf about to be appended. The caller must
+    /// append that same leaf before using the proof. At most 64 hashes are
+    /// retained; no historical leaves are required.
+    pub fn proof_for_next_leaf(&self, leaf: Hash32) -> Vec<Hash32> {
+        let mut proof = Vec::new();
+        let mut current = leaf;
+        let mut height = 0u32;
+        let mut remaining = self.leaf_count;
+        for left in self.peaks.iter().rev() {
+            let left_height = remaining.trailing_zeros();
+            while height < left_height {
+                proof.push(current);
+                current = sha256d_pair(&current, &current);
+                height += 1;
+            }
+            proof.push(*left);
+            current = sha256d_pair(left, &current);
+            height += 1;
+            remaining &= remaining - 1;
+        }
+        proof
+    }
+
     /// Bitcoin-style Merkle root produced by bagging the MMR peaks from the
     /// shortest/rightmost peak toward the tallest/leftmost peak, duplicating
     /// nodes as necessary to equalize heights.
@@ -328,6 +351,26 @@ const fn countr_zero(value: u64) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn appended_tip_proof_restores_every_peak_shape() {
+        let mut accumulator = MmrAccumulator::new();
+        for index in 0u64..257 {
+            let leaf: Hash32 = Sha256::digest(index.to_le_bytes()).into();
+            let proof = accumulator.proof_for_next_leaf(leaf);
+            accumulator.extend(leaf);
+            assert!(proof.len() <= 64);
+            assert!(accumulator.verify_proof_to_root(index, leaf, &proof));
+            let restored = MmrAccumulator::bootstrap_from_last_leaf_proof(index + 1, leaf, &proof)
+                .expect("new tip proof restores its accumulator");
+            assert_eq!(restored, accumulator);
+            if !proof.is_empty() {
+                let mut corrupt = proof.clone();
+                corrupt[0][0] ^= 1;
+                assert!(!accumulator.verify_proof_to_root(index, leaf, &corrupt));
+            }
+        }
+    }
 
     fn leaf(value: u8) -> Hash32 {
         [value; 32]
