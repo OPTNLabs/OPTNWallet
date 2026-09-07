@@ -1,28 +1,26 @@
 import {
   CompilationContextBCH,
-  SigningSerializationFlag,
   binToHex,
   encodeTransaction,
-  generateSigningSerializationBCH,
-  hash256,
   hexToBin,
-  importWalletTemplate,
   lockingBytecodeToCashAddress,
-  secp256k1,
   sha256,
   type Transaction,
-  walletTemplateP2pkhNonHd,
-  walletTemplateToCompilerBCH,
 } from '@bitauth/libauth';
 import { DerivationPath } from '@wizardconnect/wallet';
 import type { SignTransactionRequest } from '@wizardconnect/core';
 import type { Network } from '../../state/slices/networkSlice';
 import { PREFIX } from '../../utils/constants';
 import { ensureUint8Array } from '../../utils/binary';
-import { getPublicKeyCompressed } from '../../utils/hex';
 import { zeroize } from '../../utils/secureMemory';
 import { derivePrivateKeyForPath } from './derivation';
 import { decodeWizardConnectTransaction } from './transaction';
+import {
+  CONNECT_ALL_OUTPUTS_ALL_UTXOS,
+  connectorPublicKey,
+  signConnectorInput,
+  signConnectorP2pkh,
+} from '../connect/ConnectSigningCore';
 
 type WalletSeedMaterial = {
   mnemonic: string;
@@ -53,21 +51,6 @@ export async function signWizardConnectTransaction(
   const { transaction: txDetails, sourceOutputs } =
     decodeWizardConnectTransaction(request.transaction);
 
-  const template = importWalletTemplate({
-    ...walletTemplateP2pkhNonHd,
-    scripts: {
-      ...walletTemplateP2pkhNonHd.scripts,
-      unlock: {
-        ...walletTemplateP2pkhNonHd.scripts.unlock,
-        script:
-          '<key.schnorr_signature.all_outputs_all_utxos> <key.public_key>',
-      },
-    },
-  });
-  if (typeof template === 'string') {
-    throw new Error(template);
-  }
-  const compiler = walletTemplateToCompilerBCH(template);
   const txTemplate = {
     ...txDetails,
     inputs: txDetails.inputs.map((input) => ({ ...input })),
@@ -117,10 +100,6 @@ export async function signWizardConnectTransaction(
         let hexUnlock = binToHex(ensureUint8Array(utxo.unlockingBytecode));
         const sigPlaceholder = '41' + binToHex(new Uint8Array(65).fill(0));
         const pubkeyPlaceholder = '21' + binToHex(new Uint8Array(33).fill(0));
-        const hashType =
-          SigningSerializationFlag.allOutputs |
-          SigningSerializationFlag.utxos |
-          SigningSerializationFlag.forkId;
 
         if (hexUnlock.includes(sigPlaceholder)) {
           const context = {
@@ -128,16 +107,15 @@ export async function signWizardConnectTransaction(
             sourceOutputs,
             transaction: txDetails as Transaction,
           } as CompilationContextBCH;
-          const preimage = generateSigningSerializationBCH(context, {
-            coveredBytecode: utxo.contract.redeemScript!,
-            signingSerializationType: new Uint8Array([hashType]),
-          });
-          const sighash = hash256(preimage);
-          const sig = secp256k1.signMessageHashSchnorr(
+          if (!utxo.contract.redeemScript) {
+            throw new Error('Missing WizardConnect covenant redeem script');
+          }
+          const sigWithType = signConnectorInput(
+            context,
             signerKey,
-            sighash
-          ) as Uint8Array;
-          const sigWithType = Uint8Array.from([...sig, hashType]);
+            utxo.contract.redeemScript,
+            CONNECT_ALL_OUTPUTS_ALL_UTXOS
+          );
           hexUnlock = hexUnlock.replace(
             sigPlaceholder,
             '41' + binToHex(sigWithType)
@@ -145,7 +123,7 @@ export async function signWizardConnectTransaction(
         }
 
         if (hexUnlock.includes(pubkeyPlaceholder)) {
-          const pubkey = getPublicKeyCompressed(signerKey, false) as Uint8Array;
+          const pubkey = connectorPublicKey(signerKey);
           hexUnlock = hexUnlock.replace(
             pubkeyPlaceholder,
             '21' + binToHex(pubkey)
@@ -156,23 +134,14 @@ export async function signWizardConnectTransaction(
         continue;
       }
 
-      // WizardConnect requires all UTXOs, including covenant inputs. The
-      // generateTransaction helper only supplies the current input's output.
-      const generated = compiler.generateBytecode({
-        scriptId: 'unlock',
-        data: {
-          keys: { privateKeys: { key: signerKey } },
-          compilationContext: {
-            inputIndex: i,
-            sourceOutputs,
-            transaction: txTemplate,
-          },
+      input.unlockingBytecode = signConnectorP2pkh(
+        {
+          inputIndex: i,
+          sourceOutputs,
+          transaction: txTemplate,
         },
-      });
-      if (!generated.success) {
-        throw new Error('WizardConnect transaction signing failed');
-      }
-      input.unlockingBytecode = generated.bytecode;
+        signerKey
+      );
     }
 
     const rawSigned = encodeTransaction(txTemplate);

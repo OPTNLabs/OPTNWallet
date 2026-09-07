@@ -25,8 +25,8 @@ installed API; do not rename that property solely to match the newer example.
   Missing source outputs, malformed fields, and invalid totals fail closed.
 - The [protocol's signature requirement](https://docs.riftenlabs.com/wizardconnect/protocol/#sighash-requirement-security-critical)
   is `SIGHASH_ALL | SIGHASH_FORKID | SIGHASH_UTXOS` (`0x61`). The software signer
-  supplies every source output to libauth's compiler, including preset covenant
-  inputs. A regression test verifies both signature flags and rejection after
+  supplies every source output to the shared Rust signing core, including preset
+  covenant inputs. A regression test verifies both signature flags and rejection after
   a source-output substitution.
   Native, serialized, and partially signed transaction fixtures are checked
   using libauth's BCH virtual machine. Hardware signing remains unverified for
@@ -46,6 +46,43 @@ installed API; do not rename that property solely to match the newer example.
   certification. Public Chipnet transaction IDs:
   - WalletConnect: `e7fc235f350d8c1de4a8989993a30d820487e65e28a53c8c2e935fc12a724f93`
   - WizardConnect: `704dcb0d6ddc62a87cb5bb2ff4dd02062d9d21bd17efc0ac1c4247a33c93d17a`
+  - After moving signing into Rust: WizardConnect transaction
+    `334822643fbc18e19c8e789efbe1e736d99daa9959c904cce907a0a770b9debf`
+    exchanged 2,000 test sats with a 1,221-sat fee. The rebuilt Rust CLI retrieved
+    it and its parent; all six inputs passed the BCH VM and the wallet signature
+    uses `0x61`. This was a local production web build, not an emulator test.
+
+### Shared signing boundary in PR #80
+
+`crates/optn-core::connect` owns BCH/CashTokens signing serialization, supported
+sighash modes, source-output/key checks, Schnorr signatures and P2PKH lock/unlock
+scripts. It reuses the Schnorr implementation published in PR #63 at
+`d9deb7b348a7af03204b82b57cf0d892b9ec6227`. WalletConnect, WizardConnect and
+CashConnect's wallet-owned P2PKH directives call that core through
+`src/services/connect/ConnectSigningCore.ts` and generated WASM. The native CLI
+calls the same signing serialization directly; its existing ECDSA signer and
+`0x41` mode are preserved. Connector software signatures use `0x61`.
+
+This is a signing boundary, not a complete port of the protocol engines. SDK
+session management, transport, HD derivation, approval policy, arbitrary template
+execution and hardware adapters remain in their existing integrations. The core
+accepts an approved transaction; it does not independently authorize sessions or
+prove covenant and token conservation. The approval and BCH VM checks still
+matter.
+
+Desktop, mobile and browser builds use the same WASM through their existing web
+shell. Chrome and Firefox remain popup-only viewers: their route restrictions
+and broadcast-denial adapter are retained. Shared code does not enable extension
+spending or solve popup/background-session lifetime. CLI use does not depend on
+a GUI or Tauri. Full architecture migration remains with PR #63.
+
+Rebuild bindings after Rust changes with
+`npx --no-install tsx scripts/build-optn-core-wasm.mts`. The shared Rust CI job
+checks source/artifact freshness, native Rust tests, committed WASM against
+libauth and the BCH VM, and a fresh Rust-to-WASM rebuild. CLI native matrix jobs
+also test the core, and the Rust dependency audit includes its lockfile without
+advisory exceptions. These checks complement the existing platform previews;
+repository administrators must separately configure required status checks.
 
 ## Historical design proposal
 

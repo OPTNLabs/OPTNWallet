@@ -145,6 +145,11 @@ jobs:
         working-directory: crates/optn-cli
         run: cargo test --target ${{ matrix.target }}
 
+      - name: Test shared Rust core on the native target
+        if: env.CLI_PRESENT == 'true' && matrix.cross-package == ''
+        working-directory: crates/optn-core
+        run: cargo test --locked --target ${{ matrix.target }}
+
       - name: Build
         if: env.CLI_PRESENT == 'true'
         working-directory: crates/optn-cli

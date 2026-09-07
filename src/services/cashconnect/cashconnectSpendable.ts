@@ -9,6 +9,11 @@ import type {
   ChangeTemplateDirective,
   TemplateDirective,
 } from '@cashconnect-js/core/templates';
+import {
+  connectorP2pkhLock,
+  connectorPublicKey,
+  signConnectorP2pkh,
+} from '../connect/ConnectSigningCore';
 
 export function cashConnectChangeData(publicKey: Uint8Array) {
   return {
@@ -59,10 +64,40 @@ export function createP2pkhUTXOSpendable(args: {
   fee?: number;
 }): P2pkhUTXOSpendable {
   const compiler = walletTemplateToCompilerBCH(walletTemplateP2pkhNonHd);
-  const unlockData = cashConnectSpendData(args.privateKey);
-  const lockData = args.publicKey
-    ? cashConnectChangeData(args.publicKey)
-    : unlockData;
+  const privateKey = Uint8Array.from(args.privateKey);
+  const publicKey = connectorPublicKey(privateKey);
+  if (
+    args.publicKey &&
+    (args.publicKey.length !== publicKey.length ||
+      args.publicKey.some((byte, index) => byte !== publicKey[index]))
+  ) {
+    privateKey.fill(0);
+    throw new Error('CashConnect public and private keys do not match');
+  }
+  // alpha.31 expects a compiler-shaped directive. Only that interface is
+  // retained: the actual lock and transaction signature are produced in Rust.
+  // No wallet private key is placed in the SDK's compilation-data object.
+  const unlockData = cashConnectChangeData(publicKey);
+  const lockData = cashConnectChangeData(publicKey);
+  const generateBytecode = (({ data, debug, scriptId }) => {
+    if (debug)
+      throw new Error(
+        'CashConnect Rust signer does not expose compiler debug data'
+      );
+    if (scriptId === 'lock') {
+      return { success: true, bytecode: connectorP2pkhLock(publicKey) };
+    }
+    if (scriptId !== 'unlock' || !data.compilationContext) {
+      throw new Error(
+        'CashConnect signing requires the complete transaction context'
+      );
+    }
+    return {
+      success: true,
+      bytecode: signConnectorP2pkh(data.compilationContext, privateKey),
+    };
+  }) as CompilerBCH['generateBytecode'];
+  compiler.generateBytecode = generateBytecode;
   const fee = args.fee ?? DEFAULT_CHANGE_FEE_SATS;
 
   const directive = (script: 'lock' | 'unlock'): TemplateDirective => ({
@@ -76,9 +111,7 @@ export function createP2pkhUTXOSpendable(args: {
     unlock: (compilationContext) =>
       compileScript(
         compiler,
-        compilationContext
-          ? { ...unlockData, compilationContext }
-          : unlockData,
+        compilationContext ? { ...unlockData, compilationContext } : unlockData,
         'unlock'
       ),
     fee,

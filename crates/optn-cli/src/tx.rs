@@ -8,6 +8,7 @@
 //! in the tests rather than only end-to-end.
 
 use k256::ecdsa::{signature::hazmat::PrehashSigner, Signature, SigningKey};
+use optn_core::connect;
 use sha2::{Digest, Sha256};
 
 use crate::error::{CliError, Result};
@@ -39,6 +40,36 @@ pub struct Output {
 }
 
 impl Output {
+    fn shared_output(&self) -> Result<connect::Output> {
+        let token = self
+            .token_prefix
+            .as_ref()
+            .map(|prefix| {
+                let (token, consumed) = crate::token::TokenData::decode_prefix(prefix)?;
+                if consumed != prefix.len() {
+                    return Err(CliError::Protocol("trailing bytes in token prefix".into()));
+                }
+                Ok(connect::Token {
+                    category: token.category.to_vec(),
+                    amount: token.amount,
+                    nft: token.nft.map(|nft| connect::Nft {
+                        capability: match nft.capability {
+                            crate::token::Capability::None => connect::Capability::None,
+                            crate::token::Capability::Mutable => connect::Capability::Mutable,
+                            crate::token::Capability::Minting => connect::Capability::Minting,
+                        },
+                        commitment: nft.commitment,
+                    }),
+                })
+            })
+            .transpose()?;
+        Ok(connect::Output {
+            value_satoshis: self.value,
+            locking_bytecode: self.script_pubkey.clone(),
+            token,
+        })
+    }
+
     pub fn new(value: u64, script_pubkey: Vec<u8>) -> Self {
         Output {
             value,
@@ -138,34 +169,6 @@ impl Transaction {
         }
     }
 
-    fn hash_prevouts(&self) -> [u8; 32] {
-        let mut buf = Vec::with_capacity(self.inputs.len() * 36);
-        for i in &self.inputs {
-            buf.extend_from_slice(&i.txid);
-            buf.extend_from_slice(&i.vout.to_le_bytes());
-        }
-        double_sha256(&buf)
-    }
-
-    fn hash_sequence(&self) -> [u8; 32] {
-        let mut buf = Vec::with_capacity(self.inputs.len() * 4);
-        for _ in &self.inputs {
-            buf.extend_from_slice(&self.sequence.to_le_bytes());
-        }
-        double_sha256(&buf)
-    }
-
-    fn hash_outputs(&self) -> [u8; 32] {
-        let mut buf = Vec::new();
-        for o in &self.outputs {
-            let field = o.locking_field();
-            buf.extend_from_slice(&o.value.to_le_bytes());
-            buf.extend_from_slice(&varint(field.len() as u64));
-            buf.extend_from_slice(&field);
-        }
-        double_sha256(&buf)
-    }
-
     /// The BIP143 preimage for one input.
     ///
     /// `scriptCode` is the UTXO's own output script for P2PKH.
@@ -175,20 +178,38 @@ impl Transaction {
             .get(index)
             .ok_or_else(|| CliError::Internal(format!("no input at index {index}")))?;
 
-        let mut p = Vec::with_capacity(256);
-        p.extend_from_slice(&self.version.to_le_bytes());
-        p.extend_from_slice(&self.hash_prevouts());
-        p.extend_from_slice(&self.hash_sequence());
-        p.extend_from_slice(&input.txid);
-        p.extend_from_slice(&input.vout.to_le_bytes());
-        p.extend_from_slice(&varint(input.script_pubkey.len() as u64));
-        p.extend_from_slice(&input.script_pubkey);
-        p.extend_from_slice(&input.value.to_le_bytes());
-        p.extend_from_slice(&self.sequence.to_le_bytes());
-        p.extend_from_slice(&self.hash_outputs());
-        p.extend_from_slice(&self.locktime.to_le_bytes());
-        p.extend_from_slice(&SIGHASH_ALL_FORKID.to_le_bytes());
-        Ok(p)
+        let context = connect::SigningContext {
+            input_index: index,
+            transaction: connect::Transaction {
+                version: self.version,
+                locktime: self.locktime,
+                inputs: self
+                    .inputs
+                    .iter()
+                    .map(|input| connect::Input {
+                        outpoint_transaction_hash: input.txid.iter().rev().copied().collect(),
+                        outpoint_index: input.vout,
+                        sequence_number: self.sequence,
+                    })
+                    .collect(),
+                outputs: self
+                    .outputs
+                    .iter()
+                    .map(Output::shared_output)
+                    .collect::<Result<_>>()?,
+            },
+            source_outputs: self
+                .inputs
+                .iter()
+                .map(|input| connect::Output {
+                    value_satoshis: input.value,
+                    locking_bytecode: input.script_pubkey.clone(),
+                    token: None,
+                })
+                .collect(),
+        };
+        connect::signing_serialization(&context, &input.script_pubkey, connect::ALL_OUTPUTS)
+            .map_err(CliError::Usage)
     }
 
     pub fn sighash(&self, index: usize) -> Result<[u8; 32]> {
@@ -543,8 +564,10 @@ mod tests {
 
     #[test]
     fn changing_an_output_changes_every_sighash() {
+        let mut second = utxo(50_000);
+        second.vout = 1;
         let base = Transaction::new(
-            vec![utxo(100_000), utxo(50_000)],
+            vec![utxo(100_000), second],
             vec![Output::new(90_000, vec![0x51])],
         );
         let mut altered = base.clone();

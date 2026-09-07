@@ -65,10 +65,12 @@ runLifecycleTest(
     await $('h1=Name This Wallet').waitForDisplayed({ timeout: 10000 });
 
     await $('input[placeholder="Wallet name"]').setValue(walletName);
-    await $('input[placeholder="Password (or leave blank)"]').setValue(
-      password
+    const newPasswordFields = await $$(
+      'input[type="password"][autocomplete="new-password"]'
     );
-    await $('input[placeholder="Confirm password"]').setValue(password);
+    expect(newPasswordFields.length).toBe(2);
+    await newPasswordFields[0].setValue(password);
+    await newPasswordFields[1].setValue(password);
     await $('button=Create Wallet').click();
     await $('h1=Home').waitForExist({ timeout: 30000 });
 
