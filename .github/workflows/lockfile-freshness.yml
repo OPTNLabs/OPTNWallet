@@ -3,15 +3,6 @@ name: Lockfile Freshness
 on:
   pull_request:
     branches: [dev, staging, main]
-    paths:
-      - 'Cargo.toml'
-      - 'rust-toolchain.toml'
-      - 'crates/**/Cargo.toml'
-      - 'src-tauri/Cargo.toml'
-      - 'src-tauri/Cargo.lock'
-      - 'package.json'
-      - 'package-lock.json'
-      - '.github/workflows/lockfile-freshness.yml'
   workflow_dispatch:
 
 permissions:
@@ -53,6 +44,15 @@ jobs:
         working-directory: src-tauri
         run: cargo generate-lockfile
 
+      - name: Regenerate standalone Rust lockfiles
+        run: |
+          for directory in crates/optn-core crates/optn-cli crates/optn-ui-egui fuzz; do
+            (
+              cd "$directory"
+              cargo generate-lockfile
+            )
+          done
+
       - name: Upload generated lockfiles
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -62,12 +62,16 @@ jobs:
             Cargo.lock
             package-lock.json
             src-tauri/Cargo.lock
+            crates/optn-core/Cargo.lock
+            crates/optn-cli/Cargo.lock
+            crates/optn-ui-egui/Cargo.lock
+            fuzz/Cargo.lock
           if-no-files-found: error
           retention-days: 3
 
       - name: Verify generated lockfiles are committed
         run: |
-          status="$(git status --porcelain -- Cargo.lock package-lock.json src-tauri/Cargo.lock)"
+          status="$(git status --porcelain -- Cargo.lock package-lock.json src-tauri/Cargo.lock crates/optn-core/Cargo.lock crates/optn-cli/Cargo.lock crates/optn-ui-egui/Cargo.lock fuzz/Cargo.lock)"
           if [ -n "$status" ]; then
             printf '%s\n' "$status"
             echo '::error::generated lockfiles differ from the repository'

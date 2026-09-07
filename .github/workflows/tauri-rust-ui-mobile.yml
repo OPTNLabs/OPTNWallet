@@ -1,19 +1,10 @@
 name: Tauri Rust UI Targets
 
 on:
+  # These target builds link the shared core and transport crates, so they must
+  # run on every pull request rather than only on a hand-maintained path list.
   pull_request:
     branches: [dev, staging, main]
-    paths:
-      - 'Cargo.toml'
-      - 'rust-toolchain.toml'
-      - 'crates/optn-app/**'
-      - 'crates/optn-platform/**'
-      - 'crates/optn-runtime/**'
-      - 'crates/optn-ui/**'
-      - 'src-tauri/**'
-      - 'package.json'
-      - 'package-lock.json'
-      - '.github/workflows/tauri-rust-ui-mobile.yml'
   workflow_dispatch:
 
 permissions:
