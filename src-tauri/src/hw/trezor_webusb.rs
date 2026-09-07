@@ -215,7 +215,7 @@ pub fn trezor_webusb_write(session_id: u64, data_hex: String) -> Result<(), Stri
             .write_interrupt(ENDPOINT_OUT, &packet, IO_TIMEOUT)
         {
             Ok(n) if n == CHUNK => return Ok(()),
-            Ok(n) if n == 0 => continue,
+            Ok(0) => continue,
             Ok(n) => {
                 return Err(format!("USB partial write: {n} of {CHUNK}"));
             }
@@ -250,8 +250,8 @@ pub fn trezor_webusb_read(session_id: u64, timeout_ms: Option<u64>) -> Result<St
         {
             Ok(n) if n == CHUNK => return Ok(hex::encode(buf)),
             Ok(n) if n > 0 => {
-                // pad short reads
-                return Ok(hex::encode(&buf[..n.max(CHUNK).min(CHUNK)]));
+                // Keep the fixed 64-byte protocol frame, zero-padded by `buf`.
+                return Ok(hex::encode(buf));
             }
             Ok(_) => continue,
             Err(rusb::Error::Timeout) => continue,

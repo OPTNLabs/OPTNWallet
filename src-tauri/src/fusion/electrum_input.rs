@@ -40,16 +40,11 @@ struct ListUnspentRequest<'a> {
     params: [&'a str; 1],
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 enum RpcMember<T> {
+    #[default]
     Missing,
     Present(T),
-}
-
-impl<T> Default for RpcMember<T> {
-    fn default() -> Self {
-        Self::Missing
-    }
 }
 
 impl<'de, T> Deserialize<'de> for RpcMember<T>

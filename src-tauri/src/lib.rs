@@ -310,7 +310,6 @@ fn fusion_p2p_encode_component(
 /// hashed with a per-process salt into the self-fusion pool tag, so the server
 /// can refuse to place this wallet in one fusion twice without learning
 /// anything that survives a restart.
-#[allow(clippy::too_many_arguments)]
 async fn fusion_run(
     round_id: String,
     wallet_tag: String,
