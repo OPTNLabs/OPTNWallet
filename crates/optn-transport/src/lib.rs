@@ -363,6 +363,10 @@ pub enum WireActionKind {
         entry: String,
     },
     UseNetworkDefaultServers,
+    ReplaceNetworkServers {
+        network: WireNetwork,
+        servers: WireNetworkServers,
+    },
     OpenMultisigWallet {
         wallet_name: String,
         policy: String,
@@ -1036,6 +1040,12 @@ impl From<AppAction> for WireAction {
                 entry,
             },
             AppAction::UseNetworkDefaultServers => WireActionKind::UseNetworkDefaultServers,
+            AppAction::ReplaceNetworkServers { network, servers } => {
+                WireActionKind::ReplaceNetworkServers {
+                    network: network.into(),
+                    servers: (&servers).into(),
+                }
+            }
             AppAction::OpenMultisigWallet(preview) => WireActionKind::OpenMultisigWallet {
                 wallet_name: preview.wallet_name,
                 policy: preview.policy,
@@ -1223,6 +1233,15 @@ impl TryFrom<WireAction> for AppAction {
                 entry,
             },
             WireActionKind::UseNetworkDefaultServers => Self::UseNetworkDefaultServers,
+            WireActionKind::ReplaceNetworkServers { network, servers } => {
+                let network = network.into();
+                let mut validated = ServerOverrides::new();
+                restore_network_servers(&mut validated, network, servers)?;
+                Self::ReplaceNetworkServers {
+                    network,
+                    servers: validated.for_network(network).clone(),
+                }
+            }
             WireActionKind::OpenMultisigWallet {
                 wallet_name,
                 policy,
@@ -1855,6 +1874,16 @@ mod tests {
         let encoded = serde_json::to_string(&WireAction::from(action.clone())).unwrap();
         let decoded: WireAction = serde_json::from_str(&encoded).unwrap();
         assert_eq!(AppAction::try_from(decoded).unwrap(), action);
+
+        let action = AppAction::ReplaceNetworkServers {
+            network: Network::Chipnet,
+            servers: NetworkServers {
+                peer: Some("chip.example:8333".into()),
+                ..NetworkServers::new()
+            },
+        };
+        let decoded = AppAction::try_from(WireAction::from(action.clone())).unwrap();
+        assert_eq!(decoded, action);
 
         let mut state = AppState::default();
         state.apply(AppAction::ToggleTheme);
