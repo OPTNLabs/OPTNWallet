@@ -15,6 +15,7 @@ import path from 'node:path';
 import { config as loadDotenv } from 'dotenv';
 import * as bip39 from 'bip39';
 import { remote } from 'webdriverio';
+import { callPageFunction } from './e2e-cdp.mjs';
 
 const projectRoot = process.cwd();
 
@@ -97,7 +98,13 @@ async function waitForDriver(driver) {
       throw new Error(`tauri-driver exited with code ${driver.exitCode}`);
     }
     try {
-      const response = await fetch('http://127.0.0.1:4444/status');
+      // tauri-driver exposes a local HTTP health endpoint, with no wallet data.
+      // Reject redirects so this probe cannot become an external HTTP request.
+      // nosemgrep: typescript.react.security.react-insecure-request.react-insecure-request
+      const response = await fetch('http://127.0.0.1:4444/status', {
+        redirect: 'error',
+        signal: AbortSignal.timeout(1000),
+      });
       if (response.status < 500) return;
     } catch {
       // Driver startup is asynchronous.
@@ -537,7 +544,12 @@ async function androidWait(client, expression, message, timeout = 60_000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     try {
-      if (await client.evaluate(expression)) return;
+      if (
+        await (typeof expression === 'function'
+          ? expression()
+          : client.evaluate(expression))
+      )
+        return;
     } catch {
       // The React tree can be replaced while navigating.
     }
@@ -549,7 +561,22 @@ async function androidWait(client, expression, message, timeout = 60_000) {
 async function androidClickText(client, selector, text) {
   await androidWait(
     client,
-    `(() => { const el = [...document.querySelectorAll(${JSON.stringify(selector)})].find((candidate) => candidate.textContent?.trim() === ${JSON.stringify(text)} && !candidate.disabled); if (!el) return false; el.scrollIntoView({ block: 'center' }); el.click(); return true; })()`,
+    () =>
+      callPageFunction(
+        client,
+        (selector, text) => {
+          const el = [...document.querySelectorAll(selector)].find(
+            (candidate) =>
+              candidate.textContent?.trim() === text && !candidate.disabled
+          );
+          if (!el) return false;
+          el.scrollIntoView({ block: 'center' });
+          el.click();
+          return true;
+        },
+        selector,
+        text
+      ),
     `Could not click ${selector} with text "${text}" on Android`
   );
 }
@@ -557,7 +584,18 @@ async function androidClickText(client, selector, text) {
 async function androidClickSelector(client, selector) {
   await androidWait(
     client,
-    `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el || el.disabled) return false; el.scrollIntoView({ block: 'center' }); el.click(); return true; })()`,
+    () =>
+      callPageFunction(
+        client,
+        (selector) => {
+          const el = document.querySelector(selector);
+          if (!el || el.disabled) return false;
+          el.scrollIntoView({ block: 'center' });
+          el.click();
+          return true;
+        },
+        selector
+      ),
     `Could not click ${selector} on Android`
   );
 }
@@ -565,7 +603,26 @@ async function androidClickSelector(client, selector) {
 async function androidSetInput(client, selector, index, value) {
   await androidWait(
     client,
-    `(() => { const el = document.querySelectorAll(${JSON.stringify(selector)})[${index}]; if (!el) return false; el.focus(); const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set; setter?.call(el, ${JSON.stringify(value)}); el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`,
+    () =>
+      callPageFunction(
+        client,
+        (selector, index, value) => {
+          const el = document.querySelectorAll(selector)[index];
+          if (!el) return false;
+          el.focus();
+          const setter = Object.getOwnPropertyDescriptor(
+            HTMLInputElement.prototype,
+            'value'
+          )?.set;
+          setter?.call(el, value);
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          return true;
+        },
+        selector,
+        index,
+        value
+      ),
     `Could not set ${selector}[${index}] on Android`
   );
 }
@@ -573,7 +630,15 @@ async function androidSetInput(client, selector, index, value) {
 async function androidWaitHeading(client, text, timeout = 60_000) {
   await androidWait(
     client,
-    `([...document.querySelectorAll('h1')].some((el) => el.textContent?.includes(${JSON.stringify(text)})))`,
+    () =>
+      callPageFunction(
+        client,
+        (text) =>
+          [...document.querySelectorAll('h1')].some((el) =>
+            el.textContent?.includes(text)
+          ),
+        text
+      ),
     `Expected Android h1 to contain "${text}"`,
     timeout
   );
@@ -609,7 +674,7 @@ async function routeProposalToMobile(client, payload) {
     'Android QR input did not open.'
   );
   await androidSetInput(client, '[data-testid="home-scan-input"]', 0, payload);
-  await androidClickText(client, 'button', 'Connect');
+  await androidClickSelector(client, '[data-testid="home-scan-continue"]');
   await androidWaitHeading(client, 'Cauldron', 120_000);
   try {
     await androidWait(

@@ -1270,6 +1270,12 @@ export const localeOverrides = {
     'wc.enterUri': 'أدخل URI الخاص بـ WalletConnect',
     'wc.scanQr': 'مسح QR',
     'wc.connect': 'اتصال',
+    'homeConnect.scanTitle': 'مسح',
+    'homeConnect.scanDescription': 'امسح رمز دفع أو عنوانًا أو اتصال محفظة.',
+    'homeConnect.scanButton': 'مسح رمز QR',
+    'homeConnect.enterManually': 'إدخال يدوي',
+    'homeConnect.manualPlaceholder': 'ألصق طلب دفع أو عنوانًا أو اتصال محفظة',
+    'homeConnect.continue': 'متابعة',
     'homeConnect.description':
       'ألصق أو امسح دعوة CashConnect أو URI لـ WalletConnect أو عنوان دفع. تتم الموافقة على الطلبات من الصفحة الرئيسية.',
     'homeConnect.placeholder': 'bch-cc-v1:… أو wc:…',
