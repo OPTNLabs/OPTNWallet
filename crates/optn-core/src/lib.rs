@@ -41,7 +41,9 @@ pub mod rpa;
 pub mod scan;
 pub mod sources;
 pub mod spend;
+pub mod token;
 pub mod tor;
+pub mod tx;
 pub mod wallet_pack;
 pub mod watch_only;
 

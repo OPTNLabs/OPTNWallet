@@ -130,22 +130,17 @@ mod tests {
             &network_settings,
             AppAction::SetSkin(UiSkin::Cyberpunk),
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
         dispatch_action(
             &runtime,
             &store,
             &network_settings,
             AppAction::SetTheme(ThemeMode::Light),
         )
-            .await
-            .unwrap();
-        dispatch_action(
-            &runtime,
-            &store,
-            &network_settings,
-            AppAction::ToggleTheme,
-        )
+        .await
+        .unwrap();
+        dispatch_action(&runtime, &store, &network_settings, AppAction::ToggleTheme)
             .await
             .unwrap();
         let mut restored = AppState::default();
@@ -163,8 +158,8 @@ mod tests {
             &network_settings,
             AppAction::SetTheme(ThemeMode::Dark),
         )
-            .await
-            .unwrap_err();
+        .await
+        .unwrap_err();
         assert!(error.contains("changed for this session, but could not be saved"));
         assert_eq!(runtime.state().theme, ThemeMode::Dark);
         // Retrying the same (now no-op) action still retries persistence.
@@ -175,8 +170,8 @@ mod tests {
             &network_settings,
             AppAction::SetTheme(ThemeMode::Dark),
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
         directory.store().restore(&mut restored).unwrap();
         assert_eq!(restored.theme, ThemeMode::Dark);
     }
@@ -229,7 +224,11 @@ mod tests {
         let mut restored = AppState::default();
         network_settings.restore(&mut restored).unwrap();
         assert_eq!(
-            restored.servers.for_network(Network::Mainnet).electrum.as_deref(),
+            restored
+                .servers
+                .for_network(Network::Mainnet)
+                .electrum
+                .as_deref(),
             Some("main.example:50002")
         );
     }
@@ -264,7 +263,11 @@ mod tests {
         let mut restored = AppState::default();
         network_settings.restore(&mut restored).unwrap();
         assert_eq!(
-            restored.servers.for_network(Network::Chipnet).peer.as_deref(),
+            restored
+                .servers
+                .for_network(Network::Chipnet)
+                .peer
+                .as_deref(),
             Some("chip.example:8333")
         );
         assert!(restored.servers.for_network(Network::Mainnet).is_empty());

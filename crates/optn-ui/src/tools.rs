@@ -1,13 +1,14 @@
 #![cfg(target_arch = "wasm32")]
 
-use crate::{dispatch_action, UiTransport};
+use crate::{dispatch_action, qr::encode_address_qr, UiTransport};
 use leptos::prelude::*;
 use optn_app::{
-    chipnet_demo_coin, coins_view_model, flipstarter_view_model, format_bch, fundme_view_model,
-    history_view_model, portfolio_totals, product_nav, sample_chipnet_campaign_blob, AppAction,
-    AppRoute, AppState, Coin, FreezeReason, HistoryEntry, HistoryKind, Network, Outpoint,
-    PledgeStatus, ProductNavItem, SpendKind, WalletKind,
+    coins_view_model, flipstarter_view_model, format_bch, fundme_view_model, history_view_model,
+    portfolio_totals, product_nav, sample_chipnet_campaign_blob, AppAction, AppRoute, AppState,
+    Coin, FreezeReason, HistoryEntry, HistoryKind, Network, Outpoint, PledgeStatus, ProductNavItem,
+    SpendKind, WalletKind,
 };
+use optn_transport::TransportError;
 
 fn now_ms() -> u64 {
     js_sys::Date::now() as u64
@@ -142,7 +143,7 @@ fn NoticeBanner(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
 pub fn WalletHome(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
     view! {
         <WalletChrome transport=transport state=state>
-            <section class="page">
+            <section class="page wallet-home">
                 <article class="hero-card">
                     <p class="muted">{move || {
                         state
@@ -392,20 +393,6 @@ pub fn CoinsPage(transport: UiTransport, state: RwSignal<AppState>) -> impl Into
                         <strong>{move || format_bch(coins_view_model(&state.get()).reserved_sats)}</strong>
                     </article>
                 </div>
-                <div class="toolbar">
-                    <button
-                        class="secondary"
-                        type="button"
-                        on:click=move |_| {
-                            let slot = state.get_untracked().coins.len() as u8;
-                            if let Ok(coin) = chipnet_demo_coin(4_000, slot) {
-                                dispatch_action(transport, state, AppAction::InsertCoin(coin));
-                            }
-                        }
-                    >
-                        "Add Chipnet demo coin"
-                    </button>
-                </div>
                 <Show
                     when=move || state.get().layout().is_desktop()
                     fallback=move || view! { <CoinCards transport=transport state=state /> }
@@ -466,7 +453,11 @@ fn CoinRow(
 ) -> impl IntoView {
     let outpoint = coin.outpoint();
     let frozen = coin.is_reserved();
+    let token_protected = coin.token().is_some();
+    let output_protected = token_protected || coin.value_sats() == 0;
     let status = match coin.freeze() {
+        None if token_protected => "CashTokens (protected)".to_string(),
+        None if coin.value_sats() == 0 => "Zero-value output".to_string(),
         None => "Spendable".to_string(),
         Some(FreezeReason::User) => "Frozen".into(),
         Some(FreezeReason::FlipstarterPledge) => "Flipstarter pledge".into(),
@@ -504,8 +495,8 @@ fn CoinRow(
                     </Show>
                 </td>
                 <td>
-                    <button class="secondary" type="button" on:click=freeze_or_unfreeze>
-                        {if frozen { "Unfreeze" } else { "Freeze" }}
+                    <button class="secondary" type="button" disabled=output_protected on:click=freeze_or_unfreeze>
+                        {if output_protected { "Protected" } else if frozen { "Unfreeze" } else { "Freeze" }}
                     </button>
                 </td>
             </tr>
@@ -529,8 +520,8 @@ fn CoinRow(
                         <p class="muted">{label.clone()}</p>
                     </Show>
                 </div>
-                <button class="secondary" type="button" on:click=freeze_or_unfreeze>
-                    {if frozen { "Unfreeze" } else { "Freeze" }}
+                <button class="secondary" type="button" disabled=output_protected on:click=freeze_or_unfreeze>
+                    {if output_protected { "Protected" } else if frozen { "Unfreeze" } else { "Freeze" }}
                 </button>
             </article>
         }
@@ -892,12 +883,48 @@ pub fn FundMePage(transport: UiTransport, state: RwSignal<AppState>) -> impl Int
 }
 
 #[component]
+fn ReceiveQr(state: RwSignal<AppState>) -> impl IntoView {
+    view! {
+        {move || {
+            let address = state
+                .get()
+                .wallet
+                .as_ref()
+                .map(|wallet| wallet.receive_address.clone())
+                .unwrap_or_default();
+            match encode_address_qr(&address) {
+                Ok(qr) => {
+                    let view_box = format!("0 0 {} {}", qr.size, qr.size);
+                    view! {
+                        <svg
+                            class="receive-qr"
+                            viewBox=view_box
+                            role="img"
+                            aria-label="Receive address QR code"
+                        >
+                            <rect width=qr.size height=qr.size fill="#ffffff"></rect>
+                            <path d=qr.path fill="#002b1d"></path>
+                        </svg>
+                    }
+                        .into_any()
+                }
+                Err(message) => view! {
+                    <p class="receive-qr-unavailable" role="status">{message}</p>
+                }
+                .into_any(),
+            }
+        }}
+    }
+}
+
+#[component]
 pub fn ReceivePage(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
+    let copy_status = RwSignal::new(None::<String>);
     view! {
         <WalletChrome transport=transport state=state>
-            <section class="page">
+            <section class="page receive-page">
                 <button
-                    class="text-link back"
+                    class="back-button"
                     type="button"
                     on:click=move |_| dispatch_action(
                         transport,
@@ -905,20 +932,32 @@ pub fn ReceivePage(transport: UiTransport, state: RwSignal<AppState>) -> impl In
                         AppAction::GoBack,
                     )
                 >
-                    {move || format!("‹ {}", state.get().flow().back_label)}
+                    <span aria-hidden="true">"‹"</span>
+                    <span class="sr-only">{move || state.get().flow().back_label}</span>
                 </button>
                 <h1>"Receive"</h1>
                 <p class="lede">"Share this address on the selected network."</p>
-                <article class="panel">
-                    <p class="muted">
+                <article class="panel receive-card">
+                    <div class="receive-tabs" role="tablist" aria-label="Receive asset">
+                        <button class="receive-tab active" type="button" role="tab" aria-selected="true">
+                            "BCH"
+                        </button>
+                        <button class="receive-tab" type="button" role="tab" disabled=true>
+                            "Token"
+                        </button>
+                    </div>
+                    <div class="receive-qr-frame">
+                        <ReceiveQr state=state />
+                    </div>
+                    <p class="muted receive-kind">
                         {move || match state.get().wallet.as_ref().map(|wallet| wallet.kind) {
-                            Some(WalletKind::WatchOnly) => "Watch-only receive",
-                            Some(WalletKind::Hardware) => "Hardware wallet receive",
-                            Some(WalletKind::Seed) => "Seed wallet receive",
-                            None => "No wallet",
+                            Some(WalletKind::WatchOnly) => "Watch-only receive address",
+                            Some(WalletKind::Hardware) => "Hardware wallet receive address",
+                            Some(WalletKind::Seed) => "Seed wallet receive address",
+                            None => "No wallet is open",
                         }}
                     </p>
-                    <p class="mono">
+                    <p class="mono receive-address">
                         {move || {
                             state
                                 .get()
@@ -927,6 +966,49 @@ pub fn ReceivePage(transport: UiTransport, state: RwSignal<AppState>) -> impl In
                                 .map(|wallet| wallet.receive_address.clone())
                                 .unwrap_or_default()
                         }}
+                    </p>
+                    <div class="receive-actions">
+                        <button
+                            class="secondary"
+                            type="button"
+                            on:click=move |_| {
+                                let text = state
+                                    .get_untracked()
+                                    .wallet
+                                    .as_ref()
+                                    .map(|wallet| wallet.receive_address.clone())
+                                    .unwrap_or_default();
+                                if text.is_empty() {
+                                    copy_status.set(Some("No receive address is available.".into()));
+                                    return;
+                                }
+                                copy_status.set(None);
+                                let clipboard = transport.get_value();
+                                leptos::task::spawn_local(async move {
+                                    let status = match clipboard.write_clipboard(text).await {
+                                        Ok(()) => "Address copied.".to_string(),
+                                        Err(TransportError::Unsupported) => {
+                                            "This host does not offer a clipboard.".to_string()
+                                        }
+                                        Err(_) => "Could not copy the address.".to_string(),
+                                    };
+                                    copy_status.set(Some(status));
+                                });
+                            }
+                        >
+                            "Copy"
+                        </button>
+                        <button class="secondary" type="button" disabled=true>
+                            "Share"
+                        </button>
+                    </div>
+                    <Show when=move || copy_status.get().is_some()>
+                        <p class="receive-copy-status" role="status">
+                            {move || copy_status.get().unwrap_or_default()}
+                        </p>
+                    </Show>
+                    <p class="receive-note">
+                        {move || format!("Only send {} funds to this address.", network_label(state.get().network))}
                     </p>
                 </article>
             </section>

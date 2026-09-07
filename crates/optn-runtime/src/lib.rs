@@ -25,6 +25,8 @@ pub mod event_recovery;
 pub mod events;
 /// Explorer routing is deliberately separate from wallet consensus/state.
 pub mod explorer;
+/// Public-key HD account discovery over the shared chain service.
+pub mod hd_sync;
 /// Provider-neutral SHV/MMR header verification using the pure optn-core accumulator.
 pub mod header_verifier;
 /// Versioned user-network overlay and bootstrap-refresh migration scaffolding.
@@ -39,10 +41,15 @@ pub mod sync_worker;
 pub mod tx_broadcast;
 /// Framework-neutral authenticated wallet-update state/provider scaffolding.
 pub mod update;
+/// Authenticated HD restart state; storage never grants unlock or spend authority.
+pub mod wallet_checkpoint;
+/// Session-bound publication of provider observations into application state.
+pub mod wallet_sync;
 
 use optn_app::{AppAction, AppEvent, AppState};
 use optn_transport::{AppTransport, TransportError, TransportFuture};
 use tokio::sync::{broadcast, mpsc, oneshot, watch, Mutex};
+use wallet_sync::{WalletSyncRequest, WalletSyncSession};
 
 const ACTION_CAPACITY: usize = 128;
 const EVENT_CAPACITY: usize = 128;
@@ -61,16 +68,23 @@ impl std::error::Error for RuntimeStopped {}
 
 #[derive(Clone)]
 pub struct AppRuntime {
-    action_tx: mpsc::Sender<(AppAction, oneshot::Sender<()>)>,
+    action_tx: mpsc::Sender<RuntimeRequest>,
     state_rx: watch::Receiver<AppState>,
     event_tx: broadcast::Sender<AppEvent>,
+    wallet_sync_rx: watch::Receiver<wallet_sync::WalletReconciliation>,
 }
 
 pub struct AppRuntimeDriver {
-    action_rx: mpsc::Receiver<(AppAction, oneshot::Sender<()>)>,
+    action_rx: mpsc::Receiver<RuntimeRequest>,
     state_tx: watch::Sender<AppState>,
     event_tx: broadcast::Sender<AppEvent>,
     state: AppState,
+    wallet_sync: WalletSyncSession,
+}
+
+enum RuntimeRequest {
+    Action(AppAction, oneshot::Sender<()>),
+    WalletSync(WalletSyncRequest),
 }
 
 /// Zero-IPC transport for renderers hosted in the same Rust process.
@@ -123,18 +137,21 @@ impl AppRuntime {
         let (action_tx, action_rx) = mpsc::channel(ACTION_CAPACITY);
         let (state_tx, state_rx) = watch::channel(initial_state.clone());
         let (event_tx, _) = broadcast::channel(EVENT_CAPACITY);
+        let (wallet_sync, wallet_sync_rx) = WalletSyncSession::new();
 
         (
             Self {
                 action_tx,
                 state_rx,
                 event_tx: event_tx.clone(),
+                wallet_sync_rx,
             },
             AppRuntimeDriver {
                 action_rx,
                 state_tx,
                 event_tx,
                 state: initial_state,
+                wallet_sync,
             },
         )
     }
@@ -149,7 +166,7 @@ impl AppRuntime {
     pub async fn dispatch(&self, action: AppAction) -> Result<(), RuntimeStopped> {
         let (applied_tx, applied_rx) = oneshot::channel();
         self.action_tx
-            .send((action, applied_tx))
+            .send(RuntimeRequest::Action(action, applied_tx))
             .await
             .map_err(|_| RuntimeStopped)?;
         applied_rx.await.map_err(|_| RuntimeStopped)
@@ -168,12 +185,48 @@ impl AppRuntime {
 
 impl AppRuntimeDriver {
     pub async fn run(mut self) {
-        while let Some((action, applied)) = self.action_rx.recv().await {
-            if let Some(event) = self.state.reduce(action) {
-                self.state_tx.send_replace(self.state.clone());
-                let _ = self.event_tx.send(event);
+        loop {
+            let request = tokio::select! {
+            biased;
+            _ = self.wallet_sync.wait_for_abandonment() => {
+                self.wallet_sync.cancel_abandoned();
+                continue;
             }
-            let _ = applied.send(());
+            request = self.action_rx.recv() => request,
+            };
+            let Some(request) = request else {
+                break;
+            };
+            match request {
+                RuntimeRequest::Action(action, applied) => {
+                    let event = if self.wallet_sync.requires_fresh_coins(&action, &self.state) {
+                        self.state.spend = None;
+                        self.state.notice = Some(
+                            "Refresh the wallet before preparing or authorizing a spend.".into(),
+                        );
+                        Some(AppEvent::NoticeChanged)
+                    } else {
+                        self.state.reduce_intent(action)
+                    };
+                    if let Some(event) = event {
+                        self.wallet_sync.on_event(&event);
+                        if !self.wallet_sync.coins_are_fresh() {
+                            self.state.spend = None;
+                        }
+                        self.state_tx.send_replace(self.state.clone());
+                        let _ = self.event_tx.send(event);
+                    }
+                    let _ = applied.send(());
+                }
+                RuntimeRequest::WalletSync(request) => {
+                    self.wallet_sync.handle(
+                        request,
+                        &mut self.state,
+                        &self.state_tx,
+                        &self.event_tx,
+                    );
+                }
+            }
         }
     }
 }

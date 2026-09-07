@@ -32,7 +32,11 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
 use bip39::{Language, Mnemonic};
+use optn_chain_native::{build_native_chain_stack, NativeChainSecrets};
 use optn_multisig_core::{inspect_p2sh20, Network as MultisigNetwork};
+use optn_runtime::chain::{build_selection_plan, ProtocolFamily};
+use optn_runtime::chain_service::{ChainOperation, ChainPayload, ChainRequest};
+use optn_runtime::tx_broadcast::{BroadcastCoordinator, BroadcastState};
 
 use cashaddr::Address;
 use electrum::Client;
@@ -76,9 +80,9 @@ struct Cli {
     #[arg(long, global = true, default_value = "default")]
     profile: String,
 
-    /// Seconds to wait for the server before giving up.
-    #[arg(long, global = true, default_value_t = 30)]
-    timeout: u64,
+    /// Seconds to wait before giving up. Defaults to 300 for rescan and 30 otherwise.
+    #[arg(long, global = true)]
+    timeout: Option<u64>,
 
     #[command(subcommand)]
     command: Command,
@@ -88,6 +92,11 @@ struct Cli {
 enum Command {
     /// Check the server is reachable and report its version.
     Ping,
+    /// Inspect the durable source policy shared with the desktop host.
+    Network {
+        #[command(subcommand)]
+        action: NetworkCommand,
+    },
     /// Confirmed and unconfirmed balance of an address.
     Balance { address: String },
     /// Unspent outputs held by an address.
@@ -101,7 +110,7 @@ enum Command {
     /// Fetch a transaction by id.
     Tx {
         txid: String,
-        /// Ask the server to decode it rather than returning raw hex.
+        /// Decode the transaction (locally when using the shared chain policy).
         #[arg(long)]
         verbose: bool,
     },
@@ -224,9 +233,18 @@ enum Command {
     /// answer when a cached balance has drifted — there is no stale state here
     /// to be wrong.
     Rescan {
-        /// Addresses per chain to scan.
+        /// Consecutive unused addresses required on each HD branch.
         #[arg(long, default_value_t = 20)]
         gap: u32,
+        /// Fail incomplete if a branch reaches this bound before its unused gap.
+        #[arg(long, default_value_t = 200)]
+        max_addresses: u32,
+        /// Selected BIP44 origin, including imported nondefault coin types.
+        #[arg(long)]
+        account_path: Option<String>,
+        /// Public account key. Omit to derive it from the selected stored wallet.
+        #[arg(long)]
+        xpub: Option<String>,
         /// Include addresses with no balance in the output.
         #[arg(long)]
         all: bool,
@@ -345,6 +363,39 @@ enum Command {
         #[command(subcommand)]
         action: RpaCommand,
     },
+}
+
+#[derive(Subcommand)]
+enum NetworkCommand {
+    /// Show sources, policy, and the primary/fallback selection order.
+    Status,
+    /// Select an existing shared source without a public fallback.
+    Select {
+        source: String,
+        #[arg(long, value_enum)]
+        protocol: ChainProtocol,
+    },
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum ChainProtocol {
+    Electrum,
+    Bip37,
+    Neutrino,
+    NodeRpc,
+    NodeEvents,
+}
+
+impl From<ChainProtocol> for ProtocolFamily {
+    fn from(value: ChainProtocol) -> Self {
+        match value {
+            ChainProtocol::Electrum => Self::Electrum,
+            ChainProtocol::Bip37 => Self::Bip37,
+            ChainProtocol::Neutrino => Self::Neutrino,
+            ChainProtocol::NodeRpc => Self::BchnRpc,
+            ChainProtocol::NodeEvents => Self::BchnZmq,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -568,6 +619,9 @@ async fn main() {
             } else {
                 print_human(&cli.command, &value);
             }
+            if value["ok"] == false {
+                std::process::exit(if value["state"] == "rejected" { 5 } else { 3 });
+            }
         }
         Err(err) => {
             if cli.json {
@@ -589,6 +643,10 @@ async fn main() {
 fn command_name(command: &Command) -> &'static str {
     match command {
         Command::Ping => "ping",
+        Command::Network {
+            action: NetworkCommand::Select { .. },
+        } => "network select",
+        Command::Network { .. } => "network",
         Command::Balance { .. } => "balance",
         Command::Utxos { .. } => "utxos",
         Command::Inspect { .. } => "inspect",
@@ -624,7 +682,7 @@ fn client_for(cli: &Cli) -> Result<Client> {
                 .unwrap_or_else(|| cli.network.default_host().to_string()),
             cli.port.unwrap_or_else(|| cli.network.default_port()),
             !cli.no_tls,
-            cli.timeout,
+            timeout_seconds(cli),
         );
     }
 
@@ -636,15 +694,25 @@ fn client_for(cli: &Cli) -> Result<Client> {
             endpoint.host().to_owned(),
             endpoint.port(),
             endpoint.encrypted(),
-            cli.timeout,
+            timeout_seconds(cli),
         ),
         None => Client::new(
             cli.network.default_host().to_owned(),
             cli.network.default_port(),
             true,
-            cli.timeout,
+            timeout_seconds(cli),
         ),
     }
+}
+
+fn timeout_seconds(cli: &Cli) -> u64 {
+    cli.timeout.unwrap_or({
+        if matches!(&cli.command, Command::Rescan { .. }) {
+            300
+        } else {
+            30
+        }
+    })
 }
 
 fn append_network_config_dir(base: &mut Vec<String>, directory: Option<&Path>) -> Result<()> {
@@ -659,55 +727,541 @@ fn append_network_config_dir(base: &mut Vec<String>, directory: Option<&Path>) -
     Ok(())
 }
 
+fn shared_network_status(cli: &Cli) -> Result<Value> {
+    let Some(selection) =
+        network_settings::shared_chain_selection(cli.network, cli.network_config_dir.as_deref())
+            .map_err(CliError::Usage)?
+    else {
+        return Ok(json!({
+            "ok": true,
+            "network": cli.network.to_string(),
+            "configured": false,
+            "sources": [],
+            "primary": [],
+            "fallback": [],
+            "message": "no durable shared source policy is configured",
+        }));
+    };
+    let plan = build_selection_plan(&selection.catalog, &selection.policy);
+    let protocols = [
+        ProtocolFamily::Electrum,
+        ProtocolFamily::Bip37,
+        ProtocolFamily::Neutrino,
+        ProtocolFamily::BchnRpc,
+        ProtocolFamily::BchnZmq,
+    ]
+    .into_iter()
+    .filter(|protocol| selection.policy.protocols.contains(*protocol))
+    .map(|protocol| format!("{protocol:?}"))
+    .collect::<Vec<_>>();
+    let sources = selection
+        .catalog
+        .iter()
+        .map(|source| {
+            json!({
+                "id": source.id.as_str(),
+                "label": source.label,
+                "origin": format!("{:?}", source.origin),
+                "disposition": format!("{:?}", source.disposition),
+                "priority": source.priority,
+                "endpoints": source.endpoints.iter().map(|endpoint| json!({
+                    "kind": format!("{:?}", endpoint.kind),
+                    "host": endpoint.host,
+                    "port": endpoint.port,
+                })).collect::<Vec<_>>(),
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "ok": true,
+        "network": cli.network.to_string(),
+        "configured": true,
+        "policy": {
+            "protocols": protocols,
+            "primary_scope": format!("{:?}", selection.policy.primary_scope),
+            "fallback_scope": selection.policy.fallback_scope.as_ref().map(|scope| format!("{scope:?}")),
+            "preferred": selection.policy.preferred.iter().map(|source| source.as_str()).collect::<Vec<_>>(),
+        },
+        "sources": sources,
+        "primary": plan.primary.iter().map(|source| source.as_str()).collect::<Vec<_>>(),
+        "fallback": plan.fallback.iter().map(|source| source.as_str()).collect::<Vec<_>>(),
+    }))
+}
+
+async fn ping_selected_chain(cli: &Cli) -> Result<Value> {
+    // Command-line endpoint flags are an explicit per-invocation override.
+    // Without one, the CLI uses the exact durable selection shared with Tauri.
+    if cli.host.is_some() || cli.port.is_some() || cli.no_tls {
+        let client = client_for(cli)?;
+        let version = client.server_version().await?;
+        return Ok(json!({
+            "ok": true,
+            "network": cli.network.to_string(),
+            "selection": "command-line-electrum",
+            "endpoint": client.endpoint(),
+            "server": version,
+        }));
+    }
+
+    let Some(selection) =
+        network_settings::shared_chain_selection(cli.network, cli.network_config_dir.as_deref())
+            .map_err(CliError::Usage)?
+    else {
+        let client = client_for(cli)?;
+        let version = client.server_version().await?;
+        return Ok(json!({
+            "ok": true,
+            "network": cli.network.to_string(),
+            "selection": "legacy-electrum-default",
+            "endpoint": client.endpoint(),
+            "server": version,
+        }));
+    };
+
+    let stack = build_native_chain_stack(
+        selection.catalog,
+        selection.policy,
+        &cli.network.to_string(),
+        &NativeChainSecrets::default(),
+    )
+    .await;
+    let routes = stack
+        .service
+        .lock()
+        .await
+        .routes_for_operation(ChainOperation::HeaderSync);
+    if routes.is_empty() {
+        let failures = stack
+            .failures
+            .iter()
+            .map(|failure| {
+                format!(
+                    "{:?} {}:{}: {}",
+                    failure.protocol,
+                    failure.endpoint.host,
+                    failure.endpoint.port.unwrap_or_default(),
+                    failure.error
+                )
+            })
+            .collect::<Vec<_>>();
+        return Err(CliError::Network(format!(
+            "the selected shared chain policy has no usable header route{}",
+            if failures.is_empty() {
+                String::new()
+            } else {
+                format!(": {}", failures.join("; "))
+            }
+        )));
+    }
+    Ok(json!({
+        "ok": true,
+        "network": cli.network.to_string(),
+        "selection": "shared-native-policy",
+        "routes": routes.into_iter().map(|route| json!({
+            "source": route.source.as_str(),
+            "protocol": format!("{:?}", route.protocol),
+            "endpoint": route.endpoint.map(|endpoint| json!({
+                "kind": format!("{:?}", endpoint.kind),
+                "host": endpoint.host,
+                "port": endpoint.port,
+            })),
+        })).collect::<Vec<_>>(),
+    }))
+}
+
+fn decoded_transaction_json(bytes: &[u8]) -> Result<Value> {
+    let d = tx::decode(bytes)?;
+    Ok(json!({
+        "ok": true,
+        "version": d.version,
+        "locktime": d.locktime,
+        "size_bytes": bytes.len(),
+        "inputs": d.inputs.iter().map(|(txid, vout, sequence)| {
+            let mut display = *txid;
+            // Stored little-endian on the wire, shown big-endian.
+            display.reverse();
+            json!({ "txid": hex(&display), "vout": vout, "sequence": sequence })
+        }).collect::<Vec<_>>(),
+        "outputs": d.outputs.iter().map(|o| json!({
+            "value": o.value,
+            "script": hex(&o.script_pubkey),
+            "token": o.token.as_ref().map(|t| json!({
+                "category": t.category_hex(),
+                "amount": t.amount,
+                "nft": t.nft.as_ref().map(|n| json!({
+                    "capability": n.capability.as_str(),
+                    "commitment": hex(&n.commitment),
+                })),
+            })),
+        })).collect::<Vec<_>>(),
+    }))
+}
+
+fn configured_chain(cli: &Cli) -> Result<Option<network_settings::SharedChainSelection>> {
+    if cli.host.is_some() || cli.port.is_some() || cli.no_tls {
+        Ok(None)
+    } else {
+        network_settings::shared_chain_selection(cli.network, cli.network_config_dir.as_deref())
+            .map_err(CliError::Usage)
+    }
+}
+
+async fn transaction_selected_chain(cli: &Cli, txid: &str, verbose: bool) -> Result<Value> {
+    let mut requested = decode_hex32(txid)?;
+    requested.reverse();
+    let Some(selection) = configured_chain(cli)? else {
+        let transaction = client_for(cli)?.transaction(txid, verbose).await?;
+        return Ok(json!({"ok": true, "txid": txid, "transaction": transaction}));
+    };
+    tokio::time::timeout(
+        std::time::Duration::from_secs(timeout_seconds(cli)),
+        async {
+            let stack = build_native_chain_stack(
+                selection.catalog,
+                selection.policy,
+                &cli.network.to_string(),
+                &NativeChainSecrets::default(),
+            )
+            .await;
+            let observation = stack
+                .service
+                .lock()
+                .await
+                .execute(&ChainRequest::TransactionLookup { txid: requested })
+                .await
+                .map_err(|error| {
+                    CliError::Network(format!("shared transaction lookup failed: {error:?}"))
+                })?;
+            let ChainPayload::Transaction(transaction) = observation.value else {
+                return Err(CliError::Protocol(
+                    "transaction route returned an unexpected payload".into(),
+                ));
+            };
+            let value = if verbose {
+                decoded_transaction_json(&transaction.raw)?
+            } else {
+                Value::String(hex(&transaction.raw))
+            };
+            Ok(json!({
+                "ok": true, "txid": txid, "transaction": value,
+                "network": cli.network.to_string(), "selection": "shared-native-policy",
+                "source": observation.source.as_str(),
+                "evidence": format!("{:?}", observation.evidence),
+            }))
+        },
+    )
+    .await
+    .map_err(|_| CliError::Network("shared transaction lookup timed out".into()))?
+}
+
+async fn broadcast_selected_chain(cli: &Cli, raw: &str) -> Result<Value> {
+    let bytes = decode_hex(raw)?;
+    if bytes.is_empty() {
+        return Err(CliError::Usage("transaction must be non-empty hex".into()));
+    }
+    let txid = optn_core::header_hash::sha256d(&bytes);
+    let Some(selection) = configured_chain(cli)? else {
+        let txid = client_for(cli)?.broadcast(raw).await?;
+        return Ok(json!({"ok": true, "network": cli.network.to_string(), "txid": txid}));
+    };
+    let budget = std::time::Duration::from_secs(timeout_seconds(cli));
+    let stack = tokio::time::timeout(
+        budget,
+        build_native_chain_stack(
+            selection.catalog,
+            selection.policy,
+            &cli.network.to_string(),
+            &NativeChainSecrets::default(),
+        ),
+    )
+    .await;
+    let outcome = match stack {
+        Err(_) => BroadcastState::Unavailable { txid },
+        Ok(stack) => {
+            let mut service = stack.service.lock().await;
+            tokio::time::timeout(
+                budget,
+                BroadcastCoordinator.submit(&mut service, bytes, txid),
+            )
+            .await
+            .unwrap_or(BroadcastState::Uncertain {
+                txid,
+                attempts: vec![],
+            })
+        }
+    };
+    let (state, ok, source) = match outcome {
+        BroadcastState::Submitted { via, .. } => ("submitted", true, Some(via)),
+        BroadcastState::Observed { via, .. } => ("observed", true, Some(via)),
+        BroadcastState::Uncertain { .. } => ("uncertain", false, None),
+        BroadcastState::Rejected { .. } => ("rejected", false, None),
+        BroadcastState::Unavailable { .. } | BroadcastState::Prepared { .. } => {
+            ("unavailable", false, None)
+        }
+    };
+    let mut display = txid;
+    display.reverse();
+    Ok(
+        json!({"ok": ok, "network": cli.network.to_string(), "selection": "shared-native-policy",
+            "txid": hex(&display), "state": state, "source": source.map(|source| source.as_str().to_owned()),
+        }),
+    )
+}
+
+async fn address_selected_chain(cli: &Cli, address: &str, include_outputs: bool) -> Result<Value> {
+    let parsed = parse_address(address, cli.network)?;
+    let scripthash = parsed.electrum_scripthash();
+    let Some(selection) = configured_chain(cli)? else {
+        if include_outputs {
+            let utxos = client_for(cli)?.utxos(&scripthash).await?;
+            let total: u64 = utxos.iter().map(|output| output.value).sum();
+            return Ok(
+                json!({"ok": true, "network": cli.network.to_string(), "address": address,
+                "count": utxos.len(), "total": total, "utxos": utxos.iter().map(|output| json!({
+                    "txid":output.tx_hash, "vout":output.tx_pos, "height":output.height, "value":output.value,
+                })).collect::<Vec<_>>()}),
+            );
+        }
+        let balance = client_for(cli)?.balance(&scripthash).await?;
+        return Ok(
+            json!({"ok": true, "network": cli.network.to_string(), "address": address,
+            "scripthash": scripthash, "confirmed": balance.confirmed, "unconfirmed": balance.unconfirmed,
+            "total": balance.confirmed + balance.unconfirmed}),
+        );
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(timeout_seconds(cli)), async {
+        let stack = build_native_chain_stack(
+            selection.catalog,
+            selection.policy,
+            &cli.network.to_string(),
+            &NativeChainSecrets::default(),
+        )
+        .await;
+        let mut worker = optn_runtime::sync_worker::ProgressiveSyncWorker::new(Default::default());
+        let script = parsed.script_pubkey();
+        // A one-address observation session, not the user's stored HD wallet.
+        // Use the same publication/reconciliation path as other Rust interfaces.
+        let runtime = optn_runtime::AppRuntime::spawn(optn_app::AppState {
+            network: cli.network,
+            wallet: Some(optn_app::OpenedWallet {
+                kind: optn_app::WalletKind::WatchOnly,
+                name: "Address observation".into(),
+                receive_address: address.to_owned(),
+                master_fingerprint: None,
+                account_path: String::new(),
+                multisig_policy: None,
+                account_xpub: None,
+            }),
+            ..Default::default()
+        });
+        runtime
+            .sync_wallet(
+                &mut *stack.service.lock().await,
+                &mut worker,
+                vec![address.to_owned()],
+                None,
+            )
+            .await
+            .map_err(|error| {
+                CliError::Network(format!("shared wallet refresh failed: {error:?}"))
+            })?;
+        let status = runtime.subscribe_wallet_sync().borrow().clone();
+        if !status.sync.history_fresh || !status.sync.utxos_fresh {
+            return Err(CliError::Network("wallet refresh did not publish a fresh snapshot".into()));
+        }
+        let snapshot = status
+            .authoritative
+            .as_ref()
+            .ok_or_else(|| {
+                CliError::Protocol("refresh produced no authoritative snapshot".into())
+            })?;
+        let (confirmed, unconfirmed) = snapshot.value.script_balance(&script)?;
+        let mut value =
+            json!({"ok": true, "network": cli.network.to_string(), "address": address,
+            "scripthash": scripthash, "confirmed": confirmed, "unconfirmed": unconfirmed,
+            "total": confirmed + unconfirmed, "selection": "shared-native-policy",
+            "source": snapshot.source.as_str(), "evidence": format!("{:?}", snapshot.evidence)});
+        if include_outputs {
+            let coins = runtime.state().coins;
+            let heights = snapshot.value.transactions.iter().map(|tx| (tx.txid, tx.block_height))
+                .collect::<std::collections::BTreeMap<_,_>>();
+            value["count"] = json!(coins.len());
+            value["utxos"] = json!(coins.iter().map(|coin| {
+                let mut internal = coin.outpoint().txid();
+                internal.reverse();
+                json!({"txid":coin.outpoint().txid_hex(), "vout":coin.outpoint().vout(), "value":coin.value_sats(),
+                    "height":heights.get(&internal).copied().flatten().unwrap_or(0),
+                    "token":coin.token().map(|token| json!({
+                        "category":token.category_hex(), "amount":token.amount,
+                        "nft":token.nft.as_ref().map(|nft| json!({"capability":nft.capability.as_str(), "commitment":hex(&nft.commitment)})),
+                    })),
+                })
+            }).collect::<Vec<_>>());
+        }
+        Ok(value)
+    })
+    .await
+    .map_err(|_| CliError::Network("shared wallet refresh timed out".into()))?
+}
+
+async fn rescan_shared_wallet(
+    cli: &Cli,
+    gap: u32,
+    cap: u32,
+    all: bool,
+    account_path: Option<&str>,
+    xpub: Option<&str>,
+) -> Result<Value> {
+    use optn_runtime::chain::{
+        ChainSource, ConnectionPolicy, Endpoint, EndpointKind, SourceCatalog, SourceDisposition,
+        SourceId, SourceOrigin,
+    };
+    optn_runtime::hd_sync::HdSyncLimits {
+        gap_limit: gap,
+        addresses_per_branch: cap,
+    }
+    .validate()
+    .map_err(CliError::Usage)?;
+    let account = account_path
+        .map(hd::parse_account_path)
+        .transpose()?
+        .unwrap_or_else(|| hd::AccountPath::default_for(cli.network));
+    let xpub = match xpub {
+        Some(xpub) => xpub.to_owned(),
+        // Drop the temporary seed-holding Wallet before starting provider I/O.
+        None => read_wallet(cli)?.account_xpub_at(account)?,
+    };
+    let receive = optn_core::watch_only::address_under_account(cli.network, &xpub, 0, 0)?;
+    let selection = match configured_chain(cli)? {
+        Some(selection) => selection,
+        None => {
+            let id = SourceId::new("cli-electrum");
+            let mut catalog = SourceCatalog::default();
+            catalog
+                .insert(ChainSource {
+                    id: id.clone(),
+                    label: "CLI Electrum selection".into(),
+                    origin: SourceOrigin::UserAdded,
+                    endpoints: vec![Endpoint {
+                        kind: if cli.no_tls {
+                            EndpointKind::ElectrumTcp
+                        } else {
+                            EndpointKind::ElectrumTls
+                        },
+                        host: cli
+                            .host
+                            .clone()
+                            .unwrap_or_else(|| cli.network.default_host().into()),
+                        port: Some(cli.port.unwrap_or_else(|| cli.network.default_port())),
+                    }],
+                    capabilities: Default::default(),
+                    disposition: SourceDisposition::Enabled,
+                    priority: 0,
+                })
+                .map_err(|error| CliError::Usage(format!("invalid chain selection: {error:?}")))?;
+            network_settings::SharedChainSelection {
+                catalog,
+                policy: ConnectionPolicy::exact(id, ProtocolFamily::Electrum),
+            }
+        }
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(timeout_seconds(cli)), async {
+        let runtime = optn_runtime::AppRuntime::spawn(optn_app::AppState {
+            network: cli.network,
+            wallet: Some(optn_app::OpenedWallet {
+                kind: optn_app::WalletKind::WatchOnly, name: "HD account rescan".into(),
+                receive_address: receive.address, master_fingerprint: None, account_path: account.to_string(),
+                multisig_policy: None, account_xpub: Some(xpub.clone()),
+            }), ..Default::default()
+        });
+        let stack = build_native_chain_stack(selection.catalog, selection.policy, &cli.network.to_string(), &NativeChainSecrets::default()).await;
+        let mut worker = optn_runtime::sync_worker::ProgressiveSyncWorker::new(Default::default());
+        runtime.sync_hd_wallet(&mut *stack.service.lock().await, &mut worker, xpub,
+            optn_runtime::hd_sync::HdSyncLimits { gap_limit: gap, addresses_per_branch: cap })
+            .await.map_err(|error| CliError::Network(format!("HD rescan incomplete: {error}")))?;
+        let status = runtime.subscribe_wallet_sync().borrow().clone();
+        if !status.sync.history_fresh || !status.sync.utxos_fresh {
+            return Err(CliError::Network("HD rescan did not publish a complete account".into()));
+        }
+        let snapshot = status.authoritative.ok_or_else(|| CliError::Protocol("HD rescan has no snapshot".into()))?;
+        let book = snapshot.value.hd.as_ref().ok_or_else(|| CliError::Protocol("HD rescan has no address book".into()))?;
+        let mut addresses = Vec::new();
+        let mut confirmed_total = 0i64;
+        let mut unconfirmed_total = 0i64;
+        for (branch, entries) in book.branches.iter().enumerate() {
+            for (index, address) in entries.iter().enumerate() {
+                let script = Address::decode(&address.address).map_err(CliError::Protocol)?.script_pubkey();
+                let (confirmed, unconfirmed) = snapshot.value.script_balance(&script)?;
+                let utxos = snapshot.value.script_outputs(&script)?;
+                confirmed_total = confirmed_total.checked_add(confirmed).ok_or_else(|| CliError::Protocol("HD balance overflow".into()))?;
+                unconfirmed_total = unconfirmed_total.checked_add(unconfirmed).ok_or_else(|| CliError::Protocol("HD pending balance overflow".into()))?;
+                if all || confirmed != 0 || unconfirmed != 0 || !utxos.is_empty() {
+                    addresses.push(json!({"path": address.path, "address": address.address,
+                        "chain": (["receiving", "change", "defi"][branch]), "index": index,
+                        "confirmed": confirmed, "unconfirmed": unconfirmed, "utxos": utxos.len()}));
+                }
+            }
+        }
+        let total = confirmed_total.checked_add(unconfirmed_total).ok_or_else(|| CliError::Protocol("HD total balance overflow".into()))?;
+        Ok(json!({"ok":true, "hd":true, "complete":true, "network":cli.network.to_string(),
+            "account_path":account.to_string(), "gap":gap, "max_addresses":cap,
+            "selection":"shared-native-policy", "source":snapshot.source.as_str(),
+            "evidence":format!("{:?}",snapshot.evidence), "last_used":book.last_used,
+            "scanned_addresses":snapshot.value.interests.len(), "confirmed":confirmed_total,
+            "unconfirmed":unconfirmed_total, "total":total, "utxos":runtime.state().coins.len(), "addresses":addresses}))
+    }).await.map_err(|_| CliError::Network("HD rescan timed out before completing the account".into()))?
+}
+
 async fn run(cli: &Cli) -> Result<Value> {
     // Before anything else, including opening a connection. A refusal should
     // cost nothing and reveal nothing about the wallet.
     skills::enforce(skills::Policy::from_env()?, command_name(&cli.command))?;
 
-    let client = client_for(cli)?;
+    match &cli.command {
+        Command::Network {
+            action: NetworkCommand::Status,
+        } => return shared_network_status(cli),
+        Command::Network {
+            action: NetworkCommand::Select { source, protocol },
+        } => {
+            network_settings::select_source(
+                cli.network,
+                cli.network_config_dir.as_deref(),
+                source,
+                (*protocol).into(),
+            )
+            .map_err(CliError::Usage)?;
+            return shared_network_status(cli);
+        }
+        Command::Ping => return ping_selected_chain(cli).await,
+        Command::Tx { txid, verbose } => {
+            return transaction_selected_chain(cli, txid, *verbose).await
+        }
+        Command::Broadcast { hex } => return broadcast_selected_chain(cli, hex).await,
+        Command::Balance { address } => return address_selected_chain(cli, address, false).await,
+        Command::Utxos { address } => return address_selected_chain(cli, address, true).await,
+        _ => {}
+    }
+
+    // Resolve the legacy route only when an operation actually needs it.
+    // Cache it for the command so a settings edit cannot mix endpoints mid-scan.
+    let legacy_client = std::cell::OnceCell::new();
+    let client = || -> Result<&Client> {
+        if legacy_client.get().is_none() {
+            let _ = legacy_client.set(client_for(cli)?);
+        }
+        Ok(legacy_client.get().expect("client initialized above"))
+    };
 
     match &cli.command {
-        Command::Ping => {
-            let version = client.server_version().await?;
-            Ok(json!({
-                "ok": true,
-                "network": cli.network.to_string(),
-                "endpoint": client.endpoint(),
-                "server": version,
-            }))
+        Command::Ping
+        | Command::Network { .. }
+        | Command::Tx { .. }
+        | Command::Broadcast { .. } => {
+            unreachable!("handled before Electrum setup")
         }
-        Command::Balance { address } => {
-            let parsed = parse_address(address, cli.network)?;
-            let scripthash = parsed.electrum_scripthash();
-            let balance = client.balance(&scripthash).await?;
-            Ok(json!({
-                "ok": true,
-                "network": cli.network.to_string(),
-                "address": address,
-                "scripthash": scripthash,
-                "confirmed": balance.confirmed,
-                "unconfirmed": balance.unconfirmed,
-                "total": balance.confirmed + balance.unconfirmed,
-            }))
-        }
-        Command::Utxos { address } => {
-            let parsed = parse_address(address, cli.network)?;
-            let scripthash = parsed.electrum_scripthash();
-            let utxos = client.utxos(&scripthash).await?;
-            let total: u64 = utxos.iter().map(|u| u.value).sum();
-            Ok(json!({
-                "ok": true,
-                "network": cli.network.to_string(),
-                "address": address,
-                "count": utxos.len(),
-                "total": total,
-                "utxos": utxos.iter().map(|u| json!({
-                    "txid": u.tx_hash,
-                    "vout": u.tx_pos,
-                    "height": u.height,
-                    "value": u.value,
-                })).collect::<Vec<_>>(),
-            }))
+        Command::Balance { .. } | Command::Utxos { .. } => {
+            unreachable!("handled before Electrum setup")
         }
         Command::Inspect { address } => {
             let parsed = parse_address(address, cli.network)?;
@@ -747,15 +1301,6 @@ async fn run(cli: &Cli) -> Result<Value> {
                 }))
             }
         },
-        Command::Tx { txid, verbose } => {
-            if txid.len() != 64 || !txid.chars().all(|c| c.is_ascii_hexdigit()) {
-                return Err(CliError::Usage(format!(
-                    "'{txid}' is not a 64-character hex txid"
-                )));
-            }
-            let tx = client.transaction(txid, *verbose).await?;
-            Ok(json!({ "ok": true, "txid": txid, "transaction": tx }))
-        }
         Command::New { words } => {
             // Lengths live in optn-core so the wallet UI cannot drift from `optn new`.
             hd::entropy_len_for_word_count(*words)?;
@@ -812,7 +1357,7 @@ async fn run(cli: &Cli) -> Result<Value> {
             let destination = parse_address(to, cli.network)?;
             let wallet = read_wallet(cli)?;
             let spend = spend_to(
-                &client,
+                client()?,
                 cli.network,
                 &wallet,
                 destination.script_pubkey(),
@@ -848,34 +1393,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 "inputs": spend.inputs,
             }))
         }
-        Command::Decode { hex: raw } => {
-            let bytes = decode_hex(raw)?;
-            let d = tx::decode(&bytes)?;
-            Ok(json!({
-                "ok": true,
-                "version": d.version,
-                "locktime": d.locktime,
-                "size_bytes": bytes.len(),
-                "inputs": d.inputs.iter().map(|(txid, vout, sequence)| {
-                    let mut display = *txid;
-                    // Stored little-endian on the wire, shown big-endian.
-                    display.reverse();
-                    json!({ "txid": hex(&display), "vout": vout, "sequence": sequence })
-                }).collect::<Vec<_>>(),
-                "outputs": d.outputs.iter().map(|o| json!({
-                    "value": o.value,
-                    "script": hex(&o.script_pubkey),
-                    "token": o.token.as_ref().map(|t| json!({
-                        "category": t.category_hex(),
-                        "amount": t.amount,
-                        "nft": t.nft.as_ref().map(|n| json!({
-                            "capability": n.capability.as_str(),
-                            "commitment": hex(&n.commitment),
-                        })),
-                    })),
-                })).collect::<Vec<_>>(),
-            }))
-        }
+        Command::Decode { hex: raw } => decoded_transaction_json(&decode_hex(raw)?),
         Command::SendNft {
             to,
             category,
@@ -909,7 +1427,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 for index in 0..*gap {
                     let path = hd::address_path(coin, 0, change, index);
                     let address = wallet.address(cli.network, &path)?;
-                    for u in client.utxos(&address.electrum_scripthash()).await? {
+                    for u in client()?.utxos(&address.electrum_scripthash()).await? {
                         let mut txid = decode_hex32(&u.tx_hash)?;
                         txid.reverse();
                         let utxo = tx::Utxo {
@@ -1042,7 +1560,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 }));
             }
 
-            let txid = client.broadcast(&raw_hex).await?;
+            let txid = client()?.broadcast(&raw_hex).await?;
             Ok(json!({
                 "ok": true,
                 "network": cli.network.to_string(),
@@ -1092,7 +1610,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 for index in 0..*gap {
                     let path = hd::address_path(coin, 0, change, index);
                     let address = wallet.address(cli.network, &path)?;
-                    for u in client.utxos(&address.electrum_scripthash()).await? {
+                    for u in client()?.utxos(&address.electrum_scripthash()).await? {
                         let mut txid = decode_hex32(&u.tx_hash)?;
                         txid.reverse();
                         let utxo = tx::Utxo {
@@ -1210,7 +1728,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 }));
             }
 
-            let txid = client.broadcast(&raw_hex).await?;
+            let txid = client()?.broadcast(&raw_hex).await?;
             Ok(json!({
                 "ok": true,
                 "network": cli.network.to_string(),
@@ -1233,7 +1751,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 for index in 0..*gap {
                     let path = hd::address_path(coin, 0, change, index);
                     let address = wallet.address(cli.network, &path)?;
-                    for u in client.utxos(&address.electrum_scripthash()).await? {
+                    for u in client()?.utxos(&address.electrum_scripthash()).await? {
                         let Some(t) = u.token_data else { continue };
                         token_utxos += 1;
                         if let Some(amount) = t.amount.as_deref() {
@@ -1273,51 +1791,22 @@ async fn run(cli: &Cli) -> Result<Value> {
                 "nfts": nfts,
             }))
         }
-        Command::Rescan { gap, all } => {
-            let wallet = read_wallet(cli)?;
-            let coin = default_coin_type(cli.network);
-            let mut addresses = Vec::new();
-            let mut confirmed_total: i64 = 0;
-            let mut unconfirmed_total: i64 = 0;
-            let mut utxo_count = 0usize;
-
-            for change in [false, true] {
-                for index in 0..*gap {
-                    let path = hd::address_path(coin, 0, change, index);
-                    let address = wallet.address(cli.network, &path)?;
-                    let scripthash = address.electrum_scripthash();
-                    let balance = client.balance(&scripthash).await?;
-                    let utxos = client.utxos(&scripthash).await?;
-                    let has_funds = balance.confirmed != 0 || balance.unconfirmed != 0;
-                    if has_funds {
-                        confirmed_total += balance.confirmed;
-                        unconfirmed_total += balance.unconfirmed;
-                        utxo_count += utxos.len();
-                    }
-                    if has_funds || *all {
-                        addresses.push(json!({
-                            "path": path,
-                            "address": address.encode(),
-                            "chain": if change { "change" } else { "receiving" },
-                            "index": index,
-                            "confirmed": balance.confirmed,
-                            "unconfirmed": balance.unconfirmed,
-                            "utxos": utxos.len(),
-                        }));
-                    }
-                }
-            }
-            Ok(json!({
-                "ok": true,
-                "network": cli.network.to_string(),
-                "account_path": hd::account_path(coin, 0),
-                "gap": gap,
-                "confirmed": confirmed_total,
-                "unconfirmed": unconfirmed_total,
-                "total": confirmed_total + unconfirmed_total,
-                "utxos": utxo_count,
-                "addresses": addresses,
-            }))
+        Command::Rescan {
+            gap,
+            all,
+            max_addresses,
+            account_path,
+            xpub,
+        } => {
+            rescan_shared_wallet(
+                cli,
+                *gap,
+                *max_addresses,
+                *all,
+                account_path.as_deref(),
+                xpub.as_deref(),
+            )
+            .await
         }
         Command::History { gap, limit } => {
             let wallet = read_wallet(cli)?;
@@ -1328,7 +1817,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 for index in 0..*gap {
                     let path = hd::address_path(coin, 0, change, index);
                     let address = wallet.address(cli.network, &path)?;
-                    for e in client.history(&address.electrum_scripthash()).await? {
+                    for e in client()?.history(&address.electrum_scripthash()).await? {
                         entries.push((e.height, e.tx_hash, path.clone(), e.fee));
                     }
                 }
@@ -1375,7 +1864,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                         for index in 0..*gap {
                             let path = hd::address_path(coin, account, change, index);
                             let address = wallet.address(cli.network, &path)?;
-                            let balance = client.balance(&address.electrum_scripthash()).await?;
+                            let balance = client()?.balance(&address.electrum_scripthash()).await?;
                             if balance.confirmed != 0 || balance.unconfirmed != 0 {
                                 used += 1;
                                 total += balance.confirmed + balance.unconfirmed;
@@ -1400,15 +1889,6 @@ async fn run(cli: &Cli) -> Result<Value> {
                 "scanned_coin_types": hd::scan_coin_types(cli.network),
                 "found": found,
             }))
-        }
-        Command::Broadcast { hex: raw } => {
-            if raw.is_empty() || !raw.chars().all(|c| c.is_ascii_hexdigit()) {
-                return Err(CliError::Usage(
-                    "transaction must be non-empty hex".to_string(),
-                ));
-            }
-            let txid = client.broadcast(raw).await?;
-            Ok(json!({ "ok": true, "network": cli.network.to_string(), "txid": txid }))
         }
         Command::Quantumroot { action } => {
             let vault_id = |raw: &str| -> Result<[u8; 16]> {
@@ -1860,7 +2340,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                     .to_bytes()
                     .into();
                 let spend_pub = wallet.public_key(&rpa::spend_path(coin, *account))?;
-                let raw_hex = client.transaction(txid, false).await?;
+                let raw_hex = client()?.transaction(txid, false).await?;
                 let raw_hex = raw_hex.as_str().ok_or_else(|| {
                     CliError::Protocol("server did not return raw transaction hex".into())
                 })?;
@@ -1926,7 +2406,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 }
                 let wallet = read_wallet(cli)?;
                 let paid = rpa_pay(
-                    &client,
+                    client()?,
                     cli.network,
                     &wallet,
                     &decoded,
@@ -2009,7 +2489,9 @@ async fn run(cli: &Cli) -> Result<Value> {
                 data,
             } => {
                 let spec = request_spec(url, method, data, headers)?;
-                let attempt = x402::Http::new(cli.timeout)?.send(&spec, None).await?;
+                let attempt = x402::Http::new(timeout_seconds(cli))?
+                    .send(&spec, None)
+                    .await?;
                 if !attempt.is_payment_required() {
                     // Not every resource charges. Reporting the body rather
                     // than an error is what lets a caller use this to probe.
@@ -2077,7 +2559,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 }
 
                 let spec = request_spec(url, method, data, headers)?;
-                let http = x402::Http::new(cli.timeout)?;
+                let http = x402::Http::new(timeout_seconds(cli))?;
                 let first = http.send(&spec, None).await?;
                 if !first.is_payment_required() {
                     return Ok(json!({
@@ -2118,7 +2600,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                         )));
                     }
                     let spend = spend_to(
-                        &client,
+                        client()?,
                         cli.network,
                         &wallet,
                         destination.script_pubkey(),
@@ -2742,8 +3224,14 @@ fn print_human(command: &Command, v: &Value) {
     match command {
         Command::Ping => {
             println!("network   {}", s("network"));
-            println!("endpoint  {}  reachable", s("endpoint"));
-            println!("server    {}", v.get("server").unwrap_or(&Value::Null));
+            if let Some(routes) = v.get("routes").and_then(Value::as_array) {
+                for route in routes {
+                    println!("route     {route}");
+                }
+            } else {
+                println!("endpoint  {}  reachable", s("endpoint"));
+                println!("server    {}", v.get("server").unwrap_or(&Value::Null));
+            }
         }
         Command::Balance { .. } => {
             println!("address      {}", s("address"));
@@ -2820,6 +3308,47 @@ mod manifest_tests {
     use super::*;
     use clap::CommandFactory;
 
+    #[test]
+    fn network_selection_is_configure_only_before_any_file_access() {
+        let cli = Cli::try_parse_from([
+            "optn",
+            "network",
+            "select",
+            "my-node",
+            "--protocol",
+            "bip37",
+        ])
+        .unwrap();
+        let name = command_name(&cli.command);
+        assert_eq!(name, "network select");
+        assert!(skills::enforce(skills::Policy::parse("read").unwrap(), name).is_err());
+        assert!(skills::enforce(skills::Policy::parse("configure").unwrap(), name).is_ok());
+        assert!(skills::enforce(skills::Policy::parse("configure").unwrap(), "send").is_err());
+    }
+
+    #[test]
+    fn timeout_defaults_follow_command_and_honor_override() {
+        let ordinary = Cli::try_parse_from(["optn", "ping"]).unwrap();
+        let rescan = Cli::try_parse_from(["optn", "rescan"]).unwrap();
+        let explicit = Cli::try_parse_from(["optn", "rescan", "--timeout", "1"]).unwrap();
+
+        assert_eq!(timeout_seconds(&ordinary), 30);
+        assert_eq!(timeout_seconds(&rescan), 300);
+        assert_eq!(timeout_seconds(&explicit), 1);
+    }
+
+    fn command_path_exists(path: &str) -> bool {
+        let root = Cli::command();
+        let mut current = &root;
+        for part in path.split_whitespace() {
+            let Some(child) = current.find_subcommand(part) else {
+                return false;
+            };
+            current = child;
+        }
+        true
+    }
+
     /// Every subcommand clap knows about, as the user types it.
     fn clap_subcommands() -> Vec<String> {
         Cli::command()
@@ -2848,11 +3377,10 @@ mod manifest_tests {
     fn the_manifest_lists_no_command_that_does_not_exist() {
         // The other direction. A stale entry tells an agent it can invoke
         // something that was renamed or removed.
-        let known = clap_subcommands();
         let stale: Vec<&str> = skills::SKILLS
             .iter()
             .map(|s| s.name)
-            .filter(|name| !known.iter().any(|k| k == name))
+            .filter(|name| !command_path_exists(name))
             .collect();
         assert!(
             stale.is_empty(),
@@ -2866,10 +3394,9 @@ mod manifest_tests {
         // command_name() is what the gate looks up. If it returned a name clap
         // does not use, the lookup would miss and the command would be refused
         // as unknown — or worse, match a different skill's capability.
-        let known = clap_subcommands();
         for skill in skills::SKILLS {
             assert!(
-                known.iter().any(|k| k == skill.name),
+                command_path_exists(skill.name),
                 "{} is not a clap subcommand",
                 skill.name
             );

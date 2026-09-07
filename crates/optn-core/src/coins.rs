@@ -49,7 +49,7 @@ impl fmt::Display for Outpoint {
 /// Why a coin is reserved. Flipstarter pledges use their own reason so a
 /// FundMe flag cannot masquerade as a Flipstarter hold, and a user freeze
 /// cannot be confused with a campaign pledge.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum FreezeReason {
     User,
     FlipstarterPledge,
@@ -88,6 +88,7 @@ impl FreezeReason {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Coin {
+    token: Option<crate::token::TokenData>,
     outpoint: Outpoint,
     value_sats: u64,
     address: String,
@@ -110,14 +111,26 @@ impl Coin {
         value_sats: u64,
         address: impl Into<String>,
     ) -> Result<Self, CoinError> {
-        let address = address.into();
         if value_sats == 0 {
             return Err(CoinError::ZeroValue);
         }
+        Self::from_observation(outpoint, value_sats, address, None)
+    }
+
+    /// Preserve observed outputs, including zero-satoshi token custody. This
+    /// constructs a record, not evidence of inclusion or permission to spend.
+    pub fn from_observation(
+        outpoint: Outpoint,
+        value_sats: u64,
+        address: impl Into<String>,
+        token: Option<crate::token::TokenData>,
+    ) -> Result<Self, CoinError> {
+        let address = address.into();
         if address.trim().is_empty() {
             return Err(CoinError::EmptyAddress);
         }
         Ok(Self {
+            token,
             outpoint,
             value_sats,
             address,
@@ -129,6 +142,17 @@ impl Coin {
 
     pub const fn outpoint(&self) -> Outpoint {
         self.outpoint
+    }
+
+    pub fn token(&self) -> Option<&crate::token::TokenData> {
+        self.token.as_ref()
+    }
+
+    /// Token custody is independent of user freeze state. Ordinary BCH/Fusion
+    /// selection must not consume it, even if a user freeze is lifted.
+    pub fn with_token(mut self, token: crate::token::TokenData) -> Self {
+        self.token = Some(token);
+        self
     }
 
     pub const fn value_sats(&self) -> u64 {
@@ -173,7 +197,7 @@ impl Coin {
     /// A coin at or past `max_depth` is done: continuing would pay fees
     /// forever for privacy it already has.
     pub const fn is_fusable(&self, max_depth: u32) -> bool {
-        self.freeze.is_none() && self.fuse_depth < max_depth
+        self.is_spendable() && self.fuse_depth < max_depth
     }
 
     pub fn label(&self) -> Option<&str> {
@@ -185,11 +209,11 @@ impl Coin {
     }
 
     pub const fn is_spendable(&self) -> bool {
-        self.freeze.is_none()
+        self.value_sats > 0 && self.freeze.is_none() && self.token.is_none()
     }
 
     pub const fn is_reserved(&self) -> bool {
-        self.freeze.is_some()
+        !self.is_spendable()
     }
 
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
@@ -250,12 +274,66 @@ impl CoinSet {
         {
             return Err(CoinError::DuplicateOutpoint);
         }
+        self.coins
+            .iter()
+            .try_fold(coin.value_sats, |total, existing| {
+                total.checked_add(existing.value_sats)
+            })
+            .ok_or(CoinError::AmountOverflow)?;
         self.coins.push(coin);
         Ok(())
     }
 
     pub fn get(&self, outpoint: Outpoint) -> Option<&Coin> {
         self.coins.iter().find(|coin| coin.outpoint == outpoint)
+    }
+
+    /// Apply authenticated local bookkeeping to an already projected output.
+    /// This cannot create a coin or change its amount, script, or token data.
+    pub fn restore_annotations(
+        &mut self,
+        outpoint: Outpoint,
+        label: Option<String>,
+        freeze: Option<FreezeReason>,
+        fuse_depth: u32,
+    ) -> Result<(), CoinError> {
+        let coin = self
+            .coins
+            .iter_mut()
+            .find(|coin| coin.outpoint == outpoint)
+            .ok_or(CoinError::UnknownOutpoint)?;
+        coin.set_label(label);
+        coin.restore_freeze(freeze);
+        coin.fuse_depth = fuse_depth;
+        Ok(())
+    }
+
+    /// Replace a complete wallet-scoped chain projection atomically. Chain
+    /// fields come from the projection; local annotations never come from peers.
+    /// The caller must establish completeness and wallet/network ownership first.
+    pub fn replace_chain_outputs(&mut self, mut outputs: Vec<Coin>) -> Result<(), CoinError> {
+        use std::collections::{HashMap, HashSet};
+        let previous: HashMap<_, _> = self
+            .coins
+            .iter()
+            .map(|coin| (coin.outpoint, coin))
+            .collect();
+        let mut seen = HashSet::new();
+        let mut total = 0u64;
+        for coin in &mut outputs {
+            if !seen.insert(coin.outpoint) {
+                return Err(CoinError::DuplicateOutpoint);
+            }
+            total = total
+                .checked_add(coin.value_sats)
+                .ok_or(CoinError::AmountOverflow)?;
+            let prior = previous.get(&coin.outpoint);
+            coin.label = prior.and_then(|coin| coin.label.clone());
+            coin.freeze = prior.and_then(|coin| coin.freeze);
+            coin.fuse_depth = prior.map_or(0, |coin| coin.fuse_depth);
+        }
+        self.coins = outputs;
+        Ok(())
     }
 
     pub fn freeze(&mut self, outpoint: Outpoint, reason: FreezeReason) -> Result<(), CoinError> {
@@ -326,6 +404,7 @@ impl CoinSet {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoinError {
     DuplicateOutpoint,
+    AmountOverflow,
     UnknownOutpoint,
     AlreadyFrozen,
     NotFrozen,
@@ -338,6 +417,10 @@ impl fmt::Display for CoinError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::DuplicateOutpoint => write!(f, "that coin is already in the set"),
+            Self::AmountOverflow => write!(
+                f,
+                "wallet output values overflow the supported amount range"
+            ),
             Self::UnknownOutpoint => write!(f, "unknown coin"),
             Self::AlreadyFrozen => write!(f, "coin is already frozen"),
             Self::NotFrozen => write!(f, "coin is not frozen"),
@@ -464,6 +547,60 @@ mod fusion_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overflowing_observations_preserve_the_previous_coin_set() {
+        let mut set = CoinSet::new();
+        set.insert(coin(1, u64::MAX)).unwrap();
+        let before = set.clone();
+        assert_eq!(set.insert(coin(2, 1)), Err(CoinError::AmountOverflow));
+        assert_eq!(set, before);
+        assert_eq!(set.spendable_sats(), u64::MAX);
+        assert_eq!(
+            set.replace_chain_outputs(vec![coin(2, u64::MAX), coin(3, 1)]),
+            Err(CoinError::AmountOverflow)
+        );
+        assert_eq!(set, before);
+        set.replace_chain_outputs(vec![coin(2, u64::MAX - 1), coin(3, 1)])
+            .unwrap();
+        assert_eq!(set.spendable_sats(), u64::MAX);
+    }
+
+    #[test]
+    fn chain_replacement_preserves_local_records_and_is_atomic() {
+        let token = crate::token::TokenData::fungible([9; 32], 42);
+        let mut set = CoinSet::new();
+        let existing = coin(1, 8000).with_label("local label").with_fuse_depth(3);
+        let outpoint = existing.outpoint();
+        set.insert(existing).unwrap();
+        set.insert(coin(2, 1000)).unwrap();
+        set.freeze(outpoint, FreezeReason::FusionInFlight).unwrap();
+        let mut added = coin(3, 2000).with_label("peer label").with_fuse_depth(99);
+        added.restore_freeze(Some(FreezeReason::User));
+        set.replace_chain_outputs(vec![coin(1, 7000).with_token(token.clone()), added])
+            .unwrap();
+        let restored = set.get(outpoint).unwrap();
+        assert_eq!(
+            restored.value_sats(),
+            7000,
+            "chain fields are authoritative"
+        );
+        assert_eq!(restored.token(), Some(&token));
+        assert_eq!(restored.label(), Some("local label"));
+        assert_eq!(restored.freeze(), Some(FreezeReason::FusionInFlight));
+        assert_eq!(restored.fuse_depth(), 3);
+        assert!(set.get(coin(2, 1000).outpoint()).is_none());
+        let added = set.get(coin(3, 2000).outpoint()).unwrap();
+        assert_eq!(added.label(), None);
+        assert_eq!(added.freeze(), None);
+        assert_eq!(added.fuse_depth(), 0);
+        let retained = set.clone();
+        assert_eq!(
+            set.replace_chain_outputs(vec![coin(3, 2000), coin(3, 2000)]),
+            Err(CoinError::DuplicateOutpoint)
+        );
+        assert_eq!(set, retained);
+    }
 
     fn coin(slot: u8, value: u64) -> Coin {
         let mut txid = [0u8; 32];

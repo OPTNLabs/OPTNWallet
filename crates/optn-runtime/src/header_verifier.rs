@@ -4,12 +4,27 @@ use crate::chain::{
     BlockHeaderBytes, CheckpointProvenance, Hash32, HeaderAccumulatorState, HeaderCheckpoint,
     HeaderVerificationMode, HeaderVerifier, HistoricalHeaderProof,
 };
+use optn_core::network::Network;
 use optn_core::{
     asert::{verify_expected_bits, AsertAnchor, AsertError, AsertParams},
     header_hash::sha256d,
     header_mmr::MmrAccumulator,
     header_pow::{verify_declared_pow, verify_link, HeaderPowError},
 };
+use serde::{Deserialize, Serialize};
+
+const MAX_CHECKPOINT_BYTES: usize = 16 * 1024;
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredCheckpoint {
+    schema: u32,
+    network: String,
+    height: u32,
+    commitment: Hash32,
+    header: Vec<u8>,
+    proof: Vec<Hash32>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShvMmrError {
@@ -21,6 +36,10 @@ pub enum ShvMmrError {
     HistoricalProofInvalid,
     HeightOverflow,
     EmptyAccumulator,
+    InvalidStoredCheckpoint,
+    StoredCheckpointTooLarge,
+    StoredCheckpointNetworkMismatch,
+    StoredCheckpointTrustMismatch,
 }
 
 impl From<HeaderPowError> for ShvMmrError {
@@ -51,6 +70,8 @@ pub struct ShvMmrHeaderVerifier {
     provenance: CheckpointProvenance,
     last_hash: Option<Hash32>,
     last_time: Option<u32>,
+    last_header: Option<BlockHeaderBytes>,
+    last_leaf_proof: Vec<Hash32>,
     difficulty: Option<DifficultyContext>,
 }
 
@@ -61,6 +82,8 @@ impl ShvMmrHeaderVerifier {
             provenance,
             last_hash: None,
             last_time: None,
+            last_header: None,
+            last_leaf_proof: Vec::new(),
             difficulty: None,
         }
     }
@@ -97,6 +120,8 @@ impl ShvMmrHeaderVerifier {
             provenance,
             last_hash: Some(parsed.hash),
             last_time: Some(parsed.time),
+            last_header: Some(checkpoint_header),
+            last_leaf_proof: proof.to_vec(),
             difficulty: None,
         })
     }
@@ -137,6 +162,73 @@ impl ShvMmrHeaderVerifier {
     pub fn last_time(&self) -> Option<u32> {
         self.last_time
     }
+
+    pub fn has_difficulty_context(&self) -> bool {
+        self.difficulty.is_some()
+    }
+
+    /// Material for restoring this verified tip with `from_checkpoint_proof`.
+    /// The host must separately authenticate the root and bind it to a network;
+    /// a proof fetched alongside an untrusted root does not establish trust.
+    pub fn tip_checkpoint_proof(&self) -> Option<(&BlockHeaderBytes, &[Hash32])> {
+        Some((self.last_header.as_ref()?, &self.last_leaf_proof))
+    }
+
+    /// Encode public resume material. The host separately persists the trusted
+    /// checkpoint commitment through its authenticated storage provider.
+    pub fn encode_checkpoint_json(&self, network: Network) -> Result<String, ShvMmrError> {
+        let state = self.state()?;
+        let (header, proof) = self
+            .tip_checkpoint_proof()
+            .ok_or(ShvMmrError::EmptyAccumulator)?;
+        let record = StoredCheckpoint {
+            schema: 1,
+            network: network.to_string(),
+            height: state.height,
+            commitment: state.commitment,
+            header: header.0.to_vec(),
+            proof: proof.to_vec(),
+        };
+        serde_json::to_string(&record).map_err(|_| ShvMmrError::InvalidStoredCheckpoint)
+    }
+
+    /// Restore against an independently trusted, network-scoped commitment.
+    /// Never obtain `trusted` from the same unauthenticated file or peer.
+    /// Difficulty rules are deliberately absent from the record: the host
+    /// must attach the selected network's context with `with_asert`.
+    pub fn from_checkpoint_json(
+        json: &str,
+        network: Network,
+        trusted: &HeaderCheckpoint,
+    ) -> Result<Self, ShvMmrError> {
+        if json.len() > MAX_CHECKPOINT_BYTES {
+            return Err(ShvMmrError::StoredCheckpointTooLarge);
+        }
+        let record: StoredCheckpoint =
+            serde_json::from_str(json).map_err(|_| ShvMmrError::InvalidStoredCheckpoint)?;
+        if record.schema != 1 || record.proof.len() > 32 {
+            return Err(ShvMmrError::InvalidStoredCheckpoint);
+        }
+        if record.network != network.to_string() {
+            return Err(ShvMmrError::StoredCheckpointNetworkMismatch);
+        }
+        if record.height != trusted.height || record.commitment != trusted.commitment {
+            return Err(ShvMmrError::StoredCheckpointTrustMismatch);
+        }
+        let header = BlockHeaderBytes(
+            record
+                .header
+                .try_into()
+                .map_err(|_| ShvMmrError::InvalidStoredCheckpoint)?,
+        );
+        Self::from_checkpoint_proof(
+            record.height,
+            header,
+            &record.proof,
+            trusted.commitment,
+            trusted.provenance.clone(),
+        )
+    }
 }
 
 impl HeaderVerifier for ShvMmrHeaderVerifier {
@@ -147,9 +239,14 @@ impl HeaderVerifier for ShvMmrHeaderVerifier {
     }
 
     fn extend(&mut self, headers: &[BlockHeaderBytes]) -> Result<(), Self::Error> {
+        // A rejected peer batch must not advance the trusted cursor or MMR.
+        // Only peaks and the current header context are cloned, not history.
+        let mut candidate = self.clone();
         for header in headers {
-            if let (Some(context), Some(previous_time)) = (self.difficulty, self.last_time) {
-                let previous_height = self
+            if let (Some(context), Some(previous_time)) =
+                (candidate.difficulty, candidate.last_time)
+            {
+                let previous_height = candidate
                     .accumulator
                     .leaf_count()
                     .checked_sub(1)
@@ -165,14 +262,17 @@ impl HeaderVerifier for ShvMmrHeaderVerifier {
                 )?;
             }
 
-            let parsed = match self.last_hash {
+            let parsed = match candidate.last_hash {
                 Some(expected_prev) => verify_link(expected_prev, &header.0)?,
                 None => verify_declared_pow(&header.0)?,
             };
-            self.accumulator.extend(parsed.hash);
-            self.last_hash = Some(parsed.hash);
-            self.last_time = Some(parsed.time);
+            candidate.last_leaf_proof = candidate.accumulator.proof_for_next_leaf(parsed.hash);
+            candidate.accumulator.extend(parsed.hash);
+            candidate.last_header = Some(header.clone());
+            candidate.last_hash = Some(parsed.hash);
+            candidate.last_time = Some(parsed.time);
         }
+        *self = candidate;
         Ok(())
     }
 
@@ -229,6 +329,22 @@ mod tests {
     }
 
     #[test]
+    fn rejected_batch_preserves_accumulator_and_header_cursor() {
+        let mut verifier = ShvMmrHeaderVerifier::empty(CheckpointProvenance::ShippedReviewed);
+        let before = verifier.checkpoint();
+        // The first header is valid; the second cannot link to it.
+        assert!(verifier.extend(&[genesis(), genesis()]).is_err());
+        assert_eq!(verifier.checkpoint(), before);
+        assert_eq!(verifier.last_hash(), None);
+        assert_eq!(verifier.last_time(), None);
+        assert_eq!(verifier.state(), Err(ShvMmrError::EmptyAccumulator));
+        verifier.extend(&[genesis()]).unwrap();
+        let accepted = verifier.state().unwrap();
+        assert!(verifier.extend(&[genesis()]).is_err());
+        assert_eq!(verifier.state().unwrap(), accepted);
+    }
+
+    #[test]
     fn one_leaf_checkpoint_bootstraps_and_round_trips() {
         let header = genesis();
         let commitment = header_leaf(&header);
@@ -244,6 +360,53 @@ mod tests {
         assert_eq!(verifier.checkpoint().commitment, commitment);
         assert_eq!(verifier.state().unwrap().peaks.len(), 1);
         assert_eq!(verifier.last_time(), Some(1_231_006_505));
+    }
+
+    #[test]
+    fn persisted_checkpoint_requires_matching_network_trust_and_header_proof() {
+        let mut verifier = ShvMmrHeaderVerifier::empty(CheckpointProvenance::SelfDerived);
+        verifier.extend(&[genesis()]).unwrap();
+        let trusted = verifier.checkpoint();
+        let json = verifier.encode_checkpoint_json(Network::Mainnet).unwrap();
+        let restored =
+            ShvMmrHeaderVerifier::from_checkpoint_json(&json, Network::Mainnet, &trusted).unwrap();
+        assert_eq!(restored.state(), verifier.state());
+        assert_eq!(restored.last_time(), verifier.last_time());
+        assert!(!restored.has_difficulty_context());
+        assert!(matches!(
+            ShvMmrHeaderVerifier::from_checkpoint_json(&json, Network::Chipnet, &trusted),
+            Err(ShvMmrError::StoredCheckpointNetworkMismatch)
+        ));
+        let mut wrong_trust = trusted.clone();
+        wrong_trust.commitment[0] ^= 1;
+        assert!(matches!(
+            ShvMmrHeaderVerifier::from_checkpoint_json(&json, Network::Mainnet, &wrong_trust),
+            Err(ShvMmrError::StoredCheckpointTrustMismatch)
+        ));
+        let mut record: StoredCheckpoint = serde_json::from_str(&json).unwrap();
+        record.header[68] ^= 1;
+        let corrupt = serde_json::to_string(&record).unwrap();
+        assert!(
+            ShvMmrHeaderVerifier::from_checkpoint_json(&corrupt, Network::Mainnet, &trusted)
+                .is_err()
+        );
+        assert!(matches!(
+            ShvMmrHeaderVerifier::from_checkpoint_json(
+                &" ".repeat(MAX_CHECKPOINT_BYTES + 1),
+                Network::Mainnet,
+                &trusted
+            ),
+            Err(ShvMmrError::StoredCheckpointTooLarge)
+        ));
+        record.schema = 2;
+        assert!(matches!(
+            ShvMmrHeaderVerifier::from_checkpoint_json(
+                &serde_json::to_string(&record).unwrap(),
+                Network::Mainnet,
+                &trusted
+            ),
+            Err(ShvMmrError::InvalidStoredCheckpoint)
+        ));
     }
 
     #[test]

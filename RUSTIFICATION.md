@@ -8,6 +8,7 @@ OPTN currently uses:
 - **Tauri 2.x** as the current desktop/mobile shell
 - **optn-core** for reusable BCH/protocol logic
 - **optn-app** for framework-neutral application state and actions
+- **optn-chain-native** for Tauri-free native chain adapter composition shared by desktop and CLI
 - **optn-transport** for renderer-to-application communication contracts
 - **optn-platform** for OS capability contracts and provider metadata
 - **optn-platform-apple** for the Apple NativeFfi provider; optional Opal stays gated
@@ -202,6 +203,7 @@ optn-app       → Leptos/Tauri/Dioxus/Capacitor
 optn-platform  → Leptos/Tauri/Dioxus/Capacitor
 optn-transport → Leptos/Tauri/Dioxus/Capacitor
 optn-runtime   → Leptos/Tauri/Dioxus/Capacitor
+optn-chain-native → Leptos/Tauri/Dioxus/Capacitor
 optn-ui        → optn-core directly
 optn-ui        → optn-runtime directly
 optn-platform-apple must not depend on optn-core/optn-app/optn-runtime

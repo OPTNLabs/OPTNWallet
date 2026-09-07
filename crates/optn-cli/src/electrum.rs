@@ -157,9 +157,13 @@ impl Client {
 
         let mut roots = RootCertStore::empty();
         roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        let config = ClientConfig::builder()
-            .with_root_certificates(roots)
-            .with_no_client_auth();
+        let config = ClientConfig::builder_with_provider(Arc::new(
+            tokio_rustls::rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .map_err(|error| CliError::Internal(format!("TLS configuration: {error}")))?
+        .with_root_certificates(roots)
+        .with_no_client_auth();
         let server_name = ServerName::try_from(self.host.clone()).map_err(|_| {
             CliError::Usage(format!("'{}' is not a valid TLS server name", self.host))
         })?;

@@ -73,6 +73,14 @@ status = "started"
 security_weight = 8
 
 [[component]]
+name = "native-chain-adapter-composition"
+current = "tauri-local-chain-wiring"
+target = "tauri-free-rust-shared-by-desktop-and-cli"
+layer = "chain-adapter"
+status = "started"
+security_weight = 9
+
+[[component]]
 name = "application-transport"
 current = "local-wasm-direct-rust-versioned-wire"
 target = "renderer-shell-agnostic"

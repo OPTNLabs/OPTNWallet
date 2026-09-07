@@ -64,6 +64,15 @@ pub trait AppTransport {
     fn scan_qr<'a>(&'a self) -> TransportFuture<'a, String> {
         Box::pin(async { Err(TransportError::Unsupported) })
     }
+
+    /// Write a user-visible value through the host clipboard.
+    ///
+    /// This stays at the transport boundary for the same reason as camera
+    /// access: browser clipboard APIs are not reliable native-shell APIs, and
+    /// a renderer must not select a platform fallback on its own.
+    fn write_clipboard<'a>(&'a self, _text: String) -> TransportFuture<'a, ()> {
+        Box::pin(async { Err(TransportError::Unsupported) })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -234,6 +243,8 @@ pub enum WireFreezeReason {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WireCoin {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<optn_app::TokenData>,
     pub txid: String,
     pub vout: u32,
     pub value_sats: u64,
@@ -863,6 +874,7 @@ impl From<WireFreezeReason> for FreezeReason {
 impl From<&Coin> for WireCoin {
     fn from(value: &Coin) -> Self {
         Self {
+            token: value.token().cloned(),
             txid: value.outpoint().txid_hex(),
             vout: value.outpoint().vout(),
             value_sats: value.value_sats(),
@@ -880,8 +892,9 @@ impl TryFrom<WireCoin> for Coin {
     fn try_from(value: WireCoin) -> Result<Self, Self::Error> {
         let outpoint = Outpoint::parse(&value.txid, value.vout)
             .map_err(|error| TransportError::InvalidData(error.to_string()))?;
-        let mut coin = Coin::new(outpoint, value.value_sats, value.address)
-            .map_err(|error| TransportError::InvalidData(error.to_string()))?;
+        let mut coin =
+            Coin::from_observation(outpoint, value.value_sats, value.address, value.token)
+                .map_err(|error| TransportError::InvalidData(error.to_string()))?;
         coin.set_label(value.label);
         coin.restore_freeze(value.freeze.map(FreezeReason::from));
         let coin = coin.with_fuse_depth(value.fuse_depth);
@@ -1799,7 +1812,7 @@ impl AppTransport for LocalTransport {
                 .state
                 .lock()
                 .map_err(|_| TransportError::Other("local state lock poisoned".into()))?
-                .reduce(action);
+                .reduce_intent(action);
 
             if let Some(event) = event {
                 self.events
@@ -1866,6 +1879,47 @@ mod tests {
             Some(AppEvent::ThemeChanged(optn_app::ThemeMode::Dark))
         );
         assert_eq!(result.1.theme, optn_app::ThemeMode::Dark);
+    }
+
+    #[test]
+    fn local_and_wire_intents_cannot_assert_password_verification_or_coins() {
+        for scope in [optn_app::AuthScope::Spend, optn_app::AuthScope::Reveal] {
+            let mut initial = AppState::default();
+            initial.lock.prompt = Some(scope);
+            let before = initial.lock.clone();
+            let transport = LocalTransport::new(initial);
+            futures_lite::future::block_on(async {
+                let wire = WireAction::from(AppAction::ConfirmAuth { now_ms: 999_999 });
+                transport
+                    .dispatch(AppAction::try_from(wire).unwrap())
+                    .await
+                    .unwrap();
+                let state = transport.snapshot().await.unwrap();
+                assert_eq!(state.lock, before);
+                assert!(!state.identity_revealed);
+                assert!(state
+                    .notice
+                    .unwrap()
+                    .contains("Authorization was not granted"));
+                assert_eq!(
+                    transport.next_event().await.unwrap(),
+                    Some(AppEvent::NoticeChanged)
+                );
+
+                transport
+                    .dispatch(AppAction::SetStealthSats(999_999))
+                    .await
+                    .unwrap();
+                assert_eq!(transport.snapshot().await.unwrap().stealth_sats, 0);
+                transport
+                    .dispatch(AppAction::InsertCoin(
+                        optn_app::chipnet_demo_coin(10_000, 1).unwrap(),
+                    ))
+                    .await
+                    .unwrap();
+                assert!(transport.snapshot().await.unwrap().coins.is_empty());
+            });
+        }
     }
 
     #[test]
@@ -2041,6 +2095,22 @@ mod tests {
     fn transport_can_be_used_as_a_framework_neutral_trait_object() {
         let transport = NeverTransport;
         assert_transport_object_safe(&transport);
+    }
+
+    #[test]
+    fn wire_coin_preserves_token_custody_and_accepts_legacy_plain_coins() {
+        let plain = optn_app::chipnet_demo_coin(6000, 5).unwrap();
+        let token = optn_app::TokenData::fungible([9; 32], 42);
+        let protected = plain.clone().with_token(token.clone());
+        let json = serde_json::to_string(&WireCoin::from(&protected)).unwrap();
+        let restored = Coin::try_from(serde_json::from_str::<WireCoin>(&json).unwrap()).unwrap();
+        assert_eq!(restored.token(), Some(&token));
+        assert!(!restored.is_spendable());
+        assert!(!restored.is_fusable(3));
+        let legacy = serde_json::to_string(&WireCoin::from(&plain)).unwrap();
+        assert!(!legacy.contains("token"));
+        let restored = Coin::try_from(serde_json::from_str::<WireCoin>(&legacy).unwrap()).unwrap();
+        assert!(restored.is_spendable());
     }
 
     #[test]

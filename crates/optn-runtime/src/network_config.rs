@@ -92,6 +92,20 @@ pub fn merge_bootstrap_with_user_overlay(
     Ok(merged)
 }
 
+/// Resolve the complete persisted source selection for a native host.
+///
+/// This is deliberately paired with the same codec used by every shell: a
+/// caller either receives the catalog *and* policy the user selected, or an
+/// error. Flattening the overlay to one convenient endpoint would silently
+/// replace own-infrastructure, protocol, fallback, and ban choices.
+pub fn resolve_chain_selection(
+    bootstrap_base: &SourceCatalog,
+    envelope: &NetworkConfigEnvelope,
+) -> Result<(SourceCatalog, ConnectionPolicy), NetworkConfigError> {
+    let catalog = merge_bootstrap_with_user_overlay(bootstrap_base, envelope)?;
+    Ok((catalog, envelope.overlay.connection_policy.clone()))
+}
+
 /// Decode the one-Electrum/one-peer/one-explorer settings shape used by the
 /// current desktop settings UI.
 ///
@@ -496,14 +510,38 @@ impl StoredEndpoint {
     }
 
     fn into_endpoint(self) -> Result<Endpoint, NetworkConfigCodecError> {
-        if self.host.trim().is_empty() {
+        let host = self.host.trim();
+        if host.is_empty() {
             return Err(NetworkConfigCodecError::InvalidEndpoint(
                 "endpoint host must not be empty".into(),
             ));
         }
+        if host.contains(['/', '\\', '@', '?', '#']) || host.chars().any(char::is_whitespace) {
+            return Err(NetworkConfigCodecError::InvalidEndpoint(
+                "endpoint host must be a host name or IP literal, not a URL or path".into(),
+            ));
+        }
+        if self.port == Some(0) {
+            return Err(NetworkConfigCodecError::InvalidEndpoint(
+                "endpoint port must be between 1 and 65535".into(),
+            ));
+        }
+        if matches!(
+            self.kind,
+            StoredEndpointKind::BchP2p
+                | StoredEndpointKind::ElectrumTls
+                | StoredEndpointKind::ElectrumTcp
+                | StoredEndpointKind::BchnRpc
+                | StoredEndpointKind::BchnZmq
+        ) && self.port.is_none()
+        {
+            return Err(NetworkConfigCodecError::InvalidEndpoint(
+                "chain endpoint requires an explicit port".into(),
+            ));
+        }
         Ok(Endpoint {
             kind: self.kind.into(),
-            host: self.host,
+            host: host.to_owned(),
             port: self.port,
         })
     }
@@ -705,6 +743,39 @@ mod tests {
         };
 
         assert!(legacy_network_servers_from_overlay(&overlay).is_err());
+    }
+
+    #[test]
+    fn chain_selection_keeps_the_persisted_policy_and_source_kind() {
+        let source = ChainSource {
+            id: SourceId::new("self-hosted"),
+            label: "My node".into(),
+            origin: SourceOrigin::UserInfrastructure {
+                group: "rack".into(),
+            },
+            endpoints: vec![Endpoint {
+                kind: EndpointKind::BchP2p,
+                host: "127.0.0.1".into(),
+                port: Some(8333),
+            }],
+            capabilities: CapabilitySet::default(),
+            disposition: SourceDisposition::Enabled,
+            priority: 0,
+        };
+        let policy = ConnectionPolicy::exact(source.id.clone(), ProtocolFamily::Bip37);
+        let envelope = NetworkConfigEnvelope::current(
+            "test",
+            UserNetworkOverlay {
+                user_sources: vec![source.clone()],
+                connection_policy: policy.clone(),
+                ..Default::default()
+            },
+        );
+
+        let (catalog, restored_policy) =
+            resolve_chain_selection(&SourceCatalog::default(), &envelope).unwrap();
+        assert_eq!(restored_policy, policy);
+        assert_eq!(catalog.get(&source.id), Some(&source));
     }
 
     #[test]

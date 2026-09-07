@@ -1,0 +1,21 @@
+[package]
+name = "optn-chain-native"
+version = "1.7.3"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Framework-neutral native chain adapter composition for OPTN Wallet."
+
+[dependencies]
+optn-core = { path = "../optn-core", version = "=1.7.3" }
+optn-runtime = { path = "../optn-runtime", version = "=1.7.3" }
+optn-chain-electrum = { path = "../optn-chain-electrum", version = "=1.7.3" }
+optn-chain-bip37 = { path = "../optn-chain-bip37", version = "=1.7.3" }
+optn-chain-neutrino = { path = "../optn-chain-neutrino", version = "=1.7.3" }
+optn-chain-bchn = { path = "../optn-chain-bchn", version = "=1.7.3" }
+optn-chain-zmq = { path = "../optn-chain-zmq", version = "=1.7.3" }
+hex = "0.4"
+rand_core = { version = "0.6", features = ["getrandom"] }
+tokio = { version = "1.53.1", features = ["io-util", "net", "sync", "time"] }
+
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["macros", "rt", "io-util", "net"] }

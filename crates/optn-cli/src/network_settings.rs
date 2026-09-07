@@ -4,16 +4,74 @@
 //! versioned per-network overlay that the desktop shell writes.
 
 use std::env;
-use std::fs::File;
-use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
+use optn_chain_native::network_config::NetworkConfigFile;
 use optn_core::endpoint::{parse_electrum_endpoint, ElectrumEndpoint};
 use optn_core::network::Network;
-use optn_runtime::network_config::{decode_envelope_json, legacy_network_servers_from_overlay};
+use optn_runtime::chain::{ConnectionPolicy, SourceCatalog};
+use optn_runtime::network_config::{
+    legacy_network_servers_from_overlay,
+    resolve_chain_selection as resolve_persisted_chain_selection, NetworkConfigEnvelope,
+    NetworkConfigStore,
+};
 
 const APP_CONFIG_IDENTIFIER: &str = "com.optilabs.wallet";
-const MAX_BYTES: u64 = 128 * 1024;
+
+pub fn select_source(
+    network: Network,
+    directory: Option<&Path>,
+    source: &str,
+    protocol: optn_runtime::chain::ProtocolFamily,
+) -> Result<(), String> {
+    let directory =
+        config_directory(directory).ok_or("network configuration directory is unavailable")?;
+    NetworkConfigFile::new(directory.join(file_name(network)))
+        .update(|existing| {
+            let mut envelope =
+                existing.ok_or("no shared sources are configured; configure a source first")?;
+            let (catalog, _) =
+                resolve_persisted_chain_selection(&SourceCatalog::default(), &envelope)
+                    .map_err(|error| format!("invalid network settings: {error:?}"))?;
+            let id = optn_runtime::chain::SourceId::new(source);
+            let policy = ConnectionPolicy::exact(id.clone(), protocol);
+            if !optn_runtime::chain::build_selection_plan(&catalog, &policy)
+                .primary
+                .contains(&id)
+            {
+                return Err(
+                    "source is missing, disabled, banned, or has no endpoint for this protocol"
+                        .into(),
+                );
+            }
+            envelope.overlay.connection_policy = policy;
+            Ok(envelope)
+        })
+        .map(|_| ())
+}
+
+/// The durable source catalog and policy shared by native wallet surfaces.
+///
+/// The CLI has no private network-settings shape: it either uses this exact
+/// selection or reports that an older Electrum-only command cannot express it.
+#[derive(Debug, Clone)]
+pub struct SharedChainSelection {
+    pub catalog: SourceCatalog,
+    pub policy: ConnectionPolicy,
+}
+
+/// Load the full persisted source selection without flattening it to Electrum.
+pub fn shared_chain_selection(
+    network: Network,
+    configured_directory: Option<&Path>,
+) -> Result<Option<SharedChainSelection>, String> {
+    let Some(envelope) = shared_envelope(network, configured_directory)? else {
+        return Ok(None);
+    };
+    let (catalog, policy) = resolve_persisted_chain_selection(&SourceCatalog::default(), &envelope)
+        .map_err(|error| format!("cannot enforce network settings: {error:?}"))?;
+    Ok(Some(SharedChainSelection { catalog, policy }))
+}
 
 /// Load the desktop-selected encrypted Electrum endpoint for one network.
 ///
@@ -24,37 +82,11 @@ pub fn shared_electrum(
     network: Network,
     configured_directory: Option<&Path>,
 ) -> Result<Option<ElectrumEndpoint>, String> {
-    let Some(path) =
-        config_directory(configured_directory).map(|directory| directory.join(file_name(network)))
-    else {
+    let Some(envelope) = shared_envelope(network, configured_directory)? else {
         return Ok(None);
     };
-    let file = match File::open(&path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(format!("could not open {}: {error}", path.display())),
-    };
-
-    let mut bytes = Vec::new();
-    file.take(MAX_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|error| format!("could not read {}: {error}", path.display()))?;
-    if bytes.len() as u64 > MAX_BYTES {
-        return Err(format!(
-            "network settings file is too large: {}",
-            path.display()
-        ));
-    }
-
-    let text = std::str::from_utf8(&bytes)
-        .map_err(|_| format!("network settings are not UTF-8: {}", path.display()))?;
-    let envelope = decode_envelope_json(text)
-        .map_err(|error| format!("invalid network settings in {}: {error:?}", path.display()))?;
     let servers = legacy_network_servers_from_overlay(&envelope.overlay).map_err(|error| {
-        format!(
-            "cannot enforce network settings in {}: {error}",
-            path.display()
-        )
+        format!("cannot enforce network settings in an Electrum-only command: {error}")
     })?;
     if servers.peer.is_some() {
         return Err(
@@ -63,7 +95,9 @@ pub fn shared_electrum(
         );
     }
     let Some(entry) = servers.electrum else {
-        return Ok(None);
+        return Err(
+            "shared network settings contain no Electrum route; refusing a default server".into(),
+        );
     };
     let endpoint = parse_electrum_endpoint(&entry, network.default_port())
         .map_err(|error| format!("invalid shared Electrum endpoint: {error}"))?;
@@ -71,6 +105,18 @@ pub fn shared_electrum(
         return Err("shared network settings selected plaintext Electrum".into());
     }
     Ok(Some(endpoint))
+}
+
+fn shared_envelope(
+    network: Network,
+    configured_directory: Option<&Path>,
+) -> Result<Option<NetworkConfigEnvelope>, String> {
+    let Some(path) =
+        config_directory(configured_directory).map(|directory| directory.join(file_name(network)))
+    else {
+        return Ok(None);
+    };
+    NetworkConfigFile::new(path).load()
 }
 
 fn config_directory(configured_directory: Option<&Path>) -> Option<PathBuf> {
@@ -132,6 +178,279 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn offline_commands_do_not_require_a_usable_chain_policy() {
+        use clap::Parser;
+        let directory = TestDirectory::new();
+        let address = optn_core::flipstarter::chipnet_demo_coin(1000, 0)
+            .unwrap()
+            .address()
+            .to_owned();
+        for corrupt in [false, true] {
+            if corrupt {
+                fs::write(directory.0.join(file_name(Network::Chipnet)), b"not JSON").unwrap();
+            } else {
+                directory.write(
+                    Network::Chipnet,
+                    UserNetworkOverlay {
+                        connection_policy: ConnectionPolicy::own_infrastructure(),
+                        ..Default::default()
+                    },
+                );
+            }
+            let base = [
+                "optn",
+                "--network",
+                "chipnet",
+                "--network-config-dir",
+                directory.0.to_str().unwrap(),
+            ];
+            for command in [
+                vec!["inspect", address.as_str()],
+                vec!["decode", "01000000000000000000"],
+                vec!["skills"],
+            ] {
+                let cli = crate::Cli::try_parse_from(base.into_iter().chain(command)).unwrap();
+                assert!(
+                    crate::run(&cli).await.is_ok(),
+                    "local command was blocked by network settings"
+                );
+            }
+            let cli =
+                crate::Cli::try_parse_from(base.into_iter().chain(["balance", address.as_str()]))
+                    .unwrap();
+            assert!(
+                crate::run(&cli).await.is_err(),
+                "network commands must still enforce settings"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn cli_transactions_use_shared_policy_and_preserve_broadcast_ambiguity() {
+        use clap::Parser;
+        use optn_runtime::chain::ProtocolFamily;
+        use serde_json::{json, Value};
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let directory = TestDirectory::new();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut overlay = legacy_electrum("127.0.0.1");
+        let source = &mut overlay.user_sources[0];
+        source.endpoints[0].kind = EndpointKind::ElectrumTcp;
+        source.endpoints[0].port = Some(listener.local_addr().unwrap().port());
+        overlay.connection_policy =
+            ConnectionPolicy::exact(source.id.clone(), ProtocolFamily::Electrum);
+        directory.write(Network::Chipnet, overlay);
+        // A serialization fixture, not a mined or spendable transaction.
+        let account = optn_core::hd::AccountPath::new(145, 1).unwrap();
+        let xpub =
+            optn_core::hd::Wallet::from_mnemonic(optn_core::hd::BIP39_TEST_VECTOR_MNEMONIC, "")
+                .unwrap()
+                .account_xpub_at(account)
+                .unwrap();
+        let address = optn_core::watch_only::address_under_account(Network::Chipnet, &xpub, 0, 1)
+            .unwrap()
+            .address;
+        let script = crate::parse_address(&address, Network::Chipnet)
+            .unwrap()
+            .script_pubkey();
+        let mut output_field = optn_core::token::TokenData::fungible([9; 32], 42)
+            .encode_prefix()
+            .unwrap();
+        output_field.extend_from_slice(&script);
+        let raw = format!(
+            "0100000001{}ffffffff020101ffffffff01e803000000000000{:02x}{}00000000",
+            "00".repeat(32),
+            output_field.len(),
+            crate::hex(&output_field)
+        );
+        let bytes = crate::decode_hex(&raw).unwrap();
+        let mut hash = optn_core::header_hash::sha256d(&bytes);
+        hash.reverse();
+        let txid = crate::hex(&hash);
+        let expected_txid = txid.clone();
+        let response_raw = raw.clone();
+        let server = tokio::spawn(async move {
+            let mut lookups = 0;
+            let mut broadcasts = 0;
+            // One probe per invocation, then its lookup or full HD refresh rounds.
+            for _ in 0..17 {
+                let (socket, _) = listener.accept().await.unwrap();
+                let mut stream = BufReader::new(socket);
+                loop {
+                    let mut line = String::new();
+                    if stream.read_line(&mut line).await.unwrap() == 0 {
+                        break;
+                    }
+                    let request: Value = serde_json::from_str(&line).unwrap();
+                    let result = match request["method"].as_str().unwrap() {
+                        "server.version" => json!(["cli-test", "1.6"]),
+                        "server.features" => {
+                            json!({"genesis_hash": "000000001dd410c49a788668ce26751718cc797474d3152a5fc073dd44fd9f7b"})
+                        }
+                        "server.peers.subscribe" => json!([]),
+                        "blockchain.headers.subscribe" => json!({"height":7,"hex":"00".repeat(80)}),
+                        "blockchain.scripthash.get_history" => {
+                            json!([{"tx_hash":expected_txid,"height":5}])
+                        }
+                        "blockchain.scripthash.get_mempool" => json!([]),
+                        "blockchain.transaction.get" => {
+                            assert_eq!(request["params"], json!([expected_txid, false]));
+                            lookups += 1;
+                            if lookups == 3 {
+                                json!("ff")
+                            } else {
+                                json!(response_raw)
+                            }
+                        }
+                        "blockchain.transaction.broadcast" => {
+                            assert_eq!(request["params"], json!([response_raw]));
+                            broadcasts += 1;
+                            if broadcasts == 2 {
+                                break;
+                            } // Accepted bytes, lost reply.
+                            json!(expected_txid)
+                        }
+                        other => panic!("unexpected RPC {other}"),
+                    };
+                    let response = json!({"id": request["id"], "result": result, "error": null});
+                    stream
+                        .get_mut()
+                        .write_all(format!("{response}\n").as_bytes())
+                        .await
+                        .unwrap();
+                }
+            }
+            assert_eq!(lookups, 7);
+            assert_eq!(broadcasts, 2);
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            let args = [
+                "optn",
+                "--network",
+                "chipnet",
+                "--timeout",
+                "2",
+                "--network-config-dir",
+                directory.0.to_str().unwrap(),
+                "tx",
+                txid.as_str(),
+            ];
+            let cli = crate::Cli::try_parse_from(args).unwrap();
+            let result = crate::run(&cli).await.unwrap();
+            assert_eq!(result["selection"], "shared-native-policy");
+            assert_eq!(result["source"], "desktop-electrum");
+            assert_eq!(result["transaction"], raw);
+            let verbose_cli =
+                crate::Cli::try_parse_from(args.into_iter().chain(["--verbose"])).unwrap();
+            let verbose = crate::run(&verbose_cli).await.unwrap();
+            assert_eq!(verbose["transaction"]["version"], 1);
+            assert_eq!(verbose["transaction"]["outputs"][0]["value"], 1000);
+            assert!(crate::run(&cli).await.is_err(), "substitution must fail");
+            let broadcast_cli = crate::Cli::try_parse_from([
+                "optn",
+                "--network",
+                "chipnet",
+                "--timeout",
+                "2",
+                "--network-config-dir",
+                directory.0.to_str().unwrap(),
+                "broadcast",
+                raw.as_str(),
+            ])
+            .unwrap();
+            let submitted = crate::run(&broadcast_cli).await.unwrap();
+            assert_eq!(submitted["state"], "submitted");
+            assert_eq!(submitted["ok"], true);
+            assert_eq!(submitted["txid"], txid);
+            let uncertain = crate::run(&broadcast_cli).await.unwrap();
+            assert_eq!(uncertain["state"], "uncertain");
+            assert_eq!(uncertain["ok"], false);
+            assert_eq!(uncertain["txid"], txid);
+            let balance_cli = crate::Cli::try_parse_from([
+                "optn",
+                "--network",
+                "chipnet",
+                "--timeout",
+                "2",
+                "--network-config-dir",
+                directory.0.to_str().unwrap(),
+                "balance",
+                address.as_str(),
+            ])
+            .unwrap();
+            let balance = crate::run(&balance_cli).await.unwrap();
+            assert_eq!(balance["selection"], "shared-native-policy");
+            assert_eq!(balance["confirmed"], 1000);
+            assert_eq!(balance["unconfirmed"], 0);
+            assert_eq!(balance["evidence"], "ServerAssertion");
+            let utxo_cli = crate::Cli::try_parse_from([
+                "optn",
+                "--network",
+                "chipnet",
+                "--timeout",
+                "2",
+                "--network-config-dir",
+                directory.0.to_str().unwrap(),
+                "utxos",
+                address.as_str(),
+            ])
+            .unwrap();
+            let utxos = crate::run(&utxo_cli).await.unwrap();
+            assert_eq!(utxos["total"], balance["total"]);
+            assert_eq!(utxos["count"], 1);
+            assert_eq!(utxos["utxos"][0]["txid"], txid);
+            assert_eq!(utxos["utxos"][0]["vout"], 0);
+            assert_eq!(utxos["utxos"][0]["height"], 5);
+            assert_eq!(utxos["utxos"][0]["token"]["amount"], 42);
+            let rescan_cli = crate::Cli::try_parse_from([
+                "optn",
+                "--network",
+                "chipnet",
+                "--timeout",
+                "2",
+                "--network-config-dir",
+                directory.0.to_str().unwrap(),
+                "rescan",
+                "--gap",
+                "2",
+                "--max-addresses",
+                "6",
+                "--all",
+                "--account-path",
+                "m/44'/145'/1'",
+                "--xpub",
+                &xpub,
+            ])
+            .unwrap();
+            let rescan = crate::run(&rescan_cli).await.unwrap();
+            assert_eq!(rescan["hd"], true);
+            assert_eq!(rescan["complete"], true);
+            assert_eq!(rescan["account_path"], "m/44'/145'/1'");
+            assert_eq!(rescan["scanned_addresses"], 8);
+            assert_eq!(rescan["last_used"], json!([1, null, null]));
+            assert_eq!(rescan["utxos"], 1);
+            assert_eq!(rescan["total"], 1000);
+            assert_eq!(rescan["addresses"].as_array().unwrap().len(), 8);
+            assert!(rescan["addresses"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["chain"] == "defi"));
+            server.await.unwrap();
+            directory.write(Network::Chipnet, UserNetworkOverlay::default());
+            assert!(
+                crate::run(&cli).await.is_err(),
+                "empty policy must not use public defaults"
+            );
+            let unavailable = crate::run(&broadcast_cli).await.unwrap();
+            assert_eq!(unavailable["state"], "unavailable");
+            assert_eq!(unavailable["ok"], false);
+        })
+        .await
+        .unwrap();
+    }
+
     fn legacy_electrum(host: &str) -> UserNetworkOverlay {
         UserNetworkOverlay {
             user_sources: vec![ChainSource {
@@ -177,6 +496,119 @@ mod tests {
         directory.write(Network::Mainnet, overlay);
 
         assert!(shared_electrum(Network::Mainnet, Some(&directory.0)).is_err());
+    }
+
+    #[test]
+    fn selecting_a_source_preserves_catalog_and_rejects_invalid_edits() {
+        let directory = TestDirectory::new();
+        let overlay = legacy_electrum("desktop.example");
+        directory.write(Network::Chipnet, overlay.clone());
+        select_source(
+            Network::Chipnet,
+            Some(&directory.0),
+            "desktop-electrum",
+            optn_runtime::chain::ProtocolFamily::Electrum,
+        )
+        .unwrap();
+        let selected = shared_chain_selection(Network::Chipnet, Some(&directory.0))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            selected.catalog.iter().cloned().collect::<Vec<_>>(),
+            overlay.user_sources
+        );
+        assert_eq!(
+            selected.policy,
+            ConnectionPolicy::exact(
+                SourceId::new("desktop-electrum"),
+                optn_runtime::chain::ProtocolFamily::Electrum
+            )
+        );
+        let path = directory.0.join(file_name(Network::Chipnet));
+        let before = fs::read(&path).unwrap();
+        assert!(select_source(
+            Network::Chipnet,
+            Some(&directory.0),
+            "missing",
+            optn_runtime::chain::ProtocolFamily::Electrum
+        )
+        .is_err());
+        assert!(select_source(
+            Network::Chipnet,
+            Some(&directory.0),
+            "desktop-electrum",
+            optn_runtime::chain::ProtocolFamily::Bip37
+        )
+        .is_err());
+        assert_eq!(fs::read(&path).unwrap(), before);
+        let lock = fs::OpenOptions::new()
+            .write(true)
+            .open(path.with_extension("lock"))
+            .unwrap();
+        lock.lock().unwrap();
+        assert!(select_source(
+            Network::Chipnet,
+            Some(&directory.0),
+            "desktop-electrum",
+            optn_runtime::chain::ProtocolFamily::Electrum
+        )
+        .is_err());
+        assert_eq!(fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn empty_persisted_selection_never_becomes_a_public_default() {
+        let directory = TestDirectory::new();
+        directory.write(Network::Chipnet, UserNetworkOverlay::default());
+
+        let selection = shared_chain_selection(Network::Chipnet, Some(&directory.0))
+            .unwrap()
+            .expect("present configuration");
+        assert_eq!(selection.catalog.iter().count(), 0);
+        let error = shared_electrum(Network::Chipnet, Some(&directory.0)).unwrap_err();
+        assert!(error.contains("refusing a default server"));
+        // A different network with no configuration remains distinguishable.
+        assert!(shared_electrum(Network::Mainnet, Some(&directory.0))
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn exposes_the_full_shared_selection_to_protocol_neutral_commands() {
+        let directory = TestDirectory::new();
+        let source = ChainSource {
+            id: SourceId::new("my-peer"),
+            label: "My node".into(),
+            origin: SourceOrigin::UserInfrastructure {
+                group: "home".into(),
+            },
+            endpoints: vec![Endpoint {
+                kind: EndpointKind::BchP2p,
+                host: "127.0.0.1".into(),
+                port: Some(8333),
+            }],
+            capabilities: CapabilitySet::default(),
+            disposition: SourceDisposition::Enabled,
+            priority: 0,
+        };
+        let policy = ConnectionPolicy::exact(
+            source.id.clone(),
+            optn_runtime::chain::ProtocolFamily::Bip37,
+        );
+        directory.write(
+            Network::Mainnet,
+            UserNetworkOverlay {
+                user_sources: vec![source.clone()],
+                connection_policy: policy.clone(),
+                ..Default::default()
+            },
+        );
+
+        let selection = shared_chain_selection(Network::Mainnet, Some(&directory.0))
+            .unwrap()
+            .unwrap();
+        assert_eq!(selection.policy, policy);
+        assert_eq!(selection.catalog.get(&source.id), Some(&source));
     }
 
     #[test]

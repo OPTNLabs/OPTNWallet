@@ -50,6 +50,8 @@ impl<T: Clone> ReconciliationState<T> {
         complete: bool,
     ) -> ReconciliationDecision {
         if !complete {
+            self.sync.history_fresh = false;
+            self.sync.utxos_fresh = false;
             self.sync.verification = VerificationState::Degraded;
             self.sync.degraded_reason = Some("provider response incomplete".into());
             return ReconciliationDecision::PreservedIncomplete;
@@ -58,9 +60,11 @@ impl<T: Clone> ReconciliationState<T> {
         if let Some(current) = &self.authoritative {
             // Never replace stronger cryptographic evidence with a weaker server
             // assertion merely because that server answered later/faster.
-            if evidence_strength(&evidence) < evidence_strength(&current.evidence)
-                && current.chain_tip == chain_tip
-            {
+            if evidence_strength(&evidence) < evidence_strength(&current.evidence) {
+                self.sync.history_fresh = false;
+                self.sync.utxos_fresh = false;
+                self.sync.degraded_reason =
+                    Some("candidate evidence is weaker than the retained snapshot".into());
                 return ReconciliationDecision::PreservedWeakerEvidence;
             }
         }
@@ -83,6 +87,8 @@ impl<T: Clone> ReconciliationState<T> {
     /// Record a provider/runtime failure without mutating the last valid wallet
     /// snapshot. This is the explicit "timeout != empty wallet" invariant.
     pub fn record_failure(&mut self, reason: impl Into<String>) -> ReconciliationDecision {
+        self.sync.history_fresh = false;
+        self.sync.utxos_fresh = false;
         self.sync.verification = VerificationState::Degraded;
         self.sync.degraded_reason = Some(reason.into());
         ReconciliationDecision::PreservedFailure
@@ -159,10 +165,12 @@ mod tests {
         state.record_failure("timeout");
         assert_eq!(state.authoritative.as_ref().unwrap().value, 42);
         assert_eq!(state.sync.verification, VerificationState::Degraded);
+        assert!(!state.sync.history_fresh);
+        assert!(!state.sync.utxos_fresh);
     }
 
     #[test]
-    fn weaker_same_tip_assertion_does_not_replace_stronger_evidence() {
+    fn weaker_assertion_cannot_replace_stronger_evidence_at_any_tip() {
         let mut state = ReconciliationState::default();
         state.reconcile_candidate(
             "verified",
@@ -174,16 +182,22 @@ mod tests {
             Some((7, [2; 32])),
             true,
         );
-        assert_eq!(
-            state.reconcile_candidate(
-                "server",
-                SourceId::new("fast"),
-                Evidence::ServerAssertion,
-                Some((7, [2; 32])),
-                true,
-            ),
-            ReconciliationDecision::PreservedWeakerEvidence
-        );
-        assert_eq!(state.authoritative.as_ref().unwrap().value, "verified");
+        let retained = state.authoritative.clone();
+        for tip in [Some((7, [2; 32])), Some((8, [3; 32])), None] {
+            assert_eq!(
+                state.reconcile_candidate(
+                    "server",
+                    SourceId::new("fast"),
+                    Evidence::ServerAssertion,
+                    tip,
+                    true,
+                ),
+                ReconciliationDecision::PreservedWeakerEvidence
+            );
+            assert_eq!(state.authoritative, retained);
+            assert_eq!(state.sync.chain_tip, Some((7, [2; 32])));
+            assert!(!state.sync.history_fresh);
+            assert!(!state.sync.utxos_fresh);
+        }
     }
 }

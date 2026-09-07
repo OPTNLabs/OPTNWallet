@@ -1070,3 +1070,416 @@ h1 {
   color: var(--accent-text);
   background: var(--accent);
 }
+
+/* Canonical wallet shell from docs/ui-overhaul. Layout follows the renderer's
+   explicit surface class so a desktop does not inherit a stretched phone card. */
+.wallet-chrome.shell-desktop {
+  width: min(100% - 3rem, 100rem);
+  min-height: 100dvh;
+  padding: 1.25rem 0 2rem;
+}
+
+.wallet-chrome.shell-desktop .chrome-body {
+  grid-template-columns: 13rem minmax(0, 1fr);
+  gap: clamp(1.25rem, 2vw, 2rem);
+  flex: 1;
+}
+
+.wallet-chrome.shell-desktop .tab-rail {
+  position: sticky;
+  top: 1.25rem;
+  gap: 0.45rem;
+  padding: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 1.35rem;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+}
+
+.wallet-chrome.shell-desktop .chrome-main {
+  min-width: 0;
+}
+
+.wallet-chrome.shell-mobile {
+  width: 100%;
+  min-height: 100dvh;
+  padding: 0 0 calc(5.5rem + env(safe-area-inset-bottom));
+}
+
+.wallet-chrome.shell-mobile .product-topbar,
+.wallet-chrome.shell-mobile .chrome-main {
+  padding-inline: max(1rem, env(safe-area-inset-left));
+}
+
+.wallet-chrome.shell-mobile .product-topbar {
+  padding-top: max(1rem, env(safe-area-inset-top));
+}
+
+.wallet-chrome.shell-mobile .tab-bar {
+  position: fixed;
+  z-index: 20;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  gap: 0;
+  padding: 0.45rem max(0.4rem, env(safe-area-inset-right))
+    max(0.45rem, env(safe-area-inset-bottom)) max(0.4rem, env(safe-area-inset-left));
+  background: color-mix(in srgb, var(--surface) 96%, var(--bg));
+  backdrop-filter: blur(18px);
+}
+
+.product-topbar {
+  min-height: 4.25rem;
+  padding: 0.7rem 0 1.15rem;
+}
+
+.brand-lockup {
+  gap: 0.75rem;
+}
+
+.brand-mark {
+  position: relative;
+  width: 2rem;
+  height: 2rem;
+  border: 0;
+  border-radius: 0.7rem;
+  transform: none;
+  background: var(--accent);
+  box-shadow: inset 0 0 0 0.25rem color-mix(in srgb, var(--accent-text) 28%, transparent);
+}
+
+.brand-mark::before,
+.brand-mark::after {
+  position: absolute;
+  top: 0.45rem;
+  bottom: 0.45rem;
+  width: 0.28rem;
+  border-radius: 999px;
+  background: var(--accent-text);
+  content: "";
+}
+
+.brand-mark::before {
+  left: 0.6rem;
+}
+
+.brand-mark::after {
+  right: 0.6rem;
+}
+
+.brand-tag {
+  font-size: 0.7rem;
+  letter-spacing: 0.03em;
+}
+
+.network-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.65rem;
+  padding: 0.55rem 0.85rem;
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  background: color-mix(in srgb, var(--surface) 84%, var(--bg));
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.sync-dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  margin-right: 0.45rem;
+  box-shadow: 0 0 0 0.18rem color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.tab-item {
+  min-height: 2.75rem;
+  border-radius: 0.85rem;
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+  transition: background 140ms ease, color 140ms ease;
+}
+
+.tab-item.active {
+  color: var(--accent-text);
+  border-radius: 0.85rem;
+  background: var(--accent);
+}
+
+.tab-glyph {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.tab-rail .tab-item {
+  min-height: 2.9rem;
+}
+
+.page {
+  gap: 1rem;
+  padding-bottom: 1rem;
+}
+
+.page > h1 {
+  font-size: clamp(1.75rem, 3vw, 2.45rem);
+  line-height: 1;
+  letter-spacing: -0.045em;
+}
+
+.hero-card,
+.panel,
+.stat-card,
+.hint-card,
+.explore-card,
+.network-choice,
+.add-source {
+  border-color: color-mix(in srgb, var(--border) 85%, var(--accent));
+  border-radius: 1.35rem;
+  background: color-mix(in srgb, var(--surface) 94%, var(--bg));
+  box-shadow: 0 0.8rem 2.2rem rgba(0, 0, 0, 0.1);
+}
+
+.hero-card {
+  overflow: hidden;
+  min-height: 12rem;
+  padding: clamp(1.25rem, 2.5vw, 2rem);
+  background:
+    radial-gradient(circle at 92% 12%, color-mix(in srgb, var(--accent) 25%, transparent), transparent 15rem),
+    color-mix(in srgb, var(--surface) 94%, var(--bg));
+}
+
+.balance {
+  font-size: clamp(2rem, 4.5vw, 3.8rem);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.055em;
+}
+
+.wallet-home {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 25rem), 1fr));
+  align-items: start;
+}
+
+.wallet-home > .hero-card,
+.wallet-chrome.shell-desktop .wallet-home > .panel:nth-of-type(3) {
+  grid-column: 1 / -1;
+}
+
+.wallet-chrome.shell-desktop .wallet-home > .hero-card {
+  min-height: 15rem;
+}
+
+.panel-head h2,
+.advanced-toggle h2 {
+  margin: 0;
+  font-size: 1rem;
+  letter-spacing: -0.015em;
+}
+
+.source-row {
+  min-height: 4.75rem;
+  padding: 0.85rem 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.source-row:last-child {
+  border-bottom: 0;
+}
+
+.source-icon {
+  display: grid;
+  width: 2.4rem;
+  height: 2.4rem;
+  place-items: center;
+  border-radius: 0.85rem;
+  color: var(--accent-text);
+  background: var(--accent);
+}
+
+.source-title {
+  margin: 0;
+  font-weight: 800;
+}
+
+.quick-grid,
+.basic-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+
+.quick-tile {
+  min-height: 6.2rem;
+  align-content: center;
+  justify-items: start;
+  padding: 0.9rem;
+  border-radius: 1rem;
+  border-color: color-mix(in srgb, var(--border) 75%, var(--accent));
+  background: color-mix(in srgb, var(--surface) 92%, var(--bg));
+  font-weight: 800;
+}
+
+.quick-tile > span {
+  color: var(--accent);
+  font-size: 1.2rem;
+}
+
+.quick-tile small {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.quick-tile:focus-visible,
+.tab-item:focus-visible,
+.network-pill:focus-visible,
+.back-button:focus-visible,
+.receive-tab:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 75%, white);
+  outline-offset: 3px;
+}
+
+.quick-tile:disabled,
+.receive-tab:disabled,
+.secondary:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.back-button {
+  display: grid;
+  width: 2.75rem;
+  height: 2.75rem;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 0.85rem;
+  color: var(--text);
+  background: color-mix(in srgb, var(--surface) 92%, var(--bg));
+  cursor: pointer;
+  font-size: 1.65rem;
+  line-height: 1;
+}
+
+.receive-page {
+  max-width: 42rem;
+}
+
+.wallet-chrome.shell-desktop .receive-page {
+  max-width: 46rem;
+}
+
+.receive-card {
+  display: grid;
+  gap: 1rem;
+  padding: clamp(1rem, 3vw, 1.75rem);
+}
+
+.receive-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.45rem;
+  padding: 0.3rem;
+  border-radius: 0.9rem;
+  background: color-mix(in srgb, var(--bg) 72%, var(--surface));
+}
+
+.receive-tab {
+  min-height: 2.6rem;
+  border: 0;
+  border-radius: 0.68rem;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.receive-tab.active {
+  color: var(--accent-text);
+  background: var(--accent);
+}
+
+.receive-qr-frame {
+  display: grid;
+  min-height: min(70vw, 19rem);
+  place-items: center;
+  padding: clamp(0.8rem, 4vw, 1.4rem);
+  border-radius: 1.1rem;
+  background: #ffffff;
+}
+
+.receive-qr {
+  display: block;
+  width: min(100%, 18rem);
+  height: auto;
+  color: #002b1d;
+  image-rendering: pixelated;
+}
+
+.receive-qr-unavailable {
+  margin: 0;
+  color: #6b1c1c;
+}
+
+.receive-kind,
+.receive-address,
+.receive-copy-status,
+.receive-note {
+  margin: 0;
+}
+
+.receive-address {
+  overflow-wrap: anywhere;
+  padding: 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 0.85rem;
+  background: color-mix(in srgb, var(--bg) 52%, var(--surface));
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
+.receive-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem;
+}
+
+.receive-actions .secondary {
+  min-height: 2.75rem;
+  padding: 0.7rem 1rem;
+  font-weight: 800;
+}
+
+.receive-copy-status {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.receive-note {
+  padding: 0.8rem;
+  border-left: 0.2rem solid var(--accent);
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.wallet-chrome.shell-mobile .quick-grid,
+.wallet-chrome.shell-mobile .basic-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.wallet-chrome.shell-mobile .quick-tile {
+  min-height: 5.8rem;
+  padding: 0.7rem;
+  font-size: 0.8rem;
+}
+
+.wallet-chrome.shell-mobile .quick-tile small {
+  font-size: 0.64rem;
+}

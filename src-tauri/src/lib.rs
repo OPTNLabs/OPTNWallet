@@ -5,13 +5,13 @@ mod menu;
 pub mod app_transport;
 mod appearance;
 pub mod chain_runtime;
-mod network_config;
 #[cfg(desktop)]
 pub mod clipboard;
 pub mod electrum_tcp;
 pub mod fusion;
 #[cfg(desktop)]
 pub mod hw;
+mod network_config;
 pub mod nostr_tor;
 #[cfg(desktop)]
 pub mod platform;
@@ -1236,13 +1236,18 @@ pub fn run() {
                 log::warn!("Could not restore appearance preferences; using defaults: {error}");
             }
             if let Err(error) = network_settings.restore(&mut initial_state) {
-                log::warn!("Could not restore network preferences; keeping the existing file: {error}");
+                log::warn!(
+                    "Could not restore network preferences; keeping the existing file: {error}"
+                );
             }
             // Restore only non-wallet preferences before publishing the first
             // authoritative snapshot. Wallet state is never loaded here.
             let (app_runtime, app_driver) = optn_runtime::AppRuntime::new(initial_state);
             tauri::async_runtime::spawn(app_driver.run());
-            let native_chain = chain_runtime::NativeChainRuntime::spawn(app_runtime.clone());
+            let native_chain = chain_runtime::NativeChainRuntime::spawn(
+                app_runtime.clone(),
+                network_settings.clone(),
+            );
             app.manage(appearance);
             app.manage(network_settings);
             app.manage(native_chain);

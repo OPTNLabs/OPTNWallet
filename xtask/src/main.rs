@@ -139,6 +139,7 @@ fn architecture() {
         root.join("crates/optn-platform-native/Cargo.toml"),
         root.join("crates/optn-platform-apple/Cargo.toml"),
         root.join("crates/optn-runtime/Cargo.toml"),
+        root.join("crates/optn-chain-native/Cargo.toml"),
         root.join("crates/optn-transport/Cargo.toml"),
     ];
 
@@ -429,6 +430,21 @@ fn architecture() {
         "crates/optn-runtime",
         &runtime_manifest,
         &["optn-ui", "optn-platform-native"],
+        &mut failures,
+    );
+
+    let native_chain_manifest = read(&root.join("crates/optn-chain-native/Cargo.toml"));
+    forbid_dependencies(
+        "crates/optn-chain-native",
+        &native_chain_manifest,
+        &[
+            "optn-app",
+            "optn-platform",
+            "optn-platform-native",
+            "optn-platform-apple",
+            "optn-transport",
+            "optn-ui",
+        ],
         &mut failures,
     );
 

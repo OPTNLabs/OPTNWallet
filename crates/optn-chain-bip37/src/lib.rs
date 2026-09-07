@@ -260,13 +260,19 @@ impl Bip37Backend {
         let mut bloom_items = Vec::<Vec<u8>>::new();
         for interest in interests {
             match interest {
-                WalletInterest::Script(script) => bloom_items.extend(script_push_items(script)),
+                WalletInterest::Script(script) => {
+                    let items = script_push_items(script);
+                    if items.is_empty() {
+                        return Err(ChainBackendError::Unsupported);
+                    }
+                    bloom_items.extend(items);
+                }
                 WalletInterest::Outpoint { .. } => {
                     if let Some(outpoint) = interest.serialized_outpoint() {
                         bloom_items.push(outpoint.to_vec());
                     }
                 }
-                WalletInterest::RpaPrefix(_) => {}
+                WalletInterest::RpaPrefix(_) => return Err(ChainBackendError::Unsupported),
             }
         }
         if bloom_items.is_empty() {
@@ -846,6 +852,42 @@ async fn relay_tx_on_stream<S: AsyncReadExt + AsyncWriteExt + Unpin>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn unsupported_scope_is_rejected_before_scanning_blocks() {
+        let backend = Bip37Backend {
+            config: Bip37Config::new(
+                SourceId::new("local-test"),
+                Endpoint {
+                    kind: EndpointKind::BchP2p,
+                    host: "127.0.0.1".into(),
+                    port: Some(1),
+                },
+                "chipnet",
+            ),
+            capabilities: CapabilitySet::default(),
+            probe: NodeProbe {
+                user_agent: "test".into(),
+                protocol_version: 70015,
+                services: 4,
+                start_height: 0,
+                serves_bloom: true,
+            },
+            headers: Mutex::new(HeaderCache::default()),
+        };
+        for unsupported in [
+            WalletInterest::rpa_prefix("ab").unwrap(),
+            WalletInterest::script(vec![0x51]),
+            WalletInterest::script(vec![]),
+        ] {
+            assert_eq!(
+                backend
+                    .wallet_refresh(&[WalletInterest::script(vec![1, 0x51]), unsupported,], None)
+                    .await,
+                Err(ChainBackendError::Unsupported)
+            );
+        }
+    }
     #[test]
     fn p2pkh_script_produces_hash_push() {
         let mut script = vec![0x76, 0xa9, 0x14];

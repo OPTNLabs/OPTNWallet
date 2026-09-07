@@ -306,7 +306,7 @@ impl NeutrinoBackend {
             return Err(ChainBackendError::Unsupported);
         }
 
-        let (query_items, watched_scripts, watched_outpoints) = query_items(interests);
+        let (query_items, watched_scripts, watched_outpoints) = query_items(interests)?;
         if query_items.is_empty() {
             return Err(ChainBackendError::Rejected(
                 "compact-filter refresh has no script/outpoint interests".into(),
@@ -554,7 +554,7 @@ impl ChainBackend for NeutrinoBackend {
 
 type QueryItems = (Vec<Vec<u8>>, Vec<Vec<u8>>, BTreeSet<([u8; 32], u32)>);
 
-fn query_items(interests: &[WalletInterest]) -> QueryItems {
+fn query_items(interests: &[WalletInterest]) -> Result<QueryItems, ChainBackendError> {
     let mut query = Vec::new();
     let mut scripts = Vec::new();
     let mut outpoints = BTreeSet::new();
@@ -570,10 +570,12 @@ fn query_items(interests: &[WalletInterest]) -> QueryItems {
                 }
                 outpoints.insert((*txid, *vout));
             }
-            WalletInterest::RpaPrefix(_) | WalletInterest::Script(_) => {}
+            WalletInterest::RpaPrefix(_) | WalletInterest::Script(_) => {
+                return Err(ChainBackendError::Unsupported)
+            }
         }
     }
-    (query, scripts, outpoints)
+    Ok((query, scripts, outpoints))
 }
 
 async fn probe_genesis_filter(
@@ -1205,6 +1207,20 @@ fn nonce() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unsupported_interest_cannot_be_silently_dropped_from_filter_scope() {
+        let valid = WalletInterest::script(vec![0x51]);
+        assert!(query_items(std::slice::from_ref(&valid)).is_ok());
+        assert_eq!(
+            query_items(&[valid.clone(), WalletInterest::rpa_prefix("ab").unwrap()]),
+            Err(ChainBackendError::Unsupported)
+        );
+        assert_eq!(
+            query_items(&[valid, WalletInterest::script(vec![])]),
+            Err(ChainBackendError::Unsupported)
+        );
+    }
 
     #[test]
     fn bchd_compact_filter_service_bit_is_1_shift_8() {

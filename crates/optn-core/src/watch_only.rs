@@ -28,6 +28,17 @@ pub struct WatchOnlyAccountPreview {
     pub change: PublicAddressPreview,
 }
 
+/// Public address-book scope discovered for a selected HD account. Branches
+/// are receive (0), change (1), and ordinary DeFi (2), in address-index order.
+/// This carries no private key or claim of authenticated storage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HdAddressBook {
+    pub account: crate::hd::AccountPath,
+    pub account_xpub: String,
+    pub branches: [Vec<PublicAddressPreview>; 3],
+    pub last_used: [Option<u32>; 3],
+}
+
 /// Normalize the optional four-byte master fingerprint used by PSBT key origins.
 pub fn normalize_master_fingerprint(raw: &str) -> Result<Option<String>> {
     let trimmed = raw.trim();

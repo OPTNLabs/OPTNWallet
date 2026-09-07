@@ -15,24 +15,10 @@ pub struct TauriWebTransport;
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use super::*;
-    use js_sys::{Object, Reflect};
+    use js_sys::{Function, Object, Promise, Reflect};
     use optn_transport::{WireAction, WireState};
-    use wasm_bindgen::prelude::*;
+    use wasm_bindgen::{JsCast, JsValue};
     use wasm_bindgen_futures::JsFuture;
-
-    #[wasm_bindgen(inline_js = r#"
-        export function optnTauriInvoke(command, args) {
-            const tauri = globalThis.__TAURI__;
-            if (!tauri?.core?.invoke) {
-                return Promise.reject(new Error('Tauri invoke bridge is unavailable'));
-            }
-            return tauri.core.invoke(command, args);
-        }
-    "#)]
-    extern "C" {
-        #[wasm_bindgen(js_name = optnTauriInvoke)]
-        fn tauri_invoke(command: &str, args: &JsValue) -> js_sys::Promise;
-    }
 
     fn js_error(value: JsValue) -> TransportError {
         TransportError::Other(
@@ -48,8 +34,27 @@ mod wasm {
         Ok(args.into())
     }
 
+    /// Invoke the Tauri global without a handwritten JavaScript bridge.
+    ///
+    /// `withGlobalTauri` is a shell setting; Rust owns argument construction,
+    /// result handling, and every application command above this boundary.
+    fn tauri_invoke(command: &str, args: &JsValue) -> Result<Promise, TransportError> {
+        let global = js_sys::global();
+        let tauri = Reflect::get(&global, &JsValue::from_str("__TAURI__")).map_err(js_error)?;
+        let core = Reflect::get(&tauri, &JsValue::from_str("core")).map_err(js_error)?;
+        let invoke = Reflect::get(&core, &JsValue::from_str("invoke")).map_err(js_error)?;
+        let invoke = invoke
+            .dyn_into::<Function>()
+            .map_err(|_| TransportError::Other("Tauri invoke bridge is unavailable".into()))?;
+        invoke
+            .call2(&core, &JsValue::from_str(command), args)
+            .map_err(js_error)?
+            .dyn_into::<Promise>()
+            .map_err(|_| TransportError::Other("Tauri invoke did not return a promise".into()))
+    }
+
     async fn invoke(command: &str, args: JsValue) -> Result<JsValue, TransportError> {
-        JsFuture::from(tauri_invoke(command, &args))
+        JsFuture::from(tauri_invoke(command, &args)?)
             .await
             .map_err(js_error)
     }
@@ -76,6 +81,14 @@ mod wasm {
 
         fn next_event<'a>(&'a self) -> TransportFuture<'a, Option<AppEvent>> {
             Box::pin(async { Err(TransportError::Unsupported) })
+        }
+
+        fn write_clipboard<'a>(&'a self, text: String) -> TransportFuture<'a, ()> {
+            Box::pin(async move {
+                let args = command_args("text", &JsValue::from_str(&text))?;
+                invoke("clipboard_write_text", args).await?;
+                Ok(())
+            })
         }
     }
 }
