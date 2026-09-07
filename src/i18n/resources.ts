@@ -606,6 +606,22 @@ export const translations = {
     ...baseTranslations.en,
     ...localeOverrides.ar,
     ...localeHardwareOverrides.ar,
+    'connection.relayAvailable':
+      'خادم الترحيل متاح — لم يُتحقق من اتصال التطبيق اللامركزي',
+    'connection.reconnecting': 'جارٍ إعادة الاتصال بخادم الترحيل',
+    'connection.disconnected': 'الاتصال بخادم الترحيل منقطع',
+    'connection.sessionEnded': 'انتهت الجلسة',
+    'connection.unknown': 'حالة الاتصال غير متاحة',
+    'connection.expired': 'انتهت صلاحية الجلسة',
+    'connection.sessionAuthorized':
+      'الجلسة مصرح بها — توفر التطبيق اللامركزي غير معروف',
+    'connection.awaitingAcknowledgement': 'بانتظار تأكيد الجلسة',
+    'connection.awaitingApproval': 'بانتظار موافقتك',
+    'connection.savedSessions': 'الجلسات المحفوظة',
+    'connection.noSavedSessions': 'لا توجد جلسات محفوظة',
+    'connection.attempts': 'محاولات الاتصال',
+    'connection.attemptStarted': 'بدء المحاولة',
+    'connection.failed': 'فشلت محاولة الاتصال. أعد الاقتران للمحاولة مجددًا.',
   },
   fr: {
     ...baseTranslations.en,
