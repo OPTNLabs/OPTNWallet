@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   buildIpfsGatewayUrl,
+  checkIpfsRelayHealth,
   uploadToIpfsRelay,
   waitForIpfsAvailability,
 } from '../IpfsService';
@@ -127,6 +128,32 @@ describe('IpfsService', () => {
       expect.objectContaining({ method: 'POST' })
     );
     expect(result.cid).toBe('bafyfallback');
+  });
+
+  it('uses Kubo paths only for the exact Kubo relay host', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({ name: 'upload.bin', cid: 'bafyexacthost', size: '1' }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const lookalike = 'https://attacker.example/ipfs-api.optnlabs.com';
+
+    await uploadToIpfsRelay(new Blob(['x']), {
+      filename: 'x.bin',
+      relayBase: lookalike,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${lookalike}/v1/ipfs/add`,
+      expect.objectContaining({ method: 'POST' })
+    );
+
+    await checkIpfsRelayHealth({ relayBase: lookalike });
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      `${lookalike}/v1/ipfs/version`,
+      expect.objectContaining({ method: 'GET' })
+    );
   });
 
   it('uploadToIpfsRelay retries once after a transport TypeError', async () => {
