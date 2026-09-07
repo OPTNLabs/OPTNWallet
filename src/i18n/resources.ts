@@ -23,6 +23,23 @@ const baseTranslations = {
   en: {
     ...coreTranslations.en,
     ...remainingTranslations.en,
+    'connection.relayAvailable':
+      'Relay available — dApp connection not verified',
+    'connection.reconnecting': 'Reconnecting to relay',
+    'connection.disconnected': 'Relay disconnected',
+    'connection.sessionEnded': 'Session ended',
+    'connection.unknown': 'Connection status unavailable',
+    'connection.expired': 'Session expired',
+    'connection.sessionAuthorized':
+      'Session authorized — dApp availability unknown',
+    'connection.awaitingAcknowledgement': 'Waiting for session acknowledgement',
+    'connection.awaitingApproval': 'Waiting for your approval',
+    'connection.savedSessions': 'Saved sessions',
+    'connection.noSavedSessions': 'No saved sessions',
+    'connection.attempts': 'Connection attempts',
+    'connection.attemptStarted': 'Attempt started',
+    'connection.failed':
+      'Connection attempt failed. Retry pairing to try again.',
     'app.language': 'Language',
     'app.languageDescription': 'Choose the wallet interface language',
     'app.back': 'Back',
@@ -523,6 +540,8 @@ const baseTranslations = {
  */
 export const translations = {
   ...baseTranslations,
+  es: { ...baseTranslations.en, ...baseTranslations.es },
+  'zh-CN': { ...baseTranslations.en, ...baseTranslations['zh-CN'] },
   'pt-BR': {
     ...baseTranslations.en,
     ...localeOverrides['pt-BR'],

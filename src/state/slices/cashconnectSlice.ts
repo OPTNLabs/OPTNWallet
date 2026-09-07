@@ -1,4 +1,8 @@
-import { createAsyncThunk, createSlice, type PayloadAction } from '@reduxjs/toolkit';
+import {
+  createAsyncThunk,
+  createSlice,
+  type PayloadAction,
+} from '@reduxjs/toolkit';
 import type {
   ExecuteActionRequest,
   ExecuteActionResponse,
@@ -88,6 +92,7 @@ const cashconnectSlice = createSlice({
       action: PayloadAction<SessionProposalResponse | null>
     ) {
       state.pendingProposal = action.payload as never;
+      if (action.payload) state.errorMessage = null;
     },
     setCashConnectAction(state, action: PayloadAction<ActionPrompt | null>) {
       state.pendingAction = action.payload as never;
@@ -95,6 +100,21 @@ const cashconnectSlice = createSlice({
     setCashConnectError(state, action: PayloadAction<string | null>) {
       state.errorMessage = action.payload;
     },
+  },
+  extraReducers: (builder) => {
+    builder.addCase(initCashConnect.pending, (state) => {
+      state.errorMessage = null;
+    });
+    builder.addCase(pairCashConnectThunk.pending, (state) => {
+      state.errorMessage = null;
+    });
+    builder.addCase(initCashConnect.rejected, (state) => {
+      state.errorMessage = 'Connection attempt failed';
+    });
+    builder.addCase(pairCashConnectThunk.rejected, (state) => {
+      state.errorMessage = 'Connection attempt failed';
+    });
+    builder.addCase(stopCashConnectThunk.fulfilled, () => initialState);
   },
 });
 

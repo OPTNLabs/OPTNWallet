@@ -6,6 +6,7 @@ import { disconnectSession } from '../../state/slices/walletconnectSlice';
 import { normalizeExternalUrl } from '../../utils/externalUrl';
 import { useI18n } from '../../i18n/useI18n';
 import { formatDate } from '../../i18n/format';
+import { walletConnectSessionStatus } from '../../utils/connectionStatus';
 
 interface Props {
   sessionTopic: string;
@@ -55,6 +56,9 @@ const SessionSettingsModal: React.FC<Props> = ({ sessionTopic, onClose }) => {
           <div className="flex min-w-0 flex-col text-center md:text-left">
             <p className="break-words font-bold text-lg sm:text-xl leading-tight">
               {dappMeta.name}
+            </p>
+            <p role="status" className="wallet-muted text-xs sm:text-sm">
+              {t(walletConnectSessionStatus(session, Date.now() / 1000))}
             </p>
             {dappUrl ? (
               <a

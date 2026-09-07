@@ -10,6 +10,7 @@ export type JsonRpcError = {
 export type JsonRpcResponse<T> = JsonRpcSuccess<T> | JsonRpcError;
 
 export interface WalletconnectState {
+  connectionFailed?: boolean;
   web3wallet: IWalletKit | null;
   activeSessions: Record<string, SessionTypes.Struct> | null;
   pendingProposal: WalletKitTypes.SessionProposal | null;
