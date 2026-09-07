@@ -506,7 +506,7 @@ export function encodeUnsignedPsbt(
       ];
     }
     derivations ??= [];
-    if (derivations.length === 0 && !input.finalScriptSig) {
+    if (derivations.length === 0 && !input.finalScriptSig?.length) {
       throw new Error('Inputs need at least one public key derivation.');
     }
     for (const derivation of derivations) {
@@ -560,7 +560,7 @@ export function encodeUnsignedPsbt(
           signature.signature
         );
       }),
-      ...(input.finalScriptSig
+      ...(input.finalScriptSig?.length
         ? [
             record(
               Uint8Array.from([PSBT_IN_FINAL_SCRIPTSIG]),

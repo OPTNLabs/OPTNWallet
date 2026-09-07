@@ -375,6 +375,30 @@ describe('Paytaca v145 fields', () => {
     expect(parsed.inputs[0].finalScriptSig).toEqual(finalScriptSig);
     expect(parsed.inputs[0].derivations).toHaveLength(0);
   });
+
+  it('rejects an empty finalized input script without wallet derivation', () => {
+    expect(() =>
+      encodeUnsignedPsbt(
+        [
+          input({
+            publicKey: undefined,
+            masterFingerprint: undefined,
+            derivationPath: undefined,
+            finalScriptSig: new Uint8Array(),
+          }),
+        ],
+        [output()]
+      )
+    ).toThrow('Inputs need at least one public key derivation.');
+  });
+
+  it('omits an empty finalized input script record', () => {
+    const psbt = encodeUnsignedPsbt(
+      [input({ finalScriptSig: new Uint8Array() })],
+      [output()]
+    );
+    expect(decodePsbt(psbt).inputs[0].finalScriptSig).toBeNull();
+  });
 });
 
 describe('BCH PSBT decoding', () => {
