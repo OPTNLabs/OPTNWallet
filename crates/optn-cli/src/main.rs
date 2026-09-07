@@ -618,20 +618,20 @@ fn command_name(command: &Command) -> &'static str {
 
 fn client_for(cli: &Cli) -> Result<Client> {
     if cli.host.is_some() || cli.port.is_some() || cli.no_tls {
-        return Ok(Client::new(
+        return Client::new(
             cli.host
                 .clone()
                 .unwrap_or_else(|| cli.network.default_host().to_string()),
             cli.port.unwrap_or_else(|| cli.network.default_port()),
             !cli.no_tls,
             cli.timeout,
-        ));
+        );
     }
 
     let endpoint =
         network_settings::shared_electrum(cli.network, cli.network_config_dir.as_deref())
             .map_err(CliError::Usage)?;
-    Ok(match endpoint {
+    match endpoint {
         Some(endpoint) => Client::new(
             endpoint.host().to_owned(),
             endpoint.port(),
@@ -644,7 +644,7 @@ fn client_for(cli: &Cli) -> Result<Client> {
             true,
             cli.timeout,
         ),
-    })
+    }
 }
 
 fn append_network_config_dir(base: &mut Vec<String>, directory: Option<&Path>) -> Result<()> {
