@@ -1,5 +1,54 @@
 # WizardConnect Integration Notes
 
+## Verified integration notes — 2026-09-08
+
+The design notes below are historical. The adapter, connection manager, per-pairing
+relay identity storage, and approval UI now exist. Review the installed
+`@wizardconnect/wallet` 0.1.5 API alongside the current Riften documentation:
+the installed adapter returns `signedTransaction`, while the current wallet-page
+example calls that property `signedTransactionHex`. OPTN's manager consumes the
+installed API; do not rename that property solely to match the newer example.
+
+- `RelayConnectionState.status` reports relay transport state. The installed
+  manager keeps handshake discovery private; a reachable relay alone does not
+  prove that the dApp is available. Connection panels and signing approval must
+  use the same status mapping.
+- Sign requests use `WcSignTransactionRequest`; its transaction may be raw hex
+  or a structured transaction. Approval must decode the same representation the
+  signer accepts, show the selected network's addresses, and disable signing
+  when the transaction/source-output preview is unavailable.
+- Riften's [relay serialization](https://docs.riftenlabs.com/wizardconnect/serialization/)
+  encodes bytes as plain hex or extended `Uint8Array` strings and amounts as
+  extended `bigint` strings. The pinned SDK does not expose the newer decoding
+  helpers. `decodeWizardConnectTransaction` validates and converts both formats
+  for the approval UI and adapter, including token data and covenant scripts.
+  Missing source outputs, malformed fields, and invalid totals fail closed.
+- The [protocol's signature requirement](https://docs.riftenlabs.com/wizardconnect/protocol/#sighash-requirement-security-critical)
+  is `SIGHASH_ALL | SIGHASH_FORKID | SIGHASH_UTXOS` (`0x61`). The software signer
+  supplies every source output to libauth's compiler, including preset covenant
+  inputs. A regression test verifies both signature flags and rejection after
+  a source-output substitution.
+  Native, serialized, and partially signed transaction fixtures are checked
+  using libauth's BCH virtual machine. Hardware signing remains unverified for
+  this signature requirement; successful software tests do not certify it.
+- [Named xpub paths](https://docs.riftenlabs.com/wizardconnect/pubkey-derivation/)
+  describe protocol roles, not a mandatory internal account path. OPTN derives
+  them from the wallet's saved account path. The historical coin-type-145 note
+  below is a recommendation, not a protocol restriction.
+- Live Chipnet checks against Cauldron verified pairing with both WizardConnect
+  and WalletConnect, WizardConnect approval cancellation and disconnect, and
+  small swaps through both protocols. The original WizardConnect swap exposed
+  the raw-hex preview bug; the next attempt exposed missing relay decoding.
+  Both failed attempts were cancelled before broadcast. After the fixes, the
+  WizardConnect swap succeeded; its retrieved transaction and source outputs
+  passed the BCH VM and its wallet signature uses `0x61`.
+  These are browser integration checks, not native-platform or hardware-wallet
+  certification. Public Chipnet transaction IDs:
+  - WalletConnect: `e7fc235f350d8c1de4a8989993a30d820487e65e28a53c8c2e935fc12a724f93`
+  - WizardConnect: `704dcb0d6ddc62a87cb5bb2ff4dd02062d9d21bd17efc0ac1c4247a33c93d17a`
+
+## Historical design proposal
+
 Date: 2026-03-20
 
 ## Summary

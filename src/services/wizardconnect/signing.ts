@@ -2,32 +2,27 @@ import {
   CompilationContextBCH,
   SigningSerializationFlag,
   binToHex,
-  decodeTransaction,
   encodeTransaction,
   generateSigningSerializationBCH,
-  generateTransaction,
   hash256,
   hexToBin,
   importWalletTemplate,
   lockingBytecodeToCashAddress,
   secp256k1,
   sha256,
-  type Input,
-  type Output,
   type Transaction,
-  type TransactionTemplateFixed,
   walletTemplateP2pkhNonHd,
   walletTemplateToCompilerBCH,
 } from '@bitauth/libauth';
 import { DerivationPath } from '@wizardconnect/wallet';
 import type { SignTransactionRequest } from '@wizardconnect/core';
-import type { ContractInfo } from '../../types/wcInterfaces';
 import type { Network } from '../../state/slices/networkSlice';
 import { PREFIX } from '../../utils/constants';
 import { ensureUint8Array } from '../../utils/binary';
 import { getPublicKeyCompressed } from '../../utils/hex';
 import { zeroize } from '../../utils/secureMemory';
 import { derivePrivateKeyForPath } from './derivation';
+import { decodeWizardConnectTransaction } from './transaction';
 
 type WalletSeedMaterial = {
   mnemonic: string;
@@ -36,7 +31,9 @@ type WalletSeedMaterial = {
   accountPath?: string;
 };
 
-function pathNameToDerivationPath(pathName: 'receive' | 'change' | 'defi'): DerivationPath {
+function pathNameToDerivationPath(
+  pathName: 'receive' | 'change' | 'defi'
+): DerivationPath {
   switch (pathName) {
     case 'receive':
       return DerivationPath.Receive;
@@ -53,33 +50,34 @@ export async function signWizardConnectTransaction(
   request: SignTransactionRequest,
   wallet: WalletSeedMaterial
 ): Promise<string> {
-  const payload = request.transaction;
-  const txDetails =
-    typeof payload.transaction === 'string'
-      ? decodeTransaction(hexToBin(payload.transaction))
-      : payload.transaction;
-  const sourceOutputs = payload.sourceOutputs as (Input & Output & ContractInfo)[];
+  const { transaction: txDetails, sourceOutputs } =
+    decodeWizardConnectTransaction(request.transaction);
 
-  if (!txDetails || typeof txDetails === 'string') {
-    throw new Error(
-      'WizardConnect transaction payload must include a structured transaction or valid raw hex'
-    );
-  }
-
-  if (!Array.isArray(sourceOutputs) || sourceOutputs.length === 0) {
-    throw new Error('WizardConnect request is missing source outputs');
-  }
-
-  const template = importWalletTemplate(walletTemplateP2pkhNonHd);
+  const template = importWalletTemplate({
+    ...walletTemplateP2pkhNonHd,
+    scripts: {
+      ...walletTemplateP2pkhNonHd.scripts,
+      unlock: {
+        ...walletTemplateP2pkhNonHd.scripts.unlock,
+        script:
+          '<key.schnorr_signature.all_outputs_all_utxos> <key.public_key>',
+      },
+    },
+  });
   if (typeof template === 'string') {
     throw new Error(template);
   }
   const compiler = walletTemplateToCompilerBCH(template);
-  const txTemplate = { ...txDetails } as TransactionTemplateFixed<typeof compiler>;
-  const inputPaths = new Map(request.inputPaths.map(([index, path, addressIndex]) => [
-    index,
-    { path, addressIndex },
-  ]));
+  const txTemplate = {
+    ...txDetails,
+    inputs: txDetails.inputs.map((input) => ({ ...input })),
+  } as Transaction;
+  const inputPaths = new Map(
+    request.inputPaths.map(([index, path, addressIndex]) => [
+      index,
+      { path, addressIndex },
+    ])
+  );
   const usedKeys = new Set<Uint8Array>();
   const networkPrefix = PREFIX[wallet.network];
 
@@ -140,33 +138,44 @@ export async function signWizardConnectTransaction(
             sighash
           ) as Uint8Array;
           const sigWithType = Uint8Array.from([...sig, hashType]);
-          hexUnlock = hexUnlock.replace(sigPlaceholder, '41' + binToHex(sigWithType));
+          hexUnlock = hexUnlock.replace(
+            sigPlaceholder,
+            '41' + binToHex(sigWithType)
+          );
         }
 
         if (hexUnlock.includes(pubkeyPlaceholder)) {
           const pubkey = getPublicKeyCompressed(signerKey, false) as Uint8Array;
-          hexUnlock = hexUnlock.replace(pubkeyPlaceholder, '21' + binToHex(pubkey));
+          hexUnlock = hexUnlock.replace(
+            pubkeyPlaceholder,
+            '21' + binToHex(pubkey)
+          );
         }
 
         input.unlockingBytecode = hexToBin(hexUnlock);
         continue;
       }
 
-      input.unlockingBytecode = {
-        compiler,
-        data: { keys: { privateKeys: { key: signerKey } } },
-        valueSatoshis: utxo.valueSatoshis,
-        script: 'unlock',
-        token: utxo.token,
-      };
+      // WizardConnect requires all UTXOs, including covenant inputs. The
+      // generateTransaction helper only supplies the current input's output.
+      const generated = compiler.generateBytecode({
+        scriptId: 'unlock',
+        data: {
+          keys: { privateKeys: { key: signerKey } },
+          compilationContext: {
+            inputIndex: i,
+            sourceOutputs,
+            transaction: txTemplate,
+          },
+        },
+      });
+      if (!generated.success) {
+        throw new Error('WizardConnect transaction signing failed');
+      }
+      input.unlockingBytecode = generated.bytecode;
     }
 
-    const generated = generateTransaction(txTemplate);
-    if (!generated.success) {
-      throw new Error('WizardConnect transaction signing failed');
-    }
-
-    const rawSigned = encodeTransaction(generated.transaction);
+    const rawSigned = encodeTransaction(txTemplate);
     const txid = binToHex(sha256.hash(sha256.hash(rawSigned)).reverse());
     const signedTransaction = binToHex(rawSigned);
 
