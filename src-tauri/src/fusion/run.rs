@@ -593,6 +593,7 @@ async fn revalidate_own_inputs(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)] // The phase needs its live stream and independently validated inputs.
 async fn run_blame_phase<S>(
     main: &mut S,
     cancel: &CancelFlag,

@@ -118,7 +118,7 @@ fn outpoint(txid: &str, index: u32) -> String {
     format!("{}:{index}", txid.to_ascii_lowercase())
 }
 
-fn wipe_string(value: &mut String) {
+fn wipe_string(value: &mut str) {
     // SAFETY: replacing bytes with zero preserves UTF-8 validity and length.
     unsafe { value.as_bytes_mut().fill(0) };
 }
