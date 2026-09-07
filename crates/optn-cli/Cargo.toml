@@ -44,6 +44,9 @@ bip32 = { version = "0.5", default-features = false, features = ["alloc", "secp2
 # 24-word phrases, so bip32's would have silently refused most real seeds.
 bip39 = { version = "2", default-features = false, features = ["std", "rand"] }
 tokio = { version = "1", features = ["net", "io-util", "time", "macros", "rt", "rt-multi-thread"] }
+# Same pure-Rust SOCKS client as the native chain adapters. Remote Electrum
+# routes fail closed unless this reaches a verified local Tor SOCKS proxy.
+tokio-socks = "0.5"
 # default-features = false is load-bearing for cross-compilation: the default
 # pulls aws-lc-sys, which builds C and CMake and does not cross to riscv64.
 # ring is pure-ish Rust with a small asm surface and cross-compiles cleanly.

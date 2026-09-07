@@ -4,16 +4,24 @@
 //! newline rather than to EOF — a server that keeps the connection open for
 //! subscriptions would otherwise hang a read-to-end forever.
 
-use std::sync::Arc;
+use std::{fmt::Write, sync::Arc, time::Duration};
 
+use optn_core::tor::{route as tor_route, Route as TorRoute, TorStatus, AUTODETECT_SOCKS_PORTS};
+use rand::{rngs::OsRng, RngCore};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::net::TcpStream;
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
 
 use crate::error::{CliError, Result};
+
+const DEFAULT_TOR_HOST: &str = "127.0.0.1";
+const TOR_PROBE_TIMEOUT: Duration = Duration::from_millis(1_500);
+const REMOTE_ELECTRUM_TOR_REQUIRED: &str =
+    "remote Electrum requires a verified Tor SOCKS proxy; refusing a direct connection";
 
 #[derive(Debug, Deserialize)]
 pub struct Balance {
@@ -69,13 +77,18 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn new(host: String, port: u16, tls: bool, timeout_secs: u64) -> Self {
-        Self {
+    pub fn new(host: String, port: u16, tls: bool, timeout_secs: u64) -> Result<Self> {
+        if !tls && !optn_core::endpoint::is_loopback_host(&host) {
+            return Err(CliError::Usage(
+                "plaintext Electrum is only allowed for a loopback server".into(),
+            ));
+        }
+        Ok(Self {
             host,
             port,
             tls,
             timeout_secs,
-        }
+        })
     }
 
     pub fn endpoint(&self) -> String {
@@ -125,9 +138,7 @@ impl Client {
 
     async fn exchange(&self, line: String) -> Result<String> {
         let addr = format!("{}:{}", self.host, self.port);
-        let stream = tokio::net::TcpStream::connect(&addr)
-            .await
-            .map_err(|e| CliError::Network(format!("could not connect to {addr}: {e}")))?;
+        let stream = self.connect(&addr).await?;
 
         if !self.tls {
             let mut reader = BufReader::new(stream);
@@ -169,6 +180,48 @@ impl Client {
             .await
             .map_err(|e| CliError::Network(e.to_string()))?;
         Ok(out)
+    }
+
+    async fn connect(&self, addr: &str) -> Result<TcpStream> {
+        let local_route = tor_route(&self.host, TorStatus::Absent);
+        let route = if local_route.is_refused() {
+            route_for_host(&self.host, default_tor_status().await)?
+        } else {
+            local_route
+        };
+        match route {
+            TorRoute::Direct => TcpStream::connect(addr)
+                .await
+                .map_err(|e| CliError::Network(format!("could not connect to {addr}: {e}"))),
+            TorRoute::Through { socks_port } => {
+                let token = fresh_tor_isolation_token();
+                let proxy = format!("{DEFAULT_TOR_HOST}:{socks_port}");
+                let target = format!("{}:{}", self.host, self.port);
+                tokio::time::timeout(
+                    Duration::from_secs(self.timeout_secs),
+                    tokio_socks::tcp::Socks5Stream::connect_with_password(
+                        proxy.as_str(),
+                        target.as_str(),
+                        &token,
+                        &token,
+                    ),
+                )
+                .await
+                .map_err(|_| {
+                    CliError::Network(format!(
+                        "timed out after {}s connecting to Tor SOCKS proxy {proxy}",
+                        self.timeout_secs
+                    ))
+                })?
+                .map(|stream| stream.into_inner())
+                .map_err(|e| {
+                    CliError::Network(format!(
+                        "could not connect to {target} through Tor SOCKS proxy {proxy}: {e}"
+                    ))
+                })
+            }
+            TorRoute::Refused(_) => Err(CliError::Network(REMOTE_ELECTRUM_TOR_REQUIRED.into())),
+        }
     }
 
     pub async fn server_version(&self) -> Result<Value> {
@@ -213,5 +266,93 @@ impl Client {
         v.as_str()
             .map(str::to_string)
             .ok_or_else(|| CliError::Protocol("broadcast did not return a txid".into()))
+    }
+}
+
+fn route_for_host(host: &str, tor_status: TorStatus) -> Result<TorRoute> {
+    let route = tor_route(host, tor_status);
+    if route.is_refused() {
+        Err(CliError::Network(REMOTE_ELECTRUM_TOR_REQUIRED.into()))
+    } else {
+        Ok(route)
+    }
+}
+
+async fn default_tor_status() -> TorStatus {
+    // ponytail: default Tor ports only; add a typed persisted proxy route when
+    // the shared network overlay owns custom proxy configuration.
+    for &socks_port in AUTODETECT_SOCKS_PORTS {
+        if is_tor_socks_proxy(DEFAULT_TOR_HOST, socks_port).await {
+            return TorStatus::Verified { socks_port };
+        }
+    }
+    TorStatus::Absent
+}
+
+/// The Rust core owns the fail-closed route decision. This Tauri-free shell
+/// performs only the local SOCKS capability probe needed to supply that input.
+async fn is_tor_socks_proxy(host: &str, port: u16) -> bool {
+    let probe = async {
+        let mut stream = TcpStream::connect((host, port)).await.ok()?;
+        stream.write_all(&[0x05, 0x01, 0x00]).await.ok()?;
+        let mut response = [0u8; 2];
+        stream.read_exact(&mut response).await.ok()?;
+        Some(response == [0x05, 0x00])
+    };
+
+    matches!(
+        tokio::time::timeout(TOR_PROBE_TIMEOUT, probe).await,
+        Ok(Some(true))
+    )
+}
+
+fn fresh_tor_isolation_token() -> String {
+    let mut bytes = [0u8; 32];
+    let mut rng = OsRng;
+    rng.fill_bytes(&mut bytes);
+    let mut token = String::from("optn-cli-");
+    for byte in bytes {
+        write!(&mut token, "{byte:02x}").expect("writing into String cannot fail");
+    }
+    token
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::AsyncReadExt;
+
+    #[test]
+    fn remote_electrum_has_no_direct_fallback() {
+        assert!(route_for_host("electrum.example", TorStatus::Absent).is_err());
+        assert_eq!(
+            route_for_host("electrum.example", TorStatus::Verified { socks_port: 9050 }).unwrap(),
+            TorRoute::Through { socks_port: 9050 }
+        );
+        assert_eq!(
+            route_for_host("127.0.0.1", TorStatus::Absent).unwrap(),
+            TorRoute::Direct
+        );
+    }
+
+    #[test]
+    fn plaintext_electrum_is_limited_to_loopback() {
+        assert!(Client::new("127.0.0.1".into(), 50001, false, 1).is_ok());
+        assert!(Client::new("electrum.example".into(), 50001, false, 1).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_plain_listener_is_not_mistaken_for_tor() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let mut request = [0u8; 3];
+                let _ = stream.read_exact(&mut request).await;
+                let _ = stream.write_all(b"HTTP/1.1 200 OK\\r\\n\\r\\n").await;
+            }
+        });
+
+        assert!(!is_tor_socks_proxy("127.0.0.1", port).await);
     }
 }
