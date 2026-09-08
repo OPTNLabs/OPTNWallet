@@ -187,3 +187,52 @@ candidate is accepted. The guard covers sync, annotations and receive issuance,
 including a transient post-store wallet-file read error. It does not rely on a
 subsequent lock or on the read failure continuing. Regressions verify that stale
 memory cannot allocate again and reopen recovers the committed history/indexes.
+
+## Current no-dismissal remediation
+
+At PR head `0f6c351c`, CodeQL analyzed merge commit
+`b68d894d61840a20df1a5c4413e66a3df38f0023` and reports **31 open alerts**,
+#82-112. All use the same hard-coded cryptographic-value rule. The source review
+accounts for every alert: 27 concern test material; four concern production
+initialization or the guarded passwordless branch.
+
+| Alerts | Current source evidence / action |
+| --- | --- |
+| #82-85, #87-102 | Existing test credentials, salts, nonces and password-policy inputs reviewed above. Keep the independent legacy ciphertext vector and boundary cases intact. |
+| #106 | Published BIP39 fixture in `wallet_sync.rs`'s test module. |
+| #107 | In-memory test checkpoint provider's incremented counter nonce; unrelated to the native production provider. |
+| #108-112 | `wallet_checkpoint.rs`'s `#[cfg(test)]` authenticated-codec fixtures: offline allocation, malformed provenance and v1 branch-2 compatibility. Test-only encryption inputs are explicit; no production caller includes this module. |
+| #86 | Native checkpoint storage now directly calls the already-resolved `getrandom 0.2.17` API and propagates failure before encryption/write. |
+| #103 | The passwordless branch now passes its already-verified session credential. The guard still rejects omitted credentials for a password-protected wallet; no default password is synthesized. |
+| #104-105 | `WalletStorage::entropy()` returns `Result<[u8; 56]>`; runtime creation and password changes consume only successfully returned material. The native provider directly calls fallible `getrandom` and returns the complete array. |
+
+The direct RNG calls use the same implementation previously reached through
+`OsRng`; no package version, cipher, format, platform or randomness source
+changes. The pinned CodeQL rule explicitly models direct `getrandom` calls.
+This makes that dataflow visible without a custom scanner model or exclusion.
+Only a fresh scan can establish which alerts close automatically as fixed.
+No result here authorizes dismissal or guarantees the CodeQL gate is green.
+
+The new failure regression checks creation while closed, creation with a wallet
+already open, and first-password setup. An entropy-provider error must leave
+wallet ciphertext, visible state, active session, credential and epoch unchanged.
+Existing password-change, stale-epoch, ciphertext-CAS and restart tests remain.
+
+The separate repository-wide security inventory also contains default-branch
+alerts and dependency advisories. They are not the PR merge-ref inventory.
+Secret-scanning API access returned HTTP 404, so its alert list is unavailable;
+do not report that as zero alerts. Before dependency updates, the full npm audit
+reports 26 affected entries (11 high, 6 moderate, 9 low, no critical), including
+development dependencies. A passing production-only check is not a clean full
+dependency audit.
+
+Four stale Rust advisory exceptions are removed from `deny.toml` and the Cargo
+audit workflow. All six committed lockfiles already use patched quick-xml
+(`>=0.41`) and quinn-proto (`0.11.17`) where present; none contains rkyv.
+The primary RustSec records are [quick-xml duplicate attributes](https://rustsec.org/advisories/RUSTSEC-2026-0194.html),
+[quick-xml namespaces](https://rustsec.org/advisories/RUSTSEC-2026-0195.html),
+[quinn-proto reassembly](https://rustsec.org/advisories/RUSTSEC-2026-0185.html),
+and [rkyv archive validation](https://rustsec.org/advisories/RUSTSEC-2026-0235.html).
+Their gates will now catch regressions. The existing glib 0.18.5 advisory is
+still unresolved; its separate cargo-deny exception has not been expanded or
+treated as a fix. No GitHub security alert state has been changed.

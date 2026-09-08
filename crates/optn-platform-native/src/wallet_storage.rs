@@ -1,6 +1,5 @@
 //! Native ciphertext files, shared by CLI and desktop. No wallet secrets here.
 use optn_platform::{PlatformError, PlatformResult, WalletStorage};
-use rand_core::{OsRng, RngCore};
 use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
@@ -126,8 +125,10 @@ impl WalletStorage for NativeWalletStorage {
         }
         self.atomic_write(&path, bytes)
     }
-    fn entropy(&self, output: &mut [u8]) -> PlatformResult<()> {
-        OsRng.try_fill_bytes(output).map_err(error)
+    fn entropy(&self) -> PlatformResult<[u8; 56]> {
+        let mut entropy = [0u8; 56];
+        getrandom::getrandom(&mut entropy).map_err(error)?;
+        Ok(entropy)
     }
     fn auto_lock_minutes(&self) -> PlatformResult<Option<u32>> {
         let path = self.root.join(".auto-lock");

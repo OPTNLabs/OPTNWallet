@@ -436,8 +436,7 @@ impl WalletSecurity {
             } => {
                 let network: Network = network.parse().map_err(failure)?;
                 let account = hd::parse_account_path(&account_path).map_err(crypto)?;
-                let mut entropy = [0u8; 56];
-                self.storage.entropy(&mut entropy).map_err(platform)?;
+                let entropy = self.storage.entropy().map_err(platform)?;
                 let file = WalletFile::create(
                     &name,
                     mnemonic.expose(),
@@ -476,14 +475,13 @@ impl WalletSecurity {
                 let session = self.bound(state, epoch)?;
                 let old = match current.as_ref() {
                     Some(current) => current.expose(),
-                    None if session.password.expose().is_empty() => "",
+                    None if session.password.expose().is_empty() => session.password.expose(),
                     None => return Err(failure("Enter the current wallet password.")),
                 };
                 if session.password.expose().is_empty() && password.expose().is_empty() {
                     return Err(failure("Choose a new password with at least 8 characters."));
                 }
-                let mut entropy = [0u8; 56];
-                self.storage.entropy(&mut entropy).map_err(platform)?;
+                let entropy = self.storage.entropy().map_err(platform)?;
                 let next = session
                     .file
                     .change_password(old, password.expose(), confirmation.expose(), &entropy)
@@ -575,10 +573,14 @@ pub(crate) mod tests {
         Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
         Arc<AtomicU8>,
         Arc<std::sync::atomic::AtomicBool>,
+        Arc<std::sync::atomic::AtomicBool>,
     );
     impl Storage {
         pub(crate) fn fail_next_read(&self) {
             self.2.store(true, Ordering::SeqCst);
+        }
+        fn fail_next_entropy(&self) {
+            self.3.store(true, Ordering::SeqCst);
         }
     }
     impl WalletStorage for Storage {
@@ -604,12 +606,14 @@ pub(crate) mod tests {
             files.insert(handle.into(), bytes.to_vec());
             Ok(())
         }
-        fn entropy(&self, output: &mut [u8]) -> PlatformResult<()> {
-            let value = self.1.fetch_add(1, Ordering::SeqCst);
-            for (index, byte) in output.iter_mut().enumerate() {
-                *byte = (index as u8).wrapping_add(value);
+        fn entropy(&self) -> PlatformResult<[u8; 56]> {
+            if self.3.swap(false, Ordering::SeqCst) {
+                return Err(PlatformError::Unavailable);
             }
-            Ok(())
+            let value = self.1.fetch_add(1, Ordering::SeqCst);
+            Ok(std::array::from_fn(|index| {
+                (index as u8).wrapping_add(value)
+            }))
         }
         fn auto_lock_minutes(&self) -> PlatformResult<Option<u32>> {
             Ok(None)
@@ -644,6 +648,62 @@ pub(crate) mod tests {
     }
     fn secret(value: &str) -> SecretText {
         SecretText::new(value.into())
+    }
+
+    #[test]
+    fn entropy_failure_preserves_files_and_authenticated_session() {
+        let storage = Storage::default();
+        let mut security = WalletSecurity::new(Box::new(storage.clone()), None);
+        let mut state = AppState::default();
+        let history = WalletReconciliation::default();
+        let create = || Request::Create {
+            name: "Public entropy failure fixture".into(),
+            mnemonic: secret(hd::BIP39_TEST_VECTOR_MNEMONIC),
+            bip39_passphrase: SecretText::default(),
+            password: SecretText::default(),
+            confirmation: SecretText::default(),
+            network: "chipnet".into(),
+            account_path: "m/44'/1'/0'".into(),
+        };
+
+        let closed = state.clone();
+        storage.fail_next_entropy();
+        assert_eq!(
+            security.handle(&mut state, create(), 1, &history),
+            Err(platform(PlatformError::Unavailable))
+        );
+        assert_eq!(state, closed);
+        assert!(storage.list().unwrap().is_empty());
+        assert!(security.session.is_none());
+
+        let opened = security.handle(&mut state, create(), 2, &history).unwrap();
+        let before = state.clone();
+        let files = storage.0.lock().unwrap().clone();
+        let handle = opened.active.as_ref().unwrap();
+        assert_eq!(files.len(), 1);
+        for request in [
+            create(),
+            Request::ChangePassword {
+                current: None,
+                password: secret("new-password"),
+                confirmation: secret("new-password"),
+                epoch: opened.epoch,
+            },
+        ] {
+            storage.fail_next_entropy();
+            assert_eq!(
+                security.handle(&mut state, request, 3, &history),
+                Err(platform(PlatformError::Unavailable))
+            );
+            assert_eq!(state, before);
+            assert_eq!(*storage.0.lock().unwrap(), files);
+            assert_eq!(security.status(&state).unwrap(), opened);
+            let session = security.bound(&state, opened.epoch).unwrap();
+            assert_eq!(&session.handle, handle);
+            assert_eq!(session.bytes, files[handle]);
+            assert_eq!(session.file.encode().unwrap(), files[handle]);
+            assert!(session.password.expose().is_empty());
+        }
     }
 
     #[tokio::test]

@@ -2156,6 +2156,7 @@ dependencies = [
 name = "optn-chain-native"
 version = "1.7.3"
 dependencies = [
+ "getrandom 0.2.17",
  "hex",
  "optn-chain-bchn",
  "optn-chain-bip37",
@@ -2242,10 +2243,10 @@ name = "optn-platform-native"
 version = "1.7.3"
 dependencies = [
  "arboard",
+ "getrandom 0.2.17",
  "keyring",
  "notify-rust",
  "optn-platform",
- "rand_core 0.6.4",
  "tempfile",
 ]
 
