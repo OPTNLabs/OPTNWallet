@@ -110,7 +110,7 @@ describe('appsViewHelpers', () => {
     ).toBe(true);
     expect(
       isComingSoonApp('optn.builtin.demo:merchantPayApp', 'Merchant Pay')
-    ).toBe(true);
+    ).toBe(false);
     expect(
       isComingSoonApp('optn.builtin.cauldron:cauldronSwapApp', 'Cauldron')
     ).toBe(false);

@@ -2,12 +2,15 @@ import React, { useEffect, useRef, useState } from 'react';
 import jsQR from 'jsqr';
 import {
   QrStreamDecoder,
+  qrPayloadToBytes,
+  decodeFrame,
   type QrStreamProgress,
 } from '../../services/qrStream';
 import { useI18n } from '../../i18n/useI18n';
 
 type Props = {
   onComplete: (payload: Uint8Array) => void;
+  onSinglePayload?: (payload: string) => void;
   onProgress?: (progress: QrStreamProgress | null) => void;
   onClose?: () => void;
   initialPayload?: string;
@@ -17,6 +20,7 @@ type Props = {
 /** Continuously scans camera frames until a fountain stream is complete. */
 export const QrStreamScanner: React.FC<Props> = ({
   onComplete,
+  onSinglePayload,
   onProgress,
   onClose,
   initialPayload,
@@ -101,6 +105,14 @@ export const QrStreamScanner: React.FC<Props> = ({
               onComplete(recovered);
               return;
             }
+            // Ordinary QR payloads are passed through unchanged. Stream
+            // frames are consumed by the decoder above and only emitted when
+            // the complete payload has been recovered.
+            const frameBytes = qrPayloadToBytes(code.data);
+            if (!frameBytes || !decodeFrame(frameBytes)) {
+              onSinglePayload?.(code.data);
+              return;
+            }
           } catch (scanError) {
             setError(
               scanError instanceof Error
@@ -153,7 +165,7 @@ export const QrStreamScanner: React.FC<Props> = ({
       cancelAnimationFrame(animationFrame);
       stream?.getTracks().forEach((track) => track.stop());
     };
-  }, [initialPayload, onComplete, onProgress, t]);
+  }, [initialPayload, onComplete, onProgress, onSinglePayload, t]);
 
   return (
     <div className={className}>

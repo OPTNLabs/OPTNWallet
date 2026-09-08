@@ -55,6 +55,7 @@ import { isDesktopPlatform } from '../../utils/platform';
 import { hasCapability } from '../../platform/capabilities';
 import { useI18n } from '../../i18n/useI18n';
 import { LanguageSettings } from './LanguageSettings';
+import { MerchantPaySettings } from './MerchantPaySettings';
 import type { TranslationKey } from '../../i18n/resources';
 
 const Settings: React.FC = () => {
@@ -254,6 +255,8 @@ const Settings: React.FC = () => {
         return <WizardConnectPanel />;
       case 'cashconnect':
         return <CashConnectPanel />;
+      case 'merchant-pay':
+        return <MerchantPaySettings />;
       case 'app-lock':
         return <AppLockSettings />;
       case 'export-archive':
@@ -327,6 +330,8 @@ const Settings: React.FC = () => {
         return t('settingsPanels.wizardConnect');
       case 'cashconnect':
         return 'CashConnect';
+      case 'merchant-pay':
+        return 'Merchant Pay';
       case 'network':
         return t('settings.network');
       case 'faucet':

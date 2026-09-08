@@ -6,6 +6,7 @@ import {
   createVirtualMachineBCH,
   decodeTransaction,
   hexToBin,
+  hash256,
   type Input,
   type Output,
   type TransactionTemplateFixed,
@@ -15,6 +16,17 @@ import type { SignTransactionRequest } from '@wizardconnect/core';
 import KeyService from '../KeyService';
 import TransactionService from '../TransactionService';
 import { OptnWizardWalletAdapter } from '../wizardconnect/OptnWizardWalletAdapter';
+import { getBchCoinType } from '../HdWalletService';
+import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
+import { store } from '../../state/store';
+import {
+  encodeUnsignedPsbt,
+  SIGHASH_ALL_FORKID_ANYONECANPAY,
+  type PsbtInputSpec,
+  type PsbtOutputSpec,
+  type PsbtTokenSpec,
+} from '../psbt/psbtBch';
+import { fetchParentTransactions } from '../psbt/parentTransactions';
 import { TOKEN_OUTPUT_SATS, DUST } from '../../utils/constants';
 import { ensureUint8Array, parseSatoshis } from '../../utils/binary';
 import { derivePublicKeyHash } from '../../utils/derivePublicKeyHash';
@@ -40,6 +52,10 @@ export type ResolvedCauldronFundingInput = {
   lockingBytecode: Uint8Array;
   pathName: WalletPathName;
   addressIndex: number;
+  /** Public metadata used when materializing the final buyer PSBT. */
+  publicKey?: Uint8Array;
+  accountIndex?: number;
+  coinType?: number;
 };
 
 export type CauldronSettlementOutput = {
@@ -61,10 +77,24 @@ export type BuiltCauldronTradeRequest = {
   totalSupply: bigint;
   totalDemand: bigint;
   walletInputs: ResolvedCauldronFundingInput[];
+  changeAddress: string;
+  tokenChangeAddress?: string;
 };
 
 export type BuiltCauldronMerchantPaymentRequest = BuiltCauldronTradeRequest & {
   paymentKind: 'merchant';
+  merchantPaymentMode: 'cauldron' | 'direct';
+  merchantOutputIndexes: number[];
+  merchantPaymentTerms: CauldronMerchantPaymentTerms;
+};
+
+export type CauldronMerchantPaymentTerms = {
+  incomingAsset: 'bch' | 'token';
+  incomingTokenCategory?: string;
+  incomingAmountAtomic: bigint;
+  directIncomingAmountAtomic: bigint;
+  merchantBchAmountSatoshis: bigint;
+  merchantTokenAmountAtomic: bigint;
 };
 
 export type BuiltCauldronPoolDepositRequest = {
@@ -86,9 +116,28 @@ export type BuiltCauldronPoolWithdrawRequest = {
   pool: CauldronPool;
 };
 
-// Keep Cauldron fee estimates conservative. Wallet P2PKH signatures can
-// serialize larger than the 65-byte Schnorr placeholders used in tests.
-const P2PKH_INPUT_SIZE_BYTES = 32 + 4 + 1 + (1 + 73 + 1 + 33) + 4;
+// BCH P2PKH inputs use a 65-byte Schnorr signature including the sighash byte
+// and a 33-byte compressed public key. Keep this aligned with the serialized
+// transaction so a 1 sat/byte target does not become an unintended surcharge.
+const P2PKH_INPUT_SIZE_BYTES = 32 + 4 + 1 + (1 + 65 + 1 + 33) + 4;
+
+/**
+ * Cauldron swaps target the BCH network's 1 sat/byte relay floor. Callers may
+ * request a higher rate, but never a lower one.
+ */
+export const CAULDRON_TARGET_FEE_RATE_SATS_PER_BYTE = 1n;
+
+function normalizeCauldronFeeRate(
+  feeRateSatsPerByte?: bigint | number
+): bigint {
+  const requestedRate =
+    typeof feeRateSatsPerByte === 'bigint'
+      ? feeRateSatsPerByte
+      : BigInt(feeRateSatsPerByte ?? CAULDRON_TARGET_FEE_RATE_SATS_PER_BYTE);
+  return requestedRate < CAULDRON_TARGET_FEE_RATE_SATS_PER_BYTE
+    ? CAULDRON_TARGET_FEE_RATE_SATS_PER_BYTE
+    : requestedRate;
+}
 
 function maxBigInt(left: bigint, right: bigint) {
   return left > right ? left : right;
@@ -114,7 +163,9 @@ export function calculateSignedTransactionFeeSatoshis(
   const actualFee = totalInputValue - totalOutputValue;
 
   if (actualFee < 0n) {
-    throw new Error('Signed Cauldron transaction output value exceeds its inputs.');
+    throw new Error(
+      'Signed Cauldron transaction output value exceeds its inputs.'
+    );
   }
 
   return {
@@ -134,12 +185,13 @@ export function assertSignedTransactionFeeSufficiency(args: {
     signedTransactionHex,
     sourceOutputs,
     estimatedFeeSatoshis,
-    feeRateSatsPerByte = 1n,
+    feeRateSatsPerByte = CAULDRON_TARGET_FEE_RATE_SATS_PER_BYTE,
     transactionLabel = 'Cauldron transaction',
   } = args;
   const { actualFeeSatoshis, transactionSizeBytes } =
     calculateSignedTransactionFeeSatoshis(signedTransactionHex, sourceOutputs);
-  const minimumRelayFeeSatoshis = transactionSizeBytes * feeRateSatsPerByte;
+  const minimumRelayFeeSatoshis =
+    transactionSizeBytes * normalizeCauldronFeeRate(feeRateSatsPerByte);
   const requiredFeeSatoshis = maxBigInt(
     estimatedFeeSatoshis,
     minimumRelayFeeSatoshis
@@ -198,7 +250,9 @@ function toWalletPathName(changeIndex: number): WalletPathName {
   if (changeIndex === 0) return 'receive';
   if (changeIndex === 1) return 'change';
   if (changeIndex === 7) return 'defi';
-  throw new Error(`Unsupported wallet branch for Cauldron signing: ${changeIndex}`);
+  throw new Error(
+    `Unsupported wallet branch for Cauldron signing: ${changeIndex}`
+  );
 }
 
 function tokenToLibauthToken(token: Token | null | undefined) {
@@ -215,7 +269,9 @@ function tokenToLibauthToken(token: Token | null | undefined) {
   };
 }
 
-function buildCauldronPoolContractInfo(withdrawPublicKeyHash: Uint8Array): ContractInfo {
+function buildCauldronPoolContractInfo(
+  withdrawPublicKeyHash: Uint8Array
+): ContractInfo {
   return {
     contract: {
       abiFunction: {
@@ -232,7 +288,11 @@ function buildCauldronPoolContractInfo(withdrawPublicKeyHash: Uint8Array): Contr
 }
 
 function normalizeWithdrawPublicKeyHash(
-  withdrawPublicKeyHash: Uint8Array | string | number[] | Record<string, unknown>,
+  withdrawPublicKeyHash:
+    | Uint8Array
+    | string
+    | number[]
+    | Record<string, unknown>,
   fallbackOwnerAddress?: string | null,
   fallbackOwnerPublicKeyHash?: string | null
 ): Uint8Array {
@@ -267,7 +327,9 @@ function outputSizeBytes(output: CauldronSettlementOutput): number {
 
   return (
     8 +
-    compactUintPrefixToLength(bigIntToCompactUint(BigInt(lockingLength))[0] as number) +
+    compactUintPrefixToLength(
+      bigIntToCompactUint(BigInt(lockingLength))[0] as number
+    ) +
     lockingLength +
     tokenLength
   );
@@ -281,13 +343,17 @@ function estimateCauldronTradeTxSize(
   const poolIoSize = poolTrades.reduce((sum, trade) => {
     const nextTokenAmount =
       trade.pool.output.tokenAmount +
-      (trade.supplyTokenId === CAULDRON_NATIVE_BCH ? -trade.demand : trade.supply);
+      (trade.supplyTokenId === CAULDRON_NATIVE_BCH
+        ? -trade.demand
+        : trade.supply);
     const outputSize =
       8 +
       1 +
       trade.pool.output.lockingBytecode.length +
       34 +
-      compactUintPrefixToLength(bigIntToCompactUint(nextTokenAmount)[0] as number);
+      compactUintPrefixToLength(
+        bigIntToCompactUint(nextTokenAmount)[0] as number
+      );
     const inputSize = 32 + 4 + 1 + 69 + 4;
     return sum + inputSize + outputSize;
   }, 0);
@@ -303,8 +369,12 @@ function estimateCauldronTradeTxSize(
 
   return (
     4 +
-    compactUintPrefixToLength(bigIntToCompactUint(BigInt(totalInputCount))[0] as number) +
-    compactUintPrefixToLength(bigIntToCompactUint(BigInt(totalOutputCount))[0] as number) +
+    compactUintPrefixToLength(
+      bigIntToCompactUint(BigInt(totalInputCount))[0] as number
+    ) +
+    compactUintPrefixToLength(
+      bigIntToCompactUint(BigInt(totalOutputCount))[0] as number
+    ) +
     poolIoSize +
     walletInputBytes +
     outputsBytes +
@@ -334,7 +404,9 @@ function buildCashAddressOutput(
   };
 }
 
-function buildPoolSourceOutput(trade: CauldronPoolTrade): Input & Output & ContractInfo {
+function buildPoolSourceOutput(
+  trade: CauldronPoolTrade
+): Input & Output & ContractInfo {
   const withdrawPublicKeyHash = normalizeWithdrawPublicKeyHash(
     trade.pool.parameters.withdrawPublicKeyHash,
     trade.pool.ownerAddress,
@@ -344,12 +416,10 @@ function buildPoolSourceOutput(trade: CauldronPoolTrade): Input & Output & Contr
     outpointIndex: trade.pool.outputIndex,
     outpointTransactionHash: hexToBin(trade.pool.txHash),
     sequenceNumber: 0,
-    unlockingBytecode: buildCauldronPoolV0ExchangeUnlockingBytecode(
-      {
-        ...trade.pool.parameters,
-        withdrawPublicKeyHash,
-      }
-    ),
+    unlockingBytecode: buildCauldronPoolV0ExchangeUnlockingBytecode({
+      ...trade.pool.parameters,
+      withdrawPublicKeyHash,
+    }),
     lockingBytecode: trade.pool.output.lockingBytecode,
     valueSatoshis: trade.pool.output.amountSatoshis,
     token: {
@@ -383,17 +453,22 @@ function buildPoolOutput(trade: CauldronPoolTrade): CauldronSettlementOutput {
     lockingBytecode: trade.pool.output.lockingBytecode,
     valueSatoshis:
       trade.pool.output.amountSatoshis +
-      (trade.supplyTokenId === CAULDRON_NATIVE_BCH ? trade.supply : -trade.demand),
+      (trade.supplyTokenId === CAULDRON_NATIVE_BCH
+        ? trade.supply
+        : -trade.demand),
     token: {
       amount:
         trade.pool.output.tokenAmount +
-        (trade.supplyTokenId === CAULDRON_NATIVE_BCH ? -trade.demand : trade.supply),
+        (trade.supplyTokenId === CAULDRON_NATIVE_BCH
+          ? -trade.demand
+          : trade.supply),
       category: hexToBin(trade.pool.output.tokenCategory),
     },
   };
 }
 
 function buildSettlementOutputs(args: {
+  supplyTokenId: CauldronTokenId;
   demandTokenId: CauldronTokenId;
   totalDemand: bigint;
   totalSupply: bigint;
@@ -405,8 +480,10 @@ function buildSettlementOutputs(args: {
   tokenChangeCategoryHex?: string;
   feeSatoshis: bigint;
   tokenOutputSatoshis: bigint;
+  merchantPaymentTerms?: CauldronMerchantPaymentTerms;
 }): CauldronSettlementOutput[] {
   const {
+    supplyTokenId,
     demandTokenId,
     totalDemand,
     totalSupply,
@@ -418,6 +495,7 @@ function buildSettlementOutputs(args: {
     tokenChangeCategoryHex,
     feeSatoshis,
     tokenOutputSatoshis,
+    merchantPaymentTerms,
   } = args;
 
   const outputs: CauldronSettlementOutput[] = [];
@@ -425,15 +503,38 @@ function buildSettlementOutputs(args: {
   if (demandTokenId === CAULDRON_NATIVE_BCH) {
     outputs.push(buildCashAddressOutput(recipientAddress, totalDemand));
 
-    const tokenChange = totalWalletTokenSupply - totalSupply;
+    const directTokenAmount =
+      merchantPaymentTerms?.incomingAsset === 'token'
+        ? merchantPaymentTerms.merchantTokenAmountAtomic
+        : 0n;
+    const tokenChange =
+      totalWalletTokenSupply - totalSupply - directTokenAmount;
     if (tokenChange < 0n) {
       throw new Error('Insufficient token funding for Cauldron trade');
     }
 
-    let bchChange = totalWalletBch - totalSupply - feeSatoshis;
+    if (directTokenAmount > 0n) {
+      outputs.push(
+        buildCashAddressOutput(recipientAddress, tokenOutputSatoshis, {
+          amount: directTokenAmount,
+          categoryHex:
+            merchantPaymentTerms?.incomingTokenCategory ?? supplyTokenId,
+        })
+      );
+    }
+
+    // Token amounts are atomic token units, not satoshis. The BCH attached to
+    // token funding inputs remains wallet value and is only reduced by the
+    // network fee, plus a token-output reserve when token change is needed.
+    let bchChange = totalWalletBch - feeSatoshis;
+    if (merchantPaymentTerms?.merchantBchAmountSatoshis) {
+      bchChange -= merchantPaymentTerms.merchantBchAmountSatoshis;
+    }
     if (tokenChange > 0n) {
       if (!tokenChangeCategoryHex) {
-        throw new Error('Missing token category for Cauldron token change output');
+        throw new Error(
+          'Missing token category for Cauldron token change output'
+        );
       }
       const tokenChangeTarget = tokenChangeAddress ?? changeAddress;
       outputs.push(
@@ -444,11 +545,14 @@ function buildSettlementOutputs(args: {
       );
       bchChange -= tokenOutputSatoshis;
     }
+    if (directTokenAmount > 0n) bchChange -= tokenOutputSatoshis;
 
     if (bchChange >= BigInt(DUST)) {
       outputs.push(buildCashAddressOutput(changeAddress, bchChange));
     } else if (bchChange < 0n) {
-      throw new Error('Insufficient BCH funding for Cauldron fee/change backing');
+      throw new Error(
+        'Insufficient BCH funding for Cauldron fee/change backing'
+      );
     }
     return outputs;
   }
@@ -460,8 +564,70 @@ function buildSettlementOutputs(args: {
     })
   );
 
-  let bchChange = totalWalletBch - totalSupply - feeSatoshis;
+  if (
+    merchantPaymentTerms?.incomingAsset === 'bch' &&
+    merchantPaymentTerms.merchantBchAmountSatoshis > 0n
+  ) {
+    outputs.push(
+      buildCashAddressOutput(
+        recipientAddress,
+        merchantPaymentTerms.merchantBchAmountSatoshis
+      )
+    );
+  }
+
+  let bchChange =
+    totalWalletBch -
+    (supplyTokenId === CAULDRON_NATIVE_BCH ? totalSupply : 0n) -
+    feeSatoshis;
   bchChange -= tokenOutputSatoshis;
+  if (
+    merchantPaymentTerms?.incomingAsset === 'bch' &&
+    merchantPaymentTerms.merchantBchAmountSatoshis > 0n
+  ) {
+    bchChange -= merchantPaymentTerms.merchantBchAmountSatoshis;
+  }
+  const directTokenAmount =
+    merchantPaymentTerms?.incomingAsset === 'token'
+      ? merchantPaymentTerms.merchantTokenAmountAtomic
+      : 0n;
+  const tokenChange =
+    supplyTokenId === CAULDRON_NATIVE_BCH
+      ? 0n
+      : totalWalletTokenSupply - totalSupply - directTokenAmount;
+  if (tokenChange < 0n) {
+    throw new Error('Insufficient token funding for Cauldron trade');
+  }
+  if (directTokenAmount > 0n) {
+    outputs.push(
+      buildCashAddressOutput(recipientAddress, tokenOutputSatoshis, {
+        amount: directTokenAmount,
+        categoryHex:
+          merchantPaymentTerms?.incomingTokenCategory ?? supplyTokenId,
+      })
+    );
+    bchChange -= tokenOutputSatoshis;
+  }
+  // The regular token-to-BCH path creates token change below. Keep its BCH
+  // reserve separate from the fixed merchant token output above.
+  if (tokenChange > 0n) {
+    if (!tokenChangeCategoryHex) {
+      throw new Error(
+        'Missing token category for Cauldron token change output'
+      );
+    }
+    outputs.push(
+      buildCashAddressOutput(
+        tokenChangeAddress ?? changeAddress,
+        tokenOutputSatoshis,
+        {
+          amount: tokenChange,
+          categoryHex: tokenChangeCategoryHex,
+        }
+      )
+    );
+    bchChange -= tokenOutputSatoshis;
+  }
   if (bchChange >= BigInt(DUST)) {
     outputs.push(buildCashAddressOutput(changeAddress, bchChange));
   } else if (bchChange < 0n) {
@@ -529,8 +695,12 @@ function estimateFixedTransactionSize(args: {
   const { inputSizes, outputs } = args;
   return (
     4 +
-    compactUintPrefixToLength(bigIntToCompactUint(BigInt(inputSizes.length))[0] as number) +
-    compactUintPrefixToLength(bigIntToCompactUint(BigInt(outputs.length))[0] as number) +
+    compactUintPrefixToLength(
+      bigIntToCompactUint(BigInt(inputSizes.length))[0] as number
+    ) +
+    compactUintPrefixToLength(
+      bigIntToCompactUint(BigInt(outputs.length))[0] as number
+    ) +
     inputSizes.reduce((sum, size) => sum + size, 0) +
     outputs.reduce((sum, output) => sum + outputSizeBytes(output), 0) +
     4
@@ -553,9 +723,14 @@ function validateWalletTokenInputs(
     if (!token) continue;
 
     if (token.nft) {
-      throw new Error('NFT-bearing UTXOs are not supported for Cauldron funding');
+      throw new Error(
+        'NFT-bearing UTXOs are not supported for Cauldron funding'
+      );
     }
-    if (!allowedTokenCategoryHex || token.category !== allowedTokenCategoryHex) {
+    if (
+      !allowedTokenCategoryHex ||
+      token.category !== allowedTokenCategoryHex
+    ) {
       throw new Error(
         `Unexpected token funding input category for Cauldron transaction: ${token.category}`
       );
@@ -586,7 +761,9 @@ export async function resolveCauldronFundingInputs(
       keyByAddress.get(utxo.address) ??
       (utxo.tokenAddress ? keyByAddress.get(utxo.tokenAddress) : undefined);
     if (!key) {
-      throw new Error(`Unable to resolve wallet path for funding input ${utxo.tx_hash}:${utxo.tx_pos}`);
+      throw new Error(
+        `Unable to resolve wallet path for funding input ${utxo.tx_hash}:${utxo.tx_pos}`
+      );
     }
 
     const lockingResult = cashAddressToLockingBytecode(utxo.address);
@@ -599,6 +776,9 @@ export async function resolveCauldronFundingInputs(
       lockingBytecode: lockingResult.bytecode,
       pathName: toWalletPathName(key.changeIndex),
       addressIndex: key.addressIndex,
+      publicKey: key.publicKey,
+      accountIndex: key.accountIndex,
+      coinType: getBchCoinType(selectCurrentNetwork(store.getState())),
     };
   });
 }
@@ -614,6 +794,8 @@ export function buildCauldronTradeRequest(params: {
   userPrompt?: string;
   sequence?: number;
   tokenOutputSatoshis?: bigint;
+  minimumDemand?: bigint;
+  merchantPaymentTerms?: CauldronMerchantPaymentTerms;
 }): BuiltCauldronTradeRequest {
   const {
     poolTrades,
@@ -623,26 +805,35 @@ export function buildCauldronTradeRequest(params: {
     tokenChangeAddress,
     userPrompt,
   } = params;
-  const feeRateSatsPerByte =
-    typeof params.feeRateSatsPerByte === 'bigint'
-      ? params.feeRateSatsPerByte
-      : BigInt(params.feeRateSatsPerByte ?? 1);
-  const tokenOutputSatoshis = params.tokenOutputSatoshis ?? BigInt(TOKEN_OUTPUT_SATS);
+  const feeRateSatsPerByte = normalizeCauldronFeeRate(
+    params.feeRateSatsPerByte
+  );
+  const tokenOutputSatoshis =
+    params.tokenOutputSatoshis ?? BigInt(TOKEN_OUTPUT_SATS);
   const normalizedPoolTrades = poolTrades.map(normalizePoolTradeForTx);
   const { supplyTokenId, demandTokenId, totalSupply, totalDemand } =
     validateTradeDirection(normalizedPoolTrades);
 
-  const {
-    totalWalletBch,
-    totalMatchingTokenSupply: totalWalletTokenSupply,
-  } = validateWalletTokenInputs(
-    walletInputs,
-    supplyTokenId === CAULDRON_NATIVE_BCH ? undefined : supplyTokenId
-  );
+  if (
+    params.minimumDemand != null &&
+    (params.minimumDemand < 0n || totalDemand < params.minimumDemand)
+  ) {
+    throw new Error(
+      `Cauldron trade output ${totalDemand} is below the required minimum ${params.minimumDemand}.`
+    );
+  }
+
+  const { totalWalletBch, totalMatchingTokenSupply: totalWalletTokenSupply } =
+    validateWalletTokenInputs(
+      walletInputs,
+      supplyTokenId === CAULDRON_NATIVE_BCH ? undefined : supplyTokenId
+    );
 
   if (supplyTokenId === CAULDRON_NATIVE_BCH) {
     if (walletInputs.some((input) => input.utxo.token)) {
-      throw new Error('BCH-to-token Cauldron trades expect BCH-only funding inputs');
+      throw new Error(
+        'BCH-to-token Cauldron trades expect BCH-only funding inputs'
+      );
     }
   } else {
     if (totalWalletTokenSupply < totalSupply) {
@@ -650,8 +841,11 @@ export function buildCauldronTradeRequest(params: {
     }
   }
 
-  const buildOutputsForFee = (feeSatoshis: bigint): CauldronSettlementOutput[] =>
+  const buildOutputsForFee = (
+    feeSatoshis: bigint
+  ): CauldronSettlementOutput[] =>
     buildSettlementOutputs({
+      supplyTokenId,
       demandTokenId,
       totalDemand,
       totalSupply,
@@ -664,18 +858,28 @@ export function buildCauldronTradeRequest(params: {
         supplyTokenId === CAULDRON_NATIVE_BCH ? undefined : supplyTokenId,
       feeSatoshis,
       tokenOutputSatoshis,
+      merchantPaymentTerms: params.merchantPaymentTerms,
     });
 
   let settlementOutputs = buildOutputsForFee(0n);
-  let estimatedFeeSatoshis = BigInt(
-    estimateCauldronTradeTxSize(normalizedPoolTrades, walletInputs, settlementOutputs)
-  ) * feeRateSatsPerByte;
+  let estimatedFeeSatoshis =
+    BigInt(
+      estimateCauldronTradeTxSize(
+        normalizedPoolTrades,
+        walletInputs,
+        settlementOutputs
+      )
+    ) * feeRateSatsPerByte;
 
   for (let i = 0; i < 3; i += 1) {
     settlementOutputs = buildOutputsForFee(estimatedFeeSatoshis);
     const nextFee =
       BigInt(
-        estimateCauldronTradeTxSize(normalizedPoolTrades, walletInputs, settlementOutputs)
+        estimateCauldronTradeTxSize(
+          normalizedPoolTrades,
+          walletInputs,
+          settlementOutputs
+        )
       ) * feeRateSatsPerByte;
     if (nextFee === estimatedFeeSatoshis) break;
     estimatedFeeSatoshis = nextFee;
@@ -733,6 +937,8 @@ export function buildCauldronTradeRequest(params: {
     totalSupply,
     totalDemand,
     walletInputs,
+    changeAddress,
+    tokenChangeAddress,
   };
 }
 
@@ -747,6 +953,8 @@ export function buildCauldronMerchantPaymentRequest(params: {
   userPrompt?: string;
   sequence?: number;
   tokenOutputSatoshis?: bigint;
+  minimumDemand?: bigint;
+  merchantPaymentTerms?: CauldronMerchantPaymentTerms;
 }): BuiltCauldronMerchantPaymentRequest {
   const built = buildCauldronTradeRequest({
     poolTrades: params.poolTrades,
@@ -759,12 +967,526 @@ export function buildCauldronMerchantPaymentRequest(params: {
     userPrompt: params.userPrompt ?? 'Merchant payment in stablecoins',
     sequence: params.sequence,
     tokenOutputSatoshis: params.tokenOutputSatoshis,
+    minimumDemand: params.minimumDemand,
+    merchantPaymentTerms: params.merchantPaymentTerms,
   });
+
+  const merchantPaymentTerms: CauldronMerchantPaymentTerms =
+    params.merchantPaymentTerms ?? {
+      incomingAsset: 'bch',
+      incomingAmountAtomic: built.totalSupply,
+      directIncomingAmountAtomic: 0n,
+      merchantBchAmountSatoshis: 0n,
+      merchantTokenAmountAtomic: built.totalDemand,
+    };
 
   return {
     ...built,
     paymentKind: 'merchant',
+    merchantPaymentMode: 'cauldron',
+    merchantOutputIndexes: [
+      0,
+      ...(merchantPaymentTerms.merchantBchAmountSatoshis > 0n ||
+      (merchantPaymentTerms.incomingAsset === 'token' &&
+        merchantPaymentTerms.merchantTokenAmountAtomic > 0n)
+        ? [1]
+        : []),
+    ],
+    merchantPaymentTerms,
   };
+}
+
+export function buildCauldronMerchantDirectPaymentRequest(params: {
+  walletInputs: ResolvedCauldronFundingInput[];
+  merchantAddress: string;
+  changeAddress: string;
+  tokenChangeAddress?: string;
+  paymentAsset: 'bch' | 'token';
+  tokenCategoryHex?: string;
+  amountAtomic: bigint;
+  requireAdditionalBchUtxo?: boolean;
+  feeRateSatsPerByte?: bigint | number;
+  broadcast?: boolean;
+  userPrompt?: string;
+  sequence?: number;
+  tokenOutputSatoshis?: bigint;
+}): BuiltCauldronMerchantPaymentRequest {
+  const {
+    walletInputs,
+    merchantAddress,
+    changeAddress,
+    tokenChangeAddress,
+    paymentAsset,
+    tokenCategoryHex,
+    amountAtomic,
+    requireAdditionalBchUtxo = true,
+    userPrompt,
+    tokenOutputSatoshis = BigInt(TOKEN_OUTPUT_SATS),
+  } = params;
+  if (amountAtomic <= 0n) {
+    throw new Error(
+      'Direct merchant payment amount must be greater than zero.'
+    );
+  }
+  if (paymentAsset === 'token' && !tokenCategoryHex) {
+    throw new Error('Direct token merchant payment is missing its category.');
+  }
+
+  const { totalWalletBch, totalMatchingTokenSupply: totalWalletTokenSupply } =
+    validateWalletTokenInputs(
+      walletInputs,
+      paymentAsset === 'token' ? tokenCategoryHex : undefined
+    );
+  if (
+    paymentAsset === 'bch' &&
+    walletInputs.some((input) => input.utxo.token)
+  ) {
+    throw new Error(
+      'Direct BCH merchant payments expect BCH-only funding inputs.'
+    );
+  }
+  if (
+    paymentAsset === 'token' &&
+    requireAdditionalBchUtxo &&
+    !walletInputs.some((input) => !input.utxo.token)
+  ) {
+    throw new Error(
+      'Direct token merchant payments require an additional BCH funding UTXO.'
+    );
+  }
+  if (paymentAsset === 'token' && totalWalletTokenSupply < amountAtomic) {
+    throw new Error(
+      'Not enough token funding for the direct merchant payment.'
+    );
+  }
+
+  const buildOutputs = (feeSatoshis: bigint): CauldronSettlementOutput[] => {
+    if (paymentAsset === 'bch') {
+      const change = totalWalletBch - amountAtomic - feeSatoshis;
+      if (change < 0n) {
+        throw new Error(
+          'Insufficient BCH funding for the direct merchant payment.'
+        );
+      }
+      return [
+        buildCashAddressOutput(merchantAddress, amountAtomic),
+        ...(change >= BigInt(DUST)
+          ? [buildCashAddressOutput(changeAddress, change)]
+          : []),
+      ];
+    }
+
+    const tokenChange = totalWalletTokenSupply - amountAtomic;
+    const outputs: CauldronSettlementOutput[] = [
+      buildCashAddressOutput(merchantAddress, tokenOutputSatoshis, {
+        amount: amountAtomic,
+        categoryHex: tokenCategoryHex!,
+      }),
+    ];
+    let bchChange = totalWalletBch - feeSatoshis;
+    if (tokenChange > 0n) {
+      outputs.push(
+        buildCashAddressOutput(
+          tokenChangeAddress ?? changeAddress,
+          tokenOutputSatoshis,
+          {
+            amount: tokenChange,
+            categoryHex: tokenCategoryHex!,
+          }
+        )
+      );
+      bchChange -= tokenOutputSatoshis;
+    }
+    bchChange -= tokenOutputSatoshis;
+    if (bchChange < 0n) {
+      throw new Error(
+        'Insufficient BCH funding for the direct token payment fee.'
+      );
+    }
+    if (bchChange >= BigInt(DUST)) {
+      outputs.push(buildCashAddressOutput(changeAddress, bchChange));
+    }
+    return outputs;
+  };
+
+  let settlementOutputs = buildOutputs(0n);
+  let estimatedFeeSatoshis =
+    BigInt(
+      estimateFixedTransactionSize({
+        inputSizes: walletInputs.map(() => P2PKH_INPUT_SIZE_BYTES),
+        outputs: settlementOutputs,
+      })
+    ) * normalizeCauldronFeeRate(params.feeRateSatsPerByte);
+  for (let i = 0; i < 3; i += 1) {
+    settlementOutputs = buildOutputs(estimatedFeeSatoshis);
+    const nextFee =
+      BigInt(
+        estimateFixedTransactionSize({
+          inputSizes: walletInputs.map(() => P2PKH_INPUT_SIZE_BYTES),
+          outputs: settlementOutputs,
+        })
+      ) * normalizeCauldronFeeRate(params.feeRateSatsPerByte);
+    if (nextFee === estimatedFeeSatoshis) break;
+    estimatedFeeSatoshis = nextFee;
+  }
+
+  const sourceOutputs = walletInputs.map((input) =>
+    buildWalletSourceOutput(input)
+  );
+  const transaction: TransactionTemplateFixed<unknown> = {
+    version: 2,
+    locktime: 0,
+    inputs: walletInputs.map(buildWalletInput),
+    outputs: settlementOutputs,
+  };
+  const signRequest = {
+    action: 'sign_transaction_request',
+    time: Date.now(),
+    sequence: params.sequence ?? 0,
+    inputPaths: walletInputs.map((input, index) => [
+      index,
+      input.pathName,
+      input.addressIndex,
+    ]),
+    transaction: {
+      transaction,
+      sourceOutputs,
+      broadcast: params.broadcast ?? false,
+      userPrompt: userPrompt ?? 'Direct merchant payment',
+    },
+  } as unknown as SignTransactionRequest;
+  const merchantPaymentTerms: CauldronMerchantPaymentTerms = {
+    incomingAsset: paymentAsset,
+    incomingTokenCategory: tokenCategoryHex,
+    incomingAmountAtomic: amountAtomic,
+    directIncomingAmountAtomic: amountAtomic,
+    merchantBchAmountSatoshis: paymentAsset === 'bch' ? amountAtomic : 0n,
+    merchantTokenAmountAtomic: paymentAsset === 'token' ? amountAtomic : 0n,
+  };
+  return {
+    signRequest,
+    sourceOutputs,
+    settlementOutputs,
+    estimatedFeeSatoshis,
+    supplyTokenId:
+      paymentAsset === 'bch' ? CAULDRON_NATIVE_BCH : tokenCategoryHex!,
+    demandTokenId:
+      paymentAsset === 'bch' ? CAULDRON_NATIVE_BCH : tokenCategoryHex!,
+    totalSupply: amountAtomic,
+    totalDemand: amountAtomic,
+    walletInputs,
+    changeAddress,
+    tokenChangeAddress,
+    paymentKind: 'merchant',
+    merchantPaymentMode: 'direct',
+    merchantOutputIndexes: [0],
+    merchantPaymentTerms,
+  };
+}
+
+function byteArraysEqual(left: Uint8Array, right: Uint8Array): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((byte, index) => byte === right[index]);
+}
+
+function tokenToPsbtToken(token: Output['token']): PsbtTokenSpec | undefined {
+  if (!token) return undefined;
+  if (token.nft) {
+    const capability = String(token.nft.capability);
+    return {
+      category: token.category,
+      capability:
+        capability === 'minting' || capability === '2'
+          ? 2
+          : capability === 'mutable' || capability === '1'
+            ? 1
+            : 0,
+      commitment: token.nft.commitment,
+    };
+  }
+  return { category: token.category, amount: token.amount };
+}
+
+function validatePsbtParentOutput(args: {
+  inputIndex: number;
+  txid: string;
+  vout: number;
+  parentHex: string;
+  sourceOutput: Input & Output & ContractInfo;
+}): Uint8Array {
+  const parentBytes = hexToBin(args.parentHex);
+  const parentTxid = binToHex(hash256(parentBytes).slice().reverse());
+  if (parentTxid.toLowerCase() !== args.txid.toLowerCase()) {
+    throw new Error(
+      `Cauldron merchant PSBT input ${args.inputIndex} carries a parent transaction for ${parentTxid}, not ${args.txid}.`
+    );
+  }
+
+  const parent = decodeTransaction(parentBytes);
+  if (typeof parent === 'string') {
+    throw new Error(
+      `Unable to decode the parent transaction for merchant PSBT input ${args.inputIndex}: ${parent}`
+    );
+  }
+  const spent = parent.outputs[args.vout];
+  if (!spent) {
+    throw new Error(
+      `Merchant PSBT input ${args.inputIndex} spends missing parent output ${args.vout}.`
+    );
+  }
+  if (
+    spent.valueSatoshis !== args.sourceOutput.valueSatoshis ||
+    !byteArraysEqual(spent.lockingBytecode, args.sourceOutput.lockingBytecode)
+  ) {
+    throw new Error(
+      `Merchant PSBT input ${args.inputIndex} parent output does not match the selected source output.`
+    );
+  }
+
+  const sourceToken = args.sourceOutput.token;
+  const parentToken = spent.token;
+  if (Boolean(sourceToken) !== Boolean(parentToken)) {
+    throw new Error(
+      `Merchant PSBT input ${args.inputIndex} parent token state does not match the selected source output.`
+    );
+  }
+  if (
+    sourceToken &&
+    parentToken &&
+    (binToHex(sourceToken.category) !== binToHex(parentToken.category) ||
+      sourceToken.amount !== parentToken.amount)
+  ) {
+    throw new Error(
+      `Merchant PSBT input ${args.inputIndex} parent token state does not match the selected source output.`
+    );
+  }
+  return parentBytes;
+}
+
+function pathForCauldronInput(input: ResolvedCauldronFundingInput): number[] {
+  const branch =
+    input.pathName === 'receive' ? 0 : input.pathName === 'change' ? 1 : 7;
+  const accountIndex = input.accountIndex ?? 0;
+  const coinType = input.coinType ?? 145;
+  if (
+    !Number.isSafeInteger(accountIndex) ||
+    accountIndex < 0 ||
+    accountIndex > 0x7fffffff ||
+    !Number.isSafeInteger(coinType) ||
+    coinType < 0 ||
+    coinType > 0x7fffffff ||
+    !Number.isSafeInteger(input.addressIndex) ||
+    input.addressIndex < 0 ||
+    input.addressIndex > 0x7fffffff
+  ) {
+    throw new Error('Merchant PSBT input has an invalid BIP32 path.');
+  }
+  return [
+    0x80000000 | 44,
+    0x80000000 | coinType,
+    0x80000000 | accountIndex,
+    branch,
+    input.addressIndex,
+  ];
+}
+
+/**
+ * Materialize the complete one-transaction merchant payment as a BCH PSBT.
+ *
+ * LP inputs are already finalized contract inputs. The buyer wallet inputs
+ * carry BIP32 metadata and remain unsigned. The merchant output and LP
+ * successor outputs come from the built transaction; buyer BCH change is
+ * therefore represented in the same PSBT rather than settled separately.
+ */
+export async function buildCauldronMerchantPaymentPsbt(
+  built: BuiltCauldronMerchantPaymentRequest,
+  parentTransactions?: ReadonlyMap<string, string>
+): Promise<Uint8Array> {
+  if (built.paymentKind !== 'merchant') {
+    throw new Error('Merchant PSBT metadata is missing.');
+  }
+
+  const transaction = built.signRequest.transaction
+    .transaction as unknown as TransactionTemplateFixed<unknown>;
+  if (
+    transaction.inputs.length !== built.sourceOutputs.length ||
+    transaction.inputs.length === 0
+  ) {
+    throw new Error(
+      'Merchant PSBT transaction inputs and source outputs differ.'
+    );
+  }
+
+  const txids = transaction.inputs.map((input) =>
+    binToHex(input.outpointTransactionHash)
+  );
+  const fetchedParents = parentTransactions
+    ? new Map(parentTransactions)
+    : await fetchParentTransactions(txids);
+  const parentsByTxid = new Map(
+    [...fetchedParents.entries()].map(([txid, hex]) => [
+      txid.toLowerCase(),
+      hex,
+    ])
+  );
+  const poolInputCount = built.sourceOutputs.length - built.walletInputs.length;
+
+  const psbtInputs: PsbtInputSpec[] = transaction.inputs.map(
+    (input, inputIndex) => {
+      const sourceOutput = built.sourceOutputs[inputIndex];
+      if (!sourceOutput) {
+        throw new Error(
+          `Merchant PSBT input ${inputIndex} has no source output.`
+        );
+      }
+      const txid = txids[inputIndex];
+      if (
+        binToHex(sourceOutput.outpointTransactionHash).toLowerCase() !==
+          txid.toLowerCase() ||
+        sourceOutput.outpointIndex !== input.outpointIndex
+      ) {
+        throw new Error(
+          `Merchant PSBT input ${inputIndex} does not match its source outpoint.`
+        );
+      }
+      const parentHex = parentsByTxid.get(txid.toLowerCase());
+      if (!parentHex) {
+        throw new Error(
+          `Merchant PSBT input ${inputIndex} is missing its parent transaction.`
+        );
+      }
+      const parentBytes = validatePsbtParentOutput({
+        inputIndex,
+        txid,
+        vout: input.outpointIndex,
+        parentHex,
+        sourceOutput,
+      });
+      const unlockingBytecode = ensureUint8Array(input.unlockingBytecode);
+      const lockingBytecode = ensureUint8Array(sourceOutput.lockingBytecode);
+
+      if (sourceOutput.contract) {
+        if (unlockingBytecode.length === 0) {
+          throw new Error(
+            `Merchant PSBT contract input ${inputIndex} is not finalized.`
+          );
+        }
+        return {
+          txid,
+          vout: input.outpointIndex,
+          satoshis: sourceOutput.valueSatoshis,
+          lockingBytecode,
+          previousTransaction: parentBytes,
+          sequence: input.sequenceNumber,
+          finalScriptSig: unlockingBytecode,
+        };
+      }
+
+      const walletInput = built.walletInputs[inputIndex - poolInputCount];
+      if (!walletInput?.publicKey || walletInput.publicKey.length !== 33) {
+        throw new Error(
+          `Merchant PSBT wallet input ${inputIndex} is missing its compressed public key.`
+        );
+      }
+      return {
+        txid,
+        vout: input.outpointIndex,
+        satoshis: sourceOutput.valueSatoshis,
+        lockingBytecode,
+        previousTransaction: parentBytes,
+        publicKey: walletInput.publicKey,
+        masterFingerprint: new Uint8Array(4),
+        derivationPath: pathForCauldronInput(walletInput),
+        sequence: input.sequenceNumber,
+      };
+    }
+  );
+
+  const changeLockingResult = cashAddressToLockingBytecode(built.changeAddress);
+  const changeBytecode =
+    typeof changeLockingResult === 'string'
+      ? null
+      : changeLockingResult.bytecode;
+  const changeKey = built.walletInputs.find((input) =>
+    [input.utxo.address, input.utxo.tokenAddress].includes(built.changeAddress)
+  );
+
+  const psbtOutputs: PsbtOutputSpec[] = transaction.outputs.map(
+    (output, outputIndex) => {
+      const psbtOutput: PsbtOutputSpec = {
+        lockingBytecode: ensureUint8Array(output.lockingBytecode),
+        satoshis: output.valueSatoshis,
+        token: tokenToPsbtToken(output.token),
+      };
+      if (
+        outputIndex >= poolInputCount &&
+        changeBytecode &&
+        byteArraysEqual(
+          ensureUint8Array(output.lockingBytecode),
+          changeBytecode
+        ) &&
+        changeKey?.publicKey
+      ) {
+        psbtOutput.publicKey = changeKey.publicKey;
+        psbtOutput.masterFingerprint = new Uint8Array(4);
+        psbtOutput.derivationPath = pathForCauldronInput(changeKey);
+      }
+      return psbtOutput;
+    }
+  );
+
+  const routeOutput =
+    psbtOutputs[poolInputCount + built.merchantOutputIndexes[0]!];
+  const routeIsToken = built.demandTokenId !== CAULDRON_NATIVE_BCH;
+  if (
+    !routeOutput ||
+    (routeIsToken
+      ? !routeOutput.token ||
+        binToHex(routeOutput.token.category) !== built.demandTokenId ||
+        routeOutput.token.amount !== built.totalDemand ||
+        routeOutput.satoshis !== BigInt(TOKEN_OUTPUT_SATS)
+      : routeOutput.token || routeOutput.satoshis !== built.totalDemand)
+  ) {
+    throw new Error('Merchant PSBT routed output does not match the proposal.');
+  }
+
+  const directOutputIndex = built.merchantOutputIndexes[1];
+  if (directOutputIndex !== undefined) {
+    const directOutput = psbtOutputs[poolInputCount + directOutputIndex];
+    const terms = built.merchantPaymentTerms;
+    const expectedDirectToken =
+      terms.incomingAsset === 'token' ? terms.merchantTokenAmountAtomic : 0n;
+    const expectedDirectBch =
+      terms.incomingAsset === 'bch' ? terms.merchantBchAmountSatoshis : 0n;
+    if (!directOutput) {
+      throw new Error('Merchant PSBT is missing its direct payment output.');
+    }
+    if (expectedDirectToken > 0n) {
+      if (
+        !directOutput.token ||
+        binToHex(directOutput.token.category) !== terms.incomingTokenCategory ||
+        directOutput.token.amount !== expectedDirectToken ||
+        directOutput.satoshis !== BigInt(TOKEN_OUTPUT_SATS)
+      ) {
+        throw new Error(
+          'Merchant PSBT direct token output does not match the proposal.'
+        );
+      }
+    } else if (
+      directOutput.token ||
+      directOutput.satoshis !== expectedDirectBch
+    ) {
+      throw new Error(
+        'Merchant PSBT direct BCH output does not match the proposal.'
+      );
+    }
+  }
+
+  return encodeUnsignedPsbt(
+    psbtInputs,
+    psbtOutputs,
+    SIGHASH_ALL_FORKID_ANYONECANPAY
+  );
 }
 
 export function buildCauldronPoolDepositRequest(params: {
@@ -790,10 +1512,9 @@ export function buildCauldronPoolDepositRequest(params: {
     changeAddress,
     userPrompt,
   } = params;
-  const feeRateSatsPerByte =
-    typeof params.feeRateSatsPerByte === 'bigint'
-      ? params.feeRateSatsPerByte
-      : BigInt(params.feeRateSatsPerByte ?? 1);
+  const feeRateSatsPerByte = normalizeCauldronFeeRate(
+    params.feeRateSatsPerByte
+  );
   const normalizedWithdrawPublicKeyHash = normalizeWithdrawPublicKeyHash(
     withdrawPublicKeyHash,
     ownerAddress
@@ -805,10 +1526,8 @@ export function buildCauldronPoolDepositRequest(params: {
     throw new Error('Cauldron pool BCH amount must be at least dust');
   }
 
-  const {
-    totalWalletBch,
-    totalMatchingTokenSupply,
-  } = validateWalletTokenInputs(walletInputs, tokenCategoryHex);
+  const { totalWalletBch, totalMatchingTokenSupply } =
+    validateWalletTokenInputs(walletInputs, tokenCategoryHex);
   if (totalMatchingTokenSupply < tokenAmount) {
     throw new Error('Token funding is insufficient for Cauldron pool creation');
   }
@@ -824,11 +1543,15 @@ export function buildCauldronPoolDepositRequest(params: {
     },
   };
 
-  const buildOutputsForFee = (feeSatoshis: bigint): CauldronSettlementOutput[] => {
+  const buildOutputsForFee = (
+    feeSatoshis: bigint
+  ): CauldronSettlementOutput[] => {
     const outputs: CauldronSettlementOutput[] = [poolOutput];
     const tokenChangeAmount = totalMatchingTokenSupply - tokenAmount;
     if (tokenChangeAmount < 0n) {
-      throw new Error('Token funding is insufficient for Cauldron pool creation');
+      throw new Error(
+        'Token funding is insufficient for Cauldron pool creation'
+      );
     }
     if (tokenChangeAmount > 0n) {
       outputs.push(
@@ -875,7 +1598,9 @@ export function buildCauldronPoolDepositRequest(params: {
     estimatedFeeSatoshis = nextFee;
   }
 
-  const sourceOutputs = walletInputs.map((input) => buildWalletSourceOutput(input));
+  const sourceOutputs = walletInputs.map((input) =>
+    buildWalletSourceOutput(input)
+  );
   const transaction: TransactionTemplateFixed<unknown> = {
     version: 2,
     locktime: 0,
@@ -887,7 +1612,11 @@ export function buildCauldronPoolDepositRequest(params: {
     action: 'sign_transaction_request',
     time: Date.now(),
     sequence: params.sequence ?? 0,
-    inputPaths: walletInputs.map((input, index) => [index, input.pathName, input.addressIndex]),
+    inputPaths: walletInputs.map((input, index) => [
+      index,
+      input.pathName,
+      input.addressIndex,
+    ]),
     transaction: {
       transaction,
       sourceOutputs,
@@ -917,17 +1646,12 @@ export function buildCauldronPoolWithdrawRequest(params: {
   sequence?: number;
   tokenOutputSatoshis?: bigint;
 }): BuiltCauldronPoolWithdrawRequest {
-  const {
-    pool,
-    ownerInput,
-    recipientAddress,
-    userPrompt,
-  } = params;
-  const feeRateSatsPerByte =
-    typeof params.feeRateSatsPerByte === 'bigint'
-      ? params.feeRateSatsPerByte
-      : BigInt(params.feeRateSatsPerByte ?? 1);
-  const tokenOutputSatoshis = params.tokenOutputSatoshis ?? BigInt(TOKEN_OUTPUT_SATS);
+  const { pool, ownerInput, recipientAddress, userPrompt } = params;
+  const feeRateSatsPerByte = normalizeCauldronFeeRate(
+    params.feeRateSatsPerByte
+  );
+  const tokenOutputSatoshis =
+    params.tokenOutputSatoshis ?? BigInt(TOKEN_OUTPUT_SATS);
   const normalizedWithdrawPublicKeyHash = normalizeWithdrawPublicKeyHash(
     pool.parameters.withdrawPublicKeyHash,
     pool.ownerAddress,
@@ -944,7 +1668,9 @@ export function buildCauldronPoolWithdrawRequest(params: {
     32 +
     4 +
     1 +
-    buildCauldronPoolV0WithdrawUnlockingBytecodePlaceholder(normalizedPool.parameters).length +
+    buildCauldronPoolV0WithdrawUnlockingBytecodePlaceholder(
+      normalizedPool.parameters
+    ).length +
     4;
   const ownerP2pkhInputSize = P2PKH_INPUT_SIZE_BYTES;
 
@@ -953,18 +1679,26 @@ export function buildCauldronPoolWithdrawRequest(params: {
     throw new Error('Cauldron pool withdrawal owner input must be BCH-only');
   }
 
-  const baseRecipientValue = pool.output.amountSatoshis >= tokenOutputSatoshis
-    ? pool.output.amountSatoshis
-    : tokenOutputSatoshis;
-  const ownerBchValue = parseSatoshis(ownerInput.utxo.amount ?? ownerInput.utxo.value);
+  const baseRecipientValue =
+    pool.output.amountSatoshis >= tokenOutputSatoshis
+      ? pool.output.amountSatoshis
+      : tokenOutputSatoshis;
+  const ownerBchValue = parseSatoshis(
+    ownerInput.utxo.amount ?? ownerInput.utxo.value
+  );
 
-  const buildOutputsForFee = (feeSatoshis: bigint): CauldronSettlementOutput[] => {
-    const requiredFromOwner = tokenOutputSatoshis > pool.output.amountSatoshis
-      ? tokenOutputSatoshis - pool.output.amountSatoshis
-      : 0n;
+  const buildOutputsForFee = (
+    feeSatoshis: bigint
+  ): CauldronSettlementOutput[] => {
+    const requiredFromOwner =
+      tokenOutputSatoshis > pool.output.amountSatoshis
+        ? tokenOutputSatoshis - pool.output.amountSatoshis
+        : 0n;
     const recipientValue = baseRecipientValue - feeSatoshis;
     if (recipientValue < tokenOutputSatoshis) {
-      throw new Error('Cauldron pool reserve is too small to withdraw after fee');
+      throw new Error(
+        'Cauldron pool reserve is too small to withdraw after fee'
+      );
     }
 
     const outputs: CauldronSettlementOutput[] = [
@@ -978,7 +1712,9 @@ export function buildCauldronPoolWithdrawRequest(params: {
     if (bchChange >= BigInt(DUST)) {
       outputs.push(buildCashAddressOutput(ownerInput.utxo.address, bchChange));
     } else if (bchChange < 0n) {
-      throw new Error('Owner BCH input is insufficient to back the withdrawal output');
+      throw new Error(
+        'Owner BCH input is insufficient to back the withdrawal output'
+      );
     }
 
     return outputs;
@@ -1011,9 +1747,10 @@ export function buildCauldronPoolWithdrawRequest(params: {
       outpointIndex: pool.outputIndex,
       outpointTransactionHash: hexToBin(pool.txHash),
       sequenceNumber: 0,
-      unlockingBytecode: buildCauldronPoolV0WithdrawUnlockingBytecodePlaceholder(
-        pool.parameters
-      ),
+      unlockingBytecode:
+        buildCauldronPoolV0WithdrawUnlockingBytecodePlaceholder(
+          pool.parameters
+        ),
       lockingBytecode: pool.output.lockingBytecode,
       valueSatoshis: pool.output.amountSatoshis,
       token: {
@@ -1033,9 +1770,10 @@ export function buildCauldronPoolWithdrawRequest(params: {
         outpointIndex: pool.outputIndex,
         outpointTransactionHash: hexToBin(pool.txHash),
         sequenceNumber: 0,
-        unlockingBytecode: buildCauldronPoolV0WithdrawUnlockingBytecodePlaceholder(
-          normalizedPool.parameters
-        ),
+        unlockingBytecode:
+          buildCauldronPoolV0WithdrawUnlockingBytecodePlaceholder(
+            normalizedPool.parameters
+          ),
       },
       buildWalletInput(ownerInput),
     ],
@@ -1107,14 +1845,15 @@ export async function signAndBroadcastCauldronTradeRequest(
       sourceLabel: options?.sourceLabel ?? 'Cauldron',
       recipientSummary: options?.recipientSummary ?? null,
       amountSummary: options?.amountSummary ?? null,
-      userPrompt: options?.userPrompt ?? built.signRequest.transaction.userPrompt ?? null,
+      userPrompt:
+        options?.userPrompt ?? built.signRequest.transaction.userPrompt ?? null,
     }
   );
 }
 
 export async function signAndBroadcastCauldronMerchantPaymentRequest(
   walletId: number,
-  built: BuiltCauldronTradeRequest,
+  built: BuiltCauldronMerchantPaymentRequest,
   options?: {
     sourceLabel?: string | null;
     recipientSummary?: string | null;
@@ -1122,11 +1861,17 @@ export async function signAndBroadcastCauldronMerchantPaymentRequest(
     userPrompt?: string | null;
   }
 ) {
+  // Materialize and validate the complete transaction-backed PSBT before any
+  // wallet signing. The native OPTN adapter still consumes its structured
+  // transaction request; the PSBT now proves the same fixed outputs and
+  // parent UTXO state instead of relying on the removed second settlement tx.
+  await buildCauldronMerchantPaymentPsbt(built);
   return signAndBroadcastCauldronTradeRequest(walletId, built, {
     sourceLabel: options?.sourceLabel ?? 'Cauldron Merchant Pay',
     recipientSummary: options?.recipientSummary ?? null,
     amountSummary: options?.amountSummary ?? null,
-    userPrompt: options?.userPrompt ?? built.signRequest.transaction.userPrompt ?? null,
+    userPrompt:
+      options?.userPrompt ?? built.signRequest.transaction.userPrompt ?? null,
   });
 }
 
@@ -1156,7 +1901,8 @@ export async function signAndBroadcastCauldronPoolDepositRequest(
       sourceLabel: options?.sourceLabel ?? 'Cauldron Pool',
       recipientSummary: options?.recipientSummary ?? null,
       amountSummary: options?.amountSummary ?? null,
-      userPrompt: options?.userPrompt ?? built.signRequest.transaction.userPrompt ?? null,
+      userPrompt:
+        options?.userPrompt ?? built.signRequest.transaction.userPrompt ?? null,
     }
   );
 }
@@ -1192,7 +1938,8 @@ export async function signAndBroadcastCauldronPoolWithdrawRequest(
       sourceLabel: options?.sourceLabel ?? 'Cauldron Pool Withdraw',
       recipientSummary: options?.recipientSummary ?? null,
       amountSummary: options?.amountSummary ?? null,
-      userPrompt: options?.userPrompt ?? built.signRequest.transaction.userPrompt ?? null,
+      userPrompt:
+        options?.userPrompt ?? built.signRequest.transaction.userPrompt ?? null,
     }
   );
 }

@@ -45,6 +45,7 @@ import HomeConnectPopup from '../../components/home/HomeConnectPopup';
 import { preloadTokenMetadata } from '../../hooks/useSharedTokenMetadata';
 import { useHomeConnect } from './useHomeConnect';
 import { useI18n } from '../../i18n/useI18n';
+import { unitFor } from '../../utils/unitLabel';
 
 type QuickActionButtonProps = {
   title: string;
@@ -116,6 +117,7 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
   const bchUsdQuote = useSelector(
     (state: RootState) => state.priceFeed['BCH-USD']?.price
   );
+  const unit = unitFor(currentNetwork);
   const [displayMode, setDisplayMode] = useState<'BCH' | 'USD'>('BCH');
   const autoSyncWalletRef = useRef<number | null>(null);
   const homeConnect = useHomeConnect();
@@ -310,7 +312,7 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
                 >
                   <div className="text-2xl font-bold wallet-text-strong">
                     {displayMode === 'BCH'
-                      ? `${totalBch.toFixed(8)} BCH`
+                      ? `${totalBch.toFixed(8)} ${unit}`
                       : totalUsd !== null
                         ? `$${totalUsd.toFixed(2)} USD`
                         : t('home.usdUnavailable')}
@@ -320,7 +322,7 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
                       ? totalUsd !== null
                         ? `$${totalUsd.toFixed(2)} USD`
                         : t('home.usdPriceUnavailable')
-                      : `${totalBch.toFixed(8)} BCH`}
+                      : `${totalBch.toFixed(8)} ${unit}`}
                   </div>
                   {stealthSats > 0 && (
                     <div className="text-[10px] wallet-muted mt-0.5">
@@ -474,6 +476,9 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
           onClose={homeConnect.closePopup}
           scanning={homeConnect.scanning}
           submitting={homeConnect.submitting}
+          streamScanning={homeConnect.streamScanning}
+          onStreamScan={homeConnect.scanStreamQr}
+          onStreamComplete={homeConnect.completeStreamScan}
         />
       ) : null}
     </WalletScreen>

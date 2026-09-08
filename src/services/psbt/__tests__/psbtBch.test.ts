@@ -9,7 +9,11 @@
 //   * signature from PSBT_IN_PARTIAL_SIG (0x02), key `0x02 || pubkey`
 
 import { describe, expect, it } from 'vitest';
-import { encodeTransaction, hexToBin } from '@bitauth/libauth';
+import {
+  decodeTransaction,
+  encodeTransaction,
+  hexToBin,
+} from '@bitauth/libauth';
 import {
   PSBT_MAGIC,
   SIGHASH_ALL_FORKID,
@@ -303,6 +307,11 @@ describe('Paytaca v145 fields', () => {
     );
     const parsed = decodePsbt(psbt);
     expect(parsed.outputs[0].token).toEqual({ category, amount: 500n });
+    const unsigned = decodeTransaction(parsed.unsignedTransaction);
+    expect(typeof unsigned).not.toBe('string');
+    if (typeof unsigned !== 'string') {
+      expect(unsigned.outputs[0].token).toEqual({ category, amount: 500n });
+    }
   });
 
   it('encodes NFT token prefixes with capability and commitment', () => {
@@ -347,6 +356,48 @@ describe('Paytaca v145 fields', () => {
       commitment,
     });
     expect(parsed.outputs[0].token?.amount).toBeUndefined();
+  });
+
+  it('represents an already-finalized covenant input without wallet derivation', () => {
+    const finalScriptSig = Uint8Array.from([0x51, 0x52]);
+    const psbt = encodeUnsignedPsbt(
+      [
+        input({
+          publicKey: undefined,
+          masterFingerprint: undefined,
+          derivationPath: undefined,
+          finalScriptSig,
+        }),
+      ],
+      [output()]
+    );
+    const parsed = decodePsbt(psbt);
+    expect(parsed.inputs[0].finalScriptSig).toEqual(finalScriptSig);
+    expect(parsed.inputs[0].derivations).toHaveLength(0);
+  });
+
+  it('rejects an empty finalized input script without wallet derivation', () => {
+    expect(() =>
+      encodeUnsignedPsbt(
+        [
+          input({
+            publicKey: undefined,
+            masterFingerprint: undefined,
+            derivationPath: undefined,
+            finalScriptSig: new Uint8Array(),
+          }),
+        ],
+        [output()]
+      )
+    ).toThrow('Inputs need at least one public key derivation.');
+  });
+
+  it('omits an empty finalized input script record', () => {
+    const psbt = encodeUnsignedPsbt(
+      [input({ finalScriptSig: new Uint8Array() })],
+      [output()]
+    );
+    expect(decodePsbt(psbt).inputs[0].finalScriptSig).toBeNull();
   });
 });
 

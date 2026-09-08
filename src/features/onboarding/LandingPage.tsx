@@ -56,7 +56,6 @@ const LandingPage = ({ surface }: LandingPageProps) => {
   const showWatchOnly = offersWatchOnly(resolvedSurface);
   const { t } = useI18n();
 
-
   return (
     <section className="min-h-[100dvh] wallet-surface flex flex-col justify-center items-center px-4 relative">
       <div className="safe-area-top" />

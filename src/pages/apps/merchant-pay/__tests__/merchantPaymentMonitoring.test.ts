@@ -68,4 +68,47 @@ describe('merchantPaymentMonitoring', () => {
       })
     ).toBeNull();
   });
+
+  it('matches all fixed outputs from the same reverse-payment transaction', () => {
+    const reverseProposal = {
+      version: 2 as const,
+      tokenId,
+      tokenAmountAtomic: 500n,
+      merchantTokenAmountAtomic: 500n,
+      merchantBchAmountSatoshis: 700n,
+      incomingAsset: 'token' as const,
+    } as never;
+    const txid = '11'.repeat(32);
+    const otherTxid = '22'.repeat(32);
+
+    expect(
+      findMerchantPaymentObservation({
+        utxos: [
+          createUtxo({
+            tx_hash: txid,
+            token: { category: tokenId, amount: 500 },
+          }),
+          createUtxo({
+            tx_hash: txid,
+            tx_pos: 3,
+            value: 700,
+            amount: 700,
+            token: null,
+          }),
+          createUtxo({
+            tx_hash: otherTxid,
+            value: 700,
+            amount: 700,
+            token: null,
+          }),
+        ],
+        baselineOutpoints: [],
+        proposal: reverseProposal,
+      })
+    ).toMatchObject({
+      status: 'pending',
+      txid,
+      outpoint: `${txid}:2`,
+    });
+  });
 });
