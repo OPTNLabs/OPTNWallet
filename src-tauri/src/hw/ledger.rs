@@ -1,11 +1,13 @@
 //! Ledger APDU over USB HID — same channel framing as Ledger Live / btchip-python.
 //!
 //! Packet layout (64 bytes):
+//! ```text
 //!   [0..1] channel (BE, default 0x0101)
 //!   [2]    tag 0x05 (APDU)
 //!   [3..4] sequence (BE)
 //!   first packet only: [5..6] APDU length (BE), then payload
 //!   continuation: payload only after sequence
+//! ```
 
 use super::session::{self, HwFamily};
 use hidapi::HidDevice;
