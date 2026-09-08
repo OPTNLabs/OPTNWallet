@@ -95,8 +95,30 @@ The new regression covers zero, one and four mixed-type values, dropping
 the source before the owned roundtrip and cloning a surviving value.
 The existing Linux job now runs it under Valgrind with fatal GLib criticals
 and failure on invalid accesses, uninitialized reads or definite leaks.
-Execution of that new regression remains pending until CI runs the fix.
+The optimized array regression passed under Valgrind on source `416285e7`
+in [run 34226399477](https://github.com/OPTNLabs/OPTNWallet/actions/runs/34226399477):
+zero memory errors, zero suppressed errors and zero definitely lost bytes.
 
 This does not make the impossible generic paths executable, resolve #117,
 or establish safety for arbitrary unsafe callers. The source review and
 the new array defect must not be conflated.
+
+## Related ownership follow-up
+
+The same caller review found `GStringBuilder::copy_into` replacing an already
+initialized allocation without freeing it and resetting the copied length to
+zero. It now appends the source's explicit byte length into the initialized
+destination using GLib's existing API. The regression covers empty and embedded
+NUL strings, cloning, full/borrowed imports, source drop and contiguous arrays.
+
+`ThreadPool::push` also freed a callback after worker creation failed, although
+[GLib explicitly keeps that task queued](https://docs.gtk.org/glib/method.ThreadPool.push.html).
+The callback now remains owned by the queue and its worker frees it. A regression
+uses the real queue with workers paused, injects the documented error result,
+then resumes a worker and checks execution and exactly one callback drop.
+This tests the ownership contract, not actual operating-system thread exhaustion.
+
+Both changes and their tests passed Windows Rust typechecking using local-only
+system dependency metadata overrides. That does not link or execute GLib.
+Their optimized Linux Valgrind execution is pending CI; the existing gate now
+includes both tests without changing scanner coverage or alert state.

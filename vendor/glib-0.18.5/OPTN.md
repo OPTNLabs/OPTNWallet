@@ -30,11 +30,17 @@ not a Cargo source replacement or a republished crate.
   for an arbitrary slice and skipped destination initialization.
 - `src/value.rs`: one regression exercises empty, single and multi-element
   GValue arrays, mixed types, source drop, owned roundtrip and cloning.
+- `src/gstring_builder.rs`: copy into the initialized destination with
+  `g_string_append_len`, preserving length and embedded NULs without leaking
+  its buffer. One regression covers single-value and array ownership roundtrips.
+- `src/thread_pool.rs`: retain GLib's ownership of a queued callback when worker
+  creation fails. One regression injects that documented error at the enqueue
+  boundary, then starts a worker and checks execution and exactly one drop.
 - `OPTN.md`: this provenance and verification note.
 
 The original `src/variant_iter.rs` SHA-256 is
 `1fd02859333761c45321b32f28b24233446b97d0022a90d3a937ed162585b90e`.
-Compare each retained file against the authenticated archive; only the five
+Compare each retained file against the authenticated archive; only the seven
 files above should differ, and this note is the only added file.
 
 ## Smallest optimized Linux regression
@@ -52,7 +58,7 @@ This tests glib directly, without building Tauri, GTK, or the wallet. The
 standalone test command creates its own Cargo.lock/build artifacts under this
 vendor directory; they are not part of the imported upstream source. The
 desktop dependency graph is instead governed by `src-tauri/Cargo.lock`.
-The existing Linux job also runs the array regression under Valgrind with
+The existing Linux job also runs the array, string and queued-task regressions under Valgrind with
 fatal GLib criticals and a nonzero exit on memory errors or definite leaks.
 
 For desktop resolution verification without fetching or changing its lock:

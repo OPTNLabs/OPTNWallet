@@ -77,9 +77,27 @@ impl ThreadPool {
     }
 
     #[doc(alias = "g_thread_pool_push")]
+    /// Queues a task. If starting a worker fails, the task remains queued and
+    /// may still execute; an error does not mean that retrying it is safe.
     pub fn push<T: Send + 'static, F: FnOnce() -> T + Send + 'static>(
         &self,
         func: F,
+    ) -> Result<ThreadHandle<T>, crate::Error> {
+        self.push_with(func, |pool, task, error| unsafe {
+            ffi::g_thread_pool_push(pool, task, error)
+        })
+    }
+
+    // Keep the C enqueue boundary injectable so its queued-on-error contract
+    // can be tested without exhausting system threads.
+    fn push_with<T: Send + 'static, F: FnOnce() -> T + Send + 'static>(
+        &self,
+        func: F,
+        enqueue: impl FnOnce(
+            *mut ffi::GThreadPool,
+            ffi::gpointer,
+            *mut *mut ffi::GError,
+        ) -> ffi::gboolean,
     ) -> Result<ThreadHandle<T>, crate::Error> {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         unsafe {
@@ -90,15 +108,12 @@ impl ThreadPool {
             let mut err = ptr::null_mut();
 
             let func = Box::into_raw(func);
-            let ret: bool = from_glib(ffi::g_thread_pool_push(
-                self.0.as_ptr(),
-                func as *mut _,
-                &mut err,
-            ));
+            let ret: bool = from_glib(enqueue(self.0.as_ptr(), func as *mut _, &mut err));
             if ret {
                 Ok(ThreadHandle { rx })
             } else {
-                let _ = Box::from_raw(func);
+                // GLib enqueues the task even when it cannot start a worker.
+                // spawn_func remains its owner and must be the only one to free it.
                 Err(from_glib_full(err))
             }
         }
@@ -222,6 +237,54 @@ unsafe extern "C" fn spawn_func(func: ffi::gpointer, _data: ffi::gpointer) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_push_error_keeps_queued_task_alive() {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+        use std::time::Duration;
+
+        struct DropCount(Arc<AtomicUsize>);
+        impl Drop for DropCount {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        // Pause workers so the real GLib queue retains the callback while we
+        // inject its documented thread-creation-failed result at the C boundary.
+        let pool = ThreadPool::shared(Some(0)).unwrap();
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let guard = DropCount(dropped.clone());
+        let (tx, rx) = std::sync::mpsc::channel();
+        let result = pool.push_with(
+            move || {
+                drop(guard);
+                tx.send(17).unwrap();
+            },
+            |pool, task, error| unsafe {
+                assert_ne!(ffi::g_thread_pool_push(pool, task, error), ffi::GFALSE);
+                *error = ffi::g_error_new_literal(
+                    ffi::g_thread_error_quark(),
+                    ffi::G_THREAD_ERROR_AGAIN,
+                    b"injected worker creation failure\0".as_ptr().cast(),
+                );
+                ffi::GFALSE
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(pool.unprocessed(), 1);
+        // Do not execute a freed task if this regression is run against old code.
+        if dropped.load(Ordering::SeqCst) != 0 {
+            std::mem::forget(pool);
+            panic!("queued task was freed after enqueue failure");
+        }
+        pool.set_max_threads(Some(1)).unwrap();
+        assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), 17);
+        drop(pool);
+        assert_eq!(dropped.load(Ordering::SeqCst), 1);
+    }
 
     #[test]
     fn test_push() {
