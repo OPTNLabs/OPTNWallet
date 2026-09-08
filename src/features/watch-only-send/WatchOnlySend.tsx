@@ -204,9 +204,17 @@ const FEE_RATE_CHOICES: ReadonlyArray<{
     label: 'Wallet default',
     hint: 'Follows Settings, like every other send in this wallet.',
   },
-  { rate: 1.1, label: 'Economy', hint: 'The relay minimum. Cheapest that propagates.' },
+  {
+    rate: 1.1,
+    label: 'Economy',
+    hint: 'The relay minimum. Cheapest that propagates.',
+  },
   { rate: 2, label: 'Standard', hint: 'A little headroom over the floor.' },
-  { rate: 5, label: 'Priority', hint: 'For when a backend is fussy about its rolling minimum.' },
+  {
+    rate: 5,
+    label: 'Priority',
+    hint: 'For when a backend is fussy about its rolling minimum.',
+  },
 ];
 
 const satsToBch = (sats: bigint): string => {
@@ -467,6 +475,10 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
       ),
     [feeRateOverride, walletFeeMode, walletCustomFeeSatPerByte]
   );
+  const feePolicyLabel =
+    feeRateSatPerByte === undefined
+      ? 'automatic relay fee'
+      : `${feeRateSatPerByte} sat/byte`;
   const fusionDepthRev = useFusionDepthRevision(
     walletIdOverride ?? standardWalletId ?? 0
   );
@@ -1729,7 +1741,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
                         {selectedInputs.length === 1 ? '' : 's'} · fee{' '}
                         {satsToBch(proposalState.feeSats)} BCH · change{' '}
                         {satsToBch(proposalState.changeSats)} BCH
-                        {multisigPolicy ? ' · 1 sat/byte' : ''}
+                        {multisigPolicy ? ` · ${feePolicyLabel}` : ''}
                       </p>
                     </div>
                     {!broadcastTxid && (
@@ -1960,7 +1972,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
                         Multisig fee policy
                       </p>
                       <span className="rounded-full border border-emerald-500/40 px-2 py-1 text-[10px] font-semibold text-emerald-300">
-                        1 sat/byte
+                        {feePolicyLabel}
                       </span>
                     </div>
                     <p className="text-xs leading-relaxed wallet-muted">
@@ -1993,8 +2005,8 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
                       </p>
                     ) : (
                       <p className="text-[11px] text-amber-300">
-                        The available BCH cannot cover the 1 sat/byte fee, or
-                        the destination is not valid for this network.
+                        The available BCH cannot cover {feePolicyLabel}, or the
+                        destination is not valid for this network.
                       </p>
                     )}
                     {tokenInputCount > 0 && (
@@ -2013,7 +2025,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
                   {proposalState && (
                     <span>
                       Fee {satsToBch(proposalState.feeSats)} BCH
-                      {multisigPolicy ? ' · 1 sat/byte' : ''}
+                      {multisigPolicy ? ` · ${feePolicyLabel}` : ''}
                     </span>
                   )}
                 </div>

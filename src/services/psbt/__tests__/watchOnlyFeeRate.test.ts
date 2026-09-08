@@ -50,9 +50,16 @@ describe('resolveWatchOnlyFeeRate', () => {
     const bytes = 1_000;
     const resolved = resolveWatchOnlyFeeRate(null, 'auto', 1.1);
 
-    expect(feeForTransactionBytes(bytes, resolved)).toBe(relayFeeForBytes(bytes));
-    expect(feeForTransactionBytes(bytes, resolved)).toBeGreaterThan(
-      feeForTransactionBytes(bytes, 1)
+    expect(feeForTransactionBytes(bytes, resolved)).toBe(
+      relayFeeForBytes(bytes)
     );
+  });
+
+  it('raises positive explicit rates below the relay floor', () => {
+    const bytes = 1_000;
+    const minimum = relayFeeForBytes(bytes);
+
+    expect(feeForTransactionBytes(bytes, 1)).toBe(minimum);
+    expect(feeForTransactionBytes(bytes, 0.5)).toBe(minimum);
   });
 });

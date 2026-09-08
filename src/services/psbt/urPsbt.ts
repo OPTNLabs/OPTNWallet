@@ -229,5 +229,6 @@ export class UrPsbtScanner {
   /** Start over — e.g. the user aborted, or scanned the wrong device's screen. */
   reset(): void {
     this.decoder = new URRegistryDecoder();
+    this.damaged = 0;
   }
 }

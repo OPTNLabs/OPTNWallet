@@ -498,7 +498,9 @@ export function feeForTransactionBytes(
   if (!Number.isSafeInteger(fee)) {
     throw new Error('Fee calculation exceeded the safe integer range.');
   }
-  return BigInt(fee);
+  const explicitFee = BigInt(fee);
+  const minimumFee = relayFeeForBytes(bytes);
+  return explicitFee > minimumFee ? explicitFee : minimumFee;
 }
 
 export function estimateUnsignedSize(
@@ -772,11 +774,7 @@ export function buildWatchOnlyPsbt(
           token: params.recipientToken,
         }
   );
-  const psbtBytes = encodeUnsignedPsbt(
-    psbtInputs,
-    psbtOutputs,
-    sighashType
-  );
+  const psbtBytes = encodeUnsignedPsbt(psbtInputs, psbtOutputs, sighashType);
   const rawUnsigned = encodeTransaction({
     version: 2,
     inputs: params.inputs.map((input) => ({

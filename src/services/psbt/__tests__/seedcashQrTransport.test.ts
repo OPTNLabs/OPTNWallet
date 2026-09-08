@@ -24,6 +24,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { binToHex, hexToBin } from '@bitauth/libauth';
 import { UrPsbtScanner } from '../urPsbt';
+import { decodePsbt } from '../psbtBch';
 
 type Fixture = {
   unsigned_hex: string;
@@ -59,19 +60,27 @@ describe('a PSBT SeedCash actually signed', () => {
   );
 
   it('is the transaction we sent, with a signature added', () => {
-    // The bytes grew and the unsigned transaction inside is unchanged -- the
-    // device signed *our* proposal rather than substituting one of its own.
+    // The unsigned transaction inside is unchanged -- the device signed *our*
+    // proposal rather than substituting one of its own.
     const recovered = drain(fixture['50'].frames)!;
-    const unsigned = hexToBin(fixture.unsigned_hex);
+    const unsignedPsbt = decodePsbt(hexToBin(fixture.unsigned_hex));
+    const signedPsbt = decodePsbt(hexToBin(fixture.signed_hex));
 
-    expect(recovered.length).toBeGreaterThan(unsigned.length);
+    expect(recovered.length).toBeGreaterThan(
+      hexToBin(fixture.unsigned_hex).length
+    );
+    expect([...signedPsbt.unsignedTransaction]).toEqual([
+      ...unsignedPsbt.unsignedTransaction,
+    ]);
 
-    // PSBT_IN_PARTIAL_SIG is key type 0x02, and a BCH signature is 0x41 at the
-    // end (ALL|FORKID). Neither appears in the unsigned PSBT.
-    const signedHex = fixture.signed_hex;
-    const unsignedHex = fixture.unsigned_hex;
-    expect(signedHex.startsWith(unsignedHex.slice(0, 20))).toBe(true);
-    expect(signedHex.length - unsignedHex.length).toBeGreaterThan(100);
+    // The returned signature must belong to the public key requested by our
+    // proposal, and must carry BCH's ALL|FORKID sighash byte.
+    expect(unsignedPsbt.inputs[0]?.derivations).toHaveLength(1);
+    expect(signedPsbt.inputs[0]?.partialSignatures).toHaveLength(1);
+    const expectedPublicKey = unsignedPsbt.inputs[0].derivations[0].publicKey;
+    const partialSignature = signedPsbt.inputs[0].partialSignatures[0];
+    expect([...partialSignature.publicKey]).toEqual([...expectedPublicKey]);
+    expect(partialSignature.signature.at(-1)).toBe(0x41);
   });
 
   it('still recovers when the camera misreads part of the return scan', () => {
@@ -80,7 +89,9 @@ describe('a PSBT SeedCash actually signed', () => {
     // so a bad read is close to certain on the return leg.
     const clean = fixture['50'].frames;
     const withMisreads = clean.flatMap((frame, index) =>
-      index % 4 === 1 ? ['UR:CRYPTO-PSBT/7-11/NOTBYTEWORDSATALL', frame] : [frame]
+      index % 4 === 1
+        ? ['UR:CRYPTO-PSBT/7-11/NOTBYTEWORDSATALL', frame]
+        : [frame]
     );
     const recovered = drain(withMisreads);
     expect(recovered).not.toBeNull();
