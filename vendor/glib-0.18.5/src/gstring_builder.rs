@@ -26,15 +26,7 @@ wrapper! {
         },
         copy_into => |dest, src| {
             debug_assert!((*src).allocated_len > (*src).len);
-            let allocated_len = (*src).allocated_len;
-            let inner = ffi::GString {
-                str: ffi::g_malloc(allocated_len) as *mut _,
-                len: 0,
-                allocated_len,
-            };
-            // +1 to also copy the NUL-terminator
-            ptr::copy_nonoverlapping((*src).str, inner.str, (*src).len + 1);
-            *dest = inner;
+            ffi::g_string_append_len(dest, (*src).str, (*src).len as isize);
         },
         clear => |ptr| {
             ffi::g_free((*ptr).str as *mut _);
@@ -315,6 +307,46 @@ impl fmt::Write for GStringBuilder {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn copy_roundtrip() {
+        use crate::{translate::*, GStringBuilder};
+
+        let long = "before\0after".repeat(16);
+        let expected = ["", "plain", "before\0after", long.as_str()];
+        for text in expected {
+            let source = GStringBuilder::new(text);
+            let cloned = source.clone();
+            let raw: *const ffi::GString = source.to_glib_full();
+            drop(source);
+            // SAFETY: the export owns a separate GString. Copy its contents before
+            // consuming it; all three builders must outlive both source allocations.
+            let copies: [GStringBuilder; 3] =
+                unsafe { [cloned, from_glib_none(raw), from_glib_full(raw)] };
+            for mut copy in copies {
+                assert_eq!(copy.as_str(), text);
+                assert_eq!(copy.inner.len, text.len());
+                // SAFETY: a valid GString has a terminator just beyond its contents.
+                assert_eq!(unsafe { *copy.inner.str.add(copy.inner.len) }, 0);
+                copy.append("!");
+                assert_eq!(copy.as_str(), format!("{text}!"));
+            }
+        }
+
+        for length in [0, 1, 4] {
+            let sources: Vec<_> = expected[..length].iter().map(GStringBuilder::new).collect();
+            let raw: *mut ffi::GString = sources.as_slice().to_glib_full();
+            drop(sources);
+            // SAFETY: transfer ownership of all elements and free the C array once.
+            let copies: Vec<GStringBuilder> =
+                unsafe { FromGlibContainer::from_glib_full_num(raw, length) };
+            assert_eq!(copies.len(), length);
+            for (copy, text) in copies.iter().zip(&expected[..length]) {
+                assert_eq!(copy.as_str(), *text);
+                assert_eq!(copy.inner.len, text.len());
+            }
+        }
+    }
+
     #[test]
     fn append() {
         let mut s = crate::GStringBuilder::new("");
