@@ -684,7 +684,7 @@ async fn bip37_node_probe(
     spv::probe_node(&host, port, &network, transport).await
 }
 
-// Parse a 40-hex-char pubkey hash (hash160) into 20 bytes.
+/// Decode an even-length ASCII hex value, rejecting malformed input before I/O.
 fn decode_hex(h: &str) -> Result<Vec<u8>, String> {
     if !h.is_ascii() {
         return Err("invalid hex".into());
@@ -692,34 +692,27 @@ fn decode_hex(h: &str) -> Result<Vec<u8>, String> {
     if h.len() % 2 != 0 {
         return Err("odd-length hex".into());
     }
-    (0..h.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&h[i..i + 2], 16).map_err(|_| "invalid hex".to_string()))
-        .collect()
+    hex::decode(h).map_err(|_| "invalid hex".to_string())
 }
 
+/// Decode exactly 20 bytes of hash160 without accepting non-hex UTF-8 input.
 fn parse_pkh(h: &str) -> Result<[u8; 20], String> {
     if h.len() != 40 {
         return Err("pubkey hash must be 40 hex chars".into());
     }
     let mut out = [0u8; 20];
-    for i in 0..20 {
-        out[i] = u8::from_str_radix(&h[i * 2..i * 2 + 2], 16)
-            .map_err(|_| "invalid pubkey-hash hex".to_string())?;
-    }
+    hex::decode_to_slice(h, &mut out).map_err(|_| "invalid pubkey-hash hex".to_string())?;
     Ok(out)
 }
 
-// Parse a display (big-endian) block-hash hex into internal little-endian bytes.
+/// Parse display-order block-hash hex into internal little-endian bytes.
 fn parse_block_hash(h: &str) -> Result<[u8; 32], String> {
     if h.len() != 64 {
         return Err("block hash must be 64 hex chars".into());
     }
     let mut out = [0u8; 32];
-    for i in 0..32 {
-        out[31 - i] = u8::from_str_radix(&h[i * 2..i * 2 + 2], 16)
-            .map_err(|_| "invalid block-hash hex".to_string())?;
-    }
+    hex::decode_to_slice(h, &mut out).map_err(|_| "invalid block-hash hex".to_string())?;
+    out.reverse();
     Ok(out)
 }
 
@@ -788,11 +781,7 @@ async fn bip37_broadcast(
     if tx_hex.len() % 2 != 0 || tx_hex.is_empty() {
         return Err("transaction hex must be non-empty and even length".into());
     }
-    let tx_bytes: Vec<u8> = (0..tx_hex.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&tx_hex[i..i + 2], 16))
-        .collect::<Result<_, _>>()
-        .map_err(|_| "invalid transaction hex".to_string())?;
+    let tx_bytes = decode_hex(&tx_hex).map_err(|_| "invalid transaction hex".to_string())?;
     let transport = match (tor_host.as_deref(), tor_port) {
         (Some(h), Some(p)) => fusion::Transport::Tor { host: h, port: p },
         _ => fusion::Transport::Direct,
@@ -1279,6 +1268,35 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn native_hex_boundaries_reject_malformed_input() {
+        for prefix in ["雪", "😀", "aé", "+", "g"] {
+            let pkh = format!("{prefix}{}", "0".repeat(40 - prefix.len()));
+            let block = format!("{prefix}{}", "0".repeat(64 - prefix.len()));
+            assert!(parse_pkh(&pkh).is_err());
+            assert!(parse_block_hash(&block).is_err());
+        }
+        for value in ["雪a", "😀", "aé0", "+0", "0g"] {
+            assert_eq!(
+                bip37_broadcast(
+                    "unused.invalid".into(),
+                    0,
+                    "chipnet".into(),
+                    value.into(),
+                    None,
+                    None
+                )
+                .await,
+                Err("invalid transaction hex".into())
+            );
+        }
+        assert_eq!(parse_pkh(&"AB".repeat(20)).unwrap(), [0xab; 20]);
+        let mut display = std::array::from_fn::<_, 32, _>(|index| index as u8);
+        let decoded = parse_block_hash(&hex::encode_upper(display)).unwrap();
+        display.reverse();
+        assert_eq!(decoded, display);
+    }
 
     #[test]
     fn host_app_surface_matches_the_native_os() {
