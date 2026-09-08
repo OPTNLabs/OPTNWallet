@@ -427,16 +427,22 @@ mod tests {
             assert_eq!(rescan["hd"], true);
             assert_eq!(rescan["complete"], true);
             assert_eq!(rescan["account_path"], "m/44'/145'/1'");
-            assert_eq!(rescan["scanned_addresses"], 8);
-            assert_eq!(rescan["last_used"], json!([1, null, null]));
+            assert_eq!(rescan["scanned_addresses"], 10);
+            assert_eq!(rescan["branches"], json!([0, 1, 7, 2]));
+            assert_eq!(rescan["last_used"], json!([1, null, null, null]));
             assert_eq!(rescan["utxos"], 1);
             assert_eq!(rescan["total"], 1000);
-            assert_eq!(rescan["addresses"].as_array().unwrap().len(), 8);
+            assert_eq!(rescan["addresses"].as_array().unwrap().len(), 10);
             assert!(rescan["addresses"]
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|entry| entry["chain"] == "defi"));
+                .any(|entry| entry["chain"] == "defi" && entry["branch"] == 7));
+            assert!(rescan["addresses"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["chain"] == "compatibility" && entry["branch"] == 2));
             server.await.unwrap();
             directory.write(Network::Chipnet, UserNetworkOverlay::default());
             assert!(

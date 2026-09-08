@@ -367,6 +367,10 @@ impl WalletSyncSession {
         self.state_tx.send_replace(self.state.clone());
     }
 
+    pub(super) fn reconciliation(&self) -> &WalletReconciliation {
+        &self.state
+    }
+
     fn invalidate(&mut self, reason: String) {
         self.active = None;
         self.cancellation_tx = None;
@@ -378,6 +382,16 @@ impl WalletSyncSession {
     /// Open/restore callers validate account ownership before installing it.
     pub(super) fn install_checkpoint(&mut self, checkpoint: WalletCheckpoint, app: &mut AppState) {
         app.coins = checkpoint.coins;
+        app.hd_addresses = checkpoint.allocation;
+        if app.hd_addresses.is_some() {
+            let wallet = app
+                .wallet
+                .as_mut()
+                .expect("checkpoint wallet validated before installation");
+            wallet.account_xpub = Some(checkpoint.account_xpub);
+        }
+        crate::wallet_checkpoint::update_receive_address(app)
+            .expect("checkpoint ownership and allocation validated before installation");
         app.spend = None;
         self.state = checkpoint.state;
         self.state
@@ -413,7 +427,7 @@ impl WalletSyncSession {
         app: &mut AppState,
         app_tx: &watch::Sender<AppState>,
         events: &broadcast::Sender<AppEvent>,
-        security: Option<&mut crate::wallet_security::WalletSecurity>,
+        mut security: Option<&mut crate::wallet_security::WalletSecurity>,
         guard: crate::PublicationGuard<'_>,
     ) {
         match request {
@@ -483,13 +497,16 @@ impl WalletSyncSession {
                     app,
                     lease,
                     *result,
-                    |app, state| match security {
+                    |app, state| match security.as_deref_mut() {
                         Some(security) => security.persist_checkpoint(app, state),
                         None => Ok(()),
                     },
                     |app| guard.allows(app, reply.is_closed()),
                 );
                 if outcome == Ok(ReconciliationDecision::Accepted) {
+                    if let Some(security) = security {
+                        security.checkpoint_published();
+                    }
                     app_tx.send_replace(app.clone());
                     let _ = events.send(AppEvent::CoinsChanged);
                 }
@@ -587,6 +604,26 @@ impl WalletSyncSession {
         let account = optn_core::hd::parse_account_path(&wallet.account_path)
             .map_err(|error| WalletSyncError::InvalidScope(error.to_string()))?;
         let mut required = std::collections::BTreeSet::new();
+        if let Some(allocation) = &app.hd_addresses {
+            // Retain every issued/reserved branch horizon, even if no provider
+            // has seen funds there yet. The scan covers all intervening indexes.
+            for (branch, next) in allocation.next_indexes().into_iter().enumerate() {
+                if let Some(index) = next.checked_sub(1) {
+                    let address = optn_core::watch_only::address_under_account(
+                        app.network,
+                        &xpub,
+                        optn_core::watch_only::HD_SCAN_BRANCHES[branch],
+                        index,
+                    )
+                    .map_err(|error| WalletSyncError::InvalidScope(error.to_string()))?;
+                    required.insert(
+                        Address::decode(&address.address)
+                            .map_err(WalletSyncError::InvalidScope)?
+                            .script_pubkey(),
+                    );
+                }
+            }
+        }
         required.insert(
             Address::decode(&wallet.receive_address)
                 .map_err(WalletSyncError::InvalidScope)?
@@ -705,6 +742,13 @@ impl WalletSyncSession {
                 self.publish_status();
                 return Err(WalletSyncError::InvalidSnapshot(reason));
             }
+            if let Err(reason) =
+                crate::wallet_checkpoint::observe_allocation(&mut candidate_app, &next)
+            {
+                self.state.record_failure(reason.clone());
+                self.publish_status();
+                return Err(WalletSyncError::InvalidSnapshot(reason));
+            }
             if !may_publish(app) {
                 self.invalidate("wallet refresh cancelled before persistence".into());
                 return Err(WalletSyncError::Superseded);
@@ -725,6 +769,8 @@ impl WalletSyncSession {
                 return Err(WalletSyncError::Superseded);
             }
             app.coins = candidate_app.coins;
+            app.hd_addresses = candidate_app.hd_addresses;
+            app.wallet = candidate_app.wallet;
             // A prepared spend may refer to outputs removed by this refresh.
             app.spend = None;
         }

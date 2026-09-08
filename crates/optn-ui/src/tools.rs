@@ -679,7 +679,7 @@ pub fn HistoryPage(transport: UiTransport, state: RwSignal<AppState>) -> impl In
                     {move || format!("‹ {}", state.get().flow().back_label)}
                 </button>
                 <h1>"History"</h1>
-                <p class="lede">"Receives from coins and a pending send. Rebuild Wallet clears this."</p>
+                <p class="lede">"Receives from coins and a pending send. Rebuilding refreshes chain history and keeps your coin holds and labels."</p>
                 <Show
                     when=move || !history_snapshot(state).is_empty()
                     fallback=move || view! { <p class="empty-line">"No transactions yet."</p> }
@@ -920,6 +920,10 @@ fn ReceiveQr(state: RwSignal<AppState>) -> impl IntoView {
 #[component]
 pub fn ReceivePage(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
     let copy_status = RwSignal::new(None::<String>);
+    let status = RwSignal::new(None);
+    let error = RwSignal::new(None::<String>);
+    let busy = RwSignal::new(false);
+    let acknowledge_gap = RwSignal::new(false);
     view! {
         <WalletChrome transport=transport state=state>
             <section class="page receive-page">
@@ -1001,7 +1005,30 @@ pub fn ReceivePage(transport: UiTransport, state: RwSignal<AppState>) -> impl In
                         <button class="secondary" type="button" disabled=true>
                             "Share"
                         </button>
+                        <button class="secondary" type="button"
+                            disabled=move || busy.get() || state.get().hd_addresses.is_none()
+                            on:click=move |_| {
+                                copy_status.set(None);
+                                crate::security::submit(transport, state,
+                                    optn_transport::WalletSecurityRequest::NextReceive {
+                                        epoch: state.get_untracked().lock.unlock_epoch,
+                                        acknowledge_gap: acknowledge_gap.get_untracked(),
+                                    }, status, error, busy);
+                                acknowledge_gap.set(false);
+                            }>
+                            {move || if busy.get() { "Saving address…" } else { "New address" }}
+                        </button>
                     </div>
+                    <Show when=move || error.get().is_some()>
+                        <p role="alert">{move || error.get().unwrap_or_default()}</p>
+                    </Show>
+                    <Show when=move || error.get().is_some_and(|message| message.contains("BIP44 recovery gap"))>
+                        <label class="field">
+                            <input type="checkbox" prop:checked=move || acknowledge_gap.get()
+                                on:change=move |event| acknowledge_gap.set(event_target_checked(&event)) />
+                            "I understand recovery may require scanning beyond 20 unused addresses."
+                        </label>
+                    </Show>
                     <Show when=move || copy_status.get().is_some()>
                         <p class="receive-copy-status" role="status">
                             {move || copy_status.get().unwrap_or_default()}

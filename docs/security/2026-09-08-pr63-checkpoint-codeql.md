@@ -153,3 +153,31 @@ These changes do not approve any alert dismissal. Rescan completeness remains
 labelled by provider evidence; disk authentication does not promote a server
 assertion to SHV/MMR verification. Malicious rollback of disk state, durable
 address issuance/reservation and the nonce lifetime ceiling remain separate work.
+
+## Allocation follow-up and newly reported fixtures
+
+At `fe1bc092e34dcf85fb64129236101098e16cd353`, the PR merge ref reports two more
+test-only findings: #106 is the empty password in the published BIP39 fixture
+inside `wallet_sync.rs`'s test module; #107 is the counter nonce used by the
+in-memory checkpoint test provider in `hd_sync.rs`'s test module. The latter
+increments its write counter before sealing; production still uses fallible OS
+randomness. Both are proposed `used in tests`, independently of the prior
+24-alert proposal. All 26 remained open during this review; no dismissal or
+scan-rule change was performed. Recheck exact locations on subsequent heads.
+
+The current Rust allocation changes close durable private-wallet receive
+issuance: even index zero is saved before display; stale writers fail CAS;
+cancellation after a committed save retains the consumed index on reopen.
+Allocation is separate from chain evidence and cannot confer freshness.
+The v2 codec explicitly retains old branch-2 scope alongside canonical DeFi 7
+without reinterpreting addresses. Rebuilds retain freeze/label controls.
+Shared spend/change reservation, other wallet kinds and malicious disk rollback
+are still separate work. This does not approve any alert dismissal.
+
+An additional source review found that retaining a new CAS revision with old
+memory after cancelled publication could overwrite a newer saved allocation.
+The checkpoint session now requires reload after a committed write until its
+candidate is accepted. The guard covers sync, annotations and receive issuance,
+including a transient post-store wallet-file read error. It does not rely on a
+subsequent lock or on the read failure continuing. Regressions verify that stale
+memory cannot allocate again and reopen recovers the committed history/indexes.

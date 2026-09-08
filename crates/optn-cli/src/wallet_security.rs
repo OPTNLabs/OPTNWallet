@@ -106,7 +106,12 @@ pub async fn run(
         while let Some(line) = private_line(&mut input, 262_144)? {
             let output = match serde_json::from_str::<Input>(&line) {
                 Ok(input) => match execute(&runtime, input).await {
-                    Ok(status) => json!({"ok": true, "security": status}),
+                    Ok(status) => {
+                        let state = runtime.state();
+                        json!({"ok": true, "security": status,
+                            "receive_address":state.wallet.as_ref().map(|wallet| &wallet.receive_address),
+                            "hd_addresses":state.hd_addresses})
+                    }
                     Err(error) => json!({"ok": false, "error": message(error)}),
                 },
                 Err(_) => json!({"ok": false, "error": "Invalid wallet command."}),
@@ -114,7 +119,7 @@ pub async fn run(
             println!("{output}");
         }
     } else {
-        eprintln!("Wallet commands: list, open <file>, import, password, autolock <minutes>, lock, authorize, reveal, quit");
+        eprintln!("Wallet commands: list, open <file>, import, receive [--acknowledge-gap], password, autolock <minutes>, lock, authorize, reveal, quit");
         loop {
             eprint!("wallet> ");
             io::stderr().flush().ok();
@@ -135,6 +140,16 @@ pub async fn run(
             let request = match command {
                 "quit" | "exit" => break,
                 "list" => Some(Request::Status),
+                "receive" => match argument {
+                    "" | "--acknowledge-gap" => Some(Request::NextReceive {
+                        epoch: status.epoch,
+                        acknowledge_gap: argument == "--acknowledge-gap",
+                    }),
+                    _ => {
+                        eprintln!("Use receive, or receive --acknowledge-gap after reviewing the recovery warning.");
+                        None
+                    }
+                },
                 "open" => Some(Request::Open {
                     handle: argument.into(),
                     password: password("Wallet password (empty if none): ")?,
@@ -225,6 +240,9 @@ pub async fn run(
                             println!("{}  {}", wallet.handle, wallet.name);
                         }
                         println!("Open: {}", status.active.as_deref().unwrap_or("none"));
+                        if let Some(wallet) = runtime.state().wallet {
+                            println!("Receive: {}", wallet.receive_address);
+                        }
                         if let Some(warning) = status.warning {
                             eprintln!("{warning}");
                         }

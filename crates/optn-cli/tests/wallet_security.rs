@@ -116,6 +116,45 @@ fn request(input: &mut ChildStdin, output: &mut BufReader<ChildStdout>, value: V
 }
 
 #[test]
+fn issued_receive_addresses_survive_cli_restart_and_wrong_epochs_do_not_allocate() {
+    let directory = test_directory();
+    fixture(directory.path(), "public.optn", 1);
+    let open =
+        json!({"request":{"command":"open","handle":"public.optn","password":"old-password"}});
+    let next = json!({"request":{"command":"next_receive","epoch":1}});
+    let stale = json!({"request":{"command":"next_receive","epoch":0}});
+    let first = run_cli(
+        directory.path(),
+        &["wallet", "--stdio"],
+        &format!("{open}\n{stale}\n{next}\n"),
+    );
+    assert!(first.status.success());
+    let first = responses(&first);
+    assert_eq!(first[0]["receive_address"], address(1));
+    assert_eq!(first[0]["hd_addresses"]["current_receive"], 0);
+    assert_eq!(first[1]["ok"], false);
+    assert_eq!(first[2]["ok"], true, "{:?}", first[2]);
+    assert_eq!(first[2]["hd_addresses"]["current_receive"], 1);
+    let expected =
+        optn_core::hd::Wallet::from_mnemonic(optn_core::hd::BIP39_TEST_VECTOR_MNEMONIC, "TREZOR")
+            .unwrap()
+            .address(optn_core::network::Network::Chipnet, "m/44'/1'/1'/0/1")
+            .unwrap()
+            .encode();
+    assert_eq!(first[2]["receive_address"], expected);
+    let restarted = run_cli(
+        directory.path(),
+        &["wallet", "--stdio"],
+        &format!("{open}\n{next}\n"),
+    );
+    assert!(restarted.status.success());
+    let restarted = responses(&restarted);
+    assert_eq!(restarted[0]["receive_address"], expected);
+    assert_eq!(restarted[1]["hd_addresses"]["current_receive"], 2);
+    assert_eq!(restarted[1]["hd_addresses"]["next"], json!([3, 0, 0]));
+}
+
+#[test]
 fn migrated_ciphertext_password_and_account_work_through_the_real_cli() {
     let directory = test_directory();
     let path = directory.path().join("public-vector.optn");
@@ -483,7 +522,7 @@ fn managed_rescan_persists_the_selected_hd_account_and_reopens_it_after_restart(
     stopped.store(true, Ordering::SeqCst);
     assert_eq!(
         server.join().unwrap(),
-        3,
+        4,
         "all ordinary HD branches must be queried"
     );
     assert!(
@@ -494,7 +533,7 @@ fn managed_rescan_persists_the_selected_hd_account_and_reopens_it_after_restart(
     let value = &responses(&output)[0];
     assert_eq!(value["account_path"], "m/44'/1'/1'");
     assert_eq!(value["complete"], true);
-    assert_eq!(value["scanned_addresses"], 3);
+    assert_eq!(value["scanned_addresses"], 4);
     let account = optn_core::hd::AccountPath::new(1, 1).unwrap();
     let key =
         optn_core::hd::Wallet::from_mnemonic(optn_core::hd::BIP39_TEST_VECTOR_MNEMONIC, "TREZOR")

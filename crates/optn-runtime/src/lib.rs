@@ -396,6 +396,7 @@ impl AppRuntimeDriver {
                     let approves_spend =
                         authenticates && self.state.lock.prompt == Some(optn_app::AuthScope::Spend);
                     let previous_epoch = self.state.lock.unlock_epoch;
+                    let previous_allocation = self.state.hd_addresses.clone();
                     let previous_lock = self.state.lock.clone();
                     let mut candidate = self.state.clone();
                     let result = if generation != self.revocation.load(Ordering::SeqCst) {
@@ -414,7 +415,12 @@ impl AppRuntimeDriver {
                             "Refresh the wallet before preparing or authorizing a spend.".into(),
                         ))
                     } else if let Some(security) = &mut self.security {
-                        security.handle(&mut candidate, request, now_ms)
+                        security.handle(
+                            &mut candidate,
+                            request,
+                            now_ms,
+                            self.wallet_sync.reconciliation(),
+                        )
                     } else {
                         Err(TransportError::Unsupported)
                     };
@@ -460,10 +466,14 @@ impl AppRuntimeDriver {
                             } else {
                                 AppEvent::AppLockChanged
                             };
-                            if !opens_wallet && previous_epoch != self.state.lock.unlock_epoch {
-                                // Password rotation revokes in-flight work, but retains the
-                                // account history and its durable checkpoint binding.
+                            if !opens_wallet
+                                && (previous_epoch != self.state.lock.unlock_epoch
+                                    || previous_allocation != self.state.hd_addresses)
+                            {
+                                // A new address expands scan scope; password rotation revokes
+                                // authority. Both cancel work begun against the previous state.
                                 self.revocation.fetch_add(1, Ordering::SeqCst);
+                                self.state.spend = None;
                                 self.wallet_sync.on_event(&AppEvent::WalletRebuilt);
                             }
                             self.publish(event);
@@ -552,6 +562,9 @@ impl AppRuntimeDriver {
                                 |app, sync| security.persist_checkpoint(app, sync),
                                 |app| guard.allows(app, applied.is_closed()),
                             ));
+                            if event == Some(AppEvent::CoinsChanged) {
+                                security.checkpoint_published();
+                            }
                         }
                     }
                     // Storage may have crossed the idle deadline. Lock and drop the

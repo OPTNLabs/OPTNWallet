@@ -6,6 +6,11 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum WalletSecurityRequest {
     Status,
+    NextReceive {
+        epoch: u64,
+        #[serde(default)]
+        acknowledge_gap: bool,
+    },
     Create {
         name: String,
         mnemonic: SecretText,
