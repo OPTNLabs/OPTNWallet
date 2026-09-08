@@ -49,6 +49,7 @@ export function useHomeConnect() {
   const [uri, setUri] = useState('');
   const [scanning, setScanning] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [streamScanning, setStreamScanning] = useState(false);
 
   const returnTo = `/home/${currentWalletId ?? ''}`;
 
@@ -88,12 +89,12 @@ export function useHomeConnect() {
         return true;
       }
 
-      if (parsed.kind === 'merchant-proposal-stream') {
+      if (parsed.kind === 'merchant-proposal') {
         setPopupOpen(false);
         navigate('/apps/optn.builtin.demo:cauldronSwapApp', {
           state: {
             returnTo,
-            merchantProposalInitialQrPayload: parsed.initialQrPayload,
+            merchantProposalQrPayload: parsed.scannedValue,
           },
         });
         return true;
@@ -135,7 +136,7 @@ export function useHomeConnect() {
       }
 
       await Toast.show({
-        text: 'Not a supported address, CashConnect invite, WalletConnect URI, or Wizard URI.',
+        text: 'Unsupported format. Scan or paste a supported payment, CashConnect invite, WalletConnect URI, Wizard URI, or the Merchant Pay machine-readable proposal from Copy proposal.',
       });
       return false;
     },
@@ -185,7 +186,21 @@ export function useHomeConnect() {
 
   const closePopup = useCallback(() => {
     setPopupOpen(false);
+    setStreamScanning(false);
   }, []);
+
+  const scanStreamQr = useCallback(() => {
+    if (!scanning && !submitting) setStreamScanning(true);
+  }, [scanning, submitting]);
+
+  const completeStreamScan = useCallback(
+    (payload: Uint8Array) => {
+      setStreamScanning(false);
+      const value = new TextDecoder().decode(payload);
+      void connectUri(value);
+    },
+    [connectUri]
+  );
 
   return {
     popupOpen,
@@ -197,5 +212,8 @@ export function useHomeConnect() {
     closePopup,
     scanQr,
     connectUri,
+    streamScanning,
+    scanStreamQr,
+    completeStreamScan,
   };
 }
