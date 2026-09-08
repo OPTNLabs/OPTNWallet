@@ -57,7 +57,9 @@ fn run_cli(directory: &Path, args: &[&str], input: &str) -> Output {
         .unwrap()
         .write_all(input.as_bytes())
         .unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    // One console child runs the full multiwallet sequence with repeated real
+    // 600,000-round PBKDF2 derivations. Allow slower CI CPUs a bounded total budget.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
     let mut timed_out = false;
     while child.try_wait().unwrap().is_none() {
         if std::time::Instant::now() >= deadline {
