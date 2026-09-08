@@ -286,8 +286,12 @@ impl Transaction {
 /// pubkey plus two push opcodes; 148 bytes per input is the standard worst
 /// case. Over-estimating costs a few satoshis, under-estimating gets the
 /// transaction rejected, so the worst case is the right side to err on.
-pub fn estimate_size(inputs: usize, outputs: usize) -> usize {
-    10 + inputs * 148 + outputs * 34
+pub fn estimate_size(inputs: usize, outputs: usize) -> Result<usize> {
+    inputs
+        .checked_mul(148)
+        .and_then(|bytes| bytes.checked_add(outputs.checked_mul(34)?))
+        .and_then(|bytes| bytes.checked_add(10))
+        .ok_or_else(|| CliError::Usage("transaction size exceeds this platform".into()))
 }
 
 /// Select UTXOs to cover `target` plus fee, largest first.
@@ -301,6 +305,22 @@ pub fn select_coins(
     fee_per_byte: u64,
     output_count: usize,
 ) -> Result<(Vec<Utxo>, u64)> {
+    let cost = |inputs| -> Result<(u64, u64)> {
+        let fee = (estimate_size(inputs, output_count)? as u64)
+            .checked_mul(fee_per_byte)
+            .ok_or_else(|| CliError::Usage("transaction fee exceeds the amount range".into()))?;
+        let needed = target.checked_add(fee).ok_or_else(|| {
+            CliError::Usage("send amount plus fee exceeds the amount range".into())
+        })?;
+        Ok((needed, fee))
+    };
+    let (mut needed, mut fee) = cost(1)?;
+    let mut outpoints = BTreeSet::new();
+    for utxo in available {
+        if !outpoints.insert((utxo.txid, utxo.vout)) {
+            return Err(CliError::Protocol("duplicate funding outpoint".into()));
+        }
+    }
     let mut sorted = available.to_vec();
     sorted.sort_by_key(|u| std::cmp::Reverse(u.value));
 
@@ -308,20 +328,21 @@ pub fn select_coins(
     let mut total: u64 = 0;
 
     for utxo in sorted {
-        total = total.saturating_add(utxo.value);
+        total = total
+            .checked_add(utxo.value)
+            .ok_or_else(|| CliError::Protocol("funding total exceeds the amount range".into()))?;
         chosen.push(utxo);
 
         // Recompute the fee each round: it grows with every input added.
-        let fee = estimate_size(chosen.len(), output_count) as u64 * fee_per_byte;
-        if total >= target.saturating_add(fee) {
+        (needed, fee) = cost(chosen.len())?;
+        if total >= needed {
             return Ok((chosen, fee));
         }
     }
 
-    let fee = estimate_size(chosen.len().max(1), output_count) as u64 * fee_per_byte;
     Err(CliError::Usage(format!(
         "not enough funds: need {} sats (including about {} sats of fee) but only {} sats are spendable",
-        target.saturating_add(fee),
+        needed,
         fee,
         total
     )))
@@ -951,11 +972,40 @@ mod tests {
 
     #[test]
     fn coin_selection_covers_the_fee_not_just_the_target() {
-        let pool = vec![utxo(10_000), utxo(5_000), utxo(1_000)];
+        let pool: Vec<_> = [10_000, 5_000, 1_000]
+            .into_iter()
+            .enumerate()
+            .map(|(index, value)| Utxo {
+                vout: index as u32,
+                ..utxo(value)
+            })
+            .collect();
         let (chosen, fee) = select_coins(&pool, 9_000, 1, 2).unwrap();
         let total: u64 = chosen.iter().map(|u| u.value).sum();
         assert!(total >= 9_000 + fee, "selection must cover target plus fee");
         assert!(fee > 0, "a real transaction always costs something");
+    }
+
+    #[test]
+    fn coin_selection_rejects_overflow_and_duplicate_outpoints() {
+        let coin = utxo(10_000);
+        // 226 * 2^63 wraps to zero in an unchecked release build.
+        assert!(select_coins(std::slice::from_ref(&coin), 1_000, 1 << 63, 2).is_err());
+        assert!(select_coins(&[coin.clone(), coin.clone()], 15_000, 1, 2).is_err());
+        assert!(select_coins(std::slice::from_ref(&coin), 1_000, 1, usize::MAX).is_err());
+        assert!(select_coins(&[], u64::MAX, 1, 2).is_err());
+        let mut second = coin.clone();
+        second.vout = 1;
+        let (selected, fee) = select_coins(&[coin, second], 15_000, 1, 2).unwrap();
+        assert_eq!(selected.len(), 2);
+        assert_eq!(fee, 374);
+        assert!(select_coins(&[utxo(u64::MAX)], u64::MAX, 1, 2).is_err());
+        let huge = utxo(u64::MAX / 2 + 1);
+        let other = Utxo {
+            vout: 1,
+            ..huge.clone()
+        };
+        assert!(select_coins(&[huge, other], u64::MAX - 500, 1, 2).is_err());
     }
 
     #[test]
