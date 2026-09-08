@@ -139,15 +139,10 @@ impl WalletStorage for NativeWalletStorage {
         }
         let bytes = Self::read_path(&path)?;
         let minutes = std::str::from_utf8(&bytes)
-            .map_err(error)?
-            .trim()
-            .parse::<u32>()
-            .map_err(error)?;
-        if ![0, 1, 5, 15, 30, 60, 120, 240].contains(&minutes) {
-            return Err(PlatformError::InvalidData(
-                "Invalid auto-lock policy.".into(),
-            ));
-        }
+            .ok()
+            .and_then(|value| value.trim().parse::<u32>().ok())
+            .filter(|minutes| [0, 1, 5, 15, 30, 60, 120, 240].contains(minutes))
+            .ok_or_else(|| PlatformError::InvalidData("Invalid auto-lock policy.".into()))?;
         Ok(Some(minutes))
     }
     fn save_auto_lock_minutes(&self, minutes: u32) -> PlatformResult<()> {

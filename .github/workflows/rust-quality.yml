@@ -67,6 +67,11 @@ jobs:
           cargo test --manifest-path vendor/glib-0.18.5/Cargo.toml --release --lib
           variant_iter::tests::test_variant_str_iter_output_pointer -- --exact
 
+      - name: Optimized GLib pointer-slice unwind regression
+        run: >-
+          cargo test --manifest-path vendor/glib-0.18.5/Cargo.toml --release --lib
+          collections::ptr_slice::test::test_truncate_preserves_terminator_and_drops -- --exact
+
   dependency-policy:
     name: Rust dependency policy
     runs-on: ubuntu-latest

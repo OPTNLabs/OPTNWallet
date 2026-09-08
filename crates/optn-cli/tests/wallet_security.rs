@@ -113,6 +113,63 @@ fn stdio_console_keeps_every_reply_including_eof_on_one_json_line() {
     assert_eq!(replies[1]["locked"], true);
 }
 
+#[test]
+fn private_stdio_errors_do_not_echo_credentials_or_malformed_input() {
+    let directory = test_directory();
+    fixture(directory.path(), "public.optn", 0);
+    let marker = "public-input-that-must-never-be-echoed";
+    let rejected = json!({"request": {
+        "command": "open", "handle": "public.optn", "password": marker,
+    }});
+    let malformed = format!("{{\"request\":{{\"password\":\"{marker}\"");
+    let output = run_cli(
+        directory.path(),
+        &["wallet", "--stdio"],
+        &format!("{rejected}\n{malformed}\n"),
+    );
+    assert!(output.status.success());
+    for bytes in [&output.stdout, &output.stderr] {
+        assert!(!String::from_utf8_lossy(bytes).contains(marker));
+    }
+    let replies = responses(&output);
+    assert_eq!(replies.len(), 3);
+    assert_eq!(replies[0]["ok"], false);
+    assert_eq!(replies[1]["error"], "Invalid wallet command.");
+    assert_eq!(replies[2]["locked"], true);
+
+    // The bounded reader fails before parsing; its top-level error must also
+    // omit the private line, including when the final newline is absent.
+    let oversized = marker.repeat(262_145 / marker.len() + 1);
+    let output = run_cli(directory.path(), &["wallet", "--stdio"], &oversized);
+    assert!(!output.status.success());
+    for bytes in [&output.stdout, &output.stderr] {
+        assert!(!String::from_utf8_lossy(bytes).contains(marker));
+    }
+    assert_eq!(
+        responses(&output)[0]["message"],
+        "Private input is too large."
+    );
+}
+
+#[test]
+fn invalid_auto_lock_policy_stops_startup_without_echoing_file_contents() {
+    let directory = test_directory();
+    let policy = directory.path().join(".auto-lock");
+    for bytes in [b"private-policy-marker".as_slice(), &[0xff], b"999"] {
+        std::fs::write(&policy, bytes).unwrap();
+        let output = run_cli(directory.path(), &["wallet", "--stdio"], "");
+        assert!(!output.status.success());
+        assert_eq!(
+            responses(&output)[0]["message"],
+            "Wallet auto-lock policy: invalid saved policy."
+        );
+        for output in [&output.stdout, &output.stderr] {
+            assert!(!String::from_utf8_lossy(output).contains("private-policy-marker"));
+        }
+        assert_eq!(std::fs::read(&policy).unwrap(), bytes);
+    }
+}
+
 fn address(account: u32) -> String {
     optn_core::hd::Wallet::from_mnemonic(optn_core::hd::BIP39_TEST_VECTOR_MNEMONIC, "TREZOR")
         .unwrap()
