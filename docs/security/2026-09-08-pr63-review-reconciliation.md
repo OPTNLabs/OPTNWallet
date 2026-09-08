@@ -13,6 +13,12 @@ resolution, scanner exclusion or advisory-allowlist change. The API also records
 not counted as fixes. Four production RNG/password reports, #86 and #103–105,
 are automatically fixed with null dismissal timestamps.
 
+After pushing `c7b013deaee412ff2958d106b7982447d21dca77`, Rust analysis
+`1740807108` on merge `a7ad16e09c45c391c7a3ba6ba5aa6c108f08908f` automatically
+marked #125 fixed, with a null dismissal timestamp. The PR now has **40 open
+alerts**; the four exported #126 flows still contain the cross-command and
+successful-password-result paths described below. No new open alert appeared.
+
 ## Open-alert disposition
 
 | Alerts         | Current evidence and action                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
@@ -22,7 +28,7 @@ are automatically fixed with null dismissal timestamps.
 | #106–107       | Published BIP39 empty-password fixture and the in-memory checkpoint provider's incremented write nonce, both within test modules. The counter is not a production entropy provider.                                                                                                                                                                                                                                                                                                                                                                                                            |
 | #108–112       | Authenticated checkpoint-codec tests covering offline allocation, malformed provenance and legacy branch-2 migration. Distinct fixture sequences remain explicit.                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | #113–124       | GLib boolean and pointer-conversion reports. Concrete Rust return types/C output contracts do not follow the reported cross-type paths. Source and exported SARIF reviewed; no arbitrary unsafe-caller safety claim. [Detailed paths](2026-09-08-pr63-glib-codeql.md).                                                                                                                                                                                                                                                                                                                         |
-| #125           | Found a real destructor-unwind edge case at the reported truncation method. Reuse `pop()` to restore the null terminator before destruction. Added a normal/panicking-drop regression and an optimized Linux CI check. Automatic closure requires a new scan.                                                                                                                                                                                                                                                                                                                                  |
+| #125           | Found a real destructor-unwind edge case at the reported truncation method. Reuse `pop()` to restore the null terminator before destruction. Added a normal/panicking-drop regression and an optimized Linux CI check. Automatically marked fixed by analysis `1740807108`; the optimized Linux regression passes.                                                                                                                                                                                                                                                                             |
 | #126           | New CLI cleartext-logging report at `main.rs:638`. Exported flows jump from successful `?` expressions to a returned command result without identifying a secret field. The wallet console's final result contains `ok`, `locked` and the public sync view after locking. Interactive password branches cannot execute in `--stdio`; rescan is a different command. `WalletSecurityStatus` has no credential field. Real-process tests verify public responses and absence of passwords/mnemonics; added malformed/wrong/oversized-input checks. No scanner model changed; alert remains open. |
 
 #126 has 13 linked source locations but four exported representative code flows.
@@ -35,18 +41,18 @@ generated during this review.
 
 ## Bot findings reconciled
 
-| Finding                                                      | Result                                                                                                                                                                                                                                                                                                                                      |
-| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Kani resolution inputs / Rust-quality native-source triggers | Existing root manifests/lock and native-source filters remain. No trigger or platform removed.                                                                                                                                                                                                                                              |
-| Fusion vector regeneration races readers                     | Readers use in-memory vectors during regeneration; all sibling callers checked. Five stored-vector tests pass.                                                                                                                                                                                                                              |
-| Keystone multipart scanner                                   | `continuous` reaches the shared scanner; landing and signed-PSBT callers retain it. Preview/parser component tests pass; no camera-device claim.                                                                                                                                                                                            |
-| Trezor browser fallback advice                               | Native-only guidance retained; no nonexistent browser fallback advertised.                                                                                                                                                                                                                                                                  |
-| Blocking persisted selection reads                           | Existing `spawn_blocking` precedes write guards and publication checks. Ten native chain-runtime tests pass.                                                                                                                                                                                                                                |
-| Short native WebUSB reads                                    | Existing Rust boundary rejects partial reports. Three native packet tests pass.                                                                                                                                                                                                                                                             |
-| Trezor account-export claim                                  | Reproduced malformed HID/WebUSB and Bridge framing in the existing vendor-SDK adapter. Reuse the installed protocol codecs, retain the initial USB marker, and use Bridge framing for Bridge replies/acks. Four actual-session transport-mock tests pass; no physical-device claim.                                                         |
-| Startup diagnostics                                          | The previous Tauri formatting change still received a generic runtime error. Shared policy operations now report safe cause categories; native malformed UTF-8/numeric policy files are `InvalidData`. Real CLI startup fails closed without echoing policy contents.                                                                       |
-| Android assertion/error acceptance                           | Reproduced that final runner code `-1` could mask per-test failure `-1` or `-2`. The guard now requires one successful expected class/method, its JUnit summary and runner completion; skips, errors and incomplete output fail. All 47 release-workflow tests and ten captured real CI transcripts pass; this is not a fresh emulator run. |
-| Docstring coverage                                           | CodeRabbit's stored 50.48% warning is an older snapshot without a current missing-function list. Existing added API docs remain; the current equivalent metric is unverified. No threshold was lowered.                                                                                                                                     |
+| Finding                                                      | Result                                                                                                                                                                                                                                                                                                                                                        |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Kani resolution inputs / Rust-quality native-source triggers | Existing root manifests/lock and native-source filters remain. No trigger or platform removed.                                                                                                                                                                                                                                                                |
+| Fusion vector regeneration races readers                     | Readers use in-memory vectors during regeneration; all sibling callers checked. Five stored-vector tests pass.                                                                                                                                                                                                                                                |
+| Keystone multipart scanner                                   | `continuous` reaches the shared scanner; landing and signed-PSBT callers retain it. Preview/parser component tests pass; no camera-device claim.                                                                                                                                                                                                              |
+| Trezor browser fallback advice                               | Native-only guidance retained; no nonexistent browser fallback advertised.                                                                                                                                                                                                                                                                                    |
+| Blocking persisted selection reads                           | Existing `spawn_blocking` precedes write guards and publication checks. Ten native chain-runtime tests pass.                                                                                                                                                                                                                                                  |
+| Short native WebUSB reads                                    | Existing Rust boundary rejects partial reports. Three native packet tests pass.                                                                                                                                                                                                                                                                               |
+| Trezor account-export claim                                  | Reproduced malformed HID/WebUSB and Bridge framing in the existing vendor-SDK adapter. Reuse the installed protocol codecs, retain the initial USB marker, and use Bridge framing for Bridge replies/acks. Six actual-session transport-mock tests pass, including response bounds; no physical-device claim.                                                 |
+| Startup diagnostics                                          | The previous Tauri formatting change still received a generic runtime error. Shared policy operations now report safe cause categories; native malformed UTF-8/numeric policy files are `InvalidData`. Real CLI startup fails closed without echoing policy contents.                                                                                         |
+| Android assertion/error acceptance                           | Reproduced that final runner code `-1` could mask per-test failure `-1` or `-2`. The guard now requires one successful expected class/method, its JUnit summary and runner completion; skips, errors and incomplete output fail. All 47 release-workflow tests pass; fresh CI run `34223430337` also passed all ten emulator invocations across both flavors. |
+| Docstring coverage                                           | CodeRabbit's stored 50.48% warning is an older snapshot without a current missing-function list. Existing added API docs remain; the current equivalent metric is unverified. No threshold was lowered.                                                                                                                                                       |
 
 ## Dependency and CI boundaries
 
@@ -75,22 +81,36 @@ only `optn-core` and `sha2` in the CLI test profile reduced that same console
 regression locally from **43.03 s to 1.89 s**. Production 600,000-round PBKDF2,
 test debug assertions, overflow checks, timeouts and the full platform matrix
 remain. All ten CLI wallet-security process tests pass in **4.13 s** after the
-change. This is local Windows timing; remote macOS must verify its own result.
+change. Remote macOS Intel subsequently passed all ten tests in 8.11 s on `c7b013de`.
 
 Other checks: CLI/runtime strict all-target Clippy, four runtime wallet-security
 tests, 13 runtime checkpoint tests, the
 populated authenticated HD restart test, two core wallet-file tests and the
 Rust architecture firewall pass. Local evidence is under
 `target-codex-chain-native/security-review-current/` and is not a release artifact.
-The GLib unwind regression requires the real Linux GLib libraries in CI.
-The local Windows attempt stopped at missing pkg-config/GLib prerequisites;
+The local Windows GLib attempt stopped at missing pkg-config/GLib prerequisites;
 it did not execute the test. Docker also did not provide a working local engine.
+Both optimized regressions subsequently passed on Linux in CI (see below).
 
-The Trezor framing review also noted an existing resource-budget gap:
-`readRaw` trusts the device's advertised u32 message length and applies timeout
-per report while repeatedly concatenating. No total message budget or canonical
-upstream limit was established in this review. It remains follow-up work before
-claiming untrusted-device or complete hardware-wallet verification.
+The follow-up closes the Trezor resource-budget gap: HID/WebUSB responses reject
+advertised payloads over 1 MiB before allocation, assemble into one bounded
+buffer, and share a monotonic deadline across every report in one response.
+Bridge frames reject malformed hex and the same oversized payload. These are
+wallet resource limits, not universal Trezor protocol limits. The current BCH
+signer exchanges streamed TxRequest/TxAck frames; firmware upload is not a caller.
+Six session tests cover framing, oversize declarations, malformed input and
+slow multi-report responses on both native transports. Core typecheck and strict native-library Clippy pass.
+All six Rust Bridge body reads now enforce a cumulative 2,098,176-byte cap before
+appending a chunk, including JSON and HTTP error responses. The fixed loopback
+client refuses redirects and proxy routing and retains its 120-second timeout.
+The native loopback HTTP regression passes for advertised/chunked oversize,
+invalid UTF-8/JSON, exact-limit acceptance and redirect refusal. Proxy bypass and
+the existing HTTP deadline are source-verified, not separate runtime tests.
+
+CI on `c7b013de` executed both optimized Linux GLib regressions successfully.
+The macOS Intel CLI job passed all ten wallet-security process tests in **8.11 s**
+with the unchanged password cost and deadline. These supersede the local-only
+verification limits above; they do not establish physical-device signing.
 
 These fixes/reviews do not establish full Issue #71/#75 completion, a clean
 CodeQL gate, native SeedCash signing, or tested APK/macOS packages.
