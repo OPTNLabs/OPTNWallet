@@ -24,11 +24,17 @@ not a Cargo source replacement or a republished crate.
   terminator before dropping the removed element. A destructor panic must not
   expose a stale pointer through the surviving slice. A regression covers normal
   and panicking destruction, retained allocation, terminators and exact drop counts.
+- `src/boxed_inline.rs`: the full-transfer inline-array conversion allocates
+  every element with GLib's overflow-checked `g_malloc_n` and invokes the existing
+  per-type initializer before copying. The upstream code allocated one element
+  for an arbitrary slice and skipped destination initialization.
+- `src/value.rs`: one regression exercises empty, single and multi-element
+  GValue arrays, mixed types, source drop, owned roundtrip and cloning.
 - `OPTN.md`: this provenance and verification note.
 
 The original `src/variant_iter.rs` SHA-256 is
 `1fd02859333761c45321b32f28b24233446b97d0022a90d3a937ed162585b90e`.
-Compare each retained file against the authenticated archive; only the three
+Compare each retained file against the authenticated archive; only the five
 files above should differ, and this note is the only added file.
 
 ## Smallest optimized Linux regression
@@ -39,12 +45,15 @@ pkg-config, GLib/GObject/GIO development libraries, and cached test dependencies
 ```sh
 cargo test --offline --manifest-path vendor/glib-0.18.5/Cargo.toml --release --lib variant_iter::tests::test_variant_str_iter_output_pointer -- --exact
 cargo test --offline --manifest-path vendor/glib-0.18.5/Cargo.toml --release --lib collections::ptr_slice::test::test_truncate_preserves_terminator_and_drops -- --exact
+cargo test --offline --manifest-path vendor/glib-0.18.5/Cargo.toml --release --lib value::tests::test_inline_value_array_roundtrip -- --exact
 ```
 
 This tests glib directly, without building Tauri, GTK, or the wallet. The
 standalone test command creates its own Cargo.lock/build artifacts under this
 vendor directory; they are not part of the imported upstream source. The
 desktop dependency graph is instead governed by `src-tauri/Cargo.lock`.
+The existing Linux job also runs the array regression under Valgrind with
+fatal GLib criticals and a nonzero exit on memory errors or definite leaks.
 
 For desktop resolution verification without fetching or changing its lock:
 

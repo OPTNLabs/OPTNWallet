@@ -60,7 +60,7 @@ jobs:
       - name: Install GLib regression prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libglib2.0-dev pkg-config
+          sudo apt-get install -y --no-install-recommends libglib2.0-dev pkg-config valgrind
 
       - name: Optimized GLib output-pointer regression
         run: >-
@@ -71,6 +71,18 @@ jobs:
         run: >-
           cargo test --manifest-path vendor/glib-0.18.5/Cargo.toml --release --lib
           collections::ptr_slice::test::test_truncate_preserves_terminator_and_drops -- --exact
+
+      - name: GLib inline-value array memory regression
+        env:
+          G_DEBUG: fatal-criticals
+        run: |
+          cargo test --manifest-path vendor/glib-0.18.5/Cargo.toml --release --lib --no-run \
+            --message-format=json > "$RUNNER_TEMP/glib-test-artifacts.json"
+          binary="$(jq -r 'select(.reason == "compiler-artifact" and .profile.test == true and .target.name == "glib") | .executable // empty' "$RUNNER_TEMP/glib-test-artifacts.json")"
+          test -n "$binary" && test -x "$binary"
+          valgrind --error-exitcode=1 --track-origins=yes --leak-check=full \
+            --errors-for-leak-kinds=definite "$binary" \
+            value::tests::test_inline_value_array_roundtrip --exact --test-threads=1
 
   dependency-policy:
     name: Rust dependency policy

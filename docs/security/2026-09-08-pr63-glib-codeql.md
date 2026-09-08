@@ -66,3 +66,37 @@ Alerts #113-124 were rechecked against the exported SARIF's concrete source
 locations and return types. The generic cross-type paths remain unsupported by
 the source contracts described above. None is suppressed or dismissed. The
 unwind fix is not a claim that every GLib unsafe caller has been audited.
+
+## Urgent #117 follow-up: GValue copy callers
+
+The screenshot at `value.rs:462` is alert #117, still open in Rust analysis
+`1740807108` on merge `a7ad16e0`. Its four exported representative paths start
+at `console_charset`, `charset`, `file_set_contents` and
+`file_set_contents_full`. The first two return string types; the last two
+convert a non-null `GError` into `crate::Error` only in their error branch.
+Those instantiations of `from_glib_none/full` do not select the `GValue`
+conversion. The repeated messages represent source links into one sink, not
+independent proof of that many executable memory errors. No dismissal follows
+from this source assessment.
+
+Tracing the actual `copy_into_value` callers found a **separate real defect**
+in the shared `BoxedInline` full-transfer array conversion: it allocated only
+`size_of::<T>()` bytes, then copied every element of an arbitrary slice into
+that allocation. It also skipped the destination initializer required by
+`GValue`. This is reachable through the library's safe slice conversion API;
+no direct OPTN application call to that owned-array conversion was found.
+
+The fix allocates the full count with overflow-checked
+[`g_malloc_n`](https://docs.gtk.org/glib/func.malloc_n.html), then invokes the
+existing per-type initializer before copying each element, matching the
+single-value conversion's initialization order. It applies to both
+`Value` and `SendValue` and the container-copy path that delegates to it.
+The new regression covers zero, one and four mixed-type values, dropping
+the source before the owned roundtrip and cloning a surviving value.
+The existing Linux job now runs it under Valgrind with fatal GLib criticals
+and failure on invalid accesses, uninitialized reads or definite leaks.
+Execution of that new regression remains pending until CI runs the fix.
+
+This does not make the impossible generic paths executable, resolve #117,
+or establish safety for arbitrary unsafe callers. The source review and
+the new array defect must not be conflated.
