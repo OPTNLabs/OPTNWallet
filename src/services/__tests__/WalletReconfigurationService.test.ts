@@ -17,6 +17,7 @@ const {
   stopWorkerMock,
   startWorkerMock,
   historyRefreshMock,
+  walletMetadataMock,
 } = vi.hoisted(() => ({
   dispatchMock: vi.fn(),
   dbRunMock: vi.fn(),
@@ -26,6 +27,11 @@ const {
     scannedAddresses: [],
     refreshed: true,
   })),
+  walletMetadataMock: vi.fn(),
+}));
+
+vi.mock('../../apis/WalletManager/WalletManager', () => ({
+  default: () => ({ getWalletMetadata: walletMetadataMock }),
 }));
 
 vi.mock('../../apis/DatabaseManager/DatabaseService', () => ({
@@ -76,7 +82,26 @@ vi.mock('../../state/store', () => ({
 describe('WalletReconfigurationService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    walletMetadataMock.mockResolvedValue({ walletType: 'standard' });
   });
+
+  it.each(['watch-only', 'hardware'])(
+    'preserves a %s wallet when settings request seed-based regeneration',
+    async (walletType) => {
+      walletMetadataMock.mockResolvedValue({ walletType });
+      await expect(
+        reconfigureActiveWallet({
+          walletId: 4,
+          network: Network.CHIPNET,
+          derivationPath: "m/44'/1'/2'",
+          derivationPathSource: 'custom',
+        })
+      ).rejects.toThrow('signing device');
+      expect(dbRunMock).not.toHaveBeenCalled();
+      expect(stopWorkerMock).not.toHaveBeenCalled();
+      expect(startWorkerMock).not.toHaveBeenCalled();
+    }
+  );
 
   it('stops the worker, clears derived records, writes the new path, and resyncs', async () => {
     await reconfigureActiveWallet({
