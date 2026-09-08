@@ -20,11 +20,15 @@ not a Cargo source replacement or a republished crate.
   `nth_back`, mixed front/back traversal, empty strings, UTF-8, and exhaustion.
 - `Cargo.toml`: an empty `[workspace]` table permits standalone upstream tests
   without changing OPTN's root workspace or adding glib to it.
+- `src/collections/ptr_slice.rs`: `truncate` reuses `pop` to restore the null
+  terminator before dropping the removed element. A destructor panic must not
+  expose a stale pointer through the surviving slice. A regression covers normal
+  and panicking destruction, retained allocation, terminators and exact drop counts.
 - `OPTN.md`: this provenance and verification note.
 
 The original `src/variant_iter.rs` SHA-256 is
 `1fd02859333761c45321b32f28b24233446b97d0022a90d3a937ed162585b90e`.
-Compare each retained file against the authenticated archive; only the two
+Compare each retained file against the authenticated archive; only the three
 files above should differ, and this note is the only added file.
 
 ## Smallest optimized Linux regression
@@ -34,6 +38,7 @@ pkg-config, GLib/GObject/GIO development libraries, and cached test dependencies
 
 ```sh
 cargo test --offline --manifest-path vendor/glib-0.18.5/Cargo.toml --release --lib variant_iter::tests::test_variant_str_iter_output_pointer -- --exact
+cargo test --offline --manifest-path vendor/glib-0.18.5/Cargo.toml --release --lib collections::ptr_slice::test::test_truncate_preserves_terminator_and_drops -- --exact
 ```
 
 This tests glib directly, without building Tauri, GTK, or the wallet. The

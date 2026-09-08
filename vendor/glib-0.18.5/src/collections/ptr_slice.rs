@@ -887,20 +887,9 @@ impl<T: TransparentPtrType> PtrSlice<T> {
     /// If there are fewer than `len` items then this has no effect.
     #[inline]
     pub fn truncate(&mut self, len: usize) {
-        if self.len <= len {
-            return;
-        }
-
-        unsafe {
-            while self.len > len {
-                self.len -= 1;
-                let p = self.ptr.as_ptr().add(self.len);
-                ptr::drop_in_place::<T>(p as *mut T);
-                ptr::write(
-                    p,
-                    Ptr::from(ptr::null_mut::<<T as GlibPtrDefault>::GlibType>()),
-                );
-            }
+        while self.len > len {
+            // Restore the NULL terminator before a potentially panicking destructor runs.
+            drop(self.pop());
         }
     }
 }
@@ -1178,6 +1167,64 @@ impl<'a, T: TransparentPtrType> IntoPtrSlice<T> for &'a [T] {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn test_truncate_preserves_terminator_and_drops() {
+        use std::{cell::Cell, panic::AssertUnwindSafe, rc::Rc};
+
+        #[derive(Clone)]
+        struct Probe {
+            drops: Rc<Cell<usize>>,
+            panics: bool,
+        }
+
+        impl Drop for Probe {
+            fn drop(&mut self) {
+                self.drops.set(self.drops.get() + 1);
+                assert!(!self.panics, "intentional element destructor panic");
+            }
+        }
+
+        #[repr(transparent)]
+        #[derive(Clone)]
+        struct Item(Box<Probe>);
+
+        impl GlibPtrDefault for Item {
+            type GlibType = *mut Probe;
+        }
+
+        // SAFETY: repr(transparent) around Box<Probe> has the representation of *mut Probe.
+        unsafe impl TransparentPtrType for Item {}
+
+        for panics in [false, true] {
+            let drops = Rc::new(Cell::new(0));
+            let mut slice = PtrSlice::new();
+            for index in 0..3 {
+                slice.push(Item(Box::new(Probe {
+                    drops: drops.clone(),
+                    panics: panics && index == 2,
+                })));
+            }
+            let allocation = slice.as_ptr();
+            slice.truncate(4);
+            assert_eq!(slice.len(), 3);
+            assert_eq!(drops.get(), 0);
+
+            let result = std::panic::catch_unwind(AssertUnwindSafe(|| slice.truncate(1)));
+            assert_eq!(result.is_err(), panics);
+            assert_eq!(slice.len(), if panics { 2 } else { 1 });
+            assert_eq!(drops.get(), 3 - slice.len());
+            assert_eq!(slice.as_ptr(), allocation);
+            // Read only the still-allocated pointer array, never a dropped pointee.
+            assert!(unsafe { (*slice.as_ptr().add(slice.len())).is_null() });
+            assert_eq!(unsafe { c_ptr_array_len(slice.as_ptr()) }, slice.len());
+
+            slice.truncate(0);
+            assert_eq!(unsafe { c_ptr_array_len(slice.as_ptr()) }, 0);
+            drop(slice);
+            assert_eq!(drops.get(), 3);
+        }
+    }
 
     #[test]
     fn test_from_glib_full() {

@@ -401,8 +401,30 @@ jobs:
                 | tee "$instrumentation_log"
               instrumentation_exit=${PIPESTATUS[0]}
               set -e
-              if grep -q '^INSTRUMENTATION_FAILED:' "$instrumentation_log" ||
-                ! grep -q '^INSTRUMENTATION_CODE: -1$' "$instrumentation_log"; then
+              # Runner RESULT_OK (-1) is separate from per-test error/failure.
+              # Each invocation must execute and pass its one required milestone.
+              if ! awk -v expected_method="$method" '
+                { sub(/\r$/, "") }
+                /^INSTRUMENTATION_FAILED:|^INSTRUMENTATION_RESULT: shortMsg=|^FAILURES!!!/ { failed = 1 }
+                /^INSTRUMENTATION_STATUS: class=/ { class = substr($0, index($0, "=") + 1) }
+                /^INSTRUMENTATION_STATUS: test=/ { method = substr($0, index($0, "=") + 1) }
+                /^INSTRUMENTATION_STATUS: numtests=/ { count = substr($0, index($0, "=") + 1) }
+                /^INSTRUMENTATION_STATUS_CODE:/ {
+                  if (class != "com.getcapacitor.myapp.ExampleInstrumentedTest" || method != expected_method || count != "1") failed = 1
+                  if ($0 == "INSTRUMENTATION_STATUS_CODE: 1") started++
+                  else if ($0 == "INSTRUMENTATION_STATUS_CODE: 0" && started == 1) passed++
+                  else failed = 1
+                  class = method = count = ""
+                }
+                /^OK \(1 test\)$/ { summaries++ }
+                /^INSTRUMENTATION_CODE:/ {
+                  finals++
+                  if ($0 != "INSTRUMENTATION_CODE: -1") failed = 1
+                }
+                END {
+                  exit !(!failed && started == 1 && passed == 1 && summaries == 1 && finals == 1)
+                }
+              ' "$instrumentation_log"; then
                 echo "::error::Android instrumentation ${method} failed on the $flavour flavour"
                 echo 'Android instrumentation output:'
                 cat "$instrumentation_log" || true

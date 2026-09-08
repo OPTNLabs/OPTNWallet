@@ -19,6 +19,20 @@ fn platform(_: optn_platform::PlatformError) -> TransportError {
     failure("Wallet storage or device authentication failed. No approval was granted.")
 }
 
+fn policy_error(error: optn_platform::PlatformError) -> TransportError {
+    use optn_platform::PlatformError;
+    // Preserve the cause category, never arbitrary provider text, paths or file contents.
+    let cause = match error {
+        PlatformError::Unavailable => "storage unavailable",
+        PlatformError::PermissionDenied => "permission denied",
+        PlatformError::Cancelled => "operation cancelled",
+        PlatformError::InvalidData(_) => "invalid saved policy",
+        PlatformError::Io(_) => "storage I/O failed",
+        PlatformError::Other(_) => "platform operation failed",
+    };
+    failure(format!("Wallet auto-lock policy: {cause}."))
+}
+
 struct Session {
     handle: String,
     bytes: Vec<u8>,
@@ -158,7 +172,7 @@ impl WalletSecurity {
     }
 
     pub fn restore_policy(&self, state: &mut AppState) -> Result<(), TransportError> {
-        if let Some(minutes) = self.storage.auto_lock_minutes().map_err(platform)? {
+        if let Some(minutes) = self.storage.auto_lock_minutes().map_err(policy_error)? {
             state.lock.auto_lock = AutoLockMinutes::from_minutes(minutes);
         }
         Ok(())
@@ -167,7 +181,7 @@ impl WalletSecurity {
     pub fn save_policy(&self, minutes: u32) -> Result<(), TransportError> {
         self.storage
             .save_auto_lock_minutes(AutoLockMinutes::from_minutes(minutes).as_minutes())
-            .map_err(platform)
+            .map_err(policy_error)
     }
 
     pub fn reconcile(&mut self, state: &AppState) {
@@ -250,7 +264,7 @@ impl WalletSecurity {
             needs_auto_lock_confirmation: self
                 .storage
                 .auto_lock_minutes()
-                .map_err(platform)?
+                .map_err(policy_error)?
                 .is_none(),
         })
     }
@@ -267,7 +281,7 @@ impl WalletSecurity {
             && self
                 .storage
                 .auto_lock_minutes()
-                .map_err(platform)?
+                .map_err(policy_error)?
                 .is_none()
         {
             return Err(failure("Choose the auto-lock setting you used before, then open this wallet. Your existing file is unchanged."));

@@ -83,3 +83,12 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 
 [dev-dependencies]
 tempfile = "3.27"
+
+# Real wallet-file tests retain the production 600,000 PBKDF2 rounds. Optimize
+# their crypto path so debug codegen does not exhaust the child-process deadline
+# on Intel macOS runners. Test debug assertions and overflow checks stay enabled.
+[profile.test.package.optn-core]
+opt-level = 2
+
+[profile.test.package.sha2]
+opt-level = 2

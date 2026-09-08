@@ -1,4 +1,6 @@
-import { readFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -66,6 +68,139 @@ function publishNeeds(): string {
 }
 
 describe('release workflow', () => {
+  describe('Android instrumentation guard', () => {
+    const android = assetWorkflows.find(
+      ({ name }) => name === 'android-preview.yml'
+    )!.contents;
+    const run = android.match(
+      /^ {12}run_instrumentation\(\) \{[\s\S]*?^ {12}\}/m
+    )?.[0];
+    const method = 'useAppContext';
+    // Git for Windows supplies Bash; derive its location from the installed Git.
+    const bash =
+      process.env.BASH ||
+      (process.platform === 'win32'
+        ? resolve(
+            execFileSync('git', ['--exec-path'], { encoding: 'utf8' }).trim(),
+            '../../../bin/bash.exe'
+          )
+        : 'bash');
+    // Replay the AndroidJUnitRunner transcript from CI run 34218705281,
+    // with only the GitHub step/timestamp prefix removed.
+    const status = (code: number, total = 1) =>
+      `INSTRUMENTATION_STATUS: class=com.getcapacitor.myapp.ExampleInstrumentedTest\n` +
+      `INSTRUMENTATION_STATUS: current=1\nINSTRUMENTATION_STATUS: id=AndroidJUnitRunner\n` +
+      `INSTRUMENTATION_STATUS: numtests=${total}\n` +
+      `INSTRUMENTATION_STATUS: stream=${code === 1 ? '\ncom.getcapacitor.myapp.ExampleInstrumentedTest:' : '.'}\n` +
+      `INSTRUMENTATION_STATUS: test=${method}\n` +
+      `INSTRUMENTATION_STATUS_CODE: ${code}\n`;
+    const finish = (count: number) =>
+      `INSTRUMENTATION_RESULT: stream=\n\nTime: 0.072\n\nOK (${count} test${count === 1 ? '' : 's'})\n\n\nINSTRUMENTATION_CODE: -1\n`;
+    const passed = status(1) + status(0) + finish(1);
+    const cases: [string, string, boolean, number?][] = [
+      ['captured CI success', passed, true],
+      ['CRLF', passed.replaceAll('\n', '\r\n'), true],
+      [
+        'assumption does not prove the milestone',
+        status(1) + status(-4) + finish(1),
+        false,
+      ],
+      [
+        'ignored alongside an executed test',
+        status(1, 2) + status(-3, 2) + status(1, 2) + status(0, 2) + finish(1),
+        false,
+      ],
+      [
+        'assertion failure with runner success',
+        status(1) + status(-2) + finish(1),
+        false,
+      ],
+      [
+        'test error with runner success',
+        status(1) + status(-1) + finish(1),
+        false,
+      ],
+      ['unknown status', status(1) + status(-5) + finish(1), false],
+      ['unknown positive status', status(1) + status(2) + finish(1), false],
+      ['zero tests', finish(0), false],
+      ['only ignored tests', status(1) + status(-3) + finish(0), false],
+      ['runner code alone', 'INSTRUMENTATION_CODE: -1\n', false],
+      [
+        'no JUnit summary',
+        status(1) + status(0) + 'INSTRUMENTATION_CODE: -1\n',
+        false,
+      ],
+      ['no terminal status', status(1) + finish(1), false],
+      ['no start status', status(0) + finish(1), false],
+      ['missing expected test', status(1, 2) + status(0, 2) + finish(1), false],
+      ['JUnit count mismatch', status(1) + status(0) + finish(2), false],
+      ['wrong method', passed.replaceAll(method, 'otherTest'), false],
+      [
+        'wrong class',
+        passed.replaceAll('ExampleInstrumentedTest', 'OtherTest'),
+        false,
+      ],
+      ['duplicate successful test', status(1) + status(0) + passed, false],
+      ['JUnit failure', passed + 'FAILURES!!!\n', false],
+      [
+        'missing count',
+        passed.replaceAll('INSTRUMENTATION_STATUS: numtests=1\n', ''),
+        false,
+      ],
+      [
+        'runner failure',
+        passed + 'INSTRUMENTATION_FAILED: runner crashed\n',
+        false,
+      ],
+      [
+        'runner shortMsg',
+        passed + 'INSTRUMENTATION_RESULT: shortMsg=Process crashed\n',
+        false,
+      ],
+      [
+        'cancelled runner',
+        passed.replace('INSTRUMENTATION_CODE: -1', 'INSTRUMENTATION_CODE: 0'),
+        false,
+      ],
+      [
+        'missing final code',
+        passed.replace('INSTRUMENTATION_CODE: -1\n', ''),
+        false,
+      ],
+      ['duplicate final code', passed + 'INSTRUMENTATION_CODE: -1\n', false],
+      ['adb failure after complete output', passed, false, 1],
+      ['adb timeout after complete output', passed, false, 124],
+    ];
+    it.each(cases)('%s', (name, input, expected, adbExit = 0) => {
+      expect(run).toBeTruthy();
+      const directory = mkdtempSync(resolve(tmpdir(), 'optn-instrumentation-'));
+      try {
+        const result = spawnSync(
+          bash,
+          [
+            '-c',
+            `set -euo pipefail\ntimeout() { cat; return "$MOCK_ADB_EXIT"; }\nadb_with_timeout() { :; }\nflavour=test\nemulator_serial=test\n${run}\nrun_instrumentation ${method}`,
+          ],
+          {
+            cwd: repoRoot,
+            input,
+            encoding: 'utf8',
+            timeout: 5_000,
+            env: {
+              ...process.env,
+              RUNNER_TEMP: directory,
+              MOCK_ADB_EXIT: String(adbExit),
+            },
+          }
+        );
+        expect(result.error, name).toBeUndefined();
+        expect(result.status === 0, `${name}: ${result.stderr}`).toBe(expected);
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    });
+  });
+
   it('pins every external action to an immutable full commit SHA', () => {
     for (const [name, contents] of [
       ['release', workflow],
