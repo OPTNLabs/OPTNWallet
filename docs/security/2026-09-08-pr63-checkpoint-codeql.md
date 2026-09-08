@@ -92,6 +92,35 @@ user had not explicitly authorized them. The user then requested deeper
 internet research. **No alert was dismissed in this continuation.** Approval
 remains pending; do not interpret the research request as approval.
 
-This assessment covers these 12 checkpoint alerts only. It does not validate
+The assessment above covers these 12 checkpoint alerts only. It does not validate
 older alert numbers, other bot findings, funded Chipnet spending, GUI behavior,
 the complete Issue #71/#75 architecture, or release artifacts.
+
+## Wallet-security follow-up: alerts 94–105
+
+After the recovered security work was pushed as `5338e8e6`, the PR merge-ref scan
+reported twelve additional annotations from analyzed merge `903017ebda30fd8de1cf1dd9c2e5fd21a2e12873`.
+Their source was rechecked at `af8f00ac11f6f7c4f9f286c8bb6c094a85f806f3`, which also
+includes the latest dev merge. All **24 alerts (82–105) remain open**. No dismissal
+or scan-rule change was performed. The earlier approval request did not include
+these new alerts and does not authorize them.
+
+| Alerts | Source at af8f00ac | Assessment and recommendation |
+| --- | --- | --- |
+| 94–98 | `crates/optn-core/src/wallet_file.rs:283,291,306,312` | Public BIP39/TREZOR fixture passwords used for compatibility, password rotation and wrong-password rejection. The enclosing module is guarded by `#[cfg(test)]` at line 266. Recommend `used in tests`. |
+| 99–102 | Same file, lines 317–320 | Empty, too-short, valid and mismatched strings exercise the password-input policy inside that test-only module. No shipped password is selected by these constants. Recommend `used in tests`. |
+| 103 | `crates/optn-runtime/src/wallet_security.rs:307` | The empty old-password branch is reachable only when the already-open, ciphertext-bound session has an empty password. A protected session with missing current-password input is rejected by the following match arm. The old ciphertext is still decrypted and validated before replacement. This preserves the established explicit passwordless-wallet mode, not a hard-coded password for protected wallets. Recommend `false positive` for this specific finding; this does not claim a passwordless file has password secrecy. |
+| 104, 105 | Same file, lines 267 and 313 | Both zero-initialized 56-byte buffers immediately pass to `WalletStorage::entropy`; the sole production native provider calls `OsRng.try_fill_bytes` at `crates/optn-platform-native/src/wallet_storage.rs:130`. Failure propagates before wallet creation/resealing or file writes. Successful OS filling supplies a 32-byte salt and two 12-byte nonces; core also rejects equal nonces. Recommend `false positive` for the zero-initialization reports. |
+
+The upstream Rust compilation, rand_core/getrandom and CodeQL-model evidence
+above also applies here. The runtime lifecycle test verifies changing an empty
+password to a real password, refusal of a missing current password afterward,
+wrong-password refusal, biometric empty-versus-absent behavior, and restart.
+The real native CLI process verifies legacy ciphertext, password rotation,
+account identity, and explicit wallet selection. These are behavioral checks,
+not RNG certification or full wallet security certification.
+
+Combined recommendation: **20 test-fixture findings and 4 false positives**.
+This is a reviewed classification proposal only. A future source change must be
+reassessed, and new private-store providers must preserve full-buffer OS entropy
+or fail before encryption. The nonce lifetime and persistence limits above remain.
