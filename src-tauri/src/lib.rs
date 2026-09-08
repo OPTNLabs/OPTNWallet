@@ -1250,7 +1250,11 @@ pub fn run() {
             );
             let (app_runtime, app_driver) =
                 optn_runtime::AppRuntime::new_with_security(initial_state, security).map_err(
-                    |_| std::io::Error::other("Could not load wallet security settings."),
+                    |error| {
+                        std::io::Error::other(format!(
+                            "Could not load wallet security settings: {error:?}"
+                        ))
+                    },
                 )?;
             tauri::async_runtime::spawn(app_driver.run());
             let native_chain = chain_runtime::NativeChainRuntime::spawn(
