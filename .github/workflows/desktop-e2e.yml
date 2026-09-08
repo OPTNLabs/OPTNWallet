@@ -1,6 +1,7 @@
 name: Desktop E2E
 
 on:
+  workflow_dispatch:
   pull_request:
     branches: [main, staging, dev]
 
@@ -77,3 +78,4 @@ jobs:
         env:
           TAURI_E2E_APP_BINARY: ${{ github.workspace }}/src-tauri/target/debug/optn-wallet-desktop
         run: xvfb-run --auto-servernum --server-args='-screen 0 1280x1024x24' npm run test:e2e:lifecycle
+
