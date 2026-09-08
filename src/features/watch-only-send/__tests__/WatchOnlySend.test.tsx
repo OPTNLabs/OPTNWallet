@@ -77,4 +77,5 @@ describe('WatchOnlySend workspace', () => {
     expect(html).not.toContain('Increase QR density');
     expect(html).not.toContain('Decrease QR density');
   });
+
 });

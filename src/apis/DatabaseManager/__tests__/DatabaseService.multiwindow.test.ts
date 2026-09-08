@@ -8,6 +8,77 @@ describe('DatabaseService multi-window persistence', () => {
     vi.clearAllMocks();
   });
 
+  it('keeps a newly inserted wallet when onboarding starts the database again before its save', async () => {
+    const SQL = await initSqlJs();
+    let persisted: Uint8Array | undefined;
+    vi.doMock('idb-keyval', () => ({
+      get: vi.fn(async () => persisted?.slice()),
+      set: vi.fn(async (_key: string, value: Uint8Array) => {
+        persisted = value.slice();
+      }),
+    }));
+    vi.doMock('sql.js', () => ({ default: vi.fn(async () => SQL) }));
+
+    const service = (await import('../DatabaseService')).default();
+    const original = await service.startDatabase();
+    original!.run(
+      `INSERT INTO wallets
+        (id, wallet_name, mnemonic, passphrase, networkType, walletType, balance)
+       VALUES (1, 'disposable', '', '', 'chipnet', 'watch-only', 0)`
+    );
+    await service.startDatabase();
+    await service.flushDatabaseToFile(1);
+
+    expect(service.getDatabase()).toBe(original);
+    const saved = new SQL.Database(persisted);
+    expect(saved.exec('SELECT id FROM wallets')[0].values).toEqual([[1]]);
+    saved.close();
+  });
+
+  it('shares initialization failures across both entry points and retries without a partial handle', async () => {
+    const SQL = await initSqlJs();
+    const initialize = vi.fn(async () => SQL);
+    let releaseSave!: () => void;
+    let saveStarted!: () => void;
+    const blockedSave = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    const saving = new Promise<void>((resolve) => {
+      saveStarted = resolve;
+    });
+    const idbSet = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        saveStarted();
+        await blockedSave;
+        throw new Error('disposable storage unavailable');
+      })
+      .mockResolvedValue(undefined);
+    vi.doMock('idb-keyval', () => ({ get: vi.fn(), set: idbSet }));
+    vi.doMock('sql.js', () => ({ default: initialize }));
+
+    const service = (await import('../DatabaseService')).default();
+    const first = service.startDatabase();
+    await saving;
+    const results = Promise.allSettled([
+      first,
+      service.startDatabase(),
+      service.ensureDatabaseStarted(),
+    ]);
+    releaseSave();
+    expect((await results).map((result) => result.status)).toEqual([
+      'rejected',
+      'rejected',
+      'rejected',
+    ]);
+    expect(initialize).toHaveBeenCalledTimes(1);
+    expect(service.getDatabase()).toBeNull();
+    const recovered = await service.startDatabase();
+    expect(recovered).not.toBeNull();
+    expect(recovered).toBe(service.getDatabase());
+    expect(initialize).toHaveBeenCalledTimes(2);
+  });
+
   it('merges wallet-scoped saves after legacy secret migration without dropping either wallet keys', async () => {
     const SQL = await initSqlJs();
     const seed = new SQL.Database();
@@ -89,8 +160,9 @@ describe('DatabaseService multi-window persistence', () => {
       [4, 'bchtest:q6-old'],
     ]);
     expect(
-      result.exec("SELECT authbase FROM bcmr WHERE authbase = 'wallet5-bcmr'")[0]
-        .values
+      result.exec(
+        "SELECT authbase FROM bcmr WHERE authbase = 'wallet5-bcmr'"
+      )[0].values
     ).toEqual([['wallet5-bcmr']]);
     result.close();
   });
@@ -349,7 +421,9 @@ describe('DatabaseService multi-window persistence', () => {
 
     firstWindow
       .getDatabase()!
-      .run("UPDATE wallets SET mnemonic = 'enc:v1:first-window-secret' WHERE id = 1");
+      .run(
+        "UPDATE wallets SET mnemonic = 'enc:v1:first-window-secret' WHERE id = 1"
+      );
     await firstWindow.flushDatabaseToFile(1);
 
     staleWindow
@@ -360,9 +434,10 @@ describe('DatabaseService multi-window persistence', () => {
     );
 
     const result = new SQL.Database(persisted);
-    expect(result.exec('SELECT mnemonic, wallet_name FROM wallets WHERE id = 1')[0].values).toEqual([
-      ['enc:v1:first-window-secret', 'wallet5'],
-    ]);
+    expect(
+      result.exec('SELECT mnemonic, wallet_name FROM wallets WHERE id = 1')[0]
+        .values
+    ).toEqual([['enc:v1:first-window-secret', 'wallet5']]);
     result.close();
   });
 
@@ -410,9 +485,9 @@ describe('DatabaseService multi-window persistence', () => {
     await staleWindow.flushDatabaseToFile();
 
     const result = new SQL.Database(persisted);
-    expect(result.exec('SELECT id FROM wallets ORDER BY id')[0].values).toEqual([
-      [4],
-    ]);
+    expect(result.exec('SELECT id FROM wallets ORDER BY id')[0].values).toEqual(
+      [[4]]
+    );
     expect(
       result.exec(
         "SELECT authbase FROM bcmr WHERE authbase = 'stale-global-save'"
