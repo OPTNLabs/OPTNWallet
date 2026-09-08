@@ -93,7 +93,8 @@ struct Cli {
     #[arg(long, global = true, default_value = "default")]
     profile: String,
 
-    /// Seconds to wait before giving up. Defaults to 300 for rescan and 30 otherwise.
+    /// Seconds to wait before giving up. Defaults to 300 for rescan, history,
+    /// and wallet; 30 otherwise.
     #[arg(long, global = true)]
     timeout: Option<u64>,
 
@@ -250,10 +251,9 @@ enum Command {
     },
     /// Rebuild the wallet view from the chain.
     ///
-    /// The desktop app keeps a local UTXO and history cache; this has none, so
-    /// every run reads the chain fresh. That is slower but it is also the
-    /// answer when a cached balance has drifted — there is no stale state here
-    /// to be wrong.
+    /// Refresh through the shared Rust HD runtime. Saved encrypted wallets
+    /// retain the same checkpoint as the GUI; restored data remains stale
+    /// until a complete live refresh succeeds.
     Rescan {
         /// Consecutive unused addresses required on each HD branch.
         #[arg(long, default_value_t = 20)]
@@ -631,9 +631,12 @@ enum X402Command {
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
+    let line_protocol = matches!(cli.command, Command::Wallet { stdio: true, .. });
     match run(&cli).await {
         Ok(value) => {
-            if cli.json {
+            if line_protocol {
+                println!("{value}");
+            } else if cli.json {
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&value).unwrap_or_default()
@@ -646,13 +649,17 @@ async fn main() {
             }
         }
         Err(err) => {
-            if cli.json {
+            if cli.json || line_protocol {
                 let payload =
                     json!({ "ok": false, "error": err.kind(), "message": err.to_string() });
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&payload).unwrap_or_default()
-                );
+                if line_protocol {
+                    println!("{payload}");
+                } else {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&payload).unwrap_or_default()
+                    );
+                }
             } else {
                 eprintln!("error: {err}");
             }
@@ -730,7 +737,10 @@ fn client_for(cli: &Cli) -> Result<Client> {
 
 fn timeout_seconds(cli: &Cli) -> u64 {
     cli.timeout.unwrap_or({
-        if matches!(&cli.command, Command::Rescan { .. }) {
+        if matches!(
+            &cli.command,
+            Command::Rescan { .. } | Command::History { .. } | Command::Wallet { .. }
+        ) {
             300
         } else {
             30
@@ -1239,15 +1249,11 @@ async fn rescan_shared_wallet(
         let snapshot = status.authoritative.ok_or_else(|| CliError::Protocol("HD rescan has no snapshot".into()))?;
         let book = snapshot.value.hd.as_ref().ok_or_else(|| CliError::Protocol("HD rescan has no address book".into()))?;
         let mut addresses = Vec::new();
-        let mut confirmed_total = 0i64;
-        let mut unconfirmed_total = 0i64;
         for (branch, entries) in book.branches.iter().enumerate() {
             for (index, address) in entries.iter().enumerate() {
                 let script = Address::decode(&address.address).map_err(CliError::Protocol)?.script_pubkey();
                 let (confirmed, unconfirmed) = snapshot.value.script_balance(&script)?;
                 let utxos = snapshot.value.script_outputs(&script)?;
-                confirmed_total = confirmed_total.checked_add(confirmed).ok_or_else(|| CliError::Protocol("HD balance overflow".into()))?;
-                unconfirmed_total = unconfirmed_total.checked_add(unconfirmed).ok_or_else(|| CliError::Protocol("HD pending balance overflow".into()))?;
                 if all || confirmed != 0 || unconfirmed != 0 || !utxos.is_empty() {
                     addresses.push(json!({"path": address.path, "address": address.address,
                         "chain": (["receiving", "change", "defi", "compatibility"][branch]),
@@ -1256,14 +1262,21 @@ async fn rescan_shared_wallet(
                 }
             }
         }
-        let total = confirmed_total.checked_add(unconfirmed_total).ok_or_else(|| CliError::Protocol("HD total balance overflow".into()))?;
+        let state = runtime.state();
+        if !state.wallet_sync.history_fresh || !state.wallet_sync.utxos_fresh || state.wallet.is_none() {
+            return Err(CliError::Network("HD wallet session ended before reporting its result".into()));
+        }
+        let confirmed_total = state.wallet_sync.confirmed_sats.ok_or_else(|| CliError::Protocol("HD balance is unavailable".into()))?;
+        let unconfirmed_total = state.wallet_sync.pending_sats;
+        let total = state.wallet_sync.total_sats().ok_or_else(|| CliError::Protocol("HD total balance overflow".into()))?;
         Ok(json!({"ok":true, "hd":true, "complete":true, "network":cli.network.to_string(),
             "account_path":account.to_string(), "gap":gap, "max_addresses":cap,
             "selection":"shared-native-policy", "source":snapshot.source.as_str(),
             "evidence":format!("{:?}",snapshot.evidence),
             "branches":optn_core::watch_only::HD_SCAN_BRANCHES, "last_used":book.last_used,
             "scanned_addresses":snapshot.value.interests.len(), "confirmed":confirmed_total,
-            "unconfirmed":unconfirmed_total, "total":total, "utxos":runtime.state().coins.len(), "addresses":addresses}))
+            "unconfirmed":unconfirmed_total, "total":total, "utxos":state.coins.len(), "addresses":addresses,
+            "wallet_sync":optn_transport::WireState::from(&state).wallet_sync}))
     }).await.map_err(|_| CliError::Network("HD rescan timed out before completing the account".into()))?
 }
 
@@ -1284,7 +1297,7 @@ async fn run(cli: &Cli) -> Result<Value> {
         return wallet_security::run(
             directory.clone().or_else(|| cli.wallet_directory.clone()),
             *stdio,
-            cli.network,
+            cli,
         )
         .await;
     }
@@ -1882,49 +1895,24 @@ async fn run(cli: &Cli) -> Result<Value> {
             .await
         }
         Command::History { gap, limit } => {
-            let wallet = read_wallet(cli).await?;
-            let coin = default_coin_type(cli.network);
-            let mut entries: Vec<(i64, String, String, Option<u64>)> = Vec::new();
-
-            for change in [false, true] {
-                for index in 0..*gap {
-                    let path = hd::address_path(coin, 0, change, index);
-                    let address = wallet.address(cli.network, &path)?;
-                    for e in client()?.history(&address.electrum_scripthash()).await? {
-                        entries.push((e.height, e.tx_hash, path.clone(), e.fee));
-                    }
-                }
-            }
-
-            // An unconfirmed entry has height 0, and a negative height means it
-            // has unconfirmed parents. Both belong at the top, not sorted as if
-            // they were ancient blocks.
-            entries.sort_by_key(|(height, ..)| if *height <= 0 { i64::MAX } else { *height });
-            entries.reverse();
-            entries.dedup_by(|a, b| a.1 == b.1);
-
-            let shown: Vec<Value> = entries
-                .iter()
-                .take(*limit)
-                .map(|(height, txid, path, fee)| {
-                    json!({
-                        "txid": txid,
-                        "height": height,
-                        "status": if *height > 0 { "confirmed" } else { "unconfirmed" },
-                        "path": path,
-                        // Servers report a fee only for mempool entries.
-                        "fee": fee,
-                    })
-                })
-                .collect();
-
-            Ok(json!({
-                "ok": true,
-                "network": cli.network.to_string(),
-                "count": entries.len(),
-                "shown": shown.len(),
-                "transactions": shown,
-            }))
+            let result = rescan_shared_wallet(
+                cli,
+                *gap,
+                optn_core::discovery::ADDRESS_CAP.max(*gap),
+                false,
+                None,
+                None,
+            )
+            .await?;
+            let entries = result["wallet_sync"]["history"]
+                .as_array()
+                .ok_or_else(|| CliError::Protocol("shared wallet history is unavailable".into()))?;
+            let shown = entries.iter().take(*limit).cloned().collect::<Vec<_>>();
+            Ok(json!({"ok":true, "network":cli.network.to_string(),
+                "count":entries.len(), "shown":shown.len(), "transactions":shown,
+                "source":result["source"], "evidence":result["evidence"],
+                "confirmed":result["confirmed"], "unconfirmed":result["unconfirmed"],
+                "total":result["total"], "complete":result["complete"]}))
         }
         Command::Discover { gap } => {
             let wallet = read_wallet(cli).await?;
@@ -3430,13 +3418,17 @@ mod manifest_tests {
 
     #[test]
     fn timeout_defaults_follow_command_and_honor_override() {
-        let ordinary = Cli::try_parse_from(["optn", "ping"]).unwrap();
-        let rescan = Cli::try_parse_from(["optn", "rescan"]).unwrap();
-        let explicit = Cli::try_parse_from(["optn", "rescan", "--timeout", "1"]).unwrap();
-
-        assert_eq!(timeout_seconds(&ordinary), 30);
-        assert_eq!(timeout_seconds(&rescan), 300);
-        assert_eq!(timeout_seconds(&explicit), 1);
+        for (command, seconds) in [
+            ("ping", 30),
+            ("rescan", 300),
+            ("history", 300),
+            ("wallet", 300),
+        ] {
+            let default = Cli::try_parse_from(["optn", command]).unwrap();
+            let explicit = Cli::try_parse_from(["optn", command, "--timeout", "1"]).unwrap();
+            assert_eq!(timeout_seconds(&default), seconds);
+            assert_eq!(timeout_seconds(&explicit), 1);
+        }
     }
 
     fn command_path_exists(path: &str) -> bool {

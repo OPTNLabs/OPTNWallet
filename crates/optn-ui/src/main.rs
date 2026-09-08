@@ -68,6 +68,15 @@ fn make_transport() -> Rc<dyn AppTransport> {
 }
 
 #[cfg(target_arch = "wasm32")]
+fn apply_snapshot(state: RwSignal<AppState>, snapshot: AppState) {
+    state.try_update(|current| {
+        if snapshot.snapshot_revision >= current.snapshot_revision {
+            *current = snapshot;
+        }
+    });
+}
+
+#[cfg(target_arch = "wasm32")]
 fn dispatch_action(transport: UiTransport, state: RwSignal<AppState>, action: AppAction) {
     let transport = transport.get_value();
     leptos::task::spawn_local(async move {
@@ -75,7 +84,7 @@ fn dispatch_action(transport: UiTransport, state: RwSignal<AppState>, action: Ap
         // authoritative state after either result; keep current state if unavailable.
         let _ = transport.dispatch(action).await;
         if let Ok(snapshot) = transport.snapshot().await {
-            state.set(snapshot);
+            apply_snapshot(state, snapshot);
         }
     });
 }
@@ -868,11 +877,38 @@ fn App(transport: Rc<dyn AppTransport>) -> impl IntoView {
         let transport = transport.get_value();
         leptos::task::spawn_local(async move {
             if let Ok(snapshot) = transport.snapshot().await {
-                state.set(snapshot);
+                apply_snapshot(state, snapshot);
                 ready.set(true);
             }
         });
     }
+
+    // One in-flight read; the host revision rejects delayed replies after lock,
+    // network changes or actions. No renderer-owned wallet synchronization.
+    let reading = RwSignal::new(false);
+    let poll = leptos::prelude::set_interval_with_handle(
+        move || {
+            if reading.get_untracked() {
+                return;
+            }
+            reading.set(true);
+            let transport = transport.get_value();
+            leptos::task::spawn_local(async move {
+                if let Ok(snapshot) = transport.snapshot().await {
+                    apply_snapshot(state, snapshot);
+                    ready.try_set(true);
+                }
+                reading.try_set(false);
+            });
+        },
+        std::time::Duration::from_secs(1),
+    )
+    .ok();
+    on_cleanup(move || {
+        if let Some(poll) = poll {
+            poll.clear();
+        }
+    });
 
     // Track route only. A Chipnet/theme snapshot must not remount Create/Import
     // and wipe the mnemonic or xPub sitting in local signals.

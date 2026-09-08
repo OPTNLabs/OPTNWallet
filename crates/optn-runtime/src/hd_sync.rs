@@ -1318,6 +1318,19 @@ mod tests {
             .await
             .unwrap();
         let before = runtime.state().coins;
+        let observed = runtime.state().wallet_sync;
+        assert_eq!(observed.total_sats(), Some(800));
+        assert_eq!(observed.history.len(), 3);
+        assert_eq!(
+            observed
+                .history
+                .iter()
+                .filter(|entry| entry.kind == optn_app::HistoryKind::Sent)
+                .count(),
+            2
+        );
+        assert!(observed.history_fresh && observed.utxos_fresh);
+        assert_eq!(observed.evidence.as_deref(), Some("Server assertion"));
         let key = derive_key_with_rounds("public checkpoint test fixture", &[33; 16], 1).unwrap();
         let wrong = derive_key_with_rounds("different public test fixture", &[33; 16], 1).unwrap();
         // Fixed nonce under a test-only key for a deterministic corruption test.
@@ -1377,6 +1390,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(restarted.state().coins, before);
+        let restored = restarted.state().wallet_sync;
+        assert_eq!(restored.history, observed.history);
+        assert_eq!(restored.total_sats(), observed.total_sats());
+        assert_eq!(restored.source, observed.source);
+        assert_eq!(restored.evidence, observed.evidence);
+        assert!(!restored.history_fresh && !restored.utxos_fresh && !restored.refreshing);
         assert_eq!(
             restarted.state().coins.get(outpoint).unwrap().freeze(),
             Some(FreezeReason::User)

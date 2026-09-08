@@ -419,6 +419,8 @@ impl LayoutKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppState {
+    /// Monotonic host snapshot order; delayed renderer replies cannot roll state back.
+    pub snapshot_revision: u64,
     pub route: AppRoute,
     pub theme: ThemeMode,
     pub skin: UiSkin,
@@ -432,6 +434,8 @@ pub struct AppState {
     pub wallet: Option<OpenedWallet>,
     /// Public allocation state. Only the authenticated runtime advances it durably.
     pub hd_addresses: Option<HdAddressAllocation>,
+    /// Runtime-owned chain projection. A missing balance means no complete observation.
+    pub wallet_sync: WalletSyncView,
     pub spend: Option<SpendPlan>,
     /// App-wide fee policy. Providers may advise Auto, but never own this preference.
     pub fee_preferences: FeePreferences,
@@ -512,6 +516,7 @@ impl Default for AppState {
 impl AppState {
     pub const fn for_surface(surface: AppSurface) -> Self {
         Self {
+            snapshot_revision: 0,
             route: AppRoute::Landing,
             theme: ThemeMode::Green,
             skin: UiSkin::Default,
@@ -528,6 +533,7 @@ impl AppState {
             notice: None,
             wallet: None,
             hd_addresses: None,
+            wallet_sync: WalletSyncView::empty(),
             spend: None,
             fee_preferences: FeePreferences::app_default(),
             hardware: HardwareSessionState::new(),
@@ -831,6 +837,7 @@ impl AppState {
                 // a different wallet, only an unsynced one.
                 self.coins.clear();
                 self.hd_addresses = None;
+                self.wallet_sync = WalletSyncView::empty();
                 self.pledges.clear();
                 self.spend = None;
                 self.stealth_sats = 0;
@@ -1290,6 +1297,7 @@ impl AppState {
         // No balance, approval, or revealed identity belongs to both sessions.
         self.coins.clear();
         self.hd_addresses = None;
+        self.wallet_sync = WalletSyncView::empty();
         self.pledges.clear();
         self.stealth_sats = 0;
         self.spend = None;
@@ -1314,6 +1322,7 @@ impl AppState {
         self.identity_revealed = false;
         self.wallet = None;
         self.hd_addresses = None;
+        self.wallet_sync = WalletSyncView::empty();
         self.spend = None;
         self.coins.clear();
         self.pledges.clear();
@@ -1756,6 +1765,8 @@ pub fn fundme_view_model(state: &AppState) -> FundMeViewModel {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HistoryKind {
     Received,
+    Sent,
+    Transfer,
     PendingSend,
 }
 
@@ -1766,6 +1777,49 @@ pub struct HistoryEntry {
     pub amount_sats: u64,
     pub address: String,
     pub reserved: bool,
+    /// Provider-reported height, qualified by the wallet's displayed evidence.
+    pub block_height: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WalletSyncView {
+    pub refreshing: bool,
+    pub history_fresh: bool,
+    pub utxos_fresh: bool,
+    pub source: Option<String>,
+    pub evidence: Option<String>,
+    pub tip_height: Option<u32>,
+    pub confirmed_sats: Option<u64>,
+    pub pending_sats: i64,
+    pub history: Vec<HistoryEntry>,
+    pub error: Option<String>,
+}
+
+impl WalletSyncView {
+    pub const fn empty() -> Self {
+        Self {
+            refreshing: false,
+            history_fresh: false,
+            utxos_fresh: false,
+            source: None,
+            evidence: None,
+            tip_height: None,
+            confirmed_sats: None,
+            pending_sats: 0,
+            history: Vec::new(),
+            error: None,
+        }
+    }
+
+    pub fn total_sats(&self) -> Option<u64> {
+        self.confirmed_sats?.checked_add_signed(self.pending_sats)
+    }
+}
+
+impl Default for WalletSyncView {
+    fn default() -> Self {
+        Self::empty()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1774,26 +1828,17 @@ pub struct HistoryViewModel {
     pub entries: Vec<HistoryEntry>,
 }
 
-/// History is derived from opened coins and a pending spend. Rebuild clears it.
+/// Chain transactions come from the runtime's complete snapshot, including spent outputs.
 pub fn history_view_model(state: &AppState) -> HistoryViewModel {
-    let mut entries: Vec<HistoryEntry> = state
-        .coins
-        .iter()
-        .map(|coin| HistoryEntry {
-            kind: HistoryKind::Received,
-            txid: coin.outpoint().txid_hex(),
-            amount_sats: coin.value_sats(),
-            address: coin.address().to_owned(),
-            reserved: coin.is_reserved(),
-        })
-        .collect();
+    let mut entries = state.wallet_sync.history.clone();
     if let Some(plan) = state.spend.as_ref() {
         entries.push(HistoryEntry {
             kind: HistoryKind::PendingSend,
-            txid: plan.selected.txid_hex(),
+            txid: String::new(),
             amount_sats: plan.amount_sats,
             address: plan.destination.clone(),
             reserved: false,
+            block_height: None,
         });
     }
     HistoryViewModel {
@@ -3442,7 +3487,7 @@ mod tests {
     }
 
     #[test]
-    fn history_comes_from_coins_and_rebuild_keeps_the_seed() {
+    fn history_requires_runtime_observations_and_rebuild_keeps_the_seed() {
         let dest = optn_core::cashaddr::Address::from_hash(
             Network::Chipnet.prefix(),
             optn_core::cashaddr::AddressKind::P2pkh,
@@ -3463,13 +3508,19 @@ mod tests {
         state.apply(AppAction::InsertCoin(coin));
         state.apply(AppAction::InsertCoin(frozen));
         state.apply(AppAction::FreezeCoin(frozen_out));
+        // Coins alone cannot establish transaction history or identify sends.
+        assert!(history_view_model(&state).entries.is_empty());
+        state.wallet_sync.history = vec![HistoryEntry {
+            kind: HistoryKind::Sent,
+            txid: "observed-transaction".into(),
+            amount_sats: 4_000,
+            address: String::new(),
+            reserved: false,
+            block_height: Some(123),
+        }];
         let history = history_view_model(&state);
-        assert_eq!(history.entries.len(), 2);
-        assert!(history
-            .entries
-            .iter()
-            .all(|entry| entry.kind == HistoryKind::Received));
-        assert!(history.entries.iter().any(|entry| entry.reserved));
+        assert_eq!(history.entries.len(), 1);
+        assert_eq!(history.entries[0].kind, HistoryKind::Sent);
 
         state.apply(AppAction::PrepareSend {
             destination: dest,
@@ -3484,7 +3535,13 @@ mod tests {
             state.spend.as_ref().map(|plan| plan.sighash),
             Some(SIGHASH_ALL_FORKID)
         );
-        assert_eq!(history_view_model(&state).entries.len(), 3);
+        assert_eq!(history_view_model(&state).entries.len(), 2);
+        assert!(history_view_model(&state)
+            .entries
+            .last()
+            .unwrap()
+            .txid
+            .is_empty());
         assert_eq!(
             history_view_model(&state)
                 .entries
@@ -3500,7 +3557,7 @@ mod tests {
         assert!(state.coins.get(frozen_out).unwrap().freeze().is_some());
         assert!(state.spend.is_none());
         assert!(state.pledges.is_empty());
-        assert_eq!(history_view_model(&state).entries.len(), 2);
+        assert_eq!(history_view_model(&state).entries.len(), 1);
         assert_eq!(state.route, AppRoute::Send);
     }
 

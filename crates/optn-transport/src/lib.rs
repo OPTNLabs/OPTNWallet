@@ -10,10 +10,11 @@ use optn_app::{
     parse_account_path, AppAction, AppEvent, AppLockState, AppRoute, AppState, AppSurface,
     AuthScope, AutoLockMinutes, CampaignOutput, Coin, ConnectState, CreateStep, FeatureFlag,
     FeatureFlags, FeeMode, FeePreferences, FeeRate, FlipstarterPledge, FreezeReason,
-    HardwareSessionState, HardwareSetupPreview, HardwareVendor, ImportStep, LedgerLink,
-    MultisigSetupPreview, MultisigStep, Network, NetworkServers, OpenedWallet, Outpoint,
-    PledgeStatus, ServerKind, ServerOverrides, SettingsRowId, SpendKind, SpendPlan, ThemeMode,
-    UiSkin, WalletKind, WatchOnlyKind, WatchOnlySetupPreview, RELAY_MINIMUM_FEE_RATE,
+    HardwareSessionState, HardwareSetupPreview, HardwareVendor, HistoryEntry, HistoryKind,
+    ImportStep, LedgerLink, MultisigSetupPreview, MultisigStep, Network, NetworkServers,
+    OpenedWallet, Outpoint, PledgeStatus, ServerKind, ServerOverrides, SettingsRowId, SpendKind,
+    SpendPlan, ThemeMode, UiSkin, WalletKind, WalletSyncView, WatchOnlyKind, WatchOnlySetupPreview,
+    RELAY_MINIMUM_FEE_RATE,
 };
 pub mod host;
 pub mod security;
@@ -49,6 +50,10 @@ pub trait AppTransport {
     fn dispatch<'a>(&'a self, action: AppAction) -> TransportFuture<'a, ()>;
     fn snapshot<'a>(&'a self) -> TransportFuture<'a, AppState>;
     fn next_event<'a>(&'a self) -> TransportFuture<'a, Option<AppEvent>>;
+
+    fn refresh_wallet<'a>(&'a self) -> TransportFuture<'a, ()> {
+        Box::pin(async { Err(TransportError::Unsupported) })
+    }
 
     fn wallet_security<'a>(
         &'a self,
@@ -268,6 +273,124 @@ pub struct WireCoin {
     pub fuse_depth: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WireHistoryKind {
+    Received,
+    Sent,
+    Transfer,
+    PendingSend,
+}
+
+impl From<HistoryKind> for WireHistoryKind {
+    fn from(value: HistoryKind) -> Self {
+        match value {
+            HistoryKind::Received => Self::Received,
+            HistoryKind::Sent => Self::Sent,
+            HistoryKind::Transfer => Self::Transfer,
+            HistoryKind::PendingSend => Self::PendingSend,
+        }
+    }
+}
+
+impl From<WireHistoryKind> for HistoryKind {
+    fn from(value: WireHistoryKind) -> Self {
+        match value {
+            WireHistoryKind::Received => Self::Received,
+            WireHistoryKind::Sent => Self::Sent,
+            WireHistoryKind::Transfer => Self::Transfer,
+            WireHistoryKind::PendingSend => Self::PendingSend,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireHistoryEntry {
+    pub kind: WireHistoryKind,
+    pub txid: String,
+    pub amount_sats: u64,
+    pub address: String,
+    pub reserved: bool,
+    #[serde(default)]
+    pub block_height: Option<u32>,
+}
+
+impl From<&HistoryEntry> for WireHistoryEntry {
+    fn from(value: &HistoryEntry) -> Self {
+        Self {
+            kind: value.kind.into(),
+            txid: value.txid.clone(),
+            amount_sats: value.amount_sats,
+            address: value.address.clone(),
+            reserved: value.reserved,
+            block_height: value.block_height,
+        }
+    }
+}
+
+impl From<WireHistoryEntry> for HistoryEntry {
+    fn from(value: WireHistoryEntry) -> Self {
+        Self {
+            kind: value.kind.into(),
+            txid: value.txid,
+            amount_sats: value.amount_sats,
+            address: value.address,
+            reserved: value.reserved,
+            block_height: value.block_height,
+        }
+    }
+}
+
+/// Missing sync metadata means stale data and an unknown balance.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct WireWalletSyncView {
+    pub refreshing: bool,
+    pub history_fresh: bool,
+    pub utxos_fresh: bool,
+    pub source: Option<String>,
+    pub evidence: Option<String>,
+    pub tip_height: Option<u32>,
+    pub confirmed_sats: Option<u64>,
+    pub pending_sats: i64,
+    pub history: Vec<WireHistoryEntry>,
+    pub error: Option<String>,
+}
+
+impl From<&WalletSyncView> for WireWalletSyncView {
+    fn from(value: &WalletSyncView) -> Self {
+        Self {
+            refreshing: value.refreshing,
+            history_fresh: value.history_fresh,
+            utxos_fresh: value.utxos_fresh,
+            source: value.source.clone(),
+            evidence: value.evidence.clone(),
+            tip_height: value.tip_height,
+            confirmed_sats: value.confirmed_sats,
+            pending_sats: value.pending_sats,
+            history: value.history.iter().map(WireHistoryEntry::from).collect(),
+            error: value.error.clone(),
+        }
+    }
+}
+
+impl From<WireWalletSyncView> for WalletSyncView {
+    fn from(value: WireWalletSyncView) -> Self {
+        Self {
+            refreshing: value.refreshing,
+            history_fresh: value.history_fresh,
+            utxos_fresh: value.utxos_fresh,
+            source: value.source,
+            evidence: value.evidence,
+            tip_height: value.tip_height,
+            confirmed_sats: value.confirmed_sats,
+            pending_sats: value.pending_sats,
+            history: value.history.into_iter().map(HistoryEntry::from).collect(),
+            error: value.error,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WireCampaignOutput {
     pub value_sats: u64,
@@ -458,6 +581,8 @@ pub struct WireAction {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WireState {
     pub version: u16,
+    #[serde(default)]
+    pub snapshot_revision: u64,
     pub route: WireRoute,
     pub theme: WireTheme,
     #[serde(default)]
@@ -477,6 +602,8 @@ pub struct WireState {
     pub watch_only: bool,
     #[serde(default)]
     pub coins: Vec<WireCoin>,
+    #[serde(default)]
+    pub wallet_sync: WireWalletSyncView,
     #[serde(default)]
     pub pledges: Vec<WirePledge>,
     #[serde(default)]
@@ -1368,6 +1495,7 @@ impl From<&AppState> for WireState {
     fn from(value: &AppState) -> Self {
         Self {
             version: WIRE_PROTOCOL_VERSION,
+            snapshot_revision: value.snapshot_revision,
             route: value.route.into(),
             theme: value.theme.into(),
             skin: value.skin.into(),
@@ -1387,6 +1515,7 @@ impl From<&AppState> for WireState {
                 .features
                 .enabled(value.surface, FeatureFlag::WatchOnly),
             coins: value.coins.iter().map(WireCoin::from).collect(),
+            wallet_sync: WireWalletSyncView::from(&value.wallet_sync),
             pledges: value.pledges.iter().map(WirePledge::from).collect(),
             notice: value.notice.clone(),
             wallet: value.wallet.as_ref().map(WireOpenedWallet::from),
@@ -1490,6 +1619,7 @@ impl TryFrom<WireState> for AppState {
         verify_wire_version(value.version)?;
         let servers = ServerOverrides::try_from(value.servers)?;
         Ok(Self {
+            snapshot_revision: value.snapshot_revision,
             route: value.route.into(),
             theme: value.theme.into(),
             skin: value.skin.into(),
@@ -1541,6 +1671,7 @@ impl TryFrom<WireState> for AppState {
                 .into_iter()
                 .map(FlipstarterPledge::try_from)
                 .collect::<Result<Vec<_>, _>>()?,
+            wallet_sync: value.wallet_sync.into(),
             notice: value.notice,
             wallet: value.wallet.map(OpenedWallet::from),
             hd_addresses: value.hd_addresses,
@@ -2000,6 +2131,75 @@ mod tests {
         assert_eq!(
             AppRoute::from(WireRoute::from(AppRoute::History)),
             AppRoute::History
+        );
+    }
+
+    #[test]
+    fn wallet_sync_wire_round_trip_preserves_history_and_legacy_unknowns() {
+        let mut state = AppState {
+            network: Network::Chipnet,
+            snapshot_revision: 42,
+            wallet_sync: WalletSyncView {
+                refreshing: true,
+                history_fresh: false,
+                utxos_fresh: false,
+                source: Some("chip.example:50002".into()),
+                evidence: Some("provider-reported".into()),
+                tip_height: Some(250_000),
+                confirmed_sats: Some(50_000),
+                pending_sats: -2_500,
+                // Spent receipts and outgoing history must survive without live coins.
+                history: [
+                    HistoryKind::Received,
+                    HistoryKind::Sent,
+                    HistoryKind::Transfer,
+                    HistoryKind::PendingSend,
+                ]
+                .into_iter()
+                .enumerate()
+                .map(|(index, kind)| HistoryEntry {
+                    kind,
+                    txid: format!("{index:064x}"),
+                    amount_sats: 2_500 + index as u64,
+                    address: "bchtest:qhistory".into(),
+                    reserved: kind == HistoryKind::PendingSend,
+                    block_height: (kind != HistoryKind::PendingSend).then_some(249_999),
+                })
+                .collect(),
+                error: Some("refresh failed; retaining prior history".into()),
+            },
+            ..AppState::default()
+        };
+        assert!(state.coins.is_empty());
+        for (history_fresh, utxos_fresh) in [(false, false), (true, false), (false, true)] {
+            state.wallet_sync.history_fresh = history_fresh;
+            state.wallet_sync.utxos_fresh = utxos_fresh;
+            let encoded = serde_json::to_string(&WireState::from(&state)).unwrap();
+            let decoded: WireState = serde_json::from_str(&encoded).unwrap();
+            assert_eq!(AppState::try_from(decoded).unwrap(), state);
+        }
+
+        let mut legacy = serde_json::to_value(WireState::from(&state)).unwrap();
+        let fields = legacy.as_object_mut().unwrap();
+        fields.remove("snapshot_revision");
+        fields.remove("wallet_sync");
+        for sync in [None, Some(serde_json::json!({}))] {
+            if let Some(sync) = sync {
+                legacy["wallet_sync"] = sync;
+            }
+            let decoded: WireState = serde_json::from_value(legacy.clone()).unwrap();
+            let restored = AppState::try_from(decoded).unwrap();
+            assert_eq!(restored.snapshot_revision, 0);
+            assert_eq!(restored.wallet_sync, WalletSyncView::empty());
+            assert_eq!(restored.wallet_sync.total_sats(), None);
+        }
+
+        let mut invalid = serde_json::to_value(WireState::from(&state)).unwrap();
+        invalid["wallet_sync"]["history"][0]["kind"] = "unknown".into();
+        assert!(serde_json::from_value::<WireState>(invalid).is_err());
+        assert_eq!(
+            futures_lite::future::block_on(NeverTransport.refresh_wallet()),
+            Err(TransportError::Unsupported)
         );
     }
 

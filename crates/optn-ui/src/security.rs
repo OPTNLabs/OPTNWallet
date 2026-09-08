@@ -34,7 +34,7 @@ pub fn submit(
         }
         if refresh {
             if let Ok(snapshot) = transport.snapshot().await {
-                state.set(snapshot);
+                crate::apply_snapshot(state, snapshot);
             }
         }
         busy.set(false);

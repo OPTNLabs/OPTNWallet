@@ -94,6 +94,25 @@ fn responses(output: &Output) -> Vec<Value> {
         .unwrap()
 }
 
+#[test]
+fn stdio_console_keeps_every_reply_including_eof_on_one_json_line() {
+    let directory = test_directory();
+    let output = run_cli(
+        directory.path(),
+        &["wallet", "--stdio"],
+        "{\"request\":{\"command\":\"status\"}}\n",
+    );
+    assert!(output.status.success());
+    let lines = String::from_utf8(output.stdout).unwrap();
+    let replies = lines
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(replies.len(), 2);
+    assert_eq!(replies[0]["ok"], true);
+    assert_eq!(replies[1]["locked"], true);
+}
+
 fn address(account: u32) -> String {
     optn_core::hd::Wallet::from_mnemonic(optn_core::hd::BIP39_TEST_VECTOR_MNEMONIC, "TREZOR")
         .unwrap()

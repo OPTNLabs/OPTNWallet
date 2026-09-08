@@ -140,6 +140,62 @@ fn NoticeBanner(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
 }
 
 #[component]
+fn WalletSyncControl(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
+    let busy = RwSignal::new(false);
+    let error = RwSignal::new(None::<String>);
+    view! {
+        <section class="panel" aria-label="Wallet synchronization">
+            <div class="panel-head">
+                <h2>{move || if state.get().wallet_sync.refreshing { "Synchronizing" }
+                    else if state.get().wallet_sync.history_fresh && state.get().wallet_sync.utxos_fresh { "Up to date" }
+                    else if state.get().wallet_sync.confirmed_sats.is_some() { "Saved balance · refresh needed" }
+                    else { "Wallet has not synchronized" }}</h2>
+                <button class="chip" type="button"
+                    disabled=move || busy.get() || state.get().wallet_sync.refreshing
+                    on:click=move |_| {
+                        if busy.get_untracked() { return; }
+                        busy.set(true); error.set(None);
+                        let transport = transport.get_value();
+                        leptos::task::spawn_local(async move {
+                            if let Err(failure) = transport.refresh_wallet().await {
+                                error.try_set(Some(match failure {
+                                    optn_transport::TransportError::Other(message)
+                                    | optn_transport::TransportError::InvalidData(message) => message,
+                                    _ => "Wallet synchronization is unavailable on this interface.".into(),
+                                }));
+                            }
+                            if let Ok(snapshot) = transport.snapshot().await {
+                                crate::apply_snapshot(state, snapshot);
+                            }
+                            busy.try_set(false);
+                        });
+                    }>"Refresh wallet"</button>
+            </div>
+            <p class="muted">{move || {
+                let sync = state.get().wallet_sync;
+                match (sync.source, sync.evidence) {
+                    (Some(source), Some(evidence)) => format!("{source} · {evidence}{}",
+                        sync.tip_height.map(|height| format!(" · tip {height}")).unwrap_or_default()),
+                    _ if sync.refreshing => "Synchronizing this HD account through the selected source.".into(),
+                    _ => "Select a chain source in Settings, then refresh this HD account.".into(),
+                }
+            }}</p>
+            <Show when=move || state.get().wallet_sync.confirmed_sats.is_some()>
+                <p class="muted">{move || {
+                    let sync = state.get().wallet_sync;
+                    format!("Reported confirmed: {} · pending change: {:+} sats",
+                        format_bch(sync.confirmed_sats.unwrap_or_default()), sync.pending_sats)
+                }}</p>
+            </Show>
+            <p class="muted" role="status">{move || error.get().or(state.get().wallet_sync.error).unwrap_or_default()}</p>
+            <button class="text-link" type="button" on:click=move |_|
+                dispatch_action(transport, state, AppAction::Navigate(AppRoute::Settings))
+            >"Chain source settings ›"</button>
+        </section>
+    }
+}
+
+#[component]
 pub fn WalletHome(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
     view! {
         <WalletChrome transport=transport state=state>
@@ -154,7 +210,11 @@ pub fn WalletHome(transport: UiTransport, state: RwSignal<AppState>) -> impl Int
                             .unwrap_or_else(|| "Wallet".into())
                     }}</p>
                     <h1 class="balance">
-                        {move || format_bch(portfolio_totals(&state.get()).total_sats())}
+                        {move || {
+                            let current = state.get();
+                            current.wallet_sync.total_sats().and_then(|total| total.checked_add(current.stealth_sats))
+                                .map(format_bch).unwrap_or_else(|| "Balance unknown".into())
+                        }}
                     </h1>
                     // Shown only when there is stealth to account for, so an
                     // ordinary wallet is not told about a pool it has none of.
@@ -182,9 +242,9 @@ pub fn WalletHome(transport: UiTransport, state: RwSignal<AppState>) -> impl Int
                             {move || {
                                 let count = state.get().coins.len();
                                 if count == 0 {
-                                    "No sources yet".to_string()
+                                    "No observed unspent outputs".to_string()
                                 } else {
-                                    format!("{count} active source")
+                                    format!("{count} unspent outputs")
                                 }
                             }}
                         </span>
@@ -201,6 +261,8 @@ pub fn WalletHome(transport: UiTransport, state: RwSignal<AppState>) -> impl Int
                         </button>
                     </div>
                 </article>
+
+                <WalletSyncControl transport=transport state=state />
 
                 <section class="panel">
                     <div class="panel-head">
@@ -362,7 +424,9 @@ pub fn WalletHome(transport: UiTransport, state: RwSignal<AppState>) -> impl Int
                                     <p class="source-title">
                                         {match entry.kind {
                                             HistoryKind::Received => "Received",
-                                            HistoryKind::PendingSend => "Pending send",
+                                            HistoryKind::Sent => "Sent",
+                                            HistoryKind::Transfer => "Transfer",
+                                            HistoryKind::PendingSend => "Prepared send · not broadcast",
                                         }}
                                     </p>
                                     <p class="mono">{format_bch(entry.amount_sats)}</p>
@@ -679,15 +743,16 @@ pub fn HistoryPage(transport: UiTransport, state: RwSignal<AppState>) -> impl In
                     {move || format!("‹ {}", state.get().flow().back_label)}
                 </button>
                 <h1>"History"</h1>
-                <p class="lede">"Receives from coins and a pending send. Rebuilding refreshes chain history and keeps your coin holds and labels."</p>
+                <p class="lede">"Transactions across this HD account, including spent outputs. Sent amounts include the change in the wallet balance, including fees."</p>
+                <WalletSyncControl transport=transport state=state />
                 <Show
                     when=move || !history_snapshot(state).is_empty()
-                    fallback=move || view! { <p class="empty-line">"No transactions yet."</p> }
+                    fallback=move || view! { <p class="empty-line">{move || if state.get().wallet_sync.confirmed_sats.is_some() { "No transactions in the retained snapshot." } else { "Refresh the wallet to load transaction history." }}</p> }
                 >
                     <ul class="history-list">
                         <For
                             each=move || history_snapshot(state)
-                            key=|entry| format!("{}-{}-{}", entry.txid, entry.amount_sats, entry.reserved)
+                            key=|entry| format!("{}-{}-{}-{:?}", entry.txid, entry.amount_sats, entry.reserved, entry.block_height)
                             let:entry
                         >
                             <li class="source-row stacked">
@@ -695,13 +760,19 @@ pub fn HistoryPage(transport: UiTransport, state: RwSignal<AppState>) -> impl In
                                     <p class="source-title">
                                         {match entry.kind {
                                             HistoryKind::Received => "Received",
-                                            HistoryKind::PendingSend => "Pending send",
+                                            HistoryKind::Sent => "Sent",
+                                            HistoryKind::Transfer => "Transfer",
+                                            HistoryKind::PendingSend => "Prepared send · not broadcast",
                                         }}
                                         {if entry.reserved { " · reserved" } else { "" }}
                                     </p>
                                     <p class="mono">{format_bch(entry.amount_sats)}</p>
                                     <p class="mono">{entry.address.clone()}</p>
                                     <p class="muted">{entry.txid.clone()}</p>
+                                    <p class="muted">{if entry.kind == HistoryKind::PendingSend { String::new() } else {
+                                        entry.block_height.map(|height| format!("Reported in block {height}"))
+                                            .unwrap_or_else(|| "Mempool".into())
+                                    }}</p>
                                 </div>
                             </li>
                         </For>

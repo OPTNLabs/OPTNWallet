@@ -3,7 +3,7 @@ use crate::error::{CliError, Result};
 use optn_app::{AppAction, AppState, SecretText};
 use optn_runtime::{wallet_security::WalletSecurity, AppRuntime};
 use optn_transport::{
-    TransportError, WalletSecurityRequest as Request, WalletSecurityStatus, WireAction,
+    TransportError, WalletSecurityRequest as Request, WalletSecurityStatus, WireAction, WireState,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -35,13 +35,122 @@ fn password(prompt: &str) -> Result<SecretText> {
 enum Input {
     Security { request: Request },
     Action { action: WireAction },
+    Chain { chain: ChainCommand },
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ChainCommand {
+    Sync,
+    History,
+}
+
+async fn sync_wallet(cli: &crate::Cli, runtime: &AppRuntime) -> Result<()> {
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(crate::timeout_seconds(cli)),
+        async {
+            let selection = crate::configured_chain(cli)?.ok_or_else(|| {
+                CliError::Usage(
+                    "Select a persisted shared source with network select --protocol before syncing; wallet sync cannot use a default or --host override.".into(),
+                )
+            })?;
+            let state = runtime.state();
+            if state.network != cli.network {
+                return Err(CliError::Usage(
+                    "The saved wallet belongs to a different network. Select its network explicitly.".into(),
+                ));
+            }
+            let xpub = state.wallet.as_ref()
+                .and_then(|wallet| wallet.account_xpub.clone())
+                .ok_or_else(|| CliError::Usage("Open a saved HD wallet before syncing.".into()))?;
+            let stack = optn_chain_native::build_native_chain_stack(
+                selection.catalog,
+                selection.policy,
+                &cli.network.to_string(),
+                &optn_chain_native::NativeChainSecrets::default(),
+            ).await;
+            let mut worker = optn_runtime::sync_worker::ProgressiveSyncWorker::new(Default::default());
+            let decision = runtime.sync_hd_wallet(
+                &mut *stack.service.lock().await,
+                &mut worker,
+                xpub,
+                optn_runtime::hd_sync::HdSyncLimits::default(),
+            ).await.map_err(|error| CliError::Network(error.to_string()))?;
+            if decision != optn_runtime::reconciliation::ReconciliationDecision::Accepted {
+                return Err(CliError::Network("Wallet refresh was incomplete; retained history remains stale.".into()));
+            }
+            Ok(())
+        },
+    ).await.unwrap_or_else(|_| Err(CliError::Network("Wallet refresh timed out; retained history remains stale.".into())));
+    if let Err(error) = &result {
+        runtime
+            .invalidate_wallet_sync(error.to_string())
+            .await
+            .map_err(|error| CliError::Network(error.to_string()))?;
+    }
+    result
+}
+
+fn success_reply(state: &AppState, status: WalletSecurityStatus) -> Value {
+    json!({"ok": true, "security": status,
+        "receive_address": state.wallet.as_ref().map(|wallet| &wallet.receive_address),
+        "hd_addresses": state.hd_addresses,
+        "wallet_sync": WireState::from(state).wallet_sync})
+}
+
+fn print_history(sync: &optn_app::WalletSyncView) {
+    println!(
+        "Source: {}  Evidence: {}",
+        sync.source.as_deref().unwrap_or("unknown"),
+        sync.evidence.as_deref().unwrap_or("unknown")
+    );
+    println!(
+        "History fresh: {}  UTXOs fresh: {}  Refreshing: {}",
+        sync.history_fresh, sync.utxos_fresh, sync.refreshing
+    );
+    println!(
+        "Confirmed: {} sats  Pending: {} sats  Total: {} sats",
+        sync.confirmed_sats
+            .map(|sats| sats.to_string())
+            .unwrap_or_else(|| "unknown".into()),
+        sync.pending_sats,
+        sync.total_sats()
+            .map(|sats| sats.to_string())
+            .unwrap_or_else(|| "unknown".into())
+    );
+    for entry in &sync.history {
+        println!(
+            "{:?}  {}  {} sats  {}  height={}  reserved={}",
+            entry.kind,
+            entry.txid,
+            entry.amount_sats,
+            entry.address,
+            entry
+                .block_height
+                .map(|height| height.to_string())
+                .unwrap_or_else(|| "unknown".into()),
+            entry.reserved
+        );
+    }
+    if let Some(error) = &sync.error {
+        eprintln!("{error}");
+    }
 }
 
 async fn execute(
+    cli: &crate::Cli,
     runtime: &AppRuntime,
     input: Input,
 ) -> std::result::Result<WalletSecurityStatus, TransportError> {
     match input {
+        Input::Chain { chain } => {
+            if matches!(chain, ChainCommand::Sync) {
+                sync_wallet(cli, runtime)
+                    .await
+                    .map_err(|error| TransportError::Other(error.to_string()))?;
+            }
+            runtime.wallet_security(Request::Status).await
+        }
         Input::Security { request } => runtime.wallet_security(request).await,
         Input::Action { action } => {
             let action = AppAction::try_from(action)?;
@@ -67,11 +176,7 @@ async fn execute(
     }
 }
 
-pub async fn run(
-    directory: Option<PathBuf>,
-    stdio: bool,
-    network: optn_app::Network,
-) -> Result<Value> {
+pub async fn run(directory: Option<PathBuf>, stdio: bool, cli: &crate::Cli) -> Result<Value> {
     let directory = directory
         .or_else(|| dirs::data_dir().map(|root| root.join("com.optilabs.wallet").join("wallets")))
         .ok_or_else(|| CliError::Usage("Specify a wallet directory.".into()))?;
@@ -81,7 +186,7 @@ pub async fn run(
     let service =
         WalletSecurity::new(Box::new(storage), None).with_checkpoints(Box::new(checkpoints));
     let initial = AppState {
-        network,
+        network: cli.network,
         ..Default::default()
     };
     let (runtime, driver) = AppRuntime::new_with_security(initial, service)
@@ -105,13 +210,8 @@ pub async fn run(
         let mut input = io::stdin().lock();
         while let Some(line) = private_line(&mut input, 262_144)? {
             let output = match serde_json::from_str::<Input>(&line) {
-                Ok(input) => match execute(&runtime, input).await {
-                    Ok(status) => {
-                        let state = runtime.state();
-                        json!({"ok": true, "security": status,
-                            "receive_address":state.wallet.as_ref().map(|wallet| &wallet.receive_address),
-                            "hd_addresses":state.hd_addresses})
-                    }
+                Ok(input) => match execute(cli, &runtime, input).await {
+                    Ok(status) => success_reply(&runtime.state(), status),
                     Err(error) => json!({"ok": false, "error": message(error)}),
                 },
                 Err(_) => json!({"ok": false, "error": "Invalid wallet command."}),
@@ -119,7 +219,7 @@ pub async fn run(
             println!("{output}");
         }
     } else {
-        eprintln!("Wallet commands: list, open <file>, import, receive [--acknowledge-gap], password, autolock <minutes>, lock, authorize, reveal, quit");
+        eprintln!("Wallet commands: list, open <file>, import, receive [--acknowledge-gap], sync, history, password, autolock <minutes>, lock, authorize, reveal, quit");
         loop {
             eprint!("wallet> ");
             io::stderr().flush().ok();
@@ -140,6 +240,18 @@ pub async fn run(
             let request = match command {
                 "quit" | "exit" => break,
                 "list" => Some(Request::Status),
+                "sync" | "history" => {
+                    let chain = if command == "sync" {
+                        ChainCommand::Sync
+                    } else {
+                        ChainCommand::History
+                    };
+                    match execute(cli, &runtime, Input::Chain { chain }).await {
+                        Ok(_) => print_history(&runtime.state().wallet_sync),
+                        Err(error) => eprintln!("{}", message(error)),
+                    }
+                    continue;
+                }
                 "receive" => match argument {
                     "" | "--acknowledge-gap" => Some(Request::NextReceive {
                         epoch: status.epoch,
@@ -234,7 +346,7 @@ pub async fn run(
                 }
             };
             if let Some(request) = request {
-                match runtime.wallet_security(request).await {
+                match execute(cli, &runtime, Input::Security { request }).await {
                     Ok(status) => {
                         for wallet in status.wallets {
                             println!("{}  {}", wallet.handle, wallet.name);
@@ -256,11 +368,12 @@ pub async fn run(
         .dispatch(AppAction::LockWallet)
         .await
         .map_err(|_| CliError::Usage("Wallet runtime stopped.".into()))?;
+    let wallet_sync = WireState::from(&runtime.state()).wallet_sync;
     drop(runtime);
     driver_thread
         .join()
         .map_err(|_| CliError::Usage("Wallet runtime stopped unexpectedly.".into()))?;
-    Ok(json!({"ok":true,"locked":true}))
+    Ok(json!({"ok":true,"locked":true,"wallet_sync":wallet_sync}))
 }
 
 // Bound allocation before reading and wipe private command/password buffers on drop.
@@ -426,6 +539,78 @@ pub async fn read_managed_wallet(cli: &crate::Cli) -> Result<optn_core::hd::Wall
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn console_history_preserves_retained_projection_and_sync_requires_selection() {
+        use clap::Parser;
+        let directory = tempfile::tempdir().unwrap();
+        let mut cli =
+            crate::Cli::try_parse_from(["optn", "--network", "chipnet", "wallet", "--stdio"])
+                .unwrap();
+        cli.network_config_dir = Some(directory.path().join("network-config"));
+        let storage = optn_platform_native::wallet_storage::NativeWalletStorage::new(
+            directory.path().to_path_buf(),
+        );
+        let (runtime, driver) = AppRuntime::new_with_security(
+            AppState {
+                network: optn_app::Network::Chipnet,
+                ..Default::default()
+            },
+            WalletSecurity::new(Box::new(storage), None),
+        )
+        .unwrap();
+        let task = tokio::spawn(driver.run());
+        let history = serde_json::from_str(r#"{"chain":"history"}"#).unwrap();
+        let status = execute(&cli, &runtime, history).await.unwrap();
+        let reply = success_reply(&runtime.state(), status.clone());
+        assert_eq!(reply["wallet_sync"]["confirmed_sats"], Value::Null);
+        assert_eq!(reply["wallet_sync"]["history_fresh"], false);
+        assert_eq!(reply["wallet_sync"]["utxos_fresh"], false);
+        assert_eq!(reply["wallet_sync"]["source"], Value::Null);
+        let sync = serde_json::from_str(r#"{"chain":"sync"}"#).unwrap();
+        let error = execute(&cli, &runtime, sync).await.unwrap_err();
+        assert!(message(error).contains("persisted shared source"));
+        assert!(!runtime.state().wallet_sync.history_fresh);
+        assert!(!runtime.state().wallet_sync.utxos_fresh);
+
+        // The console projects retained runtime history even when no live coin remains.
+        let mut retained = runtime.state();
+        retained.wallet_sync = optn_app::WalletSyncView {
+            source: Some("saved-provider".into()),
+            evidence: Some("ProviderReported".into()),
+            confirmed_sats: Some(3_000),
+            pending_sats: -500,
+            history: vec![optn_app::HistoryEntry {
+                kind: optn_app::HistoryKind::Sent,
+                txid: "11".repeat(32),
+                amount_sats: 500,
+                address: "bchtest:qhistory".into(),
+                reserved: false,
+                block_height: Some(250_000),
+            }],
+            ..Default::default()
+        };
+        let reply = success_reply(&retained, status);
+        assert_eq!(reply["wallet_sync"]["source"], "saved-provider");
+        assert_eq!(reply["wallet_sync"]["evidence"], "ProviderReported");
+        assert_eq!(reply["wallet_sync"]["confirmed_sats"], 3_000);
+        assert_eq!(reply["wallet_sync"]["pending_sats"], -500);
+        assert_eq!(reply["wallet_sync"]["history_fresh"], false);
+        assert_eq!(
+            reply["wallet_sync"]["history"],
+            json!([{
+                "kind":"sent", "txid":"11".repeat(32), "amount_sats":500,
+                "address":"bchtest:qhistory", "reserved":false, "block_height":250_000,
+            }])
+        );
+        assert!(reply.get("security").is_some());
+        assert!(reply.get("receive_address").is_some());
+        assert!(reply.get("hd_addresses").is_some());
+        assert!(serde_json::from_str::<Input>(r#"{"chain":"broadcast"}"#).is_err());
+        drop(runtime);
+        task.await.unwrap();
+    }
+
     #[test]
     fn private_input_is_bounded_and_preserves_empty_and_whitespace_passwords() {
         let mut input = &b"\r\n  password  \n"[..];

@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_rustls::rustls::{pki_types::ServerName, ClientConfig, RootCertStore};
@@ -28,6 +28,11 @@ impl<T> AsyncIo for T where T: AsyncRead + AsyncWrite + Unpin + Send {}
 type DynIo = Box<dyn AsyncIo>;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
+// Bound pending RPCs and peer-controlled response allocation on every transport.
+const MAX_PENDING_REQUESTS: usize = 16;
+const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_PIPELINE_BYTES: usize = 32 * 1024 * 1024;
+const MAX_WALLET_TRANSACTIONS: usize = 100_000;
 const CLIENT_NAME: &str = "OPTN Wallet";
 const PROTOCOL_MIN: &str = "1.4";
 const PROTOCOL_MAX: &str = "1.6";
@@ -247,71 +252,78 @@ impl ElectrumBackend {
         )?;
         let mut txs = BTreeMap::<[u8; 32], i64>::new();
 
-        for interest in interests {
-            match interest {
-                WalletInterest::Script(script) => {
-                    let sh = electrum_scripthash(script);
-                    let params = if protocol_at_least(&self.server_info.protocol, 1, 5, 1) {
-                        json!([sh, from_height.unwrap_or(0), -1])
-                    } else {
-                        json!([sh])
-                    };
-                    let history = session
-                        .call("blockchain.scripthash.get_history", params)
-                        .await?;
-                    merge_history(&mut txs, &history)?;
-                    // get_history pagination excludes mempool in modern servers;
-                    // explicitly merge mempool to keep wallet refresh complete.
-                    let mempool = session
-                        .call("blockchain.scripthash.get_mempool", json!([sh]))
-                        .await?;
-                    merge_history(&mut txs, &mempool)?;
+        for group in interests.chunks(MAX_PENDING_REQUESTS / 2) {
+            let mut requests = Vec::with_capacity(group.len() * 2);
+            for interest in group {
+                match interest {
+                    WalletInterest::Script(script) => {
+                        let sh = electrum_scripthash(script);
+                        let params = if protocol_at_least(&self.server_info.protocol, 1, 5, 1) {
+                            json!([sh, from_height.unwrap_or(0), -1])
+                        } else {
+                            json!([sh])
+                        };
+                        requests.push(("blockchain.scripthash.get_history", params));
+                        // Modern paginated history excludes mempool; require both replies.
+                        requests.push(("blockchain.scripthash.get_mempool", json!([sh])));
+                    }
+                    WalletInterest::RpaPrefix(prefix) => {
+                        validate_rpa_prefix(prefix)?;
+                        let start = from_height
+                            .unwrap_or_else(|| rpa_starting_height(&self.server_info.features));
+                        requests.push(("blockchain.rpa.get_history", json!([prefix, start, -1])));
+                        requests.push(("blockchain.rpa.get_mempool", json!([prefix])));
+                    }
+                    WalletInterest::Outpoint { .. } => {
+                        unreachable!("outpoint interests rejected above")
+                    }
                 }
-                WalletInterest::RpaPrefix(prefix) => {
-                    validate_rpa_prefix(prefix)?;
-                    let start = from_height
-                        .unwrap_or_else(|| rpa_starting_height(&self.server_info.features));
-                    let history = session
-                        .call("blockchain.rpa.get_history", json!([prefix, start, -1]))
-                        .await?;
-                    merge_history(&mut txs, &history)?;
-                    let mempool = session
-                        .call("blockchain.rpa.get_mempool", json!([prefix]))
-                        .await?;
-                    merge_history(&mut txs, &mempool)?;
-                }
-                // Standard Electrum wallet discovery is script-indexed. Another
-                // provider may satisfy Outpoint directly without changing intent.
-                WalletInterest::Outpoint { .. } => {}
+            }
+            for response in session.call_many(&requests).await? {
+                merge_history(&mut txs, &response)?;
             }
         }
 
+        let txs = txs.into_iter().collect::<Vec<_>>();
         let mut transactions = Vec::with_capacity(txs.len());
-        for (txid, height) in txs {
-            let raw_hex = session
-                .call(
-                    "blockchain.transaction.get",
-                    json!([display_hash(txid), false]),
-                )
-                .await?
-                .as_str()
-                .ok_or_else(|| {
+        let mut raw_bytes = 0usize;
+        for group in txs.chunks(MAX_PENDING_REQUESTS) {
+            let requests = group
+                .iter()
+                .map(|(txid, _)| {
+                    (
+                        "blockchain.transaction.get",
+                        json!([display_hash(*txid), false]),
+                    )
+                })
+                .collect::<Vec<_>>();
+            for ((txid, height), response) in group.iter().zip(session.call_many(&requests).await?)
+            {
+                let raw_hex = response.as_str().ok_or_else(|| {
                     ChainBackendError::InvalidResponse("transaction.get did not return hex".into())
-                })?
-                .to_owned();
-            let raw = hex::decode(raw_hex).map_err(|error| {
-                ChainBackendError::InvalidResponse(format!("invalid transaction hex: {error}"))
-            })?;
-            if sha256d(&raw) != txid {
-                return Err(ChainBackendError::InvalidResponse(
-                    "transaction bytes do not match returned txid".into(),
-                ));
+                })?;
+                let raw = hex::decode(raw_hex).map_err(|error| {
+                    ChainBackendError::InvalidResponse(format!("invalid transaction hex: {error}"))
+                })?;
+                raw_bytes = raw_bytes
+                    .checked_add(raw.len())
+                    .filter(|bytes| *bytes <= optn_runtime::wallet_checkpoint::MAX_CHECKPOINT_BYTES)
+                    .ok_or_else(|| {
+                        ChainBackendError::InvalidResponse(
+                            "wallet transaction data exceeds storage limit".into(),
+                        )
+                    })?;
+                if sha256d(&raw) != *txid {
+                    return Err(ChainBackendError::InvalidResponse(
+                        "transaction bytes do not match returned txid".into(),
+                    ));
+                }
+                transactions.push(ObservedTransaction {
+                    txid: *txid,
+                    raw,
+                    block_height: (*height > 0).then_some(*height as u32),
+                });
             }
-            transactions.push(ObservedTransaction {
-                txid,
-                raw,
-                block_height: (height > 0).then_some(height as u32),
-            });
         }
         let chain_tip = tip.as_ref().map(|tip| (tip.height, tip.hash));
         Ok(BackendObservation {
@@ -556,12 +568,40 @@ impl Session {
         }
     }
     async fn call(&mut self, method: &str, params: Value) -> Result<Value, ChainBackendError> {
-        let id = self.next_id;
-        self.next_id = self.next_id.saturating_add(1);
-        let mut bytes =
-            serde_json::to_vec(&json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}))
-                .map_err(|e| ChainBackendError::Protocol(e.to_string()))?;
-        bytes.push(b'\n');
+        self.call_many(&[(method, params)])
+            .await?
+            .pop()
+            .ok_or_else(|| {
+                ChainBackendError::InvalidResponse("Electrum response is missing".into())
+            })
+    }
+
+    /// Pipeline ordinary newline-framed RPCs on this exact connection. This
+    /// avoids a Tor round trip per address without requiring JSON-array batches.
+    /// All request IDs must complete; reordered replies are restored to input order.
+    async fn call_many(
+        &mut self,
+        requests: &[(&str, Value)],
+    ) -> Result<Vec<Value>, ChainBackendError> {
+        if requests.is_empty() || requests.len() > MAX_PENDING_REQUESTS {
+            return Err(ChainBackendError::Rejected(
+                "invalid Electrum request group size".into(),
+            ));
+        }
+        let first = self.next_id;
+        self.next_id = first
+            .checked_add(requests.len() as u64)
+            .ok_or_else(|| ChainBackendError::Rejected("Electrum request IDs exhausted".into()))?;
+        let mut bytes = Vec::new();
+        for (index, (method, params)) in requests.iter().enumerate() {
+            serde_json::to_writer(
+                &mut bytes,
+                &json!({"jsonrpc":"2.0", "id":first+index as u64,
+                "method":method, "params":params}),
+            )
+            .map_err(|e| ChainBackendError::Protocol(e.to_string()))?;
+            bytes.push(b'\n');
+        }
         timeout(self.request_timeout, async {
             self.reader
                 .get_mut()
@@ -569,27 +609,73 @@ impl Session {
                 .await
                 .map_err(map_io)?;
             self.reader.get_mut().flush().await.map_err(map_io)?;
-            loop {
-                let mut line = String::new();
-                let read = self.reader.read_line(&mut line).await.map_err(map_io)?;
+            let mut results = vec![None; requests.len()];
+            let mut received = 0;
+            let mut total_bytes = 0usize;
+            while received < requests.len() {
+                let mut line = Vec::new();
+                let read = (&mut self.reader)
+                    .take((MAX_RESPONSE_BYTES + 1) as u64)
+                    .read_until(b'\n', &mut line)
+                    .await
+                    .map_err(map_io)?;
                 if read == 0 {
                     return Err(ChainBackendError::Offline);
                 }
-                let response: Value = serde_json::from_str(line.trim()).map_err(|e| {
+                total_bytes = total_bytes
+                    .checked_add(read)
+                    .filter(|size| *size <= MAX_PIPELINE_BYTES)
+                    .ok_or_else(|| {
+                        ChainBackendError::InvalidResponse(
+                            "Electrum responses exceed byte limit".into(),
+                        )
+                    })?;
+                if read > MAX_RESPONSE_BYTES || line.last() != Some(&b'\n') {
+                    return Err(ChainBackendError::InvalidResponse(
+                        "Electrum response is oversized or truncated".into(),
+                    ));
+                }
+                let mut response: Value = serde_json::from_slice(&line).map_err(|e| {
                     ChainBackendError::InvalidResponse(format!("invalid Electrum JSON: {e}"))
                 })?;
-                if response.get("id").and_then(Value::as_u64) != Some(id) {
-                    continue;
+                if response.get("id").is_none_or(Value::is_null)
+                    && response.get("method").and_then(Value::as_str).is_some()
+                {
+                    continue; // Subscription notifications are not RPC completions.
                 }
-                if let Some(error) = response.get("error") {
-                    if !error.is_null() {
-                        return Err(ChainBackendError::Protocol(error.to_string()));
-                    }
+                let index = response
+                    .get("id")
+                    .and_then(Value::as_u64)
+                    .and_then(|id| id.checked_sub(first))
+                    .and_then(|id| usize::try_from(id).ok())
+                    .filter(|index| *index < results.len())
+                    .ok_or_else(|| {
+                        ChainBackendError::InvalidResponse(
+                            "Electrum reply has an unexpected request ID".into(),
+                        )
+                    })?;
+                if results[index].is_some() {
+                    return Err(ChainBackendError::InvalidResponse(
+                        "duplicate Electrum reply".into(),
+                    ));
                 }
-                return response.get("result").cloned().ok_or_else(|| {
-                    ChainBackendError::InvalidResponse("Electrum response lacks result".into())
-                });
+                if let Some(error) = response.get("error").filter(|error| !error.is_null()) {
+                    return Err(ChainBackendError::Protocol(error.to_string()));
+                }
+                results[index] =
+                    Some(response.get_mut("result").map(Value::take).ok_or_else(|| {
+                        ChainBackendError::InvalidResponse("Electrum response lacks result".into())
+                    })?);
+                received += 1;
             }
+            results
+                .into_iter()
+                .map(|result| {
+                    result.ok_or_else(|| {
+                        ChainBackendError::InvalidResponse("Electrum response is missing".into())
+                    })
+                })
+                .collect()
         })
         .await
         .map_err(|_| ChainBackendError::Timeout)?
@@ -767,7 +853,20 @@ fn merge_history(
         let txid = decode_display_hash(object.get("tx_hash").and_then(Value::as_str).ok_or_else(
             || ChainBackendError::InvalidResponse("history entry lacks tx_hash".into()),
         )?)?;
-        let height = object.get("height").and_then(Value::as_i64).unwrap_or(0);
+        let height = object
+            .get("height")
+            .and_then(Value::as_i64)
+            .filter(|height| (-1..=i64::from(u32::MAX)).contains(height))
+            .ok_or_else(|| {
+                ChainBackendError::InvalidResponse(
+                    "history height is missing or outside BCH range".into(),
+                )
+            })?;
+        if txs.len() >= MAX_WALLET_TRANSACTIONS && !txs.contains_key(&txid) {
+            return Err(ChainBackendError::InvalidResponse(
+                "wallet history exceeds transaction limit".into(),
+            ));
+        }
         txs.entry(txid)
             .and_modify(|known| *known = (*known).max(height))
             .or_insert(height);
@@ -874,6 +973,104 @@ fn map_io(_: std::io::Error) -> ChainBackendError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn pipelined_requests_require_every_matching_reply_and_preserve_order() {
+        for mode in ["reordered", "duplicate", "missing", "foreign", "error"] {
+            let (client, server) = tokio::io::duplex(8192);
+            let mut session = Session {
+                reader: BufReader::new(Box::new(client)),
+                next_id: 1,
+                request_timeout: Duration::from_secs(2),
+            };
+            let peer = tokio::spawn(async move {
+                let mut server = BufReader::new(server);
+                let mut ids = Vec::new();
+                // Refuse to respond until all requests arrive: serial calls deadlock.
+                for _ in 0..3 {
+                    let mut line = String::new();
+                    server.read_line(&mut line).await.unwrap();
+                    ids.push(serde_json::from_str::<Value>(&line).unwrap()["id"].clone());
+                }
+                let responses = match mode {
+                    "reordered" => vec![
+                        json!({"method":"blockchain.headers.subscribe","params":[]}),
+                        json!({"id":ids[2],"result":30}),
+                        json!({"id":ids[0],"result":10}),
+                        json!({"id":ids[1],"result":null}),
+                    ],
+                    "duplicate" => vec![
+                        json!({"id":ids[0],"result":10}),
+                        json!({"id":ids[0],"result":10}),
+                    ],
+                    "missing" => vec![json!({"id":ids[0],"result":10})],
+                    "foreign" => vec![json!({"id":99,"result":10})],
+                    _ => vec![json!({"id":ids[0],"error":{"code":1,"message":"rejected"}})],
+                };
+                for response in responses {
+                    server
+                        .get_mut()
+                        .write_all(format!("{response}\n").as_bytes())
+                        .await
+                        .unwrap();
+                }
+            });
+            let result = session
+                .call_many(&[
+                    ("first", json!([])),
+                    ("second", json!([])),
+                    ("third", json!([])),
+                ])
+                .await;
+            if mode == "reordered" {
+                assert_eq!(result.unwrap(), vec![json!(10), Value::Null, json!(30)]);
+            } else {
+                assert!(
+                    result.is_err(),
+                    "{mode} must not acknowledge a complete group"
+                );
+            }
+            peer.await.unwrap();
+        }
+        for height in [
+            json!(null),
+            json!(-2),
+            json!(u64::from(u32::MAX) + 1),
+            json!(1.5),
+        ] {
+            assert!(merge_history(
+                &mut BTreeMap::new(),
+                &json!([{"tx_hash":"ab".repeat(32),"height":height}])
+            )
+            .is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn oversized_rpc_frame_is_rejected_before_parsing() {
+        let (client, server) = tokio::io::duplex(8192);
+        let mut session = Session {
+            reader: BufReader::new(Box::new(client)),
+            next_id: 1,
+            request_timeout: Duration::from_secs(5),
+        };
+        let peer = tokio::spawn(async move {
+            let mut server = BufReader::new(server);
+            let mut request = String::new();
+            server.read_line(&mut request).await.unwrap();
+            server
+                .get_mut()
+                .write_all(&vec![b' '; MAX_RESPONSE_BYTES + 1])
+                .await
+                .unwrap();
+        });
+        assert!(matches!(
+            session.call("server.features", json!([])).await,
+            Err(ChainBackendError::InvalidResponse(message))
+                if message.contains("oversized or truncated")
+        ));
+        peer.await.unwrap();
+    }
 
     #[tokio::test]
     async fn tls_configuration_reaches_handshake_without_global_provider_setup() {

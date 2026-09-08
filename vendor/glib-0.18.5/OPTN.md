@@ -60,5 +60,7 @@ The existing Rust nextest CI job runs the optimized regression on Linux. The
 Rust dependency policy job also audits a temporary registry dependency pinned
 to `glib = "=0.18.5"` with the repository's existing `deny.toml`. This preserves
 registry advisory matching despite the desktop path patch; it adds no ignore.
-Local source, lock resolution, YAML, and shell syntax checks pass. Optimized
-Linux execution and the registry audit still require their CI results.
+Local source, lock resolution, YAML, and shell syntax checks pass. The optimized
+Linux regression and registry advisory audit both passed in
+[run 34212834376](https://github.com/OPTNLabs/OPTNWallet/actions/runs/34212834376)
+for PR commit `07896453e99d81cf7a9538dedeca8fc287a06537`, which retains this backport.
