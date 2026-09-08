@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from 'react-dom/server';
-import { StaticRouter } from 'react-router-dom/server';
+import { StaticRouter } from 'react-router-dom';
 import { Provider } from 'react-redux';
 import { describe, expect, it, vi } from 'vitest';
 import * as bip39 from 'bip39';
