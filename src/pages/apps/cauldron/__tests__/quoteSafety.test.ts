@@ -1,8 +1,17 @@
 import { describe, expect, it } from 'vitest';
 
 import { buildCauldronQuoteSafetyBanner } from '../quoteSafety';
+import { applySlippage } from '../cauldronHelpers';
 
 describe('cauldron quote safety banner', () => {
+  it('calculates a bounded minimum output and rejects invalid rates', () => {
+    expect(applySlippage(1_000n, 100n)).toBe(990n);
+    expect(applySlippage(1_000n, 10_000n)).toBe(0n);
+    expect(() => applySlippage(1_000n, 10_001n)).toThrow(
+      'Slippage must be between 0% and 100%.'
+    );
+  });
+
   it('returns no banner for a fresh quote with healthy live updates', () => {
     expect(
       buildCauldronQuoteSafetyBanner({

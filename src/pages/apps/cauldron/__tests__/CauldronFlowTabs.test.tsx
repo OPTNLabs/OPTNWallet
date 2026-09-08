@@ -15,6 +15,7 @@ describe('CauldronFlowTabs', () => {
     const html = renderToStaticMarkup(element);
     expect(html).toContain('Swap');
     expect(html).toContain('Pool');
+    expect(html).not.toContain('Merchant Pay');
     expect(html).toContain('aria-pressed="true"');
 
     const buttons = Children.toArray(element.props.children).filter(

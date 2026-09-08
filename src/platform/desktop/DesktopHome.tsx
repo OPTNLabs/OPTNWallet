@@ -48,7 +48,7 @@ import { FusionBadge } from '../../components/FusionBadge';
 import HomeConnectPopup from '../../components/home/HomeConnectPopup';
 import { preloadTokenMetadata } from '../../hooks/useSharedTokenMetadata';
 import { useHomeConnect } from '../../features/home/useHomeConnect';
-import { unitFor } from './unitLabel'; // ← desktop-only: per-network unit label
+import { unitFor } from '../../utils/unitLabel';
 import { useI18n } from '../../i18n/useI18n';
 
 type QuickActionButtonProps = {
@@ -116,7 +116,7 @@ const Home: React.FC = () => {
     );
   });
   const currentNetwork = useSelector(selectCurrentNetwork);
-  const unit = unitFor(currentNetwork); // ← desktop-only: BCH / tBCH
+  const unit = unitFor(currentNetwork);
   const bchUsdQuote = useSelector(
     (state: RootState) => state.priceFeed['BCH-USD']?.price
   );
@@ -499,6 +499,9 @@ const Home: React.FC = () => {
           onClose={homeConnect.closePopup}
           scanning={homeConnect.scanning}
           submitting={homeConnect.submitting}
+          streamScanning={homeConnect.streamScanning}
+          onStreamScan={homeConnect.scanStreamQr}
+          onStreamComplete={homeConnect.completeStreamScan}
         />
       ) : null}
     </WalletScreen>
