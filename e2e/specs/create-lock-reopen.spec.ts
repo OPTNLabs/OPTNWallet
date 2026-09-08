@@ -81,7 +81,33 @@ runLifecycleTest(
 
     const walletLabel = await $(`p=${walletName}`);
     const walletCard = walletLabel.$('../..');
-    await walletCard.$('button=Open').click();
+    const openButton = await walletCard.$('button=Open');
+    try {
+      await openButton.waitForClickable({ timeout: 10000 });
+      await openButton.click();
+    } catch (error) {
+      // Report only UI structure after locking, never input values or seed text.
+      const blocker = await browser.execute((button: HTMLElement) => {
+        const rect = button.getBoundingClientRect();
+        const top = document.elementFromPoint(
+          rect.x + rect.width / 2,
+          rect.y + rect.height / 2
+        );
+        return {
+          tag: top?.tagName,
+          className: top?.getAttribute('class'),
+          headings: Array.from(document.querySelectorAll('h2, h3')).map(
+            (heading) => heading.textContent
+          ),
+        };
+      }, openButton);
+      throw new Error(
+        `Wallet picker Open is blocked: ${JSON.stringify(blocker)}`,
+        {
+          cause: error,
+        }
+      );
+    }
 
     const passwordInput = await $('input[placeholder="Password"]');
     await passwordInput.setValue('wrong-password');
@@ -101,3 +127,4 @@ runLifecycleTest(
     await createdWallet.waitForExist({ reverse: true, timeout: 10000 });
   }
 );
+
