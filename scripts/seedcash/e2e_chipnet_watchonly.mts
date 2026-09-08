@@ -22,6 +22,7 @@ import {
 } from '@bitauth/libauth';
 
 import { buildWatchOnlyPsbt } from '../../src/services/psbt/watchOnlySend.ts';
+import { isChipnetBroadcastEnabled } from './broadcastGate.ts';
 import {
   inspectImportedPsbt,
   mergeImportedSignatures,
@@ -250,7 +251,7 @@ async function main() {
   // verifies against consensus rules without leaving a trace. Step 8 is not.
   // Gating it means this script can be run as a check -- which is most of what
   // anyone wants from it -- instead of only as a spend.
-  if (!process.env.OPTN_E2E_BROADCAST) {
+  if (!isChipnetBroadcastEnabled(process.env.OPTN_E2E_BROADCAST)) {
     console.log(
       '8) broadcast skipped. Everything up to and including the BCH VM check ' +
         'passed. Set OPTN_E2E_BROADCAST=1 to put this transaction on chipnet.'
