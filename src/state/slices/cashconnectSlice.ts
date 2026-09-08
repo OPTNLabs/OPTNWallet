@@ -32,6 +32,8 @@ type CashConnectState = {
   pendingProposal: SessionProposalResponse | null;
   pendingAction: ActionPrompt | null;
   errorMessage: string | null;
+  initializationRequestId: string | null;
+  pairingRequestId: string | null;
 };
 
 const initialState: CashConnectState = {
@@ -39,6 +41,8 @@ const initialState: CashConnectState = {
   pendingProposal: null,
   pendingAction: null,
   errorMessage: null,
+  initializationRequestId: null,
+  pairingRequestId: null,
 };
 
 export const initCashConnect = createAsyncThunk(
@@ -102,19 +106,25 @@ const cashconnectSlice = createSlice({
     },
   },
   extraReducers: (builder) => {
-    builder.addCase(initCashConnect.pending, (state) => {
+    builder.addCase(initCashConnect.pending, (state, action) => {
       state.errorMessage = null;
+      state.initializationRequestId = action.meta.requestId;
     });
-    builder.addCase(pairCashConnectThunk.pending, (state) => {
+    builder.addCase(pairCashConnectThunk.pending, (state, action) => {
       state.errorMessage = null;
+      state.pairingRequestId = action.meta.requestId;
     });
-    builder.addCase(initCashConnect.rejected, (state) => {
+    builder.addCase(initCashConnect.rejected, (state, action) => {
+      if (state.initializationRequestId !== action.meta.requestId) return;
+      state.initializationRequestId = null;
       state.errorMessage = 'Connection attempt failed';
     });
-    builder.addCase(pairCashConnectThunk.rejected, (state) => {
+    builder.addCase(pairCashConnectThunk.rejected, (state, action) => {
+      if (state.pairingRequestId !== action.meta.requestId) return;
+      state.pairingRequestId = null;
       state.errorMessage = 'Connection attempt failed';
     });
-    builder.addCase(stopCashConnectThunk.fulfilled, () => initialState);
+    builder.addCase(stopCashConnectThunk.pending, () => initialState);
   },
 });
 
