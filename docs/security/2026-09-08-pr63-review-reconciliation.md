@@ -114,3 +114,18 @@ verification limits above; they do not establish physical-device signing.
 
 These fixes/reviews do not establish full Issue #71/#75 completion, a clean
 CodeQL gate, native SeedCash signing, or tested APK/macOS packages.
+
+## Latest security checkpoint
+
+All reviewed fixes are pushed through source `1a36623e`. The urgent GLib caller
+audit also repaired undersized/uninitialized inline copies, string-copy ownership,
+queued callbacks freed after worker creation failure, and Unix spawn outputs read
+on failure. [The GLib record](2026-09-08-pr63-glib-codeql.md) links the source
+analysis and passing optimized Linux/Valgrind run `34228111716`.
+
+The refreshed inventory still has **40 open PR CodeQL alerts**: 27 test-fixture
+reports, 12 GLib conversion reports, and the CLI cleartext-flow report #126.
+Alert #125's PR instance is automatically `fixed`, with no dismissal. All seven
+CodeRabbit inline threads are already resolved; this work did not resolve threads
+or alter alert state, suppressions, scanner models, or advisory exceptions.
+The remaining source-path assessments are not a clean security result.
