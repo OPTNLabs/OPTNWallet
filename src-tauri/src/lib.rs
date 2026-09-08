@@ -1013,6 +1013,7 @@ async fn optn_cold_file_exists(path: String) -> Result<bool, String> {
     Ok(std::path::Path::new(&path).is_file())
 }
 
+/// Select the compiled OS surface for shared capability and feature policy.
 fn host_app_surface() -> optn_app::AppSurface {
     #[cfg(target_os = "android")]
     {
@@ -1045,6 +1046,8 @@ pub struct MultisigInspection {
     token_address: String,
 }
 
+/// Validate public keys, threshold, and network through the shared multisig core,
+/// returning deterministic BIP-67/P2SH20 scripts and addresses without wallet I/O.
 pub fn inspect_multisig(
     network: String,
     threshold: u8,
@@ -1072,6 +1075,7 @@ pub fn inspect_multisig(
     })
 }
 
+/// Expose public-only multisig inspection through the native command boundary.
 #[tauri::command]
 fn multisig_inspect(
     network: String,
@@ -1081,6 +1085,9 @@ fn multisig_inspect(
     inspect_multisig(network, threshold, public_keys)
 }
 
+/// Start the native shell, restore settings and security policy, and register
+/// platform providers before exposing the shared runtime. Security-policy load
+/// failures abort startup rather than continuing with an uninitialized policy.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
