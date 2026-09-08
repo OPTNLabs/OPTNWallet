@@ -103,7 +103,7 @@ macro_rules! glib_boxed_inline_wrapper {
 
         $crate::glib_boxed_inline_wrapper!(
             @generic_impl $name $(<$($generic $(: $bound $(+ $bound2)*)?),+>)?, $ffi_name,
-            @copy ptr unsafe { let copy = $crate::ffi::g_malloc(std::mem::size_of::<$ffi_name>()) as *mut $ffi_name; let c = |$copy_into_arg_dest, $copy_into_arg_src| $copy_into_expr; c(copy, ptr); copy },
+            @copy ptr unsafe { let copy = $crate::ffi::g_malloc(std::mem::size_of::<$ffi_name>()) as *mut $ffi_name; let init = |$init_arg: *mut $ffi_name| $init_expr; init(copy); let c = |$copy_into_arg_dest, $copy_into_arg_src| $copy_into_expr; c(copy, ptr); copy },
             @free ptr unsafe { let c = |$clear_arg| $clear_expr; c(ptr); $crate::ffi::g_free(ptr as *mut _); },
             @init $init_arg $init_expr, @copy_into $copy_into_arg_dest $copy_into_arg_src $copy_into_expr, @clear $clear_arg $clear_expr
         );

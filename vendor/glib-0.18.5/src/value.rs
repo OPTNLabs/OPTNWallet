@@ -1479,6 +1479,24 @@ mod tests {
 
     #[test]
     fn test_inline_value_array_roundtrip() {
+        // Exercise the public macro arm that synthesizes copy/free from the
+        // inline operations; Value itself supplies custom copy/free functions.
+        wrapper! {
+            struct InitializedValue(BoxedInline<gobject_ffi::GValue>);
+            match fn {
+                init => |ptr| init_value(ptr),
+                copy_into => |dest, src| copy_into_value(dest, src),
+                clear => |ptr| clear_value(ptr),
+            }
+        }
+        let value = "initialized copy".to_value();
+        let ptr: *const gobject_ffi::GValue = value.to_glib_none().0;
+        let inline: InitializedValue = unsafe { from_glib_none(ptr) };
+        let raw: *const gobject_ffi::GValue = inline.to_glib_full();
+        drop((value, inline));
+        let copied: Value = unsafe { from_glib_full(raw) };
+        assert_eq!(copied.get::<&str>(), Ok("initialized copy"));
+
         for length in [0, 1, 4] {
             let values = vec![
                 17i32.to_value(),
