@@ -244,18 +244,59 @@ pub fn trezor_webusb_read(session_id: u64, timeout_ms: Option<u64>) -> Result<St
         if start.elapsed() > total {
             return Err("Timeout reading WebUSB packet — confirm on the device".into());
         }
-        match session
+        let result = session
             .handle
-            .read_interrupt(ENDPOINT_IN, &mut buf, IO_TIMEOUT)
-        {
-            Ok(n) if n == CHUNK => return Ok(hex::encode(buf)),
-            Ok(n) if n > 0 => {
-                // Keep the fixed 64-byte protocol frame, zero-padded by `buf`.
-                return Ok(hex::encode(buf));
-            }
-            Ok(_) => continue,
-            Err(rusb::Error::Timeout) => continue,
-            Err(e) => return Err(format!("USB read failed: {e}")),
+            .read_interrupt(ENDPOINT_IN, &mut buf, IO_TIMEOUT);
+        if let Some(packet) = read_packet_result(result, &buf)? {
+            return Ok(packet);
         }
+    }
+}
+
+fn read_packet_result(
+    result: rusb::Result<usize>,
+    buf: &[u8; CHUNK],
+) -> Result<Option<String>, String> {
+    match result {
+        Ok(CHUNK) => Ok(Some(hex::encode(buf))),
+        Ok(0) | Err(rusb::Error::Timeout) => Ok(None),
+        // A short transfer is not a complete frame; never pad it with buffer contents.
+        Ok(n) => Err(format!("USB partial read: {n} of {CHUNK}")),
+        Err(e) => Err(format!("USB read failed: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn complete_read_preserves_all_packet_bytes() {
+        let packet = std::array::from_fn(|index| index as u8);
+        let encoded = read_packet_result(Ok(64), &packet).unwrap().unwrap();
+        assert_eq!(hex::decode(encoded).unwrap(), packet);
+    }
+
+    #[test]
+    fn short_and_oversized_reads_never_return_a_padded_packet() {
+        // Nonzero trailing bytes also model a buffer changed by an earlier timeout.
+        let packet = [0xa5; CHUNK];
+        for length in (1..64).chain([65, usize::MAX]) {
+            assert!(
+                read_packet_result(Ok(length), &packet).is_err(),
+                "accepted invalid USB packet length {length}"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_reads_and_timeouts_retry_but_other_errors_fail() {
+        let packet = [0xa5; CHUNK];
+        assert_eq!(read_packet_result(Ok(0), &packet), Ok(None));
+        assert_eq!(
+            read_packet_result(Err(rusb::Error::Timeout), &packet),
+            Ok(None)
+        );
+        assert!(read_packet_result(Err(rusb::Error::NoDevice), &packet).is_err());
     }
 }

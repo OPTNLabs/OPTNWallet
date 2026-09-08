@@ -65,7 +65,7 @@ impl NativeChainRuntime {
 
     async fn run(&self) {
         loop {
-            let selection = self.selection(&self.owner.state());
+            let selection = self.selection(&self.owner.state()).await;
             let changed = self.wait_for_selection_change(&selection);
             tokio::pin!(changed);
             tokio::select! {
@@ -109,14 +109,29 @@ impl NativeChainRuntime {
         self.rebuild_selection().await;
     }
 
-    fn selection(&self, state: &AppState) -> NativeSelection {
+    async fn persisted_selection(
+        &self,
+        network: Network,
+    ) -> Result<Option<(SourceCatalog, ConnectionPolicy)>, String> {
+        let settings = self.network_settings.clone();
+        tokio::task::spawn_blocking(move || settings.chain_selection(network))
+            .await
+            .map_err(|_| "network settings reader stopped".to_string())?
+    }
+
+    async fn selection(&self, state: &AppState) -> NativeSelection {
+        Self::resolve_selection(state, self.persisted_selection(state.network).await)
+    }
+
+    fn resolve_selection(
+        state: &AppState,
+        persisted: Result<Option<(SourceCatalog, ConnectionPolicy)>, String>,
+    ) -> NativeSelection {
         (
             state.network,
-            self.network_settings
-                .chain_selection(state.network)
-                .map(|selection| {
-                    selection.unwrap_or_else(|| catalog_and_policy_from_app_state(state))
-                }),
+            persisted.map(|selection| {
+                selection.unwrap_or_else(|| catalog_and_policy_from_app_state(state))
+            }),
         )
     }
 
@@ -127,7 +142,7 @@ impl NativeChainRuntime {
         let mut poll = tokio::time::interval(Duration::from_secs(2));
         poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
-            if self.selection(&self.owner.state()) != *previous {
+            if self.selection(&self.owner.state()).await != *previous {
                 return true;
             }
             tokio::select! {
@@ -177,7 +192,7 @@ impl NativeChainRuntime {
         let generation = self.generation.load(Ordering::SeqCst);
         // Re-read the owner's state after cancellation and lock acquisition so
         // a stale caller snapshot cannot select a different network.
-        let captured_selection = self.selection(&self.owner.state());
+        let captured_selection = self.selection(&self.owner.state()).await;
         let (network, selection) = captured_selection.clone();
         let previous = self
             .stack
@@ -193,8 +208,11 @@ impl NativeChainRuntime {
         let (catalog, policy) = match selection {
             Ok(selection) => selection,
             Err(error) => {
+                let persisted = self.persisted_selection(network).await;
                 let mut stack = self.stack.write().await;
-                if self.selection(&self.owner.state()) != captured_selection
+                let current = self.owner.state();
+                if current.network != network
+                    || Self::resolve_selection(&current, persisted) != captured_selection
                     || self.generation.load(Ordering::SeqCst) != generation
                 {
                     return true;
@@ -212,8 +230,13 @@ impl NativeChainRuntime {
         };
         let replacement =
             build_native_chain_stack(catalog, policy, &network.to_string(), &secrets).await;
+        // Disk I/O must not hold the stack lock. Resolve any app-state fallback
+        // from the current owner only after the read and lock acquisition.
+        let persisted = self.persisted_selection(network).await;
         let mut stack = self.stack.write().await;
-        if self.selection(&self.owner.state()) != captured_selection
+        let current = self.owner.state();
+        if current.network != network
+            || Self::resolve_selection(&current, persisted) != captured_selection
             || self.credential_revision.load(Ordering::SeqCst) != credential_revision
             || self.generation.load(Ordering::SeqCst) != generation
         {
@@ -336,6 +359,89 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::Notify;
 
+    fn test_directory(label: &str) -> std::path::PathBuf {
+        static NEXT_DIRECTORY: AtomicUsize = AtomicUsize::new(0);
+        let time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        // Windows wall-clock timestamps can repeat across concurrent tests.
+        let sequence = NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "optn-{label}-{}-{time}-{sequence}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn queued_settings_read_keeps_executor_and_stack_available() {
+        use std::{
+            future::{poll_fn, Future},
+            task::Poll,
+        };
+        let executor = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        executor.block_on(async {
+            let directory = test_directory("queued-settings");
+            assert!(!directory.exists()); // Missing config: no filesystem mutations or network probes.
+            let runtime = AppRuntime::spawn(AppState::default());
+            let native = Arc::new(NativeChainRuntime::new(
+                runtime.clone(),
+                NetworkSettingsStore::new(directory),
+            ));
+            let (release, held) = std::sync::mpsc::channel::<()>();
+            let (entered, started) = tokio::sync::oneshot::channel();
+            let blocking = tokio::task::spawn_blocking(move || {
+                entered.send(()).unwrap();
+                let _ = held.recv(); // Dropping release also unblocks on assertion failure.
+            });
+            started.await.unwrap();
+            let initial = AppState::default();
+            let mut rebuilding = Box::pin(native.rebuild_from_app_state(&initial));
+            tokio::time::timeout(Duration::from_secs(2), async {
+                while native.generation.load(Ordering::SeqCst) < 2 {
+                    assert!(poll_fn(|cx| Poll::Ready(rebuilding.as_mut().poll(cx)))
+                        .await
+                        .is_pending());
+                    runtime.dispatch(AppAction::ClearNotice).await.unwrap();
+                }
+                // Consume the invalidation reply and drive exactly to the queued
+                // settings read before changing the network. No scheduling sleeps.
+                runtime.dispatch(AppAction::ClearNotice).await.unwrap();
+                assert!(
+                    poll_fn(|cx| Poll::Ready(rebuilding.as_mut().poll(cx)))
+                        .await
+                        .is_pending(),
+                    "settings I/O must await the blocking pool"
+                );
+                assert!(native.with_service(Arc::clone).await.is_none());
+                assert!(native.configuration_error().await.is_none());
+                // A policy change while disk I/O waits must invalidate publication.
+                runtime
+                    .dispatch(AppAction::SetNetwork(Network::Chipnet))
+                    .await
+                    .unwrap();
+            })
+            .await
+            .unwrap();
+            drop(release);
+            blocking.await.unwrap();
+            tokio::time::timeout(Duration::from_secs(2), rebuilding)
+                .await
+                .unwrap();
+            assert!(
+                native.with_service(Arc::clone).await.is_none(),
+                "old network must not publish after the asynchronous read"
+            );
+            native.rebuild_from_app_state(&AppState::default()).await;
+            assert!(native.with_service(Arc::clone).await.is_some());
+            assert_eq!(native.selection(&runtime.state()).await.0, Network::Chipnet);
+        });
+    }
+
     struct PendingWalletBackend {
         source: SourceId,
         endpoint: Endpoint,
@@ -418,14 +524,7 @@ mod tests {
             .local_addr()
             .expect("local probe listener address")
             .port();
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos();
-        let directory = std::env::temp_dir().join(format!(
-            "optn-native-selection-{}-{unique}",
-            std::process::id()
-        ));
+        let directory = test_directory("native-selection");
         std::fs::create_dir(&directory).expect("test probe directory");
         let path = directory.join("network-mainnet.json");
         let source = ChainSource {
@@ -505,14 +604,7 @@ mod tests {
             }),
             ..Default::default()
         });
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos();
-        let settings_directory = std::env::temp_dir().join(format!(
-            "optn-native-refresh-cancel-{}-{unique}",
-            std::process::id()
-        ));
+        let settings_directory = test_directory("native-refresh-cancel");
         std::fs::create_dir(&settings_directory).expect("test settings directory");
         let native = Arc::new(NativeChainRuntime::new(
             runtime.clone(),
@@ -882,12 +974,7 @@ mod tests {
         use tokio::io::AsyncReadExt;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let directory =
-            std::env::temp_dir().join(format!("optn-probe-cancel-{}-{unique}", std::process::id()));
+        let directory = test_directory("probe-cancel");
         std::fs::create_dir(&directory).unwrap();
         let path = directory.join("network-mainnet.json");
         let file = NetworkConfigFile::new(path.clone());
@@ -963,12 +1050,7 @@ mod tests {
         use optn_runtime::network_config::{
             NetworkConfigEnvelope, NetworkConfigStore, UserNetworkOverlay,
         };
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let directory =
-            std::env::temp_dir().join(format!("optn-host-policy-{}-{unique}", std::process::id()));
+        let directory = test_directory("host-policy");
         std::fs::create_dir(&directory).unwrap();
         let path = directory.join("network-mainnet.json");
         let file = NetworkConfigFile::new(path.clone());
