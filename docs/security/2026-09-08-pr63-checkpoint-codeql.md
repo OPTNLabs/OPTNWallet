@@ -1,8 +1,14 @@
 # PR #63 checkpoint CodeQL review — 2026-09-08
 
-Recommendation: classify alerts **82–85 and 87–93 as `used in tests`**, and
-**86 as `false positive`**. This is a source-reviewed recommendation, not an
-executed dismissal or a statement that the entire wallet is secure.
+**Current instruction: do not dismiss any security alerts.** The user explicitly
+withdrew the dismissal route on September 8. The older proposals below are
+historical classifications only; there is no pending approval request to execute.
+Do not suppress rules, exclude fixtures, or obscure constants to clear the gate.
+Fix verified production defects and retain evidence for findings that remain.
+
+Original assessment: alerts **82–85 and 87–93** concern test material and
+**86** reports an overwritten output buffer. This is a source-reviewed
+assessment, not a statement that the entire wallet is secure.
 
 Reviewed PR head: `8b92ff1702920f1d8229a06dc3c7aa602a020f94`.
 CodeQL 2.26.4 analyzed merge commit `e4f83c17d929f43076ba262256ee501b207f521b`
