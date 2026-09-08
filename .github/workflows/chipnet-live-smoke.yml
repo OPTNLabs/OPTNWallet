@@ -28,7 +28,7 @@ concurrency:
 
 env:
   SEEDCASH_REPOSITORY: SeedCashOrg/seedcash
-  SEEDCASH_REVISION: beb33222e47f52937bc139f2f2dbb727c8179b39
+  SEEDCASH_REVISION: 4e1016637edf12bc478fc01bff354a5e384563ca
 
 jobs:
   seedcash-chipnet:
@@ -65,7 +65,7 @@ jobs:
 
       - name: Install SeedCash signer dependencies
         run: |
-          python -m pip install --disable-pip-version-check             'base58==2.1.1'             'ecdsa==0.19.1'
+          python -m pip install --disable-pip-version-check             'base58==2.1.1'             'ecdsa==0.19.1'             'Pillow==12.3.0'
 
       - name: Prove pinned signer imports
         run: python scripts/seedcash/sign_psbt.py keys
