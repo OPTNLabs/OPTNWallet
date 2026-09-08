@@ -33,6 +33,14 @@ Yarn resolutions mirror these repairs, including the existing Ledger UUID
 overrides. Consumer vectors match before/after, and short UUID output buffers
 are now rejected without mutation. Review the callers again when removing pins.
 
+Yarn does not apply npm `overrides`. Keep matching `resolutions` for security
+updates to the secondary lockfile, and regenerate it with Yarn rather than
+editing entries manually. Protobuf is pinned to the same 8.7.0 runtime as the
+npm lockfile; Axios and the Mocha serializer use the same patched ranges as npm.
+The hardware codec test checks BCH address requests and 64-bit transaction
+amounts without connecting to a device. Audit both lockfiles after changing
+these pins; a clean npm audit does not validate `yarn.lock`.
+
 ## Required checks
 
 - `npm run deps:check` verifies package-manager metadata, lockfile format, and
