@@ -43,7 +43,7 @@ pub fn parse_header(header: &[u8; HEADER_LEN]) -> ParsedHeader {
 /// Decode Bitcoin compact target (`nBits`). Reject negative, zero, or >256-bit
 /// targets instead of silently normalizing malformed encodings.
 pub fn target_from_compact(bits: u32) -> Result<BigUint, HeaderPowError> {
-    let exponent = (bits >> 24) as u32;
+    let exponent = bits >> 24;
     let mantissa = bits & 0x007f_ffff;
     if bits & 0x0080_0000 != 0 {
         return Err(HeaderPowError::NegativeTarget);

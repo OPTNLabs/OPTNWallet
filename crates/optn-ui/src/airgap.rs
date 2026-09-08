@@ -198,7 +198,7 @@ pub fn AirgapSection(transport: UiTransport, state: RwSignal<AppState>) -> impl 
                             maxlength="80"
                             autocomplete="off"
                             prop:value=move || wallet_name.get()
-                            placeholder=move || default_name()
+                            placeholder=default_name
                             on:input=move |event| {
                                 wallet_name.set(event_target_value(&event));
                                 preview.set(None);

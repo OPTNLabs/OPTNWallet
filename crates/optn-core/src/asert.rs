@@ -174,7 +174,7 @@ fn target_to_compact(target: &BigUint, max_target: &BigUint) -> Result<u32, Aser
     }
 
     let mut size =
-        u32::try_from((target.bits() + 7) / 8).map_err(|_| AsertError::ArithmeticRange)?;
+        u32::try_from(target.bits().div_ceil(8)).map_err(|_| AsertError::ArithmeticRange)?;
     let compact_value = if size <= 3 {
         target << (8 * (3 - size)) as usize
     } else {

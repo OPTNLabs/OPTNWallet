@@ -315,14 +315,7 @@ impl MmrAccumulator {
                 actual: data.len(),
             });
         }
-        let peaks = data[8..]
-            .chunks_exact(32)
-            .map(|chunk| {
-                let mut hash = [0u8; 32];
-                hash.copy_from_slice(chunk);
-                hash
-            })
-            .collect();
+        let peaks = data[8..].as_chunks::<32>().0.to_vec();
         Self::from_parts(leaf_count, peaks)
     }
 }
