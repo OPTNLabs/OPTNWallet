@@ -122,7 +122,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          node-version: 20
+          node-version: '22.23.2'
           cache: npm
       - name: Install deps
         run: |
@@ -141,6 +141,8 @@ jobs:
         run: npm run deps:check
       - name: Dependency audit (prod, critical+)
         run: npm audit --omit=dev --audit-level=critical
+      - name: Dependency audit (all, high+)
+        run: npm run security:audit:all
 
   web-ci:
     needs: [secrets-scan, dependency-audit]
@@ -152,7 +154,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          node-version: 20
+          node-version: '22.23.2'
           cache: npm
 
       - name: Install deps

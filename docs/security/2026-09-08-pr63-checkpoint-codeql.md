@@ -96,7 +96,8 @@ reviewed again. All scanning rules should remain enabled.
 Automatic approval review rejected the proposed 12 dismissals because the
 user had not explicitly authorized them. The user then requested deeper
 internet research. **No alert was dismissed in this continuation.** Approval
-remains pending; do not interpret the research request as approval.
+was then pending; the September 8 no-dismissal instruction above supersedes it.
+There is no pending dismissal action.
 
 The assessment above covers these 12 checkpoint alerts only. It does not validate
 older alert numbers, other bot findings, funded Chipnet spending, GUI behavior,
@@ -235,4 +236,41 @@ The primary RustSec records are [quick-xml duplicate attributes](https://rustsec
 and [rkyv archive validation](https://rustsec.org/advisories/RUSTSEC-2026-0235.html).
 Their gates will now catch regressions. The existing glib 0.18.5 advisory is
 still unresolved; its separate cargo-deny exception has not been expanded or
-treated as a fix. No GitHub security alert state has been changed.
+treated as a fix. No GitHub security alert state has been changed manually.
+
+## Verified scan and dependency remediation
+
+PR head `4a9efef125854f8b4ef5bd1e42d87473d8999027` was scanned at merge
+`4291986b71bafb136ef0de5a4ebc71808ea54f9e`. GitHub now reports the PR-ref
+instances of **#86 and #103-105 as fixed**. Their dismissal timestamps remain
+null. This is automatic scan evidence after the production code changes, not
+a dismissal. The other **27 test-material alerts remain open**, and CodeQL
+still fails. No rule, fixture exclusion or custom scanner model was added.
+
+The next dependency slice removes all eleven high-severity npm entries by
+updating WDIO, its browser downloader, `qs` and `tsx`. WDIO's maintained release
+adopts patched `deepmerge-ts`; the scoped browser 3.2.2 override replaces the
+vulnerable `extract-zip` path. Compatibility review covers WDIO's imported APIs,
+ESM and the Node >=22.12 requirement. CI moves from Node 20 to 22.23.2 across
+all twelve affected workflows. No platform matrix or existing job was removed.
+The existing required dependency-audit job gains a full-graph high/critical
+audit, alongside its production check. Primary evidence:
+[WDIO release](https://github.com/webdriverio/webdriverio/releases/tag/v9.31.6),
+[deepmerge-ts advisory](https://github.com/advisories/GHSA-ggr8-5vv4-36mx),
+[extract-zip advisory](https://github.com/advisories/GHSA-jmr9-qjv8-65gv),
+[browser-tool changelog](https://github.com/puppeteer/puppeteer/blob/browsers-v3.2.2/packages/browsers/CHANGELOG.md),
+and [Node release status](https://nodejs.org/en/about/previous-releases).
+
+The clean npm install applies all eleven existing patches. Actual Chrome
+152.0.7977.82 download/launch/navigation passes through both independently
+installed npm and Yarn graphs on Node 22.23.2. All 126 npm platform entries
+retain their versions/constraints and remain represented in Yarn, including
+the twelve Linux entries initially omitted by the secondary lock writer.
+These are build-tool compatibility checks, not wallet/device end-to-end tests.
+
+Full npm audit now reports **15 affected entries: 0 high, 0 critical, 5 moderate,
+10 low**. Remaining root advisories concern `diff`, `elliptic`, another `esbuild`
+copy, React Router and `uuid`; propagation accounts for the larger entry count.
+The existing React Router dependency-review allowlist and glib 0.18.5 exception
+remain unresolved. No new exceptions were added. This is not a clean bill of
+security for the repository, a release approval, or full #71/#75 completion.

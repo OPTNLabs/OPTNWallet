@@ -99,7 +99,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          node-version: '20'
+          node-version: '22.23.2'
           cache: npm
 
       - name: Install production dependency graph
@@ -111,11 +111,8 @@ jobs:
       - name: License policy
         run: npm run licenses:check
 
-      # Dev/e2e pulls unfixed extract-zip via @puppeteer/browsers (wdio).
-      # That is CI-only; the production graph is what this job installed.
-      # Critical production vulnerabilities block CI. High and moderate
-      # advisories remain visible for review before release promotion, matching
-      # docs/dependency-policy.md and the CI dependency-audit job.
+      # The CI dependency-audit job also checks the full graph at high severity,
+      # including build/e2e tooling. Keep the production check alongside the SBOM.
       - name: Critical-severity dependency audit
         run: npm audit --omit=dev --audit-level=critical
 
