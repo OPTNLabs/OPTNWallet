@@ -43,6 +43,8 @@ function messages(): ProtobufRoot {
 
 const HID_CHUNK = 64;
 const HEADER_SIZE = 9;
+// Wallet transport budget, not a protocol-v1 limit. BCH signing streams TxRequest frames.
+const MAX_PAYLOAD_BYTES = 1024 * 1024;
 
 function stripReportId(buf: Buffer): Buffer {
   if (buf.length === 65 && buf[0] === 0x00) return buf.subarray(1);
@@ -178,13 +180,18 @@ export class TrezorNativeSession {
     }
     // Narrow once so nested callbacks keep sessionId (not bridge.session).
     const usbWire = this.wire;
-    const readUsbChunk = async (): Promise<string> =>
-      usbWire.kind === 'webusb'
-        ? trezorWebUsbRead(usbWire.sessionId, timeoutMs)
-        : hwRead(usbWire.sessionId, timeoutMs);
+    const deadline = performance.now() + timeoutMs;
 
     const readReport = async (): Promise<Buffer> => {
-      const buf = stripReportId(Buffer.from(await readUsbChunk(), 'hex'));
+      const remaining = Math.ceil(deadline - performance.now());
+      if (remaining <= 0) throw new Error('Trezor USB: response timed out');
+      const hex = await (usbWire.kind === 'webusb'
+        ? trezorWebUsbRead(usbWire.sessionId, remaining)
+        : hwRead(usbWire.sessionId, remaining));
+      if (performance.now() >= deadline) {
+        throw new Error('Trezor USB: response timed out');
+      }
+      const buf = stripReportId(Buffer.from(hex, 'hex'));
       if (buf.length !== HID_CHUNK || buf[0] !== 0x3f) {
         throw new Error('Trezor USB: invalid report');
       }
@@ -194,13 +201,17 @@ export class TrezorNativeSession {
     // Keep the first marker: the vendor decoder expects ?## and a 9-byte header.
     const first = await readReport();
     const { length: payloadLen } = protocolV1.decode(first);
-    const total = HEADER_SIZE + payloadLen;
-    let assembled = Buffer.from(first);
-    while (assembled.length < total) {
-      const next = (await readReport()).subarray(1);
-      assembled = Buffer.concat([assembled, next]);
+    if (payloadLen > MAX_PAYLOAD_BYTES) {
+      throw new Error('Trezor USB: response exceeds wallet transport limit');
     }
-    return assembled.subarray(0, total);
+    const total = HEADER_SIZE + payloadLen;
+    const assembled = Buffer.alloc(total);
+    let offset = first.copy(assembled);
+    while (offset < total) {
+      const next = (await readReport()).subarray(1);
+      offset += next.copy(assembled, offset);
+    }
+    return assembled;
   }
 
   /**
@@ -213,6 +224,9 @@ export class TrezorNativeSession {
   ): Promise<NativeHwCallResult> {
     if (!this.wire) throw new Error('Trezor session not open');
     const timeoutMs = opts?.timeoutMs ?? 120_000;
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+      throw new Error('Trezor: invalid response timeout');
+    }
     const protocol = this.wire.kind === 'bridge' ? protocolBridge : protocolV1;
     const { messageType, message } = encodeMessage(messages(), name, data);
     const encoded = Buffer.from(
@@ -226,8 +240,17 @@ export class TrezorNativeSession {
         encoded.toString('hex')
       );
       for (let round = 0; round < 32; round++) {
-        const buf = Buffer.from(responseHex.replace(/\s/g, ''), 'hex');
+        const hex = responseHex.replace(/\s/g, '');
+        if (hex.length % 2 !== 0 || !/^[0-9a-f]+$/i.test(hex)) {
+          throw new Error('Trezor Bridge: invalid response encoding');
+        }
+        const buf = Buffer.from(hex, 'hex');
         const decodedFrame = protocol.decode(buf);
+        if (decodedFrame.length > MAX_PAYLOAD_BYTES) {
+          throw new Error(
+            'Trezor Bridge: response exceeds wallet transport limit'
+          );
+        }
         if (decodedFrame.payload.length !== decodedFrame.length) {
           throw new Error('Trezor Bridge: invalid payload length');
         }
