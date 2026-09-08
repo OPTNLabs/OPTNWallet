@@ -259,26 +259,74 @@ pub fn parse(raw: &[u8]) -> Result<Psbt> {
     }
     let mut cursor = Cursor::new(raw, PSBT_MAGIC.len());
 
-    let global = cursor.read_map()?;
+    let global = cursor.read_map(&[
+        GLOBAL_UNSIGNED_TX,
+        GLOBAL_VERSION,
+        GLOBAL_INPUT_COUNT,
+        GLOBAL_OUTPUT_COUNT,
+    ])?;
     let unsigned_tx = global
         .iter()
-        .find(|(key, _)| key.first() == Some(&GLOBAL_UNSIGNED_TX))
+        .find(|(key, _)| key.as_slice() == [GLOBAL_UNSIGNED_TX])
         .map(|(_, value)| value.clone())
         .ok_or_else(|| CliError::Protocol("PSBT has no unsigned transaction".into()))?;
 
     let (tx_inputs, tx_outputs) = parse_transaction(&unsigned_tx)?;
+    if tx_inputs
+        .iter()
+        .any(|(_, _, script_sig)| !script_sig.is_empty())
+    {
+        return Err(CliError::Protocol(
+            "PSBT unsigned transaction contains a scriptSig".into(),
+        ));
+    }
+    for (kind, expected) in [
+        (GLOBAL_INPUT_COUNT, tx_inputs.len()),
+        (GLOBAL_OUTPUT_COUNT, tx_outputs.len()),
+    ] {
+        if let Some((_, value)) = global.iter().find(|(key, _)| key.as_slice() == [kind]) {
+            let mut count = Cursor::new(value, 0);
+            if count.compact_size()? != expected as u64 || count.at != value.len() {
+                return Err(CliError::Protocol(
+                    "PSBT count disagrees with its unsigned transaction".into(),
+                ));
+            }
+        }
+    }
 
     let mut inputs = Vec::with_capacity(tx_inputs.len());
     for index in 0..tx_inputs.len() {
         let fields = cursor
-            .read_map()
+            .read_map(&[
+                IN_NON_WITNESS_UTXO,
+                IN_WITNESS_UTXO,
+                IN_SIGHASH_TYPE,
+                IN_REDEEM_SCRIPT,
+                0x05,
+                0x07,
+                0x08, // witness script and final scripts
+                IN_PREVIOUS_TXID,
+                IN_OUTPUT_INDEX,
+                IN_SEQUENCE,
+            ])
             .map_err(|error| CliError::Protocol(format!("input {index}: {error}")))?;
         inputs.push(input_from_fields(index, &fields)?);
     }
     for index in 0..tx_outputs.len() {
         cursor
-            .read_map()
+            .read_map(&[
+                OUT_REDEEM_SCRIPT,
+                0x01,
+                OUT_AMOUNT,
+                OUT_SCRIPT,
+                OUT_CASHTOKEN,
+            ])
             .map_err(|error| CliError::Protocol(format!("output {index}: {error}")))?;
+    }
+    if cursor.at != raw.len() {
+        return Err(CliError::Protocol(
+            "PSBT contains trailing maps or bytes".into(),
+        ));
     }
 
     Ok(Psbt {
@@ -495,18 +543,35 @@ impl<'a> Cursor<'a> {
     }
 
     /// One map: `<keylen><key><vallen><value>` pairs until a zero-length key.
-    fn read_map(&mut self) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+    fn read_map(&mut self, singleton_types: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
         let mut fields = Vec::new();
+        let mut keys = std::collections::BTreeSet::new();
         loop {
-            let key_len = self.compact_size()?;
-            if key_len == 0 {
+            let key = self.record_bytes()?;
+            if key.is_empty() {
                 return Ok(fields);
             }
-            let key = self.take(key_len)?.to_vec();
-            let value_len = self.compact_size()?;
-            let value = self.take(value_len)?.to_vec();
-            fields.push((key, value));
+            // BIP174 requires a canonical type and a unique complete key per map.
+            Cursor::new(key, 0).compact_size()?;
+            if key.len() != 1 && singleton_types.contains(&key[0]) {
+                return Err(CliError::Protocol(
+                    "PSBT singleton key contains key data".into(),
+                ));
+            }
+            if !keys.insert(key) {
+                return Err(CliError::Protocol(
+                    "PSBT map contains a duplicate key".into(),
+                ));
+            }
+            let value = self.record_bytes()?;
+            fields.push((key.to_vec(), value.to_vec()));
         }
+    }
+
+    fn record_bytes(&mut self) -> Result<&'a [u8]> {
+        let len = usize::try_from(self.compact_size()?)
+            .map_err(|_| CliError::Protocol("PSBT record length exceeds this platform".into()))?;
+        self.take(len)
     }
 
     fn take(&mut self, len: usize) -> Result<&'a [u8]> {
@@ -521,13 +586,13 @@ impl<'a> Cursor<'a> {
     }
 
     /// Bitcoin's CompactSize, which PSBT uses for every length.
-    fn compact_size(&mut self) -> Result<usize> {
+    fn compact_size(&mut self) -> Result<u64> {
         let first = *self
             .take(1)?
             .first()
             .ok_or_else(|| CliError::Protocol("PSBT ends where a length was expected".into()))?;
         let width = match first {
-            0..=0xfc => return Ok(usize::from(first)),
+            0..=0xfc => return Ok(u64::from(first)),
             0xfd => 2,
             0xfe => 4,
             _ => 8,
@@ -535,8 +600,18 @@ impl<'a> Cursor<'a> {
         let bytes = self.take(width)?;
         let mut buf = [0u8; 8];
         buf[..width].copy_from_slice(bytes);
-        usize::try_from(u64::from_le_bytes(buf))
-            .map_err(|_| CliError::Protocol("PSBT record length exceeds this platform".into()))
+        let value = u64::from_le_bytes(buf);
+        let minimum = match width {
+            2 => 0xfd,
+            4 => 0x1_0000,
+            _ => 0x1_0000_0000,
+        };
+        if value < minimum {
+            return Err(CliError::Protocol(
+                "PSBT has a non-minimal CompactSize".into(),
+            ));
+        }
+        Ok(value)
     }
 }
 
@@ -817,6 +892,8 @@ pub fn encode_unsigned_with_sighash(
         out.push(0x00);
     }
 
+    // Apply the same envelope rules to caller-supplied origins and signatures.
+    parse(&out)?;
     Ok(out)
 }
 
@@ -956,6 +1033,101 @@ mod tests {
 
         out.push(0x00); // an empty output map
         out
+    }
+
+    #[test]
+    fn ambiguous_psbt_maps_are_rejected_before_approval() {
+        let valid = psbt_with_sighash(Some(WATCH_ONLY_SIGHASH));
+        let global_end = PSBT_MAGIC.len() + field(&[GLOBAL_UNSIGNED_TX], &unsigned_tx()).len();
+        let input_end = valid.len() - 2;
+        for (at, record) in [
+            (global_end, field(&[GLOBAL_UNSIGNED_TX], &unsigned_tx())),
+            (global_end, field(&[GLOBAL_UNSIGNED_TX, 1], &unsigned_tx())),
+            (input_end, field(&[IN_SIGHASH_TYPE], &0x41u32.to_le_bytes())),
+            (
+                input_end,
+                field(&[IN_SIGHASH_TYPE, 1], &0x41u32.to_le_bytes()),
+            ),
+            (input_end, field(&[IN_NON_WITNESS_UTXO, 1], &[])),
+            (
+                valid.len() - 1,
+                field(&[OUT_AMOUNT, 1], &50_000u64.to_le_bytes()),
+            ),
+            (valid.len(), vec![0]),
+        ] {
+            let mut malformed = valid.clone();
+            malformed.splice(at..at, record);
+            assert!(
+                check_watch_only(&malformed, Network::Chipnet).is_err(),
+                "offset {at}"
+            );
+        }
+
+        // Unknown extensions remain accepted, but their complete keys must be unique
+        // in each map. The same key in different maps is valid.
+        for at in [global_end, input_end, valid.len() - 1] {
+            let mut extended = valid.clone();
+            extended.splice(at..at, field(&[0x80, 1], &[1]));
+            assert!(parse(&extended).is_ok());
+            extended.splice(at..at, field(&[0x80, 1], &[2]));
+            assert!(parse(&extended).is_err());
+        }
+        let mut extended = valid.clone();
+        for at in [valid.len() - 1, input_end, global_end] {
+            extended.splice(at..at, field(&[0x80, 1], &[1]));
+        }
+        assert!(parse(&extended).is_ok());
+
+        for key in [vec![0xfd], vec![0xfd, 0x80, 0], vec![0xfe, 0x80, 0, 0, 0]] {
+            let mut malformed = valid.clone();
+            malformed.splice(global_end..global_end, field(&key, &[]));
+            assert!(parse(&malformed).is_err());
+        }
+        // A canonical unknown 64-bit type is valid on native and WASM alike.
+        let mut extended = valid.clone();
+        extended.splice(global_end..global_end, field(&[0xff; 9], &[]));
+        assert!(parse(&extended).is_ok());
+
+        let mut duplicate_origin = spec_input();
+        duplicate_origin
+            .derivations
+            .push(duplicate_origin.derivations[0].clone());
+        assert!(encode_unsigned(&[duplicate_origin], &[spec_output()], &[]).is_err());
+
+        for kind in [GLOBAL_INPUT_COUNT, GLOBAL_OUTPUT_COUNT] {
+            for count in [vec![0], vec![2], vec![1, 0], vec![0xfd, 1, 0]] {
+                let mut malformed = valid.clone();
+                malformed.splice(global_end..global_end, field(&[kind], &count));
+                assert!(parse(&malformed).is_err());
+            }
+            let mut explicit_count = valid.clone();
+            explicit_count.splice(global_end..global_end, field(&[kind], &[1]));
+            assert!(parse(&explicit_count).is_ok());
+        }
+        let mut signed_tx = unsigned_tx();
+        signed_tx.splice(41..42, [1, 0x51]);
+        let mut malformed = valid.clone();
+        malformed.splice(
+            PSBT_MAGIC.len()..global_end,
+            field(&[GLOBAL_UNSIGNED_TX], &signed_tx),
+        );
+        assert!(parse(&malformed).is_err());
+
+        // All three extended CompactSize widths must reject non-minimal lengths.
+        for prefix in [0xfd, 0xfe, 0xff] {
+            let width = match prefix {
+                0xfd => 2,
+                0xfe => 4,
+                _ => 8,
+            };
+            for at in [PSBT_MAGIC.len(), PSBT_MAGIC.len() + 2, global_end] {
+                let mut malformed = valid.clone();
+                let mut length = vec![prefix, valid[at]];
+                length.resize(width + 1, 0);
+                malformed.splice(at..at + 1, length);
+                assert!(parse(&malformed).is_err(), "non-minimal length at {at}");
+            }
+        }
     }
 
     #[test]
@@ -1343,13 +1515,15 @@ mod tests {
             pubkey: [0x03; 33],
             signature: vec![0x30, 0x44, 0x02],
         }];
-        cosigned.derivations = vec![origin(0), origin(7)];
+        let mut other_cosigner = origin(7);
+        other_cosigner.pubkey = [0x03; 33];
+        cosigned.derivations = vec![origin(0), other_cosigner.clone()];
 
         let raw = encode_unsigned(&[cosigned], &[change], &[]).expect("encodes");
         let parsed = check_watch_only(&raw, Network::Chipnet).expect("still conforms");
         assert_eq!(
             parsed.inputs[0].origins,
-            vec![origin(0), origin(7)],
+            vec![origin(0), other_cosigner],
             "both cosigners' origins survive"
         );
         // The redeem script is a single-byte key, so it can be found exactly.
