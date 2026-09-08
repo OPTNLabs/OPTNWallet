@@ -953,6 +953,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
     multisigPolicy,
     multisigSpendMode,
     pendingSpendCheckNonce,
+    policyNetwork,
     proposalState,
   ]);
 
@@ -1002,7 +1003,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
     if (typeof destination === 'string') return null;
     try {
       // Send-all has no change output. The fee is calculated from the same
-      // conservative final P2SH size used by the builder, at exactly 1 sat/B.
+      // conservative final P2SH size and selected fee rate used by the builder.
       const estimatedBytes = estimateFinalTransactionBytes(bchOnlyInputs, [
         {
           bytecode: Uint8Array.from(destination.bytecode),
@@ -1019,7 +1020,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
     } catch {
       return null;
     }
-  }, [bchOnlyInputs, multisigPolicy, recipient]);
+  }, [bchOnlyInputs, feeRateSatPerByte, multisigPolicy, recipient]);
 
   const toggleInput = (key: string) => {
     setSelected((prev) => {
