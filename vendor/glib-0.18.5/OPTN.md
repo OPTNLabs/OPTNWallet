@@ -27,7 +27,8 @@ not a Cargo source replacement or a republished crate.
 - `src/boxed_inline.rs`: the full-transfer inline-array conversion allocates
   every element with GLib's overflow-checked `g_malloc_n` and invokes the existing
   per-type initializer before copying. The upstream code allocated one element
-  for an arbitrary slice and skipped destination initialization.
+  for an arbitrary slice and skipped destination initialization. The generated
+  single-element copy also invokes that initializer before copying.
 - `src/value.rs`: one regression exercises empty, single and multi-element
   GValue arrays, mixed types, source drop, owned roundtrip and cloning.
 - `src/gstring_builder.rs`: copy into the initialized destination with
@@ -36,11 +37,15 @@ not a Cargo source replacement or a republished crate.
 - `src/thread_pool.rs`: retain GLib's ownership of a queued callback when worker
   creation fails. One regression injects that documented error at the enqueue
   boundary, then starts a worker and checks execution and exactly one drop.
+- `src/manual_functions.rs`: read PID and pipe outputs only after successful
+  spawning, reject flags that suppress required pipes, and free the parent's
+  child-setup callback box. One Unix regression exercises failures, parent
+  cleanup, and successful pipes/FD roundtrips with child reaping.
 - `OPTN.md`: this provenance and verification note.
 
 The original `src/variant_iter.rs` SHA-256 is
 `1fd02859333761c45321b32f28b24233446b97d0022a90d3a937ed162585b90e`.
-Compare each retained file against the authenticated archive; only the seven
+Compare each retained file against the authenticated archive; only the eight
 files above should differ, and this note is the only added file.
 
 ## Smallest optimized Linux regression
@@ -58,8 +63,11 @@ This tests glib directly, without building Tauri, GTK, or the wallet. The
 standalone test command creates its own Cargo.lock/build artifacts under this
 vendor directory; they are not part of the imported upstream source. The
 desktop dependency graph is instead governed by `src-tauri/Cargo.lock`.
-The existing Linux job also runs the array, string and queued-task regressions under Valgrind with
+The existing Linux job also runs the array, string, queued-task and Unix spawn
+regressions with `v2_74` enabled under Valgrind with
 fatal GLib criticals and a nonzero exit on memory errors or definite leaks.
+The spawn test asserts the specific expected GLib diagnostic for its intentional
+empty-argv failure cases; unexpected diagnostics still abort the test.
 
 For desktop resolution verification without fetching or changing its lock:
 

@@ -122,3 +122,21 @@ Both changes and their tests passed Windows Rust typechecking using local-only
 system dependency metadata overrides. That does not link or execute GLib.
 Their optimized Linux Valgrind execution is pending CI; the existing gate now
 includes both tests without changing scanner coverage or alert state.
+
+The generated `BoxedInline` single-value copy, used when a wrapper supplies only
+init/copy-into/clear operations, also omitted initialization. It now uses the
+same initializer; the existing value regression exercises that public macro arm.
+No concrete wrapper in this vendored crate selected it before the regression.
+
+The two Unix spawn wrappers read uninitialized PID/FD outputs on failure and
+leaked the parent's child-setup box. They now check the C result and error first,
+retain parent ownership of the callback, and reject flags that suppress pipes
+required by the Rust return type (including unknown bits at older feature levels).
+The Unix regression covers missing executables/directories, FALSE without a
+GError, incompatible flags, callback cleanup, and successful pipe/FD roundtrips
+with closing and reaping. Its intentional empty-argv cases assert the specific
+GLib diagnostic; unexpected criticals remain fatal. Linux execution is pending
+CI, which enables `v2_74` to cover newer flags and the `v2_58` FD wrapper.
+Cross-target Linux `cargo check --lib --tests --features v2_74` passed locally
+with dependency metadata overrides; this compiles the Unix tests but does not
+link or execute them. No GLib library or linker result is inferred from it.
