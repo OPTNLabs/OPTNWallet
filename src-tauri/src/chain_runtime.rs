@@ -42,6 +42,7 @@ pub struct NativeChainRuntime {
 }
 
 impl NativeChainRuntime {
+    /// Create an inactive host with no published routes or supplied credentials.
     fn new(owner: AppRuntime, network_settings: NetworkSettingsStore) -> Self {
         Self {
             owner,
@@ -65,6 +66,8 @@ impl NativeChainRuntime {
         native
     }
 
+    /// Rebuild while observing selections, cancelling an in-flight build when they
+    /// change. Stop when the runtime owner no longer acknowledges or publishes state.
     async fn run(&self) {
         loop {
             let selection = self.selection(&self.owner.state()).await;
@@ -128,6 +131,8 @@ impl NativeChainRuntime {
             .map_err(|_| "network settings reader stopped".to_string())?
     }
 
+    /// Resolve the snapshot's network through persisted policy, retaining read
+    /// errors so invalid configuration cannot silently select a fallback route.
     async fn selection(&self, state: &AppState) -> NativeSelection {
         Self::resolve_selection(state, self.persisted_selection(state.network).await)
     }
@@ -167,6 +172,8 @@ impl NativeChainRuntime {
         }
     }
 
+    /// Cancel active wallet sync before waiting for a replacement build; return
+    /// false if the owner cannot acknowledge that cancellation.
     async fn rebuild_selection(&self) -> bool {
         // This must complete before the rebuild lock or the old service mutex
         // is awaited. The owner is the actor that owns the active sync lease.
@@ -199,6 +206,9 @@ impl NativeChainRuntime {
             .is_ok()
     }
 
+    /// Serialize replacement probes and publish only while the captured network,
+    /// policy, credentials, and generation remain current. Stale builds are discarded;
+    /// false means the owner could not acknowledge invalidation.
     async fn rebuild_selection_after_invalidation(&self, reason: &str) -> bool {
         let _rebuild = self.rebuild_lock.lock().await;
         if !self.invalidate_current_wallet_sync(reason).await {
@@ -347,6 +357,8 @@ pub fn catalog_and_policy_from_app_state(state: &AppState) -> (SourceCatalog, Co
     (catalog, ConnectionPolicy::auto())
 }
 
+/// Group endpoints by normalized host, deduplicating exact endpoints while
+/// retaining the first label. Capabilities remain unproven until discovery.
 fn upsert_user_source(by_host: &mut BTreeMap<String, ChainSource>, host: &str, endpoint: Endpoint) {
     let key = host.trim().trim_end_matches('.').to_ascii_lowercase();
     let entry = by_host.entry(key.clone()).or_insert_with(|| ChainSource {

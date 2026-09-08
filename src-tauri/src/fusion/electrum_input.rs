@@ -278,6 +278,8 @@ fn parse_listunspent_response(
     Ok(InputLookup::Match)
 }
 
+/// Send one list-unspent request and validate its bounded, newline-delimited
+/// response against the request ID and input. The caller owns transport and timeout.
 async fn exchange<S>(
     stream: &mut S,
     request_id: u64,

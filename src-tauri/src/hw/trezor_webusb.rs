@@ -253,6 +253,8 @@ pub fn trezor_webusb_read(session_id: u64, timeout_ms: Option<u64>) -> Result<St
     }
 }
 
+/// Return only complete USB frames; timeout or zero bytes means retry, while
+/// partial transfers and other I/O failures are errors rather than padded packets.
 fn read_packet_result(
     result: rusb::Result<usize>,
     buf: &[u8; CHUNK],

@@ -131,6 +131,8 @@ pub struct P2pComponentEncodeResponse {
 
 pub const P2P_COMPONENT_PROTOCOL: &str = "p2p-v4-ec-component";
 
+/// Validate an IPC component request and return canonical bytes plus their blind
+/// message hash. Input txids arrive in display order and are reversed for the wire.
 pub fn encode_component_for_p2p(
     request: P2pComponentEncodeRequest,
 ) -> Result<P2pComponentEncodeResponse, String> {
