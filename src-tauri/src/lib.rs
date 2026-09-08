@@ -1110,6 +1110,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app_transport::optn_app_dispatch,
             app_transport::optn_app_snapshot,
+            app_transport::optn_wallet_refresh,
             app_transport::optn_wallet_security,
             #[cfg(desktop)]
             clipboard::clipboard_write_text,

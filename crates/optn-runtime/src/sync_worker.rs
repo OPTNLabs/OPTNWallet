@@ -23,6 +23,88 @@ pub struct WalletNetworkSnapshot {
 }
 
 impl WalletNetworkSnapshot {
+    /// Project one account-wide history and balance from the same validated raw
+    /// transactions used for coins. Heights alone do not prove confirmation.
+    pub fn wallet_view(&self) -> optn_core::error::Result<optn_app::WalletSyncView> {
+        use optn_core::error::CliError;
+        let scripts = self
+            .interests
+            .iter()
+            .map(|interest| match interest {
+                WalletInterest::Script(script) => Ok(script.clone()),
+                _ => Err(CliError::Protocol(
+                    "wallet projection requires scripts".into(),
+                )),
+            })
+            .collect::<optn_core::error::Result<Vec<_>>>()?;
+        let first = scripts
+            .first()
+            .ok_or_else(|| CliError::Protocol("wallet scope is empty".into()))?;
+        self.validate_script_scope(first)?;
+        let raws = self
+            .transactions
+            .iter()
+            .map(|tx| tx.raw.clone())
+            .collect::<Vec<_>>();
+        let heights = self
+            .transactions
+            .iter()
+            .map(|tx| (tx.txid, tx.block_height))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let mut history = optn_core::tx::wallet_history(&raws, &scripts)?
+            .into_iter()
+            .map(|entry| {
+                let height = heights.get(&entry.txid).copied().flatten();
+                let mut display = entry.txid;
+                display.reverse();
+                optn_app::HistoryEntry {
+                    kind: match entry.received_sats.cmp(&entry.spent_sats) {
+                        std::cmp::Ordering::Greater => optn_app::HistoryKind::Received,
+                        std::cmp::Ordering::Less => optn_app::HistoryKind::Sent,
+                        std::cmp::Ordering::Equal => optn_app::HistoryKind::Transfer,
+                    },
+                    txid: optn_core::coins::Outpoint::new(display, 0).txid_hex(),
+                    amount_sats: entry.received_sats.abs_diff(entry.spent_sats),
+                    address: String::new(),
+                    reserved: false,
+                    block_height: height,
+                }
+            })
+            .collect::<Vec<_>>();
+        // Mempool first; height order is deterministic, not a made-up timestamp.
+        history.sort_by(|a, b| {
+            b.block_height
+                .unwrap_or(u32::MAX)
+                .cmp(&a.block_height.unwrap_or(u32::MAX))
+                .then(a.txid.cmp(&b.txid))
+        });
+        let total = |confirmed_only: bool| -> optn_core::error::Result<i64> {
+            optn_core::tx::unspent_outputs(
+                self.transactions
+                    .iter()
+                    .filter(|tx| !confirmed_only || tx.block_height.is_some())
+                    .map(|tx| tx.raw.as_slice()),
+                &scripts,
+            )?
+            .into_iter()
+            .try_fold(0i64, |sum, output| {
+                i64::try_from(output.output.value)
+                    .ok()
+                    .and_then(|value| sum.checked_add(value))
+                    .ok_or_else(|| {
+                        CliError::Protocol("wallet balance exceeds supported range".into())
+                    })
+            })
+        };
+        let confirmed = total(true)?;
+        Ok(optn_app::WalletSyncView {
+            confirmed_sats: Some(confirmed as u64),
+            pending_sats: total(false)? - confirmed,
+            history,
+            ..Default::default()
+        })
+    }
+
     /// Project the complete supplied script scope into coin records atomically.
     /// Hosts must additionally bind this snapshot to the active wallet session.
     pub fn reconcile_coins(
@@ -333,6 +415,7 @@ impl ProgressiveSyncWorker {
                 return Err(ProgressiveSyncError::InconsistentRefreshScope);
             }
         }
+        service.retry_offline_routes();
         let routes = service.routes_for_operation(ChainOperation::WalletRefresh);
         if routes.is_empty() {
             self.reconciliation
@@ -434,7 +517,7 @@ impl ProgressiveSyncWorker {
                 }
                 Err(error) => {
                     self.reconciliation
-                        .record_failure(format!("wallet refresh failed: {error:?}"));
+                        .record_failure(format!("wallet refresh failed: {error}"));
                 }
             }
         }

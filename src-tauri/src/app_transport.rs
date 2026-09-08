@@ -6,8 +6,17 @@
 //! a different adapter.
 
 use crate::appearance::AppearanceStore;
+use crate::chain_runtime::NativeChainRuntime;
 use crate::network_config::NetworkSettingsStore;
 use optn_transport::{WireAction, WireState};
+use std::sync::Arc;
+
+#[tauri::command]
+pub async fn optn_wallet_refresh(
+    runtime: tauri::State<'_, Arc<NativeChainRuntime>>,
+) -> Result<(), String> {
+    runtime.refresh_wallet().await
+}
 
 #[tauri::command]
 pub async fn optn_wallet_security(

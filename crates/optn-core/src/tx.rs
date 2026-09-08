@@ -9,6 +9,7 @@
 
 use k256::ecdsa::{signature::hazmat::PrehashSigner, Signature, SigningKey};
 use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::error::{CliError, Result};
 
@@ -352,6 +353,50 @@ pub struct UnspentOutput {
     pub output: DecodedOutput,
 }
 
+/// BCH received and spent by one transaction within the supplied script scope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WalletTransaction {
+    /// Internal/wire hash order, as in `UnspentOutput`.
+    pub txid: [u8; 32],
+    pub received_sats: u64,
+    /// Only owned prevouts present in the supplied transaction set are counted.
+    pub spent_sats: u64,
+}
+
+/// Project relevant history, including spent and zero-value owned outputs.
+/// Results are sorted by internal txid; order and duplicate observations do not
+/// change them. This proves neither inclusion nor completeness of the history.
+pub fn wallet_history(
+    transactions: &[Vec<u8>],
+    scripts: &[Vec<u8>],
+) -> Result<Vec<WalletTransaction>> {
+    let projection = wallet_projection(transactions.iter().map(Vec::as_slice), scripts)?;
+    let mut history = BTreeMap::new();
+    for (outpoint, output) in projection.outputs {
+        let received = history.entry(output.txid).or_insert(WalletTransaction {
+            txid: output.txid,
+            received_sats: 0,
+            spent_sats: 0,
+        });
+        received.received_sats = received
+            .received_sats
+            .checked_add(output.output.value)
+            .ok_or_else(|| CliError::Protocol("wallet received value exceeds u64 range".into()))?;
+        if let Some(&txid) = projection.spent.get(&outpoint) {
+            let spent = history.entry(txid).or_insert(WalletTransaction {
+                txid,
+                received_sats: 0,
+                spent_sats: 0,
+            });
+            spent.spent_sats = spent
+                .spent_sats
+                .checked_add(output.output.value)
+                .ok_or_else(|| CliError::Protocol("wallet spent value exceeds u64 range".into()))?;
+        }
+    }
+    Ok(history.into_values().collect())
+}
+
 /// Project a complete transaction set for the supplied scripts. Order and
 /// duplicate observations do not change the result. This proves neither
 /// transaction inclusion nor that a provider supplied complete history.
@@ -359,10 +404,25 @@ pub fn unspent_outputs<'a>(
     transactions: impl IntoIterator<Item = &'a [u8]>,
     scripts: &[Vec<u8>],
 ) -> Result<Vec<UnspentOutput>> {
-    use std::collections::{BTreeMap, BTreeSet};
+    let mut projection = wallet_projection(transactions, scripts)?;
+    projection
+        .outputs
+        .retain(|outpoint, _| !projection.spent.contains_key(outpoint));
+    Ok(projection.outputs.into_values().collect())
+}
+
+struct WalletProjection {
+    outputs: BTreeMap<([u8; 32], u32), UnspentOutput>,
+    spent: BTreeMap<([u8; 32], u32), [u8; 32]>,
+}
+
+fn wallet_projection<'a>(
+    transactions: impl IntoIterator<Item = &'a [u8]>,
+    scripts: &[Vec<u8>],
+) -> Result<WalletProjection> {
     let scripts: BTreeSet<_> = scripts.iter().map(Vec::as_slice).collect();
     let mut seen = BTreeSet::new();
-    let mut spent = BTreeSet::new();
+    let mut spent = BTreeMap::new();
     let mut outputs = BTreeMap::new();
     for raw in transactions {
         let txid = double_sha256(raw);
@@ -374,7 +434,7 @@ pub fn unspent_outputs<'a>(
             if previous == [0; 32] && vout == u32::MAX {
                 continue;
             }
-            if !spent.insert((previous, vout)) {
+            if spent.insert((previous, vout), txid).is_some() {
                 return Err(CliError::Protocol(
                     "conflicting transactions require reconciliation before wallet projection"
                         .into(),
@@ -389,8 +449,7 @@ pub fn unspent_outputs<'a>(
             }
         }
     }
-    outputs.retain(|outpoint, _| !spent.contains(outpoint));
-    Ok(outputs.into_values().collect())
+    Ok(WalletProjection { outputs, spent })
 }
 
 fn take_varint(b: &[u8], i: &mut usize) -> Result<u64> {
@@ -525,6 +584,191 @@ mod tests {
                 .chain([0x88, 0xac])
                 .collect(),
         }
+    }
+
+    #[test]
+    fn wallet_history_counts_receive_and_spend_with_change_in_any_order() {
+        let prefix = crate::token::TokenData::fungible([9; 32], 42)
+            .encode_prefix()
+            .unwrap();
+        let parent = Transaction::new(
+            vec![utxo(100_000)],
+            vec![
+                Output::new(10_000, vec![0x51]),
+                Output::with_tokens(1000, vec![0x53], prefix),
+                Output::new(80_000, vec![0x52]),
+            ],
+        )
+        .serialize(&[]);
+        let parent_txid = double_sha256(&parent);
+        let child = Transaction::new(
+            (0..3)
+                .map(|vout| Utxo {
+                    txid: parent_txid,
+                    vout,
+                    ..utxo(0)
+                })
+                .collect(),
+            vec![
+                Output::new(3000, vec![0x51]),
+                Output::new(2000, vec![0x53]),
+                Output::new(85_000, vec![0x52]),
+            ],
+        )
+        .serialize(&[]);
+        let child_txid = double_sha256(&child);
+        let unrelated = Transaction::new(
+            vec![Utxo {
+                txid: [8; 32],
+                ..utxo(1000)
+            }],
+            vec![Output::new(900, vec![0x52])],
+        )
+        .serialize(&[]);
+        let scripts = [vec![0x51], vec![0x53], vec![0x51]];
+        let mut expected = vec![
+            WalletTransaction {
+                txid: parent_txid,
+                received_sats: 11_000,
+                spent_sats: 0,
+            },
+            WalletTransaction {
+                txid: child_txid,
+                received_sats: 5000,
+                spent_sats: 11_000,
+            },
+        ];
+        expected.sort_by_key(|tx| tx.txid);
+        for transactions in [
+            vec![parent.clone(), child.clone(), unrelated.clone()],
+            vec![child.clone(), unrelated, parent.clone(), parent, child],
+        ] {
+            assert_eq!(wallet_history(&transactions, &scripts).unwrap(), expected);
+            let outputs =
+                unspent_outputs(transactions.iter().map(Vec::as_slice), &scripts).unwrap();
+            assert_eq!(outputs.len(), 2);
+            assert!(outputs.iter().all(|output| output.txid == child_txid));
+            assert_eq!(
+                outputs
+                    .iter()
+                    .map(|output| output.output.value)
+                    .sum::<u64>(),
+                5000
+            );
+            assert!(wallet_history(&transactions, &[]).unwrap().is_empty());
+        }
+        assert!(wallet_history(&[], &scripts).unwrap().is_empty());
+    }
+
+    #[test]
+    fn wallet_history_retains_zero_value_token_receives_and_spends() {
+        let prefix = crate::token::TokenData::fungible([9; 32], 42)
+            .encode_prefix()
+            .unwrap();
+        let parent = Transaction::new(
+            vec![utxo(1000)],
+            vec![Output::with_tokens(0, vec![0x51], prefix)],
+        )
+        .serialize(&[]);
+        let child = Transaction::new(
+            vec![Utxo {
+                txid: double_sha256(&parent),
+                ..utxo(0)
+            }],
+            vec![Output::new(0, vec![0x52])],
+        )
+        .serialize(&[]);
+        let transactions = [child, parent];
+        let mut expected: Vec<_> = transactions
+            .iter()
+            .map(|raw| WalletTransaction {
+                txid: double_sha256(raw),
+                received_sats: 0,
+                spent_sats: 0,
+            })
+            .collect();
+        expected.sort_by_key(|tx| tx.txid);
+        assert_eq!(
+            wallet_history(&transactions, &[vec![0x51]]).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn wallet_history_rejects_malformed_and_conflicting_observations() {
+        let transaction = Transaction::new(vec![utxo(1000)], vec![Output::new(900, vec![0x51])]);
+        let raw = transaction.serialize(&[]);
+        let mut invalid: Vec<Vec<Vec<u8>>> = (0..raw.len())
+            .map(|cut| vec![raw[..cut].to_vec()])
+            .collect();
+        let mut trailing = raw.clone();
+        trailing.push(0);
+        let mut noncanonical = raw.clone();
+        noncanonical.splice(4..5, [0xfd, 1, 0]);
+        let malformed_token = Transaction::new(vec![utxo(1000)], vec![Output::new(0, vec![0xef])]);
+        let duplicate_inputs =
+            Transaction::new(vec![utxo(1000), utxo(1000)], transaction.outputs.clone());
+        let conflict = Transaction::new(vec![utxo(1000)], vec![Output::new(800, vec![0x51])]);
+        invalid.extend([
+            vec![trailing],
+            vec![noncanonical],
+            vec![malformed_token.serialize(&[])],
+            vec![duplicate_inputs.serialize(&[])],
+            vec![raw, conflict.serialize(&[])],
+        ]);
+        for transactions in invalid {
+            for scripts in [vec![vec![0x51]], vec![vec![0x52]], vec![]] {
+                let history_error = wallet_history(&transactions, &scripts).unwrap_err();
+                let output_error =
+                    unspent_outputs(transactions.iter().map(Vec::as_slice), &scripts).unwrap_err();
+                assert!(matches!(history_error, CliError::Protocol(_)));
+                assert_eq!(history_error.to_string(), output_error.to_string());
+            }
+        }
+    }
+
+    #[test]
+    fn wallet_history_checks_received_and_spent_sums() {
+        let received_overflow = Transaction::new(
+            vec![utxo(0)],
+            vec![
+                Output::new(u64::MAX, vec![0x51]),
+                Output::new(1, vec![0x51]),
+            ],
+        )
+        .serialize(&[]);
+        assert!(
+            matches!(wallet_history(&[received_overflow], &[vec![0x51]]), Err(CliError::Protocol(message)) if message.contains("received"))
+        );
+        let parents: Vec<_> = [u64::MAX, 1]
+            .into_iter()
+            .enumerate()
+            .map(|(vout, value)| {
+                Transaction::new(
+                    vec![Utxo {
+                        vout: vout as u32,
+                        ..utxo(0)
+                    }],
+                    vec![Output::new(value, vec![0x51])],
+                )
+                .serialize(&[])
+            })
+            .collect();
+        let child = Transaction::new(
+            parents
+                .iter()
+                .map(|raw| Utxo {
+                    txid: double_sha256(raw),
+                    ..utxo(0)
+                })
+                .collect(),
+            vec![Output::new(0, vec![0x52])],
+        )
+        .serialize(&[]);
+        let transactions = [vec![child], parents].concat();
+        assert!(
+            matches!(wallet_history(&transactions, &[vec![0x51]]), Err(CliError::Protocol(message)) if message.contains("spent"))
+        );
     }
 
     #[test]

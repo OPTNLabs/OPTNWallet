@@ -60,6 +60,13 @@ mod wasm {
     }
 
     impl AppTransport for TauriWebTransport {
+        fn refresh_wallet<'a>(&'a self) -> TransportFuture<'a, ()> {
+            Box::pin(async {
+                invoke("optn_wallet_refresh", Object::new().into()).await?;
+                Ok(())
+            })
+        }
+
         fn wallet_security<'a>(
             &'a self,
             request: optn_transport::WalletSecurityRequest,

@@ -189,6 +189,35 @@ pub enum ChainServiceError {
     Exhausted { attempts: Vec<AttemptFailure> },
 }
 
+impl std::fmt::Display for ChainServiceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoEligibleProvider => f.write_str("no selected source supports this operation"),
+            Self::RouteUnavailable => f.write_str("the selected source is unavailable"),
+            Self::Exhausted { attempts } => {
+                let Some(last) = attempts.last() else {
+                    return f.write_str("the selected sources could not complete the request");
+                };
+                write!(f, "{}: ", last.source.as_str())?;
+                match &last.error {
+                    ChainBackendError::Offline => {
+                        f.write_str("connection unavailable; check the source and Tor connection")
+                    }
+                    ChainBackendError::Timeout => f.write_str("the source did not respond in time"),
+                    ChainBackendError::Unsupported => {
+                        f.write_str("the source does not support this operation")
+                    }
+                    ChainBackendError::Protocol(reason) => write!(f, "protocol error: {reason}"),
+                    ChainBackendError::InvalidResponse(reason) => {
+                        write!(f, "invalid response: {reason}")
+                    }
+                    ChainBackendError::Rejected(reason) => write!(f, "request rejected: {reason}"),
+                }
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct ProviderRegistry {
     providers: Vec<Arc<dyn ChainBackend>>,
@@ -372,6 +401,13 @@ impl ChainService {
     pub fn clear_health_override(&mut self, source: &SourceId, protocol: ProtocolFamily) {
         self.health_overrides
             .retain(|entry| entry.source != *source || entry.protocol != protocol);
+    }
+
+    /// A new wallet refresh may retry transport failures once. Invalid-response
+    /// quarantine, backend health, revocation and current source policy still apply.
+    pub(crate) fn retry_offline_routes(&mut self) {
+        self.health_overrides
+            .retain(|entry| entry.health != ProviderHealth::Offline);
     }
 
     fn route_unavailable(&self, route: &CapabilityRoute) -> bool {
@@ -693,6 +729,42 @@ mod tests {
         start_height: 1,
         count: 1,
     };
+
+    #[tokio::test]
+    async fn refresh_retry_recovers_offline_routes_without_clearing_quarantine_or_revocation() {
+        let (mut service, backend, route) = routed_service();
+        service.set_route_health(&route, ProviderHealth::Offline);
+        assert!(service
+            .routes_for_operation(ChainOperation::HeaderSync)
+            .is_empty());
+        service.retry_offline_routes();
+        assert!(service
+            .execute_on_route(&route, &HEADER_REQUEST)
+            .await
+            .is_ok());
+        service.set_route_health(&route, ProviderHealth::Degraded);
+        service.retry_offline_routes();
+        assert!(service
+            .execute_on_route(&route, &HEADER_REQUEST)
+            .await
+            .is_err());
+        service.set_route_health(&route, ProviderHealth::Offline);
+        service.revocation().revoke();
+        service.retry_offline_routes();
+        assert!(service
+            .execute_on_route(&route, &HEADER_REQUEST)
+            .await
+            .is_err());
+        assert_eq!(backend.calls.load(Ordering::SeqCst), 1);
+        let error = ChainServiceError::Exhausted {
+            attempts: vec![AttemptFailure {
+                source: route.source,
+                protocol: route.protocol,
+                error: ChainBackendError::Offline,
+            }],
+        };
+        assert!(error.to_string().contains("connection unavailable"));
+    }
 
     #[tokio::test]
     async fn revoked_service_cancels_io_and_preserves_broadcast_uncertainty() {

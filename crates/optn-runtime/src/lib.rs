@@ -286,6 +286,11 @@ impl AppRuntime {
     }
 }
 
+fn publish_state(state: &mut AppState, state_tx: &watch::Sender<AppState>) {
+    state.snapshot_revision = state.snapshot_revision.saturating_add(1);
+    state_tx.send_replace(state.clone());
+}
+
 impl AppRuntimeDriver {
     fn now_ms(&self) -> u64 {
         elapsed_ms(self.started)
@@ -309,7 +314,8 @@ impl AppRuntimeDriver {
         if let Some(security) = &mut self.security {
             security.reconcile(&self.state);
         }
-        self.state_tx.send_replace(self.state.clone());
+        self.wallet_sync.project_status(&mut self.state);
+        publish_state(&mut self.state, &self.state_tx);
         let _ = self.event_tx.send(event);
     }
 
@@ -329,6 +335,8 @@ impl AppRuntimeDriver {
             let request = tokio::select! {
                 _ = self.wallet_sync.wait_for_abandonment() => {
                     self.wallet_sync.cancel_abandoned();
+                    self.wallet_sync.project_status(&mut self.state);
+                    publish_state(&mut self.state, &self.state_tx);
                     continue;
                 }
                 request = self.action_rx.recv() => match request { Some(request) => request, None => break },
@@ -377,7 +385,8 @@ impl AppRuntimeDriver {
                             "Wallet operation was cancelled.".into(),
                         ))
                     };
-                    self.state_tx.send_replace(self.state.clone());
+                    self.wallet_sync.project_status(&mut self.state);
+                    publish_state(&mut self.state, &self.state_tx);
                     let _ = reply.send(result);
                 }
                 RuntimeRequest::Security(request, generation, reply) => {

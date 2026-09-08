@@ -27,7 +27,10 @@ pub enum WalletSyncError {
     InvalidSnapshot(String),
     HdDiscovery(String),
     Persistence(String),
-    Refresh(ProgressiveSyncError),
+    Refresh {
+        error: ProgressiveSyncError,
+        reason: Option<String>,
+    },
 }
 
 impl std::fmt::Display for WalletSyncError {
@@ -40,7 +43,14 @@ impl std::fmt::Display for WalletSyncError {
             | Self::Persistence(reason)
             | Self::HdDiscovery(reason) => f.write_str(reason),
             Self::Superseded => f.write_str("wallet sync request is no longer current"),
-            Self::Refresh(error) => write!(f, "wallet refresh failed: {error:?}"),
+            Self::Refresh {
+                reason: Some(reason),
+                ..
+            } => f.write_str(reason),
+            Self::Refresh {
+                error,
+                reason: None,
+            } => write!(f, "wallet refresh failed: {error:?}"),
         }
     }
 }
@@ -183,7 +193,10 @@ impl AppRuntime {
                         .finish_wallet_sync(lease, worker.reconciliation().clone())
                         .await?;
                     completion.map_err(WalletSyncError::HdDiscovery)?;
-                    let outcome = refreshed.map_err(WalletSyncError::Refresh)?;
+                    let outcome = refreshed.map_err(|error| WalletSyncError::Refresh {
+                        error,
+                        reason: worker.reconciliation().sync.degraded_reason.clone(),
+                    })?;
                     return Ok(if outcome.decision == ReconciliationDecision::Accepted {
                         decision
                     } else {
@@ -219,7 +232,10 @@ impl AppRuntime {
         let decision = self
             .finish_wallet_sync(lease, worker.reconciliation().clone())
             .await?;
-        let outcome = refreshed.map_err(WalletSyncError::Refresh)?;
+        let outcome = refreshed.map_err(|error| WalletSyncError::Refresh {
+            error,
+            reason: worker.reconciliation().sync.degraded_reason.clone(),
+        })?;
         if decision == ReconciliationDecision::PreservedFailure
             && outcome.decision != ReconciliationDecision::Accepted
         {
@@ -367,6 +383,46 @@ impl WalletSyncSession {
         self.state_tx.send_replace(self.state.clone());
     }
 
+    pub(super) fn project_status(&self, app: &mut AppState) {
+        if self.state.authoritative.is_none() {
+            app.wallet_sync = optn_app::WalletSyncView::empty();
+        }
+        let view = &mut app.wallet_sync;
+        view.refreshing = self.active.is_some();
+        view.history_fresh = self.state.sync.history_fresh;
+        view.utxos_fresh = self.state.sync.utxos_fresh;
+        view.error.clone_from(&self.state.sync.degraded_reason);
+        view.source = self
+            .state
+            .authoritative
+            .as_ref()
+            .map(|snapshot| snapshot.source.as_str().to_owned());
+        view.evidence = self.state.authoritative.as_ref().map(|snapshot| {
+            match &snapshot.evidence {
+                crate::chain::Evidence::ServerAssertion => "Server assertion",
+                crate::chain::Evidence::MempoolObservation => "Mempool observation",
+                crate::chain::Evidence::HeaderLinked { .. } => "Header linked",
+                crate::chain::Evidence::HeaderPowVerified { .. } => "Header proof of work",
+                crate::chain::Evidence::HeaderMmrProven { .. } => "Header MMR proof",
+                crate::chain::Evidence::MerkleTransactionIncluded { .. } => {
+                    "Transaction inclusion proof"
+                }
+                crate::chain::Evidence::FullNodeValidated { .. } => "Full node validation",
+            }
+            .to_owned()
+        });
+        view.tip_height = self
+            .state
+            .authoritative
+            .as_ref()
+            .and_then(|snapshot| snapshot.chain_tip.map(|tip| tip.0));
+    }
+
+    fn publish_app(&self, app: &mut AppState, app_tx: &watch::Sender<AppState>) {
+        self.project_status(app);
+        crate::publish_state(app, app_tx);
+    }
+
     pub(super) fn reconciliation(&self) -> &WalletReconciliation {
         &self.state
     }
@@ -381,6 +437,14 @@ impl WalletSyncSession {
 
     /// Open/restore callers validate account ownership before installing it.
     pub(super) fn install_checkpoint(&mut self, checkpoint: WalletCheckpoint, app: &mut AppState) {
+        app.wallet_sync = checkpoint
+            .state
+            .authoritative
+            .as_ref()
+            .map(|snapshot| snapshot.value.wallet_view())
+            .transpose()
+            .expect("checkpoint projection validated before installation")
+            .unwrap_or_default();
         app.coins = checkpoint.coins;
         app.hd_addresses = checkpoint.allocation;
         if app.hd_addresses.is_some() {
@@ -396,6 +460,7 @@ impl WalletSyncSession {
         self.state = checkpoint.state;
         self.state
             .record_failure("restored wallet state requires a live refresh");
+        self.project_status(app);
         self.publish_status();
     }
 
@@ -452,15 +517,16 @@ impl WalletSyncSession {
                 };
                 if outcome.is_ok() {
                     self.install_checkpoint(*checkpoint, app);
-                    app_tx.send_replace(app.clone());
+                    self.publish_app(app, app_tx);
                     let _ = events.send(AppEvent::CoinsChanged);
                 }
                 let _ = reply.send(outcome);
             }
             WalletSyncRequest::BeginHd(xpub, limits, reply) => {
                 let outcome = self.begin_hd(app, xpub, limits, guard.generation);
-                if outcome.is_ok() && app.spend.take().is_some() {
-                    app_tx.send_replace(app.clone());
+                if outcome.is_ok() {
+                    app.spend = None;
+                    self.publish_app(app, app_tx);
                     let _ = events.send(AppEvent::CoinsChanged);
                 }
                 let _ = reply.send(outcome);
@@ -482,8 +548,9 @@ impl WalletSyncSession {
                 } else {
                     self.begin(app, addresses, guard.generation)
                 };
-                if outcome.is_ok() && app.spend.take().is_some() {
-                    app_tx.send_replace(app.clone());
+                if outcome.is_ok() {
+                    app.spend = None;
+                    self.publish_app(app, app_tx);
                     let _ = events.send(AppEvent::CoinsChanged);
                 }
                 let _ = reply.send(outcome);
@@ -507,17 +574,17 @@ impl WalletSyncSession {
                     if let Some(security) = security {
                         security.checkpoint_published();
                     }
-                    app_tx.send_replace(app.clone());
                     let _ = events.send(AppEvent::CoinsChanged);
                 }
+                self.publish_app(app, app_tx);
                 let _ = reply.send(outcome);
             }
             WalletSyncRequest::Invalidate(reason, reply) => {
                 self.invalidate(reason);
                 if app.spend.take().is_some() {
-                    app_tx.send_replace(app.clone());
                     let _ = events.send(AppEvent::CoinsChanged);
                 }
+                self.publish_app(app, app_tx);
                 let _ = reply.send(());
             }
         }
@@ -749,6 +816,15 @@ impl WalletSyncSession {
                 self.publish_status();
                 return Err(WalletSyncError::InvalidSnapshot(reason));
             }
+            candidate_app.wallet_sync = match snapshot.wallet_view() {
+                Ok(view) => view,
+                Err(error) => {
+                    let reason = error.to_string();
+                    self.state.record_failure(reason.clone());
+                    self.publish_status();
+                    return Err(WalletSyncError::InvalidSnapshot(reason));
+                }
+            };
             if !may_publish(app) {
                 self.invalidate("wallet refresh cancelled before persistence".into());
                 return Err(WalletSyncError::Superseded);
@@ -771,6 +847,7 @@ impl WalletSyncSession {
             app.coins = candidate_app.coins;
             app.hd_addresses = candidate_app.hd_addresses;
             app.wallet = candidate_app.wallet;
+            app.wallet_sync = candidate_app.wallet_sync;
             // A prepared spend may refer to outputs removed by this refresh.
             app.spend = None;
         }

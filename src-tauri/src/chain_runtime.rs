@@ -254,6 +254,44 @@ impl NativeChainRuntime {
         guard.as_ref().map(|stack| f(&stack.service))
     }
 
+    /// The host supplies its selected provider; HD discovery and durable
+    /// publication remain the same runtime use case invoked by the CLI.
+    pub async fn refresh_wallet(&self) -> Result<(), String> {
+        let service = self
+            .with_service(Arc::clone)
+            .await
+            .ok_or("Chain source is still connecting. Select a source in Settings and retry.")?;
+        let mut service = service
+            .try_lock()
+            .map_err(|_| "A chain operation is already running. Please wait.")?;
+        let state = self.owner.state();
+        let wallet = state
+            .wallet
+            .as_ref()
+            .ok_or("Open a wallet before refreshing.")?;
+        let xpub = wallet
+            .account_xpub
+            .clone()
+            .ok_or("This wallet has no HD account to synchronize.")?;
+        let mut worker = optn_runtime::sync_worker::ProgressiveSyncWorker::new(Default::default());
+        let decision = tokio::time::timeout(
+            Duration::from_secs(300),
+            self.owner.sync_hd_wallet(
+                &mut service,
+                &mut worker,
+                xpub,
+                optn_runtime::hd_sync::HdSyncLimits::default(),
+            ),
+        )
+        .await
+        .map_err(|_| "Wallet refresh timed out; retained history remains stale.")?
+        .map_err(|error| error.to_string())?;
+        if decision != optn_runtime::reconciliation::ReconciliationDecision::Accepted {
+            return Err("Refresh was incomplete; retained history remains stale.".into());
+        }
+        Ok(())
+    }
+
     pub async fn failures(&self) -> Vec<NativeChainProbeFailure> {
         self.stack
             .read()

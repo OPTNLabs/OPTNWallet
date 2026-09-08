@@ -237,6 +237,12 @@ impl WalletCheckpoint {
         if receive.prefix != self.network.prefix() || !owns_receive {
             return Err("checkpoint does not own the opened wallet's receive address".into());
         }
+        if let Some(snapshot) = &self.state.authoritative {
+            snapshot
+                .value
+                .wallet_view()
+                .map_err(|error| error.to_string())?;
+        }
         Ok(())
     }
 
