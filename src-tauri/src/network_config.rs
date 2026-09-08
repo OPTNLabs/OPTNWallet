@@ -32,6 +32,7 @@ pub struct NetworkSettingsStore {
 }
 
 impl NetworkSettingsStore {
+    /// Bind separate mainnet and Chipnet files without loading or creating them.
     pub fn new(directory: PathBuf) -> Self {
         Self {
             mainnet: NetworkConfigFile::new(directory.join("network-mainnet.json")),
@@ -40,6 +41,9 @@ impl NetworkSettingsStore {
         }
     }
 
+    /// Restore both networks into a clone, publishing only after all reads succeed.
+    /// Rich overlays remain available to the chain runtime without being flattened
+    /// into the legacy server fields; missing files leave existing fields unchanged.
     pub fn restore(&self, state: &mut AppState) -> Result<(), String> {
         let mut restored = state.clone();
         for network in [Network::Mainnet, Network::Chipnet] {
@@ -93,6 +97,7 @@ impl NetworkSettingsStore {
         .map(|_| ())
     }
 
+    /// Select the file whose contents belong exclusively to this chain network.
     fn file_for(&self, network: Network) -> &NetworkConfigFile {
         match network {
             Network::Mainnet => &self.mainnet,
@@ -101,6 +106,8 @@ impl NetworkSettingsStore {
     }
 }
 
+/// Snapshot one network's legacy settings as an overlay, preserving the
+/// catalog version and rejecting explorer URLs that cannot represent an origin.
 fn envelope_from_state(
     state: &AppState,
     network: Network,
@@ -127,6 +134,8 @@ fn envelope_from_state(
     ))
 }
 
+/// Reset and validate each legacy server override on the caller's working state.
+/// This can fail after a partial update, so restoration passes an unpublished clone.
 fn apply_servers(
     state: &mut AppState,
     network: Network,
@@ -145,6 +154,8 @@ fn apply_servers(
     Ok(())
 }
 
+/// Accept an HTTPS origin, including its optional port, without credentials,
+/// path, query, or fragment that the endpoint representation would discard.
 fn explorer_endpoint(entry: &str) -> Result<Endpoint, String> {
     let url = reqwest::Url::parse(entry)
         .map_err(|_| "the explorer setting is not a valid HTTPS URL".to_string())?;
