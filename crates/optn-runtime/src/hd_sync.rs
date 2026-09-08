@@ -7,14 +7,14 @@ use optn_core::{
     discovery::{GapScan, ScanStop, ADDRESS_CAP, GAP_LIMIT},
     hd::AccountPath,
     network::Network,
-    watch_only::{address_under_account, parse_account_xpub, HdAddressBook, PublicAddressPreview},
+    watch_only::{
+        address_under_account, parse_account_xpub, HdAddressBook, PublicAddressPreview,
+        HD_SCAN_BRANCHES as BRANCHES,
+    },
 };
 use std::collections::BTreeSet;
 
-/// Receive, change, and the existing ordinary DeFi/Cauldron branch. RPA branch
-/// 3 is a key gate; it must not be scanned as ordinary P2PKH addresses.
-const BRANCHES: [u32; 3] = [0, 1, 2];
-pub(crate) const MAX_HD_BRANCH_ADDRESSES: u32 = 10_000;
+pub(crate) use optn_core::watch_only::MAX_HD_ADDRESSES_PER_BRANCH as MAX_HD_BRANCH_ADDRESSES;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HdSyncLimits {
@@ -51,10 +51,10 @@ pub(crate) struct HdAccountScan {
     xpub: String,
     account: AccountPath,
     limits: HdSyncLimits,
-    derived: [Vec<PublicAddressPreview>; 3],
-    horizon: [usize; 3],
-    minimum: [usize; 3],
-    last_used: [Option<u32>; 3],
+    derived: [Vec<PublicAddressPreview>; 4],
+    horizon: [usize; 4],
+    minimum: [usize; 4],
+    last_used: [Option<u32>; 4],
 }
 
 impl HdAccountScan {
@@ -77,9 +77,9 @@ impl HdAccountScan {
             account,
             limits,
             derived: Default::default(),
-            horizon: [gap; 3],
-            minimum: [gap; 3],
-            last_used: [None; 3],
+            horizon: [gap; 4],
+            minimum: [gap; 4],
+            last_used: [None; 4],
         };
         // Locate retained scripts locally, without asking providers to decide
         // ownership or dropping an older branch just because it is empty now.
@@ -116,15 +116,20 @@ impl HdAccountScan {
 
     /// Reconstruct authenticated local scope. This does not mark it fresh or
     /// complete; the restored raw history and next live scan are checked too.
-    pub(crate) fn restore_horizons(&mut self, counts: [u32; 3]) -> Result<(), String> {
+    /// A migrated v1 checkpoint has no observed DeFi (7) scope. Its zero stays
+    /// unscanned here; the next live scan is constructed with all four branches.
+    pub(crate) fn restore_horizons(&mut self, counts: [u32; 4]) -> Result<(), String> {
+        if counts.iter().enumerate().any(|(branch, &count)| {
+            (count == 0 && BRANCHES[branch] != 7) || count > self.limits.addresses_per_branch
+        }) {
+            return Err("invalid stored HD branch length".into());
+        }
         for (branch, count) in counts.into_iter().enumerate() {
-            if count == 0 || count > self.limits.addresses_per_branch {
-                return Err("invalid stored HD branch length".into());
-            }
             self.derive_through(branch, count as usize)?;
             self.horizon[branch] = count as usize;
             self.minimum[branch] = count as usize;
         }
+        self.last_used = [None; 4];
         Ok(())
     }
 
@@ -168,8 +173,9 @@ impl HdAccountScan {
         }
     }
 
-    /// Return true only after every branch has an unused gap covering retained
-    /// scope. History determines usage; a fully spent address is still used.
+    /// Return true only after every requested branch has an unused gap covering
+    /// retained scope. Migrated unscanned DeFi remains absent until a new live
+    /// scan; it is not evidence of an empty branch. Fully spent addresses are used.
     pub(crate) fn advance(&mut self, snapshot: &WalletNetworkSnapshot) -> Result<bool, String> {
         if snapshot.interests != self.interests() {
             return Err("HD response does not cover the requested script scope".into());
@@ -177,6 +183,9 @@ impl HdAccountScan {
         let used = snapshot.used_scripts().map_err(|error| error.to_string())?;
         let mut complete = true;
         for (branch, number) in BRANCHES.iter().enumerate() {
+            if self.horizon[branch] == 0 {
+                continue;
+            }
             let mut gap =
                 GapScan::with_limits(self.limits.gap_limit, self.limits.addresses_per_branch);
             let mut last_used = None;
@@ -419,7 +428,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn hd_runtime_finds_spent_receive_change_and_zero_value_defi_tokens() {
+    async fn hd_runtime_finds_spent_receive_change_and_zero_value_compatibility_tokens() {
         let (runtime, xpub) = account();
         let (mut service, backend) = service(history(&xpub), false);
         let mut worker = ProgressiveSyncWorker::new(Default::default());
@@ -430,7 +439,7 @@ mod tests {
                 .unwrap(),
             ReconciliationDecision::Accepted
         );
-        assert_eq!(*backend.calls.lock().unwrap(), [6, 12, 14]);
+        assert_eq!(*backend.calls.lock().unwrap(), [8, 14, 16]);
         let state = runtime.state();
         assert_eq!(state.coins.len(), 2);
         assert_eq!(state.coins.spendable_sats(), 800);
@@ -456,7 +465,7 @@ mod tests {
                 .value
                 .interests
                 .len(),
-            14
+            16
         );
         // A rescan must not forget already-watched high indexes, even after an
         // unused gap earlier in that branch or when their balance becomes zero.
@@ -467,7 +476,128 @@ mod tests {
                 .unwrap(),
             ReconciliationDecision::Accepted
         );
-        assert_eq!(*backend.calls.lock().unwrap(), [6, 12, 14, 14]);
+        assert_eq!(*backend.calls.lock().unwrap(), [8, 14, 16, 16]);
+    }
+
+    #[tokio::test]
+    async fn hd_scan_discovers_canonical_defi_and_compatibility_funds_together() {
+        let (runtime, xpub) = account();
+        let mut transactions = history(&xpub);
+        let mut token = TokenData::fungible([8; 32], 99).encode_prefix().unwrap();
+        token.extend_from_slice(&script(&xpub, 7, 1));
+        transactions.push(transaction(
+            None,
+            vec![
+                (500, script(&xpub, 7, 1)),
+                (0, token),
+                (300, script(&xpub, 2, 0)),
+            ],
+        ));
+        let (mut service, backend) = service(transactions, false);
+        runtime
+            .sync_hd_wallet(
+                &mut service,
+                &mut ProgressiveSyncWorker::new(Default::default()),
+                xpub.clone(),
+                LIMITS,
+            )
+            .await
+            .unwrap();
+        assert_eq!(*backend.calls.lock().unwrap(), [8, 16, 18]);
+        let state = runtime.state();
+        assert_eq!(state.coins.len(), 5);
+        assert_eq!(state.coins.spendable_sats(), 1600);
+        for (branch, index, amount) in [(7, 1, 99), (2, 1, 42)] {
+            let address = address_under_account(Network::Chipnet, &xpub, branch, index)
+                .unwrap()
+                .address;
+            assert!(state.coins.iter().any(|coin| coin.address() == address
+                && coin.token().is_some_and(|token| token.amount == amount)));
+        }
+        for (branch, index, amount) in [(7, 1, 500), (2, 0, 300)] {
+            let address = address_under_account(Network::Chipnet, &xpub, branch, index)
+                .unwrap()
+                .address;
+            assert!(state.coins.iter().any(|coin| coin.address() == address
+                && coin.token().is_none()
+                && coin.value_sats() == amount));
+        }
+        let status = runtime.subscribe_wallet_sync().borrow().clone();
+        assert!(status.sync.utxos_fresh);
+        let book = status.authoritative.unwrap().value.hd.unwrap();
+        assert_eq!(book.last_used, [Some(1), Some(3), Some(1), Some(1)]);
+        assert_eq!(book.allocation_last_used(), [Some(1), Some(3), Some(1)]);
+        assert_eq!(book.branches[2][1].path, "m/44'/145'/1'/7/1");
+        assert_eq!(book.branches[3][1].path, "m/44'/145'/1'/2/1");
+    }
+
+    #[tokio::test]
+    async fn hd_restore_keeps_migrated_defi_unscanned_until_a_new_live_scan() {
+        let (_, xpub) = account();
+        let account = AccountPath::new(145, 1).unwrap();
+        let mut restored = HdAccountScan::new(
+            Network::Chipnet,
+            xpub.clone(),
+            account,
+            LIMITS,
+            Default::default(),
+        )
+        .unwrap();
+        restored.restore_horizons([4, 6, 0, 4]).unwrap();
+        let snapshot = WalletNetworkSnapshot {
+            hd: None,
+            interests: restored.interests(),
+            transactions: history(&xpub),
+            tip: Some(ChainTip {
+                height: 100,
+                hash: [7; 32],
+            }),
+        };
+        assert_eq!(snapshot.interests.len(), 14);
+        for _ in 0..2 {
+            assert!(restored.advance(&snapshot).unwrap());
+            assert_eq!(restored.interests(), snapshot.interests);
+            let book = restored.address_book();
+            assert!(book.branches[2].is_empty());
+            assert_eq!(book.last_used, [Some(1), Some(3), None, Some(1)]);
+            assert_eq!(book.branches[3][1].path, "m/44'/145'/1'/2/1");
+        }
+        let required = restored
+            .addresses()
+            .iter()
+            .map(|address| Address::decode(address).unwrap().script_pubkey())
+            .collect();
+        let live =
+            HdAccountScan::new(Network::Chipnet, xpub.clone(), account, LIMITS, required).unwrap();
+        assert_eq!(live.interests().len(), 16);
+        assert_eq!(live.address_book().branches[2].len(), 2);
+        assert!(live
+            .interests()
+            .contains(&WalletInterest::script(script(&xpub, 7, 0))));
+    }
+
+    #[tokio::test]
+    async fn hd_restore_rejects_zero_nonmigration_branches_and_caps_without_mutation() {
+        let (_, xpub) = account();
+        let mut scan = HdAccountScan::new(
+            Network::Chipnet,
+            xpub,
+            AccountPath::new(145, 1).unwrap(),
+            LIMITS,
+            Default::default(),
+        )
+        .unwrap();
+        let before = scan.address_book();
+        for counts in [
+            [0, 2, 2, 2],
+            [2, 0, 2, 2],
+            [2, 2, 2, 0],
+            [2, 2, 0, 7],
+            [2, 2, 7, 2],
+        ] {
+            assert!(scan.restore_horizons(counts).is_err());
+            assert_eq!(scan.address_book(), before);
+        }
     }
 
     #[derive(Default)]
@@ -476,6 +606,7 @@ mod tests {
         writes: u64,
         fail: bool,
         revoke_on_save: Option<Arc<std::sync::atomic::AtomicU64>>,
+        after_save: Option<Box<dyn FnOnce() + Send>>,
     }
 
     #[derive(Clone, Default)]
@@ -522,6 +653,9 @@ mod tests {
             if let Some(revocation) = disk.revoke_on_save.take() {
                 revocation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             }
+            if let Some(after_save) = disk.after_save.take() {
+                after_save();
+            }
             Ok(revision)
         }
     }
@@ -536,6 +670,382 @@ mod tests {
             AppRuntime::new_with_security(AppState::default(), security).unwrap();
         tokio::spawn(driver.run());
         runtime
+    }
+
+    #[tokio::test]
+    async fn cancelled_hd_commit_requires_reload_before_allocating_again() {
+        use optn_app::SecretText;
+        use optn_transport::WalletSecurityRequest as Request;
+        use std::{
+            future::{poll_fn, Future},
+            task::Poll,
+        };
+
+        let storage = crate::wallet_security::tests::Storage::default();
+        let checkpoints = Checkpoints::default();
+        let runtime = private_runtime(storage.clone(), checkpoints.clone());
+        let opened = runtime
+            .wallet_security(Request::Create {
+                name: "Public cancelled sync fixture".into(),
+                mnemonic: SecretText::new(BIP39_TEST_VECTOR_MNEMONIC.into()),
+                bip39_passphrase: SecretText::default(),
+                password: SecretText::default(),
+                confirmation: SecretText::default(),
+                network: "chipnet".into(),
+                // Distinct public account keeps this mock nonce stream on its own key.
+                account_path: "m/44'/1'/2'".into(),
+            })
+            .await
+            .unwrap();
+        let handle = opened.active.unwrap();
+        assert_eq!(
+            runtime.state().hd_addresses.unwrap().current_receive(),
+            Some(0)
+        );
+        let original = checkpoints.0.lock().unwrap().files.clone();
+        let generation = runtime.revocation.load(std::sync::atomic::Ordering::SeqCst);
+        let xpub = runtime.state().wallet.unwrap().account_xpub.unwrap();
+        let (mut service, _) = service(history(&xpub), false);
+        let syncing = runtime.clone();
+        let pending = Arc::new(Mutex::new(Some(Box::pin(async move {
+            syncing
+                .sync_hd_wallet(
+                    &mut service,
+                    &mut ProgressiveSyncWorker::new(Default::default()),
+                    xpub,
+                    LIMITS,
+                )
+                .await
+        }))));
+        let (committed, cancelled) = tokio::sync::oneshot::channel();
+        let cancel_pending = pending.clone();
+        checkpoints.0.lock().unwrap().after_save = Some(Box::new(move || {
+            // Drop the actual sync future, closing its Finish reply during the
+            // synchronous store. No global revocation or wallet lock is injected.
+            drop(cancel_pending.lock().unwrap().take().unwrap());
+            committed.send(()).unwrap();
+        }));
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            tokio::select! {
+                closed = cancelled => closed.unwrap(),
+                outcome = poll_fn(|cx| {
+                    match pending.lock().unwrap().as_mut() {
+                        Some(future) => future.as_mut().poll(cx),
+                        None => Poll::Pending,
+                    }
+                }) => panic!("sync completed before cancellation hook: {outcome:?}"),
+            }
+        })
+        .await
+        .unwrap();
+        // Queue a harmless actor turn so all post-store publication checks finish.
+        runtime.dispatch(AppAction::ClearNotice).await.unwrap();
+        assert!(pending.lock().unwrap().is_none());
+        assert_eq!(
+            runtime.revocation.load(std::sync::atomic::Ordering::SeqCst),
+            generation
+        );
+        assert_eq!(
+            runtime.state().hd_addresses.unwrap().current_receive(),
+            Some(0)
+        );
+        assert!(runtime.state().coins.is_empty());
+        assert!(runtime
+            .subscribe_wallet_sync()
+            .borrow()
+            .authoritative
+            .is_none());
+        assert!(!runtime.subscribe_wallet_sync().borrow().sync.utxos_fresh);
+        let saved = checkpoints.0.lock().unwrap().files.clone();
+        assert_ne!(saved, original, "the cancelled result really committed");
+        assert!(
+            runtime
+                .wallet_security(Request::NextReceive {
+                    epoch: opened.epoch,
+                    acknowledge_gap: false,
+                })
+                .await
+                .is_err(),
+            "old memory must not allocate index 1 using the committed revision"
+        );
+        assert_eq!(
+            runtime.state().hd_addresses.unwrap().current_receive(),
+            Some(0)
+        );
+        assert_eq!(checkpoints.0.lock().unwrap().files, saved);
+
+        let restarted = private_runtime(storage, checkpoints);
+        let reopened = restarted
+            .wallet_security(Request::Open {
+                handle,
+                password: SecretText::default(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            restarted.state().hd_addresses.unwrap().current_receive(),
+            Some(2)
+        );
+        assert_eq!(restarted.state().coins.len(), 2);
+        assert!(!restarted.subscribe_wallet_sync().borrow().sync.utxos_fresh);
+        restarted
+            .wallet_security(Request::NextReceive {
+                epoch: reopened.epoch,
+                acknowledge_gap: false,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            restarted.state().hd_addresses.unwrap().current_receive(),
+            Some(3)
+        );
+    }
+
+    #[tokio::test]
+    async fn hd_commit_post_store_read_failure_requires_reload() {
+        use optn_app::SecretText;
+        use optn_platform::WalletStorage;
+        use optn_transport::WalletSecurityRequest as Request;
+        let storage = crate::wallet_security::tests::Storage::default();
+        let checkpoints = Checkpoints::default();
+        let runtime = private_runtime(storage.clone(), checkpoints.clone());
+        let opened = runtime
+            .wallet_security(Request::Create {
+                name: "Public post-store read fixture".into(),
+                mnemonic: SecretText::new(BIP39_TEST_VECTOR_MNEMONIC.into()),
+                bip39_passphrase: SecretText::default(),
+                password: SecretText::default(),
+                confirmation: SecretText::default(),
+                network: "chipnet".into(),
+                // Keep deterministic checkpoint nonces separate from other test keys.
+                account_path: "m/44'/1'/3'".into(),
+            })
+            .await
+            .unwrap();
+        let handle = opened.active.unwrap();
+        let original = checkpoints.0.lock().unwrap().files.clone();
+        let fail_read = storage.clone();
+        checkpoints.0.lock().unwrap().after_save =
+            Some(Box::new(move || fail_read.fail_next_read()));
+        let xpub = runtime.state().wallet.unwrap().account_xpub.unwrap();
+        let (mut service, _) = service(history(&xpub), false);
+        assert!(matches!(
+            runtime
+                .sync_hd_wallet(
+                    &mut service,
+                    &mut ProgressiveSyncWorker::new(Default::default()),
+                    xpub,
+                    LIMITS,
+                )
+                .await,
+            Err(WalletSyncError::Persistence(_))
+        ));
+        let committed = checkpoints.0.lock().unwrap().files.clone();
+        assert_ne!(committed, original);
+        assert!(
+            storage.read(&handle).is_ok(),
+            "one-shot storage fault has cleared"
+        );
+        assert_eq!(
+            runtime.state().hd_addresses.unwrap().current_receive(),
+            Some(0)
+        );
+        assert!(runtime.state().coins.is_empty());
+        assert!(runtime
+            .subscribe_wallet_sync()
+            .borrow()
+            .authoritative
+            .is_none());
+        assert!(!runtime.subscribe_wallet_sync().borrow().sync.utxos_fresh);
+        assert!(
+            runtime
+                .wallet_security(Request::NextReceive {
+                    epoch: opened.epoch,
+                    acknowledge_gap: false,
+                })
+                .await
+                .is_err(),
+            "a recovered file read must not allow stale allocation"
+        );
+        assert_eq!(
+            runtime.state().hd_addresses.unwrap().current_receive(),
+            Some(0)
+        );
+        assert_eq!(checkpoints.0.lock().unwrap().files, committed);
+        let reopened = runtime
+            .wallet_security(Request::Open {
+                handle,
+                password: SecretText::default(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime.state().hd_addresses.unwrap().current_receive(),
+            Some(2)
+        );
+        assert_eq!(runtime.state().coins.len(), 2);
+        assert!(!runtime.subscribe_wallet_sync().borrow().sync.utxos_fresh);
+        runtime
+            .wallet_security(Request::NextReceive {
+                epoch: reopened.epoch,
+                acknowledge_gap: false,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime.state().hd_addresses.unwrap().current_receive(),
+            Some(3)
+        );
+    }
+
+    #[tokio::test]
+    async fn private_receive_allocation_persists_before_publish_and_cancels_older_scan() {
+        use optn_app::SecretText;
+        use optn_transport::WalletSecurityRequest as Request;
+        let storage = crate::wallet_security::tests::Storage::default();
+        let checkpoints = Checkpoints::default();
+        let runtime = private_runtime(storage.clone(), checkpoints.clone());
+        let opened = runtime
+            .wallet_security(Request::Create {
+                name: "Public allocation fixture".into(),
+                mnemonic: SecretText::new(BIP39_TEST_VECTOR_MNEMONIC.into()),
+                bip39_passphrase: SecretText::default(),
+                password: SecretText::default(),
+                confirmation: SecretText::default(),
+                network: "chipnet".into(),
+                // Separate public fixture account keeps the checkpoint key
+                // distinct from the lifecycle test's deterministic nonce stream.
+                account_path: "m/44'/1'/1'".into(),
+            })
+            .await
+            .unwrap();
+        let handle = opened.active.unwrap();
+        let next = || Request::NextReceive {
+            epoch: opened.epoch,
+            acknowledge_gap: false,
+        };
+        assert_eq!(
+            runtime.state().hd_addresses.unwrap().current_receive(),
+            Some(0)
+        );
+        assert_eq!(checkpoints.0.lock().unwrap().writes, 1);
+        assert!(runtime
+            .subscribe_wallet_sync()
+            .borrow()
+            .authoritative
+            .is_none());
+        runtime.wallet_security(next()).await.unwrap();
+        assert_eq!(
+            runtime.state().hd_addresses.unwrap().current_receive(),
+            Some(1)
+        );
+        let before = runtime.state();
+        let committed = checkpoints.0.lock().unwrap().files.clone();
+        checkpoints.0.lock().unwrap().fail = true;
+        assert!(runtime.wallet_security(next()).await.is_err());
+        assert_eq!(runtime.state().hd_addresses, before.hd_addresses);
+        assert_eq!(runtime.state().wallet, before.wallet);
+        assert_eq!(checkpoints.0.lock().unwrap().files, committed);
+        checkpoints.0.lock().unwrap().fail = false;
+        runtime.wallet_security(next()).await.unwrap();
+        assert_eq!(
+            runtime.state().hd_addresses.unwrap().current_receive(),
+            Some(2)
+        );
+
+        let restarted = private_runtime(storage.clone(), checkpoints.clone());
+        let reopened = restarted
+            .wallet_security(Request::Open {
+                handle: handle.clone(),
+                password: SecretText::default(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(restarted.state().hd_addresses, runtime.state().hd_addresses);
+        assert_eq!(restarted.state().wallet, runtime.state().wallet);
+        let next_restarted = || Request::NextReceive {
+            epoch: reopened.epoch,
+            acknowledge_gap: false,
+        };
+        restarted.wallet_security(next_restarted()).await.unwrap();
+        assert_eq!(
+            restarted.state().hd_addresses.unwrap().current_receive(),
+            Some(3)
+        );
+        let newest = checkpoints.0.lock().unwrap().files.clone();
+        assert!(runtime.wallet_security(next()).await.is_err());
+        assert_eq!(
+            runtime.state().hd_addresses.unwrap().current_receive(),
+            Some(2)
+        );
+        assert_eq!(
+            checkpoints.0.lock().unwrap().files,
+            newest,
+            "stale process cannot overwrite allocation"
+        );
+
+        let xpub = restarted.state().wallet.unwrap().account_xpub.unwrap();
+        let (mut held, backend) = service(history(&xpub), true);
+        let scanning = restarted.clone();
+        let task = tokio::spawn(async move {
+            scanning
+                .sync_hd_wallet(
+                    &mut held,
+                    &mut ProgressiveSyncWorker::new(Default::default()),
+                    xpub,
+                    LIMITS,
+                )
+                .await
+        });
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            backend.entered.notified(),
+        )
+        .await
+        .unwrap();
+        restarted.wallet_security(next_restarted()).await.unwrap();
+        assert_eq!(
+            restarted.state().hd_addresses.unwrap().current_receive(),
+            Some(4)
+        );
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), task)
+                .await
+                .unwrap()
+                .unwrap(),
+            Err(WalletSyncError::Superseded)
+        );
+        assert!(restarted.state().coins.is_empty());
+        assert!(!restarted.subscribe_wallet_sync().borrow().sync.utxos_fresh);
+
+        // A revocation at the real storage boundary hides the committed address,
+        // but reopening must retain its consumed index instead of reusing it.
+        checkpoints.0.lock().unwrap().revoke_on_save = Some(restarted.revocation.clone());
+        assert!(restarted.wallet_security(next_restarted()).await.is_err());
+        assert!(restarted.state().wallet.is_none());
+        let after_revocation = private_runtime(storage, checkpoints);
+        after_revocation
+            .wallet_security(Request::Open {
+                handle,
+                password: SecretText::default(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            after_revocation
+                .state()
+                .hd_addresses
+                .unwrap()
+                .current_receive(),
+            Some(5)
+        );
+        assert!(
+            !after_revocation
+                .subscribe_wallet_sync()
+                .borrow()
+                .sync
+                .utxos_fresh
+        );
     }
 
     #[tokio::test]
@@ -559,6 +1069,21 @@ mod tests {
             .unwrap();
         let handle = status.active.unwrap();
         let xpub = runtime.state().wallet.unwrap().account_xpub.unwrap();
+        let initial_checkpoint = checkpoints.0.lock().unwrap().files.clone();
+        assert_eq!(
+            initial_checkpoint.len(),
+            1,
+            "first receive allocation is durable before publication"
+        );
+        assert_eq!(
+            runtime.state().hd_addresses.unwrap().current_receive(),
+            Some(0)
+        );
+        assert!(runtime
+            .subscribe_wallet_sync()
+            .borrow()
+            .authoritative
+            .is_none());
         let (mut provider, _) = service(history(&xpub), false);
         let mut worker = ProgressiveSyncWorker::new(Default::default());
 
@@ -571,7 +1096,7 @@ mod tests {
         ));
         assert!(runtime.state().coins.is_empty());
         assert!(!runtime.subscribe_wallet_sync().borrow().sync.utxos_fresh);
-        assert!(checkpoints.0.lock().unwrap().files.is_empty());
+        assert_eq!(checkpoints.0.lock().unwrap().files, initial_checkpoint);
         checkpoints.0.lock().unwrap().fail = false;
         runtime
             .sync_hd_wallet(&mut provider, &mut worker, xpub.clone(), LIMITS)
@@ -596,6 +1121,40 @@ mod tests {
             .await
             .unwrap();
         let before = runtime.state().coins;
+        runtime.dispatch(AppAction::RebuildWallet).await.unwrap();
+        assert_eq!(
+            runtime.state().coins,
+            before,
+            "rebuild preserves labels and holds"
+        );
+        assert!(!runtime.subscribe_wallet_sync().borrow().sync.utxos_fresh);
+        let previous_receive = runtime
+            .state()
+            .hd_addresses
+            .unwrap()
+            .current_receive()
+            .unwrap();
+        runtime
+            .wallet_security(Request::NextReceive {
+                epoch: status.epoch,
+                acknowledge_gap: false,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime.state().hd_addresses.unwrap().current_receive(),
+            Some(previous_receive + 1)
+        );
+        assert_eq!(runtime.state().coins, before);
+        runtime
+            .sync_hd_wallet(&mut provider, &mut worker, xpub.clone(), LIMITS)
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime.state().coins,
+            before,
+            "resync after rebuild and allocation preserves annotations"
+        );
         let ciphertext = checkpoints.0.lock().unwrap().files.clone();
         assert!(!ciphertext.values().any(|bytes| bytes
             .windows(xpub.len())
@@ -780,8 +1339,8 @@ mod tests {
         let stored: serde_json::Value = serde_json::from_slice(&plaintext).unwrap();
         for (index, (field, bad_value)) in [
             ("format", serde_json::json!("future-unknown-format")),
-            ("branch_lengths", serde_json::json!([0, 4, 4])),
-            ("branch_lengths", serde_json::json!([10001, 4, 4])),
+            ("branch_lengths", serde_json::json!([0, 4, 4, 4])),
+            ("branch_lengths", serde_json::json!([10001, 4, 4, 4])),
             ("annotations", serde_json::json!([])),
         ]
         .into_iter()
@@ -880,7 +1439,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             *backend.calls.lock().unwrap(),
-            [14],
+            [16],
             "restart must retain all discovered branches"
         );
         assert_eq!(restarted.state().coins, before);
@@ -1023,7 +1582,7 @@ mod tests {
                 .unwrap(),
             Err(WalletSyncError::Superseded)
         );
-        assert_eq!(*backend.calls.lock().unwrap(), [6]);
+        assert_eq!(*backend.calls.lock().unwrap(), [8]);
         assert!(runtime.state().wallet.is_none());
         assert!(runtime
             .subscribe_wallet_sync()

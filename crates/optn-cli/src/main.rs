@@ -1250,7 +1250,8 @@ async fn rescan_shared_wallet(
                 unconfirmed_total = unconfirmed_total.checked_add(unconfirmed).ok_or_else(|| CliError::Protocol("HD pending balance overflow".into()))?;
                 if all || confirmed != 0 || unconfirmed != 0 || !utxos.is_empty() {
                     addresses.push(json!({"path": address.path, "address": address.address,
-                        "chain": (["receiving", "change", "defi"][branch]), "index": index,
+                        "chain": (["receiving", "change", "defi", "compatibility"][branch]),
+                        "branch":optn_core::watch_only::HD_SCAN_BRANCHES[branch], "index": index,
                         "confirmed": confirmed, "unconfirmed": unconfirmed, "utxos": utxos.len()}));
                 }
             }
@@ -1259,7 +1260,8 @@ async fn rescan_shared_wallet(
         Ok(json!({"ok":true, "hd":true, "complete":true, "network":cli.network.to_string(),
             "account_path":account.to_string(), "gap":gap, "max_addresses":cap,
             "selection":"shared-native-policy", "source":snapshot.source.as_str(),
-            "evidence":format!("{:?}",snapshot.evidence), "last_used":book.last_used,
+            "evidence":format!("{:?}",snapshot.evidence),
+            "branches":optn_core::watch_only::HD_SCAN_BRANCHES, "last_used":book.last_used,
             "scanned_addresses":snapshot.value.interests.len(), "confirmed":confirmed_total,
             "unconfirmed":unconfirmed_total, "total":total, "utxos":runtime.state().coins.len(), "addresses":addresses}))
     }).await.map_err(|_| CliError::Network("HD rescan timed out before completing the account".into()))?

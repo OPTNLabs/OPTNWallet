@@ -34,6 +34,7 @@ struct CheckpointSession {
     id: [u8; 32],
     key: optn_core::wallet_pack::PackKey,
     revision: Option<[u8; 32]>,
+    needs_reload: bool,
     restored: Option<WalletCheckpoint>,
 }
 
@@ -127,11 +128,33 @@ impl WalletSecurity {
             .and_then(|session| session.checkpoint.as_mut())
         {
             binding.revision = Some(revision);
+            // Old memory must never use the new CAS revision after a failed
+            // post-write check or cancelled publication. Only acceptance clears this.
+            binding.needs_reload = true;
         }
         // Another process can rotate/replace the wallet during a blocking save.
         // Keep any committed checkpoint revision, but grant no fresh authority.
-        self.bound(app, app.lock.unlock_epoch)?;
+        let session = self
+            .session
+            .as_ref()
+            .ok_or_else(|| failure("Wallet session ended."))?;
+        let bytes = self.storage.read(&session.handle).map_err(|_| failure(
+            "Wallet state was saved, but its wallet file could not be rechecked. Reopen the wallet before continuing."
+        ))?;
+        if bytes != session.bytes {
+            return Err(failure("Wallet changed on disk. Lock and reopen it."));
+        }
         Ok(())
+    }
+
+    pub(crate) fn checkpoint_published(&mut self) {
+        if let Some(binding) = self
+            .session
+            .as_mut()
+            .and_then(|session| session.checkpoint.as_mut())
+        {
+            binding.needs_reload = false;
+        }
     }
 
     pub fn restore_policy(&self, state: &mut AppState) -> Result<(), TransportError> {
@@ -166,6 +189,15 @@ impl WalletSecurity {
             .session
             .as_ref()
             .ok_or_else(|| failure("Unlock the wallet first."))?;
+        if session
+            .checkpoint
+            .as_ref()
+            .is_some_and(|binding| binding.needs_reload)
+        {
+            return Err(failure(
+                "Saved wallet state was not published. Reopen the wallet before continuing.",
+            ));
+        }
         if epoch != state.lock.unlock_epoch
             || session.epoch != epoch
             || session.network != state.network
@@ -252,7 +284,7 @@ impl WalletSecurity {
             .address(network, &account.address_path(false, 0))
             .map_err(crypto)?
             .encode();
-        let checkpoint = if let Some(storage) = &self.checkpoints {
+        let mut checkpoint = if let Some(storage) = &self.checkpoints {
             let key = wallet.checkpoint_key(network, account).map_err(crypto)?;
             let id = optn_core::header_hash::sha256d(
                 format!("{handle}\0{network}\0{account}").as_bytes(),
@@ -266,6 +298,7 @@ impl WalletSecurity {
                 id,
                 key,
                 revision,
+                needs_reload: false,
                 restored,
             })
         } else {
@@ -291,6 +324,37 @@ impl WalletSecurity {
         {
             restored.validate_wallet(&candidate).map_err(failure)?;
         }
+        if let (Some(binding), Some(storage)) = (checkpoint.as_mut(), self.checkpoints.as_ref()) {
+            let history = binding
+                .restored
+                .as_ref()
+                .map(|checkpoint| checkpoint.state.clone())
+                .unwrap_or_default();
+            if let Some(restored) = &binding.restored {
+                candidate.coins = restored.coins.clone();
+            }
+            let previous = binding
+                .restored
+                .as_ref()
+                .and_then(|checkpoint| checkpoint.allocation.clone());
+            candidate.hd_addresses = Some(previous.clone().unwrap_or_default());
+            crate::wallet_checkpoint::observe_allocation(&mut candidate, &history)
+                .map_err(failure)?;
+            let restored = WalletCheckpoint::capture(&candidate, &history).map_err(failure)?;
+            if previous != candidate.hd_addresses {
+                // Even the first offline receive address must be durable before it
+                // appears. Old history-only checkpoints are upgraded atomically.
+                binding.revision = Some(
+                    storage
+                        .store(&binding.id, &restored, &binding.key, binding.revision)
+                        .map_err(failure)?,
+                );
+            }
+            binding.restored = Some(restored);
+        }
+        if self.storage.read(&handle).map_err(platform)? != bytes {
+            return Err(failure("Wallet changed on disk while opening. Reopen it."));
+        }
         *state = candidate;
         self.session = Some(Session {
             handle,
@@ -311,6 +375,7 @@ impl WalletSecurity {
         state: &mut AppState,
         request: Request,
         now_ms: u64,
+        history: &WalletReconciliation,
     ) -> Result<WalletSecurityStatus, TransportError> {
         self.reconcile(state);
         if state.wallet.is_some() && state.lock.idle_should_lock(now_ms) {
@@ -319,6 +384,29 @@ impl WalletSecurity {
         }
         match request {
             Request::Status => {}
+            Request::NextReceive {
+                epoch,
+                acknowledge_gap,
+            } => {
+                self.bound(state, epoch)?;
+                if self.checkpoints.is_none() {
+                    return Err(failure("Durable HD address storage is unavailable."));
+                }
+                let mut candidate = state.clone();
+                let allocation = candidate
+                    .hd_addresses
+                    .as_mut()
+                    .ok_or_else(|| failure("Reopen the wallet to restore HD allocation."))?;
+                let used = crate::wallet_checkpoint::allocation_history(history);
+                allocation
+                    .allocate(optn_app::HdBranch::Receive, used, acknowledge_gap)
+                    .map_err(crypto)?;
+                crate::wallet_checkpoint::update_receive_address(&mut candidate)
+                    .map_err(failure)?;
+                self.persist_checkpoint(&candidate, history)?;
+                *state = candidate;
+                self.checkpoint_published();
+            }
             Request::Open { handle, password } => self.open(state, handle, password)?,
             Request::UnlockBiometric { handle } => {
                 let bio = self
@@ -483,12 +571,24 @@ pub(crate) mod tests {
     };
 
     #[derive(Clone, Default)]
-    pub(crate) struct Storage(Arc<Mutex<BTreeMap<String, Vec<u8>>>>, Arc<AtomicU8>);
+    pub(crate) struct Storage(
+        Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
+        Arc<AtomicU8>,
+        Arc<std::sync::atomic::AtomicBool>,
+    );
+    impl Storage {
+        pub(crate) fn fail_next_read(&self) {
+            self.2.store(true, Ordering::SeqCst);
+        }
+    }
     impl WalletStorage for Storage {
         fn list(&self) -> PlatformResult<Vec<String>> {
             Ok(self.0.lock().unwrap().keys().cloned().collect())
         }
         fn read(&self, handle: &str) -> PlatformResult<Vec<u8>> {
+            if self.2.swap(false, Ordering::SeqCst) {
+                return Err(PlatformError::Unavailable);
+            }
             self.0
                 .lock()
                 .unwrap()
@@ -565,6 +665,7 @@ pub(crate) mod tests {
                     account_path: "m/44'/1'/0'".into(),
                 },
                 1,
+                &WalletReconciliation::default(),
             )
             .unwrap();
         // Model an existing spend prompt when its chain observations go stale.

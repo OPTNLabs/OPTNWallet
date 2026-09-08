@@ -58,6 +58,7 @@ pub use optn_core::spend::{
     sign_seed_spend, SpendKind, SpendPlan, SpendingCapability, SIGHASH_ALL_FORKID,
 };
 pub use optn_core::token::TokenData;
+pub use optn_core::watch_only::{HdAddressAllocation, HdBranch};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThemeMode {
@@ -429,6 +430,8 @@ pub struct AppState {
     pub pledges: Vec<FlipstarterPledge>,
     pub notice: Option<String>,
     pub wallet: Option<OpenedWallet>,
+    /// Public allocation state. Only the authenticated runtime advances it durably.
+    pub hd_addresses: Option<HdAddressAllocation>,
     pub spend: Option<SpendPlan>,
     /// App-wide fee policy. Providers may advise Auto, but never own this preference.
     pub fee_preferences: FeePreferences,
@@ -524,6 +527,7 @@ impl AppState {
             pledges: Vec::new(),
             notice: None,
             wallet: None,
+            hd_addresses: None,
             spend: None,
             fee_preferences: FeePreferences::app_default(),
             hardware: HardwareSessionState::new(),
@@ -826,6 +830,7 @@ impl AppState {
                 // addresses". The wallet itself stays open; it has not become
                 // a different wallet, only an unsynced one.
                 self.coins.clear();
+                self.hd_addresses = None;
                 self.pledges.clear();
                 self.spend = None;
                 self.stealth_sats = 0;
@@ -1154,10 +1159,11 @@ impl AppState {
                 if self.wallet.is_none() {
                     return self.reject("open a wallet first".into());
                 }
-                self.coins.clear();
-                self.pledges.clear();
+                // The runtime invalidates freshness. Retain user holds and labels
+                // until reconciliation can project the new chain observations.
                 self.spend = None;
-                self.notice = None;
+                self.notice =
+                    Some("Wallet refresh required. Coin holds and labels are retained.".into());
                 Some(AppEvent::WalletRebuilt)
             }
             AppAction::GoBack => self.go_back(),
@@ -1283,6 +1289,7 @@ impl AppState {
         // Opening can replace a wallet without passing through LockWallet.
         // No balance, approval, or revealed identity belongs to both sessions.
         self.coins.clear();
+        self.hd_addresses = None;
         self.pledges.clear();
         self.stealth_sats = 0;
         self.spend = None;
@@ -1306,6 +1313,7 @@ impl AppState {
         // locked wallet showing its xPub would defeat the gate entirely.
         self.identity_revealed = false;
         self.wallet = None;
+        self.hd_addresses = None;
         self.spend = None;
         self.coins.clear();
         self.pledges.clear();
@@ -1832,7 +1840,9 @@ impl SettingsRowId {
             Self::Derivation => "Active BIP44 account path",
             Self::Recovery => "Back up your wallet",
             Self::AppLock => "Auto-lock · Password on send",
-            Self::RebuildWallet => "Wipe chain data and resync from network (keeps seed)",
+            Self::RebuildWallet => {
+                "Resync chain history, retaining addresses, coin holds and labels"
+            }
             Self::Servers => "Electrum · Block explorer · Transaction fees",
             Self::Device => "Connected signer, its label, and how it is reached",
             Self::CashFusion => "Privacy mixing on desktop",
@@ -3486,10 +3496,11 @@ mod tests {
         let opened = state.wallet.clone();
         state.apply(AppAction::RebuildWallet);
         assert_eq!(state.wallet, opened);
-        assert!(state.coins.is_empty());
+        assert_eq!(state.coins.len(), 2);
+        assert!(state.coins.get(frozen_out).unwrap().freeze().is_some());
         assert!(state.spend.is_none());
         assert!(state.pledges.is_empty());
-        assert!(history_view_model(&state).entries.is_empty());
+        assert_eq!(history_view_model(&state).entries.len(), 2);
         assert_eq!(state.route, AppRoute::Send);
     }
 

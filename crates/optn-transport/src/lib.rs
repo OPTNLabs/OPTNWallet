@@ -484,6 +484,8 @@ pub struct WireState {
     #[serde(default)]
     pub wallet: Option<WireOpenedWallet>,
     #[serde(default)]
+    pub hd_addresses: Option<optn_app::HdAddressAllocation>,
+    #[serde(default)]
     pub spend: Option<WireSpendPlan>,
     #[serde(default)]
     pub hardware: WireHardwareSession,
@@ -1388,6 +1390,7 @@ impl From<&AppState> for WireState {
             pledges: value.pledges.iter().map(WirePledge::from).collect(),
             notice: value.notice.clone(),
             wallet: value.wallet.as_ref().map(WireOpenedWallet::from),
+            hd_addresses: value.hd_addresses.clone(),
             spend: value.spend.as_ref().map(WireSpendPlan::from),
             hardware: WireHardwareSession::from(&value.hardware),
             stealth_sats: value.stealth_sats,
@@ -1540,6 +1543,7 @@ impl TryFrom<WireState> for AppState {
                 .collect::<Result<Vec<_>, _>>()?,
             notice: value.notice,
             wallet: value.wallet.map(OpenedWallet::from),
+            hd_addresses: value.hd_addresses,
             spend: value.spend.map(SpendPlan::try_from).transpose()?,
             hardware: HardwareSessionState::try_from(value.hardware)?,
             // A decoded snapshot never arrives already revealed: the eye
