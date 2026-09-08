@@ -100,6 +100,49 @@ export function selectLargestBchUtxos(utxos: UTXO[]): UTXO[] {
     });
 }
 
+export type CauldronFundingCandidate<T> = {
+  value: T;
+  feePremiumSatoshis: bigint;
+  inputCount: number;
+  expansionCount: number;
+};
+
+/**
+ * Prefer the candidate whose actual fee is closest to its serialized-size
+ * estimate, then prefer the candidate with fewer inputs. A token UTXO can
+ * otherwise turn a sub-dust remainder into an unnecessarily large fee.
+ */
+export function chooseBestCauldronFundingCandidate<T>(
+  candidates: CauldronFundingCandidate<T>[]
+): T | null {
+  let best: CauldronFundingCandidate<T> | null = null;
+  for (const candidate of candidates) {
+    if (!best) {
+      best = candidate;
+      continue;
+    }
+    if (candidate.feePremiumSatoshis < best.feePremiumSatoshis) {
+      best = candidate;
+      continue;
+    }
+    if (
+      candidate.feePremiumSatoshis === best.feePremiumSatoshis &&
+      candidate.inputCount < best.inputCount
+    ) {
+      best = candidate;
+      continue;
+    }
+    if (
+      candidate.feePremiumSatoshis === best.feePremiumSatoshis &&
+      candidate.inputCount === best.inputCount &&
+      candidate.expansionCount < best.expansionCount
+    ) {
+      best = candidate;
+    }
+  }
+  return best?.value ?? null;
+}
+
 function tryResolvePublicKeyHashHex(address: string): string | null {
   try {
     return binToHex(derivePublicKeyHash(address)).toLowerCase();

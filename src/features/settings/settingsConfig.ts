@@ -10,6 +10,7 @@ export type SettingsPanelKey =
   | 'walletconnect'
   | 'wizardconnect'
   | 'cashconnect'
+  | 'merchant-pay'
   | 'network'
   | 'faucet'
   | 'wallet-info'
@@ -248,6 +249,13 @@ export function getParentSettingsGroup(
 export const CONTRACT_ROWS: SettingsRowConfig[] = [];
 
 export const CONNECTION_ROWS: SettingsRowConfig[] = [
+  {
+    key: 'merchant-pay',
+    title: 'Merchant Pay',
+    description: 'Set the default payment conversion percentage',
+    action: 'panel',
+    target: 'merchant-pay',
+  },
   {
     key: 'walletconnect',
     title: 'WalletConnect',

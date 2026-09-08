@@ -9,6 +9,7 @@ import type {
 } from '../../../services/cauldron';
 import {
   getCauldronSubscriptionService,
+  fetchNormalizedCauldronPools,
   normalizeCauldronPoolRow,
   tryParseCauldronPoolFromUtxo,
 } from '../../../services/cauldron';
@@ -86,7 +87,8 @@ function getChainRowLockingBytecode(
 async function queryPoolsForTokenId(
   sdk: CauldronChainPoolSdk,
   lockingBytecodeHex: string,
-  tokenId: string
+  tokenId: string,
+  forceRefresh = false
 ): Promise<CauldronActivePoolRow[]> {
   const clientCache =
     chainQueryCacheByClient.get(sdk.chain) ??
@@ -104,7 +106,7 @@ async function queryPoolsForTokenId(
 
   const cacheKey = `${lockingBytecodeHex}:${tokenId}`;
   const cached = clientCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) {
+  if (!forceRefresh && cached && cached.expiresAt > Date.now()) {
     return cached.rows;
   }
 
@@ -137,11 +139,12 @@ async function queryPoolsForTokenId(
 async function resolvePoolsAgainstChain(args: {
   sdk: CauldronChainPoolSdk;
   pools: CauldronPool[];
+  forceRefresh?: boolean;
 }): Promise<{
   resolvedByOutpoint: Map<string, CauldronPool>;
   missingCount: number;
 }> {
-  const { sdk, pools } = args;
+  const { sdk, pools, forceRefresh = false } = args;
   const resolvedByOutpoint = new Map<string, CauldronPool>();
   let missingCount = 0;
 
@@ -154,7 +157,8 @@ async function resolvePoolsAgainstChain(args: {
       const rows = await queryPoolsForTokenId(
         sdk,
         binToHex(pool.output.lockingBytecode),
-        pool.output.tokenCategory
+        pool.output.tokenCategory,
+        forceRefresh
       );
       const outpointKey = getPoolOutpointKey(pool);
       const exactRow = rows.find(
@@ -241,14 +245,16 @@ function rehydratePoolFromChainRow(
 export async function fetchCurrentQuotedPoolsFromChain(args: {
   sdk: CauldronChainPoolSdk;
   quotedPools: CauldronPool[];
+  forceRefresh?: boolean;
 }): Promise<{
   resolvedPools: CauldronPool[];
   missingQuotedPoolCount: number;
 }> {
-  const { sdk, quotedPools } = args;
+  const { sdk, quotedPools, forceRefresh = false } = args;
   const { resolvedByOutpoint, missingCount } = await resolvePoolsAgainstChain({
     sdk,
     pools: quotedPools,
+    forceRefresh,
   });
 
   return {
@@ -269,11 +275,12 @@ export async function fetchCurrentQuotedPoolsFromChain(args: {
 export async function fetchCurrentLiquidityPoolsFromChain(args: {
   sdk: CauldronChainPoolSdk;
   quotedPools: CauldronPool[];
+  forceRefresh?: boolean;
 }): Promise<{
   currentPools: CauldronPool[];
   missingQuotedPoolCount: number;
 }> {
-  const { sdk, quotedPools } = args;
+  const { sdk, quotedPools, forceRefresh = false } = args;
   const uniquePools = [
     ...new Map(
       quotedPools.map((pool) => [getPoolOutpointKey(pool), pool])
@@ -287,7 +294,8 @@ export async function fetchCurrentLiquidityPoolsFromChain(args: {
       const rows = await queryPoolsForTokenId(
         sdk,
         binToHex(pool.output.lockingBytecode),
-        pool.output.tokenCategory
+        pool.output.tokenCategory,
+        forceRefresh
       );
       const exactRow = rows.find(
         (row) => getChainRowOutpointKey(row) === getPoolOutpointKey(pool)
@@ -330,12 +338,27 @@ export async function fetchCurrentCauldronPools(args: {
     unsubscribe = await service.subscribe(args.tokenId, (rows) => {
       liveRows = rows;
     });
-    return liveRows
+    const livePools = liveRows
       .map((row) => normalizeCauldronPoolRow(row))
       .filter((pool): pool is CauldronPool => pool !== null)
       .filter((pool) => pool.output.tokenCategory === args.tokenId);
+    if (livePools.length > 0) return livePools;
+  } catch {
+    // The public REST snapshot below is also a chain-derived source. It keeps
+    // merchant/buyer preflight usable while a Cauldron Rostrum feed is empty
+    // or temporarily unavailable.
   } finally {
     if (unsubscribe) await unsubscribe();
+  }
+
+  try {
+    return await fetchNormalizedCauldronPools(
+      args.network,
+      undefined,
+      args.tokenId
+    );
+  } catch {
+    return [];
   }
 }
 
@@ -375,15 +398,17 @@ export async function fetchCurrentQuotedPoolsFromCauldron(args: {
 export async function fetchVisiblePoolsFromChain(args: {
   sdk: CauldronChainPoolSdk;
   visiblePools: CauldronPool[];
+  forceRefresh?: boolean;
 }): Promise<{
   confirmedPools: CauldronPool[];
   missingVisiblePoolCount: number;
 }> {
-  const { sdk, visiblePools } = args;
+  const { sdk, visiblePools, forceRefresh = false } = args;
   const { resolvedByOutpoint: confirmedByOutpoint, missingCount } =
     await resolvePoolsAgainstChain({
       sdk,
       pools: visiblePools,
+      forceRefresh,
     });
 
   return {
