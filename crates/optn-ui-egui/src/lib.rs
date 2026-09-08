@@ -238,19 +238,20 @@ mod tests {
     /// crate with this line pointing at that one, and asserts the same facts.
     type Ui<T> = EguiRenderer<T>;
 
-    /// A wallet being opened and looked at, as actions alone.
-    fn script() -> Vec<AppAction> {
+    /// Trusted wallet observations are prepared before the interface transport.
+    fn initial_state() -> AppState {
         let opened = seed_wallet_preview(Network::Chipnet, "swap", BIP39_TEST_VECTOR_MNEMONIC)
             .expect("preview");
-        vec![
-            AppAction::SetNetwork(Network::Chipnet),
-            AppAction::OpenCreatedWallet {
-                name: opened.name,
-                receive_address: opened.receive_address,
-                account_path: opened.account_path,
-            },
-            AppAction::SetStealthSats(50_000),
-        ]
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        state.apply(AppAction::SetNetwork(Network::Chipnet));
+        state.apply(AppAction::OpenCreatedWallet {
+            name: opened.name,
+            receive_address: opened.receive_address,
+            account_path: opened.account_path,
+        });
+        state.apply(AppAction::SetStealthSats(50_000));
+        state.apply(AppAction::Navigate(AppRoute::Settings));
+        state
     }
 
     #[test]
@@ -258,8 +259,9 @@ mod tests {
         // The host is `optn_transport::run`, shared and unchanged. Swapping
         // renderers is the `Ui` alias above and nothing else -- no different
         // host, no different actions, no different assertions.
-        let transport = LocalTransport::new(AppState::for_surface(AppSurface::Desktop));
-        let painted = optn_transport::run::<_, Ui<_>>(transport, &script()).expect("run");
+        let transport = LocalTransport::new(initial_state());
+        let script = [AppAction::Navigate(AppRoute::WalletHome)];
+        let painted = optn_transport::run::<_, Ui<_>>(transport, &script).expect("run");
 
         // The same facts, from the same view models, whichever renderer drew.
         // Asserted on the screen as a whole rather than on exact fragments:
