@@ -327,17 +327,14 @@ fn validate_warmup(
     }
 }
 
+/// Decode a display-order transaction ID and reverse it for component matching.
 fn display_txid_to_wire(txid: &str) -> Result<[u8; 32], String> {
     if txid.len() != 64 {
         return Err("prev_txid must be 32 bytes".into());
     }
 
     let mut bytes = [0u8; 32];
-    for (index, byte) in bytes.iter_mut().enumerate() {
-        let offset = index * 2;
-        *byte = u8::from_str_radix(&txid[offset..offset + 2], 16)
-            .map_err(|_| "bad prev_txid hex".to_string())?;
-    }
+    hex::decode_to_slice(txid, &mut bytes).map_err(|_| "bad prev_txid hex".to_string())?;
     bytes.reverse();
     Ok(bytes)
 }
@@ -1416,6 +1413,18 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use tokio::sync::mpsc;
+
+    #[test]
+    fn fusion_txid_hex_rejects_malformed_input() {
+        for prefix in ["雪", "😀", "aé", "+", "g"] {
+            let value = format!("{prefix}{}", "0".repeat(64 - prefix.len()));
+            assert!(display_txid_to_wire(&value).is_err());
+        }
+        let mut display = std::array::from_fn::<_, 32, _>(|index| index as u8);
+        let decoded = display_txid_to_wire(&hex::encode_upper(display)).unwrap();
+        display.reverse();
+        assert_eq!(decoded, display);
+    }
 
     enum Covert {
         Component(usize, Vec<u8>),
