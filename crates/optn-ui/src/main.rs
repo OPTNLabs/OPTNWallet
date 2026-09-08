@@ -2,6 +2,7 @@
 
 mod onboarding;
 mod qr;
+mod security;
 
 #[cfg(target_arch = "wasm32")]
 use leptos::prelude::*;
@@ -423,6 +424,7 @@ fn Landing(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
             </div>
 
             <section class="wallet-card">
+                <security::SavedWallets transport=transport state=state />
                 <p class="eyebrow">"Pay, Your Way"</p>
                 <h1>"OPTN Wallet"</h1>
                 <p class="description">
@@ -467,6 +469,10 @@ fn CreateWallet(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
     let name = RwSignal::new(String::from("My wallet"));
     let phrase = RwSignal::new(String::new());
     let error = RwSignal::new(None::<String>);
+    let password = RwSignal::new(String::new());
+    let confirmation = RwSignal::new(String::new());
+    let security_status = RwSignal::new(None);
+    let security_busy = RwSignal::new(false);
     let word_count = RwSignal::new(BIP39_DEFAULT_WORD_COUNT);
     let answers = RwSignal::new([String::new(), String::new(), String::new()]);
     let account = RwSignal::new(onboarding::derivation_for_network(
@@ -641,6 +647,7 @@ fn CreateWallet(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
                     </button>
                 </Show>
                 <Show when=move || state.get().create_step == CreateStep::Name>
+                    <security::NewPasswordFields password=password confirmation=confirmation />
                     <label class="field">
                         <span>"Wallet name"</span>
                         <input
@@ -653,22 +660,27 @@ fn CreateWallet(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
                     <button
                         class="primary"
                         type="button"
+                        disabled=move || security_busy.get()
                         on:click=move |_| {
+                            if security_busy.get_untracked() { return; }
                             match seed_wallet_preview_at(
                                 state.get_untracked().network,
                                 &name.get_untracked(),
                                 &phrase.get_untracked(),
                                 account.get_untracked(),
                             ) {
-                                Ok(opened) => dispatch_action(
-                                    transport,
-                                    state,
-                                    AppAction::OpenCreatedWallet {
+                                Ok(opened) => {
+                                    let request = optn_transport::WalletSecurityRequest::Create {
                                         name: opened.name,
-                                        receive_address: opened.receive_address,
-                                        account_path: opened.account_path,
-                                    },
-                                ),
+                                        mnemonic: optn_app::SecretText::new(phrase.get_untracked()),
+                                        bip39_passphrase: optn_app::SecretText::default(),
+                                        password: optn_app::SecretText::new(password.get_untracked()),
+                                        confirmation: optn_app::SecretText::new(confirmation.get_untracked()),
+                                        network: state.get_untracked().network.to_string(), account_path: opened.account_path,
+                                    };
+                                    password.set(String::new()); confirmation.set(String::new());
+                                    security::submit(transport, state, request, security_status, error, security_busy);
+                                },
                                 Err(message) => error.set(Some(message)),
                             }
                         }
@@ -692,6 +704,10 @@ fn ImportWallet(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
     let name = RwSignal::new(String::from("Imported wallet"));
     let phrase = RwSignal::new(String::new());
     let error = RwSignal::new(None::<String>);
+    let password = RwSignal::new(String::new());
+    let confirmation = RwSignal::new(String::new());
+    let security_status = RwSignal::new(None);
+    let security_busy = RwSignal::new(false);
     let account = RwSignal::new(onboarding::derivation_for_network(
         state.get_untracked().network,
     ));
@@ -788,6 +804,7 @@ fn ImportWallet(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
                     </button>
                 </Show>
                 <Show when=move || state.get().import_step == ImportStep::Name>
+                    <security::NewPasswordFields password=password confirmation=confirmation />
                     <label class="field">
                         <span>"Wallet name"</span>
                         <input
@@ -800,22 +817,27 @@ fn ImportWallet(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
                     <button
                         class="primary"
                         type="button"
+                        disabled=move || security_busy.get()
                         on:click=move |_| {
+                            if security_busy.get_untracked() { return; }
                             match seed_wallet_preview_at(
                                 state.get_untracked().network,
                                 &name.get_untracked(),
                                 &phrase.get_untracked(),
                                 account.get_untracked(),
                             ) {
-                                Ok(opened) => dispatch_action(
-                                    transport,
-                                    state,
-                                    AppAction::OpenImportedWallet {
+                                Ok(opened) => {
+                                    let request = optn_transport::WalletSecurityRequest::Create {
                                         name: opened.name,
-                                        receive_address: opened.receive_address,
-                                        account_path: opened.account_path,
-                                    },
-                                ),
+                                        mnemonic: optn_app::SecretText::new(phrase.get_untracked()),
+                                        bip39_passphrase: optn_app::SecretText::default(),
+                                        password: optn_app::SecretText::new(password.get_untracked()),
+                                        confirmation: optn_app::SecretText::new(confirmation.get_untracked()),
+                                        network: state.get_untracked().network.to_string(), account_path: opened.account_path,
+                                    };
+                                    password.set(String::new()); confirmation.set(String::new());
+                                    security::submit(transport, state, request, security_status, error, security_busy);
+                                },
                                 Err(message) => error.set(Some(message)),
                             }
                         }
@@ -978,21 +1000,7 @@ fn App(transport: Rc<dyn AppTransport>) -> impl IntoView {
                         <p>
                             {move || state.get().lock.prompt.map(AuthScope::description).unwrap_or_default()}
                         </p>
-                        <label class="field">
-                            <span>"Password"</span>
-                            <input type="password" autocomplete="current-password" />
-                        </label>
-                        <button
-                            class="primary"
-                            type="button"
-                            on:click=move |_| dispatch_action(
-                                transport,
-                                state,
-                                AppAction::ConfirmAuth { now_ms: js_sys::Date::now() as u64 },
-                            )
-                        >
-                            "Confirm"
-                        </button>
+                        <security::ConfirmPassword transport=transport state=state />
                         <button
                             class="secondary"
                             type="button"

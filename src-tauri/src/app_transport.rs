@@ -9,6 +9,21 @@ use crate::appearance::AppearanceStore;
 use crate::network_config::NetworkSettingsStore;
 use optn_transport::{WireAction, WireState};
 
+#[tauri::command]
+pub async fn optn_wallet_security(
+    runtime: tauri::State<'_, optn_runtime::AppRuntime>,
+    request: optn_transport::WalletSecurityRequest,
+) -> Result<optn_transport::WalletSecurityStatus, String> {
+    runtime
+        .wallet_security(request)
+        .await
+        .map_err(|error| match error {
+            optn_transport::TransportError::Other(message)
+            | optn_transport::TransportError::InvalidData(message) => message,
+            _ => "Wallet authentication is unavailable.".into(),
+        })
+}
+
 /// Appearance save failures are returned after the runtime has applied the
 /// selection. Callers should refresh their snapshot and display the error;
 /// retrying the same selection retries persistence even if reduction is a no-op.

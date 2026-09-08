@@ -529,6 +529,7 @@ fn AppLockSection(transport: UiTransport, state: RwSignal<AppState>) -> impl Int
         >
             "Lock now"
         </button>
+        <crate::security::SecuritySettings transport=transport state=state />
     }
 }
 

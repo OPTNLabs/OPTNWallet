@@ -132,6 +132,14 @@ pub struct Skill {
 /// manifest and that the gate therefore never classifies.
 pub const SKILLS: &[Skill] = &[
     Skill {
+        name: "wallet",
+        capability: Capability::Secret,
+        summary: "Manage encrypted native wallets, passwords and lock policy through the shared Rust runtime.",
+        needs_wallet: false,
+        needs_network: false,
+        requires_confirmation: false,
+    },
+    Skill {
         name: "ping",
         capability: Capability::Read,
         summary: "Check the Electrum server is reachable and report its version.",

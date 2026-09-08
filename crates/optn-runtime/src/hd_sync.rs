@@ -732,7 +732,9 @@ mod tests {
         initial.wallet.as_mut().unwrap().kind = WalletKind::Seed;
         initial.lock.mark_unlocked();
         initial.lock.observe(1); // The original unlock approval is expired below.
-        let runtime = AppRuntime::spawn(initial);
+        let (runtime, mut driver) = AppRuntime::new(initial);
+        driver.started = std::time::Instant::now() - std::time::Duration::from_millis(1_000_000);
+        tokio::spawn(driver.run());
         let (mut service, _) = service(history(&xpub), false);
         runtime
             .sync_hd_wallet(
@@ -754,16 +756,15 @@ mod tests {
             let transport = crate::DirectTransport::new(runtime.clone());
             let wire =
                 optn_transport::WireAction::from(AppAction::ConfirmAuth { now_ms: 1_000_001 });
-            optn_transport::AppTransport::dispatch(&transport, AppAction::try_from(wire).unwrap())
-                .await
-                .unwrap();
+            assert!(AppAction::try_from(wire).is_err());
+            assert!(optn_transport::AppTransport::dispatch(
+                &transport,
+                AppAction::ConfirmAuth { now_ms: 1_000_001 }
+            )
+            .await
+            .is_err());
             assert_eq!(runtime.state().lock, before);
             assert!(!runtime.state().identity_revealed);
-            assert!(runtime
-                .state()
-                .notice
-                .unwrap()
-                .contains("Authorization was not granted"));
             runtime.dispatch(AppAction::CancelAuth).await.unwrap();
         }
     }

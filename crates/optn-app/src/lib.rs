@@ -6,6 +6,7 @@
 //! adapters may subscribe to typed events. No UI or native-shell framework
 //! belongs in this crate.
 
+pub use optn_core::wallet_file::SecretText;
 pub mod connect;
 mod flow;
 pub mod identity;

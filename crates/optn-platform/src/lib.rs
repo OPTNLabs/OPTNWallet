@@ -171,6 +171,27 @@ pub trait Biometrics {
     fn authenticate<'a>(&'a self, reason: &'a str) -> PlatformFuture<'a, ()>;
 }
 
+/// Native wallet-file operations. Handles are opaque names, never renderer paths.
+/// Replacements must compare the previous bytes and commit atomically.
+pub trait WalletStorage: Send {
+    fn list(&self) -> PlatformResult<Vec<String>>;
+    fn read(&self, handle: &str) -> PlatformResult<Vec<u8>>;
+    fn save(&self, handle: &str, previous: Option<&[u8]>, bytes: &[u8]) -> PlatformResult<()>;
+    fn entropy(&self, output: &mut [u8]) -> PlatformResult<()>;
+    fn auto_lock_minutes(&self) -> PlatformResult<Option<u32>>;
+    fn save_auto_lock_minutes(&self, minutes: u32) -> PlatformResult<()>;
+}
+
+/// Per-wallet OS credential protection. Some(empty) is a valid password;
+/// None means no enrollment. The provider must authenticate before returning data.
+pub trait WalletBiometrics: Send {
+    fn available(&self) -> bool;
+    fn enrolled(&self, handle: &str) -> PlatformResult<bool>;
+    fn unlock(&self, handle: &str) -> PlatformResult<Option<Vec<u8>>>;
+    fn enroll(&self, handle: &str, password: &[u8]) -> PlatformResult<()>;
+    fn remove(&self, handle: &str) -> PlatformResult<()>;
+}
+
 pub trait QrScanner {
     fn scan<'a>(&'a self) -> PlatformFuture<'a, String>;
 }

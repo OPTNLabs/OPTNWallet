@@ -3363,6 +3363,8 @@ version = "1.7.3"
 dependencies = [
  "arboard",
  "optn-platform",
+ "rand_core 0.6.4",
+ "tempfile",
 ]
 
 [[package]]
@@ -3371,10 +3373,12 @@ version = "1.7.3"
 dependencies = [
  "optn-app",
  "optn-core",
+ "optn-platform",
  "optn-transport",
  "serde",
  "serde_json",
  "tokio",
+ "zeroize",
 ]
 
 [[package]]

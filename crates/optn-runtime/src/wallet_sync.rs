@@ -307,15 +307,27 @@ impl WalletSyncSession {
         app: &AppState,
     ) -> bool {
         use optn_app::{AppAction, AuthScope};
+        match action {
+            AppAction::PrepareSend { .. }
+            | AppAction::PrepareFlipstarterPledge { .. }
+            | AppAction::AuthorizeSpend { .. } => self.requires_fresh_coins_for(AuthScope::Spend),
+            AppAction::AuthorizeBackground { .. } => {
+                self.requires_fresh_coins_for(AuthScope::Background)
+            }
+            AppAction::ConfirmAuth { .. } => app
+                .lock
+                .prompt
+                .is_some_and(|scope| self.requires_fresh_coins_for(scope)),
+            _ => false,
+        }
+    }
+
+    pub(super) fn requires_fresh_coins_for(&self, scope: optn_app::AuthScope) -> bool {
         !self.coins_are_fresh()
-            && (matches!(
-                action,
-                AppAction::PrepareSend { .. }
-                    | AppAction::PrepareFlipstarterPledge { .. }
-                    | AppAction::AuthorizeSpend { .. }
-                    | AppAction::AuthorizeBackground { .. }
-            ) || matches!(action, AppAction::ConfirmAuth { .. })
-                && app.lock.prompt == Some(AuthScope::Spend))
+            && matches!(
+                scope,
+                optn_app::AuthScope::Spend | optn_app::AuthScope::Background
+            )
     }
 
     pub(super) fn new() -> (Self, watch::Receiver<WalletReconciliation>) {
