@@ -120,8 +120,10 @@ This tests the ownership contract, not actual operating-system thread exhaustion
 
 Both changes and their tests passed Windows Rust typechecking using local-only
 system dependency metadata overrides. That does not link or execute GLib.
-Their optimized Linux Valgrind execution is pending CI; the existing gate now
-includes both tests without changing scanner coverage or alert state.
+Their optimized Linux Valgrind execution passed in
+[run 34227538754](https://github.com/OPTNLabs/OPTNWallet/actions/runs/34227538754)
+on source `33225589`, with zero errors, zero suppressed errors and zero definitely
+lost bytes. Scanner coverage and alert states were not changed.
 
 The generated `BoxedInline` single-value copy, used when a wrapper supplies only
 init/copy-into/clear operations, also omitted initialization. It now uses the
@@ -135,8 +137,21 @@ required by the Rust return type (including unknown bits at older feature levels
 The Unix regression covers missing executables/directories, FALSE without a
 GError, incompatible flags, callback cleanup, and successful pipe/FD roundtrips
 with closing and reaping. Its intentional empty-argv cases assert the specific
-GLib diagnostic; unexpected criticals remain fatal. Linux execution is pending
-CI, which enables `v2_74` to cover newer flags and the `v2_58` FD wrapper.
+GLib diagnostic; unexpected criticals remain fatal. CI enables `v2_74` to cover
+newer flags and the `v2_58` FD wrapper.
 Cross-target Linux `cargo check --lib --tests --features v2_74` passed locally
 with dependency metadata overrides; this compiles the Unix tests but does not
 link or execute them. No GLib library or linker result is inferred from it.
+
+The final optimized Linux execution passed on source `1a36623e` in
+[run 34228111716](https://github.com/OPTNLabs/OPTNWallet/actions/runs/34228111716).
+All four Valgrind regressions (value/macro, strings, queued callbacks and Unix
+spawn) passed with zero errors, zero suppressed errors and zero definitely lost
+bytes, including the forked failure paths. The existing iterator and pointer
+slice regressions also passed, as did the run's workspace/core tests, dependency
+policy, feature/fuzz compilation and coverage jobs.
+
+The refreshed PR alert inventory still contains 40 open findings. Alert #125's
+PR instance is `fixed` with no dismissal; #117 remains open. These focused
+regressions verify the repaired ownership paths, not complete GLib safety or
+the full wallet/platform architecture.

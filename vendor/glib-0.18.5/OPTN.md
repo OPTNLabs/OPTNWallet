@@ -92,3 +92,10 @@ Local source, lock resolution, YAML, and shell syntax checks pass. The optimized
 Linux regression and registry advisory audit both passed in
 [run 34212834376](https://github.com/OPTNLabs/OPTNWallet/actions/runs/34212834376)
 for PR commit `07896453e99d81cf7a9538dedeca8fc287a06537`, which retains this backport.
+
+All later ownership regressions passed with release optimization in
+[run 34228111716](https://github.com/OPTNLabs/OPTNWallet/actions/runs/34228111716)
+on source `1a36623e`. The four Valgrind checks reported zero memory errors,
+zero suppressed errors and zero definitely lost bytes. The eight-file difference
+and retention of all 121 upstream files were rechecked against the archive SHA-256.
+This does not resolve the remaining CodeQL reports or certify arbitrary unsafe callers.
