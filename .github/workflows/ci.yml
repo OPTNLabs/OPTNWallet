@@ -161,6 +161,12 @@ jobs:
       - name: Unit tests
         run: npm run test:core
 
+      - name: App tests
+        run: npm run test:apps
+
+      - name: UI tests
+        run: npm run test:ui
+
       - name: Addon manifest validation
         run: npm run addons:validate
 

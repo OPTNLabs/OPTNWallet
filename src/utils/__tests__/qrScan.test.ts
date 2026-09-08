@@ -55,14 +55,16 @@ describe('classifyScannedQrPayload', () => {
     );
   });
 
-  it('recognizes a merchant proposal QR stream frame', () => {
-    const initialQrPayload = 'qrstream/1/AQID';
+  it('recognizes a merchant proposal as one normal QR payload', () => {
+    const proposalPayload = JSON.stringify({
+      application: {
+        applicationId: 'optn.builtin.merchant-pay.transaction-proposal',
+      },
+    });
 
-    expect(classifyScannedQrPayload(initialQrPayload, Network.MAINNET)).toEqual(
-      {
-        kind: 'merchant-proposal-stream',
-        initialQrPayload,
-      }
-    );
+    expect(classifyScannedQrPayload(proposalPayload, Network.MAINNET)).toEqual({
+      kind: 'merchant-proposal',
+      scannedValue: proposalPayload,
+    });
   });
 });

@@ -26,14 +26,17 @@ export default function CauldronFlowTabs({
   activeMode,
   onChange,
 }: CauldronFlowTabsProps) {
+  // Merchant payment is entered from the Merchant Pay app and opened from a
+  // scanned request. It is not a second version of the general swap form.
+  // Keep the mode in the type because a scanned proposal still needs a
+  // distinct execution path, but do not advertise it as a peer tab.
   const modes: Array<{ mode: CauldronFlowMode; label: string }> = [
     { mode: 'swap', label: 'Swap' },
-    { mode: 'merchant', label: 'Merchant Pay' },
     { mode: 'pool', label: 'Pool' },
   ];
 
   return (
-    <div className="grid grid-cols-3 gap-2">
+    <div className="grid grid-cols-2 gap-2">
       {modes.map(({ mode, label }) => (
         <button
           key={mode}
