@@ -1491,7 +1491,7 @@ mod tests {
             drop(values);
             // SAFETY: the full-transfer conversion owns exactly `length` GValues;
             // this takes their contents and frees the C array once.
-            let copied: Vec<Value> = unsafe { from_glib_full_num(raw, length) };
+            let copied: Vec<Value> = unsafe { FromGlibContainer::from_glib_full_num(raw, length) };
             assert_eq!(copied.len(), length);
             if length > 0 {
                 assert_eq!(copied[0].clone().get::<i32>(), Ok(17));
