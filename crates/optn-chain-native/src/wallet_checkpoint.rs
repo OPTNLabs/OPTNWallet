@@ -9,7 +9,6 @@ use optn_core::{
 use optn_runtime::wallet_checkpoint::{
     WalletCheckpoint, WalletCheckpointStorage, MAX_CHECKPOINT_BYTES,
 };
-use rand_core::{OsRng, RngCore};
 use std::path::PathBuf;
 
 /// One directory for a native host's account-scoped restart files. Identifiers
@@ -81,8 +80,7 @@ impl WalletCheckpointFile {
             }
         }
         let mut nonce = [0u8; NONCE_LEN];
-        OsRng
-            .try_fill_bytes(&mut nonce)
+        getrandom::getrandom(&mut nonce)
             .map_err(|_| "OS randomness unavailable for wallet state")?;
         let bytes = checkpoint.seal(key, &nonce)?;
         write_atomically(&self.path, &bytes).map_err(|error| error.to_string())?;

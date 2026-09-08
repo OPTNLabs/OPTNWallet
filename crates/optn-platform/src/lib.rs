@@ -177,7 +177,10 @@ pub trait WalletStorage: Send {
     fn list(&self) -> PlatformResult<Vec<String>>;
     fn read(&self, handle: &str) -> PlatformResult<Vec<u8>>;
     fn save(&self, handle: &str, previous: Option<&[u8]>, bytes: &[u8]) -> PlatformResult<()>;
-    fn entropy(&self, output: &mut [u8]) -> PlatformResult<()>;
+    /// Fresh OS cryptographic randomness: a 32-byte salt and two 12-byte nonces.
+    /// Return all 56 bytes only after successful generation; on failure return
+    /// an error, never default bytes or partially generated material.
+    fn entropy(&self) -> PlatformResult<[u8; 56]>;
     fn auto_lock_minutes(&self) -> PlatformResult<Option<u32>>;
     fn save_auto_lock_minutes(&self, minutes: u32) -> PlatformResult<()>;
 }
