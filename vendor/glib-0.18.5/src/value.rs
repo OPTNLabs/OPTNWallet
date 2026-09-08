@@ -1478,6 +1478,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_inline_value_array_roundtrip() {
+        for length in [0, 1, 4] {
+            let values = vec![
+                17i32.to_value(),
+                "public array value".to_value(),
+                None::<String>.to_value(),
+                true.to_value(),
+            ];
+            // The safe slice conversion must allocate and initialize every GValue.
+            let raw: *mut gobject_ffi::GValue = values[..length].to_glib_full();
+            drop(values);
+            // SAFETY: the full-transfer conversion owns exactly `length` GValues;
+            // this takes their contents and frees the C array once.
+            let copied: Vec<Value> = unsafe { from_glib_full_num(raw, length) };
+            assert_eq!(copied.len(), length);
+            if length > 0 {
+                assert_eq!(copied[0].clone().get::<i32>(), Ok(17));
+            }
+            if length == 4 {
+                assert_eq!(copied[1].get::<&str>(), Ok("public array value"));
+                assert_eq!(copied[2].get::<Option<String>>(), Ok(None));
+                assert_eq!(copied[3].get::<bool>(), Ok(true));
+            }
+        }
+    }
+
+    #[test]
     fn test_send_value() {
         use std::thread;
 
