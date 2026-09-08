@@ -28,6 +28,10 @@ fn fixture(directory: &Path, handle: &str, account: u32) {
 }
 
 fn run_cli(directory: &Path, args: &[&str], input: &str) -> Output {
+    run_cli_at(directory, args, input, 1)
+}
+
+fn run_cli_at(directory: &Path, args: &[&str], input: &str, port: u16) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_optn"))
         .args(["--network", "chipnet", "--json", "--wallet-directory"])
         .arg(directory)
@@ -37,7 +41,7 @@ fn run_cli(directory: &Path, args: &[&str], input: &str) -> Output {
             "--host",
             "127.0.0.1",
             "--port",
-            "1",
+            &port.to_string(),
             "--no-tls",
             "--timeout",
             "1",
@@ -399,4 +403,122 @@ fn managed_spend_refuses_without_shared_runtime_coin_freshness() {
         .unwrap()
         .contains("Refresh the wallet"));
     assert!(values[0].get("raw").is_none() && values[0].get("txid").is_none());
+}
+
+#[test]
+fn managed_rescan_persists_the_selected_hd_account_and_reopens_it_after_restart() {
+    use optn_runtime::wallet_checkpoint::WalletCheckpointStorage;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    let directory = test_directory();
+    fixture(directory.path(), "public.optn", 1); // Nondefault account must be retained.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let stopped = Arc::new(AtomicBool::new(false));
+    let stop = stopped.clone();
+    let server = std::thread::spawn(move || {
+        let mut histories = 0;
+        while !stop.load(Ordering::SeqCst) {
+            let stream = match listener.accept() {
+                Ok((stream, _)) => stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    continue;
+                }
+                Err(error) => panic!("loopback listener: {error}"),
+            };
+            // Windows accepted sockets inherit the listener's nonblocking mode.
+            stream.set_nonblocking(false).unwrap();
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .unwrap();
+            let mut stream = BufReader::new(stream);
+            loop {
+                let mut line = String::new();
+                if stream.read_line(&mut line).unwrap() == 0 {
+                    break;
+                }
+                let request: Value = serde_json::from_str(&line).unwrap();
+                let result = match request["method"].as_str().unwrap() {
+                    "server.version" => json!(["loopback-fixture", "1.6"]),
+                    "server.features" => {
+                        json!({"genesis_hash": "000000001dd410c49a788668ce26751718cc797474d3152a5fc073dd44fd9f7b"})
+                    }
+                    "server.peers.subscribe" | "blockchain.scripthash.get_mempool" => json!([]),
+                    "blockchain.scripthash.get_history" => {
+                        histories += 1;
+                        json!([])
+                    }
+                    "blockchain.headers.subscribe" => Value::Null,
+                    method => panic!("unexpected loopback request: {method}"),
+                };
+                writeln!(
+                    stream.get_mut(),
+                    "{}",
+                    json!({"id":request["id"],"result":result})
+                )
+                .unwrap();
+            }
+        }
+        histories
+    });
+    let output = run_cli_at(
+        directory.path(),
+        &[
+            "--wallet",
+            "public.optn",
+            "--password-stdin",
+            "rescan",
+            "--gap",
+            "1",
+            "--max-addresses",
+            "4",
+        ],
+        "old-password\n",
+        port,
+    );
+    stopped.store(true, Ordering::SeqCst);
+    assert_eq!(
+        server.join().unwrap(),
+        3,
+        "all ordinary HD branches must be queried"
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let value = &responses(&output)[0];
+    assert_eq!(value["account_path"], "m/44'/1'/1'");
+    assert_eq!(value["complete"], true);
+    assert_eq!(value["scanned_addresses"], 3);
+    let account = optn_core::hd::AccountPath::new(1, 1).unwrap();
+    let key =
+        optn_core::hd::Wallet::from_mnemonic(optn_core::hd::BIP39_TEST_VECTOR_MNEMONIC, "TREZOR")
+            .unwrap()
+            .checkpoint_key(optn_app::Network::Chipnet, account)
+            .unwrap();
+    let id = optn_core::header_hash::sha256d(b"public.optn\0chipnet\0m/44'/1'/1'");
+    let disk = optn_chain_native::wallet_checkpoint::WalletCheckpointDirectory(
+        directory.path().join(".state"),
+    );
+    let (_, revision) = disk
+        .load(&id, &key)
+        .unwrap()
+        .expect("CLI saved authenticated account state");
+    // A new process authenticates and loads the saved account.
+    // No signing or broadcast is attempted.
+    let output = run_cli(directory.path(), &[
+        "--wallet", "public.optn", "--password-stdin", "wallet", "--stdio",
+    ], "{\"request\":{\"command\":\"open\",\"handle\":\"public.optn\",\"password\":\"old-password\"}}\n");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(responses(&output)[0]["ok"], true);
+    assert_eq!(disk.load(&id, &key).unwrap().unwrap().1, revision);
 }

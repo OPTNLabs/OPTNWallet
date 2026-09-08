@@ -62,6 +62,28 @@ use wallet_sync::{WalletSyncRequest, WalletSyncSession};
 const ACTION_CAPACITY: usize = 128;
 const EVENT_CAPACITY: usize = 128;
 
+/// Recheck after synchronous native storage: cancellation and time can advance
+/// even though the actor has not processed another request.
+struct PublicationGuard<'a> {
+    generation: u64,
+    revocation: &'a AtomicU64,
+    now_ms: &'a dyn Fn() -> u64,
+}
+
+impl PublicationGuard<'_> {
+    fn allows(&self, state: &AppState, reply_closed: bool) -> bool {
+        !reply_closed
+            && self.generation == self.revocation.load(Ordering::SeqCst)
+            && !state.lock.idle_should_lock((self.now_ms)())
+    }
+}
+
+fn elapsed_ms(started: std::time::Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis())
+        .unwrap_or(u64::MAX)
+        .saturating_add(1)
+}
+
 /// The runtime driver is no longer running, so the action was not applied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeStopped;
@@ -266,13 +288,21 @@ impl AppRuntime {
 
 impl AppRuntimeDriver {
     fn now_ms(&self) -> u64 {
-        u64::try_from(self.started.elapsed().as_millis())
-            .unwrap_or(u64::MAX)
-            .saturating_add(1)
+        elapsed_ms(self.started)
     }
 
     fn publish(&mut self, event: AppEvent) {
         self.wallet_sync.on_event(&event);
+        if event == AppEvent::WalletOpened {
+            if let Some(checkpoint) = self
+                .security
+                .as_mut()
+                .and_then(|security| security.take_restored_checkpoint())
+            {
+                self.wallet_sync
+                    .install_checkpoint(checkpoint, &mut self.state);
+            }
+        }
         if !self.wallet_sync.coins_are_fresh() {
             self.state.spend = None;
         }
@@ -313,7 +343,14 @@ impl AppRuntimeDriver {
                         &mut self.state,
                         &self.state_tx,
                         &self.event_tx,
+                        self.security.as_mut(),
+                        PublicationGuard {
+                            generation: self.revocation.load(Ordering::SeqCst),
+                            revocation: &self.revocation,
+                            now_ms: &|| elapsed_ms(self.started),
+                        },
                     );
+                    self.expire_session();
                 }
                 RuntimeRequest::WalletOperation(scope, generation, reply) => {
                     if reply.is_closed() {
@@ -411,6 +448,7 @@ impl AppRuntimeDriver {
                         }
                         if !is_query {
                             let event = if self.state.wallet.is_some()
+                                && opens_wallet
                                 && previous_epoch != self.state.lock.unlock_epoch
                             {
                                 AppEvent::WalletOpened
@@ -422,6 +460,12 @@ impl AppRuntimeDriver {
                             } else {
                                 AppEvent::AppLockChanged
                             };
+                            if !opens_wallet && previous_epoch != self.state.lock.unlock_epoch {
+                                // Password rotation revokes in-flight work, but retains the
+                                // account history and its durable checkpoint binding.
+                                self.revocation.fetch_add(1, Ordering::SeqCst);
+                                self.wallet_sync.on_event(&AppEvent::WalletRebuilt);
+                            }
                             self.publish(event);
                         }
                         result
@@ -476,7 +520,15 @@ impl AppRuntimeDriver {
                         self.state.reduce(AppAction::LockWallet);
                         self.publish(AppEvent::WalletLocked);
                     }
-                    let event = if self.wallet_sync.requires_fresh_coins(&action, &self.state) {
+                    let annotation_before = matches!(
+                        action,
+                        AppAction::FreezeCoin(_)
+                            | AppAction::UnfreezeCoin(_)
+                            | AppAction::SetCoinLabel { .. }
+                    )
+                    .then(|| self.state.clone());
+                    let annotation_generation = self.revocation.load(Ordering::SeqCst);
+                    let mut event = if self.wallet_sync.requires_fresh_coins(&action, &self.state) {
                         self.state.spend = None;
                         self.state.notice = Some(
                             "Refresh the wallet before preparing or authorizing a spend.".into(),
@@ -485,6 +537,26 @@ impl AppRuntimeDriver {
                     } else {
                         self.state.reduce_intent(action)
                     };
+                    if event == Some(AppEvent::CoinsChanged) {
+                        if let (Some(previous), Some(security)) =
+                            (annotation_before, self.security.as_mut())
+                        {
+                            let guard = PublicationGuard {
+                                generation: annotation_generation,
+                                revocation: &self.revocation,
+                                now_ms: &|| elapsed_ms(self.started),
+                            };
+                            event = Some(self.wallet_sync.persist_annotation(
+                                &mut self.state,
+                                previous,
+                                |app, sync| security.persist_checkpoint(app, sync),
+                                |app| guard.allows(app, applied.is_closed()),
+                            ));
+                        }
+                    }
+                    // Storage may have crossed the idle deadline. Lock and drop the
+                    // private session before publishing any annotation result.
+                    self.expire_session();
                     if let Some(event) = event {
                         self.publish(event);
                     }
@@ -499,6 +571,34 @@ impl AppRuntimeDriver {
 mod tests {
     use super::*;
     use optn_app::{AppRoute, ThemeMode};
+
+    #[test]
+    fn checkpoint_publication_host_clock_expires_before_another_request() {
+        let mut state = AppState::default();
+        state.reduce(AppAction::OpenImportedWallet {
+            name: "public observation fixture".into(),
+            receive_address: optn_core::cashaddr::Address::from_hash(
+                "bitcoincash",
+                optn_core::cashaddr::AddressKind::P2pkh,
+                [1; 20],
+            )
+            .encode(),
+            account_path: "m/44'/145'/0'".into(),
+        });
+        state.lock.auto_lock = optn_app::AutoLockMinutes::Fifteen;
+        state.lock.record_activity(1);
+        let (runtime, mut driver) = AppRuntime::new(state);
+        driver.started = std::time::Instant::now() - std::time::Duration::from_secs(15 * 60);
+        let guard = PublicationGuard {
+            generation: 0,
+            revocation: &driver.revocation,
+            now_ms: &|| elapsed_ms(driver.started),
+        };
+        assert!(!guard.allows(&driver.state, false));
+        driver.expire_session();
+        assert!(runtime.state().wallet.is_none());
+        assert_eq!(runtime.revocation.load(Ordering::SeqCst), 1);
+    }
 
     #[tokio::test]
     async fn host_clock_expires_timer_sessions_without_renderer_ticks() {

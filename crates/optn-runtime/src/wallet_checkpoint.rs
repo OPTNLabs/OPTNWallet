@@ -26,6 +26,23 @@ use std::collections::HashSet;
 pub const MAX_CHECKPOINT_BYTES: usize = 64 * 1024 * 1024;
 const FORMAT: &str = "optn-hd-restart-v1";
 
+/// Native persistence port. The runtime supplies a private-session key and an
+/// opaque account identifier; adapters supply atomic ciphertext storage only.
+pub trait WalletCheckpointStorage: Send {
+    fn load(
+        &self,
+        id: &[u8; 32],
+        key: &PackKey,
+    ) -> Result<Option<(WalletCheckpoint, [u8; 32])>, String>;
+    fn store(
+        &self,
+        id: &[u8; 32],
+        checkpoint: &WalletCheckpoint,
+        key: &PackKey,
+        expected: Option<[u8; 32]>,
+    ) -> Result<[u8; 32], String>;
+}
+
 /// Only captured by the runtime or constructed by authenticated decoding.
 /// Hosts must supply a wallet-specific key after an actual unlock, never a
 /// renderer-provided wallet id. This is not a key store or an unlock credential.

@@ -6,9 +6,36 @@ use optn_core::{
     header_hash::sha256d,
     wallet_pack::{PackKey, NONCE_LEN},
 };
-use optn_runtime::wallet_checkpoint::{WalletCheckpoint, MAX_CHECKPOINT_BYTES};
+use optn_runtime::wallet_checkpoint::{
+    WalletCheckpoint, WalletCheckpointStorage, MAX_CHECKPOINT_BYTES,
+};
 use rand_core::{OsRng, RngCore};
 use std::path::PathBuf;
+
+/// One directory for a native host's account-scoped restart files. Identifiers
+/// are hashes supplied by the runtime, never renderer paths or private keys.
+pub struct WalletCheckpointDirectory(pub PathBuf);
+
+impl WalletCheckpointStorage for WalletCheckpointDirectory {
+    fn load(
+        &self,
+        id: &[u8; 32],
+        key: &PackKey,
+    ) -> Result<Option<(WalletCheckpoint, [u8; 32])>, String> {
+        WalletCheckpointFile::new(self.0.join(hex::encode(id)).with_extension("state")).load(key)
+    }
+
+    fn store(
+        &self,
+        id: &[u8; 32],
+        checkpoint: &WalletCheckpoint,
+        key: &PackKey,
+        expected: Option<[u8; 32]>,
+    ) -> Result<[u8; 32], String> {
+        WalletCheckpointFile::new(self.0.join(hex::encode(id)).with_extension("state"))
+            .store(checkpoint, key, expected)
+    }
+}
 
 #[derive(Clone)]
 pub struct WalletCheckpointFile {

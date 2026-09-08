@@ -124,3 +124,32 @@ Combined recommendation: **20 test-fixture findings and 4 false positives**.
 This is a reviewed classification proposal only. A future source change must be
 reassessed, and new private-store providers must preserve full-buffer OS entropy
 or fail before encryption. The nonce lifetime and persistence limits above remain.
+
+## Authenticated runtime persistence follow-up
+
+The native session now derives a separate checkpoint key from its verified
+private BIP39 seed using the already-resolved RustCrypto HKDF-SHA256 dependency.
+The fixed extraction context is `OPTN/HD-wallet-checkpoint/v1`; expansion binds
+canonical network and account path, separated by a NUL byte. This is an
+application-specific use of [RFC 5869's context binding](https://www.rfc-editor.org/rfc/rfc5869.html#section-3.2),
+not a new signing-key path or an unlock credential. An independent Python
+hashlib/HMAC oracle checks the public BIP39/TREZOR vector; account, network and
+passphrase separation are tested. No seed or checkpoint key enters renderer DTOs.
+
+Because wallet-password rotation preserves that private seed, it does not need
+to rewrite a second encrypted file atomically with the wallet file. Native
+adapters reuse the existing bounded authenticated checkpoint codec, OS nonce
+generation and compare-and-swap writer. The filename is an opaque hash of wallet
+handle/network/account; this hash is a storage identifier, not a decryption key.
+
+The runtime verifies stored ownership before replacing an open session, saves
+accepted HD observations before publishing freshness, and rolls back visible
+annotation changes on save failure. It rechecks wallet ciphertext after a
+blocking save. Cancellation, queued lock, source revocation and elapsed auto-lock
+time are checked before publication; committed revisions remain recorded even
+when publication is cancelled. Restarts restore stale observations only.
+
+These changes do not approve any alert dismissal. Rescan completeness remains
+labelled by provider evidence; disk authentication does not promote a server
+assertion to SHV/MMR verification. Malicious rollback of disk state, durable
+address issuance/reservation and the nonce lifetime ceiling remain separate work.
