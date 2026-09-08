@@ -25,6 +25,14 @@ npm remains canonical. Remove the override when WDIO's published range includes
 the maintained downloader. See the
 [browser-tool changelog](https://github.com/puppeteer/puppeteer/blob/browsers-v3.2.2/packages/browsers/CHANGELOG.md).
 
+Other reviewed transitive pins are `uuid` 11.1.1 for Keystone's UUID parser
+and the top-level-await plugin's deterministic v5 identifiers, `diff` 8.0.4
+for Mocha's two reporting APIs, and Vite 7.3.6 for the Vitest/vite-node graph.
+The latter accepts patched esbuild 0.28; the application remains on Vite 8.
+Yarn resolutions mirror these repairs, including the existing Ledger UUID
+overrides. Consumer vectors match before/after, and short UUID output buffers
+are now rejected without mutation. Review the callers again when removing pins.
+
 ## Required checks
 
 - `npm run deps:check` verifies package-manager metadata, lockfile format, and

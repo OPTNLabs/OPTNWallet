@@ -274,3 +274,31 @@ copy, React Router and `uuid`; propagation accounts for the larger entry count.
 The existing React Router dependency-review allowlist and glib 0.18.5 exception
 remain unresolved. No new exceptions were added. This is not a clean bill of
 security for the repository, a release approval, or full #71/#75 completion.
+
+The subsequent dependency slice upgrades React Router to 7.18.3 and removes
+both historical React Router GHSA exceptions from dependency review. The
+existing HashRouter shells remain; lazy route components are already module
+scoped, and multisig navigation uses absolute routes. Only the three test-only
+StaticRouter import paths change. No wallet business logic moves into JS/TS.
+The [versioned migration guide](https://github.com/remix-run/react-router/blob/react-router%407.18.3/docs/upgrading/v6.md)
+and existing route consumers were reviewed before the upgrade.
+
+Scoped UUID and Mocha pins remove the remaining
+[UUID bounds defect](https://github.com/advisories/GHSA-w5hq-g745-h8pq) and
+[patch-parser denial of service](https://github.com/advisories/GHSA-73rr-hh4g-fpgx).
+Vitest/vite-node use Vite 7.3.6 with patched esbuild 0.28.2, removing the
+[Windows development-server file read](https://github.com/advisories/GHSA-g7r4-m6w7-qqqr).
+Independent npm/Yarn installs preserve all 100 logical native-package platform
+targets (the old 126 lock paths included duplicate esbuild versions).
+The actual Keystone request CBOR, plugin v5 identifiers and Mocha diff output
+match the previous graph; UUID output bounds and malformed patch termination
+are checked against the patched graph. All eleven existing package patches
+still apply. The full existing application suite passes 1810 tests with nine
+existing skips; core typecheck, lint and production build pass.
+
+Full npm audit now has **six low affected entries**, all propagated from the
+single remaining [elliptic advisory](https://github.com/advisories/GHSA-848j-6mx2-7j84).
+There are no moderate, high or critical entries in that graph. Elliptic has no
+patched published release in this audit; its legacy browser crypto dependency
+still needs remediation. The Rust/CodeQL findings and native device/workflow
+verification are separate. Nothing was dismissed or newly excepted.
