@@ -13,6 +13,7 @@ on:
       - 'crates/**/Cargo.lock'
       - 'fuzz/**'
       - 'src-tauri/**'
+      - 'vendor/glib-0.18.5/**'
       - '.github/workflows/rust-quality.yml'
   push:
     branches: [dev, staging]
@@ -56,6 +57,16 @@ jobs:
       - name: Shared protocol core tests
         run: cargo nextest run --manifest-path crates/optn-core/Cargo.toml
 
+      - name: Install GLib regression prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libglib2.0-dev pkg-config
+
+      - name: Optimized GLib output-pointer regression
+        run: >-
+          cargo test --manifest-path vendor/glib-0.18.5/Cargo.toml --release --lib
+          variant_iter::tests::test_variant_str_iter_output_pointer -- --exact
+
   dependency-policy:
     name: Rust dependency policy
     runs-on: ubuntu-latest
@@ -81,6 +92,24 @@ jobs:
 
       - name: Native Tauri policy
         run: cargo deny --manifest-path src-tauri/Cargo.toml check advisories bans licenses sources
+
+      # Cargo advisory matching can skip path dependencies. Audit the original
+      # registry identity as well, using the existing policy and exception list.
+      # The optimized test above verifies the separately documented source repair.
+      - name: Preserve vendored GLib advisory coverage
+        run: |
+          audit_dir="$RUNNER_TEMP/optn-glib-advisory"
+          mkdir -p "$audit_dir/src"
+          touch "$audit_dir/src/lib.rs"
+          cat > "$audit_dir/Cargo.toml" <<'EOF'
+          [package]
+          name = "optn-glib-advisory"
+          version = "0.0.0"
+          edition = "2021"
+          [dependencies]
+          glib = "=0.18.5"
+          EOF
+          cargo deny --manifest-path "$audit_dir/Cargo.toml" --config "$GITHUB_WORKSPACE/deny.toml" check advisories
 
   feature-matrix:
     name: Rust feature and fuzz compile
