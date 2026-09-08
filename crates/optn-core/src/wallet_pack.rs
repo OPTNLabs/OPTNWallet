@@ -336,7 +336,7 @@ pub const SALT_LEN: usize = 16;
 /// Bytes of nonce AES-GCM needs.
 pub const NONCE_LEN: usize = 12;
 
-/// A key derived from a wallet password.
+/// A key for encrypted wallet data, derived from a password or private HD seed.
 ///
 /// Zeroized on drop, and its `Debug` says nothing: this key decrypts the
 /// wallet's cold data, and a log line carrying it would outlive the session it
@@ -345,6 +345,10 @@ pub const NONCE_LEN: usize = 12;
 pub struct PackKey([u8; 32]);
 
 impl PackKey {
+    pub(crate) const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
     pub const fn expose(&self) -> &[u8; 32] {
         &self.0
     }

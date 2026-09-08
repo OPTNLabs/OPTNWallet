@@ -578,6 +578,7 @@ dependencies = [
  "chacha20",
  "ctr",
  "getrandom 0.2.17",
+ "hkdf",
  "hmac",
  "js-sys",
  "k256",

@@ -75,8 +75,11 @@ pub async fn run(
     let directory = directory
         .or_else(|| dirs::data_dir().map(|root| root.join("com.optilabs.wallet").join("wallets")))
         .ok_or_else(|| CliError::Usage("Specify a wallet directory.".into()))?;
+    let checkpoints =
+        optn_chain_native::wallet_checkpoint::WalletCheckpointDirectory(directory.join(".state"));
     let storage = optn_platform_native::wallet_storage::NativeWalletStorage::new(directory);
-    let service = WalletSecurity::new(Box::new(storage), None);
+    let service =
+        WalletSecurity::new(Box::new(storage), None).with_checkpoints(Box::new(checkpoints));
     let initial = AppState {
         network,
         ..Default::default()
@@ -281,7 +284,8 @@ fn managed_password(cli: &crate::Cli, prompt: &str) -> Result<SecretText> {
     }
 }
 
-pub async fn read_managed_wallet(cli: &crate::Cli) -> Result<optn_core::hd::Wallet> {
+/// The saved-wallet runtime is also the owner of HD observations and restart state.
+pub async fn open_managed_runtime(cli: &crate::Cli) -> Result<&AppRuntime> {
     let handle = cli
         .wallet
         .as_deref()
@@ -296,13 +300,17 @@ pub async fn read_managed_wallet(cli: &crate::Cli) -> Result<optn_core::hd::Wall
                     dirs::data_dir().map(|root| root.join("com.optilabs.wallet").join("wallets"))
                 })
                 .ok_or_else(|| CliError::Usage("Specify --wallet-directory.".into()))?;
+            let checkpoints = optn_chain_native::wallet_checkpoint::WalletCheckpointDirectory(
+                directory.join(".state"),
+            );
             let storage = optn_platform_native::wallet_storage::NativeWalletStorage::new(directory);
             let (runtime, driver) = AppRuntime::new_with_security(
                 AppState {
                     network: cli.network,
                     ..Default::default()
                 },
-                WalletSecurity::new(Box::new(storage), None),
+                WalletSecurity::new(Box::new(storage), None)
+                    .with_checkpoints(Box::new(checkpoints)),
             )
             .map_err(|error| CliError::Usage(message(error)))?;
             tokio::spawn(driver.run());
@@ -328,6 +336,11 @@ pub async fn read_managed_wallet(cli: &crate::Cli) -> Result<optn_core::hd::Wall
                 .into(),
         ));
     }
+    Ok(runtime)
+}
+
+pub async fn read_managed_wallet(cli: &crate::Cli) -> Result<optn_core::hd::Wallet> {
+    let runtime = open_managed_runtime(cli).await?;
     let state = runtime.state();
     let stored_account = optn_core::hd::parse_account_path(
         &state

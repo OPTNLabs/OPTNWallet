@@ -1145,15 +1145,45 @@ async fn rescan_shared_wallet(
     }
     .validate()
     .map_err(CliError::Usage)?;
+    let managed = if cli.wallet.is_some() {
+        Some(wallet_security::open_managed_runtime(cli).await?)
+    } else {
+        None
+    };
+    let stored = managed.and_then(|runtime| runtime.state().wallet);
+    let default_account = stored
+        .as_ref()
+        .map(|wallet| hd::parse_account_path(&wallet.account_path))
+        .transpose()?
+        .unwrap_or_else(|| hd::AccountPath::default_for(cli.network));
     let account = account_path
         .map(hd::parse_account_path)
         .transpose()?
-        .unwrap_or_else(|| hd::AccountPath::default_for(cli.network));
+        .unwrap_or(default_account);
+    if managed.is_some() && account != default_account {
+        return Err(CliError::Usage(
+            "The rescan account must match the selected saved wallet.".into(),
+        ));
+    }
     let xpub = match xpub {
         Some(xpub) => xpub.to_owned(),
+        None if managed.is_some() => stored
+            .as_ref()
+            .and_then(|wallet| wallet.account_xpub.clone())
+            .ok_or_else(|| CliError::Usage("The selected wallet has no HD account.".into()))?,
         // Drop the temporary seed-holding Wallet before starting provider I/O.
         None => read_wallet(cli).await?.account_xpub_at(account)?,
     };
+    if managed.is_some()
+        && stored
+            .as_ref()
+            .and_then(|wallet| wallet.account_xpub.as_deref())
+            != Some(xpub.as_str())
+    {
+        return Err(CliError::Usage(
+            "The rescan xpub must match the selected saved wallet.".into(),
+        ));
+    }
     let receive = optn_core::watch_only::address_under_account(cli.network, &xpub, 0, 0)?;
     let selection = match configured_chain(cli)? {
         Some(selection) => selection,
@@ -1189,14 +1219,14 @@ async fn rescan_shared_wallet(
         }
     };
     tokio::time::timeout(std::time::Duration::from_secs(timeout_seconds(cli)), async {
-        let runtime = optn_runtime::AppRuntime::spawn(optn_app::AppState {
+        let runtime = managed.cloned().unwrap_or_else(|| optn_runtime::AppRuntime::spawn(optn_app::AppState {
             network: cli.network,
             wallet: Some(optn_app::OpenedWallet {
                 kind: optn_app::WalletKind::WatchOnly, name: "HD account rescan".into(),
                 receive_address: receive.address, master_fingerprint: None, account_path: account.to_string(),
                 multisig_policy: None, account_xpub: Some(xpub.clone()),
             }), ..Default::default()
-        });
+        }));
         let stack = build_native_chain_stack(selection.catalog, selection.policy, &cli.network.to_string(), &NativeChainSecrets::default()).await;
         let mut worker = optn_runtime::sync_worker::ProgressiveSyncWorker::new(Default::default());
         runtime.sync_hd_wallet(&mut *stack.service.lock().await, &mut worker, xpub,

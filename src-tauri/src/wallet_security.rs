@@ -72,8 +72,11 @@ pub fn service(
     app: tauri::AppHandle,
     root: std::path::PathBuf,
 ) -> optn_runtime::wallet_security::WalletSecurity {
+    let checkpoints =
+        optn_chain_native::wallet_checkpoint::WalletCheckpointDirectory(root.join(".state"));
     optn_runtime::wallet_security::WalletSecurity::new(
         Box::new(optn_platform_native::wallet_storage::NativeWalletStorage::new(root)),
         Some(Box::new(NativeBiometrics(app))),
     )
+    .with_checkpoints(Box::new(checkpoints))
 }

@@ -1,4 +1,6 @@
 //! Wallet-password lifecycle shared by native GUI and CLI hosts.
+use crate::wallet_checkpoint::{WalletCheckpoint, WalletCheckpointStorage};
+use crate::wallet_sync::WalletReconciliation;
 use optn_app::{AppAction, AppState, AutoLockMinutes, Network, SecretText};
 use optn_core::{hd, wallet_file::WalletFile};
 use optn_platform::{WalletBiometrics, WalletStorage};
@@ -25,12 +27,21 @@ struct Session {
     epoch: u64,
     xpub: String,
     network: Network,
+    checkpoint: Option<CheckpointSession>,
+}
+
+struct CheckpointSession {
+    id: [u8; 32],
+    key: optn_core::wallet_pack::PackKey,
+    revision: Option<[u8; 32]>,
+    restored: Option<WalletCheckpoint>,
 }
 
 pub struct WalletSecurity {
     storage: Box<dyn WalletStorage>,
     biometrics: Option<Box<dyn WalletBiometrics>>,
     session: Option<Session>,
+    checkpoints: Option<Box<dyn WalletCheckpointStorage>>,
 }
 
 impl WalletSecurity {
@@ -78,7 +89,49 @@ impl WalletSecurity {
             storage,
             biometrics,
             session: None,
+            checkpoints: None,
         }
+    }
+
+    pub fn with_checkpoints(mut self, storage: Box<dyn WalletCheckpointStorage>) -> Self {
+        self.checkpoints = Some(storage);
+        self
+    }
+
+    /// Taken only after open validated it against the newly derived account.
+    pub(crate) fn take_restored_checkpoint(&mut self) -> Option<WalletCheckpoint> {
+        self.session.as_mut()?.checkpoint.as_mut()?.restored.take()
+    }
+
+    pub(crate) fn persist_checkpoint(
+        &mut self,
+        app: &AppState,
+        state: &WalletReconciliation,
+    ) -> Result<(), TransportError> {
+        let Some(storage) = &self.checkpoints else {
+            return Ok(());
+        };
+        let session = self.bound(app, app.lock.unlock_epoch)?;
+        let binding = session
+            .checkpoint
+            .as_ref()
+            .ok_or_else(|| failure("Wallet checkpoint session is unavailable."))?;
+        let checkpoint = WalletCheckpoint::capture(app, state).map_err(failure)?;
+        let revision = storage
+            .store(&binding.id, &checkpoint, &binding.key, binding.revision)
+            .map_err(failure)?;
+        // No other request can change this session within the actor turn.
+        if let Some(binding) = self
+            .session
+            .as_mut()
+            .and_then(|session| session.checkpoint.as_mut())
+        {
+            binding.revision = Some(revision);
+        }
+        // Another process can rotate/replace the wallet during a blocking save.
+        // Keep any committed checkpoint revision, but grant no fresh authority.
+        self.bound(app, app.lock.unlock_epoch)?;
+        Ok(())
     }
 
     pub fn restore_policy(&self, state: &mut AppState) -> Result<(), TransportError> {
@@ -132,6 +185,9 @@ impl WalletSecurity {
     }
 
     pub fn status(&self, state: &AppState) -> Result<WalletSecurityStatus, TransportError> {
+        if self.session.is_some() {
+            self.bound(state, state.lock.unlock_epoch)?;
+        }
         let mut wallets = Vec::new();
         for handle in self.storage.list().map_err(platform)? {
             // A malformed file is not an empty wallet and must never be overwritten.
@@ -196,19 +252,46 @@ impl WalletSecurity {
             .address(network, &account.address_path(false, 0))
             .map_err(crypto)?
             .encode();
+        let checkpoint = if let Some(storage) = &self.checkpoints {
+            let key = wallet.checkpoint_key(network, account).map_err(crypto)?;
+            let id = optn_core::header_hash::sha256d(
+                format!("{handle}\0{network}\0{account}").as_bytes(),
+            );
+            let loaded = storage.load(&id, &key).map_err(failure)?;
+            let (restored, revision) = match loaded {
+                Some((checkpoint, revision)) => (Some(checkpoint), Some(revision)),
+                None => (None, None),
+            };
+            Some(CheckpointSession {
+                id,
+                key,
+                revision,
+                restored,
+            })
+        } else {
+            None
+        };
         // Verify and derive everything before replacing the previous open wallet.
-        state.reduce(AppAction::LockWallet);
-        state.reduce(AppAction::SetNetwork(network));
-        state.reduce(AppAction::OpenImportedWallet {
+        let mut candidate = state.clone();
+        candidate.reduce(AppAction::LockWallet);
+        candidate.reduce(AppAction::SetNetwork(network));
+        candidate.reduce(AppAction::OpenImportedWallet {
             name: file.name.clone(),
             receive_address: address,
             account_path: account.path(),
         });
-        let opened = state
+        let opened = candidate
             .wallet
             .as_mut()
             .ok_or_else(|| failure("Wallet could not be opened."))?;
         opened.account_xpub = Some(xpub.clone());
+        if let Some(restored) = checkpoint
+            .as_ref()
+            .and_then(|binding| binding.restored.as_ref())
+        {
+            restored.validate_wallet(&candidate).map_err(failure)?;
+        }
+        *state = candidate;
         self.session = Some(Session {
             handle,
             bytes,
@@ -217,6 +300,7 @@ impl WalletSecurity {
             epoch: state.lock.unlock_epoch,
             xpub,
             network,
+            checkpoint,
         });
         Ok(())
     }
@@ -387,7 +471,7 @@ impl WalletSecurity {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use optn_platform::{PlatformError, PlatformResult};
     use std::{
@@ -399,7 +483,7 @@ mod tests {
     };
 
     #[derive(Clone, Default)]
-    struct Storage(Arc<Mutex<BTreeMap<String, Vec<u8>>>>, Arc<AtomicU8>);
+    pub(crate) struct Storage(Arc<Mutex<BTreeMap<String, Vec<u8>>>>, Arc<AtomicU8>);
     impl WalletStorage for Storage {
         fn list(&self) -> PlatformResult<Vec<String>> {
             Ok(self.0.lock().unwrap().keys().cloned().collect())
@@ -590,6 +674,10 @@ mod tests {
         storage
             .save(&handle, Some(&saved), &changed_on_disk)
             .unwrap();
+        assert!(
+            transport.wallet_security(Request::Status).await.is_err(),
+            "a public rescan must not reuse a session whose wallet file changed"
+        );
         assert!(
             transport
                 .wallet_security(Request::SetBiometric {

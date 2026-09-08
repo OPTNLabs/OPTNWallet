@@ -26,6 +26,7 @@ pub enum WalletSyncError {
     Superseded,
     InvalidSnapshot(String),
     HdDiscovery(String),
+    Persistence(String),
     Refresh(ProgressiveSyncError),
 }
 
@@ -36,6 +37,7 @@ impl std::fmt::Display for WalletSyncError {
             Self::NoWallet => f.write_str("open a wallet before synchronizing"),
             Self::InvalidScope(reason)
             | Self::InvalidSnapshot(reason)
+            | Self::Persistence(reason)
             | Self::HdDiscovery(reason) => f.write_str(reason),
             Self::Superseded => f.write_str("wallet sync request is no longer current"),
             Self::Refresh(error) => write!(f, "wallet refresh failed: {error:?}"),
@@ -49,6 +51,7 @@ impl std::error::Error for WalletSyncError {}
 // network-away-and-back ABA and publication into another runtime instance.
 pub(super) struct WalletSyncLease {
     id: Arc<()>,
+    generation: u64,
     network: Network,
     addresses: Vec<String>,
     interests: Vec<WalletInterest>,
@@ -372,12 +375,46 @@ impl WalletSyncSession {
         self.publish_status();
     }
 
+    /// Open/restore callers validate account ownership before installing it.
+    pub(super) fn install_checkpoint(&mut self, checkpoint: WalletCheckpoint, app: &mut AppState) {
+        app.coins = checkpoint.coins;
+        app.spend = None;
+        self.state = checkpoint.state;
+        self.state
+            .record_failure("restored wallet state requires a live refresh");
+        self.publish_status();
+    }
+
+    pub(super) fn persist_annotation(
+        &mut self,
+        app: &mut AppState,
+        previous: AppState,
+        persist: impl FnOnce(
+            &AppState,
+            &WalletReconciliation,
+        ) -> Result<(), optn_transport::TransportError>,
+        may_publish: impl Fn(&AppState) -> bool,
+    ) -> AppEvent {
+        if !may_publish(app) || persist(app, &self.state).is_err() || !may_publish(app) {
+            *app = previous;
+            app.spend = None;
+            app.notice = Some("Wallet annotation could not be saved or publication was cancelled. Reopen the wallet before continuing.".into());
+            self.invalidate(
+                "wallet annotation save failed or was cancelled; reopen before continuing".into(),
+            );
+            return AppEvent::NoticeChanged;
+        }
+        AppEvent::CoinsChanged
+    }
+
     pub(super) fn handle(
         &mut self,
         request: WalletSyncRequest,
         app: &mut AppState,
         app_tx: &watch::Sender<AppState>,
         events: &broadcast::Sender<AppEvent>,
+        security: Option<&mut crate::wallet_security::WalletSecurity>,
+        guard: crate::PublicationGuard<'_>,
     ) {
         match request {
             WalletSyncRequest::Checkpoint(reply) => {
@@ -400,19 +437,14 @@ impl WalletSyncSession {
                         .map_err(WalletSyncError::InvalidSnapshot)
                 };
                 if outcome.is_ok() {
-                    app.coins = checkpoint.coins;
-                    app.spend = None;
-                    self.state = checkpoint.state;
-                    self.state
-                        .record_failure("restored wallet state requires a live refresh");
-                    self.publish_status();
+                    self.install_checkpoint(*checkpoint, app);
                     app_tx.send_replace(app.clone());
                     let _ = events.send(AppEvent::CoinsChanged);
                 }
                 let _ = reply.send(outcome);
             }
             WalletSyncRequest::BeginHd(xpub, limits, reply) => {
-                let outcome = self.begin_hd(app, xpub, limits);
+                let outcome = self.begin_hd(app, xpub, limits, guard.generation);
                 if outcome.is_ok() && app.spend.take().is_some() {
                     app_tx.send_replace(app.clone());
                     let _ = events.send(AppEvent::CoinsChanged);
@@ -434,7 +466,7 @@ impl WalletSyncSession {
                         "an HD wallet requires account-wide synchronization".into(),
                     ))
                 } else {
-                    self.begin(app, addresses)
+                    self.begin(app, addresses, guard.generation)
                 };
                 if outcome.is_ok() && app.spend.take().is_some() {
                     app_tx.send_replace(app.clone());
@@ -443,7 +475,20 @@ impl WalletSyncSession {
                 let _ = reply.send(outcome);
             }
             WalletSyncRequest::Finish(lease, result, reply) => {
-                let outcome = self.finish(app, lease, *result);
+                let guard = crate::PublicationGuard {
+                    generation: lease.generation,
+                    ..guard
+                };
+                let outcome = self.finish(
+                    app,
+                    lease,
+                    *result,
+                    |app, state| match security {
+                        Some(security) => security.persist_checkpoint(app, state),
+                        None => Ok(()),
+                    },
+                    |app| guard.allows(app, reply.is_closed()),
+                );
                 if outcome == Ok(ReconciliationDecision::Accepted) {
                     app_tx.send_replace(app.clone());
                     let _ = events.send(AppEvent::CoinsChanged);
@@ -465,6 +510,7 @@ impl WalletSyncSession {
         &mut self,
         app: &AppState,
         addresses: Vec<String>,
+        generation: u64,
     ) -> Result<WalletSyncLease, WalletSyncError> {
         let wallet = app.wallet.as_ref().ok_or(WalletSyncError::NoWallet)?;
         let watched = wallet_scripts(app.network, &addresses, &app.coins)
@@ -493,6 +539,7 @@ impl WalletSyncSession {
         let (completion, abandoned) = oneshot::channel();
         let lease = WalletSyncLease {
             id: id.clone(),
+            generation,
             network: app.network,
             addresses: watched.values().cloned().collect(),
             interests: watched
@@ -520,6 +567,7 @@ impl WalletSyncSession {
         app: &AppState,
         xpub: String,
         limits: HdSyncLimits,
+        generation: u64,
     ) -> Result<(WalletSyncLease, HdAccountScan), WalletSyncError> {
         let wallet = app.wallet.as_ref().ok_or(WalletSyncError::NoWallet)?;
         if wallet.multisig_policy.is_some() {
@@ -563,7 +611,7 @@ impl WalletSyncSession {
         }
         let scan = HdAccountScan::new(app.network, xpub, account, limits, required)
             .map_err(WalletSyncError::InvalidScope)?;
-        let lease = self.begin(app, scan.addresses())?;
+        let lease = self.begin(app, scan.addresses(), generation)?;
         Ok((lease, scan))
     }
 
@@ -572,6 +620,11 @@ impl WalletSyncSession {
         app: &mut AppState,
         lease: WalletSyncLease,
         result: WalletReconciliation,
+        persist: impl FnOnce(
+            &AppState,
+            &WalletReconciliation,
+        ) -> Result<(), optn_transport::TransportError>,
+        may_publish: impl Fn(&AppState) -> bool,
     ) -> Result<ReconciliationDecision, WalletSyncError> {
         if !self
             .active
@@ -580,12 +633,15 @@ impl WalletSyncSession {
         {
             return Err(WalletSyncError::Superseded);
         }
-        if lease
-            .source_lifetime
-            .as_ref()
-            .is_some_and(|source| source.is_revoked())
-        {
-            self.invalidate("wallet source was revoked before publication".into());
+        let may_publish = |app: &AppState| {
+            may_publish(app)
+                && !lease
+                    .source_lifetime
+                    .as_ref()
+                    .is_some_and(|source| source.is_revoked())
+        };
+        if !may_publish(app) {
+            self.invalidate("wallet refresh cancelled before publication".into());
             return Err(WalletSyncError::Superseded);
         }
         self.active = None;
@@ -635,19 +691,40 @@ impl WalletSyncSession {
             true,
         );
         if decision == ReconciliationDecision::Accepted {
+            let mut candidate_app = app.clone();
             let snapshot = &next
                 .authoritative
                 .as_ref()
                 .expect("accepted candidate")
                 .value;
             if let Err(error) =
-                snapshot.reconcile_coins(lease.network, &lease.addresses, &mut app.coins)
+                snapshot.reconcile_coins(lease.network, &lease.addresses, &mut candidate_app.coins)
             {
                 let reason = error.to_string();
                 self.state.record_failure(reason.clone());
                 self.publish_status();
                 return Err(WalletSyncError::InvalidSnapshot(reason));
             }
+            if !may_publish(app) {
+                self.invalidate("wallet refresh cancelled before persistence".into());
+                return Err(WalletSyncError::Superseded);
+            }
+            if let Err(error) = persist(&candidate_app, &next) {
+                let reason = match error {
+                    optn_transport::TransportError::Other(reason) => reason,
+                    _ => "wallet state could not be saved".into(),
+                };
+                self.state.record_failure(reason.clone());
+                self.publish_status();
+                return Err(WalletSyncError::Persistence(reason));
+            }
+            // Storage can block while a lock or source change is queued. A saved
+            // checkpoint may be restored later, but it grants no fresh authority.
+            if !may_publish(app) {
+                self.invalidate("wallet refresh cancelled during persistence".into());
+                return Err(WalletSyncError::Superseded);
+            }
+            app.coins = candidate_app.coins;
             // A prepared spend may refer to outputs removed by this refresh.
             app.spend = None;
         }
@@ -681,10 +758,10 @@ mod tests {
         }
     }
 
-    async fn runtime() -> AppRuntime {
+    fn observation_app() -> AppState {
         // Same non-HD address-observation session used by CLI balance/utxos.
         // Seed and hardware wallet sessions always require HD discovery.
-        AppRuntime::spawn(AppState {
+        AppState {
             network: Network::Chipnet,
             wallet: Some(optn_app::OpenedWallet {
                 kind: optn_app::WalletKind::WatchOnly,
@@ -696,7 +773,11 @@ mod tests {
                 account_xpub: None,
             }),
             ..Default::default()
-        })
+        }
+    }
+
+    async fn runtime() -> AppRuntime {
+        AppRuntime::spawn(observation_app())
     }
 
     fn candidate(evidence: Evidence) -> WalletReconciliation {
@@ -725,6 +806,322 @@ mod tests {
             true,
         );
         state
+    }
+
+    #[test]
+    fn checkpoint_publication_cancelled_old_finish_keeps_newer_lease() {
+        use crate::PublicationGuard;
+        use std::sync::atomic::AtomicU64;
+
+        let mut app = observation_app();
+        let (mut session, status) = WalletSyncSession::new();
+        let old = session.begin(&app, vec![address()], 0).unwrap();
+        let newer = session.begin(&app, vec![address()], 0).unwrap();
+        let (app_tx, _) = watch::channel(app.clone());
+        let (events, _) = broadcast::channel(4);
+        let revocation = AtomicU64::new(0);
+        let (reply, received) = oneshot::channel();
+        drop(received);
+        session.handle(
+            WalletSyncRequest::Finish(old, Box::new(candidate(Evidence::ServerAssertion)), reply),
+            &mut app,
+            &app_tx,
+            &events,
+            None,
+            PublicationGuard {
+                generation: 0,
+                revocation: &revocation,
+                now_ms: &|| 1,
+            },
+        );
+        assert!(Arc::ptr_eq(session.active.as_ref().unwrap(), &newer.id));
+        assert!(newer.cancelled.has_changed().is_ok());
+
+        let (reply, mut received) = oneshot::channel();
+        session.handle(
+            WalletSyncRequest::Finish(newer, Box::new(candidate(Evidence::ServerAssertion)), reply),
+            &mut app,
+            &app_tx,
+            &events,
+            None,
+            PublicationGuard {
+                generation: 0,
+                revocation: &revocation,
+                now_ms: &|| 1,
+            },
+        );
+        assert_eq!(
+            received.try_recv().unwrap(),
+            Ok(ReconciliationDecision::Accepted)
+        );
+        assert_eq!(app.coins.len(), 1);
+        assert!(status.borrow().sync.utxos_fresh);
+    }
+
+    #[test]
+    fn checkpoint_publication_closed_reply_skips_store() {
+        use crate::PublicationGuard;
+        use std::sync::atomic::AtomicU64;
+
+        let mut app = observation_app();
+        let (mut session, status) = WalletSyncSession::new();
+        let lease = session.begin(&app, vec![address()], 0).unwrap();
+        let revocation = AtomicU64::new(0);
+        let guard = PublicationGuard {
+            generation: 0,
+            revocation: &revocation,
+            now_ms: &|| 1,
+        };
+        let (reply, received) = oneshot::channel::<()>();
+        drop(received);
+        assert_eq!(
+            session.finish(
+                &mut app,
+                lease,
+                candidate(Evidence::ServerAssertion),
+                |_, _| panic!("cancelled work must not write"),
+                |app| guard.allows(app, reply.is_closed()),
+            ),
+            Err(WalletSyncError::Superseded)
+        );
+        assert!(session.active.is_none());
+        assert!(app.coins.is_empty());
+        assert!(!status.borrow().sync.utxos_fresh);
+    }
+
+    #[test]
+    fn checkpoint_publication_cancel_during_store_keeps_commit_without_publishing() {
+        use crate::PublicationGuard;
+        use std::{cell::Cell, sync::atomic::AtomicU64};
+
+        let mut app = observation_app();
+        let (mut session, status) = WalletSyncSession::new();
+        let lease = session.begin(&app, vec![address()], 0).unwrap();
+        let revocation = AtomicU64::new(0);
+        let guard = PublicationGuard {
+            generation: 0,
+            revocation: &revocation,
+            now_ms: &|| 1,
+        };
+        let (reply, received) = oneshot::channel::<()>();
+        let committed_revision = Cell::new(0);
+        // Synchronous storage hook closes the real reply receiver at the same
+        // boundary as a caller timing out while native storage is blocked.
+        let result = session.finish(
+            &mut app,
+            lease,
+            candidate(Evidence::ServerAssertion),
+            |candidate, _| {
+                assert_eq!(candidate.coins.len(), 1);
+                committed_revision.set(1);
+                drop(received);
+                Ok(())
+            },
+            |app| guard.allows(app, reply.is_closed()),
+        );
+        assert_eq!(result, Err(WalletSyncError::Superseded));
+        assert_eq!(committed_revision.get(), 1);
+        assert!(app.coins.is_empty());
+        assert!(status.borrow().authoritative.is_none());
+        assert!(!status.borrow().sync.utxos_fresh);
+    }
+
+    #[test]
+    fn checkpoint_publication_idle_deadline_during_store_refuses_freshness() {
+        use crate::PublicationGuard;
+        use std::{cell::Cell, sync::atomic::AtomicU64};
+
+        let mut app = observation_app();
+        app.lock.auto_lock = optn_app::AutoLockMinutes::Fifteen;
+        app.lock.mark_unlocked();
+        app.lock.record_activity(1);
+        let (mut session, status) = WalletSyncSession::new();
+        let lease = session.begin(&app, vec![address()], 0).unwrap();
+        let now = Cell::new(900_000);
+        let revocation = AtomicU64::new(0);
+        let clock = || now.get();
+        let guard = PublicationGuard {
+            generation: 0,
+            revocation: &revocation,
+            now_ms: &clock,
+        };
+        assert!(guard.allows(&app, false));
+        let result = session.finish(
+            &mut app,
+            lease,
+            candidate(Evidence::ServerAssertion),
+            |_, _| {
+                now.set(900_001);
+                Ok(())
+            },
+            |app| guard.allows(app, false),
+        );
+        assert_eq!(result, Err(WalletSyncError::Superseded));
+        assert!(app.coins.is_empty());
+        assert!(status.borrow().authoritative.is_none());
+        assert!(!status.borrow().sync.utxos_fresh);
+    }
+
+    #[test]
+    fn checkpoint_publication_annotations_recheck_reply_revocation_and_idle_after_store() {
+        use crate::PublicationGuard;
+        use std::{
+            cell::Cell,
+            sync::atomic::{AtomicU64, Ordering},
+        };
+
+        for cause in 0..3 {
+            let mut app = observation_app();
+            app.lock.auto_lock = optn_app::AutoLockMinutes::Fifteen;
+            app.lock.mark_unlocked();
+            app.lock.record_activity(1);
+            let (mut session, status) = WalletSyncSession::new();
+            let lease = session.begin(&app, vec![address()], 0).unwrap();
+            session
+                .finish(
+                    &mut app,
+                    lease,
+                    candidate(Evidence::ServerAssertion),
+                    |_, _| Ok(()),
+                    |_| true,
+                )
+                .unwrap();
+            let previous = app.clone();
+            let outpoint = app.coins.iter().next().unwrap().outpoint();
+            assert_eq!(
+                app.reduce_intent(AppAction::FreezeCoin(outpoint)),
+                Some(AppEvent::CoinsChanged)
+            );
+            let now = Cell::new(1);
+            let revocation = AtomicU64::new(0);
+            let clock = || now.get();
+            let guard = PublicationGuard {
+                generation: 0,
+                revocation: &revocation,
+                now_ms: &clock,
+            };
+            let (reply, received) = oneshot::channel::<()>();
+            let mut received = Some(received);
+            let committed = Cell::new(false);
+            let event = session.persist_annotation(
+                &mut app,
+                previous.clone(),
+                |app, _| {
+                    assert_eq!(
+                        app.coins.get(outpoint).unwrap().freeze(),
+                        Some(FreezeReason::User)
+                    );
+                    committed.set(true);
+                    match cause {
+                        0 => drop(received.take()),
+                        1 => {
+                            revocation.fetch_add(1, Ordering::SeqCst);
+                        }
+                        _ => now.set(900_001),
+                    }
+                    Ok(())
+                },
+                |app| guard.allows(app, reply.is_closed()),
+            );
+            assert!(committed.get());
+            assert_eq!(reply.is_closed(), cause == 0);
+            assert_eq!(event, AppEvent::NoticeChanged);
+            assert_eq!(app.coins, previous.coins);
+            assert!(app.spend.is_none());
+            assert!(!status.borrow().sync.utxos_fresh);
+        }
+    }
+
+    #[tokio::test]
+    async fn checkpoint_publication_open_status_failure_cannot_keep_previous_wallet_freshness() {
+        use crate::wallet_security::{tests::Storage, WalletSecurity};
+        use optn_app::SecretText;
+        use optn_platform::{PlatformError, PlatformResult, WalletBiometrics, WalletStorage};
+        use optn_transport::WalletSecurityRequest;
+
+        struct FailedEnrollmentStatus;
+        impl WalletBiometrics for FailedEnrollmentStatus {
+            fn available(&self) -> bool {
+                true
+            }
+            fn enrolled(&self, _: &str) -> PlatformResult<bool> {
+                Err(PlatformError::Unavailable)
+            }
+            fn unlock(&self, _: &str) -> PlatformResult<Option<Vec<u8>>> {
+                panic!("not requested")
+            }
+            fn enroll(&self, _: &str, _: &[u8]) -> PlatformResult<()> {
+                panic!("not requested")
+            }
+            fn remove(&self, _: &str) -> PlatformResult<()> {
+                panic!("not requested")
+            }
+        }
+
+        // Published BIP39 fixture; deterministic entropy is test-only. Use the
+        // real wallet-file encryption and password verification unchanged.
+        let file = optn_core::wallet_file::WalletFile::create(
+            "new public fixture",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "", "", "", Network::Chipnet,
+            optn_core::hd::AccountPath::default_for(Network::Chipnet),
+            &std::array::from_fn(|i| i as u8),
+        ).unwrap();
+        let storage = Storage::default();
+        storage
+            .save("new.optn", None, &file.encode().unwrap())
+            .unwrap();
+        let mut previous = observation_app();
+        let reconciliation = candidate(Evidence::ServerAssertion);
+        reconciliation
+            .authoritative
+            .as_ref()
+            .unwrap()
+            .value
+            .reconcile_coins(Network::Chipnet, &[address()], &mut previous.coins)
+            .unwrap();
+        let security =
+            WalletSecurity::new(Box::new(storage), Some(Box::new(FailedEnrollmentStatus)));
+        let (runtime, mut driver) =
+            AppRuntime::new_with_security(previous.clone(), security).unwrap();
+        driver.wallet_sync.state = reconciliation;
+        driver.wallet_sync.publish_status();
+        let mut events = runtime.subscribe_events();
+        let task = tokio::spawn(driver.run());
+
+        assert!(runtime
+            .wallet_security(WalletSecurityRequest::Open {
+                handle: "missing.optn".into(),
+                password: SecretText::new(String::new()),
+            })
+            .await
+            .is_err());
+        assert_eq!(events.try_recv().unwrap(), AppEvent::AppLockChanged);
+        assert_eq!(
+            runtime.state().lock.unlock_epoch,
+            previous.lock.unlock_epoch
+        );
+        assert_eq!(runtime.state().coins, previous.coins);
+        assert!(runtime.subscribe_wallet_sync().borrow().sync.utxos_fresh);
+
+        // Open succeeds before the final enrolled() status query fails.
+        assert!(runtime
+            .wallet_security(WalletSecurityRequest::Open {
+                handle: "new.optn".into(),
+                password: SecretText::new(String::new()),
+            })
+            .await
+            .is_err());
+        assert_eq!(events.try_recv().unwrap(), AppEvent::WalletOpened);
+        assert_eq!(runtime.state().wallet.unwrap().name, "new public fixture");
+        assert!(runtime.state().lock.unlock_epoch > previous.lock.unlock_epoch);
+        assert!(runtime.state().coins.is_empty());
+        let status = runtime.subscribe_wallet_sync();
+        assert!(status.borrow().authoritative.is_none());
+        assert!(!status.borrow().sync.history_fresh);
+        assert!(!status.borrow().sync.utxos_fresh);
+        drop(runtime);
+        task.await.unwrap();
     }
 
     #[tokio::test]

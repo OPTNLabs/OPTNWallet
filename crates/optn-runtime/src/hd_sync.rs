@@ -470,6 +470,240 @@ mod tests {
         assert_eq!(*backend.calls.lock().unwrap(), [6, 12, 14, 14]);
     }
 
+    #[derive(Default)]
+    struct CheckpointDisk {
+        files: std::collections::BTreeMap<[u8; 32], Vec<u8>>,
+        writes: u64,
+        fail: bool,
+        revoke_on_save: Option<Arc<std::sync::atomic::AtomicU64>>,
+    }
+
+    #[derive(Clone, Default)]
+    struct Checkpoints(Arc<Mutex<CheckpointDisk>>);
+
+    impl crate::wallet_checkpoint::WalletCheckpointStorage for Checkpoints {
+        fn load(
+            &self,
+            id: &[u8; 32],
+            key: &optn_core::wallet_pack::PackKey,
+        ) -> Result<Option<(crate::wallet_checkpoint::WalletCheckpoint, [u8; 32])>, String>
+        {
+            self.0
+                .lock()
+                .unwrap()
+                .files
+                .get(id)
+                .map(|bytes| {
+                    Ok((
+                        crate::wallet_checkpoint::WalletCheckpoint::open(key, bytes)?,
+                        sha256d(bytes),
+                    ))
+                })
+                .transpose()
+        }
+        fn store(
+            &self,
+            id: &[u8; 32],
+            checkpoint: &crate::wallet_checkpoint::WalletCheckpoint,
+            key: &optn_core::wallet_pack::PackKey,
+            expected: Option<[u8; 32]>,
+        ) -> Result<[u8; 32], String> {
+            let mut disk = self.0.lock().unwrap();
+            if disk.fail || disk.files.get(id).map(|bytes| sha256d(bytes)) != expected {
+                return Err("injected storage failure or stale revision".into());
+            }
+            disk.writes += 1;
+            // Test-only counter; the native adapter uses fallible OS randomness.
+            let mut nonce = [0; 12];
+            nonce[..8].copy_from_slice(&disk.writes.to_le_bytes());
+            let bytes = checkpoint.seal(key, &nonce)?;
+            let revision = sha256d(&bytes);
+            disk.files.insert(*id, bytes);
+            if let Some(revocation) = disk.revoke_on_save.take() {
+                revocation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            Ok(revision)
+        }
+    }
+
+    fn private_runtime(
+        storage: crate::wallet_security::tests::Storage,
+        checkpoints: Checkpoints,
+    ) -> AppRuntime {
+        let security = crate::wallet_security::WalletSecurity::new(Box::new(storage), None)
+            .with_checkpoints(Box::new(checkpoints));
+        let (runtime, driver) =
+            AppRuntime::new_with_security(AppState::default(), security).unwrap();
+        tokio::spawn(driver.run());
+        runtime
+    }
+
+    #[tokio::test]
+    async fn private_hd_checkpoint_lifecycle_is_durable_stale_on_restore_and_cas_guarded() {
+        use optn_app::SecretText;
+        use optn_transport::WalletSecurityRequest as Request;
+        let storage = crate::wallet_security::tests::Storage::default();
+        let checkpoints = Checkpoints::default();
+        let runtime = private_runtime(storage.clone(), checkpoints.clone());
+        let status = runtime
+            .wallet_security(Request::Create {
+                name: "Public restart fixture".into(),
+                mnemonic: SecretText::new(BIP39_TEST_VECTOR_MNEMONIC.into()),
+                bip39_passphrase: SecretText::default(),
+                password: SecretText::default(),
+                confirmation: SecretText::default(),
+                network: "chipnet".into(),
+                account_path: "m/44'/1'/0'".into(),
+            })
+            .await
+            .unwrap();
+        let handle = status.active.unwrap();
+        let xpub = runtime.state().wallet.unwrap().account_xpub.unwrap();
+        let (mut provider, _) = service(history(&xpub), false);
+        let mut worker = ProgressiveSyncWorker::new(Default::default());
+
+        checkpoints.0.lock().unwrap().fail = true;
+        assert!(matches!(
+            runtime
+                .sync_hd_wallet(&mut provider, &mut worker, xpub.clone(), LIMITS)
+                .await,
+            Err(WalletSyncError::Persistence(_))
+        ));
+        assert!(runtime.state().coins.is_empty());
+        assert!(!runtime.subscribe_wallet_sync().borrow().sync.utxos_fresh);
+        assert!(checkpoints.0.lock().unwrap().files.is_empty());
+        checkpoints.0.lock().unwrap().fail = false;
+        runtime
+            .sync_hd_wallet(&mut provider, &mut worker, xpub.clone(), LIMITS)
+            .await
+            .unwrap();
+        let outpoint = runtime
+            .state()
+            .coins
+            .iter()
+            .find(|coin| coin.token().is_none())
+            .unwrap()
+            .outpoint();
+        runtime
+            .dispatch(AppAction::FreezeCoin(outpoint))
+            .await
+            .unwrap();
+        runtime
+            .dispatch(AppAction::SetCoinLabel {
+                outpoint,
+                label: Some("durable hold".into()),
+            })
+            .await
+            .unwrap();
+        let before = runtime.state().coins;
+        let ciphertext = checkpoints.0.lock().unwrap().files.clone();
+        assert!(!ciphertext.values().any(|bytes| bytes
+            .windows(xpub.len())
+            .any(|window| window == xpub.as_bytes())));
+
+        checkpoints.0.lock().unwrap().fail = true;
+        runtime
+            .dispatch(AppAction::UnfreezeCoin(outpoint))
+            .await
+            .unwrap();
+        assert_eq!(runtime.state().coins, before);
+        assert!(runtime
+            .state()
+            .notice
+            .unwrap()
+            .contains("could not be saved"));
+        assert_eq!(checkpoints.0.lock().unwrap().files, ciphertext);
+        checkpoints.0.lock().unwrap().fail = false;
+        runtime
+            .wallet_security(Request::ChangePassword {
+                current: None,
+                password: SecretText::new("new-password".into()),
+                confirmation: SecretText::new("new-password".into()),
+                epoch: status.epoch,
+            })
+            .await
+            .unwrap();
+        assert_eq!(runtime.state().coins, before);
+        assert!(runtime
+            .subscribe_wallet_sync()
+            .borrow()
+            .authoritative
+            .is_some());
+        assert!(!runtime.subscribe_wallet_sync().borrow().sync.utxos_fresh);
+        assert_eq!(
+            checkpoints.0.lock().unwrap().files,
+            ciphertext,
+            "password rotation does not rekey or lose the restart file"
+        );
+
+        let restarted = private_runtime(storage, checkpoints.clone());
+        assert!(restarted
+            .wallet_security(Request::Open {
+                handle: handle.clone(),
+                password: SecretText::default()
+            })
+            .await
+            .is_err());
+        assert!(restarted.state().wallet.is_none());
+        restarted
+            .wallet_security(Request::Open {
+                handle: handle.clone(),
+                password: SecretText::new("new-password".into()),
+            })
+            .await
+            .unwrap();
+        assert_eq!(restarted.state().coins, before);
+        assert!(!restarted.subscribe_wallet_sync().borrow().sync.utxos_fresh);
+        assert!(restarted
+            .wallet_for_operation(optn_app::AuthScope::Spend)
+            .await
+            .is_err());
+        restarted
+            .dispatch(AppAction::SetCoinLabel {
+                outpoint,
+                label: Some("newer process".into()),
+            })
+            .await
+            .unwrap();
+        let newest = checkpoints.0.lock().unwrap().files.clone();
+        runtime
+            .dispatch(AppAction::UnfreezeCoin(outpoint))
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime.state().coins,
+            before,
+            "stale process cannot overwrite the newer annotations"
+        );
+        assert_eq!(checkpoints.0.lock().unwrap().files, newest);
+
+        // A queued lock while synchronous storage finishes cannot publish fresh coins.
+        checkpoints.0.lock().unwrap().revoke_on_save = Some(restarted.revocation.clone());
+        assert_eq!(
+            restarted
+                .sync_hd_wallet(&mut provider, &mut worker, xpub, LIMITS)
+                .await,
+            Err(WalletSyncError::Superseded)
+        );
+        assert!(!restarted.subscribe_wallet_sync().borrow().sync.utxos_fresh);
+        let prior = restarted.state().coins;
+        for bytes in checkpoints.0.lock().unwrap().files.values_mut() {
+            bytes[0] ^= 1;
+        }
+        assert!(restarted
+            .wallet_security(Request::Open {
+                handle,
+                password: SecretText::new("new-password".into())
+            })
+            .await
+            .is_err());
+        assert_eq!(
+            restarted.state().coins,
+            prior,
+            "corrupt restart data cannot replace an existing wallet session"
+        );
+    }
+
     #[tokio::test]
     async fn hd_cap_failure_preserves_previous_wallet_and_marks_it_incomplete() {
         let (runtime, xpub) = account();

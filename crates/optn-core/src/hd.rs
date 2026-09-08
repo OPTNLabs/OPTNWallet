@@ -265,6 +265,21 @@ pub struct Wallet {
 }
 
 impl Wallet {
+    /// Private restart-state key, independent of the wallet-file password.
+    /// RFC 5869 context separates this from signing, other accounts and chains.
+    /// It is never an unlock credential and must not cross a renderer boundary.
+    pub fn checkpoint_key(
+        &self,
+        network: Network,
+        account: AccountPath,
+    ) -> Result<crate::wallet_pack::PackKey> {
+        let hk = hkdf::Hkdf::<Sha256>::new(Some(b"OPTN/HD-wallet-checkpoint/v1"), &self.seed);
+        let mut key = Zeroizing::new([0u8; 32]);
+        hk.expand(format!("{network}\0{account}").as_bytes(), key.as_mut())
+            .map_err(|_| CliError::Internal("invalid checkpoint key length".into()))?;
+        Ok(crate::wallet_pack::PackKey::from_bytes(*key))
+    }
+
     /// Build from a BIP39 phrase. The passphrase is BIP39's optional 25th
     /// word; an empty string is the overwhelmingly common case.
     pub fn from_mnemonic(phrase: &str, passphrase: &str) -> Result<Self> {
@@ -351,6 +366,45 @@ pub fn hash160(bytes: &[u8]) -> [u8; 20] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn checkpoint_key_matches_independent_rfc5869_vector_and_separates_contexts() {
+        // Public BIP39/TREZOR fixture. Oracle: Python hashlib PBKDF2 + hmac
+        // extract/expand, not this implementation or the wallet-file password.
+        let wallet = Wallet::from_mnemonic(BIP39_TEST_VECTOR_MNEMONIC, "TREZOR").unwrap();
+        let account = AccountPath::new(1, 0).unwrap();
+        let key = wallet.checkpoint_key(Network::Chipnet, account).unwrap();
+        assert_eq!(
+            key.expose(),
+            &[
+                0x64, 0xc4, 0xed, 0x90, 0x04, 0xc9, 0xc1, 0xe7, 0x24, 0x24, 0x7a, 0xa9, 0x3d, 0x5f,
+                0x9b, 0x97, 0x3d, 0x61, 0x54, 0x78, 0x00, 0xb6, 0x35, 0xce, 0x22, 0xb8, 0x0b, 0x5b,
+                0x71, 0x81, 0x8e, 0x97,
+            ]
+        );
+        assert_eq!(
+            key,
+            wallet.checkpoint_key(Network::Chipnet, account).unwrap()
+        );
+        assert_ne!(
+            key,
+            wallet.checkpoint_key(Network::Mainnet, account).unwrap()
+        );
+        assert_ne!(
+            key,
+            wallet
+                .checkpoint_key(Network::Chipnet, AccountPath::new(1, 1).unwrap())
+                .unwrap()
+        );
+        assert_ne!(
+            key,
+            Wallet::from_mnemonic(BIP39_TEST_VECTOR_MNEMONIC, "")
+                .unwrap()
+                .checkpoint_key(Network::Chipnet, account)
+                .unwrap()
+        );
+        assert_eq!(format!("{key:?}"), "PackKey(<redacted>)");
+    }
 
     // BIP39's own test vector: the all-zeros entropy phrase. Deriving from a
     // fixed mnemonic means a regression in seed generation or in the
