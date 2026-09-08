@@ -44,6 +44,7 @@ pub mod spend;
 pub mod token;
 pub mod tor;
 pub mod tx;
+pub mod wallet_file;
 pub mod wallet_pack;
 pub mod watch_only;
 

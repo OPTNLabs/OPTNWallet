@@ -16,7 +16,9 @@ use optn_app::{
     UiSkin, WalletKind, WatchOnlyKind, WatchOnlySetupPreview, RELAY_MINIMUM_FEE_RATE,
 };
 pub mod host;
+pub mod security;
 pub use host::{block_on_ready, run, Renderer};
+pub use security::{StoredWallet, WalletSecurityRequest, WalletSecurityStatus};
 
 use serde::{Deserialize, Serialize};
 use std::{
@@ -33,6 +35,7 @@ pub type TransportFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Transpor
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TransportError {
     Closed,
+    AuthenticationRequired,
     Unsupported,
     InvalidData(String),
     Other(String),
@@ -46,6 +49,13 @@ pub trait AppTransport {
     fn dispatch<'a>(&'a self, action: AppAction) -> TransportFuture<'a, ()>;
     fn snapshot<'a>(&'a self) -> TransportFuture<'a, AppState>;
     fn next_event<'a>(&'a self) -> TransportFuture<'a, Option<AppEvent>>;
+
+    fn wallet_security<'a>(
+        &'a self,
+        _request: WalletSecurityRequest,
+    ) -> TransportFuture<'a, WalletSecurityStatus> {
+        Box::pin(async { Err(TransportError::Unsupported) })
+    }
 
     /// Read one QR payload from the host's camera.
     ///
@@ -1333,7 +1343,11 @@ impl TryFrom<WireAction> for AppAction {
             WireActionKind::RequestReveal { now_ms } => Self::RequestReveal { now_ms },
             WireActionKind::AuthorizeBackground { now_ms } => Self::AuthorizeBackground { now_ms },
             WireActionKind::AuthorizeChat { now_ms } => Self::AuthorizeChat { now_ms },
-            WireActionKind::ConfirmAuth { now_ms } => Self::ConfirmAuth { now_ms },
+            WireActionKind::ConfirmAuth { .. } => {
+                return Err(TransportError::InvalidData(
+                    "authentication approval is owned by the wallet runtime".into(),
+                ));
+            }
             WireActionKind::CancelAuth => Self::CancelAuth,
             WireActionKind::SetWatchOnlyKind(kind) => Self::SetWatchOnlyKind(match kind.as_str() {
                 "single" => WatchOnlyKind::Single,
@@ -1808,6 +1822,9 @@ impl LocalTransport {
 impl AppTransport for LocalTransport {
     fn dispatch<'a>(&'a self, action: AppAction) -> TransportFuture<'a, ()> {
         Box::pin(async move {
+            if matches!(action, AppAction::ConfirmAuth { .. }) {
+                return Err(TransportError::Unsupported);
+            }
             let event = self
                 .state
                 .lock()
@@ -1890,21 +1907,15 @@ mod tests {
             let transport = LocalTransport::new(initial);
             futures_lite::future::block_on(async {
                 let wire = WireAction::from(AppAction::ConfirmAuth { now_ms: 999_999 });
-                transport
-                    .dispatch(AppAction::try_from(wire).unwrap())
+                assert!(AppAction::try_from(wire).is_err());
+                assert!(transport
+                    .dispatch(AppAction::ConfirmAuth { now_ms: 999_999 })
                     .await
-                    .unwrap();
+                    .is_err());
                 let state = transport.snapshot().await.unwrap();
                 assert_eq!(state.lock, before);
                 assert!(!state.identity_revealed);
-                assert!(state
-                    .notice
-                    .unwrap()
-                    .contains("Authorization was not granted"));
-                assert_eq!(
-                    transport.next_event().await.unwrap(),
-                    Some(AppEvent::NoticeChanged)
-                );
+                assert!(transport.next_event().await.unwrap().is_none());
 
                 transport
                     .dispatch(AppAction::SetStealthSats(999_999))

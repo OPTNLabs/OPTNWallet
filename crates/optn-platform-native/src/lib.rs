@@ -5,6 +5,9 @@
 //! Providers are selected per capability. Enabling clipboard does not pull
 //! secure-storage or notification dependencies, and vice versa.
 
+#[cfg(all(feature = "wallet-storage", not(target_arch = "wasm32")))]
+pub mod wallet_storage;
+
 #[cfg(all(
     feature = "clipboard",
     not(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))

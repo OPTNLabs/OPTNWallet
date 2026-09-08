@@ -90,8 +90,8 @@ impl AutoLockMinutes {
 /// `src/services/KeyService.ts`, plus chat/message-sign which that service
 /// already excludes from spend re-auth (`signMessageForAddress`).
 ///
-/// The password itself never enters application state — the shell verifies,
-/// then dispatches [`crate::AppAction::ConfirmAuth`].
+/// The password never enters renderable application state. The shared native
+/// runtime verifies ciphertext before applying its internal confirmation action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthScope {
     /// Producing a signature that moves funds. Prompt only when auto-lock is

@@ -18,6 +18,7 @@ pub mod platform;
 #[cfg(mobile)]
 pub mod platform_mobile;
 pub mod spv;
+mod wallet_security;
 
 async fn verified_fusion_proxy<'a>(
     destination_hosts: &[&str],
@@ -1109,6 +1110,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app_transport::optn_app_dispatch,
             app_transport::optn_app_snapshot,
+            app_transport::optn_wallet_security,
             #[cfg(desktop)]
             clipboard::clipboard_write_text,
             #[cfg(desktop)]
@@ -1242,7 +1244,14 @@ pub fn run() {
             }
             // Restore only non-wallet preferences before publishing the first
             // authoritative snapshot. Wallet state is never loaded here.
-            let (app_runtime, app_driver) = optn_runtime::AppRuntime::new(initial_state);
+            let security = wallet_security::service(
+                app.handle().clone(),
+                app.path().app_data_dir()?.join("wallets"),
+            );
+            let (app_runtime, app_driver) =
+                optn_runtime::AppRuntime::new_with_security(initial_state, security).map_err(
+                    |_| std::io::Error::other("Could not load wallet security settings."),
+                )?;
             tauri::async_runtime::spawn(app_driver.run());
             let native_chain = chain_runtime::NativeChainRuntime::spawn(
                 app_runtime.clone(),

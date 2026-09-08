@@ -20,6 +20,7 @@ mod serve;
 mod skills;
 mod token;
 mod tx;
+mod wallet_security;
 mod x402;
 
 // These modules live in optn-core so the wallet can reach the same code
@@ -47,6 +48,18 @@ use network::Network;
 #[derive(Parser)]
 #[command(name = "optn", version, about = "OPTN Wallet command-line interface")]
 struct Cli {
+    /// Open a saved encrypted wallet instead of the legacy phrase/keychain sources.
+    #[arg(long, global = true, value_name = "FILE")]
+    wallet: Option<String>,
+    /// Directory shared with the native GUI (override for portable wallets).
+    #[arg(long, global = true)]
+    wallet_directory: Option<PathBuf>,
+    /// Read wallet passwords from piped stdin, never from command arguments.
+    #[arg(long, global = true, requires = "wallet")]
+    password_stdin: bool,
+    #[arg(skip)]
+    wallet_session: std::sync::Arc<tokio::sync::OnceCell<optn_runtime::AppRuntime>>,
+
     /// Emit JSON instead of human-readable text.
     #[arg(long, global = true)]
     json: bool,
@@ -90,6 +103,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Manage saved encrypted wallets through the same runtime as the native GUI.
+    Wallet {
+        /// Override the shared native wallet directory.
+        #[arg(long)]
+        directory: Option<PathBuf>,
+        /// Read private JSON requests from stdin and emit public JSON responses.
+        #[arg(long)]
+        stdio: bool,
+    },
     /// Check the server is reachable and report its version.
     Ping,
     /// Inspect the durable source policy shared with the desktop host.
@@ -642,6 +664,7 @@ async fn main() {
 /// The command as it appears in the skill manifest.
 fn command_name(command: &Command) -> &'static str {
     match command {
+        Command::Wallet { .. } => "wallet",
         Command::Ping => "ping",
         Command::Network {
             action: NetworkCommand::Select { .. },
@@ -1129,7 +1152,7 @@ async fn rescan_shared_wallet(
     let xpub = match xpub {
         Some(xpub) => xpub.to_owned(),
         // Drop the temporary seed-holding Wallet before starting provider I/O.
-        None => read_wallet(cli)?.account_xpub_at(account)?,
+        None => read_wallet(cli).await?.account_xpub_at(account)?,
     };
     let receive = optn_core::watch_only::address_under_account(cli.network, &xpub, 0, 0)?;
     let selection = match configured_chain(cli)? {
@@ -1216,8 +1239,25 @@ async fn run(cli: &Cli) -> Result<Value> {
     // Before anything else, including opening a connection. A refusal should
     // cost nothing and reveal nothing about the wallet.
     skills::enforce(skills::Policy::from_env()?, command_name(&cli.command))?;
+    if cli.wallet.is_some()
+        && (matches!(cli.command, Command::Serve { .. })
+            || SERVING.load(std::sync::atomic::Ordering::SeqCst))
+    {
+        return Err(CliError::Usage(
+            "Saved wallet sessions require local terminal or private stdio authentication.".into(),
+        ));
+    }
 
+    if let Command::Wallet { directory, stdio } = &cli.command {
+        return wallet_security::run(
+            directory.clone().or_else(|| cli.wallet_directory.clone()),
+            *stdio,
+            cli.network,
+        )
+        .await;
+    }
     match &cli.command {
+        Command::Wallet { .. } => unreachable!("handled before network setup"),
         Command::Network {
             action: NetworkCommand::Status,
         } => return shared_network_status(cli),
@@ -1254,6 +1294,7 @@ async fn run(cli: &Cli) -> Result<Value> {
     };
 
     match &cli.command {
+        Command::Wallet { .. } => unreachable!("handled before network setup"),
         Command::Ping
         | Command::Network { .. }
         | Command::Tx { .. }
@@ -1322,7 +1363,7 @@ async fn run(cli: &Cli) -> Result<Value> {
             coin_type,
             token,
         } => {
-            let wallet = read_wallet(cli)?;
+            let wallet = read_wallet(cli).await?;
             let coin = coin_type.unwrap_or(default_coin_type(cli.network));
             let path = hd::address_path(coin, *account, *change, *index);
             let mut address = wallet.address(cli.network, &path)?;
@@ -1355,7 +1396,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 ));
             }
             let destination = parse_address(to, cli.network)?;
-            let wallet = read_wallet(cli)?;
+            let wallet = read_wallet(cli).await?;
             let spend = spend_to(
                 client()?,
                 cli.network,
@@ -1416,7 +1457,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 )));
             }
             let wanted = token::parse_category(category)?;
-            let wallet = read_wallet(cli)?;
+            let wallet = read_wallet(cli).await?;
             let coin = default_coin_type(cli.network);
             const TOKEN_DUST: u64 = 1000;
 
@@ -1595,7 +1636,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 )));
             }
             let wanted = token::parse_category(category)?;
-            let wallet = read_wallet(cli)?;
+            let wallet = read_wallet(cli).await?;
             let coin = default_coin_type(cli.network);
 
             // A token output still carries BCH. 1000 sats clears the dust
@@ -1740,7 +1781,7 @@ async fn run(cli: &Cli) -> Result<Value> {
             }))
         }
         Command::Tokens { gap } => {
-            let wallet = read_wallet(cli)?;
+            let wallet = read_wallet(cli).await?;
             let coin = default_coin_type(cli.network);
             // category -> (fungible total, nft count)
             let mut fungible: std::collections::BTreeMap<String, u128> = Default::default();
@@ -1809,7 +1850,7 @@ async fn run(cli: &Cli) -> Result<Value> {
             .await
         }
         Command::History { gap, limit } => {
-            let wallet = read_wallet(cli)?;
+            let wallet = read_wallet(cli).await?;
             let coin = default_coin_type(cli.network);
             let mut entries: Vec<(i64, String, String, Option<u64>)> = Vec::new();
 
@@ -1854,7 +1895,7 @@ async fn run(cli: &Cli) -> Result<Value> {
             }))
         }
         Command::Discover { gap } => {
-            let wallet = read_wallet(cli)?;
+            let wallet = read_wallet(cli).await?;
             let mut found = Vec::new();
             for &coin in hd::scan_coin_types(cli.network) {
                 for &account in hd::SCAN_ACCOUNTS {
@@ -2054,7 +2095,7 @@ async fn run(cli: &Cli) -> Result<Value> {
             }
         }
         Command::Console { json } => {
-            use std::io::{BufRead, Write};
+            use std::io::Write;
 
             let mut base = vec!["--network".to_string(), cli.network.to_string()];
             if cli.profile != "default" {
@@ -2068,14 +2109,19 @@ async fn run(cli: &Cli) -> Result<Value> {
             eprintln!("`help` lists commands, `quit` leaves.");
 
             let stdin = std::io::stdin();
-            let mut lines = stdin.lock().lines();
             loop {
                 eprint!("optn> ");
                 let _ = std::io::stderr().flush();
 
-                let Some(line) = lines.next() else { break };
-                let line =
-                    line.map_err(|e| CliError::Usage(format!("could not read input: {e}")))?;
+                // Release stdin before dispatch so wallet authentication can read it.
+                let mut line = String::new();
+                if stdin
+                    .read_line(&mut line)
+                    .map_err(|e| CliError::Usage(format!("could not read input: {e}")))?
+                    == 0
+                {
+                    break;
+                }
 
                 let parsed = match console::parse(&line) {
                     Ok(parsed) => parsed,
@@ -2109,7 +2155,14 @@ async fn run(cli: &Cli) -> Result<Value> {
                     }
                     console::Line::Command(args) => {
                         let argv = console::argv(&base, &args, *json);
-                        let parsed_cli = match Cli::try_parse_from(&argv) {
+                        // Clap's nested parser can exceed the Windows main-thread stack
+                        // while this dispatch frame is live. Parse on the blocking pool.
+                        let parsed = tokio::task::spawn_blocking(move || Cli::try_parse_from(argv))
+                            .await
+                            .map_err(|_| {
+                                CliError::Internal("Console argument parsing failed.".into())
+                            })?;
+                        let mut parsed_cli = match parsed {
                             Ok(parsed) => parsed,
                             Err(error) => {
                                 // clap already formats this well; printing it
@@ -2118,6 +2171,20 @@ async fn run(cli: &Cli) -> Result<Value> {
                                 continue;
                             }
                         };
+
+                        parsed_cli.wallet = parsed_cli.wallet.or_else(|| cli.wallet.clone());
+                        parsed_cli.wallet_directory = parsed_cli
+                            .wallet_directory
+                            .or_else(|| cli.wallet_directory.clone());
+                        parsed_cli.password_stdin |= cli.password_stdin;
+                        // Only reuse authentication for the same resolved wallet selection.
+                        // An explicit override keeps the parser's fresh session.
+                        if parsed_cli.wallet == cli.wallet
+                            && parsed_cli.wallet_directory == cli.wallet_directory
+                            && parsed_cli.network == cli.network
+                        {
+                            parsed_cli.wallet_session = std::sync::Arc::clone(&cli.wallet_session);
+                        }
 
                         // Boxed for the same reason as serve: the console is
                         // reached from run, and reaches it back.
@@ -2302,7 +2369,7 @@ async fn run(cli: &Cli) -> Result<Value> {
         Command::Skills => Ok(skills::manifest(skills::Policy::from_env()?)),
         Command::Rpa { action } => match action {
             RpaCommand::Code { account } => {
-                let wallet = read_wallet(cli)?;
+                let wallet = read_wallet(cli).await?;
                 let coin = default_coin_type(cli.network);
                 let scan_path = rpa::scan_path(coin, *account);
                 let spend_path = rpa::spend_path(coin, *account);
@@ -2333,7 +2400,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 }))
             }
             RpaCommand::Scan { txid, account } => {
-                let wallet = read_wallet(cli)?;
+                let wallet = read_wallet(cli).await?;
                 let coin = default_coin_type(cli.network);
                 let scan_priv: [u8; 32] = wallet
                     .signing_key(&rpa::scan_path(coin, *account))?
@@ -2404,7 +2471,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 if let Some(reason) = rpa::send_block_reason(&decoded) {
                     return Err(CliError::Usage(reason));
                 }
-                let wallet = read_wallet(cli)?;
+                let wallet = read_wallet(cli).await?;
                 let paid = rpa_pay(
                     client()?,
                     cli.network,
@@ -2583,7 +2650,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                     )));
                 }
 
-                let wallet = read_wallet(cli)?;
+                let wallet = read_wallet(cli).await?;
                 let coin = default_coin_type(cli.network);
                 // The address whose key signs the authorisation. The
                 // Facilitator recovers it from the signature and credits the
@@ -3163,7 +3230,10 @@ fn read_phrase() -> Result<String> {
 /// phrase, and stdin comes last because reaching it means blocking on input —
 /// which for a binary designed to be driven by automation is a hang, not a
 /// prompt.
-fn read_wallet(cli: &Cli) -> Result<Wallet> {
+async fn read_wallet(cli: &Cli) -> Result<Wallet> {
+    if cli.wallet.is_some() {
+        return wallet_security::read_managed_wallet(cli).await;
+    }
     let passphrase = std::env::var("OPTN_PASSPHRASE").unwrap_or_default();
 
     if let Ok(v) = std::env::var("OPTN_MNEMONIC") {

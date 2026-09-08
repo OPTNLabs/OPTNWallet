@@ -60,6 +60,19 @@ mod wasm {
     }
 
     impl AppTransport for TauriWebTransport {
+        fn wallet_security<'a>(
+            &'a self,
+            request: optn_transport::WalletSecurityRequest,
+        ) -> TransportFuture<'a, optn_transport::WalletSecurityStatus> {
+            Box::pin(async move {
+                let value = serde_wasm_bindgen::to_value(&request)
+                    .map_err(|_| TransportError::InvalidData("Invalid wallet request.".into()))?;
+                let result =
+                    invoke("optn_wallet_security", command_args("request", &value)?).await?;
+                serde_wasm_bindgen::from_value(result)
+                    .map_err(|_| TransportError::InvalidData("Invalid wallet response.".into()))
+            })
+        }
         fn dispatch<'a>(&'a self, action: AppAction) -> TransportFuture<'a, ()> {
             Box::pin(async move {
                 let action = serde_wasm_bindgen::to_value(&WireAction::from(action))

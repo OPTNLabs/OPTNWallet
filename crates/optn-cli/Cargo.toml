@@ -28,6 +28,11 @@ optn-runtime = { path = "../optn-runtime", version = "=1.7.3" }
 # The same Tauri-free native adapter composition used by desktop. This keeps
 # CLI source selection, Tor policy, and protocol capability routing aligned.
 optn-chain-native = { path = "../optn-chain-native", version = "=1.7.3" }
+optn-platform-native = { path = "../optn-platform-native", version = "=1.7.3", features = ["wallet-storage"] }
+optn-transport = { path = "../optn-transport", version = "=1.7.3" }
+# Native terminal echo control; passwords must never be normal command arguments.
+rpassword = "=7.5.4"
+zeroize = "1"
 clap = { version = "4", features = ["derive"] }
 dirs = "6"
 serde = { version = "1.0", features = ["derive"] }
@@ -77,4 +82,4 @@ keyring = { version = "3", default-features = false, features = [
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "charset", "json"] }
 
 [dev-dependencies]
-optn-transport = { path = "../optn-transport", version = "=1.7.3" }
+tempfile = "3.27"
