@@ -3,10 +3,11 @@
 //! EC: `trezorlib.transport.enumerate_devices()` + `get_transport(path)`
 //! talks to Bridge **from the native process**, never from a browser WebView.
 //!
-//! Safe 5 / Model T are WebUSB → only visible via Bridge (Suite starts it on
-//! 127.0.0.1:21325). Model One may also appear as HID (session.rs).
+//! This optional route requires a local Bridge on 127.0.0.1:21325. Native
+//! WebUSB is handled separately by `trezor_webusb`; Model One may also appear
+//! as HID through `session`.
 //!
-//! Protocol: https://github.com/trezor/trezord-go (HTTP API)
+//! Protocol: <https://github.com/trezor/trezord-go> (HTTP API)
 
 use serde::{Deserialize, Serialize};
 use std::time::Duration;

@@ -54,6 +54,8 @@ impl NativeChainRuntime {
         }
     }
 
+    /// Start the process-owned worker that rebuilds routes as persisted policy
+    /// or runtime selections change. No service is installed until a build finishes.
     pub fn spawn(app_runtime: AppRuntime, network_settings: NetworkSettingsStore) -> Arc<Self> {
         let native = Arc::new(Self::new(app_runtime.clone(), network_settings));
         let worker = native.clone();
@@ -86,6 +88,9 @@ impl NativeChainRuntime {
         }
     }
 
+    /// Retire active sync routes before replacing credentials and rebuilding.
+    /// The owner's current state selects the network; the caller snapshot is ignored.
+    /// If the owner is closed, credential replacement stops after invalidation.
     pub async fn replace_secrets(&self, secrets: NativeChainSecrets, _state: &AppState) {
         // Stop callers before changing credentials or waiting on the old
         // service. Otherwise a refresh can publish a result obtained with the
@@ -105,10 +110,14 @@ impl NativeChainRuntime {
             .await;
     }
 
+    /// Rebuild from the owner's latest state, ignoring potentially stale caller
+    /// snapshots. Configuration and probe failures are exposed by the accessors.
     pub async fn rebuild_from_app_state(&self, _state: &AppState) {
         self.rebuild_selection().await;
     }
 
+    /// Read persisted policy on the blocking pool without holding the stack lock.
+    /// Missing files return `None`; reader or validation failures remain errors.
     async fn persisted_selection(
         &self,
         network: Network,
@@ -123,6 +132,8 @@ impl NativeChainRuntime {
         Self::resolve_selection(state, self.persisted_selection(state.network).await)
     }
 
+    /// Fall back to legacy app settings only when a persisted policy is absent.
+    /// Invalid persisted settings remain errors instead of enabling another route.
     fn resolve_selection(
         state: &AppState,
         persisted: Result<Option<(SourceCatalog, ConnectionPolicy)>, String>,
@@ -135,6 +146,8 @@ impl NativeChainRuntime {
         )
     }
 
+    /// Wait for an app or persisted policy change; return false when the owner closes.
+    /// File changes are observed by bounded polling alongside state notifications.
     async fn wait_for_selection_change(&self, previous: &NativeSelection) -> bool {
         let mut state = self.owner.subscribe_state();
         // ponytail: bounded file polling; use native filesystem notifications
@@ -167,6 +180,8 @@ impl NativeChainRuntime {
             .await
     }
 
+    /// Revoke published routes and invalidate pending builds before cancelling the
+    /// owner's sync lease. Returns false when the owner cannot acknowledge cancellation.
     async fn invalidate_current_wallet_sync(&self, reason: &str) -> bool {
         // The generation also retires an unpublished build whose stack is not
         // visible yet. Hold the read guard while revoking so a final stack
@@ -246,6 +261,9 @@ impl NativeChainRuntime {
         true
     }
 
+    /// Invoke a synchronous callback with the current service handle under the
+    /// stack read lock. Returns `None` during replacement; retained handles can
+    /// subsequently be revoked by a policy or credential change.
     pub async fn with_service<T>(
         &self,
         f: impl FnOnce(&Arc<Mutex<ChainService>>) -> T,
@@ -254,6 +272,8 @@ impl NativeChainRuntime {
         guard.as_ref().map(|stack| f(&stack.service))
     }
 
+    /// Snapshot probe failures from the installed stack. An empty result also
+    /// covers an absent stack and must not be treated as proof of connectivity.
     pub async fn failures(&self) -> Vec<NativeChainProbeFailure> {
         self.stack
             .read()
@@ -263,6 +283,8 @@ impl NativeChainRuntime {
             .unwrap_or_default()
     }
 
+    /// Return the installed stack's configuration error, if any. An absent
+    /// stack returns `None` even though a replacement may still be pending.
     pub async fn configuration_error(&self) -> Option<String> {
         self.stack
             .read()
