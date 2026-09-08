@@ -314,7 +314,7 @@ describe('buildWatchOnlyPsbt', () => {
     ]);
   });
 
-  it('uses an explicit 1 sat/byte fee rate when requested', () => {
+  it('raises an explicit 1 sat/byte rate to the relay minimum', () => {
     const input = makeInput();
     const result = buildWatchOnlyPsbt({
       inputs: [input],
@@ -335,9 +335,9 @@ describe('buildWatchOnlyPsbt', () => {
     );
 
     expect(feeForTransactionBytes(estimatedFinalBytes, 1)).toBe(
-      BigInt(estimatedFinalBytes)
+      relayFeeForBytes(estimatedFinalBytes)
     );
-    expect(result.feeSats).toBe(BigInt(estimatedFinalBytes));
+    expect(result.feeSats).toBe(relayFeeForBytes(estimatedFinalBytes));
   });
 
   it('builds an unsigned PSBT with correct change and fee', () => {

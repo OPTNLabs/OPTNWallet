@@ -1,4 +1,5 @@
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
+import WalletManager from '../apis/WalletManager/WalletManager';
 import type { Database } from 'sql.js';
 import ElectrumServer from '../apis/ElectrumServer/ElectrumServer';
 import KeyService from './KeyService';
@@ -201,6 +202,21 @@ export async function reconfigureActiveWallet(
       await dbService.ensureDatabaseStarted();
       const db = dbService.getDatabase();
       if (!db) throw new Error('Database is not available.');
+
+      const wallet = await WalletManager().getWalletMetadata(request.walletId);
+      if (!wallet)
+        throw new Error('Reopen the wallet before changing its settings.');
+      // Regeneration below requires a seed. An exported account key cannot
+      // derive another hardened account; reject before clearing its records.
+      if (
+        wallet.walletType === 'watch-only' ||
+        wallet.walletType === 'hardware'
+      ) {
+        throw new Error(
+          'This wallet uses an account exported by a signing device. ' +
+            'Import a new wallet from that device to use a different network or account path.'
+        );
+      }
 
       await stopUTXOWorker();
       await resetReduxForWalletReload(request.walletId);
