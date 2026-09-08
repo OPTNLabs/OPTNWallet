@@ -18,6 +18,10 @@ pub async fn optn_wallet_refresh(
     runtime.refresh_wallet().await
 }
 
+/// Forward authentication requests to the shared Rust runtime.
+///
+/// Passes through runtime validation and service messages; other error kinds
+/// use a generic unavailable message. This adapter does not verify secrets.
 #[tauri::command]
 pub async fn optn_wallet_security(
     runtime: tauri::State<'_, optn_runtime::AppRuntime>,
@@ -47,6 +51,9 @@ pub async fn optn_app_dispatch(
     dispatch_action(&runtime, &appearance, &network_settings, action).await
 }
 
+/// Serialize network edits with network switches, and appearance edits with saves.
+/// Network edits persist before publication; appearance edits persist afterward
+/// and report save failures even when the runtime selection has already changed.
 async fn dispatch_action(
     runtime: &optn_runtime::AppRuntime,
     appearance: &AppearanceStore,
@@ -94,6 +101,11 @@ async fn dispatch_action(
     Ok(())
 }
 
+/// Validate and persist the targeted network before publishing its action.
+///
+/// The caller must hold the network store's write lock across this operation.
+/// Validation or save errors leave the runtime unchanged. A closed runtime can
+/// still reject publication after a successful save.
 async fn dispatch_network_settings(
     runtime: &optn_runtime::AppRuntime,
     network_settings: &NetworkSettingsStore,
@@ -124,6 +136,7 @@ async fn dispatch_network_settings(
         .map_err(|_| "application runtime is closed".to_string())
 }
 
+/// Return the current versioned wire snapshot without starting a refresh or sync.
 #[tauri::command]
 pub fn optn_app_snapshot(runtime: tauri::State<'_, optn_runtime::AppRuntime>) -> WireState {
     WireState::from(&runtime.state())

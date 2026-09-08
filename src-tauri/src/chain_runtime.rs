@@ -42,6 +42,7 @@ pub struct NativeChainRuntime {
 }
 
 impl NativeChainRuntime {
+    /// Create an inactive host with no published routes or supplied credentials.
     fn new(owner: AppRuntime, network_settings: NetworkSettingsStore) -> Self {
         Self {
             owner,
@@ -54,6 +55,8 @@ impl NativeChainRuntime {
         }
     }
 
+    /// Start the process-owned worker that rebuilds routes as persisted policy
+    /// or runtime selections change. No service is installed until a build finishes.
     pub fn spawn(app_runtime: AppRuntime, network_settings: NetworkSettingsStore) -> Arc<Self> {
         let native = Arc::new(Self::new(app_runtime.clone(), network_settings));
         let worker = native.clone();
@@ -63,6 +66,8 @@ impl NativeChainRuntime {
         native
     }
 
+    /// Rebuild while observing selections, cancelling an in-flight build when they
+    /// change. Stop when the runtime owner no longer acknowledges or publishes state.
     async fn run(&self) {
         loop {
             let selection = self.selection(&self.owner.state()).await;
@@ -86,6 +91,9 @@ impl NativeChainRuntime {
         }
     }
 
+    /// Retire active sync routes before replacing credentials and rebuilding.
+    /// The owner's current state selects the network; the caller snapshot is ignored.
+    /// If the owner is closed, credential replacement stops after invalidation.
     pub async fn replace_secrets(&self, secrets: NativeChainSecrets, _state: &AppState) {
         // Stop callers before changing credentials or waiting on the old
         // service. Otherwise a refresh can publish a result obtained with the
@@ -105,10 +113,14 @@ impl NativeChainRuntime {
             .await;
     }
 
+    /// Rebuild from the owner's latest state, ignoring potentially stale caller
+    /// snapshots. Configuration and probe failures are exposed by the accessors.
     pub async fn rebuild_from_app_state(&self, _state: &AppState) {
         self.rebuild_selection().await;
     }
 
+    /// Read persisted policy on the blocking pool without holding the stack lock.
+    /// Missing files return `None`; reader or validation failures remain errors.
     async fn persisted_selection(
         &self,
         network: Network,
@@ -119,10 +131,14 @@ impl NativeChainRuntime {
             .map_err(|_| "network settings reader stopped".to_string())?
     }
 
+    /// Resolve the snapshot's network through persisted policy, retaining read
+    /// errors so invalid configuration cannot silently select a fallback route.
     async fn selection(&self, state: &AppState) -> NativeSelection {
         Self::resolve_selection(state, self.persisted_selection(state.network).await)
     }
 
+    /// Fall back to legacy app settings only when a persisted policy is absent.
+    /// Invalid persisted settings remain errors instead of enabling another route.
     fn resolve_selection(
         state: &AppState,
         persisted: Result<Option<(SourceCatalog, ConnectionPolicy)>, String>,
@@ -135,6 +151,8 @@ impl NativeChainRuntime {
         )
     }
 
+    /// Wait for an app or persisted policy change; return false when the owner closes.
+    /// File changes are observed by bounded polling alongside state notifications.
     async fn wait_for_selection_change(&self, previous: &NativeSelection) -> bool {
         let mut state = self.owner.subscribe_state();
         // ponytail: bounded file polling; use native filesystem notifications
@@ -154,6 +172,8 @@ impl NativeChainRuntime {
         }
     }
 
+    /// Cancel active wallet sync before waiting for a replacement build; return
+    /// false if the owner cannot acknowledge that cancellation.
     async fn rebuild_selection(&self) -> bool {
         // This must complete before the rebuild lock or the old service mutex
         // is awaited. The owner is the actor that owns the active sync lease.
@@ -167,6 +187,8 @@ impl NativeChainRuntime {
             .await
     }
 
+    /// Revoke published routes and invalidate pending builds before cancelling the
+    /// owner's sync lease. Returns false when the owner cannot acknowledge cancellation.
     async fn invalidate_current_wallet_sync(&self, reason: &str) -> bool {
         // The generation also retires an unpublished build whose stack is not
         // visible yet. Hold the read guard while revoking so a final stack
@@ -184,6 +206,9 @@ impl NativeChainRuntime {
             .is_ok()
     }
 
+    /// Serialize replacement probes and publish only while the captured network,
+    /// policy, credentials, and generation remain current. Stale builds are discarded;
+    /// false means the owner could not acknowledge invalidation.
     async fn rebuild_selection_after_invalidation(&self, reason: &str) -> bool {
         let _rebuild = self.rebuild_lock.lock().await;
         if !self.invalidate_current_wallet_sync(reason).await {
@@ -246,6 +271,9 @@ impl NativeChainRuntime {
         true
     }
 
+    /// Invoke a synchronous callback with the current service handle under the
+    /// stack read lock. Returns `None` during replacement; retained handles can
+    /// subsequently be revoked by a policy or credential change.
     pub async fn with_service<T>(
         &self,
         f: impl FnOnce(&Arc<Mutex<ChainService>>) -> T,
@@ -292,6 +320,8 @@ impl NativeChainRuntime {
         Ok(())
     }
 
+    /// Snapshot probe failures from the installed stack. An empty result also
+    /// covers an absent stack and must not be treated as proof of connectivity.
     pub async fn failures(&self) -> Vec<NativeChainProbeFailure> {
         self.stack
             .read()
@@ -301,6 +331,8 @@ impl NativeChainRuntime {
             .unwrap_or_default()
     }
 
+    /// Return the installed stack's configuration error, if any. An absent
+    /// stack returns `None` even though a replacement may still be pending.
     pub async fn configuration_error(&self) -> Option<String> {
         self.stack
             .read()
@@ -363,6 +395,8 @@ pub fn catalog_and_policy_from_app_state(state: &AppState) -> (SourceCatalog, Co
     (catalog, ConnectionPolicy::auto())
 }
 
+/// Group endpoints by normalized host, deduplicating exact endpoints while
+/// retaining the first label. Capabilities remain unproven until discovery.
 fn upsert_user_source(by_host: &mut BTreeMap<String, ChainSource>, host: &str, endpoint: Endpoint) {
     let key = host.trim().trim_end_matches('.').to_ascii_lowercase();
     let entry = by_host.entry(key.clone()).or_insert_with(|| ChainSource {

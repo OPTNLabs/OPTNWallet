@@ -26,6 +26,7 @@ pub struct AppearanceStore {
 }
 
 impl AppearanceStore {
+    /// Bind a preferences path without reading or creating a file.
     pub fn new(path: PathBuf) -> Self {
         Self {
             path,
@@ -33,6 +34,8 @@ impl AppearanceStore {
         }
     }
 
+    /// Restore validated theme and skin together; a missing file keeps defaults.
+    /// Malformed, oversized, or unreadable files leave the supplied state unchanged.
     pub fn restore(&self, state: &mut AppState) -> io::Result<()> {
         let file = match File::open(&self.path) {
             Ok(file) => file,
@@ -55,6 +58,9 @@ impl AppearanceStore {
         Ok(())
     }
 
+    /// Sync a new temporary file, then rename it over the preferences file.
+    /// Callers serialize updates with `write_lock`. A directory-sync failure on
+    /// Unix can be returned after the replacement is already visible.
     pub fn save(&self, theme: ThemeMode, skin: UiSkin) -> io::Result<()> {
         let bytes = serde_json::to_vec(&Appearance {
             theme: theme.into(),

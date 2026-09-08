@@ -22,15 +22,13 @@ fn sha256(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
 }
 
+/// Decode a trimmed request field and report malformed text with its field name.
 fn hex_decode(s: &str, field: &str) -> Result<Vec<u8>, String> {
     let s = s.trim();
     if s.len() % 2 != 0 {
         return Err(format!("{field}: odd-length hex"));
     }
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|_| format!("{field}: bad hex")))
-        .collect()
+    hex::decode(s).map_err(|_| format!("{field}: bad hex"))
 }
 
 fn require_len(bytes: &[u8], expected: usize, field: &str) -> Result<(), String> {
@@ -133,6 +131,8 @@ pub struct P2pComponentEncodeResponse {
 
 pub const P2P_COMPONENT_PROTOCOL: &str = "p2p-v4-ec-component";
 
+/// Validate an IPC component request and return canonical bytes plus their blind
+/// message hash. Input txids arrive in display order and are reversed for the wire.
 pub fn encode_component_for_p2p(
     request: P2pComponentEncodeRequest,
 ) -> Result<P2pComponentEncodeResponse, String> {
@@ -180,6 +180,17 @@ pub fn encode_component_for_p2p(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn component_request_hex_rejects_malformed_input() {
+        for field in ["saltCommitment", "prevTxid", "pubkey", "script"] {
+            for value in ["雪a", "😀", "aé0", "+0", "0g", "0"] {
+                let error = hex_decode(value, field).unwrap_err();
+                assert!(error.starts_with(field));
+            }
+        }
+        assert_eq!(hex_decode(" 01aBFF ", "script").unwrap(), [1, 0xab, 0xff]);
+    }
 
     /// Same vector as `components.rs::canonical_input_component_matches_electron_cash_protobuf_wire_vector`.
     const EC_INPUT_COMPONENT_HEX: &str = concat!(
