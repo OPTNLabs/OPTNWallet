@@ -10,8 +10,8 @@ const BASE58_WIF_CANDIDATE_PATTERN =
 
 export type ScannedQrPayload =
   | {
-      kind: 'merchant-proposal-stream';
-      initialQrPayload: string;
+      kind: 'merchant-proposal';
+      scannedValue: string;
     }
   | {
       kind: 'paper-wallet';
@@ -39,6 +39,10 @@ export type ScannedQrPayload =
       kind: 'wizardconnect';
       scannedValue: string;
       uri: string;
+    }
+  | {
+      kind: 'merchant-proposal-stream';
+      initialQrPayload: string;
     }
   | {
       kind: 'unknown';
@@ -104,6 +108,20 @@ export function classifyScannedQrPayload(
       kind: 'merchant-proposal-stream',
       initialQrPayload: scannedValue,
     };
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(scannedValue);
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      (parsed as { application?: { applicationId?: unknown } }).application
+        ?.applicationId === 'optn.builtin.merchant-pay.transaction-proposal'
+    ) {
+      return { kind: 'merchant-proposal', scannedValue };
+    }
+  } catch {
+    // Continue classifying ordinary payment and wallet payloads.
   }
 
   for (const candidate of extractWifCandidates(scannedValue)) {

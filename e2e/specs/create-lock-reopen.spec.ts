@@ -112,7 +112,11 @@ runLifecycleTest(
     const passwordInput = await $('input[placeholder="Password"]');
     await passwordInput.setValue('wrong-password');
     await $('button=Unlock').click();
-    await expect($('p=Incorrect password.')).toBeDisplayed();
+    await expect(
+      $('p=Incorrect password for this wallet file.')
+    ).toBeDisplayed();
+    await expect($('h1=OPTN Wallet')).toBeDisplayed();
+    await expect(passwordInput).toBeDisplayed();
 
     await passwordInput.setValue(password);
     await $('button=Unlock').click();
@@ -127,4 +131,3 @@ runLifecycleTest(
     await createdWallet.waitForExist({ reverse: true, timeout: 10000 });
   }
 );
-

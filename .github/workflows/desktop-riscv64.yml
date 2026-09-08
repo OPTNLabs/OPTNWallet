@@ -2,7 +2,8 @@ name: Desktop riscv64
 
 # Cross-compiles the desktop app for riscv64 from an x86_64 runner.
 #
-# Runs on every pull request. A missing or broken target must fail the check.
+# This is a blocking pull-request build. The release publishes a riscv64 binary,
+# so a failed cross-build must be visible before a change can merge.
 #
 # The obstacle was never the Rust target — riscv64gc-unknown-linux-gnu is tier 2
 # with std. It is webkit2gtk: the desktop app links it, so a cross-build needs

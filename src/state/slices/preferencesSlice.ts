@@ -7,6 +7,8 @@ import {
 } from '../../utils/servers/explorers';
 import type { SupportedLocale } from '../../i18n/types';
 
+export const DEFAULT_MERCHANT_PAY_CONVERSION_BPS = 10_000;
+
 type PreferencesState = {
   locale: SupportedLocale;
   preferInternalChangeForBch: boolean;
@@ -20,6 +22,8 @@ type PreferencesState = {
   // sat/byte (never below the relay minimum). Immediate effect on new txs.
   feeMode: 'auto' | 'custom';
   customFeeSatPerByte: number;
+  /** Default share of an incoming Merchant Pay amount converted to the other asset. */
+  merchantPayDefaultConversionBps: number;
 };
 
 const initialState: PreferencesState = {
@@ -31,6 +35,7 @@ const initialState: PreferencesState = {
   explorerCustomAddress: '',
   feeMode: 'auto',
   customFeeSatPerByte: 1.1,
+  merchantPayDefaultConversionBps: DEFAULT_MERCHANT_PAY_CONVERSION_BPS,
 };
 
 const preferencesSlice = createSlice({
@@ -71,6 +76,15 @@ const preferencesSlice = createSlice({
       state.customFeeSatPerByte =
         Number.isFinite(value) && value > 0 ? value : 1.1;
     },
+    setMerchantPayDefaultConversionBps: (
+      state,
+      action: PayloadAction<number>
+    ) => {
+      const value = Number(action.payload);
+      state.merchantPayDefaultConversionBps = Number.isFinite(value)
+        ? Math.min(10_000, Math.max(0, Math.round(value)))
+        : DEFAULT_MERCHANT_PAY_CONVERSION_BPS;
+    },
   },
 });
 
@@ -84,6 +98,7 @@ export const {
   setExplorerCustom,
   setFeeMode,
   setCustomFeeSatPerByte,
+  setMerchantPayDefaultConversionBps,
 } = preferencesSlice.actions;
 
 export const selectLocale = (state: RootState): SupportedLocale =>
@@ -129,5 +144,14 @@ export const selectFeeMode = (state: RootState): 'auto' | 'custom' =>
 
 export const selectCustomFeeSatPerByte = (state: RootState): number =>
   state.preferences.customFeeSatPerByte ?? 1.1;
+
+export const selectMerchantPayDefaultConversionBps = (
+  state: RootState
+): number => {
+  const value = Number(state.preferences.merchantPayDefaultConversionBps);
+  return Number.isFinite(value)
+    ? Math.min(10_000, Math.max(0, Math.round(value)))
+    : DEFAULT_MERCHANT_PAY_CONVERSION_BPS;
+};
 
 export default preferencesSlice.reducer;
