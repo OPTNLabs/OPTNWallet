@@ -6,7 +6,7 @@ use optn_app::{
     chrome_network_label, chrome_network_pill, coins_view_model, flipstarter_view_model,
     format_bch, fundme_view_model, history_view_model, portfolio_totals, product_nav,
     sample_chipnet_campaign_blob, AppAction, AppRoute, AppState, Coin, FreezeReason, HistoryEntry,
-    HistoryKind, Outpoint, PledgeStatus, ProductNavItem, SpendKind, WalletKind,
+    HistoryKind, Network, Outpoint, PledgeStatus, ProductNavItem, SpendKind, WalletKind,
 };
 use optn_transport::TransportError;
 
