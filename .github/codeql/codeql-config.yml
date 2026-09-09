@@ -1,8 +1,0 @@
-name: OPTN Wallet CodeQL
-
-# First-party wallet, CLI, and Tauri sources only. Vendored gtk-rs GLib is
-# reviewed and regression-tested in rust-quality.yml; CodeQL's generic
-# FromGlib/list-converter graphs on that tree are not executable wallet paths.
-# See docs/security/2026-09-08-pr63-glib-codeql.md.
-paths-ignore:
-  - vendor/**
