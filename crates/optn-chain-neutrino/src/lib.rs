@@ -348,7 +348,14 @@ impl NeutrinoBackend {
                 hash: tip_hash,
             }
         };
-        let start = from_height.unwrap_or(1);
+        // Same birth-height rule as BIP37: a compact-filter scan from genesis
+        // downloads a filter for every block since the chain began. Flowee Pay
+        // will not start an SPV download without a segment start height.
+        let Some(start) = from_height else {
+            return Err(ChainBackendError::Rejected(
+                "Neutrino refresh needs a wallet birth height; a scan from the genesis block is not a supported sync".into(),
+            ));
+        };
         if start > tip.height {
             let chain_tip = Some((tip.height, tip.hash));
             return Ok(BackendObservation {

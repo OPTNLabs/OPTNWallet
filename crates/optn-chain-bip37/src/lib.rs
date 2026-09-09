@@ -300,7 +300,17 @@ impl Bip37Backend {
                 "BIP37 refresh has no bloom-compatible wallet interests".into(),
             ));
         }
-        let start = from_height.unwrap_or(1).max(1);
+        // Flowee Pay gates its merkleblock download on `firstBlock() > 1` and
+        // refuses to even assign peers to a wallet whose segment has no start
+        // height (libs/p2p/SyncSPVAction.cpp). Treating a missing birth height
+        // as "scan from block 1" is one `getdata`/`merkleblock` round trip per
+        // block since genesis, which on Chipnet is ~322k round trips and does
+        // not finish. Fail closed and say so instead of hanging.
+        let Some(start) = from_height.map(|height| height.max(1)) else {
+            return Err(ChainBackendError::Rejected(
+                "BIP37 refresh needs a wallet birth height; a scan from the genesis block is not a supported sync".into(),
+            ));
+        };
         let cache = self.headers.lock().await;
         let blocks = cache
             .by_height
@@ -922,6 +932,55 @@ mod tests {
             );
         }
     }
+
+    #[tokio::test]
+    async fn a_missing_birth_height_is_refused_rather_than_scanned_from_genesis() {
+        // Flowee Pay will not start an SPV download for a segment whose
+        // firstBlock() is unset, because the alternative is one merkleblock
+        // round trip per block since genesis. Neither will we.
+        let backend = Bip37Backend {
+            config: Bip37Config::new(
+                SourceId::new("local-test"),
+                Endpoint {
+                    kind: EndpointKind::BchP2p,
+                    host: "127.0.0.1".into(),
+                    port: Some(1),
+                },
+                "chipnet",
+            ),
+            capabilities: CapabilitySet::default(),
+            probe: NodeProbe {
+                user_agent: "test".into(),
+                protocol_version: 70015,
+                services: 4,
+                start_height: 0,
+                serves_bloom: true,
+            },
+            headers: Mutex::new(HeaderCache::default()),
+        };
+        let mut script = vec![0x76, 0xa9, 0x14];
+        script.extend_from_slice(&[9; 20]);
+        script.extend_from_slice(&[0x88, 0xac]);
+        let interests = [WalletInterest::script(script)];
+
+        let refused = backend.wallet_refresh(&interests, None).await;
+        assert!(
+            matches!(&refused, Err(ChainBackendError::Rejected(message))
+                if message.contains("birth height")),
+            "expected a birth-height refusal, got {refused:?}"
+        );
+
+        // With a birth height the request gets past the gate and fails later,
+        // on the empty header cache, rather than being refused up front.
+        assert_eq!(
+            backend.wallet_refresh(&interests, Some(500)).await,
+            Err(ChainBackendError::Rejected(
+                "BIP37 has no cached headers in the requested range; header sync must run first"
+                    .into()
+            ))
+        );
+    }
+
     #[test]
     fn p2pkh_script_produces_hash_push() {
         let mut script = vec![0x76, 0xa9, 0x14];
