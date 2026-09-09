@@ -1702,6 +1702,105 @@ pub fn format_bch(sats: u64) -> String {
     format!("{whole}.{frac:08} BCH")
 }
 
+/// Satoshis in one BCH, and the decimal places that implies.
+pub const SATS_PER_BCH: u64 = 100_000_000;
+/// BCH carries eight decimal places; a ninth cannot be represented.
+pub const BCH_DECIMALS: u32 = 8;
+
+/// Why an amount was rejected, so a screen can say what is wrong instead of
+/// substituting a number the user did not type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AmountError {
+    /// Nothing was entered.
+    Empty,
+    /// Not a plain decimal number. Covers thousands separators, exponents and
+    /// stray signs -- a comma is the decimal separator in much of the world, so
+    /// reading "1,5" as fifteen thousand would be a silent money bug.
+    NotANumber,
+    /// More decimal places than BCH can hold. Rejected rather than rounded:
+    /// truncating loses the user's money without telling them.
+    TooManyDecimals { max: u32 },
+    /// Money is never negative here.
+    Negative,
+    /// Larger than satoshis can count.
+    TooLarge,
+}
+
+impl core::fmt::Display for AmountError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Empty => write!(f, "Enter an amount."),
+            Self::NotANumber => write!(f, "Enter a plain number, like 0.001."),
+            Self::TooManyDecimals { max } => {
+                write!(f, "BCH has at most {max} decimal places.")
+            }
+            Self::Negative => write!(f, "An amount cannot be negative."),
+            Self::TooLarge => write!(f, "That amount is too large."),
+        }
+    }
+}
+
+/// Parse a BCH amount into satoshis, exactly.
+///
+/// No floating point is involved at any step. `0.1` has no exact binary
+/// representation, so an f64 round-trip silently changes the amount, and the
+/// difference lands on-chain.
+///
+/// Accepts what [`format_bch`] emits, so the pair round-trips.
+pub fn parse_bch(text: &str) -> core::result::Result<u64, AmountError> {
+    let trimmed = text.trim();
+    // Accept the display form as input; the field is often pre-filled from it.
+    let trimmed = trimmed.strip_suffix("BCH").unwrap_or(trimmed).trim();
+
+    if trimmed.is_empty() {
+        return Err(AmountError::Empty);
+    }
+    if trimmed.starts_with('-') {
+        return Err(AmountError::Negative);
+    }
+
+    let (whole, frac) = match trimmed.split_once('.') {
+        Some((whole, frac)) => (whole, frac),
+        None => (trimmed, ""),
+    };
+
+    // A second separator, or a bare ".", is not a number.
+    if frac.contains('.') || (whole.is_empty() && frac.is_empty()) {
+        return Err(AmountError::NotANumber);
+    }
+    if !whole.chars().all(|c| c.is_ascii_digit()) || !frac.chars().all(|c| c.is_ascii_digit()) {
+        return Err(AmountError::NotANumber);
+    }
+    if frac.len() as u32 > BCH_DECIMALS {
+        return Err(AmountError::TooManyDecimals { max: BCH_DECIMALS });
+    }
+
+    let whole_sats = if whole.is_empty() {
+        0
+    } else {
+        whole
+            .parse::<u64>()
+            .map_err(|_| AmountError::TooLarge)?
+            .checked_mul(SATS_PER_BCH)
+            .ok_or(AmountError::TooLarge)?
+    };
+
+    // Right-pad so "0.5" means five tenths, not five satoshis.
+    let mut digits = frac.to_string();
+    while (digits.len() as u32) < BCH_DECIMALS {
+        digits.push('0');
+    }
+    let frac_sats = if digits.is_empty() {
+        0
+    } else {
+        digits.parse::<u64>().map_err(|_| AmountError::NotANumber)?
+    };
+
+    whole_sats
+        .checked_add(frac_sats)
+        .ok_or(AmountError::TooLarge)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoinsViewModel {
     pub layout: LayoutKind,
@@ -5065,5 +5164,118 @@ mod fee_policy_integration_regression {
             1700,
         )));
         assert_eq!(state.fee_preferences.custom_rate.satoshis_per_kb(), 1700);
+    }
+}
+
+#[cfg(test)]
+mod amount_tests {
+    use super::{format_bch, parse_bch, AmountError, BCH_DECIMALS, SATS_PER_BCH};
+
+    #[test]
+    fn whole_and_fractional_bch_convert_exactly() {
+        assert_eq!(parse_bch("1"), Ok(SATS_PER_BCH));
+        assert_eq!(parse_bch("0"), Ok(0));
+        assert_eq!(parse_bch("21000000"), Ok(2_100_000_000_000_000));
+        assert_eq!(parse_bch("0.00000001"), Ok(1));
+        assert_eq!(parse_bch("1.5"), Ok(150_000_000));
+    }
+
+    #[test]
+    fn a_fraction_is_padded_not_read_as_satoshis() {
+        // The bug this parser exists to prevent: "0.5" is half a BCH, not five
+        // satoshis. Reading the fractional digits without padding them to eight
+        // places understates the amount by seven orders of magnitude.
+        assert_eq!(parse_bch("0.5"), Ok(50_000_000));
+        assert_eq!(parse_bch("0.05"), Ok(5_000_000));
+        assert_eq!(parse_bch("0.000001"), Ok(100));
+    }
+
+    #[test]
+    fn a_small_decimal_amount_is_no_longer_silently_zero() {
+        // Send parsed the field with `parse::<u64>().unwrap_or(0)`, so a user
+        // who typed a decimal amount got a prepared send of zero with no error
+        // shown anywhere.
+        assert!("0.001".parse::<u64>().is_err());
+        assert_eq!(parse_bch("0.001"), Ok(100_000));
+    }
+
+    #[test]
+    fn the_display_form_round_trips() {
+        // format_bch emits "<whole>.<8 digits> BCH"; parsing that must return
+        // the satoshis it started from, or the field cannot be pre-filled.
+        for sats in [
+            0u64,
+            1,
+            999,
+            100_000_000,
+            123_456_789,
+            2_100_000_000_000_000,
+        ] {
+            assert_eq!(parse_bch(&format_bch(sats)), Ok(sats), "round trip {sats}");
+        }
+    }
+
+    #[test]
+    fn surrounding_whitespace_and_the_unit_are_accepted() {
+        assert_eq!(parse_bch("  1.25  "), Ok(125_000_000));
+        assert_eq!(parse_bch("1.25 BCH"), Ok(125_000_000));
+    }
+
+    #[test]
+    fn an_omitted_side_of_the_point_is_allowed() {
+        assert_eq!(parse_bch(".5"), Ok(50_000_000));
+        assert_eq!(parse_bch("1."), Ok(SATS_PER_BCH));
+    }
+
+    #[test]
+    fn a_ninth_decimal_is_refused_rather_than_rounded() {
+        // Truncating would spend a different amount than the one on screen.
+        assert_eq!(
+            parse_bch("0.000000001"),
+            Err(AmountError::TooManyDecimals { max: BCH_DECIMALS })
+        );
+    }
+
+    #[test]
+    fn separators_and_exponents_are_refused() {
+        // A comma is the decimal separator across much of the world. Reading
+        // "1,5" as fifteen thousand, or as one and a half, are both guesses --
+        // and one of them is off by four orders of magnitude.
+        for input in ["1,5", "1 000", "1_000", "1e8", "0x10", "+1", "1.2.3", "."] {
+            assert_eq!(parse_bch(input), Err(AmountError::NotANumber), "{input}");
+        }
+    }
+
+    #[test]
+    fn empty_and_negative_are_named_separately() {
+        assert_eq!(parse_bch(""), Err(AmountError::Empty));
+        assert_eq!(parse_bch("   "), Err(AmountError::Empty));
+        assert_eq!(parse_bch("-1"), Err(AmountError::Negative));
+    }
+
+    #[test]
+    fn an_amount_beyond_satoshi_range_is_refused_not_wrapped() {
+        assert_eq!(
+            parse_bch("99999999999999999999"),
+            Err(AmountError::TooLarge)
+        );
+        // Within u64 as a whole number, but not once multiplied out to sats.
+        assert_eq!(parse_bch("184467440738"), Err(AmountError::TooLarge));
+    }
+
+    #[test]
+    fn every_rejection_explains_itself() {
+        // These strings reach the user, so none may be empty or a Debug dump.
+        for error in [
+            AmountError::Empty,
+            AmountError::NotANumber,
+            AmountError::TooManyDecimals { max: BCH_DECIMALS },
+            AmountError::Negative,
+            AmountError::TooLarge,
+        ] {
+            let text = error.to_string();
+            assert!(!text.is_empty(), "{error:?} has no message");
+            assert!(text.ends_with('.'), "{error:?} is not a sentence");
+        }
     }
 }
