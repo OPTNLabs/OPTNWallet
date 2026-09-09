@@ -3,10 +3,10 @@
 use crate::{dispatch_action, qr::encode_address_qr, UiTransport};
 use leptos::prelude::*;
 use optn_app::{
-    coins_view_model, flipstarter_view_model, format_bch, fundme_view_model, history_view_model,
-    portfolio_totals, product_nav, sample_chipnet_campaign_blob, AppAction, AppRoute, AppState,
-    Coin, FreezeReason, HistoryEntry, HistoryKind, Network, Outpoint, PledgeStatus, ProductNavItem,
-    SpendKind, WalletKind,
+    chrome_network_label, chrome_network_pill, coins_view_model, flipstarter_view_model,
+    format_bch, fundme_view_model, history_view_model, portfolio_totals, product_nav,
+    sample_chipnet_campaign_blob, AppAction, AppRoute, AppState, Coin, FreezeReason, HistoryEntry,
+    HistoryKind, Outpoint, PledgeStatus, ProductNavItem, SpendKind, WalletKind,
 };
 use optn_transport::TransportError;
 
@@ -20,13 +20,6 @@ fn coins_snapshot(state: RwSignal<AppState>) -> Vec<Coin> {
 
 fn history_snapshot(state: RwSignal<AppState>) -> Vec<HistoryEntry> {
     history_view_model(&state.get()).entries
-}
-
-fn network_label(network: Network) -> &'static str {
-    match network {
-        Network::Mainnet => "MAINNET",
-        Network::Chipnet => "CHIPNET",
-    }
 }
 
 #[component]
@@ -57,7 +50,7 @@ pub fn WalletChrome(
                     )
                 >
                     <span class="sync-dot" aria-hidden="true"></span>
-                    {move || format!("{} · Local", network_label(state.get().network))}
+                    {move || chrome_network_pill(&state.get())}
                 </button>
             </header>
 
@@ -1106,7 +1099,7 @@ pub fn ReceivePage(transport: UiTransport, state: RwSignal<AppState>) -> impl In
                         </p>
                     </Show>
                     <p class="receive-note">
-                        {move || format!("Only send {} funds to this address.", network_label(state.get().network))}
+                        {move || format!("Only send {} funds to this address.", chrome_network_label(state.get().network))}
                     </p>
                 </article>
             </section>

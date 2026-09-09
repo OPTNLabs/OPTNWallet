@@ -63,6 +63,37 @@ const fn description_of(network: Network) -> &'static str {
     }
 }
 
+/// Chrome network pill. The renderer must not invent "Local" or "Synced".
+///
+/// Issue #71 wants `MAINNET · Synced`. Until a live source has published, the
+/// honest status is Local — that is an absent chain route, not a network name.
+pub fn chrome_network_pill(state: &crate::AppState) -> String {
+    format!(
+        "{} · {}",
+        chrome_network_label(state.network),
+        chrome_sync_status(&state.wallet_sync)
+    )
+}
+
+pub const fn chrome_network_label(network: Network) -> &'static str {
+    match network {
+        Network::Mainnet => "MAINNET",
+        Network::Chipnet => "CHIPNET",
+    }
+}
+
+pub fn chrome_sync_status(sync: &crate::WalletSyncView) -> &'static str {
+    if sync.refreshing {
+        "Syncing"
+    } else if sync.error.is_some() {
+        "Offline"
+    } else if sync.source.is_some() {
+        "Synced"
+    } else {
+        "Local"
+    }
+}
+
 pub fn network_settings_view_model(active: Network, busy: bool) -> NetworkSettingsViewModel {
     NetworkSettingsViewModel {
         description: NETWORK_DESCRIPTION,
@@ -329,6 +360,27 @@ mod tests {
             vm.available[1].description,
             "BCH testnet for upcoming CHIPs — test funds only"
         );
+    }
+
+    #[test]
+    fn chrome_pill_is_local_until_a_live_source_publishes() {
+        let mut state = crate::AppState::default();
+        state.network = Network::Chipnet;
+        assert_eq!(chrome_network_pill(&state), "CHIPNET · Local");
+
+        state.wallet_sync.source = Some("chipnet.imaginary.cash:50002".into());
+        assert_eq!(chrome_network_pill(&state), "CHIPNET · Synced");
+
+        state.wallet_sync.refreshing = true;
+        assert_eq!(chrome_network_pill(&state), "CHIPNET · Syncing");
+
+        state.wallet_sync.refreshing = false;
+        state.wallet_sync.error = Some("timed out".into());
+        assert_eq!(chrome_network_pill(&state), "CHIPNET · Offline");
+
+        state.network = Network::Mainnet;
+        state.wallet_sync = crate::WalletSyncView::empty();
+        assert_eq!(chrome_network_pill(&state), "MAINNET · Local");
     }
 
     #[test]
