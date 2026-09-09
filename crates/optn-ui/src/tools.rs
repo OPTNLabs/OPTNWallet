@@ -4,7 +4,7 @@ use crate::{dispatch_action, qr::encode_address_qr, UiTransport};
 use leptos::prelude::*;
 use optn_app::{
     chrome_network_label, chrome_network_pill, coins_view_model, flipstarter_view_model,
-    format_bch, fundme_view_model, history_view_model, portfolio_totals, product_nav,
+    format_bch, fundme_view_model, history_view_model, parse_bch, portfolio_totals, product_nav,
     sample_chipnet_campaign_blob, AppAction, AppRoute, AppState, Coin, FreezeReason, HistoryEntry,
     HistoryKind, Network, Outpoint, PledgeStatus, ProductNavItem, SpendKind, WalletKind,
 };
@@ -1111,7 +1111,10 @@ pub fn ReceivePage(transport: UiTransport, state: RwSignal<AppState>) -> impl In
 pub fn SendPage(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
     let destination = RwSignal::new(String::new());
     let chosen_coin = RwSignal::new(None::<Outpoint>);
-    let amount = RwSignal::new(String::from("1000"));
+    let amount = RwSignal::new(String::new());
+    // Shown under the field when the amount will not parse, so a bad entry
+    // says so instead of silently preparing a send of zero.
+    let amount_error = RwSignal::new(None::<String>);
     view! {
         <WalletChrome transport=transport state=state>
             <section class="page">
@@ -1145,14 +1148,24 @@ pub fn SendPage(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
                     />
                 </label>
                 <label class="field">
-                    <span>"Amount (sats)"</span>
+                    <span>"Amount (BCH)"</span>
                     <input
                         type="text"
-                        inputmode="numeric"
+                        inputmode="decimal"
+                        placeholder="0.00000000"
+                        aria-describedby="send-amount-error"
                         prop:value=move || amount.get()
-                        on:input=move |event| amount.set(event_target_value(&event))
+                        on:input=move |event| {
+                            amount.set(event_target_value(&event));
+                            amount_error.set(None);
+                        }
                     />
                 </label>
+                <Show when=move || amount_error.get().is_some()>
+                    <p id="send-amount-error" role="alert" class="field-error">
+                        {move || amount_error.get().unwrap_or_default()}
+                    </p>
+                </Show>
                 <section class="coin-control" data-testid="coin-control">
                     <div class="panel-head">
                         <span class="field-label">"Coin control"</span>
@@ -1227,7 +1240,17 @@ pub fn SendPage(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
                     class="primary"
                     type="button"
                     on:click=move |_| {
-                        let parsed = amount.get_untracked().parse::<u64>().unwrap_or(0);
+                        // `parse::<u64>().unwrap_or(0)` used to turn any amount
+                        // it could not read into zero, so a decimal entry
+                        // prepared a send of nothing with no error anywhere.
+                        let parsed = match parse_bch(&amount.get_untracked()) {
+                            Ok(sats) => sats,
+                            Err(problem) => {
+                                amount_error.set(Some(problem.to_string()));
+                                return;
+                            }
+                        };
+                        amount_error.set(None);
                         dispatch_action(
                             transport,
                             state,
