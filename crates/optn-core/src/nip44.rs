@@ -163,15 +163,27 @@ impl Drop for MessageKeys {
 /// never share a ChaCha20 key -- which is what makes reusing the conversation
 /// key safe.
 fn message_keys(key: &ConversationKey, nonce: &[u8; 32]) -> MessageKeys {
-    let expanded = hkdf_expand(key.expose(), nonce, 76);
-    let mut keys = MessageKeys {
-        chacha_key: [0u8; 32],
-        chacha_nonce: [0u8; 12],
-        hmac_key: [0u8; 32],
+    let mut expanded = hkdf_expand(key.expose(), nonce, 76);
+    // Built straight from the expansion rather than zero-initialised and then
+    // overwritten. Those placeholders were never used as a key or an IV -- the
+    // following lines replaced them before anything read the struct -- but a
+    // literal flowing into a field named `chacha_key` is indistinguishable,
+    // to a scanner and to a reader, from a key that really was hard-coded.
+    let keys = MessageKeys {
+        chacha_key: expanded[..32]
+            .try_into()
+            .expect("hkdf_expand returns the 76 bytes asked for"),
+        chacha_nonce: expanded[32..44]
+            .try_into()
+            .expect("hkdf_expand returns the 76 bytes asked for"),
+        hmac_key: expanded[44..76]
+            .try_into()
+            .expect("hkdf_expand returns the 76 bytes asked for"),
     };
-    keys.chacha_key.copy_from_slice(&expanded[..32]);
-    keys.chacha_nonce.copy_from_slice(&expanded[32..44]);
-    keys.hmac_key.copy_from_slice(&expanded[44..76]);
+    // MessageKeys wipes itself on drop; the buffer it was copied out of holds
+    // the same material and has to go the same way, or the secret outlives the
+    // type that guards it.
+    expanded.zeroize();
     keys
 }
 
