@@ -364,8 +364,10 @@ mod tests {
 
     #[test]
     fn chrome_pill_is_local_until_a_live_source_publishes() {
-        let mut state = crate::AppState::default();
-        state.network = Network::Chipnet;
+        let mut state = crate::AppState {
+            network: Network::Chipnet,
+            ..Default::default()
+        };
         assert_eq!(chrome_network_pill(&state), "CHIPNET · Local");
 
         state.wallet_sync.source = Some("chipnet.imaginary.cash:50002".into());
