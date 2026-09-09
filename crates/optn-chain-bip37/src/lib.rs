@@ -29,6 +29,13 @@ const PROTOCOL_VERSION: i32 = 70015;
 const NODE_BLOOM: u64 = 1 << 2;
 const USER_AGENT: &str = "/OPTNWallet:1.0/";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Tor gets its own budget: a SOCKS connect is a circuit build, not a TCP
+/// handshake. Measured against a live daemon, an isolated circuit to one
+/// peer usually lands in 2-5s but occasionally takes over 20s, and a
+/// genesis-to-tip header sync is ~160 sequential connections. Sharing the
+/// direct-TCP timeout made the privacy route the one route that could
+/// never finish. Stream isolation per connection is kept.
+const TOR_CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
 const IO_TIMEOUT: Duration = Duration::from_secs(15);
 const RELAY_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_PAYLOAD: usize = 2 * 1024 * 1024;
@@ -627,7 +634,7 @@ async fn connect_peer(
             let proxy = format!("{proxy_host}:{proxy_port}");
             let target = format!("{host}:{port}");
             let socks = tokio::time::timeout(
-                CONNECT_TIMEOUT,
+                TOR_CONNECT_TIMEOUT,
                 tokio_socks::tcp::Socks5Stream::connect_with_password(
                     proxy.as_str(),
                     target.as_str(),
