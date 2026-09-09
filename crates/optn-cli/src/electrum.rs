@@ -252,6 +252,73 @@ impl Client {
             .map(str::to_string)
             .ok_or_else(|| CliError::Protocol("broadcast did not return a txid".into()))
     }
+
+    pub async fn tip(&self) -> Result<(u32, String)> {
+        let v = self.call("blockchain.headers.subscribe", json!([])).await?;
+        let height = v
+            .get("height")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| CliError::Protocol("headers.subscribe lacks height".into()))?;
+        let height = u32::try_from(height)
+            .map_err(|_| CliError::Protocol("tip height exceeds u32".into()))?;
+        let header = v
+            .get("hex")
+            .or_else(|| v.get("header"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| CliError::Protocol("headers.subscribe lacks header hex".into()))?
+            .to_owned();
+        Ok((height, header))
+    }
+
+    pub async fn block_headers(&self, start_height: u32, count: u32) -> Result<Vec<[u8; 80]>> {
+        let v = self
+            .call("blockchain.block.headers", json!([start_height, count, 0]))
+            .await?;
+        parse_concatenated_headers(&v)
+    }
+}
+
+fn parse_concatenated_headers(value: &Value) -> Result<Vec<[u8; 80]>> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| CliError::Protocol("block.headers result is not an object".into()))?;
+    if let Some(headers) = object.get("headers").and_then(Value::as_array) {
+        return headers
+            .iter()
+            .map(|header| {
+                header
+                    .as_str()
+                    .ok_or_else(|| CliError::Protocol("headers array contains a non-string".into()))
+                    .and_then(parse_header_hex)
+            })
+            .collect();
+    }
+    let concatenated = object.get("hex").and_then(Value::as_str).ok_or_else(|| {
+        CliError::Protocol("block.headers result has neither headers[] nor hex".into())
+    })?;
+    if concatenated.len() % 160 != 0 {
+        return Err(CliError::Protocol(
+            "concatenated header hex is not a multiple of 80 bytes".into(),
+        ));
+    }
+    (0..concatenated.len() / 160)
+        .map(|i| parse_header_hex(&concatenated[i * 160..(i + 1) * 160]))
+        .collect()
+}
+
+fn parse_header_hex(value: &str) -> Result<[u8; 80]> {
+    if value.len() != 160 || !value.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(CliError::Protocol(format!(
+            "header hex must be 160 hex digits, got {}",
+            value.len()
+        )));
+    }
+    let mut header = [0u8; 80];
+    for i in 0..80 {
+        header[i] = u8::from_str_radix(&value[i * 2..i * 2 + 2], 16)
+            .map_err(|e| CliError::Protocol(format!("invalid header hex: {e}")))?;
+    }
+    Ok(header)
 }
 
 fn route_for_host(host: &str, tor_status: TorStatus) -> Result<TorRoute> {
