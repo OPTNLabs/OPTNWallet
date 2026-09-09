@@ -662,12 +662,9 @@ async fn main() {
             Err(err) => emit_cli_error(&cli, *stdio, err),
         }
     }
-    let line_protocol = false;
     match run(&cli).await {
         Ok(value) => {
-            if line_protocol {
-                println!("{value}");
-            } else if cli.json {
+            if cli.json {
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&value).unwrap_or_default()
@@ -679,7 +676,7 @@ async fn main() {
                 std::process::exit(if value["state"] == "rejected" { 5 } else { 3 });
             }
         }
-        Err(err) => emit_cli_error(&cli, line_protocol, err),
+        Err(err) => emit_cli_error(&cli, false, err),
     }
 }
 
