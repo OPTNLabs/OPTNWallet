@@ -201,7 +201,8 @@
     },
     "vitest": {
       "vite": "7.3.6"
-    }
+    },
+    "js-yaml": "4.3.2"
   },
   "devDependencies": {
     "@capacitor/cli": "^7.6.8",
