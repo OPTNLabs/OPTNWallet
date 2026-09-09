@@ -628,10 +628,41 @@ enum X402Command {
     },
 }
 
+fn emit_cli_error(cli: &Cli, line_protocol: bool, err: CliError) -> ! {
+    if cli.json || line_protocol {
+        let payload = json!({ "ok": false, "error": err.kind(), "message": err.to_string() });
+        if line_protocol {
+            println!("{payload}");
+        } else {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&payload).unwrap_or_default()
+            );
+        }
+    } else {
+        eprintln!("error: {err}");
+    }
+    std::process::exit(err.exit_code());
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
-    let line_protocol = matches!(cli.command, Command::Wallet { stdio: true, .. });
+    // Wallet console prints its own public replies. Do not funnel password
+    // prompts or HD xpubs through this process-wide JSON printer.
+    if let Command::Wallet { directory, stdio } = &cli.command {
+        match wallet_security::run(
+            directory.clone().or_else(|| cli.wallet_directory.clone()),
+            *stdio,
+            &cli,
+        )
+        .await
+        {
+            Ok(()) => return,
+            Err(err) => emit_cli_error(&cli, *stdio, err),
+        }
+    }
+    let line_protocol = false;
     match run(&cli).await {
         Ok(value) => {
             if line_protocol {
@@ -648,23 +679,7 @@ async fn main() {
                 std::process::exit(if value["state"] == "rejected" { 5 } else { 3 });
             }
         }
-        Err(err) => {
-            if cli.json || line_protocol {
-                let payload =
-                    json!({ "ok": false, "error": err.kind(), "message": err.to_string() });
-                if line_protocol {
-                    println!("{payload}");
-                } else {
-                    println!(
-                        "{}",
-                        serde_json::to_string_pretty(&payload).unwrap_or_default()
-                    );
-                }
-            } else {
-                eprintln!("error: {err}");
-            }
-            std::process::exit(err.exit_code());
-        }
+        Err(err) => emit_cli_error(&cli, line_protocol, err),
     }
 }
 
@@ -1293,13 +1308,8 @@ async fn run(cli: &Cli) -> Result<Value> {
         ));
     }
 
-    if let Command::Wallet { directory, stdio } = &cli.command {
-        return wallet_security::run(
-            directory.clone().or_else(|| cli.wallet_directory.clone()),
-            *stdio,
-            cli,
-        )
-        .await;
+    if let Command::Wallet { .. } = &cli.command {
+        unreachable!("wallet console is handled in main before run()");
     }
     match &cli.command {
         Command::Wallet { .. } => unreachable!("handled before network setup"),
@@ -3388,7 +3398,7 @@ fn print_human(command: &Command, v: &Value) {
         // The console has already printed each command's result. Its own
         // return value is bookkeeping, and echoing it at exit reads like one
         // last command ran.
-        Command::Console { .. } => {}
+        Command::Console { .. } | Command::Wallet { .. } => {}
         _ => println!("{}", serde_json::to_string_pretty(v).unwrap_or_default()),
     }
 }

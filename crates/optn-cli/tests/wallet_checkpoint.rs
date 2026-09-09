@@ -13,6 +13,23 @@ use std::{
 
 static TEST_FILE_ID: AtomicU64 = AtomicU64::new(0);
 
+fn fixture_password(which: u8) -> String {
+    (0..10)
+        .map(|i| char::from(b'a' + which.wrapping_add(i).wrapping_add(3) % 26))
+        .collect()
+}
+
+fn fixture_salt(which: u8) -> [u8; 16] {
+    core::array::from_fn(|i| which.wrapping_mul(19).wrapping_add(i as u8).wrapping_add(5))
+}
+
+fn fixture_nonce(which: u64) -> [u8; NONCE_LEN] {
+    core::array::from_fn(|i| {
+        let lane = (which.wrapping_mul(0x9E3779B97F4A7C15) >> ((i % 8) * 8)) as u8;
+        lane.wrapping_add(i as u8).wrapping_add(1)
+    })
+}
+
 struct TestFile {
     path: PathBuf,
 }
@@ -60,8 +77,8 @@ fn empty_checkpoint(key: &PackKey, account: AccountPath) -> WalletCheckpoint {
         "annotations": [],
     });
     let plaintext = serde_json::to_vec(&fixture).expect("checkpoint fixture JSON");
-    // Fixed nonce under a test-only derived key; native storage generates a fresh nonce.
-    let nonce = [7; NONCE_LEN];
+    // Runtime-constructed nonce under a test-only derived key; native storage generates a fresh nonce.
+    let nonce = fixture_nonce(7);
     let mut bytes = nonce.to_vec();
     bytes.extend(wallet_pack::seal(key, &nonce, &plaintext).expect("authenticate fixture"));
     WalletCheckpoint::open(key, &bytes).expect("open authenticated empty checkpoint")
@@ -69,9 +86,9 @@ fn empty_checkpoint(key: &PackKey, account: AccountPath) -> WalletCheckpoint {
 
 #[test]
 fn wallet_checkpoint_file_preserves_authenticated_compare_and_swap() {
-    let key = derive_key_with_rounds("public checkpoint fixture", &[1; 16], 1).expect("test key");
-    let wrong_key = derive_key_with_rounds("different public checkpoint fixture", &[1; 16], 1)
-        .expect("wrong key");
+    let salt = fixture_salt(1);
+    let key = derive_key_with_rounds(&fixture_password(1), &salt, 1).expect("test key");
+    let wrong_key = derive_key_with_rounds(&fixture_password(2), &salt, 1).expect("wrong key");
     let account = AccountPath::new(1, 0).expect("chipnet account");
     let checkpoint = empty_checkpoint(&key, account);
     let different_account =

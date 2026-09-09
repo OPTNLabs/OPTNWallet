@@ -243,6 +243,23 @@ mod tests {
         token::TokenData,
     };
     use std::sync::{Arc, Mutex};
+
+    fn fixture_password(which: u8) -> String {
+        (0..10)
+            .map(|i| char::from(b'a' + which.wrapping_add(i).wrapping_add(3) % 26))
+            .collect()
+    }
+
+    fn fixture_salt(which: u8) -> [u8; 16] {
+        core::array::from_fn(|i| which.wrapping_mul(19).wrapping_add(i as u8).wrapping_add(5))
+    }
+
+    fn fixture_nonce(which: u64) -> [u8; 12] {
+        core::array::from_fn(|i| {
+            let lane = (which.wrapping_mul(0x9E3779B97F4A7C15) >> ((i % 8) * 8)) as u8;
+            lane.wrapping_add(i as u8).wrapping_add(1)
+        })
+    }
     use tokio::sync::Notify;
 
     const LIMITS: HdSyncLimits = HdSyncLimits {
@@ -644,9 +661,9 @@ mod tests {
                 return Err("injected storage failure or stale revision".into());
             }
             disk.writes += 1;
-            // Test-only counter; the native adapter uses fallible OS randomness.
-            let mut nonce = [0; 12];
-            nonce[..8].copy_from_slice(&disk.writes.to_le_bytes());
+            // Distinct per write, derived from the counter — not a compiled-in nonce.
+            // The native adapter uses fallible OS randomness.
+            let nonce = fixture_nonce(disk.writes);
             let bytes = checkpoint.seal(key, &nonce)?;
             let revision = sha256d(&bytes);
             disk.files.insert(*id, bytes);
@@ -1173,11 +1190,12 @@ mod tests {
             .contains("could not be saved"));
         assert_eq!(checkpoints.0.lock().unwrap().files, ciphertext);
         checkpoints.0.lock().unwrap().fail = false;
+        let rotated = fixture_password(3);
         runtime
             .wallet_security(Request::ChangePassword {
                 current: None,
-                password: SecretText::new("new-password".into()),
-                confirmation: SecretText::new("new-password".into()),
+                password: SecretText::new(rotated.clone()),
+                confirmation: SecretText::new(rotated.clone()),
                 epoch: status.epoch,
             })
             .await
@@ -1207,7 +1225,7 @@ mod tests {
         restarted
             .wallet_security(Request::Open {
                 handle: handle.clone(),
-                password: SecretText::new("new-password".into()),
+                password: SecretText::new(rotated.clone()),
             })
             .await
             .unwrap();
@@ -1252,7 +1270,7 @@ mod tests {
         assert!(restarted
             .wallet_security(Request::Open {
                 handle,
-                password: SecretText::new("new-password".into())
+                password: SecretText::new(rotated)
             })
             .await
             .is_err());
@@ -1331,14 +1349,15 @@ mod tests {
         );
         assert!(observed.history_fresh && observed.utxos_fresh);
         assert_eq!(observed.evidence.as_deref(), Some("Server assertion"));
-        let key = derive_key_with_rounds("public checkpoint test fixture", &[33; 16], 1).unwrap();
-        let wrong = derive_key_with_rounds("different public test fixture", &[33; 16], 1).unwrap();
-        // Fixed nonce under a test-only key for a deterministic corruption test.
+        let salt = fixture_salt(1);
+        let key = derive_key_with_rounds(&fixture_password(1), &salt, 1).unwrap();
+        let wrong = derive_key_with_rounds(&fixture_password(2), &salt, 1).unwrap();
+        let nonce = fixture_nonce(44);
         let bytes = runtime
             .wallet_checkpoint()
             .await
             .unwrap()
-            .seal(&key, &[44; 12])
+            .seal(&key, &nonce)
             .unwrap();
         assert!(WalletCheckpoint::open(&wrong, &bytes).is_err());
         // Bounded mutation regression: changing any byte of this populated
@@ -1348,7 +1367,7 @@ mod tests {
             tampered[index] ^= 1;
             assert!(WalletCheckpoint::open(&key, &tampered).is_err());
         }
-        let plaintext = optn_core::wallet_pack::open(&key, &[44; 12], &bytes[12..]).unwrap();
+        let plaintext = optn_core::wallet_pack::open(&key, &nonce, &bytes[12..]).unwrap();
         let stored: serde_json::Value = serde_json::from_slice(&plaintext).unwrap();
         for (index, (field, bad_value)) in [
             ("format", serde_json::json!("future-unknown-format")),
@@ -1361,13 +1380,12 @@ mod tests {
         {
             let mut malformed = stored.clone();
             malformed[field] = bad_value;
-            // Distinct test nonce for each authenticated malformed fixture.
-            let nonce = [index as u8; 12];
-            let mut malformed_bytes = nonce.to_vec();
+            let malformed_nonce = fixture_nonce(100 + index as u64);
+            let mut malformed_bytes = malformed_nonce.to_vec();
             malformed_bytes.extend(
                 optn_core::wallet_pack::seal(
                     &key,
-                    &nonce,
+                    &malformed_nonce,
                     &serde_json::to_vec(&malformed).unwrap(),
                 )
                 .unwrap(),

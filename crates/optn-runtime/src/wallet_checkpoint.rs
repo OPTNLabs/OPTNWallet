@@ -443,6 +443,13 @@ mod tests {
         watch_only::address_under_account,
     };
 
+    fn fixture_nonce(which: u64) -> [u8; NONCE_LEN] {
+        core::array::from_fn(|i| {
+            let lane = (which.wrapping_mul(0x9E3779B97F4A7C15) >> ((i % 8) * 8)) as u8;
+            lane.wrapping_add(i as u8).wrapping_add(1)
+        })
+    }
+
     fn fixture() -> (PackKey, StoredCheckpoint) {
         let account = AccountPath::new(1, 1).unwrap();
         let wallet = Wallet::from_mnemonic(BIP39_TEST_VECTOR_MNEMONIC, "TREZOR").unwrap();
@@ -466,7 +473,7 @@ mod tests {
 
     // Authenticated codec fixtures, never a production key or encryption entry point.
     fn encoded(key: &PackKey, stored: &StoredCheckpoint, sequence: u8) -> Vec<u8> {
-        let nonce = [sequence; NONCE_LEN];
+        let nonce = fixture_nonce(u64::from(sequence) + 1);
         let mut bytes = nonce.to_vec();
         bytes.extend(wallet_pack::seal(key, &nonce, &serde_json::to_vec(stored).unwrap()).unwrap());
         bytes
@@ -551,7 +558,7 @@ mod tests {
         assert_eq!(book.last_used, [None, None, None, Some(0)]);
         assert!(!restored.state.sync.utxos_fresh);
         let v2 =
-            WalletCheckpoint::open(&key, &restored.seal(&key, &[9; NONCE_LEN]).unwrap()).unwrap();
+            WalletCheckpoint::open(&key, &restored.seal(&key, &fixture_nonce(9)).unwrap()).unwrap();
         assert_eq!(restored.coins, v2.coins);
         assert!(v2.state.authoritative.unwrap().value.hd.unwrap().branches[2].is_empty());
 
