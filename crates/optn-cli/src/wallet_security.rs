@@ -176,7 +176,7 @@ async fn execute(
     }
 }
 
-pub async fn run(directory: Option<PathBuf>, stdio: bool, cli: &crate::Cli) -> Result<Value> {
+pub async fn run(directory: Option<PathBuf>, stdio: bool, cli: &crate::Cli) -> Result<()> {
     let directory = directory
         .or_else(|| dirs::data_dir().map(|root| root.join("com.optilabs.wallet").join("wallets")))
         .ok_or_else(|| CliError::Usage("Specify a wallet directory.".into()))?;
@@ -368,12 +368,16 @@ pub async fn run(directory: Option<PathBuf>, stdio: bool, cli: &crate::Cli) -> R
         .dispatch(AppAction::LockWallet)
         .await
         .map_err(|_| CliError::Usage("Wallet runtime stopped.".into()))?;
-    let wallet_sync = WireState::from(&runtime.state()).wallet_sync;
     drop(runtime);
     driver_thread
         .join()
         .map_err(|_| CliError::Usage("Wallet runtime stopped unexpectedly.".into()))?;
-    Ok(json!({"ok":true,"locked":true,"wallet_sync":wallet_sync}))
+    if stdio {
+        // Literal public bookkeeping. Do not return runtime state (or any
+        // value that touched a password request) to the process-wide printer.
+        println!("{{\"ok\":true,\"locked\":true}}");
+    }
+    Ok(())
 }
 
 // Bound allocation before reading and wipe private command/password buffers on drop.

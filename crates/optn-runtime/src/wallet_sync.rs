@@ -1183,13 +1183,18 @@ mod tests {
 
         // Published BIP39 fixture; deterministic entropy is test-only. Use the
         // real wallet-file encryption and password verification unchanged.
+        let none = String::new();
         let file = optn_core::wallet_file::WalletFile::create(
             "new public fixture",
-            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
-            "", "", "", Network::Chipnet,
+            optn_core::hd::BIP39_TEST_VECTOR_MNEMONIC,
+            &none,
+            &none,
+            &none,
+            Network::Chipnet,
             optn_core::hd::AccountPath::default_for(Network::Chipnet),
             &std::array::from_fn(|i| i as u8),
-        ).unwrap();
+        )
+        .unwrap();
         let storage = Storage::default();
         storage
             .save("new.optn", None, &file.encode().unwrap())

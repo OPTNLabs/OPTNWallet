@@ -1,0 +1,5 @@
+{
+  "unlockPassword": "old-password",
+  "rotatedPassword": "new-password",
+  "bip39Passphrase": "TREZOR"
+}
