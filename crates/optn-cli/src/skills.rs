@@ -164,6 +164,14 @@ pub const SKILLS: &[Skill] = &[
         requires_confirmation: false,
     },
     Skill {
+        name: "network headers",
+        capability: Capability::Read,
+        summary: "Fetch live headers and verify predecessor link, declared PoW, and ASERT.",
+        needs_wallet: false,
+        needs_network: true,
+        requires_confirmation: false,
+    },
+    Skill {
         name: "balance",
         capability: Capability::Read,
         summary: "Confirmed and unconfirmed balance of an address.",

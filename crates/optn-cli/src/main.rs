@@ -397,6 +397,15 @@ enum NetworkCommand {
         #[arg(long, value_enum)]
         protocol: ChainProtocol,
     },
+    /// Fetch live headers and check predecessor link, declared PoW, and ASERT.
+    Headers {
+        /// First height. Defaults to a window ending at the current tip.
+        #[arg(long)]
+        start: Option<u32>,
+        /// Headers to fetch and verify. Must be at least 2.
+        #[arg(long, default_value_t = 8)]
+        count: u32,
+    },
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -688,6 +697,9 @@ fn command_name(command: &Command) -> &'static str {
         Command::Network {
             action: NetworkCommand::Select { .. },
         } => "network select",
+        Command::Network {
+            action: NetworkCommand::Headers { .. },
+        } => "network headers",
         Command::Network { .. } => "network",
         Command::Balance { .. } => "balance",
         Command::Utxos { .. } => "utxos",
@@ -831,6 +843,82 @@ fn shared_network_status(cli: &Cli) -> Result<Value> {
         "primary": plan.primary.iter().map(|source| source.as_str()).collect::<Vec<_>>(),
         "fallback": plan.fallback.iter().map(|source| source.as_str()).collect::<Vec<_>>(),
     }))
+}
+
+async fn verify_selected_headers(cli: &Cli, start: Option<u32>, count: u32) -> Result<Value> {
+    if count < 2 {
+        return Err(CliError::Usage(
+            "header verification needs at least 2 consecutive headers".into(),
+        ));
+    }
+    let client = client_for(cli)?;
+    let (tip_height, _) = client.tip().await?;
+    let count = count.min(2016);
+    let start_height = match start {
+        Some(height) => height,
+        None => tip_height.saturating_sub(count.saturating_sub(1)),
+    };
+    if start_height > tip_height {
+        return Err(CliError::Usage(format!(
+            "start height {start_height} is above tip {tip_height}"
+        )));
+    }
+    let available = tip_height.saturating_sub(start_height).saturating_add(1);
+    let count = count.min(available);
+    let headers = client.block_headers(start_height, count).await?;
+    if headers.len() < 2 {
+        return Err(CliError::Protocol(
+            "server returned fewer than 2 headers".into(),
+        ));
+    }
+    let checked = verify_header_batch(cli.network, start_height, &headers)?;
+    Ok(json!({
+        "ok": true,
+        "network": cli.network.to_string(),
+        "endpoint": client.endpoint(),
+        "tip_height": tip_height,
+        "start_height": start_height,
+        "count": headers.len(),
+        "asert": true,
+        "evidence": "HeaderLinked",
+        "last_height": start_height + u32::try_from(headers.len().saturating_sub(1))
+            .map_err(|_| CliError::Protocol("header count exceeds u32".into()))?,
+        "last_hash": hex(&checked),
+    }))
+}
+
+fn verify_header_batch(
+    network: Network,
+    start_height: u32,
+    headers: &[[u8; 80]],
+) -> Result<[u8; 32]> {
+    use optn_core::asert::{verify_header_extension, AsertAnchor, AsertCheck, AsertParams};
+    use optn_core::header_pow::verify_declared_pow;
+
+    let mut previous = verify_declared_pow(&headers[0])
+        .map_err(|e| CliError::Protocol(format!("header {start_height} failed PoW: {e:?}")))?;
+    for (offset, header) in headers.iter().enumerate().skip(1) {
+        let previous_height = start_height
+            .checked_add(u32::try_from(offset - 1).expect("header offset fits u32"))
+            .ok_or_else(|| CliError::Protocol("header height overflow".into()))?;
+        previous = verify_header_extension(
+            previous.hash,
+            header,
+            Some(AsertCheck {
+                params: AsertParams::for_network(network),
+                anchor: AsertAnchor::for_network(network),
+                previous_height,
+                previous_time: i64::from(previous.time),
+            }),
+        )
+        .map_err(|e| {
+            CliError::Protocol(format!(
+                "header {} failed ASERT/link check: {e}",
+                previous_height + 1
+            ))
+        })?;
+    }
+    Ok(previous.hash)
 }
 
 async fn ping_selected_chain(cli: &Cli) -> Result<Value> {
@@ -1325,6 +1413,9 @@ async fn run(cli: &Cli) -> Result<Value> {
             .map_err(CliError::Usage)?;
             return shared_network_status(cli);
         }
+        Command::Network {
+            action: NetworkCommand::Headers { start, count },
+        } => return verify_selected_headers(cli, *start, *count).await,
         Command::Ping => return ping_selected_chain(cli).await,
         Command::Tx { txid, verbose } => {
             return transaction_selected_chain(cli, txid, *verbose).await
@@ -3313,6 +3404,29 @@ fn decode_hex(s: &str) -> Result<Vec<u8>> {
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[cfg(test)]
+mod header_batch_tests {
+    use super::verify_header_batch;
+    use optn_core::network::Network;
+
+    fn header_from_hex(hex: &str) -> [u8; 80] {
+        let mut header = [0u8; 80];
+        for i in 0..80 {
+            header[i] = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap();
+        }
+        header
+    }
+
+    #[test]
+    fn chipnet_electrum_headers_pass_asert_on_the_cli_path() {
+        // Same consecutive Chipnet headers as optn-core asert tests (height 322752).
+        let prev = header_from_hex("00e0ff3fce8f6b81aa0ed30a9cf02730fd5c5c3d31e5ea79c50c908fa91200000000000059497c97770f494c32670e39a38a5f7282b6089c3713b8ee336d1cb9a9a0f5dafbdca06a45031a1aa04d838d");
+        let cur = header_from_hex("0000ff3fdcd2ef553db3e4ef9ac52fcdd900c994a7c8829bdd9c1fdfcd0e00000000000065dfdfbf2166cb985df2ab752e52815440aad540359c80c172211163ccaf434dcee1a06affff001de4aba516");
+        let hash = verify_header_batch(Network::Chipnet, 322_752, &[prev, cur]).expect("asert");
+        assert_ne!(hash, [0u8; 32]);
+    }
 }
 
 fn print_human(command: &Command, v: &Value) {
