@@ -31,7 +31,26 @@ const PROTOCOL_VERSION: i32 = 70015;
 const SF_NODE_CF: u64 = 1 << 8;
 const USER_AGENT: &str = "/OPTNWallet:1.0/";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Tor gets its own budget: a SOCKS connect is a circuit build, not a TCP
+/// handshake. Measured against a live daemon, an isolated circuit to one
+/// peer usually lands in 2-5s but occasionally takes over 20s, and a
+/// genesis-to-tip header sync is ~160 sequential connections. Sharing the
+/// direct-TCP timeout made the privacy route the one route that could
+/// never finish. Stream isolation per connection is kept.
+const TOR_CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
 const IO_TIMEOUT: Duration = Duration::from_secs(20);
+/// Reading a message body over Tor is bounded by circuit bandwidth, not by how
+/// fast the peer answers, so it gets its own budget the way the connect does.
+const TOR_IO_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// Per-message IO budget for a transport. Direct TCP keeps the tighter value
+/// so a dead peer is still detected quickly.
+const fn io_timeout(transport: &NeutrinoTransport) -> Duration {
+    match transport {
+        NeutrinoTransport::Direct => IO_TIMEOUT,
+        NeutrinoTransport::Tor { .. } => TOR_IO_TIMEOUT,
+    }
+}
 const MAX_GENERAL_PAYLOAD: usize = 8 * 1024 * 1024;
 const MAX_BLOCK_PAYLOAD: usize = 256 * 1024 * 1024;
 const MAX_CF_RANGE: u32 = 1000;
@@ -184,6 +203,7 @@ impl NeutrinoBackend {
                 &mut stream,
                 params_for(&config.network).magic,
                 genesis_hash(&config.network),
+                io_timeout(&config.transport),
             )
             .await
             {
@@ -264,8 +284,13 @@ impl NeutrinoBackend {
             &self.config.transport,
         )
         .await?;
-        let mut headers =
-            request_headers(&mut stream, params_for(&self.config.network).magic, locator).await?;
+        let mut headers = request_headers(
+            &mut stream,
+            params_for(&self.config.network).magic,
+            locator,
+            io_timeout(&self.config.transport),
+        )
+        .await?;
         headers.truncate(count as usize);
 
         let mut expected_prev = locator;
@@ -354,8 +379,13 @@ impl NeutrinoBackend {
 
         while chunk_start <= tip.height {
             let chunk_end = chunk_start.saturating_add(MAX_CF_RANGE - 1).min(tip.height);
-            self.ensure_filter_headers(&mut stream, magic, chunk_end)
-                .await?;
+            self.ensure_filter_headers(
+                &mut stream,
+                magic,
+                chunk_end,
+                io_timeout(&self.config.transport),
+            )
+            .await?;
             let expected_hashes = {
                 let cache = self.headers.lock().await;
                 (chunk_start..=chunk_end)
@@ -375,6 +405,7 @@ impl NeutrinoBackend {
                 chunk_start,
                 stop_hash,
                 expected_hashes.len(),
+                io_timeout(&self.config.transport),
             )
             .await?;
 
@@ -409,7 +440,13 @@ impl NeutrinoBackend {
                 if gcs.match_any(&block_hash, &query_items).map_err(|error| {
                     ChainBackendError::InvalidResponse(format!("GCS match failed: {error:?}"))
                 })? {
-                    let block = request_block(&mut stream, magic, block_hash).await?;
+                    let block = request_block(
+                        &mut stream,
+                        magic,
+                        block_hash,
+                        io_timeout(&self.config.transport),
+                    )
+                    .await?;
                     for tx in parse_relevant_block(
                         &block,
                         block_hash,
@@ -444,6 +481,7 @@ impl NeutrinoBackend {
         stream: &mut TcpStream,
         magic: [u8; 4],
         stop_height: u32,
+        io_timeout: Duration,
     ) -> Result<(), ChainBackendError> {
         loop {
             let start = {
@@ -485,7 +523,7 @@ impl NeutrinoBackend {
                         ))
                     })?
             };
-            let response = request_cfheaders(stream, magic, start, stop_hash).await?;
+            let response = request_cfheaders(stream, magic, start, stop_hash, io_timeout).await?;
             if response.stop_hash != stop_hash || response.prev_filter_header != expected_prev {
                 return Err(ChainBackendError::InvalidResponse(
                     "cfheaders chain anchor mismatch".into(),
@@ -582,8 +620,9 @@ async fn probe_genesis_filter(
     stream: &mut TcpStream,
     magic: [u8; 4],
     genesis: [u8; 32],
+    io_timeout: Duration,
 ) -> Result<([u8; 32], [u8; 32]), ChainBackendError> {
-    let headers = request_cfheaders(stream, magic, 0, genesis).await?;
+    let headers = request_cfheaders(stream, magic, 0, genesis, io_timeout).await?;
     if headers.stop_hash != genesis
         || headers.prev_filter_header != [0; 32]
         || headers.filter_hashes.len() != 1
@@ -592,7 +631,7 @@ async fn probe_genesis_filter(
             "genesis cfheaders probe mismatch".into(),
         ));
     }
-    let filters = request_cfilters(stream, magic, 0, genesis, 1).await?;
+    let filters = request_cfilters(stream, magic, 0, genesis, 1, io_timeout).await?;
     let filter = filters
         .into_iter()
         .next()
@@ -627,17 +666,18 @@ async fn request_cfheaders(
     magic: [u8; 4],
     start_height: u32,
     stop_hash: [u8; 32],
+    io_timeout: Duration,
 ) -> Result<CFHeaders, ChainBackendError> {
     let mut payload = Vec::with_capacity(37);
     payload.push(FILTER_TYPE_BASIC);
     payload.extend_from_slice(&start_height.to_le_bytes());
     payload.extend_from_slice(&stop_hash);
-    send_message(stream, magic, "getcfheaders", &payload).await?;
+    send_message(stream, magic, "getcfheaders", &payload, io_timeout).await?;
     for _ in 0..100 {
-        let (command, payload) = read_message(stream, magic).await?;
+        let (command, payload) = read_message(stream, magic, io_timeout).await?;
         match command.as_str() {
             "cfheaders" => return parse_cfheaders(&payload),
-            "ping" => send_message(stream, magic, "pong", &payload).await?,
+            "ping" => send_message(stream, magic, "pong", &payload, io_timeout).await?,
             _ => {}
         }
     }
@@ -689,6 +729,7 @@ async fn request_cfilters(
     start_height: u32,
     stop_hash: [u8; 32],
     expected_count: usize,
+    io_timeout: Duration,
 ) -> Result<Vec<CFilter>, ChainBackendError> {
     if expected_count > MAX_CF_RANGE as usize {
         return Err(ChainBackendError::Rejected(
@@ -699,10 +740,10 @@ async fn request_cfilters(
     payload.push(FILTER_TYPE_BASIC);
     payload.extend_from_slice(&start_height.to_le_bytes());
     payload.extend_from_slice(&stop_hash);
-    send_message(stream, magic, "getcfilters", &payload).await?;
+    send_message(stream, magic, "getcfilters", &payload, io_timeout).await?;
     let mut filters = Vec::with_capacity(expected_count);
     for _ in 0..(expected_count.saturating_mul(4).max(20)) {
-        let (command, payload) = read_message(stream, magic).await?;
+        let (command, payload) = read_message(stream, magic, io_timeout).await?;
         match command.as_str() {
             "cfilter" => {
                 filters.push(parse_cfilter(&payload)?);
@@ -710,7 +751,7 @@ async fn request_cfilters(
                     return Ok(filters);
                 }
             }
-            "ping" => send_message(stream, magic, "pong", &payload).await?,
+            "ping" => send_message(stream, magic, "pong", &payload, io_timeout).await?,
             "reject" | "notfound" => {
                 return Err(ChainBackendError::Rejected(
                     "peer rejected compact-filter request".into(),
@@ -752,18 +793,19 @@ async fn request_headers(
     stream: &mut TcpStream,
     magic: [u8; 4],
     locator: [u8; 32],
+    io_timeout: Duration,
 ) -> Result<Vec<[u8; 80]>, ChainBackendError> {
     let mut payload = Vec::with_capacity(69);
     payload.extend_from_slice(&PROTOCOL_VERSION.to_le_bytes());
     write_varint(&mut payload, 1);
     payload.extend_from_slice(&locator);
     payload.extend_from_slice(&[0; 32]);
-    send_message(stream, magic, "getheaders", &payload).await?;
+    send_message(stream, magic, "getheaders", &payload, io_timeout).await?;
     for _ in 0..100 {
-        let (command, payload) = read_message(stream, magic).await?;
+        let (command, payload) = read_message(stream, magic, io_timeout).await?;
         match command.as_str() {
             "headers" => return parse_headers(&payload),
-            "ping" => send_message(stream, magic, "pong", &payload).await?,
+            "ping" => send_message(stream, magic, "pong", &payload, io_timeout).await?,
             _ => {}
         }
     }
@@ -797,14 +839,15 @@ async fn request_block(
     stream: &mut TcpStream,
     magic: [u8; 4],
     block_hash: [u8; 32],
+    io_timeout: Duration,
 ) -> Result<Vec<u8>, ChainBackendError> {
     let mut payload = Vec::with_capacity(37);
     write_varint(&mut payload, 1);
     payload.extend_from_slice(&MSG_BLOCK.to_le_bytes());
     payload.extend_from_slice(&block_hash);
-    send_message(stream, magic, "getdata", &payload).await?;
+    send_message(stream, magic, "getdata", &payload, io_timeout).await?;
     for _ in 0..200 {
-        let (command, payload) = read_message(stream, magic).await?;
+        let (command, payload) = read_message(stream, magic, io_timeout).await?;
         match command.as_str() {
             "block" => {
                 let header = payload.get(..80).ok_or_else(|| {
@@ -817,7 +860,7 @@ async fn request_block(
                 }
                 return Ok(payload);
             }
-            "ping" => send_message(stream, magic, "pong", &payload).await?,
+            "ping" => send_message(stream, magic, "pong", &payload, io_timeout).await?,
             "notfound" => {
                 return Err(ChainBackendError::Rejected(
                     "peer does not have requested block".into(),
@@ -976,7 +1019,12 @@ async fn connect_handshaken(
     transport: &NeutrinoTransport,
 ) -> Result<(TcpStream, NodeProbe), ChainBackendError> {
     let mut stream = connect_peer(host, port, transport).await?;
-    let probe = handshake(&mut stream, params_for(network).magic).await?;
+    let probe = handshake(
+        &mut stream,
+        params_for(network).magic,
+        io_timeout(transport),
+    )
+    .await?;
     Ok((stream, probe))
 }
 
@@ -1000,7 +1048,7 @@ async fn connect_peer(
             let proxy = format!("{proxy_host}:{proxy_port}");
             let target = format!("{host}:{port}");
             let socks = tokio::time::timeout(
-                CONNECT_TIMEOUT,
+                TOR_CONNECT_TIMEOUT,
                 tokio_socks::tcp::Socks5Stream::connect_with_password(
                     proxy.as_str(),
                     target.as_str(),
@@ -1016,17 +1064,28 @@ async fn connect_peer(
     }
 }
 
-async fn handshake(stream: &mut TcpStream, magic: [u8; 4]) -> Result<NodeProbe, ChainBackendError> {
-    send_message(stream, magic, "version", &build_version_payload()).await?;
+async fn handshake(
+    stream: &mut TcpStream,
+    magic: [u8; 4],
+    io_timeout: Duration,
+) -> Result<NodeProbe, ChainBackendError> {
+    send_message(
+        stream,
+        magic,
+        "version",
+        &build_version_payload(),
+        io_timeout,
+    )
+    .await?;
     for _ in 0..50 {
-        let (command, payload) = read_message(stream, magic).await?;
+        let (command, payload) = read_message(stream, magic, io_timeout).await?;
         match command.as_str() {
             "version" => {
                 let probe = parse_version(&payload)?;
-                send_message(stream, magic, "verack", &[]).await?;
+                send_message(stream, magic, "verack", &[], io_timeout).await?;
                 return Ok(probe);
             }
-            "ping" => send_message(stream, magic, "pong", &payload).await?,
+            "ping" => send_message(stream, magic, "pong", &payload, io_timeout).await?,
             _ => {}
         }
     }
@@ -1078,9 +1137,10 @@ async fn send_message(
     magic: [u8; 4],
     command: &str,
     payload: &[u8],
+    io_timeout: Duration,
 ) -> Result<(), ChainBackendError> {
     let message = encode_message(magic, command, payload);
-    tokio::time::timeout(IO_TIMEOUT, stream.write_all(&message))
+    tokio::time::timeout(io_timeout, stream.write_all(&message))
         .await
         .map_err(|_| ChainBackendError::Timeout)?
         .map_err(|_| ChainBackendError::Offline)
@@ -1104,9 +1164,10 @@ fn encode_message(magic: [u8; 4], command: &str, payload: &[u8]) -> Vec<u8> {
 async fn read_message(
     stream: &mut TcpStream,
     magic: [u8; 4],
+    io_timeout: Duration,
 ) -> Result<(String, Vec<u8>), ChainBackendError> {
     let mut header = [0u8; 24];
-    tokio::time::timeout(IO_TIMEOUT, stream.read_exact(&mut header))
+    tokio::time::timeout(io_timeout, stream.read_exact(&mut header))
         .await
         .map_err(|_| ChainBackendError::Timeout)?
         .map_err(|_| ChainBackendError::Offline)?;
@@ -1132,7 +1193,7 @@ async fn read_message(
         )));
     }
     let mut payload = vec![0u8; len];
-    tokio::time::timeout(IO_TIMEOUT, stream.read_exact(&mut payload))
+    tokio::time::timeout(io_timeout, stream.read_exact(&mut payload))
         .await
         .map_err(|_| ChainBackendError::Timeout)?
         .map_err(|_| ChainBackendError::Offline)?;
