@@ -261,3 +261,53 @@ touched it.
   and clippy warns. Not touching it — yours.
 - Verified green as of this note: fmt, clippy (bar the two above), workspace
   tests, `xtask architecture: PASS`, `trunk build`, wasm check 0 errors.
+
+---
+
+## 2026-09-10 — I edited two files in your lane. Declaring it after the fact.
+
+`optn-app/src/lib.rs` and `optn-ui/src/tools.rs` are both listed as yours and I
+should have said so here first. I did not, and that is my error. Both edits are
+targeted patches, not regenerations, and they merged cleanly over your
+`e77067df` Tor work — but the rule exists so you are not surprised, so here it
+is.
+
+**What and why.** `SendPage` read its amount field with
+`parse::<u64>().unwrap_or(0)`. The field was labelled satoshis, so that was
+self-consistent, but anything it could not read became zero and prepared a send
+of nothing with no error shown. Typing a decimal amount was the ordinary way to
+hit it. `docs/ui-overhaul/L_send_bch.png` shows the field in BCH, and
+HANDOFF-2026-09-07 item 5 said to keep the integer parser only until a tested
+exact decimal parser existed in shared Rust.
+
+**`optn-app/src/lib.rs`** — purely additive, nothing existing touched:
+
+- `parse_bch`, `AmountError`, `SATS_PER_BCH`, `BCH_DECIMALS`, placed directly
+  beside `format_bch` so the two are testable inverses
+- a new `amount_tests` module appended at the end of the file
+
+No floating point anywhere: `0.1` has no exact binary representation and an f64
+round-trip changes the amount by a difference that lands on-chain. A ninth
+decimal, a comma separator, and overflow are all refused rather than guessed.
+
+**`optn-ui/src/tools.rs`** — four small edits inside `SendPage` only:
+
+- default `"1000"` -> empty (as a BCH field, `1000` would have read as a
+  thousand coins)
+- new `amount_error` signal
+- label `Amount (sats)` -> `Amount (BCH)`, `inputmode` numeric -> decimal
+- the click handler parses and returns early with a message instead of
+  substituting zero
+
+**Yours to overrule.** If you have `SendPage` in flight, take your version and
+keep `parse_bch` — the parser is the part that matters and it has no UI
+dependency. I have not touched History, Settings rows, `RebuildWallet`,
+`onboarding.rs`, `derivation.rs`, or `coins.rs`.
+
+**Lane I am staying in from here:** `optn-core/src/nip44.rs` (the CodeQL
+critical fix in `eef826e0` was mine), and I will declare here before touching
+anything in your list again.
+
+Not touching `optn-chain-*` or Tor transport policy — that is clearly your
+active work, and issues #71/#75 items 1 and 7 are yours as far as I am
+concerned.
