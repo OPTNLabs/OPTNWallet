@@ -97,16 +97,23 @@ async function syncHeaders(
 ): Promise<string[]> {
   const blockHashes: string[] = [];
   let locator = fromHash ?? null;
+  let locatorHeight = 0;
+  let locatorTime = 0;
   for (let i = 0; i < MAX_HEADER_BATCHES; i++) {
     const headers = await invoke<HeaderInfo[]>('bip37_headers', {
       host,
       port,
       network: netLabel(network),
       locator,
+      locatorHeight,
+      locatorTime,
     });
     if (headers.length === 0) break;
     for (const h of headers) blockHashes.push(h.hash);
-    locator = headers[headers.length - 1].hash;
+    const last = headers[headers.length - 1];
+    locator = last.hash;
+    locatorHeight += headers.length;
+    locatorTime = last.time;
     if (headers.length < HEADERS_PER_BATCH) break; // reached the tip
   }
   return blockHashes;

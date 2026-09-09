@@ -725,6 +725,8 @@ async fn bip37_headers(
     port: u16,
     network: String,
     locator: Option<String>,
+    locator_height: Option<u32>,
+    locator_time: Option<i64>,
     tor_host: Option<String>,
     tor_port: Option<u16>,
 ) -> Result<Vec<spv::HeaderInfo>, String> {
@@ -736,7 +738,13 @@ async fn bip37_headers(
         (Some(h), Some(p)) => fusion::Transport::Tor { host: h, port: p },
         _ => fusion::Transport::Direct,
     };
-    spv::fetch_headers_after(&host, port, &network, transport, start).await
+    let walk = spv::HeaderWalk::for_network(
+        &network,
+        start,
+        locator_height.unwrap_or(0),
+        locator_time.unwrap_or(0),
+    );
+    spv::fetch_headers_after_from(&host, port, &network, transport, walk).await
 }
 
 // Scan the given blocks (display-hex hashes) for outputs/inputs touching the
