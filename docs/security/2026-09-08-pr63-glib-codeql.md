@@ -64,15 +64,8 @@ See [the vendor verification commands](../../vendor/glib-0.18.5/OPTN.md).
 
 Alerts #113-124 were rechecked against the exported SARIF's concrete source
 locations and return types. The generic cross-type paths remain unsupported by
-the source contracts described above. The unwind fix is not a claim that every
-GLib unsafe caller has been audited.
-
-CodeQL analysis of first-party wallet/CLI/Tauri sources ignores `vendor/**`
-via `.github/codeql/codeql-config.yml` (GitHub's documented `paths-ignore` for
-Rust `build-mode: none`). Vendored GLib remains covered by the rust-quality
-regressions above and by the crates.io advisory audit in `OPTN.md`. That
-exclusion is not a rewrite of GLib converters and is not a first-party alert
-dismissal.
+the source contracts described above. None is suppressed or dismissed. The
+unwind fix is not a claim that every GLib unsafe caller has been audited.
 
 ## Urgent #117 follow-up: GValue copy callers
 
