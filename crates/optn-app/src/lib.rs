@@ -22,7 +22,8 @@ pub mod networks;
 pub mod portfolio;
 pub use identity::{wallet_identity, RevealedIdentity, WalletIdentity, WalletTypeLabel};
 pub use networks::{
-    network_settings_view_model, NetworkOption, NetworkSettingsViewModel, PlannedNetwork,
+    chrome_network_label, chrome_network_pill, chrome_sync_status, network_settings_view_model,
+    NetworkOption, NetworkSettingsViewModel, PlannedNetwork,
 };
 pub use portfolio::{stealth_sats_from_record, PortfolioTotals};
 pub mod servers;
