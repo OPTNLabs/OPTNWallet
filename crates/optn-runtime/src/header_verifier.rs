@@ -326,6 +326,42 @@ pub fn header_leaf(header: &BlockHeaderBytes) -> Hash32 {
     sha256d(&header.0)
 }
 
+/// Chipnet / testnet4 genesis header (BCHN `CreateGenesisBlock`).
+///
+/// Hash `000000001dd410c49a788668ce26751718cc797474d3152a5fc073dd44fd9f7b`.
+/// This is independently reviewed chain identity, not an Electrum server tip.
+pub const CHIPNET_GENESIS_HEADER_HEX: &str = "0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4af1a93c5fffff001d01d3cd06";
+
+fn decode_header_hex(hex: &str) -> BlockHeaderBytes {
+    let mut header = [0u8; 80];
+    for i in 0..80 {
+        header[i] =
+            u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).expect("shipped header hex is valid");
+    }
+    BlockHeaderBytes(header)
+}
+
+/// Trusted Chipnet checkpoint at height 0 plus Chipnet ASERT context.
+///
+/// BIP37/Neutrino workers must attach this (or a later host-authenticated
+/// checkpoint) before publishing balances. Electrum first-paint stays
+/// `ServerAssertion` and must not be labeled MMR.
+pub fn shipped_chipnet_header_verifier() -> Result<ShvMmrHeaderVerifier, ShvMmrError> {
+    let header = decode_header_hex(CHIPNET_GENESIS_HEADER_HEX);
+    let commitment = header_leaf(&header);
+    Ok(ShvMmrHeaderVerifier::from_checkpoint_proof(
+        0,
+        header,
+        &[],
+        commitment,
+        CheckpointProvenance::ShippedReviewed,
+    )?
+    .with_asert(
+        AsertParams::for_network(Network::Chipnet),
+        AsertAnchor::for_network(Network::Chipnet),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -418,6 +454,27 @@ mod tests {
             ),
             Err(ShvMmrError::InvalidStoredCheckpoint)
         ));
+    }
+
+    #[test]
+    fn shipped_chipnet_checkpoint_has_asert_and_known_genesis_hash() {
+        let verifier = shipped_chipnet_header_verifier().unwrap();
+        assert!(verifier.has_difficulty_context());
+        assert_eq!(verifier.checkpoint().height, 0);
+        assert_eq!(
+            verifier.checkpoint().provenance,
+            CheckpointProvenance::ShippedReviewed
+        );
+        let expected = [
+            0x7b, 0x9f, 0xfd, 0x44, 0xdd, 0x73, 0xc0, 0x5f, 0x2a, 0x15, 0xd3, 0x74, 0x74, 0x79,
+            0xcc, 0x18, 0x17, 0x75, 0x26, 0xce, 0x68, 0x86, 0x78, 0x9a, 0xc4, 0x10, 0xd4, 0x1d, 0,
+            0, 0, 0,
+        ];
+        assert_eq!(verifier.last_hash(), Some(expected));
+        assert_eq!(verifier.checkpoint().commitment, expected);
+        crate::sync_worker::ProgressiveSyncWorker::new(Default::default())
+            .with_header_verifier(verifier)
+            .expect("genesis plus ASERT is enough to enable verified P2P sync");
     }
 
     #[test]

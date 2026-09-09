@@ -1163,6 +1163,7 @@ async fn address_selected_chain(cli: &Cli, address: &str, include_outputs: bool)
         );
     };
     tokio::time::timeout(std::time::Duration::from_secs(timeout_seconds(cli)), async {
+        let mut worker = hd_sync_worker(cli.network, &selection.policy)?;
         let stack = build_native_chain_stack(
             selection.catalog,
             selection.policy,
@@ -1170,7 +1171,6 @@ async fn address_selected_chain(cli: &Cli, address: &str, include_outputs: bool)
             &NativeChainSecrets::default(),
         )
         .await;
-        let mut worker = optn_runtime::sync_worker::ProgressiveSyncWorker::new(Default::default());
         let script = parsed.script_pubkey();
         // A one-address observation session, not the user's stored HD wallet.
         // Use the same publication/reconciliation path as other Rust interfaces.
@@ -1337,8 +1337,8 @@ async fn rescan_shared_wallet(
                 multisig_policy: None, account_xpub: Some(xpub.clone()),
             }), ..Default::default()
         }));
+        let mut worker = hd_sync_worker(cli.network, &selection.policy)?;
         let stack = build_native_chain_stack(selection.catalog, selection.policy, &cli.network.to_string(), &NativeChainSecrets::default()).await;
-        let mut worker = optn_runtime::sync_worker::ProgressiveSyncWorker::new(Default::default());
         runtime.sync_hd_wallet(&mut *stack.service.lock().await, &mut worker, xpub,
             optn_runtime::hd_sync::HdSyncLimits { gap_limit: gap, addresses_per_branch: cap })
             .await.map_err(|error| CliError::Network(format!("HD rescan incomplete: {error}")))?;
@@ -1373,11 +1373,38 @@ async fn rescan_shared_wallet(
             "account_path":account.to_string(), "gap":gap, "max_addresses":cap,
             "selection":"shared-native-policy", "source":snapshot.source.as_str(),
             "evidence":format!("{:?}",snapshot.evidence),
+            "header_verifier": worker.header_verifier().is_some(),
+            "mmr": worker.header_verifier().is_some()
+                && !matches!(snapshot.evidence, optn_runtime::chain::Evidence::ServerAssertion),
             "branches":optn_core::watch_only::HD_SCAN_BRANCHES, "last_used":book.last_used,
             "scanned_addresses":snapshot.value.interests.len(), "confirmed":confirmed_total,
             "unconfirmed":unconfirmed_total, "total":total, "utxos":state.coins.len(), "addresses":addresses,
             "wallet_sync":optn_transport::WireState::from(&state).wallet_sync}))
     }).await.map_err(|_| CliError::Network("HD rescan timed out before completing the account".into()))?
+}
+
+fn hd_sync_worker(
+    network: Network,
+    policy: &optn_runtime::chain::ConnectionPolicy,
+) -> Result<optn_runtime::sync_worker::ProgressiveSyncWorker> {
+    use optn_runtime::chain::ProtocolFamily;
+    let worker = optn_runtime::sync_worker::ProgressiveSyncWorker::new(Default::default());
+    let p2p = policy.protocols.contains(ProtocolFamily::Bip37)
+        || policy.protocols.contains(ProtocolFamily::Neutrino);
+    if !p2p {
+        return Ok(worker);
+    }
+    if network != Network::Chipnet {
+        return Err(CliError::Usage(
+            "BIP37/Neutrino refresh needs a host-authenticated header checkpoint for this network"
+                .into(),
+        ));
+    }
+    let verifier = optn_runtime::header_verifier::shipped_chipnet_header_verifier()
+        .map_err(|e| CliError::Usage(format!("Chipnet header verifier: {e:?}")))?;
+    worker
+        .with_header_verifier(verifier)
+        .map_err(|e| CliError::Usage(format!("header verifier: {e:?}")))
 }
 
 async fn run(cli: &Cli) -> Result<Value> {
@@ -2009,6 +2036,8 @@ async fn run(cli: &Cli) -> Result<Value> {
             Ok(json!({"ok":true, "network":cli.network.to_string(),
                 "count":entries.len(), "shown":shown.len(), "transactions":shown,
                 "source":result["source"], "evidence":result["evidence"],
+                "header_verifier": result["header_verifier"],
+                "mmr": result["mmr"],
                 "confirmed":result["confirmed"], "unconfirmed":result["unconfirmed"],
                 "total":result["total"], "complete":result["complete"]}))
         }
@@ -3417,6 +3446,28 @@ mod header_batch_tests {
             header[i] = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap();
         }
         header
+    }
+
+    #[test]
+    fn electrum_hd_worker_does_not_claim_mmr() {
+        let policy = optn_runtime::chain::ConnectionPolicy::exact(
+            optn_runtime::chain::SourceId::new("cli-electrum"),
+            optn_runtime::chain::ProtocolFamily::Electrum,
+        );
+        let worker = super::hd_sync_worker(Network::Chipnet, &policy).unwrap();
+        assert!(worker.header_verifier().is_none());
+    }
+
+    #[test]
+    fn chipnet_p2p_worker_attaches_shipped_genesis_verifier() {
+        let policy = optn_runtime::chain::ConnectionPolicy::exact(
+            optn_runtime::chain::SourceId::new("chipnet-peer"),
+            optn_runtime::chain::ProtocolFamily::Bip37,
+        );
+        let worker = super::hd_sync_worker(Network::Chipnet, &policy).unwrap();
+        let verifier = worker.header_verifier().expect("P2P must attach SHV");
+        assert!(verifier.has_difficulty_context());
+        assert_eq!(verifier.state().unwrap().height, 0);
     }
 
     #[test]

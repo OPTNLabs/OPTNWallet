@@ -227,6 +227,84 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn send_dry_run_drives_spend_to_on_a_loopback_electrum() {
+        use clap::Parser;
+        use serde_json::{json, Value};
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        let mnemonic = optn_core::hd::BIP39_TEST_VECTOR_MNEMONIC;
+        std::env::set_var("OPTN_MNEMONIC", mnemonic);
+        let wallet = optn_core::hd::Wallet::from_mnemonic(mnemonic, "").unwrap();
+        let path = optn_core::hd::address_path(1, 0, false, 0);
+        let address = wallet.address(Network::Chipnet, &path).unwrap();
+        let scripthash = address.electrum_scripthash();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            for _ in 0..4 {
+                let Ok((socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut stream = BufReader::new(socket);
+                let mut line = String::new();
+                if stream.read_line(&mut line).await.unwrap() == 0 {
+                    continue;
+                }
+                let request: Value = serde_json::from_str(&line).unwrap();
+                let result = match request["method"].as_str().unwrap() {
+                    "blockchain.scripthash.listunspent" => {
+                        if request["params"][0] == scripthash {
+                            json!([{
+                                "tx_hash": "11".repeat(32),
+                                "tx_pos": 0,
+                                "height": 5,
+                                "value": 100_000
+                            }])
+                        } else {
+                            json!([])
+                        }
+                    }
+                    other => panic!("unexpected RPC {other}"),
+                };
+                let response = json!({"id": request["id"], "result": result, "error": null});
+                stream
+                    .get_mut()
+                    .write_all(format!("{response}\n").as_bytes())
+                    .await
+                    .unwrap();
+            }
+        });
+        let cli = crate::Cli::try_parse_from([
+            "optn",
+            "--network",
+            "chipnet",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            &port.to_string(),
+            "--no-tls",
+            "--timeout",
+            "5",
+            "send",
+            &address.encode(),
+            "1000",
+            "--dry-run",
+            "--gap",
+            "1",
+        ])
+        .unwrap();
+        let result = crate::run(&cli).await.unwrap();
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["dry_run"], true);
+        assert_eq!(result["sats"], 1000);
+        assert_eq!(result["inputs"], 1);
+        assert!(result["fee"].as_u64().unwrap() > 0);
+        assert!(result["raw"].as_str().unwrap().len() > 20);
+        server.abort();
+        std::env::remove_var("OPTN_MNEMONIC");
+    }
+
+    #[tokio::test]
     async fn cli_transactions_use_shared_policy_and_preserve_broadcast_ambiguity() {
         use clap::Parser;
         use optn_runtime::chain::ProtocolFamily;
@@ -560,6 +638,33 @@ mod tests {
         )
         .is_err());
         assert_eq!(fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn select_without_overlay_fails_closed_for_every_protocol() {
+        let directory = TestDirectory::new();
+        for protocol in [
+            optn_runtime::chain::ProtocolFamily::Electrum,
+            optn_runtime::chain::ProtocolFamily::Bip37,
+            optn_runtime::chain::ProtocolFamily::Neutrino,
+            optn_runtime::chain::ProtocolFamily::BchnRpc,
+        ] {
+            let error = select_source(
+                Network::Chipnet,
+                Some(&directory.0),
+                "public-fulcrum",
+                protocol,
+            )
+            .unwrap_err();
+            assert!(
+                error.contains("no shared sources are configured"),
+                "{protocol:?}: {error}"
+            );
+        }
+        assert!(
+            !directory.0.join(file_name(Network::Chipnet)).exists(),
+            "fail-closed select must not write a public Electrum overlay"
+        );
     }
 
     #[test]
