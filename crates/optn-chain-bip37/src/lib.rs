@@ -37,6 +37,19 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// never finish. Stream isolation per connection is kept.
 const TOR_CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
 const IO_TIMEOUT: Duration = Duration::from_secs(15);
+/// Reading a message body over Tor is bounded by circuit bandwidth, not by
+/// how fast the peer answers. A 2000-header batch is ~160 KB, which routinely
+/// takes longer than the direct-TCP budget over three hops.
+const TOR_IO_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// Per-message read budget for a transport. Direct TCP keeps the tighter value
+/// so a dead peer is still detected quickly.
+const fn io_timeout(transport: &Bip37Transport) -> Duration {
+    match transport {
+        Bip37Transport::Direct => IO_TIMEOUT,
+        Bip37Transport::Tor { .. } => TOR_IO_TIMEOUT,
+    }
+}
 const RELAY_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_PAYLOAD: usize = 2 * 1024 * 1024;
 const MAX_MESSAGES: usize = 1000;
@@ -351,12 +364,18 @@ impl Bip37Backend {
             .await
             .map_err(ChainBackendError::Protocol)?;
         let magic = params_for(&self.config.network).magic;
-        handshake(&mut stream, magic)
+        handshake(&mut stream, magic, io_timeout(&self.config.transport))
             .await
             .map_err(ChainBackendError::Protocol)?;
-        relay_tx_on_stream(&mut stream, magic, raw_tx, txid)
-            .await
-            .map_err(ChainBackendError::Protocol)?;
+        relay_tx_on_stream(
+            &mut stream,
+            magic,
+            raw_tx,
+            txid,
+            io_timeout(&self.config.transport),
+        )
+        .await
+        .map_err(ChainBackendError::Protocol)?;
         Ok(BackendObservation {
             payload: ChainPayload::BroadcastObserved { txid },
             evidence: Evidence::ServerAssertion,
@@ -532,9 +551,10 @@ fn encode_message(magic: [u8; 4], command: &str, payload: &[u8]) -> Vec<u8> {
 async fn read_message<S: AsyncReadExt + Unpin>(
     stream: &mut S,
     magic: [u8; 4],
+    io_timeout: Duration,
 ) -> Result<(String, Vec<u8>), String> {
     let mut header = [0u8; 24];
-    tokio::time::timeout(IO_TIMEOUT, stream.read_exact(&mut header))
+    tokio::time::timeout(io_timeout, stream.read_exact(&mut header))
         .await
         .map_err(|_| "timed out waiting for node message header".to_string())?
         .map_err(|e| format!("read failed: {e}"))?;
@@ -548,7 +568,7 @@ async fn read_message<S: AsyncReadExt + Unpin>(
         return Err(format!("node message too large: {len}"));
     }
     let mut payload = vec![0u8; len];
-    tokio::time::timeout(IO_TIMEOUT, stream.read_exact(&mut payload))
+    tokio::time::timeout(io_timeout, stream.read_exact(&mut payload))
         .await
         .map_err(|_| "timed out reading node message body".to_string())?
         .map_err(|e| format!("read failed: {e}"))?;
@@ -596,13 +616,14 @@ fn parse_version_payload(payload: &[u8]) -> Result<NodeProbe, String> {
 async fn handshake<S: AsyncReadExt + AsyncWriteExt + Unpin>(
     stream: &mut S,
     magic: [u8; 4],
+    io_timeout: Duration,
 ) -> Result<NodeProbe, String> {
     stream
         .write_all(&encode_message(magic, "version", &build_version_payload(0)))
         .await
         .map_err(|e| format!("version send failed: {e}"))?;
     for _ in 0..20 {
-        let (command, payload) = read_message(stream, magic).await?;
+        let (command, payload) = read_message(stream, magic, io_timeout).await?;
         if command == "version" {
             let probe = parse_version_payload(&payload)?;
             stream
@@ -656,7 +677,12 @@ pub async fn probe_node(
     transport: &Bip37Transport,
 ) -> Result<NodeProbe, String> {
     let mut stream = connect_peer(host, port, transport).await?;
-    handshake(&mut stream, params_for(network).magic).await
+    handshake(
+        &mut stream,
+        params_for(network).magic,
+        io_timeout(transport),
+    )
+    .await
 }
 
 fn build_getheaders_payload(locator: &[u8; 32]) -> Vec<u8> {
@@ -686,7 +712,7 @@ pub async fn fetch_headers_after_raw(
 ) -> Result<Vec<[u8; 80]>, String> {
     let magic = params_for(network).magic;
     let mut stream = connect_peer(host, port, transport).await?;
-    handshake(&mut stream, magic).await?;
+    handshake(&mut stream, magic, io_timeout(transport)).await?;
     stream
         .write_all(&encode_message(
             magic,
@@ -696,7 +722,7 @@ pub async fn fetch_headers_after_raw(
         .await
         .map_err(|e| format!("getheaders send failed: {e}"))?;
     for _ in 0..100 {
-        let (cmd, payload) = read_message(&mut stream, magic).await?;
+        let (cmd, payload) = read_message(&mut stream, magic, io_timeout(transport)).await?;
         if cmd == "headers" {
             let raws = parse_headers_payload(&payload)?;
             let mut expected = locator;
@@ -735,7 +761,7 @@ async fn scan_blocks_observed(
 ) -> Result<Vec<ObservedTransaction>, String> {
     let magic = params_for(network).magic;
     let mut stream = connect_peer(host, port, transport).await?;
-    let probe = handshake(&mut stream, magic).await?;
+    let probe = handshake(&mut stream, magic, io_timeout(transport)).await?;
     if !probe.serves_bloom {
         return Err("peer does not advertise NODE_BLOOM".into());
     }
@@ -764,7 +790,7 @@ async fn scan_blocks_observed(
         let mut expected = None;
         let mut got = 0usize;
         for _ in 0..MAX_MESSAGES {
-            let (cmd, payload) = read_message(&mut stream, magic).await?;
+            let (cmd, payload) = read_message(&mut stream, magic, io_timeout(transport)).await?;
             match cmd.as_str() {
                 "merkleblock" => {
                     let mb = merkleblock::parse_merkleblock(&payload)?;
@@ -823,6 +849,7 @@ async fn relay_tx_on_stream<S: AsyncReadExt + AsyncWriteExt + Unpin>(
     magic: [u8; 4],
     raw_tx: &[u8],
     txid: [u8; 32],
+    io_timeout: Duration,
 ) -> Result<bool, String> {
     stream
         .write_all(&encode_message(magic, "inv", &build_getdata(MSG_TX, &txid)))
@@ -830,7 +857,7 @@ async fn relay_tx_on_stream<S: AsyncReadExt + AsyncWriteExt + Unpin>(
         .map_err(|e| format!("inv send failed: {e}"))?;
     let exchange = async {
         for _ in 0..30 {
-            let (cmd, payload) = read_message(stream, magic).await?;
+            let (cmd, payload) = read_message(stream, magic, io_timeout).await?;
             match cmd.as_str() {
                 "getdata" if inventory_contains_tx(&payload, &txid)? => {
                     stream
