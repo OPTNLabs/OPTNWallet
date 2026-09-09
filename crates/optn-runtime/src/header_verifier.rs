@@ -6,10 +6,13 @@ use crate::chain::{
 };
 use optn_core::network::Network;
 use optn_core::{
-    asert::{verify_expected_bits, AsertAnchor, AsertError, AsertParams},
+    asert::{
+        verify_header_extension, AsertAnchor, AsertCheck, AsertError, AsertParams,
+        HeaderExtensionError,
+    },
     header_hash::sha256d,
     header_mmr::MmrAccumulator,
-    header_pow::{verify_declared_pow, verify_link, HeaderPowError},
+    header_pow::{verify_declared_pow, HeaderPowError},
 };
 use serde::{Deserialize, Serialize};
 
@@ -51,6 +54,15 @@ impl From<HeaderPowError> for ShvMmrError {
 impl From<AsertError> for ShvMmrError {
     fn from(value: AsertError) -> Self {
         Self::Difficulty(value)
+    }
+}
+
+impl From<HeaderExtensionError> for ShvMmrError {
+    fn from(value: HeaderExtensionError) -> Self {
+        match value {
+            HeaderExtensionError::Pow(error) => Self::Header(error),
+            HeaderExtensionError::Difficulty(error) => Self::Difficulty(error),
+        }
     }
 }
 
@@ -243,27 +255,26 @@ impl HeaderVerifier for ShvMmrHeaderVerifier {
         // Only peaks and the current header context are cloned, not history.
         let mut candidate = self.clone();
         for header in headers {
-            if let (Some(context), Some(previous_time)) =
-                (candidate.difficulty, candidate.last_time)
-            {
-                let previous_height = candidate
-                    .accumulator
-                    .leaf_count()
-                    .checked_sub(1)
-                    .ok_or(ShvMmrError::EmptyAccumulator)?;
-                let previous_height =
-                    u32::try_from(previous_height).map_err(|_| ShvMmrError::HeightOverflow)?;
-                verify_expected_bits(
-                    context.params,
-                    context.anchor,
-                    previous_height,
-                    i64::from(previous_time),
-                    &header.0,
-                )?;
-            }
-
             let parsed = match candidate.last_hash {
-                Some(expected_prev) => verify_link(expected_prev, &header.0)?,
+                Some(expected_prev) => {
+                    let previous_height = candidate
+                        .accumulator
+                        .leaf_count()
+                        .checked_sub(1)
+                        .ok_or(ShvMmrError::EmptyAccumulator)?;
+                    let previous_height =
+                        u32::try_from(previous_height).map_err(|_| ShvMmrError::HeightOverflow)?;
+                    let difficulty = match (candidate.difficulty, candidate.last_time) {
+                        (Some(context), Some(previous_time)) => Some(AsertCheck {
+                            params: context.params,
+                            anchor: context.anchor,
+                            previous_height,
+                            previous_time: i64::from(previous_time),
+                        }),
+                        _ => None,
+                    };
+                    verify_header_extension(expected_prev, &header.0, difficulty)?
+                }
                 None => verify_declared_pow(&header.0)?,
             };
             candidate.last_leaf_proof = candidate.accumulator.proof_for_next_leaf(parsed.hash);

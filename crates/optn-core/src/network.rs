@@ -64,7 +64,7 @@ impl FromStr for Network {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "mainnet" | "main" | "bitcoincash" => Ok(Network::Mainnet),
-            "chipnet" | "chip" | "bchtest" | "testnet" => Ok(Network::Chipnet),
+            "chipnet" | "chip" | "bchtest" | "testnet" | "testnet4" => Ok(Network::Chipnet),
             other => Err(format!(
                 "unknown network '{other}' (expected 'mainnet' or 'chipnet')"
             )),

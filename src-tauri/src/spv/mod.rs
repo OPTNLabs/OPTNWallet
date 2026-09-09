@@ -15,7 +15,10 @@
 
 use std::time::Duration;
 
-use optn_core::header_pow::verify_link;
+use optn_core::asert::{
+    verify_header_extension, AsertAnchor, AsertCheck, AsertParams, HeaderExtensionError,
+};
+use optn_core::network::Network;
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -325,11 +328,12 @@ fn nonce() -> u64 {
 // ── Phase 2: block-header chain sync ─────────────────────────────────────────
 //
 // After the handshake, request block headers with `getheaders` and validate the
-// returned chain LINKS to our locator (each header's prev-block == the previous
-// header's hash). A node returns up to 2000 headers per `headers` message, so a
-// full sync-to-tip loops with an updated locator. Each returned header proves
-// its own declared target and predecessor link; network-difficulty transitions
-// and checkpoint authority remain separate validation concerns.
+// returned chain against the SHV/MMR primitives in `optn-core`: predecessor
+// link, declared PoW, and (once past the network ASERT anchor) expected BCH
+// difficulty. A node returns up to 2000 headers per `headers` message, so a
+// full sync-to-tip loops with an updated locator plus the previous height/time.
+// Checkpoint authority still lives in `optn-runtime::ShvMmrHeaderVerifier`; this
+// adapter must not accept a linked easy-target chain on its own.
 
 /// Chain start hash (double-SHA256 of the genesis header, internal little-endian
 /// byte order — the form used on the wire and by header_hash). Used as the
@@ -396,18 +400,60 @@ fn parse_headers_payload(payload: &[u8]) -> Result<Vec<[u8; 80]>, String> {
     Ok(out)
 }
 
+/// Previous-block cursor required to check ASERT on the next header.
+#[derive(Debug, Clone, Copy)]
+pub struct HeaderWalk {
+    pub expected_prev: [u8; 32],
+    pub locator_height: u32,
+    pub locator_time: i64,
+    pub params: AsertParams,
+    pub anchor: AsertAnchor,
+}
+
+impl HeaderWalk {
+    pub fn for_network(network: &str, locator: [u8; 32], height: u32, time: i64) -> Self {
+        let parsed = network.parse::<Network>().unwrap_or(Network::Mainnet);
+        Self {
+            expected_prev: locator,
+            locator_height: height,
+            locator_time: time,
+            params: AsertParams::for_network(parsed),
+            anchor: AsertAnchor::for_network(parsed),
+        }
+    }
+
+    fn check(&self) -> AsertCheck {
+        AsertCheck {
+            params: self.params,
+            anchor: self.anchor,
+            previous_height: self.locator_height,
+            previous_time: self.locator_time,
+        }
+    }
+
+    fn advance(&mut self, parsed: optn_core::header_pow::ParsedHeader) {
+        self.expected_prev = parsed.hash;
+        self.locator_height = self.locator_height.saturating_add(1);
+        self.locator_time = i64::from(parsed.time);
+    }
+}
+
 /// Handshake, then request and validate one batch of headers after `locator`.
 /// Split from connection setup so it can be exercised over an in-memory duplex.
 async fn sync_headers_batch<S>(
     stream: &mut S,
     magic: [u8; 4],
-    locator: [u8; 32],
+    mut walk: HeaderWalk,
 ) -> Result<Vec<HeaderInfo>, String>
 where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
 {
     handshake(stream, magic).await?;
-    let msg = encode_message(magic, "getheaders", &build_getheaders_payload(&locator));
+    let msg = encode_message(
+        magic,
+        "getheaders",
+        &build_getheaders_payload(&walk.expected_prev),
+    );
     tokio::time::timeout(IO_TIMEOUT, stream.write_all(&msg))
         .await
         .map_err(|_| "timed out sending getheaders".to_string())?
@@ -433,20 +479,18 @@ where
     }
     let raws = raws.ok_or("node did not return headers")?;
 
-    // Validate the declared proof of work and linkage: the first header links
-    // to the locator, each subsequent header to the previous one.
-    let mut expected_prev = locator;
+    // Validate linkage, declared PoW, and (past the ASERT anchor) expected bits.
     let mut out = Vec::with_capacity(raws.len());
     for raw in &raws {
-        let parsed = verify_link(expected_prev, raw)
-            .map_err(|error| format!("header proof check failed: {error:?}"))?;
+        let parsed = verify_header_extension(walk.expected_prev, raw, Some(walk.check()))
+            .map_err(|error: HeaderExtensionError| format!("header proof check failed: {error}"))?;
         out.push(HeaderInfo {
             hash: hex_be(&parsed.hash),
             prev_hash: hex_be(&parsed.prev_hash),
             time: parsed.time,
             bits: parsed.bits,
         });
-        expected_prev = parsed.hash;
+        walk.advance(parsed);
     }
     Ok(out)
 }
@@ -458,6 +502,25 @@ pub async fn fetch_headers_after(
     network: &str,
     transport: Transport<'_>,
     locator: [u8; 32],
+) -> Result<Vec<HeaderInfo>, String> {
+    fetch_headers_after_from(
+        host,
+        port,
+        network,
+        transport,
+        HeaderWalk::for_network(network, locator, 0, 0),
+    )
+    .await
+}
+
+/// Same as [`fetch_headers_after`], with an explicit previous height/time so a
+/// resumed walk past the ASERT anchor can check expected `nBits`.
+pub async fn fetch_headers_after_from(
+    host: &str,
+    port: u16,
+    network: &str,
+    transport: Transport<'_>,
+    walk: HeaderWalk,
 ) -> Result<Vec<HeaderInfo>, String> {
     let magic = params_for(network).magic;
     let mut stream = match transport {
@@ -477,7 +540,7 @@ pub async fn fetch_headers_after(
             .map_err(|_| format!("timed out connecting to {host}:{port} over Tor"))??
         }
     };
-    sync_headers_batch(&mut stream, magic, locator).await
+    sync_headers_batch(&mut stream, magic, walk).await
 }
 
 // ── Phase 3c: filterload + merkleblock download ──────────────────────────────
@@ -1080,7 +1143,15 @@ mod tests {
     }
 
     async fn sync_one_header(raw: [u8; 80], locator: [u8; 32]) -> Result<Vec<HeaderInfo>, String> {
+        sync_one_header_from(raw, HeaderWalk::for_network("mainnet", locator, 0, 0)).await
+    }
+
+    async fn sync_one_header_from(
+        raw: [u8; 80],
+        walk: HeaderWalk,
+    ) -> Result<Vec<HeaderInfo>, String> {
         let magic = params_for("mainnet").magic;
+        let locator = walk.expected_prev;
         let (mut client, mut server) = tokio::io::duplex(4096);
         let server_task = tokio::spawn(async move {
             let (command, _) = read_message(&mut server, magic).await.unwrap();
@@ -1100,7 +1171,7 @@ mod tests {
                 .unwrap();
         });
 
-        let result = sync_headers_batch(&mut client, magic, locator).await;
+        let result = sync_headers_batch(&mut client, magic, walk).await;
         server_task.await.unwrap();
         result
     }
@@ -1139,6 +1210,55 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.contains("LinkMismatch"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn header_batch_rejects_linked_easy_target_past_asert_anchor() {
+        use optn_core::asert::{next_bits, AsertAnchor, AsertParams};
+        use optn_core::header_pow::verify_declared_pow;
+
+        let params = AsertParams {
+            half_life: 172_800,
+            ideal_block_time: 600,
+            max_bits: 0x207f_ffff,
+        };
+        let anchor = AsertAnchor {
+            height: 1,
+            bits: 0x207f_ffff,
+            prev_time: 0,
+        };
+        let prev = [7u8; 32];
+        let expected = next_bits(params, anchor, 10, 10).unwrap();
+        assert_ne!(expected, params.max_bits);
+
+        let mut header = [0u8; 80];
+        header[0..4].copy_from_slice(&1u32.to_le_bytes());
+        header[4..36].copy_from_slice(&prev);
+        header[68..72].copy_from_slice(&610u32.to_le_bytes());
+        header[72..76].copy_from_slice(&params.max_bits.to_le_bytes());
+        let mut mined = false;
+        for nonce in 0u32..50_000 {
+            header[76..80].copy_from_slice(&nonce.to_le_bytes());
+            if verify_declared_pow(&header).is_ok() {
+                mined = true;
+                break;
+            }
+        }
+        assert!(mined, "easy-target attack header must be nonce-valid");
+
+        let error = sync_one_header_from(
+            header,
+            HeaderWalk {
+                expected_prev: prev,
+                locator_height: 10,
+                locator_time: 10,
+                params,
+                anchor,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("UnexpectedBits"), "{error}");
     }
 
     #[test]

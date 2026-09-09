@@ -151,15 +151,22 @@ impl ServerOverrides {
         Ok(Some(canonical))
     }
 
-    /// Replace one network's complete override set after validating every
-    /// supplied endpoint. This prevents a newly selected backend from leaving
-    /// a stale route of another kind behind.
+    /// Replace the chain routes (Electrum / P2P) for one network after
+    /// validating every supplied endpoint. Explorer origin is a separate
+    /// navigation surface: omitting it keeps the current explorer, so a backend
+    /// switch cannot wipe a self-hosted explorer. Pass `explorer` to change it.
     pub fn replace(&mut self, network: Network, servers: NetworkServers) -> Result<bool, String> {
+        let kept_explorer = self.for_network(network).explorer.clone();
         let mut validated = Self::new();
-        for kind in ServerKind::ALL {
-            if let Some(entry) = servers.get(*kind) {
-                validated.set(network, *kind, entry)?;
+        for kind in [ServerKind::Electrum, ServerKind::Peer] {
+            if let Some(entry) = servers.get(kind) {
+                validated.set(network, kind, entry)?;
             }
+        }
+        if let Some(entry) = servers.explorer.as_deref() {
+            validated.set(network, ServerKind::Explorer, entry)?;
+        } else {
+            validated.for_network_mut(network).explorer = kept_explorer;
         }
         let replacement = validated.for_network(network).clone();
         let current = self.for_network_mut(network);
@@ -307,6 +314,35 @@ mod tests {
                 .unwrap(),
             Some("https://explorer.example".into()),
             "a trailing slash is not a different explorer"
+        );
+    }
+
+    #[test]
+    fn replacing_a_chain_route_keeps_the_explorer() {
+        let mut servers = ServerOverrides::new();
+        servers
+            .set(
+                Network::Chipnet,
+                ServerKind::Explorer,
+                "https://chipnet.example",
+            )
+            .unwrap();
+        servers
+            .replace(
+                Network::Chipnet,
+                NetworkServers {
+                    peer: Some("node.example:48333".into()),
+                    ..NetworkServers::new()
+                },
+            )
+            .unwrap();
+        let chipnet = servers.for_network(Network::Chipnet);
+        assert_eq!(chipnet.peer.as_deref(), Some("node.example:48333"));
+        assert_eq!(chipnet.electrum, None, "stale Electrum route must clear");
+        assert_eq!(
+            chipnet.explorer.as_deref(),
+            Some("https://chipnet.example"),
+            "explorer is not a chain backend"
         );
     }
 
