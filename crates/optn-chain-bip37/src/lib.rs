@@ -6,6 +6,7 @@
 
 pub mod bloom;
 pub mod merkleblock;
+pub mod shv;
 pub mod tx;
 
 use bloom::{BloomFilter, BLOOM_UPDATE_ALL};
@@ -139,6 +140,9 @@ pub struct NodeProbe {
     pub services: u64,
     pub start_height: i32,
     pub serves_bloom: bool,
+    /// Whether the peer advertises NODE_SHV -- i.e. it will answer `getshv`
+    /// with historical header inclusion proofs.
+    pub serves_shv: bool,
 }
 
 #[derive(Default)]
@@ -202,6 +206,19 @@ impl Bip37Backend {
                 Capability::TransactionMerkleProof,
                 CapabilityConfidence::Advertised,
                 discovery,
+            );
+        }
+        if probe.serves_shv {
+            // The proof route the privacy policies were missing: until a peer
+            // advertises this, only an indexed Electrum server can answer a
+            // historical header proof.
+            capabilities.record(
+                Capability::HeaderMerkleProof,
+                CapabilityConfidence::Advertised,
+                CapabilityDiscovery::P2pServiceBit {
+                    bit: shv::NODE_SHV,
+                    name: "NODE_SHV".into(),
+                },
             );
         }
         let mut headers = HeaderCache::default();
@@ -355,6 +372,86 @@ impl Bip37Backend {
         })
     }
 
+    /// Ask a peer for one historical header plus its inclusion proof.
+    ///
+    /// The peer's own `target` is carried through untouched as a claim. It is
+    /// the runtime's accumulator that decides whether the proof is evidence,
+    /// so this observation stays `ServerAssertion` no matter what the peer
+    /// asserts.
+    async fn historical_header_proof(
+        &self,
+        height: u32,
+        checkpoint_height: u32,
+    ) -> Result<BackendObservation, ChainBackendError> {
+        if !self.probe.serves_shv {
+            return Err(ChainBackendError::Unsupported);
+        }
+        let request = shv::ShvRequest {
+            target: shv::ProofTarget::Root,
+            selector: shv::BlockSelector::Height(u64::from(height)),
+            commitment_height: u64::from(checkpoint_height),
+        };
+        let payload = shv::encode_getshv(&[request]).map_err(ChainBackendError::Rejected)?;
+
+        let port = self
+            .config
+            .endpoint
+            .port
+            .unwrap_or_else(|| params_for(&self.config.network).default_port);
+        let mut stream = connect_peer(&self.config.endpoint.host, port, &self.config.transport)
+            .await
+            .map_err(ChainBackendError::Protocol)?;
+        let magic = params_for(&self.config.network).magic;
+        let io_timeout = io_timeout(&self.config.transport);
+        handshake(&mut stream, magic, io_timeout)
+            .await
+            .map_err(ChainBackendError::Protocol)?;
+        stream
+            .write_all(&encode_message(magic, "getshv", &payload))
+            .await
+            .map_err(|e| ChainBackendError::Protocol(format!("getshv send failed: {e}")))?;
+
+        for _ in 0..MAX_MESSAGES {
+            let (command, body) = read_message(&mut stream, magic, io_timeout)
+                .await
+                .map_err(ChainBackendError::Protocol)?;
+            match command.as_str() {
+                "shv" => {
+                    let responses =
+                        shv::decode_shv(&body).map_err(ChainBackendError::InvalidResponse)?;
+                    // A peer answers only what it accepted, so match on the
+                    // fields the request pinned rather than on position.
+                    let answer = responses
+                        .into_iter()
+                        .find(|response| response.answers(&request))
+                        .ok_or(ChainBackendError::Unsupported)?;
+                    return Ok(BackendObservation {
+                        payload: ChainPayload::HistoricalHeaderProof {
+                            height,
+                            checkpoint_height,
+                            header: answer.header,
+                            siblings: answer.proof,
+                            root: answer.claimed_target,
+                        },
+                        // The peer's target is its claim. Only the runtime's
+                        // accumulator can promote this to HeaderMmrProven.
+                        evidence: Evidence::ServerAssertion,
+                        chain_tip: None,
+                    });
+                }
+                "ping" => {
+                    let _ = stream
+                        .write_all(&encode_message(magic, "pong", &body))
+                        .await;
+                }
+                _ => {}
+            }
+        }
+        Err(ChainBackendError::Protocol(
+            "peer never answered getshv".into(),
+        ))
+    }
+
     async fn broadcast(
         &self,
         raw_tx: &[u8],
@@ -414,7 +511,8 @@ impl ChainBackend for Bip37Backend {
         match operation {
             ChainOperation::WalletRefresh => self.capabilities.is_usable(Capability::UtxoQuery),
             ChainOperation::Broadcast | ChainOperation::HeaderSync => true,
-            ChainOperation::TransactionLookup | ChainOperation::HistoricalHeaderProof => false,
+            ChainOperation::HistoricalHeaderProof => self.probe.serves_shv,
+            ChainOperation::TransactionLookup => false,
         }
     }
     fn execute<'a>(&'a self, request: &'a ChainRequest) -> ChainFuture<'a, BackendObservation> {
@@ -429,8 +527,14 @@ impl ChainBackend for Bip37Backend {
                     start_height,
                     count,
                 } => self.header_sync(*start_height, *count).await,
-                ChainRequest::TransactionLookup { .. }
-                | ChainRequest::HistoricalHeaderProof { .. } => Err(ChainBackendError::Unsupported),
+                ChainRequest::HistoricalHeaderProof {
+                    height,
+                    checkpoint_height,
+                } => {
+                    self.historical_header_proof(*height, *checkpoint_height)
+                        .await
+                }
+                ChainRequest::TransactionLookup { .. } => Err(ChainBackendError::Unsupported),
             }
         })
     }
@@ -621,6 +725,7 @@ fn parse_version_payload(payload: &[u8]) -> Result<NodeProbe, String> {
         services,
         start_height,
         serves_bloom: services & NODE_BLOOM != 0,
+        serves_shv: services & shv::NODE_SHV != 0,
     })
 }
 async fn handshake<S: AsyncReadExt + AsyncWriteExt + Unpin>(
@@ -916,6 +1021,7 @@ mod tests {
                 services: 4,
                 start_height: 0,
                 serves_bloom: true,
+                serves_shv: false,
             },
             headers: Mutex::new(HeaderCache::default()),
         };
@@ -955,6 +1061,7 @@ mod tests {
                 services: 4,
                 start_height: 0,
                 serves_bloom: true,
+                serves_shv: false,
             },
             headers: Mutex::new(HeaderCache::default()),
         };
@@ -981,18 +1088,19 @@ mod tests {
         );
     }
 
-    /// Pins the honest state of the pruned-history path.
-    ///
-    /// `getheaders`/`headers` carries headers, not MMR proof siblings, so this
-    /// backend cannot serve a historical inclusion proof and does not claim to.
-    /// Today the only provider that answers `HistoricalHeaderProof` is Electrum
-    /// via `cp_height`, which means a BIP37-only or Privacy policy has no proof
-    /// route at all and must degrade explicitly rather than reach for an
-    /// indexer. If a P2P proof-serving extension is added, this test should
-    /// fail and be updated deliberately.
-    #[test]
-    fn bip37_does_not_claim_to_serve_historical_header_proofs() {
-        let backend = Bip37Backend {
+    fn probe(serves_shv: bool) -> NodeProbe {
+        NodeProbe {
+            user_agent: "test".into(),
+            protocol_version: 70015,
+            services: 4 | if serves_shv { shv::NODE_SHV } else { 0 },
+            start_height: 0,
+            serves_bloom: true,
+            serves_shv,
+        }
+    }
+
+    fn backend_with(probe: NodeProbe) -> Bip37Backend {
+        Bip37Backend {
             config: Bip37Config::new(
                 SourceId::new("local-test"),
                 Endpoint {
@@ -1003,20 +1111,34 @@ mod tests {
                 "chipnet",
             ),
             capabilities: CapabilitySet::default(),
-            probe: NodeProbe {
-                user_agent: "test".into(),
-                protocol_version: 70015,
-                services: 4,
-                start_height: 0,
-                serves_bloom: true,
-            },
+            probe,
             headers: Mutex::new(HeaderCache::default()),
-        };
-        assert!(!backend.supports(ChainOperation::HistoricalHeaderProof));
-        assert!(
-            backend.supports(ChainOperation::HeaderSync),
-            "headers are served; proofs are not"
+        }
+    }
+
+    /// Historical header proofs are gated on the peer's own advertisement.
+    ///
+    /// The reference node advertises `NODE_SHV` only when its MMR index is
+    /// built, and ignores `getshv` entirely otherwise
+    /// (`test/functional/bchn-p2p-shv.py`, `test_service_bit` and
+    /// `test_disabled_mmrindex`). Claiming the capability against a peer that
+    /// does not advertise it would turn a silent non-answer into a stall.
+    #[tokio::test]
+    async fn historical_header_proofs_follow_the_peers_node_shv_bit() {
+        let without = backend_with(probe(false));
+        assert!(!without.supports(ChainOperation::HistoricalHeaderProof));
+        assert_eq!(
+            without.historical_header_proof(1, 2).await,
+            Err(ChainBackendError::Unsupported),
+            "no advertisement means no request is sent at all"
         );
+
+        let with = backend_with(probe(true));
+        assert!(with.supports(ChainOperation::HistoricalHeaderProof));
+
+        // Headers are served either way; the proof is the part that is gated.
+        assert!(without.supports(ChainOperation::HeaderSync));
+        assert!(with.supports(ChainOperation::HeaderSync));
     }
 
     #[test]
