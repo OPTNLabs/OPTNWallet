@@ -12,3 +12,7 @@ serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
 tokio = { version = "1.53.1", features = ["io-util", "net", "rt", "sync", "time"] }
 tokio-socks = "0.5"
+
+[dev-dependencies]
+# `start_paused` for the probe-deadline tests: a real 30s wait is not a unit test.
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "test-util"] }

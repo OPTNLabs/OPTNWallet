@@ -1,9 +1,11 @@
 //! BCH compact-filter contents, as BCHD actually builds them.
 //!
-//! This is **not** Bitcoin Core's BIP158. Core's final revision dropped spent
-//! outpoints and filters on previous *output scripts* instead. BCH kept the
-//! earlier construction, so a client that assumes Core semantics will silently
-//! fail to match its own spends.
+//! This is **not** Bitcoin Core's BIP158. Both constructions can detect a
+//! spend: Core's final revision does it by including the previous *output
+//! script*, while BCH kept the earlier form and includes the serialized spent
+//! *outpoint*. The problem is not that one of them cannot see spends -- it is
+//! that they watch for different bytes, so a client built to Core's rules
+//! queries the wrong entries against a BCH filter and matches nothing.
 //!
 //! `BuildBasicFilter` in `gcash/bchutil` (`gcs/builder/builder.go`, pinned by
 //! `gcash/bchd` at `v0.0.0-20260423044137-a3c041e4cc77`) adds, in order:
@@ -271,7 +273,8 @@ mod tests {
     }
 
     /// Spend: the wallet's coin is consumed, so the *serialized outpoint* is in
-    /// the filter. This is the case Core's BIP158 cannot express.
+    /// the filter -- where Core's BIP158 would instead have carried the
+    /// previous output's script.
     #[test]
     fn a_spend_is_matched_by_the_serialized_outpoint() {
         let ours = p2pkh(0x11);
@@ -310,8 +313,11 @@ mod tests {
             entries.contains(&expected),
             "the spent outpoint is an entry"
         );
-        // The spending block does not carry our script anywhere, so an
-        // output-script-only filter would miss this spend entirely.
+        // Our script appears nowhere in the spending block's own outputs, so
+        // the outpoint is the only thing here that identifies the spend. Core
+        // would have covered this case with the previous output's script
+        // instead; BCH covers it with this outpoint, and a client has to query
+        // whichever one the filter was actually built from.
         assert!(!entries.contains(&ours));
 
         let watch = WatchSet {

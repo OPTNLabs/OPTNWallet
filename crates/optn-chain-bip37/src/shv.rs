@@ -33,8 +33,89 @@ pub const NODE_SHV: u64 = 1 << 9;
 ///
 /// A peer that advertised bit 9 for another protocol will never answer, and on
 /// a busy connection it may send a great deal of unrelated traffic first. This
-/// bounds that wait to something short enough to fail over on.
+/// is one of three independent budgets; see [`ShvProbeBudget`].
 pub const MAX_MESSAGES_AWAITING_SHV: usize = 32;
+
+/// Bytes of unrelated traffic tolerated while waiting for an `shv` reply.
+///
+/// A message budget alone is not enough: thirty-two large blocks is a lot of
+/// bandwidth to spend finding out a peer does not speak this.
+pub const MAX_BYTES_AWAITING_SHV: usize = 2 * 1024 * 1024;
+
+/// Budgets for one `getshv` attempt.
+///
+/// The deadline is the important one and it is *absolute*: it spans connect,
+/// handshake, send and every read. A per-read timeout renews itself, so a
+/// chatty peer could hold the attempt open for message-budget times
+/// per-read-timeout — minutes, over Tor. An attempt is over when the clock says
+/// so, whatever arrived in the meantime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShvProbeBudget {
+    pub deadline: std::time::Duration,
+    pub max_messages: usize,
+    pub max_bytes: usize,
+}
+
+impl ShvProbeBudget {
+    /// Direct TCP: a peer that serves this answers promptly.
+    pub const DIRECT: Self = Self {
+        deadline: std::time::Duration::from_secs(30),
+        max_messages: MAX_MESSAGES_AWAITING_SHV,
+        max_bytes: MAX_BYTES_AWAITING_SHV,
+    };
+
+    /// Over Tor the same exchange is bounded by circuit bandwidth, so the
+    /// deadline is larger while the message and byte budgets are unchanged.
+    pub const TOR: Self = Self {
+        deadline: std::time::Duration::from_secs(120),
+        ..Self::DIRECT
+    };
+}
+
+/// How long to leave a peer alone after an attempt demonstrated nothing.
+///
+/// Without this, every historical lookup re-probes a peer that has already
+/// declined to answer, which is both slow and rude. It is a cooldown, not a
+/// verdict: the peer is asked again later.
+pub const SHV_PROBE_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// What one attempt established.
+///
+/// Kept separate from the transport outcome on purpose. "This peer did not
+/// demonstrate the capability within this attempt" is a different fact from
+/// "this peer sent us something malformed" and from "the connection failed",
+/// and only the middle one says anything about the peer's honesty.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShvProbeOutcome {
+    /// Nothing arrived within the budget. Not a protocol violation, and not
+    /// permanent: the bit may have meant XThinner, or the peer may be busy.
+    NotDemonstrated(ShvProbeLimit),
+    /// The peer answered `shv`, but not for what was asked. Also not a
+    /// violation: the reference node silently skips requests it declines.
+    NoMatchingResponse,
+}
+
+/// Which budget ran out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShvProbeLimit {
+    Deadline,
+    Messages,
+    Bytes,
+}
+
+impl ShvProbeOutcome {
+    /// A short reason for logs and health tracking.
+    pub const fn reason(&self) -> &'static str {
+        match self {
+            Self::NotDemonstrated(ShvProbeLimit::Deadline) => "no shv reply within the deadline",
+            Self::NotDemonstrated(ShvProbeLimit::Messages) => {
+                "no shv reply within the message budget"
+            }
+            Self::NotDemonstrated(ShvProbeLimit::Bytes) => "no shv reply within the byte budget",
+            Self::NoMatchingResponse => "shv reply did not answer the request",
+        }
+    }
+}
 
 /// Bit 0: proof terminates at the bagged root rather than at a peak.
 pub const TYPE_PROOF_TO_ROOT: u8 = 1 << 0;
