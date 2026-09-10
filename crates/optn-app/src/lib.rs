@@ -633,6 +633,14 @@ pub enum AppAction {
     HideWalletIdentity,
     /// Record the RPA stealth balance a scan found.
     SetStealthSats(u64),
+    /// Rescan this wallet from a chosen block height, inclusive.
+    ///
+    /// An instruction, not an observation, so the renderer may make it: it
+    /// says what to read, never what was found. The scan itself belongs to the
+    /// runtime, which resolves the floor and decides what the result means.
+    RequestRescanFrom {
+        height: u32,
+    },
     /// Point one endpoint at a user-run server. An empty entry clears it.
     SetServer {
         kind: ServerKind,
@@ -996,6 +1004,22 @@ impl AppState {
                     return None;
                 }
                 self.stealth_sats = sats;
+                Some(AppEvent::CoinsChanged)
+            }
+            AppAction::RequestRescanFrom { height } => {
+                if self.wallet.is_none() {
+                    return self.reject("Open a wallet before rescanning.".into());
+                }
+                if self.wallet_sync.rescan_requested == Some(height) {
+                    return None;
+                }
+                // Deliberately leaves balances, history and pending state as
+                // they are. A wallet that blanks itself the moment a rescan is
+                // requested tells its holder their money is gone, and the
+                // result it is waiting for may well confirm what it already
+                // shows. The runtime replaces this view when the scan lands.
+                self.wallet_sync.rescan_requested = Some(height);
+                self.wallet_sync.error = None;
                 Some(AppEvent::CoinsChanged)
             }
             AppAction::HideWalletIdentity => {
@@ -1882,6 +1906,22 @@ pub struct HistoryEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanCoverageView {
+    /// Inclusive height the scan starts at.
+    pub from_height: u32,
+    /// Heights below this are not covered by it.
+    ///
+    /// `Some` means the wallet is knowingly incomplete: coins received under
+    /// it and never spent are still the holder's and are not in the totals
+    /// above. A balance shown without saying so is a wrong number presented as
+    /// a right one.
+    pub skipped_below: Option<u32>,
+    /// Whether the shortfall is the holder's own rescan choice rather than
+    /// something the wallet decided for them.
+    pub chosen_by_holder: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WalletSyncView {
     pub refreshing: bool,
     pub history_fresh: bool,
@@ -1893,6 +1933,10 @@ pub struct WalletSyncView {
     pub pending_sats: i64,
     pub history: Vec<HistoryEntry>,
     pub error: Option<String>,
+    /// What the resolved scan floor covers, when that is worth saying.
+    pub scan_coverage: Option<ScanCoverageView>,
+    /// A rescan the holder asked for that has not produced a result yet.
+    pub rescan_requested: Option<u32>,
 }
 
 impl WalletSyncView {
@@ -1908,6 +1952,8 @@ impl WalletSyncView {
             pending_sats: 0,
             history: Vec::new(),
             error: None,
+            scan_coverage: None,
+            rescan_requested: None,
         }
     }
 
@@ -2525,6 +2571,79 @@ pub fn seed_wallet_preview_at(
 
 #[cfg(test)]
 mod tests {
+
+    /// Asking for a rescan must not look like losing the money.
+    ///
+    /// The scan has not run yet. Blanking balances, history or anything
+    /// pending at the moment of the request tells the holder their coins are
+    /// gone, and the result may well confirm exactly what is already shown.
+    #[test]
+    fn requesting_a_rescan_records_the_height_without_clearing_the_wallet() {
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        state.apply(AppAction::OpenCreatedWallet {
+            name: "Rescan".into(),
+            receive_address: "bitcoincash:qq0000000000000000000000000000000000000000".into(),
+            account_path: "m/44'/145'/0'".into(),
+        });
+        state.wallet_sync.confirmed_sats = Some(1_234_000);
+        state.wallet_sync.pending_sats = -5_000;
+        state.wallet_sync.tip_height = Some(900_000);
+        state.wallet_sync.history_fresh = true;
+
+        let event = state.reduce(AppAction::RequestRescanFrom { height: 700_000 });
+
+        assert_eq!(state.wallet_sync.rescan_requested, Some(700_000));
+        assert_eq!(
+            state.wallet_sync.confirmed_sats,
+            Some(1_234_000),
+            "a pending rescan must not zero the balance"
+        );
+        assert_eq!(state.wallet_sync.pending_sats, -5_000);
+        assert_eq!(state.wallet_sync.tip_height, Some(900_000));
+        assert_eq!(event, Some(AppEvent::CoinsChanged));
+    }
+
+    /// A renderer may ask for a rescan: it is an instruction, not a finding.
+    #[test]
+    fn a_renderer_may_request_a_rescan() {
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        state.apply(AppAction::OpenCreatedWallet {
+            name: "Rescan".into(),
+            receive_address: "bitcoincash:qq0000000000000000000000000000000000000000".into(),
+            account_path: "m/44'/145'/0'".into(),
+        });
+
+        state.reduce_intent(AppAction::RequestRescanFrom { height: 5 });
+        assert_eq!(state.wallet_sync.rescan_requested, Some(5));
+        assert_eq!(
+            state.notice, None,
+            "an instruction from the interface is not a rejected observation"
+        );
+    }
+
+    /// There is nothing to rescan without a wallet.
+    #[test]
+    fn a_rescan_needs_an_open_wallet() {
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        state.reduce(AppAction::RequestRescanFrom { height: 10 });
+        assert_eq!(state.wallet_sync.rescan_requested, None);
+        assert!(state.notice.is_some(), "the refusal has to be visible");
+    }
+
+    /// Coverage is part of what the wallet says about itself.
+    #[test]
+    fn scan_coverage_travels_with_the_sync_view() {
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        state.wallet_sync.scan_coverage = Some(ScanCoverageView {
+            from_height: 700_000,
+            skipped_below: Some(650_000),
+            chosen_by_holder: true,
+        });
+        let coverage = state.wallet_sync.scan_coverage.expect("coverage");
+        assert_eq!(coverage.skipped_below, Some(650_000));
+        assert!(coverage.chosen_by_holder);
+    }
+
     use super::*;
 
     #[test]

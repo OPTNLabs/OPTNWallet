@@ -348,7 +348,9 @@ impl NativeChainRuntime {
                 )
                 .await
             }
-            Err(_) => build_native_chain_stack(catalog, policy, &network.to_string(), &secrets).await,
+            Err(_) => {
+                build_native_chain_stack(catalog, policy, &network.to_string(), &secrets).await
+            }
         };
         // Disk I/O must not hold the stack lock. Resolve any app-state fallback
         // from the current owner only after the read and lock acquisition.
@@ -380,6 +382,26 @@ impl NativeChainRuntime {
     /// The host supplies its selected provider; HD discovery and durable
     /// publication remain the same runtime use case invoked by the CLI.
     pub async fn refresh_wallet(&self) -> Result<(), String> {
+        self.sync_wallet_from(None).await
+    }
+
+    /// Rescan this wallet from `height`, inclusive.
+    ///
+    /// Keys are untouched, and so is the accepted chain every other wallet and
+    /// provider shares: only this wallet's scan floor moves. Nothing is
+    /// cleared first, so balances, history and anything pending stay on screen
+    /// while the scan runs and are replaced only by a result.
+    pub async fn rescan_wallet_from(&self, height: u32) -> Result<(), String> {
+        // Record the instruction before the work, so the interface can show
+        // what was asked for even if the scan then fails or is slow.
+        self.owner
+            .dispatch(optn_app::AppAction::RequestRescanFrom { height })
+            .await
+            .map_err(|_| "The wallet runtime is no longer running.")?;
+        self.sync_wallet_from(Some(height)).await
+    }
+
+    async fn sync_wallet_from(&self, floor: Option<u32>) -> Result<(), String> {
         let service = self
             .with_service(Arc::clone)
             .await
@@ -418,11 +440,12 @@ impl NativeChainRuntime {
         }
         let outcome = tokio::time::timeout(
             Duration::from_secs(300),
-            self.owner.sync_hd_wallet(
+            self.owner.sync_hd_wallet_from_floor(
                 &mut service,
                 &mut worker,
                 xpub,
                 optn_runtime::hd_sync::HdSyncLimits::default(),
+                floor,
             ),
         )
         .await;
