@@ -28,6 +28,7 @@ pub mod explorer;
 /// Public-key HD account discovery over the shared chain service.
 pub mod hd_sync;
 /// Provider-neutral SHV/MMR header verification using the pure optn-core accumulator.
+pub mod header_recovery;
 pub mod header_store;
 pub mod header_verifier;
 pub mod header_view;
