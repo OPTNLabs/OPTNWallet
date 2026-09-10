@@ -31,8 +31,15 @@ jobs:
     # added here, and an explicit line is what makes that visible in review.
     permissions:
       contents: read
-    # Uncached Linux AppImage packaging can take slightly over 40 minutes.
-    timeout-minutes: 60
+    # Measured on this branch: macOS and Windows finish in 4-8 minutes, but the
+    # Linux legs are far slower -- arm64 took 55 minutes and x64 was killed at
+    # the 60-minute mark mid-way through uploading its DEB, with the AppImage
+    # already published. The build was not broken, it ran out of clock.
+    #
+    # A timeout here is self-perpetuating: the run dies before "Post Rust cache",
+    # so nothing is saved and the next run is uncached and slow for the same
+    # reason. 90 leaves the slowest observed leg about 35 minutes of headroom.
+    timeout-minutes: 90
     env:
       # macOS runners have less memory; the Vite frontend build (Tauri beforeBuildCommand)
       # OOMs at Node's default heap. Raise it for all platforms (harmless on Windows/Linux).
