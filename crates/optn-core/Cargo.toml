@@ -1,6 +1,6 @@
 [package]
 name = "optn-core"
-version = "1.7.3"
+version = "1.7.4"
 edition = "2021"
 license = "GPL-3.0"
 description = "Shared BCH wallet primitives for native and WASM OPTN clients"

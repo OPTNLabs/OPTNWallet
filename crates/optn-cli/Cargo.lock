@@ -891,7 +891,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "optn-cli"
-version = "1.7.3"
+version = "1.7.4"
 dependencies = [
  "bip32",
  "bip39",
@@ -917,7 +917,7 @@ dependencies = [
 
 [[package]]
 name = "optn-core"
-version = "1.7.3"
+version = "1.7.4"
 dependencies = [
  "getrandom 0.2.17",
  "hmac",
@@ -934,7 +934,7 @@ dependencies = [
 
 [[package]]
 name = "optn-multisig-core"
-version = "1.7.3"
+version = "1.7.4"
 dependencies = [
  "k256",
  "ripemd",

@@ -1,6 +1,6 @@
 [package]
 name = "optn-multisig-core"
-version = "1.7.3"
+version = "1.7.4"
 description = "Stateless BCH multisig derivation primitives for OPTN Wallet"
 authors = ["OPTNLabs"]
 license = "GPL-3.0"
