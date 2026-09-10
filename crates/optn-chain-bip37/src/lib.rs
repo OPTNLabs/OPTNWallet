@@ -120,6 +120,10 @@ pub struct Bip37Config {
     pub endpoint: Endpoint,
     pub network: String,
     pub transport: Bip37Transport,
+    /// Budgets for one `getshv` attempt. `None` derives them from the
+    /// transport. Set explicitly to tune a deployment, or to make a test
+    /// deterministic without depending on wall-clock behaviour.
+    pub shv_budget: Option<shv::ShvProbeBudget>,
 }
 
 impl Bip37Config {
@@ -129,6 +133,7 @@ impl Bip37Config {
             endpoint,
             network: network.into(),
             transport: Bip37Transport::Direct,
+            shv_budget: None,
         }
     }
 }
@@ -421,10 +426,13 @@ impl Bip37Backend {
         };
         let payload = shv::encode_getshv(&[request]).map_err(ChainBackendError::Rejected)?;
 
-        let budget = match self.config.transport {
-            Bip37Transport::Direct => shv::ShvProbeBudget::DIRECT,
-            Bip37Transport::Tor { .. } => shv::ShvProbeBudget::TOR,
-        };
+        let budget = self
+            .config
+            .shv_budget
+            .unwrap_or(match self.config.transport {
+                Bip37Transport::Direct => shv::ShvProbeBudget::DIRECT,
+                Bip37Transport::Tor { .. } => shv::ShvProbeBudget::TOR,
+            });
         // Absolute, and taken before the connection so that connect, handshake,
         // send and every read share it. It is also the *only* clock on the
         // response path: `read_message`'s own per-read timeout is shorter than
@@ -444,7 +452,7 @@ impl Bip37Backend {
             .await;
 
         match outcome {
-            shv::ShvProbeOutcome::Answered(answer) => Ok(BackendObservation {
+            Ok(answer) => Ok(BackendObservation {
                 payload: ChainPayload::HistoricalHeaderProof {
                     height,
                     checkpoint_height,
@@ -457,7 +465,7 @@ impl Bip37Backend {
                 evidence: Evidence::ServerAssertion,
                 chain_tip: None,
             }),
-            other => Err(self.record_shv_outcome(other).await),
+            Err(failure) => Err(self.record_shv_outcome(failure).await),
         }
     }
 
@@ -471,11 +479,12 @@ impl Bip37Backend {
         deadline: tokio::time::Instant,
         budget: shv::ShvProbeBudget,
     ) -> shv::ShvProbeOutcome {
-        use shv::{ShvProbeLimit, ShvProbeOutcome, ShvProbePhase};
+        use shv::{ShvProbeFailure, ShvProbeLimit, ShvProbePhase};
 
         let io_timeout = io_timeout(&self.config.transport);
-        let transport =
-            |phase: ShvProbePhase, detail: String| ShvProbeOutcome::Transport { phase, detail };
+        let transport = |phase: ShvProbePhase, detail: String| {
+            Err(ShvProbeFailure::Transport { phase, detail })
+        };
 
         // Phase: connect. A deadline here says the peer is unreachable, which
         // is not evidence about what it serves.
@@ -521,19 +530,19 @@ impl Bip37Backend {
                 match read_message_bounded(&mut stream, magic, deadline, remaining).await {
                     Ok(message) => message,
                     Err(BoundedReadError::Deadline) => {
-                        return ShvProbeOutcome::NotDemonstrated(ShvProbeLimit::Deadline)
+                        return Err(ShvProbeFailure::NotDemonstrated(ShvProbeLimit::Deadline))
                     }
                     Err(BoundedReadError::BudgetExceeded {
                         announced,
                         remaining,
                     }) => {
-                        return ShvProbeOutcome::NotDemonstrated(ShvProbeLimit::Bytes {
+                        return Err(ShvProbeFailure::NotDemonstrated(ShvProbeLimit::Bytes {
                             announced,
                             remaining,
-                        })
+                        }))
                     }
                     Err(BoundedReadError::Framing(detail)) => {
-                        return ShvProbeOutcome::Malformed(detail)
+                        return Err(ShvProbeFailure::Malformed(detail))
                     }
                     Err(BoundedReadError::Transport(detail)) => {
                         return transport(ShvProbePhase::AwaitingResponse, detail)
@@ -543,15 +552,15 @@ impl Bip37Backend {
             match command.as_str() {
                 "shv" => {
                     return match shv::decode_shv(&body) {
-                        Err(detail) => ShvProbeOutcome::Malformed(detail),
+                        Err(detail) => Err(ShvProbeFailure::Malformed(detail)),
                         // A peer answers only what it accepted, so match on the
                         // fields the request pinned rather than on position.
                         Ok(responses) => match responses
                             .into_iter()
                             .find(|response| response.answers(request))
                         {
-                            Some(answer) => ShvProbeOutcome::Answered(answer),
-                            None => ShvProbeOutcome::NoMatchingResponse,
+                            Some(answer) => Ok(answer),
+                            None => Err(ShvProbeFailure::NoMatchingResponse),
                         },
                     };
                 }
@@ -563,7 +572,7 @@ impl Bip37Backend {
                 _ => {}
             }
         }
-        ShvProbeOutcome::NotDemonstrated(ShvProbeLimit::Messages)
+        Err(ShvProbeFailure::NotDemonstrated(ShvProbeLimit::Messages))
     }
 
     /// Record what an unsuccessful attempt established, and map it to the
@@ -572,8 +581,8 @@ impl Bip37Backend {
     /// The three facts stay distinct. Only an outcome reached after the request
     /// went out puts the proof route on cooldown; a peer we could not reach has
     /// told us nothing about what it serves.
-    async fn record_shv_outcome(&self, outcome: shv::ShvProbeOutcome) -> ChainBackendError {
-        use shv::ShvProbeOutcome;
+    async fn record_shv_outcome(&self, outcome: shv::ShvProbeFailure) -> ChainBackendError {
+        use shv::ShvProbeFailure;
 
         if outcome.warrants_cooldown() {
             *self.shv_status.lock().await = Some(ShvCapabilityStatus {
@@ -584,16 +593,15 @@ impl Bip37Backend {
         match outcome {
             // Temporarily unresponsive, not unsupported: the advertisement
             // stands and the peer is asked again after the cooldown.
-            ShvProbeOutcome::NotDemonstrated(_) | ShvProbeOutcome::NoMatchingResponse => {
+            ShvProbeFailure::NotDemonstrated(_) | ShvProbeFailure::NoMatchingResponse => {
                 ChainBackendError::Timeout
             }
             // Something we could not parse. Observed, not judged.
-            ShvProbeOutcome::Malformed(detail) => ChainBackendError::InvalidResponse(detail),
-            ShvProbeOutcome::Transport { phase, detail } => {
+            ShvProbeFailure::Malformed(detail) => ChainBackendError::InvalidResponse(detail),
+            ShvProbeFailure::Transport { phase, detail } => {
                 debug_assert!(!phase.informs_shv_support());
                 ChainBackendError::Protocol(detail)
             }
-            ShvProbeOutcome::Answered(_) => unreachable!("handled by the caller"),
         }
     }
 
@@ -1385,10 +1393,13 @@ mod tests {
         StallDuringHandshake,
     }
 
-    /// Legal filler that consumes most of the byte budget.
-    const FILLER_PAYLOAD: usize = 1_500_000;
+    /// A deliberately tiny byte budget, so the fixture needs no large writes
+    /// and cannot race the scheduler under a paused clock.
+    const TEST_BYTE_BUDGET: usize = 1_024;
+    /// Legal filler that consumes most of that budget.
+    const FILLER_PAYLOAD: usize = 768;
     /// Under MAX_PAYLOAD, over what remains after the filler.
-    const OVERSIZED_ANNOUNCE: usize = 1_000_000;
+    const OVERSIZED_ANNOUNCE: usize = 512;
 
     struct ScriptedPeer {
         port: u16,
@@ -1535,6 +1546,17 @@ mod tests {
         }
     }
 
+    /// Same peer, but with the byte budget shrunk so the oversized-body case
+    /// is exercised by an announced length rather than by a large transfer.
+    fn backend_with_tiny_byte_budget(port: u16) -> Bip37Backend {
+        let mut backend = backend_at(port, true);
+        backend.config.shv_budget = Some(shv::ShvProbeBudget {
+            max_bytes: TEST_BYTE_BUDGET,
+            ..shv::ShvProbeBudget::DIRECT
+        });
+        backend
+    }
+
     /// The handshake completes, the request lands, and then nothing comes back.
     ///
     /// The peer confirms it parsed `getshv` before going quiet, so this cannot
@@ -1606,7 +1628,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn an_oversized_announced_body_is_refused_before_it_is_downloaded() {
         let peer = spawn_scripted_peer(PeerScript::OversizedBodyAfterRequest).await;
-        let backend = backend_at(peer.port, true);
+        let backend = backend_with_tiny_byte_budget(peer.port);
 
         let outcome = backend.historical_header_proof(1, 2).await;
         assert_eq!(outcome, Err(ChainBackendError::Timeout));
@@ -1715,14 +1737,14 @@ mod tests {
     /// Phase classification is the rule the mapping depends on.
     #[test]
     fn only_the_response_phase_says_anything_about_shv_support() {
-        use shv::{ShvProbeLimit, ShvProbeOutcome, ShvProbePhase};
+        use shv::{ShvProbeFailure, ShvProbeLimit, ShvProbePhase};
         for phase in [
             ShvProbePhase::Connect,
             ShvProbePhase::Handshake,
             ShvProbePhase::Request,
         ] {
             assert!(!phase.informs_shv_support(), "{phase:?}");
-            assert!(!ShvProbeOutcome::Transport {
+            assert!(!ShvProbeFailure::Transport {
                 phase,
                 detail: "x".into()
             }
@@ -1737,12 +1759,12 @@ mod tests {
                 remaining: 0,
             },
         ] {
-            assert!(ShvProbeOutcome::NotDemonstrated(limit).warrants_cooldown());
+            assert!(ShvProbeFailure::NotDemonstrated(limit).warrants_cooldown());
         }
-        assert!(ShvProbeOutcome::NoMatchingResponse.warrants_cooldown());
+        assert!(ShvProbeFailure::NoMatchingResponse.warrants_cooldown());
         // A frame we could not parse is observed behaviour, and does not put
         // the route on cooldown -- a version mismatch looks like this too.
-        assert!(!ShvProbeOutcome::Malformed("bad".into()).warrants_cooldown());
+        assert!(!ShvProbeFailure::Malformed("bad".into()).warrants_cooldown());
     }
 
     /// The budgets are three independent bounds.
