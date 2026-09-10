@@ -1591,6 +1591,7 @@ mod tests {
             Err(ChainBackendError::Timeout),
             "temporarily unresponsive, not a broken connection"
         );
+        peer.await_requests(1).await;
         assert_eq!(peer.requests(), 1, "the request really did reach the peer");
 
         let status = backend
@@ -1627,6 +1628,7 @@ mod tests {
 
         let outcome = backend.historical_header_proof(1, 2).await;
         assert_eq!(outcome, Err(ChainBackendError::Timeout));
+        peer.await_requests(1).await;
         assert_eq!(peer.requests(), 1);
 
         let status = backend.shv_capability_status().await.expect("status");
@@ -1649,6 +1651,7 @@ mod tests {
 
         let outcome = backend.historical_header_proof(1, 2).await;
         assert_eq!(outcome, Err(ChainBackendError::Timeout));
+        peer.await_requests(1).await;
         assert_eq!(peer.requests(), 1);
 
         let status = backend.shv_capability_status().await.expect("status");
