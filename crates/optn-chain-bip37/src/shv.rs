@@ -36,10 +36,19 @@ pub const NODE_SHV: u64 = 1 << 9;
 /// is one of three independent budgets; see [`ShvProbeBudget`].
 pub const MAX_MESSAGES_AWAITING_SHV: usize = 32;
 
-/// Bytes of unrelated traffic tolerated while waiting for an `shv` reply.
+/// Payload bytes tolerated while waiting for an `shv` reply.
 ///
 /// A message budget alone is not enough: thirty-two large blocks is a lot of
 /// bandwidth to spend finding out a peer does not speak this.
+///
+/// **Counts payload bytes only** — the 24-byte wire header of each message is
+/// not charged, so the true ceiling is this plus 24 per message, bounded in
+/// turn by the message budget. Handshake traffic is outside this budget: it
+/// happens before the request and is bounded by the deadline and by the
+/// handshake's own message cap.
+///
+/// The budget is enforced against the *announced* payload length, before the
+/// body is allocated or read, so an oversized message costs nothing to refuse.
 pub const MAX_BYTES_AWAITING_SHV: usize = 2 * 1024 * 1024;
 
 /// Budgets for one `getshv` attempt.
@@ -79,20 +88,77 @@ impl ShvProbeBudget {
 /// verdict: the peer is asked again later.
 pub const SHV_PROBE_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(300);
 
+/// Which stage of one attempt an outcome came from.
+///
+/// The phase decides how a failure is read. The same elapsed clock means
+/// "this peer is slow to connect" during [`Connect`](Self::Connect) and
+/// "this peer will not answer getshv" during
+/// [`AwaitingResponse`](Self::AwaitingResponse) — and only the second is
+/// evidence about SHV support.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShvProbePhase {
+    Connect,
+    Handshake,
+    Request,
+    AwaitingResponse,
+}
+
+impl ShvProbePhase {
+    /// Whether a failure here says anything about the peer's SHV support.
+    ///
+    /// Before the request is on the wire, nothing does: a peer we could not
+    /// reach has told us nothing about what it serves.
+    pub const fn informs_shv_support(&self) -> bool {
+        matches!(self, Self::AwaitingResponse)
+    }
+}
+
 /// What one attempt established.
 ///
 /// Kept separate from the transport outcome on purpose. "This peer did not
-/// demonstrate the capability within this attempt" is a different fact from
-/// "this peer sent us something malformed" and from "the connection failed",
-/// and only the middle one says anything about the peer's honesty.
+/// answer within this attempt" is a different fact from "this peer sent
+/// something we could not parse" and from "the connection failed". None of
+/// them is a statement about intent — a malformed frame is a thing observed,
+/// not a motive inferred.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShvProbeOutcome {
-    /// Nothing arrived within the budget. Not a protocol violation, and not
-    /// permanent: the bit may have meant XThinner, or the peer may be busy.
+    /// The peer answered the request that was sent.
+    Answered(ShvResponse),
+    /// Nothing arrived within the budget, after the request went out. Not a
+    /// protocol violation and not permanent: the bit may have meant XThinner,
+    /// or the peer may simply be busy.
     NotDemonstrated(ShvProbeLimit),
-    /// The peer answered `shv`, but not for what was asked. Also not a
-    /// violation: the reference node silently skips requests it declines.
+    /// The peer answered `shv`, but not for what was asked. Also normal: the
+    /// reference node silently skips requests it declines, and answers an
+    /// empty `shv` while its MMR index is still building.
     NoMatchingResponse,
+    /// A frame we could not parse. Observed behaviour, not a verdict on the
+    /// peer: a version mismatch looks like this too.
+    Malformed(String),
+    /// The attempt failed before it could establish anything about SHV.
+    Transport {
+        phase: ShvProbePhase,
+        detail: String,
+    },
+}
+
+impl ShvProbeOutcome {
+    /// Whether this outcome justifies leaving the peer alone for a while.
+    ///
+    /// Only outcomes reached *after* the request went out do. A connect or
+    /// handshake failure is about reachability, and putting the proof route on
+    /// cooldown for it would penalise the wrong capability.
+    pub const fn warrants_cooldown(&self) -> bool {
+        matches!(self, Self::NotDemonstrated(_) | Self::NoMatchingResponse)
+    }
+
+    /// Whether the peer is expected to serve this again shortly.
+    pub const fn is_temporary(&self) -> bool {
+        matches!(
+            self,
+            Self::NotDemonstrated(_) | Self::NoMatchingResponse | Self::Transport { .. }
+        )
+    }
 }
 
 /// Which budget ran out.
@@ -100,19 +166,38 @@ pub enum ShvProbeOutcome {
 pub enum ShvProbeLimit {
     Deadline,
     Messages,
-    Bytes,
+    /// The announced payload would have overrun what was left of the budget.
+    /// Both figures are kept: they say whether the peer is merely chatty or
+    /// sent one absurd frame, which reads differently in diagnostics.
+    Bytes {
+        announced: usize,
+        remaining: usize,
+    },
 }
 
 impl ShvProbeOutcome {
-    /// A short reason for logs and health tracking.
-    pub const fn reason(&self) -> &'static str {
+    /// A short, non-sensitive reason. Carries no heights, hashes or wallet
+    /// material, so it is safe to surface as diagnostics.
+    pub fn reason(&self) -> String {
         match self {
-            Self::NotDemonstrated(ShvProbeLimit::Deadline) => "no shv reply within the deadline",
-            Self::NotDemonstrated(ShvProbeLimit::Messages) => {
-                "no shv reply within the message budget"
+            Self::NotDemonstrated(ShvProbeLimit::Deadline) => {
+                "no shv reply within the deadline".into()
             }
-            Self::NotDemonstrated(ShvProbeLimit::Bytes) => "no shv reply within the byte budget",
-            Self::NoMatchingResponse => "shv reply did not answer the request",
+            Self::NotDemonstrated(ShvProbeLimit::Messages) => {
+                "no shv reply within the message budget".into()
+            }
+            Self::NotDemonstrated(ShvProbeLimit::Bytes {
+                announced,
+                remaining,
+            }) => format!(
+                "no shv reply within the byte budget: a {announced}-byte body                  was announced with {remaining} left"
+            ),
+            Self::Answered(_) => "answered".into(),
+            Self::NoMatchingResponse => "shv reply did not answer the request".into(),
+            Self::Malformed(detail) => format!("unparsable shv frame: {detail}"),
+            Self::Transport { phase, detail } => {
+                format!("{phase:?} failed before any shv exchange: {detail}")
+            }
         }
     }
 }
