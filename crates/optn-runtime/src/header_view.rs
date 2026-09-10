@@ -19,8 +19,8 @@ use serde::{Deserialize, Serialize};
 
 use optn_core::asert::{AsertAnchor, AsertParams};
 use optn_core::header_time::{
-    header_timestamp, median_time_past, HeaderAnchor, HeaderIndexError, SparseHeaderIndex,
-    TimeLookup, MEDIAN_TIME_SPAN,
+    header_timestamp, median_time_past, AnchorTrust, HeaderAnchor, HeaderIndexError,
+    SparseHeaderIndex, TimeLookup, MEDIAN_TIME_SPAN,
 };
 use optn_core::network::Network;
 
@@ -104,6 +104,11 @@ pub enum HeaderViewError {
         height: u32,
         retained: Hash32,
     },
+    /// The supplied median-time window is the wrong length, does not link, or
+    /// carries no usable timestamps.
+    UnusableTimeWindow {
+        height: u32,
+    },
 }
 
 impl From<ShvMmrError> for HeaderViewError {
@@ -126,6 +131,9 @@ impl From<HeaderIndexError> for HeaderViewError {
 pub enum RestoreStartUnavailable {
     /// Nothing has been verified into this view yet.
     NothingVerified,
+    /// Anchors were restored but their medians have not been re-derived from
+    /// authenticated headers. Recoverable, and deliberately not an answer.
+    AnchorsNotReauthenticated { retained_anchors: usize },
     /// The requested instant is older than the retained range. The caller
     /// chooses between a full-history scan and a documented shortened scan.
     OlderThanRetained {
@@ -216,19 +224,25 @@ impl VerifiedHeaderView {
             Err(error) => return Err(error.into()),
         };
 
-        self.verifier.extend(headers)?;
-
+        // Stage every part of the view together. The verifier, the anchor
+        // index and the median window are one logical version: advancing the
+        // accumulator and then failing to record an anchor would leave them at
+        // different heights, and the next extend would compute the wrong
+        // median from a window that never saw the missing block.
+        let mut staged = self.clone();
+        staged.verifier.extend(headers)?;
         for (offset, header) in headers.iter().enumerate() {
             let height = first_height + offset as u64;
             // The leaf the accumulator just committed to is this block's hash;
             // retaining it is what lets a pruned client build a `getheaders`
             // locator and re-authenticate the anchor later.
-            self.record_anchor(
+            staged.record_anchor(
                 height,
                 crate::header_verifier::header_leaf(header),
                 header_timestamp(&header.0),
             )?;
         }
+        *self = staged;
         Ok(())
     }
 
@@ -273,6 +287,8 @@ impl VerifiedHeaderView {
             height,
             block_hash,
             median_time_past,
+            // Derived here, from headers this verifier just accepted.
+            trust: AnchorTrust::Authenticated,
         })?;
         Ok(())
     }
@@ -295,6 +311,11 @@ impl VerifiedHeaderView {
                 oldest_height,
                 oldest_median_time_past,
             }),
+            TimeLookup::Unauthenticated { retained_anchors } => {
+                RestoreStart::Unavailable(RestoreStartUnavailable::AnchorsNotReauthenticated {
+                    retained_anchors,
+                })
+            }
             TimeLookup::Empty => {
                 RestoreStart::Unavailable(RestoreStartUnavailable::NothingVerified)
             }
@@ -382,6 +403,74 @@ impl VerifiedHeaderView {
             block_hash: optn_core::header_hash::sha256d(&proof.header.0),
             height: proof.height,
         })
+    }
+
+    /// Re-derive a restored anchor's median from an authenticated header
+    /// window, without needing a proof server.
+    ///
+    /// `window` is the consecutive run of headers ending at the anchor, oldest
+    /// first — the same eleven blocks consensus uses, or fewer near the start
+    /// of the chain. It is authenticated the way any header range is: each
+    /// header must link to its predecessor, and the last must hash to the block
+    /// the anchor already names. That final equality is what ties the window to
+    /// something already accepted; eleven arbitrary timestamps are not
+    /// median-time context.
+    ///
+    /// The recomputed median must equal the stored one. A mismatch drops the
+    /// anchor rather than correcting it: a saved value that disagrees with the
+    /// chain says the snapshot cannot be trusted piecemeal.
+    ///
+    /// Deliberately independent of SHV. Requiring a proof here would make the
+    /// compatibility path depend on the very service it exists to do without.
+    pub fn reauthenticate_anchor_window(
+        &mut self,
+        height: u32,
+        window: &[BlockHeaderBytes],
+    ) -> Result<(), HeaderViewError> {
+        let Some(anchor) = self.times.anchor_at(height) else {
+            return Err(HeaderViewError::NoAnchorAtHeight { height });
+        };
+        if window.is_empty() {
+            return Err(HeaderViewError::UnusableTimeWindow { height });
+        }
+        // Near the chain start the window is shorter, exactly as the median is.
+        let expected = MEDIAN_TIME_SPAN.min(height as usize + 1);
+        if window.len() != expected {
+            return Err(HeaderViewError::UnusableTimeWindow { height });
+        }
+
+        let mut previous: Option<Hash32> = None;
+        let mut times = Vec::with_capacity(window.len());
+        for header in window {
+            let parsed = optn_core::header_pow::verify_declared_pow(&header.0)
+                .map_err(|error| HeaderViewError::Verification(ShvMmrError::Header(error)))?;
+            if let Some(expected_prev) = previous {
+                if parsed.prev_hash != expected_prev {
+                    return Err(HeaderViewError::UnusableTimeWindow { height });
+                }
+            }
+            times.push(parsed.time);
+            previous = Some(parsed.hash);
+        }
+        // The window only means anything because it terminates at the block the
+        // anchor already commits to.
+        if previous != Some(anchor.block_hash) {
+            return Err(HeaderViewError::AnchorMismatch {
+                height,
+                retained: anchor.block_hash,
+            });
+        }
+
+        let recomputed =
+            median_time_past(&times).ok_or(HeaderViewError::UnusableTimeWindow { height })?;
+        self.times.authenticate(height, recomputed)?;
+        Ok(())
+    }
+
+    /// Retained anchors, and how many have been re-derived. Surfaced so a
+    /// caller can report coverage instead of implying full authentication.
+    pub fn anchor_authentication(&self) -> (usize, usize) {
+        (self.times.authenticated_count(), self.times.len())
     }
 
     /// Block-hash locator for asking a peer to resend headers from `height`.
@@ -501,9 +590,15 @@ impl VerifiedHeaderView {
                 height: anchor.height,
                 block_hash: anchor.block_hash,
                 median_time_past: anchor.median_time_past,
+                // Ordering survived the round trip; the timestamps behind the
+                // median did not come back authenticated. Until they are
+                // re-derived these are retrieval hints, not date answers.
+                trust: AnchorTrust::Provisional,
             })?;
         }
-        view.window = record.window.into_iter().collect();
+        // The trailing window feeds the next median, so a restored one is
+        // untrusted for the same reason and is rebuilt from live headers.
+        view.window.clear();
         Ok(view)
     }
 
@@ -823,6 +918,167 @@ mod tests {
             VerifiedHeaderView::restore(&tampered, Network::Chipnet, &trusted),
             Err(HeaderViewError::TimeIndex(_))
         ));
+    }
+
+    /// Whole-operation atomicity.
+    ///
+    /// `extend` validates through the verifier before it touches the anchor
+    /// index. A failure in the second half must not leave the accumulator ahead
+    /// of the index: the next extend would then compute a median from a window
+    /// that never saw the missing block.
+    #[test]
+    fn a_failure_after_verifier_validation_advances_nothing() {
+        let mut view = view_with_interval(1);
+        // Rising timestamps first, so anchors exist and the median is high.
+        let rising = (0..24u32)
+            .map(|i| 1_600_000_000 + i * 600)
+            .collect::<Vec<_>>();
+        let headers = chain(&rising);
+        view.extend(&headers).expect("rising chain extends");
+
+        let tip_before = view.tip().expect("a tip");
+        let anchors_before = view.times().anchors().to_vec();
+        let root_before = view.verifier().accumulator().root();
+
+        // A continuation whose timestamps collapse, dragging the sliding
+        // median backwards. The headers themselves are valid and link, so the
+        // verifier accepts them and the index is what refuses.
+        let mut collapsing = rising.clone();
+        collapsing.extend((0..12).map(|_| 1_500_000_000u32));
+        let longer = chain(&collapsing);
+        let error = view
+            .extend(&longer[headers.len()..])
+            .expect_err("a falling median must be refused");
+        assert!(
+            matches!(error, HeaderViewError::TimeIndex(_)),
+            "expected the index to refuse, got {error:?}"
+        );
+
+        assert_eq!(view.tip(), Some(tip_before), "the tip did not move");
+        assert_eq!(
+            view.verifier().accumulator().root(),
+            root_before,
+            "the accumulator did not advance"
+        );
+        assert_eq!(
+            view.times().anchors(),
+            anchors_before.as_slice(),
+            "the index did not advance"
+        );
+        // And the view is still usable afterwards.
+        let (authenticated, retained) = view.anchor_authentication();
+        assert_eq!(authenticated, retained);
+    }
+
+    /// A restored snapshot is monotonic but not authenticated. Its medians must
+    /// not answer a date question until they are re-derived.
+    #[test]
+    fn restored_anchors_are_provisional_until_reauthenticated() {
+        let (mut view, _) = bootstrapped_view();
+        let headers = chain(&wobbly_times(40));
+        view.extend(&headers[1..])
+            .expect("extends past the checkpoint");
+        // The host persists the commitment for the state it actually saved.
+        let trusted = view.checkpoint();
+        let (authenticated, retained) = view.anchor_authentication();
+        assert!(retained > 0 && authenticated == retained);
+
+        let encoded = view.encode().expect("encodes");
+        let restored =
+            VerifiedHeaderView::restore(&encoded, Network::Chipnet, &trusted).expect("restores");
+
+        let (authenticated, retained) = restored.anchor_authentication();
+        assert_eq!(authenticated, 0, "nothing comes back authenticated");
+        assert!(retained > 0, "but the anchors are still there");
+
+        // A date question is refused, and says why, rather than answered from
+        // a value nobody has vouched for.
+        assert_eq!(
+            restored.restore_start_for_time(u32::MAX, 0),
+            RestoreStart::Unavailable(RestoreStartUnavailable::AnchorsNotReauthenticated {
+                retained_anchors: retained,
+            })
+        );
+        // The hashes remain usable as retrieval hints -- that is the point of
+        // keeping them.
+        assert!(!restored.getheaders_locator(u32::MAX).is_empty());
+    }
+
+    /// The non-SHV path: re-derive the median from a linked header window.
+    ///
+    /// Also the case the directive singles out -- a genuine block, an altered
+    /// but still-monotonic saved median -- which must be refused.
+    #[test]
+    fn a_window_reauthenticates_an_anchor_and_catches_an_altered_median() {
+        let (mut view, _) = bootstrapped_view();
+        let times = wobbly_times(40);
+        let headers = chain(&times);
+        view.extend(&headers[1..]).expect("extends");
+        let trusted = view.checkpoint();
+        let encoded = view.encode().expect("encodes");
+
+        let anchor = view.times().newest().expect("an anchor");
+        let height = anchor.height as usize;
+        let window_len = MEDIAN_TIME_SPAN.min(height + 1);
+        let window = &headers[height + 1 - window_len..=height];
+
+        // Honest snapshot: the window re-derives the stored median.
+        let mut restored =
+            VerifiedHeaderView::restore(&encoded, Network::Chipnet, &trusted).expect("restores");
+        restored
+            .reauthenticate_anchor_window(anchor.height, window)
+            .expect("an honest window re-derives the stored median");
+        assert!(restored
+            .times()
+            .anchor_at(anchor.height)
+            .expect("still retained")
+            .is_authenticated());
+
+        // A window that does not terminate at the block the anchor names.
+        let mut restored =
+            VerifiedHeaderView::restore(&encoded, Network::Chipnet, &trusted).expect("restores");
+        let wrong = &headers[..window_len];
+        assert!(matches!(
+            restored.reauthenticate_anchor_window(anchor.height, wrong),
+            Err(HeaderViewError::AnchorMismatch { .. })
+        ));
+
+        // A window of the wrong length, and one that does not link.
+        let mut broken = window.to_vec();
+        broken.pop();
+        assert!(matches!(
+            restored.reauthenticate_anchor_window(anchor.height, &broken),
+            Err(HeaderViewError::UnusableTimeWindow { .. })
+        ));
+        let mut unlinked = window.to_vec();
+        unlinked[1] = headers[0].clone();
+        assert!(matches!(
+            restored.reauthenticate_anchor_window(anchor.height, &unlinked),
+            Err(HeaderViewError::UnusableTimeWindow { .. })
+        ));
+
+        // The altered-median case: the snapshot's ordering still holds, the
+        // block is genuine, and the stored time is a lie.
+        let stored = format!("\"median_time_past\":{}", anchor.median_time_past);
+        let bumped = format!("\"median_time_past\":{}", anchor.median_time_past + 1);
+        let altered = encoded.replace(&stored, &bumped);
+        assert_ne!(altered, encoded, "fixture must change the saved median");
+        let mut tampered = VerifiedHeaderView::restore(&altered, Network::Chipnet, &trusted)
+            .expect("an altered-but-monotonic snapshot still loads");
+        let error = tampered
+            .reauthenticate_anchor_window(anchor.height, window)
+            .expect_err("the recomputed median must not match");
+        assert!(
+            matches!(
+                error,
+                HeaderViewError::TimeIndex(
+                    optn_core::header_time::HeaderIndexError::MedianTimeMismatch { .. }
+                )
+            ),
+            "expected a median mismatch, got {error:?}"
+        );
+        // The anchor is dropped rather than corrected.
+        assert!(tampered.times().anchor_at(anchor.height).is_none());
     }
 
     /// `getheaders` takes a locator of block hashes, not a height, so a pruned
