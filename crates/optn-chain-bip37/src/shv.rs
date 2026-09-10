@@ -20,7 +20,21 @@
 use super::{read_varint, take, write_varint};
 
 /// Service bit advertising that a peer will answer `getshv`.
+///
+/// **Bit 9 is not unambiguous.** BCHD assigns the same bit to `SFNodeXThinner`
+/// (`gcash/bchd`, `wire/protocol.go`), so a BCHD node advertising XThinner is
+/// indistinguishable at the bit level from a BCHN node advertising SHV. The bit
+/// is therefore treated as a hint that a request is *worth trying*, never as
+/// evidence that a route works: a peer proves it by answering, and a peer that
+/// does not answer is reported unsupported rather than waited on.
 pub const NODE_SHV: u64 = 1 << 9;
+
+/// Messages read while waiting for an `shv` reply before giving up.
+///
+/// A peer that advertised bit 9 for another protocol will never answer, and on
+/// a busy connection it may send a great deal of unrelated traffic first. This
+/// bounds that wait to something short enough to fail over on.
+pub const MAX_MESSAGES_AWAITING_SHV: usize = 32;
 
 /// Bit 0: proof terminates at the bagged root rather than at a peak.
 pub const TYPE_PROOF_TO_ROOT: u8 = 1 << 0;

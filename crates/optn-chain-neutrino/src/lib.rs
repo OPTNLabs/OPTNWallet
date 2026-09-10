@@ -8,6 +8,7 @@
 //! wallet observations. Stronger chain trust still belongs to shared header
 //! verification/reconciliation.
 
+pub mod filter;
 pub mod gcs;
 
 use gcs::GcsFilter;
@@ -905,9 +906,15 @@ fn parse_relevant_block(
     }
     let mut txids = Vec::with_capacity((count as usize).min(1_000_000));
     let mut relevant = Vec::new();
-    for _ in 0..count {
+    for index in 0..count {
         let start = pos;
-        let touches_wallet = parse_tx_shape(block, &mut pos, watched_scripts, watched_outpoints)?;
+        let touches_wallet = parse_tx_shape(
+            block,
+            &mut pos,
+            index == 0,
+            watched_scripts,
+            watched_outpoints,
+        )?;
         let raw = block.get(start..pos).ok_or_else(|| {
             ChainBackendError::InvalidResponse("transaction slice overflow".into())
         })?;
@@ -935,9 +942,16 @@ fn parse_relevant_block(
     Ok(relevant)
 }
 
+/// Local matching, mirroring what BCHD puts in a basic filter.
+///
+/// `is_coinbase` is not cosmetic: the coinbase input spends the null outpoint
+/// and BCHD never adds it to a filter, so matching one here would find a
+/// "relevant" transaction no filter could ever have led us to. See
+/// [`crate::filter`] for the entry-set definition this mirrors.
 fn parse_tx_shape(
     data: &[u8],
     pos: &mut usize,
+    is_coinbase: bool,
     watched_scripts: &[Vec<u8>],
     watched_outpoints: &BTreeSet<([u8; 32], u32)>,
 ) -> Result<bool, ChainBackendError> {
@@ -952,7 +966,7 @@ fn parse_tx_shape(
     for _ in 0..input_count {
         let prev_txid: [u8; 32] = take(data, pos, 32)?.try_into().expect("fixed slice");
         let vout = read_u32(data, pos)?;
-        if watched_outpoints.contains(&(prev_txid, vout)) {
+        if !is_coinbase && watched_outpoints.contains(&(prev_txid, vout)) {
             relevant = true;
         }
         let script_len = usize::try_from(read_varint(data, pos)?)

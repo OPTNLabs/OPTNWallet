@@ -411,7 +411,10 @@ impl Bip37Backend {
             .await
             .map_err(|e| ChainBackendError::Protocol(format!("getshv send failed: {e}")))?;
 
-        for _ in 0..MAX_MESSAGES {
+        // Bounded: bit 9 is shared with BCHD's XThinner, so a peer that
+        // advertised it may have meant something else entirely and will never
+        // answer. Fail over instead of holding the connection open.
+        for _ in 0..shv::MAX_MESSAGES_AWAITING_SHV {
             let (command, body) = read_message(&mut stream, magic, io_timeout)
                 .await
                 .map_err(ChainBackendError::Protocol)?;
@@ -447,9 +450,11 @@ impl Bip37Backend {
                 _ => {}
             }
         }
-        Err(ChainBackendError::Protocol(
-            "peer never answered getshv".into(),
-        ))
+        // Not a protocol error on our side: the peer simply does not serve
+        // this, whatever its service bits claimed. Reported as unsupported so
+        // the planner can route elsewhere without treating the peer as broken
+        // for its other capabilities.
+        Err(ChainBackendError::Unsupported)
     }
 
     async fn broadcast(
