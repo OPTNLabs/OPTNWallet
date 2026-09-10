@@ -1213,7 +1213,10 @@ async fn scan_blocks_observed(
                 }
                 _ => {}
             }
-            if proven.as_ref().is_some_and(|txids| delivered.len() >= txids.len()) {
+            if proven
+                .as_ref()
+                .is_some_and(|txids| delivered.len() >= txids.len())
+            {
                 break;
             }
         }
@@ -1980,7 +1983,9 @@ mod tests {
                         let _ = socket
                             .write_all(&encode_message(magic, "version", &bloom_version()))
                             .await;
-                        let _ = socket.write_all(&encode_message(magic, "verack", &[])).await;
+                        let _ = socket
+                            .write_all(&encode_message(magic, "verack", &[]))
+                            .await;
                         while let Some((command, _)) = peer_read_message(&mut socket).await {
                             if command != "getdata" {
                                 continue;
