@@ -709,4 +709,35 @@ mod tests {
             .iter()
             .all(|failure| failure.error == REMOTE_NATIVE_CHAIN_TOR_ADAPTER_UNAVAILABLE));
     }
+
+    /// The provider crates keep separate copies of the network tables, and
+    /// they have to answer identically.
+    ///
+    /// They are reached over the same socket for the same wallet: if BIP37 and
+    /// Neutrino disagree about a network's genesis or wire magic, one of them
+    /// is talking to a chain the rest of the wallet is not on. Regtest was
+    /// missing from Neutrino's genesis table while present in its parameters,
+    /// which is the shape this catches.
+    #[test]
+    fn bip37_and_neutrino_agree_about_every_network() {
+        for network in [
+            "mainnet", "chipnet", "testnet4", "testnet", "testnet3", "regtest",
+        ] {
+            assert_eq!(
+                optn_chain_bip37::genesis_hash(network),
+                optn_chain_neutrino::genesis_hash(network),
+                "{network} genesis differs between BIP37 and Neutrino"
+            );
+            let bip37 = optn_chain_bip37::params_for(network);
+            let neutrino = optn_chain_neutrino::params_for(network);
+            assert_eq!(
+                bip37.magic, neutrino.magic,
+                "{network} wire magic differs between BIP37 and Neutrino"
+            );
+            assert_eq!(
+                bip37.default_port, neutrino.default_port,
+                "{network} default port differs between BIP37 and Neutrino"
+            );
+        }
+    }
 }

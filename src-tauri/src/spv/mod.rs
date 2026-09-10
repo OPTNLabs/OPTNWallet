@@ -43,7 +43,7 @@ const IO_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_PAYLOAD: usize = 2 * 1024 * 1024;
 
 /// Network magic + default P2P port for a BCH network (chainparams.cpp).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NetworkParams {
     pub magic: [u8; 4],
     pub default_port: u16,
@@ -348,6 +348,16 @@ pub fn genesis_hash(network: &str) -> [u8; 32] {
             0xcc, 0x18, 0x17, 0x75, 0x26, 0xce, 0x68, 0x86, 0x78, 0x9a, 0xc4, 0x10, 0xd4, 0x1d,
             0x00, 0x00, 0x00, 0x00,
         ],
+        // Regtest genesis, display hash
+        // 0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206,
+        // stored in internal order. `params_for` above already knew regtest,
+        // so without this arm a regtest peer was asked to commit to mainnet's
+        // genesis and every request for it went unanswered.
+        "regtest" => [
+            0x06, 0x22, 0x6e, 0x46, 0x11, 0x1a, 0x0b, 0x59, 0xca, 0xaf, 0x12, 0x60, 0x43, 0xeb,
+            0x5b, 0xbf, 0x28, 0xc3, 0x4f, 0x3a, 0x5e, 0x33, 0x2a, 0x1f, 0xc7, 0xb2, 0xb7, 0x3c,
+            0xf1, 0x88, 0x91, 0x0f,
+        ],
         "testnet" | "testnet3" => [
             0x43, 0x49, 0x7f, 0xd7, 0xf8, 0x26, 0x95, 0x71, 0x08, 0xf4, 0xa3, 0x0f, 0xd9, 0xce,
             0xc3, 0xae, 0xba, 0x79, 0x97, 0x20, 0x84, 0xe9, 0x0e, 0xad, 0x01, 0xea, 0x33, 0x09,
@@ -358,6 +368,55 @@ pub fn genesis_hash(network: &str) -> [u8; 32] {
             0xf7, 0x4f, 0x93, 0x1e, 0x83, 0x65, 0xe1, 0x5a, 0x08, 0x9c, 0x68, 0xd6, 0x19, 0x00,
             0x00, 0x00, 0x00, 0x00,
         ],
+    }
+}
+
+#[cfg(test)]
+mod network_map_agreement {
+    use super::{genesis_hash, params_for};
+
+    /// A network with parameters of its own must have a genesis of its own.
+    ///
+    /// This table is the third copy of the same map, and all three end in a
+    /// catch-all returning mainnet. A network added to `params_for` and
+    /// forgotten in `genesis_hash` therefore fails quietly: the handshake
+    /// succeeds against the right chain and every block request names a
+    /// genesis that chain has never heard of.
+    #[test]
+    fn every_network_with_its_own_params_has_its_own_genesis() {
+        let mainnet_params = params_for("mainnet");
+        let mainnet_genesis = genesis_hash("mainnet");
+        for network in ["chipnet", "testnet4", "testnet", "testnet3", "regtest"] {
+            assert_ne!(
+                params_for(network),
+                mainnet_params,
+                "{network} has no parameters of its own"
+            );
+            assert_ne!(
+                genesis_hash(network),
+                mainnet_genesis,
+                "{network} falls through to mainnet's genesis"
+            );
+        }
+    }
+
+    /// Copies of a table drift. This one has to agree with the store the
+    /// providers are actually seeded from, or the legacy SPV path and the
+    /// chain runtime disagree about which chain the wallet is on.
+    #[test]
+    fn this_copy_agrees_with_the_accepted_header_store() {
+        use optn_runtime::header_store::BlockHeaderSource;
+
+        for network in ["mainnet", "chipnet", "testnet4", "regtest"] {
+            let seeded = optn_chain_native::new_accepted_header_store(network)
+                .hash_at(0)
+                .expect("the store is seeded at genesis");
+            assert_eq!(
+                genesis_hash(network),
+                seeded,
+                "{network} genesis differs between the SPV table and the accepted store"
+            );
+        }
     }
 }
 
