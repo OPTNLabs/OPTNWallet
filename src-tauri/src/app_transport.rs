@@ -18,6 +18,18 @@ pub async fn optn_wallet_refresh(
     runtime.refresh_wallet().await
 }
 
+/// Rescan the open wallet from a chosen block height, inclusive.
+///
+/// The height is the holder's instruction. It does not touch keys, and it does
+/// not touch the accepted chain the rest of the application reads.
+#[tauri::command]
+pub async fn optn_wallet_rescan(
+    runtime: tauri::State<'_, Arc<NativeChainRuntime>>,
+    height: u32,
+) -> Result<(), String> {
+    runtime.rescan_wallet_from(height).await
+}
+
 /// Forward authentication requests to the shared Rust runtime.
 ///
 /// Passes through runtime validation and service messages; other error kinds

@@ -12,9 +12,9 @@ use optn_app::{
     FeatureFlags, FeeMode, FeePreferences, FeeRate, FlipstarterPledge, FreezeReason,
     HardwareSessionState, HardwareSetupPreview, HardwareVendor, HistoryEntry, HistoryKind,
     ImportStep, LedgerLink, MultisigSetupPreview, MultisigStep, Network, NetworkServers,
-    OpenedWallet, Outpoint, PledgeStatus, ServerKind, ServerOverrides, SettingsRowId, SpendKind,
-    SpendPlan, ThemeMode, UiSkin, WalletKind, WalletSyncView, WatchOnlyKind, WatchOnlySetupPreview,
-    RELAY_MINIMUM_FEE_RATE,
+    OpenedWallet, Outpoint, PledgeStatus, ScanCoverageView, ServerKind, ServerOverrides,
+    SettingsRowId, SpendKind, SpendPlan, ThemeMode, UiSkin, WalletKind, WalletSyncView,
+    WatchOnlyKind, WatchOnlySetupPreview, RELAY_MINIMUM_FEE_RATE,
 };
 pub mod host;
 pub mod security;
@@ -59,6 +59,19 @@ pub trait AppTransport {
         &'a self,
         _request: WalletSecurityRequest,
     ) -> TransportFuture<'a, WalletSecurityStatus> {
+        Box::pin(async { Err(TransportError::Unsupported) })
+    }
+
+    /// Rescan this wallet from `height`, inclusive.
+    ///
+    /// Separate from `dispatch` because a scan is work rather than a state
+    /// change: the action records that the holder asked, and this performs it.
+    /// Keys are untouched and the shared chain authority is untouched -- only
+    /// this wallet's scan floor moves.
+    ///
+    /// Defaulted to `Unsupported` so a shell with no chain runtime is honest
+    /// rather than silently accepting a request nothing will act on.
+    fn rescan_from_height<'a>(&'a self, _height: u32) -> TransportFuture<'a, ()> {
         Box::pin(async { Err(TransportError::Unsupported) })
     }
 
@@ -342,6 +355,35 @@ impl From<WireHistoryEntry> for HistoryEntry {
     }
 }
 
+/// What a scan covers, when the wallet is knowingly short of full history.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct WireScanCoverage {
+    pub from_height: u32,
+    pub skipped_below: Option<u32>,
+    pub chosen_by_holder: bool,
+}
+
+impl From<&ScanCoverageView> for WireScanCoverage {
+    fn from(value: &ScanCoverageView) -> Self {
+        Self {
+            from_height: value.from_height,
+            skipped_below: value.skipped_below,
+            chosen_by_holder: value.chosen_by_holder,
+        }
+    }
+}
+
+impl From<WireScanCoverage> for ScanCoverageView {
+    fn from(value: WireScanCoverage) -> Self {
+        Self {
+            from_height: value.from_height,
+            skipped_below: value.skipped_below,
+            chosen_by_holder: value.chosen_by_holder,
+        }
+    }
+}
+
 /// Missing sync metadata means stale data and an unknown balance.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -356,6 +398,8 @@ pub struct WireWalletSyncView {
     pub pending_sats: i64,
     pub history: Vec<WireHistoryEntry>,
     pub error: Option<String>,
+    pub scan_coverage: Option<WireScanCoverage>,
+    pub rescan_requested: Option<u32>,
 }
 
 impl From<&WalletSyncView> for WireWalletSyncView {
@@ -371,6 +415,8 @@ impl From<&WalletSyncView> for WireWalletSyncView {
             pending_sats: value.pending_sats,
             history: value.history.iter().map(WireHistoryEntry::from).collect(),
             error: value.error.clone(),
+            scan_coverage: value.scan_coverage.as_ref().map(WireScanCoverage::from),
+            rescan_requested: value.rescan_requested,
         }
     }
 }
@@ -388,6 +434,8 @@ impl From<WireWalletSyncView> for WalletSyncView {
             pending_sats: value.pending_sats,
             history: value.history.into_iter().map(HistoryEntry::from).collect(),
             error: value.error,
+            scan_coverage: value.scan_coverage.map(ScanCoverageView::from),
+            rescan_requested: value.rescan_requested,
         }
     }
 }
@@ -500,6 +548,9 @@ pub enum WireActionKind {
     },
     DisconnectHardware,
     HideWalletIdentity,
+    RequestRescanFrom {
+        height: u32,
+    },
     SetStealthSats {
         sats: u64,
     },
@@ -1189,6 +1240,7 @@ impl From<AppAction> for WireAction {
             },
             AppAction::DisconnectHardware => WireActionKind::DisconnectHardware,
             AppAction::HideWalletIdentity => WireActionKind::HideWalletIdentity,
+            AppAction::RequestRescanFrom { height } => WireActionKind::RequestRescanFrom { height },
             AppAction::SetStealthSats(sats) => WireActionKind::SetStealthSats { sats },
             AppAction::SetServer { kind, entry } => WireActionKind::SetServer {
                 kind: kind.id().to_string(),
@@ -1374,6 +1426,7 @@ impl TryFrom<WireAction> for AppAction {
             },
             WireActionKind::DisconnectHardware => Self::DisconnectHardware,
             WireActionKind::HideWalletIdentity => Self::HideWalletIdentity,
+            WireActionKind::RequestRescanFrom { height } => Self::RequestRescanFrom { height },
             WireActionKind::SetStealthSats { sats } => Self::SetStealthSats(sats),
             WireActionKind::SetServer { kind, entry } => Self::SetServer {
                 // An unknown kind is refused rather than defaulted: writing a
@@ -2170,6 +2223,12 @@ mod tests {
                 })
                 .collect(),
                 error: Some("refresh failed; retaining prior history".into()),
+                scan_coverage: Some(ScanCoverageView {
+                    from_height: 200_000,
+                    skipped_below: Some(150_000),
+                    chosen_by_holder: true,
+                }),
+                rescan_requested: Some(200_000),
             },
             ..AppState::default()
         };
@@ -2371,5 +2430,44 @@ mod tests {
         };
         let decoded = AppAction::try_from(WireAction::from(action.clone())).unwrap();
         assert_eq!(decoded, action);
+    }
+
+    /// A rescan instruction has to survive the renderer boundary intact.
+    ///
+    /// A height that arrives as a different number, or not at all, means the
+    /// wallet reads a stretch of chain nobody asked for.
+    #[test]
+    fn wire_round_trip_preserves_a_rescan_instruction() {
+        let action = AppAction::RequestRescanFrom { height: 812_345 };
+        let decoded = AppAction::try_from(WireAction::from(action.clone())).unwrap();
+        assert_eq!(decoded, action);
+    }
+
+    /// So does what the wallet says its scan covers.
+    #[test]
+    fn wire_round_trip_preserves_scan_coverage() {
+        let view = WalletSyncView {
+            scan_coverage: Some(ScanCoverageView {
+                from_height: 700_000,
+                skipped_below: Some(650_000),
+                chosen_by_holder: true,
+            }),
+            rescan_requested: Some(700_000),
+            ..WalletSyncView::empty()
+        };
+        let decoded = WalletSyncView::from(WireWalletSyncView::from(&view));
+        assert_eq!(decoded.scan_coverage, view.scan_coverage);
+        assert_eq!(decoded.rescan_requested, Some(700_000));
+    }
+
+    /// A renderer built before rescans existed still decodes.
+    #[test]
+    fn a_sync_view_without_coverage_fields_still_decodes() {
+        let legacy = r#"{"refreshing":false,"history_fresh":true,"confirmed_sats":10}"#;
+        let wire: WireWalletSyncView = serde_json::from_str(legacy).expect("legacy view decodes");
+        let view = WalletSyncView::from(wire);
+        assert_eq!(view.confirmed_sats, Some(10));
+        assert_eq!(view.scan_coverage, None);
+        assert_eq!(view.rescan_requested, None);
     }
 }
