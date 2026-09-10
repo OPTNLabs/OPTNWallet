@@ -99,30 +99,14 @@ fn varint(raw: &[u8], pos: &mut usize) -> u64 {
     }
 }
 
-#[tokio::test]
-#[ignore = "requires a local regtest node; see the module docs for how to start one"]
-async fn a_wallet_finds_its_own_coins_through_bchd_filters() {
-    let (address, script) = wallet_script();
-    println!("wallet address: {address}");
-
-    // Connecting runs the genesis-filter probe. If OPTN and the node disagreed
-    // about which chain this is, the probe would find nothing to commit to and
-    // the capability would come back unusable rather than wrong.
-    let store = seeded_store("regtest");
-    let backend = NeutrinoBackend::connect(
-        NeutrinoConfig::new(SourceId::new("regtest-neutrino"), endpoint(), "regtest"),
-        store.clone() as Arc<dyn BlockHeaderSource>,
-    )
-    .await
-    .expect("the node accepts a connection and the genesis filter commits");
-    assert!(
-        backend.probe().serves_compact_filters,
-        "the node must serve compact filters; start it without --nocfilters"
-    );
-
-    // The provider hands back headers and stores nothing. Verification and
-    // acceptance happen here, exactly as the runtime does them, and only what
-    // is accepted becomes the chain the scan below runs against.
+/// Pull the chain in, verifying every batch before it is accepted.
+///
+/// The provider stores nothing; acceptance happens here, exactly as the
+/// runtime does it, so the scans below read a chain this test verified.
+async fn sync_accepted_headers(
+    backend: &NeutrinoBackend,
+    store: &SharedHeaders,
+) -> VerifiedHeaderView {
     let verifier = optn_runtime::header_verifier::regtest_header_verifier()
         .expect("the regtest verifier anchors at genesis");
     let mut view = VerifiedHeaderView::with_anchor_interval(Network::Regtest, verifier, 16);
@@ -159,6 +143,69 @@ async fn a_wallet_finds_its_own_coins_through_bchd_filters() {
             break;
         }
     }
+    view
+}
+
+/// One compact-filter scan over the accepted chain.
+async fn refresh(
+    backend: &NeutrinoBackend,
+    interests: Vec<WalletInterest>,
+) -> Vec<optn_runtime::chain_service::ObservedTransaction> {
+    let observation = backend
+        .execute(&ChainRequest::WalletRefresh {
+            interests,
+            from_height: Some(1),
+        })
+        .await
+        .expect("the compact-filter scan completes");
+    let ChainPayload::WalletRefresh { transactions, .. } = observation.payload else {
+        panic!("expected a WalletRefresh payload");
+    };
+    transactions
+}
+
+/// The outpoints a transaction spends.
+fn inputs(raw: &[u8]) -> Vec<([u8; 32], u32)> {
+    let mut pos = 4usize; // version
+    let count = varint(raw, &mut pos);
+    let mut found = Vec::new();
+    for _ in 0..count {
+        let txid: [u8; 32] = raw[pos..pos + 32].try_into().expect("an outpoint txid");
+        pos += 32;
+        let vout = u32::from_le_bytes(raw[pos..pos + 4].try_into().expect("an outpoint index"));
+        pos += 4;
+        let len = varint(raw, &mut pos) as usize;
+        pos += len + 4; // scriptSig, then sequence
+        found.push((txid, vout));
+    }
+    found
+}
+
+#[tokio::test]
+#[ignore = "requires a local regtest node; see the module docs for how to start one"]
+async fn a_wallet_finds_its_own_coins_through_bchd_filters() {
+    let (address, script) = wallet_script();
+    println!("wallet address: {address}");
+
+    // Connecting runs the genesis-filter probe. If OPTN and the node disagreed
+    // about which chain this is, the probe would find nothing to commit to and
+    // the capability would come back unusable rather than wrong.
+    let store = seeded_store("regtest");
+    let backend = NeutrinoBackend::connect(
+        NeutrinoConfig::new(SourceId::new("regtest-neutrino"), endpoint(), "regtest"),
+        store.clone() as Arc<dyn BlockHeaderSource>,
+    )
+    .await
+    .expect("the node accepts a connection and the genesis filter commits");
+    assert!(
+        backend.probe().serves_compact_filters,
+        "the node must serve compact filters; start it without --nocfilters"
+    );
+
+    // The provider hands back headers and stores nothing. Verification and
+    // acceptance happen here, exactly as the runtime does them, and only what
+    // is accepted becomes the chain the scan below runs against.
+    let view = sync_accepted_headers(&backend, &store).await;
     let (tip_height, _) = store.tip().expect("a tip after syncing");
     assert!(
         tip_height > 0,
@@ -255,4 +302,191 @@ async fn a_regtest_node_does_not_answer_for_mainnet() {
             "a regtest node reported working mainnet compact filters"
         ),
     }
+}
+
+/// Everything below drives the node's RPC, and only to build the fixture:
+/// mining a block and relaying a transaction. Nothing read here reaches the
+/// wallet path under test -- discovery stays on compact filters over P2P.
+mod fixture {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+
+    fn base64(bytes: &[u8]) -> String {
+        const ALPHABET: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::new();
+        for chunk in bytes.chunks(3) {
+            let b = [
+                chunk[0],
+                chunk.get(1).copied().unwrap_or(0),
+                chunk.get(2).copied().unwrap_or(0),
+            ];
+            let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+            for index in 0..4 {
+                if index <= chunk.len() {
+                    out.push(ALPHABET[((n >> (18 - 6 * index)) & 0x3f) as usize] as char);
+                } else {
+                    out.push('=');
+                }
+            }
+        }
+        out
+    }
+
+    /// One JSON-RPC call against the local node. Loopback only.
+    pub fn call(method: &str, params: &str) -> String {
+        let endpoint =
+            std::env::var("OPTN_REGTEST_RPC").unwrap_or_else(|_| "127.0.0.1:18443".into());
+        let user = std::env::var("OPTN_REGTEST_RPC_USER").unwrap_or_else(|_| "optn".into());
+        let pass = std::env::var("OPTN_REGTEST_RPC_PASS")
+            .unwrap_or_else(|_| "regtest-only-not-a-secret".into());
+        let body =
+            format!(r#"{{"jsonrpc":"1.0","id":"optn","method":"{method}","params":{params}}}"#);
+        let request = format!(
+            "POST / HTTP/1.1\r\nHost: {endpoint}\r\nAuthorization: Basic {}\r\n\
+             Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            base64(format!("{user}:{pass}").as_bytes()),
+            body.len()
+        );
+        let mut stream = TcpStream::connect(&endpoint).expect("the node's RPC is reachable");
+        stream.write_all(request.as_bytes()).expect("send");
+        let mut response = String::new();
+        stream.read_to_string(&mut response).expect("read");
+        assert!(
+            response.contains("\"error\":null"),
+            "{method} failed: {response}"
+        );
+        response
+    }
+
+    pub fn mine(blocks: u32) {
+        call("generate", &format!("[{blocks}]"));
+    }
+
+    pub fn relay(raw_hex: &str) {
+        call("sendrawtransaction", &format!("[\"{raw_hex}\"]"));
+    }
+}
+
+/// Receive, then spend, learned in that order and no other.
+///
+/// A restoring wallet begins with a script. The outpoint it must later watch
+/// to notice a spend can only come out of the receive scan, so this test may
+/// not know it either -- handing it over up front would prove the matcher
+/// works on data no real wallet has yet.
+///
+/// The spend deliberately pays a script this wallet does not watch. Paying
+/// itself again would let the receive interest match the spend, and the
+/// outpoint path this exists to exercise would never run.
+#[tokio::test]
+#[ignore = "requires a local regtest node; see the module docs for how to start one"]
+async fn a_spend_is_found_through_an_outpoint_the_receive_scan_discovered() {
+    use optn_core::tx::{double_sha256, Output, Transaction, Utxo};
+
+    let (address, script) = wallet_script();
+    let store = seeded_store("regtest");
+    let backend = NeutrinoBackend::connect(
+        NeutrinoConfig::new(SourceId::new("regtest-lifecycle"), endpoint(), "regtest"),
+        store.clone() as Arc<dyn BlockHeaderSource>,
+    )
+    .await
+    .expect("connect");
+
+    // ---- receive ----
+    sync_accepted_headers(&backend, &store).await;
+    let (tip, _) = store.tip().expect("a tip after syncing");
+    let received = refresh(&backend, vec![WalletInterest::script(script.clone())]).await;
+    assert!(!received.is_empty(), "mine some blocks to {address} first");
+
+    // ---- discover, from that scan alone ----
+    // Newest mature first: an older coinbase may already have been spent by a
+    // previous run on this chain, and a receive scan cannot tell.
+    let mut candidates: Vec<_> = received.iter().collect();
+    candidates.sort_by_key(|transaction| std::cmp::Reverse(transaction.block_height));
+    let mut spendable = None;
+    for transaction in candidates {
+        let Some(height) = transaction.block_height else {
+            continue;
+        };
+        if tip < height + 100 {
+            continue; // regtest coinbase maturity
+        }
+        if let Some((index, (value, out_script))) = outputs(&transaction.raw)
+            .into_iter()
+            .enumerate()
+            .find(|(_, (_, candidate))| *candidate == script)
+        {
+            spendable = Some(Utxo {
+                txid: transaction.txid,
+                vout: index as u32,
+                value,
+                script_pubkey: out_script,
+            });
+            break;
+        }
+    }
+    let utxo = spendable.expect("a mature coinbase paying this wallet");
+
+    // ---- spend it somewhere this wallet is not watching ----
+    let wallet = Wallet::from_mnemonic(BIP39_TEST_VECTOR_MNEMONIC, "").expect("test mnemonic");
+    let path = address_path(1, 0, false, 0);
+    let elsewhere = wallet
+        .address(Network::Regtest, &address_path(1, 0, true, 0))
+        .expect("a change address")
+        .script_pubkey();
+    assert_ne!(elsewhere, script, "the spend must leave the watched script");
+    let spend = Transaction::new(
+        vec![utxo.clone()],
+        vec![Output::new(utxo.value - 1_000, elsewhere)],
+    );
+    let key = wallet.signing_key(&path).expect("the key for this address");
+    let raw = spend.sign(&[key]).expect("sign");
+    let txid = double_sha256(&raw);
+    let raw_hex: String = raw.iter().map(|byte| format!("{byte:02x}")).collect();
+
+    fixture::relay(&raw_hex);
+    fixture::mine(1);
+
+    // ---- and find it, through the outpoint only ----
+    let store = seeded_store("regtest");
+    let backend = NeutrinoBackend::connect(
+        NeutrinoConfig::new(
+            SourceId::new("regtest-lifecycle-after"),
+            endpoint(),
+            "regtest",
+        ),
+        store.clone() as Arc<dyn BlockHeaderSource>,
+    )
+    .await
+    .expect("connect");
+    sync_accepted_headers(&backend, &store).await;
+
+    let by_script = refresh(&backend, vec![WalletInterest::script(script.clone())]).await;
+    assert!(
+        !by_script.iter().any(|transaction| transaction.txid == txid),
+        "the spend pays elsewhere, so a script-only scan must not see it -- \
+         otherwise this test proves nothing about outpoints"
+    );
+
+    let with_outpoint = refresh(
+        &backend,
+        vec![
+            WalletInterest::script(script),
+            WalletInterest::Outpoint {
+                txid: utxo.txid,
+                vout: utxo.vout,
+            },
+        ],
+    )
+    .await;
+    let found = with_outpoint
+        .iter()
+        .find(|transaction| transaction.txid == txid)
+        .expect("the spend must be found through its spent outpoint");
+    assert!(
+        inputs(&found.raw)
+            .into_iter()
+            .any(|outpoint| outpoint == (utxo.txid, utxo.vout)),
+        "the matched transaction must actually spend the discovered outpoint"
+    );
 }
