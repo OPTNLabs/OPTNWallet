@@ -29,6 +29,7 @@ pub mod explorer;
 pub mod hd_sync;
 /// Provider-neutral SHV/MMR header verification using the pure optn-core accumulator.
 pub mod header_verifier;
+pub mod header_view;
 /// Versioned user-network overlay and bootstrap-refresh migration scaffolding.
 pub mod network_config;
 /// Evidence-aware wallet-state reconciliation. Partial/failed providers never

@@ -28,6 +28,7 @@ pub mod hd;
 pub mod header_hash;
 pub mod header_mmr;
 pub mod header_pow;
+pub mod header_time;
 pub mod multisig;
 pub mod multisig_session;
 pub mod network;
