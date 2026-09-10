@@ -272,6 +272,51 @@ impl VerifiedHeaderView {
     /// commits to, and to the root **this runtime built** rather than the root
     /// the proof arrived with. A provider's own root is an assertion; matching
     /// it against the accumulator is what turns it into evidence.
+    /// Accept a proof that terminates at a peak rather than at the bagged root.
+    ///
+    /// The SHV wire protocol offers both. A peak proof is shorter, and a client
+    /// that already holds the peaks -- which this view does, that being the
+    /// whole point of the accumulator -- can check it without bagging. The
+    /// binding is the same: the claimed peak must be one of *ours*, not one the
+    /// peer supplied alongside its own proof.
+    pub fn accept_historical_peak_proof(
+        &self,
+        network: Network,
+        proof: &HistoricalHeaderProof,
+    ) -> Result<Evidence, HeaderViewError> {
+        if network != self.network {
+            return Err(HeaderViewError::NetworkMismatch {
+                expected: self.network,
+                actual: network,
+            });
+        }
+        let accumulator = self.verifier.accumulator();
+        if !accumulator.peaks().contains(&proof.target) {
+            return Err(HeaderViewError::UnacceptedRoot {
+                expected: accumulator.root(),
+                offered: proof.target,
+            });
+        }
+        let leaf_count = accumulator.leaf_count();
+        if u64::from(proof.height) >= leaf_count {
+            return Err(HeaderViewError::HeightOutsideAccumulator {
+                height: proof.height,
+                leaf_count,
+            });
+        }
+        let parsed = optn_core::header_pow::verify_declared_pow(&proof.header.0)
+            .map_err(|error| HeaderViewError::Verification(ShvMmrError::Header(error)))?;
+        if !accumulator.verify_proof_to_peak(u64::from(proof.height), parsed.hash, &proof.proof) {
+            return Err(HeaderViewError::Verification(
+                ShvMmrError::HistoricalProofInvalid,
+            ));
+        }
+        Ok(Evidence::HeaderMmrProven {
+            block_hash: parsed.hash,
+            height: proof.height,
+        })
+    }
+
     pub fn accept_historical_proof(
         &self,
         network: Network,
@@ -679,6 +724,85 @@ mod tests {
             VerifiedHeaderView::restore(&tampered, Network::Chipnet, &trusted),
             Err(HeaderViewError::TimeIndex(_))
         ));
+    }
+
+    /// A peak proof is bound to one of *our* peaks, not to whatever the peer
+    /// sent alongside it.
+    #[test]
+    fn a_peak_proof_binds_to_a_peak_this_runtime_holds() {
+        let mut view = view_with_interval(4);
+        let headers = chain(&wobbly_times(11));
+        view.extend(&headers).expect("extends");
+
+        let accumulator = view.verifier().accumulator();
+        assert!(
+            accumulator.peak_count() > 1,
+            "fixture should have several peaks"
+        );
+
+        // Leaf 0 lives under the tallest peak. Rebuild its path to that peak
+        // independently of the crate under test.
+        let leaves: Vec<[u8; 32]> = headers.iter().map(|h| sha256d(&h.0)).collect();
+        let tallest = accumulator.peaks()[0];
+        let mut level: Vec<[u8; 32]> = leaves[..8].to_vec();
+        let mut siblings = Vec::new();
+        let mut index = 0usize;
+        while level.len() > 1 {
+            siblings.push(level[index ^ 1]);
+            let mut next = Vec::with_capacity(level.len() / 2);
+            let mut i = 0;
+            while i + 1 < level.len() {
+                let mut joined = Vec::with_capacity(64);
+                joined.extend_from_slice(&level[i]);
+                joined.extend_from_slice(&level[i + 1]);
+                next.push(sha256d(&joined));
+                i += 2;
+            }
+            level = next;
+            index /= 2;
+        }
+        assert_eq!(level[0], tallest, "rebuilt the tallest peak independently");
+
+        let proof = HistoricalHeaderProof {
+            height: 0,
+            header: headers[0].clone(),
+            proof: siblings.clone(),
+            target: tallest,
+        };
+        assert_eq!(
+            view.accept_historical_peak_proof(Network::Chipnet, &proof),
+            Ok(Evidence::HeaderMmrProven {
+                block_hash: leaves[0],
+                height: 0,
+            })
+        );
+
+        // A peak we do not hold is refused even with a self-consistent proof.
+        let mut foreign = proof.clone();
+        foreign.target[0] ^= 1;
+        assert!(matches!(
+            view.accept_historical_peak_proof(Network::Chipnet, &foreign),
+            Err(HeaderViewError::UnacceptedRoot { .. })
+        ));
+
+        // Wrong network, and a height the accumulator does not commit to.
+        assert!(matches!(
+            view.accept_historical_peak_proof(Network::Mainnet, &proof),
+            Err(HeaderViewError::NetworkMismatch { .. })
+        ));
+        let mut too_high = proof.clone();
+        too_high.height = 10_000;
+        assert!(matches!(
+            view.accept_historical_peak_proof(Network::Chipnet, &too_high),
+            Err(HeaderViewError::HeightOutsideAccumulator { .. })
+        ));
+
+        // A tampered sibling fails verification rather than being waved through.
+        let mut tampered = proof.clone();
+        tampered.proof[0][0] ^= 1;
+        assert!(view
+            .accept_historical_peak_proof(Network::Chipnet, &tampered)
+            .is_err());
     }
 
     #[test]
