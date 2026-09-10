@@ -57,6 +57,9 @@ fn network_copy(network: Network) -> (&'static str, &'static str) {
     match network {
         Network::Mainnet => ("Mainnet", "Real BCH network"),
         Network::Chipnet => ("Chipnet", "BCH testing network"),
+        // Its own prefix, genesis and no retargeting -- named so a regtest
+        // wallet is never mistaken on screen for one on a shared network.
+        Network::Regtest => ("Regtest", "Locally mined chain for testing"),
     }
 }
 
