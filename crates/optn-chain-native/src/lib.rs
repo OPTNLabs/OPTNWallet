@@ -274,6 +274,20 @@ fn fresh_tor_isolation_token() -> String {
     format!("optn-chain-{}", hex::encode(token))
 }
 
+/// An empty accepted-header store for `network`, seeded with its genesis.
+///
+/// Genesis is chain identity rather than anything a peer supplied, and
+/// `getheaders` needs a locator to start from on a fresh install. Hosts that
+/// keep the accepted chain across provider rebuilds create it here so the seed
+/// is defined in one place.
+pub fn new_accepted_header_store(network: &str) -> Arc<optn_runtime::header_store::SharedHeaders> {
+    let store = optn_runtime::header_store::SharedHeaders::default();
+    store.write(|retained| {
+        retained.insert_hash_only(0, optn_chain_bip37::genesis_hash(network));
+    });
+    Arc::new(store)
+}
+
 pub async fn build_native_chain_stack(
     catalog: SourceCatalog,
     policy: ConnectionPolicy,
@@ -281,7 +295,34 @@ pub async fn build_native_chain_stack(
     secrets: &NativeChainSecrets,
 ) -> NativeChainStack {
     let tor_status = default_tor_status(&catalog, &policy).await;
-    build_native_chain_stack_with_tor_status(catalog, policy, network, secrets, tor_status).await
+    build_native_chain_stack_with_tor_status(catalog, policy, network, secrets, tor_status, None)
+        .await
+}
+
+/// Build a stack whose providers read a store the caller already owns.
+///
+/// A stack is rebuilt whenever policy, sources or credentials change, but the
+/// accepted chain is not a property of a provider set: it is what the runtime
+/// has verified, and it has to survive a source being swapped out. A host that
+/// lets the store be rebuilt with the stack throws away every accepted header
+/// each time the user edits a setting, and the next scan starts from genesis.
+pub async fn build_native_chain_stack_with_headers(
+    catalog: SourceCatalog,
+    policy: ConnectionPolicy,
+    network: &str,
+    secrets: &NativeChainSecrets,
+    headers: Arc<optn_runtime::header_store::SharedHeaders>,
+) -> NativeChainStack {
+    let tor_status = default_tor_status(&catalog, &policy).await;
+    build_native_chain_stack_with_tor_status(
+        catalog,
+        policy,
+        network,
+        secrets,
+        tor_status,
+        Some(headers),
+    )
+    .await
 }
 
 async fn build_native_chain_stack_with_tor_status(
@@ -290,17 +331,12 @@ async fn build_native_chain_stack_with_tor_status(
     network: &str,
     secrets: &NativeChainSecrets,
     tor_status: TorStatus,
+    supplied_headers: Option<Arc<optn_runtime::header_store::SharedHeaders>>,
 ) -> NativeChainStack {
     // One store for the whole stack. Seeded with the network's genesis, which
     // is chain identity rather than anything a peer supplied, so `getheaders`
     // has a locator to start from on a fresh install.
-    let headers = {
-        let store = optn_runtime::header_store::SharedHeaders::default();
-        store.write(|retained| {
-            retained.insert_hash_only(0, optn_chain_bip37::genesis_hash(network));
-        });
-        Arc::new(store)
-    };
+    let headers = supplied_headers.unwrap_or_else(|| new_accepted_header_store(network));
     let selected = selected_source_ids(&catalog, &policy);
     let sources = catalog.iter().cloned().collect::<Vec<_>>();
     let mut service = ChainService::new(catalog, policy.clone());
@@ -401,7 +437,7 @@ async fn build_native_chain_stack_with_tor_status(
                                 proxy_port: socks_port,
                             };
                         }
-                        match NeutrinoBackend::connect(config).await {
+                        match NeutrinoBackend::connect(config, headers.clone()).await {
                             Ok(provider) => service.register(Arc::new(provider)),
                             Err(error) => failures.push(failure(
                                 &source,
@@ -594,6 +630,7 @@ mod tests {
             "chipnet",
             &NativeChainSecrets::default(),
             TorStatus::Absent,
+            None,
         )
         .await;
 
@@ -661,6 +698,7 @@ mod tests {
             "chipnet",
             &NativeChainSecrets::default(),
             TorStatus::Verified { socks_port: 9050 },
+            None,
         )
         .await;
 
