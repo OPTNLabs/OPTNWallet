@@ -1221,6 +1221,7 @@ mod tests {
             half_life: 172_800,
             ideal_block_time: 600,
             max_bits: 0x207f_ffff,
+            retargets: true,
         };
         let anchor = AsertAnchor {
             height: 1,

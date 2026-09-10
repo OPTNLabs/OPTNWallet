@@ -18,11 +18,15 @@
 //! BCHD serves compact filters by default, so no extra flag is needed. Set
 //! `OPTN_REGTEST_P2P` if it is not on `127.0.0.1:18444`.
 
-use optn_chain_neutrino::{NeutrinoBackend, NeutrinoConfig};
+use std::sync::Arc;
+
+use optn_chain_neutrino::{genesis_hash, NeutrinoBackend, NeutrinoConfig};
 use optn_core::hd::{address_path, Wallet, BIP39_TEST_VECTOR_MNEMONIC};
 use optn_core::network::Network;
-use optn_runtime::chain::{Endpoint, EndpointKind, SourceId};
+use optn_runtime::chain::{BlockHeaderBytes, Endpoint, EndpointKind, SourceId};
 use optn_runtime::chain_service::{ChainBackend, ChainPayload, ChainRequest, WalletInterest};
+use optn_runtime::header_store::{BlockHeaderSource, SharedHeaders};
+use optn_runtime::header_view::VerifiedHeaderView;
 
 fn endpoint() -> Endpoint {
     let raw = std::env::var("OPTN_REGTEST_P2P").unwrap_or_else(|_| "127.0.0.1:18444".into());
@@ -65,6 +69,13 @@ fn outputs(raw: &[u8]) -> Vec<(u64, Vec<u8>)> {
     found
 }
 
+/// The accepted chain, seeded with genesis and nothing else assumed.
+fn seeded_store(network: &str) -> Arc<SharedHeaders> {
+    let store = Arc::new(SharedHeaders::default());
+    store.write(|retained| retained.insert_hash_only(0, genesis_hash(network)));
+    store
+}
+
 fn varint(raw: &[u8], pos: &mut usize) -> u64 {
     let first = raw[*pos];
     *pos += 1;
@@ -97,11 +108,11 @@ async fn a_wallet_finds_its_own_coins_through_bchd_filters() {
     // Connecting runs the genesis-filter probe. If OPTN and the node disagreed
     // about which chain this is, the probe would find nothing to commit to and
     // the capability would come back unusable rather than wrong.
-    let backend = NeutrinoBackend::connect(NeutrinoConfig::new(
-        SourceId::new("regtest-neutrino"),
-        endpoint(),
-        "regtest",
-    ))
+    let store = seeded_store("regtest");
+    let backend = NeutrinoBackend::connect(
+        NeutrinoConfig::new(SourceId::new("regtest-neutrino"), endpoint(), "regtest"),
+        store.clone() as Arc<dyn BlockHeaderSource>,
+    )
     .await
     .expect("the node accepts a connection and the genesis filter commits");
     assert!(
@@ -109,7 +120,12 @@ async fn a_wallet_finds_its_own_coins_through_bchd_filters() {
         "the node must serve compact filters; start it without --nocfilters"
     );
 
-    // The backend keeps its own header view and will not scan past it.
+    // The provider hands back headers and stores nothing. Verification and
+    // acceptance happen here, exactly as the runtime does them, and only what
+    // is accepted becomes the chain the scan below runs against.
+    let verifier = optn_runtime::header_verifier::regtest_header_verifier()
+        .expect("the regtest verifier anchors at genesis");
+    let mut view = VerifiedHeaderView::with_anchor_interval(Network::Regtest, verifier, 16);
     let mut next = 1u32;
     loop {
         let observation = backend
@@ -129,15 +145,32 @@ async fn a_wallet_finds_its_own_coins_through_bchd_filters() {
         if headers.is_empty() {
             break;
         }
-        next = start_height + headers.len() as u32;
-        if headers.len() < 2000 {
+        let batch: Vec<BlockHeaderBytes> = headers.iter().copied().map(BlockHeaderBytes).collect();
+        view.extend(&batch).expect("live headers verify");
+        store.write(|retained| {
+            for (offset, header) in batch.iter().enumerate() {
+                retained
+                    .insert_verified(start_height + offset as u32, header.clone())
+                    .expect("verified headers link");
+            }
+        });
+        next = start_height + batch.len() as u32;
+        if batch.len() < 2000 {
             break;
         }
     }
-    let tip_height = next - 1;
+    let (tip_height, _) = store.tip().expect("a tip after syncing");
     assert!(
         tip_height > 0,
         "no blocks to scan; mine some to {address} first"
+    );
+    // One accepted chain: the filter scan reads the same heights the verifier
+    // accepted, so a disagreement here means the provider is answering from
+    // somewhere else.
+    assert_eq!(
+        view.verifier().state().expect("accumulator state").height,
+        tip_height,
+        "the accumulator and the accepted store disagree about how many blocks exist"
     );
 
     let observation = backend
@@ -206,11 +239,11 @@ async fn a_wallet_finds_its_own_coins_through_bchd_filters() {
 #[tokio::test]
 #[ignore = "requires a local regtest node; see the module docs for how to start one"]
 async fn a_regtest_node_does_not_answer_for_mainnet() {
-    let result = NeutrinoBackend::connect(NeutrinoConfig::new(
-        SourceId::new("regtest-as-mainnet"),
-        endpoint(),
-        "mainnet",
-    ))
+    let store = seeded_store("mainnet");
+    let result = NeutrinoBackend::connect(
+        NeutrinoConfig::new(SourceId::new("regtest-as-mainnet"), endpoint(), "mainnet"),
+        store as Arc<dyn BlockHeaderSource>,
+    )
     .await;
     match result {
         // The magic bytes differ, so this normally fails in the handshake.

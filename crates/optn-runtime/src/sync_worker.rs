@@ -10,10 +10,12 @@ use crate::chain_service::{
     CapabilityRoute, ChainOperation, ChainPayload, ChainRequest, ChainService, ChainServiceError,
     ChainTip, ObservedTransaction, WalletInterest,
 };
+use crate::header_store::{HeaderStoreError, SharedHeaders};
 use crate::header_verifier::{ShvMmrError, ShvMmrHeaderVerifier};
 use crate::header_view::{HeaderViewError, VerifiedHeaderView};
 use crate::reconciliation::{evidence_strength, ReconciliationDecision, ReconciliationState};
 use optn_core::network::Network;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WalletNetworkSnapshot {
@@ -341,6 +343,11 @@ pub enum ProgressiveSyncError {
     InconsistentRefreshScope,
     HeaderVerification(ShvMmrError),
     HeaderView(HeaderViewError),
+    /// Accepted headers did not join the dense store they were destined for.
+    ///
+    /// The view and the store are one accepted chain; if they disagree about
+    /// what precedes a batch, neither is advanced.
+    HeaderStore(HeaderStoreError),
     InvalidHeaderRange,
     Chain(ChainServiceError),
     UnexpectedPayload,
@@ -353,6 +360,15 @@ pub struct ProgressiveSyncWorker {
     /// The runtime's shared verified header view, not a worker-local cache.
     /// Header truth is per network and outlives any one provider or sync run.
     header_view: Option<VerifiedHeaderView>,
+    /// The dense accepted store the providers read back.
+    ///
+    /// The view proves the chain; this is where the headers it accepted are
+    /// kept so a Bloom or compact-filter scan can ask "which block is at
+    /// height h" and get the same answer the verifier reached. Without it the
+    /// store never advances past genesis and every scan correctly refuses to
+    /// run, so a host that verifies headers but never publishes them has a
+    /// wallet that cannot sync.
+    accepted: Option<Arc<SharedHeaders>>,
 }
 
 impl ProgressiveSyncWorker {
@@ -361,7 +377,21 @@ impl ProgressiveSyncWorker {
             config,
             reconciliation: ReconciliationState::default(),
             header_view: None,
+            accepted: None,
         }
+    }
+
+    /// Publish accepted headers into the store providers read.
+    ///
+    /// Give the worker the same store the provider stack was built with, or
+    /// the two hold different ideas of the accepted chain.
+    pub fn with_accepted_headers(mut self, headers: Arc<SharedHeaders>) -> Self {
+        self.accepted = Some(headers);
+        self
+    }
+
+    pub fn accepted_headers(&self) -> Option<&Arc<SharedHeaders>> {
+        self.accepted.as_ref()
     }
 
     /// The host supplies a trusted checkpoint and the selected network's
@@ -586,6 +616,7 @@ impl ProgressiveSyncWorker {
             .height
             .checked_add(1)
             .ok_or(ProgressiveSyncError::HeaderSafetyLimit)?;
+        let mut staged: Vec<(u32, BlockHeaderBytes)> = Vec::new();
         for _ in 0..self.config.max_header_batches {
             let request = ChainRequest::HeaderSync {
                 start_height: start,
@@ -608,27 +639,65 @@ impl ProgressiveSyncWorker {
                 return Err(ProgressiveSyncError::InvalidHeaderRange);
             }
             if headers.is_empty() {
-                self.header_view = Some(view);
-                return Ok(());
+                return self.publish_headers(view, staged);
             }
             let returned = u32::try_from(headers.len())
                 .map_err(|_| ProgressiveSyncError::HeaderSafetyLimit)?;
-            view.extend(
-                &headers
+            let batch: Vec<BlockHeaderBytes> = headers.into_iter().map(BlockHeaderBytes).collect();
+            view.extend(&batch)
+                .map_err(ProgressiveSyncError::HeaderView)?;
+            // Held rather than written: a later batch in this pass can still
+            // fail, and a half-advanced store is a chain nobody verified.
+            staged.extend(
+                batch
                     .into_iter()
-                    .map(BlockHeaderBytes)
-                    .collect::<Vec<_>>(),
-            )
-            .map_err(ProgressiveSyncError::HeaderView)?;
+                    .enumerate()
+                    .map(|(offset, header)| (start_height + offset as u32, header)),
+            );
             start = start_height
                 .checked_add(returned)
                 .ok_or(ProgressiveSyncError::HeaderSafetyLimit)?;
             if returned < self.config.header_batch_size.max(1) {
-                self.header_view = Some(view);
-                return Ok(());
+                return self.publish_headers(view, staged);
             }
         }
         Err(ProgressiveSyncError::HeaderSafetyLimit)
+    }
+
+    /// Commit one bounded header pass: the verified view and the dense store
+    /// advance together, or neither does.
+    ///
+    /// The join is checked before anything is written, so a batch that does not
+    /// continue the store cannot leave it half-extended. Everything after the
+    /// first header links to the one before it, which the view already proved,
+    /// so that single check covers the batch.
+    fn publish_headers(
+        &mut self,
+        view: VerifiedHeaderView,
+        staged: Vec<(u32, BlockHeaderBytes)>,
+    ) -> Result<(), ProgressiveSyncError> {
+        if let Some(store) = self.accepted.as_ref() {
+            store
+                .write(|retained| {
+                    if let Some((height, header)) = staged.first() {
+                        if let Some(parent) = height
+                            .checked_sub(1)
+                            .and_then(|before| retained.hash_at(before))
+                        {
+                            if header.0[4..36] != parent {
+                                return Err(HeaderStoreError::Linkage { height: *height });
+                            }
+                        }
+                    }
+                    for (height, header) in staged {
+                        retained.insert_verified(height, header)?;
+                    }
+                    Ok(())
+                })
+                .map_err(ProgressiveSyncError::HeaderStore)?;
+        }
+        self.header_view = Some(view);
+        Ok(())
     }
 }
 
@@ -1269,5 +1338,109 @@ pub(crate) mod tests {
         assert_eq!(worker.reconciliation().authoritative, retained);
         assert!(!worker.reconciliation().sync.history_fresh);
         assert!(!worker.reconciliation().sync.utxos_fresh);
+    }
+
+    /// The verified view and the dense store are one accepted chain.
+    ///
+    /// Nothing used to write accepted headers where a provider could read them:
+    /// the worker verified into its view and stopped, the shared store stayed at
+    /// whatever it was seeded with, and every Bloom or compact-filter scan then
+    /// correctly refused to run because the accepted chain did not cover the
+    /// range it was asked about. Verifying headers and publishing them are one
+    /// step or the wallet cannot sync.
+    #[tokio::test]
+    async fn a_header_pass_advances_the_view_and_the_store_together() {
+        use crate::header_store::BlockHeaderSource;
+
+        let (verifier, headers) = header_fixture();
+        let config = ProgressiveSyncConfig {
+            header_batch_size: 1,
+            ..Default::default()
+        };
+        let store = Arc::new(SharedHeaders::default());
+        let mut worker = ProgressiveSyncWorker::new(config)
+            .with_header_verifier(Network::Chipnet, verifier)
+            .unwrap()
+            .with_accepted_headers(store.clone());
+        let mut service = service_with_headers(
+            ProtocolFamily::Bip37,
+            headers.clone(),
+            0,
+            Evidence::ServerAssertion,
+        );
+        let route = service
+            .routes_for_operation(ChainOperation::WalletRefresh)
+            .remove(0);
+        worker
+            .prime_headers_on_same_route(&mut service, &route)
+            .await
+            .unwrap();
+
+        let view_tip = worker
+            .header_view()
+            .and_then(VerifiedHeaderView::tip)
+            .expect("a verified tip");
+        assert_eq!(
+            store.tip(),
+            Some(view_tip),
+            "the accepted store did not follow the verified view"
+        );
+
+        // The lookups a scan actually performs, over what was just published.
+        let (first, last) = store.retained_span().expect("a retained span");
+        let range = store
+            .range_inclusive(first, last)
+            .expect("accepted headers are contiguous");
+        assert_eq!(range.len() as u32, last - first + 1);
+        for (height, hash) in &range {
+            assert_eq!(store.hash_at(*height), Some(*hash));
+            assert_eq!(store.height_of(hash), Some(*height));
+        }
+    }
+
+    /// A rejected pass advances neither half.
+    ///
+    /// The first batch verifies and the second does not. Publishing the first
+    /// anyway would leave the store holding headers the view never accepted,
+    /// which is the split-authority this store exists to prevent.
+    #[tokio::test]
+    async fn a_rejected_header_pass_publishes_nothing() {
+        use crate::header_store::BlockHeaderSource;
+
+        let (verifier, headers) = header_fixture();
+        let initial = verifier.state().unwrap();
+        let config = ProgressiveSyncConfig {
+            header_batch_size: 1,
+            ..Default::default()
+        };
+        let store = Arc::new(SharedHeaders::default());
+        let mut worker = ProgressiveSyncWorker::new(config)
+            .with_header_verifier(Network::Chipnet, verifier)
+            .unwrap()
+            .with_accepted_headers(store.clone());
+
+        let mut tampered = headers;
+        tampered[1][4] ^= 1;
+        let mut service = service_with_headers(
+            ProtocolFamily::Bip37,
+            tampered,
+            0,
+            Evidence::ServerAssertion,
+        );
+        let route = service
+            .routes_for_operation(ChainOperation::WalletRefresh)
+            .remove(0);
+        assert!(worker
+            .prime_headers_on_same_route(&mut service, &route)
+            .await
+            .is_err());
+
+        assert_eq!(worker.header_verifier().unwrap().state().unwrap(), initial);
+        assert_eq!(
+            store.retained_span(),
+            None,
+            "a failed header pass published headers into the accepted store"
+        );
+        assert_eq!(store.tip(), None);
     }
 }

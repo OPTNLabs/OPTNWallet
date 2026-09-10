@@ -24,10 +24,51 @@ use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
 
 pub use optn_chain_native::{
-    build_native_chain_stack, NativeChainProbeFailure, NativeChainSecrets, NativeChainStack,
+    build_native_chain_stack, build_native_chain_stack_with_headers, NativeChainProbeFailure,
+    NativeChainSecrets, NativeChainStack,
 };
+use optn_runtime::header_store::SharedHeaders;
+use optn_runtime::header_verifier::ShvMmrHeaderVerifier;
+use optn_runtime::header_view::VerifiedHeaderView;
 
 type NativeSelection = (Network, Result<(SourceCatalog, ConnectionPolicy), String>);
+
+/// One accepted chain for one network: what the runtime verified, and the
+/// dense store its providers read back.
+///
+/// This lives on the host rather than in the stack. A stack is rebuilt every
+/// time policy, sources or credentials change, and verified header progress is
+/// not a property of a provider set -- rebuilding it with the stack would throw
+/// away every accepted header each time a user edits a setting and send the
+/// next scan back to genesis.
+struct AcceptedChain {
+    network: Network,
+    headers: Arc<SharedHeaders>,
+    view: VerifiedHeaderView,
+}
+
+/// The reviewed starting point for a network's header chain.
+///
+/// A verifier without a reviewed checkpoint is not trusted material. A network
+/// that ships none cannot verify headers at all, which is the honest outcome:
+/// the alternative is anchoring trust on whatever a peer served first.
+fn shipped_header_verifier(network: Network) -> Result<ShvMmrHeaderVerifier, String> {
+    match network {
+        Network::Chipnet => optn_runtime::header_verifier::shipped_chipnet_header_verifier()
+            .map_err(|error| format!("the shipped chipnet checkpoint is unusable: {error:?}")),
+        Network::Regtest => optn_runtime::header_verifier::regtest_header_verifier()
+            .map_err(|error| format!("the regtest genesis anchor is unusable: {error:?}")),
+        // Deliberate: no reviewed mainnet checkpoint ships with this build, so
+        // there is nothing to anchor mainnet header verification on. Routes
+        // that do not need verified headers keep working; BIP37 and Neutrino
+        // refuse rather than trusting an unverified chain.
+        Network::Mainnet => Err(
+            "no reviewed mainnet header checkpoint ships with this build; P2P header \
+             verification is unavailable on mainnet"
+                .into(),
+        ),
+    }
+}
 
 /// Process-owned chain stack. Old routes are retired before replacement probes;
 /// a policy change during probing cancels that build before publication.
@@ -39,6 +80,8 @@ pub struct NativeChainRuntime {
     credential_revision: AtomicU64,
     network_settings: NetworkSettingsStore,
     rebuild_lock: Mutex<()>,
+    /// Survives stack rebuilds; replaced only when the network changes.
+    accepted: Mutex<Option<AcceptedChain>>,
 }
 
 impl NativeChainRuntime {
@@ -52,6 +95,43 @@ impl NativeChainRuntime {
             credential_revision: AtomicU64::new(0),
             network_settings,
             rebuild_lock: Mutex::new(()),
+            accepted: Mutex::new(None),
+        }
+    }
+
+    /// The accepted chain for `network`, created on first use.
+    ///
+    /// A network switch starts a fresh one: a verified view belongs to exactly
+    /// one chain, and carrying it across would be asserting that headers proven
+    /// on one network say something about another.
+    async fn accepted_chain(
+        &self,
+        network: Network,
+    ) -> Result<(Arc<SharedHeaders>, VerifiedHeaderView), String> {
+        let mut guard = self.accepted.lock().await;
+        let matches = matches!(guard.as_ref(), Some(chain) if chain.network == network);
+        if !matches {
+            let verifier = shipped_header_verifier(network)?;
+            *guard = Some(AcceptedChain {
+                network,
+                headers: optn_chain_native::new_accepted_header_store(&network.to_string()),
+                view: VerifiedHeaderView::new(network, verifier),
+            });
+        }
+        let chain = guard.as_ref().expect("the accepted chain was just created");
+        Ok((chain.headers.clone(), chain.view.clone()))
+    }
+
+    /// Keep the header progress a completed sync pass reached.
+    ///
+    /// Ignored if the network changed underneath the pass, because the view
+    /// then describes a chain this host is no longer on.
+    async fn publish_header_view(&self, network: Network, view: VerifiedHeaderView) {
+        let mut guard = self.accepted.lock().await;
+        if let Some(chain) = guard.as_mut() {
+            if chain.network == network {
+                chain.view = view;
+            }
         }
     }
 
@@ -253,8 +333,23 @@ impl NativeChainRuntime {
                 current.clone(),
             )
         };
-        let replacement =
-            build_native_chain_stack(catalog, policy, &network.to_string(), &secrets).await;
+        // Providers read the host's accepted chain, so a rebuild swaps routes
+        // without discarding verified headers. A network with no reviewed
+        // checkpoint gets a stack whose P2P scans will refuse for want of
+        // accepted headers, which is correct; other protocols still work.
+        let replacement = match self.accepted_chain(network).await {
+            Ok((headers, _)) => {
+                build_native_chain_stack_with_headers(
+                    catalog,
+                    policy,
+                    &network.to_string(),
+                    &secrets,
+                    headers,
+                )
+                .await
+            }
+            Err(_) => build_native_chain_stack(catalog, policy, &network.to_string(), &secrets).await,
+        };
         // Disk I/O must not hold the stack lock. Resolve any app-state fallback
         // from the current owner only after the read and lock acquisition.
         let persisted = self.persisted_selection(network).await;
@@ -301,8 +396,27 @@ impl NativeChainRuntime {
             .account_xpub
             .clone()
             .ok_or("This wallet has no HD account to synchronize.")?;
+        // The worker joins the host's accepted chain rather than starting its
+        // own. Without this it verified headers into a view that was thrown
+        // away when the refresh returned, and published nothing to the store
+        // the providers read, so BIP37 and Neutrino refreshes could never match
+        // a verified tip and every P2P sync failed.
+        let network = state.network;
         let mut worker = optn_runtime::sync_worker::ProgressiveSyncWorker::new(Default::default());
-        let decision = tokio::time::timeout(
+        match self.accepted_chain(network).await {
+            Ok((headers, view)) => {
+                worker = worker
+                    .with_header_view(view)
+                    .map_err(|error| format!("Verified header context is unusable: {error:?}"))?
+                    .with_accepted_headers(headers);
+            }
+            Err(reason) => {
+                // Electrum and RPC routes do not need verified headers; the
+                // P2P ones will decline on their own.
+                log::warn!("continuing without verified header context: {reason}");
+            }
+        }
+        let outcome = tokio::time::timeout(
             Duration::from_secs(300),
             self.owner.sync_hd_wallet(
                 &mut service,
@@ -311,9 +425,16 @@ impl NativeChainRuntime {
                 optn_runtime::hd_sync::HdSyncLimits::default(),
             ),
         )
-        .await
-        .map_err(|_| "Wallet refresh timed out; retained history remains stale.")?
-        .map_err(|error| error.to_string())?;
+        .await;
+        // Keep whatever progress the pass reached, including when it then
+        // failed for an unrelated reason. Headers already accepted stay
+        // accepted; discarding them would re-download them next time.
+        if let Some(view) = worker.into_header_view() {
+            self.publish_header_view(network, view).await;
+        }
+        let decision = outcome
+            .map_err(|_| "Wallet refresh timed out; retained history remains stale.")?
+            .map_err(|error| error.to_string())?;
         if decision != optn_runtime::reconciliation::ReconciliationDecision::Accepted {
             return Err("Refresh was incomplete; retained history remains stale.".into());
         }
@@ -725,6 +846,7 @@ mod tests {
             event_sources: Vec::new(),
             failures: Vec::new(),
             configuration_error: None,
+            headers: optn_chain_native::new_accepted_header_store("chipnet"),
         });
 
         let old_service = service.clone();

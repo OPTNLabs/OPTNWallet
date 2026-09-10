@@ -21,8 +21,10 @@ use optn_runtime::chain_service::{
     BackendObservation, ChainBackend, ChainBackendError, ChainFuture, ChainOperation, ChainPayload,
     ChainRequest, ChainTip, ObservedTransaction, WalletInterest,
 };
+use optn_runtime::header_store::BlockHeaderSource;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -159,11 +161,11 @@ pub struct NodeProbe {
     pub serves_compact_filters: bool,
 }
 
-#[derive(Default)]
-struct HeaderCache {
-    by_height: BTreeMap<u32, [u8; 32]>,
-}
-
+/// Compact-filter protocol state, which is *not* a block-header authority.
+///
+/// Filter hashes and filter headers commit to filters, not to the chain. They
+/// are checked against the node's own cfheaders chain and stay here; the block
+/// headers they are indexed by come from the accepted store.
 #[derive(Default)]
 struct FilterCache {
     hashes: BTreeMap<u32, [u8; 32]>,
@@ -174,12 +176,26 @@ pub struct NeutrinoBackend {
     config: NeutrinoConfig,
     capabilities: CapabilitySet,
     probe: NodeProbe,
-    headers: Mutex<HeaderCache>,
+    /// The accepted chain, read-only.
+    ///
+    /// This provider used to keep its own height-to-hash map, filled straight
+    /// from `getheaders` responses. That made it a second chain authority: it
+    /// answered "which block is at height h" from material only checked for
+    /// linkage against the previous answer, with no proof-of-work, no
+    /// difficulty rule and no reorg handling, while the runtime maintained a
+    /// separately verified chain. A filter or block fetched against that map
+    /// was attributed to a height the rest of the wallet might not agree on.
+    ///
+    /// Now the runtime verifies and stores, and this reads.
+    headers: Arc<dyn BlockHeaderSource>,
     filters: Mutex<FilterCache>,
 }
 
 impl NeutrinoBackend {
-    pub async fn connect(config: NeutrinoConfig) -> Result<Self, ChainBackendError> {
+    pub async fn connect(
+        config: NeutrinoConfig,
+        headers: Arc<dyn BlockHeaderSource>,
+    ) -> Result<Self, ChainBackendError> {
         if config.endpoint.kind != EndpointKind::BchP2p {
             return Err(ChainBackendError::Rejected(
                 "Neutrino requires a BCH P2P endpoint".into(),
@@ -253,13 +269,11 @@ impl NeutrinoBackend {
             );
         }
 
-        let mut headers = HeaderCache::default();
-        headers.by_height.insert(0, genesis_hash(&config.network));
         Ok(Self {
             config,
             capabilities,
             probe,
-            headers: Mutex::new(headers),
+            headers,
             filters: Mutex::new(filters),
         })
     }
@@ -278,16 +292,11 @@ impl NeutrinoBackend {
                 "getheaders starts after a locator; request height 1 or later".into(),
             ));
         }
-        let locator = self
-            .headers
-            .lock()
-            .await
-            .by_height
-            .get(&(start_height - 1))
-            .copied()
-            .ok_or_else(|| {
-                ChainBackendError::Rejected("header cursor is not cached; sync sequentially".into())
-            })?;
+        let locator = self.headers.hash_at(start_height - 1).ok_or_else(|| {
+            ChainBackendError::Rejected(
+                "no accepted header before the requested start; sync sequentially".into(),
+            )
+        })?;
         let port = self
             .config
             .endpoint
@@ -309,19 +318,20 @@ impl NeutrinoBackend {
         .await?;
         headers.truncate(count as usize);
 
+        // Linkage is checked here because a batch that does not chain off the
+        // locator is a malformed answer to this request. It is not acceptance:
+        // these headers are returned unverified and are deliberately not
+        // written anywhere. Proof-of-work, the difficulty rule and the decision
+        // to accept belong to the runtime, and only what it accepts becomes the
+        // chain this provider then reads back.
         let mut expected_prev = locator;
-        let mut cache = self.headers.lock().await;
-        for (offset, header) in headers.iter().enumerate() {
+        for header in headers.iter() {
             if header[4..36] != expected_prev {
                 return Err(ChainBackendError::InvalidResponse(
                     "header chain does not link to locator".into(),
                 ));
             }
-            let hash = sha256d(header);
-            cache
-                .by_height
-                .insert(start_height.saturating_add(offset as u32), hash);
-            expected_prev = hash;
+            expected_prev = sha256d(header);
         }
         let last = headers
             .last()
@@ -354,15 +364,14 @@ impl NeutrinoBackend {
             ));
         }
 
-        let tip = {
-            let cache = self.headers.lock().await;
-            let Some((&tip_height, &tip_hash)) = cache.by_height.iter().next_back() else {
-                return Err(ChainBackendError::Rejected("header cache is empty".into()));
-            };
-            ChainTip {
-                height: tip_height,
-                hash: tip_hash,
-            }
+        let Some((tip_height, tip_hash)) = self.headers.tip() else {
+            return Err(ChainBackendError::Rejected(
+                "no accepted headers yet; header sync must run first".into(),
+            ));
+        };
+        let tip = ChainTip {
+            height: tip_height,
+            hash: tip_hash,
         };
         // Same birth-height rule as BIP37: a compact-filter scan from genesis
         // downloads a filter for every block since the chain began. Flowee Pay
@@ -409,18 +418,17 @@ impl NeutrinoBackend {
                 io_timeout(&self.config.transport),
             )
             .await?;
-            let expected_hashes = {
-                let cache = self.headers.lock().await;
-                (chunk_start..=chunk_end)
-                    .map(|height| {
-                        cache.by_height.get(&height).copied().ok_or_else(|| {
-                            ChainBackendError::Rejected(format!(
-                                "missing block hash at height {height}"
-                            ))
-                        })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?
-            };
+            let expected_hashes: Vec<[u8; 32]> = self
+                .headers
+                .range_inclusive(chunk_start, chunk_end)
+                .map_err(|error| {
+                    ChainBackendError::Rejected(format!(
+                        "accepted headers do not cover {chunk_start}..={chunk_end}: {error:?}"
+                    ))
+                })?
+                .into_iter()
+                .map(|(_, hash)| hash)
+                .collect();
             let stop_hash = *expected_hashes.last().expect("non-empty range");
             let filters = request_cfilters(
                 &mut stream,
@@ -520,16 +528,9 @@ impl NeutrinoBackend {
                 return Ok(());
             }
             let end = start.saturating_add(MAX_CF_HEADERS - 1).min(stop_height);
-            let stop_hash = self
-                .headers
-                .lock()
-                .await
-                .by_height
-                .get(&end)
-                .copied()
-                .ok_or_else(|| {
-                    ChainBackendError::Rejected(format!("missing block header at height {end}"))
-                })?;
+            let stop_hash = self.headers.hash_at(end).ok_or_else(|| {
+                ChainBackendError::Rejected(format!("no accepted header at height {end}"))
+            })?;
             let expected_prev = if start == 0 {
                 [0; 32]
             } else {
