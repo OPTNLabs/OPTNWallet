@@ -19,8 +19,8 @@ use serde::{Deserialize, Serialize};
 
 use optn_core::asert::{AsertAnchor, AsertParams};
 use optn_core::header_time::{
-    header_timestamp, median_time_past, SparseTimeIndex, TimeAnchor, TimeIndexError, TimeLookup,
-    MEDIAN_TIME_SPAN,
+    header_timestamp, median_time_past, HeaderAnchor, HeaderIndexError, SparseHeaderIndex,
+    TimeLookup, MEDIAN_TIME_SPAN,
 };
 use optn_core::network::Network;
 
@@ -42,6 +42,11 @@ pub const DEFAULT_ANCHOR_INTERVAL: u32 = 2016;
 /// malformed or hostile file rather than a chain that grew.
 const MAX_PERSISTED_VIEW_BYTES: usize = 1024 * 1024;
 
+/// Bumped when the record shape changes. A record from an older schema is
+/// refused rather than partially understood; the view rebuilds from its
+/// checkpoint instead.
+const PERSISTED_VIEW_SCHEMA: u32 = 2;
+
 /// Durable form of a [`VerifiedHeaderView`].
 ///
 /// Deliberately does not carry the trusted commitment or the difficulty
@@ -49,11 +54,19 @@ const MAX_PERSISTED_VIEW_BYTES: usize = 1024 * 1024;
 /// what the view will accept.
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct PersistedAnchor {
+    height: u32,
+    block_hash: Hash32,
+    median_time_past: u32,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PersistedHeaderView {
     schema: u32,
     network: String,
     checkpoint: String,
-    anchors: Vec<(u32, u32)>,
+    anchors: Vec<PersistedAnchor>,
     window: Vec<u32>,
     anchor_interval: u32,
 }
@@ -61,7 +74,7 @@ struct PersistedHeaderView {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HeaderViewError {
     Verification(ShvMmrError),
-    TimeIndex(TimeIndexError),
+    TimeIndex(HeaderIndexError),
     /// A proof arrived for a different chain than this view tracks.
     NetworkMismatch {
         expected: Network,
@@ -82,6 +95,15 @@ pub enum HeaderViewError {
     },
     /// The persisted record is malformed, oversized, or for another chain.
     InvalidPersistedView,
+    /// Nothing is retained at the height a re-authentication named.
+    NoAnchorAtHeight {
+        height: u32,
+    },
+    /// A proof authenticated a different block than the retained anchor claims.
+    AnchorMismatch {
+        height: u32,
+        retained: Hash32,
+    },
 }
 
 impl From<ShvMmrError> for HeaderViewError {
@@ -90,8 +112,8 @@ impl From<ShvMmrError> for HeaderViewError {
     }
 }
 
-impl From<TimeIndexError> for HeaderViewError {
-    fn from(value: TimeIndexError) -> Self {
+impl From<HeaderIndexError> for HeaderViewError {
+    fn from(value: HeaderIndexError) -> Self {
         Self::TimeIndex(value)
     }
 }
@@ -128,7 +150,7 @@ pub enum RestoreStart {
 pub struct VerifiedHeaderView {
     network: Network,
     verifier: ShvMmrHeaderVerifier,
-    times: SparseTimeIndex,
+    times: SparseHeaderIndex,
     /// Trailing timestamps for the median-time-past window.
     window: VecDeque<u32>,
     anchor_interval: u32,
@@ -147,7 +169,7 @@ impl VerifiedHeaderView {
         Self {
             network,
             verifier,
-            times: SparseTimeIndex::new(),
+            times: SparseHeaderIndex::new(),
             window: VecDeque::with_capacity(MEDIAN_TIME_SPAN),
             anchor_interval: anchor_interval.max(1),
         }
@@ -161,7 +183,7 @@ impl VerifiedHeaderView {
         &self.verifier
     }
 
-    pub fn times(&self) -> &SparseTimeIndex {
+    pub fn times(&self) -> &SparseHeaderIndex {
         &self.times
     }
 
@@ -198,12 +220,24 @@ impl VerifiedHeaderView {
 
         for (offset, header) in headers.iter().enumerate() {
             let height = first_height + offset as u64;
-            self.record_time(height, header_timestamp(&header.0))?;
+            // The leaf the accumulator just committed to is this block's hash;
+            // retaining it is what lets a pruned client build a `getheaders`
+            // locator and re-authenticate the anchor later.
+            self.record_anchor(
+                height,
+                crate::header_verifier::header_leaf(header),
+                header_timestamp(&header.0),
+            )?;
         }
         Ok(())
     }
 
-    fn record_time(&mut self, height: u64, timestamp: u32) -> Result<(), HeaderViewError> {
+    fn record_anchor(
+        &mut self,
+        height: u64,
+        block_hash: Hash32,
+        timestamp: u32,
+    ) -> Result<(), HeaderViewError> {
         if self.window.len() == MEDIAN_TIME_SPAN {
             self.window.pop_front();
         }
@@ -235,8 +269,9 @@ impl VerifiedHeaderView {
         {
             return Ok(());
         }
-        self.times.insert(TimeAnchor {
+        self.times.insert(HeaderAnchor {
             height,
+            block_hash,
             median_time_past,
         })?;
         Ok(())
@@ -349,6 +384,58 @@ impl VerifiedHeaderView {
         })
     }
 
+    /// Block-hash locator for asking a peer to resend headers from `height`.
+    ///
+    /// `getheaders` has no height parameter — it takes a locator and the peer
+    /// answers from the first hash it recognises. A pruned client can therefore
+    /// only ask for ranges it can still name, which is precisely what the
+    /// retained anchors record.
+    ///
+    /// An empty locator means nothing at or below `height` is retained: the
+    /// caller must recover by another route rather than fabricate a starting
+    /// point.
+    pub fn getheaders_locator(&self, height: u32) -> Vec<Hash32> {
+        self.times.locator(height)
+    }
+
+    /// The retained anchor span, or `None` when nothing is retained.
+    pub fn retained_span(&self) -> Option<(u32, u32)> {
+        self.times.retained_span()
+    }
+
+    /// Re-authenticate a retained anchor against accumulator-backed material.
+    ///
+    /// Monotonic ordering is an integrity check on a restored series, not an
+    /// authentication of it. This is the step that turns a persisted anchor
+    /// back into something trusted: the proof must satisfy the usual network,
+    /// height and accepted-root binding **and** carry the very block the
+    /// anchor claims at that height.
+    pub fn reauthenticate_anchor(
+        &self,
+        network: Network,
+        proof: &HistoricalHeaderProof,
+    ) -> Result<Evidence, HeaderViewError> {
+        let Some(anchor) = self.times.anchor_at(proof.height) else {
+            return Err(HeaderViewError::NoAnchorAtHeight {
+                height: proof.height,
+            });
+        };
+        let evidence = self.accept_historical_proof(network, proof)?;
+        let Evidence::HeaderMmrProven { block_hash, .. } = evidence else {
+            return Err(HeaderViewError::AnchorMismatch {
+                height: proof.height,
+                retained: anchor.block_hash,
+            });
+        };
+        if block_hash != anchor.block_hash {
+            return Err(HeaderViewError::AnchorMismatch {
+                height: proof.height,
+                retained: anchor.block_hash,
+            });
+        }
+        Ok(evidence)
+    }
+
     /// Encode this view for durable storage.
     ///
     /// The accumulator half reuses the verifier's own checkpoint record, so the
@@ -356,14 +443,18 @@ impl VerifiedHeaderView {
     /// re-supplied from authenticated storage, never taken from this blob.
     pub fn encode(&self) -> Result<String, HeaderViewError> {
         let record = PersistedHeaderView {
-            schema: 1,
+            schema: PERSISTED_VIEW_SCHEMA,
             network: self.network.to_string(),
             checkpoint: self.verifier.encode_checkpoint_json(self.network)?,
             anchors: self
                 .times
                 .anchors()
                 .iter()
-                .map(|anchor| (anchor.height, anchor.median_time_past))
+                .map(|anchor| PersistedAnchor {
+                    height: anchor.height,
+                    block_hash: anchor.block_hash,
+                    median_time_past: anchor.median_time_past,
+                })
                 .collect(),
             window: self.window.iter().copied().collect(),
             anchor_interval: self.anchor_interval,
@@ -390,7 +481,7 @@ impl VerifiedHeaderView {
         }
         let record: PersistedHeaderView =
             serde_json::from_str(json).map_err(|_| HeaderViewError::InvalidPersistedView)?;
-        if record.schema != 1 || record.network != network.to_string() {
+        if record.schema != PERSISTED_VIEW_SCHEMA || record.network != network.to_string() {
             return Err(HeaderViewError::InvalidPersistedView);
         }
         if record.window.len() > MEDIAN_TIME_SPAN {
@@ -405,10 +496,11 @@ impl VerifiedHeaderView {
                 );
 
         let mut view = Self::with_anchor_interval(network, verifier, record.anchor_interval);
-        for (height, median_time_past) in record.anchors {
-            view.times.insert(TimeAnchor {
-                height,
-                median_time_past,
+        for anchor in record.anchors {
+            view.times.insert(HeaderAnchor {
+                height: anchor.height,
+                block_hash: anchor.block_hash,
+                median_time_past: anchor.median_time_past,
             })?;
         }
         view.window = record.window.into_iter().collect();
@@ -714,8 +806,15 @@ mod tests {
     fn a_restored_view_rejects_a_non_monotonic_time_series() {
         let (view, trusted) = bootstrapped_view();
         let encoded = view.encode().expect("encodes");
-        // Splice in anchors whose median-time-past goes backwards.
-        let tampered = encoded.replace("\"anchors\":[]", "\"anchors\":[[4,5000],[8,4000]]");
+        // Splice in anchors whose median-time-past goes backwards. Ordering is
+        // the only integrity check a restored series gets, so it has to hold.
+        let hash = format!("[{}]", ["0"; 32].join(","));
+        let anchors = format!(
+            "\"anchors\":[\
+             {{\"height\":4,\"block_hash\":{hash},\"median_time_past\":5000}},\
+             {{\"height\":8,\"block_hash\":{hash},\"median_time_past\":4000}}]"
+        );
+        let tampered = encoded.replace("\"anchors\":[]", &anchors);
         assert_ne!(
             tampered, encoded,
             "fixture must actually change the anchors"
@@ -723,6 +822,92 @@ mod tests {
         assert!(matches!(
             VerifiedHeaderView::restore(&tampered, Network::Chipnet, &trusted),
             Err(HeaderViewError::TimeIndex(_))
+        ));
+    }
+
+    /// `getheaders` takes a locator of block hashes, not a height, so a pruned
+    /// client can only re-ask for ranges it can still name.
+    #[test]
+    fn a_locator_is_built_from_retained_anchors_and_bounded_by_them() {
+        let mut view = view_with_interval(4);
+        let headers = chain(&wobbly_times(60));
+        view.extend(&headers).expect("extends");
+
+        let (oldest, newest) = view.retained_span().expect("anchors retained");
+        let locator = view.getheaders_locator(newest);
+        assert!(!locator.is_empty());
+        assert_eq!(
+            locator[0],
+            crate::header_verifier::header_leaf(&headers[newest as usize]),
+            "the locator starts at the newest retained anchor"
+        );
+        assert_eq!(
+            *locator.last().expect("non-empty"),
+            crate::header_verifier::header_leaf(&headers[oldest as usize]),
+            "and reaches back to the oldest one we still hold"
+        );
+        // Every entry names a block this view actually verified.
+        for hash in &locator {
+            assert!(
+                headers
+                    .iter()
+                    .any(|header| crate::header_verifier::header_leaf(header) == *hash),
+                "locator must not name a block we never verified"
+            );
+        }
+
+        // After pruning, the locator shortens rather than naming a pruned block.
+        view.prune_below(newest);
+        let pruned = view.getheaders_locator(newest);
+        assert_eq!(pruned.len(), 1);
+        assert!(
+            view.getheaders_locator(oldest).is_empty(),
+            "nothing to send"
+        );
+    }
+
+    /// Ordering is an integrity check on a restored series, not authentication.
+    /// Re-authentication is the step that binds an anchor back to the
+    /// accumulator, and it must reject a proof for a different block.
+    #[test]
+    fn an_anchor_is_reauthenticated_against_the_block_it_claims() {
+        let mut view = view_with_interval(4);
+        let headers = chain(&wobbly_times(40));
+        view.extend(&headers).expect("extends");
+
+        let anchor = view.times().newest().expect("an anchor");
+        let root = view.verifier().accumulator().root();
+
+        // No anchor at that height at all.
+        let orphan = HistoricalHeaderProof {
+            height: anchor.height + 1,
+            header: headers[(anchor.height + 1) as usize].clone(),
+            proof: Vec::new(),
+            target: root,
+        };
+        assert!(matches!(
+            view.reauthenticate_anchor(Network::Chipnet, &orphan),
+            Err(HeaderViewError::NoAnchorAtHeight { .. })
+        ));
+
+        // A proof for the right height but the wrong block is refused. It fails
+        // the accumulator first, which is the stronger of the two checks.
+        let impostor = HistoricalHeaderProof {
+            height: anchor.height,
+            header: headers[0].clone(),
+            proof: Vec::new(),
+            target: root,
+        };
+        assert!(view
+            .reauthenticate_anchor(Network::Chipnet, &impostor)
+            .is_err());
+
+        // And the accepted-root binding still applies underneath.
+        let mut foreign = impostor.clone();
+        foreign.target[0] ^= 1;
+        assert!(matches!(
+            view.reauthenticate_anchor(Network::Chipnet, &foreign),
+            Err(HeaderViewError::UnacceptedRoot { .. })
         ));
     }
 
