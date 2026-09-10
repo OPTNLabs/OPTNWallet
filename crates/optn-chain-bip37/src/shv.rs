@@ -121,9 +121,7 @@ impl ShvProbePhase {
 /// them is a statement about intent — a malformed frame is a thing observed,
 /// not a motive inferred.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ShvProbeOutcome {
-    /// The peer answered the request that was sent.
-    Answered(ShvResponse),
+pub enum ShvProbeFailure {
     /// Nothing arrived within the budget, after the request went out. Not a
     /// protocol violation and not permanent: the bit may have meant XThinner,
     /// or the peer may simply be busy.
@@ -142,7 +140,15 @@ pub enum ShvProbeOutcome {
     },
 }
 
-impl ShvProbeOutcome {
+/// One attempt's result: the answer, or why there was not one.
+///
+/// A plain `Result` rather than a four-armed enum with a success case, so the
+/// mapping code cannot be handed a success it has no branch for. That was
+/// previously guarded by `unreachable!()`, which would have panicked in
+/// release inside a wallet's network path.
+pub type ShvProbeOutcome = Result<ShvResponse, ShvProbeFailure>;
+
+impl ShvProbeFailure {
     /// Whether this outcome justifies leaving the peer alone for a while.
     ///
     /// Only outcomes reached *after* the request went out do. A connect or
@@ -175,7 +181,7 @@ pub enum ShvProbeLimit {
     },
 }
 
-impl ShvProbeOutcome {
+impl ShvProbeFailure {
     /// A short, non-sensitive reason. Carries no heights, hashes or wallet
     /// material, so it is safe to surface as diagnostics.
     pub fn reason(&self) -> String {
@@ -192,7 +198,6 @@ impl ShvProbeOutcome {
             }) => format!(
                 "no shv reply within the byte budget: a {announced}-byte body                  was announced with {remaining} left"
             ),
-            Self::Answered(_) => "answered".into(),
             Self::NoMatchingResponse => "shv reply did not answer the request".into(),
             Self::Malformed(detail) => format!("unparsable shv frame: {detail}"),
             Self::Transport { phase, detail } => {
