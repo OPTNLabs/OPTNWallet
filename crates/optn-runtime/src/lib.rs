@@ -43,6 +43,7 @@ pub mod sync_worker;
 /// Broadcast state tracking. Timeout/offline ambiguity is preserved rather than
 /// collapsed into a false deterministic failure.
 pub mod token_capability;
+pub mod token_metadata;
 pub mod tx_broadcast;
 /// Framework-neutral authenticated wallet-update state/provider scaffolding.
 pub mod update;

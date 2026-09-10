@@ -58,6 +58,17 @@ pub struct RegistryPublication {
 }
 
 impl RegistryPublication {
+    /// The publication that would commit to `contents`.
+    ///
+    /// The one place the committed hash is computed, so a publisher, a
+    /// verifier and a test cannot each pick a different digest.
+    pub fn committing_to(contents: &[u8], uris: Vec<String>) -> Self {
+        Self {
+            content_hash: Sha256::digest(contents).into(),
+            uris,
+        }
+    }
+
     /// Whether `contents` is the registry this publication commits to.
     ///
     /// Single SHA-256, because that is what the specification commits to.
