@@ -473,7 +473,7 @@ mod tests {
         assert_eq!(verifier.last_hash(), Some(expected));
         assert_eq!(verifier.checkpoint().commitment, expected);
         crate::sync_worker::ProgressiveSyncWorker::new(Default::default())
-            .with_header_verifier(verifier)
+            .with_header_verifier(Network::Chipnet, verifier)
             .expect("genesis plus ASERT is enough to enable verified P2P sync");
     }
 
