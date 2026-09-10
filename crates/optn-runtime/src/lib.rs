@@ -9,6 +9,8 @@
 //! The runtime does not choose an executor for the host. `AppRuntime::new`
 //! returns a driver future which Tauri, tests, or another shell can spawn.
 
+/// Provider-neutral SHV/MMR header verification using the pure optn-core accumulator.
+pub mod authchain;
 /// Provenance-preserving normalization of upstream node/server bootstrap feeds.
 pub mod bootstrap;
 /// Provider-neutral direct-vs-derived planning for token/BCMR operations.
@@ -27,7 +29,6 @@ pub mod events;
 pub mod explorer;
 /// Public-key HD account discovery over the shared chain service.
 pub mod hd_sync;
-/// Provider-neutral SHV/MMR header verification using the pure optn-core accumulator.
 pub mod header_recovery;
 pub mod header_store;
 pub mod header_verifier;
