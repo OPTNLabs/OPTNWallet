@@ -1150,26 +1150,61 @@ async fn scan_blocks_observed(
             ))
             .await
             .map_err(|e| format!("getdata failed: {e}"))?;
-        let mut expected = None;
-        let mut got = 0usize;
+        // The peer decides what to send back, so every answer has to be tied
+        // to what was asked for. A partial merkle tree only proves that its
+        // hashes sit under the merkle root in the header attached to it, and
+        // that header arrived from the same peer: on its own it proves a peer
+        // can build a consistent tree, not that any of this is on the chain.
+        // The block hash comes from the accepted header store, which is where
+        // proof-of-work, linkage and difficulty were checked, so requiring the
+        // returned header to hash to it is what makes the proof mean anything.
+        let mut proven: Option<Vec<[u8; 32]>> = None;
+        let mut delivered: Vec<[u8; 32]> = Vec::new();
         for _ in 0..MAX_MESSAGES {
             let (cmd, payload) = read_message(&mut stream, magic, io_timeout(transport)).await?;
             match cmd.as_str() {
                 "merkleblock" => {
+                    if proven.is_some() {
+                        return Err(format!(
+                            "peer sent more than one merkle proof for block {height}"
+                        ));
+                    }
                     let mb = merkleblock::parse_merkleblock(&payload)?;
                     if !mb.valid {
                         return Err("merkleblock failed verification during scan".into());
                     }
-                    expected = Some(mb.matched_txids.len())
+                    if double_sha256(&mb.header) != *block_hash {
+                        return Err(format!(
+                            "peer answered the request for block {height} with a different block"
+                        ));
+                    }
+                    proven = Some(mb.matched_txids);
                 }
                 "tx" => {
+                    // BIP37 sends the proof ahead of the transactions it
+                    // commits to. One arriving first has nothing vouching for
+                    // it, and accepting it would credit the wallet with a
+                    // transaction no merkle root covers.
+                    let Some(proven) = proven.as_ref() else {
+                        return Err(format!(
+                            "peer sent a transaction for block {height} before its merkle proof"
+                        ));
+                    };
                     let parsed = tx::parse_tx(&payload)?;
+                    if !proven.contains(&parsed.txid) {
+                        return Err(format!(
+                            "peer sent a transaction the merkle proof for block {height} does not commit to"
+                        ));
+                    }
+                    if delivered.contains(&parsed.txid) {
+                        continue;
+                    }
+                    delivered.push(parsed.txid);
                     observed.push(ObservedTransaction {
                         txid: parsed.txid,
                         raw: parsed.raw,
                         block_height: Some(*height),
                     });
-                    got += 1
                 }
                 "ping" => {
                     let _ = stream
@@ -1178,14 +1213,14 @@ async fn scan_blocks_observed(
                 }
                 _ => {}
             }
-            if expected.is_some_and(|n| got >= n) {
+            if proven.as_ref().is_some_and(|txids| delivered.len() >= txids.len()) {
                 break;
             }
         }
-        if expected.is_none() {
+        let Some(proven) = proven else {
             return Err("node did not return merkleblock".into());
-        }
-        if got < expected.unwrap_or(0) {
+        };
+        if delivered.len() < proven.len() {
             return Err("node did not return all matched transactions".into());
         }
     }
@@ -1858,5 +1893,208 @@ mod tests {
         let mut payload = build_version_payload(123);
         payload[4..12].copy_from_slice(&NODE_BLOOM.to_le_bytes());
         assert!(parse_version_payload(&payload).unwrap().serves_bloom)
+    }
+
+    /// A merkle proof is only worth what its header is worth.
+    ///
+    /// A partial merkle tree proves its hashes hang under the merkle root of
+    /// the header sent alongside it. Both come from the peer, so a peer that
+    /// invents a header, puts whatever transactions it likes underneath, and
+    /// builds a consistent tree produces something that verifies against
+    /// itself. What makes it evidence is the block hash from the accepted
+    /// header store, where proof-of-work, linkage and difficulty were already
+    /// checked. These fixtures cover a peer answering with the wrong block,
+    /// and a peer answering with the right block but the wrong transactions.
+    mod merkle_binding {
+        use super::*;
+        use optn_runtime::header_store::{BlockHeaderSource, SharedHeaders};
+
+        /// Coinbase-shaped and parseable; the contents do not matter, only
+        /// that a peer could offer it and that it hashes to something.
+        fn payment(marker: u8) -> Vec<u8> {
+            let mut raw = Vec::new();
+            raw.extend_from_slice(&1u32.to_le_bytes()); // version
+            raw.push(1); // one input
+            raw.extend_from_slice(&[0u8; 32]); // null outpoint
+            raw.extend_from_slice(&0xffff_ffffu32.to_le_bytes());
+            raw.push(2); // scriptSig: the marker keeps txids distinct
+            raw.extend_from_slice(&[marker, marker]);
+            raw.extend_from_slice(&0xffff_ffffu32.to_le_bytes()); // sequence
+            raw.push(1); // one output
+            raw.extend_from_slice(&5_000_000_000u64.to_le_bytes());
+            raw.push(25);
+            raw.extend_from_slice(&[0x76, 0xa9, 0x14]);
+            raw.extend_from_slice(&[marker; 20]);
+            raw.extend_from_slice(&[0x88, 0xac]);
+            raw.extend_from_slice(&0u32.to_le_bytes()); // locktime
+            raw
+        }
+
+        /// A header committing to exactly one transaction, so the merkle root
+        /// is that txid. `marker` also varies the header, keeping the two
+        /// blocks distinguishable by hash.
+        fn header_over(txid: &[u8; 32], marker: u8) -> [u8; 80] {
+            let mut header = [0u8; 80];
+            header[0] = marker;
+            header[36..68].copy_from_slice(txid);
+            header
+        }
+
+        /// The wire form of a single-transaction partial merkle tree.
+        fn merkleblock_payload(header: &[u8; 80], txid: &[u8; 32]) -> Vec<u8> {
+            let mut payload = Vec::new();
+            payload.extend_from_slice(header);
+            payload.extend_from_slice(&1u32.to_le_bytes()); // one transaction
+            payload.push(1); // one hash
+            payload.extend_from_slice(txid);
+            payload.push(1); // one flag byte
+            payload.push(0x01); // matched leaf
+            payload
+        }
+
+        /// Advertises NODE_BLOOM, because a scan is refused without it.
+        fn bloom_version() -> Vec<u8> {
+            let mut p = Vec::new();
+            p.extend_from_slice(&PROTOCOL_VERSION.to_le_bytes());
+            p.extend_from_slice(&NODE_BLOOM.to_le_bytes());
+            p.extend_from_slice(&0i64.to_le_bytes());
+            p.extend_from_slice(&[0u8; 26]);
+            p.extend_from_slice(&[0u8; 26]);
+            p.extend_from_slice(&0u64.to_le_bytes());
+            write_varstr(&mut p, b"/scripted-peer/");
+            p.extend_from_slice(&0i32.to_le_bytes());
+            p.push(0);
+            p
+        }
+
+        /// Handshakes, then answers every `getdata` with the same scripted
+        /// merkleblock and transactions regardless of what was asked for.
+        async fn spawn_peer(merkleblock: Vec<u8>, txs: Vec<Vec<u8>>) -> u16 {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let magic = params_for("chipnet").magic;
+            tokio::spawn(async move {
+                while let Ok((mut socket, _)) = listener.accept().await {
+                    let (merkleblock, txs) = (merkleblock.clone(), txs.clone());
+                    tokio::spawn(async move {
+                        let _ = socket
+                            .write_all(&encode_message(magic, "version", &bloom_version()))
+                            .await;
+                        let _ = socket.write_all(&encode_message(magic, "verack", &[])).await;
+                        while let Some((command, _)) = peer_read_message(&mut socket).await {
+                            if command != "getdata" {
+                                continue;
+                            }
+                            let _ = socket
+                                .write_all(&encode_message(magic, "merkleblock", &merkleblock))
+                                .await;
+                            for tx in &txs {
+                                let _ = socket.write_all(&encode_message(magic, "tx", tx)).await;
+                            }
+                        }
+                    });
+                }
+            });
+            port
+        }
+
+        /// One accepted block at height 7, and a scan asking only for it.
+        async fn refresh_against(
+            port: u16,
+            accepted: [u8; 80],
+        ) -> Result<BackendObservation, ChainBackendError> {
+            let headers = Arc::new(SharedHeaders::default());
+            headers.write(|store| store.insert_hash_only(7, double_sha256(&accepted)));
+            let backend = Bip37Backend::connect(
+                Bip37Config::new(
+                    SourceId::new("scripted"),
+                    Endpoint {
+                        kind: EndpointKind::BchP2p,
+                        host: "127.0.0.1".into(),
+                        port: Some(port),
+                    },
+                    "chipnet",
+                ),
+                headers as Arc<dyn BlockHeaderSource>,
+            )
+            .await
+            .expect("the scripted peer completes a handshake");
+            backend
+                .execute(&ChainRequest::WalletRefresh {
+                    interests: vec![WalletInterest::script(vec![
+                        0x76, 0xa9, 0x14, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11,
+                        0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x88,
+                        0xac,
+                    ])],
+                    from_height: Some(7),
+                })
+                .await
+        }
+
+        #[tokio::test]
+        async fn a_self_consistent_proof_for_another_block_is_refused() {
+            // The block the wallet accepted, and a block the peer made up.
+            let honest = payment(0x11);
+            let honest_header = header_over(&double_sha256(&honest), 0x11);
+            let forged = payment(0x22);
+            let forged_txid = double_sha256(&forged);
+            let forged_header = header_over(&forged_txid, 0x22);
+
+            // The forgery verifies against itself: that is the whole point.
+            let payload = merkleblock_payload(&forged_header, &forged_txid);
+            let parsed = merkleblock::parse_merkleblock(&payload).unwrap();
+            assert!(parsed.valid, "the forged proof is internally consistent");
+            assert_eq!(parsed.matched_txids, vec![forged_txid]);
+            assert_ne!(double_sha256(&forged_header), double_sha256(&honest_header));
+
+            let port = spawn_peer(payload, vec![forged]).await;
+            match refresh_against(port, honest_header).await {
+                Err(ChainBackendError::Protocol(message)) => assert!(
+                    message.contains("different block"),
+                    "expected the block-binding refusal, got: {message}"
+                ),
+                other => panic!("a forged block was not refused: {other:?}"),
+            }
+        }
+
+        #[tokio::test]
+        async fn a_transaction_the_proof_does_not_cover_is_refused() {
+            // The right block, so the header check passes, then a transaction
+            // the merkle root says nothing about.
+            let honest = payment(0x11);
+            let honest_header = header_over(&double_sha256(&honest), 0x11);
+            let smuggled = payment(0x33);
+
+            let payload = merkleblock_payload(&honest_header, &double_sha256(&honest));
+            let port = spawn_peer(payload, vec![smuggled]).await;
+            match refresh_against(port, honest_header).await {
+                Err(ChainBackendError::Protocol(message)) => assert!(
+                    message.contains("does not commit to"),
+                    "expected the transaction-binding refusal, got: {message}"
+                ),
+                other => panic!("an uncommitted transaction was not refused: {other:?}"),
+            }
+        }
+
+        /// The control: the checks above reject forgeries, not everything.
+        #[tokio::test]
+        async fn the_matching_block_and_its_own_transaction_are_accepted() {
+            let honest = payment(0x11);
+            let txid = double_sha256(&honest);
+            let honest_header = header_over(&txid, 0x11);
+
+            let payload = merkleblock_payload(&honest_header, &txid);
+            let port = spawn_peer(payload, vec![honest.clone()]).await;
+            let observation = refresh_against(port, honest_header)
+                .await
+                .expect("an honest answer is accepted");
+            let ChainPayload::WalletRefresh { transactions, .. } = observation.payload else {
+                panic!("expected a WalletRefresh payload");
+            };
+            assert_eq!(transactions.len(), 1);
+            assert_eq!(transactions[0].txid, txid);
+            assert_eq!(transactions[0].raw, honest);
+            assert_eq!(transactions[0].block_height, Some(7));
+        }
     }
 }
