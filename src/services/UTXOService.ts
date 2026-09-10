@@ -374,12 +374,16 @@ const UTXOService = {
       const tFetch = performance.now();
       let utxosByAddress: Record<string, UTXO[]> = {};
       try {
-        utxosByAddress = await ElectrumService.getUTXOsMany(
-          uniqueAddresses,
-          options.onProgress
-            ? (done, total) => options.onProgress?.(done, total)
-            : undefined
-        );
+        const onProgress = options.onProgress
+          ? (done: number, total: number) => options.onProgress?.(done, total)
+          : undefined;
+        utxosByAddress = options.network
+          ? await ElectrumService.getUTXOsMany(
+              uniqueAddresses,
+              onProgress,
+              currentNetwork
+            )
+          : await ElectrumService.getUTXOsMany(uniqueAddresses, onProgress);
       } catch (fetchError) {
         // Soft-fail on transport/backoff: keep last SQL so reconnect does not wipe.
         const msg =
