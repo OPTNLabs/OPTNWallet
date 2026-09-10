@@ -86,6 +86,7 @@ export const createMultisigTables = (db: DatabaseRunner) => {
       policy_id TEXT NOT NULL,
       unsigned_tx_hash TEXT NOT NULL,
       psbt_bytes BLOB NOT NULL,
+      fee_rate_sat_per_byte REAL,
       stage TEXT NOT NULL,
       signatures_json TEXT NOT NULL DEFAULT '[]',
       raw_tx_hex TEXT,
@@ -96,6 +97,22 @@ export const createMultisigTables = (db: DatabaseRunner) => {
       UNIQUE(wallet_id, unsigned_tx_hash)
     );
   `);
+
+  // Existing wallet databases were created before multisig sessions persisted
+  // the resolved relay-fee policy. Keep those sessions valid and let the
+  // session reader treat the new nullable column as the legacy relay minimum.
+  try {
+    db.run(
+      'ALTER TABLE multisig_spend_sessions ADD COLUMN fee_rate_sat_per_byte REAL'
+    );
+  } catch (error) {
+    if (
+      !(error instanceof Error) ||
+      !/duplicate column name/i.test(error.message)
+    ) {
+      throw error;
+    }
+  }
 
   db.run(
     'CREATE INDEX IF NOT EXISTS idx_multisig_addresses_wallet ON multisig_addresses(wallet_id, branch_index, address_index);'

@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { Network } from '../../state/slices/networkSlice';
+
 const ensureInitialAddressBatchesMock = vi.fn();
 const getUTXOsManyMock = vi.fn();
 const replaceWalletAddressUTXOsMock = vi.fn();
@@ -210,6 +212,21 @@ describe('UTXOService', () => {
     expect(getUTXOsManyMock).toHaveBeenCalledWith(
       ['bitcoincash:q1'],
       undefined
+    );
+  });
+
+  it('passes a route network through to the Electrum UTXO scan', async () => {
+    const { default: UTXOService } = await import('../UTXOService');
+
+    await UTXOService.fetchAndStoreUTXOsMany(11, ['bchtest:q1'], {
+      discover: false,
+      network: Network.CHIPNET,
+    });
+
+    expect(getUTXOsManyMock).toHaveBeenCalledWith(
+      ['bchtest:q1'],
+      undefined,
+      Network.CHIPNET
     );
   });
 
