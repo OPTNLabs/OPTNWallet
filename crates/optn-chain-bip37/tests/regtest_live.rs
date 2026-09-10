@@ -29,7 +29,9 @@ use std::sync::Arc;
 use optn_chain_bip37::{genesis_hash, Bip37Backend, Bip37Config};
 use optn_core::hd::{address_path, Wallet, BIP39_TEST_VECTOR_MNEMONIC};
 use optn_core::network::Network;
-use optn_runtime::chain::{BlockHeaderBytes, Endpoint, EndpointKind, SourceId};
+use optn_runtime::chain::{
+    BlockHeaderBytes, Endpoint, EndpointKind, Evidence, HistoricalHeaderProof, SourceId,
+};
 use optn_runtime::chain_service::{ChainBackend, ChainPayload, ChainRequest, WalletInterest};
 use optn_runtime::header_store::{BlockHeaderSource, SharedHeaders};
 use optn_runtime::header_view::VerifiedHeaderView;
@@ -134,6 +136,23 @@ fn outputs(raw: &[u8]) -> Vec<(u64, Vec<u8>)> {
     found
 }
 
+/// The outpoints a transaction spends.
+fn inputs(raw: &[u8]) -> Vec<([u8; 32], u32)> {
+    let mut pos = 4usize; // version
+    let count = varint(raw, &mut pos);
+    let mut found = Vec::new();
+    for _ in 0..count {
+        let txid: [u8; 32] = raw[pos..pos + 32].try_into().expect("an outpoint txid");
+        pos += 32;
+        let vout = u32::from_le_bytes(raw[pos..pos + 4].try_into().expect("an outpoint index"));
+        pos += 4;
+        let len = varint(raw, &mut pos) as usize;
+        pos += len + 4; // scriptSig, then sequence
+        found.push((txid, vout));
+    }
+    found
+}
+
 fn varint(raw: &[u8], pos: &mut usize) -> u64 {
     let first = raw[*pos];
     *pos += 1;
@@ -219,6 +238,24 @@ async fn a_wallet_finds_its_own_coins_over_bip37() {
         "the refresh reported a different tip than the store holds"
     );
 
+    // Everything this wallet was ever paid, and where it sits.
+    //
+    // A Bloom filter matches on input data as well as output scripts, which is
+    // how BIP37 finds a wallet's *outgoing* transactions at all: the spending
+    // input carries the public key, so the filter matches a transaction that
+    // pays this wallet nothing. That is relevance, not a false positive, and
+    // requiring every match to pay us would reject the outgoing half of the
+    // wallet's own history. It is also where BIP37 and compact filters differ:
+    // a Neutrino scan for the same script alone does not see that spend.
+    let mut owned = std::collections::BTreeSet::new();
+    for transaction in &transactions {
+        for (index, (_, output)) in outputs(&transaction.raw).into_iter().enumerate() {
+            if output == script {
+                owned.insert((transaction.txid, index as u32));
+            }
+        }
+    }
+
     let mut total = 0u64;
     for transaction in &transactions {
         let paid: u64 = outputs(&transaction.raw)
@@ -226,11 +263,12 @@ async fn a_wallet_finds_its_own_coins_over_bip37() {
             .filter(|(_, output)| *output == script)
             .map(|(value, _)| value)
             .sum();
-        // A Bloom filter has false positives; a transaction that pays us
-        // nothing at all means the match had nothing to do with this wallet.
+        let spends_ours = inputs(&transaction.raw)
+            .into_iter()
+            .any(|outpoint| owned.contains(&outpoint));
         assert!(
-            paid > 0,
-            "a matched transaction paid this wallet nothing: {}",
+            paid > 0 || spends_ours,
+            "a matched transaction neither pays this wallet nor spends its coins: {}",
             transaction
                 .txid
                 .iter()
@@ -308,4 +346,111 @@ async fn a_birth_height_is_an_inclusive_floor() {
             "a scan from height 3 still returned a transaction from block 2"
         );
     }
+}
+
+/// A node that actually serves SHV, which the BIP37 node above does not.
+///
+/// Set `OPTN_BCHN_SHV_P2P` to reach it. Built from Bitcoin Cash Node's
+/// `mmr-squashed` work and started with the MMR index:
+///
+///   bitcoind -regtest -datadir=<isolated dir> -mmrindex=1 \
+///            -rpcuser=<user> -rpcpassword=<pass> \
+///            -rpcbind=127.0.0.1:19443 -bind=127.0.0.1:19444 \
+///            -listen=1 -dnsseed=0
+///   bitcoin-cli -regtest ... generatetoaddress 20 <any regtest address>
+///
+/// Without `-mmrindex=1` the node advertises NODE_SHV and then has nothing to
+/// prove from, which is a different failure to not supporting it at all.
+fn shv_endpoint() -> Option<Endpoint> {
+    let raw = std::env::var("OPTN_BCHN_SHV_P2P").ok()?;
+    let (host, port) = raw
+        .rsplit_once(':')
+        .expect("OPTN_BCHN_SHV_P2P is host:port");
+    Some(Endpoint {
+        kind: EndpointKind::BchP2p,
+        host: host.to_owned(),
+        port: Some(port.parse().expect("a port number")),
+    })
+}
+
+/// OPTN's own client against a node that speaks SHV.
+///
+/// Upstream's own tests passing says that node implements the proposal. This
+/// says OPTN and that node agree, which is a different claim and the only one
+/// worth anything here.
+///
+/// The weight is all in one rule: OPTN syncs the headers, builds its own
+/// accumulator over them, and accepts a proof only if the root the node names
+/// is the root OPTN already computed. A server that could nominate the root it
+/// is judged against could prove anything at all.
+#[tokio::test]
+#[ignore = "requires a local BCHN node built with SHV support; see shv_endpoint"]
+async fn a_node_proof_is_accepted_only_against_optns_own_root() {
+    let Some(endpoint) = shv_endpoint() else {
+        panic!("set OPTN_BCHN_SHV_P2P to the SHV node's host:port");
+    };
+
+    let store = seeded_store();
+    let backend = Bip37Backend::connect(
+        Bip37Config::new(SourceId::new("bchn-shv"), endpoint, NETWORK),
+        store.clone() as Arc<dyn BlockHeaderSource>,
+    )
+    .await
+    .expect("the SHV node accepts a connection");
+    assert!(
+        backend.probe().serves_shv,
+        "this node does not advertise NODE_SHV; bit 9 is also BCHD's XThinner, \
+         so an advertisement alone was never the test -- the proof below is"
+    );
+
+    // OPTN's own chain, from headers it verified itself.
+    let view = sync_headers(&backend, &store).await;
+    let state = view
+        .verifier()
+        .state()
+        .expect("an accumulator over the synced headers");
+    assert!(state.height > 1, "mine some blocks on the SHV node first");
+
+    let observation = backend
+        .execute(&ChainRequest::HistoricalHeaderProof {
+            height: 1,
+            checkpoint_height: state.height,
+        })
+        .await
+        .expect("the node serves a historical proof");
+    let ChainPayload::HistoricalHeaderProof {
+        height,
+        header,
+        siblings,
+        root,
+        ..
+    } = observation.payload
+    else {
+        panic!("expected a HistoricalHeaderProof payload");
+    };
+    assert_eq!(
+        root, state.commitment,
+        "the node proved against a different chain than the one OPTN verified"
+    );
+
+    let proof = HistoricalHeaderProof {
+        height,
+        header: BlockHeaderBytes(header),
+        proof: siblings,
+        target: root,
+    };
+    match view.accept_historical_proof(Network::Regtest, &proof) {
+        Ok(Evidence::HeaderMmrProven { height: proven, .. }) => assert_eq!(proven, 1),
+        other => panic!("a valid proof was not accepted: {other:?}"),
+    }
+
+    // The rule stated as a refusal: a target the node picked for itself buys
+    // nothing, however well-formed the rest of the proof is.
+    let mut server_chosen = proof;
+    server_chosen.target = [0xab; 32];
+    assert!(
+        view.accept_historical_proof(Network::Regtest, &server_chosen)
+            .is_err(),
+        "a proof server must not be able to nominate the root that trusts it"
+    );
 }
