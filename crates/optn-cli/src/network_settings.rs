@@ -134,6 +134,9 @@ fn file_name(network: Network) -> &'static str {
     match network {
         Network::Mainnet => "network-mainnet.json",
         Network::Chipnet => "network-chipnet.json",
+        // Its own file, so a regtest source can never be read by a wallet on
+        // a network anyone else uses.
+        Network::Regtest => "network-regtest.json",
     }
 }
 

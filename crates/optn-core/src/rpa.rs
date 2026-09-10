@@ -161,7 +161,9 @@ pub fn encode_with_family(
     let mut payload = [0u8; PAYLOAD_LEN];
     payload[0] = match network {
         Network::Mainnet => VERSION_MAINNET,
-        Network::Chipnet => VERSION_TESTNET,
+        // Regtest shares the testnet payload version, as it shares the
+        // testnet coin type.
+        Network::Chipnet | Network::Regtest => VERSION_TESTNET,
     };
     payload[1] = prefix_bits;
     payload[2..35].copy_from_slice(scan_pubkey);
@@ -170,9 +172,9 @@ pub fn encode_with_family(
 
     let prefix = match (family, network) {
         (PrefixFamily::Cashcode, Network::Mainnet) => CASHCODE_MAINNET,
-        (PrefixFamily::Cashcode, Network::Chipnet) => CASHCODE_TESTNET,
+        (PrefixFamily::Cashcode, Network::Chipnet | Network::Regtest) => CASHCODE_TESTNET,
         (PrefixFamily::LegacyPaycode, Network::Mainnet) => LEGACY_MAINNET,
-        (PrefixFamily::LegacyPaycode, Network::Chipnet) => LEGACY_TESTNET,
+        (PrefixFamily::LegacyPaycode, Network::Chipnet | Network::Regtest) => LEGACY_TESTNET,
     };
 
     // Leading kind byte, as the desktop wallet and Electron Cash both write.

@@ -132,6 +132,7 @@ pub enum WireSkin {
 pub enum WireNetwork {
     Mainnet,
     Chipnet,
+    Regtest,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -931,6 +932,7 @@ impl From<Network> for WireNetwork {
         match value {
             Network::Mainnet => Self::Mainnet,
             Network::Chipnet => Self::Chipnet,
+            Network::Regtest => Self::Regtest,
         }
     }
 }
@@ -940,6 +942,7 @@ impl From<WireNetwork> for Network {
         match value {
             WireNetwork::Mainnet => Self::Mainnet,
             WireNetwork::Chipnet => Self::Chipnet,
+            WireNetwork::Regtest => Self::Regtest,
         }
     }
 }

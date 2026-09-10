@@ -31,6 +31,9 @@ pub fn scan_coin_types(network: Network) -> &'static [u32] {
     match network {
         Network::Mainnet => &[145, 0],
         Network::Chipnet => &[1, 145, 0],
+        // A locally mined chain has no legacy wallets to rediscover, so the
+        // scan is just its own coin type.
+        Network::Regtest => &[1],
     }
 }
 
