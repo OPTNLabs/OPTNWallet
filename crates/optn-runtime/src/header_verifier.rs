@@ -341,6 +341,39 @@ fn decode_header_hex(hex: &str) -> BlockHeaderBytes {
     BlockHeaderBytes(header)
 }
 
+/// Regtest genesis header (BCHN `CreateGenesisBlock`, regtest parameters).
+///
+/// Hash `0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206`,
+/// confirmed against a live BCHD regtest node's reported chain state. Version
+/// 1, nTime 1296688602, nBits 0x207fffff, nonce 2.
+pub const REGTEST_GENESIS_HEADER_HEX: &str = "0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4adae5494dffff7f2002000000";
+
+/// A verifier anchored at the regtest genesis.
+///
+/// The same shape as the Chipnet one and for the same reason: an accumulator
+/// numbers its leaves by height, so a sync that starts anywhere other than the
+/// next leaf silently mis-attributes every header it is given. Anchoring at
+/// genesis is what makes "extend with heights 1..N" mean what it says.
+///
+/// Regtest's difficulty context says the chain does not retarget, so ASERT has
+/// nothing to assert here -- but declared proof-of-work and linkage are still
+/// checked on every header.
+pub fn regtest_header_verifier() -> Result<ShvMmrHeaderVerifier, ShvMmrError> {
+    let header = decode_header_hex(REGTEST_GENESIS_HEADER_HEX);
+    let commitment = header_leaf(&header);
+    Ok(ShvMmrHeaderVerifier::from_checkpoint_proof(
+        0,
+        header,
+        &[],
+        commitment,
+        CheckpointProvenance::SelfDerived,
+    )?
+    .with_asert(
+        AsertParams::for_network(Network::Regtest),
+        AsertAnchor::for_network(Network::Regtest),
+    ))
+}
+
 /// Trusted Chipnet checkpoint at height 0 plus Chipnet ASERT context.
 ///
 /// BIP37/Neutrino workers must attach this (or a later host-authenticated
