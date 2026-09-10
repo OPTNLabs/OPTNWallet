@@ -1593,6 +1593,11 @@ mod tests {
         let mut backend = backend_at(port, true);
         backend.config.shv_budget = Some(shv::ShvProbeBudget {
             max_bytes: TEST_BYTE_BUDGET,
+            // Short, and real. Its only job is to stop a genuine regression
+            // hanging the suite; the byte budget is what the one test using
+            // this helper is about, and DIRECT's 30 seconds is long enough to
+            // be reached only if something is actually wrong.
+            deadline: std::time::Duration::from_secs(5),
             ..shv::ShvProbeBudget::DIRECT
         });
         backend
@@ -1668,7 +1673,17 @@ mod tests {
     /// The byte budget is enforced against the announced length, before the
     /// body is read. The peer never sends the body, so a client that waited
     /// for it would hang until the deadline instead of refusing immediately.
-    #[tokio::test(start_paused = true)]
+    ///
+    /// Real time on purpose, unlike its neighbours. Two refusals race here --
+    /// the announced length overrunning the byte budget, and the deadline --
+    /// and the test asserts which one wins. Under `start_paused` tokio
+    /// advances the clock whenever every task is idle, and a client blocked on
+    /// a real socket read is idle, so the runtime would jump straight to the
+    /// deadline before the peer's announcement had been read. A quiet machine
+    /// delivered the bytes first and a loaded CI runner did not, which is
+    /// exactly the intermittent failure this replaces. With a real clock the
+    /// announcement is already on the wire and wins deterministically.
+    #[tokio::test]
     async fn an_oversized_announced_body_is_refused_before_it_is_downloaded() {
         let peer = spawn_scripted_peer(PeerScript::OversizedBodyAfterRequest).await;
         let backend = backend_with_tiny_byte_budget(peer.port);
