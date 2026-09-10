@@ -17,12 +17,22 @@ pub const IDEAL_BLOCK_TIME: i64 = 10 * 60;
 pub const MAINNET_HALF_LIFE: i64 = 2 * 24 * 60 * 60;
 pub const TESTNET_HALF_LIFE: i64 = 60 * 60;
 pub const DEFAULT_MAX_BITS: u32 = 0x1d00ffff;
+/// Regtest's proof-of-work limit. Every regtest block declares this, because
+/// the chain never retargets.
+pub const REGTEST_MAX_BITS: u32 = 0x207f_ffff;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AsertParams {
     pub half_life: i64,
     pub ideal_block_time: i64,
     pub max_bits: u32,
+    /// Whether this chain retargets difficulty at all.
+    ///
+    /// BCHN sets `fPowNoRetargeting` on regtest, so every block there declares
+    /// `max_bits` and ASERT has nothing to say. Encoded here as the consensus
+    /// rule it is, rather than as a check the verifier skips -- mainnet and
+    /// chipnet keep exactly the validation they had.
+    pub retargets: bool,
 }
 
 impl AsertParams {
@@ -31,6 +41,7 @@ impl AsertParams {
             half_life: MAINNET_HALF_LIFE,
             ideal_block_time: IDEAL_BLOCK_TIME,
             max_bits: DEFAULT_MAX_BITS,
+            retargets: true,
         }
     }
 
@@ -39,6 +50,17 @@ impl AsertParams {
             half_life: TESTNET_HALF_LIFE,
             ideal_block_time: IDEAL_BLOCK_TIME,
             max_bits: DEFAULT_MAX_BITS,
+            retargets: true,
+        }
+    }
+
+    /// A locally mined chain that never retargets.
+    pub const fn regtest() -> Self {
+        Self {
+            half_life: TESTNET_HALF_LIFE,
+            ideal_block_time: IDEAL_BLOCK_TIME,
+            max_bits: REGTEST_MAX_BITS,
+            retargets: false,
         }
     }
 
@@ -47,6 +69,7 @@ impl AsertParams {
         match network {
             Network::Mainnet => Self::mainnet(),
             Network::Chipnet => Self::testnet(),
+            Network::Regtest => Self::regtest(),
         }
     }
 }
@@ -76,6 +99,12 @@ impl AsertAnchor {
                 bits: 486_604_799,
                 prev_time: 1_605_451_779,
             },
+            // Nominal: with no retargeting the anchor is never consulted.
+            Network::Regtest => Self {
+                height: 0,
+                bits: REGTEST_MAX_BITS,
+                prev_time: 0,
+            },
         }
     }
 }
@@ -90,8 +119,13 @@ pub struct AsertCheck {
 }
 
 impl AsertCheck {
+    /// Whether the expected-difficulty rule has anything to say here.
+    ///
+    /// False below the anchor, and false on a chain that does not retarget at
+    /// all. Both are the consensus rule, not a relaxation of it: the header
+    /// still has to satisfy the target it declares.
     pub const fn applies(&self) -> bool {
-        self.previous_height >= self.anchor.height
+        self.params.retargets && self.previous_height >= self.anchor.height
     }
 }
 
@@ -371,6 +405,7 @@ mod tests {
             half_life: 172_800,
             ideal_block_time: 600,
             max_bits: 0x207f_ffff,
+            retargets: true,
         };
         let anchor = AsertAnchor {
             height: 1,
@@ -480,5 +515,54 @@ mod tests {
         assert_eq!(cur_parsed.bits, DEFAULT_MAX_BITS);
         assert_eq!(cur_parsed.prev_hash, prev_parsed.hash);
         assert!(i64::from(cur_parsed.time) - i64::from(prev_parsed.time) > 20 * 60);
+    }
+}
+
+#[cfg(test)]
+mod regtest_difficulty {
+    use super::*;
+
+    /// Regtest does not retarget, so the expected-difficulty rule has nothing
+    /// to say there. That is BCHN's `fPowNoRetargeting`, encoded as a property
+    /// of the chain rather than as a check the verifier declines to run.
+    #[test]
+    fn regtest_does_not_retarget_and_the_others_still_do() {
+        let regtest = AsertParams::for_network(Network::Regtest);
+        assert!(!regtest.retargets);
+        assert_eq!(regtest.max_bits, REGTEST_MAX_BITS);
+
+        for network in [Network::Mainnet, Network::Chipnet] {
+            let params = AsertParams::for_network(network);
+            assert!(params.retargets, "{network} must still retarget");
+            assert_eq!(params.max_bits, DEFAULT_MAX_BITS);
+        }
+    }
+
+    /// A non-retargeting chain reports the rule as inapplicable at every
+    /// height, while the production chains keep the anchor boundary they had.
+    #[test]
+    fn applies_follows_the_chain_rule_not_a_relaxation() {
+        let check = |network: Network, height: u32| {
+            AsertCheck {
+                params: AsertParams::for_network(network),
+                anchor: AsertAnchor::for_network(network),
+                previous_height: height,
+                previous_time: 0,
+            }
+            .applies()
+        };
+
+        for height in [0, 1, 100, 1_000_000] {
+            assert!(!check(Network::Regtest, height), "regtest never retargets");
+        }
+
+        // Mainnet and chipnet are unchanged: inapplicable below the anchor,
+        // applicable at and above it.
+        let mainnet_anchor = AsertAnchor::for_network(Network::Mainnet).height;
+        assert!(!check(Network::Mainnet, mainnet_anchor - 1));
+        assert!(check(Network::Mainnet, mainnet_anchor));
+        let chipnet_anchor = AsertAnchor::for_network(Network::Chipnet).height;
+        assert!(!check(Network::Chipnet, chipnet_anchor - 1));
+        assert!(check(Network::Chipnet, chipnet_anchor));
     }
 }

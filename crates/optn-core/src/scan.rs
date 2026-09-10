@@ -150,6 +150,10 @@ impl WrongNetwork {
                 "That address is for Mainnet (bitcoincash:). This wallet is on Chipnet — paste a \
                  bchtest: address."
             }
+            Network::Regtest => {
+                "That address is for another network. This wallet is on Regtest — paste a \
+                 bchreg: address."
+            }
         }
     }
 }
@@ -504,9 +508,12 @@ fn classify_address(scanned: &str, network: Network) -> ScannedPayload {
     }
 
     let expected = network.prefix();
+    // "The other chain" only means something where there are two in play.
+    // Regtest is local and has no counterpart a user could confuse it with,
+    // so it reports an unrecognised address rather than naming a wrong one.
     let opposite = match network {
         Network::Mainnet => Network::Chipnet,
-        Network::Chipnet => Network::Mainnet,
+        Network::Chipnet | Network::Regtest => Network::Mainnet,
     }
     .prefix();
 

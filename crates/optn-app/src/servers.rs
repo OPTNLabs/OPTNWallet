@@ -104,6 +104,9 @@ impl NetworkServers {
 pub struct ServerOverrides {
     mainnet: NetworkServers,
     chipnet: NetworkServers,
+    /// Kept per-network like the others. A regtest override must never be
+    /// reachable from a mainnet or chipnet wallet.
+    regtest: NetworkServers,
 }
 
 impl ServerOverrides {
@@ -111,6 +114,7 @@ impl ServerOverrides {
         Self {
             mainnet: NetworkServers::new(),
             chipnet: NetworkServers::new(),
+            regtest: NetworkServers::new(),
         }
     }
 
@@ -120,6 +124,7 @@ impl ServerOverrides {
         match network {
             Network::Mainnet => &self.mainnet,
             Network::Chipnet => &self.chipnet,
+            Network::Regtest => &self.regtest,
         }
     }
 
@@ -127,6 +132,7 @@ impl ServerOverrides {
         match network {
             Network::Mainnet => &mut self.mainnet,
             Network::Chipnet => &mut self.chipnet,
+            Network::Regtest => &mut self.regtest,
         }
     }
 

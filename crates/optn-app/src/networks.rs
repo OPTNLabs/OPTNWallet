@@ -53,6 +53,7 @@ const fn label_of(network: Network) -> &'static str {
     match network {
         Network::Mainnet => "Mainnet",
         Network::Chipnet => "Chipnet",
+        Network::Regtest => "Regtest",
     }
 }
 
@@ -60,6 +61,7 @@ const fn description_of(network: Network) -> &'static str {
     match network {
         Network::Mainnet => "Live BCH network — real funds",
         Network::Chipnet => "BCH testnet for upcoming CHIPs — test funds only",
+        Network::Regtest => "A chain you mine locally — for testing only",
     }
 }
 
@@ -79,6 +81,7 @@ pub const fn chrome_network_label(network: Network) -> &'static str {
     match network {
         Network::Mainnet => "MAINNET",
         Network::Chipnet => "CHIPNET",
+        Network::Regtest => "REGTEST",
     }
 }
 

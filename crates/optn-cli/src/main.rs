@@ -1494,7 +1494,11 @@ async fn run(cli: &Cli) -> Result<Value> {
             } => {
                 let network = match cli.network {
                     Network::Mainnet => MultisigNetwork::Mainnet,
-                    Network::Chipnet => MultisigNetwork::Chipnet,
+                    // The multisig core models two chains. Regtest shares
+                    // chipnet's address encoding, which is all this inspection
+                    // depends on, and saying so beats silently widening that
+                    // crate's own network model.
+                    Network::Chipnet | Network::Regtest => MultisigNetwork::Chipnet,
                 };
                 let public_key_refs = public_keys.iter().map(String::as_str).collect::<Vec<_>>();
                 let inspection = inspect_p2sh20(network, *threshold, &public_key_refs)
@@ -3411,10 +3415,9 @@ fn decode_hex32(s: &str) -> Result<[u8; 32]> {
 
 /// SLIP-44 coin type this wallet uses by default on a network.
 fn default_coin_type(network: Network) -> u32 {
-    match network {
-        Network::Mainnet => 145,
-        Network::Chipnet => 1,
-    }
+    // Delegates rather than restating the table: two copies of the same
+    // mapping is how they drift apart.
+    network.default_coin_type()
 }
 
 /// Decode an even-length hex string.

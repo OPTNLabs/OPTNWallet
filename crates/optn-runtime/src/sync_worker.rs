@@ -779,6 +779,7 @@ pub(crate) mod tests {
             half_life: 172800,
             ideal_block_time: 600,
             max_bits: 0x207fffff,
+            retargets: true,
         };
         let anchor = AsertAnchor {
             height: 0,

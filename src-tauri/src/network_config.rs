@@ -26,6 +26,10 @@ const LEGACY_CATALOG_VERSION: &str = "legacy-server-overrides-v1";
 pub struct NetworkSettingsStore {
     mainnet: NetworkConfigFile,
     chipnet: NetworkConfigFile,
+    /// Its own file for the same reason the others have theirs: a locally
+    /// mined chain's sources must not be readable by a wallet on a network
+    /// anyone else uses.
+    regtest: NetworkConfigFile,
     // A network edit snapshots the selected network before saving, then
     // publishes it. Serialize that sequence with network switches.
     pub(crate) write_lock: Arc<tokio::sync::Mutex<()>>,
@@ -37,6 +41,7 @@ impl NetworkSettingsStore {
         Self {
             mainnet: NetworkConfigFile::new(directory.join("network-mainnet.json")),
             chipnet: NetworkConfigFile::new(directory.join("network-chipnet.json")),
+            regtest: NetworkConfigFile::new(directory.join("network-regtest.json")),
             write_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
@@ -102,6 +107,7 @@ impl NetworkSettingsStore {
         match network {
             Network::Mainnet => &self.mainnet,
             Network::Chipnet => &self.chipnet,
+            Network::Regtest => &self.regtest,
         }
     }
 }
