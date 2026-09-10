@@ -137,6 +137,29 @@ impl AppRuntime {
         account_xpub: String,
         limits: HdSyncLimits,
     ) -> Result<ReconciliationDecision, WalletSyncError> {
+        self.sync_hd_wallet_from_floor(service, worker, account_xpub, limits, None)
+            .await
+    }
+
+    /// The same discovery, starting at a resolved scan floor.
+    ///
+    /// `floor` is where this wallet's history can begin -- its birthday, or a
+    /// height its holder asked to rescan from. It is not a resume point and it
+    /// does not merge onto a baseline: each round is a complete answer that
+    /// happens to start there.
+    ///
+    /// Supplying it is what makes P2P discovery possible at all. BIP37 and
+    /// Neutrino both refuse a refresh with no floor rather than reading the
+    /// chain from genesis, so an HD account that passes `None` can only ever be
+    /// served by Electrum or RPC.
+    pub async fn sync_hd_wallet_from_floor(
+        &self,
+        service: &mut ChainService,
+        worker: &mut ProgressiveSyncWorker,
+        account_xpub: String,
+        limits: HdSyncLimits,
+        floor: Option<u32>,
+    ) -> Result<ReconciliationDecision, WalletSyncError> {
         let (reply, received) = oneshot::channel();
         self.action_tx
             .send(RuntimeRequest::WalletSync(WalletSyncRequest::BeginHd(
@@ -153,7 +176,11 @@ impl AppRuntime {
             let refreshed = tokio::select! {
                 biased;
                 _ = lease.cancelled.changed() => return Err(WalletSyncError::Superseded),
-                result = worker.refresh(service, lease.interests.clone(), None) => result,
+                result = worker.refresh_with_scope(
+                    service,
+                    lease.interests.clone(),
+                    crate::sync_worker::RefreshScope::Complete { floor },
+                ) => result,
             };
             let advance = match &refreshed {
                 Ok(outcome) if outcome.decision == ReconciliationDecision::Accepted => scan

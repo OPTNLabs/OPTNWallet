@@ -354,6 +354,45 @@ pub enum ProgressiveSyncError {
     Exhausted,
 }
 
+/// What a refresh is asking a provider for.
+///
+/// `from_height` used to carry two meanings at once: the floor handed to the
+/// provider, and a signal to merge the answer onto an existing baseline. They
+/// are not the same request. A wallet scanning from its birthday wants a
+/// complete answer that happens to start there; a wallet topping up wants only
+/// the suffix. Conflating them means a rescan from an earlier height either
+/// gets rejected for having no baseline or gets merged onto one that already
+/// claims to cover more than it does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefreshScope {
+    /// Everything this wallet's floor covers, replacing the snapshot.
+    ///
+    /// `floor` is where coverage begins, not a resume point. BIP37 and
+    /// Neutrino both refuse a scan with no floor rather than reading the chain
+    /// from genesis, so an HD wallet needs one here to use them at all.
+    Complete { floor: Option<u32> },
+    /// A top-up above an existing complete baseline, merged onto it.
+    Incremental { from_height: u32 },
+}
+
+impl RefreshScope {
+    /// The floor the provider is asked to start at.
+    const fn provider_floor(&self) -> Option<u32> {
+        match self {
+            Self::Complete { floor } => *floor,
+            Self::Incremental { from_height } => Some(*from_height),
+        }
+    }
+
+    /// The height above which results merge onto a baseline, if any.
+    const fn incremental_start(&self) -> Option<u32> {
+        match self {
+            Self::Complete { .. } => None,
+            Self::Incremental { from_height } => Some(*from_height),
+        }
+    }
+}
+
 pub struct ProgressiveSyncWorker {
     config: ProgressiveSyncConfig,
     reconciliation: ReconciliationState<WalletNetworkSnapshot>,
@@ -449,15 +488,34 @@ impl ProgressiveSyncWorker {
         self.reconciliation = state;
     }
 
+    /// Refresh, where `Some(height)` means an incremental top-up.
+    ///
+    /// Kept for callers that only ever meant that. A scan that starts at a
+    /// floor without claiming a baseline is [`Self::refresh_with_scope`] with
+    /// [`RefreshScope::Complete`].
     pub async fn refresh(
         &mut self,
         service: &mut ChainService,
-        mut interests: Vec<WalletInterest>,
+        interests: Vec<WalletInterest>,
         from_height: Option<u32>,
+    ) -> Result<SyncOutcome, ProgressiveSyncError> {
+        let scope = match from_height.filter(|height| *height > 0) {
+            Some(from_height) => RefreshScope::Incremental { from_height },
+            None => RefreshScope::Complete { floor: None },
+        };
+        self.refresh_with_scope(service, interests, scope).await
+    }
+
+    pub async fn refresh_with_scope(
+        &mut self,
+        service: &mut ChainService,
+        mut interests: Vec<WalletInterest>,
+        scope: RefreshScope,
     ) -> Result<SyncOutcome, ProgressiveSyncError> {
         interests.sort();
         interests.dedup();
-        let incremental_start = from_height.filter(|height| *height > 0);
+        let from_height = scope.provider_floor();
+        let incremental_start = scope.incremental_start();
         if let Some(start) = incremental_start {
             let Some(previous) = &self.reconciliation.authoritative else {
                 self.reconciliation
@@ -723,6 +781,8 @@ pub(crate) mod tests {
         headers: Vec<[u8; 80]>,
         header_height_offset: u32,
         wallet_evidence: Evidence,
+        /// Every floor this backend was asked to scan from, in order.
+        asked_from: Arc<std::sync::Mutex<Vec<Option<u32>>>>,
     }
     impl ChainBackend for WalletBackend {
         fn source_id(&self) -> &SourceId {
@@ -767,6 +827,12 @@ pub(crate) mod tests {
                         evidence: Evidence::ServerAssertion,
                         chain_tip: None,
                     });
+                }
+                if let ChainRequest::WalletRefresh { from_height, .. } = request {
+                    self.asked_from
+                        .lock()
+                        .expect("floor recorder")
+                        .push(*from_height);
                 }
                 Ok(BackendObservation {
                     payload: ChainPayload::WalletRefresh {
@@ -835,8 +901,57 @@ pub(crate) mod tests {
             headers,
             header_height_offset,
             wallet_evidence,
+            asked_from: Arc::new(std::sync::Mutex::new(Vec::new())),
         }));
         service
+    }
+
+    /// A service whose only provider reports the scan floors it was given.
+    fn service_recording_floors(
+        protocol: ProtocolFamily,
+    ) -> (ChainService, Arc<std::sync::Mutex<Vec<Option<u32>>>>) {
+        let asked_from = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let id = SourceId::new("recorder");
+        let endpoint = Endpoint {
+            kind: EndpointKind::ElectrumTcp,
+            host: "recorder".into(),
+            port: Some(50001),
+        };
+        let mut catalog = SourceCatalog::default();
+        catalog
+            .insert(ChainSource {
+                id: id.clone(),
+                label: "recorder".into(),
+                origin: SourceOrigin::UserAdded,
+                endpoints: vec![endpoint.clone()],
+                capabilities: CapabilitySet::default(),
+                disposition: SourceDisposition::Enabled,
+                priority: 0,
+            })
+            .unwrap();
+        let mut caps = CapabilitySet::default();
+        caps.record(
+            Capability::UtxoQuery,
+            CapabilityConfidence::Verified,
+            CapabilityDiscovery::ActiveProbe,
+        );
+        caps.record(
+            Capability::HeaderStream,
+            CapabilityConfidence::Verified,
+            CapabilityDiscovery::ActiveProbe,
+        );
+        let mut service = ChainService::new(catalog, ConnectionPolicy::auto());
+        service.register(Arc::new(WalletBackend {
+            id,
+            endpoint,
+            caps,
+            protocol,
+            headers: Vec::new(),
+            header_height_offset: 0,
+            wallet_evidence: Evidence::ServerAssertion,
+            asked_from: asked_from.clone(),
+        }));
+        (service, asked_from)
     }
 
     // Synthetic low-difficulty chain, used only to exercise verifier wiring.
@@ -1442,5 +1557,91 @@ pub(crate) mod tests {
             "a failed header pass published headers into the accepted store"
         );
         assert_eq!(store.tip(), None);
+    }
+
+    /// A floor and a baseline are different requests.
+    ///
+    /// Both used to arrive as `from_height`, so a wallet asking to scan from
+    /// its birthday was told it needed a baseline it had never built. That is
+    /// why an HD wallet could not use BIP37 or Neutrino at all: those refuse a
+    /// scan with no floor, and the only way to supply one demanded a prior
+    /// complete result.
+    #[tokio::test]
+    async fn a_floor_does_not_require_a_baseline_but_a_top_up_does() {
+        let (mut service, asked_from) = service_recording_floors(ProtocolFamily::Electrum);
+        let mut worker = ProgressiveSyncWorker::new(ProgressiveSyncConfig::default());
+
+        // No baseline anywhere, and a floor is still a legitimate request.
+        worker
+            .refresh_with_scope(
+                &mut service,
+                vec![],
+                RefreshScope::Complete { floor: Some(5) },
+            )
+            .await
+            .expect("a complete scan from a floor needs no baseline");
+        assert_eq!(
+            asked_from.lock().unwrap().last().copied(),
+            Some(Some(5)),
+            "the floor has to reach the provider or BIP37 and Neutrino refuse"
+        );
+
+        // The same number, meant as a top-up, still needs one.
+        let (mut fresh, _) = service_recording_floors(ProtocolFamily::Electrum);
+        let mut topping_up = ProgressiveSyncWorker::new(ProgressiveSyncConfig::default());
+        assert_eq!(
+            topping_up
+                .refresh_with_scope(
+                    &mut fresh,
+                    vec![],
+                    RefreshScope::Incremental { from_height: 5 },
+                )
+                .await,
+            Err(ProgressiveSyncError::MissingRefreshBaseline)
+        );
+    }
+
+    /// A complete scan replaces the snapshot rather than merging onto it.
+    #[tokio::test]
+    async fn a_complete_scan_from_a_floor_does_not_merge_a_prefix() {
+        let (mut service, _) = service_recording_floors(ProtocolFamily::Electrum);
+        let mut worker = ProgressiveSyncWorker::new(ProgressiveSyncConfig::default());
+
+        // Establish a baseline the incremental path would have merged onto.
+        worker
+            .refresh_with_scope(&mut service, vec![], RefreshScope::Complete { floor: None })
+            .await
+            .expect("a baseline");
+        assert!(worker.reconciliation().authoritative.is_some());
+
+        // A rescan from a floor is a fresh answer, not an extension of that.
+        worker
+            .refresh_with_scope(
+                &mut service,
+                vec![],
+                RefreshScope::Complete { floor: Some(3) },
+            )
+            .await
+            .expect("a rescan from a floor is accepted");
+        let snapshot = worker
+            .reconciliation()
+            .authoritative
+            .as_ref()
+            .expect("a snapshot");
+        assert!(
+            snapshot.value.transactions.is_empty(),
+            "a complete scan reports what it found, not what a baseline remembered"
+        );
+    }
+
+    /// The compatibility wrapper still means "top-up".
+    #[tokio::test]
+    async fn the_plain_refresh_entry_point_keeps_its_meaning() {
+        let (mut service, _) = service_recording_floors(ProtocolFamily::Electrum);
+        let mut worker = ProgressiveSyncWorker::new(ProgressiveSyncConfig::default());
+        assert_eq!(
+            worker.refresh(&mut service, vec![], Some(5)).await,
+            Err(ProgressiveSyncError::MissingRefreshBaseline)
+        );
     }
 }
