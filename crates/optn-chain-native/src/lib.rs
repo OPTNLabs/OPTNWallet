@@ -94,6 +94,12 @@ pub struct NativeChainProbeFailure {
 }
 
 pub struct NativeChainStack {
+    /// The accepted block headers every provider in this stack reads.
+    ///
+    /// Owned here rather than by any provider: the runtime writes verified
+    /// headers into it, and BIP37 and Neutrino both hold read handles on the
+    /// same store instead of keeping chains of their own.
+    pub headers: Arc<optn_runtime::header_store::SharedHeaders>,
     pub revocation: optn_runtime::chain_service::ChainRevocation,
     pub service: Arc<Mutex<ChainService>>,
     pub event_sources: Vec<Arc<dyn NativeChainEventSource>>,
@@ -108,6 +114,9 @@ impl NativeChainStack {
     pub fn unavailable(error: impl Into<String>) -> Self {
         let service = ChainService::new(SourceCatalog::default(), ConnectionPolicy::auto());
         Self {
+            // Empty rather than seeded: no provider is registered in this
+            // state, so nothing should be able to read a header from it.
+            headers: Arc::new(optn_runtime::header_store::SharedHeaders::default()),
             revocation: service.revocation(),
             service: Arc::new(Mutex::new(service)),
             event_sources: Vec::new(),
@@ -282,6 +291,16 @@ async fn build_native_chain_stack_with_tor_status(
     secrets: &NativeChainSecrets,
     tor_status: TorStatus,
 ) -> NativeChainStack {
+    // One store for the whole stack. Seeded with the network's genesis, which
+    // is chain identity rather than anything a peer supplied, so `getheaders`
+    // has a locator to start from on a fresh install.
+    let headers = {
+        let store = optn_runtime::header_store::SharedHeaders::default();
+        store.write(|retained| {
+            retained.insert_hash_only(0, optn_chain_bip37::genesis_hash(network));
+        });
+        Arc::new(store)
+    };
     let selected = selected_source_ids(&catalog, &policy);
     let sources = catalog.iter().cloned().collect::<Vec<_>>();
     let mut service = ChainService::new(catalog, policy.clone());
@@ -363,7 +382,7 @@ async fn build_native_chain_stack_with_tor_status(
                                 proxy_port: socks_port,
                             };
                         }
-                        match Bip37Backend::connect(config).await {
+                        match Bip37Backend::connect(config, headers.clone()).await {
                             Ok(provider) => service.register(Arc::new(provider)),
                             Err(error) => failures.push(failure(
                                 &source,
@@ -433,6 +452,7 @@ async fn build_native_chain_stack_with_tor_status(
     }
 
     NativeChainStack {
+        headers,
         revocation: service.revocation(),
         service: Arc::new(Mutex::new(service)),
         event_sources,

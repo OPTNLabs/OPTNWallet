@@ -18,9 +18,10 @@ use optn_runtime::chain_service::{
     BackendObservation, ChainBackend, ChainBackendError, ChainFuture, ChainOperation, ChainPayload,
     ChainRequest, ChainTip, ObservedTransaction, WalletInterest,
 };
+use optn_runtime::header_store::BlockHeaderSource;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -150,16 +151,16 @@ pub struct NodeProbe {
     pub serves_shv: bool,
 }
 
-#[derive(Default)]
-struct HeaderCache {
-    by_height: BTreeMap<u32, [u8; 32]>,
-}
-
 pub struct Bip37Backend {
     config: Bip37Config,
     capabilities: CapabilitySet,
     probe: NodeProbe,
-    headers: Mutex<HeaderCache>,
+    /// Read access to the runtime's accepted headers.
+    ///
+    /// Not a cache: this provider no longer keeps a chain of its own. It
+    /// fetches headers, returns them as observations, and reads back whatever
+    /// the runtime verified and accepted.
+    headers: Arc<dyn BlockHeaderSource>,
     /// What the last unsuccessful SHV attempt established, and when to try
     /// again. A cooldown, not a verdict: the peer keeps every other capability
     /// it has, and is asked again once the time passes.
@@ -177,7 +178,10 @@ pub struct ShvCapabilityStatus {
 }
 
 impl Bip37Backend {
-    pub async fn connect(config: Bip37Config) -> Result<Self, ChainBackendError> {
+    pub async fn connect(
+        config: Bip37Config,
+        headers: Arc<dyn BlockHeaderSource>,
+    ) -> Result<Self, ChainBackendError> {
         if config.endpoint.kind != EndpointKind::BchP2p {
             return Err(ChainBackendError::Rejected(
                 "BIP37 requires a BCH P2P endpoint".into(),
@@ -240,13 +244,11 @@ impl Bip37Backend {
                 },
             );
         }
-        let mut headers = HeaderCache::default();
-        headers.by_height.insert(0, genesis_hash(&config.network));
         Ok(Self {
             config,
             capabilities,
             probe,
-            headers: Mutex::new(headers),
+            headers,
             shv_status: Mutex::new(None),
         })
     }
@@ -265,7 +267,15 @@ impl Bip37Backend {
                 "BIP37 getheaders starts after a locator; request height 1 or later".into(),
             ));
         }
-        let locator = self.headers.lock().await.by_height.get(&(start_height - 1)).copied().ok_or_else(|| ChainBackendError::Rejected("BIP37 header cursor is not cached; sync sequentially from the known checkpoint".into()))?;
+        // `getheaders` names its starting point by hash, so the block below
+        // the requested height has to be one the runtime already accepted.
+        let locator = self.headers.hash_at(start_height - 1).ok_or_else(|| {
+            ChainBackendError::Rejected(format!(
+                "no accepted header at {}: sync forward from the retained range {:?}",
+                start_height - 1,
+                self.headers.retained_span()
+            ))
+        })?;
         let port = self
             .config
             .endpoint
@@ -281,13 +291,10 @@ impl Bip37Backend {
         .await
         .map_err(ChainBackendError::Protocol)?;
         headers.truncate(count as usize);
-        let mut cache = self.headers.lock().await;
-        for (offset, header) in headers.iter().enumerate() {
-            cache.by_height.insert(
-                start_height.saturating_add(offset as u32),
-                double_sha256(header),
-            );
-        }
+        // Deliberately not stored here. These are unverified until the runtime
+        // has checked linkage, proof-of-work and difficulty; writing them into
+        // the accepted store from inside a provider is exactly the second
+        // chain authority this migration removes.
         let last = headers.last().map(|header| {
             (
                 start_height + headers.len() as u32 - 1,
@@ -348,27 +355,26 @@ impl Bip37Backend {
                 "BIP37 refresh needs a wallet birth height; a scan from the genesis block is not a supported sync".into(),
             ));
         };
-        let cache = self.headers.lock().await;
-        let blocks = cache
-            .by_height
-            .range(start..)
-            .map(|(height, hash)| (*height, *hash))
-            .collect::<Vec<_>>();
-        let tip = cache
-            .by_height
-            .iter()
-            .next_back()
-            .map(|(height, hash)| ChainTip {
-                height: *height,
-                hash: *hash,
-            });
-        drop(cache);
-        if blocks.is_empty() {
+        // One `getdata` per block, so the range has to be complete: a short
+        // one would look like blocks with no wallet activity rather than
+        // blocks that were never examined.
+        let Some((_, tip_height)) = self.headers.retained_span() else {
             return Err(ChainBackendError::Rejected(
-                "BIP37 has no cached headers in the requested range; header sync must run first"
-                    .into(),
+                "no accepted headers yet; header sync must run first".into(),
             ));
-        }
+        };
+        let blocks = self
+            .headers
+            .range_inclusive(start, tip_height)
+            .map_err(|error| {
+                ChainBackendError::Rejected(format!(
+                    "accepted headers do not cover {start}..={tip_height}: {error:?}"
+                ))
+            })?;
+        let tip = self
+            .headers
+            .tip()
+            .map(|(height, hash)| ChainTip { height, hash });
         let port = self
             .config
             .endpoint
@@ -1255,7 +1261,7 @@ mod tests {
                 serves_bloom: true,
                 serves_shv: false,
             },
-            headers: Mutex::new(HeaderCache::default()),
+            headers: test_headers(),
             shv_status: Mutex::new(None),
         };
         for unsupported in [
@@ -1296,7 +1302,7 @@ mod tests {
                 serves_bloom: true,
                 serves_shv: false,
             },
-            headers: Mutex::new(HeaderCache::default()),
+            headers: test_headers(),
             shv_status: Mutex::new(None),
         };
         let mut script = vec![0x76, 0xa9, 0x14];
@@ -1312,13 +1318,14 @@ mod tests {
         );
 
         // With a birth height the request gets past the gate and fails later,
-        // on the empty header cache, rather than being refused up front.
-        assert_eq!(
-            backend.wallet_refresh(&interests, Some(500)).await,
-            Err(ChainBackendError::Rejected(
-                "BIP37 has no cached headers in the requested range; header sync must run first"
-                    .into()
-            ))
+        // on coverage: the shared store holds only genesis, so it cannot
+        // supply a contiguous 500..=tip range. The message names the gap
+        // rather than reporting an empty scan.
+        let uncovered = backend.wallet_refresh(&interests, Some(500)).await;
+        assert!(
+            matches!(&uncovered, Err(ChainBackendError::Rejected(message))
+                if message.contains("do not cover")),
+            "expected a coverage refusal, got {uncovered:?}"
         );
     }
 
@@ -1346,7 +1353,7 @@ mod tests {
             ),
             capabilities: CapabilitySet::default(),
             probe,
-            headers: Mutex::new(HeaderCache::default()),
+            headers: test_headers(),
             shv_status: Mutex::new(None),
         }
     }
@@ -1545,6 +1552,13 @@ mod tests {
         }
     }
 
+    /// A shared store seeded with genesis, standing in for the runtime's.
+    fn test_headers() -> Arc<dyn BlockHeaderSource> {
+        let store = optn_runtime::header_store::SharedHeaders::default();
+        store.write(|retained| retained.insert_hash_only(0, genesis_hash("chipnet")));
+        Arc::new(store)
+    }
+
     fn backend_at(port: u16, serves_shv: bool) -> Bip37Backend {
         Bip37Backend {
             config: Bip37Config::new(
@@ -1558,7 +1572,7 @@ mod tests {
             ),
             capabilities: CapabilitySet::default(),
             probe: probe(serves_shv),
-            headers: Mutex::new(HeaderCache::default()),
+            headers: test_headers(),
             shv_status: Mutex::new(None),
         }
     }

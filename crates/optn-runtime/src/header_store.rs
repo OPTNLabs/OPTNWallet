@@ -155,6 +155,20 @@ impl RetainedHeaders {
         Ok(())
     }
 
+    /// Record a height whose hash is known but whose header is not retained.
+    ///
+    /// The same shape a pruned tail has. Used to seed a network's genesis,
+    /// which is chain identity rather than something a peer supplied.
+    pub fn insert_hash_only(&mut self, height: u32, hash: Hash32) {
+        if let Some(displaced) = self
+            .by_height
+            .insert(height, Retained { hash, header: None })
+        {
+            self.by_hash.remove(&displaced.hash);
+        }
+        self.by_hash.insert(hash, height);
+    }
+
     /// Every `(height, hash)` from `start` to `end` inclusive.
     ///
     /// Contiguous or nothing. A Bloom scan issues one request per entry, so a
@@ -245,6 +259,78 @@ impl RetainedHeaders {
             }
         }
         self.generation = self.generation.next();
+    }
+}
+
+/// Read access to the runtime's accepted block headers.
+///
+/// The contract providers see. Deliberately read-only: a provider fetches
+/// headers and returns them as observations, and the runtime verifies them and
+/// writes them here. Handing a provider a writer would put it back in the
+/// business of deciding what the accepted chain is.
+///
+/// Neither provider implements this, and neither depends on the other to get
+/// it: both are handed the same `Arc<dyn BlockHeaderSource>` by the runtime.
+pub trait BlockHeaderSource: Send + Sync + std::fmt::Debug {
+    /// Which accepted chain these answers belong to. A caller that caches
+    /// anything derived from them compares this to detect a reorg.
+    fn generation(&self) -> ChainGeneration;
+    fn tip(&self) -> Option<(u32, Hash32)>;
+    fn hash_at(&self, height: u32) -> Option<Hash32>;
+    fn height_of(&self, hash: &Hash32) -> Option<u32>;
+    fn retained_span(&self) -> Option<(u32, u32)>;
+    /// Contiguous or an error. Never a short result.
+    fn range_inclusive(&self, start: u32, end: u32)
+        -> Result<Vec<(u32, Hash32)>, HeaderStoreError>;
+    /// The `count` blocks before `height`, oldest first.
+    fn preceding(&self, height: u32, count: usize) -> Result<Vec<(u32, Hash32)>, HeaderStoreError>;
+}
+
+/// The runtime's own store behind a shared lock, handed to providers as a
+/// [`BlockHeaderSource`].
+#[derive(Debug, Default)]
+pub struct SharedHeaders(std::sync::RwLock<RetainedHeaders>);
+
+impl SharedHeaders {
+    pub fn new(headers: RetainedHeaders) -> Self {
+        Self(std::sync::RwLock::new(headers))
+    }
+
+    /// Write access, for the runtime only. Providers get the trait.
+    pub fn write<R>(&self, edit: impl FnOnce(&mut RetainedHeaders) -> R) -> R {
+        edit(&mut self.0.write().expect("header store lock poisoned"))
+    }
+
+    fn read<R>(&self, view: impl FnOnce(&RetainedHeaders) -> R) -> R {
+        view(&self.0.read().expect("header store lock poisoned"))
+    }
+}
+
+impl BlockHeaderSource for SharedHeaders {
+    fn generation(&self) -> ChainGeneration {
+        self.read(RetainedHeaders::generation)
+    }
+    fn tip(&self) -> Option<(u32, Hash32)> {
+        self.read(RetainedHeaders::tip)
+    }
+    fn hash_at(&self, height: u32) -> Option<Hash32> {
+        self.read(|store| store.hash_at(height))
+    }
+    fn height_of(&self, hash: &Hash32) -> Option<u32> {
+        self.read(|store| store.height_of(hash))
+    }
+    fn retained_span(&self) -> Option<(u32, u32)> {
+        self.read(RetainedHeaders::retained_span)
+    }
+    fn range_inclusive(
+        &self,
+        start: u32,
+        end: u32,
+    ) -> Result<Vec<(u32, Hash32)>, HeaderStoreError> {
+        self.read(|store| store.range_inclusive(start, end))
+    }
+    fn preceding(&self, height: u32, count: usize) -> Result<Vec<(u32, Hash32)>, HeaderStoreError> {
+        self.read(|store| store.preceding(height, count))
     }
 }
 
