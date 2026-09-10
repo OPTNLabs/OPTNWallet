@@ -1286,6 +1286,47 @@ async fn relay_tx_on_stream<S: AsyncReadExt + AsyncWriteExt + Unpin>(
 
 #[cfg(test)]
 mod tests {
+    /// A network with parameters of its own must have a genesis of its own.
+    ///
+    /// Both tables end in a catch-all that returns mainnet. A network added to
+    /// one and forgotten in the other therefore fails silently rather than
+    /// loudly: the wallet handshakes fine, then asks the peer to commit to
+    /// mainnet's genesis on a chain that has never heard of it, and every
+    /// request quietly times out. Regtest shipped exactly that way -- known to
+    /// `params_for`, missing from `genesis_hash` -- and the capability probe
+    /// reported the node simply could not do the job.
+    #[test]
+    fn every_network_with_its_own_params_has_its_own_genesis() {
+        let mainnet_params = params_for("mainnet");
+        let mainnet_genesis = genesis_hash("mainnet");
+        for network in ["chipnet", "testnet4", "testnet", "testnet3", "regtest"] {
+            assert_ne!(
+                params_for(network),
+                mainnet_params,
+                "{network} has no parameters of its own"
+            );
+            assert_ne!(
+                genesis_hash(network),
+                mainnet_genesis,
+                "{network} falls through to mainnet's genesis"
+            );
+        }
+    }
+
+    /// The value a BCHD regtest node reports for `getblockhash 0`.
+    #[test]
+    fn the_regtest_genesis_matches_what_a_node_reports() {
+        let display: String = genesis_hash("regtest")
+            .iter()
+            .rev()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        assert_eq!(
+            display,
+            "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"
+        );
+    }
+
     use super::*;
 
     #[tokio::test]

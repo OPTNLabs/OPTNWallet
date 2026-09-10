@@ -97,6 +97,21 @@ pub fn genesis_hash(network: &str) -> [u8; 32] {
             0xcc, 0x18, 0x17, 0x75, 0x26, 0xce, 0x68, 0x86, 0x78, 0x9a, 0xc4, 0x10, 0xd4, 0x1d, 0,
             0, 0, 0,
         ],
+        // Regtest genesis: version 1, nTime 1296688602, nBits 0x207fffff,
+        // nonce 2. Display hash
+        // 0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206,
+        // stored here in internal order.
+        //
+        // `params_for` above already knew regtest, so the handshake succeeded
+        // and only this lookup was wrong: the genesis probe asked the node to
+        // commit to mainnet's genesis on a regtest chain, got nothing back,
+        // and the whole compact-filter capability was marked unusable. The
+        // same arm was missing from the BIP37 copy of this table.
+        "regtest" => [
+            0x06, 0x22, 0x6e, 0x46, 0x11, 0x1a, 0x0b, 0x59, 0xca, 0xaf, 0x12, 0x60, 0x43, 0xeb,
+            0x5b, 0xbf, 0x28, 0xc3, 0x4f, 0x3a, 0x5e, 0x33, 0x2a, 0x1f, 0xc7, 0xb2, 0xb7, 0x3c,
+            0xf1, 0x88, 0x91, 0x0f,
+        ],
         "testnet" | "testnet3" => [
             0x43, 0x49, 0x7f, 0xd7, 0xf8, 0x26, 0x95, 0x71, 0x08, 0xf4, 0xa3, 0x0f, 0xd9, 0xce,
             0xc3, 0xae, 0xba, 0x79, 0x97, 0x20, 0x84, 0xe9, 0x0e, 0xad, 0x01, 0xea, 0x33, 0x09, 0,
@@ -1288,6 +1303,47 @@ fn nonce() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    /// A network with parameters of its own must have a genesis of its own.
+    ///
+    /// Both tables end in a catch-all that returns mainnet. A network added to
+    /// one and forgotten in the other therefore fails silently rather than
+    /// loudly: the wallet handshakes fine, then asks the peer to commit to
+    /// mainnet's genesis on a chain that has never heard of it, and every
+    /// request quietly times out. Regtest shipped exactly that way -- known to
+    /// `params_for`, missing from `genesis_hash` -- and the capability probe
+    /// reported the node simply could not do the job.
+    #[test]
+    fn every_network_with_its_own_params_has_its_own_genesis() {
+        let mainnet_params = params_for("mainnet");
+        let mainnet_genesis = genesis_hash("mainnet");
+        for network in ["chipnet", "testnet4", "testnet", "testnet3", "regtest"] {
+            assert_ne!(
+                params_for(network),
+                mainnet_params,
+                "{network} has no parameters of its own"
+            );
+            assert_ne!(
+                genesis_hash(network),
+                mainnet_genesis,
+                "{network} falls through to mainnet's genesis"
+            );
+        }
+    }
+
+    /// The value a BCHD regtest node reports for `getblockhash 0`.
+    #[test]
+    fn the_regtest_genesis_matches_what_a_node_reports() {
+        let display: String = genesis_hash("regtest")
+            .iter()
+            .rev()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        assert_eq!(
+            display,
+            "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"
+        );
+    }
+
     use super::*;
 
     #[test]
