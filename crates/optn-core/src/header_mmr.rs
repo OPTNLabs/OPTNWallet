@@ -449,3 +449,237 @@ mod tests {
         assert!(mmr.verify_proof_to_peak(1, leaf(2), &[leaf(1)]));
     }
 }
+
+/// Cross-check against the reference accumulator's own published vectors.
+///
+/// Source: `A60AB5450353F40E/mmr-accumulator`, `test_vectors/mmr_test_vectors.json`
+/// at commit `eb4f99afc0cd3c6cb56865bed71cd95fe14b64ae` ("Proof-to-Peak
+/// optimization"), vendored to `test-vectors/shv-mmr-accumulator.json`. That is
+/// the library the Electron Cash `mmr4` checkpoint extender imports, so these
+/// vectors are the same ones the SHV reference implementation is held to.
+///
+/// The vectors carry real Bitcoin mainnet data: block Merkle roots, the first
+/// sixteen header hashes, live Electrum `cp_height` proofs, and the
+/// CVE-2012-2459 forgery. Agreement here is what makes "OPTN's MMR is the
+/// commitment Fulcrum already serves" a checked statement rather than a claim.
+#[cfg(test)]
+mod reference_vectors {
+    use super::*;
+    use crate::header_hash::sha256d;
+    use serde_json::Value;
+
+    const RAW: &str = include_str!("../../../test-vectors/shv-mmr-accumulator.json");
+
+    fn doc() -> Value {
+        serde_json::from_str(RAW).expect("reference vectors are valid JSON")
+    }
+
+    /// Display hex is big-endian; the accumulator works in internal order.
+    /// The reference does the same reversal when it takes Electrum branches.
+    fn display_hash(value: &str) -> Hash32 {
+        let mut bytes = decode_hex(value);
+        bytes.reverse();
+        bytes.try_into().expect("32-byte hash")
+    }
+
+    fn decode_hex(value: &str) -> Vec<u8> {
+        (0..value.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&value[i..i + 2], 16).expect("hex"))
+            .collect()
+    }
+
+    fn accumulator_of(leaves: &[Hash32]) -> MmrAccumulator {
+        let mut mmr = MmrAccumulator::new();
+        for leaf in leaves {
+            mmr.extend(*leaf);
+        }
+        mmr
+    }
+
+    fn branch_of(entry: &Value) -> Vec<Hash32> {
+        entry["branch"]
+            .as_array()
+            .expect("branch")
+            .iter()
+            .map(|item| display_hash(item.as_str().expect("sibling")))
+            .collect()
+    }
+
+    fn leaf_of(entry: &Value) -> Hash32 {
+        sha256d(&decode_hex(entry["header"].as_str().expect("header")))
+    }
+
+    /// Every Bitcoin Merkle tree contains this MMR, so bagging the peaks over a
+    /// block's transaction ids must reproduce that block's `merkleroot`.
+    #[test]
+    fn block_merkle_roots_match_the_bagged_peaks() {
+        let doc = doc();
+        let blocks = doc["blocks"].as_object().expect("blocks");
+        assert!(!blocks.is_empty());
+        for (height, block) in blocks {
+            let leaves = block["tx"]
+                .as_array()
+                .expect("tx list")
+                .iter()
+                .map(|tx| display_hash(tx.as_str().expect("txid")))
+                .collect::<Vec<_>>();
+            let mut expected = display_hash(block["merkleroot"].as_str().expect("merkleroot"));
+            let mmr = accumulator_of(&leaves);
+            assert_eq!(mmr.root(), expected, "block {height}");
+            expected[0] ^= 1;
+            assert_ne!(mmr.root(), expected);
+        }
+    }
+
+    /// Live Electrum `blockchain.block.header(height, cp_height)` proofs.
+    ///
+    /// For each checkpoint the last-leaf proof bootstraps the accumulator, and
+    /// every other proof at that checkpoint then verifies against it.
+    #[test]
+    fn electrum_checkpoint_proofs_bootstrap_and_verify() {
+        let doc = doc();
+        let proofs = doc["electrum_proofs"].as_object().expect("electrum_proofs");
+        assert!(proofs.len() >= 8, "vector set shrank unexpectedly");
+
+        let mut checked_bootstraps = 0usize;
+        let mut checked_members = 0usize;
+
+        for proof in proofs.values() {
+            let cp_height = proof["cp_height"].as_u64().expect("cp_height") as u32;
+            let height = proof["height"].as_u64().expect("height") as u32;
+            if height != cp_height {
+                continue;
+            }
+            let root = display_hash(proof["root"].as_str().expect("root"));
+            let restored = MmrAccumulator::bootstrap_from_last_leaf_proof(
+                u64::from(cp_height) + 1,
+                leaf_of(proof),
+                &branch_of(proof),
+            )
+            .unwrap_or_else(|| panic!("cp {cp_height} last-leaf proof must bootstrap"));
+            assert_eq!(restored.root(), root, "cp {cp_height} root");
+            assert_eq!(restored.leaf_count(), u64::from(cp_height) + 1);
+            assert_eq!(
+                restored.peak_count(),
+                restored.leaf_count().count_ones() as usize
+            );
+            checked_bootstraps += 1;
+
+            for member in proofs.values() {
+                if member["cp_height"].as_u64().expect("cp_height") as u32 != cp_height {
+                    continue;
+                }
+                let member_height = member["height"].as_u64().expect("height") as u32;
+                let member_leaf = leaf_of(member);
+                let member_branch = branch_of(member);
+                assert!(
+                    restored.verify_proof_to_root(
+                        u64::from(member_height),
+                        member_leaf,
+                        &member_branch
+                    ),
+                    "cp {cp_height} proof for height {member_height} must verify"
+                );
+                if let Some(first) = member_branch.first().copied() {
+                    let mut tampered = member_branch.clone();
+                    tampered[0][0] = first[0] ^ 1;
+                    assert!(!restored.verify_proof_to_root(
+                        u64::from(member_height),
+                        member_leaf,
+                        &tampered
+                    ));
+                }
+                checked_members += 1;
+            }
+        }
+
+        assert!(checked_bootstraps >= 3, "expected several checkpoints");
+        assert!(checked_members >= 6, "expected several member proofs");
+    }
+
+    /// CVE-2012-2459: a 16-leaf tree of duplicated tail hashes bags to the same
+    /// root as the real 11-leaf tree.
+    ///
+    /// Reproducing the collision proves our root function matches the
+    /// reference. Refusing the phantom leaves is the part that matters: the
+    /// real accumulator commits to 11 leaves, so a proof claiming index 11-15
+    /// is rejected on the leaf count rather than on the hashes.
+    #[test]
+    fn the_cve_2012_2459_forgery_collides_but_is_not_accepted() {
+        let doc = doc();
+        let cve = &doc["cve_2012_2459"];
+        let real_leaf_count = cve["real_leaf_count"].as_u64().expect("real_leaf_count");
+        let forged_leaf_count = cve["forged_leaf_count"]
+            .as_u64()
+            .expect("forged_leaf_count");
+        let root = display_hash(cve["root"].as_str().expect("root"));
+
+        let hashes = |key: &str| -> Vec<Hash32> {
+            doc["header_segments"][key]["header_hashes"]
+                .as_array()
+                .expect("header_hashes")
+                .iter()
+                .map(|item| display_hash(item.as_str().expect("hash")))
+                .collect()
+        };
+
+        let real = accumulator_of(&hashes("first_16")[..real_leaf_count as usize]);
+        assert_eq!(real.root(), root, "real 11-leaf root");
+
+        let forged = accumulator_of(&hashes("first_16_forged")[..forged_leaf_count as usize]);
+        assert_eq!(
+            forged.root(),
+            root,
+            "the forged tree really does collide -- this is the CVE"
+        );
+        assert_ne!(real.leaf_count(), forged.leaf_count());
+
+        let proofs = doc["electrum_proofs"].as_object().expect("electrum_proofs");
+        for mapping in cve["forged_proof_mappings"]
+            .as_array()
+            .expect("forged_proof_mappings")
+        {
+            let forged_index = mapping["forged_index"].as_u64().expect("forged_index");
+            let source = &proofs[mapping["proof_key"].as_str().expect("proof_key")];
+            assert!(
+                forged_index >= real.leaf_count(),
+                "mapping should describe a phantom leaf"
+            );
+            assert!(
+                !real.verify_proof_to_root(forged_index, leaf_of(source), &branch_of(source)),
+                "phantom leaf {forged_index} must not verify against the real accumulator"
+            );
+        }
+    }
+
+    /// Extending leaf by leaf must land on the same state a bootstrap does.
+    #[test]
+    fn extending_the_first_sixteen_headers_matches_the_published_segment() {
+        let doc = doc();
+        let segment = &doc["header_segments"]["first_16"];
+        assert_eq!(segment["start_height"].as_u64(), Some(0));
+        let leaves = segment["header_hashes"]
+            .as_array()
+            .expect("header_hashes")
+            .iter()
+            .map(|item| display_hash(item.as_str().expect("hash")))
+            .collect::<Vec<_>>();
+        assert_eq!(leaves.len(), 16);
+
+        let mut mmr = MmrAccumulator::new();
+        for (index, leaf) in leaves.iter().enumerate() {
+            let proof = mmr.proof_for_next_leaf(*leaf);
+            mmr.extend(*leaf);
+            assert_eq!(mmr.leaf_count(), index as u64 + 1);
+            assert_eq!(mmr.peak_count(), mmr.leaf_count().count_ones() as usize);
+            assert!(mmr.verify_proof_to_root(index as u64, *leaf, &proof));
+            let restored =
+                MmrAccumulator::bootstrap_from_last_leaf_proof(mmr.leaf_count(), *leaf, &proof)
+                    .expect("tip proof restores the accumulator");
+            assert_eq!(restored, mmr);
+        }
+        // 16 leaves is a single perfect tree: exactly one peak.
+        assert_eq!(mmr.peak_count(), 1);
+    }
+}
