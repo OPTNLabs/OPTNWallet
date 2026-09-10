@@ -981,6 +981,44 @@ mod tests {
         );
     }
 
+    /// Pins the honest state of the pruned-history path.
+    ///
+    /// `getheaders`/`headers` carries headers, not MMR proof siblings, so this
+    /// backend cannot serve a historical inclusion proof and does not claim to.
+    /// Today the only provider that answers `HistoricalHeaderProof` is Electrum
+    /// via `cp_height`, which means a BIP37-only or Privacy policy has no proof
+    /// route at all and must degrade explicitly rather than reach for an
+    /// indexer. If a P2P proof-serving extension is added, this test should
+    /// fail and be updated deliberately.
+    #[test]
+    fn bip37_does_not_claim_to_serve_historical_header_proofs() {
+        let backend = Bip37Backend {
+            config: Bip37Config::new(
+                SourceId::new("local-test"),
+                Endpoint {
+                    kind: EndpointKind::BchP2p,
+                    host: "127.0.0.1".into(),
+                    port: Some(1),
+                },
+                "chipnet",
+            ),
+            capabilities: CapabilitySet::default(),
+            probe: NodeProbe {
+                user_agent: "test".into(),
+                protocol_version: 70015,
+                services: 4,
+                start_height: 0,
+                serves_bloom: true,
+            },
+            headers: Mutex::new(HeaderCache::default()),
+        };
+        assert!(!backend.supports(ChainOperation::HistoricalHeaderProof));
+        assert!(
+            backend.supports(ChainOperation::HeaderSync),
+            "headers are served; proofs are not"
+        );
+    }
+
     #[test]
     fn p2pkh_script_produces_hash_push() {
         let mut script = vec![0x76, 0xa9, 0x14];

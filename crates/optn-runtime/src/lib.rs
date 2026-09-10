@@ -42,6 +42,7 @@ pub mod sync_worker;
 pub mod tx_broadcast;
 /// Framework-neutral authenticated wallet-update state/provider scaffolding.
 pub mod update;
+pub mod wallet_birthday;
 /// Authenticated HD restart state; storage never grants unlock or spend authority.
 pub mod wallet_checkpoint;
 /// Private ciphertext sessions and password verification shared by native hosts.
