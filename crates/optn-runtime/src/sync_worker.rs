@@ -5,13 +5,15 @@
 //! route. Route-local prerequisites (BIP37/Neutrino header cursors) stay on the
 //! same endpoint via `ChainService::execute_on_route`.
 
-use crate::chain::{BlockHeaderBytes, HeaderVerifier, ProtocolFamily, SourceId};
+use crate::chain::{BlockHeaderBytes, ProtocolFamily, SourceId};
 use crate::chain_service::{
     CapabilityRoute, ChainOperation, ChainPayload, ChainRequest, ChainService, ChainServiceError,
     ChainTip, ObservedTransaction, WalletInterest,
 };
 use crate::header_verifier::{ShvMmrError, ShvMmrHeaderVerifier};
+use crate::header_view::{HeaderViewError, VerifiedHeaderView};
 use crate::reconciliation::{evidence_strength, ReconciliationDecision, ReconciliationState};
+use optn_core::network::Network;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WalletNetworkSnapshot {
@@ -338,6 +340,7 @@ pub enum ProgressiveSyncError {
     MissingRefreshBaseline,
     InconsistentRefreshScope,
     HeaderVerification(ShvMmrError),
+    HeaderView(HeaderViewError),
     InvalidHeaderRange,
     Chain(ChainServiceError),
     UnexpectedPayload,
@@ -347,7 +350,9 @@ pub enum ProgressiveSyncError {
 pub struct ProgressiveSyncWorker {
     config: ProgressiveSyncConfig,
     reconciliation: ReconciliationState<WalletNetworkSnapshot>,
-    header_verifier: Option<ShvMmrHeaderVerifier>,
+    /// The runtime's shared verified header view, not a worker-local cache.
+    /// Header truth is per network and outlives any one provider or sync run.
+    header_view: Option<VerifiedHeaderView>,
 }
 
 impl ProgressiveSyncWorker {
@@ -355,25 +360,52 @@ impl ProgressiveSyncWorker {
         Self {
             config,
             reconciliation: ReconciliationState::default(),
-            header_verifier: None,
+            header_view: None,
         }
     }
 
     /// The host supplies a trusted checkpoint and the selected network's
     /// difficulty context. Provider responses must never choose either.
+    ///
+    /// The network is required because a verified header view belongs to one
+    /// chain; a checkpoint without the chain it was taken on is not trusted
+    /// material.
     pub fn with_header_verifier(
-        mut self,
+        self,
+        network: Network,
         verifier: ShvMmrHeaderVerifier,
     ) -> Result<Self, ProgressiveSyncError> {
         if !verifier.has_difficulty_context() || verifier.state().is_err() {
             return Err(ProgressiveSyncError::MissingTrustedHeaderVerifier);
         }
-        self.header_verifier = Some(verifier);
+        self.with_header_view(VerifiedHeaderView::new(network, verifier))
+    }
+
+    /// Attach an existing shared view, so a sync run joins the runtime's
+    /// verified progress instead of starting its own.
+    pub fn with_header_view(
+        mut self,
+        view: VerifiedHeaderView,
+    ) -> Result<Self, ProgressiveSyncError> {
+        if !view.verifier().has_difficulty_context() || view.verifier().state().is_err() {
+            return Err(ProgressiveSyncError::MissingTrustedHeaderVerifier);
+        }
+        self.header_view = Some(view);
         Ok(self)
     }
 
+    pub fn header_view(&self) -> Option<&VerifiedHeaderView> {
+        self.header_view.as_ref()
+    }
+
+    /// Take the advanced view back, so the host can persist it and hand it to
+    /// the next sync run or a different provider.
+    pub fn into_header_view(self) -> Option<VerifiedHeaderView> {
+        self.header_view
+    }
+
     pub fn header_verifier(&self) -> Option<&ShvMmrHeaderVerifier> {
-        self.header_verifier.as_ref()
+        self.header_view.as_ref().map(VerifiedHeaderView::verifier)
     }
 
     pub fn reconciliation(&self) -> &ReconciliationState<WalletNetworkSnapshot> {
@@ -451,9 +483,8 @@ impl ProgressiveSyncWorker {
                         route.protocol,
                         ProtocolFamily::Bip37 | ProtocolFamily::Neutrino
                     ) {
-                        let verified_tip = self.header_verifier.as_ref().and_then(|verifier| {
-                            Some((verifier.state().ok()?.height, verifier.last_hash()?))
-                        });
+                        let verified_tip =
+                            self.header_view.as_ref().and_then(VerifiedHeaderView::tip);
                         let reported_tip = tip.as_ref().map(|tip| (tip.height, tip.hash));
                         if verified_tip.is_none()
                             || reported_tip != verified_tip
@@ -531,8 +562,8 @@ impl ProgressiveSyncWorker {
     ) -> Result<(), ProgressiveSyncError> {
         // Work on a candidate so a failed route cannot poison another route's
         // trusted cursor. Publish only after the complete bounded header pass.
-        let mut verifier = self
-            .header_verifier
+        let mut view = self
+            .header_view
             .clone()
             .ok_or(ProgressiveSyncError::MissingTrustedHeaderVerifier)?;
         let header_route = service
@@ -548,7 +579,8 @@ impl ProgressiveSyncWorker {
                 protocol: wallet_route.protocol,
             })?;
 
-        let mut start = verifier
+        let mut start = view
+            .verifier()
             .state()
             .map_err(ProgressiveSyncError::HeaderVerification)?
             .height
@@ -576,24 +608,23 @@ impl ProgressiveSyncWorker {
                 return Err(ProgressiveSyncError::InvalidHeaderRange);
             }
             if headers.is_empty() {
-                self.header_verifier = Some(verifier);
+                self.header_view = Some(view);
                 return Ok(());
             }
             let returned = u32::try_from(headers.len())
                 .map_err(|_| ProgressiveSyncError::HeaderSafetyLimit)?;
-            verifier
-                .extend(
-                    &headers
-                        .into_iter()
-                        .map(BlockHeaderBytes)
-                        .collect::<Vec<_>>(),
-                )
-                .map_err(ProgressiveSyncError::HeaderVerification)?;
+            view.extend(
+                &headers
+                    .into_iter()
+                    .map(BlockHeaderBytes)
+                    .collect::<Vec<_>>(),
+            )
+            .map_err(ProgressiveSyncError::HeaderView)?;
             start = start_height
                 .checked_add(returned)
                 .ok_or(ProgressiveSyncError::HeaderSafetyLimit)?;
             if returned < self.config.header_batch_size.max(1) {
-                self.header_verifier = Some(verifier);
+                self.header_view = Some(view);
                 return Ok(());
             }
         }
@@ -604,6 +635,9 @@ impl ProgressiveSyncWorker {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    // The worker itself drives the shared view; these tests still exercise the
+    // verifier trait directly to build fixtures.
+    use crate::chain::HeaderVerifier;
     use crate::chain::{
         Capability, CapabilityConfidence, CapabilityDiscovery, CapabilitySet, ChainSource,
         ConnectionPolicy, Endpoint, EndpointKind, Evidence, ProviderHealth, SourceCatalog,
@@ -822,7 +856,7 @@ pub(crate) mod tests {
                 ..Default::default()
             };
             let mut worker = ProgressiveSyncWorker::new(config)
-                .with_header_verifier(verifier.clone())
+                .with_header_verifier(Network::Chipnet, verifier.clone())
                 .unwrap();
             let mut service =
                 service_with_headers(protocol, headers.clone(), 0, Evidence::ServerAssertion);
@@ -850,7 +884,7 @@ pub(crate) mod tests {
             let mut bad_headers = headers.clone();
             bad_headers[1][4] ^= 1;
             let mut rejected = ProgressiveSyncWorker::new(config)
-                .with_header_verifier(verifier.clone())
+                .with_header_verifier(Network::Chipnet, verifier.clone())
                 .unwrap();
             let mut bad_service =
                 service_with_headers(protocol, bad_headers, 0, Evidence::ServerAssertion);
@@ -899,13 +933,67 @@ pub(crate) mod tests {
         }
     }
 
+    /// Verified progress is the runtime's, not a sync run's.
+    ///
+    /// The worker borrows the shared view, advances it, and hands it back. A
+    /// later run -- or a run against a different provider -- resumes from that
+    /// state instead of re-verifying, which is what makes persisting the view
+    /// worth doing.
+    #[tokio::test]
+    async fn the_advanced_view_can_be_handed_to_the_next_worker() {
+        let (verifier, headers) = header_fixture();
+        let worker = ProgressiveSyncWorker::new(ProgressiveSyncConfig {
+            header_start_height: 1,
+            header_batch_size: 2,
+            max_header_batches: 8,
+        })
+        .with_header_verifier(Network::Chipnet, verifier)
+        .expect("a trusted verifier enables verified P2P sync");
+
+        let before = worker
+            .header_view()
+            .expect("the worker holds the shared view")
+            .tip();
+
+        let mut worker = worker;
+        let mut service =
+            service_with_headers(ProtocolFamily::Bip37, headers, 0, Evidence::ServerAssertion);
+        let route = service
+            .routes_for_operation(ChainOperation::WalletRefresh)
+            .remove(0);
+        worker
+            .prime_headers_on_same_route(&mut service, &route)
+            .await
+            .expect("headers prime on the wallet route");
+
+        let advanced = worker
+            .header_view()
+            .expect("still holds the view")
+            .tip()
+            .expect("a tip after priming");
+        assert_ne!(Some(advanced), before, "the sync run advanced the view");
+
+        // Hand it to a fresh worker: the state travels, not the worker.
+        let carried = worker.into_header_view().expect("view is recoverable");
+        let carried_state = carried.verifier().state().expect("state");
+        let carried_anchors = carried.times().anchors().to_vec();
+
+        let next = ProgressiveSyncWorker::new(ProgressiveSyncConfig::default())
+            .with_header_view(carried)
+            .expect("an advanced view is still a trusted one");
+        let resumed = next.header_view().expect("the next worker holds it");
+        assert_eq!(resumed.verifier().state().expect("state"), carried_state);
+        assert_eq!(resumed.times().anchors(), carried_anchors.as_slice());
+        assert_eq!(resumed.tip(), Some(advanced));
+    }
+
     #[test]
     fn empty_verifier_cannot_enable_verified_sync() {
         let verifier =
             ShvMmrHeaderVerifier::empty(crate::chain::CheckpointProvenance::ShippedReviewed);
         assert!(matches!(
             ProgressiveSyncWorker::new(ProgressiveSyncConfig::default())
-                .with_header_verifier(verifier),
+                .with_header_verifier(Network::Chipnet, verifier),
             Err(ProgressiveSyncError::MissingTrustedHeaderVerifier)
         ));
     }

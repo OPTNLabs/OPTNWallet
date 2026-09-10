@@ -1403,7 +1403,7 @@ fn hd_sync_worker(
     let verifier = optn_runtime::header_verifier::shipped_chipnet_header_verifier()
         .map_err(|e| CliError::Usage(format!("Chipnet header verifier: {e:?}")))?;
     worker
-        .with_header_verifier(verifier)
+        .with_header_verifier(network, verifier)
         .map_err(|e| CliError::Usage(format!("header verifier: {e:?}")))
 }
 
