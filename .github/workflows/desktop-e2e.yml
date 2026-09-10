@@ -1,12 +1,16 @@
 name: Desktop E2E
 
 on:
+  workflow_dispatch:
   pull_request:
     branches: [main, staging, dev]
 
 concurrency:
   group: desktop-e2e-${{ github.ref }}
   cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   desktop-e2e:
@@ -71,3 +75,8 @@ jobs:
             exit 1
           fi
           xvfb-run --auto-servernum --server-args='-screen 0 1280x1024x24' npm run test:e2e
+
+      - name: Create, lock and reopen a Chipnet wallet in an isolated profile
+        env:
+          TAURI_E2E_APP_BINARY: ${{ github.workspace }}/src-tauri/target/debug/optn-wallet-desktop
+        run: xvfb-run --auto-servernum --server-args='-screen 0 1280x1024x24' npm run test:e2e:lifecycle

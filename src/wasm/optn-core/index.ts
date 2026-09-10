@@ -53,3 +53,12 @@ export function ensureOptnCore(): void {
   initSync({ module: decodeBase64(OPTN_CORE_WASM_BASE64) });
   ready = true;
 }
+
+// Initialised on import as well as on demand.
+//
+// Two call styles reach this module and both have to work. The fusion helpers
+// call `ensureOptnCore()` before each operation. The CashConnect signing glue
+// imports the generated bindings directly and never calls anything, so without
+// this line its first call would hit an uninstantiated module. `ensureOptnCore`
+// is idempotent, so paying it here costs the on-demand callers nothing.
+ensureOptnCore();

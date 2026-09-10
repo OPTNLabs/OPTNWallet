@@ -2,7 +2,7 @@
 name = "optn-core"
 version = "1.7.3"
 edition = "2021"
-license = "MIT"
+license = "GPL-3.0-only"
 description = "Protocol core shared by the OPTN CLI and, via wasm32, the wallet."
 
 # Every dependency here is pure Rust on purpose. This crate is built for the
@@ -65,7 +65,10 @@ serde_json = { version = "1", default-features = false, features = ["std"] }
 getrandom = { version = "0.2", features = ["js"] }
 # The binding surface the wallet calls. wasm32 only: no native, riscv64 or
 # armv7 build links wasm-bindgen.
-wasm-bindgen = "0.2"
+# Pinned exactly, and it has to be: wasm-bindgen generates bindings that
+# only load against a CLI of the same version, so a floating minor breaks
+# the wallet at runtime rather than at build time.
+wasm-bindgen = "=0.2.127"
 js-sys = "0.3"
 
 [lints.rust]

@@ -10,9 +10,8 @@ name: CLI Preview
 # touches the right directory is a job that silently stops covering everything
 # else, and a required check that never runs stays "Expected" forever.
 #
-# The crate itself arrives in a separate pull request. This probes for it, so
-# branches without it report that plainly and pass, and the builds arm
-# themselves the moment it lands.
+# The CLI is part of the supported application. Removing its crate must fail
+# this workflow, rather than silently skipping all seven targets.
 
 on:
   pull_request:
@@ -48,8 +47,8 @@ jobs:
             echo 'present=true' >> "$GITHUB_OUTPUT"
             echo 'The optn CLI is in this tree; every target is required.'
           else
-            echo 'present=false' >> "$GITHUB_OUTPUT"
-            echo '::notice::crates/optn-cli is not in this tree; nothing to build.'
+            echo '::error::the required crates/optn-cli/Cargo.toml is missing'
+            exit 1
           fi
 
   build:
@@ -147,6 +146,11 @@ jobs:
         working-directory: crates/optn-cli
         run: cargo test --target ${{ matrix.target }}
 
+      - name: Test shared Rust core on the native target
+        if: env.CLI_PRESENT == 'true' && matrix.cross-package == ''
+        working-directory: crates/optn-core
+        run: cargo test --locked --target ${{ matrix.target }}
+
       - name: Build
         if: env.CLI_PRESENT == 'true'
         working-directory: crates/optn-cli
@@ -191,9 +195,16 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Nothing to check
-        if: needs.probe.outputs.present != 'true'
-        run: echo 'The optn CLI is not in this tree; no binaries expected.'
+      - name: Require every CLI build to succeed
+        env:
+          PROBE_RESULT: ${{ needs.probe.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          CLI_PRESENT: ${{ needs.probe.outputs.present }}
+        run: |
+          if [ "$PROBE_RESULT" != success ] || [ "$BUILD_RESULT" != success ] || [ "$CLI_PRESENT" != true ]; then
+            echo '::error::the CLI probe or a required build failed, was cancelled, or was skipped'
+            exit 1
+          fi
 
       - name: Download every CLI artifact
         if: needs.probe.outputs.present == 'true'

@@ -23,6 +23,23 @@ const baseTranslations = {
   en: {
     ...coreTranslations.en,
     ...remainingTranslations.en,
+    'connection.relayAvailable':
+      'Relay available — dApp connection not verified',
+    'connection.reconnecting': 'Reconnecting to relay',
+    'connection.disconnected': 'Relay disconnected',
+    'connection.sessionEnded': 'Session ended',
+    'connection.unknown': 'Connection status unavailable',
+    'connection.expired': 'Session expired',
+    'connection.sessionAuthorized':
+      'Session authorized — dApp availability unknown',
+    'connection.awaitingAcknowledgement': 'Waiting for session acknowledgement',
+    'connection.awaitingApproval': 'Waiting for your approval',
+    'connection.savedSessions': 'Saved sessions',
+    'connection.noSavedSessions': 'No saved sessions',
+    'connection.attempts': 'Connection attempts',
+    'connection.attemptStarted': 'Attempt started',
+    'connection.failed':
+      'Connection attempt failed. Retry pairing to try again.',
     'app.language': 'Language',
     'app.languageDescription': 'Choose the wallet interface language',
     'app.back': 'Back',
@@ -523,6 +540,8 @@ const baseTranslations = {
  */
 export const translations = {
   ...baseTranslations,
+  es: { ...baseTranslations.en, ...baseTranslations.es },
+  'zh-CN': { ...baseTranslations.en, ...baseTranslations['zh-CN'] },
   'pt-BR': {
     ...baseTranslations.en,
     ...localeOverrides['pt-BR'],
@@ -587,6 +606,22 @@ export const translations = {
     ...baseTranslations.en,
     ...localeOverrides.ar,
     ...localeHardwareOverrides.ar,
+    'connection.relayAvailable':
+      'خادم الترحيل متاح — لم يُتحقق من اتصال التطبيق اللامركزي',
+    'connection.reconnecting': 'جارٍ إعادة الاتصال بخادم الترحيل',
+    'connection.disconnected': 'الاتصال بخادم الترحيل منقطع',
+    'connection.sessionEnded': 'انتهت الجلسة',
+    'connection.unknown': 'حالة الاتصال غير متاحة',
+    'connection.expired': 'انتهت صلاحية الجلسة',
+    'connection.sessionAuthorized':
+      'الجلسة مصرح بها — توفر التطبيق اللامركزي غير معروف',
+    'connection.awaitingAcknowledgement': 'بانتظار تأكيد الجلسة',
+    'connection.awaitingApproval': 'بانتظار موافقتك',
+    'connection.savedSessions': 'الجلسات المحفوظة',
+    'connection.noSavedSessions': 'لا توجد جلسات محفوظة',
+    'connection.attempts': 'محاولات الاتصال',
+    'connection.attemptStarted': 'بدء المحاولة',
+    'connection.failed': 'فشلت محاولة الاتصال. أعد الاقتران للمحاولة مجددًا.',
   },
   fr: {
     ...baseTranslations.en,

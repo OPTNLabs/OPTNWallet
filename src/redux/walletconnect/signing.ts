@@ -1,21 +1,12 @@
 import {
-  importWalletTemplate,
-  walletTemplateP2pkhNonHd,
-  walletTemplateToCompilerBCH,
-  generateTransaction,
   encodeTransaction,
   sha256,
   binToHex,
   hexToBin,
   type TransactionCommon,
-  type TransactionTemplateFixed,
   type Input,
   type Output,
-  SigningSerializationFlag,
   CompilationContextBCH,
-  generateSigningSerializationBCH,
-  hash256,
-  secp256k1,
   lockingBytecodeToCashAddress,
   stringify,
 } from '@bitauth/libauth';
@@ -26,15 +17,29 @@ import KeyService from '../../services/KeyService';
 import { getBchAddressPath } from '../../services/HdWalletService';
 import { parseExtendedJson } from '../../utils/parseExtendedJson';
 import type { ContractInfo } from '../../types/wcInterfaces';
-import { getPublicKeyCompressed } from '../../utils/hex';
 import TransactionService from '../../services/TransactionService';
 import { ensureUint8Array } from '../../utils/binary';
 import { PREFIX } from '../../utils/constants';
 import { normalizeWalletAddressCandidate } from './helpers';
 import { zeroize } from '../../utils/secureMemory';
-import { trezorSignTransaction, pathToAddressN, type TrezorInput, type TrezorOutput } from '../../services/hardware/TrezorService';
-import { ledgerSignTransaction, type LedgerInput, type LedgerOutput } from '../../services/hardware/LedgerService';
+import {
+  trezorSignTransaction,
+  pathToAddressN,
+  type TrezorInput,
+  type TrezorOutput,
+} from '../../services/hardware/TrezorService';
+import {
+  ledgerSignTransaction,
+  type LedgerInput,
+  type LedgerOutput,
+} from '../../services/hardware/LedgerService';
 import getElectrumAdapter from '../../services/ElectrumAdapter';
+import {
+  CONNECT_ALL_OUTPUTS_ALL_UTXOS,
+  connectorPublicKey,
+  signConnectorInput,
+  signConnectorP2pkh,
+} from '../../services/connect/ConnectSigningCore';
 
 type SignedTxObject = {
   signedTransaction: string;
@@ -53,8 +58,15 @@ export async function signWalletConnectTransactionRequest(
   const rawParams = params.request.params as unknown;
   const request = parseExtendedJson(stringify(rawParams));
   const txDetails = request.transaction as TransactionCommon;
-  const sourceOutputs = request.sourceOutputs as (Input & Output & ContractInfo)[];
-  if (!txDetails || !sourceOutputs) {
+  const sourceOutputs = request.sourceOutputs as (Input &
+    Output &
+    ContractInfo)[];
+  if (
+    !txDetails ||
+    !Array.isArray(txDetails.inputs) ||
+    !Array.isArray(sourceOutputs) ||
+    sourceOutputs.length !== txDetails.inputs.length
+  ) {
     throw new Error('Malformed WalletConnect transaction request');
   }
 
@@ -64,10 +76,12 @@ export async function signWalletConnectTransactionRequest(
   const networkPrefix = PREFIX[state.network.currentNetwork];
 
   // Hardware wallet branch — device signs instead of software key
-  const hwState = (state as unknown as Record<string, unknown>).hardwareWallet as
-    | { type: string; connected: boolean }
-    | undefined;
-  if (hwState?.connected && (hwState.type === 'trezor' || hwState.type === 'ledger')) {
+  const hwState = (state as unknown as Record<string, unknown>)
+    .hardwareWallet as { type: string; connected: boolean } | undefined;
+  if (
+    hwState?.connected &&
+    (hwState.type === 'trezor' || hwState.type === 'ledger')
+  ) {
     const addressToKey = new Map(keys.map((k) => [k.address, k]));
     const signed = await signWalletConnectWithHardware({
       txDetails,
@@ -79,8 +93,14 @@ export async function signWalletConnectTransactionRequest(
       hwType: hwState.type as 'trezor' | 'ledger',
     });
     const rawBytes = hexToBin(signed);
-    const signedTransactionHash = binToHex(sha256.hash(sha256.hash(rawBytes)).reverse());
-    return { id, topic, signedTxObject: { signedTransaction: signed, signedTransactionHash } };
+    const signedTransactionHash = binToHex(
+      sha256.hash(sha256.hash(rawBytes)).reverse()
+    );
+    return {
+      id,
+      topic,
+      signedTxObject: { signedTransaction: signed, signedTransactionHash },
+    };
   }
   const keyAddressSet = new Set(
     keys
@@ -91,24 +111,32 @@ export async function signWalletConnectTransactionRequest(
     request && typeof request === 'object'
       ? (request as Record<string, unknown>)
       : {};
-  const requestedSignerAddress = [rawRequestRecord.account, rawRequestRecord.address]
+  const requestedSignerAddress = [
+    rawRequestRecord.account,
+    rawRequestRecord.address,
+  ]
     .filter((value): value is string => typeof value === 'string')
-    .map((candidate) => normalizeWalletAddressCandidate(candidate, networkPrefix))
-    .find((candidate): candidate is string =>
-      !!candidate && keyAddressSet.has(candidate)
+    .map((candidate) =>
+      normalizeWalletAddressCandidate(candidate, networkPrefix)
+    )
+    .find(
+      (candidate): candidate is string =>
+        !!candidate && keyAddressSet.has(candidate)
     );
 
   const defaultSignerAddress = requestedSignerAddress ?? keys[0].address;
-  const defaultPrivateKey = await KeyService.fetchAddressPrivateKey(defaultSignerAddress, 'spend');
+  const defaultPrivateKey = await KeyService.fetchAddressPrivateKey(
+    defaultSignerAddress,
+    'spend'
+  );
   if (!defaultPrivateKey) throw new Error('Private key not found');
   const usedKeys = new Set<Uint8Array>([defaultPrivateKey]);
 
   try {
-    const template = importWalletTemplate(walletTemplateP2pkhNonHd);
-    if (typeof template === 'string') throw new Error(template);
-    const compiler = walletTemplateToCompilerBCH(template);
-
-    const txTemplate = { ...txDetails } as TransactionTemplateFixed<typeof compiler>;
+    const txTemplate = {
+      ...txDetails,
+      inputs: txDetails.inputs.map((input) => ({ ...input })),
+    };
     for (let i = 0; i < txTemplate.inputs.length; i++) {
       const input = txTemplate.inputs[i];
       const utxo = sourceOutputs[i];
@@ -126,6 +154,16 @@ export async function signWalletConnectTransactionRequest(
         return addressResult.address;
       })();
 
+      if (
+        (!sourceAddress || !keyAddressSet.has(sourceAddress)) &&
+        !utxo.contract?.artifact?.contractName &&
+        input.unlockingBytecode instanceof Uint8Array &&
+        input.unlockingBytecode.length > 0
+      ) {
+        // Keep another participant's already signed input byte-for-byte.
+        continue;
+      }
+
       const signerKey =
         sourceAddress && keyAddressSet.has(sourceAddress)
           ? await KeyService.fetchAddressPrivateKey(sourceAddress, 'spend')
@@ -141,25 +179,20 @@ export async function signWalletConnectTransactionRequest(
         const pubkeyPlaceholder = '21' + binToHex(new Uint8Array(33).fill(0));
 
         if (hexUnlock.includes(sigPlaceholder)) {
-          const hashType =
-            SigningSerializationFlag.allOutputs |
-            SigningSerializationFlag.utxos |
-            SigningSerializationFlag.forkId;
           const context = {
             inputIndex: i,
             sourceOutputs,
             transaction: txDetails,
           } as CompilationContextBCH;
-          const preimage = generateSigningSerializationBCH(context, {
-            coveredBytecode: utxo.contract.redeemScript!,
-            signingSerializationType: new Uint8Array([hashType]),
-          });
-          const sighash = hash256(preimage);
-          const sig = secp256k1.signMessageHashSchnorr(
+          if (!utxo.contract.redeemScript) {
+            throw new Error('Missing WalletConnect covenant redeem script');
+          }
+          const sigWithType = signConnectorInput(
+            context,
             signerKey,
-            sighash
-          ) as Uint8Array;
-          const sigWithType = Uint8Array.from([...sig, hashType]);
+            utxo.contract.redeemScript,
+            CONNECT_ALL_OUTPUTS_ALL_UTXOS
+          );
           hexUnlock = hexUnlock.replace(
             sigPlaceholder,
             '41' + binToHex(sigWithType)
@@ -167,27 +200,27 @@ export async function signWalletConnectTransactionRequest(
         }
 
         if (hexUnlock.includes(pubkeyPlaceholder)) {
-          const pubkey = getPublicKeyCompressed(signerKey, false) as Uint8Array;
-          hexUnlock = hexUnlock.replace(pubkeyPlaceholder, '21' + binToHex(pubkey));
+          const pubkey = connectorPublicKey(signerKey);
+          hexUnlock = hexUnlock.replace(
+            pubkeyPlaceholder,
+            '21' + binToHex(pubkey)
+          );
         }
 
         input.unlockingBytecode = hexToBin(hexUnlock);
       } else {
-        input.unlockingBytecode = {
-          compiler,
-          data: { keys: { privateKeys: { key: signerKey } } },
-          valueSatoshis: utxo.valueSatoshis,
-          script: 'unlock',
-          token: utxo.token,
-        };
+        input.unlockingBytecode = signConnectorP2pkh(
+          {
+            inputIndex: i,
+            sourceOutputs,
+            transaction: txTemplate,
+          },
+          signerKey
+        );
       }
     }
 
-    const generated = generateTransaction(txTemplate);
-    if (!generated.success) {
-      throw new Error('Transaction signing failed');
-    }
-    const rawSigned = encodeTransaction(generated.transaction);
+    const rawSigned = encodeTransaction(txTemplate);
     const rawSignedHex = binToHex(rawSigned);
     const txid = binToHex(sha256.hash(sha256.hash(rawSigned)).reverse());
 
@@ -198,7 +231,8 @@ export async function signWalletConnectTransactionRequest(
 
     if (request.broadcast) {
       try {
-        const sessionMeta = state.walletconnect.activeSessions?.[topic]?.peer?.metadata;
+        const sessionMeta =
+          state.walletconnect.activeSessions?.[topic]?.peer?.metadata;
         const sent = await TransactionService.sendTransaction(
           rawSignedHex,
           undefined,
@@ -212,7 +246,9 @@ export async function signWalletConnectTransactionRequest(
             dappUrl: sessionMeta?.url ?? null,
             requestId: String(id),
             userPrompt:
-              typeof request.userPrompt === 'string' ? request.userPrompt : null,
+              typeof request.userPrompt === 'string'
+                ? request.userPrompt
+                : null,
             amountSummary: `${txDetails.outputs.length} output${
               txDetails.outputs.length === 1 ? '' : 's'
             }`,
@@ -240,7 +276,9 @@ type KeyRecord = {
   addressIndex: number;
 };
 
-type CashAddrPrefix = Parameters<typeof lockingBytecodeToCashAddress>[0]['prefix'];
+type CashAddrPrefix = Parameters<
+  typeof lockingBytecodeToCashAddress
+>[0]['prefix'];
 
 async function signWalletConnectWithHardware({
   txDetails,
@@ -262,7 +300,10 @@ async function signWalletConnectWithHardware({
   const typedPrefix = networkPrefix as unknown as CashAddrPrefix;
 
   function lcbToAddress(locking: Uint8Array): string {
-    const r = lockingBytecodeToCashAddress({ prefix: typedPrefix, bytecode: locking });
+    const r = lockingBytecodeToCashAddress({
+      prefix: typedPrefix,
+      bytecode: locking,
+    });
     return typeof r === 'string' ? r : (r as { address: string }).address;
   }
 
@@ -278,11 +319,19 @@ async function signWalletConnectWithHardware({
       const address = inputAddress(sourceOutputs[i]);
       const keyRecord = address ? addressToKey.get(address) : null;
       const bip44 = keyRecord
-        ? getBchAddressPath(network, 0, keyRecord.changeIndex, keyRecord.addressIndex, accountPath)
+        ? getBchAddressPath(
+            network,
+            0,
+            keyRecord.changeIndex,
+            keyRecord.addressIndex,
+            accountPath
+          )
         : getBchAddressPath(network, 0, 0, 0, accountPath);
       return {
         address_n: pathToAddressN(bip44),
-        prev_hash: binToHex(Uint8Array.from(inp.outpointTransactionHash).reverse()),
+        prev_hash: binToHex(
+          Uint8Array.from(inp.outpointTransactionHash).reverse()
+        ),
         prev_index: inp.outpointIndex,
         amount: String(sourceOutputs[i]?.valueSatoshis ?? 0n),
         script_type: 'SPENDADDRESS',
@@ -306,10 +355,22 @@ async function signWalletConnectWithHardware({
       const address = inputAddress(sourceOutputs[i]);
       const keyRecord = address ? addressToKey.get(address) : null;
       const bip44 = keyRecord
-        ? getBchAddressPath(network, 0, keyRecord.changeIndex, keyRecord.addressIndex, accountPath).replace(/^m\//, '')
+        ? getBchAddressPath(
+            network,
+            0,
+            keyRecord.changeIndex,
+            keyRecord.addressIndex,
+            accountPath
+          ).replace(/^m\//, '')
         : getBchAddressPath(network, 0, 0, 0, accountPath).replace(/^m\//, '');
-      const txid = binToHex(Uint8Array.from(inp.outpointTransactionHash).reverse());
-      const prevTxHex = (await adapter.request('blockchain.transaction.get', txid, false)) as string;
+      const txid = binToHex(
+        Uint8Array.from(inp.outpointTransactionHash).reverse()
+      );
+      const prevTxHex = (await adapter.request(
+        'blockchain.transaction.get',
+        txid,
+        false
+      )) as string;
       return { path: bip44, prevTxHex, prevIndex: inp.outpointIndex };
     })
   );

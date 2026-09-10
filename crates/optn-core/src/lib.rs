@@ -17,6 +17,7 @@ pub mod asert;
 pub mod cashaddr;
 pub mod coins;
 pub mod conformance;
+pub mod connect;
 pub mod discovery;
 pub mod endpoint;
 pub mod error;

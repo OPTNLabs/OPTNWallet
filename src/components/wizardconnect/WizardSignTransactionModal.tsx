@@ -7,9 +7,12 @@ import {
   rejectWizardSignRequest,
 } from '../../state/slices/wizardconnectSlice';
 import { ensureUint8Array, parseSatoshis } from '../../utils/binary';
-import { SATSINBITCOIN } from '../../utils/constants';
+import { PREFIX, SATSINBITCOIN } from '../../utils/constants';
+import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
+import { wizardConnectionStatus } from '../../utils/connectionStatus';
 import { toErrorMessage } from '../../utils/errorHandling';
 import { useI18n } from '../../i18n/useI18n';
+import { decodeWizardConnectTransaction } from '../../services/wizardconnect/transaction';
 
 type TxAmountCarrier = { valueSatoshis: unknown };
 type TxToken = {
@@ -21,10 +24,7 @@ type TxOutput = TxAmountCarrier & {
   lockingBytecode: unknown;
   token?: TxToken;
 };
-type TxInputSource = TxAmountCarrier & {
-  outpointTransactionHash: unknown;
-  outpointIndex: number;
-};
+type TxInputSource = TxAmountCarrier;
 
 function parsePushData(bytecode: Uint8Array): string[] {
   const result: string[] = [];
@@ -46,6 +46,7 @@ function parsePushData(bytecode: Uint8Array): string[] {
 export default function WizardSignTransactionModal() {
   const dispatch = useDispatch<AppDispatch>();
   const { t } = useI18n();
+  const network = useSelector(selectCurrentNetwork);
   const pending = useSelector(
     (state: RootState) => state.wizardconnect.pendingSignRequest
   );
@@ -57,11 +58,14 @@ export default function WizardSignTransactionModal() {
 
   const connection = connections[pending.connectionId];
   const payload = pending.request.transaction;
-  const tx =
-    payload.transaction && typeof payload.transaction === 'object'
-      ? payload.transaction
-      : null;
-  const sourceOutputs = payload.sourceOutputs ?? [];
+  let decoded: ReturnType<typeof decodeWizardConnectTransaction> | null = null;
+  try {
+    decoded = decodeWizardConnectTransaction(payload);
+  } catch {
+    // A failed preview must never leave an approval button enabled.
+  }
+  const tx = decoded?.transaction;
+  const sourceOutputs = decoded?.sourceOutputs ?? [];
   const outputs = tx?.outputs ?? [];
   const totalInput = (sourceOutputs as TxInputSource[]).reduce(
     (sum, output) => sum + parseSatoshis(output.valueSatoshis),
@@ -71,8 +75,14 @@ export default function WizardSignTransactionModal() {
     (sum, output) => sum + parseSatoshis(output.valueSatoshis),
     0n
   );
+  const canApprove =
+    !!tx &&
+    tx.inputs.length > 0 &&
+    sourceOutputs.length === tx.inputs.length &&
+    totalInput >= totalOutput;
 
   const handleApprove = async () => {
+    if (!canApprove) return;
     try {
       await dispatch(approveWizardSignRequest()).unwrap();
       await Toast.show({ text: t('wizard.approved') });
@@ -119,7 +129,9 @@ export default function WizardSignTransactionModal() {
             </div>
             <div>
               <strong>{t('wizard.status')}:</strong>{' '}
-              {connection?.status.status ?? 'pending'}
+              {t(
+                wizardConnectionStatus(connection?.status.status ?? 'pending')
+              )}
             </div>
           </div>
 
@@ -129,13 +141,13 @@ export default function WizardSignTransactionModal() {
             </p>
           )}
 
-          {!tx && (
+          {!canApprove && (
             <div className="text-sm wallet-surface-strong border border-[var(--wallet-border)] rounded p-3 wallet-text-strong">
               {t('wizard.unsupportedTransaction')}
             </div>
           )}
 
-          {tx && (
+          {tx && canApprove && (
             <>
               {(sourceOutputs as TxInputSource[]).map((source, index) => (
                 <div
@@ -146,12 +158,14 @@ export default function WizardSignTransactionModal() {
                     {t('wizard.txid')}:{' '}
                     <span className="font-mono break-all">
                       {binToHex(
-                        ensureUint8Array(source.outpointTransactionHash)
+                        ensureUint8Array(
+                          tx.inputs[index].outpointTransactionHash
+                        )
                       )}
                     </span>
                   </div>
                   <div>
-                    {t('wizard.index')}: {source.outpointIndex}
+                    {t('wizard.index')}: {tx.inputs[index].outpointIndex}
                   </div>
                   <div>
                     {Number(parseSatoshis(source.valueSatoshis)) /
@@ -189,7 +203,7 @@ export default function WizardSignTransactionModal() {
                 }
 
                 const addressResult = lockingBytecodeToCashAddress({
-                  prefix: 'bitcoincash',
+                  prefix: PREFIX[network],
                   bytecode: lockingBytecode,
                 });
                 const address =
@@ -217,12 +231,13 @@ export default function WizardSignTransactionModal() {
                             {binToHex(ensureUint8Array(output.token.category))}
                           </span>
                         </div>
-                        {output.token.amount !== undefined && output.token.amount !== null && (
-                          <div>
-                            <strong>{t('wizard.fungibleAmount')}:</strong>{' '}
-                            {String(parseSatoshis(output.token.amount))}
-                          </div>
-                        )}
+                        {output.token.amount !== undefined &&
+                          output.token.amount !== null && (
+                            <div>
+                              <strong>{t('wizard.fungibleAmount')}:</strong>{' '}
+                              {String(parseSatoshis(output.token.amount))}
+                            </div>
+                          )}
                       </div>
                     )}
                   </div>
@@ -253,6 +268,7 @@ export default function WizardSignTransactionModal() {
 
         <div className="flex justify-around pt-2">
           <button
+            disabled={!canApprove}
             onClick={() => void handleApprove()}
             className="wallet-btn-primary"
           >

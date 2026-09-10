@@ -31,7 +31,10 @@ const assetWorkflows = [
   'desktop-riscv64.yml',
 ].map((name) => ({
   name,
-  contents: readFileSync(resolve(repoRoot, '.github', 'workflows', name), 'utf8'),
+  contents: readFileSync(
+    resolve(repoRoot, '.github', 'workflows', name),
+    'utf8'
+  ),
 }));
 
 const releaseAssets = readFileSync(
@@ -312,7 +315,9 @@ describe('release workflow', () => {
     // build is wrapped in a retry for the hdiutil "Resource busy" flake on
     // macOS. Assert the invocation and the wiring separately rather than
     // pinning the exact string, which broke the moment a retry was added.
-    expect(desktopPreviewWorkflow).toContain('npx tauri build --debug --target');
+    expect(desktopPreviewWorkflow).toContain(
+      'npx tauri build --debug --target'
+    );
     expect(desktopPreviewWorkflow).toContain('${{ matrix.target }}');
     // One artifact per format, not a catch-all over bundle/**. A single glob
     // uploaded whatever happened to exist, so a bundler that quietly stopped
@@ -382,7 +387,9 @@ describe('release workflow', () => {
     // Now declared in packaging/release-assets.json, which the workflow
     // generates its checks from.
     expect(releaseAssets).toContain('OPTNWallet-${VERSION}-linux-x64.flatpak');
-    expect(releaseAssets).toContain('OPTNWallet-${VERSION}-linux-arm64.flatpak');
+    expect(releaseAssets).toContain(
+      'OPTNWallet-${VERSION}-linux-arm64.flatpak'
+    );
 
     // Preview builds it too: a manifest that stops working should fail on the
     // pull request, not at release time.
@@ -486,18 +493,20 @@ describe('release workflow', () => {
     // looking at which artifacts happen to have been produced -- an artifact
     // listing cannot tell a failed build from a crate that was never here.
     expect(workflow).toContain('if [ -f crates/optn-cli/Cargo.toml ]; then');
-    expect(workflow).toMatch(/cli_present: \x24\x7b\x7b steps\.\w+\.outputs\.present \x7d\x7d/);
-    expect(workflow).toContain(
-      'needs.resolve.outputs.cli_present }}" = \'true\''
+    expect(workflow).toMatch(
+      /cli_present: \x24\x7b\x7b steps\.\w+\.outputs\.present \x7d\x7d/
     );
-    expect(workflow).toContain("require_asset \"artifacts/cli-$label\"");
+    expect(workflow).toContain(
+      "needs.resolve.outputs.cli_present }}\" = 'true'"
+    );
+    expect(workflow).toContain('require_asset "artifacts/cli-$label"');
   });
 
   it('verifies each cross-built CLI binary is the architecture it claims', () => {
     // A misconfigured linker silently emits a host binary, which would ship
     // labelled riscv64 and fail to start on the only machines that need it.
-    expect(workflow).toContain("riscv64gc-*) file \"$SRC\" | grep -q 'RISC-V'");
-    expect(workflow).toContain("armv7-*)     file \"$SRC\" | grep -q 'ARM'");
+    expect(workflow).toContain('riscv64gc-*) file "$SRC" | grep -q \'RISC-V\'');
+    expect(workflow).toContain('armv7-*)     file "$SRC" | grep -q \'ARM\'');
   });
   it('builds the CLI in preview for every target the release ships', () => {
     // The release matrix and the preview matrix must agree, or a target is
@@ -525,7 +534,9 @@ describe('release workflow', () => {
     // touch that path, and stays "Expected" forever. The probe is what makes
     // always-on cheap.
     expect(cliPreviewWorkflow).toMatch(/^\s{2}probe:\s*$/m);
-    expect(cliPreviewWorkflow).toContain('if [ -f crates/optn-cli/Cargo.toml ]; then');
+    expect(cliPreviewWorkflow).toContain(
+      'if [ -f crates/optn-cli/Cargo.toml ]; then'
+    );
     // No path filter at all: a path-filtered required check never runs on a
     // branch that does not touch that path, and stays "Expected" forever.
     expect(cliPreviewWorkflow).not.toContain('paths:');
@@ -554,7 +565,10 @@ describe('release workflow', () => {
       const trigger = contents.match(
         /pull_request:[\s\S]*?branches: \[([^\]]+)\]/
       );
-      expect(trigger, `${name} should filter pull_request branches`).not.toBeNull();
+      expect(
+        trigger,
+        `${name} should filter pull_request branches`
+      ).not.toBeNull();
 
       const branches = trigger![1].split(',').map((b) => b.trim());
       for (const branch of ['dev', 'staging', 'main']) {
@@ -562,12 +576,45 @@ describe('release workflow', () => {
       }
     }
   });
+  it('keeps the desktop RISC-V build always-on and blocking', () => {
+    const riscv = assetWorkflows.find(
+      ({ name }) => name === 'desktop-riscv64.yml'
+    )!.contents;
+    expect(riscv).not.toMatch(/^\s*(?:paths|paths-ignore|continue-on-error):/m);
+    expect(riscv).toContain('targets: riscv64gc-unknown-linux-gnu');
+    expect(riscv).toContain('if-no-files-found: error');
+  });
+
+  it('exercises wallet creation, lock and reopen in an isolated native profile', () => {
+    const e2e = readFileSync(
+      resolve(repoRoot, '.github/workflows/desktop-e2e.yml'),
+      'utf8'
+    );
+    const lifecycle = readFileSync(
+      resolve(repoRoot, 'scripts/run-e2e-lifecycle.mjs'),
+      'utf8'
+    );
+    expect(e2e).toContain('npm run test:e2e:lifecycle');
+    expect(e2e.indexOf('npm run test:e2e:lifecycle')).toBeGreaterThan(
+      e2e.indexOf('npx tauri build --debug --no-bundle')
+    );
+    expect(lifecycle).toContain('mkdtempSync');
+    expect(lifecycle).toContain(
+      'environment.XDG_DATA_HOME = temporaryDataHome'
+    );
+    expect(lifecycle).toContain("environment.TAURI_E2E_ALLOW_MUTATION = '1'");
+  });
   it('drives the asset checks from one config, with a loud opt-out', () => {
     // The list of what ships and the check that it shipped are generated from
     // the same file, so they cannot drift. Two hand-maintained lists would,
     // and the half that drifts silently is the one that stops rejecting.
     const config = JSON.parse(releaseAssets) as {
-      assets: { label: string; pattern: string; required?: boolean; reason?: string }[];
+      assets: {
+        label: string;
+        pattern: string;
+        required?: boolean;
+        reason?: string;
+      }[];
     };
     expect(config.assets.length).toBeGreaterThan(20);
 
@@ -576,7 +623,10 @@ describe('release workflow', () => {
     // rather than silent.
     for (const asset of config.assets) {
       if (asset.required === false) {
-        expect(asset.reason, `${asset.label} is waived with no reason`).toBeTruthy();
+        expect(
+          asset.reason,
+          `${asset.label} is waived with no reason`
+        ).toBeTruthy();
       }
     }
 

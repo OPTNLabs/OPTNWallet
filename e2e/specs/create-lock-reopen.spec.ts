@@ -65,10 +65,12 @@ runLifecycleTest(
     await $('h1=Name This Wallet').waitForDisplayed({ timeout: 10000 });
 
     await $('input[placeholder="Wallet name"]').setValue(walletName);
-    await $('input[placeholder="Password (or leave blank)"]').setValue(
-      password
+    const newPasswordFields = await $$(
+      'input[type="password"][autocomplete="new-password"]'
     );
-    await $('input[placeholder="Confirm password"]').setValue(password);
+    expect(newPasswordFields.length).toBe(2);
+    await newPasswordFields[0].setValue(password);
+    await newPasswordFields[1].setValue(password);
     await $('button=Create Wallet').click();
     await $('h1=Home').waitForExist({ timeout: 30000 });
 
@@ -79,12 +81,42 @@ runLifecycleTest(
 
     const walletLabel = await $(`p=${walletName}`);
     const walletCard = walletLabel.$('../..');
-    await walletCard.$('button=Open').click();
+    const openButton = await walletCard.$('button=Open');
+    try {
+      await openButton.waitForClickable({ timeout: 10000 });
+      await openButton.click();
+    } catch (error) {
+      // Report only UI structure after locking, never input values or seed text.
+      const blocker = await browser.execute((button: HTMLElement) => {
+        const rect = button.getBoundingClientRect();
+        const top = document.elementFromPoint(
+          rect.x + rect.width / 2,
+          rect.y + rect.height / 2
+        );
+        return {
+          tag: top?.tagName,
+          className: top?.getAttribute('class'),
+          headings: Array.from(document.querySelectorAll('h2, h3')).map(
+            (heading) => heading.textContent
+          ),
+        };
+      }, openButton);
+      throw new Error(
+        `Wallet picker Open is blocked: ${JSON.stringify(blocker)}`,
+        {
+          cause: error,
+        }
+      );
+    }
 
     const passwordInput = await $('input[placeholder="Password"]');
     await passwordInput.setValue('wrong-password');
     await $('button=Unlock').click();
-    await expect($('p=Incorrect password.')).toBeDisplayed();
+    await expect(
+      $('p=Incorrect password for this wallet file.')
+    ).toBeDisplayed();
+    await expect($('h1=OPTN Wallet')).toBeDisplayed();
+    await expect(passwordInput).toBeDisplayed();
 
     await passwordInput.setValue(password);
     await $('button=Unlock').click();
