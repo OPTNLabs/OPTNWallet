@@ -1905,7 +1905,7 @@ pub struct HistoryEntry {
     pub block_height: Option<u32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScanCoverageView {
     /// Inclusive height the scan starts at.
     pub from_height: u32,
@@ -2002,6 +2002,7 @@ pub enum SettingsRowId {
     Recovery,
     AppLock,
     RebuildWallet,
+    RescanFromHeight,
     Servers,
     Device,
     CashFusion,
@@ -2017,6 +2018,7 @@ impl SettingsRowId {
             Self::Recovery => "Recovery Phrase",
             Self::AppLock => "App lock",
             Self::RebuildWallet => "Rebuild Wallet",
+            Self::RescanFromHeight => "Rescan from block height",
             Self::Servers => "Servers",
             Self::Device => "Hardware device",
             Self::CashFusion => "CashFusion",
@@ -2033,6 +2035,9 @@ impl SettingsRowId {
             Self::AppLock => "Auto-lock · Password on send",
             Self::RebuildWallet => {
                 "Resync chain history, retaining addresses, coin holds and labels"
+            }
+            Self::RescanFromHeight => {
+                "Read the chain again from a block you choose. Anything earlier stays unscanned"
             }
             Self::Servers => "Electrum · Block explorer · Transaction fees",
             Self::Device => "Connected signer, its label, and how it is reached",
@@ -2068,6 +2073,13 @@ pub struct SettingsViewModel {
     /// A warning, not a correction: the path may be exactly what was meant.
     pub hardware_path_warning: Option<String>,
     pub show_cash_fusion: bool,
+    /// A rescan the holder asked for that has not produced a result yet.
+    pub rescan_requested: Option<u32>,
+    /// What the current scan covers, when it is knowingly short.
+    pub scan_coverage: Option<ScanCoverageView>,
+    /// The verified tip, so a renderer can refuse a height above the chain
+    /// instead of sending the wallet to read blocks that do not exist.
+    pub tip_height: Option<u32>,
     pub rows: Vec<SettingsRowId>,
 }
 
@@ -2083,6 +2095,7 @@ pub fn settings_view_model(state: &AppState) -> SettingsViewModel {
         SettingsRowId::Recovery,
         SettingsRowId::AppLock,
         SettingsRowId::RebuildWallet,
+        SettingsRowId::RescanFromHeight,
         SettingsRowId::Servers,
     ]);
     // Only where a device can actually be reached; a row that can never do
@@ -2136,6 +2149,9 @@ pub fn settings_view_model(state: &AppState) -> SettingsViewModel {
         }),
         hardware: state.hardware.clone(),
         show_cash_fusion,
+        rescan_requested: state.wallet_sync.rescan_requested,
+        scan_coverage: state.wallet_sync.scan_coverage,
+        tip_height: state.wallet_sync.tip_height,
         rows,
     }
 }

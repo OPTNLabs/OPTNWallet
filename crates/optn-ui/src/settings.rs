@@ -200,6 +200,9 @@ fn SettingsRow(
                         "Rebuild wallet"
                     </button>
                 }.into_any(),
+                SettingsRowId::RescanFromHeight => view! {
+                    <RescanSection transport=transport state=state />
+                }.into_any(),
                 SettingsRowId::Servers => view! {
                     <NodeSection transport=transport state=state />
                 }.into_any(),
@@ -660,6 +663,144 @@ fn DeviceSection(transport: UiTransport, state: RwSignal<AppState>) -> impl Into
                 >
                     "Forget this device"
                 </button>
+            </Show>
+        </div>
+    }
+}
+
+/// Read the chain again from a block the holder chooses.
+///
+/// Two steps on purpose. A height typed by hand is easy to get wrong, and a
+/// number that is too high quietly leaves coins out of the wallet rather than
+/// failing, so the confirm step says what will be skipped before it happens.
+#[component]
+fn RescanSection(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
+    let entry = RwSignal::new(String::new());
+    let confirming = RwSignal::new(false);
+    let busy = RwSignal::new(false);
+    let error = RwSignal::new(None::<String>);
+
+    // A height above the verified tip is not a scan, it is a typo.
+    let parsed = move || {
+        let raw = entry.get();
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Err(String::new());
+        }
+        let height: u32 = trimmed
+            .parse()
+            .map_err(|_| "Enter a block height as a whole number.".to_owned())?;
+        match settings_view_model(&state.get()).tip_height {
+            Some(tip) if height > tip => {
+                Err(format!("This wallet has only verified up to block {tip}."))
+            }
+            _ => Ok(height),
+        }
+    };
+
+    view! {
+        <div class="stack">
+            <p class="muted">
+                {move || {
+                    let model = settings_view_model(&state.get());
+                    match (model.rescan_requested, model.scan_coverage) {
+                        (Some(height), _) => format!(
+                            "Waiting on a rescan from block {height}.                              Balances below stay as they were until it finishes."
+                        ),
+                        (None, Some(coverage)) => match coverage.skipped_below {
+                            Some(skipped) => format!(
+                                "Scanning from block {}. Blocks below {skipped} are not                                  covered, so coins received earlier and never spent are                                  missing from the totals.",
+                                coverage.from_height
+                            ),
+                            None => format!("Scanning from block {}.", coverage.from_height),
+                        },
+                        (None, None) => "Scanning from this wallet's own start point.".into(),
+                    }
+                }}
+            </p>
+            <label class="field">
+                "Block height"
+                <input
+                    class="mono"
+                    type="text"
+                    inputmode="numeric"
+                    placeholder="e.g. 800000"
+                    prop:value=move || entry.get()
+                    on:input=move |event| {
+                        entry.set(event_target_value(&event));
+                        confirming.set(false);
+                        error.set(None);
+                    }
+                />
+            </label>
+            {move || error.get().map(|message| view! { <p class="warning">{message}</p> })}
+            <Show
+                when=move || confirming.get()
+                fallback=move || view! {
+                    <button
+                        class="secondary"
+                        type="button"
+                        disabled=move || busy.get() || parsed().is_err()
+                        on:click=move |_| {
+                            match parsed() {
+                                Ok(_) => { error.set(None); confirming.set(true); }
+                                Err(message) if message.is_empty() => {}
+                                Err(message) => error.set(Some(message)),
+                            }
+                        }
+                    >
+                        "Rescan from this height"
+                    </button>
+                }
+            >
+                <p class="warning">
+                    {move || match parsed() {
+                        Ok(height) => format!(
+                            "Rescan from block {height}? Anything before it is left                              unscanned, including coins you still hold. Your keys and                              addresses are untouched."
+                        ),
+                        Err(_) => String::new(),
+                    }}
+                </p>
+                <div class="row">
+                    <button
+                        class="primary"
+                        type="button"
+                        disabled=move || busy.get()
+                        on:click=move |_| {
+                            let Ok(height) = parsed() else { return };
+                            if busy.get_untracked() { return; }
+                            busy.set(true);
+                            error.set(None);
+                            confirming.set(false);
+                            let transport = transport.get_value();
+                            leptos::task::spawn_local(async move {
+                                if let Err(failure) = transport.rescan_from_height(height).await {
+                                    error.try_set(Some(match failure {
+                                        optn_transport::TransportError::Other(message)
+                                        | optn_transport::TransportError::InvalidData(message) => {
+                                            message
+                                        }
+                                        _ => "Rescanning is unavailable on this interface."
+                                            .into(),
+                                    }));
+                                }
+                                if let Ok(snapshot) = transport.snapshot().await {
+                                    crate::apply_snapshot(state, snapshot);
+                                }
+                                busy.try_set(false);
+                            });
+                        }
+                    >
+                        "Confirm rescan"
+                    </button>
+                    <button
+                        class="secondary"
+                        type="button"
+                        on:click=move |_| confirming.set(false)
+                    >
+                        "Cancel"
+                    </button>
+                </div>
             </Show>
         </div>
     }
