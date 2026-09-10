@@ -7,6 +7,7 @@ import WizardConnectionManager from './WizardConnectionManager';
 import WizardConnectionSettingsModal from './WizardConnectionSettingsModal';
 import WizardDappAvatar from './WizardDappAvatar';
 import { useI18n } from '../../i18n/useI18n';
+import { wizardConnectionStatus } from '../../utils/connectionStatus';
 
 type WizardConnectView = RelayConnectionState & {
   dappDescription?: string | null;
@@ -46,7 +47,7 @@ export default function WizardConnectPanel() {
         ) : (
           <>
             <h3 className="text-lg sm:text-xl font-bold wallet-text-strong">
-              {t('wizard.activeSessions')}
+              {t('connection.attempts')}
             </h3>
             <div className="space-y-4 max-h-96 overflow-y-auto">
               {connectionEntries.map((connection) => {
@@ -72,7 +73,7 @@ export default function WizardConnectPanel() {
                             'WizardConnect'}
                         </div>
                         <div className="wallet-muted text-xs sm:text-sm">
-                          {connection.status.status}
+                          {t(wizardConnectionStatus(connection.status.status))}
                         </div>
                         <div className="mt-1 text-xs sm:text-sm leading-relaxed break-words">
                           {description ? (

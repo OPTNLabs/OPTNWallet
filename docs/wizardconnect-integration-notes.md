@@ -1,5 +1,91 @@
 # WizardConnect Integration Notes
 
+## Verified integration notes — 2026-09-08
+
+The design notes below are historical. The adapter, connection manager, per-pairing
+relay identity storage, and approval UI now exist. Review the installed
+`@wizardconnect/wallet` 0.1.5 API alongside the current Riften documentation:
+the installed adapter returns `signedTransaction`, while the current wallet-page
+example calls that property `signedTransactionHex`. OPTN's manager consumes the
+installed API; do not rename that property solely to match the newer example.
+
+- `RelayConnectionState.status` reports relay transport state. The installed
+  manager keeps handshake discovery private; a reachable relay alone does not
+  prove that the dApp is available. Connection panels and signing approval must
+  use the same status mapping.
+- Sign requests use `WcSignTransactionRequest`; its transaction may be raw hex
+  or a structured transaction. Approval must decode the same representation the
+  signer accepts, show the selected network's addresses, and disable signing
+  when the transaction/source-output preview is unavailable.
+- Riften's [relay serialization](https://docs.riftenlabs.com/wizardconnect/serialization/)
+  encodes bytes as plain hex or extended `Uint8Array` strings and amounts as
+  extended `bigint` strings. The pinned SDK does not expose the newer decoding
+  helpers. `decodeWizardConnectTransaction` validates and converts both formats
+  for the approval UI and adapter, including token data and covenant scripts.
+  Missing source outputs, malformed fields, and invalid totals fail closed.
+- The [protocol's signature requirement](https://docs.riftenlabs.com/wizardconnect/protocol/#sighash-requirement-security-critical)
+  is `SIGHASH_ALL | SIGHASH_FORKID | SIGHASH_UTXOS` (`0x61`). The software signer
+  supplies every source output to the shared Rust signing core, including preset
+  covenant inputs. A regression test verifies both signature flags and rejection after
+  a source-output substitution.
+  Native, serialized, and partially signed transaction fixtures are checked
+  using libauth's BCH virtual machine. Hardware signing remains unverified for
+  this signature requirement; successful software tests do not certify it.
+- [Named xpub paths](https://docs.riftenlabs.com/wizardconnect/pubkey-derivation/)
+  describe protocol roles, not a mandatory internal account path. OPTN derives
+  them from the wallet's saved account path. The historical coin-type-145 note
+  below is a recommendation, not a protocol restriction.
+- Live Chipnet checks against Cauldron verified pairing with both WizardConnect
+  and WalletConnect, WizardConnect approval cancellation and disconnect, and
+  small swaps through both protocols. The original WizardConnect swap exposed
+  the raw-hex preview bug; the next attempt exposed missing relay decoding.
+  Both failed attempts were cancelled before broadcast. After the fixes, the
+  WizardConnect swap succeeded; its retrieved transaction and source outputs
+  passed the BCH VM and its wallet signature uses `0x61`.
+  These are browser integration checks, not native-platform or hardware-wallet
+  certification. Public Chipnet transaction IDs:
+  - WalletConnect: `e7fc235f350d8c1de4a8989993a30d820487e65e28a53c8c2e935fc12a724f93`
+  - WizardConnect: `704dcb0d6ddc62a87cb5bb2ff4dd02062d9d21bd17efc0ac1c4247a33c93d17a`
+  - After moving signing into Rust: WizardConnect transaction
+    `334822643fbc18e19c8e789efbe1e736d99daa9959c904cce907a0a770b9debf`
+    exchanged 2,000 test sats with a 1,221-sat fee. The rebuilt Rust CLI retrieved
+    it and its parent; all six inputs passed the BCH VM and the wallet signature
+    uses `0x61`. This was a local production web build, not an emulator test.
+
+### Shared signing boundary in PR #80
+
+`crates/optn-core::connect` owns BCH/CashTokens signing serialization, supported
+sighash modes, source-output/key checks, Schnorr signatures and P2PKH lock/unlock
+scripts. It reuses the Schnorr implementation published in PR #63 at
+`d9deb7b348a7af03204b82b57cf0d892b9ec6227`. WalletConnect, WizardConnect and
+CashConnect's wallet-owned P2PKH directives call that core through
+`src/services/connect/ConnectSigningCore.ts` and generated WASM. The native CLI
+calls the same signing serialization directly; its existing ECDSA signer and
+`0x41` mode are preserved. Connector software signatures use `0x61`.
+
+This is a signing boundary, not a complete port of the protocol engines. SDK
+session management, transport, HD derivation, approval policy, arbitrary template
+execution and hardware adapters remain in their existing integrations. The core
+accepts an approved transaction; it does not independently authorize sessions or
+prove covenant and token conservation. The approval and BCH VM checks still
+matter.
+
+Desktop, mobile and browser builds use the same WASM through their existing web
+shell. Chrome and Firefox remain popup-only viewers: their route restrictions
+and broadcast-denial adapter are retained. Shared code does not enable extension
+spending or solve popup/background-session lifetime. CLI use does not depend on
+a GUI or Tauri. Full architecture migration remains with PR #63.
+
+Rebuild bindings after Rust changes with
+`npx --no-install tsx scripts/build-optn-core-wasm.mts`. The shared Rust CI job
+checks source/artifact freshness, native Rust tests, committed WASM against
+libauth and the BCH VM, and a fresh Rust-to-WASM rebuild. CLI native matrix jobs
+also test the core, and the Rust dependency audit includes its lockfile without
+advisory exceptions. These checks complement the existing platform previews;
+repository administrators must separately configure required status checks.
+
+## Historical design proposal
+
 Date: 2026-03-20
 
 ## Summary

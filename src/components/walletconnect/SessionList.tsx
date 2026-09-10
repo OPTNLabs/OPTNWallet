@@ -2,6 +2,7 @@
 import type { SessionTypes } from '@walletconnect/types';
 import { normalizeExternalUrl } from '../../utils/externalUrl';
 import { useI18n } from '../../i18n/useI18n';
+import { walletConnectSessionStatus } from '../../utils/connectionStatus';
 
 interface Props {
   activeSessions: Record<string, SessionTypes.Struct> | null;
@@ -40,6 +41,9 @@ export function SessionList({
                 <div className="break-words font-bold text-base sm:text-lg lg:text-xl">
                   {dappMeta.name}
                 </div>
+                <p role="status" className="wallet-muted text-xs sm:text-sm">
+                  {t(walletConnectSessionStatus(session, Date.now() / 1000))}
+                </p>
                 {dappUrl ? (
                   <a
                     href={dappUrl}

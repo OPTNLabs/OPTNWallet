@@ -200,3 +200,4 @@ jobs:
       # This runs the workflow's own shell against a synthetic release and
       # removes one asset at a time, requiring every removal to be caught.
       - run: bash scripts/verify-release-completeness.sh
+      - run: python scripts/verify-preview-completeness.py
