@@ -84,6 +84,12 @@ pub enum ScanFloor {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UndecidableReason {
     NothingVerified,
+    /// Anchors exist but their medians have not been re-derived from
+    /// authenticated headers since restore. The caller re-authenticates them
+    /// and asks again rather than scanning on a value it cannot vouch for.
+    AnchorsNotReauthenticated {
+        retained_anchors: usize,
+    },
     OlderThanRetained {
         oldest_height: u32,
         oldest_median_time_past: u32,
@@ -94,6 +100,9 @@ impl From<RestoreStartUnavailable> for UndecidableReason {
     fn from(value: RestoreStartUnavailable) -> Self {
         match value {
             RestoreStartUnavailable::NothingVerified => Self::NothingVerified,
+            RestoreStartUnavailable::AnchorsNotReauthenticated { retained_anchors } => {
+                Self::AnchorsNotReauthenticated { retained_anchors }
+            }
             RestoreStartUnavailable::OlderThanRetained {
                 oldest_height,
                 oldest_median_time_past,

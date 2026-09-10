@@ -82,6 +82,24 @@ pub const fn header_timestamp(header: &[u8; 80]) -> u32 {
     u32::from_le_bytes([header[68], header[69], header[70], header[71]])
 }
 
+/// Whether an anchor's recorded time may be relied on.
+///
+/// A block hash and a median-time-past are authenticated by different things.
+/// A proof, or linkage to an accepted header, establishes *which block* sits at
+/// a height. It says nothing about the eleven timestamps that produced the
+/// median stored beside it: a genuine block proof coexists perfectly well with
+/// altered, still-monotonic time data, because monotonicity is an ordering
+/// check on the series and not a signature over it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnchorTrust {
+    /// Derived in this process from headers the verifier accepted.
+    Authenticated,
+    /// Loaded from storage and not yet re-derived. The hash is usable as a
+    /// retrieval hint — it names a block to go and ask for — but the time is
+    /// not an answer to a date question.
+    Provisional,
+}
+
 /// One retained anchor: a height, the block that was verified at it, and the
 /// median-time-past at that point.
 ///
@@ -92,6 +110,13 @@ pub struct HeaderAnchor {
     pub height: u32,
     pub block_hash: Hash32,
     pub median_time_past: u32,
+    pub trust: AnchorTrust,
+}
+
+impl HeaderAnchor {
+    pub const fn is_authenticated(&self) -> bool {
+        matches!(self.trust, AnchorTrust::Authenticated)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,6 +127,15 @@ pub enum HeaderIndexError {
     /// means the caller mixed chains, replayed a stale fork, or mis-derived the
     /// window — it is rejected rather than stored.
     MedianTimeWentBackwards { last: u32, offered: u32 },
+    /// Nothing is retained at the height an authentication named.
+    NoAnchorAtHeight { height: u32 },
+    /// The stored median disagrees with the one re-derived from authenticated
+    /// headers. The anchor is dropped, not corrected.
+    MedianTimeMismatch {
+        height: u32,
+        stored: u32,
+        recomputed: u32,
+    },
 }
 
 /// What a height-for-time question resolved to.
@@ -117,6 +151,12 @@ pub enum TimeLookup {
         oldest_height: u32,
         oldest_median_time_past: u32,
     },
+    /// Anchors are retained but none covering this instant has been
+    /// re-derived from authenticated headers since it was restored.
+    ///
+    /// Distinct from `Empty`: there is material to work with, and the caller
+    /// can re-authenticate it. It is deliberately not an answer.
+    Unauthenticated { retained_anchors: usize },
     /// Nothing is indexed yet.
     Empty,
 }
@@ -127,10 +167,12 @@ pub enum TimeLookup {
 /// should a restore start from" and "what locator do I send to ask for this
 /// range again". It stays valid when the header store behind it is pruned.
 ///
-/// Sparse means one anchor per configured interval, so this is sub-linear in
-/// chain length. It is *not* a substitute for retained headers when an
-/// operation needs every block hash in a range — a Bloom scan does, and that
-/// storage is a separate, linear cost the runtime accounts for on its own.
+/// One anchor every `k` blocks is `O(n/k)` entries, which for a fixed `k` is
+/// still `O(n)` — a smaller constant, not a better asymptotic. Only the MMR
+/// peaks are `O(log n)`. Retained header ranges, hashes, timestamps,
+/// serialization overhead and filter state are separate costs and are counted
+/// separately; this index is not a substitute for retained headers when an
+/// operation needs every block hash in a range, which a Bloom scan does.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SparseHeaderIndex {
     anchors: Vec<HeaderAnchor>,
@@ -262,9 +304,22 @@ impl SparseHeaderIndex {
     /// late. The result is clamped to the oldest retained anchor, because
     /// scanning below the retained range is a different decision that belongs
     /// to the caller.
+    /// Only authenticated anchors answer a date question. A provisional one
+    /// is a retrieval hint, never a scan-start decision.
     pub fn conservative_height_for_time(&self, target_time: u32, lookback: u32) -> TimeLookup {
-        let Some(oldest) = self.oldest() else {
+        if self.anchors.is_empty() {
             return TimeLookup::Empty;
+        }
+        let authenticated = self
+            .anchors
+            .iter()
+            .filter(|anchor| anchor.is_authenticated())
+            .copied()
+            .collect::<Vec<_>>();
+        let Some(oldest) = authenticated.first().copied() else {
+            return TimeLookup::Unauthenticated {
+                retained_anchors: self.anchors.len(),
+            };
         };
         if target_time < oldest.median_time_past {
             return TimeLookup::BeforeIndex {
@@ -273,11 +328,50 @@ impl SparseHeaderIndex {
             };
         }
         // Anchors are monotonic in both fields, so partition_point is exact.
-        let index = self
-            .anchors
-            .partition_point(|anchor| anchor.median_time_past <= target_time);
-        let chosen = self.anchors[index.saturating_sub(1)];
+        let index = authenticated.partition_point(|anchor| anchor.median_time_past <= target_time);
+        let chosen = authenticated[index.saturating_sub(1)];
         TimeLookup::Height(chosen.height.saturating_sub(lookback).max(oldest.height))
+    }
+
+    /// Promote a restored anchor once its median has been re-derived from
+    /// authenticated headers.
+    ///
+    /// The recomputed median must equal what was stored. A mismatch means the
+    /// saved time was altered and the anchor is dropped rather than corrected,
+    /// because a stored value that disagrees with the chain is evidence the
+    /// snapshot cannot be trusted piecemeal.
+    pub fn authenticate(
+        &mut self,
+        height: u32,
+        recomputed_median_time_past: u32,
+    ) -> Result<(), HeaderIndexError> {
+        let Some(slot) = self
+            .anchors
+            .iter_mut()
+            .find(|anchor| anchor.height == height)
+        else {
+            return Err(HeaderIndexError::NoAnchorAtHeight { height });
+        };
+        if slot.median_time_past != recomputed_median_time_past {
+            let stored = slot.median_time_past;
+            self.anchors.retain(|anchor| anchor.height != height);
+            return Err(HeaderIndexError::MedianTimeMismatch {
+                height,
+                stored,
+                recomputed: recomputed_median_time_past,
+            });
+        }
+        slot.trust = AnchorTrust::Authenticated;
+        Ok(())
+    }
+
+    /// How many retained anchors have been re-derived from authenticated
+    /// headers. Callers surface this as coverage rather than hiding it.
+    pub fn authenticated_count(&self) -> usize {
+        self.anchors
+            .iter()
+            .filter(|anchor| anchor.is_authenticated())
+            .count()
     }
 }
 
@@ -333,6 +427,7 @@ mod tests {
                     height,
                     block_hash: hash_for(height),
                     median_time_past,
+                    trust: AnchorTrust::Authenticated,
                 })
                 .expect("monotonic fixture");
         }
@@ -418,7 +513,8 @@ mod tests {
             index.insert(HeaderAnchor {
                 height: 900,
                 block_hash: hash_for(900),
-                median_time_past: 6_000
+                median_time_past: 6_000,
+                trust: AnchorTrust::Authenticated,
             }),
             Err(HeaderIndexError::HeightWentBackwards {
                 last: 1_000,
@@ -429,7 +525,8 @@ mod tests {
             index.insert(HeaderAnchor {
                 height: 1_100,
                 block_hash: hash_for(1_100),
-                median_time_past: 4_999
+                median_time_past: 4_999,
+                trust: AnchorTrust::Authenticated,
             }),
             Err(HeaderIndexError::MedianTimeWentBackwards {
                 last: 5_000,
