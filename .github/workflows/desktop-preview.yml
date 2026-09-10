@@ -125,6 +125,11 @@ jobs:
         # asset fails closed instead of executing an unreviewed replacement.
         if: startsWith(matrix.platform, 'ubuntu')
         shell: bash
+        env:
+          # Read-only, and used by exactly one fetch below: the api.github.com
+          # release-asset call. The other downloads are release-CDN or raw URLs
+          # and need no credential.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -191,7 +196,8 @@ jobs:
             "$cache/linuxdeploy-plugin-appimage.AppImage" \
             "$appimage_plugin_sha" \
             --header 'Accept: application/octet-stream' \
-            --header 'X-GitHub-Api-Version: 2022-11-28'
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            --header "Authorization: Bearer $GITHUB_TOKEN"
           download_and_verify \
             "https://raw.githubusercontent.com/tauri-apps/linuxdeploy-plugin-gtk/b5eb8d05b4c0ed40107fe2158c5d8527f94568ef/linuxdeploy-plugin-gtk.sh" \
             "$cache/linuxdeploy-plugin-gtk.sh" \
