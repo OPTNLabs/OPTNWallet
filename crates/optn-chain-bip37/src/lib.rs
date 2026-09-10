@@ -155,6 +155,11 @@ pub struct Bip37Backend {
     capabilities: CapabilitySet,
     probe: NodeProbe,
     headers: Mutex<HeaderCache>,
+    /// When this peer may next be asked for an SHV proof.
+    ///
+    /// An inconclusive attempt is a cooldown, not a verdict: the peer keeps
+    /// every other capability it has, and is asked again once this passes.
+    shv_retry_after: Mutex<Option<tokio::time::Instant>>,
 }
 
 impl Bip37Backend {
@@ -228,6 +233,7 @@ impl Bip37Backend {
             capabilities,
             probe,
             headers: Mutex::new(headers),
+            shv_retry_after: Mutex::new(None),
         })
     }
 
@@ -386,6 +392,13 @@ impl Bip37Backend {
         if !self.probe.serves_shv {
             return Err(ChainBackendError::Unsupported);
         }
+        // A peer that already declined to answer is left alone for a while
+        // rather than re-probed on every historical lookup.
+        if let Some(retry_after) = *self.shv_retry_after.lock().await {
+            if tokio::time::Instant::now() < retry_after {
+                return Err(ChainBackendError::Unsupported);
+            }
+        }
         let request = shv::ShvRequest {
             target: shv::ProofTarget::Root,
             selector: shv::BlockSelector::Height(u64::from(height)),
@@ -393,68 +406,120 @@ impl Bip37Backend {
         };
         let payload = shv::encode_getshv(&[request]).map_err(ChainBackendError::Rejected)?;
 
+        let budget = match self.config.transport {
+            Bip37Transport::Direct => shv::ShvProbeBudget::DIRECT,
+            Bip37Transport::Tor { .. } => shv::ShvProbeBudget::TOR,
+        };
+        // Absolute, and taken before the connection so that connect, handshake,
+        // send and every read share it. A per-read timeout renews itself, which
+        // is how a chatty peer could otherwise hold the attempt open for far
+        // longer than any single timeout suggests.
+        let deadline = tokio::time::Instant::now() + budget.deadline;
+
         let port = self
             .config
             .endpoint
             .port
             .unwrap_or_else(|| params_for(&self.config.network).default_port);
-        let mut stream = connect_peer(&self.config.endpoint.host, port, &self.config.transport)
-            .await
-            .map_err(ChainBackendError::Protocol)?;
         let magic = params_for(&self.config.network).magic;
-        let io_timeout = io_timeout(&self.config.transport);
-        handshake(&mut stream, magic, io_timeout)
-            .await
-            .map_err(ChainBackendError::Protocol)?;
-        stream
-            .write_all(&encode_message(magic, "getshv", &payload))
-            .await
-            .map_err(|e| ChainBackendError::Protocol(format!("getshv send failed: {e}")))?;
 
-        // Bounded: bit 9 is shared with BCHD's XThinner, so a peer that
-        // advertised it may have meant something else entirely and will never
-        // answer. Fail over instead of holding the connection open.
-        for _ in 0..shv::MAX_MESSAGES_AWAITING_SHV {
-            let (command, body) = read_message(&mut stream, magic, io_timeout)
+        let attempt = async {
+            let mut stream = connect_peer(&self.config.endpoint.host, port, &self.config.transport)
                 .await
                 .map_err(ChainBackendError::Protocol)?;
-            match command.as_str() {
-                "shv" => {
-                    let responses =
-                        shv::decode_shv(&body).map_err(ChainBackendError::InvalidResponse)?;
-                    // A peer answers only what it accepted, so match on the
-                    // fields the request pinned rather than on position.
-                    let answer = responses
-                        .into_iter()
-                        .find(|response| response.answers(&request))
-                        .ok_or(ChainBackendError::Unsupported)?;
-                    return Ok(BackendObservation {
-                        payload: ChainPayload::HistoricalHeaderProof {
-                            height,
-                            checkpoint_height,
-                            header: answer.header,
-                            siblings: answer.proof,
-                            root: answer.claimed_target,
-                        },
-                        // The peer's target is its claim. Only the runtime's
-                        // accumulator can promote this to HeaderMmrProven.
-                        evidence: Evidence::ServerAssertion,
-                        chain_tip: None,
-                    });
+            let io_timeout = io_timeout(&self.config.transport);
+            handshake(&mut stream, magic, io_timeout)
+                .await
+                .map_err(ChainBackendError::Protocol)?;
+            stream
+                .write_all(&encode_message(magic, "getshv", &payload))
+                .await
+                .map_err(|e| ChainBackendError::Protocol(format!("getshv send failed: {e}")))?;
+
+            let mut bytes_seen = 0usize;
+            for _ in 0..budget.max_messages {
+                // Bounded by the shared deadline, not by a fresh per-read
+                // timeout, so unrelated traffic cannot renew the wait.
+                let read =
+                    tokio::time::timeout_at(deadline, read_message(&mut stream, magic, io_timeout));
+                let Ok(message) = read.await else {
+                    return Ok(Err(shv::ShvProbeOutcome::NotDemonstrated(
+                        shv::ShvProbeLimit::Deadline,
+                    )));
+                };
+                // A read that fails for a reason other than the deadline is a
+                // genuine transport problem and stays visible as one.
+                let (command, body) = message.map_err(ChainBackendError::Protocol)?;
+                bytes_seen = bytes_seen.saturating_add(body.len());
+                if bytes_seen > budget.max_bytes {
+                    return Ok(Err(shv::ShvProbeOutcome::NotDemonstrated(
+                        shv::ShvProbeLimit::Bytes,
+                    )));
                 }
-                "ping" => {
-                    let _ = stream
-                        .write_all(&encode_message(magic, "pong", &body))
-                        .await;
+                match command.as_str() {
+                    "shv" => {
+                        // Malformed is a different fact from unsupported, and
+                        // it is the only one of the three that says anything
+                        // about the peer's honesty.
+                        let responses =
+                            shv::decode_shv(&body).map_err(ChainBackendError::InvalidResponse)?;
+                        // A peer answers only what it accepted, so match on the
+                        // fields the request pinned rather than on position.
+                        let Some(answer) = responses
+                            .into_iter()
+                            .find(|response| response.answers(&request))
+                        else {
+                            return Ok(Err(shv::ShvProbeOutcome::NoMatchingResponse));
+                        };
+                        return Ok(Ok(answer));
+                    }
+                    "ping" => {
+                        let _ = stream
+                            .write_all(&encode_message(magic, "pong", &body))
+                            .await;
+                    }
+                    _ => {}
                 }
-                _ => {}
+            }
+            Ok(Err(shv::ShvProbeOutcome::NotDemonstrated(
+                shv::ShvProbeLimit::Messages,
+            )))
+        };
+
+        // The deadline also covers a peer that accepts the connection and then
+        // says nothing at all, which is the case a message budget never sees.
+        let outcome = match tokio::time::timeout_at(deadline, attempt).await {
+            Ok(result) => result?,
+            Err(_) => Err(shv::ShvProbeOutcome::NotDemonstrated(
+                shv::ShvProbeLimit::Deadline,
+            )),
+        };
+
+        match outcome {
+            Ok(answer) => Ok(BackendObservation {
+                payload: ChainPayload::HistoricalHeaderProof {
+                    height,
+                    checkpoint_height,
+                    header: answer.header,
+                    siblings: answer.proof,
+                    root: answer.claimed_target,
+                },
+                // The peer's target is its claim. Only the runtime's
+                // accumulator can promote this to HeaderMmrProven.
+                evidence: Evidence::ServerAssertion,
+                chain_tip: None,
+            }),
+            Err(outcome) => {
+                // Nothing was demonstrated this attempt. That is not a protocol
+                // violation and not permanent, so the peer keeps its header,
+                // Bloom and broadcast capabilities and is simply left alone for
+                // a while. The planner routes the proof elsewhere.
+                *self.shv_retry_after.lock().await =
+                    Some(tokio::time::Instant::now() + shv::SHV_PROBE_COOLDOWN);
+                let _ = outcome.reason();
+                Err(ChainBackendError::Unsupported)
             }
         }
-        // Not a protocol error on our side: the peer simply does not serve
-        // this, whatever its service bits claimed. Reported as unsupported so
-        // the planner can route elsewhere without treating the peer as broken
-        // for its other capabilities.
-        Err(ChainBackendError::Unsupported)
     }
 
     async fn broadcast(
@@ -1029,6 +1094,7 @@ mod tests {
                 serves_shv: false,
             },
             headers: Mutex::new(HeaderCache::default()),
+            shv_retry_after: Mutex::new(None),
         };
         for unsupported in [
             WalletInterest::rpa_prefix("ab").unwrap(),
@@ -1069,6 +1135,7 @@ mod tests {
                 serves_shv: false,
             },
             headers: Mutex::new(HeaderCache::default()),
+            shv_retry_after: Mutex::new(None),
         };
         let mut script = vec![0x76, 0xa9, 0x14];
         script.extend_from_slice(&[9; 20]);
@@ -1118,6 +1185,7 @@ mod tests {
             capabilities: CapabilitySet::default(),
             probe,
             headers: Mutex::new(HeaderCache::default()),
+            shv_retry_after: Mutex::new(None),
         }
     }
 
@@ -1144,6 +1212,152 @@ mod tests {
         // Headers are served either way; the proof is the part that is gated.
         assert!(without.supports(ChainOperation::HeaderSync));
         assert!(with.supports(ChainOperation::HeaderSync));
+    }
+
+    /// Build a backend pointed at a local listener, so the probe runs against
+    /// a real socket rather than a mocked transport.
+    fn backend_at(port: u16, serves_shv: bool) -> Bip37Backend {
+        Bip37Backend {
+            config: Bip37Config::new(
+                SourceId::new("local-test"),
+                Endpoint {
+                    kind: EndpointKind::BchP2p,
+                    host: "127.0.0.1".into(),
+                    port: Some(port),
+                },
+                "chipnet",
+            ),
+            capabilities: CapabilitySet::default(),
+            probe: probe(serves_shv),
+            headers: Mutex::new(HeaderCache::default()),
+            shv_retry_after: Mutex::new(None),
+        }
+    }
+
+    /// A peer that completes the handshake and then ignores `getshv`.
+    ///
+    /// This is the case the service-bit ambiguity actually produces: bit 9 may
+    /// have meant XThinner, so the peer is perfectly healthy for headers,
+    /// Bloom filtering and broadcast and simply has nothing to say about SHV.
+    /// A peer that will not even handshake is a different thing -- a dead peer
+    /// -- and stays a transport error.
+    async fn spawn_handshaking_mute_peer() -> (u16, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let magic = params_for("chipnet").magic;
+        let handle = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            // Answer the version so the handshake completes, then go quiet.
+            let _ = socket
+                .write_all(&encode_message(magic, "version", &build_version_payload(0)))
+                .await;
+            let _ = socket
+                .write_all(&encode_message(magic, "verack", &[]))
+                .await;
+            std::future::pending::<()>().await;
+        });
+        (port, handle)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_handshaking_peer_that_ignores_getshv_is_unsupported() {
+        let (port, server) = spawn_handshaking_mute_peer().await;
+        let backend = backend_at(port, true);
+
+        let outcome = backend.historical_header_proof(1, 2).await;
+        assert_eq!(
+            outcome,
+            Err(ChainBackendError::Unsupported),
+            "no reply is an undemonstrated capability, not a broken peer"
+        );
+        assert!(
+            backend.shv_retry_after.lock().await.is_some(),
+            "an inconclusive attempt sets a cooldown"
+        );
+
+        // The cooldown short-circuits the next lookup instead of re-probing.
+        assert_eq!(
+            backend.historical_header_proof(1, 2).await,
+            Err(ChainBackendError::Unsupported)
+        );
+
+        server.abort();
+    }
+
+    /// The cooldown is a delay, not a verdict: everything else the peer does
+    /// keeps working, and the advertisement is not revoked.
+    #[tokio::test(start_paused = true)]
+    async fn an_inconclusive_probe_does_not_disable_other_capabilities() {
+        let (port, server) = spawn_handshaking_mute_peer().await;
+        let backend = backend_at(port, true);
+        assert_eq!(
+            backend.historical_header_proof(1, 2).await,
+            Err(ChainBackendError::Unsupported)
+        );
+
+        // Unconditional capabilities are untouched. WalletRefresh is gated on
+        // a recorded UtxoQuery claim, which this bare fixture has not probed
+        // for, so it is not the assertion to make here.
+        assert!(backend.supports(ChainOperation::HeaderSync));
+        assert!(backend.supports(ChainOperation::Broadcast));
+        assert!(backend.probe.serves_bloom, "Bloom support is unaffected");
+        assert!(backend.probe.serves_shv, "the advertisement stands");
+        assert!(
+            backend.supports(ChainOperation::HistoricalHeaderProof),
+            "and the capability is not written off permanently"
+        );
+
+        server.abort();
+    }
+
+    /// A peer that refuses the connection outright is a transport failure and
+    /// must stay visible as one.
+    #[tokio::test]
+    async fn a_refused_connection_stays_a_protocol_error() {
+        // Bind then drop, so the port is almost certainly closed.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+
+        let backend = backend_at(port, true);
+        let outcome = backend.historical_header_proof(1, 2).await;
+        assert!(
+            matches!(outcome, Err(ChainBackendError::Protocol(_))),
+            "a refused connection is not an undemonstrated capability: {outcome:?}"
+        );
+        assert!(
+            backend.shv_retry_after.lock().await.is_none(),
+            "transport failure is not a capability cooldown"
+        );
+    }
+
+    /// The budgets are three independent bounds, and the deadline is absolute.
+    #[test]
+    fn the_probe_budgets_are_bounded_and_tor_only_moves_the_clock() {
+        let direct = shv::ShvProbeBudget::DIRECT;
+        let tor = shv::ShvProbeBudget::TOR;
+        assert!(
+            tor.deadline > direct.deadline,
+            "Tor gets longer, not looser"
+        );
+        assert_eq!(tor.max_messages, direct.max_messages);
+        assert_eq!(tor.max_bytes, direct.max_bytes);
+        assert_eq!(direct.max_messages, shv::MAX_MESSAGES_AWAITING_SHV);
+        assert_eq!(direct.max_bytes, shv::MAX_BYTES_AWAITING_SHV);
+
+        // Every limit reports which budget ran out, and none of them reads as
+        // a malformed response.
+        for limit in [
+            shv::ShvProbeLimit::Deadline,
+            shv::ShvProbeLimit::Messages,
+            shv::ShvProbeLimit::Bytes,
+        ] {
+            let reason = shv::ShvProbeOutcome::NotDemonstrated(limit).reason();
+            assert!(reason.contains("no shv reply"), "{reason}");
+        }
+        assert!(shv::ShvProbeOutcome::NoMatchingResponse
+            .reason()
+            .contains("did not answer"));
     }
 
     #[test]
