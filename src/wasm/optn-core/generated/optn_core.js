@@ -1,6 +1,101 @@
 /* @ts-self-types="./optn_core.d.ts" */
 
 /**
+ * @param {Uint8Array} public_key
+ * @returns {Uint8Array}
+ */
+export function connectP2pkhLock(public_key) {
+    const ptr0 = passArray8ToWasm0(public_key, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.connectP2pkhLock(ptr0, len0);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * @param {Uint8Array} private_key
+ * @returns {Uint8Array}
+ */
+export function connectPublicKey(private_key) {
+    const ptr0 = passArray8ToWasm0(private_key, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.connectPublicKey(ptr0, len0);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * @param {string} context_json
+ * @param {Uint8Array} private_key
+ * @param {Uint8Array} covered
+ * @param {number} mode
+ * @returns {Uint8Array}
+ */
+export function connectSignInput(context_json, private_key, covered, mode) {
+    const ptr0 = passStringToWasm0(context_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArray8ToWasm0(private_key, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArray8ToWasm0(covered, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ret = wasm.connectSignInput(ptr0, len0, ptr1, len1, ptr2, len2, mode);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v4 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v4;
+}
+
+/**
+ * @param {string} context_json
+ * @param {Uint8Array} private_key
+ * @param {number} mode
+ * @returns {Uint8Array}
+ */
+export function connectSignP2pkh(context_json, private_key, mode) {
+    const ptr0 = passStringToWasm0(context_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArray8ToWasm0(private_key, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.connectSignP2pkh(ptr0, len0, ptr1, len1, mode);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v3 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v3;
+}
+
+/**
+ * @param {string} context_json
+ * @param {Uint8Array} covered
+ * @param {number} mode
+ * @returns {Uint8Array}
+ */
+export function connectSigningSerialization(context_json, covered, mode) {
+    const ptr0 = passStringToWasm0(context_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArray8ToWasm0(covered, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.connectSigningSerialization(ptr0, len0, ptr1, len1, mode);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v3 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v3;
+}
+
+/**
  * Decode a cashcode or legacy paycode. Returns JSON, or throws with the
  * reason the code was rejected.
  * @param {string} code

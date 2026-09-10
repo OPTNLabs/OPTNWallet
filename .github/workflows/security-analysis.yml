@@ -89,6 +89,9 @@ jobs:
         working-directory: src-tauri
         run: cargo audit
 
+      - name: Audit shared connector core without advisory exceptions
+        run: cargo audit --file crates/optn-core/Cargo.lock
+
   supply-chain:
     name: Supply-chain policy and SBOM
     runs-on: ubuntu-latest

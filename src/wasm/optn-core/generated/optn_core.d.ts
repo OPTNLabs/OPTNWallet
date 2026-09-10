@@ -1,6 +1,16 @@
 /* tslint:disable */
 /* eslint-disable */
 
+export function connectP2pkhLock(public_key: Uint8Array): Uint8Array;
+
+export function connectPublicKey(private_key: Uint8Array): Uint8Array;
+
+export function connectSignInput(context_json: string, private_key: Uint8Array, covered: Uint8Array, mode: number): Uint8Array;
+
+export function connectSignP2pkh(context_json: string, private_key: Uint8Array, mode: number): Uint8Array;
+
+export function connectSigningSerialization(context_json: string, covered: Uint8Array, mode: number): Uint8Array;
+
 /**
  * Decode a cashcode or legacy paycode. Returns JSON, or throws with the
  * reason the code was rejected.
@@ -145,6 +155,11 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
+    readonly connectP2pkhLock: (a: number, b: number) => [number, number, number, number];
+    readonly connectPublicKey: (a: number, b: number) => [number, number, number, number];
+    readonly connectSignInput: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
+    readonly connectSignP2pkh: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+    readonly connectSigningSerialization: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly decodeCashcode: (a: number, b: number) => [number, number, number, number];
     readonly deriveRpaKeys: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number];
     readonly encodeCashcode: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
@@ -170,9 +185,9 @@ export interface InitOutput {
     readonly spendingKey: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
-    readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __externref_table_dealloc: (a: number) => void;
     readonly __wbindgen_free: (a: number, b: number, c: number) => void;
+    readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_start: () => void;
 }
 

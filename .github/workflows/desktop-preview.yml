@@ -530,6 +530,16 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Require every desktop and Flatpak build to succeed
+        env:
+          DESKTOP_RESULT: ${{ needs.build-desktop-preview.result }}
+          FLATPAK_RESULT: ${{ needs.flatpak-preview.result }}
+        run: |
+          if [ "$DESKTOP_RESULT" != success ] || [ "$FLATPAK_RESULT" != success ]; then
+            echo '::error::a required desktop or Flatpak build failed, was cancelled, or was skipped'
+            exit 1
+          fi
+
       - name: Download every preview artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
