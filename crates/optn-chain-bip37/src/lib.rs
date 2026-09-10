@@ -1417,6 +1417,23 @@ mod tests {
         fn requests(&self) -> usize {
             self.requests.load(std::sync::atomic::Ordering::SeqCst)
         }
+
+        /// Wait for the peer's task to account for `expected` requests.
+        ///
+        /// The client returning `Timeout` only says the client gave up. The
+        /// peer parses and counts on its own task, so reading the counter the
+        /// instant the client returns is a race -- one a quiet machine wins
+        /// and a loaded CI runner loses. Yielding until the count arrives
+        /// turns that into a wait rather than a coin toss; the assertion after
+        /// it still has to hold.
+        async fn await_requests(&self, expected: usize) {
+            for _ in 0..10_000 {
+                if self.requests() >= expected {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        }
     }
 
     /// Read one framed message straight off the socket, test-side.
@@ -1729,6 +1746,7 @@ mod tests {
             peer.connections() > after_first,
             "an expired cooldown lets the next attempt reach the wire"
         );
+        peer.await_requests(2).await;
         assert_eq!(peer.requests(), 2, "and the request is sent again");
 
         peer.handle.abort();
