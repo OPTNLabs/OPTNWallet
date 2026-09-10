@@ -15,6 +15,9 @@
 
 use std::collections::VecDeque;
 
+use serde::{Deserialize, Serialize};
+
+use optn_core::asert::{AsertAnchor, AsertParams};
 use optn_core::header_time::{
     header_timestamp, median_time_past, SparseTimeIndex, TimeAnchor, TimeIndexError, TimeLookup,
     MEDIAN_TIME_SPAN,
@@ -33,6 +36,27 @@ use crate::header_verifier::{ShvMmrError, ShvMmrHeaderVerifier};
 /// is roughly 1.2 KB of state, while bounding a resolved start to one
 /// retarget interval before the requested instant.
 pub const DEFAULT_ANCHOR_INTERVAL: u32 = 2016;
+
+/// Ceiling on a persisted view. Peaks are O(log n) and anchors are one per
+/// retarget interval, so a real record is kilobytes; anything far larger is a
+/// malformed or hostile file rather than a chain that grew.
+const MAX_PERSISTED_VIEW_BYTES: usize = 1024 * 1024;
+
+/// Durable form of a [`VerifiedHeaderView`].
+///
+/// Deliberately does not carry the trusted commitment or the difficulty
+/// context. Both are re-supplied on restore, so editing this file cannot move
+/// what the view will accept.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PersistedHeaderView {
+    schema: u32,
+    network: String,
+    checkpoint: String,
+    anchors: Vec<(u32, u32)>,
+    window: Vec<u32>,
+    anchor_interval: u32,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HeaderViewError {
@@ -56,6 +80,8 @@ pub enum HeaderViewError {
         height: u32,
         leaf_count: u64,
     },
+    /// The persisted record is malformed, oversized, or for another chain.
+    InvalidPersistedView,
 }
 
 impl From<ShvMmrError> for HeaderViewError {
@@ -276,6 +302,72 @@ impl VerifiedHeaderView {
             block_hash: optn_core::header_hash::sha256d(&proof.header.0),
             height: proof.height,
         })
+    }
+
+    /// Encode this view for durable storage.
+    ///
+    /// The accumulator half reuses the verifier's own checkpoint record, so the
+    /// same trust rule applies on the way back in: the commitment must be
+    /// re-supplied from authenticated storage, never taken from this blob.
+    pub fn encode(&self) -> Result<String, HeaderViewError> {
+        let record = PersistedHeaderView {
+            schema: 1,
+            network: self.network.to_string(),
+            checkpoint: self.verifier.encode_checkpoint_json(self.network)?,
+            anchors: self
+                .times
+                .anchors()
+                .iter()
+                .map(|anchor| (anchor.height, anchor.median_time_past))
+                .collect(),
+            window: self.window.iter().copied().collect(),
+            anchor_interval: self.anchor_interval,
+        };
+        serde_json::to_string(&record).map_err(|_| HeaderViewError::InvalidPersistedView)
+    }
+
+    /// Restore a view against an independently trusted checkpoint.
+    ///
+    /// `trusted` must come from authenticated storage, not from the same blob:
+    /// a record that carries its own commitment proves nothing. The network's
+    /// difficulty context is re-attached here rather than persisted, because a
+    /// stored ASERT anchor would be one more thing an attacker could edit.
+    ///
+    /// Anchors are replayed through the index's own monotonicity checks, so a
+    /// tampered or reordered time series is rejected instead of loaded.
+    pub fn restore(
+        json: &str,
+        network: Network,
+        trusted: &HeaderCheckpoint,
+    ) -> Result<Self, HeaderViewError> {
+        if json.len() > MAX_PERSISTED_VIEW_BYTES {
+            return Err(HeaderViewError::InvalidPersistedView);
+        }
+        let record: PersistedHeaderView =
+            serde_json::from_str(json).map_err(|_| HeaderViewError::InvalidPersistedView)?;
+        if record.schema != 1 || record.network != network.to_string() {
+            return Err(HeaderViewError::InvalidPersistedView);
+        }
+        if record.window.len() > MEDIAN_TIME_SPAN {
+            return Err(HeaderViewError::InvalidPersistedView);
+        }
+
+        let verifier =
+            ShvMmrHeaderVerifier::from_checkpoint_json(&record.checkpoint, network, trusted)?
+                .with_asert(
+                    AsertParams::for_network(network),
+                    AsertAnchor::for_network(network),
+                );
+
+        let mut view = Self::with_anchor_interval(network, verifier, record.anchor_interval);
+        for (height, median_time_past) in record.anchors {
+            view.times.insert(TimeAnchor {
+                height,
+                median_time_past,
+            })?;
+        }
+        view.window = record.window.into_iter().collect();
+        Ok(view)
     }
 
     /// Drop time anchors below `height`, mirroring a header prune.
@@ -503,6 +595,90 @@ mod tests {
             shared.tip().expect("a tip"),
             "the later providers did advance the view"
         );
+    }
+
+    /// A view bootstrapped from a real checkpoint, so `encode` has a
+    /// checkpoint record to reuse. `empty()` cannot be encoded by design.
+    fn bootstrapped_view() -> (VerifiedHeaderView, HeaderCheckpoint) {
+        let headers = chain(&wobbly_times(1));
+        let header = headers[0].clone();
+        let commitment = crate::header_verifier::header_leaf(&header);
+        let verifier = ShvMmrHeaderVerifier::from_checkpoint_proof(
+            0,
+            header,
+            &[],
+            commitment,
+            CheckpointProvenance::SelfDerived,
+        )
+        .expect("single-leaf checkpoint bootstraps")
+        .with_asert(
+            AsertParams::for_network(Network::Chipnet),
+            AsertAnchor::for_network(Network::Chipnet),
+        );
+        let trusted = HeaderCheckpoint {
+            height: 0,
+            commitment,
+            provenance: CheckpointProvenance::SelfDerived,
+        };
+        (
+            VerifiedHeaderView::with_anchor_interval(Network::Chipnet, verifier, 4),
+            trusted,
+        )
+    }
+
+    #[test]
+    fn a_view_survives_a_restart_and_refuses_a_tampered_record() {
+        let (view, trusted) = bootstrapped_view();
+        let encoded = view.encode().expect("a bootstrapped view encodes");
+
+        let restored = VerifiedHeaderView::restore(&encoded, Network::Chipnet, &trusted)
+            .expect("restores against the trusted checkpoint");
+        assert_eq!(restored.tip(), view.tip());
+        assert_eq!(restored.times().anchors(), view.times().anchors());
+        assert_eq!(
+            restored.verifier().accumulator().root(),
+            view.verifier().accumulator().root()
+        );
+        assert!(
+            restored.verifier().has_difficulty_context(),
+            "difficulty context is re-attached, not restored from the file"
+        );
+
+        // A commitment the host did not authenticate is refused, even though
+        // the record is internally consistent with itself.
+        let mut foreign = trusted.clone();
+        foreign.commitment[0] ^= 1;
+        assert!(VerifiedHeaderView::restore(&encoded, Network::Chipnet, &foreign).is_err());
+
+        // Wrong network.
+        assert!(VerifiedHeaderView::restore(&encoded, Network::Mainnet, &trusted).is_err());
+
+        // Garbage and oversized records are refused rather than parsed.
+        assert!(matches!(
+            VerifiedHeaderView::restore("not json", Network::Chipnet, &trusted),
+            Err(HeaderViewError::InvalidPersistedView)
+        ));
+        let oversized = "x".repeat(MAX_PERSISTED_VIEW_BYTES + 1);
+        assert!(matches!(
+            VerifiedHeaderView::restore(&oversized, Network::Chipnet, &trusted),
+            Err(HeaderViewError::InvalidPersistedView)
+        ));
+    }
+
+    #[test]
+    fn a_restored_view_rejects_a_non_monotonic_time_series() {
+        let (view, trusted) = bootstrapped_view();
+        let encoded = view.encode().expect("encodes");
+        // Splice in anchors whose median-time-past goes backwards.
+        let tampered = encoded.replace("\"anchors\":[]", "\"anchors\":[[4,5000],[8,4000]]");
+        assert_ne!(
+            tampered, encoded,
+            "fixture must actually change the anchors"
+        );
+        assert!(matches!(
+            VerifiedHeaderView::restore(&tampered, Network::Chipnet, &trusted),
+            Err(HeaderViewError::TimeIndex(_))
+        ));
     }
 
     #[test]
