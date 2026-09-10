@@ -14,6 +14,7 @@
 pub mod addon;
 pub mod airgap;
 pub mod asert;
+pub mod bcmr;
 pub mod cashaddr;
 pub mod coins;
 pub mod conformance;
