@@ -76,8 +76,9 @@ export async function signWizardConnectTransaction(
       if (!pathInfo) {
         const existingUnlockingBytecode = input.unlockingBytecode;
         const hasPresetUnlocking =
-          existingUnlockingBytecode instanceof Uint8Array ||
-          Array.isArray(existingUnlockingBytecode);
+          (existingUnlockingBytecode instanceof Uint8Array ||
+            Array.isArray(existingUnlockingBytecode)) &&
+          existingUnlockingBytecode.length > 0;
         if (!hasPresetUnlocking) {
           throw new Error(
             `Missing WizardConnect input path for wallet-managed input ${i}`

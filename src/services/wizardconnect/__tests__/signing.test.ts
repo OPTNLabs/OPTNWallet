@@ -137,4 +137,39 @@ describe('WizardConnect signing', () => {
       }
     }
   );
+
+  it('rejects a wallet-managed input with no path or preset unlocking bytecode', async () => {
+    const lockingBytecode = hexToBin(
+      '76a914751e76e8199196d454941c45d1b3a323f1433bd688ac'
+    );
+    const request = {
+      transaction: {
+        transaction: {
+          version: 2,
+          locktime: 0,
+          inputs: [
+            {
+              outpointTransactionHash: new Uint8Array(32).fill(1),
+              outpointIndex: 0,
+              sequenceNumber: 0xffffffff,
+              unlockingBytecode: new Uint8Array(),
+            },
+          ],
+          outputs: [{ lockingBytecode, valueSatoshis: 9000n }],
+        },
+        sourceOutputs: [{ lockingBytecode, valueSatoshis: 10000n }],
+      },
+      inputPaths: [],
+    } as unknown as SignTransactionRequest;
+
+    await expect(
+      signWizardConnectTransaction(request, {
+        mnemonic: 'mocked test key',
+        passphrase: '',
+        network: Network.CHIPNET,
+      })
+    ).rejects.toThrow(
+      'Missing WizardConnect input path for wallet-managed input 0'
+    );
+  });
 });
