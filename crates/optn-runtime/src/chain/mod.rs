@@ -1015,6 +1015,49 @@ mod tests {
         assert!(plan.fallback.is_empty());
     }
 
+    /// Own-infrastructure-only is a *source* restriction, not an Electrum one.
+    ///
+    /// Issue #75 requires it to fail closed rather than leak, and a public BCH
+    /// P2P peer leaks a bloom filter just as an Electrum server leaks a
+    /// scripthash. The scope filter runs before the protocol filter, so a
+    /// public peer is excluded on the same footing as a public server.
+    #[test]
+    fn own_infrastructure_only_excludes_public_p2p_peers_too() {
+        let mine_p2p = SourceId::from("mine-p2p");
+        let public_p2p = SourceId::from("public-p2p");
+        let mut catalog = SourceCatalog::default();
+        for (id, origin) in [
+            (
+                &mine_p2p,
+                SourceOrigin::UserInfrastructure {
+                    group: "home".into(),
+                },
+            ),
+            (&public_p2p, SourceOrigin::UserAdded),
+        ] {
+            let mut entry = source(id.as_str(), origin, &[ProtocolFamily::Bip37], 10);
+            entry.endpoints = vec![Endpoint {
+                kind: EndpointKind::BchP2p,
+                host: format!("{}.example", id.as_str()),
+                port: Some(48333),
+            }];
+            catalog.insert(entry).unwrap();
+        }
+
+        let plan = build_selection_plan(&catalog, &ConnectionPolicy::own_infrastructure());
+        assert_eq!(plan.primary, vec![mine_p2p]);
+        assert!(
+            !plan.primary.contains(&public_p2p),
+            "a public P2P peer is not own infrastructure"
+        );
+        assert!(plan.fallback.is_empty(), "own-infrastructure fails closed");
+
+        // The same catalog under Auto is allowed to use the public peer, which
+        // is what shows the exclusion came from the policy and not the catalog.
+        let auto = build_selection_plan(&catalog, &ConnectionPolicy::auto());
+        assert!(auto.primary.contains(&public_p2p));
+    }
+
     #[test]
     fn selected_sources_can_fall_back_to_a_broader_allowed_pool() {
         let preferred = SourceId::from("preferred");

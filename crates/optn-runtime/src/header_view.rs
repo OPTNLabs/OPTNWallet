@@ -459,6 +459,47 @@ mod tests {
         assert!(view.times().newest().unwrap().height < newest.height);
     }
 
+    /// Verified progress belongs to the view, not to whoever supplied it.
+    ///
+    /// The view has no provider identity by construction, so a batch fetched
+    /// over BIP37 and a batch fetched over Electrum land in the same
+    /// accumulator and the same index. Switching providers mid-sync therefore
+    /// continues from the verified cursor instead of restarting, and neither
+    /// provider crate is involved in holding that state.
+    #[test]
+    fn switching_provider_mid_sync_continues_from_the_same_verified_state() {
+        let times = wobbly_times(48);
+        let headers = chain(&times);
+
+        // One view, fed in three separate batches as if by three providers.
+        let mut shared = view_with_interval(4);
+        shared.extend(&headers[..16]).expect("first provider");
+        let after_first = shared.tip().expect("a tip");
+        shared.extend(&headers[16..32]).expect("second provider");
+        shared.extend(&headers[32..]).expect("third provider");
+
+        // The same chain delivered in one batch by a single provider.
+        let mut single = view_with_interval(4);
+        single.extend(&headers).expect("one provider");
+
+        assert_eq!(shared.tip(), single.tip(), "same verified tip");
+        assert_eq!(
+            shared.verifier().accumulator().root(),
+            single.verifier().accumulator().root(),
+            "same accumulator regardless of who delivered the headers"
+        );
+        assert_eq!(
+            shared.times().anchors(),
+            single.times().anchors(),
+            "same time index regardless of batch boundaries"
+        );
+        assert_ne!(
+            after_first,
+            shared.tip().expect("a tip"),
+            "the later providers did advance the view"
+        );
+    }
+
     #[test]
     fn a_proof_must_match_this_network_and_this_runtime_root() {
         let mut view = view_with_interval(4);
