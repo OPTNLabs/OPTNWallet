@@ -6,6 +6,8 @@
 //! adapters may subscribe to typed events. No UI or native-shell framework
 //! belongs in this crate.
 
+use std::collections::BTreeMap;
+
 pub use optn_core::wallet_file::SecretText;
 pub mod connect;
 mod flow;
@@ -472,6 +474,12 @@ pub struct AppState {
     pub settings_focus: Option<SettingsRowId>,
     pub watch_only_kind: WatchOnlyKind,
     pub multisig_step: MultisigStep,
+    /// Verified token identities, keyed by category id in display order.
+    ///
+    /// Written by the runtime after BCMR resolution, never by a renderer. An
+    /// absent entry is not an error: it means this wallet has not established
+    /// the identity, and the category is shown as itself until it does.
+    pub token_identities: BTreeMap<String, TokenIdentity>,
     /// Tab that opened the current overlay. `None` on a section root.
     pub return_to: Option<AppRoute>,
     pub lock: AppLockState,
@@ -561,6 +569,7 @@ impl AppState {
             settings_focus: None,
             watch_only_kind: WatchOnlyKind::Single,
             multisig_step: MultisigStep::Policy,
+            token_identities: BTreeMap::new(),
             return_to: None,
             lock: AppLockState::new(),
         }
@@ -647,6 +656,16 @@ pub enum AppAction {
     HideWalletIdentity,
     /// Record the RPA stealth balance a scan found.
     SetStealthSats(u64),
+    /// Publish a token identity the runtime resolved and verified.
+    ///
+    /// An observation, not an instruction, so a renderer may not make it: a
+    /// name that a screen could set is a name an addon or a compromised
+    /// renderer could set, and the whole point of BCMR is that the chain says
+    /// what a token is called.
+    SetTokenIdentity {
+        category_hex: String,
+        identity: TokenIdentity,
+    },
     /// Rescan this wallet from a chosen block height, inclusive.
     ///
     /// An instruction, not an observation, so the renderer may make it: it
@@ -751,7 +770,9 @@ impl AppState {
     /// the same boundary. `reduce` also serves trusted model/worker fixtures.
     pub fn reduce_intent(&mut self, action: AppAction) -> Option<AppEvent> {
         match action {
-            AppAction::InsertCoin(_) | AppAction::SetStealthSats(_) => self.reject(
+            AppAction::InsertCoin(_)
+            | AppAction::SetStealthSats(_)
+            | AppAction::SetTokenIdentity { .. } => self.reject(
                 "Wallet observations must come from the shared sync service.".into(),
             ),
             AppAction::ConfirmAuth { .. } => self.reject(
@@ -1034,6 +1055,16 @@ impl AppState {
                 // shows. The runtime replaces this view when the scan lands.
                 self.wallet_sync.rescan_requested = Some(height);
                 self.wallet_sync.error = None;
+                Some(AppEvent::CoinsChanged)
+            }
+            AppAction::SetTokenIdentity {
+                category_hex,
+                identity,
+            } => {
+                if self.token_identities.get(&category_hex) == Some(&identity) {
+                    return None;
+                }
+                self.token_identities.insert(category_hex, identity);
                 Some(AppEvent::CoinsChanged)
             }
             AppAction::HideWalletIdentity => {
@@ -1848,6 +1879,47 @@ pub struct CoinsViewModel {
     pub coins: Vec<Coin>,
 }
 
+/// How far an identity got, and therefore how much to trust the name.
+///
+/// Kept distinct all the way to the screen. A wallet that renders "could not
+/// reach the registry" the same as "the owner withdrew it" has thrown away the
+/// difference, and the holder is the one who needs it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdentityStatus {
+    /// Fetched from the current authhead and hash-verified.
+    Verified,
+    /// Verified once and no longer current. Show it, and say so.
+    Stale,
+    /// The authhead publishes no registry. Not a failure; a decision.
+    Unpublished,
+    /// Nothing could be established. The tokens are still owned.
+    Unresolved,
+}
+
+impl IdentityStatus {
+    /// A short caveat, or `None` when the identity is current.
+    pub const fn caveat(self) -> Option<&'static str> {
+        match self {
+            Self::Verified => None,
+            Self::Stale => Some("last known"),
+            Self::Unpublished => Some("no registry published"),
+            Self::Unresolved => Some("unverified"),
+        }
+    }
+}
+
+/// A token's name as this wallet currently knows it.
+///
+/// Only ever built from a registry whose committed hash matched. A name that
+/// arrived without that check is not an identity, it is a string a server sent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenIdentity {
+    pub name: String,
+    pub ticker: Option<String>,
+    pub decimals: u8,
+    pub status: IdentityStatus,
+}
+
 /// One CashToken category this wallet holds something of.
 ///
 /// Built from the wallet's own coins and nothing else. #71 is explicit that
@@ -1858,6 +1930,12 @@ pub struct CoinsViewModel {
 pub struct OwnedCategory {
     /// Category id in display order, the same order as a txid.
     pub category_hex: String,
+    /// The registry identity, when one has been verified.
+    ///
+    /// `None` means the category is shown as itself. That is deliberate: a
+    /// token whose metadata has not resolved is still owned, and hiding it
+    /// until a web server answers would make an owned asset disappear.
+    pub identity: Option<TokenIdentity>,
     /// Fungible amount across every coin in this category.
     pub amount: u64,
     /// How many of this wallet's coins carry the category.
@@ -1875,6 +1953,7 @@ pub struct OwnedCategory {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwnedNft {
     pub category_hex: String,
+    pub identity: Option<TokenIdentity>,
     /// Hex of the commitment, which may be empty.
     pub commitment_hex: String,
     pub capability: TokenCapability,
@@ -1936,10 +2015,12 @@ pub fn assets_view_model(state: &AppState) -> AssetsViewModel {
             continue;
         };
         let hex = category_hex(&token.category);
+        let identity = state.token_identities.get(&hex).cloned();
         let entry = by_category
             .entry(hex.clone())
             .or_insert_with(|| OwnedCategory {
                 category_hex: hex,
+                identity,
                 amount: 0,
                 coins: 0,
                 nfts: 0,
@@ -1975,8 +2056,10 @@ pub fn nfts_view_model(state: &AppState) -> NftsViewModel {
         .filter_map(|coin| {
             let token = coin.token()?;
             let nft = token.nft.as_ref()?;
+            let hex = category_hex(&token.category);
             Some(OwnedNft {
-                category_hex: category_hex(&token.category),
+                identity: state.token_identities.get(&hex).cloned(),
+                category_hex: hex,
                 commitment_hex: nft
                     .commitment
                     .iter()
@@ -2886,6 +2969,88 @@ mod tests {
             assert!(assets_view_model(&state).categories.is_empty());
             assert!(nfts_view_model(&state).nfts.is_empty());
             assert_eq!(assets_view_model(&state).plain_sats, 0);
+        }
+
+        fn identity(name: &str, status: IdentityStatus) -> TokenIdentity {
+            TokenIdentity {
+                name: name.to_owned(),
+                ticker: Some("BCAT".into()),
+                decimals: 2,
+                status,
+            }
+        }
+
+        /// A verified name reaches the screens that show the category.
+        #[test]
+        fn a_resolved_identity_reaches_assets_and_nfts() {
+            let mut state = wallet_with(vec![
+                coin(1, 1_000, Some(TokenData::fungible(ALPHA, 10))),
+                coin(2, 1_000, Some(nft(ALPHA, b"\x01", NftCapability::None))),
+            ]);
+            state.reduce(AppAction::SetTokenIdentity {
+                category_hex: "aa".repeat(32),
+                identity: identity("Bitcats", IdentityStatus::Verified),
+            });
+
+            let assets = assets_view_model(&state);
+            assert_eq!(
+                assets.categories[0]
+                    .identity
+                    .as_ref()
+                    .map(|i| i.name.as_str()),
+                Some("Bitcats")
+            );
+            let nfts = nfts_view_model(&state);
+            assert_eq!(
+                nfts.nfts[0].identity.as_ref().map(|i| i.name.as_str()),
+                Some("Bitcats")
+            );
+        }
+
+        /// An unresolved category is still shown, because it is still owned.
+        #[test]
+        fn an_unresolved_category_still_appears() {
+            let state = wallet_with(vec![coin(1, 1_000, Some(TokenData::fungible(ALPHA, 10)))]);
+            let assets = assets_view_model(&state);
+            assert_eq!(assets.categories.len(), 1);
+            assert_eq!(
+                assets.categories[0].identity, None,
+                "no identity yet is not a reason to hide a coin the wallet holds"
+            );
+        }
+
+        /// Every status that is not current carries a caveat.
+        ///
+        /// "Bitcats" and "Bitcats (last known)" are different claims, and the
+        /// holder deciding whether to spend needs them to look different.
+        #[test]
+        fn only_a_verified_identity_is_shown_without_a_caveat() {
+            assert_eq!(IdentityStatus::Verified.caveat(), None);
+            for status in [
+                IdentityStatus::Stale,
+                IdentityStatus::Unpublished,
+                IdentityStatus::Unresolved,
+            ] {
+                assert!(
+                    status.caveat().is_some(),
+                    "{status:?} must not be presented as current metadata"
+                );
+            }
+        }
+
+        /// A renderer cannot name a token.
+        ///
+        /// The chain says what a token is called. A name a screen could set is
+        /// a name an addon or a compromised renderer could set.
+        #[test]
+        fn a_renderer_may_not_publish_a_token_identity() {
+            let mut state = wallet_with(vec![coin(1, 1_000, Some(TokenData::fungible(ALPHA, 1)))]);
+            state.reduce_intent(AppAction::SetTokenIdentity {
+                category_hex: "aa".repeat(32),
+                identity: identity("Totally Real Coin", IdentityStatus::Verified),
+            });
+            assert!(state.token_identities.is_empty());
+            assert!(state.notice.is_some(), "the refusal has to be visible");
         }
 
         /// My NFTs is a destination of its own, reachable and titled.

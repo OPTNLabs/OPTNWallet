@@ -11,11 +11,12 @@ use optn_app::{
     AuthScope, AutoLockMinutes, CampaignOutput, Coin, ConnectState, CreateStep, FeatureFlag,
     FeatureFlags, FeeMode, FeePreferences, FeeRate, FlipstarterPledge, FreezeReason,
     HardwareSessionState, HardwareSetupPreview, HardwareVendor, HistoryEntry, HistoryKind,
-    ImportStep, LedgerLink, MultisigSetupPreview, MultisigStep, Network, NetworkServers,
-    OpenedWallet, Outpoint, PledgeStatus, ScanCoverageView, ServerKind, ServerOverrides,
-    SettingsRowId, SpendKind, SpendPlan, ThemeMode, UiSkin, WalletKind, WalletSyncView,
-    WatchOnlyKind, WatchOnlySetupPreview, RELAY_MINIMUM_FEE_RATE,
+    IdentityStatus, ImportStep, LedgerLink, MultisigSetupPreview, MultisigStep, Network,
+    NetworkServers, OpenedWallet, Outpoint, PledgeStatus, ScanCoverageView, ServerKind,
+    ServerOverrides, SettingsRowId, SpendKind, SpendPlan, ThemeMode, TokenIdentity, UiSkin,
+    WalletKind, WalletSyncView, WatchOnlyKind, WatchOnlySetupPreview, RELAY_MINIMUM_FEE_RATE,
 };
+use std::collections::BTreeMap;
 pub mod host;
 pub mod security;
 pub use host::{block_on_ready, run, Renderer};
@@ -552,6 +553,10 @@ pub enum WireActionKind {
     RequestRescanFrom {
         height: u32,
     },
+    SetTokenIdentity {
+        category_hex: String,
+        identity: WireTokenIdentity,
+    },
     SetStealthSats {
         sats: u64,
     },
@@ -631,6 +636,63 @@ pub struct WireAction {
     pub action: WireActionKind,
 }
 
+/// A verified token identity as it crosses the renderer boundary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct WireTokenIdentity {
+    pub name: String,
+    pub ticker: Option<String>,
+    pub decimals: u8,
+    /// `verified` | `stale` | `unpublished` | `unresolved`.
+    ///
+    /// A string rather than a number so an older renderer that does not know a
+    /// status shows the caveat it cannot interpret rather than silently
+    /// treating it as current.
+    pub status: String,
+}
+
+fn identity_status_name(status: IdentityStatus) -> &'static str {
+    match status {
+        IdentityStatus::Verified => "verified",
+        IdentityStatus::Stale => "stale",
+        IdentityStatus::Unpublished => "unpublished",
+        IdentityStatus::Unresolved => "unresolved",
+    }
+}
+
+fn parse_identity_status(value: &str) -> IdentityStatus {
+    match value {
+        "verified" => IdentityStatus::Verified,
+        "stale" => IdentityStatus::Stale,
+        "unpublished" => IdentityStatus::Unpublished,
+        // Anything unrecognised is treated as unresolved rather than current.
+        // A status this build cannot read must never become a confident name.
+        _ => IdentityStatus::Unresolved,
+    }
+}
+
+impl From<&TokenIdentity> for WireTokenIdentity {
+    fn from(value: &TokenIdentity) -> Self {
+        Self {
+            name: value.name.clone(),
+            ticker: value.ticker.clone(),
+            decimals: value.decimals,
+            status: identity_status_name(value.status).to_owned(),
+        }
+    }
+}
+
+impl From<WireTokenIdentity> for TokenIdentity {
+    fn from(value: WireTokenIdentity) -> Self {
+        Self {
+            name: value.name,
+            ticker: value.ticker,
+            decimals: value.decimals,
+            status: parse_identity_status(&value.status),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WireState {
     pub version: u16,
@@ -672,6 +734,9 @@ pub struct WireState {
     /// RPA stealth sats, kept apart from the coin list.
     #[serde(default)]
     pub stealth_sats: u64,
+    /// Verified token identities, keyed by category id in display order.
+    #[serde(default)]
+    pub token_identities: BTreeMap<String, WireTokenIdentity>,
     #[serde(default)]
     pub create_step: WireCreateStep,
     #[serde(default)]
@@ -1245,6 +1310,13 @@ impl From<AppAction> for WireAction {
             AppAction::HideWalletIdentity => WireActionKind::HideWalletIdentity,
             AppAction::RequestRescanFrom { height } => WireActionKind::RequestRescanFrom { height },
             AppAction::SetStealthSats(sats) => WireActionKind::SetStealthSats { sats },
+            AppAction::SetTokenIdentity {
+                category_hex,
+                identity,
+            } => WireActionKind::SetTokenIdentity {
+                category_hex,
+                identity: WireTokenIdentity::from(&identity),
+            },
             AppAction::SetServer { kind, entry } => WireActionKind::SetServer {
                 kind: kind.id().to_string(),
                 entry,
@@ -1431,6 +1503,13 @@ impl TryFrom<WireAction> for AppAction {
             WireActionKind::HideWalletIdentity => Self::HideWalletIdentity,
             WireActionKind::RequestRescanFrom { height } => Self::RequestRescanFrom { height },
             WireActionKind::SetStealthSats { sats } => Self::SetStealthSats(sats),
+            WireActionKind::SetTokenIdentity {
+                category_hex,
+                identity,
+            } => Self::SetTokenIdentity {
+                category_hex,
+                identity: TokenIdentity::from(identity),
+            },
             WireActionKind::SetServer { kind, entry } => Self::SetServer {
                 // An unknown kind is refused rather than defaulted: writing a
                 // node host into the Electrum slot would be silently wrong.
@@ -1582,6 +1661,11 @@ impl From<&AppState> for WireState {
             spend: value.spend.as_ref().map(WireSpendPlan::from),
             hardware: WireHardwareSession::from(&value.hardware),
             stealth_sats: value.stealth_sats,
+            token_identities: value
+                .token_identities
+                .iter()
+                .map(|(category, identity)| (category.clone(), WireTokenIdentity::from(identity)))
+                .collect(),
             create_step: value.create_step.into(),
             import_step: value.import_step.into(),
             settings_focus: value.settings_focus.map(settings_row_id).map(str::to_owned),
@@ -1740,6 +1824,11 @@ impl TryFrom<WireState> for AppState {
             // toggle is authorised per session, not carried on the wire.
             identity_revealed: false,
             stealth_sats: value.stealth_sats,
+            token_identities: value
+                .token_identities
+                .into_iter()
+                .map(|(category, identity)| (category, TokenIdentity::from(identity)))
+                .collect(),
             // Sessions and their pending requests are host-side and live: a
             // decoded snapshot must never arrive carrying a signature request,
             // or a stale frame could put an approval in front of the user.
@@ -2474,5 +2563,52 @@ mod tests {
         assert_eq!(view.confirmed_sats, Some(10));
         assert_eq!(view.scan_coverage, None);
         assert_eq!(view.rescan_requested, None);
+    }
+
+    /// A token identity survives the renderer boundary with its status.
+    #[test]
+    fn wire_round_trip_preserves_a_token_identity_and_its_status() {
+        for status in [
+            IdentityStatus::Verified,
+            IdentityStatus::Stale,
+            IdentityStatus::Unpublished,
+            IdentityStatus::Unresolved,
+        ] {
+            let identity = TokenIdentity {
+                name: "Bitcats".into(),
+                ticker: Some("BCAT".into()),
+                decimals: 2,
+                status,
+            };
+            let decoded = TokenIdentity::from(WireTokenIdentity::from(&identity));
+            assert_eq!(decoded, identity);
+        }
+    }
+
+    /// A status this build does not recognise is never treated as current.
+    ///
+    /// A newer host adding a status must not make an older renderer show an
+    /// unverified name as though the chain had confirmed it.
+    #[test]
+    fn an_unknown_identity_status_degrades_to_unresolved() {
+        let wire = WireTokenIdentity {
+            name: "Bitcats".into(),
+            ticker: None,
+            decimals: 0,
+            status: "something-newer".into(),
+        };
+        assert_eq!(TokenIdentity::from(wire).status, IdentityStatus::Unresolved);
+    }
+
+    /// A renderer built before token identity still decodes a snapshot.
+    #[test]
+    fn a_state_without_token_identities_still_decodes() {
+        let wire = WireTokenIdentity::default();
+        assert_eq!(wire.status, "");
+        assert_eq!(
+            TokenIdentity::from(wire).status,
+            IdentityStatus::Unresolved,
+            "an absent status is not a verified one"
+        );
     }
 }
