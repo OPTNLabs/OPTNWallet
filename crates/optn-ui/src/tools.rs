@@ -7,7 +7,7 @@ use optn_app::{
     flipstarter_view_model, format_bch, fundme_view_model, history_view_model, nfts_view_model,
     parse_bch, portfolio_totals, product_nav, sample_chipnet_campaign_blob, AppAction, AppRoute,
     AppState, Coin, FreezeReason, HistoryEntry, HistoryKind, Network, Outpoint, OwnedCategory,
-    OwnedNft, PledgeStatus, ProductNavItem, SpendKind, WalletKind,
+    OwnedNft, PledgeStatus, ProductNavItem, SpendKind, TokenIdentity, WalletKind,
 };
 use optn_transport::TransportError;
 
@@ -498,7 +498,9 @@ fn OwnedCategories(transport: UiTransport, state: RwSignal<AppState>) -> impl In
                         // Raw until BCMR resolution names it. Showing the
                         // category is what keeps an unresolved token visible
                         // instead of making an owned asset disappear.
-                        <p class="source-title mono">{short_hex(&category.category_hex)}</p>
+                        <p class="source-title">
+                            {category_label(&category.identity, &category.category_hex)}
+                        </p>
                         <p class="muted">
                             {format!(
                                 "{} · {} coin(s){}",
@@ -550,7 +552,9 @@ pub fn NftsPage(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
                             let:nft
                         >
                             <article class="panel">
-                                <p class="source-title mono">{short_hex(&nft.category_hex)}</p>
+                                <p class="source-title">
+                                    {category_label(&nft.identity, &nft.category_hex)}
+                                </p>
                                 <p class="muted">
                                     {if nft.commitment_hex.is_empty() {
                                         "No commitment".to_string()
@@ -571,6 +575,23 @@ pub fn NftsPage(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
                 </Show>
             </section>
         </WalletChrome>
+    }
+}
+
+/// A token's name where one is verified, and the category itself otherwise.
+///
+/// The caveat travels with the name. "Bitcats" and "Bitcats (last known)" are
+/// different claims, and the holder deciding whether to spend is the person who
+/// needs them to look different.
+fn category_label(identity: &Option<TokenIdentity>, category_hex: &str) -> String {
+    match identity {
+        Some(identity) => match identity.status.caveat() {
+            Some(caveat) => format!("{} ({caveat})", identity.name),
+            None => identity.name.clone(),
+        },
+        // Shown as itself rather than hidden: an unresolved token is still
+        // owned, and waiting on a web server is not a reason to lose it.
+        None => short_hex(category_hex),
     }
 }
 
