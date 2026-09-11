@@ -123,9 +123,123 @@ pub fn decode_cashcode(code: &str) -> Result<String, JsValue> {
     ))
 }
 
-/// True if the string is a Cash Code this wallet can pay. A legacy
-/// `paycode:` is not, and returns false — use `isLegacyPaycode` to tell the
-/// user why their string was refused.
+/// Sign and grind an assembled RPA payment, in the shared core.
+///
+/// The desktop sender used to run its own grind: its own signing, its own
+/// serialization, its own SHA-256, and its own 100_000 ceiling, in parallel
+/// with the CLI's. Two implementations of the same protocol step is precisely
+/// the failure this crate exists to prevent, and the failure mode is quiet —
+/// a sender that grinds differently produces a payment that is on chain,
+/// valid, and invisible to the recipient scanning for it.
+///
+/// The caller still assembles the transaction, because output ordering and
+/// review are the wallet's concern. Everything from signing onwards is here.
+///
+/// `raw_tx` is the assembled transaction with the stealth output already in
+/// place. `prevout_values` and the concatenated `prevout_scripts` (split by
+/// `prevout_script_lens`) describe the outputs being spent, in input order,
+/// because a sighash needs the value and script of the coin it spends and
+/// neither is present in the transaction itself. `privkeys` is 32 bytes per
+/// input, in the same order.
+///
+/// Returns `{"exhausted":true}` rather than throwing when the budget runs
+/// out: that is a reshape signal, and the wallet should reselect coins.
+#[wasm_bindgen(js_name = grindRpaTransaction)]
+pub fn grind_rpa_transaction(
+    raw_tx: &[u8],
+    prevout_values: &[u64],
+    prevout_scripts: &[u8],
+    prevout_script_lens: &[u32],
+    privkeys: &[u8],
+    scan_pubkey: &[u8],
+    prefix_bits: u8,
+) -> Result<String, JsValue> {
+    let decoded = crate::tx::decode(raw_tx).map_err(err)?;
+    let n = decoded.inputs.len();
+    if prevout_values.len() != n || prevout_script_lens.len() != n {
+        return Err(JsValue::from_str(
+            "one prevout value and script is needed per input",
+        ));
+    }
+    if privkeys.len() != n * 32 {
+        return Err(JsValue::from_str(
+            "one 32-byte private key is needed per input",
+        ));
+    }
+
+    let mut scripts = Vec::with_capacity(n);
+    let mut at = 0usize;
+    for len in prevout_script_lens {
+        let len = *len as usize;
+        if at + len > prevout_scripts.len() {
+            return Err(JsValue::from_str(
+                "prevout scripts are shorter than declared",
+            ));
+        }
+        scripts.push(prevout_scripts[at..at + len].to_vec());
+        at += len;
+    }
+
+    let inputs = decoded
+        .inputs
+        .iter()
+        .zip(prevout_values)
+        .zip(scripts)
+        .map(
+            |(((txid, vout, _seq), value), script_pubkey)| crate::tx::Utxo {
+                txid: *txid,
+                vout: *vout,
+                value: *value,
+                script_pubkey,
+            },
+        )
+        .collect();
+    let outputs = decoded
+        .outputs
+        .iter()
+        .map(|o| crate::tx::Output::new(o.value, o.script_pubkey.clone()))
+        .collect();
+
+    let mut transaction = crate::tx::Transaction::new(inputs, outputs);
+    transaction.version = decoded.version;
+    transaction.locktime = decoded.locktime;
+
+    let mut keys = Vec::with_capacity(n);
+    for i in 0..n {
+        keys.push(
+            k256::ecdsa::SigningKey::from_slice(&privkeys[i * 32..(i + 1) * 32])
+                .map_err(|e| JsValue::from_str(&format!("input {i} key is not valid: {e}")))?,
+        );
+    }
+
+    let scan = array33(scan_pubkey, "scan pubkey")?;
+    match rpa::grind_transaction(&mut transaction, &keys, &scan, prefix_bits).map_err(err)? {
+        Some(g) => {
+            let hex: String = g.raw.iter().map(|b| format!("{b:02x}")).collect();
+            Ok(format!(
+                r#"{{"exhausted":false,"rawHex":"{}","grindTries":{},"sequence":{}}}"#,
+                hex, g.grind_tries, g.sequence
+            ))
+        }
+        None => Ok(r#"{"exhausted":true}"#.to_string()),
+    }
+}
+
+/// How many nSequence values to try before reshaping the transaction.
+///
+/// Exported so the wallet grinds as hard as the CLI does. Both previously
+/// hardcoded 100_000, which at 16 bits exhausts about a fifth of the time.
+#[wasm_bindgen(js_name = grindBudget)]
+pub fn grind_budget(prefix_bits: u8) -> Result<u32, JsValue> {
+    rpa::grind_budget(prefix_bits).map_err(err)
+}
+
+/// The nSequence for grind attempt `offset`, kept BIP68-final.
+#[wasm_bindgen(js_name = grindSequence)]
+pub fn grind_sequence(offset: u32) -> Result<u32, JsValue> {
+    rpa::grind_sequence(offset).map_err(err)
+}
+
 #[wasm_bindgen(js_name = isLegacyPaycode)]
 pub fn is_legacy_paycode(candidate: &str) -> bool {
     rpa::is_legacy_paycode(candidate)
@@ -138,6 +252,9 @@ pub fn legacy_paycode_rejection() -> String {
     rpa::LEGACY_PAYCODE_REJECTION.to_string()
 }
 
+/// True if the string is a Cash Code this wallet can pay. A legacy
+/// `paycode:` is not, and returns false — use `isLegacyPaycode` to tell the
+/// user why their string was refused.
 #[wasm_bindgen(js_name = looksLikeRpa)]
 pub fn looks_like_rpa(candidate: &str) -> bool {
     rpa::looks_like_rpa(candidate)

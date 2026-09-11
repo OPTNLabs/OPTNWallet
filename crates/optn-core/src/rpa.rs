@@ -357,6 +357,102 @@ pub fn send_block_reason(code: &Cashcode) -> Option<String> {
     None
 }
 
+/// How many nSequence values a sender should be willing to try before giving
+/// up on one transaction shape.
+///
+/// The grind looks for an input hash whose hex begins with `prefix_bits/4`
+/// characters, so each attempt succeeds with probability 2^-prefix_bits and
+/// the count needed is geometric with mean 2^prefix_bits. A fixed budget is
+/// therefore wrong at both ends: 100_000 was ~1.5x the mean at 16 bits, which
+/// exhausts about 21.7% of the time (1 - e^-1.53), while at 4 bits the same
+/// number is 6000x more than could ever be needed.
+///
+/// Eight times the mean puts exhaustion near 1 in 2900 (e^-8). That is the
+/// useful knob: an attempt costs a signature and two SHA-256s, about 36us
+/// measured, and the *typical* grind still stops at the mean — roughly 2.4s
+/// at 16 bits — no matter how high the ceiling is. Raising it only lengthens
+/// the rare unlucky tail, to about 19s, and the caller is expected to reshape
+/// the transaction rather than surface even that.
+///
+/// Kept here rather than in each sender so the CLI and the wallet cannot
+/// disagree about how hard they try; both had their own `MAX_GRIND_TRIES` of
+/// 100_000, which is exactly the sort of drift this crate exists to stop.
+pub fn grind_budget(prefix_bits: u8) -> Result<u32> {
+    if !matches!(prefix_bits, 4 | 8 | 12 | 16) {
+        return Err(CliError::Usage(format!(
+            "unsupported Cash Code prefix size: {prefix_bits} bits"
+        )));
+    }
+    Ok(8u32 << prefix_bits)
+}
+
+/// The nSequence to try on attempt `offset`, counting down from `0xffffffff`.
+///
+/// Staying at or above `0x8000_0000` keeps bit 31 set, which is what marks a
+/// sequence BIP68-final: below it the value becomes a relative timelock and
+/// the transaction stops being spendable on the terms the sender intended.
+/// That leaves 2^31 usable values, far more than any budget above, but the
+/// bound has to be enforced rather than assumed — the desktop sender already
+/// says so in a comment, and this is that comment made executable.
+pub fn grind_sequence(offset: u32) -> Result<u32> {
+    0xffff_ffffu32
+        .checked_sub(offset)
+        .filter(|s| *s >= 0x8000_0000)
+        .ok_or_else(|| {
+            CliError::Usage("RPA grind exhausted BIP68-final nSequence values".to_string())
+        })
+}
+
+/// What a successful grind produces.
+pub struct GroundTransaction {
+    /// The signed transaction, ready to broadcast.
+    pub raw: Vec<u8>,
+    /// Attempts used, counting the one that matched.
+    pub grind_tries: u32,
+    /// The nSequence that matched.
+    pub sequence: u32,
+}
+
+/// Grind `transaction`'s nSequence until input 0 hashes to the recipient's
+/// scan prefix, and return the signed result.
+///
+/// This is the loop itself, not just a constant, and it lives here because the
+/// alternative is what the repository actually had: one copy in the CLI and
+/// another in the desktop sender, each signing and hashing independently and
+/// each with its own ceiling. A sender that grinds differently from the
+/// recipient's expectations does not fail loudly — it produces a payment that
+/// is on chain, correct, and invisible to the person who was paid.
+///
+/// `Ok(None)` means the budget ran out. That is a reshape signal, not an
+/// error: the caller should choose different coins, which changes input 0 and
+/// so re-rolls the search, and only report failure once it is out of coins.
+pub fn grind_transaction(
+    transaction: &mut crate::tx::Transaction,
+    keys: &[k256::ecdsa::SigningKey],
+    scan_pubkey: &[u8; 33],
+    prefix_bits: u8,
+) -> Result<Option<GroundTransaction>> {
+    let target = grind_string(scan_pubkey, prefix_bits)?.to_lowercase();
+    let budget = grind_budget(prefix_bits)?;
+    for offset in 0..budget {
+        transaction.sequence = grind_sequence(offset)?;
+        let (raw, script_sigs) = transaction.sign_detailed(keys)?;
+        let serialized = transaction.serialize_input(0, &script_sigs[0])?;
+        let digest: String = crate::tx::double_sha256(&serialized)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        if digest.starts_with(&target) {
+            return Ok(Some(GroundTransaction {
+                raw,
+                grind_tries: offset + 1,
+                sequence: transaction.sequence,
+            }));
+        }
+    }
+    Ok(None)
+}
+
 /// The hex a sender grinds the input hash to match: the scan pubkey's hex
 /// after the 02/03 byte, truncated to `prefix_bits`.
 pub fn grind_string(scan_pubkey: &[u8; 33], prefix_bits: u8) -> Result<String> {
@@ -773,6 +869,50 @@ mod tests {
         let receiver =
             shared_secret(&small_key(7), &pubkey_of(&small_key(37)), REF_TXID, 0).unwrap();
         assert_eq!(sender, receiver);
+    }
+
+    #[test]
+    fn the_grind_budget_scales_with_the_prefix_and_clears_the_old_ceiling() {
+        // Eight times the mean at every supported width. The point of the
+        // change is the 16-bit case: 100_000 was ~1.5x the mean there, and
+        // 1 - e^-1.53 of transactions exhausted it.
+        for bits in [4u8, 8, 12, 16] {
+            let mean = 1u32 << bits;
+            assert_eq!(grind_budget(bits).unwrap(), 8 * mean, "{bits} bits");
+        }
+        assert!(
+            grind_budget(16).unwrap() > 100_000,
+            "16-bit budget must exceed the ceiling that was failing"
+        );
+        // And it is not merely bigger everywhere: at 4 bits the old fixed
+        // number was absurdly generous, and the budget is now proportionate.
+        assert!(grind_budget(4).unwrap() < 100_000);
+        assert!(
+            grind_budget(5).is_err(),
+            "unsupported width must be refused"
+        );
+    }
+
+    #[test]
+    fn grind_sequences_stay_bip68_final() {
+        assert_eq!(grind_sequence(0).unwrap(), 0xffff_ffff);
+        assert_eq!(grind_sequence(1).unwrap(), 0xffff_fffe);
+
+        // Every offset the largest budget can reach must still have bit 31
+        // set, or the sender would silently turn a final input into a relative
+        // timelock partway through grinding.
+        let budget = grind_budget(16).unwrap();
+        for offset in [0, 1, budget / 2, budget - 1] {
+            assert!(
+                grind_sequence(offset).unwrap() >= 0x8000_0000,
+                "offset {offset} left the BIP68-final range"
+            );
+        }
+
+        // The boundary itself is the last usable value, and one past it fails
+        // rather than wrapping into timelock territory.
+        assert_eq!(grind_sequence(0x7fff_ffff).unwrap(), 0x8000_0000);
+        assert!(grind_sequence(0x8000_0000).is_err());
     }
 
     #[test]

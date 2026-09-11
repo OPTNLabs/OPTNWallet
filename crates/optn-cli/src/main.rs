@@ -2982,9 +2982,6 @@ async fn rpa_pay(
     }
 
     let pool: Vec<tx::Utxo> = spendable.iter().map(|(u, _, _)| u.clone()).collect();
-    let (chosen, fee) = tx::select_coins(&pool, sats, fee_rate, 2)?;
-    let input_total: u64 = chosen.iter().map(|u| u.value).sum();
-    let change_value = input_total - sats - fee;
 
     let lookup = |input: &tx::Utxo| -> Result<(String, String)> {
         spendable
@@ -2994,56 +2991,95 @@ async fn rpa_pay(
             .ok_or_else(|| CliError::Internal("selected an unknown utxo".into()))
     };
 
-    // The destination depends on input 0, so coin selection has to happen first.
-    let first = &chosen[0];
-    let (first_path, first_display) = lookup(first)?;
-    let first_priv: [u8; 32] = wallet.signing_key(&first_path)?.to_bytes().into();
-    let secret = rpa::shared_secret(&first_priv, &code.scan_pubkey, &first_display, first.vout)?;
-    let stealth = rpa::payment_address(&code.spend_pubkey, &secret, network, 0)?;
+    // Reported in the refusal below, so the message says what was actually
+    // attempted rather than a number the reader has to go and look up.
+    let budget = rpa::grind_budget(code.prefix_bits)?;
 
-    let mut outputs = vec![tx::Output::new(sats, stealth.script_pubkey())];
-    const DUST: u64 = 546;
-    if change_value >= DUST {
-        outputs.push(tx::Output::new(
-            change_value,
-            wallet
-                .address(network, &hd::address_path(coin, 0, true, 0))?
-                .script_pubkey(),
-        ));
-    }
-
-    let mut transaction = tx::Transaction::new(chosen.clone(), outputs);
-    let mut keys = Vec::with_capacity(chosen.len());
-    for input in &chosen {
-        keys.push(wallet.signing_key(&lookup(input)?.0)?);
-    }
-
-    // Grind. The recipient asks their server for transactions whose input hash
-    // starts with their scan prefix, so without this the payment is on chain
-    // but invisible to them.
+    // Grinding can exhaust its budget, and when it does the fix is a different
+    // transaction, not a different user. Rotating the pool puts a different
+    // coin at input 0, which changes the outpoint the destination derives from
+    // and so re-rolls the whole search — an independent attempt rather than a
+    // retry of the same arithmetic. Telling the caller to "try again with a
+    // different coin" was accurate advice and still the wrong place to put it:
+    // the grind is deterministic, so the identical command always fails
+    // identically, and picking the next coin is something the wallet can do
+    // for itself.
     //
-    // Every input's sequence moves together here, where the desktop wallet
-    // varies only input 0's. Only input 0 is hashed for the prefix, and
-    // locktime is 0, so the result is equivalent; it is simply what this
-    // Transaction shape can express.
-    let target = rpa::grind_string(&code.scan_pubkey, code.prefix_bits)?.to_lowercase();
-    const MAX_GRIND_TRIES: u32 = 100_000;
-    let mut ground = None;
-    for offset in 0..MAX_GRIND_TRIES {
-        transaction.sequence = 0xffff_ffff - offset;
-        let (raw, script_sigs) = transaction.sign_detailed(&keys)?;
-        let serialized = transaction.serialize_input(0, &script_sigs[0])?;
-        if hex(&tx::double_sha256(&serialized)).starts_with(&target) {
-            ground = Some((raw, offset + 1, transaction.sequence));
+    // Bounded by the pool: each rotation is an independent 1-in-2900 failure,
+    // so even two leave no realistic chance of surfacing this.
+    let rotations = pool.len().clamp(1, 4);
+    let mut outcome = None;
+    let mut last_err = None;
+    for rotation in 0..rotations {
+        let mut rotated = pool.clone();
+        rotated.rotate_left(rotation);
+        let (chosen, fee) = match tx::select_coins(&rotated, sats, fee_rate, 2) {
+            Ok(v) => v,
+            Err(e) => {
+                last_err = Some(e);
+                continue;
+            }
+        };
+        let input_total: u64 = chosen.iter().map(|u| u.value).sum();
+        let change_value = input_total - sats - fee;
+
+        // The destination depends on input 0, so coin selection has to happen
+        // first — and has to happen again for every rotation.
+        let first = &chosen[0];
+        let (first_path, first_display) = lookup(first)?;
+        let first_priv: [u8; 32] = wallet.signing_key(&first_path)?.to_bytes().into();
+        let secret =
+            rpa::shared_secret(&first_priv, &code.scan_pubkey, &first_display, first.vout)?;
+        let stealth = rpa::payment_address(&code.spend_pubkey, &secret, network, 0)?;
+
+        let mut outputs = vec![tx::Output::new(sats, stealth.script_pubkey())];
+        const DUST: u64 = 546;
+        if change_value >= DUST {
+            outputs.push(tx::Output::new(
+                change_value,
+                wallet
+                    .address(network, &hd::address_path(coin, 0, true, 0))?
+                    .script_pubkey(),
+            ));
+        }
+
+        let mut transaction = tx::Transaction::new(chosen.clone(), outputs);
+        let mut keys = Vec::with_capacity(chosen.len());
+        for input in &chosen {
+            keys.push(wallet.signing_key(&lookup(input)?.0)?);
+        }
+
+        // Grind in the shared core. The recipient asks their server for
+        // transactions whose input hash starts with their scan prefix, so
+        // without this the payment is on chain but invisible to them — and a
+        // sender that grinds differently from the core is a sender the
+        // recipient cannot find.
+        if let Some(ground) =
+            rpa::grind_transaction(&mut transaction, &keys, &code.scan_pubkey, code.prefix_bits)?
+        {
+            outcome = Some((
+                ground.raw,
+                ground.grind_tries,
+                ground.sequence,
+                stealth,
+                fee,
+                change_value,
+            ));
             break;
         }
     }
-    let (raw, grind_tries, sequence) = ground.ok_or_else(|| {
-        CliError::Usage(
-            "could not find a matching input prefix for this code - try again with a              different coin"
-                .to_string(),
-        )
-    })?;
+    let (raw, grind_tries, sequence, stealth, fee, change_value) = match outcome {
+        Some(v) => v,
+        None => {
+            return Err(last_err.unwrap_or_else(|| {
+                CliError::Usage(format!(
+                    "could not grind an input prefix for this code after {rotations} coin \
+                     selections of {budget} attempts each - the wallet may hold too few \
+                     coins to reshape the transaction"
+                ))
+            }))
+        }
+    };
 
     let raw_hex = hex(&raw);
     let txid = if broadcast {

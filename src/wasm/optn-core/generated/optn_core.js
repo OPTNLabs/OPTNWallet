@@ -434,6 +434,97 @@ export function fusionVerifySchnorr(pubkey, signature, message) {
 }
 
 /**
+ * How many nSequence values to try before reshaping the transaction.
+ *
+ * Exported so the wallet grinds as hard as the CLI does. Both previously
+ * hardcoded 100_000, which at 16 bits exhausts about a fifth of the time.
+ * @param {number} prefix_bits
+ * @returns {number}
+ */
+export function grindBudget(prefix_bits) {
+    const ret = wasm.grindBudget(prefix_bits);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return ret[0] >>> 0;
+}
+
+/**
+ * Sign and grind an assembled RPA payment, in the shared core.
+ *
+ * The desktop sender used to run its own grind: its own signing, its own
+ * serialization, its own SHA-256, and its own 100_000 ceiling, in parallel
+ * with the CLI's. Two implementations of the same protocol step is precisely
+ * the failure this crate exists to prevent, and the failure mode is quiet —
+ * a sender that grinds differently produces a payment that is on chain,
+ * valid, and invisible to the recipient scanning for it.
+ *
+ * The caller still assembles the transaction, because output ordering and
+ * review are the wallet's concern. Everything from signing onwards is here.
+ *
+ * `raw_tx` is the assembled transaction with the stealth output already in
+ * place. `prevout_values` and the concatenated `prevout_scripts` (split by
+ * `prevout_script_lens`) describe the outputs being spent, in input order,
+ * because a sighash needs the value and script of the coin it spends and
+ * neither is present in the transaction itself. `privkeys` is 32 bytes per
+ * input, in the same order.
+ *
+ * Returns `{"exhausted":true}` rather than throwing when the budget runs
+ * out: that is a reshape signal, and the wallet should reselect coins.
+ * @param {Uint8Array} raw_tx
+ * @param {BigUint64Array} prevout_values
+ * @param {Uint8Array} prevout_scripts
+ * @param {Uint32Array} prevout_script_lens
+ * @param {Uint8Array} privkeys
+ * @param {Uint8Array} scan_pubkey
+ * @param {number} prefix_bits
+ * @returns {string}
+ */
+export function grindRpaTransaction(raw_tx, prevout_values, prevout_scripts, prevout_script_lens, privkeys, scan_pubkey, prefix_bits) {
+    let deferred8_0;
+    let deferred8_1;
+    try {
+        const ptr0 = passArray8ToWasm0(raw_tx, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArray64ToWasm0(prevout_values, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passArray8ToWasm0(prevout_scripts, wasm.__wbindgen_malloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ptr3 = passArray32ToWasm0(prevout_script_lens, wasm.__wbindgen_malloc);
+        const len3 = WASM_VECTOR_LEN;
+        const ptr4 = passArray8ToWasm0(privkeys, wasm.__wbindgen_malloc);
+        const len4 = WASM_VECTOR_LEN;
+        const ptr5 = passArray8ToWasm0(scan_pubkey, wasm.__wbindgen_malloc);
+        const len5 = WASM_VECTOR_LEN;
+        const ret = wasm.grindRpaTransaction(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, prefix_bits);
+        var ptr7 = ret[0];
+        var len7 = ret[1];
+        if (ret[3]) {
+            ptr7 = 0; len7 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred8_0 = ptr7;
+        deferred8_1 = len7;
+        return getStringFromWasm0(ptr7, len7);
+    } finally {
+        wasm.__wbindgen_free(deferred8_0, deferred8_1, 1);
+    }
+}
+
+/**
+ * The nSequence for grind attempt `offset`, kept BIP68-final.
+ * @param {number} offset
+ * @returns {number}
+ */
+export function grindSequence(offset) {
+    const ret = wasm.grindSequence(offset);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return ret[0] >>> 0;
+}
+
+/**
  * The hex a sender grinds the input hash to match.
  * @param {Uint8Array} scan_pubkey
  * @param {number} prefix_bits
@@ -461,9 +552,6 @@ export function grindString(scan_pubkey, prefix_bits) {
 }
 
 /**
- * True if the string is a Cash Code this wallet can pay. A legacy
- * `paycode:` is not, and returns false — use `isLegacyPaycode` to tell the
- * user why their string was refused.
  * @param {string} candidate
  * @returns {boolean}
  */
@@ -493,6 +581,9 @@ export function legacyPaycodeRejection() {
 }
 
 /**
+ * True if the string is a Cash Code this wallet can pay. A legacy
+ * `paycode:` is not, and returns false — use `isLegacyPaycode` to tell the
+ * user why their string was refused.
  * @param {string} candidate
  * @returns {boolean}
  */
@@ -703,8 +794,24 @@ function getArrayU8FromWasm0(ptr, len) {
     return getUint8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
 }
 
+let cachedBigUint64ArrayMemory0 = null;
+function getBigUint64ArrayMemory0() {
+    if (cachedBigUint64ArrayMemory0 === null || cachedBigUint64ArrayMemory0.byteLength === 0) {
+        cachedBigUint64ArrayMemory0 = new BigUint64Array(wasm.memory.buffer);
+    }
+    return cachedBigUint64ArrayMemory0;
+}
+
 function getStringFromWasm0(ptr, len) {
     return decodeText(ptr >>> 0, len);
+}
+
+let cachedUint32ArrayMemory0 = null;
+function getUint32ArrayMemory0() {
+    if (cachedUint32ArrayMemory0 === null || cachedUint32ArrayMemory0.byteLength === 0) {
+        cachedUint32ArrayMemory0 = new Uint32Array(wasm.memory.buffer);
+    }
+    return cachedUint32ArrayMemory0;
 }
 
 let cachedUint8ArrayMemory0 = null;
@@ -713,6 +820,20 @@ function getUint8ArrayMemory0() {
         cachedUint8ArrayMemory0 = new Uint8Array(wasm.memory.buffer);
     }
     return cachedUint8ArrayMemory0;
+}
+
+function passArray32ToWasm0(arg, malloc) {
+    const ptr = malloc(arg.length * 4, 4) >>> 0;
+    getUint32ArrayMemory0().set(arg, ptr / 4);
+    WASM_VECTOR_LEN = arg.length;
+    return ptr;
+}
+
+function passArray64ToWasm0(arg, malloc) {
+    const ptr = malloc(arg.length * 8, 8) >>> 0;
+    getBigUint64ArrayMemory0().set(arg, ptr / 8);
+    WASM_VECTOR_LEN = arg.length;
+    return ptr;
 }
 
 function passArray8ToWasm0(arg, malloc) {
@@ -799,6 +920,8 @@ function __wbg_finalize_init(instance, module) {
     wasmInstance = instance;
     wasm = instance.exports;
     wasmModule = module;
+    cachedBigUint64ArrayMemory0 = null;
+    cachedUint32ArrayMemory0 = null;
     cachedUint8ArrayMemory0 = null;
     wasm.__wbindgen_start();
     return wasm;

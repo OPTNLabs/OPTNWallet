@@ -108,15 +108,48 @@ export function fusionScalarSum(packed: Uint8Array): Uint8Array;
 export function fusionVerifySchnorr(pubkey: Uint8Array, signature: Uint8Array, message: Uint8Array): boolean;
 
 /**
+ * How many nSequence values to try before reshaping the transaction.
+ *
+ * Exported so the wallet grinds as hard as the CLI does. Both previously
+ * hardcoded 100_000, which at 16 bits exhausts about a fifth of the time.
+ */
+export function grindBudget(prefix_bits: number): number;
+
+/**
+ * Sign and grind an assembled RPA payment, in the shared core.
+ *
+ * The desktop sender used to run its own grind: its own signing, its own
+ * serialization, its own SHA-256, and its own 100_000 ceiling, in parallel
+ * with the CLI's. Two implementations of the same protocol step is precisely
+ * the failure this crate exists to prevent, and the failure mode is quiet —
+ * a sender that grinds differently produces a payment that is on chain,
+ * valid, and invisible to the recipient scanning for it.
+ *
+ * The caller still assembles the transaction, because output ordering and
+ * review are the wallet's concern. Everything from signing onwards is here.
+ *
+ * `raw_tx` is the assembled transaction with the stealth output already in
+ * place. `prevout_values` and the concatenated `prevout_scripts` (split by
+ * `prevout_script_lens`) describe the outputs being spent, in input order,
+ * because a sighash needs the value and script of the coin it spends and
+ * neither is present in the transaction itself. `privkeys` is 32 bytes per
+ * input, in the same order.
+ *
+ * Returns `{"exhausted":true}` rather than throwing when the budget runs
+ * out: that is a reshape signal, and the wallet should reselect coins.
+ */
+export function grindRpaTransaction(raw_tx: Uint8Array, prevout_values: BigUint64Array, prevout_scripts: Uint8Array, prevout_script_lens: Uint32Array, privkeys: Uint8Array, scan_pubkey: Uint8Array, prefix_bits: number): string;
+
+/**
+ * The nSequence for grind attempt `offset`, kept BIP68-final.
+ */
+export function grindSequence(offset: number): number;
+
+/**
  * The hex a sender grinds the input hash to match.
  */
 export function grindString(scan_pubkey: Uint8Array, prefix_bits: number): string;
 
-/**
- * True if the string is a Cash Code this wallet can pay. A legacy
- * `paycode:` is not, and returns false — use `isLegacyPaycode` to tell the
- * user why their string was refused.
- */
 export function isLegacyPaycode(candidate: string): boolean;
 
 /**
@@ -125,6 +158,11 @@ export function isLegacyPaycode(candidate: string): boolean;
  */
 export function legacyPaycodeRejection(): string;
 
+/**
+ * True if the string is a Cash Code this wallet can pay. A legacy
+ * `paycode:` is not, and returns false — use `isLegacyPaycode` to tell the
+ * user why their string was refused.
+ */
 export function looksLikeRpa(candidate: string): boolean;
 
 /**
@@ -187,6 +225,9 @@ export interface InitOutput {
     readonly fusionScalarIsCanonical: (a: number, b: number) => number;
     readonly fusionScalarSum: (a: number, b: number) => [number, number, number, number];
     readonly fusionVerifySchnorr: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
+    readonly grindBudget: (a: number) => [number, number, number];
+    readonly grindRpaTransaction: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => [number, number, number, number];
+    readonly grindSequence: (a: number) => [number, number, number];
     readonly grindString: (a: number, b: number, c: number) => [number, number, number, number];
     readonly isLegacyPaycode: (a: number, b: number) => number;
     readonly legacyPaycodeRejection: () => [number, number];
