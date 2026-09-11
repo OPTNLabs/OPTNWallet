@@ -4,7 +4,8 @@
 //
 // Protocol summary:
 //   - Recipient shares a static "cashcode" (scan_pubkey + spend_pubkey, CashAddr
-//     encoded). Legacy "paycode" strings are still accepted as send targets.
+//     encoded). Electron Cash's legacy "paycode" is a different implementation
+//     and is refused as a send target — not converted, not reinterpreted.
 //   - Sender derives a unique one-time address via ECDH(sender_privkey, scan_pubkey) + outpoint hash
 //   - Sender grinds signature nonce until input hash prefix matches scan_pubkey prefix
 //   - Recipient queries an RPA-capable Electrum server (Fulcrum-RPA) using their cashcode prefix
@@ -44,6 +45,8 @@ import {
   encodeCashcode as coreEncodeCashcode,
   ensureOptnCore,
   grindString as coreGrindString,
+  isLegacyPaycode as coreIsLegacyPaycode,
+  legacyPaycodeRejection as coreLegacyPaycodeRejection,
   looksLikeRpa as coreLooksLikeRpa,
   paymentAddress as corePaymentAddress,
   sendBlockReason as coreSendBlockReason,
@@ -112,14 +115,14 @@ export function rpaGrindString(
 
 // CashAddr prefixes.
 //
-// `cashcode:` / `cashcodetest:` are what this wallet EMITS. The legacy
-// `paycode:` / `paycodetest:` prefixes (Electron Cash networks.py RPA_PREFIX)
-// stay ACCEPTED on input, so codes people already handed out keep working —
-// we simply never generate one.
+// `cashcode:` / `cashcodetest:` is the only family this wallet emits OR
+// accepts. Electron Cash's legacy `paycode:` / `paycodetest:` (networks.py
+// RPA_PREFIX) is a different implementation and is refused — see
+// `getRpaSendBlockReason`. The legacy prefixes are deliberately not exported
+// as constants here: nothing in the wallet should be matching on them, and
+// the one place that needs to recognise one asks the Rust core.
 export const CASHCODE_PREFIX_MAINNET = 'cashcode';
 export const CASHCODE_PREFIX_TESTNET = 'cashcodetest';
-export const LEGACY_PAYCODE_PREFIX_MAINNET = 'paycode';
-export const LEGACY_PAYCODE_PREFIX_TESTNET = 'paycodetest';
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
@@ -138,8 +141,6 @@ export type DecodedPaycode = {
   expiry: number;
   /** The CashAddr prefix the string actually carried. */
   prefix: string;
-  /** True when decoded from a legacy `paycode:` / `paycodetest:` string. */
-  legacy: boolean;
 };
 
 // Derive all four RPA key materials from a mnemonic.
@@ -177,31 +178,24 @@ export async function deriveRpaKeys(
   }
 }
 
-/**
- * Which prefix family to stamp on an encoded code.
- *
- * The wallet only ever emits `cashcode`. `legacy-paycode` exists so tests and
- * migration tooling can construct the old form we must keep accepting; no
- * production call site passes it.
- */
-export type RpaPrefixFamily = 'cashcode' | 'legacy-paycode';
-
 // Encode scan_pubkey + spend_pubkey as a CashAddr cashcode string.
 // prefixBits: how many bits of scan_pubkey to use as Electrum filter (8 = 1/256 bandwidth).
+//
+// There is no prefix-family parameter. `cashcode:` is the only family OPTN
+// emits, and an encoder able to stamp a legacy `paycode:` would be a way to
+// manufacture exactly the strings the send path refuses.
 export function encodePaycode(
   scanPubkey: Uint8Array,
   spendPubkey: Uint8Array,
   network: Network,
-  prefixBits = RPA_PREFIX_BITS,
-  prefixFamily: RpaPrefixFamily = 'cashcode'
+  prefixBits = RPA_PREFIX_BITS
 ): string {
   ensureOptnCore();
   return coreEncodeCashcode(
     scanPubkey,
     spendPubkey,
     coreNetwork(network),
-    prefixBits,
-    prefixFamily === 'legacy-paycode'
+    prefixBits
   );
 }
 
@@ -220,7 +214,6 @@ export function decodePaycode(paycodeStr: string): DecodedPaycode | null {
       spendPubkey: string;
       expiry: number;
       prefix: string;
-      legacy: boolean;
     };
     return {
       version: decoded.version,
@@ -229,7 +222,6 @@ export function decodePaycode(paycodeStr: string): DecodedPaycode | null {
       spendPubkey: hexToBin(decoded.spendPubkey),
       expiry: decoded.expiry,
       prefix: decoded.prefix,
-      legacy: decoded.legacy,
     };
   } catch {
     return null;
@@ -242,13 +234,36 @@ export function looksLikeRpaPaycode(recipient: string): boolean {
 }
 
 /**
- * Block only invalid / wrong-network paycodes. A valid paycode is sent
- * through finalizeRpaPayment (dummy dest → ECDH dest → prefix grind).
+ * True when the recipient is Electron Cash's legacy PayCode.
+ *
+ * Separate from `looksLikeRpaPaycode`, which answers "can this wallet pay
+ * it" — and for a legacy PayCode the answer is no. This one exists only so
+ * the refusal can name what was pasted.
+ */
+export function isLegacyPaycode(recipient: string): boolean {
+  ensureOptnCore();
+  return coreIsLegacyPaycode(recipient);
+}
+
+/**
+ * Block invalid / wrong-network codes, and legacy PayCodes outright.
+ * A valid Cash Code is sent through finalizeRpaPayment (dummy dest → ECDH
+ * dest → prefix grind).
+ *
+ * This is the gate a legacy PayCode dies at, and it runs in useSimpleSend
+ * before coin selection, construction, grinding, signing or broadcast. It has
+ * to be refused by prefix rather than left to fail later: a legacy PayCode is
+ * a well-formed string carrying real curve points, so every structural check
+ * downstream would pass and the send would succeed — to a compressed-derived
+ * address its legacy owner never derived and cannot scan for.
  */
 export function getRpaSendBlockReason(
   recipient: string,
   network: Network
 ): string | null {
+  if (isLegacyPaycode(recipient)) {
+    return `${coreLegacyPaycodeRejection()} No transaction was created.`;
+  }
   if (!looksLikeRpaPaycode(recipient)) return null;
 
   const decoded = decodePaycode(recipient);

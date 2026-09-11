@@ -30,6 +30,25 @@ const SENDER_PRIVKEY =
 const OUTPOINT_TXID =
   'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789';
 
+// Legacy PayCode strings, frozen at the commit that made OPTN Cash Code only.
+//
+// These are not regenerated, and cannot be: no encoder in the codebase can
+// stamp a `paycode:` prefix any more. They are kept verbatim because they are
+// the *negative* half of the shared vectors — the exact strings that must be
+// refused. Each holds the same scan/spend keys as the `cashcode` beside it
+// and is checksum-valid under its own prefix, which is what makes a rejection
+// test meaningful: it proves the prefix was refused rather than that a
+// malformed string tripped a later check.
+//
+// Do not "repair" these into cashcode: strings. A vector file with nothing
+// invalid in it cannot prove anything is rejected.
+const LEGACY_PAYCODE_FIXTURES: Record<string, string> = {
+  mainnet:
+    'paycode:qqq3qql4u7sr0pnmlv5yvu49cj4mxqdupq965k5wt69mtaauu4fpfa2sjsp9p0d4s4725qx94j76x33ndw88ruy5yxun7fz5zt0epxjxrg5hkgsqqqqqqjl7alqx5',
+  chipnet:
+    'paycodetest:qqz3qqu7j2x2wfa6j46degrj48nv9454uhqym9pn6a855u65nkrd4xpukqpuhc49jym04j3wt34r23pv8mk60qjtmakqnqt0qr8jr77xzcx7jzqqqqqqqhpvc6fef',
+};
+
 describe.skipIf(process.env.GEN_RPA_VECTORS !== '1')('generate', () => {
   it('writes test-vectors/rpa.json', async () => {
     const networks: Array<[string, Network]> = [
@@ -70,13 +89,14 @@ describe.skipIf(process.env.GEN_RPA_VECTORS !== '1')('generate', () => {
           network,
           RPA_PREFIX_BITS
         ),
-        legacyPaycode: encodePaycode(
-          keys.scanPubkey,
-          keys.spendPubkey,
-          network,
-          RPA_PREFIX_BITS,
-          'legacy-paycode'
-        ),
+        // Frozen. Nothing in the codebase can encode a legacy PayCode any
+        // more, which is the point of this change, so regenerating cannot
+        // rebuild this field — it is carried through from the existing file.
+        // It stays a *negative* fixture: checksum-valid, real curve points,
+        // carrying the same keys as the cashcode above, so the rejection
+        // tests prove the prefix was refused rather than that a malformed
+        // string failed some later check.
+        legacyPaycode: LEGACY_PAYCODE_FIXTURES[name],
         sharedSecret: binToHex(secret),
         paymentAddress,
         spendingPubkey: binToHex(Uint8Array.from(spendingPubkey)),
@@ -98,10 +118,19 @@ describe.skipIf(process.env.GEN_RPA_VECTORS !== '1')('generate', () => {
     const doc = {
       $comment:
         'Shared RPA vectors. Consumed by BOTH implementations: the TypeScript ' +
-        'wallet (src/services/__tests__/RpaSharedVectors.test.ts) and the Rust ' +
-        'CLI (crates/optn-cli/tests/shared_vectors.rs). They exist so the two ' +
-        'cannot drift silently. Regenerate only when the protocol itself ' +
-        'changes, never to make a failing test pass.',
+        'wallet (src/services/__tests__/RpaSharedVectors.test.ts) and the ' +
+        'shared Rust core (crates/optn-core/src/rpa.rs). They exist so the ' +
+        'two cannot drift silently. Regenerate only when the protocol itself ' +
+        'changes, never to make a failing test pass. ' +
+        "NOTE on 'legacyPaycode': it is a NEGATIVE fixture. OPTN accepts and " +
+        "emits only cashcode:/cashcodetest:; Electron Cash's legacy " +
+        'paycode:/paycodetest: is a different implementation and is rejected. ' +
+        'Each legacyPaycode carries the same scan/spend keys as the cashcode ' +
+        'beside it and is checksum-valid under its own prefix, so the ' +
+        'rejection tests prove the PREFIX was refused rather than that a ' +
+        'malformed string failed a later check. It is frozen: no encoder in ' +
+        'the codebase can produce one any more, so the generator carries it ' +
+        'through verbatim. Do not repair it into a cashcode: string.',
       mnemonic: MNEMONIC,
       passphrase: '',
       sender: {

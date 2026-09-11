@@ -356,7 +356,7 @@ number = 61
 title = "fix(rpa): emit cashcode:, keep accepting paycode:, hash compressed keys"
 outcome = "merged"
 relevance = "preserve"
-summary = "Emit cashcode:/cashcodetest:, accept legacy paycode:/paycodetest:, hash compressed CKD_pub children, refuse offline-only/no-scan-prefix codes, preserve publish/detect/spend capability separation, and keep layer-correct outpoint byte order."
+summary = "Emit cashcode:/cashcodetest:, accept legacy paycode:/paycodetest:, hash compressed CKD_pub children, refuse offline-only/no-scan-prefix codes, preserve publish/detect/spend capability separation, and keep layer-correct outpoint byte order. SUPERSEDED IN PART: the legacy paycode:/paycodetest: acceptance above no longer holds — OPTN rejects those prefixes. Electron Cash PayCode is a different implementation, so accepting the prefix and deriving under compressed Cash Code rules sends funds to an address the legacy recipient never derived. Everything else in this entry still stands; do not reintroduce acceptance when porting."
 
 [[pr]]
 number = 62

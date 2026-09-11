@@ -437,7 +437,7 @@ enum RpaCommand {
         #[arg(long, default_value_t = 0)]
         account: u32,
     },
-    /// Inspect a cashcode or a legacy paycode without spending anything.
+    /// Inspect a Cash Code without spending anything.
     Decode {
         /// The code to read.
         code: String,
@@ -455,7 +455,7 @@ enum RpaCommand {
     },
     /// Pay a cashcode.
     Pay {
-        /// Recipient's cashcode (a legacy paycode is accepted too).
+        /// Recipient's Cash Code. A legacy paycode: is not accepted.
         code: String,
         /// Amount in satoshis.
         sats: u64,
@@ -2541,7 +2541,6 @@ async fn run(cli: &Cli) -> Result<Value> {
                 Ok(json!({
                     "ok": true,
                     "prefix": d.prefix,
-                    "legacy": d.legacy,
                     "network": d.network().to_string(),
                     "version": d.version,
                     "prefix_bits": d.prefix_bits,
@@ -2606,9 +2605,15 @@ async fn run(cli: &Cli) -> Result<Value> {
                         "refusing to spend without --yes (use --dry-run to preview)".to_string(),
                     ));
                 }
+                // Named before the generic refusal below, so pasting a
+                // legacy PayCode says what is wrong with it rather than
+                // "not a Cash Code".
+                if rpa::is_legacy_paycode(code) {
+                    return Err(CliError::Usage(rpa::LEGACY_PAYCODE_REJECTION.to_string()));
+                }
                 if !rpa::looks_like_rpa(code) {
                     return Err(CliError::Usage(format!(
-                        "'{code}' is not a Cash Code — expected a cashcode: or cashcodetest: string (a legacy paycode: is accepted too). To send to an ordinary address, use `send`."
+                        "'{code}' is not a Cash Code — expected a cashcode: or cashcodetest: string. To send to an ordinary address, use `send`."
                     )));
                 }
                 let decoded = rpa::decode(code)?;
@@ -2639,7 +2644,6 @@ async fn run(cli: &Cli) -> Result<Value> {
                     "dry_run": *dry_run,
                     "network": cli.network.to_string(),
                     "txid": paid.txid,
-                    "legacy_code": decoded.legacy,
                     "stealth_address": paid.stealth_address,
                     "sats": sats,
                     "fee": paid.fee,

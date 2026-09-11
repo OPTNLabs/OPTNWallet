@@ -96,8 +96,10 @@ export function connectSigningSerialization(context_json, covered, mode) {
 }
 
 /**
- * Decode a cashcode or legacy paycode. Returns JSON, or throws with the
- * reason the code was rejected.
+ * Decode a Cash Code. Returns JSON, or throws with the reason the code was
+ * rejected — including a legacy `paycode:`, which throws rather than
+ * decoding. There is no `legacy` field on the result: nothing that decodes
+ * here is legacy.
  * @param {string} code
  * @returns {string}
  */
@@ -153,17 +155,16 @@ export function deriveRpaKeys(mnemonic, passphrase, scan_path, spend_path) {
 /**
  * Encode a scan/spend pair as a `cashcode:` string.
  *
- * `legacy` stamps the old `paycode:` prefix instead. Nothing in the wallet
- * passes it: it exists so tests and migration tooling can build the form that
- * must keep being accepted on input.
+ * There is no `legacy` argument. The legacy `paycode:` prefix is a different
+ * implementation that OPTN does not support, and an encoder able to stamp it
+ * would be a way to manufacture the very strings `decodeCashcode` refuses.
  * @param {Uint8Array} scan_pubkey
  * @param {Uint8Array} spend_pubkey
  * @param {string} network
  * @param {number} prefix_bits
- * @param {boolean | null} [legacy]
  * @returns {string}
  */
-export function encodeCashcode(scan_pubkey, spend_pubkey, network, prefix_bits, legacy) {
+export function encodeCashcode(scan_pubkey, spend_pubkey, network, prefix_bits) {
     let deferred5_0;
     let deferred5_1;
     try {
@@ -173,7 +174,7 @@ export function encodeCashcode(scan_pubkey, spend_pubkey, network, prefix_bits, 
         const len1 = WASM_VECTOR_LEN;
         const ptr2 = passStringToWasm0(network, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len2 = WASM_VECTOR_LEN;
-        const ret = wasm.encodeCashcode(ptr0, len0, ptr1, len1, ptr2, len2, prefix_bits, isLikeNone(legacy) ? 0xFFFFFF : legacy ? 1 : 0);
+        const ret = wasm.encodeCashcode(ptr0, len0, ptr1, len1, ptr2, len2, prefix_bits);
         var ptr4 = ret[0];
         var len4 = ret[1];
         if (ret[3]) {
@@ -460,7 +461,38 @@ export function grindString(scan_pubkey, prefix_bits) {
 }
 
 /**
- * True if the string carries any RPA prefix, cashcode or legacy paycode.
+ * True if the string is a Cash Code this wallet can pay. A legacy
+ * `paycode:` is not, and returns false — use `isLegacyPaycode` to tell the
+ * user why their string was refused.
+ * @param {string} candidate
+ * @returns {boolean}
+ */
+export function isLegacyPaycode(candidate) {
+    const ptr0 = passStringToWasm0(candidate, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.isLegacyPaycode(ptr0, len0);
+    return ret !== 0;
+}
+
+/**
+ * The message to show for a legacy PayCode. Exported rather than duplicated
+ * in TypeScript so the wallet and the CLI refuse it in the same words.
+ * @returns {string}
+ */
+export function legacyPaycodeRejection() {
+    let deferred1_0;
+    let deferred1_1;
+    try {
+        const ret = wasm.legacyPaycodeRejection();
+        deferred1_0 = ret[0];
+        deferred1_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+    }
+}
+
+/**
  * @param {string} candidate
  * @returns {boolean}
  */
@@ -681,10 +713,6 @@ function getUint8ArrayMemory0() {
         cachedUint8ArrayMemory0 = new Uint8Array(wasm.memory.buffer);
     }
     return cachedUint8ArrayMemory0;
-}
-
-function isLikeNone(x) {
-    return x === undefined || x === null;
 }
 
 function passArray8ToWasm0(arg, malloc) {

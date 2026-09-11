@@ -25,6 +25,8 @@ import {
   deriveSpendingKey,
   encodePaycode,
   getRpaKeyPaths,
+  isLegacyPaycode,
+  looksLikeRpaPaycode,
   rpaGrindString,
   RPA_PREFIX_BITS,
 } from '../RpaService';
@@ -119,22 +121,22 @@ describe('shared RPA vectors', () => {
           RPA_PREFIX_BITS
         )
       ).toBe(w.cashcode);
-      expect(
-        encodePaycode(
-          keys.scanPubkey,
-          keys.spendPubkey,
-          network,
-          RPA_PREFIX_BITS,
-          'legacy-paycode'
-        )
-      ).toBe(w.legacyPaycode);
+      // The legacy PayCode fixture carries the very same scan/spend keys as
+      // the cashcode just checked, and is checksum-valid for its own prefix.
+      // So it is exactly the string that would decode "successfully" and then
+      // derive a destination under compressed Cash Code rules that its legacy
+      // owner never derived. It must not decode at all.
+      expect(isLegacyPaycode(w.legacyPaycode)).toBe(true);
+      expect(looksLikeRpaPaycode(w.legacyPaycode)).toBe(false);
+      expect(decodePaycode(w.legacyPaycode)).toBeNull();
 
-      // A legacy code must still decode, and be flagged as legacy.
-      const legacy = decodePaycode(w.legacyPaycode);
-      expect(legacy).not.toBeNull();
-      expect(legacy!.legacy).toBe(true);
-      expect(binToHex(legacy!.scanPubkey)).toBe(w.scanPubkey);
-      expect(decodePaycode(w.cashcode)!.legacy).toBe(false);
+      // Refused for being legacy, not for being malformed: the same keys in a
+      // cashcode: wrapper still decode.
+      expect(looksLikeRpaPaycode(w.cashcode)).toBe(true);
+      expect(isLegacyPaycode(w.cashcode)).toBe(false);
+      expect(binToHex(decodePaycode(w.cashcode)!.scanPubkey)).toBe(
+        w.scanPubkey
+      );
 
       const secret = computeSharedSecret(
         hexToBin(vectors.sender.privkey),

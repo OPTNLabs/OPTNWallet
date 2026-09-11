@@ -86,50 +86,58 @@ pub fn derive_rpa_keys(
 
 /// Encode a scan/spend pair as a `cashcode:` string.
 ///
-/// `legacy` stamps the old `paycode:` prefix instead. Nothing in the wallet
-/// passes it: it exists so tests and migration tooling can build the form that
-/// must keep being accepted on input.
+/// There is no `legacy` argument. The legacy `paycode:` prefix is a different
+/// implementation that OPTN does not support, and an encoder able to stamp it
+/// would be a way to manufacture the very strings `decodeCashcode` refuses.
 #[wasm_bindgen(js_name = encodeCashcode)]
 pub fn encode_cashcode(
     scan_pubkey: &[u8],
     spend_pubkey: &[u8],
     network: &str,
     prefix_bits: u8,
-    legacy: Option<bool>,
 ) -> Result<String, JsValue> {
-    let family = if legacy.unwrap_or(false) {
-        rpa::PrefixFamily::LegacyPaycode
-    } else {
-        rpa::PrefixFamily::Cashcode
-    };
-    Ok(rpa::encode_with_family(
+    Ok(rpa::encode(
         &array33(scan_pubkey, "scan pubkey")?,
         &array33(spend_pubkey, "spend pubkey")?,
         network_from(network)?,
         prefix_bits,
-        family,
     ))
 }
 
-/// Decode a cashcode or legacy paycode. Returns JSON, or throws with the
-/// reason the code was rejected.
+/// Decode a Cash Code. Returns JSON, or throws with the reason the code was
+/// rejected — including a legacy `paycode:`, which throws rather than
+/// decoding. There is no `legacy` field on the result: nothing that decodes
+/// here is legacy.
 #[wasm_bindgen(js_name = decodeCashcode)]
 pub fn decode_cashcode(code: &str) -> Result<String, JsValue> {
     let c = rpa::decode(code).map_err(err)?;
     let hex = |b: &[u8]| -> String { b.iter().map(|x| format!("{x:02x}")).collect() };
     Ok(format!(
-        r#"{{"version":{},"prefixBits":{},"scanPubkey":"{}","spendPubkey":"{}","expiry":{},"prefix":"{}","legacy":{}}}"#,
+        r#"{{"version":{},"prefixBits":{},"scanPubkey":"{}","spendPubkey":"{}","expiry":{},"prefix":"{}"}}"#,
         c.version,
         c.prefix_bits,
         hex(&c.scan_pubkey),
         hex(&c.spend_pubkey),
         c.expiry,
         c.prefix,
-        c.legacy
     ))
 }
 
-/// True if the string carries any RPA prefix, cashcode or legacy paycode.
+/// True if the string is a Cash Code this wallet can pay. A legacy
+/// `paycode:` is not, and returns false — use `isLegacyPaycode` to tell the
+/// user why their string was refused.
+#[wasm_bindgen(js_name = isLegacyPaycode)]
+pub fn is_legacy_paycode(candidate: &str) -> bool {
+    rpa::is_legacy_paycode(candidate)
+}
+
+/// The message to show for a legacy PayCode. Exported rather than duplicated
+/// in TypeScript so the wallet and the CLI refuse it in the same words.
+#[wasm_bindgen(js_name = legacyPaycodeRejection)]
+pub fn legacy_paycode_rejection() -> String {
+    rpa::LEGACY_PAYCODE_REJECTION.to_string()
+}
+
 #[wasm_bindgen(js_name = looksLikeRpa)]
 pub fn looks_like_rpa(candidate: &str) -> bool {
     rpa::looks_like_rpa(candidate)

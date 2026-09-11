@@ -12,8 +12,10 @@ export function connectSignP2pkh(context_json: string, private_key: Uint8Array, 
 export function connectSigningSerialization(context_json: string, covered: Uint8Array, mode: number): Uint8Array;
 
 /**
- * Decode a cashcode or legacy paycode. Returns JSON, or throws with the
- * reason the code was rejected.
+ * Decode a Cash Code. Returns JSON, or throws with the reason the code was
+ * rejected — including a legacy `paycode:`, which throws rather than
+ * decoding. There is no `legacy` field on the result: nothing that decodes
+ * here is legacy.
  */
 export function decodeCashcode(code: string): string;
 
@@ -29,11 +31,11 @@ export function deriveRpaKeys(mnemonic: string, passphrase: string, scan_path: s
 /**
  * Encode a scan/spend pair as a `cashcode:` string.
  *
- * `legacy` stamps the old `paycode:` prefix instead. Nothing in the wallet
- * passes it: it exists so tests and migration tooling can build the form that
- * must keep being accepted on input.
+ * There is no `legacy` argument. The legacy `paycode:` prefix is a different
+ * implementation that OPTN does not support, and an encoder able to stamp it
+ * would be a way to manufacture the very strings `decodeCashcode` refuses.
  */
-export function encodeCashcode(scan_pubkey: Uint8Array, spend_pubkey: Uint8Array, network: string, prefix_bits: number, legacy?: boolean | null): string;
+export function encodeCashcode(scan_pubkey: Uint8Array, spend_pubkey: Uint8Array, network: string, prefix_bits: number): string;
 
 /**
  * Compressed one-shot nonce point published for a credential slot.
@@ -111,8 +113,18 @@ export function fusionVerifySchnorr(pubkey: Uint8Array, signature: Uint8Array, m
 export function grindString(scan_pubkey: Uint8Array, prefix_bits: number): string;
 
 /**
- * True if the string carries any RPA prefix, cashcode or legacy paycode.
+ * True if the string is a Cash Code this wallet can pay. A legacy
+ * `paycode:` is not, and returns false — use `isLegacyPaycode` to tell the
+ * user why their string was refused.
  */
+export function isLegacyPaycode(candidate: string): boolean;
+
+/**
+ * The message to show for a legacy PayCode. Exported rather than duplicated
+ * in TypeScript so the wallet and the CLI refuse it in the same words.
+ */
+export function legacyPaycodeRejection(): string;
+
 export function looksLikeRpa(candidate: string): boolean;
 
 /**
@@ -162,7 +174,7 @@ export interface InitOutput {
     readonly connectSigningSerialization: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly decodeCashcode: (a: number, b: number) => [number, number, number, number];
     readonly deriveRpaKeys: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number];
-    readonly encodeCashcode: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
+    readonly encodeCashcode: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
     readonly fusionBlindIssuerNoncePoint: (a: number, b: number) => [number, number, number, number];
     readonly fusionBlindIssuerPublicKey: (a: number, b: number) => [number, number, number, number];
     readonly fusionBlindIssuerSign: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
@@ -176,6 +188,8 @@ export interface InitOutput {
     readonly fusionScalarSum: (a: number, b: number) => [number, number, number, number];
     readonly fusionVerifySchnorr: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
     readonly grindString: (a: number, b: number, c: number) => [number, number, number, number];
+    readonly isLegacyPaycode: (a: number, b: number) => number;
+    readonly legacyPaycodeRejection: () => [number, number];
     readonly looksLikeRpa: (a: number, b: number) => number;
     readonly paymentAddress: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
     readonly rpaKeyPaths: (a: number, b: number) => [number, number];

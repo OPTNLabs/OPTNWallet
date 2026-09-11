@@ -15,14 +15,22 @@
 //! compressed keys; upstream PR #3225 calls that unintentional. We follow the
 //! spec, matching the desktop wallet's `RpaService.ts`.
 //!
-//! The name shown to a user is **Cash Code**. The wire prefix does not
-//! follow it: codes are still emitted as `cashcode:` / `cashcodetest:` and
-//! legacy `paycode:` strings are still accepted, because renaming a prefix
-//! would invalidate every code already handed out.
+//! The name shown to a user is **Cash Code**, and `cashcode:` /
+//! `cashcodetest:` is the only prefix family this module encodes or accepts.
 //!
-//! Codes are emitted as `cashcode:` / `cashcodetest:`. Legacy `paycode:` /
-//! `paycodetest:` strings are still accepted as send targets so codes already
-//! handed out keep working; nothing here ever emits one.
+//! `paycode:` / `paycodetest:` is Electron Cash's **legacy PayCode**, a
+//! different implementation, and it is rejected outright. That is not
+//! backward compatibility and the two prefixes are not interchangeable: a
+//! legacy PayCode carries keys its owner derived under the legacy rules,
+//! including `use_uncompressed = True`. Decoding one here and then deriving
+//! the destination with the compressed Cash Code rules above yields a P2PKH
+//! address the legacy recipient never derived and cannot scan for, so the
+//! payment would be unspendable by them while looking perfectly successful to
+//! the sender. Rejecting the prefix is the only safe reading of it; the
+//! distinct `cashcode:` prefix exists precisely to keep the two apart.
+//!
+//! Supporting legacy PayCode would mean implementing its semantics, not
+//! relabelling its prefix. This module does not do that.
 
 use hmac::{Hmac, Mac};
 use k256::elliptic_curve::sec1::ToEncodedPoint;
@@ -50,11 +58,39 @@ const VERSION_TESTNET: u8 = 0x05;
 
 const CASHCODE_MAINNET: &str = "cashcode";
 const CASHCODE_TESTNET: &str = "cashcodetest";
+
+/// Electron Cash's legacy PayCode prefixes. Recognised only so a legacy
+/// string can be refused by name — never to decode one. Keeping them out of
+/// the accepted-prefix lists below is what makes the refusal structural
+/// rather than a check someone can forget to call.
 const LEGACY_MAINNET: &str = "paycode";
 const LEGACY_TESTNET: &str = "paycodetest";
 
-const MAINNET_PREFIXES: [&str; 2] = [CASHCODE_MAINNET, LEGACY_MAINNET];
-const TESTNET_PREFIXES: [&str; 2] = [CASHCODE_TESTNET, LEGACY_TESTNET];
+const MAINNET_PREFIXES: [&str; 1] = [CASHCODE_MAINNET];
+const TESTNET_PREFIXES: [&str; 1] = [CASHCODE_TESTNET];
+
+/// The message a user sees when they paste a legacy PayCode.
+///
+/// Deliberately not phrased as a temporary limitation: OPTN does not
+/// implement legacy PayCode, so there is nothing here to wait for.
+pub const LEGACY_PAYCODE_REJECTION: &str =
+    "Legacy PayCode addresses are not supported. Use a Cash Code address.";
+
+/// True if the string carries a legacy PayCode prefix.
+///
+/// Callers use this to explain the refusal. It is deliberately separate from
+/// [`looks_like_rpa`], which answers "is this a recipient we can pay" — and
+/// for a legacy PayCode the answer to that is no.
+pub fn is_legacy_paycode(candidate: &str) -> bool {
+    let bare = candidate
+        .trim()
+        .split('?')
+        .next()
+        .unwrap_or("")
+        .to_lowercase();
+    bare.starts_with(&format!("{LEGACY_MAINNET}:"))
+        || bare.starts_with(&format!("{LEGACY_TESTNET}:"))
+}
 
 /// Payload is version + prefix_bits + scan(33) + spend(33) + expiry(4).
 const PAYLOAD_LEN: usize = 72;
@@ -95,7 +131,12 @@ pub fn derive_keys_from_paths(
     })
 }
 
-/// A decoded cashcode (or legacy paycode).
+/// A decoded cashcode.
+///
+/// There is no `legacy` flag: a legacy PayCode never decodes, so every value
+/// of this type came from a `cashcode:` / `cashcodetest:` string. A flag
+/// would only invite a caller to decode one and then decide what to do,
+/// which is the mistake this module exists to prevent.
 #[derive(Debug, Clone)]
 pub struct Cashcode {
     pub version: u8,
@@ -105,8 +146,6 @@ pub struct Cashcode {
     pub expiry: u32,
     /// The prefix the string actually carried.
     pub prefix: String,
-    /// True when this came from a legacy `paycode:` / `paycodetest:` string.
-    pub legacy: bool,
 }
 
 impl Cashcode {
@@ -125,38 +164,15 @@ impl Cashcode {
 /// three bits and caps it at 64 bytes, and this payload is 73 with the kind
 /// byte. Electron Cash's `cashaddr.py` added encode_rpa/decode_rpa for the
 /// same reason — same charset and checksum, no version byte, no length cap.
-/// Which prefix family to stamp on an encoded code.
 ///
-/// The wallet and the CLI only ever emit `Cashcode`. `LegacyPaycode` exists so
-/// tests and migration tooling can build the old form that must keep being
-/// accepted; no production caller passes it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PrefixFamily {
-    Cashcode,
-    LegacyPaycode,
-}
-
+/// There is no prefix-family parameter: `cashcode:` / `cashcodetest:` is the
+/// only prefix this crate emits, and no caller — production or test — can ask
+/// it for a legacy PayCode.
 pub fn encode(
     scan_pubkey: &[u8; 33],
     spend_pubkey: &[u8; 33],
     network: Network,
     prefix_bits: u8,
-) -> String {
-    encode_with_family(
-        scan_pubkey,
-        spend_pubkey,
-        network,
-        prefix_bits,
-        PrefixFamily::Cashcode,
-    )
-}
-
-pub fn encode_with_family(
-    scan_pubkey: &[u8; 33],
-    spend_pubkey: &[u8; 33],
-    network: Network,
-    prefix_bits: u8,
-    family: PrefixFamily,
 ) -> String {
     let mut payload = [0u8; PAYLOAD_LEN];
     payload[0] = match network {
@@ -170,11 +186,9 @@ pub fn encode_with_family(
     payload[35..68].copy_from_slice(spend_pubkey);
     // 68..72 stay zero: no expiry.
 
-    let prefix = match (family, network) {
-        (PrefixFamily::Cashcode, Network::Mainnet) => CASHCODE_MAINNET,
-        (PrefixFamily::Cashcode, Network::Chipnet | Network::Regtest) => CASHCODE_TESTNET,
-        (PrefixFamily::LegacyPaycode, Network::Mainnet) => LEGACY_MAINNET,
-        (PrefixFamily::LegacyPaycode, Network::Chipnet | Network::Regtest) => LEGACY_TESTNET,
+    let prefix = match network {
+        Network::Mainnet => CASHCODE_MAINNET,
+        Network::Chipnet | Network::Regtest => CASHCODE_TESTNET,
     };
 
     // Leading kind byte, as the desktop wallet and Electron Cash both write.
@@ -184,7 +198,13 @@ pub fn encode_with_family(
     encode_payload(prefix, &with_kind)
 }
 
-/// True if the string carries any RPA prefix, cashcode or legacy paycode.
+/// True if the string carries a prefix this wallet can actually pay — that
+/// is, a Cash Code.
+///
+/// A legacy PayCode returns false. The question this answers is "route this
+/// recipient down the RPA path", and routing a legacy PayCode there is the
+/// bug. Use [`is_legacy_paycode`] to tell a user *why* their string was
+/// refused.
 pub fn looks_like_rpa(candidate: &str) -> bool {
     let bare = candidate
         .trim()
@@ -198,9 +218,17 @@ pub fn looks_like_rpa(candidate: &str) -> bool {
         .any(|p| bare.starts_with(&format!("{p}:")))
 }
 
-/// Decode a cashcode or a legacy paycode. Rejects a bad checksum before any
-/// sender-side work happens.
+/// Decode a Cash Code. Rejects a bad checksum before any sender-side work
+/// happens.
+///
+/// A legacy PayCode is refused here, first, by prefix — before the checksum
+/// is even looked at. A legacy string is perfectly well-formed and would pass
+/// every structural check below, so nothing later in this function would stop
+/// it; the refusal has to be up front or it does not happen at all.
 pub fn decode(code: &str) -> Result<Cashcode> {
+    if is_legacy_paycode(code) {
+        return Err(CliError::Usage(LEGACY_PAYCODE_REJECTION.to_string()));
+    }
     let bare = code.trim().split('?').next().unwrap_or("");
     let has_lower = bare != bare.to_uppercase();
     let has_upper = bare != bare.to_lowercase();
@@ -292,7 +320,6 @@ pub fn decode(code: &str) -> Result<Cashcode> {
         // Little-endian, matching the desktop wallet's decoder.
         expiry: u32::from_le_bytes([p[68], p[69], p[70], p[71]]),
         prefix: prefix.to_string(),
-        legacy: prefix == LEGACY_MAINNET || prefix == LEGACY_TESTNET,
     })
 }
 
@@ -770,7 +797,6 @@ mod tests {
         assert_eq!(decoded.spend_pubkey, spend);
         assert_eq!(decoded.prefix_bits, RPA_PREFIX_BITS);
         assert_eq!(decoded.expiry, 0);
-        assert!(!decoded.legacy);
         assert_eq!(decoded.network(), Network::Chipnet);
         assert!(looks_like_rpa(&code));
     }
@@ -792,26 +818,66 @@ mod tests {
         assert!(decode(&swapped).is_err());
     }
 
-    #[test]
-    fn accepts_a_legacy_paycode_string() {
-        // Built by hand, since nothing here emits one.
+    /// Build a legacy PayCode string by hand.
+    ///
+    /// Test-only on purpose: nothing in the crate emits one any more, and the
+    /// point of these fixtures is to have a *well-formed* legacy string —
+    /// correct payload, correct checksum for its own prefix — so a rejection
+    /// test proves the prefix was refused rather than that a malformed string
+    /// happened to fail some later check.
+    fn handmade_legacy_paycode(prefix: &str, version: u8) -> String {
         let scan = pubkey_of(&small_key(7));
         let spend = pubkey_of(&small_key(13));
         let mut payload = [0u8; PAYLOAD_LEN];
-        payload[0] = VERSION_TESTNET;
+        payload[0] = version;
         payload[1] = RPA_PREFIX_BITS;
         payload[2..35].copy_from_slice(&scan);
         payload[35..68].copy_from_slice(&spend);
         let mut with_kind = vec![0x00];
         with_kind.extend_from_slice(&payload);
-        let legacy = encode_payload(LEGACY_TESTNET, &with_kind);
+        encode_payload(prefix, &with_kind)
+    }
 
-        assert!(legacy.starts_with("paycodetest:"));
-        assert!(looks_like_rpa(&legacy));
-        let decoded = decode(&legacy).unwrap();
-        assert!(decoded.legacy);
-        assert_eq!(decoded.scan_pubkey, scan);
-        assert_eq!(decoded.spend_pubkey, spend);
+    #[test]
+    fn rejects_a_legacy_paycode_string() {
+        for (prefix, version) in [
+            (LEGACY_MAINNET, VERSION_MAINNET),
+            (LEGACY_TESTNET, VERSION_TESTNET),
+        ] {
+            let legacy = handmade_legacy_paycode(prefix, version);
+            assert!(legacy.starts_with(&format!("{prefix}:")), "{legacy}");
+
+            // Not a payable recipient, so the send path never routes it into
+            // RPA derivation in the first place.
+            assert!(!looks_like_rpa(&legacy), "{prefix} must not look payable");
+            // And named, so the wallet can say why rather than "bad address".
+            assert!(is_legacy_paycode(&legacy), "{prefix} must be recognised");
+
+            let error = decode(&legacy).expect_err("legacy PayCode must not decode");
+            assert!(
+                error.to_string().contains("not supported"),
+                "{prefix} rejected for the wrong reason: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_legacy_paycode_is_refused_on_its_prefix_not_its_checksum() {
+        // The fixture above is checksum-valid for `paycodetest:`. If the
+        // refusal were really a checksum failure it would be indistinguishable
+        // from a typo, and repairing the checksum would let a legacy code
+        // through. Truncating the last character changes the checksum without
+        // touching the prefix: both forms must still be refused as legacy.
+        let legacy = handmade_legacy_paycode(LEGACY_TESTNET, VERSION_TESTNET);
+        let broken_checksum = &legacy[..legacy.len() - 1];
+
+        for candidate in [legacy.as_str(), broken_checksum] {
+            let error = decode(candidate).expect_err("must not decode");
+            assert!(
+                error.to_string().contains("not supported"),
+                "expected the legacy refusal, got: {error}"
+            );
+        }
     }
 
     #[test]
@@ -872,7 +938,6 @@ mod tests {
                 spend_pubkey: spend,
                 expiry: 0,
                 prefix: String::new(),
-                legacy: false,
             };
             assert_eq!(code.network(), network);
             let reason = send_block_reason(&code).expect("offline-only must be refused");
@@ -892,7 +957,6 @@ mod tests {
                 spend_pubkey: spend,
                 expiry: 0,
                 prefix: String::new(),
-                legacy: false,
             };
             assert!(send_block_reason(&code).is_none());
         }
@@ -907,7 +971,6 @@ mod tests {
             spend_pubkey: pubkey_of(&small_key(13)),
             expiry: 0,
             prefix: String::new(),
-            legacy: false,
         };
         // grind_string is where this would otherwise surface, late.
         assert!(grind_string(&code.scan_pubkey, 0).is_err());
@@ -1144,14 +1207,23 @@ mod shared_vectors {
                 "{name} cashcode"
             );
 
-            // The legacy form must still decode, and be flagged as legacy.
-            let legacy = decode(w["legacyPaycode"].as_str().unwrap()).unwrap();
-            assert!(legacy.legacy, "{name} legacy flag");
-            assert_eq!(
-                hex_of(&legacy.scan_pubkey),
-                w["scanPubkey"].as_str().unwrap()
+            // The legacy form carries the same keys as the cashcode beside
+            // it and is checksum-valid, so decoding it would "work" — and
+            // would then derive a destination under compressed Cash Code
+            // rules that its legacy owner never derived. It must be refused.
+            let legacy = w["legacyPaycode"].as_str().unwrap();
+            assert!(!looks_like_rpa(legacy), "{name} legacy must not be payable");
+            assert!(is_legacy_paycode(legacy), "{name} legacy must be named");
+            let error = decode(legacy).expect_err("{name} legacy must not decode");
+            assert!(
+                error.to_string().contains("not supported"),
+                "{name} legacy rejected for the wrong reason: {error}"
             );
-            assert!(!decode(w["cashcode"].as_str().unwrap()).unwrap().legacy);
+
+            // The cashcode beside it stays payable, so the assertion above is
+            // about the prefix and not about these particular keys.
+            assert!(looks_like_rpa(w["cashcode"].as_str().unwrap()));
+            assert!(!is_legacy_paycode(w["cashcode"].as_str().unwrap()));
 
             let secret =
                 shared_secret(&sender_privkey, &scan_pubkey, outpoint_txid, outpoint_index)

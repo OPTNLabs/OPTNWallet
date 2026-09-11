@@ -38,7 +38,7 @@ CI stays deterministic. Refresh it when closed PR history materially changes.
 | #15 plus current feature inventory | Derivation discovery must distinguish incomplete/failed scans from a confirmed empty path; only a complete unambiguous result can auto-select. |
 | #26, #27, #31, #33 | CashFusion implementation and docs must agree. Protocol knobs do not become casual UI settings, and P2P missing-signature blame is an unnamed timeout, not abort disclosure. |
 | #28 | CashConnect identity is separate from spend keys and chat Nostr identity. Exact outputs/fees/tokens/change and duplicate execution are review gates. |
-| #29, #61 | Cash Code/RPA preserves network separation, compressed-key address derivation, legacy-paycode acceptance, capability tiers, and fail-closed unsupported-code behavior. |
+| #29, #61 | Cash Code/RPA preserves network separation, compressed-key address derivation, capability tiers, and fail-closed unsupported-code behavior. **Superseded in part:** #61 also settled "keep accepting legacy `paycode:`". OPTN now rejects it — accepting the prefix while deriving under compressed Cash Code rules sends funds to an address the legacy recipient never derived. The rest of the row stands. |
 | #32 | Automatic Fusion is opt-in and wallet-scoped; wallet changes disarm the session. Product readiness controls visibility of dev-only apps. |
 | #34, #60 | SeedCash consumes raw PSBT bytes in `crypto-psbt` URs. `0xc1` sighash and camera-readable density are interoperability constraints, not styling preferences. |
 | #35 | UTXO state must reconcile across workers, discovery, Electrum, wallet changes, and lifecycle events. Stale snapshots are never chain truth. |
