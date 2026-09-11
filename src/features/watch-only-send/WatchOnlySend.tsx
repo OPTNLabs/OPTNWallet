@@ -431,6 +431,7 @@ const toHex = (bytes: Uint8Array): string =>
 type ProposalState = {
   psbtBytes: Uint8Array;
   proposal: WatchOnlyProposal;
+  feeRateSatPerByte: number | undefined;
   feeSats: bigint;
   changeSats: bigint;
   inputSumSats: bigint;
@@ -476,10 +477,6 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
       ),
     [feeRateOverride, walletFeeMode, walletCustomFeeSatPerByte]
   );
-  const feePolicyLabel =
-    feeRateSatPerByte === undefined
-      ? 'automatic relay fee'
-      : `${feeRateSatPerByte} sat/byte`;
   const fusionDepthRev = useFusionDepthRevision(
     walletIdOverride ?? standardWalletId ?? 0
   );
@@ -510,6 +507,13 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
   const [proposalState, setProposalState] = useState<ProposalState | null>(
     null
   );
+  const displayedFeeRateSatPerByte = proposalState
+    ? proposalState.feeRateSatPerByte
+    : feeRateSatPerByte;
+  const feePolicyLabel =
+    displayedFeeRateSatPerByte === undefined
+      ? 'automatic relay fee'
+      : `${displayedFeeRateSatPerByte} sat/byte`;
 
   const [frames, setFrames] = useState<UrFrames | null>(null);
   const [qrUri, setQrUri] = useState('');
@@ -599,7 +603,10 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
     setMultisigSpendMode(locationState?.multisigSpendMode ?? null);
   }, [locationState]);
 
-  const persistCoordinatorSession = async (psbtBytes: Uint8Array) => {
+  const persistCoordinatorSession = async (
+    psbtBytes: Uint8Array,
+    resolvedFeeRateSatPerByte: number | undefined = feeRateSatPerByte
+  ) => {
     if (!mobile || !multisigPolicy || !currentWalletId) return null;
     const parsed = decodePsbt(psbtBytes);
     const policyId = createMultisigDescriptorSet(
@@ -611,6 +618,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
       policyId,
       unsignedTxHash: binToHex(hash256(parsed.unsignedTransaction)),
       psbtBytes,
+      feeRateSatPerByte: resolvedFeeRateSatPerByte,
     });
     setCoordinatorSessionId(session.sessionId);
     return session;
@@ -708,8 +716,9 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
         }
         const metadata =
           await WalletManager().getWalletMetadata(currentWalletId);
+        const walletNetwork = metadata?.networkType ?? currentNetwork;
         setAccountPath(
-          metadata?.derivation_path ?? getBchAccountPath(currentNetwork)
+          metadata?.derivation_path ?? getBchAccountPath(walletNetwork)
         );
 
         // Mobile multisig uses the shared policy tables. The legacy desktop
@@ -834,7 +843,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
               ? await refreshMultisigWalletUtxos(currentWalletId)
               : await refreshWatchOnlyWalletUtxos(
                   currentWalletId,
-                  currentNetwork
+                  walletNetwork
                 );
           if (!cancelled) {
             applyInventory(Object.values(refreshed).flat());
@@ -919,6 +928,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
         setProposalState({
           psbtBytes: pending.psbtBytes,
           proposal: restored.proposal,
+          feeRateSatPerByte: pending.feeRateSatPerByte,
           feeSats: restored.feeSats,
           changeSats: restored.changeSats,
           inputSumSats: restored.inputSumSats,
@@ -1189,7 +1199,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
             }
           : {}),
       });
-      await persistCoordinatorSession(result.psbtBytes);
+      await persistCoordinatorSession(result.psbtBytes, feeRateSatPerByte);
       const proposal: WatchOnlyProposal = {
         rawUnsignedHex: result.rawUnsignedHex,
         inputs: inputsWithParents,
@@ -1199,6 +1209,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
       setProposalState({
         psbtBytes: result.psbtBytes,
         proposal,
+        feeRateSatPerByte,
         feeSats: result.feeSats,
         changeSats: result.changeSats,
         inputSumSats: result.inputSumSats,
@@ -1237,7 +1248,10 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
       const outcome = mergePsbts([base, psbt]);
       if (outcome.results.some((result) => result.combined)) {
         const nextPsbt = outcome.merged;
-        await persistCoordinatorSession(nextPsbt);
+        await persistCoordinatorSession(
+          nextPsbt,
+          proposalState.feeRateSatPerByte
+        );
         setMergedPsbt(nextPsbt);
         // Carry the accumulated signatures to the next cosigner. Reusing the
         // original unsigned frames would restart the threshold flow.
@@ -1300,6 +1314,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
         policyId,
         unsignedTxHash: binToHex(hash256(parsed.unsignedTransaction)),
         psbtBytes: activePsbt,
+        feeRateSatPerByte: proposalState.feeRateSatPerByte,
       });
       const result = await signMultisigPsbtLocally({
         policyWalletId: currentWalletId,
@@ -1482,7 +1497,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
       validateBroadcastRelayFee(
         verdict.rawTxHex,
         proposalState.inputSumSats,
-        feeRateSatPerByte
+        proposalState.feeRateSatPerByte
       );
     } catch (feeError) {
       setBroadcastArmed(false);

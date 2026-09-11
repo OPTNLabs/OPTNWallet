@@ -79,9 +79,12 @@ type SubEntry = { method: string; params?: ElectrumParams };
 const activeSubs = new Map<string, SubEntry>();
 const blockedServers = new Map<string, number>();
 
-function getNetworkAndServers(): { network: Network; servers: string[] } {
+function getNetworkAndServers(networkOverride?: Network): {
+  network: Network;
+  servers: string[];
+} {
   const state = store.getState();
-  const network = selectCurrentNetwork(state);
+  const network = networkOverride ?? selectCurrentNetwork(state);
   const servers = getElectrumServers(network);
   return { network, servers };
 }
@@ -468,9 +471,9 @@ async function resubscribeAll() {
 }
 
 // ---------- API ----------
-export default function ElectrumServer() {
+export default function ElectrumServer(networkOverride?: Network) {
   async function electrumConnect(customServer?: string): Promise<ECClient> {
-    const { network, servers } = getNetworkAndServers();
+    const { network, servers } = getNetworkAndServers(networkOverride);
 
     // A healthy socket can still be wrong for the active wallet. This occurs
     // during import when the onboarding screen warms the default network
@@ -624,7 +627,7 @@ export default function ElectrumServer() {
   }
 
   async function ensureFreshConnection(): Promise<void> {
-    const { network } = getNetworkAndServers();
+    const { network } = getNetworkAndServers(networkOverride);
     if (!electrum) {
       await electrumConnect();
       return;
@@ -674,7 +677,7 @@ export default function ElectrumServer() {
       return res;
     } catch (err) {
       markServerFailed(currentServer ?? getLastHealthyServer());
-      const { servers } = getNetworkAndServers();
+      const { servers } = getNetworkAndServers(networkOverride);
       // Health-ranked next hop (not only index+1). Prefer last healthy when set.
       const ranked = rankServersForConnect(servers, {
         isBlocked: isServerBlocked,
@@ -724,7 +727,7 @@ export default function ElectrumServer() {
       if (failedIndices.length > 0) {
         const failedServer = currentServer;
         markServerFailed(failedServer ?? getLastHealthyServer());
-        const { servers } = getNetworkAndServers();
+        const { servers } = getNetworkAndServers(networkOverride);
         const ranked = rankServersForConnect(servers, {
           isBlocked: isServerBlocked,
           preferred: getLastHealthyServer(),
@@ -759,7 +762,7 @@ export default function ElectrumServer() {
       return results;
     } catch (err) {
       markServerFailed(currentServer ?? getLastHealthyServer());
-      const { servers } = getNetworkAndServers();
+      const { servers } = getNetworkAndServers(networkOverride);
       const ranked = rankServersForConnect(servers, {
         isBlocked: isServerBlocked,
         preferred: getLastHealthyServer(),
@@ -873,7 +876,7 @@ export default function ElectrumServer() {
       markSuccessfulActivity();
     } catch (err) {
       markServerFailed(currentServer ?? getLastHealthyServer());
-      const { servers } = getNetworkAndServers();
+      const { servers } = getNetworkAndServers(networkOverride);
       const ranked = rankServersForConnect(servers, {
         isBlocked: isServerBlocked,
         preferred: getLastHealthyServer(),
@@ -938,7 +941,7 @@ export default function ElectrumServer() {
   }
 
   function getServerList(): string[] {
-    return getNetworkAndServers().servers;
+    return getNetworkAndServers(networkOverride).servers;
   }
 
   /** Multi-Fulcrum health scores (for settings/debug). */
@@ -949,7 +952,7 @@ export default function ElectrumServer() {
   } {
     return {
       current: currentServer,
-      servers: getNetworkAndServers().servers,
+      servers: getNetworkAndServers(networkOverride).servers,
       health: getAllServerHealth(),
     };
   }

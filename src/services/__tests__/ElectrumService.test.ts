@@ -7,6 +7,7 @@ import ElectrumService, {
   primeUTXOCache,
 } from '../ElectrumService';
 import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
+import { Network } from '../../state/slices/networkSlice';
 
 vi.mock('../../apis/ElectrumServer/ElectrumServer', () => ({
   default: vi.fn(),
@@ -139,6 +140,14 @@ describe('ElectrumService', () => {
     expect(server.requestMany.mock.calls[0][0][0].params[0]).toContain(
       'scripthash:'
     );
+  });
+
+  it('uses an explicit route network for wallet-wide UTXO scans', async () => {
+    mockedElectrumServer.mockReturnValue({} as never);
+
+    await ElectrumService.getUTXOsMany([], undefined, Network.CHIPNET);
+
+    expect(mockedElectrumServer).toHaveBeenCalledWith(Network.CHIPNET);
   });
 
   it('uses address listunspent requests for mobile wallet-wide scans', async () => {
