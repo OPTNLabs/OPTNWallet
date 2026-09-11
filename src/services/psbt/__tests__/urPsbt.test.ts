@@ -148,7 +148,10 @@ describe('UR crypto-psbt transport', () => {
     const frames = encodePsbtToUrFrames(psbt(), 60);
     const scanner = new UrPsbtScanner();
     scanner.receive(frames.next());
+    scanner.receive('UR:CRYPTO-PSBT/7-11/NOTBYTEWORDSATALL');
+    expect(scanner.damagedFrames).toBe(1);
     scanner.reset();
+    expect(scanner.damagedFrames).toBe(0);
     expect(scanner.receive('not-a-ur').progress).toBe(0);
   });
 });

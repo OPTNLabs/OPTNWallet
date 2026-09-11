@@ -17,6 +17,12 @@ export default function WalletConnectPanel() {
     (s: RootState) => s.walletconnect.activeSessions
   );
   const [settingsTopic, setSettingsTopic] = useState<string | null>(null);
+  const pendingProposal = useSelector(
+    (s: RootState) => s.walletconnect.pendingProposal
+  );
+  const connectionFailed = useSelector(
+    (s: RootState) => s.walletconnect.connectionFailed
+  );
 
   // Check for expired sessions when the component mounts or sessions change
   useEffect(() => {
@@ -49,14 +55,21 @@ export default function WalletConnectPanel() {
     <div className="p-4">
       {/* <h2 className="text-3xl text-center font-bold mb-4">WalletConnect</h2> */}
       <WcConnectionManager />
+      {connectionFailed ? (
+        <p role="alert">{t('connection.failed')}</p>
+      ) : pendingProposal ? (
+        <p role="status">{t('connection.awaitingApproval')}</p>
+      ) : null}
 
       <div className="wallet-card p-4 space-y-3">
         {!sessions || Object.keys(sessions).length === 0 ? (
-          <p className="wallet-muted text-sm">{t('wc.noActiveSessions')}</p>
+          <p className="wallet-muted text-sm">
+            {t('connection.noSavedSessions')}
+          </p>
         ) : (
           <>
             <h3 className="text-xl font-bold wallet-text-strong">
-              {t('wc.activeSessions')}
+              {t('connection.savedSessions')}
             </h3>
             <SessionList
               activeSessions={sessions}

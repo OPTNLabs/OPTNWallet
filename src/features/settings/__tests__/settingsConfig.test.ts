@@ -69,6 +69,20 @@ describe('settingsConfig', () => {
     expect(getParentSettingsGroup('network', true, Network.CHIPNET)).toBe(null);
   });
 
+  it('exposes Merchant Pay conversion defaults under Connections & features', () => {
+    const features = getSettingsGroupRows('features', false, Network.MAINNET);
+    const merchantPay = features.find((row) => row.key === 'merchant-pay');
+
+    expect(merchantPay).toMatchObject({
+      action: 'panel',
+      target: 'merchant-pay',
+      description: 'Set the default payment conversion percentage',
+    });
+    expect(getParentSettingsGroup('merchant-pay', false, Network.MAINNET)).toBe(
+      'features'
+    );
+  });
+
   it('puts Rebuild Wallet under Wallet & security on desktop only', () => {
     const desktopWallet = getSettingsGroupRows(
       'wallet',

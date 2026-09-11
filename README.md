@@ -1,8 +1,28 @@
 # OPTN Wallet
 
-OPTN Wallet is a Bitcoin Cash wallet focused on secure transaction flows, CashTokens support, and extensibility for external apps.
+OPTN Wallet is the shipped Bitcoin Cash wallet from OPTN Labs, focused on
+self-custody, secure transaction flows, CashTokens support, and connections to
+external applications. OPTN Labs is a Canadian company building Bitcoin Cash
+wallets, developer tools, infrastructure, and engineering support.
 
 This `README` is the high-level entrypoint. Technical implementation and integration details live in [`docs/`](./docs/README.md).
+
+## OPTN Labs and Product Links
+
+- [OPTN Labs website](https://www.optnlabs.com/)
+- [About OPTN Labs](https://www.optnlabs.com/about)
+- [OPTN Wallet product page](https://www.optnlabs.com/wallet)
+- [OPTN Wallet on Google Play](https://play.google.com/store/apps/details?id=optn.wallet.app)
+- [Wallet releases](https://github.com/OPTNLabs/OPTNWallet/releases)
+- [OPTN platform](https://www.optnlabs.com/platform)
+- [OPTN solutions](https://www.optnlabs.com/solutions)
+- [OPTN Labs blog](https://www.optnlabs.com/blog)
+- [Developer resources](https://www.optnlabs.com/developers)
+- [CashTokens guide](https://www.optnlabs.com/cashtokens)
+- [Bitcoin Cash covenants guide](https://www.optnlabs.com/covenants-on-bitcoin-cash)
+- [BCMR token metadata guide](https://www.optnlabs.com/bcmr-token-metadata)
+- [Hosted BCH infrastructure](https://www.optnlabs.com/infrastructure)
+- [Engineering support](https://www.optnlabs.com/engineering)
 
 ## Documentation Map
 
@@ -17,12 +37,19 @@ This `README` is the high-level entrypoint. Technical implementation and integra
 
 ## For Third-Party Developers
 
-There are two primary ways to integrate with OPTN Wallet:
+The currently documented external integration path is:
 
 - Wallet-to-dApp via WalletConnect.
-- In-wallet addon apps using the Addon manifest + Addon SDK model.
 
-Start with [Integration Guide](./docs/integration-guide.md), then go deeper into addon docs if you are building embedded wallet apps.
+The in-wallet add-on system and Addon SDK are still work in progress. The
+related documentation describes the current direction and implementation
+boundaries, but the add-on surface should not be treated as a finished,
+generally available integration product yet.
+
+Start with the [Integration Guide](./docs/integration-guide.md). If you are
+helping develop embedded wallet apps, continue to the
+[Addon Development Guide](./docs/addon-development-guide.md) and
+[Addon SDK Reference](./docs/addons-sdk.md).
 
 ## Quickstart (Local Development)
 
@@ -84,11 +111,6 @@ See [Build and Release Scripts](./docs/build-and-release.md) for Android APK/AAB
 - `src/addons/builtin/` curated built-in addon manifests
 - `schemas/` JSON schemas (including addon manifest schema)
 - `docs/` technical documentation
-
-## Project Links
-
-- Website: https://www.optnwallet.com/
-- Source: https://github.com/OPTNLabs/OPTNWallet
 
 ## Nostr identities
 

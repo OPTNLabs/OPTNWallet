@@ -56,10 +56,7 @@ function normalizeTokenCategory(value: unknown): string {
   return '';
 }
 
-function findString(
-  row: Record<string, unknown>,
-  keys: string[]
-): string {
+function findString(row: Record<string, unknown>, keys: string[]): string {
   for (const key of keys) {
     const value = asString(row[key]);
     if (value) return value;
@@ -67,10 +64,7 @@ function findString(
   return '';
 }
 
-function findBigInt(
-  row: Record<string, unknown>,
-  keys: string[]
-): bigint {
+function findBigInt(row: Record<string, unknown>, keys: string[]): bigint {
   for (const key of keys) {
     const value = parseSatoshis(row[key]);
     if (value > 0n) return value;
@@ -99,7 +93,12 @@ export function normalizeCauldronPoolRow(
     'category',
     'tokenCategory',
   ]);
-  const txHash = findString(row, ['txid', 'tx_hash', 'transaction', 'outpoint_txid']);
+  const txHash = findString(row, [
+    'txid',
+    'tx_hash',
+    'transaction',
+    'outpoint_txid',
+  ]);
   const liveTxHash = findString(row, ['new_utxo_txid']);
   const withdrawPublicKeyHash = findHex(row, [
     'withdraw_pubkey_hash',
@@ -121,7 +120,12 @@ export function normalizeCauldronPoolRow(
 
   const effectiveTxHash = txHash || liveTxHash;
 
-  if (!tokenCategory || !effectiveTxHash || !withdrawPublicKeyHash || !lockingBytecode) {
+  if (
+    !tokenCategory ||
+    !effectiveTxHash ||
+    !withdrawPublicKeyHash ||
+    !lockingBytecode
+  ) {
     return null;
   }
 
@@ -129,13 +133,22 @@ export function normalizeCauldronPoolRow(
     {
       tx_hash: effectiveTxHash,
       tx_pos: Number(
-        rawRow.tx_pos ?? rawRow.vout ?? rawRow.output_index ?? rawRow.new_utxo_n ?? 0
+        rawRow.tx_pos ??
+          rawRow.vout ??
+          rawRow.output_index ??
+          rawRow.new_utxo_n ??
+          0
       ),
       value: findBigInt(row, ['value', 'sats', 'amount', 'value_satoshis']),
       amount: findBigInt(row, ['value', 'sats', 'amount', 'value_satoshis']),
       token: {
         category: tokenCategory,
-        amount: findBigInt(row, ['token_amount', 'amount_token', 'tokenAmount', 'tokens']),
+        amount: findBigInt(row, [
+          'token_amount',
+          'amount_token',
+          'tokenAmount',
+          'tokens',
+        ]),
       },
       lockingBytecode,
     },
@@ -189,15 +202,19 @@ export function collectWalletCreatedCauldronPoolCandidates(
       const unlockingBytecode = input.unlockingBytecode;
       if (!(unlockingBytecode instanceof Uint8Array)) return false;
       return (
-        extractCauldronPoolV0ParametersFromUnlockingBytecode(unlockingBytecode) !==
-        null
+        extractCauldronPoolV0ParametersFromUnlockingBytecode(
+          unlockingBytecode
+        ) !== null
       );
     });
     if (hasCauldronContractInput) continue;
 
     decoded.outputs.forEach((output, outputIndex) => {
       const lockingBytecode = output.lockingBytecode;
-      if (!(lockingBytecode instanceof Uint8Array) || lockingBytecode.length === 0) {
+      if (
+        !(lockingBytecode instanceof Uint8Array) ||
+        lockingBytecode.length === 0
+      ) {
         return;
       }
 
@@ -214,7 +231,9 @@ export function collectWalletCreatedCauldronPoolCandidates(
               ? BigInt(rawTokenAmount)
               : 0n;
       if (tokenAmount <= 0n) return;
-      if (spentOutpointSet.has(getCandidateOutputKey(record.txid, outputIndex))) {
+      if (
+        spentOutpointSet.has(getCandidateOutputKey(record.txid, outputIndex))
+      ) {
         return;
       }
 
@@ -490,20 +509,22 @@ function planAggregatedTradeForTargetSupplyWithChunkCount(
   let remaining = supplyAmount;
 
   const findBestPoolAllocation = (increment: bigint) => {
-    let best:
-      | {
-          index: number;
-          trade: CauldronPoolTrade;
-          marginalDemand: bigint;
-          marginalTradeFee: bigint;
-        }
-      | null = null;
+    let best: {
+      index: number;
+      trade: CauldronPoolTrade;
+      marginalDemand: bigint;
+      marginalTradeFee: bigint;
+    } | null = null;
 
     for (let i = 0; i < workingPools.length; i += 1) {
       const current = workingPools[i];
       let trade;
       try {
-        const pair = createCauldronPoolPair(current.pool, supplyTokenId, demandTokenId);
+        const pair = createCauldronPoolPair(
+          current.pool,
+          supplyTokenId,
+          demandTokenId
+        );
         trade = calcCauldronTradeWithTargetSupply(
           pair,
           current.allocatedSupply + increment
@@ -552,11 +573,13 @@ function planAggregatedTradeForTargetSupplyWithChunkCount(
 
   for (let step = 0; step < chunkCount && remaining > 0n; step += 1) {
     const stepsLeft = BigInt(chunkCount - step);
-    const chunk = remaining / stepsLeft > 0n ? remaining / stepsLeft : remaining;
+    const chunk =
+      remaining / stepsLeft > 0n ? remaining / stepsLeft : remaining;
     const best = findBestFeasibleAllocation(chunk);
 
     if (!best) {
-      if (workingPools.every((entry) => entry.allocatedSupply === 0n)) return null;
+      if (workingPools.every((entry) => entry.allocatedSupply === 0n))
+        return null;
       break;
     }
 
@@ -642,20 +665,22 @@ function planAggregatedTradeForTargetDemandWithChunkCount(
   let remaining = demandAmount;
 
   const findBestPoolAllocation = (increment: bigint) => {
-    let best:
-      | {
-          index: number;
-          trade: CauldronPoolTrade;
-          marginalSupply: bigint;
-          marginalTradeFee: bigint;
-        }
-      | null = null;
+    let best: {
+      index: number;
+      trade: CauldronPoolTrade;
+      marginalSupply: bigint;
+      marginalTradeFee: bigint;
+    } | null = null;
 
     for (let i = 0; i < workingPools.length; i += 1) {
       const current = workingPools[i];
       let trade;
       try {
-        const pair = createCauldronPoolPair(current.pool, supplyTokenId, demandTokenId);
+        const pair = createCauldronPoolPair(
+          current.pool,
+          supplyTokenId,
+          demandTokenId
+        );
         trade = calcCauldronTradeWithTargetDemand(
           pair,
           current.allocatedDemand + increment
@@ -705,11 +730,13 @@ function planAggregatedTradeForTargetDemandWithChunkCount(
 
   for (let step = 0; step < chunkCount && remaining > 0n; step += 1) {
     const stepsLeft = BigInt(chunkCount - step);
-    const chunk = remaining / stepsLeft > 0n ? remaining / stepsLeft : remaining;
+    const chunk =
+      remaining / stepsLeft > 0n ? remaining / stepsLeft : remaining;
     const best = findBestFeasibleAllocation(chunk);
 
     if (!best) {
-      if (workingPools.every((entry) => entry.allocatedDemand === 0n)) return null;
+      if (workingPools.every((entry) => entry.allocatedDemand === 0n))
+        return null;
       break;
     }
 
@@ -824,6 +851,68 @@ export function planAggregatedTradeForTargetDemand(
   return best;
 }
 
+/**
+ * Merchant requests are transported through one QR/stream session and create
+ * one transaction. Keep their LP route bounded so a tiny payment does not
+ * become an unnecessarily large multi-pool proposal just to save a small
+ * amount of BCH.
+ */
+export function planMerchantTradeForTargetDemand(
+  pools: CauldronPool[],
+  supplyTokenId: CauldronTokenId,
+  demandTokenId: CauldronTokenId,
+  demandAmount: bigint,
+  maxPools = 4
+): { trades: CauldronPoolTrade[]; summary: CauldronTradeSummary } | null {
+  if (maxPools <= 0) return null;
+
+  let best: {
+    trades: CauldronPoolTrade[];
+    summary: CauldronTradeSummary;
+  } | null = null;
+  for (let chunkCount = 1; chunkCount <= maxPools; chunkCount += 1) {
+    const candidate = planAggregatedTradeForTargetDemandWithChunkCount(
+      pools,
+      supplyTokenId,
+      demandTokenId,
+      demandAmount,
+      chunkCount
+    );
+    if (!candidate || candidate.trades.length > maxPools) continue;
+    best = pickBetterTradePlan(best, candidate);
+  }
+
+  return best;
+}
+
+export function planMerchantTradeForTargetSupply(
+  pools: CauldronPool[],
+  supplyTokenId: CauldronTokenId,
+  demandTokenId: CauldronTokenId,
+  supplyAmount: bigint,
+  maxPools = 4
+): { trades: CauldronPoolTrade[]; summary: CauldronTradeSummary } | null {
+  if (maxPools <= 0) return null;
+
+  let best: {
+    trades: CauldronPoolTrade[];
+    summary: CauldronTradeSummary;
+  } | null = null;
+  for (let chunkCount = 1; chunkCount <= maxPools; chunkCount += 1) {
+    const candidate = planAggregatedTradeForTargetSupplyWithChunkCount(
+      pools,
+      supplyTokenId,
+      demandTokenId,
+      supplyAmount,
+      chunkCount
+    );
+    if (!candidate || candidate.trades.length > maxPools) continue;
+    best = pickBetterTradePlan(best, candidate);
+  }
+
+  return best;
+}
+
 export async function fetchNormalizedCauldronPools(
   network: Network,
   client = new CauldronApiClient(network),
@@ -855,13 +944,21 @@ export async function fetchCauldronDerivedWalletAddresses(
   maxAccountIndex = 0
 ): Promise<Array<{ address: string; tokenAddress: string }>> {
   const results: Array<{ address: string; tokenAddress: string }> = [];
-  for (let accountIndex = 0; accountIndex <= maxAccountIndex; accountIndex += 1) {
+  for (
+    let accountIndex = 0;
+    accountIndex <= maxAccountIndex;
+    accountIndex += 1
+  ) {
     try {
-      const candidates = await deriveWalletAddressCandidates(walletId, network, {
-        count: maxAddressIndex,
-        accountNumber: accountIndex,
-        branchNames: BCH_WALLET_SCAN_BRANCH_NAMES,
-      });
+      const candidates = await deriveWalletAddressCandidates(
+        walletId,
+        network,
+        {
+          count: maxAddressIndex,
+          accountNumber: accountIndex,
+          branchNames: BCH_WALLET_SCAN_BRANCH_NAMES,
+        }
+      );
       results.push(
         ...candidates.map(({ address, tokenAddress }) => ({
           address,
@@ -898,12 +995,17 @@ function poolMatchesNftCommitment(pool: CauldronPool, utxo: UTXO): boolean {
   const outpointIndexHex = pool.outputIndex.toString(16).padStart(8, '0');
   const outpointKey = `${outpointTxHash}${outpointIndexHex}`;
 
-  return commitment === poolId || commitment === outpointTxHash || commitment === outpointKey;
+  return (
+    commitment === poolId ||
+    commitment === outpointTxHash ||
+    commitment === outpointKey
+  );
 }
 
 function poolMatchesTokenNft(pool: CauldronPool, utxo: UTXO): boolean {
   return (
-    utxo.token?.category === pool.output.tokenCategory && Boolean(utxo.token?.nft)
+    utxo.token?.category === pool.output.tokenCategory &&
+    Boolean(utxo.token?.nft)
   );
 }
 
@@ -912,12 +1014,17 @@ export async function fetchNormalizedCauldronUserPools(
   walletAddresses: Array<{ address: string; tokenAddress?: string }>,
   client = new CauldronApiClient(network)
 ): Promise<CauldronPool[]> {
-  const publicKeyHashes = [...new Set(
-    walletAddresses
-      .flatMap((entry) => [entry.address, entry.tokenAddress].filter(Boolean) as string[])
-      .map((address) => publicKeyHashHexFromAddress(address))
-      .filter((value): value is string => Boolean(value))
-  )];
+  const publicKeyHashes = [
+    ...new Set(
+      walletAddresses
+        .flatMap(
+          (entry) =>
+            [entry.address, entry.tokenAddress].filter(Boolean) as string[]
+        )
+        .map((address) => publicKeyHashHexFromAddress(address))
+        .filter((value): value is string => Boolean(value))
+    ),
+  ];
 
   if (publicKeyHashes.length === 0) return [];
 
@@ -945,11 +1052,19 @@ export function detectCauldronWalletPoolPositions(
     const exactCommitmentMatches = tokenUtxos.filter((utxo) =>
       poolMatchesNftCommitment(pool, utxo)
     );
-    const matchingTokenNfts = tokenUtxos.filter((utxo) => poolMatchesTokenNft(pool, utxo));
+    const matchingTokenNfts = tokenUtxos.filter((utxo) =>
+      poolMatchesTokenNft(pool, utxo)
+    );
     const matchingNftUtxos =
-      exactCommitmentMatches.length > 0 ? exactCommitmentMatches : matchingTokenNfts;
+      exactCommitmentMatches.length > 0
+        ? exactCommitmentMatches
+        : matchingTokenNfts;
 
-    if (matchingNftUtxos.length === 0 && !pool.ownerAddress && !pool.ownerPublicKeyHash) {
+    if (
+      matchingNftUtxos.length === 0 &&
+      !pool.ownerAddress &&
+      !pool.ownerPublicKeyHash
+    ) {
       return [];
     }
 

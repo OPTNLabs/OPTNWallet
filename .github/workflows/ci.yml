@@ -161,6 +161,12 @@ jobs:
       - name: Unit tests
         run: npm run test:core
 
+      - name: App tests
+        run: npm run test:apps
+
+      - name: UI tests
+        run: npm run test:ui
+
       - name: Addon manifest validation
         run: npm run addons:validate
 
@@ -194,3 +200,4 @@ jobs:
       # This runs the workflow's own shell against a synthetic release and
       # removes one asset at a time, requiring every removal to be caught.
       - run: bash scripts/verify-release-completeness.sh
+      - run: python scripts/verify-preview-completeness.py
