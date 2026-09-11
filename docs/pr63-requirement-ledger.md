@@ -66,6 +66,7 @@ reader can open and, where there is one, the test that holds it up.
 
 | Requirement | Status | Entry point / evidence | Gap |
 | --- | --- | --- | --- |
+| Web build produces a shipping bundle | **PROVEN** | `npm run build` → `dist/` (50 MB, typecheck clean) on Vitest 5 / Vite 8 | — |
 | Four theme modes | **PROVEN** | `optn_app::ThemeMode` — Light, Gray, Green, Dark | — |
 | Default / Cyberpunk skins | **PROVEN** | `optn_app::UiSkin` | — |
 | Theme/skin persist without touching keys | **INTEGRATION** | `AppAction::SetTheme` / `SetSkin` | Persistence across restart not asserted |
@@ -73,11 +74,11 @@ reader can open and, where there is one, the test that holds it up.
 | Watch Only never gains signing authority | **PROVEN** | `WalletKind::WatchOnly`; `optn-core/src/watch_only.rs` | — |
 | Master fingerprint asked once, persisted | **INTEGRATION** | `OpenedWallet::master_fingerprint` | Matrix evidence is `unit` on every surface except Android `e2e-declared` |
 | Home / portfolio | **PARTIAL** | `AppRoute::WalletHome` | Exists; not audited against `docs/ui-overhaul` |
-| Assets | **PARTIAL** | `AppRoute::Coins` → `#/assets` | Still raw coin rows. #71 explicitly calls this out as not the finished experience |
-| **My NFTs** | **MISSING** | — | No route, no screen. `AppRoute` has no NFT destination |
+| Assets | **INTEGRATION** | `optn_app::assets_view_model`; `categories_total_across_every_coin_that_carries_them` | Leads with held categories rather than outpoints. Category is still raw hex until BCMR resolution is wired to it |
+| **My NFTs** | **INTEGRATION** | `AppRoute::Nfts` → `#/nfts`, `optn_app::nfts_view_model`, `optn-ui/src/tools.rs::NftsPage`; `my_nfts_is_a_wallet_destination` | Screen exists in both renderers and opens from Assets. Identity still unresolved hex |
 | Send / Receive | **PARTIAL** | `AppRoute::Send` / `Receive` | Screens exist; end-to-end spend from the Leptos UI not demonstrated |
 | History / tx details | **PARTIAL** | `AppRoute::History` | Details view not separately routed |
-| Owned CashToken/NFT state without a global indexer | **INTEGRATION** | `token_capability::owned_balances` / `owned_nfts` — `Scope::Wallet`, no indexer required | Not consumed by any screen |
+| Owned CashToken/NFT state without a global indexer | **PROVEN** | `optn_app::assets_view_model` / `nfts_view_model`, derived from `state.coins` alone; consumed by both renderers | — |
 | BCMR identity in Assets / My NFTs | **INTEGRATION** | `token_metadata::IdentityMetadata` keeps current / stale / unpublished / unresolved distinct | Not consumed by any screen |
 | PSBT / SeedCash / UR | **INTEGRATION** | `optn-core/src/psbt.rs`, `airgap.rs`, `optn-ui/src/airgap.rs` | Matrix `unit` on all surfaces |
 | RPA / Cash Code | **INTEGRATION** | `optn-core/src/rpa.rs` | Matrix `unit` |
