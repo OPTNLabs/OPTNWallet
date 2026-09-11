@@ -53,9 +53,13 @@ vi.mock('../ElectrumService', () => ({
 }));
 
 vi.mock('../BcmrService', () => ({
-  default: vi.fn(() => ({
-    getSnapshot: vi.fn(async () => null),
-  })),
+  // `new BcmrService()` in UTXOService: the implementation must be
+  // constructible, which an arrow function is not.
+  default: vi.fn(function () {
+    return {
+      getSnapshot: vi.fn(async () => null),
+    };
+  }),
 }));
 
 vi.mock('../../apis/TransactionManager/TransactionManager', () => ({
