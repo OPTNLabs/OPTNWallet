@@ -196,12 +196,6 @@
     "mocha": {
       "diff": "8.0.4"
     },
-    "vite-node": {
-      "vite": "7.3.6"
-    },
-    "vitest": {
-      "vite": "7.3.6"
-    },
     "js-yaml": "4.3.2"
   },
   "devDependencies": {
@@ -216,7 +210,7 @@
     "@typescript-eslint/eslint-plugin": "^7.2.0",
     "@typescript-eslint/parser": "^7.2.0",
     "@vitejs/plugin-react-swc": "^4.3.1",
-    "@vitest/coverage-v8": "^3.2.7",
+    "@vitest/coverage-v8": "^5.0.0",
     "@wdio/cli": "^9.31.7",
     "@wdio/local-runner": "^9.31.7",
     "@wdio/mocha-framework": "^9.31.7",
@@ -242,15 +236,13 @@
     "vite-plugin-node-polyfills": "^0.28.0",
     "vite-plugin-top-level-await": "^1.6.0",
     "vite-plugin-wasm": "^3.6.0",
-    "vitest": "^3.2.7",
+    "vitest": "^5.0.0",
     "webdriverio": "^9.31.7"
   },
   "resolutions": {
     "**/@puppeteer/browsers": "3.2.2",
     "**/mocha/diff": "8.0.4",
-    "**/vite-node/vite": "7.3.6",
     "**/uuid": "11.1.1",
-    "**/vitest/vite": "7.3.6",
     "**/esbuild": "0.28.2",
     "**/axios": "^1.18.0",
     "**/protobufjs": "8.7.0",
