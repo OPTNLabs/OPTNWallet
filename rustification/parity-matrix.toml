@@ -126,15 +126,27 @@ na_reason = { android = "CashFusion UI is desktop-only", ios = "CashFusion UI is
 [[feature]]
 id = "spv"
 name = "SPV"
-# Evidence corrected from "unit" on the three desktop platforms to "none"
-# everywhere. There was no test to point at: SPV has no implementation in any
-# Rust crate -- nothing matches `spv`, `merkle` or `block_header` across all 14
-# -- and its TypeScript side (`src/platform/desktop/Bip37Backend.ts`,
-# `src/features/settings/Bip37NodeSettings.tsx`) has no test file either. The
-# feature ships; the coverage claim did not exist. Raise this back to "unit"
-# with an `evidence_refs` entry the moment a test does.
+# Was "none" everywhere, correctly: SPV had no Rust implementation and no test.
+# It has both now. `crates/optn-chain-bip37` speaks the P2P handshake,
+# getheaders, Bloom filtering and merkleblock verification; `optn-runtime`
+# owns the accepted chain (`header_verifier`, `header_view`, `header_store`,
+# `header_recovery`); `crates/optn-chain-neutrino` covers compact filters.
+#
+# The reference is the merkle-binding test because it is the claim that
+# matters: a partial merkle tree is only evidence once it is tied to a block
+# hash the runtime already accepted, and without that a peer can invent a
+# header, hang any transaction under it and be believed.
+#
+# Deliberately "unit" and not "e2e" on any surface. The strongest evidence here
+# is real-node -- opt-in integration tests in
+# `crates/optn-chain-bip37/tests/regtest_live.rs` and
+# `crates/optn-chain-neutrino/tests/regtest_live.rs` drive BCHD and a
+# BCHN SHV node, recorded in `docs/chain-interop-evidence.md` -- which proves
+# the implementation interoperates, and says nothing about a packaged artifact
+# on any of these seven surfaces. That distinction is the point of the column.
 policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "pass", extension = "pass" }
-evidence = { windows = "none", linux = "none", macos = "none", android = "none", ios = "none", web = "none", extension = "none" }
+evidence = { windows = "unit", linux = "unit", macos = "unit", android = "unit", ios = "unit", web = "unit", extension = "unit" }
+evidence_refs = { windows = "crates/optn-chain-bip37/src/lib.rs::a_self_consistent_proof_for_another_block_is_refused", linux = "crates/optn-chain-bip37/src/lib.rs::a_self_consistent_proof_for_another_block_is_refused", macos = "crates/optn-chain-bip37/src/lib.rs::a_self_consistent_proof_for_another_block_is_refused", android = "crates/optn-chain-bip37/src/lib.rs::a_self_consistent_proof_for_another_block_is_refused", ios = "crates/optn-chain-bip37/src/lib.rs::a_self_consistent_proof_for_another_block_is_refused", web = "crates/optn-chain-bip37/src/lib.rs::a_self_consistent_proof_for_another_block_is_refused", extension = "crates/optn-chain-bip37/src/lib.rs::a_self_consistent_proof_for_another_block_is_refused" }
 
 [[feature]]
 id = "electrum"
