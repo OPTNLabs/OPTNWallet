@@ -1,9 +1,26 @@
 // vitest.config.ts
+import { fileURLToPath } from 'node:url';
 import { defineConfig, configDefaults } from 'vitest/config';
 
 export default defineConfig({
   test: {
     environment: 'node',
+
+    // sql.js is built for the browser: DatabaseService asks it for
+    // `/sql-wasm.wasm`, which the web build serves from public/ but which
+    // resolves to the filesystem root under Node. sql.js then aborts from
+    // inside emscripten's own instantiation promise — a rejection no
+    // .catch() on the calling side can reach. See test-support/sqlJsNode.ts.
+    // Anchored to the bare specifier so the shim's own deeper import of
+    // 'sql.js/dist/sql-wasm.js' is left alone.
+    alias: [
+      {
+        find: /^sql\.js$/,
+        replacement: fileURLToPath(
+          new URL('./test-support/sqlJsNode.ts', import.meta.url)
+        ),
+      },
+    ],
     // e2e/ specs run only via WebdriverIO (`npm run test:e2e`), not vitest —
     // they use wdio/mocha globals (describe/it with a different runtime),
     // and vitest's default include glob would otherwise pick up
@@ -40,6 +57,15 @@ export default defineConfig({
     deps: {
       optimizer: {
         ssr: {
+          // `enabled` defaults to false, so listing `include` alone left this
+          // block inert and libauth stayed external — a deep tree of small ES
+          // modules that a test can still be pulling in when its environment
+          // closes:
+          //   EnvironmentTeardownError: Cannot load '/node_modules/@bitauth/...'
+          // That is an unhandled rejection, and so fatal under Vitest 5.
+          // Prebundling collapses the tree into one file, which is both the
+          // stated intent here and much cheaper than inlining it.
+          enabled: true,
           include: ['@bitauth/libauth', '@cashscript/utils'],
         },
       },
