@@ -50,8 +50,8 @@ use settings::SettingsPage;
 use std::rc::Rc;
 #[cfg(target_arch = "wasm32")]
 use tools::{
-    ActionsPage, CoinsPage, ExplorePage, FlipstarterPage, FundMePage, HistoryPage, ReceivePage,
-    SendPage, WalletHome,
+    ActionsPage, CoinsPage, ExplorePage, FlipstarterPage, FundMePage, HistoryPage, NftsPage,
+    ReceivePage, SendPage, WalletHome,
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -986,6 +986,9 @@ fn App(transport: Rc<dyn AppTransport>) -> impl IntoView {
                 }.into_any(),
                 AppRoute::Coins => view! {
                     <CoinsPage transport=transport state=state />
+                }.into_any(),
+                AppRoute::Nfts => view! {
+                    <NftsPage transport=transport state=state />
                 }.into_any(),
                 AppRoute::Actions => view! {
                     <ActionsPage transport=transport state=state />

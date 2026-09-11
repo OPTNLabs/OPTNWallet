@@ -3,10 +3,11 @@
 use crate::{dispatch_action, qr::encode_address_qr, UiTransport};
 use leptos::prelude::*;
 use optn_app::{
-    chrome_network_label, chrome_network_pill, coins_view_model, flipstarter_view_model,
-    format_bch, fundme_view_model, history_view_model, parse_bch, portfolio_totals, product_nav,
-    sample_chipnet_campaign_blob, AppAction, AppRoute, AppState, Coin, FreezeReason, HistoryEntry,
-    HistoryKind, Network, Outpoint, PledgeStatus, ProductNavItem, SpendKind, WalletKind,
+    assets_view_model, chrome_network_label, chrome_network_pill, coins_view_model,
+    flipstarter_view_model, format_bch, fundme_view_model, history_view_model, nfts_view_model,
+    parse_bch, portfolio_totals, product_nav, sample_chipnet_campaign_blob, AppAction, AppRoute,
+    AppState, Coin, FreezeReason, HistoryEntry, HistoryKind, Network, Outpoint, OwnedCategory,
+    OwnedNft, PledgeStatus, ProductNavItem, SpendKind, WalletKind,
 };
 use optn_transport::TransportError;
 
@@ -450,6 +451,7 @@ pub fn CoinsPage(transport: UiTransport, state: RwSignal<AppState>) -> impl Into
                         <strong>{move || format_bch(coins_view_model(&state.get()).reserved_sats)}</strong>
                     </article>
                 </div>
+                <OwnedCategories transport=transport state=state />
                 <Show
                     when=move || state.get().layout().is_desktop()
                     fallback=move || view! { <CoinCards transport=transport state=state /> }
@@ -459,6 +461,125 @@ pub fn CoinsPage(transport: UiTransport, state: RwSignal<AppState>) -> impl Into
             </section>
         </WalletChrome>
     }
+}
+
+/// What this wallet holds, before the coins that hold it.
+///
+/// Derived from the wallet's own synced coins. No global indexer is consulted
+/// or required to answer "what do I own", which is the split #71 draws: an
+/// indexer can say how much of a category exists, and only this wallet can say
+/// how much of it is here.
+#[component]
+fn OwnedCategories(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
+    let categories = move || assets_view_model(&state.get()).categories;
+    view! {
+        <Show when=move || !categories().is_empty() fallback=|| ()>
+            <div class="stack">
+                <div class="panel-head">
+                    <h2>"Tokens"</h2>
+                    <button
+                        class="chip"
+                        type="button"
+                        on:click=move |_| dispatch_action(
+                            transport,
+                            state,
+                            AppAction::Navigate(AppRoute::Nfts),
+                        )
+                    >
+                        "My NFTs"
+                    </button>
+                </div>
+                <For
+                    each=categories
+                    key=|category: &OwnedCategory| category.category_hex.clone()
+                    let:category
+                >
+                    <article class="panel">
+                        // Raw until BCMR resolution names it. Showing the
+                        // category is what keeps an unresolved token visible
+                        // instead of making an owned asset disappear.
+                        <p class="source-title mono">{short_hex(&category.category_hex)}</p>
+                        <p class="muted">
+                            {format!(
+                                "{} · {} coin(s){}",
+                                category.amount,
+                                category.coins,
+                                if category.nfts > 0 {
+                                    format!(" · {} NFT(s)", category.nfts)
+                                } else {
+                                    String::new()
+                                },
+                            )}
+                        </p>
+                        <p class="muted">{format_bch(category.sats)}</p>
+                    </article>
+                </For>
+            </div>
+        </Show>
+    }
+}
+
+/// The wallet's non-fungible tokens.
+#[component]
+pub fn NftsPage(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
+    let nfts = move || nfts_view_model(&state.get()).nfts;
+    view! {
+        <WalletChrome transport=transport state=state>
+            <section class="page">
+                <h1>"My NFTs"</h1>
+                <p class="lede">"Items this wallet holds, from its own synchronized coins."</p>
+                <Show
+                    when=move || !nfts().is_empty()
+                    fallback=move || view! {
+                        // Said plainly, because an empty screen and a screen
+                        // that failed to load look identical otherwise.
+                        <p class="muted">"No non-fungible tokens in this wallet."</p>
+                    }
+                >
+                    <div class="stack">
+                        <For
+                            each=nfts
+                            key=|nft: &OwnedNft| {
+                                format!(
+                                    "{}:{}:{}",
+                                    nft.outpoint.txid_hex(),
+                                    nft.outpoint.vout(),
+                                    nft.commitment_hex,
+                                )
+                            }
+                            let:nft
+                        >
+                            <article class="panel">
+                                <p class="source-title mono">{short_hex(&nft.category_hex)}</p>
+                                <p class="muted">
+                                    {if nft.commitment_hex.is_empty() {
+                                        "No commitment".to_string()
+                                    } else {
+                                        format!("Commitment {}", short_hex(&nft.commitment_hex))
+                                    }}
+                                </p>
+                                <p class="muted">
+                                    {format!(
+                                        "{} · {}",
+                                        nft.capability.label(),
+                                        format_bch(nft.sats),
+                                    )}
+                                </p>
+                            </article>
+                        </For>
+                    </div>
+                </Show>
+            </section>
+        </WalletChrome>
+    }
+}
+
+/// Enough of a hash to recognise, without a line of hex nobody reads.
+fn short_hex(value: &str) -> String {
+    if value.len() <= 16 {
+        return value.to_string();
+    }
+    format!("{}…{}", &value[..8], &value[value.len() - 8..])
 }
 
 #[component]

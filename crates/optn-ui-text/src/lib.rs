@@ -30,9 +30,9 @@ use std::future::Future;
 use std::task::{Context, Poll, Waker};
 
 use optn_app::{
-    coins_view_model, flipstarter_view_model, format_bch, fundme_view_model, hardware_view_model,
-    history_view_model, onboarding_actions, product_nav, settings_view_model, AppAction, AppRoute,
-    AppState, OnboardingAction, WalletKind,
+    assets_view_model, coins_view_model, flipstarter_view_model, format_bch, fundme_view_model,
+    hardware_view_model, history_view_model, nfts_view_model, onboarding_actions, product_nav,
+    settings_view_model, AppAction, AppRoute, AppState, OnboardingAction, WalletKind,
 };
 use optn_transport::{AppTransport, Renderer, TransportError};
 
@@ -98,6 +98,14 @@ fn wallet_chrome(state: &AppState) -> Vec<String> {
         .collect()
 }
 
+/// Enough of a hash to recognise, without a line of hex nobody reads.
+fn short_hex(value: &str) -> String {
+    if value.len() <= 16 {
+        return value.to_string();
+    }
+    format!("{}…{}", &value[..8], &value[value.len() - 8..])
+}
+
 /// Draw the current screen from application state alone.
 ///
 /// Every branch reads a view model. Nothing here decides anything about a
@@ -155,9 +163,26 @@ pub fn draw(state: &AppState) -> Screen {
         }
         AppRoute::Coins => {
             let coins = coins_view_model(state);
+            let assets = assets_view_model(state);
             lines.extend(wallet_chrome(state));
             lines.push(format!("spendable {}", format_bch(coins.spendable_sats)));
             lines.push(format!("reserved {}", format_bch(coins.reserved_sats)));
+            // What the wallet holds, before the coins that hold it. A list of
+            // outpoints is a correct answer to a question nobody asked; #71
+            // calls raw coin rows out by name as not the finished screen.
+            for category in assets.categories {
+                lines.push(format!(
+                    "{} amount {} · {} coin(s){}",
+                    short_hex(&category.category_hex),
+                    category.amount,
+                    category.coins,
+                    if category.nfts > 0 {
+                        format!(" · {} NFT(s)", category.nfts)
+                    } else {
+                        String::new()
+                    }
+                ));
+            }
             for coin in coins.coins {
                 lines.push(format!(
                     "{} {}{}",
@@ -169,6 +194,33 @@ pub fn draw(state: &AppState) -> Screen {
                 ));
             }
             "Assets".to_string()
+        }
+        AppRoute::Nfts => {
+            let nfts = nfts_view_model(state);
+            lines.extend(wallet_chrome(state));
+            if nfts.nfts.is_empty() {
+                // Said plainly. A holder with no NFTs and a holder whose
+                // wallet failed to load them must not see the same blank.
+                lines.push("no non-fungible tokens in this wallet".into());
+            }
+            for nft in nfts.nfts {
+                // Category first because that is the identity; the commitment
+                // is what distinguishes one item in it from another. Both are
+                // shown raw until BCMR resolution names them, which is better
+                // than showing nothing and implying the item is not there.
+                lines.push(format!(
+                    "{} {} [{}] {}",
+                    short_hex(&nft.category_hex),
+                    if nft.commitment_hex.is_empty() {
+                        "no commitment".to_string()
+                    } else {
+                        short_hex(&nft.commitment_hex)
+                    },
+                    nft.capability.label(),
+                    format_bch(nft.sats),
+                ));
+            }
+            "My NFTs".to_string()
         }
         AppRoute::Settings => {
             let vm = settings_view_model(state);
