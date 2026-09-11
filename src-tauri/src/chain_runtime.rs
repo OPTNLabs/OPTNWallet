@@ -536,6 +536,34 @@ pub fn catalog_and_policy_from_app_state(state: &AppState) -> (SourceCatalog, Co
             .insert(source)
             .expect("host-grouped source ids are unique");
     }
+
+    // A wallet with configured sources and an empty catalog means Auto has
+    // nothing to choose between: it opens, finds no route, and asks its holder
+    // to type in a server before it will show them a balance. The shipped
+    // bootstrap catalog is what it starts from instead.
+    //
+    // Two conditions, and both matter.
+    //
+    // Only when the holder has chosen nothing, because a configured wallet
+    // quietly gaining a public server it never asked for is the failure this
+    // ordering avoids. The shipped entries are never written into the durable
+    // overlay either: they are a starting point, not a stored preference.
+    //
+    // And only once a wallet is open. An installed application sitting on its
+    // landing screen has no reason to touch the network, and reaching for a
+    // public server before anyone has asked for anything announces that someone
+    // installed this wallet to a host that did not need to know.
+    if catalog.iter().next().is_none() && state.wallet.is_some() {
+        let bootstrap = optn_runtime::bootstrap::shipped_bootstrap_catalog(state.network);
+        for (priority, candidate) in bootstrap.candidates().enumerate() {
+            let source = bootstrap.materialize_source(candidate, priority as u16);
+            // Deterministic ids from normalized endpoints; a collision here
+            // would be a bug in the catalog rather than anything a user did.
+            catalog
+                .insert(source)
+                .expect("bootstrap source ids are unique");
+        }
+    }
     (catalog, ConnectionPolicy::auto())
 }
 
@@ -807,7 +835,7 @@ mod tests {
             .expect("public receive address")
             .address;
 
-        let runtime = AppRuntime::spawn(AppState {
+        let mut initial = AppState {
             network: Network::Chipnet,
             wallet: Some(OpenedWallet {
                 kind: WalletKind::WatchOnly,
@@ -819,7 +847,17 @@ mod tests {
                 account_xpub: Some(xpub.clone()),
             }),
             ..Default::default()
+        };
+        // A source of this fixture's own, so rebuilding resolves against
+        // loopback rather than the shipped bootstrap catalog. These tests are
+        // about revocation and lifecycle: a closed port refuses immediately,
+        // while reaching a public server would make them slow, flaky and
+        // dependent on somebody else's uptime.
+        initial.apply(AppAction::SetServer {
+            kind: ServerKind::Electrum,
+            entry: "127.0.0.1:1".into(),
         });
+        let runtime = AppRuntime::spawn(initial);
         let settings_directory = test_directory("native-refresh-cancel");
         std::fs::create_dir(&settings_directory).expect("test settings directory");
         let native = Arc::new(NativeChainRuntime::new(
@@ -1042,7 +1080,13 @@ mod tests {
         );
 
         drop(rebuild_guard);
-        tokio::time::timeout(Duration::from_secs(2), rebuild)
+        // Ten seconds rather than two. The bound was calibrated when a rebuild
+        // resolved an empty catalog and therefore did no work at all; now there
+        // is a source to probe, and probing a closed port still costs a
+        // connect attempt per endpoint. The assertions either side of this are
+        // the actual subject -- that the revoked service starts nothing and the
+        // rebuild completes once the lock is free -- and neither is relaxed.
+        tokio::time::timeout(Duration::from_secs(10), rebuild)
             .await
             .expect("rebuild must finish after the lock is released")
             .expect("rebuild task must not panic");
@@ -1350,6 +1394,96 @@ mod tests {
     #[test]
     fn default_state_has_no_native_route_before_a_source_is_configured() {
         let state = AppState::default();
+        let (catalog, policy) = catalog_and_policy_from_app_state(&state);
+        assert!(catalog.iter().next().is_none());
+        assert!(build_selection_plan(&catalog, &policy).primary.is_empty());
+    }
+
+    /// A fresh install can reach the network without being asked to type a
+    /// server address first.
+    ///
+    /// This is the difference between "Auto" meaning something and meaning
+    /// "pick from the empty set". The catalog used to be empty here, so the
+    /// wallet opened with no eligible route at all.
+    #[test]
+    fn a_fresh_install_starts_from_the_shipped_catalog() {
+        for network in [Network::Mainnet, Network::Chipnet] {
+            let mut state = AppState::default();
+            state.network = network;
+            state.apply(AppAction::OpenCreatedWallet {
+                name: "Fresh".into(),
+                receive_address: "bitcoincash:qq0000000000000000000000000000000000000000".into(),
+                account_path: "m/44'/145'/0'".into(),
+            });
+            let (catalog, policy) = catalog_and_policy_from_app_state(&state);
+            assert!(
+                catalog.iter().next().is_some(),
+                "{network} has no source to select on a fresh install"
+            );
+            assert!(policy.protocols.contains(ProtocolFamily::Electrum));
+            for source in catalog.iter() {
+                assert!(
+                    matches!(
+                        source.origin,
+                        optn_runtime::chain::SourceOrigin::Bootstrap { .. }
+                    ),
+                    "a shipped starting point must be marked bootstrap so it can be \
+                     disabled or banned but never silently treated as the user's own"
+                );
+            }
+        }
+    }
+
+    /// A holder's own server is the catalog. A configured wallet must not
+    /// quietly gain a public server it never chose.
+    #[test]
+    fn a_configured_source_replaces_the_shipped_catalog_rather_than_joining_it() {
+        let mut state = AppState::default();
+        state.network = Network::Chipnet;
+        state.apply(AppAction::SetServer {
+            kind: ServerKind::Electrum,
+            entry: "my-own-node.example:50002".into(),
+        });
+
+        let (catalog, _) = catalog_and_policy_from_app_state(&state);
+        let hosts: Vec<_> = catalog
+            .iter()
+            .flat_map(|source| {
+                source
+                    .endpoints
+                    .iter()
+                    .map(|endpoint| endpoint.host.clone())
+            })
+            .collect();
+        assert_eq!(hosts, vec!["my-own-node.example".to_owned()]);
+        for source in catalog.iter() {
+            assert_eq!(source.origin, optn_runtime::chain::SourceOrigin::UserAdded);
+        }
+    }
+
+    /// Regtest is a chain the operator started. It gets no discovery hints.
+    #[test]
+    fn regtest_is_not_pointed_at_public_infrastructure() {
+        let mut state = AppState::default();
+        state.network = Network::Regtest;
+        state.apply(AppAction::OpenCreatedWallet {
+            name: "Local".into(),
+            receive_address: "bchreg:qq0000000000000000000000000000000000000000".into(),
+            account_path: "m/44'/1'/0'".into(),
+        });
+        let (catalog, _) = catalog_and_policy_from_app_state(&state);
+        assert!(catalog.iter().next().is_none());
+    }
+
+    /// An installed wallet nobody has opened yet does not touch the network.
+    ///
+    /// Reaching for a public server before anyone has asked for anything
+    /// announces that someone installed this wallet to a host with no need to
+    /// know it.
+    #[test]
+    fn no_wallet_open_means_no_route_and_no_probe() {
+        let state = AppState::default();
+        assert!(state.wallet.is_none());
         let (catalog, policy) = catalog_and_policy_from_app_state(&state);
         assert!(catalog.iter().next().is_none());
         assert!(build_selection_plan(&catalog, &policy).primary.is_empty());

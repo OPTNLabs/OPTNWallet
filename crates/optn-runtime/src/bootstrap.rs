@@ -111,6 +111,50 @@ impl BootstrapCatalog {
     }
 }
 
+/// The catalog a fresh install starts from.
+///
+/// Without this the base catalog is empty, and "Auto" has nothing to choose
+/// between: the wallet opens, finds no route, and asks its holder to type in a
+/// server before it will do anything. That is a reasonable position for a
+/// wallet that refuses to guess, and an unreasonable one to ship to someone who
+/// just wants to receive a payment.
+///
+/// So the shipped set is deliberately the product's own reviewed defaults --
+/// the same hosts `optn_core::network` already names -- rather than a list of
+/// third-party servers assembled here. Broadening it to the upstream feeds
+/// #75 lists (BCHN, Flowee, bchd, Knuth, Electron Cash `servers.json`,
+/// Fulcrum peer discovery) is an ingest into this same catalog, which is why
+/// [`BootstrapCatalog::ingest`] keeps every project's provenance instead of
+/// letting the first feed win.
+///
+/// These are discovery hints and nothing more. A bootstrap entry gets no trust
+/// from being shipped: it still has to handshake, still has to pass capability
+/// probing, and can be disabled or banned by the holder immediately. What it
+/// cannot be is deleted, because the base catalog has to stay recoverable for a
+/// later refresh to be deterministic.
+pub fn shipped_bootstrap_catalog(network: optn_core::network::Network) -> BootstrapCatalog {
+    use optn_core::network::Network;
+
+    let mut catalog = BootstrapCatalog::default();
+    // A regtest build is one the operator started themselves. Shipping
+    // discovery hints for it would point a private chain at someone else's.
+    if matches!(network, Network::Regtest) {
+        return catalog;
+    }
+
+    let host = network.default_host();
+    catalog.ingest(
+        Endpoint {
+            kind: EndpointKind::ElectrumTls,
+            host: host.to_owned(),
+            port: Some(network.default_port()),
+        },
+        BootstrapProject::ElectronCash,
+        "optn_core::network::Network::default_host",
+    );
+    catalog
+}
+
 pub fn stable_source_id(endpoint: &Endpoint) -> String {
     let host = normalize_host(&endpoint.host);
     let kind = endpoint_kind_label(endpoint.kind);
@@ -212,5 +256,68 @@ mod tests {
             .claim(crate::chain::Capability::ElectrumProtocol)
             .is_none());
         assert_eq!(catalog.provenance_for(&endpoint).unwrap().len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod shipped {
+    use super::*;
+    use optn_core::network::Network;
+
+    /// A fresh install has somewhere to start.
+    ///
+    /// An empty base catalog is what makes "Auto" ask its holder to type in a
+    /// server before the wallet will do anything.
+    #[test]
+    fn the_production_networks_ship_a_starting_point() {
+        for network in [Network::Mainnet, Network::Chipnet] {
+            let catalog = shipped_bootstrap_catalog(network);
+            assert!(
+                !catalog.is_empty(),
+                "{network} ships no bootstrap candidates, so Auto has nothing to select"
+            );
+            for candidate in catalog.candidates() {
+                assert_eq!(candidate.endpoint.host, network.default_host());
+                assert!(
+                    !candidate.provenance.is_empty(),
+                    "a bootstrap entry without provenance cannot be refreshed or audited"
+                );
+            }
+        }
+    }
+
+    /// Mainnet and chipnet do not share a starting point.
+    #[test]
+    fn each_network_starts_somewhere_of_its_own() {
+        let mainnet: Vec<_> = shipped_bootstrap_catalog(Network::Mainnet)
+            .candidates()
+            .map(|candidate| candidate.endpoint.host.clone())
+            .collect();
+        let chipnet: Vec<_> = shipped_bootstrap_catalog(Network::Chipnet)
+            .candidates()
+            .map(|candidate| candidate.endpoint.host.clone())
+            .collect();
+        assert_ne!(mainnet, chipnet);
+    }
+
+    /// A regtest build is one the operator started. Pointing it at somebody
+    /// else's infrastructure would be pointing a private chain at a public one.
+    #[test]
+    fn regtest_ships_no_discovery_hints() {
+        assert!(shipped_bootstrap_catalog(Network::Regtest).is_empty());
+    }
+
+    /// Shipped entries are hints, not trust. They arrive enabled and unprobed.
+    #[test]
+    fn a_shipped_entry_earns_no_capabilities_from_being_shipped() {
+        let catalog = shipped_bootstrap_catalog(Network::Mainnet);
+        let candidate = catalog.candidates().next().expect("a candidate");
+        let source = catalog.materialize_source(candidate, 0);
+        assert_eq!(source.disposition, SourceDisposition::Enabled);
+        assert!(
+            source.capabilities.iter().next().is_none(),
+            "a bootstrap entry must prove its capabilities by probing, not by shipping"
+        );
+        assert!(matches!(source.origin, SourceOrigin::Bootstrap { .. }));
     }
 }
