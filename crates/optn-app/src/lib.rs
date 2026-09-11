@@ -44,7 +44,7 @@ pub use optn_core::fee::{
     FeeMode, FeePreferences, FeeRate, DEFAULT_CUSTOM_FEE_RATE, RELAY_MINIMUM_FEE_RATE,
 };
 pub use optn_core::flipstarter::{
-    chipnet_demo_coin, encode_campaign_blob, sample_chipnet_campaign_blob, Campaign,
+    chipnet_demo_coin, encode_campaign_blob, rpa_demo_coin, sample_chipnet_campaign_blob, Campaign,
     CampaignOutput, FlipstarterPledge, PledgeStatus,
 };
 pub use optn_core::fundme::{FundMeProduct, FundMeStatus};
@@ -462,9 +462,6 @@ pub struct AppState {
     /// Whether Settings is currently showing the identifying wallet fields.
     /// Cleared by locking, so a reveal never outlives the unlocked session.
     pub identity_revealed: bool,
-    /// RPA stealth sats. Deliberately not in `coins`: they are a separate
-    /// pool, added to the portfolio total rather than counted as UTXOs.
-    pub stealth_sats: u64,
     /// The connect control and whatever a paired session is waiting on.
     pub connect: ConnectState,
     pub create_step: CreateStep,
@@ -554,7 +551,6 @@ impl AppState {
             hardware: HardwareSessionState::new(),
             servers: ServerOverrides::new(),
             identity_revealed: false,
-            stealth_sats: 0,
             connect: ConnectState::new(),
             create_step: CreateStep::Reveal,
             import_step: ImportStep::Words,
@@ -645,8 +641,6 @@ pub enum AppAction {
     DisconnectHardware,
     /// Hide the identifying wallet fields again. Needs no authorisation.
     HideWalletIdentity,
-    /// Record the RPA stealth balance a scan found.
-    SetStealthSats(u64),
     /// Rescan this wallet from a chosen block height, inclusive.
     ///
     /// An instruction, not an observation, so the renderer may make it: it
@@ -751,7 +745,7 @@ impl AppState {
     /// the same boundary. `reduce` also serves trusted model/worker fixtures.
     pub fn reduce_intent(&mut self, action: AppAction) -> Option<AppEvent> {
         match action {
-            AppAction::InsertCoin(_) | AppAction::SetStealthSats(_) => self.reject(
+            AppAction::InsertCoin(_) => self.reject(
                 "Wallet observations must come from the shared sync service.".into(),
             ),
             AppAction::ConfirmAuth { .. } => self.reject(
@@ -863,7 +857,6 @@ impl AppState {
                 self.wallet_sync = WalletSyncView::empty();
                 self.pledges.clear();
                 self.spend = None;
-                self.stealth_sats = 0;
                 // A paired session is bound to the chain it paired on. A
                 // request carried across the switch would be answered against
                 // coins that are not the ones it was built from.
@@ -1012,13 +1005,6 @@ impl AppState {
                     account_xpub: Some(preview.account_xpub),
                 });
                 self.finish_wallet_open()
-            }
-            AppAction::SetStealthSats(sats) => {
-                if self.stealth_sats == sats {
-                    return None;
-                }
-                self.stealth_sats = sats;
-                Some(AppEvent::CoinsChanged)
             }
             AppAction::RequestRescanFrom { height } => {
                 if self.wallet.is_none() {
@@ -1338,7 +1324,6 @@ impl AppState {
         self.hd_addresses = None;
         self.wallet_sync = WalletSyncView::empty();
         self.pledges.clear();
-        self.stealth_sats = 0;
         self.spend = None;
         self.connect.cancel_all();
         self.identity_revealed = false;
@@ -1370,7 +1355,6 @@ impl AppState {
         // wallet still showing a portfolio total. PR #6 made "no wallet is open
         // unless its key is cached" an invariant precisely so a closed wallet
         // cannot keep driving the UI.
-        self.stealth_sats = 0;
         // A request belongs to the session that raised it, and that session
         // belonged to this wallet. Carrying one across the lock would ask the
         // next wallet to sign something it never saw.
@@ -2013,7 +1997,7 @@ pub fn portfolio_totals(state: &AppState) -> PortfolioTotals {
     PortfolioTotals {
         spendable_sats: state.coins.spendable_sats(),
         reserved_sats: state.coins.reserved_sats(),
-        stealth_sats: state.stealth_sats,
+        stealth_sats: state.coins.rpa_sats(),
     }
 }
 
@@ -4272,31 +4256,39 @@ mod tests {
         assert_eq!(plain.total_sats(), 100_000);
         assert!(!plain.shows_split());
 
-        assert_eq!(
-            state.reduce(AppAction::SetStealthSats(50_000)),
-            Some(AppEvent::CoinsChanged)
-        );
+        // A payment received at this wallet's Cash Code, inserted through the
+        // same action as any other coin -- because it is one.
+        state.apply(AppAction::InsertCoin(
+            rpa_demo_coin(50_000, 2).expect("rpa coin"),
+        ));
+
         let totals = portfolio_totals(&state);
         assert_eq!(
             totals.utxo_sats(),
-            100_000,
-            "stealth must not be counted as a UTXO"
+            150_000,
+            "an RPA payment is a UTXO like any other"
         );
-        assert_eq!(totals.total_sats(), 150_000, "but it is part of the total");
+        assert_eq!(
+            totals.total_sats(),
+            150_000,
+            "and is counted once, not added to the total a second time"
+        );
+        assert_eq!(
+            totals.stealth_sats, 50_000,
+            "the split still says how much arrived privately"
+        );
         assert_eq!(
             totals.split_label().as_deref(),
-            Some("0.00100000 BCH spendable + 0.00050000 BCH stealth")
+            Some("0.00100000 BCH + 0.00050000 BCH stealth")
         );
 
-        // Coin control still only sees UTXOs; stealth is not spendable here.
-        assert_eq!(coins_view_model(&state).spendable_sats, 100_000);
-
-        // Setting the same value twice is not an event.
-        assert_eq!(state.reduce(AppAction::SetStealthSats(50_000)), None);
+        // The point of the change: coin control can spend it.
+        assert_eq!(coins_view_model(&state).spendable_sats, 150_000);
 
         // Stealth belongs to a chain like any other balance.
         state.apply(AppAction::SetNetwork(Network::Mainnet));
         assert_eq!(portfolio_totals(&state).stealth_sats, 0);
+        assert_eq!(portfolio_totals(&state).spendable_sats, 0);
     }
 
     #[test]
@@ -5531,7 +5523,7 @@ mod tests {
             let mut state = AppState::for_surface(AppSurface::Desktop);
             open_chipnet_seed(&mut state, "previous");
             state.apply(AppAction::InsertCoin(chipnet_demo_coin(10_000, 1).unwrap()));
-            state.apply(AppAction::SetStealthSats(50_000));
+            state.apply(AppAction::InsertCoin(rpa_demo_coin(50_000, 2).unwrap()));
             state.identity_revealed = true;
             state.hardware.account_xpub = Some("old-account".into());
             assert!(state.connect.raise(ConnectRequest {
@@ -5564,12 +5556,13 @@ mod tests {
     fn a_locked_wallet_reports_no_balance_of_any_kind() {
         // "No wallet is open unless its key is cached" is the invariant the
         // per-wallet security model rests on, and a balance is what makes a
-        // closed wallet look open. Clearing the coins is not enough: the RPA
-        // pool is the half of the total that is deliberately not a UTXO, so it
-        // has to be cleared by name or a locked wallet still shows a total.
+        // closed wallet look open. RPA payments are coins now, so clearing the
+        // coin set clears them too -- but a locked wallet showing any total at
+        // all is the failure this guards, so it is checked with an RPA coin
+        // present rather than only an ordinary one.
         let mut state = AppState::for_surface(AppSurface::Desktop);
         open_chipnet_seed(&mut state, "locked-balance");
-        state.apply(AppAction::SetStealthSats(50_000));
+        state.apply(AppAction::InsertCoin(rpa_demo_coin(50_000, 3).unwrap()));
         state.apply(AppAction::SelectHardwareVendor(Some(
             HardwareVendor::Trezor,
         )));

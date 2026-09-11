@@ -613,6 +613,13 @@ pub struct RpaMatch {
     /// Display-order txid of the input the secret was derived from.
     pub prevout_txid: String,
     pub prevout_index: u32,
+    /// The sender's compressed pubkey on that input, hex.
+    ///
+    /// Public, and the other half of the ECDH. A wallet that records this
+    /// alongside the outpoint can rebuild the secret later without refetching
+    /// the funding transaction — which is what lets a received payment become
+    /// an ordinary spendable coin rather than a balance it can only look at.
+    pub sender_pubkey_hex: String,
     /// The ECDH secret this match came from, so the caller can derive the
     /// spending key without recomputing it. Never serialise this.
     pub secret: [u8; 32],
@@ -695,6 +702,7 @@ pub fn scan_transaction(
                 value: *value,
                 prevout_txid: txid_display.clone(),
                 prevout_index: *vout,
+                sender_pubkey_hex: sender_pubkey.iter().map(|b| format!("{b:02x}")).collect(),
                 secret,
             });
         }
@@ -869,6 +877,91 @@ mod tests {
         let receiver =
             shared_secret(&small_key(7), &pubkey_of(&small_key(37)), REF_TXID, 0).unwrap();
         assert_eq!(sender, receiver);
+    }
+
+    /// A payment received at a Cash Code has to survive the whole journey
+    /// from detection to signature, not merely be detected.
+    ///
+    /// This is the regression for the gap that made a real chipnet payment
+    /// unmovable: `scan_transaction` found it, `spending_key_address` proved
+    /// the wallet controlled it, and it still could not be spent, because
+    /// nothing turned the match into a coin the spend planner would consider.
+    /// Each step below is one that used to be missing.
+    #[test]
+    fn a_received_rpa_payment_is_detected_then_selected_then_signed() {
+        use crate::coins::{Coin, CoinSet, Outpoint};
+
+        // Display-order hex, which is what `shared_secret` takes.
+        let display = |b: &[u8]| -> String { b.iter().map(|x| format!("{x:02x}")).collect() };
+
+        // Recipient publishes a code; sender pays it from a P2PKH coin.
+        let scan_priv = small_key(21);
+        let spend_priv = small_key(22);
+        let scan_pub = pubkey_of(&scan_priv);
+        let spend_pub = pubkey_of(&spend_priv);
+        let sender_priv = small_key(23);
+
+        let funding_txid = [0x5au8; 32];
+        let secret = shared_secret(&sender_priv, &scan_pub, &display(&funding_txid), 1).unwrap();
+        let stealth = payment_address(&spend_pub, &secret, Network::Chipnet, 0).unwrap();
+
+        // 1. Detection says the wallet controls it.
+        let controlled = spending_key_address(&spend_priv, &secret, 0, Network::Chipnet).unwrap();
+        assert_eq!(controlled.encode(), stealth.encode());
+
+        // 2. The match becomes a coin, carrying the outpoint the secret came
+        //    from rather than the secret itself.
+        let coin = Coin::from_rpa_payment(
+            Outpoint::new([0x77u8; 32], 0),
+            50_000,
+            stealth.encode(),
+            display(&funding_txid),
+            1,
+            display(&pubkey_of(&sender_priv)),
+        )
+        .expect("an RPA match is a coin");
+        assert!(coin.is_rpa());
+
+        // 3. It lands in the wallet's coin set as spendable, and shows up in
+        //    the private-receipts breakdown without being a separate pool.
+        let mut coins = CoinSet::default();
+        coins.insert(coin.clone()).expect("insert");
+        assert_eq!(coins.spendable_sats(), 50_000);
+        assert_eq!(coins.rpa_sats(), 50_000);
+
+        // 4. Coin selection picks it like any other coin. This is the step
+        //    that did not exist: the balance was visible and unspendable.
+        let pool = vec![crate::tx::Utxo {
+            txid: [0x77u8; 32],
+            vout: 0,
+            value: coin.value_sats(),
+            script_pubkey: stealth.script_pubkey(),
+        }];
+        let (chosen, fee) = crate::tx::select_coins(&pool, 10_000, 1, 2).expect("selected");
+        assert_eq!(chosen.len(), 1);
+
+        // 5. And the key that signs it is derivable from the origin the coin
+        //    carried, which is the whole reason for carrying it.
+        let stealth_priv = spending_key(&spend_priv, &secret, 0).expect("spending key");
+        let signing = k256::ecdsa::SigningKey::from_slice(&stealth_priv).expect("signing key");
+        let spend_to =
+            Address::from_hash(Network::Chipnet.prefix(), AddressKind::P2pkh, [0x31u8; 20]);
+        let transaction = crate::tx::Transaction::new(
+            chosen,
+            vec![crate::tx::Output::new(
+                50_000 - fee,
+                spend_to.script_pubkey(),
+            )],
+        );
+        let raw = transaction.sign(&[signing]).expect("sign the RPA coin");
+        assert!(!raw.is_empty());
+
+        // The signature has to be over this coin's own script, so a wallet
+        // that derived the wrong key would not get this far.
+        assert_eq!(
+            crate::tx::decode(&raw).expect("decodes").outputs[0].value,
+            50_000 - fee
+        );
     }
 
     #[test]

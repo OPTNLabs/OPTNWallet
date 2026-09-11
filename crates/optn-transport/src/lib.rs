@@ -552,9 +552,6 @@ pub enum WireActionKind {
     RequestRescanFrom {
         height: u32,
     },
-    SetStealthSats {
-        sats: u64,
-    },
     SetServer {
         kind: String,
         entry: String,
@@ -669,7 +666,12 @@ pub struct WireState {
     pub spend: Option<WireSpendPlan>,
     #[serde(default)]
     pub hardware: WireHardwareSession,
-    /// RPA stealth sats, kept apart from the coin list.
+    /// How much of the wire snapshot's coins arrived through a Cash Code.
+    ///
+    /// Derived from the coin list rather than carried beside it: RPA payments
+    /// are ordinary coins now, and a separately transmitted number is a
+    /// number that can disagree with them. Sent so a host can show the split
+    /// without recomputing it, and ignored on decode for the same reason.
     #[serde(default)]
     pub stealth_sats: u64,
     #[serde(default)]
@@ -1244,7 +1246,6 @@ impl From<AppAction> for WireAction {
             AppAction::DisconnectHardware => WireActionKind::DisconnectHardware,
             AppAction::HideWalletIdentity => WireActionKind::HideWalletIdentity,
             AppAction::RequestRescanFrom { height } => WireActionKind::RequestRescanFrom { height },
-            AppAction::SetStealthSats(sats) => WireActionKind::SetStealthSats { sats },
             AppAction::SetServer { kind, entry } => WireActionKind::SetServer {
                 kind: kind.id().to_string(),
                 entry,
@@ -1430,7 +1431,6 @@ impl TryFrom<WireAction> for AppAction {
             WireActionKind::DisconnectHardware => Self::DisconnectHardware,
             WireActionKind::HideWalletIdentity => Self::HideWalletIdentity,
             WireActionKind::RequestRescanFrom { height } => Self::RequestRescanFrom { height },
-            WireActionKind::SetStealthSats { sats } => Self::SetStealthSats(sats),
             WireActionKind::SetServer { kind, entry } => Self::SetServer {
                 // An unknown kind is refused rather than defaulted: writing a
                 // node host into the Electrum slot would be silently wrong.
@@ -1574,6 +1574,8 @@ impl From<&AppState> for WireState {
                 .features
                 .enabled(value.surface, FeatureFlag::WatchOnly),
             coins: value.coins.iter().map(WireCoin::from).collect(),
+            // Derived from those coins, never tracked beside them.
+            stealth_sats: value.coins.rpa_sats(),
             wallet_sync: WireWalletSyncView::from(&value.wallet_sync),
             pledges: value.pledges.iter().map(WirePledge::from).collect(),
             notice: value.notice.clone(),
@@ -1581,7 +1583,6 @@ impl From<&AppState> for WireState {
             hd_addresses: value.hd_addresses.clone(),
             spend: value.spend.as_ref().map(WireSpendPlan::from),
             hardware: WireHardwareSession::from(&value.hardware),
-            stealth_sats: value.stealth_sats,
             create_step: value.create_step.into(),
             import_step: value.import_step.into(),
             settings_focus: value.settings_focus.map(settings_row_id).map(str::to_owned),
@@ -1739,7 +1740,6 @@ impl TryFrom<WireState> for AppState {
             // A decoded snapshot never arrives already revealed: the eye
             // toggle is authorised per session, not carried on the wire.
             identity_revealed: false,
-            stealth_sats: value.stealth_sats,
             // Sessions and their pending requests are host-side and live: a
             // decoded snapshot must never arrive carrying a signature request,
             // or a stale frame could put an approval in front of the user.
@@ -2113,11 +2113,6 @@ mod tests {
                 assert!(!state.identity_revealed);
                 assert!(transport.next_event().await.unwrap().is_none());
 
-                transport
-                    .dispatch(AppAction::SetStealthSats(999_999))
-                    .await
-                    .unwrap();
-                assert_eq!(transport.snapshot().await.unwrap().stealth_sats, 0);
                 transport
                     .dispatch(AppAction::InsertCoin(
                         optn_app::chipnet_demo_coin(10_000, 1).unwrap(),

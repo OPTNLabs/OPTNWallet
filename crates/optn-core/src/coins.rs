@@ -86,9 +86,56 @@ impl FreezeReason {
     }
 }
 
+/// Where a coin's spending key comes from.
+///
+/// Every coin in the wallet needs an answer to this, and for ordinary outputs
+/// the answer is so obvious it was never written down: the key lives at the
+/// HD path the address was derived at, so the address is enough to find it
+/// again. A payment to a Cash Code breaks that assumption. Its address is a
+/// one-time P2PKH whose key is the wallet's spend key tweaked by an ECDH
+/// secret, and the secret depends on which outpoint the *sender* spent —
+/// something no amount of looking at the address will recover.
+///
+/// So the origin has to travel with the coin. Without it a received RPA
+/// payment can be detected, displayed, and counted, and still not spent:
+/// exactly the state the wallet was in, with stealth balances shown beside
+/// the spendable ones and no way to move them.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum CoinSource {
+    /// An ordinary wallet output, rediscoverable from its address.
+    #[default]
+    Hd,
+    /// A payment to this wallet's Cash Code.
+    ///
+    /// Holds the *recipe* for the key, not the key: the sender's first input,
+    /// from which the ECDH secret is recomputed against the wallet's scan key
+    /// when the coin is actually spent. Storing the secret itself would put
+    /// key material into ordinary wallet state that is displayed, persisted
+    /// and copied around; the outpoint is public and already on chain.
+    Rpa {
+        /// Display-order txid of the sender input the secret derives from.
+        prevout_txid: String,
+        prevout_index: u32,
+        /// The sender's compressed pubkey on that input, hex.
+        ///
+        /// The other half of the ECDH. Without it the outpoint alone is not
+        /// enough to recompute the secret, and the coin would be spendable
+        /// only by refetching and rescanning the funding transaction. Public
+        /// data: it is already in the scriptSig on chain.
+        sender_pubkey_hex: String,
+    },
+}
+
+impl CoinSource {
+    pub const fn is_rpa(&self) -> bool {
+        matches!(self, Self::Rpa { .. })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Coin {
     token: Option<crate::token::TokenData>,
+    source: CoinSource,
     outpoint: Outpoint,
     value_sats: u64,
     address: String,
@@ -131,6 +178,7 @@ impl Coin {
         }
         Ok(Self {
             token,
+            source: CoinSource::Hd,
             outpoint,
             value_sats,
             address,
@@ -138,6 +186,45 @@ impl Coin {
             freeze: None,
             fuse_depth: 0,
         })
+    }
+
+    /// Record a payment this wallet received at its Cash Code.
+    ///
+    /// The prevout is what makes the coin spendable later: the ECDH secret is
+    /// recomputed from it rather than stored, so this carries no key material.
+    pub fn from_rpa_payment(
+        outpoint: Outpoint,
+        value_sats: u64,
+        address: impl Into<String>,
+        prevout_txid: impl Into<String>,
+        prevout_index: u32,
+        sender_pubkey_hex: impl Into<String>,
+    ) -> Result<Self, CoinError> {
+        let prevout_txid = prevout_txid.into();
+        let sender_pubkey_hex = sender_pubkey_hex.into();
+        if prevout_txid.trim().is_empty() || sender_pubkey_hex.trim().is_empty() {
+            return Err(CoinError::EmptyAddress);
+        }
+        let mut coin = Self::from_observation(outpoint, value_sats, address, None)?;
+        coin.source = CoinSource::Rpa {
+            prevout_txid,
+            prevout_index,
+            sender_pubkey_hex,
+        };
+        Ok(coin)
+    }
+
+    pub const fn source(&self) -> &CoinSource {
+        &self.source
+    }
+
+    /// True when this coin arrived through a Cash Code.
+    ///
+    /// Spendable like any other; the distinction is only in how its key is
+    /// found, and in the fact that it is not linked on chain to the code that
+    /// received it.
+    pub const fn is_rpa(&self) -> bool {
+        self.source.is_rpa()
     }
 
     pub const fn outpoint(&self) -> Outpoint {
@@ -375,6 +462,20 @@ impl CoinSet {
 
     pub fn reserved_sats(&self) -> u64 {
         self.reserved().map(Coin::value_sats).sum()
+    }
+
+    /// How much of the spendable balance arrived through a Cash Code.
+    ///
+    /// A view over the same coins `spendable_sats` counts, not a separate
+    /// pool. The wallet shows the split because receiving privately is worth
+    /// surfacing, but these are ordinary spendable coins and the total must
+    /// not be read as "spendable plus something else" — that reading is what
+    /// kept RPA payments out of coin selection.
+    pub fn rpa_sats(&self) -> u64 {
+        self.spendable()
+            .filter(|coin| coin.is_rpa())
+            .map(Coin::value_sats)
+            .sum()
     }
 
     pub fn find_exact_spendable(&self, amount_sats: u64) -> Option<&Coin> {

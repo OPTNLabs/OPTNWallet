@@ -1284,7 +1284,10 @@ mod tests {
         let runtime = runtime().await;
         let transport = DirectTransport::new(runtime.clone());
         let coin = optn_app::chipnet_demo_coin(4000, 1).unwrap();
-        for action in [AppAction::InsertCoin(coin), AppAction::SetStealthSats(5000)] {
+        // Both kinds of coin: an RPA payment is an observation like any
+        // other, and an interface must not be able to inject one either.
+        let rpa = optn_app::rpa_demo_coin(5000, 2).unwrap();
+        for action in [AppAction::InsertCoin(coin), AppAction::InsertCoin(rpa)] {
             // Same typed conversion used by remote GUI commands, then the
             // direct transport used by in-process interfaces.
             let wire = optn_transport::WireAction::from(action);
@@ -1298,7 +1301,6 @@ mod tests {
             );
             let state = transport.snapshot().await.unwrap();
             assert!(state.coins.is_empty());
-            assert_eq!(state.stealth_sats, 0);
             assert!(state.notice.unwrap().contains("sync service"));
         }
     }
