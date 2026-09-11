@@ -38,7 +38,7 @@ reader can open and, where there is one, the test that holds it up.
 | 11 | No 2-of-3 provider voting | **PROVEN** | `reconciliation.rs` ranks evidence; no vote count exists | — |
 | 12 | SHV/MMR passes reference vectors | **PROVEN** | `optn-core/src/header_mmr.rs::reference_vectors` against bitcoincashautist's published vectors, byte-identical to BCHN's | — |
 | 13 | Pruning preserves historical verification and reorg recovery | **INTEGRATION** | `header_store.rs::prune_below`/`rewind_to`, `header_recovery.rs` | Unit-level; not driven against a live reorg |
-| 14 | CashFusion uses the shared chain observation layer | **PARTIAL** | `src-tauri/src/fusion/` | Still on the TypeScript/desktop path; not migrated to the shared provider layer |
+| 14 | CashFusion uses the shared chain observation layer | **PARTIAL** | `src-tauri/src/fusion/` (9,014 lines, 24 Tauri commands) and `optn-core/src/fusion/` (956 lines); 138 Rust tests. Server protocol in `server_plan.rs`, P2P in `p2p_component.rs`/`p2p_sign.rs`, covert transport in `covert.rs`, blame in `blame.rs` | The protocol is Rust, not TypeScript — an earlier revision of this row said otherwise and was wrong. What remains is that its chain observation still goes through `src/platform/desktop/Fusion*.ts` and `electrum_input.rs` rather than the shared provider/capability layer |
 | 15 | Explorer routing independent of consensus | **INTEGRATION** | `optn-runtime/src/explorer.rs::route_url` | Routing exists; own-infrastructure-only behaviour is not yet asserted end to end |
 | 16 | No renderer/shell owns networking or chain truth | **PROVEN** | `cargo run -p xtask -- architecture` → PASS | — |
 
@@ -83,7 +83,7 @@ reader can open and, where there is one, the test that holds it up.
 | PSBT / SeedCash / UR | **INTEGRATION** | `optn-core/src/psbt.rs`, `airgap.rs`, `optn-ui/src/airgap.rs` | Matrix `unit` on all surfaces |
 | RPA / Cash Code | **INTEGRATION** | `optn-core/src/rpa.rs` | Matrix `unit` |
 | Hardware | **PARTIAL** | `optn-ui/src/hardware.rs`, `HardwareVendor` | Vendor-by-surface audit not done; no device evidence |
-| CashFusion | **PARTIAL** | `src-tauri/src/fusion/` | Desktop-only, TypeScript path |
+| CashFusion | **PARTIAL** | Rust protocol in `src-tauri/src/fusion/` + `optn-core/src/fusion/`; driven from `src/platform/desktop/Fusion*.ts` | Implemented and released; reported working on chipnet and mainnet. The remaining gap is the renderer/driver layer, not the protocol |
 | 44px targets, safe areas, contrast | **PARTIAL** | `optn-ui` stylesheet | Not measured |
 | Capacitor/React retained until Leptos is proven | **PROVEN** | Both trees present | — |
 
