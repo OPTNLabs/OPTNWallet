@@ -106,13 +106,26 @@ if (process.argv.includes('--check')) {
     bindgenVersion: string;
     files: Record<string, string>;
   };
-  if (
-    manifest.sourceSha256 !== sourceDigest() ||
-    manifest.bindgenVersion !== version ||
-    JSON.stringify(manifest.files) !== JSON.stringify(generatedDigests())
-  ) {
+  // Naming which of the three tripped, and the command that fixes it. The
+  // old message said only that something changed, which reads as a build
+  // problem rather than "you edited Rust and did not commit the artifact" --
+  // and the distinction is not guessable from a CI log.
+  const reasons = [
+    manifest.sourceSha256 !== sourceDigest() &&
+      'Rust sources under crates/optn-core/src changed',
+    manifest.bindgenVersion !== version &&
+      `wasm-bindgen version changed (artifact built with ${manifest.bindgenVersion}, this run has ${version})`,
+    JSON.stringify(manifest.files) !== JSON.stringify(generatedDigests()) &&
+      'the committed artifacts do not match their recorded digests',
+  ].filter(Boolean);
+  if (reasons.length > 0) {
     throw new Error(
-      'Rust sources or generated WASM changed: rebuild optn-core bindings'
+      `Committed WASM is stale: ${reasons.join('; ')}. ` +
+        'Rebuild with "npx --no-install tsx scripts/build-optn-core-wasm.mts", ' +
+        'then commit src/wasm/optn-core/generated/. The source digest covers ' +
+        'every .rs under crates/optn-core/src, not only those carrying ' +
+        '#[wasm_bindgen] -- a module that exports nothing still links into the ' +
+        'binary, so it still needs a rebuild.'
     );
   }
   console.log('Shared Rust WASM sources and generated artifacts match');
