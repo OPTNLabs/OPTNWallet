@@ -292,6 +292,13 @@ pub enum AppRoute {
     HardwareWallet,
     WalletHome,
     Coins,
+    /// The wallet's non-fungible tokens.
+    ///
+    /// Separate from Assets because they are a different question. Assets asks
+    /// how much of each category this wallet holds; this asks which individual
+    /// items it holds, and an NFT has no amount to add up -- it has a
+    /// commitment and a capability, and one of them is either yours or not.
+    Nfts,
     Actions,
     Explore,
     Settings,
@@ -312,6 +319,7 @@ impl AppRoute {
             Self::HardwareWallet => "#/hardware",
             Self::WalletHome => "#/wallet",
             Self::Coins => "#/assets",
+            Self::Nfts => "#/nfts",
             Self::Actions => "#/actions",
             Self::Explore => "#/explore",
             Self::Settings => "#/settings",
@@ -355,7 +363,12 @@ impl AppRoute {
     /// Fallback when an overlay was opened without recording a return tab.
     pub const fn default_parent(self) -> Option<Self> {
         match self {
-            Self::Landing | Self::WalletHome | Self::Coins | Self::Actions | Self::Explore => None,
+            Self::Landing
+            | Self::WalletHome
+            | Self::Coins
+            | Self::Nfts
+            | Self::Actions
+            | Self::Explore => None,
             Self::Settings => Some(Self::WalletHome),
             Self::CreateWallet
             | Self::ImportWallet
@@ -376,6 +389,7 @@ impl AppRoute {
             Self::HardwareWallet => "Hardware",
             Self::WalletHome => "Home",
             Self::Coins => "Assets",
+            Self::Nfts => "My NFTs",
             Self::Actions => "Actions",
             Self::Explore => "Explore",
             Self::Settings => "Settings",
@@ -1462,6 +1476,7 @@ impl AppState {
             }
             AppRoute::WatchOnlyWallet
             | AppRoute::HardwareWallet
+            | AppRoute::Nfts
             | AppRoute::Receive
             | AppRoute::Send
             | AppRoute::History
@@ -1831,6 +1846,166 @@ pub struct CoinsViewModel {
     pub spendable_sats: u64,
     pub reserved_sats: u64,
     pub coins: Vec<Coin>,
+}
+
+/// One CashToken category this wallet holds something of.
+///
+/// Built from the wallet's own coins and nothing else. #71 is explicit that
+/// normal wallet sync is the authoritative index for owned assets: a global
+/// token indexer can say how much of a category exists, and only this wallet
+/// can say how much of it is here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnedCategory {
+    /// Category id in display order, the same order as a txid.
+    pub category_hex: String,
+    /// Fungible amount across every coin in this category.
+    pub amount: u64,
+    /// How many of this wallet's coins carry the category.
+    pub coins: usize,
+    /// Non-fungible items held in it.
+    pub nfts: usize,
+    /// Satoshis sitting in those coins.
+    ///
+    /// A token coin still holds BCH, and a holder who cannot see it cannot
+    /// understand why their spendable balance is what it is.
+    pub sats: u64,
+}
+
+/// One non-fungible token this wallet holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnedNft {
+    pub category_hex: String,
+    /// Hex of the commitment, which may be empty.
+    pub commitment_hex: String,
+    pub capability: TokenCapability,
+    pub outpoint: Outpoint,
+    pub sats: u64,
+}
+
+/// What a category's NFTs let their holder do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenCapability {
+    None,
+    Mutable,
+    Minting,
+}
+
+impl TokenCapability {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::None => "Immutable",
+            Self::Mutable => "Mutable",
+            Self::Minting => "Minting",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssetsViewModel {
+    pub layout: LayoutKind,
+    /// Categories, largest fungible holding first, then by category id so the
+    /// order does not move between renders.
+    pub categories: Vec<OwnedCategory>,
+    /// Satoshis not tied up in any token coin.
+    pub plain_sats: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NftsViewModel {
+    pub layout: LayoutKind,
+    pub nfts: Vec<OwnedNft>,
+}
+
+fn category_hex(bytes: &[u8; 32]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Group this wallet's coins by category.
+///
+/// Deliberately includes categories whose fungible amount is zero: a coin that
+/// carries only an NFT is still a coin this wallet controls, and dropping it
+/// because a number is zero makes an owned item disappear.
+pub fn assets_view_model(state: &AppState) -> AssetsViewModel {
+    let mut by_category: std::collections::BTreeMap<String, OwnedCategory> =
+        std::collections::BTreeMap::new();
+    let mut plain_sats = 0u64;
+
+    for coin in state.coins.iter() {
+        let Some(token) = coin.token() else {
+            plain_sats = plain_sats.saturating_add(coin.value_sats());
+            continue;
+        };
+        let hex = category_hex(&token.category);
+        let entry = by_category
+            .entry(hex.clone())
+            .or_insert_with(|| OwnedCategory {
+                category_hex: hex,
+                amount: 0,
+                coins: 0,
+                nfts: 0,
+                sats: 0,
+            });
+        entry.amount = entry.amount.saturating_add(token.amount);
+        entry.coins += 1;
+        entry.sats = entry.sats.saturating_add(coin.value_sats());
+        if token.nft.is_some() {
+            entry.nfts += 1;
+        }
+    }
+
+    let mut categories: Vec<OwnedCategory> = by_category.into_values().collect();
+    categories.sort_by(|left, right| {
+        right
+            .amount
+            .cmp(&left.amount)
+            .then_with(|| left.category_hex.cmp(&right.category_hex))
+    });
+    AssetsViewModel {
+        layout: state.layout(),
+        categories,
+        plain_sats,
+    }
+}
+
+/// Every non-fungible token this wallet holds.
+pub fn nfts_view_model(state: &AppState) -> NftsViewModel {
+    let mut nfts: Vec<OwnedNft> = state
+        .coins
+        .iter()
+        .filter_map(|coin| {
+            let token = coin.token()?;
+            let nft = token.nft.as_ref()?;
+            Some(OwnedNft {
+                category_hex: category_hex(&token.category),
+                commitment_hex: nft
+                    .commitment
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect(),
+                capability: match nft.capability {
+                    optn_core::token::Capability::None => TokenCapability::None,
+                    optn_core::token::Capability::Mutable => TokenCapability::Mutable,
+                    optn_core::token::Capability::Minting => TokenCapability::Minting,
+                },
+                outpoint: coin.outpoint(),
+                sats: coin.value_sats(),
+            })
+        })
+        .collect();
+    // Stable: by category, then commitment, then outpoint.
+    nfts.sort_by(|left, right| {
+        left.category_hex
+            .cmp(&right.category_hex)
+            .then_with(|| left.commitment_hex.cmp(&right.commitment_hex))
+            .then_with(|| {
+                (left.outpoint.txid_hex(), left.outpoint.vout())
+                    .cmp(&(right.outpoint.txid_hex(), right.outpoint.vout()))
+            })
+    });
+    NftsViewModel {
+        layout: state.layout(),
+        nfts,
+    }
 }
 
 /// The portfolio total, with the stealth pool kept separate from the UTXOs.
@@ -2587,6 +2762,144 @@ pub fn seed_wallet_preview_at(
 
 #[cfg(test)]
 mod tests {
+
+    /// The wallet's own coins are the asset index.
+    ///
+    /// #71 is explicit that no global indexer is needed to know what this
+    /// wallet holds. Everything below is derived from `state.coins` and
+    /// nothing else.
+    mod owned_assets {
+        use super::*;
+        use optn_core::token::{Capability as NftCapability, Nft, TokenData};
+
+        const ALPHA: [u8; 32] = [0xaa; 32];
+        const BETA: [u8; 32] = [0xbb; 32];
+
+        fn coin(seed: u8, sats: u64, token: Option<TokenData>) -> Coin {
+            let outpoint = Outpoint::new([seed; 32], u32::from(seed));
+            let coin =
+                Coin::new(outpoint, sats, format!("bitcoincash:q{seed}")).expect("a non-zero coin");
+            match token {
+                Some(token) => coin.with_token(token),
+                None => coin,
+            }
+        }
+
+        fn nft(category: [u8; 32], commitment: &[u8], capability: NftCapability) -> TokenData {
+            TokenData {
+                category,
+                amount: 0,
+                nft: Some(Nft {
+                    capability,
+                    commitment: commitment.to_vec(),
+                }),
+            }
+        }
+
+        fn wallet_with(coins: Vec<Coin>) -> AppState {
+            let mut state = AppState::for_surface(AppSurface::Desktop);
+            for coin in coins {
+                state.coins.insert(coin).expect("distinct outpoints");
+            }
+            state
+        }
+
+        #[test]
+        fn categories_total_across_every_coin_that_carries_them() {
+            let state = wallet_with(vec![
+                coin(1, 1_000, Some(TokenData::fungible(ALPHA, 500))),
+                coin(2, 2_000, Some(TokenData::fungible(ALPHA, 750))),
+                coin(3, 3_000, Some(TokenData::fungible(BETA, 10))),
+                coin(4, 4_000, None),
+            ]);
+            let model = assets_view_model(&state);
+
+            assert_eq!(model.categories.len(), 2);
+            let alpha = &model.categories[0];
+            assert_eq!(alpha.amount, 1_250);
+            assert_eq!(alpha.coins, 2);
+            // The BCH inside token coins is still the holder's, and a balance
+            // that omits it cannot be reconciled with the portfolio total.
+            assert_eq!(alpha.sats, 3_000);
+            assert_eq!(model.plain_sats, 4_000);
+        }
+
+        /// An NFT-only category has no amount, and must not vanish for it.
+        #[test]
+        fn a_category_held_only_as_an_nft_still_appears() {
+            let state = wallet_with(vec![coin(
+                1,
+                1_000,
+                Some(nft(ALPHA, b"\x01", NftCapability::None)),
+            )]);
+            let model = assets_view_model(&state);
+
+            assert_eq!(model.categories.len(), 1);
+            assert_eq!(model.categories[0].amount, 0);
+            assert_eq!(model.categories[0].nfts, 1);
+            assert_eq!(
+                model.categories[0].category_hex,
+                "aa".repeat(32),
+                "the category must be shown even with nothing resolved about it"
+            );
+        }
+
+        /// Ordering is stable, so a render does not reshuffle the list.
+        #[test]
+        fn categories_order_by_holding_then_identity() {
+            let state = wallet_with(vec![
+                coin(1, 10, Some(TokenData::fungible(ALPHA, 1))),
+                coin(2, 10, Some(TokenData::fungible(BETA, 99))),
+            ]);
+            let model = assets_view_model(&state);
+            assert_eq!(model.categories[0].category_hex, "bb".repeat(32));
+            assert_eq!(model.categories[1].category_hex, "aa".repeat(32));
+        }
+
+        #[test]
+        fn nfts_carry_their_commitment_and_capability() {
+            let state = wallet_with(vec![
+                coin(
+                    1,
+                    1_000,
+                    Some(nft(ALPHA, b"\x0a\x0b", NftCapability::Minting)),
+                ),
+                coin(2, 2_000, Some(nft(BETA, b"", NftCapability::Mutable))),
+                coin(3, 3_000, Some(TokenData::fungible(ALPHA, 5))),
+                coin(4, 4_000, None),
+            ]);
+            let model = nfts_view_model(&state);
+
+            assert_eq!(model.nfts.len(), 2, "only non-fungible items belong here");
+            assert_eq!(model.nfts[0].category_hex, "aa".repeat(32));
+            assert_eq!(model.nfts[0].commitment_hex, "0a0b");
+            assert_eq!(model.nfts[0].capability, TokenCapability::Minting);
+            // An empty commitment is normal and is not the same as absent.
+            assert_eq!(model.nfts[1].commitment_hex, "");
+            assert_eq!(model.nfts[1].capability, TokenCapability::Mutable);
+        }
+
+        /// A wallet holding nothing says so, rather than failing to render.
+        #[test]
+        fn an_empty_wallet_projects_empty_rather_than_erroring() {
+            let state = wallet_with(Vec::new());
+            assert!(assets_view_model(&state).categories.is_empty());
+            assert!(nfts_view_model(&state).nfts.is_empty());
+            assert_eq!(assets_view_model(&state).plain_sats, 0);
+        }
+
+        /// My NFTs is a destination of its own, reachable and titled.
+        #[test]
+        fn my_nfts_is_a_wallet_destination() {
+            assert_eq!(AppRoute::Nfts.fragment(), "#/nfts");
+            assert_eq!(AppRoute::Nfts.section_title(), "My NFTs");
+            assert_eq!(
+                AppRoute::Nfts.default_parent(),
+                None,
+                "a tab is not an overlay: it must not pop back to somewhere else"
+            );
+        }
+    }
 
     /// Asking for a rescan must not look like losing the money.
     ///
