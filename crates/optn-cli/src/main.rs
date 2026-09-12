@@ -1379,7 +1379,7 @@ async fn rescan_shared_wallet(
         let unconfirmed_total = state.wallet_sync.pending_sats;
         let total = state.wallet_sync.total_sats().ok_or_else(|| CliError::Protocol("HD total balance overflow".into()))?;
         Ok(json!({"ok":true, "hd":true,
-            "complete":state.wallet_sync.scan_coverage.is_none_or(|coverage| coverage.skipped_below.is_none()),
+            "complete":state.wallet_sync.scan_coverage.map_or(true, |coverage| coverage.skipped_below.is_none()),
             "network":cli.network.to_string(),
             "account_path":account.to_string(), "gap":gap, "max_addresses":cap,
             "selection":"shared-native-policy", "source":snapshot.source.as_str(),
