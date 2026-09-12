@@ -348,6 +348,99 @@ describe('release workflow', () => {
     expect(previewTimeout).toBeGreaterThanOrEqual(60);
   });
 
+  it('adds a locked Leptos macOS build without replacing legacy targets or Tor checks', () => {
+    const matrix =
+      desktopPreviewWorkflow.match(
+        /matrix:\s*\n([\s\S]*?)\n    runs-on:/
+      )?.[1] ?? '';
+    const rows = matrix.split(/- platform: /).slice(1);
+    expect(rows).toHaveLength(6);
+    for (const label of [
+      'windows-x64',
+      'macos-arm64',
+      'macos-x64',
+      'linux-x64',
+      'linux-arm64',
+    ]) {
+      const row = rows.find(
+        (value) =>
+          value.includes(`label: ${label}\n`) ||
+          value.includes(`label: ${label}\r\n`)
+      );
+      expect(row, label).toBeDefined();
+      expect(row).not.toContain('renderer: leptos');
+    }
+    const leptos = rows.find((row) =>
+      row.includes('label: macos-arm64-leptos')
+    );
+    expect(leptos).toContain('macos-latest');
+    expect(leptos).toContain('target: aarch64-apple-darwin');
+    expect(leptos).toContain(
+      'rust-targets: aarch64-apple-darwin,wasm32-unknown-unknown'
+    );
+    expect(leptos).toContain('tor-target: macos-aarch64');
+    expect(leptos).toContain('renderer: leptos');
+    expect(desktopPreviewWorkflow).toContain(
+      'targets: ${{ matrix.rust-targets || matrix.target }}'
+    );
+    expect(desktopPreviewWorkflow).toContain('toolchain: 1.98.0');
+    expect(desktopPreviewWorkflow).toContain(
+      'cargo install trunk --version 0.21.14 --locked'
+    );
+    expect(desktopPreviewWorkflow).toContain(
+      '--config src-tauri/tauri.leptos.conf.json --config "$resources_config" -- --locked'
+    );
+    expect(desktopPreviewWorkflow).toContain(
+      'codesign --force --timestamp=none --sign - "$f"'
+    );
+    expect(desktopPreviewWorkflow).toContain(
+      'bash scripts/verify-macos-bundle.sh "$APP_PATH"'
+    );
+    expect(desktopPreviewWorkflow).not.toMatch(/^\s*continue-on-error:/m);
+
+    const base = JSON.parse(
+      readFileSync(resolve(repoRoot, 'src-tauri/tauri.conf.json'), 'utf8')
+    );
+    const overlay = JSON.parse(
+      readFileSync(
+        resolve(repoRoot, 'src-tauri/tauri.leptos.conf.json'),
+        'utf8'
+      )
+    );
+    expect(base.bundle.resources).toContain('resources/tor/*');
+    // Compile-only jobs do not fetch Tor. The package build restores exactly
+    // the canonical resource list via its final Tauri config override.
+    expect(overlay.bundle.resources).toEqual([]);
+    const resourceScript = desktopPreviewWorkflow.match(
+      /resources_config="\$\(node -e '([^']+)'\)"/
+    )?.[1];
+    expect(resourceScript).toBeTruthy();
+    const packageOverlay = JSON.parse(
+      execFileSync(process.execPath, ['-e', resourceScript!], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+      })
+    );
+    expect(packageOverlay).toEqual({
+      bundle: { resources: base.bundle.resources },
+    });
+    expect(overlay.build.beforeBuildCommand).toContain(
+      'trunk build --release --locked --config Trunk.tauri.toml'
+    );
+    expect(overlay.build.frontendDist).toBe('../crates/optn-ui/dist');
+    expect(desktopPreviewWorkflow).toContain(
+      'checkout_sha="$(git rev-parse HEAD)"'
+    );
+    expect(desktopPreviewWorkflow).toContain(
+      'PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}'
+    );
+    for (const file of ['build-info.txt', 'SHA256SUMS']) {
+      expect(desktopPreviewWorkflow).toContain(
+        `src-tauri/target/\${{ matrix.target }}/debug/bundle/dmg/${file}`
+      );
+    }
+  });
+
   it('ships Linux x64 and ARM64 AppImages as the portable all-distro Linux path', () => {
     expect(workflow).toContain('target: x86_64-pc-windows-msvc');
     expect(workflow).toContain('target: x86_64-unknown-linux-gnu');
@@ -450,6 +543,7 @@ describe('release workflow', () => {
       'preview-linux-arm64-rpm',
       'preview-linux-x64-flatpak',
       'preview-linux-arm64-flatpak',
+      'preview-macos-arm64-leptos-dmg',
     ]) {
       expect(desktopPreviewWorkflow, `${artifact} must be asserted`).toContain(
         `expect ${artifact}`

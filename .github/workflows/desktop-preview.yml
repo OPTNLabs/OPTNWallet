@@ -58,6 +58,13 @@ jobs:
             target: aarch64-apple-darwin
             tor-target: macos-aarch64
             artifact-name: preview-macos-arm
+          - platform: macos-latest
+            label: macos-arm64-leptos
+            target: aarch64-apple-darwin
+            rust-targets: aarch64-apple-darwin,wasm32-unknown-unknown
+            tor-target: macos-aarch64
+            renderer: leptos
+            artifact-name: preview-macos-arm-leptos
           - platform: macos-15-intel
             label: macos-x64
             target: x86_64-apple-darwin
@@ -105,12 +112,17 @@ jobs:
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           toolchain: 1.98.0
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.rust-targets || matrix.target }}
 
       - name: Rust cache
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: './src-tauri -> target'
+          key: ${{ matrix.renderer == 'leptos' && 'macos-arm64-leptos' || '' }}
+
+      - name: Install pinned Trunk for Leptos
+        if: matrix.renderer == 'leptos'
+        run: cargo install trunk --version 0.21.14 --locked
 
       - name: Install npm dependencies
         run: npm ci
@@ -258,7 +270,15 @@ jobs:
           set -euo pipefail
           target='${{ matrix.target }}'
           build() {
-            npx tauri build --debug --target "$target" --verbose
+            if [ '${{ matrix.renderer }}' = 'leptos' ]; then
+              # The compile-only Leptos config omits resources. Restore the
+              # canonical package resources here, after Tor verification/signing.
+              resources_config="$(node -e 'const { bundle } = require("./src-tauri/tauri.conf.json"); process.stdout.write(JSON.stringify({ bundle: { resources: bundle.resources } }));')"
+              npx tauri build --debug --target "$target" --verbose \
+                --config src-tauri/tauri.leptos.conf.json --config "$resources_config" -- --locked
+            else
+              npx tauri build --debug --target "$target" --verbose
+            fi
           }
           if [ "${{ runner.os }}" != 'macOS' ]; then
             build
@@ -362,12 +382,33 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
+      - name: Record Leptos disk image provenance
+        if: matrix.renderer == 'leptos'
+        shell: bash
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          checkout_sha="$(git rev-parse HEAD)"
+          cd "src-tauri/target/${{ matrix.target }}/debug/bundle/dmg"
+          # Refuse an empty or ambiguous image set.
+          shopt -s nullglob
+          images=(*.dmg)
+          test "${#images[@]}" -eq 1
+          test -s "${images[0]}"
+          printf 'checkout_sha=%s\npr_head_sha=%s\ninterface=Rust Leptos\ntarget=aarch64-apple-darwin\nprofile=debug\n' \
+            "$checkout_sha" "$PR_HEAD_SHA" > build-info.txt
+          shasum -a 256 -- "${images[@]}" build-info.txt > SHA256SUMS
+
       - name: Upload disk image
         if: runner.os == 'macOS'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: preview-${{ matrix.label }}-dmg
-          path: src-tauri/target/${{ matrix.target }}/debug/bundle/dmg/*.dmg
+          path: |
+            src-tauri/target/${{ matrix.target }}/debug/bundle/dmg/*.dmg
+            src-tauri/target/${{ matrix.target }}/debug/bundle/dmg/build-info.txt
+            src-tauri/target/${{ matrix.target }}/debug/bundle/dmg/SHA256SUMS
           retention-days: 14
           if-no-files-found: error
 
@@ -571,6 +612,9 @@ jobs:
           expect preview-windows-x64-nsis     '*.exe'      'Windows NSIS installer'
           expect preview-windows-x64-msi      '*.msi'      'Windows MSI installer'
           expect preview-macos-arm64-dmg      '*.dmg'      'macOS Apple Silicon disk image'
+          expect preview-macos-arm64-leptos-dmg '*.dmg'    'macOS Apple Silicon Leptos disk image'
+          expect preview-macos-arm64-leptos-dmg 'build-info.txt' 'Leptos build revision'
+          expect preview-macos-arm64-leptos-dmg 'SHA256SUMS' 'Leptos package checksums'
           expect preview-macos-x64-dmg        '*.dmg'      'macOS Intel disk image'
           expect preview-linux-x64-appimage   '*.AppImage' 'Linux x64 AppImage'
           expect preview-linux-arm64-appimage '*.AppImage' 'Linux ARM64 AppImage'
@@ -585,4 +629,5 @@ jobs:
             echo '::error::the desktop preview did not produce every artifact'
             exit 1
           fi
+          (cd artifacts/preview-macos-arm64-leptos-dmg && sha256sum --check --strict SHA256SUMS) || exit 1
           echo 'Every expected desktop preview artifact is present.'

@@ -1,5 +1,9 @@
 # PR63: GLib CodeQL path review, 2026-09-08
 
+**Coverage update, 2026-09-12:** `61b11bc3` removed the vendor exclusion
+described below. GLib is scanned again. Alerts #113–124 remain open on PR63;
+the current inventory is in [the September 12 report](2026-09-12-pr63-scan-coverage-and-fusion.md).
+
 Reviewed the 13 newly visible alerts #113-125 against source at
 `6dfcb3a24e7e36df4d142ff0607fb234d3bac755`. GitHub attributes these instances to
 merge analysis `c9d5bb8f2bac93faf2b7c31a951753936991e720`. This is a review of
