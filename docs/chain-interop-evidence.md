@@ -183,10 +183,35 @@ and endpoint; the existing Rust payment builder is reused across providers.
 
 ### BIP37: scope and verification boundary
 
-Live Chipnet discovery is not yet established by the evidence recorded here.
-Earlier attempts failed during cold header synchronization; they did not publish
+Live discovery through the exact selected node `96.126.111.144:48333`, over Tor,
+completed scope **323041–323133** in approximately **7m47s**. It found the same
+**50,002-satoshi** receipt and origin as Fulcrum, unspent within the confirmed-chain
+scope, with no token and `includes_mempool: false`. No Electrum fallback occurred.
+Earlier attempts failed during cold header synchronization without publishing
 partial receipts. Consecutive public-header batches now reuse the selected-node
 connection, with one bounded same-node reconnect on transport interruption.
+
+Selected-source `rpa pay` with the same 50,003-satoshi self-payment, `--gap 1`,
+`--from-height 323041`, and `--dry-run` also passed through BIP37. It produced
+**byte-identical** signed transaction data to the Fulcrum preview above, while
+reporting `includes_mempool: false`. The floor is the explicit test scan scope,
+not a claim that the older test wallet has no history before that height.
+
+An initial BIP37 sweep attempt returned `submitted`, but neither a subsequent
+read-only `getdata` request to the selected node nor Fulcrum found the transaction.
+This exposed a relay completion bug, not successful propagation. CLI and desktop
+now share a bounded Rust relay that requires matching `getdata`, transaction
+transfer, and a nonce-matched post-transfer pong; disconnects and timeouts report
+uncertainty. A pong is processing progress, not proof of mempool acceptance.
+
+After refreshing the still-unspent receipt, one controlled retry of the exact
+same signed sweep bytes through that BIP37 node succeeded. Independent Fulcrum
+reads found transaction
+`43947112df64d86a11d870c1f6e4f46048769dbc0707a7bfce109a39bd092982`,
+no remaining receipt UTXO, and **49,809 satoshis** at the designated normal test
+wallet. The **193-satoshi** fee matches the independently VM-verified preview.
+At verification the transaction was in the mempool, not yet confirmed. No new
+payment or alternate-provider broadcast was used for the retry.
 
 Discovery uses an all-match filter and scans complete blocks locally from the
 inclusive birthday. It never uploads candidate outpoints or derived stealth
@@ -201,13 +226,14 @@ checkpoint; these Chipnet checks do not establish mainnet or packaged-device par
 
 ### Local checks and unrelated emulator boundary
 
-- Full TypeScript suite (`npm test -- --maxWorkers=1`): **1,927 passed,
-  10 skipped** across 327 files, against the regenerated Rust WASM.
+- Full TypeScript suite (`npm test -- --maxWorkers=1`): **1,929 passed,
+  10 skipped** across 328 files, against the regenerated Rust WASM. No unhandled
+  teardown errors remain; the key-manager test awaits its real lazy cleanup.
 - Desktop production bundle (`npx vite build --config vite.desktop.config.ts`),
   core TypeScript check, and generated-WASM freshness check passed.
-- Rust core, runtime receipt/sweep, accepted-header continuation, BIP37, and
-  native locator/network regression tests passed; native and WASM checks passed
-  using Rust **1.98.1**.
+- Rust core, **212 runtime tests**, **39 BIP37 tests**, **4 CLI RPA tests**, and
+  native locator/network regressions passed; native and WASM checks passed using
+  Rust **1.98.1**. CLI/runtime/BIP37 Clippy and formatting checks passed.
 - The review-summary SeedCash fixture now uses distinct parent-output values.
   Its optional live signer test was attempted against the existing external
   SeedCash checkout, but that checkout lacks the compatible signer API and its

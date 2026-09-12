@@ -53,9 +53,9 @@ const fn io_timeout(transport: &Bip37Transport) -> Duration {
         Bip37Transport::Tor { .. } => TOR_IO_TIMEOUT,
     }
 }
-const RELAY_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_PAYLOAD: usize = 2 * 1024 * 1024;
 const MAX_MESSAGES: usize = 1000;
+const MAX_RELAY_MESSAGES: usize = 30;
 const MSG_TX: u32 = 1;
 const MSG_FILTERED_BLOCK: u32 = 3;
 
@@ -723,7 +723,7 @@ impl Bip37Backend {
         handshake(&mut stream, magic, io_timeout(&self.config.transport))
             .await
             .map_err(ChainBackendError::Protocol)?;
-        relay_tx_on_stream(
+        let outcome = relay_tx_on_stream(
             &mut stream,
             magic,
             raw_tx,
@@ -732,11 +732,7 @@ impl Bip37Backend {
         )
         .await
         .map_err(ChainBackendError::Protocol)?;
-        Ok(BackendObservation {
-            payload: ChainPayload::BroadcastObserved { txid },
-            evidence: Evidence::ServerAssertion,
-            chain_tip: None,
-        })
+        relay_observation(outcome, txid)
     }
 }
 
@@ -1389,47 +1385,236 @@ fn inventory_contains_tx(payload: &[u8], expected: &[u8; 32]) -> Result<bool, St
     }
     Ok(found)
 }
-async fn relay_tx_on_stream<S: AsyncReadExt + AsyncWriteExt + Unpin>(
+/// A peer processed the message sequence, not proof of mempool acceptance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TxRelayOutcome {
+    Processed,
+    Uncertain,
+    Rejected(String),
+}
+
+fn relay_observation(
+    outcome: TxRelayOutcome,
+    txid: [u8; 32],
+) -> Result<BackendObservation, ChainBackendError> {
+    match outcome {
+        TxRelayOutcome::Processed => Ok(BackendObservation {
+            payload: ChainPayload::BroadcastObserved { txid },
+            evidence: Evidence::ServerAssertion,
+            chain_tip: None,
+        }),
+        TxRelayOutcome::Uncertain => Err(ChainBackendError::Timeout),
+        TxRelayOutcome::Rejected(reason) => Err(ChainBackendError::Rejected(reason)),
+    }
+}
+
+fn matching_tx_rejection(payload: &[u8], expected: &[u8; 32]) -> Result<Option<String>, String> {
+    let mut pos = 0;
+    let command_len = read_varint(payload, &mut pos)?;
+    if command_len > 12 {
+        return Err("oversized reject command".into());
+    }
+    let command = take(payload, &mut pos, command_len as usize)?;
+    if command != b"tx" {
+        return Ok(None);
+    }
+    let code = take(payload, &mut pos, 1)?[0];
+    let reason_len = read_varint(payload, &mut pos)?;
+    if reason_len > 256 {
+        return Err("oversized transaction rejection reason".into());
+    }
+    let reason = take(payload, &mut pos, reason_len as usize)?;
+    if payload.get(pos..) != Some(expected.as_slice()) {
+        return Ok(None);
+    }
+    let reason: String = reason
+        .iter()
+        .map(|byte| {
+            if byte.is_ascii_graphic() || *byte == b' ' {
+                *byte as char
+            } else {
+                '?'
+            }
+        })
+        .collect();
+    Ok(Some(format!(
+        "peer rejected transaction (code {code}): {reason}"
+    )))
+}
+
+/// Announce once, transfer only on matching getdata, then keep the stream alive
+/// until a post-transfer nonce-matched pong or matching transaction rejection.
+/// The single deadline covers all writes/reads; no automatic retransmission.
+pub async fn relay_tx_on_stream<S: AsyncReadExt + AsyncWriteExt + Unpin>(
     stream: &mut S,
     magic: [u8; 4],
     raw_tx: &[u8],
     txid: [u8; 32],
     io_timeout: Duration,
-) -> Result<bool, String> {
-    stream
-        .write_all(&encode_message(magic, "inv", &build_getdata(MSG_TX, &txid)))
-        .await
-        .map_err(|e| format!("inv send failed: {e}"))?;
+) -> Result<TxRelayOutcome, String> {
+    if raw_tx.is_empty() || double_sha256(raw_tx) != txid {
+        return Err("relay transaction bytes do not match txid".into());
+    }
     let exchange = async {
-        for _ in 0..30 {
+        stream
+            .write_all(&encode_message(magic, "inv", &build_getdata(MSG_TX, &txid)))
+            .await
+            .map_err(|error| format!("inv send failed: {error}"))?;
+        let mut transferred = false;
+        let ping_nonce = nonce().to_le_bytes();
+        for _ in 0..MAX_RELAY_MESSAGES {
             let (cmd, payload) = read_message(stream, magic, io_timeout).await?;
             match cmd.as_str() {
-                "getdata" if inventory_contains_tx(&payload, &txid)? => {
+                "getdata" if !transferred && inventory_contains_tx(&payload, &txid)? => {
                     stream
                         .write_all(&encode_message(magic, "tx", raw_tx))
                         .await
                         .map_err(|e| format!("tx send failed: {e}"))?;
-                    return Ok(true);
+                    transferred = true;
+                    stream
+                        .write_all(&encode_message(magic, "ping", &ping_nonce))
+                        .await
+                        .map_err(|error| format!("relay progress ping failed: {error}"))?;
                 }
-                "reject" => return Err("relay rejected transaction".into()),
+                "pong" if transferred && payload == ping_nonce => {
+                    return Ok(TxRelayOutcome::Processed)
+                }
+                "reject" => {
+                    if let Some(reason) = matching_tx_rejection(&payload, &txid)? {
+                        return Ok(TxRelayOutcome::Rejected(reason));
+                    }
+                }
                 "ping" => {
-                    let _ = stream
+                    stream
                         .write_all(&encode_message(magic, "pong", &payload))
-                        .await;
+                        .await
+                        .map_err(|error| format!("relay pong failed: {error}"))?;
                 }
                 _ => {}
             }
         }
-        Ok(false)
+        Ok::<_, String>(TxRelayOutcome::Uncertain)
     };
-    match tokio::time::timeout(RELAY_RESPONSE_TIMEOUT, exchange).await {
+    match tokio::time::timeout(io_timeout, exchange).await {
+        Ok(Err(error))
+            if [
+                "timed out",
+                "read failed:",
+                "inv send failed:",
+                "tx send failed:",
+                "relay progress ping failed:",
+                "relay pong failed:",
+            ]
+            .iter()
+            .any(|prefix| error.starts_with(prefix)) =>
+        {
+            Ok(TxRelayOutcome::Uncertain)
+        }
         Ok(v) => v,
-        Err(_) => Ok(false),
+        Err(_) => Ok(TxRelayOutcome::Uncertain),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test(start_paused = true)]
+    async fn relay_no_getdata_and_stalled_writes_never_become_observed() {
+        let raw = vec![1, 2, 3];
+        let txid = double_sha256(&raw);
+        for capacity in [1, 4096] {
+            let (mut client, _unread_peer) = tokio::io::duplex(capacity);
+            let outcome = relay_tx_on_stream(
+                &mut client,
+                params_for("chipnet").magic,
+                &raw,
+                txid,
+                Duration::from_secs(2),
+            )
+            .await
+            .unwrap();
+            assert_eq!(outcome, TxRelayOutcome::Uncertain);
+            assert!(matches!(
+                relay_observation(outcome, txid),
+                Err(ChainBackendError::Timeout)
+            ));
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn relay_requires_matching_post_transfer_progress_and_captures_matching_reject() {
+        for mode in 0..5 {
+            let raw = vec![1, 2, 3];
+            let txid = double_sha256(&raw);
+            let magic = params_for("chipnet").magic;
+            let (mut client, mut server) = tokio::io::duplex(4096);
+            let peer = tokio::spawn(async move {
+                assert_eq!(
+                    read_message(&mut server, magic, IO_TIMEOUT)
+                        .await
+                        .unwrap()
+                        .0,
+                    "inv"
+                );
+                server
+                    .write_all(&encode_message(
+                        magic,
+                        "getdata",
+                        &build_getdata(MSG_TX, &txid),
+                    ))
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    read_message(&mut server, magic, IO_TIMEOUT).await.unwrap(),
+                    ("tx".into(), vec![1, 2, 3])
+                );
+                let (command, ping) = read_message(&mut server, magic, IO_TIMEOUT).await.unwrap();
+                assert_eq!(command, "ping");
+                if mode == 4 {
+                    return;
+                } // Disconnect after transfer is not successful processing.
+                if mode == 1 || mode == 3 {
+                    let mut rejected = vec![2, b't', b'x', 0x10, 3, b'b', b'a', b'd'];
+                    rejected.extend_from_slice(if mode == 1 { &txid } else { &[9; 32] });
+                    server
+                        .write_all(&encode_message(magic, "reject", &rejected))
+                        .await
+                        .unwrap();
+                    if mode == 1 {
+                        return;
+                    }
+                    server
+                        .write_all(&encode_message(magic, "reject", &[3, b'i', b'n', b'v']))
+                        .await
+                        .unwrap();
+                }
+                let payload = if mode == 2 { vec![0; 8] } else { ping };
+                server
+                    .write_all(&encode_message(magic, "pong", &payload))
+                    .await
+                    .unwrap();
+                if mode == 2 {
+                    std::future::pending::<()>().await;
+                }
+            });
+            let result =
+                relay_tx_on_stream(&mut client, magic, &raw, txid, Duration::from_secs(2)).await;
+            match mode {
+                0 | 3 => assert_eq!(result.unwrap(), TxRelayOutcome::Processed),
+                1 => assert!(
+                    matches!(result.unwrap(), TxRelayOutcome::Rejected(reason) if reason.contains("bad"))
+                ),
+                2 => assert_eq!(result.unwrap(), TxRelayOutcome::Uncertain),
+                4 => assert_eq!(result.unwrap(), TxRelayOutcome::Uncertain),
+                _ => unreachable!(),
+            }
+            if mode == 2 {
+                peer.abort();
+            } else {
+                peer.await.unwrap();
+            }
+        }
+    }
+
     #[test]
     fn header_reconnect_never_retries_invalid_protocol_or_linkage() {
         assert!(header_transport_interrupted(
