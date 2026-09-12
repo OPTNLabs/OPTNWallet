@@ -24,19 +24,19 @@ use k256::Scalar;
 use prost::Message;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use super::blame;
-use super::components::{build_round_commit, FusionInput, FusionOutput, RoundCommit};
-use super::covert::{build_covert_signature, CovertPool, CovertSchedule};
-use super::electrum_input::{self, ElectrumEndpoint, InputLookup};
-use super::round_cancel::CancelFlag;
-use super::schnorr;
-use super::server_plan::{
+use crate::blame;
+use crate::components::{build_round_commit, FusionInput, FusionOutput, RoundCommit};
+use crate::covert::{build_covert_signature, CovertPool, CovertSchedule};
+use crate::electrum_input::{self, ElectrumEndpoint, InputLookup};
+use crate::round_cancel::CancelFlag;
+use crate::schnorr;
+use crate::server_plan::{
     validate_and_index_plans, validate_hello_match, validate_server_hello, ExpectedHello,
     FusionTierPlan,
 };
-use super::session::{build_covert_component, calc_initial_hash, calc_round_hash};
-use super::tx::FusionTx;
-use super::{
+use crate::session::{build_covert_component, calc_initial_hash, calc_round_hash};
+use crate::tx::FusionTx;
+use crate::{
     connect_stream, is_local_server, pb, recv_frame, recv_frame_unbounded, send_frame, Transport,
     VERSION,
 };
@@ -882,7 +882,7 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
                                 ),
                             });
                         }
-                        if queue_updates == 1 || queue_updates % 5 == 0 {
+                        if queue_updates == 1 || queue_updates.is_multiple_of(5) {
                             let occupied = update
                                 .statuses
                                 .values()
@@ -1404,9 +1404,9 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fusion::pedersen::random_nonce;
-    use crate::fusion::schnorr::{self, compressed, scalar_reduce};
-    use crate::fusion::session::calc_round_hash as srv_round_hash;
+    use crate::pedersen::random_nonce;
+    use crate::schnorr::{self, compressed, scalar_reduce};
+    use crate::session::calc_round_hash as srv_round_hash;
     use k256::ProjectivePoint;
     use prost::Message;
     use std::collections::HashSet;
@@ -1653,7 +1653,7 @@ mod tests {
         let input = live_test_input();
         revalidate_own_inputs(
             &[input],
-            &[endpoint.clone()],
+            std::slice::from_ref(&endpoint),
             Transport::Direct,
             "PlayerCommit",
         )
@@ -1800,9 +1800,13 @@ mod tests {
             output_component(own_output.clone(), 90_000),
         ];
 
-        let inflated_error =
-            verify_shared_transaction(&inflated, &[own_input], &[own_output.clone()], &[90_000])
-                .unwrap_err();
+        let inflated_error = verify_shared_transaction(
+            &inflated,
+            &[own_input],
+            std::slice::from_ref(&own_output),
+            &[90_000],
+        )
+        .unwrap_err();
         let duplicate_error = verify_shared_transaction(
             &duplicate,
             &[test_input_key(0xaa, 3, vec![0x02; 33], 100_000)],
@@ -1835,6 +1839,13 @@ mod tests {
     // A minimal but complete mock CashFusion server for ONE player, over plain
     // TCP (no TLS, no Tor) — which also proves the non-SSL path works end to end.
     // It plays every server step so run_fusion's whole flow is exercised.
+    //
+    // Eight arguments because a server round genuinely has that many knobs, and
+    // each test sets a different one. Grouping them into a struct would add a
+    // type whose only purpose is to satisfy a lint, and this code was moved
+    // here unchanged from src-tauri -- reshaping a fixture mid-extraction is
+    // how a move stops being a move.
+    #[allow(clippy::too_many_arguments)]
     async fn mock_server(
         main_listener: TcpListener,
         covert_listener: TcpListener,

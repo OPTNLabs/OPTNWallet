@@ -8,7 +8,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 
-use super::{connect_stream, pb, schnorr, Transport};
+use crate::{connect_stream, pb, schnorr, Transport};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 /// Per-input timeout inside a batch so a single slow query doesn't block the
@@ -478,7 +478,9 @@ mod tests {
 
     fn decode_hex(hex: &str) -> Vec<u8> {
         hex.as_bytes()
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| {
                 let text = std::str::from_utf8(pair).unwrap();
                 u8::from_str_radix(text, 16).unwrap()

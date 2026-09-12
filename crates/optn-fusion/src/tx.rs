@@ -18,7 +18,7 @@ use prost::Message;
 use ripemd::Ripemd160;
 use sha2::{Digest, Sha256};
 
-use super::pb;
+use crate::pb;
 
 /// FUSE_ID (protocol.py) — tags the session OP_RETURN so fusions are identifiable.
 const FUSE_ID: [u8; 4] = *b"FUZ\x00";
@@ -324,10 +324,10 @@ pub struct P2pOutput {
 
 #[cfg(test)]
 mod tests {
-    use super::super::components::{build_round_commit, FusionInput, FusionOutput};
-    use super::super::pedersen;
-    use super::super::schnorr;
     use super::*;
+    use crate::components::{build_round_commit, FusionInput, FusionOutput};
+    use crate::pedersen;
+    use crate::schnorr;
     use k256::elliptic_curve::sec1::ToEncodedPoint;
     use k256::ProjectivePoint;
 

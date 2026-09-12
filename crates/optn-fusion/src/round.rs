@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 use prost::Message;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use super::{
+use crate::{
     connect_stream, pb, recv_frame, recv_frame_unbounded, send_frame, FusionServerStatus,
     Transport, VERSION,
 };

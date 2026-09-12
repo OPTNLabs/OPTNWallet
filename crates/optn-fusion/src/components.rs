@@ -20,9 +20,9 @@
 use prost::Message;
 use sha2::{Digest, Sha256};
 
-use super::pb;
-use super::pedersen;
-use super::schnorr::{self, BlindSignatureRequest};
+use crate::pb;
+use crate::pedersen;
+use crate::schnorr::{self, BlindSignatureRequest};
 
 /// Electron Cash util.py fee/size formulas — must match exactly or the server
 /// rejects the player's declared excess_fee.
@@ -76,7 +76,7 @@ pub struct RoundCommit {
 
 /// Decode display-order input hex, rejecting malformed text before building commitments.
 fn hex_to_bytes(s: &str) -> Result<Vec<u8>, String> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err("odd-length hex".into());
     }
     hex::decode(s).map_err(|_| "bad hex".to_string())
@@ -217,7 +217,7 @@ pub fn build_round_commit(
     let mut blind_sig_requests = Vec::with_capacity(num_components);
     for (i, r) in rows.iter().enumerate() {
         let msg = sha256(&r.comp_ser);
-        let req = super::schnorr::new_blind_request(round_pubkey, &blind_nonce_points[i], msg)?;
+        let req = crate::schnorr::new_blind_request(round_pubkey, &blind_nonce_points[i], msg)?;
         blind_sig_requests.push(req.request().to_vec());
         requests.push(req);
     }

@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use super::pb;
+use crate::pb;
 
 pub const MAX_COMPONENT_FEERATE: u64 = 5_000;
 pub const MAX_EXCESS_FEE: u64 = 10_000;

@@ -14,8 +14,8 @@
 use prost::Message;
 use sha2::{Digest, Sha256};
 
-use super::pb;
-use super::VERSION;
+use crate::pb;
+use crate::VERSION;
 
 /// Length-delimited hash of a list of byte strings: sha256 of, for each item,
 /// its 4-byte big-endian length followed by its bytes. The length prefix makes
