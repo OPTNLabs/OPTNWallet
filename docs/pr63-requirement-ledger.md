@@ -99,7 +99,7 @@ still integration work; model/transport tests do not prove paid rounds run.
 | Theme/skin persist without touching keys | **INTEGRATION** | `AppAction::SetTheme` / `SetSkin` | Persistence across restart not asserted |
 | Landing: Create / Import / Watch Only | **PROVEN** (desktop) / **DEVICE EVIDENCE** (mobile) | `optn-ui/src/onboarding.rs`; matrix `watch_only` is `e2e` on Windows and Linux, `e2e-declared` on Android | iOS and F-Droid have no packaged assertion |
 | Watch Only never gains signing authority | **PROVEN** | `WalletKind::WatchOnly`; `optn-core/src/watch_only.rs` | — |
-| Packaged watch-only reopen | **MISSING** | Android 36 emulator, Rust Leptos APK at head `4f3face1`: Chipnet public-account validation and home worked offline | Force-stop/relaunch returned to landing without restoring the account. Shared durable public-wallet storage/listing needs integration; see `HANDOFF-2026-09-12.md` |
+| Packaged watch-only reopen | **MISSING** | Android 36 emulator, Rust Leptos APK at head `4f3face1`: Chipnet public-account validation and home worked offline | Force-stop/relaunch returned to landing without restoring the account. Shared durable public-wallet storage/listing needs integration |
 | Master fingerprint asked once, persisted | **INTEGRATION** | `OpenedWallet::master_fingerprint` | Matrix evidence is `unit` on every surface except Android `e2e-declared` |
 | Home / portfolio | **PARTIAL** | `AppRoute::WalletHome` | Exists; not audited against `docs/ui-overhaul` |
 | Assets | **INTEGRATION** | `optn_app::assets_view_model`; `categories_total_across_every_coin_that_carries_them` | Leads with held categories rather than outpoints. Category is still raw hex until BCMR resolution is wired to it |
