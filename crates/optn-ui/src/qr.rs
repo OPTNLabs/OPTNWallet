@@ -3,6 +3,14 @@
 //! The address never leaves the process: the page renders an SVG path from
 //! modules produced in Rust rather than asking a web service or a JS library.
 
+// `tools` is the only consumer and is `#[cfg(target_arch = "wasm32")]`, so on
+// a native build nothing reaches these and the compiler is right to say so.
+// Gating the module to wasm32 would answer the warning by deleting the test
+// below, which only ever runs natively -- CI is a native build. Narrowing the
+// allow to non-wasm keeps the warning live on the target that actually ships
+// this code, so genuinely dead QR code would still be reported there.
+#![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+
 use qrcodegen::{QrCode, QrCodeEcc};
 use std::fmt::Write;
 

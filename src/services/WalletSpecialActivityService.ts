@@ -31,6 +31,20 @@ export type RpaUnspentOutput = {
   address: string;
   valueSats: number;
   height: number;
+  /**
+   * How to rebuild this output's spending key.
+   *
+   * Recorded at detection because it cannot be recovered later from the
+   * address: an RPA output's key depends on which outpoint the *sender* spent.
+   * Without it the payment is detectable and unspendable, which is what these
+   * records used to be. Public data, already on chain -- the recipe, not the
+   * secret.
+   */
+  rpaOrigin?: {
+    prevoutTxid: string;
+    prevoutIndex: number;
+    senderPubkey: string;
+  };
 };
 
 export type RpaActivityPayload = {
@@ -272,6 +286,22 @@ function emptyRpaPayload(enabled: boolean, error?: string): RpaActivityPayload {
     knownTxids: [],
     ...(error ? { error } : {}),
   };
+}
+
+/**
+ * The RPA payments this wallet has detected and not yet spent.
+ *
+ * Exported so UTXOService can offer them to coin selection. They are held
+ * here rather than in the address tables because their one-time addresses
+ * were never derived at an HD path, and that storage split is exactly why
+ * they used to be visible in the balance and absent from every send.
+ */
+export async function readRpaUnspentOutputs(
+  walletId: number
+): Promise<RpaUnspentOutput[]> {
+  const numericId = Number(walletId);
+  if (!Number.isInteger(numericId) || numericId <= 0) return [];
+  return readStoredRpaPayload(numericId).unspentOutputs ?? [];
 }
 
 function readStoredRpaPayload(walletId: number): RpaActivityPayload {
@@ -666,6 +696,11 @@ export async function scanRpaActivity(params: {
               Math.trunc(toSafeNumber(current.value, match.valueSats))
             ),
             height: Math.trunc(toSafeNumber(current.height)),
+            rpaOrigin: {
+              prevoutTxid: match.prevoutHash,
+              prevoutIndex: match.prevoutIndex,
+              senderPubkey: match.senderPubkey,
+            },
           });
         }
         if (matched.length > 0) return undefined;

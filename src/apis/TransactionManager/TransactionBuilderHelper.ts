@@ -11,6 +11,7 @@ import { UTXO, TransactionOutput } from '../../types/types';
 import { store } from '../../state/store';
 import KeyService from '../../services/KeyService';
 import { PaperWalletSecretStore } from '../../services/PaperWalletSecretStore';
+import { deriveRpaUtxoSigningKey } from '../../services/RpaSpendKeyService';
 import { TOKEN_OUTPUT_SATS } from '../../utils/constants';
 
 type TransactionBuilderHelperOptions = {
@@ -266,6 +267,26 @@ export default function TransactionBuilderHelper(
             if (!signingKey || signingKey.length === 0) {
               throw new Error(
                 `Paper wallet key missing for outpoint ${processedUtxo.tx_hash}:${processedUtxo.tx_pos}`
+              );
+            }
+          } else if (processedUtxo.rpaOrigin) {
+            // A payment received at this wallet's Cash Code. Its address was
+            // never derived at an HD path, so the lookup below has never heard
+            // of it -- which is precisely why these coins were detectable,
+            // countable, and unspendable. The key is rebuilt from the origin
+            // the coin carries.
+            const walletId = Number(processedUtxo.wallet_id);
+            if (!Number.isInteger(walletId) || walletId <= 0) {
+              throw new Error(
+                `RPA coin ${processedUtxo.tx_hash}:${processedUtxo.tx_pos} has no wallet to derive its key from`
+              );
+            }
+            signingKey =
+              (await deriveRpaUtxoSigningKey(processedUtxo, walletId)) ??
+              undefined;
+            if (!signingKey || signingKey.length === 0) {
+              throw new Error(
+                `Could not rebuild the spending key for RPA coin ${processedUtxo.tx_hash}:${processedUtxo.tx_pos}`
               );
             }
           } else {

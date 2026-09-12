@@ -347,8 +347,16 @@ pub fn scan_transaction(
         .iter()
         .map(|m| {
             format!(
-                r#"{{"outputIndex":{},"address":"{}","valueSats":{},"prevoutHash":"{}","prevoutIndex":{}}}"#,
-                m.output_index, m.address, m.value, m.prevout_txid, m.prevout_index
+                r#"{{"outputIndex":{},"address":"{}","valueSats":{},"prevoutHash":"{}","prevoutIndex":{},"senderPubkey":"{}"}}"#,
+                m.output_index,
+                m.address,
+                m.value,
+                m.prevout_txid,
+                m.prevout_index,
+                // The other half of the ECDH, so a wallet can rebuild the
+                // spending key later without refetching this transaction.
+                // Public: it is already in the scriptSig on chain.
+                m.sender_pubkey_hex
             )
         })
         .collect();
