@@ -2203,6 +2203,21 @@ mod tests {
                 remote_transport: None,
                 lookup_endpoints: vec![lookup_endpoint],
                 lookup_transport: Transport::Direct,
+                // The protocol's real schedule compressed so the test is quick.
+                // Every value below is relative to covert_T0, and `comps_at` is
+                // a rendezvous rather than a deadline: all of the setup --
+                // hello, join, seventeen blind-signature finalizations, and the
+                // TCP round trips between them -- has to be finished *before*
+                // that instant, because `submit_phase` refuses to start late.
+                //
+                // At 200ms that budget was thinner than the work. It held on an
+                // idle machine and failed on a loaded CI runner with "covert
+                // connections were not ready before component disclosure",
+                // which reads like a protocol fault and is really the test
+                // clock being unreasonable. The whole schedule is shifted
+                // +1300ms, so the intervals between phases -- the part the test
+                // actually exercises -- are unchanged, and only the runway
+                // before the rendezvous grows.
                 timing: FusionTiming {
                     warmup_expected: Duration::ZERO,
                     warmup_slop: Duration::from_millis(250),
@@ -2211,11 +2226,11 @@ mod tests {
                     submit_window: Duration::from_millis(20),
                     submit_timeout: Duration::from_millis(500),
                     connect_spares: 2,
-                    comps_at: Duration::from_millis(200),
-                    comps_deadline: Duration::from_millis(700),
-                    sigs_at: Duration::from_millis(900),
-                    sigs_deadline: Duration::from_millis(1_400),
-                    conclusion_at: Duration::from_secs(2),
+                    comps_at: Duration::from_millis(1_500),
+                    comps_deadline: Duration::from_millis(2_000),
+                    sigs_at: Duration::from_millis(2_200),
+                    sigs_deadline: Duration::from_millis(2_700),
+                    conclusion_at: Duration::from_millis(3_300),
                 },
                 join_inactive_timeout: None,
                 cancel,
