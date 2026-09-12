@@ -92,11 +92,12 @@ async fn chipnet_hd_account_reaches_shared_runtime_and_transport() {
     let mut service = stack.service.lock().await;
     let decision = tokio::time::timeout(
         Duration::from_secs(300),
-        runtime.sync_hd_wallet(
+        runtime.sync_hd_wallet_from_floor(
             &mut service,
             &mut worker,
             xpub.clone(),
             HdSyncLimits::default(),
+            Some(1),
         ),
     )
     .await
@@ -134,6 +135,14 @@ async fn chipnet_hd_account_reaches_shared_runtime_and_transport() {
                 )
             });
     let app = transport.snapshot().await.unwrap();
+    let coverage = app
+        .wallet_sync
+        .scan_coverage
+        .expect("requested scan coverage");
+    assert_eq!(coverage.from_height, 1);
+    assert_eq!(coverage.skipped_below, Some(1));
+    assert!(coverage.chosen_by_holder);
+    assert_eq!(app.wallet_sync.rescan_requested, None);
     assert_eq!(
         i64::try_from(app.coins.iter().map(|coin| coin.value_sats()).sum::<u64>()).unwrap(),
         confirmed + pending
@@ -141,6 +150,7 @@ async fn chipnet_hd_account_reaches_shared_runtime_and_transport() {
     let wire = WireState::from(&app);
     let restored = AppState::try_from(wire).expect("typed transport round trip");
     assert_eq!(restored.coins, app.coins);
+    assert_eq!(restored.wallet_sync.scan_coverage, Some(coverage));
 
     // Persist the real observation through the same atomic encrypted adapter
     // used by the native GUI and saved-wallet CLI. The random key protects only
@@ -201,6 +211,7 @@ async fn chipnet_hd_account_reaches_shared_runtime_and_transport() {
     let before_refresh = restarted.state();
     assert_eq!(before_refresh.coins, app.coins);
     assert_eq!(before_refresh.wallet_sync.history, app.wallet_sync.history);
+    assert_eq!(before_refresh.wallet_sync.scan_coverage, Some(coverage));
     assert!(!before_refresh.wallet_sync.utxos_fresh);
     assert!(!before_refresh.wallet_sync.history_fresh);
     assert!(!before_refresh.fusion.session_armed);
@@ -235,6 +246,7 @@ async fn chipnet_hd_account_reaches_shared_runtime_and_transport() {
     .expect("bounded resume")
     .expect("resumed publication");
     assert_eq!(resumed, ReconciliationDecision::Accepted);
+    assert_eq!(restarted.state().wallet_sync.scan_coverage, Some(coverage));
     assert!(restarted.state().wallet_sync.utxos_fresh);
     assert!(restarted.state().wallet_sync.history_fresh);
     // Exercise the actual command dispatcher with the same persisted selection.
@@ -274,6 +286,8 @@ async fn chipnet_hd_account_reaches_shared_runtime_and_transport() {
             .arg(&directory)
             .args([
                 "rescan",
+                "--from-height",
+                "1",
                 "--xpub",
                 &xpub,
                 "--account-path",
@@ -298,7 +312,8 @@ async fn chipnet_hd_account_reaches_shared_runtime_and_transport() {
         assert_eq!(value["evidence"], "ServerAssertion");
         assert_eq!(value["total"], confirmed + pending);
         assert_eq!(value["hd"], true);
-        assert_eq!(value["complete"], true);
+        assert_eq!(value["complete"], false);
+        assert_eq!(value["wallet_sync"]["scan_coverage"]["from_height"], 1);
         assert_eq!(value["account_path"], account.to_string());
         assert!(value["scanned_addresses"].as_u64().unwrap() >= 60);
     }

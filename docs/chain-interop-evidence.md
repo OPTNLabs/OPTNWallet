@@ -17,6 +17,22 @@ a rule; nothing in it proves interoperability.
 
 ## Environment
 
+### Chipnet manual rescan and restart — 2026-09-12
+
+Windows, `a9b5d6f4` plus the accompanying shared rescan changes. The same
+read-only public HD fixture and Tor source completed at height 323122, with
+two transactions and one output. `rescan --from-height 1` reported partial
+history coverage instead of claiming full history; CLI and typed transport
+totals agreed. Encrypted checkpoint restore retained that coverage and the
+default runtime refresh resumed from it. One attempt timed out at the source
+during resync; the unchanged test passed on retry in 77.33 seconds.
+
+This command exercises public-account checkpoint restore and the real CLI.
+The private-wallet open path is separately covered by
+`private_hd_manual_rescan_persists_floor_across_failure_restart_and_cancellation`,
+which uses the actual encrypted checkpoint codec and wallet security actor.
+Neither test proves a packaged GUI launch or signing.
+
 ### Chipnet shared-runtime restart verification — 2026-09-12
 
 Executed on Windows against PR63 code at `61b11bc3` plus the accompanying

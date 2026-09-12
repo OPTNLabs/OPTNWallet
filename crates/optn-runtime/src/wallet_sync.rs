@@ -63,6 +63,7 @@ pub(super) struct WalletSyncLease {
     id: Arc<()>,
     generation: u64,
     network: Network,
+    floor: Option<u32>,
     addresses: Vec<String>,
     interests: Vec<WalletInterest>,
     baseline: Box<WalletReconciliation>,
@@ -97,6 +98,19 @@ pub(super) enum WalletSyncRequest {
 }
 
 impl AppRuntime {
+    /// Record and persist intent before provider setup can fail or time out.
+    pub async fn request_wallet_rescan(&self, height: u32) -> Result<(), WalletSyncError> {
+        self.dispatch(optn_app::AppAction::RequestRescanFrom { height })
+            .await
+            .map_err(|_| WalletSyncError::Closed)?;
+        if self.state().wallet_sync.rescan_requested != Some(height) {
+            return Err(WalletSyncError::Persistence(
+                "the wallet rescan request could not be recorded".into(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Capture wallet state in the same actor turn as its local annotations.
     /// Native/browser storage encrypts this with the unlocked wallet's key.
     pub async fn wallet_checkpoint(&self) -> Result<WalletCheckpoint, WalletSyncError> {
@@ -160,6 +174,9 @@ impl AppRuntime {
         limits: HdSyncLimits,
         floor: Option<u32>,
     ) -> Result<ReconciliationDecision, WalletSyncError> {
+        if let Some(height) = floor {
+            self.request_wallet_rescan(height).await?;
+        }
         let (reply, received) = oneshot::channel();
         self.action_tx
             .send(RuntimeRequest::WalletSync(WalletSyncRequest::BeginHd(
@@ -170,6 +187,7 @@ impl AppRuntime {
             .await
             .map_err(|_| WalletSyncError::Closed)?;
         let (mut lease, mut scan) = received.await.map_err(|_| WalletSyncError::Closed)??;
+        let floor = lease.floor;
         lease.source_lifetime = Some(service.revocation());
         worker.restore((*lease.baseline).clone());
         loop {
@@ -343,6 +361,10 @@ impl WalletSyncSession {
         self.invalidate("wallet refresh cancelled before completion".into());
     }
 
+    pub(super) fn rescan_requested(&mut self) {
+        self.invalidate("wallet rescan requested; retained observations need refresh".into());
+    }
+
     pub(super) fn coins_are_fresh(&self) -> bool {
         self.state.sync.history_fresh && self.state.sync.utxos_fresh
     }
@@ -412,7 +434,9 @@ impl WalletSyncSession {
 
     pub(super) fn project_status(&self, app: &mut AppState) {
         if self.state.authoritative.is_none() {
+            let requested = app.wallet_sync.rescan_requested;
             app.wallet_sync = optn_app::WalletSyncView::empty();
+            app.wallet_sync.rescan_requested = requested;
         }
         let view = &mut app.wallet_sync;
         view.refreshing = self.active.is_some();
@@ -472,6 +496,8 @@ impl WalletSyncSession {
             .transpose()
             .expect("checkpoint projection validated before installation")
             .unwrap_or_default();
+        app.wallet_sync.scan_coverage = checkpoint.scan_coverage;
+        app.wallet_sync.rescan_requested = checkpoint.rescan_requested;
         app.coins = checkpoint.coins;
         app.hd_addresses = checkpoint.allocation;
         if app.hd_addresses.is_some() {
@@ -652,6 +678,11 @@ impl WalletSyncSession {
             id: id.clone(),
             generation,
             network: app.network,
+            floor: app.wallet_sync.rescan_requested.or_else(|| {
+                app.wallet_sync
+                    .scan_coverage
+                    .map(|coverage| coverage.from_height)
+            }),
             addresses: watched.values().cloned().collect(),
             interests: watched
                 .keys()
@@ -807,6 +838,16 @@ impl WalletSyncSession {
             .tip
             .as_ref()
             .map(|tip| (tip.height, tip.hash));
+        if lease
+            .floor
+            .is_some_and(|floor| tip.is_none_or(|(height, _)| floor > height))
+        {
+            let reason = "wallet rescan floor is above the observed tip or the tip is unavailable"
+                .to_owned();
+            self.state.record_failure(reason.clone());
+            self.publish_status();
+            return Err(WalletSyncError::InvalidSnapshot(reason));
+        }
         if candidate.value.interests != lease.interests || tip != candidate.chain_tip {
             let reason = "wallet snapshot scope or chain tip differs from its request".to_string();
             self.state.record_failure(reason.clone());
@@ -852,6 +893,12 @@ impl WalletSyncSession {
                     return Err(WalletSyncError::InvalidSnapshot(reason));
                 }
             };
+            candidate_app.wallet_sync.scan_coverage =
+                lease.floor.map(|height| optn_app::ScanCoverageView {
+                    from_height: height,
+                    skipped_below: (height > 0).then_some(height),
+                    chosen_by_holder: true,
+                });
             if !may_publish(app) {
                 self.invalidate("wallet refresh cancelled before persistence".into());
                 return Err(WalletSyncError::Superseded);

@@ -42,10 +42,11 @@ enum Input {
 #[serde(rename_all = "snake_case")]
 enum ChainCommand {
     Sync,
+    Rescan { from_height: u32 },
     History,
 }
 
-async fn sync_wallet(cli: &crate::Cli, runtime: &AppRuntime) -> Result<()> {
+async fn sync_wallet(cli: &crate::Cli, runtime: &AppRuntime, floor: Option<u32>) -> Result<()> {
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(crate::timeout_seconds(cli)),
         async {
@@ -63,18 +64,24 @@ async fn sync_wallet(cli: &crate::Cli, runtime: &AppRuntime) -> Result<()> {
             let xpub = state.wallet.as_ref()
                 .and_then(|wallet| wallet.account_xpub.clone())
                 .ok_or_else(|| CliError::Usage("Open a saved HD wallet before syncing.".into()))?;
+            let worker = crate::hd_sync_worker(cli.network, &selection.policy)?;
+            if let Some(height) = floor {
+                runtime.request_wallet_rescan(height).await
+                    .map_err(|error| CliError::Network(error.to_string()))?;
+            }
             let stack = optn_chain_native::build_native_chain_stack(
                 selection.catalog,
                 selection.policy,
                 &cli.network.to_string(),
                 &optn_chain_native::NativeChainSecrets::default(),
             ).await;
-            let mut worker = optn_runtime::sync_worker::ProgressiveSyncWorker::new(Default::default());
-            let decision = runtime.sync_hd_wallet(
+            let mut worker = worker.with_accepted_headers(stack.headers.clone());
+            let decision = runtime.sync_hd_wallet_from_floor(
                 &mut *stack.service.lock().await,
                 &mut worker,
                 xpub,
                 optn_runtime::hd_sync::HdSyncLimits::default(),
+                floor,
             ).await.map_err(|error| CliError::Network(error.to_string()))?;
             if decision != optn_runtime::reconciliation::ReconciliationDecision::Accepted {
                 return Err(CliError::Network("Wallet refresh was incomplete; retained history remains stale.".into()));
@@ -99,6 +106,15 @@ fn success_reply(state: &AppState, status: WalletSecurityStatus) -> Value {
 }
 
 fn print_history(sync: &optn_app::WalletSyncView) {
+    if let Some(height) = sync.rescan_requested {
+        println!("Rescan requested from height {height}; previous observations retained.");
+    }
+    if let Some(coverage) = sync.scan_coverage {
+        println!("Scan starts at height {}.", coverage.from_height);
+        if let Some(height) = coverage.skipped_below {
+            println!("History below {height} was not scanned; totals may omit earlier funds.");
+        }
+    }
     println!(
         "Source: {}  Evidence: {}",
         sync.source.as_deref().unwrap_or("unknown"),
@@ -144,8 +160,12 @@ async fn execute(
 ) -> std::result::Result<WalletSecurityStatus, TransportError> {
     match input {
         Input::Chain { chain } => {
-            if matches!(chain, ChainCommand::Sync) {
-                sync_wallet(cli, runtime)
+            if !matches!(chain, ChainCommand::History) {
+                let floor = match chain {
+                    ChainCommand::Rescan { from_height } => Some(from_height),
+                    _ => None,
+                };
+                sync_wallet(cli, runtime, floor)
                     .await
                     .map_err(|error| TransportError::Other(error.to_string()))?;
             }
@@ -219,7 +239,7 @@ pub async fn run(directory: Option<PathBuf>, stdio: bool, cli: &crate::Cli) -> R
             println!("{output}");
         }
     } else {
-        eprintln!("Wallet commands: list, open <file>, import, receive [--acknowledge-gap], sync, history, password, autolock <minutes>, lock, authorize, reveal, quit");
+        eprintln!("Wallet commands: list, open <file>, import, receive [--acknowledge-gap], sync, rescan <height>, history, password, autolock <minutes>, lock, authorize, reveal, quit");
         loop {
             eprint!("wallet> ");
             io::stderr().flush().ok();
@@ -240,11 +260,17 @@ pub async fn run(directory: Option<PathBuf>, stdio: bool, cli: &crate::Cli) -> R
             let request = match command {
                 "quit" | "exit" => break,
                 "list" => Some(Request::Status),
-                "sync" | "history" => {
-                    let chain = if command == "sync" {
-                        ChainCommand::Sync
-                    } else {
-                        ChainCommand::History
+                "sync" | "history" | "rescan" => {
+                    let chain = match command {
+                        "sync" => ChainCommand::Sync,
+                        "rescan" => match argument.parse() {
+                            Ok(from_height) => ChainCommand::Rescan { from_height },
+                            Err(_) => {
+                                eprintln!("Use rescan <height>; zero requests full history.");
+                                continue;
+                            }
+                        },
+                        _ => ChainCommand::History,
                     };
                     match execute(cli, &runtime, Input::Chain { chain }).await {
                         Ok(_) => print_history(&runtime.state().wallet_sync),
