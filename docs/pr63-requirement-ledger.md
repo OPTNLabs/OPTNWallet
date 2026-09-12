@@ -1,13 +1,14 @@
 # PR #63 requirement ledger — #71 and #75
 
-Built from current source, not from docs. Where a document and the code
-disagree, the code wins and the document is the thing that is wrong.
+Current source and execution evidence establish what exists. Current issue
+requirements establish what must exist. A disagreement is a gap to reconcile;
+code does not override an unmet requirement.
 
 Read the status column strictly:
 
 | Status | Means |
 | --- | --- |
-| **PROVEN** | Implemented, and exercised against something real |
+| **PROVEN** | The named claim has evidence; its scope is limited to the cited test, live workflow or packaged target, never implicitly end to end |
 | **INTEGRATION** | Implemented and tested, but not yet reached by the running application |
 | **DEVICE EVIDENCE** | Implemented and tested; needs a packaged artifact or hardware to finish |
 | **PARTIAL** | Some of it exists; the gap is named |
@@ -16,6 +17,13 @@ Read the status column strictly:
 
 "Implemented" never means a type exists. Every row names an entry point a
 reader can open and, where there is one, the test that holds it up.
+
+Record evidence as component, application integration, live workflow or packaged
+platform, with revision/environment where available. Existing rows need that
+distinction checked before being used as release evidence. Historical statements
+about unavailable tooling must be rechecked on the current host. #84 is the
+closed Vitest dependency PR; its migration and coverage requirements are carried
+in #63, not a separate wallet architecture.
 
 ---
 
@@ -51,7 +59,7 @@ reader can open and, where there is one, the test that holds it up.
 | Neutrino off private block-header state | **PROVEN** | `optn-chain-neutrino` holds `Arc<dyn BlockHeaderSource>`; filter hashes/headers remain its own | — |
 | Duplicate network maps audited | **PROVEN** | Three copies now cross-check: `bip37_and_neutrino_agree_about_every_network`, `this_copy_agrees_with_the_accepted_header_store` | — |
 | BIP37 merkle proofs bound to the accepted chain | **PROVEN** | `optn-chain-bip37/src/lib.rs` merkle-binding tests; a forged block is refused | — |
-| Authenticated historical replay | **PROVEN** | `optn-runtime/src/header_recovery.rs`; 11 tests incl. forged resume material and same-length fork | Not yet called by the running application |
+| Authenticated historical replay | **INTEGRATION** | Component evidence: `optn-runtime/src/header_recovery.rs`; 11 tests incl. forged resume material and same-length fork | Not yet called by the running application |
 | SHV P2P root/peak proofs | **PROVEN** | `optn-chain-bip37/src/shv.rs`; live against BCHN `e6d380373` with `-mmrindex=1`, proof accepted only against OPTN's own root | — |
 | BCHD-correct compact filters | **PROVEN** | `optn-chain-neutrino/src/filter.rs`; live BCHD scan agrees with the Bloom path on the same coins | Independent BCHD-produced filter fixtures not yet vendored |
 | Sequential receive → spend lifecycle | **PROVEN** | `a_spend_is_found_through_an_outpoint_the_receive_scan_discovered`; spend invisible to a script-only scan | CashTokens/NFT/OP_RETURN/reorg/restart cases not covered |
