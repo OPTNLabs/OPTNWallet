@@ -5,8 +5,8 @@
 //! provenance instead of allowing the first feed to erase the others.
 
 use crate::chain::{
-    BootstrapProject, CapabilitySet, ChainSource, Endpoint, EndpointKind, SourceDisposition,
-    SourceId, SourceOrigin,
+    BootstrapProject, CapabilitySet, ChainSource, Endpoint, EndpointKind, SourceCatalog,
+    SourceDisposition, SourceId, SourceOrigin,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -152,6 +152,19 @@ pub fn shipped_bootstrap_catalog(network: optn_core::network::Network) -> Bootst
         BootstrapProject::ElectronCash,
         "optn_core::network::Network::default_host",
     );
+    catalog
+}
+
+/// The same unverified discovery candidates for every native interface.
+/// Materialization performs no network I/O and never persists defaults as intent.
+pub fn shipped_source_catalog(network: optn_core::network::Network) -> SourceCatalog {
+    let bootstrap = shipped_bootstrap_catalog(network);
+    let mut catalog = SourceCatalog::default();
+    for (priority, candidate) in bootstrap.candidates().enumerate() {
+        catalog
+            .insert(bootstrap.materialize_source(candidate, priority as u16))
+            .expect("shipped source ids are unique");
+    }
     catalog
 }
 

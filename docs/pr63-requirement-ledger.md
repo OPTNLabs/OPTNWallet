@@ -34,6 +34,13 @@ sync, matching CLI/transport totals, encrypted checkpoint restart, stale-state
 retention and live resume. See `docs/chain-interop-evidence.md`. This closes that
 runtime/CLI evidence gap, not the packaged GUI or whole-issue milestone.
 
+Fresh source selection now mounts the same reviewed Rust bootstrap catalog in
+native GUI and CLI. CLI Auto reached Chipnet through `shared-native-policy`
+without writing public defaults into user settings. Runtime/CLI regressions
+cover saved bootstrap bans, exact selection, and empty own-infrastructure
+policies without public fallback. The Windows native adapter compiles with
+the pinned Tor bundle staged; this is build evidence, not GUI interaction.
+
 CashFusion recovery: the protocol engine is now `crates/optn-fusion`; the shared
 app/transport policy and session state are committed. Wallet/network changes,
 locking and disable/cancel actions revoke session consent. A running shared
