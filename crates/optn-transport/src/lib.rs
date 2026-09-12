@@ -7,6 +7,9 @@
 //! crate; only these typed contracts are shared.
 
 use optn_app::{
+    fusion::{
+        AutoFusionSettings, FusionMode, FusionPhase, FusionSession, FusionStep, FusionWaitReason,
+    },
     parse_account_path, AppAction, AppEvent, AppLockState, AppRoute, AppState, AppSurface,
     AuthScope, AutoLockMinutes, CampaignOutput, Coin, ConnectState, CreateStep, FeatureFlag,
     FeatureFlags, FeeMode, FeePreferences, FeeRate, FlipstarterPledge, FreezeReason,
@@ -560,6 +563,20 @@ pub enum WireActionKind {
     SetStealthSats {
         sats: u64,
     },
+    StartFusion,
+    CancelFusion,
+    SetAutoFusionEnabled {
+        enabled: bool,
+    },
+    SetFusionMode {
+        mode: WireFusionMode,
+    },
+    SetFusionPhase {
+        phase: WireFusionPhase,
+    },
+    SetTorReady {
+        ready: bool,
+    },
     SetServer {
         kind: String,
         entry: String,
@@ -693,6 +710,263 @@ impl From<WireTokenIdentity> for TokenIdentity {
     }
 }
 
+/// Transport mirror of `fusion::FusionMode`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WireFusionMode {
+    #[default]
+    Server,
+    P2p,
+}
+
+impl From<FusionMode> for WireFusionMode {
+    fn from(value: FusionMode) -> Self {
+        match value {
+            FusionMode::Server => Self::Server,
+            FusionMode::P2p => Self::P2p,
+        }
+    }
+}
+
+impl From<WireFusionMode> for FusionMode {
+    fn from(value: WireFusionMode) -> Self {
+        match value {
+            WireFusionMode::Server => Self::Server,
+            WireFusionMode::P2p => Self::P2p,
+        }
+    }
+}
+
+/// Transport mirror of `fusion::FusionWaitReason`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WireFusionWaitReason {
+    #[default]
+    Cooldown,
+    Retry,
+    Rendezvous,
+    DepthReached,
+}
+
+impl From<FusionWaitReason> for WireFusionWaitReason {
+    fn from(value: FusionWaitReason) -> Self {
+        match value {
+            FusionWaitReason::Cooldown => Self::Cooldown,
+            FusionWaitReason::Retry => Self::Retry,
+            FusionWaitReason::Rendezvous => Self::Rendezvous,
+            FusionWaitReason::DepthReached => Self::DepthReached,
+        }
+    }
+}
+
+impl From<WireFusionWaitReason> for FusionWaitReason {
+    fn from(value: WireFusionWaitReason) -> Self {
+        match value {
+            WireFusionWaitReason::Cooldown => Self::Cooldown,
+            WireFusionWaitReason::Retry => Self::Retry,
+            WireFusionWaitReason::Rendezvous => Self::Rendezvous,
+            WireFusionWaitReason::DepthReached => Self::DepthReached,
+        }
+    }
+}
+
+/// Transport mirror of `fusion::FusionStep`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WireFusionStep {
+    #[default]
+    Joining,
+    Gathering,
+    Assembling,
+    Signing,
+    Blaming,
+}
+
+impl From<FusionStep> for WireFusionStep {
+    fn from(value: FusionStep) -> Self {
+        match value {
+            FusionStep::Joining => Self::Joining,
+            FusionStep::Gathering => Self::Gathering,
+            FusionStep::Assembling => Self::Assembling,
+            FusionStep::Signing => Self::Signing,
+            FusionStep::Blaming => Self::Blaming,
+        }
+    }
+}
+
+impl From<WireFusionStep> for FusionStep {
+    fn from(value: WireFusionStep) -> Self {
+        match value {
+            WireFusionStep::Joining => Self::Joining,
+            WireFusionStep::Gathering => Self::Gathering,
+            WireFusionStep::Assembling => Self::Assembling,
+            WireFusionStep::Signing => Self::Signing,
+            WireFusionStep::Blaming => Self::Blaming,
+        }
+    }
+}
+
+/// Transport mirror of `fusion::FusionPhase`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WireFusionPhase {
+    #[default]
+    Idle,
+    Waiting {
+        reason: WireFusionWaitReason,
+        until_ms: u64,
+    },
+    Running {
+        mode: WireFusionMode,
+        step: WireFusionStep,
+        #[serde(default)]
+        participants: Option<u32>,
+    },
+    Cancelling,
+    Completed {
+        txid: String,
+        fused_sats: u64,
+        at_ms: u64,
+    },
+    Failed {
+        message: String,
+        transient: bool,
+    },
+}
+
+impl From<FusionPhase> for WireFusionPhase {
+    fn from(value: FusionPhase) -> Self {
+        match value {
+            FusionPhase::Idle => Self::Idle,
+            FusionPhase::Waiting { reason, until_ms } => Self::Waiting {
+                reason: reason.into(),
+                until_ms,
+            },
+            FusionPhase::Running {
+                mode,
+                step,
+                participants,
+            } => Self::Running {
+                mode: mode.into(),
+                step: step.into(),
+                participants,
+            },
+            FusionPhase::Cancelling => Self::Cancelling,
+            FusionPhase::Completed {
+                txid,
+                fused_sats,
+                at_ms,
+            } => Self::Completed {
+                txid,
+                fused_sats,
+                at_ms,
+            },
+            FusionPhase::Failed { message, transient } => Self::Failed { message, transient },
+        }
+    }
+}
+
+impl From<WireFusionPhase> for FusionPhase {
+    fn from(value: WireFusionPhase) -> Self {
+        match value {
+            WireFusionPhase::Idle => Self::Idle,
+            WireFusionPhase::Waiting { reason, until_ms } => Self::Waiting {
+                reason: reason.into(),
+                until_ms,
+            },
+            WireFusionPhase::Running {
+                mode,
+                step,
+                participants,
+            } => Self::Running {
+                mode: mode.into(),
+                step: step.into(),
+                participants,
+            },
+            WireFusionPhase::Cancelling => Self::Cancelling,
+            WireFusionPhase::Completed {
+                txid,
+                fused_sats,
+                at_ms,
+            } => Self::Completed {
+                txid,
+                fused_sats,
+                at_ms,
+            },
+            WireFusionPhase::Failed { message, transient } => Self::Failed { message, transient },
+        }
+    }
+}
+
+/// Transport mirror of `fusion::FusionSession`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct WireFusionSession {
+    #[serde(default)]
+    pub phase: WireFusionPhase,
+    /// Never persisted on either side: a restart must not resume spending fees.
+    #[serde(default)]
+    pub session_armed: bool,
+    #[serde(default)]
+    pub rounds_completed: u32,
+    #[serde(default)]
+    pub fused_sats: u64,
+    #[serde(default)]
+    pub hold_reason: Option<String>,
+}
+
+impl From<&FusionSession> for WireFusionSession {
+    fn from(value: &FusionSession) -> Self {
+        Self {
+            phase: value.phase.clone().into(),
+            session_armed: value.session_armed,
+            rounds_completed: value.rounds_completed,
+            fused_sats: value.fused_sats,
+            hold_reason: value.hold_reason.clone(),
+        }
+    }
+}
+
+impl From<WireFusionSession> for FusionSession {
+    fn from(value: WireFusionSession) -> Self {
+        Self {
+            phase: value.phase.into(),
+            session_armed: value.session_armed,
+            rounds_completed: value.rounds_completed,
+            fused_sats: value.fused_sats,
+            hold_reason: value.hold_reason,
+        }
+    }
+}
+
+/// Transport mirror of `fusion::AutoFusionSettings`.
+///
+/// No master switch here either: it travels as `FeatureFlag::CashFusion`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct WireAutoFusionSettings {
+    #[serde(default)]
+    pub auto_fuse_enabled: bool,
+    #[serde(default)]
+    pub p2p_fusion_enabled: bool,
+}
+
+impl From<AutoFusionSettings> for WireAutoFusionSettings {
+    fn from(value: AutoFusionSettings) -> Self {
+        Self {
+            auto_fuse_enabled: value.auto_fuse_enabled,
+            p2p_fusion_enabled: value.p2p_fusion_enabled,
+        }
+    }
+}
+
+impl From<WireAutoFusionSettings> for AutoFusionSettings {
+    fn from(value: WireAutoFusionSettings) -> Self {
+        Self {
+            auto_fuse_enabled: value.auto_fuse_enabled,
+            p2p_fusion_enabled: value.p2p_fusion_enabled,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WireState {
     pub version: u16,
@@ -737,6 +1011,13 @@ pub struct WireState {
     /// Verified token identities, keyed by category id in display order.
     #[serde(default)]
     pub token_identities: BTreeMap<String, WireTokenIdentity>,
+    /// What Auto Fusion is doing.
+    #[serde(default)]
+    pub fusion: WireFusionSession,
+    #[serde(default)]
+    pub auto_fusion: WireAutoFusionSettings,
+    #[serde(default)]
+    pub tor_ready: bool,
     #[serde(default)]
     pub create_step: WireCreateStep,
     #[serde(default)]
@@ -952,6 +1233,7 @@ pub enum WireEventKind {
     AuthRequired,
     SpendAuthorized,
     WalletLocked,
+    FusionChanged,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1310,6 +1592,16 @@ impl From<AppAction> for WireAction {
             AppAction::HideWalletIdentity => WireActionKind::HideWalletIdentity,
             AppAction::RequestRescanFrom { height } => WireActionKind::RequestRescanFrom { height },
             AppAction::SetStealthSats(sats) => WireActionKind::SetStealthSats { sats },
+            AppAction::StartFusion => WireActionKind::StartFusion,
+            AppAction::CancelFusion => WireActionKind::CancelFusion,
+            AppAction::SetAutoFusionEnabled(enabled) => {
+                WireActionKind::SetAutoFusionEnabled { enabled }
+            }
+            AppAction::SetFusionMode(mode) => WireActionKind::SetFusionMode { mode: mode.into() },
+            AppAction::SetFusionPhase(phase) => WireActionKind::SetFusionPhase {
+                phase: phase.into(),
+            },
+            AppAction::SetTorReady(ready) => WireActionKind::SetTorReady { ready },
             AppAction::SetTokenIdentity {
                 category_hex,
                 identity,
@@ -1503,6 +1795,12 @@ impl TryFrom<WireAction> for AppAction {
             WireActionKind::HideWalletIdentity => Self::HideWalletIdentity,
             WireActionKind::RequestRescanFrom { height } => Self::RequestRescanFrom { height },
             WireActionKind::SetStealthSats { sats } => Self::SetStealthSats(sats),
+            WireActionKind::StartFusion => Self::StartFusion,
+            WireActionKind::CancelFusion => Self::CancelFusion,
+            WireActionKind::SetAutoFusionEnabled { enabled } => Self::SetAutoFusionEnabled(enabled),
+            WireActionKind::SetFusionMode { mode } => Self::SetFusionMode(mode.into()),
+            WireActionKind::SetFusionPhase { phase } => Self::SetFusionPhase(phase.into()),
+            WireActionKind::SetTorReady { ready } => Self::SetTorReady(ready),
             WireActionKind::SetTokenIdentity {
                 category_hex,
                 identity,
@@ -1660,6 +1958,9 @@ impl From<&AppState> for WireState {
             hd_addresses: value.hd_addresses.clone(),
             spend: value.spend.as_ref().map(WireSpendPlan::from),
             hardware: WireHardwareSession::from(&value.hardware),
+            fusion: (&value.fusion).into(),
+            auto_fusion: value.auto_fusion.into(),
+            tor_ready: value.tor_ready,
             stealth_sats: value.stealth_sats,
             token_identities: value
                 .token_identities
@@ -1823,6 +2124,9 @@ impl TryFrom<WireState> for AppState {
             // A decoded snapshot never arrives already revealed: the eye
             // toggle is authorised per session, not carried on the wire.
             identity_revealed: false,
+            fusion: value.fusion.into(),
+            auto_fusion: value.auto_fusion.into(),
+            tor_ready: value.tor_ready,
             stealth_sats: value.stealth_sats,
             token_identities: value
                 .token_identities
@@ -1890,6 +2194,7 @@ impl From<AppEvent> for WireEvent {
             AppEvent::AuthRequired => WireEventKind::AuthRequired,
             AppEvent::SpendAuthorized => WireEventKind::SpendAuthorized,
             AppEvent::WalletLocked => WireEventKind::WalletLocked,
+            AppEvent::FusionChanged => WireEventKind::FusionChanged,
         };
         Self {
             version: WIRE_PROTOCOL_VERSION,
@@ -1934,6 +2239,7 @@ impl TryFrom<WireEvent> for AppEvent {
             WireEventKind::AuthRequired => Self::AuthRequired,
             WireEventKind::SpendAuthorized => Self::SpendAuthorized,
             WireEventKind::WalletLocked => Self::WalletLocked,
+            WireEventKind::FusionChanged => Self::FusionChanged,
         })
     }
 }
@@ -2598,6 +2904,109 @@ mod tests {
             status: "something-newer".into(),
         };
         assert_eq!(TokenIdentity::from(wire).status, IdentityStatus::Unresolved);
+    }
+
+    /// Every fusion phase survives the wire, including the ones carrying data.
+    ///
+    /// A phase that decoded to `Idle` would tell the holder nothing is running
+    /// while a round is mid-flight and their coins are reserved.
+    #[test]
+    fn wire_round_trip_preserves_every_fusion_phase() {
+        let phases = [
+            FusionPhase::Idle,
+            FusionPhase::Waiting {
+                reason: FusionWaitReason::Rendezvous,
+                until_ms: 1_712_000_000_000,
+            },
+            FusionPhase::Running {
+                mode: FusionMode::P2p,
+                step: FusionStep::Blaming,
+                participants: Some(7),
+            },
+            FusionPhase::Running {
+                mode: FusionMode::Server,
+                step: FusionStep::Gathering,
+                participants: None,
+            },
+            FusionPhase::Cancelling,
+            FusionPhase::Completed {
+                txid: "ab".repeat(32),
+                fused_sats: 1_234_567,
+                at_ms: 1_712_000_000_001,
+            },
+            FusionPhase::Failed {
+                message: "could not connect".into(),
+                transient: true,
+            },
+        ];
+        for phase in phases {
+            let decoded = FusionPhase::from(WireFusionPhase::from(phase.clone()));
+            assert_eq!(decoded, phase);
+
+            // And through JSON, which is what actually crosses the boundary.
+            let json = serde_json::to_string(&WireFusionPhase::from(phase.clone())).unwrap();
+            let back: WireFusionPhase = serde_json::from_str(&json).unwrap();
+            assert_eq!(FusionPhase::from(back), phase);
+        }
+    }
+
+    /// The session and its settings survive a full state snapshot.
+    #[test]
+    fn wire_round_trip_preserves_the_fusion_session() {
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        state.apply(AppAction::SetAutoFusionEnabled(true));
+        state.apply(AppAction::SetFusionMode(FusionMode::P2p));
+        state.apply(AppAction::SetTorReady(true));
+        state.fusion.session_armed = true;
+        state.fusion.rounds_completed = 3;
+        state.fusion.fused_sats = 900_000;
+        state.fusion.phase = FusionPhase::Running {
+            mode: FusionMode::P2p,
+            step: FusionStep::Signing,
+            participants: Some(4),
+        };
+
+        let decoded = AppState::try_from(WireState::from(&state)).unwrap();
+        assert_eq!(decoded.fusion, state.fusion);
+        assert_eq!(decoded.auto_fusion, state.auto_fusion);
+        assert!(decoded.tor_ready);
+    }
+
+    /// Each fusion action survives the wire as itself.
+    #[test]
+    fn wire_round_trip_preserves_fusion_actions() {
+        let actions = [
+            AppAction::StartFusion,
+            AppAction::CancelFusion,
+            AppAction::SetAutoFusionEnabled(true),
+            AppAction::SetFusionMode(FusionMode::P2p),
+            AppAction::SetFusionMode(FusionMode::Server),
+            AppAction::SetTorReady(true),
+            AppAction::SetFusionPhase(FusionPhase::Cancelling),
+        ];
+        for action in actions {
+            let decoded = AppAction::try_from(WireAction::from(action.clone())).unwrap();
+            assert_eq!(decoded, action);
+        }
+        assert_eq!(
+            AppEvent::try_from(WireEvent::from(AppEvent::FusionChanged)).unwrap(),
+            AppEvent::FusionChanged
+        );
+    }
+
+    /// A renderer built before fusion still decodes a snapshot, and decodes to
+    /// "nothing running, nothing permitted" rather than to an armed session.
+    #[test]
+    fn a_state_without_fusion_still_decodes_unarmed() {
+        let wire = WireFusionSession::default();
+        assert!(!wire.session_armed);
+        let session = FusionSession::from(wire);
+        assert_eq!(session, FusionSession::new());
+        assert!(
+            !session.session_armed,
+            "an absent session is not an armed one"
+        );
+        assert_eq!(session.phase, FusionPhase::Idle);
     }
 
     /// A renderer built before token identity still decodes a snapshot.

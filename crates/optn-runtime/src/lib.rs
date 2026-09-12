@@ -725,6 +725,74 @@ mod tests {
         assert_eq!(state.theme, ThemeMode::Dark);
     }
 
+    /// Native CLI actions and renderer wire actions share session revocation.
+    #[tokio::test]
+    async fn fusion_consent_is_revoked_across_interface_and_wallet_boundaries() {
+        use optn_app::fusion::{FusionPhase, FusionSession, FusionWaitReason};
+        use optn_app::{AppSurface, FeatureFlag};
+        use optn_transport::{WireAction, WireState};
+
+        for boundary in [
+            AppAction::LockWallet,
+            AppAction::SetNetwork(optn_core::network::Network::Chipnet),
+            AppAction::SetSurface(AppSurface::Extension),
+            AppAction::SetAutoFusionEnabled(false),
+            AppAction::SetFeatureEnabled {
+                flag: FeatureFlag::CashFusion,
+                enabled: false,
+            },
+            AppAction::CancelFusion,
+        ] {
+            let mut state = AppState::for_surface(AppSurface::Desktop);
+            state.reduce(AppAction::OpenCreatedWallet {
+                name: "session-boundary".into(),
+                receive_address: "bitcoincash:qq0000000000000000000000000000000000000000".into(),
+                account_path: "m/44'/145'/0'".into(),
+            });
+            state.reduce(AppAction::SetAutoFusionEnabled(true));
+            let runtime = AppRuntime::spawn(state);
+            let renderer = DirectTransport::new(runtime.clone());
+            // CLI/native intent arms; renderer sees the same state.
+            runtime.dispatch(AppAction::StartFusion).await.unwrap();
+            assert!(renderer.snapshot().await.unwrap().fusion.session_armed);
+            for forged in [
+                AppAction::SetTorReady(true),
+                AppAction::SetFusionPhase(FusionPhase::Completed {
+                    txid: "ab".repeat(32),
+                    fused_sats: 9_000,
+                    at_ms: 1,
+                }),
+            ] {
+                renderer
+                    .dispatch(AppAction::try_from(WireAction::from(forged)).unwrap())
+                    .await
+                    .unwrap();
+            }
+            assert!(!runtime.state().tor_ready);
+            assert_eq!(runtime.state().fusion.rounds_completed, 0);
+            renderer
+                .dispatch(AppAction::try_from(WireAction::from(boundary.clone())).unwrap())
+                .await
+                .unwrap();
+            let snapshot = AppState::try_from(WireState::from(&runtime.state())).unwrap();
+            assert!(!snapshot.fusion.session_armed, "{boundary:?}");
+            assert_eq!(snapshot.fusion.phase, FusionPhase::Idle, "{boundary:?}");
+        }
+
+        // A waiting paid service must still offer cancellation in either UI.
+        let waiting = FusionSession {
+            session_armed: true,
+            phase: FusionPhase::Waiting {
+                reason: FusionWaitReason::Cooldown,
+                until_ms: 20_000,
+            },
+            ..FusionSession::new()
+        };
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        state.fusion = waiting;
+        assert!(optn_app::fusion_view_model(&state).can_cancel);
+    }
+
     #[tokio::test]
     async fn driver_can_be_spawned_by_the_host_executor() {
         let (runtime, driver) = AppRuntime::new(AppState::default());
