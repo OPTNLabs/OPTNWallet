@@ -51,7 +51,7 @@ async fn sync_wallet(cli: &crate::Cli, runtime: &AppRuntime) -> Result<()> {
         async {
             let selection = crate::configured_chain(cli)?.ok_or_else(|| {
                 CliError::Usage(
-                    "Select a persisted shared source with network select --protocol before syncing; wallet sync cannot use a default or --host override.".into(),
+                    "Wallet sync requires the shared source policy; remove the --host, --port or --no-tls override and use network select --protocol to select a source.".into(),
                 )
             })?;
             let state = runtime.state();

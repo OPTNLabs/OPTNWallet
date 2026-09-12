@@ -554,15 +554,7 @@ pub fn catalog_and_policy_from_app_state(state: &AppState) -> (SourceCatalog, Co
     // public server before anyone has asked for anything announces that someone
     // installed this wallet to a host that did not need to know.
     if catalog.iter().next().is_none() && state.wallet.is_some() {
-        let bootstrap = optn_runtime::bootstrap::shipped_bootstrap_catalog(state.network);
-        for (priority, candidate) in bootstrap.candidates().enumerate() {
-            let source = bootstrap.materialize_source(candidate, priority as u16);
-            // Deterministic ids from normalized endpoints; a collision here
-            // would be a bug in the catalog rather than anything a user did.
-            catalog
-                .insert(source)
-                .expect("bootstrap source ids are unique");
-        }
+        catalog = optn_runtime::bootstrap::shipped_source_catalog(state.network);
     }
     (catalog, ConnectionPolicy::auto())
 }

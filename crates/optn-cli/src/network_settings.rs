@@ -11,8 +11,7 @@ use optn_core::endpoint::{parse_electrum_endpoint, ElectrumEndpoint};
 use optn_core::network::Network;
 use optn_runtime::chain::{ConnectionPolicy, SourceCatalog};
 use optn_runtime::network_config::{
-    legacy_network_servers_from_overlay,
-    resolve_chain_selection as resolve_persisted_chain_selection, NetworkConfigEnvelope,
+    legacy_network_servers_from_overlay, resolve_shipped_chain_selection, NetworkConfigEnvelope,
     NetworkConfigStore,
 };
 
@@ -28,11 +27,11 @@ pub fn select_source(
         config_directory(directory).ok_or("network configuration directory is unavailable")?;
     NetworkConfigFile::new(directory.join(file_name(network)))
         .update(|existing| {
-            let mut envelope =
-                existing.ok_or("no shared sources are configured; configure a source first")?;
-            let (catalog, _) =
-                resolve_persisted_chain_selection(&SourceCatalog::default(), &envelope)
-                    .map_err(|error| format!("invalid network settings: {error:?}"))?;
+            let mut envelope = existing.unwrap_or_else(|| {
+                NetworkConfigEnvelope::current("optn-shipped-v1", Default::default())
+            });
+            let (catalog, _) = resolve_shipped_chain_selection(network, Some(&envelope))
+                .map_err(|error| format!("invalid network settings: {error:?}"))?;
             let id = optn_runtime::chain::SourceId::new(source);
             let policy = ConnectionPolicy::exact(id.clone(), protocol);
             if !optn_runtime::chain::build_selection_plan(&catalog, &policy)
@@ -65,10 +64,8 @@ pub fn shared_chain_selection(
     network: Network,
     configured_directory: Option<&Path>,
 ) -> Result<Option<SharedChainSelection>, String> {
-    let Some(envelope) = shared_envelope(network, configured_directory)? else {
-        return Ok(None);
-    };
-    let (catalog, policy) = resolve_persisted_chain_selection(&SourceCatalog::default(), &envelope)
+    let envelope = shared_envelope(network, configured_directory)?;
+    let (catalog, policy) = resolve_shipped_chain_selection(network, envelope.as_ref())
         .map_err(|error| format!("cannot enforce network settings: {error:?}"))?;
     Ok(Some(SharedChainSelection { catalog, policy }))
 }
@@ -144,8 +141,8 @@ fn file_name(network: Network) -> &'static str {
 mod tests {
     use super::*;
     use optn_runtime::chain::{
-        CapabilitySet, ChainSource, ConnectionPolicy, Endpoint, EndpointKind, SourceDisposition,
-        SourceId, SourceOrigin,
+        CapabilitySet, ChainSource, ConnectionPolicy, Endpoint, EndpointKind, ProtocolFamily,
+        SourceDisposition, SourceId, SourceOrigin,
     };
     use optn_runtime::network_config::{
         encode_envelope_json, NetworkConfigEnvelope, UserNetworkOverlay,
@@ -227,6 +224,41 @@ mod tests {
                 "network commands must still enforce settings"
             );
         }
+    }
+
+    #[test]
+    fn fresh_cli_uses_shared_auto_without_persisting_defaults() {
+        let directory = TestDirectory::new();
+        let selection = shared_chain_selection(Network::Chipnet, Some(&directory.0))
+            .unwrap()
+            .unwrap();
+        let (expected, policy) = resolve_shipped_chain_selection(Network::Chipnet, None).unwrap();
+        assert_eq!(selection.catalog, expected);
+        assert_eq!(selection.policy, policy);
+        assert!(!directory.0.join(file_name(Network::Chipnet)).exists());
+
+        let id = expected.iter().next().unwrap().id.clone();
+        select_source(
+            Network::Chipnet,
+            Some(&directory.0),
+            id.as_str(),
+            ProtocolFamily::Electrum,
+        )
+        .unwrap();
+        let pinned = shared_chain_selection(Network::Chipnet, Some(&directory.0))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            pinned.policy,
+            ConnectionPolicy::exact(id, ProtocolFamily::Electrum)
+        );
+        let stored = shared_envelope(Network::Chipnet, Some(&directory.0))
+            .unwrap()
+            .unwrap();
+        assert!(
+            stored.overlay.user_sources.is_empty(),
+            "shipped entries are not user records"
+        );
     }
 
     #[tokio::test]
@@ -600,10 +632,12 @@ mod tests {
         let selected = shared_chain_selection(Network::Chipnet, Some(&directory.0))
             .unwrap()
             .unwrap();
-        assert_eq!(
-            selected.catalog.iter().cloned().collect::<Vec<_>>(),
-            overlay.user_sources
-        );
+        for source in &overlay.user_sources {
+            assert_eq!(selected.catalog.get(&source.id), Some(source));
+        }
+        let plan = optn_runtime::chain::build_selection_plan(&selected.catalog, &selected.policy);
+        assert_eq!(plan.primary, vec![SourceId::new("desktop-electrum")]);
+        assert!(plan.fallback.is_empty());
         assert_eq!(
             selected.policy,
             ConnectionPolicy::exact(
@@ -644,7 +678,7 @@ mod tests {
     }
 
     #[test]
-    fn select_without_overlay_fails_closed_for_every_protocol() {
+    fn selecting_unknown_source_without_overlay_fails_closed_for_every_protocol() {
         let directory = TestDirectory::new();
         for protocol in [
             optn_runtime::chain::ProtocolFamily::Electrum,
@@ -660,7 +694,7 @@ mod tests {
             )
             .unwrap_err();
             assert!(
-                error.contains("no shared sources are configured"),
+                error.contains("source is missing, disabled, banned"),
                 "{protocol:?}: {error}"
             );
         }
@@ -671,16 +705,24 @@ mod tests {
     }
 
     #[test]
-    fn empty_persisted_selection_never_becomes_a_public_default() {
+    fn empty_private_selection_never_becomes_a_public_default() {
         let directory = TestDirectory::new();
-        directory.write(Network::Chipnet, UserNetworkOverlay::default());
+        directory.write(
+            Network::Chipnet,
+            UserNetworkOverlay {
+                connection_policy: ConnectionPolicy::own_infrastructure(),
+                ..Default::default()
+            },
+        );
 
         let selection = shared_chain_selection(Network::Chipnet, Some(&directory.0))
             .unwrap()
             .expect("present configuration");
-        assert_eq!(selection.catalog.iter().count(), 0);
+        let plan = optn_runtime::chain::build_selection_plan(&selection.catalog, &selection.policy);
+        assert!(plan.primary.is_empty());
+        assert!(plan.fallback.is_empty());
         let error = shared_electrum(Network::Chipnet, Some(&directory.0)).unwrap_err();
-        assert!(error.contains("refusing a default server"));
+        assert!(error.contains("cannot enforce network settings"));
         // A different network with no configuration remains distinguishable.
         assert!(shared_electrum(Network::Mainnet, Some(&directory.0))
             .unwrap()

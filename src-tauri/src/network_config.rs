@@ -10,8 +10,7 @@ use optn_chain_native::network_config::NetworkConfigFile;
 use optn_core::network::Network;
 use optn_runtime::chain::{ConnectionPolicy, Endpoint, EndpointKind, SourceCatalog};
 use optn_runtime::network_config::{
-    legacy_network_servers_from_overlay,
-    resolve_chain_selection as resolve_persisted_chain_selection, NetworkConfigEnvelope,
+    legacy_network_servers_from_overlay, resolve_shipped_chain_selection, NetworkConfigEnvelope,
     NetworkConfigStore, UserNetworkOverlay,
 };
 use std::collections::BTreeMap;
@@ -68,9 +67,8 @@ impl NetworkSettingsStore {
     }
 
     /// Resolve the exact persisted catalog and policy for the selected
-    /// network. The shipped bootstrap catalog is not mounted yet, so both
-    /// native hosts start from the same empty base and retain only durable user
-    /// intent. Missing files deliberately preserve the legacy app-state bridge.
+    /// network over the same reviewed bootstrap base as the CLI. Missing files
+    /// preserve the app-state bridge, which keeps the landing network-idle.
     pub fn chain_selection(
         &self,
         network: Network,
@@ -78,7 +76,7 @@ impl NetworkSettingsStore {
         self.file_for(network)
             .load()?
             .map(|envelope| {
-                resolve_persisted_chain_selection(&SourceCatalog::default(), &envelope)
+                resolve_shipped_chain_selection(network, Some(&envelope))
                     .map_err(|error| format!("invalid network configuration: {error:?}"))
             })
             .transpose()
@@ -361,7 +359,12 @@ mod tests {
         store.restore(&mut state).unwrap();
         let (catalog, policy) = store.chain_selection(Network::Mainnet).unwrap().unwrap();
         assert_eq!(policy, overlay.connection_policy);
-        assert_eq!(catalog.iter().count(), 1);
+        let selection = optn_runtime::chain::build_selection_plan(&catalog, &policy);
+        assert_eq!(
+            selection.primary,
+            vec![optn_runtime::chain::SourceId::new("local-peer")]
+        );
+        assert!(selection.fallback.is_empty());
         assert!(state.servers.for_network(Network::Mainnet).is_empty());
         assert!(store.save_for_network(&state, Network::Mainnet).is_err());
         assert_eq!(

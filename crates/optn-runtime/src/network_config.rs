@@ -106,6 +106,20 @@ pub fn resolve_chain_selection(
     Ok((catalog, envelope.overlay.connection_policy.clone()))
 }
 
+/// Mount reviewed defaults and durable user intent identically in GUI and CLI.
+/// Policy still controls eligibility: a catalog entry is not permission to probe
+/// it, and own-infrastructure/exact selection never gains a public fallback.
+pub fn resolve_shipped_chain_selection(
+    network: Network,
+    envelope: Option<&NetworkConfigEnvelope>,
+) -> Result<(SourceCatalog, ConnectionPolicy), NetworkConfigError> {
+    let bootstrap = crate::bootstrap::shipped_source_catalog(network);
+    match envelope {
+        Some(envelope) => resolve_chain_selection(&bootstrap, envelope),
+        None => Ok((bootstrap, ConnectionPolicy::auto())),
+    }
+}
+
 /// Decode the one-Electrum/one-peer/one-explorer settings shape used by the
 /// current desktop settings UI.
 ///
@@ -776,6 +790,54 @@ mod tests {
             resolve_chain_selection(&SourceCatalog::default(), &envelope).unwrap();
         assert_eq!(restored_policy, policy);
         assert_eq!(catalog.get(&source.id), Some(&source));
+    }
+
+    #[test]
+    fn shipped_selection_preserves_bans_and_never_expands_private_scope() {
+        use crate::chain::build_selection_plan;
+        for network in [Network::Mainnet, Network::Chipnet] {
+            let (catalog, policy) = resolve_shipped_chain_selection(network, None).unwrap();
+            let default = catalog.iter().next().expect("reviewed network default");
+            assert_eq!(default.endpoints[0].host, network.default_host());
+            assert_eq!(
+                build_selection_plan(&catalog, &policy).primary,
+                vec![default.id.clone()]
+            );
+
+            let mut overlay = UserNetworkOverlay::default();
+            overlay
+                .bootstrap_overrides
+                .insert(default.id.clone(), SourceDisposition::Banned);
+            let envelope = NetworkConfigEnvelope::current("older-release", overlay);
+            let (banned, policy) =
+                resolve_shipped_chain_selection(network, Some(&envelope)).unwrap();
+            assert!(build_selection_plan(&banned, &policy).primary.is_empty());
+            assert_eq!(
+                banned.get(&default.id).unwrap().disposition,
+                SourceDisposition::Banned
+            );
+
+            let envelope = NetworkConfigEnvelope::current(
+                "older-release",
+                UserNetworkOverlay {
+                    connection_policy: ConnectionPolicy::own_infrastructure(),
+                    ..Default::default()
+                },
+            );
+            let (private, policy) =
+                resolve_shipped_chain_selection(network, Some(&envelope)).unwrap();
+            let selection = build_selection_plan(&private, &policy);
+            assert!(selection.primary.is_empty());
+            assert!(selection.fallback.is_empty());
+        }
+        assert_eq!(
+            resolve_shipped_chain_selection(Network::Regtest, None)
+                .unwrap()
+                .0
+                .iter()
+                .count(),
+            0
+        );
     }
 
     #[test]
