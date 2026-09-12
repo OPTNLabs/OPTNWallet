@@ -11,8 +11,8 @@ use k256::{ProjectivePoint, Scalar};
 use prost::Message;
 use sha2::{Digest, Sha256};
 
-use super::components::RoundCommit;
-use super::{encrypt, pb, pedersen, schnorr};
+use crate::components::RoundCommit;
+use crate::{encrypt, pb, pedersen, schnorr};
 
 pub const PROOF_PADDING_LENGTH: usize = 80;
 
@@ -505,8 +505,8 @@ fn decrypt_with_session_key(
 
 #[cfg(test)]
 mod tests {
-    use super::super::components::{build_round_commit, FusionInput};
     use super::*;
+    use crate::components::{build_round_commit, FusionInput};
 
     fn peer_fixture(input: bool) -> (Vec<u8>, Vec<u8>, pb::Proof) {
         let salt = [0x11; 32];

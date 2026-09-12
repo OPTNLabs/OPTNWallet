@@ -3344,6 +3344,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "optn-fusion"
+version = "1.7.3"
+dependencies = [
+ "aes",
+ "cbc",
+ "futures-util",
+ "hex",
+ "hmac",
+ "k256",
+ "log",
+ "once_cell",
+ "optn-core",
+ "prost",
+ "prost-build",
+ "protox",
+ "rand_core 0.6.4",
+ "ripemd",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tokio-rustls",
+ "tokio-socks",
+ "webpki-roots 0.26.11",
+]
+
+[[package]]
 name = "optn-multisig-core"
 version = "1.7.3"
 dependencies = [
@@ -3405,6 +3432,7 @@ dependencies = [
  "optn-app",
  "optn-chain-native",
  "optn-core",
+ "optn-fusion",
  "optn-multisig-core",
  "optn-platform",
  "optn-platform-native",

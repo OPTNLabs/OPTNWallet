@@ -7,8 +7,8 @@ use k256::Scalar;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::schnorr;
-use super::tx::{FusionTx, P2pInput, P2pOutput};
+use crate::schnorr;
+use crate::tx::{FusionTx, P2pInput, P2pOutput};
 
 const MAX_INPUTS: usize = 500;
 const MAX_OUTPUTS: usize = 500;
@@ -95,7 +95,7 @@ fn decode_hex<const N: usize>(value: &str, label: &str) -> Result<[u8; N], Strin
 }
 
 fn decode_vec(value: &str, label: &str, max_bytes: usize) -> Result<Vec<u8>, String> {
-    if value.len() % 2 != 0
+    if !value.len().is_multiple_of(2)
         || value.len() > max_bytes.saturating_mul(2)
         || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
     {

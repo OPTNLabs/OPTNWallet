@@ -20,8 +20,8 @@ use hmac::{Hmac, Mac};
 use k256::{ProjectivePoint, Scalar};
 use sha2::{Digest, Sha256};
 
-use super::pedersen::random_nonce;
-use super::schnorr::{compressed, parse_point};
+use crate::pedersen::random_nonce;
+use crate::schnorr::{compressed, parse_point};
 
 type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
 type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
@@ -61,7 +61,7 @@ pub fn encrypt(
     match pad_to_length {
         None => {
             let pad = (16 - plaintext.len() % 16) % 16;
-            plaintext.extend(std::iter::repeat(0u8).take(pad));
+            plaintext.extend(std::iter::repeat_n(0u8, pad));
         }
         Some(n) => {
             if n % 16 != 0 {
@@ -106,7 +106,7 @@ pub fn decrypt_with_symmkey(data: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, Stri
     }
     let ciphertext = &data[33..data.len() - 16];
     let tag = &data[data.len() - 16..];
-    if ciphertext.len() % 16 != 0 {
+    if !ciphertext.len().is_multiple_of(16) {
         return Err("ciphertext not block-aligned".into());
     }
 
@@ -140,8 +140,8 @@ pub fn decrypt_with_symmkey(data: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, Stri
 
 #[cfg(test)]
 mod tests {
-    use super::super::schnorr::pubkey_compressed;
     use super::*;
+    use crate::schnorr::pubkey_compressed;
 
     #[test]
     fn encrypt_decrypt_round_trip() {

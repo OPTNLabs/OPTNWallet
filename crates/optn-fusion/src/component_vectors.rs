@@ -14,7 +14,7 @@
 //   WRITE_FUSION_COMPONENT_VECTORS=1 cargo test -p optn-wallet-desktop component_vectors
 //
 // A diff in that file is a change to the wire format, and should be read as one.
-use super::p2p_component::{
+use crate::p2p_component::{
     component_blind_message, encode_blank_component, encode_input_component,
     encode_output_component,
 };
@@ -22,7 +22,7 @@ use sha2::{Digest, Sha256};
 
 const PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../test-vectors/fusion-components.json"
+    "/../../test-vectors/fusion-components.json"
 );
 
 /// The Electron Cash wire vector both encoders already carry. Kept here so the

@@ -11,7 +11,7 @@ use prost::Message;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::pb;
+use crate::pb;
 
 const MAX_PUBKEY: usize = 65;
 const MAX_SCRIPT: usize = 10_000;
@@ -25,7 +25,7 @@ fn sha256(bytes: &[u8]) -> [u8; 32] {
 /// Decode a trimmed request field and report malformed text with its field name.
 fn hex_decode(s: &str, field: &str) -> Result<Vec<u8>, String> {
     let s = s.trim();
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err(format!("{field}: odd-length hex"));
     }
     hex::decode(s).map_err(|_| format!("{field}: bad hex"))

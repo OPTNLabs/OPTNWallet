@@ -16,7 +16,7 @@ pub use optn_core::fusion::schnorr::{
 
 use k256::{ProjectivePoint, Scalar};
 
-use super::pedersen::random_nonce;
+use crate::pedersen::random_nonce;
 
 /// A fresh secp256k1 keypair for a per-component communication key. Returns the
 /// private scalar (kept for decrypting blame proofs) and its compressed pubkey.

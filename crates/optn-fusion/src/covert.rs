@@ -25,8 +25,8 @@ use rand_core::{OsRng, RngCore};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::task::JoinHandle;
 
-use super::round_cancel::CancelFlag;
-use super::{connect_stream, pb, recv_frame, send_frame, FusionStream, Transport};
+use crate::round_cancel::CancelFlag;
+use crate::{connect_stream, pb, recv_frame, send_frame, FusionStream, Transport};
 
 /// One covert connection to the covert server, kept open across ping + submit.
 pub struct CovertConnection {
@@ -583,11 +583,8 @@ mod tests {
             .unwrap();
         rt.block_on(async {
             let (mut client, mut server) = tokio::io::duplex(4096);
-            let covert = super::super::session::build_covert_component(
-                &[0x02u8; 33],
-                &[0x11u8; 64],
-                &[1, 2, 3],
-            );
+            let covert =
+                crate::session::build_covert_component(&[0x02u8; 33], &[0x11u8; 64], &[1, 2, 3]);
             let covert_clone = covert.clone();
 
             let server_task = tokio::spawn(async move {
