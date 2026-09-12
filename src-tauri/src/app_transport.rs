@@ -49,6 +49,20 @@ pub async fn optn_wallet_security(
         })
 }
 
+/// Forward public PSBT preparation/finalization; the runtime owns validation.
+#[tauri::command]
+pub async fn optn_airgap(
+    runtime: tauri::State<'_, optn_runtime::AppRuntime>,
+    request: optn_transport::AirgapRequest,
+) -> Result<optn_transport::AirgapResponse, String> {
+    runtime.airgap(request).await.map_err(|error| match error {
+        optn_transport::TransportError::Other(message)
+        | optn_transport::TransportError::InvalidData(message) => message,
+        optn_transport::TransportError::AuthenticationRequired => "Open the wallet first.".into(),
+        _ => "Air-gap signing is unavailable on this interface.".into(),
+    })
+}
+
 /// Appearance save failures are returned after the runtime has applied the
 /// selection. Callers should refresh their snapshot and display the error;
 /// retrying the same selection retries persistence even if reduction is a no-op.

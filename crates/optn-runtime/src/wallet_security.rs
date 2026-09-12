@@ -159,6 +159,13 @@ impl WalletSecurity {
     pub fn is_open(&self, state: &AppState) -> bool {
         self.bound(state, state.lock.unlock_epoch).is_ok()
     }
+    pub(crate) fn require_durable_session(&self, state: &AppState) -> Result<(), TransportError> {
+        self.bound(state, state.lock.unlock_epoch)?;
+        if self.checkpoints.is_none() {
+            return Err(failure("Durable HD address storage is unavailable."));
+        }
+        Ok(())
+    }
     pub fn new(
         storage: Box<dyn WalletStorage>,
         biometrics: Option<Box<dyn WalletBiometrics>>,

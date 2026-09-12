@@ -67,6 +67,19 @@ mod wasm {
             })
         }
 
+        fn airgap<'a>(
+            &'a self,
+            request: optn_transport::AirgapRequest,
+        ) -> TransportFuture<'a, optn_transport::AirgapResponse> {
+            Box::pin(async move {
+                let value = serde_wasm_bindgen::to_value(&request)
+                    .map_err(|_| TransportError::InvalidData("Invalid air-gap request.".into()))?;
+                let result = invoke("optn_airgap", command_args("request", &value)?).await?;
+                serde_wasm_bindgen::from_value(result)
+                    .map_err(|_| TransportError::InvalidData("Invalid air-gap response.".into()))
+            })
+        }
+
         fn wallet_security<'a>(
             &'a self,
             request: optn_transport::WalletSecurityRequest,

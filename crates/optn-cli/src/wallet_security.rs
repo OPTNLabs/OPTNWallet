@@ -33,9 +33,18 @@ fn password(prompt: &str) -> Result<SecretText> {
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum Input {
-    Security { request: Request },
-    Action { action: WireAction },
-    Chain { chain: ChainCommand },
+    Airgap {
+        airgap: optn_transport::AirgapRequest,
+    },
+    Security {
+        request: Request,
+    },
+    Action {
+        action: WireAction,
+    },
+    Chain {
+        chain: ChainCommand,
+    },
 }
 
 #[derive(Deserialize)]
@@ -105,6 +114,13 @@ fn success_reply(state: &AppState, status: WalletSecurityStatus) -> Value {
         "wallet_sync": WireState::from(state).wallet_sync})
 }
 
+async fn airgap_reply(runtime: &AppRuntime, request: optn_transport::AirgapRequest) -> Value {
+    match runtime.airgap(request).await {
+        Ok(response) => json!({"ok": true, "airgap": response, "sent": false}),
+        Err(error) => json!({"ok": false, "error": message(error)}),
+    }
+}
+
 fn print_history(sync: &optn_app::WalletSyncView) {
     if let Some(height) = sync.rescan_requested {
         println!("Rescan requested from height {height}; previous observations retained.");
@@ -159,6 +175,7 @@ async fn execute(
     input: Input,
 ) -> std::result::Result<WalletSecurityStatus, TransportError> {
     match input {
+        Input::Airgap { .. } => Err(TransportError::Unsupported),
         Input::Chain { chain } => {
             if !matches!(chain, ChainCommand::History) {
                 let floor = match chain {
@@ -230,6 +247,7 @@ pub async fn run(directory: Option<PathBuf>, stdio: bool, cli: &crate::Cli) -> R
         let mut input = io::stdin().lock();
         while let Some(line) = private_line(&mut input, 262_144)? {
             let output = match serde_json::from_str::<Input>(&line) {
+                Ok(Input::Airgap { airgap }) => airgap_reply(&runtime, airgap).await,
                 Ok(input) => match execute(cli, &runtime, input).await {
                     Ok(status) => success_reply(&runtime.state(), status),
                     Err(error) => json!({"ok": false, "error": message(error)}),
@@ -239,7 +257,7 @@ pub async fn run(directory: Option<PathBuf>, stdio: bool, cli: &crate::Cli) -> R
             println!("{output}");
         }
     } else {
-        eprintln!("Wallet commands: list, open <file>, import, watch, receive [--acknowledge-gap], sync, rescan <height>, history, password, autolock <minutes>, lock, authorize, reveal, quit");
+        eprintln!("Wallet commands: list, open <file>, import, watch, receive [--acknowledge-gap], sync, rescan <height>, history, airgap <request JSON>, password, autolock <minutes>, lock, authorize, reveal, quit");
         loop {
             eprint!("wallet> ");
             io::stderr().flush().ok();
@@ -260,6 +278,13 @@ pub async fn run(directory: Option<PathBuf>, stdio: bool, cli: &crate::Cli) -> R
             let request = match command {
                 "quit" | "exit" => break,
                 "list" => Some(Request::Status),
+                "airgap" => {
+                    match serde_json::from_str::<optn_transport::AirgapRequest>(argument) {
+                        Ok(request) => println!("{}", airgap_reply(&runtime, request).await),
+                        Err(_) => eprintln!("Use airgap followed by a prepare, finalize or cancel request JSON. Finalize verifies only; it never sends."),
+                    }
+                    continue;
+                }
                 "sync" | "history" | "rescan" => {
                     let chain = match command {
                         "sync" => ChainCommand::Sync,

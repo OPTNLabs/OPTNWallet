@@ -753,3 +753,38 @@ fn managed_rescan_persists_the_selected_hd_account_and_reopens_it_after_restart(
     assert_eq!(responses(&output)[0]["ok"], true);
     assert_eq!(disk.load(&id, &key).unwrap().unwrap().1, revision);
 }
+
+#[test]
+fn stdio_airgap_routes_to_runtime_and_never_grants_broadcast() {
+    let directory = test_directory();
+    let input = [
+        json!({"airgap":{"op":"prepare", "destination":"bchtest:qqaz6s295ncfs53m86qj0uw6sl8u2kuw0ymst35fx4", "amount_sats":1000}}),
+        json!({"airgap":{"op":"finalize", "request_id":1, "signed_psbt_hex":"70736274ff"}}),
+        json!({"airgap":{"op":"cancel"}}),
+        json!({"airgap":{"op":"broadcast", "raw_transaction_hex":"00"}}),
+        json!({"airgap":{"op":"finalize", "request_id":1, "signed_psbt_hex":"00", "broadcast":true}}),
+    ].into_iter().map(|value| format!("{value}\n")).collect::<String>();
+    let output = run_cli(directory.path(), &["wallet", "--stdio"], &input);
+    assert!(output.status.success());
+    let replies = responses(&output);
+    assert_eq!(replies.len(), 6);
+    for reply in &replies[..2] {
+        assert_eq!(
+            reply["ok"], false,
+            "A locked console cannot prepare or finalize"
+        );
+        assert_ne!(
+            reply["error"], "Invalid wallet command.",
+            "Valid envelopes must reach the shared runtime"
+        );
+        assert!(reply.get("airgap").is_none());
+    }
+    assert_eq!(replies[2]["ok"], true);
+    assert_eq!(replies[2]["sent"], false);
+    assert_eq!(replies[2]["airgap"]["request_id"], 0);
+    assert!(replies[2]["airgap"]["raw_transaction_hex"].is_null());
+    for reply in &replies[3..5] {
+        assert_eq!(reply["ok"], false);
+        assert_eq!(reply["error"], "Invalid wallet command.");
+    }
+}

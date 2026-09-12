@@ -9,6 +9,7 @@
 //! The runtime does not choose an executor for the host. `AppRuntime::new`
 //! returns a driver future which Tauri, tests, or another shell can spawn.
 
+mod airgap;
 /// Provider-neutral SHV/MMR header verification using the pure optn-core accumulator.
 pub mod authchain;
 /// Provenance-preserving normalization of upstream node/server bootstrap feeds.
@@ -113,6 +114,11 @@ pub struct AppRuntime {
 }
 
 enum RuntimeRequest {
+    Airgap(
+        optn_transport::AirgapRequest,
+        u64,
+        oneshot::Sender<Result<optn_transport::AirgapResponse, TransportError>>,
+    ),
     WalletSync(WalletSyncRequest),
     WalletOperation(
         optn_app::AuthScope,
@@ -128,6 +134,7 @@ enum RuntimeRequest {
 }
 
 pub struct AppRuntimeDriver {
+    airgap: airgap::AirgapSession,
     action_rx: mpsc::Receiver<RuntimeRequest>,
     state_tx: watch::Sender<AppState>,
     event_tx: broadcast::Sender<AppEvent>,
@@ -155,6 +162,12 @@ impl DirectTransport {
 }
 
 impl AppTransport for DirectTransport {
+    fn airgap<'a>(
+        &'a self,
+        request: optn_transport::AirgapRequest,
+    ) -> TransportFuture<'a, optn_transport::AirgapResponse> {
+        Box::pin(async move { self.runtime.airgap(request).await })
+    }
     fn wallet_security<'a>(
         &'a self,
         request: WalletSecurityRequest,
@@ -219,6 +232,7 @@ impl AppRuntime {
                 wallet_sync_rx,
             },
             AppRuntimeDriver {
+                airgap: Default::default(),
                 action_rx,
                 state_tx,
                 event_tx,
@@ -322,6 +336,11 @@ impl AppRuntimeDriver {
             security.reconcile(&self.state);
         }
         self.wallet_sync.project_status(&mut self.state);
+        self.airgap.reconcile(
+            &self.state,
+            self.revocation.load(Ordering::SeqCst),
+            self.wallet_sync.coins_are_fresh(),
+        );
         publish_state(&mut self.state, &self.state_tx);
         let _ = self.event_tx.send(event);
     }
@@ -352,6 +371,9 @@ impl AppRuntimeDriver {
             self.expire_session();
             let now_ms = self.now_ms();
             match request {
+                RuntimeRequest::Airgap(request, generation, reply) => {
+                    self.handle_airgap(request, generation, reply);
+                }
                 RuntimeRequest::WalletSync(request) => {
                     self.wallet_sync.handle(
                         request,

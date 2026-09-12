@@ -20,7 +20,9 @@ use optn_app::{
     WalletKind, WalletSyncView, WatchOnlyKind, WatchOnlySetupPreview, RELAY_MINIMUM_FEE_RATE,
 };
 use std::collections::BTreeMap;
+pub mod airgap;
 pub mod host;
+pub use airgap::{AirgapRequest, AirgapResponse};
 pub mod security;
 pub use host::{block_on_ready, run, Renderer};
 pub use security::{StoredWallet, WalletSecurityRequest, WalletSecurityStatus};
@@ -54,6 +56,10 @@ pub trait AppTransport {
     fn dispatch<'a>(&'a self, action: AppAction) -> TransportFuture<'a, ()>;
     fn snapshot<'a>(&'a self) -> TransportFuture<'a, AppState>;
     fn next_event<'a>(&'a self) -> TransportFuture<'a, Option<AppEvent>>;
+
+    fn airgap<'a>(&'a self, _request: AirgapRequest) -> TransportFuture<'a, AirgapResponse> {
+        Box::pin(async { Err(TransportError::Unsupported) })
+    }
 
     fn refresh_wallet<'a>(&'a self) -> TransportFuture<'a, ()> {
         Box::pin(async { Err(TransportError::Unsupported) })
