@@ -255,6 +255,9 @@ enum Command {
     /// retain the same checkpoint as the GUI; restored data remains stale
     /// until a complete live refresh succeeds.
     Rescan {
+        /// Inclusive scan start; earlier history may be omitted. Zero requests full history.
+        #[arg(long)]
+        from_height: Option<u32>,
         /// Consecutive unused addresses required on each HD branch.
         #[arg(long, default_value_t = 20)]
         gap: u32,
@@ -1244,6 +1247,7 @@ async fn rescan_shared_wallet(
     all: bool,
     account_path: Option<&str>,
     xpub: Option<&str>,
+    from_height: Option<u32>,
 ) -> Result<Value> {
     use optn_runtime::chain::{
         ChainSource, ConnectionPolicy, Endpoint, EndpointKind, SourceCatalog, SourceDisposition,
@@ -1338,9 +1342,14 @@ async fn rescan_shared_wallet(
             }), ..Default::default()
         }));
         let mut worker = hd_sync_worker(cli.network, &selection.policy)?;
+        if let Some(height) = from_height {
+            runtime.request_wallet_rescan(height).await
+                .map_err(|error| CliError::Network(error.to_string()))?;
+        }
         let stack = build_native_chain_stack(selection.catalog, selection.policy, &cli.network.to_string(), &NativeChainSecrets::default()).await;
-        runtime.sync_hd_wallet(&mut *stack.service.lock().await, &mut worker, xpub,
-            optn_runtime::hd_sync::HdSyncLimits { gap_limit: gap, addresses_per_branch: cap })
+        worker = worker.with_accepted_headers(stack.headers.clone());
+        runtime.sync_hd_wallet_from_floor(&mut *stack.service.lock().await, &mut worker, xpub,
+            optn_runtime::hd_sync::HdSyncLimits { gap_limit: gap, addresses_per_branch: cap }, from_height)
             .await.map_err(|error| CliError::Network(format!("HD rescan incomplete: {error}")))?;
         let status = runtime.subscribe_wallet_sync().borrow().clone();
         if !status.sync.history_fresh || !status.sync.utxos_fresh {
@@ -1369,7 +1378,9 @@ async fn rescan_shared_wallet(
         let confirmed_total = state.wallet_sync.confirmed_sats.ok_or_else(|| CliError::Protocol("HD balance is unavailable".into()))?;
         let unconfirmed_total = state.wallet_sync.pending_sats;
         let total = state.wallet_sync.total_sats().ok_or_else(|| CliError::Protocol("HD total balance overflow".into()))?;
-        Ok(json!({"ok":true, "hd":true, "complete":true, "network":cli.network.to_string(),
+        Ok(json!({"ok":true, "hd":true,
+            "complete":state.wallet_sync.scan_coverage.is_none_or(|coverage| coverage.skipped_below.is_none()),
+            "network":cli.network.to_string(),
             "account_path":account.to_string(), "gap":gap, "max_addresses":cap,
             "selection":"shared-native-policy", "source":snapshot.source.as_str(),
             "evidence":format!("{:?}",snapshot.evidence),
@@ -2007,6 +2018,7 @@ async fn run(cli: &Cli) -> Result<Value> {
             }))
         }
         Command::Rescan {
+            from_height,
             gap,
             all,
             max_addresses,
@@ -2020,6 +2032,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 *all,
                 account_path.as_deref(),
                 xpub.as_deref(),
+                *from_height,
             )
             .await
         }
@@ -2029,6 +2042,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 *gap,
                 optn_core::discovery::ADDRESS_CAP.max(*gap),
                 false,
+                None,
                 None,
                 None,
             )
@@ -2042,6 +2056,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 "source":result["source"], "evidence":result["evidence"],
                 "header_verifier": result["header_verifier"],
                 "mmr": result["mmr"],
+                "scan_coverage": result["wallet_sync"]["scan_coverage"],
                 "confirmed":result["confirmed"], "unconfirmed":result["unconfirmed"],
                 "total":result["total"], "complete":result["complete"]}))
         }

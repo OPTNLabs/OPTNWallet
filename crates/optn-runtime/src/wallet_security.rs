@@ -346,6 +346,8 @@ impl WalletSecurity {
                 .unwrap_or_default();
             if let Some(restored) = &binding.restored {
                 candidate.coins = restored.coins.clone();
+                candidate.wallet_sync.rescan_requested = restored.rescan_requested;
+                candidate.wallet_sync.scan_coverage = restored.scan_coverage;
             }
             let previous = binding
                 .restored

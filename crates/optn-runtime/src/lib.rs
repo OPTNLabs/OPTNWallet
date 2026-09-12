@@ -551,8 +551,10 @@ impl AppRuntimeDriver {
                         AppAction::FreezeCoin(_)
                             | AppAction::UnfreezeCoin(_)
                             | AppAction::SetCoinLabel { .. }
+                            | AppAction::RequestRescanFrom { .. }
                     )
                     .then(|| self.state.clone());
+                    let rescan_requested = matches!(action, AppAction::RequestRescanFrom { .. });
                     let annotation_generation = self.revocation.load(Ordering::SeqCst);
                     let mut event = if self.wallet_sync.requires_fresh_coins(&action, &self.state) {
                         self.state.spend = None;
@@ -582,6 +584,10 @@ impl AppRuntimeDriver {
                                 security.checkpoint_published();
                             }
                         }
+                    }
+                    if rescan_requested && event == Some(AppEvent::CoinsChanged) {
+                        self.state.spend = None;
+                        self.wallet_sync.rescan_requested();
                     }
                     // Storage may have crossed the idle deadline. Lock and drop the
                     // private session before publishing any annotation result.

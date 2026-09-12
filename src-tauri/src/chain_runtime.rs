@@ -395,9 +395,9 @@ impl NativeChainRuntime {
         // Record the instruction before the work, so the interface can show
         // what was asked for even if the scan then fails or is slow.
         self.owner
-            .dispatch(optn_app::AppAction::RequestRescanFrom { height })
+            .request_wallet_rescan(height)
             .await
-            .map_err(|_| "The wallet runtime is no longer running.")?;
+            .map_err(|error| error.to_string())?;
         self.sync_wallet_from(Some(height)).await
     }
 

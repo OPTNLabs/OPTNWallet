@@ -25,7 +25,8 @@ use std::collections::HashSet;
 /// Bounded before both decryption and JSON decoding. No secrets are stored, but
 /// the public account and history are identifying and must remain encrypted.
 pub const MAX_CHECKPOINT_BYTES: usize = 64 * 1024 * 1024;
-const FORMAT: &str = "optn-hd-restart-v2";
+const FORMAT: &str = "optn-hd-restart-v3";
+const ALLOCATION_FORMAT: &str = "optn-hd-restart-v2";
 const LEGACY_FORMAT: &str = "optn-hd-restart-v1";
 
 /// Native persistence port. The runtime supplies a private-session key and an
@@ -54,6 +55,8 @@ pub struct WalletCheckpoint {
     account: AccountPath,
     pub(crate) account_xpub: String,
     pub(crate) allocation: Option<HdAddressAllocation>,
+    pub(crate) scan_coverage: Option<optn_app::ScanCoverageView>,
+    pub(crate) rescan_requested: Option<u32>,
     pub(crate) state: WalletReconciliation,
     pub(crate) coins: CoinSet,
 }
@@ -79,6 +82,10 @@ struct StoredCheckpoint {
     annotations: Vec<StoredAnnotation>,
     #[serde(default)]
     allocation: Option<HdAddressAllocation>,
+    #[serde(default)]
+    scan_coverage: Option<(u32, Option<u32>, bool)>,
+    #[serde(default)]
+    rescan_requested: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -96,6 +103,24 @@ struct StoredAnnotation {
     label: Option<String>,
     freeze: Option<FreezeReason>,
     fuse_depth: u32,
+}
+
+fn validate_scan_coverage(
+    coverage: Option<optn_app::ScanCoverageView>,
+    tip: Option<(u32, Hash32)>,
+) -> Result<(), String> {
+    if coverage.is_some_and(|coverage| {
+        tip.is_none_or(|(height, _)| coverage.from_height > height)
+            || coverage
+                .skipped_below
+                .is_some_and(|skipped| skipped == 0 || skipped > coverage.from_height)
+            || (coverage.chosen_by_holder
+                && coverage.from_height > 0
+                && coverage.skipped_below != Some(coverage.from_height))
+    }) {
+        return Err("invalid stored wallet scan coverage".into());
+    }
+    Ok(())
 }
 
 pub(crate) fn update_receive_address(app: &mut AppState) -> Result<(), String> {
@@ -172,6 +197,8 @@ impl WalletCheckpoint {
                 .ok_or("the wallet has no HD account")?
                 .clone(),
             allocation: app.hd_addresses.clone(),
+            scan_coverage: app.wallet_sync.scan_coverage,
+            rescan_requested: app.wallet_sync.rescan_requested,
             state: state.clone(),
             coins: app.coins.clone(),
         };
@@ -188,6 +215,13 @@ impl WalletCheckpoint {
     }
 
     pub(crate) fn validate_wallet(&self, app: &AppState) -> Result<(), String> {
+        validate_scan_coverage(
+            self.scan_coverage,
+            self.state
+                .authoritative
+                .as_ref()
+                .and_then(|snapshot| snapshot.chain_tip),
+        )?;
         let wallet = app
             .wallet
             .as_ref()
@@ -256,6 +290,10 @@ impl WalletCheckpoint {
     /// nonce with OS randomness for each write; UI/transport never chooses one.
     pub fn seal(&self, key: &PackKey, nonce: &[u8; NONCE_LEN]) -> Result<Vec<u8>, String> {
         let snapshot = self.state.authoritative.as_ref();
+        validate_scan_coverage(
+            self.scan_coverage,
+            snapshot.and_then(|snapshot| snapshot.chain_tip),
+        )?;
         let book = snapshot.and_then(|snapshot| snapshot.value.hd.as_ref());
         let stored = StoredCheckpoint {
             format: FORMAT.into(),
@@ -288,6 +326,14 @@ impl WalletCheckpoint {
                 })
                 .collect(),
             allocation: self.allocation.clone(),
+            scan_coverage: self.scan_coverage.map(|coverage| {
+                (
+                    coverage.from_height,
+                    coverage.skipped_below,
+                    coverage.chosen_by_holder,
+                )
+            }),
+            rescan_requested: self.rescan_requested,
         };
         let plaintext =
             serde_json::to_vec(&stored).map_err(|_| "cannot encode wallet checkpoint")?;
@@ -308,16 +354,32 @@ impl WalletCheckpoint {
             .map_err(|error| error.to_string())?;
         let stored: StoredCheckpoint =
             serde_json::from_slice(&plaintext).map_err(|_| "invalid wallet checkpoint data")?;
-        if ![FORMAT, LEGACY_FORMAT].contains(&stored.format.as_str()) {
+        if ![FORMAT, ALLOCATION_FORMAT, LEGACY_FORMAT].contains(&stored.format.as_str()) {
             return Err("unsupported wallet checkpoint format or source".into());
         }
+        if stored.format != FORMAT
+            && (stored.scan_coverage.is_some() || stored.rescan_requested.is_some())
+        {
+            return Err("scan preferences require checkpoint format v3".into());
+        }
+        let scan_coverage =
+            stored
+                .scan_coverage
+                .map(
+                    |(from_height, skipped_below, chosen_by_holder)| optn_app::ScanCoverageView {
+                        from_height,
+                        skipped_below,
+                        chosen_by_holder,
+                    },
+                );
+        validate_scan_coverage(scan_coverage, stored.tip)?;
         let branch_lengths: [u32; 4] =
             match (stored.format.as_str(), stored.branch_lengths.as_slice()) {
                 (LEGACY_FORMAT, [receive, change, old_defi]) if stored.allocation.is_none() => {
                     // v1 used branch 2. Never reinterpret that history as branch 7.
                     [*receive, *change, 0, *old_defi]
                 }
-                (FORMAT, [receive, change, defi, compatibility]) => {
+                (FORMAT | ALLOCATION_FORMAT, [receive, change, defi, compatibility]) => {
                     [*receive, *change, *defi, *compatibility]
                 }
                 _ => return Err("invalid checkpoint branch layout".into()),
@@ -343,10 +405,11 @@ impl WalletCheckpoint {
                 (source, evidence)
             }
             (None, None)
-                if stored.format == FORMAT
+                if [FORMAT, ALLOCATION_FORMAT].contains(&stored.format.as_str())
                     && stored.allocation.is_some()
                     && branch_lengths == [0; 4]
                     && stored.tip.is_none()
+                    && scan_coverage.is_none()
                     && stored.transactions.is_empty()
                     && stored.annotations.is_empty() =>
             {
@@ -356,6 +419,8 @@ impl WalletCheckpoint {
                     account,
                     account_xpub,
                     allocation: stored.allocation,
+                    scan_coverage: None,
+                    rescan_requested: stored.rescan_requested,
                     state: WalletReconciliation::default(),
                     coins: CoinSet::new(),
                 });
@@ -429,6 +494,8 @@ impl WalletCheckpoint {
             account,
             account_xpub,
             allocation: stored.allocation,
+            scan_coverage,
+            rescan_requested: stored.rescan_requested,
             state,
             coins,
         })
@@ -466,6 +533,8 @@ mod tests {
                 tip: None,
                 transactions: vec![],
                 annotations: vec![],
+                scan_coverage: None,
+                rescan_requested: None,
                 allocation: Some(HdAddressAllocation::default()),
             },
         )
@@ -510,6 +579,34 @@ mod tests {
             }
             assert!(WalletCheckpoint::open(&key, &encoded(&key, &stored, index + 2)).is_err());
         }
+    }
+
+    #[test]
+    fn v2_migrates_and_v3_retains_pending_rescan_without_inventing_coverage() {
+        let (key, mut stored) = fixture();
+        stored.format = ALLOCATION_FORMAT.into();
+        let previous = WalletCheckpoint::open(&key, &encoded(&key, &stored, 20)).unwrap();
+        assert_eq!(previous.scan_coverage, None);
+        assert_eq!(previous.rescan_requested, None);
+        stored.rescan_requested = Some(50);
+        assert!(WalletCheckpoint::open(&key, &encoded(&key, &stored, 21)).is_err());
+        stored.format = FORMAT.into();
+        let pending = WalletCheckpoint::open(&key, &encoded(&key, &stored, 22)).unwrap();
+        let resumed =
+            WalletCheckpoint::open(&key, &pending.seal(&key, &fixture_nonce(24)).unwrap()).unwrap();
+        assert_eq!(resumed.rescan_requested, Some(50));
+        assert!(resumed.state.authoritative.is_none());
+        assert_eq!(resumed.scan_coverage, None);
+        // A pending instruction is not proof that any range has been scanned.
+        stored.scan_coverage = Some((50, Some(50), true));
+        assert!(WalletCheckpoint::open(&key, &encoded(&key, &stored, 25)).is_err());
+        let mut invalid = pending;
+        invalid.scan_coverage = Some(optn_app::ScanCoverageView {
+            from_height: 50,
+            skipped_below: Some(50),
+            chosen_by_holder: true,
+        });
+        assert!(invalid.seal(&key, &fixture_nonce(27)).is_err());
     }
 
     #[test]
