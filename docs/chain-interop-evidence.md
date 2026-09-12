@@ -141,3 +141,77 @@ Recorded so the gap is not mistaken for a pass.
   has not been exercised against these nodes.
 - **Reorg and restart.** The header store and the replay module have unit
   coverage for both, but neither has been driven against a live node here.
+
+## PR #89 CashCode validation — 2026-09-12
+
+This section is separate from the historical PR #63 regtest evidence above.
+The designated Chipnet test profile was loaded through Windows Credential
+Manager; no recovery phrase or private key was exported. All destinations are
+test-wallet addresses. The new receipt discovery and sweep use `optn-runtime`
+and `optn-core`; desktop TypeScript only adapts IPC, UI, and existing persistence.
+
+### Fulcrum: live discovery and signed sweep preview
+
+With a saved exact-source policy selecting `chipnet.bch.ninja:50002` (TLS),
+`optn --network chipnet --profile <test-profile> --network-config-dir <fulcrum-config>
+--json --timeout 600 rpa discover --from-height 323041` returned:
+
+- Complete requested scope through height **323130**, including mempool.
+- Receipt `7658fbe1cf34f6c1393ab017e92f36e186a199e8b512a1786bff547b0a8d2680:0`,
+  **50,002 satoshis**, confirmed at height **323041**, unspent, no tokens.
+- Stealth address `bchtest:qqa2np3npedy36s8kdj7glpndwr4ap0hkyhd6fa7h4` and its
+  public input-origin recipe. No known-transaction hint was supplied to discovery.
+- Evidence remains `ServerAssertion`; an index response is not a consensus proof.
+
+On the same saved route, `rpa sweep
+bchtest:qqs3eeafad6hv2d8g7tzc9xhl5p72xtzjcfyv70a96 --from-height 323041 --dry-run`
+returned one input, **49,809 satoshis** back to the test wallet, and a **193-satoshi**
+fee. Its transaction ID was
+`43947112df64d86a11d870c1f6e4f46048769dbc0707a7bfce109a39bd092982`.
+The signed bytes passed an independent libauth BCH VM check against the real
+receipt's value and locking script. This preview was **not broadcast**.
+
+The new selected-source `rpa pay <self-cashcode> 50003 --gap 1 --dry-run`
+also completed on that Fulcrum policy. It discovered the real **18,778,868-satoshi**
+HD change output, built a **50,003-satoshi** payment plus **18,728,639-satoshi**
+change and a **226-satoshi** fee, and ground the input prefix in 3,206 attempts.
+The resulting transaction
+`a5ffbf8de6152ce45e630182464c5f612015a7ccf5d7b48c37074a6c4b61eb99`
+passed the independent BCH VM against its freshly fetched parent transaction.
+It was not broadcast. Funding discovery and submission share the selected source
+and endpoint; the existing Rust payment builder is reused across providers.
+
+### BIP37: scope and verification boundary
+
+Live Chipnet discovery is not yet established by the evidence recorded here.
+Earlier attempts failed during cold header synchronization; they did not publish
+partial receipts. Consecutive public-header batches now reuse the selected-node
+connection, with one bounded same-node reconnect on transport interruption.
+
+Discovery uses an all-match filter and scans complete blocks locally from the
+inclusive birthday. It never uploads candidate outpoints or derived stealth
+scripts to another provider. Accepted headers, complete merkle matches, and
+transaction identities are checked before publication. A late failure rejects
+the pass rather than reporting partial history as complete.
+
+BIP37 block discovery is **confirmed-chain-only**: it cannot establish absence
+of unconfirmed spends. Both UI and CLI expose this limitation. A source or Tor
+policy change invalidates publication. Mainnet P2P remains gated on a reviewed
+checkpoint; these Chipnet checks do not establish mainnet or packaged-device parity.
+
+### Local checks and unrelated emulator boundary
+
+- Full TypeScript suite (`npm test -- --maxWorkers=1`): **1,927 passed,
+  10 skipped** across 327 files, against the regenerated Rust WASM.
+- Desktop production bundle (`npx vite build --config vite.desktop.config.ts`),
+  core TypeScript check, and generated-WASM freshness check passed.
+- Rust core, runtime receipt/sweep, accepted-header continuation, BIP37, and
+  native locator/network regression tests passed; native and WASM checks passed
+  using Rust **1.98.1**.
+- The review-summary SeedCash fixture now uses distinct parent-output values.
+  Its optional live signer test was attempted against the existing external
+  SeedCash checkout, but that checkout lacks the compatible signer API and its
+  signer references a missing `Bip44.derive_private_child_key`. This is not a
+  successful emulator-signing result and is not required by CashCode discovery.
+- Packaged desktop interaction, mainnet spending, and reorg/restart live tests
+  are not established by these results.

@@ -488,6 +488,9 @@ enum RpaCommand {
         fee_rate: u64,
         #[arg(long, default_value_t = 20)]
         gap: u32,
+        /// Inclusive wallet birth height. Required for a selected P2P provider.
+        #[arg(long)]
+        from_height: Option<u32>,
         /// Build, grind and sign, print the raw transaction, but do not broadcast.
         #[arg(long)]
         dry_run: bool,
@@ -2776,6 +2779,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 sats,
                 fee_rate,
                 gap,
+                from_height,
                 dry_run,
                 yes,
             } => {
@@ -2807,19 +2811,24 @@ async fn run(cli: &Cli) -> Result<Value> {
                     return Err(CliError::Usage(reason));
                 }
                 let wallet = read_wallet(cli).await?;
-                let paid = rpa_pay(
-                    client()?,
-                    cli.network,
-                    &wallet,
-                    &decoded,
-                    *sats,
-                    *fee_rate,
-                    *gap,
-                    !*dry_run,
-                )
-                .await?;
+                let paid = if configured_chain(cli)?.is_some() {
+                    rpa_pay_selected(cli, &wallet, &decoded, *sats, *fee_rate, *gap, *from_height)
+                        .await?
+                } else {
+                    rpa_pay(
+                        client()?,
+                        cli.network,
+                        &wallet,
+                        &decoded,
+                        *sats,
+                        *fee_rate,
+                        *gap,
+                        !*dry_run,
+                    )
+                    .await?
+                };
                 Ok(json!({
-                    "ok": true,
+                    "ok": paid.broadcast_state == "not_broadcast" || paid.broadcast_state == "submitted",
                     "dry_run": *dry_run,
                     "network": cli.network.to_string(),
                     "txid": paid.txid,
@@ -2830,6 +2839,11 @@ async fn run(cli: &Cli) -> Result<Value> {
                     "grind_tries": paid.grind_tries,
                     "sequence": paid.sequence,
                     "raw": if *dry_run { Some(paid.raw_hex) } else { None },
+                    "state": paid.broadcast_state,
+                    "source": paid.source,
+                    "protocol": paid.protocol.map(|protocol| format!("{protocol:?}")),
+                    "includes_mempool": paid.includes_mempool,
+                    "warning": if paid.includes_mempool { "Submission is not confirmation; do not blindly retry an uncertain broadcast." } else { "Confirmed-chain funding only: BIP37 does not check unconfirmed spends. Submission is not confirmation; do not blindly retry an uncertain broadcast." },
                 }))
             }
         },
@@ -3109,6 +3123,10 @@ struct RpaSpend {
     grind_tries: u32,
     sequence: u32,
     raw_hex: String,
+    broadcast_state: &'static str,
+    source: Option<String>,
+    protocol: Option<ProtocolFamily>,
+    includes_mempool: bool,
 }
 
 /// Build, grind and optionally broadcast a payment to a cashcode.
@@ -3139,6 +3157,9 @@ async fn rpa_pay(
             let path = hd::address_path(coin, 0, change, index);
             let address = wallet.address(network, &path)?;
             for u in client.utxos(&address.electrum_scripthash()).await? {
+                if u.token_data.is_some() {
+                    continue;
+                }
                 let mut txid = decode_hex32(&u.tx_hash)?;
                 txid.reverse();
                 spendable.push((
@@ -3154,6 +3175,210 @@ async fn rpa_pay(
             }
         }
     }
+    let mut paid = build_rpa_payment(network, wallet, code, sats, fee_rate, spendable)?;
+    if broadcast {
+        paid.txid = Some(client.broadcast(&paid.raw_hex).await?);
+        paid.broadcast_state = "submitted";
+    }
+    Ok(paid)
+}
+
+async fn rpa_pay_selected(
+    cli: &Cli,
+    wallet: &Wallet,
+    code: &rpa::Cashcode,
+    sats: u64,
+    fee_rate: u64,
+    gap: u32,
+    from_height: Option<u32>,
+) -> Result<RpaSpend> {
+    use optn_runtime::chain_service::{ChainBackendError, ChainOperation, ChainServiceError};
+    let selection = configured_chain(cli)?.ok_or_else(|| {
+        CliError::Usage("Shared Cash Code funding requires a saved source policy".into())
+    })?;
+    if from_height == Some(0) {
+        return Err(CliError::Usage("Selected P2P Cash Code funding requires --from-height with the wallet's nonzero birth height".into()));
+    }
+    let limits = optn_runtime::hd_sync::HdSyncLimits {
+        gap_limit: gap,
+        addresses_per_branch: 1000,
+    };
+    limits.validate().map_err(CliError::Usage)?;
+    let account = hd::AccountPath::default_for(cli.network);
+    let xpub = wallet.account_xpub_at(account)?;
+    let receive = optn_core::watch_only::address_under_account(cli.network, &xpub, 0, 0)?;
+    let runtime = optn_runtime::AppRuntime::spawn(optn_app::AppState {
+        network: cli.network,
+        wallet: Some(optn_app::OpenedWallet {
+            kind: optn_app::WalletKind::WatchOnly,
+            name: "Cash Code funding observation".into(),
+            receive_address: receive.address,
+            master_fingerprint: None,
+            account_path: account.to_string(),
+            multisig_policy: None,
+            account_xpub: Some(xpub.clone()),
+        }),
+        ..Default::default()
+    });
+    let budget = std::time::Duration::from_secs(cli.timeout.unwrap_or(600));
+    let stack = tokio::time::timeout(
+        budget,
+        build_native_chain_stack(
+            selection.catalog,
+            selection.policy,
+            &cli.network.to_string(),
+            &NativeChainSecrets::default(),
+        ),
+    )
+    .await
+    .map_err(|_| {
+        CliError::Network("Cash Code funding connection timed out before signing".into())
+    })?;
+    let mut service = stack.service.lock().await;
+    let route = service
+        .routes_for_operation(ChainOperation::WalletRefresh)
+        .into_iter()
+        .next()
+        .ok_or_else(|| {
+            CliError::Network("No selected Cash Code funding route is available".into())
+        })?;
+    let p2p = matches!(
+        route.protocol,
+        ProtocolFamily::Bip37 | ProtocolFamily::Neutrino
+    );
+    if p2p && from_height.is_none() {
+        return Err(CliError::Usage("Selected P2P Cash Code funding requires --from-height with the wallet's nonzero birth height".into()));
+    }
+    let policy = optn_runtime::chain::ConnectionPolicy::exact(route.source.clone(), route.protocol);
+    let mut worker =
+        hd_sync_worker(cli.network, &policy)?.with_accepted_headers(stack.headers.clone());
+    service.set_policy(policy);
+    // Freeze this local funding session to one exact endpoint, including when
+    // a catalog source offers multiple transports. Nothing edits saved policy.
+    service
+        .catalog_mut()
+        .get_mut(&route.source)
+        .ok_or_else(|| CliError::Network("Cash Code funding source disappeared".into()))?
+        .endpoints
+        .retain(|endpoint| Some(endpoint) == route.endpoint.as_ref());
+    tokio::time::timeout(
+        budget,
+        runtime.sync_hd_wallet_from_floor(&mut service, &mut worker, xpub, limits, from_height),
+    )
+    .await
+    .map_err(|_| CliError::Network("Cash Code funding scan timed out before signing".into()))?
+    .map_err(|error| CliError::Network(format!("Cash Code HD funding incomplete: {error}")))?;
+    let status = runtime.subscribe_wallet_sync().borrow().clone();
+    if !status.sync.history_fresh || !status.sync.utxos_fresh {
+        return Err(CliError::Network(
+            "Cash Code funding scan did not complete its requested scope".into(),
+        ));
+    }
+    let snapshot = status.authoritative.ok_or_else(|| {
+        CliError::Protocol("Cash Code funding has no authoritative snapshot".into())
+    })?;
+    let book = snapshot
+        .value
+        .hd
+        .as_ref()
+        .ok_or_else(|| CliError::Protocol("Cash Code funding has no HD address book".into()))?;
+    let mut spendable = Vec::new();
+    for address in book.branches.iter().flatten() {
+        let script = Address::decode(&address.address)
+            .map_err(CliError::Protocol)?
+            .script_pubkey();
+        // Reproduce ownership from the native wallet, not the provider's labels.
+        if wallet.address(cli.network, &address.path)?.script_pubkey() != script {
+            return Err(CliError::Protocol(
+                "Cash Code funding path does not belong to the unlocked wallet".into(),
+            ));
+        }
+        for output in snapshot.value.script_outputs(&script)? {
+            if output.output.token.is_some() {
+                continue;
+            }
+            let mut display = output.txid;
+            display.reverse();
+            spendable.push((
+                tx::Utxo {
+                    txid: output.txid,
+                    vout: output.vout,
+                    value: output.output.value,
+                    script_pubkey: script.clone(),
+                },
+                address.path.clone(),
+                hex(&display),
+            ));
+        }
+    }
+    if snapshot.source != route.source {
+        return Err(CliError::Network("Cash Code funding source changed".into()));
+    }
+    let mut paid = build_rpa_payment(cli.network, wallet, code, sats, fee_rate, spendable)?;
+    paid.source = Some(route.source.as_str().to_owned());
+    paid.protocol = Some(route.protocol);
+    paid.includes_mempool = !matches!(
+        route.protocol,
+        ProtocolFamily::Bip37 | ProtocolFamily::Neutrino
+    );
+    if matches!(
+        &cli.command,
+        Command::Rpa {
+            action: RpaCommand::Pay { dry_run: false, .. }
+        }
+    ) {
+        let raw = decode_hex(&paid.raw_hex)?;
+        let txid = optn_core::header_hash::sha256d(&raw);
+        let mut display = txid;
+        display.reverse();
+        paid.txid = Some(hex(&display));
+        let broadcast_route = service
+            .routes_for_operation(ChainOperation::Broadcast)
+            .into_iter()
+            .find(|candidate| {
+                candidate.source == route.source
+                    && candidate.protocol == route.protocol
+                    && candidate.endpoint == route.endpoint
+            });
+        paid.broadcast_state = if let Some(route) = broadcast_route {
+            match tokio::time::timeout(
+                budget,
+                service.execute_on_route(&route, &ChainRequest::Broadcast { raw_tx: raw, txid }),
+            )
+            .await
+            {
+                Ok(Ok(observed)) if matches!(observed.value, ChainPayload::BroadcastObserved { txid: observed } if observed == txid) => {
+                    "submitted"
+                }
+                Ok(Err(
+                    ChainServiceError::NoEligibleProvider | ChainServiceError::RouteUnavailable,
+                )) => "unavailable",
+                Ok(Err(ChainServiceError::Exhausted { attempts }))
+                    if !attempts.is_empty()
+                        && attempts.iter().all(|attempt| {
+                            matches!(attempt.error, ChainBackendError::Rejected(_))
+                        }) =>
+                {
+                    "rejected"
+                }
+                _ => "uncertain",
+            }
+        } else {
+            "unavailable"
+        };
+    }
+    Ok(paid)
+}
+
+fn build_rpa_payment(
+    network: Network,
+    wallet: &Wallet,
+    code: &rpa::Cashcode,
+    sats: u64,
+    fee_rate: u64,
+    spendable: Vec<(tx::Utxo, String, String)>,
+) -> Result<RpaSpend> {
+    let coin = default_coin_type(network);
     if spendable.is_empty() {
         return Err(CliError::Usage(
             "no spendable outputs found - check the network and the gap limit".to_string(),
@@ -3206,9 +3431,15 @@ async fn rpa_pay(
         // first — and has to happen again for every rotation.
         let first = &chosen[0];
         let (first_path, first_display) = lookup(first)?;
-        let first_priv: [u8; 32] = wallet.signing_key(&first_path)?.to_bytes().into();
-        let secret =
-            rpa::shared_secret(&first_priv, &code.scan_pubkey, &first_display, first.vout)?;
+        let first_priv = zeroize::Zeroizing::new(<[u8; 32]>::from(
+            wallet.signing_key(&first_path)?.to_bytes(),
+        ));
+        let secret = zeroize::Zeroizing::new(rpa::shared_secret(
+            &first_priv,
+            &code.scan_pubkey,
+            &first_display,
+            first.vout,
+        )?);
         let stealth = rpa::payment_address(&code.spend_pubkey, &secret, network, 0)?;
 
         let mut outputs = vec![tx::Output::new(sats, stealth.script_pubkey())];
@@ -3261,20 +3492,18 @@ async fn rpa_pay(
     };
 
     let raw_hex = hex(&raw);
-    let txid = if broadcast {
-        Some(client.broadcast(&raw_hex).await?)
-    } else {
-        None
-    };
-
     Ok(RpaSpend {
-        txid,
+        txid: None,
         stealth_address: stealth.encode(),
         fee,
         change: change_value,
         grind_tries,
         sequence,
         raw_hex,
+        broadcast_state: "not_broadcast",
+        source: None,
+        protocol: None,
+        includes_mempool: true,
     })
 }
 
@@ -3660,6 +3889,51 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod rpa_sweep_tests {
     use super::*;
+
+    #[test]
+    fn shared_funding_builds_a_detectable_cashcode_payment_without_broadcast() {
+        // Public BIP39 test vector only, never a live wallet.
+        let wallet = Wallet::from_mnemonic("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about", "").unwrap();
+        let scan = [21u8; 32];
+        let spend = [22u8; 32];
+        let code = rpa::decode(&rpa::encode(
+            &rpa::scan_public_key(&scan).unwrap(),
+            &rpa::scan_public_key(&spend).unwrap(),
+            Network::Chipnet,
+            rpa::RPA_PREFIX_BITS,
+        ))
+        .unwrap();
+        let path = hd::address_path(default_coin_type(Network::Chipnet), 0, false, 0);
+        let address = wallet.address(Network::Chipnet, &path).unwrap();
+        let internal: [u8; 32] = std::array::from_fn(|index| index as u8);
+        let mut display = internal;
+        display.reverse();
+        let funding = vec![(
+            tx::Utxo {
+                txid: internal,
+                vout: 1,
+                value: 50_000,
+                script_pubkey: address.script_pubkey(),
+            },
+            path,
+            hex(&display),
+        )];
+        let paid = build_rpa_payment(Network::Chipnet, &wallet, &code, 10_000, 1, funding).unwrap();
+        assert_eq!(paid.broadcast_state, "not_broadcast");
+        assert!(paid.txid.is_none());
+        let raw = decode_hex(&paid.raw_hex).unwrap();
+        let matches = rpa::scan_transaction(
+            &raw,
+            &scan,
+            &rpa::scan_public_key(&spend).unwrap(),
+            Network::Chipnet,
+        )
+        .unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].address, paid.stealth_address);
+        assert_eq!(matches[0].value, 10_000);
+        assert_eq!(tx::decode(&raw).unwrap().inputs[0].0, internal);
+    }
 
     #[tokio::test]
     async fn sweep_requires_confirmation_before_wallet_or_network_access() {

@@ -218,21 +218,23 @@ pub fn prepare_cashcode_sweep(
         return Err("No unspent, non-token Cash Code receipts to sweep".into());
     }
     let script = destination.script_pubkey();
+    let output_bytes = 8 + optn_core::tx::varint(script.len() as u64).len() + script.len();
+    // BCHN default relay dust policy (1 sat/byte), independent of the user's
+    // transaction fee rate: three times output serialization plus 148 bytes.
+    let dust_threshold = 3 * (output_bytes as u64 + 148);
     // Maximum compressed P2PKH DER input length; CompactSize grows at 253 inputs.
     let maximum_bytes = 4
         + optn_core::tx::varint(inputs.len() as u64).len()
         + 149 * inputs.len()
         + 1
-        + 8
-        + optn_core::tx::varint(script.len() as u64).len()
-        + script.len()
+        + output_bytes
         + 4;
     let fee = fee_rate
         .checked_mul(maximum_bytes as u64)
         .ok_or("Cash Code sweep fee overflow")?;
     let amount = total
         .checked_sub(fee)
-        .filter(|amount| *amount >= 546)
+        .filter(|amount| *amount >= dust_threshold)
         .ok_or("Cash Code receipts cannot cover the fee and a non-dust output")?;
     let input_count = inputs.len();
     let raw = Transaction::new(inputs, vec![Output::new(amount, script)])
@@ -730,6 +732,25 @@ mod tests {
             CashcodeScanKeys::from_scan_key(Network::Chipnet, *keys.scan, keys.spend_public)
                 .unwrap();
         assert!(prepare_cashcode_sweep(&scan_only, &scan, &destination, 1).is_err());
+        let p2sh = Address::from_hash(
+            Network::Chipnet.prefix(),
+            optn_core::cashaddr::AddressKind::P2sh,
+            [8; 20],
+        )
+        .encode();
+        scan.receipts[0].value_sats = 731; // 191-byte fee plus 540-sat P2SH20 dust.
+        assert_eq!(
+            prepare_cashcode_sweep(&keys, &scan, &p2sh, 1)
+                .unwrap()
+                .amount_sats,
+            540
+        );
+        scan.receipts[0].value_sats = 730;
+        assert!(prepare_cashcode_sweep(&keys, &scan, &p2sh, 1).is_err());
+        let mut payload = vec![0x0b]; // Address currently rejects P2SH32, before signing.
+        payload.extend_from_slice(&[8; 32]);
+        let p2sh32 = optn_core::cashaddr::encode_payload(Network::Chipnet.prefix(), &payload);
+        assert!(prepare_cashcode_sweep(&keys, &scan, &p2sh32, 1).is_err());
         scan.receipts[0].prevout_index += 1;
         assert!(prepare_cashcode_sweep(&keys, &scan, &destination, 1).is_err());
         scan.receipts[0].unspent = false;

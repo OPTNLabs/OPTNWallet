@@ -34,9 +34,10 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Tor gets its own budget: a SOCKS connect is a circuit build, not a TCP
 /// handshake. Measured against a live daemon, an isolated circuit to one
 /// peer usually lands in 2-5s but occasionally takes over 20s, and a
-/// genesis-to-tip header sync is ~160 sequential connections. Sharing the
+/// genesis-to-tip header sync needs ~160 sequential batches. Sharing the
 /// direct-TCP timeout made the privacy route the one route that could
-/// never finish. Stream isolation per connection is kept.
+/// never finish. Each new connection is isolated; consecutive public-header
+/// batches reuse their established connection to the exact selected peer.
 const TOR_CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
 const IO_TIMEOUT: Duration = Duration::from_secs(15);
 /// Reading a message body over Tor is bounded by circuit bandwidth, not by
@@ -175,6 +176,8 @@ pub struct Bip37Backend {
     /// again. A cooldown, not a verdict: the peer keeps every other capability
     /// it has, and is asked again once the time passes.
     shv_status: Mutex<Option<ShvCapabilityStatus>>,
+    /// Public-header transport only, never a source of accepted chain state.
+    header_stream: Mutex<Option<TcpStream>>,
 }
 
 /// Diagnostic state for one peer's proof route.
@@ -260,6 +263,7 @@ impl Bip37Backend {
             probe,
             headers,
             shv_status: Mutex::new(None),
+            header_stream: Mutex::new(None),
         })
     }
 
@@ -291,15 +295,57 @@ impl Bip37Backend {
             .endpoint
             .port
             .unwrap_or_else(|| params_for(&self.config.network).default_port);
-        let mut headers = fetch_headers_after_raw(
-            &self.config.endpoint.host,
-            port,
-            &self.config.network,
-            &self.config.transport,
-            locator,
-        )
-        .await
-        .map_err(ChainBackendError::Protocol)?;
+        // Taking the stream before awaiting also makes cancellation safe: an
+        // interrupted reply cannot leave unread bytes for the next request.
+        let mut slot = self.header_stream.lock().await;
+        let mut retried = false;
+        let mut headers = loop {
+            let mut stream = match slot.take() {
+                Some(stream) => stream,
+                None => {
+                    let mut stream =
+                        connect_peer(&self.config.endpoint.host, port, &self.config.transport)
+                            .await
+                            .map_err(ChainBackendError::Protocol)?;
+                    handshake(
+                        &mut stream,
+                        params_for(&self.config.network).magic,
+                        io_timeout(&self.config.transport),
+                    )
+                    .await
+                    .map_err(|error| {
+                        ChainBackendError::Protocol(format!(
+                            "header sync from height {start_height}, handshake: {error}"
+                        ))
+                    })?;
+                    stream
+                }
+            };
+            let result = fetch_headers_on_stream(
+                &mut stream,
+                params_for(&self.config.network).magic,
+                io_timeout(&self.config.transport),
+                locator,
+            )
+            .await;
+            match result {
+                Ok(headers) => {
+                    *slot = Some(stream);
+                    break headers;
+                }
+                Err(error) if !retried && header_transport_interrupted(&error) => {
+                    // One fresh isolated connection to the SAME selected peer,
+                    // requesting the SAME runtime-accepted locator. No provider,
+                    // proxy, or proof fallback is permitted.
+                    retried = true;
+                }
+                Err(error) => {
+                    return Err(ChainBackendError::Protocol(format!(
+                        "header sync from height {start_height}: {error}"
+                    )))
+                }
+            }
+        };
         headers.truncate(count as usize);
         // Deliberately not stored here. These are unverified until the runtime
         // has checked linkage, proof-of-work and difficulty; writing them into
@@ -1095,6 +1141,13 @@ fn build_getheaders_payload(locator: &[u8; 32]) -> Vec<u8> {
     p.extend_from_slice(&[0u8; 32]);
     p
 }
+
+fn header_transport_interrupted(error: &str) -> bool {
+    error == "getheaders request deadline exceeded"
+        || error.starts_with("getheaders response: read failed:")
+        || error.starts_with("getheaders response: timed out waiting for node message")
+        || error.starts_with("getheaders send failed:")
+}
 fn parse_headers_payload(payload: &[u8]) -> Result<Vec<[u8; 80]>, String> {
     let mut pos = 0;
     let count = read_varint(payload, &mut pos)? as usize;
@@ -1114,36 +1167,55 @@ pub async fn fetch_headers_after_raw(
 ) -> Result<Vec<[u8; 80]>, String> {
     let magic = params_for(network).magic;
     let mut stream = connect_peer(host, port, transport).await?;
-    handshake(&mut stream, magic, io_timeout(transport)).await?;
-    stream
-        .write_all(&encode_message(
-            magic,
-            "getheaders",
-            &build_getheaders_payload(&locator),
-        ))
+    handshake(&mut stream, magic, io_timeout(transport))
         .await
-        .map_err(|e| format!("getheaders send failed: {e}"))?;
-    for _ in 0..100 {
-        let (cmd, payload) = read_message(&mut stream, magic, io_timeout(transport)).await?;
-        if cmd == "headers" {
-            let raws = parse_headers_payload(&payload)?;
-            let mut expected = locator;
-            for raw in &raws {
-                let prev: [u8; 32] = raw[4..36].try_into().unwrap();
-                if prev != expected {
-                    return Err("header chain does not link to locator/previous header".into());
+        .map_err(|error| format!("getheaders handshake: {error}"))?;
+    fetch_headers_on_stream(&mut stream, magic, io_timeout(transport), locator).await
+}
+
+async fn fetch_headers_on_stream<S: AsyncReadExt + AsyncWriteExt + Unpin>(
+    stream: &mut S,
+    magic: [u8; 4],
+    budget: Duration,
+    locator: [u8; 32],
+) -> Result<Vec<[u8; 80]>, String> {
+    // One deadline covers writes, reads, and ping chatter. No phase can
+    // indefinitely extend a caller's public-header request.
+    tokio::time::timeout(budget, async {
+        stream
+            .write_all(&encode_message(
+                magic,
+                "getheaders",
+                &build_getheaders_payload(&locator),
+            ))
+            .await
+            .map_err(|e| format!("getheaders send failed: {e}"))?;
+        for _ in 0..100 {
+            let (cmd, payload) = read_message(stream, magic, budget)
+                .await
+                .map_err(|error| format!("getheaders response: {error}"))?;
+            if cmd == "headers" {
+                let raws = parse_headers_payload(&payload)?;
+                let mut expected = locator;
+                for raw in &raws {
+                    let prev: [u8; 32] = raw[4..36].try_into().unwrap();
+                    if prev != expected {
+                        return Err("header chain does not link to locator/previous header".into());
+                    }
+                    expected = double_sha256(raw)
                 }
-                expected = double_sha256(raw)
+                return Ok(raws);
             }
-            return Ok(raws);
+            if cmd == "ping" {
+                let _ = stream
+                    .write_all(&encode_message(magic, "pong", &payload))
+                    .await;
+            }
         }
-        if cmd == "ping" {
-            let _ = stream
-                .write_all(&encode_message(magic, "pong", &payload))
-                .await;
-        }
-    }
-    Err("node did not return headers".into())
+        Err("node did not return headers".into())
+    })
+    .await
+    .map_err(|_| "getheaders request deadline exceeded".to_owned())?
 }
 
 fn build_getdata(kind: u32, hash: &[u8; 32]) -> Vec<u8> {
@@ -1358,6 +1430,145 @@ async fn relay_tx_on_stream<S: AsyncReadExt + AsyncWriteExt + Unpin>(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn header_reconnect_never_retries_invalid_protocol_or_linkage() {
+        assert!(header_transport_interrupted(
+            "getheaders response: read failed: early eof"
+        ));
+        assert!(header_transport_interrupted(
+            "getheaders request deadline exceeded"
+        ));
+        assert!(!header_transport_interrupted(
+            "header chain does not link to locator/previous header"
+        ));
+        assert!(!header_transport_interrupted(
+            "getheaders response: wrong network magic"
+        ));
+        assert!(!header_transport_interrupted(
+            "getheaders response: checksum mismatch"
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn header_request_write_stall_is_bounded() {
+        let (mut client, _unread_peer) = tokio::io::duplex(1);
+        let result = fetch_headers_on_stream(
+            &mut client,
+            params_for("chipnet").magic,
+            Duration::from_secs(2),
+            genesis_hash("chipnet"),
+        )
+        .await;
+        assert_eq!(result.unwrap_err(), "getheaders request deadline exceeded");
+    }
+
+    #[tokio::test]
+    async fn consecutive_header_batches_reuse_the_selected_peer_connection() {
+        header_batch_connection_fixture(false).await;
+    }
+
+    #[tokio::test]
+    async fn a_closed_header_stream_reconnects_to_the_same_peer_and_locator() {
+        header_batch_connection_fixture(true).await;
+    }
+
+    async fn header_batch_connection_fixture(disconnect: bool) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let mut raw = [0u8; 80];
+        raw[4..36].copy_from_slice(&genesis_hash("chipnet"));
+        let hash = double_sha256(&raw);
+        let peer = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let magic = params_for("chipnet").magic;
+            assert_eq!(peer_read_message(&mut socket).await.unwrap().0, "version");
+            socket
+                .write_all(&encode_message(magic, "version", &build_version_payload(2)))
+                .await
+                .unwrap();
+            let mut requests = 0;
+            while requests < 2 {
+                let (command, payload) = peer_read_message(&mut socket).await.unwrap();
+                if command != "getheaders" {
+                    continue;
+                }
+                let expected = if requests == 0 {
+                    genesis_hash("chipnet")
+                } else {
+                    hash
+                };
+                assert_eq!(&payload[5..37], &expected);
+                let response = if requests == 0 {
+                    let mut response = vec![1];
+                    response.extend_from_slice(&raw);
+                    response.push(0);
+                    response
+                } else {
+                    vec![0]
+                };
+                socket
+                    .write_all(&encode_message(magic, "headers", &response))
+                    .await
+                    .unwrap();
+                requests += 1;
+                if requests == 1 && disconnect {
+                    drop(socket);
+                    socket = listener.accept().await.unwrap().0;
+                    assert_eq!(peer_read_message(&mut socket).await.unwrap().0, "version");
+                    socket
+                        .write_all(&encode_message(magic, "version", &build_version_payload(2)))
+                        .await
+                        .unwrap();
+                }
+            }
+        });
+        let store = Arc::new(optn_runtime::header_store::SharedHeaders::default());
+        store.write(|headers| headers.insert_hash_only(0, genesis_hash("chipnet")));
+        let mut backend = backend_at(port, false);
+        backend.headers = store.clone();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            backend.header_sync(1, 1).await.unwrap();
+            store.write(|headers| headers.insert_hash_only(1, hash));
+            backend.header_sync(2, 1).await.unwrap();
+            peer.await.unwrap();
+        })
+        .await
+        .expect("two header requests must use the single accepted connection");
+    }
+
+    /// Opt-in, read-only transport diagnostic. No wallet inputs or keys are used.
+    #[tokio::test]
+    #[ignore = "requires an explicitly selected Chipnet peer and local Tor SOCKS proxy"]
+    async fn live_chipnet_tor_header_batches() {
+        let host = std::env::var("OPTN_BIP37_TEST_HOST").expect("explicit test peer required");
+        let port = std::env::var("OPTN_BIP37_TEST_PORT")
+            .unwrap_or_else(|_| "48333".into())
+            .parse()
+            .unwrap();
+        let proxy_port = std::env::var("OPTN_BIP37_TEST_TOR_PORT")
+            .unwrap_or_else(|_| "9050".into())
+            .parse()
+            .unwrap();
+        let transport = Bip37Transport::Tor {
+            proxy_host: "127.0.0.1".into(),
+            proxy_port,
+        };
+        let mut locator = genesis_hash("chipnet");
+        for batch in 0..3 {
+            let started = std::time::Instant::now();
+            let headers = fetch_headers_after_raw(&host, port, "chipnet", &transport, locator)
+                .await
+                .unwrap_or_else(|error| panic!("batch {batch}: {error}"));
+            eprintln!(
+                "public header batch {batch}: {} headers in {:?}",
+                headers.len(),
+                started.elapsed()
+            );
+            assert_eq!(headers.len(), 2000);
+            locator = double_sha256(headers.last().unwrap());
+        }
+    }
+
     /// A network with parameters of its own must have a genesis of its own.
     ///
     /// Both tables end in a catch-all that returns mainnet. A network added to
@@ -1424,6 +1635,7 @@ mod tests {
             },
             headers: test_headers(),
             shv_status: Mutex::new(None),
+            header_stream: Mutex::new(None),
         };
         for unsupported in [
             WalletInterest::script(vec![0x51]),
@@ -1464,6 +1676,7 @@ mod tests {
             },
             headers: test_headers(),
             shv_status: Mutex::new(None),
+            header_stream: Mutex::new(None),
         };
         let mut script = vec![0x76, 0xa9, 0x14];
         script.extend_from_slice(&[9; 20]);
@@ -1515,6 +1728,7 @@ mod tests {
             probe,
             headers: test_headers(),
             shv_status: Mutex::new(None),
+            header_stream: Mutex::new(None),
         }
     }
 
@@ -1734,6 +1948,7 @@ mod tests {
             probe: probe(serves_shv),
             headers: test_headers(),
             shv_status: Mutex::new(None),
+            header_stream: Mutex::new(None),
         }
     }
 
