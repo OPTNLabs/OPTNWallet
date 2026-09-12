@@ -545,7 +545,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn console_history_preserves_retained_projection_and_sync_requires_selection() {
+    async fn console_history_preserves_retained_projection_and_sync_requires_open_wallet() {
         use clap::Parser;
         let directory = tempfile::tempdir().unwrap();
         let mut cli =
@@ -573,7 +573,7 @@ mod tests {
         assert_eq!(reply["wallet_sync"]["source"], Value::Null);
         let sync = serde_json::from_str(r#"{"chain":"sync"}"#).unwrap();
         let error = execute(&cli, &runtime, sync).await.unwrap_err();
-        assert!(message(error).contains("persisted shared source"));
+        assert!(message(error).contains("Open a saved HD wallet"));
         assert!(!runtime.state().wallet_sync.history_fresh);
         assert!(!runtime.state().wallet_sync.utxos_fresh);
 
