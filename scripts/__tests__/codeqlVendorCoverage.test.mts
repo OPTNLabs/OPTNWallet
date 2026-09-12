@@ -22,10 +22,10 @@ const glibReview = readFileSync(
   'utf8'
 );
 
-describe('CodeQL vendor exclusion', () => {
-  it('ignores vendor/ in the CodeQL config the security workflow loads', () => {
-    expect(codeqlConfig).toMatch(/paths-ignore:/);
-    expect(codeqlConfig).toMatch(/vendor\/\*\*/);
+describe('CodeQL vendor coverage', () => {
+  it('keeps unrestricted source coverage in the config the security workflow loads', () => {
+    expect(codeqlConfig).not.toMatch(/^\s*(?:paths|paths-ignore)\s*:/m);
+    expect(codeqlConfig).toContain('name: OPTN Wallet CodeQL');
     expect(securityAnalysis).toContain(
       'config-file: ./.github/codeql/codeql-config.yml'
     );

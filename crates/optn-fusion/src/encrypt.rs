@@ -110,17 +110,10 @@ pub fn decrypt_with_symmkey(data: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, Stri
         return Err("ciphertext not block-aligned".into());
     }
 
-    let expected = hmac16(key, ciphertext);
-    // Constant-time compare (ct crate via subtle is transitively available; a
-    // simple fold is fine here since both are 16 fixed bytes and we return the
-    // same error regardless).
-    let mut diff = 0u8;
-    for (a, b) in expected.iter().zip(tag.iter()) {
-        diff |= a ^ b;
-    }
-    if diff != 0 {
-        return Err("MAC check failed — wrong key or tampered ciphertext".into());
-    }
+    let mut mac = <HmacSha256 as Mac>::new_from_slice(key).expect("hmac key");
+    mac.update(ciphertext);
+    mac.verify_truncated_left(tag)
+        .map_err(|_| "MAC check failed — wrong key or tampered ciphertext".to_string())?;
 
     let iv = [0u8; 16];
     let plaintext = Aes256CbcDec::new(&(*key).into(), &iv.into())
@@ -172,12 +165,30 @@ mod tests {
     }
 
     #[test]
+    fn every_tag_byte_is_authenticated() {
+        let priv_k = random_nonce();
+        let ct = encrypt(b"tag proof", &pubkey_compressed(priv_k), None).unwrap();
+        let key = ecdh_key(priv_k, &parse_point(&ct[..33]).unwrap());
+        assert_eq!(decrypt_with_symmkey(&ct, &key).unwrap(), b"tag proof");
+
+        for index in ct.len() - 16..ct.len() {
+            let mut corrupted = ct.clone();
+            corrupted[index] ^= 1;
+            assert_eq!(
+                decrypt_with_symmkey(&corrupted, &key).unwrap_err(),
+                "MAC check failed — wrong key or tampered ciphertext"
+            );
+        }
+    }
+
+    #[test]
     fn fixed_padding_hides_message_length() {
         let priv_k = random_nonce();
         let pubkey = pubkey_compressed(priv_k);
         // Two different-length messages padded to the same length -> same output size.
         let a = encrypt(b"short", &pubkey, Some(80)).unwrap();
         let b = encrypt(b"a somewhat longer message here", &pubkey, Some(80)).unwrap();
+        assert_eq!(a.len(), 33 + 80 + 16); // Ephemeral key + ciphertext + truncated MAC.
         assert_eq!(a.len(), b.len());
         assert_eq!(decrypt(&a, priv_k).unwrap(), b"short");
         assert_eq!(
