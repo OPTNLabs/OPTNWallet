@@ -29,7 +29,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          node-version: 20
+          node-version: '22.23.2'
           cache: npm
 
       - name: Install deps
@@ -285,7 +285,6 @@ jobs:
             fi
             printf '%s' "$found"
           }
-          instrumentation_log="$RUNNER_TEMP/android-instrumentation.log"
           install_timeout_seconds=900
           install_apk() {
             apk_path="$1"
@@ -362,10 +361,26 @@ jobs:
             warm_output="$(timeout 180s adb -s "$emulator_serial" shell am start -W -n \
               optn.wallet.app/.MainActivity 2>&1 | tr -d '\r')" || true
             printf 'Warm-up launch on the %s flavour:\n%s\n' "$flavour" "$warm_output"
+            # am start -W has its own launch timeout. Confirm the activity
+            # actually became foreground before treating that timeout as a
+            # failed launch.
+            warm_activity_ready=
+            warm_activity_deadline=$((SECONDS + 180))
+            while [ "$SECONDS" -lt "$warm_activity_deadline" ]; do
+              warm_activity_state="$(adb_with_timeout -s "$emulator_serial" shell dumpsys \
+                activity activities 2>/dev/null | tr -d '\r')" || true
+              if printf '%s' "$warm_activity_state" | grep -Eq \
+                '(mResumedActivity:|topResumedActivity).*optn\.wallet\.app/(\.|optn\.wallet\.app\.)MainActivity'; then
+                warm_activity_ready=1
+                break
+              fi
+              sleep 2
+            done
             # Asserted, not merely logged: a flavour whose main activity cannot
             # start is exactly what this job exists to catch, and saying so here
             # names the flavour instead of surfacing later as a bare ANR.
-            if ! printf '%s' "$warm_output" | grep -q '^Status: ok'; then
+            if ! printf '%s' "$warm_output" | grep -q '^Status: ok' &&
+              [ "$warm_activity_ready" != '1' ]; then
               echo "::error::MainActivity did not start on the $flavour flavour"
               adb_with_timeout -s "$emulator_serial" logcat -d -t 200 || true
               exit 1
@@ -376,22 +391,64 @@ jobs:
             # timeout above.
             sleep 5
 
-            set +e
-            timeout 300s adb -s "$emulator_serial" shell am instrument -w -r \
-              optn.wallet.app.test/androidx.test.runner.AndroidJUnitRunner \
-              | tee "$instrumentation_log"
-            instrumentation_exit=${PIPESTATUS[0]}
-            set -e
-            if grep -q '^INSTRUMENTATION_FAILED:' "$instrumentation_log" ||
-              ! grep -q '^INSTRUMENTATION_CODE: -1$' "$instrumentation_log"; then
-              echo "::error::instrumentation tests failed on the $flavour flavour"
-              echo 'Android instrumentation output:'
-              cat "$instrumentation_log" || true
-              echo 'Android logcat:'
-              adb_with_timeout -s "$emulator_serial" logcat -d -t 400 || true
-              exit 1
-            fi
-            test "$instrumentation_exit" -eq 0
+            run_instrumentation() {
+              method="$1"
+              instrumentation_log="$RUNNER_TEMP/android-instrumentation-${flavour}-${method}.log"
+              set +e
+              timeout 240s adb -s "$emulator_serial" shell am instrument -w -r \
+                -e class "com.getcapacitor.myapp.ExampleInstrumentedTest#${method}" \
+                optn.wallet.app.test/androidx.test.runner.AndroidJUnitRunner \
+                | tee "$instrumentation_log"
+              instrumentation_exit=${PIPESTATUS[0]}
+              set -e
+              # Runner RESULT_OK (-1) is separate from per-test error/failure.
+              # Each invocation must execute and pass its one required milestone.
+              if ! awk -v expected_method="$method" '
+                { sub(/\r$/, "") }
+                /^INSTRUMENTATION_FAILED:|^INSTRUMENTATION_RESULT: shortMsg=|^FAILURES!!!/ { failed = 1 }
+                /^INSTRUMENTATION_STATUS: class=/ { class = substr($0, index($0, "=") + 1) }
+                /^INSTRUMENTATION_STATUS: test=/ { method = substr($0, index($0, "=") + 1) }
+                /^INSTRUMENTATION_STATUS: numtests=/ { count = substr($0, index($0, "=") + 1) }
+                /^INSTRUMENTATION_STATUS_CODE:/ {
+                  if (class != "com.getcapacitor.myapp.ExampleInstrumentedTest" || method != expected_method || count != "1") failed = 1
+                  if ($0 == "INSTRUMENTATION_STATUS_CODE: 1") started++
+                  else if ($0 == "INSTRUMENTATION_STATUS_CODE: 0" && started == 1) passed++
+                  else failed = 1
+                  class = method = count = ""
+                }
+                /^OK \(1 test\)$/ { summaries++ }
+                /^INSTRUMENTATION_CODE:/ {
+                  finals++
+                  if ($0 != "INSTRUMENTATION_CODE: -1") failed = 1
+                }
+                END {
+                  exit !(!failed && started == 1 && passed == 1 && summaries == 1 && finals == 1)
+                }
+              ' "$instrumentation_log"; then
+                echo "::error::Android instrumentation ${method} failed on the $flavour flavour"
+                echo 'Android instrumentation output:'
+                cat "$instrumentation_log" || true
+                echo 'Android logcat:'
+                adb_with_timeout -s "$emulator_serial" logcat -d -t 400 || true
+                exit 1
+              fi
+              test "$instrumentation_exit" -eq 0
+            }
+
+            run_instrumentation useAppContext
+            run_instrumentation mainActivity_launchesInExpectedPackage
+            run_instrumentation androidLanding_exposesAndOpensWatchOnlyWallet
+            run_instrumentation androidLanding_watchOnlyCreate
+
+            # Process-death persistence cannot be exercised by force-stopping
+            # the target from inside AndroidJUnitRunner: the runner correctly
+            # reports that as a target-process crash. End the create invocation,
+            # kill the app from the host, then start a fresh instrumentation
+            # process to prove the persisted watch-only wallet survives.
+            adb_with_timeout -s "$emulator_serial" shell am force-stop optn.wallet.app
+            sleep 3
+            run_instrumentation androidLanding_watchOnlyRelaunch
+
             echo "::endgroup::"
           done
 

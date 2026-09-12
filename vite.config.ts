@@ -71,9 +71,24 @@ export default defineConfig(({ mode }) => {
     plugins: [
       react(),
       nodePolyfills({
+        exclude: ['crypto'],
         protocolImports: true,
         globals: { process: true, Buffer: true },
       }),
+      {
+        name: 'optn-crypto-bundle-guard',
+        apply: 'build',
+        generateBundle(_options, bundle) {
+          for (const chunk of Object.values(bundle)) {
+            if (chunk.type !== 'chunk') continue;
+            for (const id of Object.keys(chunk.modules)) {
+              if (/(?:^|\/)node_modules\/(?:elliptic|crypto-browserify|browserify-sign|create-ecdh)\//.test(normalizePath(id))) {
+                this.error(`Vulnerable crypto dependency in ${chunk.fileName}: ${id}`);
+              }
+            }
+          }
+        },
+      } satisfies Plugin,
       tinySecp256k1SyncLoaderPlugin(),
     ],
     resolve: {

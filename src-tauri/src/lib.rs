@@ -1,12 +1,24 @@
 #[allow(dead_code)] // menu bar is built on the JS side now; kept for reference
+#[cfg(desktop)]
 mod menu;
 
+pub mod app_transport;
+mod appearance;
+pub mod chain_runtime;
+#[cfg(desktop)]
 pub mod clipboard;
 pub mod electrum_tcp;
 pub mod fusion;
+#[cfg(desktop)]
 pub mod hw;
+mod network_config;
 pub mod nostr_tor;
+#[cfg(desktop)]
+pub mod platform;
+#[cfg(mobile)]
+pub mod platform_mobile;
 pub mod spv;
+mod wallet_security;
 
 async fn verified_fusion_proxy<'a>(
     destination_hosts: &[&str],
@@ -299,7 +311,6 @@ fn fusion_p2p_encode_component(
 /// hashed with a per-process salt into the self-fusion pool tag, so the server
 /// can refuse to place this wallet in one fusion twice without learning
 /// anything that survives a restart.
-#[allow(clippy::too_many_arguments)]
 async fn fusion_run(
     round_id: String,
     wallet_tag: String,
@@ -673,7 +684,7 @@ async fn bip37_node_probe(
     spv::probe_node(&host, port, &network, transport).await
 }
 
-// Parse a 40-hex-char pubkey hash (hash160) into 20 bytes.
+/// Decode an even-length ASCII hex value, rejecting malformed input before I/O.
 fn decode_hex(h: &str) -> Result<Vec<u8>, String> {
     if !h.is_ascii() {
         return Err("invalid hex".into());
@@ -681,34 +692,27 @@ fn decode_hex(h: &str) -> Result<Vec<u8>, String> {
     if h.len() % 2 != 0 {
         return Err("odd-length hex".into());
     }
-    (0..h.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&h[i..i + 2], 16).map_err(|_| "invalid hex".to_string()))
-        .collect()
+    hex::decode(h).map_err(|_| "invalid hex".to_string())
 }
 
+/// Decode exactly 20 bytes of hash160 without accepting non-hex UTF-8 input.
 fn parse_pkh(h: &str) -> Result<[u8; 20], String> {
     if h.len() != 40 {
         return Err("pubkey hash must be 40 hex chars".into());
     }
     let mut out = [0u8; 20];
-    for i in 0..20 {
-        out[i] = u8::from_str_radix(&h[i * 2..i * 2 + 2], 16)
-            .map_err(|_| "invalid pubkey-hash hex".to_string())?;
-    }
+    hex::decode_to_slice(h, &mut out).map_err(|_| "invalid pubkey-hash hex".to_string())?;
     Ok(out)
 }
 
-// Parse a display (big-endian) block-hash hex into internal little-endian bytes.
+/// Parse display-order block-hash hex into internal little-endian bytes.
 fn parse_block_hash(h: &str) -> Result<[u8; 32], String> {
     if h.len() != 64 {
         return Err("block hash must be 64 hex chars".into());
     }
     let mut out = [0u8; 32];
-    for i in 0..32 {
-        out[31 - i] = u8::from_str_radix(&h[i * 2..i * 2 + 2], 16)
-            .map_err(|_| "invalid block-hash hex".to_string())?;
-    }
+    hex::decode_to_slice(h, &mut out).map_err(|_| "invalid block-hash hex".to_string())?;
+    out.reverse();
     Ok(out)
 }
 
@@ -721,6 +725,8 @@ async fn bip37_headers(
     port: u16,
     network: String,
     locator: Option<String>,
+    locator_height: Option<u32>,
+    locator_time: Option<i64>,
     tor_host: Option<String>,
     tor_port: Option<u16>,
 ) -> Result<Vec<spv::HeaderInfo>, String> {
@@ -732,7 +738,13 @@ async fn bip37_headers(
         (Some(h), Some(p)) => fusion::Transport::Tor { host: h, port: p },
         _ => fusion::Transport::Direct,
     };
-    spv::fetch_headers_after(&host, port, &network, transport, start).await
+    let walk = spv::HeaderWalk::for_network(
+        &network,
+        start,
+        locator_height.unwrap_or(0),
+        locator_time.unwrap_or(0),
+    );
+    spv::fetch_headers_after_from(&host, port, &network, transport, walk).await
 }
 
 // Scan the given blocks (display-hex hashes) for outputs/inputs touching the
@@ -777,11 +789,7 @@ async fn bip37_broadcast(
     if tx_hex.len() % 2 != 0 || tx_hex.is_empty() {
         return Err("transaction hex must be non-empty and even length".into());
     }
-    let tx_bytes: Vec<u8> = (0..tx_hex.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&tx_hex[i..i + 2], 16))
-        .collect::<Result<_, _>>()
-        .map_err(|_| "invalid transaction hex".to_string())?;
+    let tx_bytes = decode_hex(&tx_hex).map_err(|_| "invalid transaction hex".to_string())?;
     let transport = match (tor_host.as_deref(), tor_port) {
         (Some(h), Some(p)) => fusion::Transport::Tor { host: h, port: p },
         _ => fusion::Transport::Direct,
@@ -1013,6 +1021,22 @@ async fn optn_cold_file_exists(path: String) -> Result<bool, String> {
     Ok(std::path::Path::new(&path).is_file())
 }
 
+/// Select the compiled OS surface for shared capability and feature policy.
+fn host_app_surface() -> optn_app::AppSurface {
+    #[cfg(target_os = "android")]
+    {
+        optn_app::AppSurface::Android
+    }
+    #[cfg(target_os = "ios")]
+    {
+        optn_app::AppSurface::Ios
+    }
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        optn_app::AppSurface::Desktop
+    }
+}
+
 /// Public, deterministic multisig material shared with the cross-compilable
 /// CLI. This command intentionally accepts no wallet, seed, private key,
 /// session, or network endpoint: callers provide already-derived public keys
@@ -1030,6 +1054,8 @@ pub struct MultisigInspection {
     token_address: String,
 }
 
+/// Validate public keys, threshold, and network through the shared multisig core,
+/// returning deterministic BIP-67/P2SH20 scripts and addresses without wallet I/O.
 pub fn inspect_multisig(
     network: String,
     threshold: u8,
@@ -1057,6 +1083,7 @@ pub fn inspect_multisig(
     })
 }
 
+/// Expose public-only multisig inspection through the native command boundary.
 #[tauri::command]
 fn multisig_inspect(
     network: String,
@@ -1066,18 +1093,39 @@ fn multisig_inspect(
     inspect_multisig(network, threshold, public_keys)
 }
 
+/// Start the native shell, restore settings and security policy, and register
+/// platform providers before exposing the shared runtime. Security-policy load
+/// failures abort startup rather than continuing with an uninitialized policy.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_keyring::init())
-        .plugin(tauri_plugin_biometry::init())
-        .manage(clipboard::ClipboardState::new())
+        .plugin(tauri_plugin_biometry::init());
+
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_keyring::init());
+
+    #[cfg(mobile)]
+    let builder = builder.plugin(tauri_plugin_clipboard_manager::init());
+
+    builder
         .invoke_handler(tauri::generate_handler![
+            app_transport::optn_app_dispatch,
+            app_transport::optn_app_snapshot,
+            app_transport::optn_wallet_refresh,
+            app_transport::optn_wallet_rescan,
+            app_transport::optn_wallet_security,
+            app_transport::optn_airgap,
+            #[cfg(desktop)]
             clipboard::clipboard_write_text,
+            #[cfg(desktop)]
             clipboard::clipboard_read_text,
+            #[cfg(mobile)]
+            platform_mobile::clipboard_write_text,
+            #[cfg(mobile)]
+            platform_mobile::clipboard_read_text,
             optn_price_fetch,
             open_external,
             read_wallet_file,
@@ -1111,25 +1159,47 @@ pub fn run() {
             nostr_tor::nostr_tor_open,
             nostr_tor::nostr_tor_send,
             nostr_tor::nostr_tor_close,
+            #[cfg(desktop)]
             hw::session::hw_enumerate,
+            #[cfg(desktop)]
             hw::session::hw_open,
+            #[cfg(desktop)]
             hw::session::hw_close,
+            #[cfg(desktop)]
             hw::session::hw_write,
+            #[cfg(desktop)]
             hw::session::hw_read,
+            #[cfg(desktop)]
             hw::ledger::hw_ledger_open,
+            #[cfg(desktop)]
             hw::ledger::hw_ledger_exchange,
+            #[cfg(desktop)]
             hw::trezor_bridge::trezor_bridge_ping,
+            #[cfg(desktop)]
             hw::trezor_bridge::trezor_bridge_enumerate,
+            #[cfg(desktop)]
             hw::trezor_bridge::trezor_bridge_acquire,
+            #[cfg(desktop)]
             hw::trezor_bridge::trezor_bridge_release,
+            #[cfg(desktop)]
             hw::trezor_bridge::trezor_bridge_call,
+            #[cfg(desktop)]
             hw::trezor_webusb::trezor_webusb_enumerate,
+            #[cfg(desktop)]
             hw::trezor_webusb::trezor_webusb_open,
+            #[cfg(desktop)]
             hw::trezor_webusb::trezor_webusb_close,
+            #[cfg(desktop)]
             hw::trezor_webusb::trezor_webusb_write,
+            #[cfg(desktop)]
             hw::trezor_webusb::trezor_webusb_read,
         ])
         .setup(|app| {
+            use tauri::Manager;
+
+            #[cfg(desktop)]
+            app.manage(optn_platform_native::NativeClipboard::new());
+
             let log_level = if cfg!(debug_assertions) {
                 log::LevelFilter::Debug
             } else {
@@ -1165,6 +1235,43 @@ pub fn run() {
                     .timezone_strategy(tauri_plugin_log::TimezoneStrategy::UseLocal)
                     .build(),
             )?;
+            let appearance = appearance::AppearanceStore::new(
+                app.path().app_config_dir()?.join("appearance.json"),
+            );
+            let network_settings =
+                network_config::NetworkSettingsStore::new(app.path().app_config_dir()?);
+            let mut initial_state = optn_app::AppState::for_surface(host_app_surface());
+            if let Err(error) = appearance.restore(&mut initial_state) {
+                log::warn!("Could not restore appearance preferences; using defaults: {error}");
+            }
+            if let Err(error) = network_settings.restore(&mut initial_state) {
+                log::warn!(
+                    "Could not restore network preferences; keeping the existing file: {error}"
+                );
+            }
+            // Restore only non-wallet preferences before publishing the first
+            // authoritative snapshot. Wallet state is never loaded here.
+            let security = wallet_security::service(
+                app.handle().clone(),
+                app.path().app_data_dir()?.join("wallets"),
+            );
+            let (app_runtime, app_driver) =
+                optn_runtime::AppRuntime::new_with_security(initial_state, security).map_err(
+                    |error| {
+                        std::io::Error::other(format!(
+                            "Could not load wallet security settings: {error:?}"
+                        ))
+                    },
+                )?;
+            tauri::async_runtime::spawn(app_driver.run());
+            let native_chain = chain_runtime::NativeChainRuntime::spawn(
+                app_runtime.clone(),
+                network_settings.clone(),
+            );
+            app.manage(appearance);
+            app.manage(network_settings);
+            app.manage(native_chain);
+            app.manage(app_runtime);
             // Menu bar is built on the frontend in TypeScript
             // (src/platform/desktop/useMenuBar.ts) so File → Open Wallet can list
             // the actual saved wallets from the webview's WASM SQLite DB. The old
@@ -1179,6 +1286,45 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn native_hex_boundaries_reject_malformed_input() {
+        for prefix in ["雪", "😀", "aé", "+", "g"] {
+            let pkh = format!("{prefix}{}", "0".repeat(40 - prefix.len()));
+            let block = format!("{prefix}{}", "0".repeat(64 - prefix.len()));
+            assert!(parse_pkh(&pkh).is_err());
+            assert!(parse_block_hash(&block).is_err());
+        }
+        for value in ["雪a", "😀", "aé0", "+0", "0g"] {
+            assert_eq!(
+                bip37_broadcast(
+                    "unused.invalid".into(),
+                    0,
+                    "chipnet".into(),
+                    value.into(),
+                    None,
+                    None
+                )
+                .await,
+                Err("invalid transaction hex".into())
+            );
+        }
+        assert_eq!(parse_pkh(&"AB".repeat(20)).unwrap(), [0xab; 20]);
+        let mut display = std::array::from_fn::<_, 32, _>(|index| index as u8);
+        let decoded = parse_block_hash(&hex::encode_upper(display)).unwrap();
+        display.reverse();
+        assert_eq!(decoded, display);
+    }
+
+    #[test]
+    fn host_app_surface_matches_the_native_os() {
+        #[cfg(target_os = "android")]
+        assert_eq!(host_app_surface(), optn_app::AppSurface::Android);
+        #[cfg(target_os = "ios")]
+        assert_eq!(host_app_surface(), optn_app::AppSurface::Ios);
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        assert_eq!(host_app_surface(), optn_app::AppSurface::Desktop);
+    }
 
     fn test_fusion_status() -> fusion::FusionServerStatus {
         fusion::FusionServerStatus {

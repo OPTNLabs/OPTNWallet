@@ -22,10 +22,13 @@ vi.mock('../KeyService', () => ({
 }));
 
 vi.mock('../BcmrService', () => ({
-  default: vi.fn().mockImplementation(() => ({
-    getSnapshot: vi.fn(),
-    resolveIdentityRegistry: vi.fn(),
-  })),
+  // `new BcmrService()` in the SDK: the implementation must be constructible.
+  default: vi.fn().mockImplementation(function () {
+    return {
+      getSnapshot: vi.fn(),
+      resolveIdentityRegistry: vi.fn(),
+    };
+  }),
 }));
 
 vi.mock(import('@capacitor/core'), async (importOriginal) => {
@@ -46,10 +49,12 @@ vi.mock(import('@capacitor/core'), async (importOriginal) => {
 });
 
 vi.mock('../../apis/TransactionManager/TransactionManager', () => ({
-  default: () => ({
-    addOutput: vi.fn(),
-    buildTransaction: vi.fn(),
-  }),
+  default: function () {
+    return {
+      addOutput: vi.fn(),
+      buildTransaction: vi.fn(),
+    };
+  },
 }));
 
 const manifest: AddonManifest = {
@@ -150,9 +155,9 @@ describe('AddonsSDK bcmr', () => {
       resolveIdentityRegistry: vi.fn(),
     };
 
-    vi.mocked(BcmrService).mockImplementation(
-      () => bcmrInstance as unknown as BcmrService
-    );
+    vi.mocked(BcmrService).mockImplementation(function () {
+      return bcmrInstance as unknown as BcmrService;
+    });
 
     const sdk = createAddonSDK(
       {
@@ -207,9 +212,9 @@ describe('AddonsSDK bcmr', () => {
       resolveIdentityRegistry: vi.fn(),
     };
 
-    vi.mocked(BcmrService).mockImplementation(
-      () => bcmrInstance as unknown as BcmrService
-    );
+    vi.mocked(BcmrService).mockImplementation(function () {
+      return bcmrInstance as unknown as BcmrService;
+    });
 
     const sdk = createAddonSDK(
       {
@@ -262,9 +267,9 @@ describe('AddonsSDK bcmr', () => {
       resolveIdentityRegistry: vi.fn(),
     };
 
-    vi.mocked(BcmrService).mockImplementation(
-      () => bcmrInstance as unknown as BcmrService
-    );
+    vi.mocked(BcmrService).mockImplementation(function () {
+      return bcmrInstance as unknown as BcmrService;
+    });
 
     const sdk = createAddonSDK(
       {

@@ -54,7 +54,7 @@ different responses, and conflating them costs a maintainer time.
 ## Prerequisites
 
 - Git
-- Node.js 20+ and npm for the native local workflow
+- Node.js 22.23.2 (CI baseline) or a supported newer LTS and npm for the native local workflow
 - Docker Engine with Docker Compose v2 for the contributor lab
 
 The Docker image is for tests and tooling. It is not the consumer wallet and

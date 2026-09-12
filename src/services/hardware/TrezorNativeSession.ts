@@ -9,13 +9,9 @@
  */
 
 import { Buffer } from 'buffer';
-import {
-  decodeMessage,
-  encodeMessage,
-  parseConfigure,
-} from '@trezor/protobuf';
+import { decodeMessage, encodeMessage, parseConfigure } from '@trezor/protobuf';
 import messagesJson from '@trezor/protobuf/messages.json';
-import { v1 as protocolV1 } from '@trezor/protocol';
+import { bridge as protocolBridge, v1 as protocolV1 } from '@trezor/protocol';
 import {
   bridgeCall,
   bridgeEnumerate,
@@ -47,10 +43,12 @@ function messages(): ProtobufRoot {
 
 const HID_CHUNK = 64;
 const HEADER_SIZE = 9;
+// Wallet transport budget, not a protocol-v1 limit. BCH signing streams TxRequest frames.
+const MAX_PAYLOAD_BYTES = 1024 * 1024;
 
 function stripReportId(buf: Buffer): Buffer {
   if (buf.length === 65 && buf[0] === 0x00) return buf.subarray(1);
-  return buf.length > 64 ? buf.subarray(0, 64) : buf;
+  return buf;
 }
 
 export type NativeHwCallResult = {
@@ -155,11 +153,9 @@ export class TrezorNativeSession {
       await bridgeCall(this.wire.session, encoded.toString('hex'));
       return;
     }
-    // trezorlib HID/WebUSB write_chunk: every 64-byte report is
-    //   0x3f || up to 63 bytes of protocol payload (padded with zeros).
-    // Sending raw 64-byte slices of the encoded message drops the segment
-    // marker and misframes multi-packet SignTx.
-    let offset = 0;
+    // The vendor codec already includes the first 0x3f marker. Reinsert it
+    // once per report while copying the remaining bytes in 63-byte chunks.
+    let offset = 1;
     while (offset < encoded.length) {
       const chunk = Buffer.alloc(HID_CHUNK);
       chunk[0] = 0x3f;
@@ -184,33 +180,38 @@ export class TrezorNativeSession {
     }
     // Narrow once so nested callbacks keep sessionId (not bridge.session).
     const usbWire = this.wire;
-    const readUsbChunk = async (): Promise<string> =>
-      usbWire.kind === 'webusb'
-        ? trezorWebUsbRead(usbWire.sessionId, timeoutMs)
-        : hwRead(usbWire.sessionId, timeoutMs);
+    const deadline = performance.now() + timeoutMs;
 
-    /** Strip USB report id (0x00) and HID/WebUSB 0x3f segment marker. */
-    const unwrapReport = (raw: Buffer): Buffer => {
-      let buf = stripReportId(raw);
-      if (buf.length > 0 && buf[0] === 0x3f) {
-        buf = buf.subarray(1);
+    const readReport = async (): Promise<Buffer> => {
+      const remaining = Math.ceil(deadline - performance.now());
+      if (remaining <= 0) throw new Error('Trezor USB: response timed out');
+      const hex = await (usbWire.kind === 'webusb'
+        ? trezorWebUsbRead(usbWire.sessionId, remaining)
+        : hwRead(usbWire.sessionId, remaining));
+      if (performance.now() >= deadline) {
+        throw new Error('Trezor USB: response timed out');
+      }
+      const buf = stripReportId(Buffer.from(hex, 'hex'));
+      if (buf.length !== HID_CHUNK || buf[0] !== 0x3f) {
+        throw new Error('Trezor USB: invalid report');
       }
       return buf;
     };
 
-    const first = unwrapReport(Buffer.from(await readUsbChunk(), 'hex'));
-    // Protocol v1 header after unwrap: ## | type(2) | length(4) | payload
-    if (first.length < HEADER_SIZE) {
-      throw new Error('Trezor USB: short first packet');
+    // Keep the first marker: the vendor decoder expects ?## and a 9-byte header.
+    const first = await readReport();
+    const { length: payloadLen } = protocolV1.decode(first);
+    if (payloadLen > MAX_PAYLOAD_BYTES) {
+      throw new Error('Trezor USB: response exceeds wallet transport limit');
     }
-    const payloadLen = first.readUInt32BE(5);
     const total = HEADER_SIZE + payloadLen;
-    let assembled = Buffer.from(first);
-    while (assembled.length < total) {
-      const next = unwrapReport(Buffer.from(await readUsbChunk(), 'hex'));
-      assembled = Buffer.concat([assembled, next]);
+    const assembled = Buffer.alloc(total);
+    let offset = first.copy(assembled);
+    while (offset < total) {
+      const next = (await readReport()).subarray(1);
+      offset += next.copy(assembled, offset);
     }
-    return assembled.subarray(0, total);
+    return assembled;
   }
 
   /**
@@ -223,9 +224,13 @@ export class TrezorNativeSession {
   ): Promise<NativeHwCallResult> {
     if (!this.wire) throw new Error('Trezor session not open');
     const timeoutMs = opts?.timeoutMs ?? 120_000;
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+      throw new Error('Trezor: invalid response timeout');
+    }
+    const protocol = this.wire.kind === 'bridge' ? protocolBridge : protocolV1;
     const { messageType, message } = encodeMessage(messages(), name, data);
     const encoded = Buffer.from(
-      protocolV1.encode(Buffer.from(message), { messageType })
+      protocol.encode(Buffer.from(message), { messageType })
     );
 
     if (this.wire.kind === 'bridge') {
@@ -235,8 +240,20 @@ export class TrezorNativeSession {
         encoded.toString('hex')
       );
       for (let round = 0; round < 32; round++) {
-        const buf = Buffer.from(responseHex.replace(/\s/g, ''), 'hex');
-        const decodedFrame = protocolV1.decode(buf);
+        const hex = responseHex.replace(/\s/g, '');
+        if (hex.length % 2 !== 0 || !/^[0-9a-f]+$/i.test(hex)) {
+          throw new Error('Trezor Bridge: invalid response encoding');
+        }
+        const buf = Buffer.from(hex, 'hex');
+        const decodedFrame = protocol.decode(buf);
+        if (decodedFrame.length > MAX_PAYLOAD_BYTES) {
+          throw new Error(
+            'Trezor Bridge: response exceeds wallet transport limit'
+          );
+        }
+        if (decodedFrame.payload.length !== decodedFrame.length) {
+          throw new Error('Trezor Bridge: invalid payload length');
+        }
         const msg = decodeMessage(
           messages(),
           decodedFrame.messageType,
@@ -248,7 +265,7 @@ export class TrezorNativeSession {
         if (type === 'ButtonRequest') {
           const ack = encodeMessage(messages(), 'ButtonAck', {});
           const ackEnc = Buffer.from(
-            protocolV1.encode(Buffer.from(ack.message), {
+            protocol.encode(Buffer.from(ack.message), {
               messageType: ack.messageType,
             })
           );
@@ -264,9 +281,7 @@ export class TrezorNativeSession {
           );
         }
         if (type === 'PassphraseRequest') {
-          throw new Error(
-            'Enter passphrase on the device, then retry.'
-          );
+          throw new Error('Enter passphrase on the device, then retry.');
         }
         if (type === 'Failure') {
           throw new Error(
@@ -282,7 +297,7 @@ export class TrezorNativeSession {
     await this.writeRaw(encoded);
     for (let round = 0; round < 32; round++) {
       const assembled = await this.readRaw(timeoutMs);
-      const decodedFrame = protocolV1.decode(assembled);
+      const decodedFrame = protocol.decode(assembled);
       const msg = decodeMessage(
         messages(),
         decodedFrame.messageType,
@@ -294,7 +309,7 @@ export class TrezorNativeSession {
         const ack = encodeMessage(messages(), 'ButtonAck', {});
         await this.writeRaw(
           Buffer.from(
-            protocolV1.encode(Buffer.from(ack.message), {
+            protocol.encode(Buffer.from(ack.message), {
               messageType: ack.messageType,
             })
           )
@@ -374,8 +389,7 @@ export async function trezorExportAccountXpub(
     // libauth derive + cashaddr prefix match (EC separates key material vs net).
     const { alignHdPublicKeyNetwork } = await import('../HdWalletService');
     const { Network } = await import('../../state/slices/networkSlice');
-    const net =
-      network === 'chipnet' ? Network.CHIPNET : Network.MAINNET;
+    const net = network === 'chipnet' ? Network.CHIPNET : Network.MAINNET;
     const xpub = alignHdPublicKeyNetwork(net, rawXpub);
 
     // First receive address is account/0/0 — not "3" (that is BIP32 depth only).

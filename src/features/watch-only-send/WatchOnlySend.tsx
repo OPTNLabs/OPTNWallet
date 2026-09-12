@@ -84,7 +84,7 @@ import {
   createMultisigDescriptorSet,
   type MultisigPolicy,
 } from '../../services/psbt/multisigWallet';
-import { watchOnlyMultisigPolicy } from '../../platform/desktop/onboarding/watchOnlyWallet';
+import { watchOnlyMultisigPolicy } from '../../services/watchOnlyWallet';
 import {
   decodePsbt,
   SIGHASH_ALL_FORKID,
@@ -98,8 +98,8 @@ import {
   type CosignerStatus,
 } from '../../services/psbt/psbtMultisig';
 import {
-  encodePsbtToUrFrames,
   DEFAULT_UR_FRAGMENT_LENGTH,
+  encodePsbtToUrFrames,
   UR_FRAGMENT_LENGTH_OPTIONS,
   encodePsbtToQrDisplay,
   UrPsbtScanner,
@@ -113,7 +113,8 @@ import {
   masterFingerprintBytes,
   watchOnlyMasterFingerprint,
 } from '../../platform/desktop/onboarding/watchOnlyWallet';
-import { CameraQrScanner } from '../../platform/desktop/CameraQrScanner';
+import { CameraQrScanner } from '../../components/qr/CameraQrScanner';
+import { getReturnPath } from '../../utils/navigation';
 import { isDesktopPlatform } from '../../utils/platform';
 import { QrScanDialog } from '../multisig/QrScanDialog';
 import { loadMultisigPolicy } from '../../services/multisig/MultisigStorageService';
@@ -516,7 +517,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
 
   const [frames, setFrames] = useState<UrFrames | null>(null);
   const [qrUri, setQrUri] = useState('');
-  const [urFragmentLength, setUrFragmentLength] = useState(
+  const [urFragmentLength, setUrFragmentLength] = useState<number>(
     DEFAULT_UR_FRAGMENT_LENGTH
   );
   const [qrMode, setQrMode] = useState<'static' | 'stream'>('static');
@@ -1588,7 +1589,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
   };
 
   const handleBack = () => {
-    navigate(returnTo ?? locationState?.returnTo ?? '/home');
+    navigate(returnTo ?? getReturnPath(location, '/home'));
   };
 
   const frameNumber =
@@ -1653,7 +1654,10 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
           >
             Back
           </button>
-          <h1 className="text-lg font-bold wallet-text-strong">
+          <h1
+            className="text-lg font-bold wallet-text-strong"
+            data-testid="watch-only-send-workspace"
+          >
             {mobile ? 'Mobile multisig send' : 'Watch-only Send'}
           </h1>
         </div>
@@ -2046,6 +2050,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
                 </div>
                 <button
                   type="button"
+                  data-testid="watch-only-build-unsigned"
                   onClick={() => void handleBuild()}
                   className="wallet-btn-primary w-full py-2 font-semibold disabled:opacity-50"
                   disabled={busy || networkRefreshing || networkRefreshFailed}

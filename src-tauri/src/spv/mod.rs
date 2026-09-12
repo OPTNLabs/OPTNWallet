@@ -15,6 +15,10 @@
 
 use std::time::Duration;
 
+use optn_core::asert::{
+    verify_header_extension, AsertAnchor, AsertCheck, AsertParams, HeaderExtensionError,
+};
+use optn_core::network::Network;
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -39,7 +43,7 @@ const IO_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_PAYLOAD: usize = 2 * 1024 * 1024;
 
 /// Network magic + default P2P port for a BCH network (chainparams.cpp).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NetworkParams {
     pub magic: [u8; 4],
     pub default_port: u16,
@@ -324,10 +328,12 @@ fn nonce() -> u64 {
 // ── Phase 2: block-header chain sync ─────────────────────────────────────────
 //
 // After the handshake, request block headers with `getheaders` and validate the
-// returned chain LINKS to our locator (each header's prev-block == the previous
-// header's hash). A node returns up to 2000 headers per `headers` message, so a
-// full sync-to-tip loops with an updated locator; Phase 2 proves one batch.
-// PoW-target verification is a later phase.
+// returned chain against the SHV/MMR primitives in `optn-core`: predecessor
+// link, declared PoW, and (once past the network ASERT anchor) expected BCH
+// difficulty. A node returns up to 2000 headers per `headers` message, so a
+// full sync-to-tip loops with an updated locator plus the previous height/time.
+// Checkpoint authority still lives in `optn-runtime::ShvMmrHeaderVerifier`; this
+// adapter must not accept a linked easy-target chain on its own.
 
 /// Chain start hash (double-SHA256 of the genesis header, internal little-endian
 /// byte order — the form used on the wire and by header_hash). Used as the
@@ -342,6 +348,16 @@ pub fn genesis_hash(network: &str) -> [u8; 32] {
             0xcc, 0x18, 0x17, 0x75, 0x26, 0xce, 0x68, 0x86, 0x78, 0x9a, 0xc4, 0x10, 0xd4, 0x1d,
             0x00, 0x00, 0x00, 0x00,
         ],
+        // Regtest genesis, display hash
+        // 0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206,
+        // stored in internal order. `params_for` above already knew regtest,
+        // so without this arm a regtest peer was asked to commit to mainnet's
+        // genesis and every request for it went unanswered.
+        "regtest" => [
+            0x06, 0x22, 0x6e, 0x46, 0x11, 0x1a, 0x0b, 0x59, 0xca, 0xaf, 0x12, 0x60, 0x43, 0xeb,
+            0x5b, 0xbf, 0x28, 0xc3, 0x4f, 0x3a, 0x5e, 0x33, 0x2a, 0x1f, 0xc7, 0xb2, 0xb7, 0x3c,
+            0xf1, 0x88, 0x91, 0x0f,
+        ],
         "testnet" | "testnet3" => [
             0x43, 0x49, 0x7f, 0xd7, 0xf8, 0x26, 0x95, 0x71, 0x08, 0xf4, 0xa3, 0x0f, 0xd9, 0xce,
             0xc3, 0xae, 0xba, 0x79, 0x97, 0x20, 0x84, 0xe9, 0x0e, 0xad, 0x01, 0xea, 0x33, 0x09,
@@ -352,6 +368,55 @@ pub fn genesis_hash(network: &str) -> [u8; 32] {
             0xf7, 0x4f, 0x93, 0x1e, 0x83, 0x65, 0xe1, 0x5a, 0x08, 0x9c, 0x68, 0xd6, 0x19, 0x00,
             0x00, 0x00, 0x00, 0x00,
         ],
+    }
+}
+
+#[cfg(test)]
+mod network_map_agreement {
+    use super::{genesis_hash, params_for};
+
+    /// A network with parameters of its own must have a genesis of its own.
+    ///
+    /// This table is the third copy of the same map, and all three end in a
+    /// catch-all returning mainnet. A network added to `params_for` and
+    /// forgotten in `genesis_hash` therefore fails quietly: the handshake
+    /// succeeds against the right chain and every block request names a
+    /// genesis that chain has never heard of.
+    #[test]
+    fn every_network_with_its_own_params_has_its_own_genesis() {
+        let mainnet_params = params_for("mainnet");
+        let mainnet_genesis = genesis_hash("mainnet");
+        for network in ["chipnet", "testnet4", "testnet", "testnet3", "regtest"] {
+            assert_ne!(
+                params_for(network),
+                mainnet_params,
+                "{network} has no parameters of its own"
+            );
+            assert_ne!(
+                genesis_hash(network),
+                mainnet_genesis,
+                "{network} falls through to mainnet's genesis"
+            );
+        }
+    }
+
+    /// Copies of a table drift. This one has to agree with the store the
+    /// providers are actually seeded from, or the legacy SPV path and the
+    /// chain runtime disagree about which chain the wallet is on.
+    #[test]
+    fn this_copy_agrees_with_the_accepted_header_store() {
+        use optn_runtime::header_store::BlockHeaderSource;
+
+        for network in ["mainnet", "chipnet", "testnet4", "regtest"] {
+            let seeded = optn_chain_native::new_accepted_header_store(network)
+                .hash_at(0)
+                .expect("the store is seeded at genesis");
+            assert_eq!(
+                genesis_hash(network),
+                seeded,
+                "{network} genesis differs between the SPV table and the accepted store"
+            );
+        }
     }
 }
 
@@ -394,18 +459,60 @@ fn parse_headers_payload(payload: &[u8]) -> Result<Vec<[u8; 80]>, String> {
     Ok(out)
 }
 
+/// Previous-block cursor required to check ASERT on the next header.
+#[derive(Debug, Clone, Copy)]
+pub struct HeaderWalk {
+    pub expected_prev: [u8; 32],
+    pub locator_height: u32,
+    pub locator_time: i64,
+    pub params: AsertParams,
+    pub anchor: AsertAnchor,
+}
+
+impl HeaderWalk {
+    pub fn for_network(network: &str, locator: [u8; 32], height: u32, time: i64) -> Self {
+        let parsed = network.parse::<Network>().unwrap_or(Network::Mainnet);
+        Self {
+            expected_prev: locator,
+            locator_height: height,
+            locator_time: time,
+            params: AsertParams::for_network(parsed),
+            anchor: AsertAnchor::for_network(parsed),
+        }
+    }
+
+    fn check(&self) -> AsertCheck {
+        AsertCheck {
+            params: self.params,
+            anchor: self.anchor,
+            previous_height: self.locator_height,
+            previous_time: self.locator_time,
+        }
+    }
+
+    fn advance(&mut self, parsed: optn_core::header_pow::ParsedHeader) {
+        self.expected_prev = parsed.hash;
+        self.locator_height = self.locator_height.saturating_add(1);
+        self.locator_time = i64::from(parsed.time);
+    }
+}
+
 /// Handshake, then request and validate one batch of headers after `locator`.
 /// Split from connection setup so it can be exercised over an in-memory duplex.
 async fn sync_headers_batch<S>(
     stream: &mut S,
     magic: [u8; 4],
-    locator: [u8; 32],
+    mut walk: HeaderWalk,
 ) -> Result<Vec<HeaderInfo>, String>
 where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
 {
     handshake(stream, magic).await?;
-    let msg = encode_message(magic, "getheaders", &build_getheaders_payload(&locator));
+    let msg = encode_message(
+        magic,
+        "getheaders",
+        &build_getheaders_payload(&walk.expected_prev),
+    );
     tokio::time::timeout(IO_TIMEOUT, stream.write_all(&msg))
         .await
         .map_err(|_| "timed out sending getheaders".to_string())?
@@ -431,24 +538,18 @@ where
     }
     let raws = raws.ok_or("node did not return headers")?;
 
-    // Validate linkage: the first header links to the locator, each subsequent
-    // header to the previous one.
-    let mut expected_prev = locator;
+    // Validate linkage, declared PoW, and (past the ASERT anchor) expected bits.
     let mut out = Vec::with_capacity(raws.len());
     for raw in &raws {
-        let mut prev = [0u8; 32];
-        prev.copy_from_slice(&raw[4..36]);
-        if prev != expected_prev {
-            return Err("header chain does not link to the locator/previous header".into());
-        }
-        let hash = double_sha256(raw);
+        let parsed = verify_header_extension(walk.expected_prev, raw, Some(walk.check()))
+            .map_err(|error: HeaderExtensionError| format!("header proof check failed: {error}"))?;
         out.push(HeaderInfo {
-            hash: hex_be(&hash),
-            prev_hash: hex_be(&prev),
-            time: u32::from_le_bytes([raw[68], raw[69], raw[70], raw[71]]),
-            bits: u32::from_le_bytes([raw[72], raw[73], raw[74], raw[75]]),
+            hash: hex_be(&parsed.hash),
+            prev_hash: hex_be(&parsed.prev_hash),
+            time: parsed.time,
+            bits: parsed.bits,
         });
-        expected_prev = hash;
+        walk.advance(parsed);
     }
     Ok(out)
 }
@@ -460,6 +561,25 @@ pub async fn fetch_headers_after(
     network: &str,
     transport: Transport<'_>,
     locator: [u8; 32],
+) -> Result<Vec<HeaderInfo>, String> {
+    fetch_headers_after_from(
+        host,
+        port,
+        network,
+        transport,
+        HeaderWalk::for_network(network, locator, 0, 0),
+    )
+    .await
+}
+
+/// Same as [`fetch_headers_after`], with an explicit previous height/time so a
+/// resumed walk past the ASERT anchor can check expected `nBits`.
+pub async fn fetch_headers_after_from(
+    host: &str,
+    port: u16,
+    network: &str,
+    transport: Transport<'_>,
+    walk: HeaderWalk,
 ) -> Result<Vec<HeaderInfo>, String> {
     let magic = params_for(network).magic;
     let mut stream = match transport {
@@ -479,7 +599,7 @@ pub async fn fetch_headers_after(
             .map_err(|_| format!("timed out connecting to {host}:{port} over Tor"))??
         }
     };
-    sync_headers_batch(&mut stream, magic, locator).await
+    sync_headers_batch(&mut stream, magic, walk).await
 }
 
 // ── Phase 3c: filterload + merkleblock download ──────────────────────────────
@@ -1061,6 +1181,144 @@ mod tests {
         assert_eq!(p[4], 1); // one locator hash
         assert_eq!(&p[5..37], &loc);
         assert_eq!(&p[37..69], &[0u8; 32]); // hash_stop = 0
+    }
+
+    fn mainnet_genesis_header() -> [u8; 80] {
+        let hex = "0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a29ab5f49ffff001d1dac2b7c";
+        (0..hex.len())
+            .step_by(2)
+            .map(|index| u8::from_str_radix(&hex[index..index + 2], 16).unwrap())
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap()
+    }
+
+    fn headers_payload(raw: [u8; 80]) -> Vec<u8> {
+        let mut payload = Vec::with_capacity(82);
+        write_varint(&mut payload, 1);
+        payload.extend_from_slice(&raw);
+        write_varint(&mut payload, 0);
+        payload
+    }
+
+    async fn sync_one_header(raw: [u8; 80], locator: [u8; 32]) -> Result<Vec<HeaderInfo>, String> {
+        sync_one_header_from(raw, HeaderWalk::for_network("mainnet", locator, 0, 0)).await
+    }
+
+    async fn sync_one_header_from(
+        raw: [u8; 80],
+        walk: HeaderWalk,
+    ) -> Result<Vec<HeaderInfo>, String> {
+        let magic = params_for("mainnet").magic;
+        let locator = walk.expected_prev;
+        let (mut client, mut server) = tokio::io::duplex(4096);
+        let server_task = tokio::spawn(async move {
+            let (command, _) = read_message(&mut server, magic).await.unwrap();
+            assert_eq!(command, "version");
+            server
+                .write_all(&encode_message(magic, "version", &build_version_payload(1)))
+                .await
+                .unwrap();
+            let (command, _) = read_message(&mut server, magic).await.unwrap();
+            assert_eq!(command, "verack");
+            let (command, payload) = read_message(&mut server, magic).await.unwrap();
+            assert_eq!(command, "getheaders");
+            assert_eq!(payload, build_getheaders_payload(&locator));
+            server
+                .write_all(&encode_message(magic, "headers", &headers_payload(raw)))
+                .await
+                .unwrap();
+        });
+
+        let result = sync_headers_batch(&mut client, magic, walk).await;
+        server_task.await.unwrap();
+        result
+    }
+
+    #[tokio::test]
+    async fn header_batch_accepts_linked_declared_pow() {
+        let headers = sync_one_header(mainnet_genesis_header(), [0; 32])
+            .await
+            .unwrap();
+        assert_eq!(headers.len(), 1);
+        assert_eq!(
+            headers[0].hash,
+            "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"
+        );
+    }
+
+    #[tokio::test]
+    async fn header_batch_rejects_insufficient_work() {
+        let mut header = mainnet_genesis_header();
+        header[72..76].copy_from_slice(&0x0300_0001u32.to_le_bytes());
+        let error = sync_one_header(header, [0; 32]).await.unwrap_err();
+        assert!(error.contains("InsufficientWork"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn header_batch_rejects_invalid_target() {
+        let mut header = mainnet_genesis_header();
+        header[72..76].copy_from_slice(&0x1d80_ffffu32.to_le_bytes());
+        let error = sync_one_header(header, [0; 32]).await.unwrap_err();
+        assert!(error.contains("NegativeTarget"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn header_batch_rejects_wrong_locator() {
+        let error = sync_one_header(mainnet_genesis_header(), [1; 32])
+            .await
+            .unwrap_err();
+        assert!(error.contains("LinkMismatch"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn header_batch_rejects_linked_easy_target_past_asert_anchor() {
+        use optn_core::asert::{next_bits, AsertAnchor, AsertParams};
+        use optn_core::header_pow::verify_declared_pow;
+
+        let params = AsertParams {
+            half_life: 172_800,
+            ideal_block_time: 600,
+            max_bits: 0x207f_ffff,
+            retargets: true,
+        };
+        let anchor = AsertAnchor {
+            height: 1,
+            bits: 0x207f_ffff,
+            prev_time: 0,
+        };
+        let prev = [7u8; 32];
+        let expected = next_bits(params, anchor, 10, 10).unwrap();
+        assert_ne!(expected, params.max_bits);
+
+        let mut header = [0u8; 80];
+        header[0..4].copy_from_slice(&1u32.to_le_bytes());
+        header[4..36].copy_from_slice(&prev);
+        header[68..72].copy_from_slice(&610u32.to_le_bytes());
+        header[72..76].copy_from_slice(&params.max_bits.to_le_bytes());
+        let mut mined = false;
+        for nonce in 0u32..50_000 {
+            header[76..80].copy_from_slice(&nonce.to_le_bytes());
+            if verify_declared_pow(&header).is_ok() {
+                mined = true;
+                break;
+            }
+        }
+        assert!(mined, "easy-target attack header must be nonce-valid");
+
+        let error = sync_one_header_from(
+            header,
+            HeaderWalk {
+                expected_prev: prev,
+                locator_height: 10,
+                locator_time: 10,
+                params,
+                anchor,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("UnexpectedBits"), "{error}");
     }
 
     #[test]

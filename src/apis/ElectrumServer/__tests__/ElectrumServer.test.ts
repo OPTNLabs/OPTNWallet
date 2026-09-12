@@ -67,7 +67,12 @@ async function loadServerWithMocks(
 
   const ElectrumClient = vi.fn();
   for (const c of clients) {
-    ElectrumClient.mockImplementationOnce(() => c);
+    // A function expression, not an arrow: production code calls
+    // `new ElectrumClient(...)`, and an arrow function cannot be constructed.
+    // Returning an object from a constructor is what makes it the result.
+    ElectrumClient.mockImplementationOnce(function () {
+      return c;
+    });
   }
 
   vi.doMock('@electrum-cash/network', () => ({
@@ -112,7 +117,12 @@ async function loadServerWithMocksAndSpies(
 
   const ElectrumClient = vi.fn();
   for (const c of clients) {
-    ElectrumClient.mockImplementationOnce(() => c);
+    // A function expression, not an arrow: production code calls
+    // `new ElectrumClient(...)`, and an arrow function cannot be constructed.
+    // Returning an object from a constructor is what makes it the result.
+    ElectrumClient.mockImplementationOnce(function () {
+      return c;
+    });
   }
 
   const ElectrumWebSocket = vi.fn();

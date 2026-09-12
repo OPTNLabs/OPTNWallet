@@ -74,11 +74,6 @@ export function rejectIntegrityCheck(reason = 'Passphrase verification failed'):
   settlePending(new Error(reason));
 }
 
-export function clearSpendAuthCache(): void {
-  _lastSpendAuthAt = 0;
-  _lastSpendAuthEpoch = -1;
-}
-
 /**
  * Call right after a successful wallet unlock (password verified at open).
  * Starts the 10-minute Never-mode spend window so the first Send does not

@@ -317,12 +317,24 @@ async function stageLinuxAarch64FromSource() {
   );
 }
 
-async function download(url, destination) {
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`download failed ${response.status}: ${url}`);
+export async function download(url, destination) {
+  let bytes;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const response = await fetch(url, {
+        signal: AbortSignal.timeout(120_000),
+      });
+      if (!response.ok) {
+        throw new Error(`download failed ${response.status}: ${url}`);
+      }
+      bytes = Buffer.from(await response.arrayBuffer());
+      break;
+    } catch (error) {
+      if (attempt === 3) throw error;
+      console.warn(`[fetch-tor] download attempt ${attempt} failed; retrying`);
+      await new Promise((resolve) => setTimeout(resolve, attempt * 1_000));
+    }
   }
-  const bytes = Buffer.from(await response.arrayBuffer());
   writeFileSync(destination, bytes);
   return bytes;
 }
@@ -433,6 +445,9 @@ async function main() {
   );
   writeFileSync(markerPath, `${artifact.version} ${target}\n`);
   signMacosTorFiles(target);
+  if (target.startsWith('linux-')) {
+    setLinuxRpath(join(outDir, torBinary));
+  }
 
   rmSync(temporaryDirectory, { recursive: true, force: true });
   console.log(

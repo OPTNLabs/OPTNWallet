@@ -207,7 +207,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: '20'
+          node-version: '22.23.2'
           cache: npm
 
       - name: Install dependencies
@@ -238,7 +238,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: '20'
+          node-version: '22.23.2'
           cache: npm
 
       - name: Install dependencies
@@ -338,7 +338,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: '20'
+          node-version: '22.23.2'
           cache: npm
 
       - name: Install dependencies
@@ -427,7 +427,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: '20'
+          node-version: '22.23.2'
           cache: npm
 
       - name: Install Linux system dependencies
@@ -448,6 +448,7 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
+          toolchain: 1.98.0
           targets: ${{ matrix.target }}
 
       - name: Rust cache
@@ -753,7 +754,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: '20'
+          node-version: '22.23.2'
           cache: npm
 
       - name: Install npm dependencies
@@ -820,7 +821,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: '20'
+          node-version: '22.23.2'
           cache: 'npm'
 
       # Host-side only; the target's own libraries come from the cross-toolchain
@@ -1139,7 +1140,7 @@ jobs:
         if: env.CLI_PRESENT == 'true'
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
-          toolchain: stable
+          toolchain: 1.98.0
           targets: ${{ matrix.target }}
 
       - name: Build

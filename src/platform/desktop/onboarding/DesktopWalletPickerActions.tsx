@@ -1,6 +1,7 @@
 import type { FC } from 'react';
 import { Link } from 'react-router-dom';
 import { useI18n } from '../../../i18n/useI18n';
+import { hasCapability } from '../../capabilities';
 
 type DesktopWalletPickerActionsProps = {
   hasWallets: boolean;
@@ -32,20 +33,24 @@ export const DesktopWalletPickerActions: FC<
       >
         {t('onboarding.importWallet')}
       </Link>
-      <button
-        type="button"
-        onClick={onHardware}
-        className="wallet-btn-secondary w-full text-center py-3 font-bold"
-      >
-        {t('onboarding.connectHardware')}
-      </button>
-      <button
-        type="button"
-        onClick={onWatchOnly}
-        className="wallet-btn-secondary w-full text-center py-3 font-bold"
-      >
-        {t('onboarding.createWatchOnly')}
-      </button>
+      {hasCapability('hardwareWallet', 'desktop') ? (
+        <button
+          type="button"
+          onClick={onHardware}
+          className="wallet-btn-secondary w-full text-center py-3 font-bold"
+        >
+          {t('onboarding.connectHardware')}
+        </button>
+      ) : null}
+      {hasCapability('watchOnlyWallet', 'desktop') ? (
+        <button
+          type="button"
+          onClick={onWatchOnly}
+          className="wallet-btn-secondary w-full text-center py-3 font-bold"
+        >
+          {t('onboarding.createWatchOnly')}
+        </button>
+      ) : null}
     </div>
   );
 };

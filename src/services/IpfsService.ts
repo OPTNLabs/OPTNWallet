@@ -54,9 +54,18 @@ const DEFAULT_GATEWAY_BASE = 'https://ipfs.optnlabs.com';
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
 const DEFAULT_POLL_INTERVAL_MS = 1_000;
+const KUBO_API_RELAY_HOST = 'ipfs-api.optnlabs.com';
 
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, '');
+}
+
+function isKuboApiRelay(relayBase: string): boolean {
+  try {
+    return new URL(relayBase).hostname === KUBO_API_RELAY_HOST;
+  } catch {
+    return false;
+  }
 }
 
 function formatBytes(bytes: number): string {
@@ -351,7 +360,7 @@ function buildUploadEndpoint(relayBase: string): {
   responseParser: (response: Response) => Promise<unknown>;
 } {
   const base = trimTrailingSlash(relayBase);
-  if (base.includes('ipfs-api.optnlabs.com')) {
+  if (isKuboApiRelay(base)) {
     return {
       uploadUrl: `${base}/api/v0/add?pin=true`,
       responseParser: async (response) => response.json(),
@@ -366,7 +375,7 @@ function buildUploadEndpoint(relayBase: string): {
 
 function buildVersionEndpoint(relayBase: string): string {
   const base = trimTrailingSlash(relayBase);
-  if (base.includes('ipfs-api.optnlabs.com')) {
+  if (isKuboApiRelay(base)) {
     return `${base}/api/v0/version`;
   }
   return `${base}/v1/ipfs/version`;

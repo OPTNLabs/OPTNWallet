@@ -52,6 +52,7 @@ import {
   type SettingsRowConfig,
 } from './settingsConfig';
 import { isDesktopPlatform } from '../../utils/platform';
+import { hasCapability } from '../../platform/capabilities';
 import { useI18n } from '../../i18n/useI18n';
 import { LanguageSettings } from './LanguageSettings';
 import { MerchantPaySettings } from './MerchantPaySettings';
@@ -70,11 +71,15 @@ const Settings: React.FC = () => {
     selectCurrentNetwork(state)
   );
   const desktop = isDesktopPlatform();
+  const cashFusionEnabled = hasCapability('cashFusion');
   const { t } = useI18n();
 
   const [selectedOption, setSelectedOption] = useState(() => {
     const panel = searchParams.get('panel') ?? '';
-    return !desktop && panel === 'app-lock' ? '' : panel;
+    return (!desktop && panel === 'app-lock') ||
+      (!cashFusionEnabled && panel === 'cashfusion')
+      ? ''
+      : panel;
   });
   const [isLogoutPopupOpen, setIsLogoutPopupOpen] = useState(false);
   const logoutNodeRef = useRef<HTMLDivElement | null>(null);
@@ -168,8 +173,13 @@ const Settings: React.FC = () => {
 
   useEffect(() => {
     const panel = searchParams.get('panel') ?? '';
-    setSelectedOption(!desktop && panel === 'app-lock' ? '' : panel);
-  }, [desktop, searchParams]);
+    setSelectedOption(
+      (!desktop && panel === 'app-lock') ||
+        (!cashFusionEnabled && panel === 'cashfusion')
+        ? ''
+        : panel
+    );
+  }, [cashFusionEnabled, desktop, searchParams]);
 
   const handleLogout = async () => {
     await waitForWalletHistoryRefresh(currentWalletId, {
@@ -268,7 +278,7 @@ const Settings: React.FC = () => {
       case 'experimental':
         return <ExperimentalSettings />;
       case 'cashfusion':
-        return <CashFusionSettings />;
+        return cashFusionEnabled ? <CashFusionSettings /> : null;
       case 'nostr':
         return <NostrSettings />;
       case 'addons':

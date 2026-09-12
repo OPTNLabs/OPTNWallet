@@ -94,11 +94,556 @@ export function connectSigningSerialization(context_json, covered, mode) {
     wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
     return v3;
 }
+
+/**
+ * Decode a cashcode or legacy paycode. Returns JSON, or throws with the
+ * reason the code was rejected.
+ * @param {string} code
+ * @returns {string}
+ */
+export function decodeCashcode(code) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(code, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.decodeCashcode(ptr0, len0);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
+ * Derive scan/spend private and compressed public keys in the shared core.
+ *
+ * The packed result is `scan_priv(32) || scan_pub(33) || spend_priv(32) ||
+ * spend_pub(33)`. A fixed byte layout avoids serializing private keys into
+ * JavaScript strings, which are immutable and cannot be wiped by the caller.
+ * @param {string} mnemonic
+ * @param {string} passphrase
+ * @param {string} scan_path
+ * @param {string} spend_path
+ * @returns {Uint8Array}
+ */
+export function deriveRpaKeys(mnemonic, passphrase, scan_path, spend_path) {
+    const ptr0 = passStringToWasm0(mnemonic, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(passphrase, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passStringToWasm0(scan_path, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ptr3 = passStringToWasm0(spend_path, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len3 = WASM_VECTOR_LEN;
+    const ret = wasm.deriveRpaKeys(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * Encode a scan/spend pair as a `cashcode:` string.
+ *
+ * `legacy` stamps the old `paycode:` prefix instead. Nothing in the wallet
+ * passes it: it exists so tests and migration tooling can build the form that
+ * must keep being accepted on input.
+ * @param {Uint8Array} scan_pubkey
+ * @param {Uint8Array} spend_pubkey
+ * @param {string} network
+ * @param {number} prefix_bits
+ * @param {boolean | null} [legacy]
+ * @returns {string}
+ */
+export function encodeCashcode(scan_pubkey, spend_pubkey, network, prefix_bits, legacy) {
+    let deferred5_0;
+    let deferred5_1;
+    try {
+        const ptr0 = passArray8ToWasm0(scan_pubkey, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArray8ToWasm0(spend_pubkey, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(network, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ret = wasm.encodeCashcode(ptr0, len0, ptr1, len1, ptr2, len2, prefix_bits, isLikeNone(legacy) ? 0xFFFFFF : legacy ? 1 : 0);
+        var ptr4 = ret[0];
+        var len4 = ret[1];
+        if (ret[3]) {
+            ptr4 = 0; len4 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred5_0 = ptr4;
+        deferred5_1 = len4;
+        return getStringFromWasm0(ptr4, len4);
+    } finally {
+        wasm.__wbindgen_free(deferred5_0, deferred5_1, 1);
+    }
+}
+
+/**
+ * Compressed one-shot nonce point published for a credential slot.
+ * @param {Uint8Array} nonce
+ * @returns {Uint8Array}
+ */
+export function fusionBlindIssuerNoncePoint(nonce) {
+    const ptr0 = passArray8ToWasm0(nonce, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.fusionBlindIssuerNoncePoint(ptr0, len0);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * Compressed public key for an issuer's non-zero canonical round secret.
+ * @param {Uint8Array} secret
+ * @returns {Uint8Array}
+ */
+export function fusionBlindIssuerPublicKey(secret) {
+    const ptr0 = passArray8ToWasm0(secret, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.fusionBlindIssuerPublicKey(ptr0, len0);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * Sign one blinded challenge with caller-owned issuer secret and nonce.
+ * @param {Uint8Array} secret
+ * @param {Uint8Array} nonce
+ * @param {Uint8Array} challenge
+ * @returns {Uint8Array}
+ */
+export function fusionBlindIssuerSign(secret, nonce, challenge) {
+    const ptr0 = passArray8ToWasm0(secret, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArray8ToWasm0(nonce, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArray8ToWasm0(challenge, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ret = wasm.fusionBlindIssuerSign(ptr0, len0, ptr1, len1, ptr2, len2);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v4 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v4;
+}
+
+/**
+ * The 32-byte blinded challenge to send to the issuer. `a` and `b` must be
+ * fresh uniform scalars from the caller's CSPRNG and must never be reused.
+ *
+ * There is no handle to keep: `fusionFinalizeBlindSignature` takes the same
+ * five inputs again and rebuilds the request, so nothing on the JS side owns
+ * Rust memory it would have to free.
+ * @param {Uint8Array} round_pubkey
+ * @param {Uint8Array} r_point
+ * @param {Uint8Array} message
+ * @param {Uint8Array} a
+ * @param {Uint8Array} b
+ * @returns {Uint8Array}
+ */
+export function fusionBlindRequest(round_pubkey, r_point, message, a, b) {
+    const ptr0 = passArray8ToWasm0(round_pubkey, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArray8ToWasm0(r_point, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArray8ToWasm0(message, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ptr3 = passArray8ToWasm0(a, wasm.__wbindgen_malloc);
+    const len3 = WASM_VECTOR_LEN;
+    const ptr4 = passArray8ToWasm0(b, wasm.__wbindgen_malloc);
+    const len4 = WASM_VECTOR_LEN;
+    const ret = wasm.fusionBlindRequest(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v6 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v6;
+}
+
+/**
+ * Complete a blinded signature. Takes the same inputs the request was built
+ * from plus the issuer's 32-byte response, and returns the 64-byte signature.
+ * Always verifies before returning, so a cheating issuer is an error here
+ * rather than a rejected signature later in the round.
+ * @param {Uint8Array} round_pubkey
+ * @param {Uint8Array} r_point
+ * @param {Uint8Array} message
+ * @param {Uint8Array} a
+ * @param {Uint8Array} b
+ * @param {Uint8Array} issuer_response
+ * @returns {Uint8Array}
+ */
+export function fusionFinalizeBlindSignature(round_pubkey, r_point, message, a, b, issuer_response) {
+    const ptr0 = passArray8ToWasm0(round_pubkey, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArray8ToWasm0(r_point, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArray8ToWasm0(message, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ptr3 = passArray8ToWasm0(a, wasm.__wbindgen_malloc);
+    const len3 = WASM_VECTOR_LEN;
+    const ptr4 = passArray8ToWasm0(b, wasm.__wbindgen_malloc);
+    const len4 = WASM_VECTOR_LEN;
+    const ptr5 = passArray8ToWasm0(issuer_response, wasm.__wbindgen_malloc);
+    const len5 = WASM_VECTOR_LEN;
+    const ret = wasm.fusionFinalizeBlindSignature(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v7 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v7;
+}
+
+/**
+ * Check packed 65-byte uncompressed commitments against one signed amount and
+ * the sum of their nonces. Malformed points fail closed.
+ * @param {Uint8Array} packed_commitments
+ * @param {bigint} excess_fee
+ * @param {Uint8Array} total_nonce
+ * @returns {boolean}
+ */
+export function fusionPedersenBalanceHolds(packed_commitments, excess_fee, total_nonce) {
+    const ptr0 = passArray8ToWasm0(packed_commitments, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArray8ToWasm0(total_nonce, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.fusionPedersenBalanceHolds(ptr0, len0, excess_fee, ptr1, len1);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return ret[0] !== 0;
+}
+
+/**
+ * The 65-byte uncompressed Pedersen commitment `amount*H + nonce*G`.
+ * @param {bigint} amount
+ * @param {Uint8Array} nonce
+ * @returns {Uint8Array}
+ */
+export function fusionPedersenCommit(amount, nonce) {
+    const ptr0 = passArray8ToWasm0(nonce, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.fusionPedersenCommit(amount, ptr0, len0);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * The commitment for a signed amount: an input commits `+value-fee`, an output
+ * `-value-fee`, a blank `0`.
+ * @param {bigint} amount
+ * @param {Uint8Array} nonce
+ * @returns {Uint8Array}
+ */
+export function fusionPedersenCommitSigned(amount, nonce) {
+    const ptr0 = passArray8ToWasm0(nonce, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.fusionPedersenCommitSigned(amount, ptr0, len0);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * The compressed nothing-up-my-sleeve generator H, for callers that check it.
+ * @returns {Uint8Array}
+ */
+export function fusionPedersenH() {
+    const ret = wasm.fusionPedersenH();
+    var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v1;
+}
+
+/**
+ * Whether bytes are one non-zero canonical secp256k1 scalar.
+ * @param {Uint8Array} bytes
+ * @returns {boolean}
+ */
+export function fusionScalarIsCanonical(bytes) {
+    const ptr0 = passArray8ToWasm0(bytes, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.fusionScalarIsCanonical(ptr0, len0);
+    return ret !== 0;
+}
+
+/**
+ * Add packed 32-byte non-zero canonical scalars modulo the group order.
+ * @param {Uint8Array} packed
+ * @returns {Uint8Array}
+ */
+export function fusionScalarSum(packed) {
+    const ptr0 = passArray8ToWasm0(packed, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.fusionScalarSum(ptr0, len0);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * Verify a 64-byte BCH Schnorr signature. False on any malformed input.
+ * @param {Uint8Array} pubkey
+ * @param {Uint8Array} signature
+ * @param {Uint8Array} message
+ * @returns {boolean}
+ */
+export function fusionVerifySchnorr(pubkey, signature, message) {
+    const ptr0 = passArray8ToWasm0(pubkey, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArray8ToWasm0(signature, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArray8ToWasm0(message, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ret = wasm.fusionVerifySchnorr(ptr0, len0, ptr1, len1, ptr2, len2);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return ret[0] !== 0;
+}
+
+/**
+ * The hex a sender grinds the input hash to match.
+ * @param {Uint8Array} scan_pubkey
+ * @param {number} prefix_bits
+ * @returns {string}
+ */
+export function grindString(scan_pubkey, prefix_bits) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passArray8ToWasm0(scan_pubkey, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.grindString(ptr0, len0, prefix_bits);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
+ * True if the string carries any RPA prefix, cashcode or legacy paycode.
+ * @param {string} candidate
+ * @returns {boolean}
+ */
+export function looksLikeRpa(candidate) {
+    const ptr0 = passStringToWasm0(candidate, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.looksLikeRpa(ptr0, len0);
+    return ret !== 0;
+}
+
+/**
+ * The one-time P2PKH a sender pays: CKD_pub of the spend key, hashed
+ * compressed.
+ * @param {Uint8Array} spend_pubkey
+ * @param {Uint8Array} secret
+ * @param {string} network
+ * @param {number} index
+ * @returns {string}
+ */
+export function paymentAddress(spend_pubkey, secret, network, index) {
+    let deferred5_0;
+    let deferred5_1;
+    try {
+        const ptr0 = passArray8ToWasm0(spend_pubkey, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArray8ToWasm0(secret, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(network, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ret = wasm.paymentAddress(ptr0, len0, ptr1, len1, ptr2, len2, index);
+        var ptr4 = ret[0];
+        var len4 = ret[1];
+        if (ret[3]) {
+            ptr4 = 0; len4 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred5_0 = ptr4;
+        deferred5_1 = len4;
+        return getStringFromWasm0(ptr4, len4);
+    } finally {
+        wasm.__wbindgen_free(deferred5_0, deferred5_1, 1);
+    }
+}
+
+/**
+ * `m/44'/<coin>'/<account>'/3/0` and `/3/1`, as a JSON object.
+ * @param {number} coin_type
+ * @param {number} account
+ * @returns {string}
+ */
+export function rpaKeyPaths(coin_type, account) {
+    let deferred1_0;
+    let deferred1_1;
+    try {
+        const ret = wasm.rpaKeyPaths(coin_type, account);
+        deferred1_0 = ret[0];
+        deferred1_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+    }
+}
+
+/**
+ * Payments to this wallet inside one raw transaction, as a JSON array.
+ *
+ * Takes `scanPrivkey` and `spendPubkey` only -- the spend private key is not
+ * needed to find a payment, and requiring it here would destroy the split the
+ * spec asks for (REQ-5) between detecting and spending.
+ * @param {Uint8Array} raw_tx
+ * @param {Uint8Array} scan_privkey
+ * @param {Uint8Array} spend_pubkey
+ * @param {string} network
+ * @returns {string}
+ */
+export function scanTransaction(raw_tx, scan_privkey, spend_pubkey, network) {
+    let deferred6_0;
+    let deferred6_1;
+    try {
+        const ptr0 = passArray8ToWasm0(raw_tx, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArray8ToWasm0(scan_privkey, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passArray8ToWasm0(spend_pubkey, wasm.__wbindgen_malloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ptr3 = passStringToWasm0(network, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len3 = WASM_VECTOR_LEN;
+        const ret = wasm.scanTransaction(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
+        var ptr5 = ret[0];
+        var len5 = ret[1];
+        if (ret[3]) {
+            ptr5 = 0; len5 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred6_0 = ptr5;
+        deferred6_1 = len5;
+        return getStringFromWasm0(ptr5, len5);
+    } finally {
+        wasm.__wbindgen_free(deferred6_0, deferred6_1, 1);
+    }
+}
+
+/**
+ * Why this code must not be paid on-chain, or `undefined` if it may be.
+ * @param {string} code
+ * @returns {string | undefined}
+ */
+export function sendBlockReason(code) {
+    const ptr0 = passStringToWasm0(code, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.sendBlockReason(ptr0, len0);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    let v2;
+    if (ret[0] !== 0) {
+        v2 = getStringFromWasm0(ret[0], ret[1]);
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    }
+    return v2;
+}
+
+/**
+ * ECDH plus the outpoint, per the reference implementation. `txid` is the
+ * display (big-endian) form, as block explorers show it.
+ * @param {Uint8Array} privkey
+ * @param {Uint8Array} counterpart_pubkey
+ * @param {string} txid
+ * @param {number} vout
+ * @returns {Uint8Array}
+ */
+export function sharedSecret(privkey, counterpart_pubkey, txid, vout) {
+    const ptr0 = passArray8ToWasm0(privkey, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArray8ToWasm0(counterpart_pubkey, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passStringToWasm0(txid, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ret = wasm.sharedSecret(ptr0, len0, ptr1, len1, ptr2, len2, vout);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v4 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v4;
+}
+
+/**
+ * The private key that spends a payment at `index`.
+ * @param {Uint8Array} spend_privkey
+ * @param {Uint8Array} secret
+ * @param {number} index
+ * @returns {Uint8Array}
+ */
+export function spendingKey(spend_privkey, secret, index) {
+    const ptr0 = passArray8ToWasm0(spend_privkey, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArray8ToWasm0(secret, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.spendingKey(ptr0, len0, ptr1, len1, index);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v3 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v3;
+}
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
         __wbg___wbindgen_throw_bb96b2010945f0bc: function(arg0, arg1) {
             throw new Error(getStringFromWasm0(arg0, arg1));
+        },
+        __wbg_length_36bd29c6848c2144: function(arg0) {
+            const ret = arg0.length;
+            return ret;
+        },
+        __wbg_new_with_length_3ffc1c56427c525c: function(arg0) {
+            const ret = new Uint8Array(arg0 >>> 0);
+            return ret;
+        },
+        __wbg_set_b9b5b5cb7b495037: function(arg0, arg1, arg2) {
+            arg0.set(getArrayU8FromWasm0(arg1, arg2));
         },
         __wbindgen_cast_0000000000000001: function(arg0, arg1) {
             // Cast intrinsic for `Ref(String) -> Externref`.
@@ -136,6 +681,10 @@ function getUint8ArrayMemory0() {
         cachedUint8ArrayMemory0 = new Uint8Array(wasm.memory.buffer);
     }
     return cachedUint8ArrayMemory0;
+}
+
+function isLikeNone(x) {
+    return x === undefined || x === null;
 }
 
 function passArray8ToWasm0(arg, malloc) {

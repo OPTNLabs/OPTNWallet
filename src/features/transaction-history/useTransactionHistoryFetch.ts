@@ -49,6 +49,7 @@ export function useTransactionHistoryFetch({
           // certainly been scanned already, so skipping scanned addresses would
           // filter out the only one that changed.
           skipAddresses: options?.full ? undefined : fetchedAddresses,
+          force: options?.full === true,
           onProgress: setProgress,
         });
         if (scannedAddresses.length > 0) {

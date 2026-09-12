@@ -1,0 +1,374 @@
+schema = 1
+source_repository = "OPTNLabs/OPTNWallet"
+source_query = "is:pr is:closed"
+snapshot_date = "2026-09-03"
+closed_pr_count = 52
+
+# This is a historical-awareness ledger, not a second source of runtime truth.
+# Merged PRs are product history. Closed-unmerged PRs may be superseded,
+# rejected, or design evidence; current code + merged successor wins.
+
+[[pr]]
+number = 1
+title = "Merging to main"
+outcome = "merged"
+relevance = "promotion"
+summary = "Historical dev→main promotion; no standalone wallet design decision."
+
+[[pr]]
+number = 2
+title = "merge to main"
+outcome = "merged"
+relevance = "promotion"
+summary = "Historical dev→main promotion; no standalone wallet design decision."
+
+[[pr]]
+number = 3
+title = "fix(signed): use CompactSize varint for message length prefix"
+outcome = "closed-unmerged"
+relevance = "protocol-signal"
+summary = "Long signed-message payloads require Bitcoin CompactSize length encoding. Closure alone does not mean the bug report was rejected; inspect current signed-message code before porting."
+
+[[pr]]
+number = 4
+title = "feat: add Tauri desktop builds for Windows, macOS and Linux"
+outcome = "merged"
+relevance = "preserve"
+summary = "Desktop is a shell/adaptation layer around shared wallet behavior; platform differences belong in adapters rather than duplicated wallet logic."
+
+[[pr]]
+number = 5
+title = "Desktop (Tauri): resizable window, working prices, CI/build fixes"
+outcome = "merged"
+relevance = "preserve"
+summary = "Desktop price fetching is narrowly host-scoped rather than a broad native HTTP/SSRF capability; the desktop window remains resizable while presenting the mobile-first wallet layout coherently."
+
+[[pr]]
+number = 6
+title = "Desktop wallet: per-wallet security, wallet files, RPA fix, addon sandbox, extension MVP"
+outcome = "merged"
+relevance = "preserve"
+summary = "Per-wallet unlock authority, encrypted wallet files, native menu behavior, sandboxed third-party add-ons, extension viewer limits, hardware-wallet guardrails, and wallet-key-in-memory isolation are product invariants."
+
+[[pr]]
+number = 7
+title = "CashFusion Phase 1: real protocol client (handshake + live server params)"
+outcome = "closed-unmerged"
+relevance = "superseded"
+summary = "Early stacked CashFusion protocol work. Use the later merged Fusion lineage and current code, not this branch as implementation authority."
+
+[[pr]]
+number = 9
+title = "fix: finalize PR #6 integration issues"
+outcome = "merged"
+relevance = "preserve"
+summary = "Mobile-only UI filtering, Chipnet BIP44 coin type handling, desktop/runtime stabilization, and restored CI are part of the post-#6 baseline."
+
+[[pr]]
+number = 10
+title = "Promote wallet cleanup and session sync to staging"
+outcome = "merged"
+relevance = "preserve"
+summary = "Wallet-owned confirmation UI, simplified settings, mainnet-default onboarding with explicit network choice, and reconnect/history bootstrap were promoted together."
+
+[[pr]]
+number = 11
+title = "Promote v1.7.0 wallet release to main"
+outcome = "merged"
+relevance = "preserve"
+summary = "The v1.7.0 product baseline included wallet-owned confirmation UI, network-select onboarding, reconnect/history bootstrap, and intentionally excluded iOS from that release."
+
+[[pr]]
+number = 12
+title = "Harden release artifacts and complete CashFusion reliability"
+outcome = "closed-unmerged"
+relevance = "lineage"
+summary = "Large reliability/Fusion/derivation work source. Preserve only behavior that is present in merged successors or current code; do not resurrect the branch wholesale."
+
+[[pr]]
+number = 13
+title = "feat(docker-dev): production-grade lab image + release-driven GHCR"
+outcome = "merged"
+relevance = "preserve"
+summary = "Docker is a contributor/lab artifact, not the end-user wallet. Native installers remain the primary product ship path."
+
+[[pr]]
+number = 14
+title = "ci: auto-retry workflow for main (merge only with main promotion)"
+outcome = "closed-unmerged"
+relevance = "release-context"
+summary = "workflow_run behavior depends on the default branch; this PR documented promotion timing rather than a wallet feature."
+
+[[pr]]
+number = 15
+title = "Add safe derivation-path discovery to wallet restore"
+outcome = "closed-unmerged"
+relevance = "design-intent"
+summary = "Discovery must use fresh bounded history, auto-select only a complete unambiguous result, respect the 20-address gap and 200-address safety cap, and keep seed access inside KeyManager."
+
+[[pr]]
+number = 16
+title = "feat: sync automated testing and localization with dev"
+outcome = "merged"
+relevance = "preserve"
+summary = "Cross-surface localization and real core/app/UI/add-on/security/E2E coverage are part of the product contract; mutation-gated lifecycle and live-network checks remain separately scoped."
+
+[[pr]]
+number = 17
+title = "feat(fusion): production desktop CashFusion (P2P 6/4/10)"
+outcome = "closed-unmerged"
+relevance = "superseded"
+summary = "Fusion gather/ACK/cap values are protocol constants, not wallet settings. This stale branch was replaced by the current-dev rebuild."
+
+[[pr]]
+number = 18
+title = "feat(fusion): production desktop CashFusion (P2P 6/4/10)"
+outcome = "closed-unmerged"
+relevance = "superseded"
+summary = "Duplicate/stale Fusion branch; use merged PR #26 and current implementation."
+
+[[pr]]
+number = 19
+title = "docs: bring main CashFusion and watch-only pages in line with the code"
+outcome = "closed-unmerged"
+relevance = "superseded"
+summary = "Docs-only stale branch; replaced by merged current-dev documentation in PR #27."
+
+[[pr]]
+number = 21
+title = "feat: CashConnect (Nostr) on the fusion wallet"
+outcome = "closed-unmerged"
+relevance = "superseded"
+summary = "CashConnect identity uses HD purpose 5001 and is distinct from spend keys and chat Nostr identity. Rebuilt and merged as PR #28."
+
+[[pr]]
+number = 22
+title = "revert: restore main to dev and staging baseline"
+outcome = "merged"
+relevance = "history"
+summary = "Records a deliberate baseline restoration; branch ancestry/history must not be mistaken for product intent when equivalent commits were rewritten."
+
+[[pr]]
+number = 23
+title = "review: bring Aug. 11 main changes into dev"
+outcome = "merged"
+relevance = "history"
+summary = "Established the current-dev integration baseline used by rebuilt feature PRs."
+
+[[pr]]
+number = 24
+title = "feat(rpa): reusable payment addresses (send, scan, stealth balance)"
+outcome = "closed-unmerged"
+relevance = "superseded"
+summary = "RPA network separation, stealth balance/activity, and scan behavior were rebuilt on current dev in PR #29."
+
+[[pr]]
+number = 26
+title = "rebuild: PR18 CashFusion changes on current dev"
+outcome = "merged"
+relevance = "preserve"
+summary = "Merged Fusion successor kept current-dev CI/onboarding/device integrity and reapplied only the intended Fusion net changes."
+
+[[pr]]
+number = 27
+title = "docs: align CashFusion and watch-only guidance with dev"
+outcome = "merged"
+relevance = "preserve"
+summary = "CashFusion/watch-only documentation must describe the implementation that actually ships, including current abort/disclosure behavior."
+
+[[pr]]
+number = 28
+title = "feat: rebuild CashConnect integration on current dev"
+outcome = "merged"
+relevance = "preserve"
+summary = "CashConnect proposal/session handling, wallet switching restrictions, exact transaction review, deep-link behavior, and separate Nostr identity are part of the product."
+
+[[pr]]
+number = 29
+title = "feat: rebuild RPA payment flow on current dev"
+outcome = "merged"
+relevance = "preserve"
+summary = "RPA send/detect/stealth accounting must preserve network separation and fail-closed transaction/fee/token/change invariants."
+
+[[pr]]
+number = 30
+title = "ci: harden Linux AppImage tool prefetch"
+outcome = "merged"
+relevance = "preserve"
+summary = "Linux packaging tools are pinned/verified infrastructure, not floating downloads."
+
+[[pr]]
+number = 31
+title = "docs: align shipped CashFusion guidance with current dev"
+outcome = "merged"
+relevance = "preserve"
+summary = "Shipped Fusion guidance is a behavioral reference and must not drift into plan-only or stale protocol descriptions."
+
+[[pr]]
+number = 32
+title = "Integrate Merchant Pay, localization, and wallet updates"
+outcome = "merged"
+relevance = "preserve"
+summary = "Shared localization is cross-surface; QR Signing Demo stays hidden from product UI; Merchant Pay is dev-only/Coming soon; automatic Fusion is opt-in, wallet-scoped, and disarmed on wallet change."
+
+[[pr]]
+number = 33
+title = "docs: P2P blame matches the wallet (no abort disclosure)"
+outcome = "merged"
+relevance = "preserve"
+summary = "P2P blame policy is an unnamed timeout for a missing signature; there is no abort-then-disclose behavior."
+
+[[pr]]
+number = 34
+title = "fix(watch-only): SeedCash-native PSBT UR QR"
+outcome = "merged"
+relevance = "preserve"
+summary = "SeedCash receives raw PSBT bytes as crypto-psbt UR CBOR, not a BCR byte-string wrapper; the master fingerprint is optional and the derivation path is the signing-critical field."
+
+[[pr]]
+number = 35
+title = "feat(wallet): improve UTXO refresh and lifecycle handling"
+outcome = "merged"
+relevance = "preserve"
+summary = "Wallet-wide UTXO refresh/reconciliation must handle stale snapshots, wallet changes, discovery, workers, and lifecycle transitions without treating stale state as truth."
+
+[[pr]]
+number = 36
+title = "chore: promote dev to staging"
+outcome = "merged"
+relevance = "promotion"
+summary = "Release-channel promotion; product behavior comes from the promoted dev tree."
+
+[[pr]]
+number = 37
+title = "fix: stabilize staging promotion checks"
+outcome = "merged"
+relevance = "release-context"
+summary = "Promotion checks are part of release reliability, not a wallet feature."
+
+[[pr]]
+number = 38
+title = "chore: promote staging to main"
+outcome = "merged"
+relevance = "promotion"
+summary = "Release-channel promotion; no standalone design decision."
+
+[[pr]]
+number = 39
+title = "chore: prepare version 1.7.3 release"
+outcome = "merged"
+relevance = "release-context"
+summary = "Version/release metadata history."
+
+[[pr]]
+number = 40
+title = "chore(deps): bump react-router and react-router-dom"
+outcome = "closed-unmerged"
+relevance = "dependency-context"
+summary = "React Router v7 major migration failed on the existing app and was intentionally not taken as a blind dependency bump."
+
+[[pr]]
+number = 41
+title = "chore(deps): bump esbuild and vite"
+outcome = "closed-unmerged"
+relevance = "dependency-context"
+summary = "Stale dependency update; use current lockfiles and merged successor state."
+
+[[pr]]
+number = 42
+title = "chore: promote version 1.7.3 to staging"
+outcome = "closed-unmerged"
+relevance = "promotion"
+summary = "Superseded staging promotion attempt."
+
+[[pr]]
+number = 43
+title = "chore: promote version 1.7.3 to staging"
+outcome = "closed-unmerged"
+relevance = "promotion"
+summary = "Superseded staging promotion attempt."
+
+[[pr]]
+number = 44
+title = "chore(deps): bump quinn-proto from 0.11.14 to 0.11.16 in /src-tauri"
+outcome = "closed-unmerged"
+relevance = "superseded"
+summary = "Stale Quinn security bump; superseded by merged PR #52 to 0.11.17."
+
+[[pr]]
+number = 45
+title = "chore(deps-dev): bump vite from 8.0.16 to 8.2.1"
+outcome = "closed-unmerged"
+relevance = "superseded"
+summary = "Stale Vite PR; rebuilt and merged as PR #64."
+
+[[pr]]
+number = 50
+title = "fix(desktop): macOS copy/paste on WalletConnect, Wizard, CashConnect"
+outcome = "merged"
+relevance = "preserve"
+summary = "Native macOS Edit menu must provide normal Cut/Copy/Paste/Select All/Undo/Redo and must not steal Cmd+C/V from URI/input fields."
+
+[[pr]]
+number = 51
+title = "chore(deps): bump react-router-dom to 6.30.6"
+outcome = "merged"
+relevance = "dependency-context"
+summary = "Legacy React surface deliberately stayed on the reviewed v6 line; a v7 migration is a separate architectural change."
+
+[[pr]]
+number = 52
+title = "chore(deps): bump quinn-proto to 0.11.17"
+outcome = "merged"
+relevance = "dependency-context"
+summary = "Merged Quinn security update replaced the stale 0.11.16 PR."
+
+[[pr]]
+number = 53
+title = "ci: make release and preview verification actually verify, and add riscv64"
+outcome = "merged"
+relevance = "preserve"
+summary = "Release gates must verify manifest/tag versions, exact artifact sets, explicit architecture, Rust advisories, and built outputs; a green upload/build step alone is not evidence."
+
+[[pr]]
+number = 56
+title = "docs: document how to file an issue and the conventions we already follow"
+outcome = "merged"
+relevance = "process"
+summary = "Security issues must not be disclosed publicly; reports distinguish verified evidence from inference; commits are coherent/revertable and explain why."
+
+[[pr]]
+number = 58
+title = "feat(cli): headless wallet with x402 payments, CashTokens and agent skills"
+outcome = "merged"
+relevance = "preserve"
+summary = "The Rust CLI is a real wallet surface with CashTokens, x402, keychain, agent policy, covenant inspection, RPA/Cash Code, and transaction-safety invariants; it is not a throwaway demo."
+
+[[pr]]
+number = 60
+title = "feat(wallet): SeedCash-readable PSBT UR density (50/8)"
+outcome = "merged"
+relevance = "preserve"
+summary = "SeedCash interoperability pins raw PSBT URs, 0xc1 sighash, readable QR defaults (50/8/640), canonical vectors, and independent upstream decoder/parser checks."
+
+[[pr]]
+number = 61
+title = "fix(rpa): emit cashcode:, keep accepting paycode:, hash compressed keys"
+outcome = "merged"
+relevance = "preserve"
+summary = "Emit cashcode:/cashcodetest:, accept legacy paycode:/paycodetest:, hash compressed CKD_pub children, refuse offline-only/no-scan-prefix codes, preserve publish/detect/spend capability separation, and keep layer-correct outpoint byte order."
+
+[[pr]]
+number = 62
+title = "fix(macos): make the shipped bundle launchable, and gate on it"
+outcome = "merged"
+relevance = "preserve"
+summary = "macOS uses vendored/static libusb where required, signs every bundled Mach-O including Tor, and verifies the final bundle has no build-machine Homebrew/MacPorts load paths."
+
+[[pr]]
+number = 64
+title = "chore(deps-dev): bump vite from 8.0.16 to 8.2.1"
+outcome = "merged"
+relevance = "dependency-context"
+summary = "Current reviewed Vite 8.2.1 update replacing stale PR #45."
+

@@ -28,6 +28,7 @@
 
         var pendingRequests = Object.create(null);
         var nextRequestId = 1;
+        var initialized = false;
 
         function post(message) {
           parent.postMessage(message, '*');
@@ -55,10 +56,16 @@
         };
 
         window.addEventListener('message', function (event) {
+          // The iframe has an opaque origin, so source identity is the trust
+          // boundary: only its embedding host may initialize it or answer SDK
+          // calls. Addon code and sibling frames cannot impersonate parent.
+          if (event.source !== parent) return;
           var data = event.data;
           if (!data || typeof data !== 'object') return;
 
           if (data.type === 'optn-addon-init') {
+            if (initialized || typeof data.bundleSource !== 'string') return;
+            initialized = true;
             try {
               // Execute the addon's bundle in THIS realm (opaque origin, no
               // allow-same-origin) by inserting it as a real <script>
@@ -66,7 +73,7 @@
               // a proper file/line identity in stack traces and respects
               // this page's CSP the same as any other script here.
               var script = document.createElement('script');
-              script.textContent = String(data.bundleSource || '');
+              script.textContent = data.bundleSource;
               document.body.appendChild(script);
               post({ type: 'optn-addon-init-ack', ok: true });
             } catch (err) {

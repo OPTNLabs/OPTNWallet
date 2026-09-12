@@ -1,13 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { UTXO } from '../../../types/types';
 import { Network } from '../../../state/slices/networkSlice';
+import * as fusionModule from '../FusionP2pService';
 
-const getUTXOsManyMock = vi.fn();
-const broadcastTransactionMock = vi.fn();
-const getTransactionVisibilityMock = vi.fn();
-const reconcileActiveWalletUtxosMock = vi.fn();
-const reservedOutpointsMock = vi.fn();
-const invokeMock = vi.fn();
+const {
+  getUTXOsManyMock,
+  broadcastTransactionMock,
+  getTransactionVisibilityMock,
+  reconcileActiveWalletUtxosMock,
+  reservedOutpointsMock,
+  invokeMock,
+} = vi.hoisted(() => ({
+  getUTXOsManyMock: vi.fn(),
+  broadcastTransactionMock: vi.fn(),
+  getTransactionVisibilityMock: vi.fn(),
+  reconcileActiveWalletUtxosMock: vi.fn(),
+  reservedOutpointsMock: vi.fn(),
+  invokeMock: vi.fn(),
+}));
 
 vi.mock('../../../services/ElectrumService', () => ({
   default: {
@@ -64,13 +74,6 @@ describe('P2P Fusion input refresh', () => {
       [fresh.address]: [fresh],
     });
 
-    const fusionModule = (await import('../FusionP2pService')) as unknown as {
-      refreshAndVerifyP2pInputs?: (
-        walletId: number,
-        fallback: UTXO[]
-      ) => Promise<UTXO[]>;
-    };
-
     expect(typeof fusionModule.refreshAndVerifyP2pInputs).toBe('function');
     await expect(
       fusionModule.refreshAndVerifyP2pInputs!(8, [stale])
@@ -90,15 +93,6 @@ describe('P2P Fusion input refresh', () => {
       [coin.address]: [], // Electrum not listing 0-conf yet
     });
 
-    const fusionModule = (await import('../FusionP2pService')) as unknown as {
-      refreshAndVerifyP2pInputs?: (
-        walletId: number,
-        fallback: UTXO[],
-        signal?: AbortSignal,
-        options?: { preferProvided?: boolean }
-      ) => Promise<UTXO[]>;
-    };
-
     await expect(
       fusionModule.refreshAndVerifyP2pInputs!(8, [coin], undefined, {
         preferProvided: true,
@@ -114,10 +108,6 @@ describe('P2P Fusion input refresh', () => {
       tx_pos: 0,
       value: 10_000 + index,
     }));
-    const fusionModule = (await import('../FusionP2pService')) as unknown as {
-      selectFusionInputs?: (utxos: UTXO[]) => UTXO[];
-    };
-
     expect(typeof fusionModule.selectFusionInputs).toBe('function');
     const selected = fusionModule.selectFusionInputs!(coins);
     expect(selected).toHaveLength(18);
@@ -193,8 +183,7 @@ describe('P2P Fusion broadcast reconciliation', () => {
 
     await expect(
       broadcast(txHex, {
-        broadcast: async () =>
-          'mempool min fee not met, 219 < 233 (code 66)',
+        broadcast: async () => 'mempool min fee not met, 219 < 233 (code 66)',
         visibility: async () => ({ seen: false, confirmed: false }),
       })
     ).rejects.toThrow(/broadcast rejected/i);
@@ -212,13 +201,16 @@ describe('P2P Fusion broadcast reconciliation', () => {
         visibility: async () => ({ seen: false, confirmed: false }),
       })
     ).txid;
-    invokeMock
-      .mockResolvedValueOnce({
-        txid: expected,
-        relaySubmitted: true,
-        observerSeen: false,
-      })
-      .mockResolvedValueOnce(true);
+    // One queued reply for the one call this test makes. A second was queued
+    // here and never consumed, and a leftover one-time reply is not cleared by
+    // `clearAllMocks` -- it sat in the queue and was handed to the next test
+    // that called `invoke`, which then saw `true` where it expected a signer
+    // response and blamed the signer.
+    invokeMock.mockResolvedValueOnce({
+      txid: expected,
+      relaySubmitted: true,
+      observerSeen: false,
+    });
 
     const { broadcastP2pTransactionTorOnly } = await import(
       '../FusionP2pService'
@@ -246,7 +238,13 @@ describe('P2P Fusion broadcast reconciliation', () => {
 
 describe('P2P Fusion native signing boundary', () => {
   beforeEach(() => {
-    vi.restoreAllMocks();
+    // Clear call history, do not restore. There is no `vi.spyOn` in this file,
+    // so `restoreAllMocks` had no spy to put back -- what it does reach is the
+    // module-level `vi.fn(impl)` mocks, whose construction-time
+    // implementations it discards. That left helpers like `isOwnRoundKey`
+    // returning undefined instead of false, and the native signing path then
+    // failed in a way that pointed at the signer rather than at the mock.
+    vi.clearAllMocks();
     reservedOutpointsMock.mockReturnValue(new Set<string>());
   });
 
@@ -261,7 +259,8 @@ describe('P2P Fusion native signing boundary', () => {
     const output = { script: `76a914${'33'.repeat(20)}88ac`, value: 99_500 };
     invokeMock.mockImplementation(async (command, args) => {
       if (command !== 'fusion_p2p_sign') return undefined;
-      const request = (args as { request: Record<string, unknown> }).request as {
+      const request = (args as { request: Record<string, unknown> })
+        .request as {
         protocol: string;
         network: string;
         session: string;
@@ -300,7 +299,9 @@ describe('P2P Fusion native signing boundary', () => {
     const signatures = await nativeSignP2pInputs({
       tx: { inputs: [input], outputs: [output] },
       myContribution: { inputs: [input], outputs: [output] },
-      keysByPubkey: new Map([[pubkey, Uint8Array.from({ length: 32 }, () => 0x55)]]),
+      keysByPubkey: new Map([
+        [pubkey, Uint8Array.from({ length: 32 }, () => 0x55)],
+      ]),
       network: 'chipnet',
       session: '44'.repeat(32),
       participants: ['77'.repeat(32), '88'.repeat(32), '99'.repeat(32)],

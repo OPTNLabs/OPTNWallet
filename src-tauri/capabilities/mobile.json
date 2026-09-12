@@ -1,0 +1,26 @@
+{
+  "$schema": "../gen/schemas/mobile-schema.json",
+  "identifier": "mobile",
+  "description": "OPTN Wallet mobile permissions",
+  "windows": ["main", "wallet-*"],
+  "platforms": ["iOS", "android"],
+  "permissions": [
+    "core:default",
+    "core:webview:allow-create-webview-window",
+    "core:window:allow-create",
+    "core:window:allow-set-title",
+    "log:default",
+    "notification:default",
+    "fs:default",
+    "fs:allow-appdata-read-recursive",
+    "fs:allow-appdata-write-recursive",
+    "fs:allow-appcache-read-recursive",
+    "fs:allow-appcache-write-recursive",
+    "dialog:default",
+    "dialog:allow-open",
+    "dialog:allow-save",
+    "biometry:default",
+    "clipboard-manager:allow-read-text",
+    "clipboard-manager:allow-write-text"
+  ]
+}

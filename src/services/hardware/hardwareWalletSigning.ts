@@ -1,7 +1,8 @@
 /**
  * Bridges WizardConnect SignTransactionRequest to hardware device signing calls.
- * Supports: Trezor (connect-web v9), Ledger (webhid + hw-app-btc),
- *           OneKey (hd-web-sdk), Keystone (air-gap QR via SDK).
+ * Supports: Trezor (native USB HID; browser pending @trezor/transport),
+ *           Ledger (webhid + hw-app-btc), OneKey (hd-web-sdk),
+ *           Keystone (air-gap QR via SDK).
  * Private keys never enter the app — the device is the signing authority.
  */
 

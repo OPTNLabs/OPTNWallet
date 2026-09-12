@@ -3,7 +3,7 @@ name = "optn-cli"
 version = "1.7.3"
 description = "OPTN Wallet command-line interface"
 authors = ["OPTNLabs"]
-license = "GPL-3.0"
+license = "GPL-3.0-only"
 repository = "https://github.com/OPTNLabs/OPTNWallet"
 edition = "2021"
 rust-version = "1.77.2"
@@ -20,9 +20,21 @@ path = "src/main.rs"
 # Versions are pinned to match src-tauri/Cargo.toml so the two trees resolve to
 # the same dependency versions and the audit baseline stays meaningful.
 [dependencies]
-optn-core = { path = "../optn-core" }
-optn-multisig-core = { path = "../optn-multisig-core" }
+optn-core = { path = "../optn-core", version = "=1.7.3" }
+optn-app = { path = "../optn-app", version = "=1.7.3" }
+optn-multisig-core = { path = "../optn-multisig-core", version = "=1.7.3" }
+# Reuses the versioned desktop network-overlay codec without pulling in Tauri.
+optn-runtime = { path = "../optn-runtime", version = "=1.7.3" }
+# The same Tauri-free native adapter composition used by desktop. This keeps
+# CLI source selection, Tor policy, and protocol capability routing aligned.
+optn-chain-native = { path = "../optn-chain-native", version = "=1.7.3" }
+optn-platform-native = { path = "../optn-platform-native", version = "=1.7.3", features = ["wallet-storage"] }
+optn-transport = { path = "../optn-transport", version = "=1.7.3" }
+# Native terminal echo control; passwords must never be normal command arguments.
+rpassword = "=7.5.4"
+zeroize = "1"
 clap = { version = "4", features = ["derive"] }
+dirs = "6"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
@@ -41,6 +53,9 @@ bip32 = { version = "0.5", default-features = false, features = ["alloc", "secp2
 # 24-word phrases, so bip32's would have silently refused most real seeds.
 bip39 = { version = "2", default-features = false, features = ["std", "rand"] }
 tokio = { version = "1", features = ["net", "io-util", "time", "macros", "rt", "rt-multi-thread"] }
+# Same pure-Rust SOCKS client as the native chain adapters. Remote Electrum
+# routes fail closed unless this reaches a verified local Tor SOCKS proxy.
+tokio-socks = "0.5"
 # default-features = false is load-bearing for cross-compilation: the default
 # pulls aws-lc-sys, which builds C and CMake and does not cross to riscv64.
 # ring is pure-ish Rust with a small asm surface and cross-compiles cleanly.
@@ -65,3 +80,15 @@ keyring = { version = "3", default-features = false, features = [
 ] }
 
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "charset", "json"] }
+
+[dev-dependencies]
+tempfile = "3.27"
+
+# Real wallet-file tests retain the production 600,000 PBKDF2 rounds. Optimize
+# their crypto path so debug codegen does not exhaust the child-process deadline
+# on Intel macOS runners. Test debug assertions and overflow checks stay enabled.
+[profile.test.package.optn-core]
+opt-level = 2
+
+[profile.test.package.sha2]
+opt-level = 2
