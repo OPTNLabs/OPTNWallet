@@ -3,18 +3,6 @@ name: Rust quality
 on:
   pull_request:
     branches: [dev, staging, main]
-    paths:
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'rust-toolchain.toml'
-      - 'deny.toml'
-      - 'crates/**/*.rs'
-      - 'crates/**/Cargo.toml'
-      - 'crates/**/Cargo.lock'
-      - 'fuzz/**'
-      - 'src-tauri/**'
-      - 'vendor/glib-0.18.5/**'
-      - '.github/workflows/rust-quality.yml'
   push:
     branches: [dev, staging]
   workflow_dispatch:
