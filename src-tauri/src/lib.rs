@@ -1117,6 +1117,7 @@ pub fn run() {
             app_transport::optn_wallet_refresh,
             app_transport::optn_wallet_rescan,
             app_transport::optn_wallet_security,
+            app_transport::optn_airgap,
             #[cfg(desktop)]
             clipboard::clipboard_write_text,
             #[cfg(desktop)]
