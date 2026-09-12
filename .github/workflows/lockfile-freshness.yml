@@ -37,19 +37,21 @@ jobs:
       - name: Regenerate npm lockfile
         run: npm install --package-lock-only --ignore-scripts
 
-      - name: Regenerate application workspace lockfile
-        run: cargo generate-lockfile
+      # Resolve the committed versions, not today's newest compatible releases.
+      # Full metadata resolution rejects missing or incompatible lockfiles.
+      - name: Validate application workspace lockfile
+        run: cargo metadata --locked --format-version 1 > /dev/null
 
-      - name: Regenerate Tauri lockfile
+      - name: Validate Tauri lockfile
         working-directory: src-tauri
-        run: cargo generate-lockfile
+        run: cargo metadata --locked --format-version 1 > /dev/null
 
-      - name: Regenerate standalone Rust lockfiles
+      - name: Validate standalone Rust lockfiles
         run: |
           for directory in crates/optn-core crates/optn-cli crates/optn-ui-egui fuzz; do
             (
               cd "$directory"
-              cargo generate-lockfile
+              cargo metadata --locked --format-version 1 > /dev/null
             )
           done
 

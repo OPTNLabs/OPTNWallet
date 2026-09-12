@@ -1,0 +1,198 @@
+{
+  "strict_required_status_checks_policy": true,
+  "do_not_enforce_on_create": false,
+  "required_status_checks": [
+    {
+      "context": "Build docker-dev (PR)",
+      "integration_id": 15368
+    },
+    {
+      "context": "web-ci",
+      "integration_id": 15368
+    },
+    {
+      "context": "secrets-scan",
+      "integration_id": 15368
+    },
+    {
+      "context": "Semgrep CE",
+      "integration_id": 15368
+    },
+    {
+      "context": "CodeQL (javascript-typescript)",
+      "integration_id": 15368
+    },
+    {
+      "context": "CodeQL (rust)",
+      "integration_id": 15368
+    },
+    {
+      "context": "Supply-chain policy and SBOM",
+      "integration_id": 15368
+    },
+    {
+      "context": "Desktop E2E (Linux)",
+      "integration_id": 15368
+    },
+    {
+      "context": "debug-apk",
+      "integration_id": 15368
+    },
+    {
+      "context": "dependency-audit",
+      "integration_id": 15368
+    },
+    {
+      "context": "dependency-review",
+      "integration_id": 15368
+    },
+    {
+      "context": "Apple native provider (iOS 14)",
+      "integration_id": 15368
+    },
+    {
+      "context": "Apple Opal flavor (GATED, not iOS 14 parity)",
+      "integration_id": 15368
+    },
+    {
+      "context": "Apple provider Rust + firewall",
+      "integration_id": 15368
+    },
+    {
+      "context": "Assets completeness",
+      "integration_id": 15368
+    },
+    {
+      "context": "Detect OPTN CLI",
+      "integration_id": 15368
+    },
+    {
+      "context": "CLI (linux-x64)",
+      "integration_id": 15368
+    },
+    {
+      "context": "CLI (linux-arm64)",
+      "integration_id": 15368
+    },
+    {
+      "context": "CLI (linux-armv7)",
+      "integration_id": 15368
+    },
+    {
+      "context": "CLI (linux-riscv64)",
+      "integration_id": 15368
+    },
+    {
+      "context": "CLI (windows-x64)",
+      "integration_id": 15368
+    },
+    {
+      "context": "CLI (macos-arm64)",
+      "integration_id": 15368
+    },
+    {
+      "context": "CLI (macos-x64)",
+      "integration_id": 15368
+    },
+    {
+      "context": "CLI preview set is complete",
+      "integration_id": 15368
+    },
+    {
+      "context": "Preview (linux-x64)",
+      "integration_id": 15368
+    },
+    {
+      "context": "Preview (linux-arm64)",
+      "integration_id": 15368
+    },
+    {
+      "context": "Preview (macos-arm64)",
+      "integration_id": 15368
+    },
+    {
+      "context": "Preview (macos-x64)",
+      "integration_id": 15368
+    },
+    {
+      "context": "Preview (windows-x64)",
+      "integration_id": 15368
+    },
+    {
+      "context": "Preview Flatpak (linux-x64)",
+      "integration_id": 15368
+    },
+    {
+      "context": "Preview Flatpak (linux-arm64)",
+      "integration_id": 15368
+    },
+    {
+      "context": "Preview set is complete",
+      "integration_id": 15368
+    },
+    {
+      "context": "Desktop riscv64",
+      "integration_id": 15368
+    },
+    {
+      "context": "Extension Preview",
+      "integration_id": 15368
+    },
+    {
+      "context": "iOS Preview",
+      "integration_id": 15368
+    },
+    {
+      "context": "Generated lockfiles are committed",
+      "integration_id": 15368
+    },
+    {
+      "context": "Rust architecture and Leptos WASM",
+      "integration_id": 15368
+    },
+    {
+      "context": "Kani optn-core proofs",
+      "integration_id": 15368
+    },
+    {
+      "context": "Rust coverage",
+      "integration_id": 15368
+    },
+    {
+      "context": "Rust dependency policy",
+      "integration_id": 15368
+    },
+    {
+      "context": "Rust feature and fuzz compile",
+      "integration_id": 15368
+    },
+    {
+      "context": "Rust nextest",
+      "integration_id": 15368
+    },
+    {
+      "context": "Rust dependency audit",
+      "integration_id": 15368
+    },
+    {
+      "context": "Shared Rust connector core",
+      "integration_id": 15368
+    },
+    {
+      "context": "Tauri Leptos Android",
+      "integration_id": 15368
+    },
+    {
+      "context": "Tauri Leptos Desktop",
+      "integration_id": 15368
+    },
+    {
+      "context": "Tauri Leptos iOS",
+      "integration_id": 15368
+    },
+    {
+      "context": "CodeQL",
+      "integration_id": 57789
+    }
+  ]
+}
