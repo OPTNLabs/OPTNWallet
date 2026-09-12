@@ -605,6 +605,115 @@ mod tests {
             .is_none());
     }
 
+    #[tokio::test]
+    async fn legacy_override_reader_and_cli_routes_never_gain_bootstrap_fallback() {
+        use clap::Parser;
+        use optn_runtime::chain::build_selection_plan;
+        use optn_runtime::network_config::{legacy_server_policy, LEGACY_SERVER_CATALOG_VERSION};
+        use serde_json::json;
+
+        let directory = TestDirectory::new();
+        let path = directory.0.join(file_name(Network::Chipnet));
+        let base = [
+            "optn",
+            "--network",
+            "chipnet",
+            "--network-config-dir",
+            directory.0.to_str().unwrap(),
+        ];
+        let status_cli =
+            crate::Cli::try_parse_from(base.into_iter().chain(["network", "status"])).unwrap();
+        let ping_cli = crate::Cli::try_parse_from(base.into_iter().chain(["ping"])).unwrap();
+        for old_auto in [true, false] {
+            let mut overlay = legacy_electrum("127.0.0.1");
+            overlay.user_sources[0].endpoints[0].port = Some(1);
+            let chosen = overlay.user_sources[0].id.clone();
+            let explicit = legacy_server_policy(&overlay.user_sources);
+            overlay.connection_policy = if old_auto {
+                ConnectionPolicy::auto()
+            } else {
+                explicit.clone()
+            };
+            for availability in ["enabled", "disabled", "missing"] {
+                let mut candidate = overlay.clone();
+                match availability {
+                    "disabled" => {
+                        candidate.user_sources[0].disposition = SourceDisposition::Disabled;
+                    }
+                    "missing" => {
+                        // Retain the chosen identity. An empty old Auto overlay
+                        // means an intentional reset, not a missing pinned source.
+                        candidate.connection_policy = explicit.clone();
+                        candidate.user_sources.clear();
+                    }
+                    _ => {}
+                }
+                let saved =
+                    NetworkConfigEnvelope::current(LEGACY_SERVER_CATALOG_VERSION, candidate);
+                fs::write(&path, encode_envelope_json(&saved).unwrap()).unwrap();
+                let before = fs::read(&path).unwrap();
+
+                // Exactly the file reader and shared resolver used by Tauri's
+                // NetworkSettingsStore::chain_selection, without linking Tauri.
+                let reopened = NetworkConfigFile::new(path.clone())
+                    .load()
+                    .unwrap()
+                    .unwrap();
+                let gui_selection =
+                    resolve_shipped_chain_selection(Network::Chipnet, Some(&reopened)).unwrap();
+                let cli_selection = shared_chain_selection(Network::Chipnet, Some(&directory.0))
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(cli_selection.catalog, gui_selection.0);
+                assert_eq!(cli_selection.policy, gui_selection.1);
+                assert!(cli_selection
+                    .catalog
+                    .iter()
+                    .any(|source| matches!(source.origin, SourceOrigin::Bootstrap { .. })));
+                let plan = build_selection_plan(&cli_selection.catalog, &cli_selection.policy);
+                let expected = if availability == "enabled" {
+                    vec![chosen.clone()]
+                } else {
+                    Vec::new()
+                };
+                assert_eq!(
+                    plan.primary, expected,
+                    "old_auto={old_auto}, {availability}"
+                );
+                assert!(plan.fallback.is_empty());
+
+                let status = crate::run(&status_cli).await.unwrap();
+                assert!(status["sources"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|source| source["origin"].as_str().unwrap().starts_with("Bootstrap")));
+                assert_eq!(
+                    status["primary"],
+                    json!(expected.iter().map(SourceId::as_str).collect::<Vec<_>>())
+                );
+                assert_eq!(status["fallback"], json!([]));
+                // Exercise the real CLI native builder only after proving its
+                // plan cannot attempt any public endpoint, even on regression.
+                let error =
+                    tokio::time::timeout(std::time::Duration::from_secs(5), crate::run(&ping_cli))
+                        .await
+                        .expect("local failure must be bounded")
+                        .unwrap_err()
+                        .to_string();
+                assert!(error.contains("no usable header route"), "{error}");
+                if availability == "enabled" {
+                    assert!(error.contains("127.0.0.1:1"), "{error}");
+                }
+                assert_eq!(
+                    fs::read(&path).unwrap(),
+                    before,
+                    "reading must not rewrite policy"
+                );
+            }
+        }
+    }
+
     #[test]
     fn refuses_an_advanced_policy_instead_of_using_a_default_server() {
         let directory = TestDirectory::new();

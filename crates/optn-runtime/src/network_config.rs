@@ -16,6 +16,18 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const NETWORK_CONFIG_SCHEMA_VERSION: u32 = 1;
+pub const LEGACY_SERVER_CATALOG_VERSION: &str = "legacy-server-overrides-v1";
+
+/// The legacy server fields are overrides, not additions to public Auto.
+/// Only clearing every chain override opts back into the shipped defaults.
+pub fn legacy_server_policy(sources: &[ChainSource]) -> ConnectionPolicy {
+    let mut policy = ConnectionPolicy::auto();
+    if !sources.is_empty() {
+        policy.primary_scope =
+            SourceScope::Explicit(sources.iter().map(|source| source.id.clone()).collect());
+    }
+    policy
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserNetworkOverlay {
@@ -103,7 +115,18 @@ pub fn resolve_chain_selection(
     envelope: &NetworkConfigEnvelope,
 ) -> Result<(SourceCatalog, ConnectionPolicy), NetworkConfigError> {
     let catalog = merge_bootstrap_with_user_overlay(bootstrap_base, envelope)?;
-    Ok((catalog, envelope.overlay.connection_policy.clone()))
+    // Older server-field saves used Auto while their catalog contained only
+    // the chosen overrides. Adding bootstrap discovery must not expand that
+    // intent. Apply this compatibility rule in the shared GUI/CLI reader;
+    // explicitly saved advanced policies retain their original meaning.
+    let policy = if envelope.bootstrap_catalog_version_seen == LEGACY_SERVER_CATALOG_VERSION
+        && envelope.overlay.connection_policy == ConnectionPolicy::auto()
+    {
+        legacy_server_policy(&envelope.overlay.user_sources)
+    } else {
+        envelope.overlay.connection_policy.clone()
+    };
+    Ok((catalog, policy))
 }
 
 /// Mount reviewed defaults and durable user intent identically in GUI and CLI.
@@ -130,7 +153,8 @@ pub fn legacy_network_servers_from_overlay(
     overlay: &UserNetworkOverlay,
 ) -> Result<NetworkServers, String> {
     if !overlay.bootstrap_overrides.is_empty()
-        || overlay.connection_policy != ConnectionPolicy::auto()
+        || (overlay.connection_policy != ConnectionPolicy::auto()
+            && overlay.connection_policy != legacy_server_policy(&overlay.user_sources))
     {
         return Err(
             "this network configuration uses source policy features this surface cannot enforce"
@@ -757,6 +781,67 @@ mod tests {
         };
 
         assert!(legacy_network_servers_from_overlay(&overlay).is_err());
+    }
+
+    #[test]
+    fn saved_server_overrides_never_gain_public_fallback_after_restart() {
+        use crate::chain::build_selection_plan;
+
+        let mut source = user_source("chosen-server");
+        source.priority = 0;
+        // An unreachable local override is still a selection, never consent
+        // to reveal this wallet to a different public server.
+        source.endpoints[0].host = "127.0.0.1".into();
+        source.endpoints[0].port = Some(1);
+        let mut overlay = UserNetworkOverlay {
+            user_sources: vec![source.clone()],
+            ..Default::default()
+        };
+        for stored_policy in [
+            ConnectionPolicy::auto(),
+            legacy_server_policy(&overlay.user_sources),
+        ] {
+            overlay.connection_policy = stored_policy;
+            let saved =
+                NetworkConfigEnvelope::current(LEGACY_SERVER_CATALOG_VERSION, overlay.clone());
+            let reopened = decode_envelope_json(&encode_envelope_json(&saved).unwrap()).unwrap();
+            assert_eq!(
+                legacy_network_servers_from_overlay(&reopened.overlay)
+                    .unwrap()
+                    .electrum
+                    .as_deref(),
+                Some("127.0.0.1:1")
+            );
+            let (mut catalog, policy) =
+                resolve_shipped_chain_selection(Network::Chipnet, Some(&reopened)).unwrap();
+            assert!(catalog.iter().any(|entry| entry.is_public()));
+            assert_eq!(
+                build_selection_plan(&catalog, &policy).primary,
+                vec![source.id.clone()]
+            );
+            catalog
+                .set_disposition(&source.id, SourceDisposition::Disabled)
+                .unwrap();
+            let unavailable = build_selection_plan(&catalog, &policy);
+            assert!(unavailable.primary.is_empty());
+            assert!(unavailable.fallback.is_empty());
+        }
+
+        // Advanced Auto retains its explicit policy; the compatibility rule
+        // belongs only to records emitted by the old server-override bridge.
+        overlay.connection_policy = ConnectionPolicy::auto();
+        let advanced = NetworkConfigEnvelope::current("advanced-auto", overlay);
+        let (catalog, policy) =
+            resolve_shipped_chain_selection(Network::Chipnet, Some(&advanced)).unwrap();
+        assert_eq!(build_selection_plan(&catalog, &policy).primary.len(), 2);
+
+        let reset =
+            NetworkConfigEnvelope::current(LEGACY_SERVER_CATALOG_VERSION, Default::default());
+        let (catalog, policy) =
+            resolve_shipped_chain_selection(Network::Chipnet, Some(&reset)).unwrap();
+        let defaults = build_selection_plan(&catalog, &policy);
+        assert_eq!(defaults.primary.len(), 1);
+        assert!(catalog.get(&defaults.primary[0]).unwrap().is_public());
     }
 
     #[test]
