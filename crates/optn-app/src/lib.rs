@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 pub use optn_core::wallet_file::SecretText;
 pub mod connect;
 mod flow;
+pub mod fusion;
 pub mod identity;
 pub mod menu;
 pub use connect::{
@@ -474,6 +475,21 @@ pub struct AppState {
     pub settings_focus: Option<SettingsRowId>,
     pub watch_only_kind: WatchOnlyKind,
     pub multisig_step: MultisigStep,
+    /// What Auto Fusion is doing. Owned by the runtime driver; a renderer
+    /// displays it and configures the policy, and never drives a round.
+    pub fusion: fusion::FusionSession,
+    /// Whether the Tor SOCKS proxy is up.
+    ///
+    /// Runtime-observed, not a preference: P2P fusion cannot start without it,
+    /// and a renderer asserting it would let a round attempt a clearnet
+    /// connection the holder never agreed to.
+    pub tor_ready: bool,
+    /// The holder's Auto Fusion settings.
+    ///
+    /// The master switch is not here: it is `FeatureFlag::CashFusion`, and
+    /// keeping one source of truth for "is this feature on at all" is worth
+    /// more than the symmetry of storing it twice.
+    pub auto_fusion: fusion::AutoFusionSettings,
     /// Verified token identities, keyed by category id in display order.
     ///
     /// Written by the runtime after BCMR resolution, never by a renderer. An
@@ -569,6 +585,9 @@ impl AppState {
             settings_focus: None,
             watch_only_kind: WatchOnlyKind::Single,
             multisig_step: MultisigStep::Policy,
+            tor_ready: false,
+            fusion: fusion::FusionSession::new(),
+            auto_fusion: fusion::AutoFusionSettings::new(),
             token_identities: BTreeMap::new(),
             return_to: None,
             lock: AppLockState::new(),
@@ -656,6 +675,27 @@ pub enum AppAction {
     HideWalletIdentity,
     /// Record the RPA stealth balance a scan found.
     SetStealthSats(u64),
+    /// Arm Auto Fusion for this session.
+    ///
+    /// The one explicit consent in the flow: a persisted preference says the
+    /// holder wants Auto Fusion, and this says they want it *now*, in this
+    /// session, with this wallet. After it the driver runs by itself; it is a
+    /// safety gate rather than a manual-mode switch, which is why reopening the
+    /// app does not resume spending fees.
+    StartFusion,
+    /// Stop the current round and disarm.
+    CancelFusion,
+    /// Turn the Auto Fusion preference on or off.
+    SetAutoFusionEnabled(bool),
+    /// Choose the transport. The two are mutually exclusive.
+    SetFusionMode(fusion::FusionMode),
+    /// Publish whether Tor is up.
+    SetTorReady(bool),
+    /// Publish what the driver is doing.
+    ///
+    /// An observation, not an instruction: a renderer that could set this could
+    /// claim a round completed, or hide one that failed.
+    SetFusionPhase(fusion::FusionPhase),
     /// Publish a token identity the runtime resolved and verified.
     ///
     /// An observation, not an instruction, so a renderer may not make it: a
@@ -748,7 +788,10 @@ pub enum AppEvent {
     NetworkChanged(Network),
     HelpVisibilityChanged(bool),
     SurfaceChanged(AppSurface),
-    FeatureFlagChanged { flag: FeatureFlag, enabled: bool },
+    FeatureFlagChanged {
+        flag: FeatureFlag,
+        enabled: bool,
+    },
     CoinsChanged,
     FlipstarterPledgesChanged,
     NoticeChanged,
@@ -762,6 +805,8 @@ pub enum AppEvent {
     AuthRequired,
     SpendAuthorized,
     WalletLocked,
+    /// Fusion policy or session state moved.
+    FusionChanged,
 }
 
 impl AppState {
@@ -772,7 +817,9 @@ impl AppState {
         match action {
             AppAction::InsertCoin(_)
             | AppAction::SetStealthSats(_)
-            | AppAction::SetTokenIdentity { .. } => self.reject(
+            | AppAction::SetTokenIdentity { .. }
+            | AppAction::SetFusionPhase(_)
+            | AppAction::SetTorReady(_) => self.reject(
                 "Wallet observations must come from the shared sync service.".into(),
             ),
             AppAction::ConfirmAuth { .. } => self.reject(
@@ -889,6 +936,8 @@ impl AppState {
                 // request carried across the switch would be answered against
                 // coins that are not the ones it was built from.
                 self.connect.cancel_all();
+                self.fusion = fusion::FusionSession::new();
+                self.tor_ready = false;
                 Some(AppEvent::NetworkChanged(network))
             }
             AppAction::OpenHelp if !self.help_open => {
@@ -902,6 +951,8 @@ impl AppState {
             AppAction::SetSurface(surface) if self.surface != surface => {
                 self.surface = surface;
                 self.features = FeatureFlags::default();
+                self.fusion.disarm();
+                self.tor_ready = false;
                 Some(AppEvent::SurfaceChanged(surface))
             }
             AppAction::SetFeatureEnabled { flag, enabled } => {
@@ -924,6 +975,9 @@ impl AppState {
                     FeatureFlag::CashFusion => self.features.cash_fusion = Some(wanted),
                     FeatureFlag::HardwareWallet => self.features.hardware_wallet = Some(wanted),
                     FeatureFlag::WatchOnly => self.features.watch_only = Some(wanted),
+                }
+                if flag == FeatureFlag::CashFusion && !wanted {
+                    self.fusion.disarm();
                 }
                 Some(AppEvent::FeatureFlagChanged {
                     flag,
@@ -1056,6 +1110,78 @@ impl AppState {
                 self.wallet_sync.rescan_requested = Some(height);
                 self.wallet_sync.error = None;
                 Some(AppEvent::CoinsChanged)
+            }
+            AppAction::StartFusion => {
+                if !self.features.enabled(self.surface, FeatureFlag::CashFusion) {
+                    return self.reject("CashFusion is not available here.".into());
+                }
+                if self.wallet.is_none() {
+                    return self.reject("Open a wallet before fusing.".into());
+                }
+                if self.wallet.as_ref().map(|wallet| wallet.kind) != Some(WalletKind::Seed) {
+                    return self.reject("Auto Fusion requires an unlocked seed wallet.".into());
+                }
+                if self.fusion.session_armed && self.fusion.is_scheduled() {
+                    return None;
+                }
+                self.fusion.session_armed = true;
+                // Deliberately does not set a running phase. Arming is consent;
+                // the driver decides when a round actually starts, and claiming
+                // otherwise here would show a round that is not happening.
+                self.fusion.hold_reason = None;
+                Some(AppEvent::FusionChanged)
+            }
+            AppAction::CancelFusion => {
+                if !self.fusion.session_armed && !self.fusion.is_scheduled() {
+                    return None;
+                }
+                // Disarm as well as stop. A cancel that left the session armed
+                // would have the driver start another round moments later,
+                // which is the opposite of what cancelling means.
+                self.fusion.disarm();
+                Some(AppEvent::FusionChanged)
+            }
+            AppAction::SetAutoFusionEnabled(enabled) => {
+                if self.auto_fusion.auto_fuse_enabled == enabled {
+                    return None;
+                }
+                self.auto_fusion.auto_fuse_enabled = enabled;
+                if !enabled {
+                    self.fusion.disarm();
+                }
+                Some(AppEvent::FusionChanged)
+            }
+            AppAction::SetFusionMode(mode) => {
+                let p2p = matches!(mode, fusion::FusionMode::P2p);
+                if self.auto_fusion.p2p_fusion_enabled == p2p {
+                    return None;
+                }
+                if self.fusion.is_busy() {
+                    return self.reject(
+                        "Finish or cancel the current round before changing transport.".into(),
+                    );
+                }
+                self.auto_fusion.p2p_fusion_enabled = p2p;
+                Some(AppEvent::FusionChanged)
+            }
+            AppAction::SetTorReady(ready) => {
+                if self.tor_ready == ready {
+                    return None;
+                }
+                self.tor_ready = ready;
+                Some(AppEvent::FusionChanged)
+            }
+            AppAction::SetFusionPhase(phase) => {
+                if self.fusion.phase == phase {
+                    return None;
+                }
+                // Keep the running totals the driver reports.
+                if let fusion::FusionPhase::Completed { fused_sats, .. } = &phase {
+                    self.fusion.rounds_completed = self.fusion.rounds_completed.saturating_add(1);
+                    self.fusion.fused_sats = self.fusion.fused_sats.saturating_add(*fused_sats);
+                }
+                self.fusion.phase = phase;
+                Some(AppEvent::FusionChanged)
             }
             AppAction::SetTokenIdentity {
                 category_hex,
@@ -1372,6 +1498,8 @@ impl AppState {
         self.stealth_sats = 0;
         self.spend = None;
         self.connect.cancel_all();
+        self.fusion = fusion::FusionSession::new();
+        self.auto_fusion = fusion::AutoFusionSettings::new();
         self.identity_revealed = false;
         self.hardware.account_xpub = None;
         self.notice = None;
@@ -1387,6 +1515,8 @@ impl AppState {
             return None;
         }
         self.lock.lock();
+        self.fusion = fusion::FusionSession::new();
+        self.auto_fusion = fusion::AutoFusionSettings::new();
         // A reveal must never outlive the unlocked session: coming back to a
         // locked wallet showing its xPub would defeat the gate entirely.
         self.identity_revealed = false;
@@ -2098,6 +2228,35 @@ pub fn portfolio_totals(state: &AppState) -> PortfolioTotals {
         reserved_sats: state.coins.reserved_sats(),
         stealth_sats: state.stealth_sats,
     }
+}
+
+/// Render Auto Fusion for a surface.
+///
+/// The master switch is read from the feature flag rather than stored twice,
+/// so the settings screen and the driver cannot disagree about whether the
+/// feature is on.
+pub fn fusion_view_model(state: &AppState) -> fusion::FusionViewModel {
+    let policy = state.auto_fusion.with_master_switch(
+        state
+            .features
+            .enabled(state.surface, FeatureFlag::CashFusion),
+    );
+    let mut view = fusion::fusion_view_model(
+        policy,
+        &state.fusion,
+        state.wallet.is_some(),
+        state.tor_ready,
+    );
+    if state
+        .wallet
+        .as_ref()
+        .is_some_and(|wallet| wallet.kind != WalletKind::Seed)
+    {
+        view.can_start = false;
+        view.status = "Auto Fusion requires an unlocked seed wallet.".into();
+        view.hint = Some(view.status.clone());
+    }
+    view
 }
 
 pub fn coins_view_model(state: &AppState) -> CoinsViewModel {
@@ -4464,6 +4623,195 @@ mod tests {
         assert_eq!(portfolio_totals(&state).stealth_sats, 0);
     }
 
+    /// Desktop, wallet open. CashFusion is desktop-only, so the surface is
+    /// part of the fixture rather than incidental to it.
+    fn seeded_wallet_state() -> AppState {
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        state.apply(AppAction::OpenCreatedWallet {
+            name: "Fusion".into(),
+            receive_address: "bitcoincash:qq0000000000000000000000000000000000000000".into(),
+            account_path: "m/44'/145'/0'".into(),
+        });
+        assert!(state.wallet.is_some(), "fixture must open a wallet");
+        state
+    }
+
+    /// Arming is consent to spend, and nothing more.
+    ///
+    /// A start that jumped straight to a running phase would show a round that
+    /// is not happening: only the driver knows whether it actually joined a
+    /// pool, and on P2P it may sit waiting for a rendezvous slot for over a
+    /// minute first.
+    #[test]
+    fn starting_fusion_arms_the_session_without_claiming_a_round() {
+        let mut state = seeded_wallet_state();
+        assert!(!state.fusion.session_armed);
+
+        assert_eq!(
+            state.reduce_intent(AppAction::StartFusion),
+            Some(AppEvent::FusionChanged)
+        );
+        assert!(state.fusion.session_armed);
+        assert_eq!(state.fusion.phase, fusion::FusionPhase::Idle);
+        assert!(!state.fusion.is_busy());
+    }
+
+    /// The preference persists; the arming does not.
+    #[test]
+    fn a_restored_session_is_not_armed_by_the_preference_alone() {
+        let mut state = seeded_wallet_state();
+        state.apply(AppAction::SetAutoFusionEnabled(true));
+
+        // Exactly the shape of a reopened app: preference on, never started.
+        assert!(state.auto_fusion.auto_fuse_enabled);
+        assert!(!state.fusion.session_armed);
+
+        let view = fusion_view_model(&state);
+        assert!(!view.session.session_armed);
+        assert_eq!(
+            view.status, "Fusion must be started once in this session first",
+            "the preference alone must not read as ready to spend"
+        );
+    }
+
+    /// Cancelling disarms. Otherwise the driver starts another round seconds
+    /// later, which is the opposite of what cancelling means.
+    #[test]
+    fn cancelling_disarms_rather_than_pausing() {
+        let mut state = seeded_wallet_state();
+        state.apply(AppAction::StartFusion);
+        state.apply(AppAction::SetFusionPhase(fusion::FusionPhase::Running {
+            mode: fusion::FusionMode::Server,
+            step: fusion::FusionStep::Gathering,
+            participants: Some(3),
+        }));
+
+        assert_eq!(
+            state.reduce_intent(AppAction::CancelFusion),
+            Some(AppEvent::FusionChanged)
+        );
+        assert!(!state.fusion.session_armed);
+        // Still Cancelling, not Idle: the round holds coin reservations until
+        // the teardown lands.
+        assert_eq!(state.fusion.phase, fusion::FusionPhase::Cancelling);
+        assert!(state.fusion.is_busy());
+    }
+
+    /// A renderer may configure and arm, but may not narrate.
+    ///
+    /// If the interface could publish the phase it could claim a round
+    /// completed, or hide one that failed.
+    #[test]
+    fn an_interface_cannot_publish_fusion_progress() {
+        let mut state = seeded_wallet_state();
+
+        assert_eq!(
+            state.reduce_intent(AppAction::SetFusionPhase(fusion::FusionPhase::Completed {
+                txid: "ff".repeat(32),
+                fused_sats: 100_000,
+                at_ms: 1,
+            })),
+            Some(AppEvent::NoticeChanged)
+        );
+        assert_eq!(state.fusion.phase, fusion::FusionPhase::Idle);
+        assert_eq!(state.fusion.rounds_completed, 0);
+        assert_eq!(state.fusion.fused_sats, 0);
+
+        assert_eq!(
+            state.reduce_intent(AppAction::SetTorReady(true)),
+            Some(AppEvent::NoticeChanged)
+        );
+        assert!(!state.tor_ready);
+
+        // The same actions from the sync service are accepted.
+        state.apply(AppAction::SetTorReady(true));
+        assert!(state.tor_ready);
+    }
+
+    /// Completed rounds accumulate, because a holder wants a session total
+    /// rather than only the most recent round.
+    #[test]
+    fn completed_rounds_accumulate_for_the_session() {
+        let mut state = seeded_wallet_state();
+        state.apply(AppAction::StartFusion);
+        for i in 0..2u64 {
+            state.apply(AppAction::SetFusionPhase(fusion::FusionPhase::Running {
+                mode: fusion::FusionMode::Server,
+                step: fusion::FusionStep::Signing,
+                participants: None,
+            }));
+            state.apply(AppAction::SetFusionPhase(fusion::FusionPhase::Completed {
+                txid: format!("{i:064}"),
+                fused_sats: 50_000,
+                at_ms: i,
+            }));
+        }
+        assert_eq!(state.fusion.rounds_completed, 2);
+        assert_eq!(state.fusion.fused_sats, 100_000);
+    }
+
+    /// Switching transport mid-round would strand the round that is running.
+    #[test]
+    fn the_transport_cannot_be_switched_mid_round() {
+        let mut state = seeded_wallet_state();
+        state.apply(AppAction::StartFusion);
+        state.apply(AppAction::SetFusionPhase(fusion::FusionPhase::Running {
+            mode: fusion::FusionMode::Server,
+            step: fusion::FusionStep::Assembling,
+            participants: Some(5),
+        }));
+
+        assert_eq!(
+            state.reduce_intent(AppAction::SetFusionMode(fusion::FusionMode::P2p)),
+            Some(AppEvent::NoticeChanged)
+        );
+        assert!(!state.auto_fusion.p2p_fusion_enabled);
+
+        // Once the round is over the switch goes through.
+        state.apply(AppAction::SetFusionPhase(fusion::FusionPhase::Idle));
+        state.apply(AppAction::SetFusionMode(fusion::FusionMode::P2p));
+        assert!(state.auto_fusion.p2p_fusion_enabled);
+    }
+
+    /// One source of truth for the master switch.
+    ///
+    /// The settings screen toggles `FeatureFlag::CashFusion`; the driver asks
+    /// the policy. A second stored copy would let them disagree.
+    #[test]
+    fn the_feature_flag_is_the_fusion_master_switch() {
+        let mut state = seeded_wallet_state();
+        state.apply(AppAction::SetAutoFusionEnabled(true));
+        state.apply(AppAction::StartFusion);
+        assert!(fusion_view_model(&state).policy.cash_fusion_enabled);
+
+        state.apply(AppAction::SetFeatureEnabled {
+            flag: FeatureFlag::CashFusion,
+            enabled: false,
+        });
+
+        let view = fusion_view_model(&state);
+        assert!(!view.policy.cash_fusion_enabled);
+        assert_eq!(view.status, "CashFusion is off");
+        assert!(!view.can_start);
+    }
+
+    /// P2P cannot start without Tor, and the reason has to say so.
+    #[test]
+    fn p2p_fusion_holds_until_tor_is_up() {
+        let mut state = seeded_wallet_state();
+        state.apply(AppAction::SetAutoFusionEnabled(true));
+        state.apply(AppAction::SetFusionMode(fusion::FusionMode::P2p));
+        state.apply(AppAction::StartFusion);
+
+        assert_eq!(
+            fusion_view_model(&state).status,
+            "Tor is not ready for P2P fusion"
+        );
+
+        state.apply(AppAction::SetTorReady(true));
+        assert_eq!(fusion_view_model(&state).status, "Ready");
+    }
+
     #[test]
     fn switching_network_drops_coins_that_belong_to_the_other_chain() {
         // Coins belong to a chain. Carrying them across a switch would count
@@ -5699,6 +6047,9 @@ mod tests {
             state.apply(AppAction::SetStealthSats(50_000));
             state.identity_revealed = true;
             state.hardware.account_xpub = Some("old-account".into());
+            state.apply(AppAction::SetAutoFusionEnabled(true));
+            state.apply(AppAction::StartFusion);
+            assert!(state.fusion.session_armed);
             assert!(state.connect.raise(ConnectRequest {
                 protocol: ConnectProtocol::CashConnect,
                 kind: RequestKind::SignTransaction,
@@ -5712,6 +6063,10 @@ mod tests {
                 account_path: "".into(),
             });
             assert_eq!(state.wallet.as_ref().unwrap().name, "previous");
+            assert!(
+                state.fusion.session_armed,
+                "rejected open preserves the current session"
+            );
             assert_eq!(portfolio_totals(&state).total_sats(), 60_000);
             assert_eq!(state.reduce(action), Some(AppEvent::WalletOpened));
             assert_eq!(state.wallet.as_ref().unwrap().name, "next");
@@ -5721,6 +6076,16 @@ mod tests {
             assert!(state.connect.request.is_none());
             assert!(!state.identity_revealed);
             assert!(state.hardware.account_xpub.is_none());
+            assert_eq!(state.fusion, fusion::FusionSession::new());
+            assert_eq!(state.auto_fusion, fusion::AutoFusionSettings::new());
+            if state.wallet.as_ref().unwrap().kind != WalletKind::Seed {
+                assert_eq!(
+                    state.reduce_intent(AppAction::StartFusion),
+                    Some(AppEvent::NoticeChanged)
+                );
+                assert!(!state.fusion.session_armed);
+                assert!(!fusion_view_model(&state).can_start);
+            }
             assert_eq!(state.route, AppRoute::WalletHome);
         }
     }
