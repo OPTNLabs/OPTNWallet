@@ -1,0 +1,488 @@
+use serde::Deserialize;
+use std::{collections::BTreeMap, fs, path::Path};
+
+const PLATFORMS: &[&str] = &[
+    "windows",
+    "linux",
+    "macos",
+    "android",
+    "ios",
+    "web",
+    "extension",
+];
+
+#[derive(Debug, Deserialize)]
+struct Matrix {
+    schema: u32,
+    platforms: Vec<String>,
+    feature: Vec<Feature>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Feature {
+    id: String,
+    name: String,
+    policy: BTreeMap<String, String>,
+    evidence: BTreeMap<String, String>,
+    #[serde(default)]
+    evidence_refs: BTreeMap<String, String>,
+    #[serde(default)]
+    na_reason: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verdict {
+    Pass,
+    Pending,
+    Na,
+    Fail,
+}
+
+impl Verdict {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::Pending => "pending",
+            Self::Na => "na",
+            Self::Fail => "fail",
+        }
+    }
+}
+
+pub fn run(root: &Path, production_ready: bool) {
+    let path = root.join("rustification/parity-matrix.toml");
+    let parsed = parse_matrix(&path);
+    let mut failures = Vec::new();
+
+    if parsed.schema != 1 {
+        failures.push(format!(
+            "{}: unsupported schema {}",
+            path.display(),
+            parsed.schema
+        ));
+    }
+    if parsed.platforms != PLATFORMS {
+        failures.push(format!(
+            "{}: platforms must be exactly {PLATFORMS:?}",
+            path.display()
+        ));
+    }
+
+    let mut fail_cells = 0usize;
+    let mut pending_cells = 0usize;
+    let mut watch_only_row = String::new();
+    println!(
+        "{:<22} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8} {:>10}",
+        "feature", "windows", "linux", "macos", "android", "ios", "web", "extension"
+    );
+
+    for feature in &parsed.feature {
+        let mut row = format!("{:<22}", feature.id);
+        for platform in PLATFORMS {
+            match verdict(feature, platform) {
+                Ok(verdict) => {
+                    match verdict {
+                        Verdict::Fail => fail_cells += 1,
+                        Verdict::Pending => pending_cells += 1,
+                        Verdict::Pass | Verdict::Na => {}
+                    }
+                    row.push_str(&format!("{:>8}", verdict.as_str()));
+                }
+                Err(error) => {
+                    fail_cells += 1;
+                    failures.push(error);
+                    row.push_str(&format!("{:>8}", "fail"));
+                }
+            }
+        }
+        println!("{row}  {}", feature.name);
+        if feature.id == "watch_only" {
+            watch_only_row = row;
+        }
+        collect_ref_failures(root, feature, &mut failures);
+    }
+
+    collect_source_drift(root, &parsed, &mut failures);
+
+    if !failures.is_empty() {
+        for failure in &failures {
+            eprintln!("parity matrix: {failure}");
+        }
+        eprintln!("parity matrix integrity: FAIL");
+        std::process::exit(1);
+    }
+
+    println!("parity matrix integrity: PASS");
+    if !watch_only_row.is_empty() {
+        println!("watch_only status:{watch_only_row}");
+        println!(
+            "note: pending means a packaged E2E test is referenced, not that this commit's APK passed it"
+        );
+    }
+    println!("failing production-ready cells: {fail_cells}");
+    println!("pending production-ready cells: {pending_cells}");
+    if production_ready && (fail_cells > 0 || pending_cells > 0) {
+        eprintln!(
+            "production-ready: FAIL ({fail_cells} fail, {pending_cells} pending). This gate is informational; required CI jobs may still pass."
+        );
+        std::process::exit(1);
+    }
+    if production_ready {
+        println!("production-ready: PASS");
+    }
+}
+
+fn parse_matrix(path: &Path) -> Matrix {
+    let text = fs::read_to_string(path)
+        .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+    toml::from_str(&text).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+}
+
+fn verdict(feature: &Feature, platform: &str) -> Result<Verdict, String> {
+    let policy = feature
+        .policy
+        .get(platform)
+        .ok_or_else(|| format!("feature '{}' is missing policy for {platform}", feature.id))?;
+    let evidence = feature.evidence.get(platform).ok_or_else(|| {
+        format!(
+            "feature '{}' is missing evidence for {platform}",
+            feature.id
+        )
+    })?;
+    match (policy.as_str(), evidence.as_str()) {
+        ("pass", "e2e" | "device") => Ok(Verdict::Pass),
+        ("pass", "e2e-declared") => Ok(Verdict::Pending),
+        ("na", "hidden") => {
+            if feature
+                .na_reason
+                .get(platform)
+                .map(|reason| reason.trim().is_empty())
+                .unwrap_or(true)
+            {
+                return Err(format!(
+                    "feature '{}' marks {platform} na without na_reason",
+                    feature.id
+                ));
+            }
+            Ok(Verdict::Na)
+        }
+        ("pass" | "na", _) => Ok(Verdict::Fail),
+        (other, _) => Err(format!(
+            "feature '{}' {platform} policy '{other}' is not pass or na",
+            feature.id
+        )),
+    }
+}
+
+/// Evidence kinds that must name something a reader can open.
+///
+/// `unit` is in this list, and it was the last one added. For a long time the
+/// check covered only the packaged kinds, on the reasoning that a unit test is
+/// cheap and nobody would claim one falsely. Ninety-two cells claimed `unit`
+/// with no reference at all, and one of them -- `spv` -- had no implementation
+/// in any of the fourteen crates and no test in the TypeScript app either. The
+/// claim was not a shortcut; it was wrong, and nothing could see it.
+///
+/// `none` and `hidden` are absent deliberately: both say there is nothing to
+/// point at, which is a claim that checks itself.
+const EVIDENCE_NEEDING_REFS: &[&str] = &["unit", "e2e", "device", "e2e-declared"];
+
+fn collect_ref_failures(root: &Path, feature: &Feature, failures: &mut Vec<String>) {
+    for platform in PLATFORMS {
+        let evidence = feature.evidence.get(*platform).map(String::as_str);
+        if !evidence.is_some_and(|kind| EVIDENCE_NEEDING_REFS.contains(&kind)) {
+            continue;
+        }
+        let Some(reference) = feature.evidence_refs.get(*platform) else {
+            failures.push(format!(
+                "feature '{}' {platform} claims {} evidence without evidence_refs",
+                feature.id,
+                evidence.unwrap_or("?")
+            ));
+            continue;
+        };
+        let (rel, token) = match reference.split_once("::") {
+            Some((path, token)) => (path, Some(token)),
+            None => (reference.as_str(), None),
+        };
+        let path = root.join(rel);
+        if !path.is_file() {
+            failures.push(format!(
+                "feature '{}' {platform} evidence_refs path is missing: {rel}",
+                feature.id
+            ));
+            continue;
+        }
+        if let Some(token) = token {
+            let text = fs::read_to_string(&path).unwrap_or_default();
+            if !text.contains(token) {
+                failures.push(format!(
+                    "feature '{}' {platform} evidence_refs token '{token}' not found in {rel}",
+                    feature.id
+                ));
+            }
+        }
+    }
+}
+
+fn collect_source_drift(root: &Path, matrix: &Matrix, failures: &mut Vec<String>) {
+    let Some(watch_only) = matrix
+        .feature
+        .iter()
+        .find(|feature| feature.id == "watch_only")
+    else {
+        failures.push("matrix is missing watch_only".into());
+        return;
+    };
+    let app = fs::read_to_string(root.join("crates/optn-app/src/lib.rs")).unwrap_or_default();
+    if !app.contains("FeatureFlag::WatchOnly") {
+        failures.push(
+            "optn-app must expose Watch Only as FeatureFlag::WatchOnly, not a hardcoded surface hide"
+                .into(),
+        );
+    }
+
+    // Every platform, with no exception for the shells that have no camera and
+    // no USB: watching a cold wallet needs neither. This is the one feature in
+    // the matrix that is deliberately uniform, so an `na` appearing here is a
+    // platform quietly losing the air-gap door rather than a gap being noted.
+    for platform in [
+        "windows",
+        "linux",
+        "macos",
+        "android",
+        "ios",
+        "web",
+        "extension",
+    ] {
+        if watch_only.policy.get(platform).map(String::as_str) != Some("pass") {
+            failures.push(format!("watch_only {platform} policy must be pass"));
+        }
+    }
+
+    let ui_main = fs::read_to_string(root.join("crates/optn-ui/src/main.rs")).unwrap_or_default();
+    if ui_main.contains("move || match state.get().route") {
+        failures.push(
+            "optn-ui must switch pages from a route Memo (mounted_page), not the full AppState snapshot"
+                .into(),
+        );
+    }
+    if !ui_main.contains("mounted_page") || !ui_main.contains("Memo::new") {
+        failures.push(
+            "optn-ui must Memo mounted_page so Create/Import/Watch-only survive Chipnet/theme snapshots"
+                .into(),
+        );
+    }
+    if ui_main.contains("network=state.get_untracked().network") {
+        failures.push(
+            "DerivationPicker must follow a reactive network, not get_untracked at first render"
+                .into(),
+        );
+    }
+
+    let shell = fs::read_to_string(root.join("src/app/AppShell.tsx")).unwrap_or_default();
+    if shell.contains("offersWatchOnly()") {
+        failures.push(
+            "AppShell must keep the Watch Only route registered; hide it with the flag, not by omitting the route"
+                .into(),
+        );
+    }
+
+    let capabilities =
+        fs::read_to_string(root.join("src/platform/capabilities.ts")).unwrap_or_default();
+    // Watch Only is offered on every surface. It needs no transport at all --
+    // an account xPub can be pasted -- so the shells with no camera and no USB
+    // can still watch a cold wallet. The table is how a platform switches it
+    // off, not how it earns it.
+    for surface in ["desktop", "android", "ios", "web", "extension"] {
+        if !capability_enabled(&capabilities, "watchOnlyWallet", surface, true) {
+            failures.push(format!(
+                "src/platform/capabilities.ts watchOnlyWallet.{surface} drifted from the parity matrix"
+            ));
+        }
+    }
+
+    let Some(hardware) = matrix
+        .feature
+        .iter()
+        .find(|feature| feature.id == "hardware_wallet")
+    else {
+        failures.push("matrix is missing hardware_wallet".into());
+        return;
+    };
+    // Hardware stays na off desktop because the vendor integrations only exist
+    // there yet -- not because the other platforms cannot reach a device.
+    // Ledger, Trezor and OneKey variously speak USB, Bluetooth and NFC, Android
+    // supports USB host mode, and Keystone needs only a camera. What is missing
+    // is the library, per platform.
+    for platform in ["android", "ios"] {
+        if hardware.policy.get(platform).map(String::as_str) != Some("na") {
+            failures.push(format!(
+                "hardware_wallet {platform} must stay na until that platform's vendor                  integration exists"
+            ));
+        }
+    }
+    // The browsers drive three of the five devices today -- Ledger over
+    // WebHID, OneKey through its own web SDK, Keystone by camera -- so they
+    // are pass rather than na. An `na` reappearing here means the extension
+    // quietly lost the place people reach for a hardware wallet.
+    for platform in ["web", "extension"] {
+        if hardware.policy.get(platform).map(String::as_str) != Some("pass") {
+            failures.push(format!(
+                "hardware_wallet {platform} must be pass: a Ledger, a OneKey and a Keystone                  are all reachable there"
+            ));
+        }
+    }
+}
+
+fn capability_enabled(source: &str, capability: &str, surface: &str, expected: bool) -> bool {
+    // The table entry, not the first mention: the capability name also appears
+    // in the union type above it, and anchoring there made the window's reach
+    // depend on how long the comments in between happened to be.
+    let Some(start) = source.find(&format!("{capability}: {{")) else {
+        return false;
+    };
+    let window = source.get(start..start.saturating_add(800)).unwrap_or("");
+    let needle = format!("{surface}: {expected}");
+    window.contains(&needle)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn feature(policy: &str, evidence: &str, na_reason: Option<&str>) -> Feature {
+        let mut item = Feature {
+            id: "watch_only".into(),
+            name: "Watch-only".into(),
+            policy: BTreeMap::from([("android".into(), policy.into())]),
+            evidence: BTreeMap::from([("android".into(), evidence.into())]),
+            evidence_refs: BTreeMap::new(),
+            na_reason: BTreeMap::new(),
+        };
+        if let Some(reason) = na_reason {
+            item.na_reason.insert("android".into(), reason.into());
+        }
+        item
+    }
+
+    #[test]
+    fn pass_requires_packaged_e2e_or_device_evidence() {
+        assert_eq!(
+            verdict(&feature("pass", "e2e", None), "android"),
+            Ok(Verdict::Pass)
+        );
+        assert_eq!(
+            verdict(&feature("pass", "device", None), "android"),
+            Ok(Verdict::Pass)
+        );
+        assert_eq!(
+            verdict(&feature("pass", "e2e-declared", None), "android"),
+            Ok(Verdict::Pending)
+        );
+        assert_eq!(
+            verdict(&feature("pass", "unit", None), "android"),
+            Ok(Verdict::Fail)
+        );
+        assert_eq!(
+            verdict(&feature("pass", "none", None), "android"),
+            Ok(Verdict::Fail)
+        );
+        assert_eq!(
+            verdict(&feature("pass", "hidden", None), "android"),
+            Ok(Verdict::Fail)
+        );
+    }
+
+    #[test]
+    fn declared_e2e_is_not_a_proven_pass() {
+        // A referenced instrumented test is not proof that this commit's APK passed.
+        assert_ne!(
+            verdict(&feature("pass", "e2e-declared", None), "android"),
+            Ok(Verdict::Pass)
+        );
+    }
+
+    #[test]
+    fn na_must_be_hidden_and_explained() {
+        assert_eq!(
+            verdict(
+                &feature("na", "hidden", Some("desktop USB only")),
+                "android"
+            ),
+            Ok(Verdict::Na)
+        );
+        assert!(verdict(&feature("na", "hidden", None), "android").is_err());
+        assert_eq!(
+            verdict(&feature("na", "unit", Some("no")), "android"),
+            Ok(Verdict::Fail)
+        );
+    }
+
+    #[test]
+    fn accidental_absence_is_fail_not_na() {
+        assert_eq!(
+            verdict(&feature("pass", "none", None), "android"),
+            Ok(Verdict::Fail)
+        );
+    }
+
+    #[test]
+    fn a_unit_claim_must_name_a_test_that_exists() {
+        // The check used to skip `unit` entirely, and 92 cells claimed it with
+        // nothing to open. One of them named a feature with no implementation
+        // in any crate. These three cases are what that hole looked like.
+        let root = Path::new(".");
+
+        let mut failures = Vec::new();
+        collect_ref_failures(
+            &root.join("nowhere"),
+            &feature("pass", "unit", None),
+            &mut failures,
+        );
+        assert_eq!(
+            failures.len(),
+            1,
+            "a unit claim with no evidence_refs must fail: {failures:?}"
+        );
+        assert!(
+            failures[0].contains("without evidence_refs"),
+            "{failures:?}"
+        );
+
+        let mut named = feature("pass", "unit", None);
+        named.evidence_refs.insert(
+            "android".into(),
+            "crates/optn-core/src/no-such-file.rs".into(),
+        );
+        let mut failures = Vec::new();
+        collect_ref_failures(root, &named, &mut failures);
+        assert_eq!(failures.len(), 1, "a path that does not exist must fail");
+        assert!(failures[0].contains("path is missing"), "{failures:?}");
+
+        // And a real file whose named test is not in it -- the failure mode a
+        // renamed or deleted test produces, which is the one most likely to
+        // happen quietly.
+        //
+        // Two traps here, both of which this test fell into before it worked.
+        //
+        // The file must be one that cannot contain the token by accident.
+        // Pointing at `parity.rs` looked natural and passed for the wrong
+        // reason: writing the "missing" name here put it *in* the file being
+        // searched, so `contains` found it and the guard stayed silent.
+        //
+        // And it must resolve from `cargo test`'s working directory, which is
+        // the package root -- `xtask/`, not the repository. So this is
+        // `Cargo.toml`, meaning `xtask/Cargo.toml`: a real file that exists and
+        // a manifest that cannot hold a Rust test name.
+        let mut stale = feature("pass", "unit", None);
+        stale.evidence_refs.insert(
+            "android".into(),
+            "Cargo.toml::a_test_name_that_was_never_here".into(),
+        );
+        let mut failures = Vec::new();
+        collect_ref_failures(root, &stale, &mut failures);
+        assert_eq!(failures.len(), 1, "a stale token must fail");
+        assert!(failures[0].contains("not found in"), "{failures:?}");
+    }
+}

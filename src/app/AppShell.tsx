@@ -8,7 +8,6 @@ import Transaction from '../features/transaction/Transaction';
 import TransactionHistory from '../features/transaction-history/TransactionHistory';
 import Receive from '../pages/Receive';
 import Quantumroot from '../pages/Quantumroot';
-import CashFusionApp from '../pages/CashFusionApp';
 import Paryon from '../pages/Paryon';
 import Outbox from '../pages/Outbox';
 import PaperWalletSweep from '../pages/PaperWalletSweep';
@@ -58,6 +57,7 @@ import ServerNotificationCenter from '../components/notifications/ServerNotifica
 import MarketplaceAppHost from '../pages/apps/MarketplaceAppHost';
 import CreateWalletPage from '../pages/onboarding/CreateWalletPage';
 import ImportWalletPage from '../pages/onboarding/ImportWalletPage';
+import WatchOnlyWalletPage from '../pages/onboarding/WatchOnlyWalletPage';
 import LandingPage from '../pages/onboarding/LandingPage';
 import MultisigReceive from '../features/multisig/MultisigReceive';
 import MultisigHome from '../features/multisig/MultisigHome';
@@ -71,6 +71,7 @@ import {
   transactionsRoute,
 } from '../navigation/routes';
 import { NostrChatRoute } from '../features/nostr/NostrChatRoute';
+import { hasCapability } from '../platform/capabilities';
 import { isDesktopPlatform } from '../utils/platform';
 
 const SimpleSend = lazy(() => import('../features/simple-send/SimpleSend'));
@@ -82,6 +83,7 @@ const MultisigSendWorkspace = lazy(
 );
 const MultisigSetup = lazy(() => import('../features/multisig/MultisigSetup'));
 const NostrChat = lazy(() => import('../features/nostr/NostrChat'));
+const CashFusionApp = lazy(() => import('../pages/CashFusionApp'));
 
 /**
  * /send routes to the air-gapped watch-only workspace when the open wallet is
@@ -239,10 +241,12 @@ function AppContent({ viewerOnly = false }: AppShellProps) {
                         path={ROUTE_PATHS.quantumroot}
                         element={<Quantumroot />}
                       />
-                      <Route
-                        path={ROUTE_PATHS.cashfusion}
-                        element={<CashFusionApp />}
-                      />
+                      {hasCapability('cashFusion') && (
+                        <Route
+                          path={ROUTE_PATHS.cashfusion}
+                          element={<CashFusionApp />}
+                        />
+                      )}
                       <Route path={ROUTE_PATHS.send} element={<SendRoute />} />
                       <Route path={ROUTE_PATHS.outbox} element={<Outbox />} />
                       <Route
@@ -285,6 +289,10 @@ function AppContent({ viewerOnly = false }: AppShellProps) {
                 <Route
                   path={ROUTE_PATHS.importWallet}
                   element={<ImportWalletPage />}
+                />
+                <Route
+                  path={ROUTE_PATHS.watchOnlyWallet}
+                  element={<WatchOnlyWalletPage />}
                 />
                 <Route
                   path="*"

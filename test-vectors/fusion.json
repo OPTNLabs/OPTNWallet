@@ -1,0 +1,127 @@
+{
+  "note": "CashFusion primitives, shared by crates/optn-core and the TypeScript in src/platform/desktop/nostr. Regenerate with WRITE_FUSION_VECTORS=1 cargo test -p optn-core fusion::vectors. A diff here is a wire-protocol change.",
+  "pedersen": {
+    "commitments": [
+      {
+        "amount": 0,
+        "commitmentHex": "04cc20f057f771f83b139c039b8b665e6c1547999b6b38e7cd3e53c96d64c145ccc043e7e8c1cb92bde2c6b038be625a0971a7293355f54614a9e6b04c12b08d5b",
+        "nonceHex": "6ca68291ea3944399db9d1595ba56642900c29ec0961b56aaef0fa8291f06d1b"
+      },
+      {
+        "amount": 1,
+        "commitmentHex": "04f831ea5d1e9b5f2b46f2b0477e0e7b3447f0d3bbe7f07b00bf7da3035c5d8b7af3907d2fe2da29376e58ca8b0e8363bbcdc6b7367c1364380f28f71ebe7af667",
+        "nonceHex": "c29ed32c636187c70a5f8bf637b9982af27aba72b32de1a63145d785f343f78c"
+      },
+      {
+        "amount": 12345,
+        "commitmentHex": "04f5ec727045d4970210de507cf42185a6802a770443b1531674ed0db314d406c4b847dec45ced7bd1193f7eb849cb02a9b1eb3ebd3357f5cd9c95eaad49257866",
+        "nonceHex": "781dc7575ba724e8c9640d0a60014a9abdd8364dce8e0163af42d1d8438baaee"
+      },
+      {
+        "amount": 2100000000000000,
+        "commitmentHex": "042e0576cf1afd6bb232fce69640a7a6b47c9231a3f3e62d56e4c8b7ef9cce461fd553cb43a48a5bff0042ba5676fa5bd9a92d0a7c8864081b41937c7258603181",
+        "nonceHex": "994b8103e271e3f579aec790558d8051ee7d03f5b5dc670082b74ade1ecf3f5b"
+      }
+    ],
+    "hCompressedHex": "0243617368467573696f6e2067697665732075732066756e676962696c6974792e"
+  },
+  "schnorr": {
+    "blind": [
+      {
+        "blindAHex": "39e0074afbbb0a796333f24981c137f4792cf56f29a8ab21fa593cd2c9e7c7e4",
+        "blindBHex": "a4820a694d645d401821c63229812115d47efe6b4274c88c944691b9b247c89a",
+        "blindedChallengeHex": "04808bb5b6ea2f8b46ac436ab9c894c5cb157eee684fac4ad5ab1544c8418d7e",
+        "issuerResponseHex": "2386a1fc552a7ad9e079275dede5d7729dd105893243e3735ef16f27d2d03d8f",
+        "messageHex": "6ff16bc83d6a18c3ee4040eeb9626ed928ec632894547d14aa7672f7979b310c",
+        "nonceHex": "7b036338629c04f0aad16f0eda8253f411a2716ae0e49573c56e9ba4f0427ce4",
+        "rPointHex": "03ea36e94b9a6a1e290488335a9cfd96391bfa079a1c0eb35993a379a4aefb4f78",
+        "roundKeyHex": "d99eea002f077b13d0b3e865f32eca16bb5f8d7ef552c25af820e2e79cfb4612",
+        "roundPubkeyHex": "02a2fc0c6f5e1376adea53b8026477ed80035147a99286855c633aaa03a2a076de",
+        "signatureHex": "1508a81fbce19dbd5a3960e9f8a1e9e6b21d8108c3a595be25a2ddd150e046baa29956b8af1a7aacbc52e6589058f097a3b0e1ee535c11a66687b292337e3bce"
+      },
+      {
+        "blindAHex": "4993f1b3b59aa0f77bed3f8a5877c47b637197585f15f07ed5fcd1075d026632",
+        "blindBHex": "e994c9bfb36125217dc6f80c5d7fa0cccbb00be970213b21e285c684f05645ac",
+        "blindedChallengeHex": "b4c021d8c69b1a34b91110d8fd215ac61539c3731c73c2cdeb2ca761d99f7db4",
+        "issuerResponseHex": "7686708ab703aa44721c99c1988c24d149da701e75160c402d39caf880fa31f0",
+        "messageHex": "6ff16bc83d6a18c3ee4040eeb9626ed928ec632894547d14aa7672f7979b310c",
+        "nonceHex": "cc27bae24e00a6b77eabfddbf261c8a6bf90c3b9263844194bba7ef75f58986a",
+        "rPointHex": "035363f54d776dafacd5357d93489e863a92735e84adf9d51a76b4eccbf9a4137a",
+        "roundKeyHex": "4b56254e973b20c346e4df2a829ce2712d949e7c9da36c2b43786701758e9181",
+        "roundPubkeyHex": "025766646b6484a22bf2a4c36d0441f50c2e33a386ef503c4fa196a9cf3ea0e29c",
+        "signatureHex": "2704e423570b916894ba2f87f09eaccfb9fa6a24b8231eeb4fbe877440a07d593fe59dc19361b4c411f626b40efc16b20d62d56fdb1ca37cbc9bc28cf239a91f"
+      },
+      {
+        "blindAHex": "1727090780d241bf41742ec150f04f2689f55b82063f29b822c69eb11efba90a",
+        "blindBHex": "0881d9082be01d9aea25f9fb496f8aa52807a10940a360fbecd6c32751299fd8",
+        "blindedChallengeHex": "4bcc1430b33e6a366ccbe9132fa3ff5a88d961499508b649528d65ee2098fa95",
+        "issuerResponseHex": "2c788f084dccb14314d0346c713e9012169bb198a5dca9669d96ec64355d5346",
+        "messageHex": "6ff16bc83d6a18c3ee4040eeb9626ed928ec632894547d14aa7672f7979b310c",
+        "nonceHex": "77cb3d53952af75301a5d81d904b5e24766b4a5e69c9932c1ddd77825afd05c6",
+        "rPointHex": "02b01e6710c8e4c42055d98d51feb9f358675c75ea88295a6e6d10d0e2bd760174",
+        "roundKeyHex": "206c464361f56d0e3c0ac48cf0e779936ab68cebc577e844c33e008778bb4992",
+        "roundPubkeyHex": "0231b76034e9e54b03f31f99481b3f820c78b6ff21bf1ef7c07dd9c331e30436d5",
+        "signatureHex": "d0fac8a9dc3b837954ec381355d00ac4a59da3c56feb00712d1506b0e53e36ffbc6067f031610cfda9bb9cd23dd120c61a1dcfcc032ccd1cff74d3777bdd44f1"
+      },
+      {
+        "blindAHex": "bc36342f6e8445faa4099dde45c0dcab88b6fbe1bfcb2df7c4b1b57013d6d3e4",
+        "blindBHex": "47b2c1e1facf6ae78181ecad5eb39884bc35f086494638cc4cd99d95a158be36",
+        "blindedChallengeHex": "d7314989ef2cf2d4a4c755311fe4246b732a1835f59067847731637271eb2762",
+        "issuerResponseHex": "43463644c22399c75ca5fdd66072c45bce450fe6d3e99450fc4add4dcd8cdcf5",
+        "messageHex": "6ff16bc83d6a18c3ee4040eeb9626ed928ec632894547d14aa7672f7979b310c",
+        "nonceHex": "1741d24b0f234a97f041293b41bcdfcffbb46c2878d467aa4a98046dd4e6cfb4",
+        "rPointHex": "02ffe5380cc32665fe7b8c4214484225a68878bb690aed67745fe65a798568541d",
+        "roundKeyHex": "02f49f6213c92c1367a08ebbd8b1f2b0010c540d4f2b6ec275b1d01e747f657c",
+        "roundPubkeyHex": "02db17345a269e25d016dd418b5898177a3488092c6f7546b73c792fd0b204cbc1",
+        "signatureHex": "65c26c061c2348ef21f210330c2f279675e8a94782970c498dc5365fbe478dc6ff7c6a7430a7dfc200af9bb4a633a10756fc0bc893b4c248c0fc92bde163b0d9"
+      },
+      {
+        "blindAHex": "6cbb7400cadd172badfa4114458d2ee7a75d5e61a310372527652624b4db30aa",
+        "blindBHex": "53bd2c427d31c9f8cf6311f4ca0ec44132633da163249a0ea0f349bd7d405197",
+        "blindedChallengeHex": "4c330524068c352e88e727697c763888b57dcac29f7bf253ad1e188d1d91109c",
+        "issuerResponseHex": "1647f7d1d49034291f52c31cc94cdf7d192de66c3a8e7e06da170844c7ba75a1",
+        "messageHex": "6ff16bc83d6a18c3ee4040eeb9626ed928ec632894547d14aa7672f7979b310c",
+        "nonceHex": "f31a120fb243b2b3d9edf972b9704a25532bc4afaae11a78494817f05d21cbc0",
+        "rPointHex": "02494348b5132743a473d4e8df857f44dbc0a85c0f7b8fe90d1d2ef1f1b1d3a1b1",
+        "roundKeyHex": "3cebe113720f041a33808b223e8d5019d6fe62f49a69371046e918136ddd0183",
+        "roundPubkeyHex": "0382cbab2192084b5d4f7aca06bd6f7e8559eacde3bd1d172d12abbb20244f0344",
+        "signatureHex": "975b33a3567019db5879e9999b7d4247b2bf8acc8a48be06ee442392b768509283036bd29f6d4b54cd4d04310eda0e64c08b44cddd9eb52c017c2e697c95a64b"
+      },
+      {
+        "blindAHex": "4729ea4f862f3f6fd58fceb2e989f608cabf1d0e9c846f6cfc7f5c5a44712897",
+        "blindBHex": "737d81919b4755b05afc4f6f22d847ea0e1351bf40ef2bec581c27e56df3483f",
+        "blindedChallengeHex": "71384e6eaf25ef7b542b4f0f7d23125ca74b502e5eb50e1f37a27a98ff2b227c",
+        "issuerResponseHex": "e014d371186eb3e0df0fc4248cce766ed6374e91451594ca3caad661c60dc172",
+        "messageHex": "6ff16bc83d6a18c3ee4040eeb9626ed928ec632894547d14aa7672f7979b310c",
+        "nonceHex": "8f69285653a83b209615f445a33ad27fc7a2ebd34cd7efb80865542975734974",
+        "rPointHex": "02dea11b8f33340550a7072e61d5071eeba167e72fe84dd510f5a4fd0a61dbdd61",
+        "roundKeyHex": "38de322b0c99e02b23cce5a21141956138eeae976c9bf02ea42debf839c4fdb3",
+        "roundPubkeyHex": "0383e1e584abec1e613680ed4f2b7955793b96d9175e359bda2aff4ca54d5de58e",
+        "signatureHex": "a298baf77b6698836fc61aebe396ccd9a0c692e1d6936dd31f799c58da7cbbb0273ebdc09e9df350b49f92d776586c78e6478eb9325163fb7957d42f3a48a8c8"
+      }
+    ],
+    "signatures": [
+      {
+        "label": "component",
+        "messageHex": "6985ca1f4daa5a584a28eae043a239cb96689af1337ea13afb63e00c2bf512fa",
+        "privkeyHex": "aed7c24bb7b8546c40fe2fa7098a43bbd1b23e907d6311ad7b8c72bb9fbc174c",
+        "pubkeyHex": "0206cde92e4adf0057cba334aea7dab92e3cd374bfc8dc71d65d7324e47e9d6910",
+        "signatureHex": "f3057746b7bb767032a70dfbba13efdc82198d345f87af8b9520e390615f141d7ab17d3025252b417586f667ea04ce6061d1e0b16e7077f859ee97fdf9fe8cc2"
+      },
+      {
+        "label": "input credential",
+        "messageHex": "413bb2f3840315d3f58ba20d3b8c0fdc787a64895b3dc7527342dd71ee4ce74a",
+        "privkeyHex": "9f23de5d6085255a70f4f0cab6323ec45628eca4267028f52597cbe8b736fbf4",
+        "pubkeyHex": "034b0352c303d056e705029cc2cb0be454ebad8e2b10243c5671ea73c64ffc2d9e",
+        "signatureHex": "9633e9701f64c9678e53affc28290156b1912fc81ada4586c9b2e29312ca932eede416e6ce29778cb992d2106164570776fd3f4512b4123d8593cd9f40a62cff"
+      },
+      {
+        "label": "output credential",
+        "messageHex": "0b90a0e40d21ba3d18bbd39283a3821a64c427dd5439d139756d57c9d9ee972c",
+        "privkeyHex": "96b361a89433af55be15ae36132dc391f17d41f67e0959cdb91641d3cfcc0ecb",
+        "pubkeyHex": "0225868c87ea5f6aaf2478ff406aa26010b054473f3b7cfce7a5e62575d33518f6",
+        "signatureHex": "5fc9e1443ac01436b3c815f525f22eb50cac564383bdd11da617f53eaa7e2a4de47adf2ac341f2c311c71186108bbaff409f6505a259c9759f7c94a80a158a12"
+      }
+    ]
+  }
+}

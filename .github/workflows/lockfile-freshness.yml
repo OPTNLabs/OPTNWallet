@@ -1,0 +1,79 @@
+name: Lockfile Freshness
+
+on:
+  pull_request:
+    branches: [dev, staging, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lockfile-freshness-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  locks:
+    name: Generated lockfiles are committed
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '22.23.2'
+          cache: npm
+
+      - name: Install pinned Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.98.1
+
+      - name: Regenerate npm lockfile
+        run: npm install --package-lock-only --ignore-scripts
+
+      - name: Regenerate application workspace lockfile
+        run: cargo generate-lockfile
+
+      - name: Regenerate Tauri lockfile
+        working-directory: src-tauri
+        run: cargo generate-lockfile
+
+      - name: Regenerate standalone Rust lockfiles
+        run: |
+          for directory in crates/optn-core crates/optn-cli crates/optn-ui-egui fuzz; do
+            (
+              cd "$directory"
+              cargo generate-lockfile
+            )
+          done
+
+      - name: Upload generated lockfiles
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: generated-lockfiles
+          path: |
+            Cargo.lock
+            package-lock.json
+            src-tauri/Cargo.lock
+            crates/optn-core/Cargo.lock
+            crates/optn-cli/Cargo.lock
+            crates/optn-ui-egui/Cargo.lock
+            fuzz/Cargo.lock
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Verify generated lockfiles are committed
+        run: |
+          status="$(git status --porcelain -- Cargo.lock package-lock.json src-tauri/Cargo.lock crates/optn-core/Cargo.lock crates/optn-cli/Cargo.lock crates/optn-ui-egui/Cargo.lock fuzz/Cargo.lock)"
+          if [ -n "$status" ]; then
+            printf '%s\n' "$status"
+            echo '::error::generated lockfiles differ from the repository'
+            exit 1
+          fi

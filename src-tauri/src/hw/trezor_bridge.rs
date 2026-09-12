@@ -3,10 +3,11 @@
 //! EC: `trezorlib.transport.enumerate_devices()` + `get_transport(path)`
 //! talks to Bridge **from the native process**, never from a browser WebView.
 //!
-//! Safe 5 / Model T are WebUSB → only visible via Bridge (Suite starts it on
-//! 127.0.0.1:21325). Model One may also appear as HID (session.rs).
+//! This optional route requires a local Bridge on 127.0.0.1:21325. Native
+//! WebUSB is handled separately by `trezor_webusb`; Model One may also appear
+//! as HID through `session`.
 //!
-//! Protocol: https://github.com/trezor/trezord-go (HTTP API)
+//! Protocol: <https://github.com/trezor/trezord-go> (HTTP API)
 
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -14,13 +15,41 @@ use std::time::Duration;
 const BRIDGE_BASE: &str = "http://127.0.0.1:21325";
 /// Suite / trezorlib-style Origin so Bridge CORS accepts us.
 const BRIDGE_ORIGIN: &str = "https://suite.trezor.io";
+/// Wallet policy: a 1 MiB binary frame as hex plus JSON overhead, not a Bridge protocol limit.
+const MAX_BRIDGE_BODY_BYTES: usize = 2 * 1024 * 1024 + 1024;
 
 fn client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(120))
         .connect_timeout(Duration::from_secs(3))
+        // Device messages must stay on the fixed loopback Bridge endpoint.
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
         .build()
         .map_err(|e| format!("Trezor Bridge HTTP client: {e}"))
+}
+
+async fn read_bridge_body(mut res: reqwest::Response) -> Result<String, String> {
+    let too_large = || format!("Bridge body exceeds wallet limit of {MAX_BRIDGE_BODY_BYTES} bytes");
+    if res
+        .content_length()
+        .is_some_and(|len| len > MAX_BRIDGE_BODY_BYTES as u64)
+    {
+        return Err(too_large());
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = res.chunk().await.map_err(|e| e.to_string())? {
+        if chunk.len() > MAX_BRIDGE_BODY_BYTES - body.len() {
+            return Err(too_large());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    String::from_utf8(body).map_err(|e| format!("Bridge body is not valid UTF-8: {e}"))
+}
+
+async fn read_bridge_json(res: reqwest::Response) -> Result<serde_json::Value, String> {
+    serde_json::from_str(&read_bridge_body(res).await?)
+        .map_err(|e| format!("Bridge body is not valid JSON: {e}"))
 }
 
 fn bridge_err(ctx: &str, e: impl std::fmt::Display) -> String {
@@ -54,8 +83,7 @@ pub async fn trezor_bridge_ping() -> Result<Option<String>, String> {
     if !res.status().is_success() {
         return Ok(None);
     }
-    let v: serde_json::Value = res
-        .json()
+    let v = read_bridge_json(res)
         .await
         .map_err(|e| bridge_err("Bridge version JSON", e))?;
     Ok(Some(
@@ -84,8 +112,7 @@ pub async fn trezor_bridge_enumerate() -> Result<Vec<BridgeDeviceInfo>, String> 
             format!("HTTP {}", res.status()),
         ));
     }
-    let raw: serde_json::Value = res
-        .json()
+    let raw = read_bridge_json(res)
         .await
         .map_err(|e| bridge_err("Bridge enumerate body", e))?;
     let arr = raw
@@ -136,7 +163,9 @@ pub async fn trezor_bridge_acquire(path: String) -> Result<String, String> {
         .await
         .map_err(|e| bridge_err("Bridge acquire", e))?;
     if !res.status().is_success() {
-        let text = res.text().await.unwrap_or_default();
+        let text = read_bridge_body(res)
+            .await
+            .map_err(|e| bridge_err("Bridge acquire body", e))?;
         return Err(bridge_err(
             "Bridge acquire",
             if text.is_empty() {
@@ -146,8 +175,7 @@ pub async fn trezor_bridge_acquire(path: String) -> Result<String, String> {
             },
         ));
     }
-    let v: serde_json::Value = res
-        .json()
+    let v = read_bridge_json(res)
         .await
         .map_err(|e| bridge_err("Bridge acquire JSON", e))?;
     v.get("session")
@@ -185,7 +213,9 @@ pub async fn trezor_bridge_call(session: String, data_hex: String) -> Result<Str
         .await
         .map_err(|e| bridge_err("Bridge call", e))?;
     if !res.status().is_success() {
-        let text = res.text().await.unwrap_or_default();
+        let text = read_bridge_body(res)
+            .await
+            .map_err(|e| bridge_err("Bridge call body", e))?;
         return Err(bridge_err(
             "Bridge call",
             if text.is_empty() {
@@ -195,8 +225,7 @@ pub async fn trezor_bridge_call(session: String, data_hex: String) -> Result<Str
             },
         ));
     }
-    let text = res
-        .text()
+    let text = read_bridge_body(res)
         .await
         .map_err(|e| bridge_err("Bridge call body", e))?
         .trim()
@@ -225,4 +254,112 @@ fn urlencoding_path(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+#[tokio::test]
+async fn bridge_http_responses_are_bounded_and_local() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use tokio::time::timeout;
+
+    async fn response(c: &reqwest::Client, headers: &str, body: &[u8]) -> reqwest::Response {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/call/test", listener.local_addr().unwrap());
+        let mut wire = format!("HTTP/1.1 {headers}\r\nConnection: close\r\n\r\n").into_bytes();
+        wire.extend_from_slice(body);
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                request.push(socket.read_u8().await.unwrap());
+                assert!(request.len() < 4096);
+            }
+            let mut message = [0; 4];
+            socket.read_exact(&mut message).await.unwrap();
+            assert_eq!(&message, b"0000");
+            // Oversized responses may be rejected before the server finishes writing.
+            let _ = socket.write_all(&wire).await;
+        });
+        c.post(url).body("0000").send().await.unwrap()
+    }
+
+    timeout(Duration::from_secs(10), async {
+        let c = client().unwrap();
+        // The last byte exceeds the cumulative limit, even with no Content-Length.
+        let chunked = format!(
+            "{:x}\r\n{}\r\n1\r\nx\r\n0\r\n\r\n",
+            MAX_BRIDGE_BODY_BYTES,
+            "a".repeat(MAX_BRIDGE_BODY_BYTES)
+        );
+        for status in ["200 OK", "500 Internal Server Error"] {
+            let headers = format!("{status}\r\nContent-Length: {}", MAX_BRIDGE_BODY_BYTES + 1);
+            // No body is sent: the advertised length must be rejected before reading it.
+            let res = response(&c, &headers, b"").await;
+            assert!(read_bridge_body(res)
+                .await
+                .unwrap_err()
+                .contains("wallet limit"));
+
+            let headers = format!("{status}\r\nTransfer-Encoding: chunked");
+            let res = response(&c, &headers, chunked.as_bytes()).await;
+            assert!(read_bridge_body(res)
+                .await
+                .unwrap_err()
+                .contains("wallet limit"));
+
+            let headers = format!("{status}\r\nContent-Length: 1");
+            let res = response(&c, &headers, &[0xff]).await;
+            assert!(read_bridge_body(res).await.unwrap_err().contains("UTF-8"));
+        }
+
+        let res = response(&c, "200 OK\r\nContent-Length: 8", b"00010203").await;
+        assert_eq!(read_bridge_body(res).await.unwrap(), "00010203");
+        let res = response(
+            &c,
+            "500 Internal Server Error\r\nContent-Length: 4",
+            b"busy",
+        )
+        .await;
+        assert_eq!(read_bridge_body(res).await.unwrap(), "busy");
+        let res = response(&c, "200 OK\r\nContent-Length: 1", b"{").await;
+        assert!(read_bridge_json(res).await.unwrap_err().contains("JSON"));
+        for body in [
+            r#"{"version":"test"}"#,
+            r#"[{"path":"test"}]"#,
+            r#"{"session":"test"}"#,
+        ] {
+            let headers = format!("200 OK\r\nContent-Length: {}", body.len());
+            let res = response(&c, &headers, body.as_bytes()).await;
+            assert_eq!(read_bridge_json(res).await.unwrap().to_string(), body);
+        }
+
+        // A 1 MiB frame encoded as hex with JSON and padding fits exactly at the cap.
+        let mut body = format!(r#"{{"message":"{}"}}"#, "00".repeat(1024 * 1024));
+        body.push_str(&" ".repeat(MAX_BRIDGE_BODY_BYTES - body.len()));
+        let headers = format!("200 OK\r\nContent-Length: {}", body.len());
+        let res = response(&c, &headers, body.as_bytes()).await;
+        assert_eq!(
+            read_bridge_json(res).await.unwrap()["message"]
+                .as_str()
+                .unwrap()
+                .len(),
+            2 * 1024 * 1024
+        );
+
+        let target = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        for status in [301, 302, 303, 307, 308] {
+            let headers = format!(
+                "{status} Redirect\r\nLocation: http://{}/capture\r\nContent-Length: 0",
+                target.local_addr().unwrap()
+            );
+            let res = response(&c, &headers, b"").await;
+            assert_eq!(res.status().as_u16(), status);
+        }
+        assert!(timeout(Duration::from_millis(100), target.accept())
+            .await
+            .is_err());
+    })
+    .await
+    .expect("loopback Bridge regression must finish promptly");
 }

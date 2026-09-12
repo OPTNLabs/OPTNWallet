@@ -13,6 +13,7 @@
  *
  * Examples:
  *   npx tsx scripts/watch-only-ur.mts encode --network chipnet --in unsigned.psbt
+ *   npx tsx scripts/watch-only-ur.mts encode --network chipnet --in unsigned.psbt --fragment-length 200
  *   npx tsx scripts/watch-only-ur.mts encode --network chipnet --in unsigned.psbt --out-dir ./frames
  *   npx tsx scripts/watch-only-ur.mts decode --in ./frames/frame-01.ur ./frames/frame-02.ur
  *   npx tsx scripts/watch-only-ur.mts verify --in unsigned.psbt
@@ -36,6 +37,7 @@ import {
   assertWatchOnlySighash,
   encodeWatchOnlyUrFrames,
   parsePsbtBytes,
+  parseWatchOnlyUrFragmentLength,
 } from '../src/services/psbt/watchOnlyUrEncode';
 
 const VECTORS = 'src/services/psbt/__tests__/vectors/watchOnlyUr.vectors.json';
@@ -66,8 +68,9 @@ export const USAGE =
   'Usage: tsx scripts/watch-only-ur.mts <command> [options]\n' +
   '\n' +
   '  encode  --network chipnet [--in <file>] [--out-dir <dir>]\n' +
-  '          Unsigned PSBT (binary/hex/base64) -> UR frames at fragment\n' +
-  `          length ${DEFAULT_UR_FRAGMENT_LENGTH}. Reads stdin when --in is absent.\n` +
+  '          [--fragment-length 50|100|200|400]\n' +
+  '          Unsigned PSBT (binary/hex/base64) -> UR frames. Defaults to\n' +
+  `          fragment length ${DEFAULT_UR_FRAGMENT_LENGTH}. Reads stdin when --in is absent.\n` +
   '  decode  [--in <file>...] [--out <file>]\n' +
   '          UR frames (one per line, or one per file) -> PSBT. Prints hex\n' +
   '          unless --out is given.\n' +
@@ -163,7 +166,13 @@ function encode(argv: string[], out: NodeJS.WritableStream): void {
   const network = argValue(argv, '--network') ?? 'chipnet';
   assertChipnetNetwork(network);
 
-  const frames = encodeWatchOnlyUrFrames(readPsbt(argValue(argv, '--in')));
+  const fragmentLength = parseWatchOnlyUrFragmentLength(
+    argValue(argv, '--fragment-length')
+  );
+  const frames = encodeWatchOnlyUrFrames(
+    readPsbt(argValue(argv, '--in')),
+    fragmentLength
+  );
   const outDir = argValue(argv, '--out-dir');
   if (!outDir) {
     for (const frame of frames) out.write(`${frame}\n`);
@@ -181,7 +190,7 @@ function encode(argv: string[], out: NodeJS.WritableStream): void {
   });
   out.write(
     `wrote ${frames.length} UR frames to ${outDir} ` +
-      `(fragment ${DEFAULT_UR_FRAGMENT_LENGTH})\n`
+      `(fragment ${fragmentLength})\n`
   );
 }
 

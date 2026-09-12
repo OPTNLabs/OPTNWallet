@@ -19,7 +19,6 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-
 use k256::elliptic_curve::PrimeField;
 use k256::Scalar;
 use prost::Message;
@@ -328,17 +327,14 @@ fn validate_warmup(
     }
 }
 
+/// Decode a display-order transaction ID and reverse it for component matching.
 fn display_txid_to_wire(txid: &str) -> Result<[u8; 32], String> {
     if txid.len() != 64 {
         return Err("prev_txid must be 32 bytes".into());
     }
 
     let mut bytes = [0u8; 32];
-    for (index, byte) in bytes.iter_mut().enumerate() {
-        let offset = index * 2;
-        *byte = u8::from_str_radix(&txid[offset..offset + 2], 16)
-            .map_err(|_| "bad prev_txid hex".to_string())?;
-    }
+    hex::decode_to_slice(txid, &mut bytes).map_err(|_| "bad prev_txid hex".to_string())?;
     bytes.reverse();
     Ok(bytes)
 }
@@ -594,6 +590,7 @@ async fn revalidate_own_inputs(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)] // The phase needs its live stream and independently validated inputs.
 async fn run_blame_phase<S>(
     main: &mut S,
     cancel: &CancelFlag,
@@ -1416,6 +1413,18 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use tokio::sync::mpsc;
+
+    #[test]
+    fn fusion_txid_hex_rejects_malformed_input() {
+        for prefix in ["雪", "😀", "aé", "+", "g"] {
+            let value = format!("{prefix}{}", "0".repeat(64 - prefix.len()));
+            assert!(display_txid_to_wire(&value).is_err());
+        }
+        let mut display = std::array::from_fn::<_, 32, _>(|index| index as u8);
+        let decoded = display_txid_to_wire(&hex::encode_upper(display)).unwrap();
+        display.reverse();
+        assert_eq!(decoded, display);
+    }
 
     enum Covert {
         Component(usize, Vec<u8>),
@@ -2308,11 +2317,13 @@ mod tests {
                     submit_window: Duration::from_millis(20),
                     submit_timeout: Duration::from_millis(500),
                     connect_spares: 2,
-                    comps_at: Duration::from_millis(200),
-                    comps_deadline: Duration::from_millis(700),
-                    sigs_at: Duration::from_millis(900),
-                    sigs_deadline: Duration::from_millis(1_400),
-                    conclusion_at: Duration::from_secs(2),
+                    // This restart path opens 19 local sockets and produces 17
+                    // debug-build signatures before component disclosure.
+                    comps_at: Duration::from_secs(1),
+                    comps_deadline: Duration::from_secs(2),
+                    sigs_at: Duration::from_millis(2_250),
+                    sigs_deadline: Duration::from_secs(3),
+                    conclusion_at: Duration::from_secs(4),
                 },
                 join_inactive_timeout: None,
                 cancel: CancelFlag::new(),

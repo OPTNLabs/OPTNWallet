@@ -74,14 +74,12 @@ pub struct RoundCommit {
     pub excess_fee: u64,
 }
 
+/// Decode display-order input hex, rejecting malformed text before building commitments.
 fn hex_to_bytes(s: &str) -> Result<Vec<u8>, String> {
     if s.len() % 2 != 0 {
         return Err("odd-length hex".into());
     }
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|_| "bad hex".to_string()))
-        .collect()
+    hex::decode(s).map_err(|_| "bad hex".to_string())
 }
 
 /// Build the `PlayerCommit` (and retained state) for a round.
@@ -219,7 +217,7 @@ pub fn build_round_commit(
     let mut blind_sig_requests = Vec::with_capacity(num_components);
     for (i, r) in rows.iter().enumerate() {
         let msg = sha256(&r.comp_ser);
-        let req = BlindSignatureRequest::new(round_pubkey, &blind_nonce_points[i], msg)?;
+        let req = super::schnorr::new_blind_request(round_pubkey, &blind_nonce_points[i], msg)?;
         blind_sig_requests.push(req.request().to_vec());
         requests.push(req);
     }
@@ -261,6 +259,14 @@ mod tests {
     use k256::elliptic_curve::sec1::FromEncodedPoint;
     use k256::elliptic_curve::PrimeField;
     use k256::{AffinePoint, EncodedPoint, ProjectivePoint, Scalar};
+
+    #[test]
+    fn component_hex_rejects_malformed_input() {
+        for value in ["雪a", "😀", "aé0", "+0", "0g", "0"] {
+            assert!(hex_to_bytes(value).is_err());
+        }
+        assert_eq!(hex_to_bytes("01aBFF").unwrap(), [1, 0xab, 0xff]);
+    }
 
     fn parse_uncompressed(b: &[u8]) -> ProjectivePoint {
         let ep = EncodedPoint::from_bytes(b).unwrap();

@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const upstreamRequest = vi.fn();
 const upstreamRequestMany = vi.fn();
 const upstreamSubscribe = vi.fn();
+const upstreamSubscribeMany = vi.fn();
 const upstreamEnsureFresh = vi.fn();
 const upstreamDisconnect = vi.fn();
 const upstreamGetCurrentServer = vi.fn();
@@ -15,6 +16,7 @@ vi.mock('../../../apis/ElectrumServer/ElectrumServer', () => ({
     request: upstreamRequest,
     requestMany: upstreamRequestMany,
     subscribe: upstreamSubscribe,
+    subscribeMany: upstreamSubscribeMany,
     unsubscribe: vi.fn(),
     ensureFreshConnection: upstreamEnsureFresh,
     electrumDisconnect: upstreamDisconnect,
@@ -23,6 +25,8 @@ vi.mock('../../../apis/ElectrumServer/ElectrumServer', () => ({
 }));
 
 let currentNetwork = 'chipnet';
+let currentWallet = 1;
+let backend: { kind: string; target?: string } = { kind: 'auto' };
 vi.mock('../../../state/store', () => ({
   store: { getState: vi.fn(() => ({})) },
 }));
@@ -30,19 +34,22 @@ vi.mock('../../../state/selectors/networkSelectors', () => ({
   selectCurrentNetwork: vi.fn(() => currentNetwork),
 }));
 vi.mock('../../../state/slices/walletSlice', () => ({
-  selectWalletId: vi.fn(() => 1),
+  selectWalletId: vi.fn(() => currentWallet),
 }));
 // Electrum pool path — never the pinned-node path, so the guard is what's under test.
 vi.mock('../backendSelection', () => ({
-  getBackend: vi.fn(() => ({ kind: 'auto' })),
+  getBackend: vi.fn(() => backend),
 }));
-vi.mock('../Bip37Backend', () => ({ nodeSync: vi.fn(), nodeBroadcast: vi.fn() }));
-vi.mock('../../../utils/servers/userNodes', () => ({ parseNodeTarget: vi.fn() }));
+vi.mock('../Bip37Backend', () => ({
+  nodeSync: vi.fn(),
+  nodeBroadcast: vi.fn(),
+}));
+vi.mock('../../../utils/servers/userNodes', () => ({
+  parseNodeTarget: vi.fn(),
+}));
 vi.mock('../../../utils/servers/ElectrumServers', () => ({
   getElectrumServers: vi.fn((network: string) =>
-    network === 'mainnet'
-      ? ['mainnet.example.com']
-      : ['chipnet.example.com']
+    network === 'mainnet' ? ['mainnet.example.com'] : ['chipnet.example.com']
   ),
 }));
 
@@ -53,12 +60,109 @@ describe('ElectrumServerRouter cross-network address guard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     currentNetwork = 'chipnet';
+    currentWallet = 1;
+    backend = { kind: 'auto' };
     upstreamRequest.mockResolvedValue([]);
-    upstreamRequestMany.mockImplementation(async (calls: unknown[]) => calls.map(() => []));
+    upstreamRequestMany.mockImplementation(async (calls: unknown[]) =>
+      calls.map(() => [])
+    );
     upstreamSubscribe.mockResolvedValue(undefined);
     upstreamEnsureFresh.mockResolvedValue(undefined);
     upstreamDisconnect.mockResolvedValue(true);
     upstreamGetCurrentServer.mockReturnValue(null);
+  });
+
+  it('does not share an in-flight node scan across wallets', async () => {
+    backend = { kind: 'node', target: 'selected-node:48333' };
+    const { nodeSync } = await import('../Bip37Backend');
+    const { parseNodeTarget } = await import(
+      '../../../utils/servers/userNodes'
+    );
+    vi.mocked(parseNodeTarget).mockReturnValue({
+      host: 'selected-node',
+      port: 48333,
+    });
+    const empty = {
+      byAddress: new Map(),
+      totalSats: 0,
+      tipHash: null,
+      scannedBlocks: 0,
+      watchedAddresses: 0,
+    };
+    let release!: () => void;
+    vi.mocked(nodeSync)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            release = () => resolve(empty);
+          })
+      )
+      .mockResolvedValue(empty);
+    const { default: ElectrumServer, invalidateNodeScan } = await import(
+      '../ElectrumServerRouter'
+    );
+    invalidateNodeScan();
+    const first = ElectrumServer().request(
+      'blockchain.address.listunspent',
+      CHIPNET_ADDR
+    );
+    await vi.waitFor(() => expect(nodeSync).toHaveBeenCalledTimes(1));
+    currentWallet = 2;
+    const second = ElectrumServer().request(
+      'blockchain.address.listunspent',
+      CHIPNET_ADDR
+    );
+    await vi.waitFor(() => expect(nodeSync).toHaveBeenCalledTimes(2));
+    release();
+    await Promise.all([first, second]);
+    expect(nodeSync).toHaveBeenNthCalledWith(
+      1,
+      'selected-node',
+      48333,
+      'chipnet',
+      1
+    );
+    expect(nodeSync).toHaveBeenNthCalledWith(
+      2,
+      'selected-node',
+      48333,
+      'chipnet',
+      2
+    );
+    invalidateNodeScan();
+  });
+
+  it('never falls back to Electrum for node-mode RPA, candidate inputs or subscriptions', async () => {
+    backend = { kind: 'node', target: 'selected-node:48333' };
+    const { default: ElectrumServer } = await import('../ElectrumServerRouter');
+    const server = ElectrumServer();
+    await server.ensureFreshConnection();
+    await expect(server.electrumConnect()).rejects.toThrow(/does not open/);
+    await expect(server.electrumReconnect()).rejects.toThrow(/does not open/);
+    expect(upstreamEnsureFresh).not.toHaveBeenCalled();
+    for (const method of [
+      'blockchain.rpa.get_history',
+      'blockchain.transaction.get',
+      'blockchain.address.get_history',
+    ]) {
+      await expect(
+        server.request(method, 'private-wallet-query')
+      ).rejects.toThrow(/fallback is disabled/);
+    }
+    await expect(
+      server.subscribe('blockchain.address.subscribe', [CHIPNET_ADDR])
+    ).rejects.toThrow(/does not register/);
+    await expect(
+      server.subscribeMany('blockchain.address.subscribe', [[CHIPNET_ADDR]])
+    ).rejects.toThrow(/does not register/);
+    const result = await server.requestMany([
+      { method: 'blockchain.transaction.get', params: ['candidate-input'] },
+    ]);
+    expect(result[0]).toBeInstanceOf(Error);
+    expect(upstreamRequest).not.toHaveBeenCalled();
+    expect(upstreamRequestMany).not.toHaveBeenCalled();
+    expect(upstreamSubscribe).not.toHaveBeenCalled();
+    expect(upstreamSubscribeMany).not.toHaveBeenCalled();
   });
 
   it('rejects a mainnet address on chipnet without hitting the server', async () => {
@@ -71,7 +175,10 @@ describe('ElectrumServerRouter cross-network address guard', () => {
 
   it('lets a matching address through', async () => {
     const { default: ElectrumServer } = await import('../ElectrumServerRouter');
-    await ElectrumServer().request('blockchain.address.listunspent', CHIPNET_ADDR);
+    await ElectrumServer().request(
+      'blockchain.address.listunspent',
+      CHIPNET_ADDR
+    );
     expect(upstreamRequest).toHaveBeenCalledOnce();
   });
 
@@ -104,7 +211,10 @@ describe('ElectrumServerRouter cross-network address guard', () => {
 
   it('ignores non-address methods (a txid is not an address)', async () => {
     const { default: ElectrumServer } = await import('../ElectrumServerRouter');
-    await ElectrumServer().request('blockchain.transaction.get', 'c0d0ad1a117fda4e');
+    await ElectrumServer().request(
+      'blockchain.transaction.get',
+      'c0d0ad1a117fda4e'
+    );
     expect(upstreamRequest).toHaveBeenCalledOnce();
   });
 

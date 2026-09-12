@@ -1,0 +1,1593 @@
+#![forbid(unsafe_code)]
+
+//! Tauri adapter for issue #75's provider-neutral chain runtime.
+//!
+//! Concrete protocol adapters live in `optn-chain-native`, which is deliberately
+//! Tauri-free so the desktop shell and CLI build the same source/policy stack.
+
+use crate::network_config::NetworkSettingsStore;
+use optn_app::AppState;
+use optn_core::endpoint::{
+    parse_electrum_endpoint, parse_peer_endpoint, DEFAULT_WSS_PORT, NODE_HINT_PORT,
+};
+use optn_core::network::Network;
+use optn_runtime::chain::{
+    CapabilitySet, ChainSource, ConnectionPolicy, Endpoint, EndpointKind, SourceCatalog,
+    SourceDisposition, SourceId, SourceOrigin,
+};
+use optn_runtime::chain_service::ChainService;
+use optn_runtime::AppRuntime;
+use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::{Mutex, RwLock};
+
+pub use optn_chain_native::{
+    build_native_chain_stack, build_native_chain_stack_with_headers, NativeChainProbeFailure,
+    NativeChainSecrets, NativeChainStack,
+};
+use optn_runtime::header_store::SharedHeaders;
+use optn_runtime::header_verifier::ShvMmrHeaderVerifier;
+use optn_runtime::header_view::VerifiedHeaderView;
+
+type NativeSelection = (Network, Result<(SourceCatalog, ConnectionPolicy), String>);
+
+/// Thin legacy-wallet adapter: public endpoint selection plus an already
+/// authorized scan key, never a seed or authority to sign. The selected node is
+/// the ONLY registered route. SOCKS failures cannot fall back to direct TCP.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn cashcode_scan_node(
+    runtime: tauri::State<'_, Arc<NativeChainRuntime>>,
+    network: String,
+    host: String,
+    port: u16,
+    from_height: u32,
+    scan_private: Vec<u8>,
+    spend_public: Vec<u8>,
+    tor_required: Option<bool>,
+    tor_host: Option<String>,
+    tor_port: Option<u16>,
+) -> Result<serde_json::Value, String> {
+    use optn_chain_native::{Bip37Backend, Bip37Config, Bip37Transport};
+    use optn_runtime::{
+        chain::ProtocolFamily,
+        rpa_receive::{scan_cashcode, CashcodeScanKeys},
+        sync_worker::ProgressiveSyncWorker,
+    };
+    // Take ownership of the sensitive IPC buffer before any fallible work.
+    let keys = CashcodeScanKeys::from_scan_bytes(&network, scan_private, spend_public)?;
+    let network = network.parse::<Network>()?;
+    if port == 0 || from_height == 0 {
+        return Err("Cash Code scan needs a node port and nonzero birth height".into());
+    }
+    let peer = parse_peer_endpoint(&host, port).map_err(|e| e.to_string())?;
+    if peer.port() != port {
+        return Err("Node host and explicit port disagree".into());
+    }
+    let transport = if tor_required.unwrap_or(true) && !crate::fusion::is_local_server(peer.host())
+    {
+        let proxy_port = tor_port.unwrap_or(9050);
+        if proxy_port == 0 {
+            return Err("Invalid Tor SOCKS port".into());
+        }
+        let proxy = parse_peer_endpoint(tor_host.as_deref().unwrap_or("127.0.0.1"), proxy_port)
+            .map_err(|e| e.to_string())?;
+        if proxy.port() != proxy_port {
+            return Err("Tor proxy host and explicit port disagree".into());
+        }
+        if !crate::fusion::tor::is_tor_port(proxy.host(), proxy_port).await {
+            return Err(
+                "Configured Tor SOCKS proxy is unavailable; direct fallback is forbidden".into(),
+            );
+        }
+        Bip37Transport::Tor {
+            proxy_host: proxy.host().to_owned(),
+            proxy_port,
+        }
+    } else {
+        Bip37Transport::Direct
+    };
+    let (headers, view) = runtime.accepted_chain(network).await?;
+    let id = SourceId::new("selected-cashcode-node");
+    let endpoint = Endpoint {
+        kind: EndpointKind::BchP2p,
+        host: peer.host().to_owned(),
+        port: Some(port),
+    };
+    let mut catalog = SourceCatalog::default();
+    catalog
+        .insert(ChainSource {
+            id: id.clone(),
+            label: "Selected Cash Code node".into(),
+            origin: SourceOrigin::UserAdded,
+            endpoints: vec![endpoint.clone()],
+            capabilities: Default::default(),
+            disposition: SourceDisposition::Enabled,
+            priority: 0,
+        })
+        .map_err(|e| format!("Invalid node selection: {e:?}"))?;
+    let mut service = ChainService::new(
+        catalog,
+        ConnectionPolicy::exact(id.clone(), ProtocolFamily::Bip37),
+    );
+    let mut config = Bip37Config::new(id, endpoint, network.to_string());
+    config.transport = transport;
+    service.register(Arc::new(
+        Bip37Backend::connect(config, headers.clone())
+            .await
+            .map_err(|e| format!("Selected node unavailable: {e:?}"))?,
+    ));
+    let mut worker = ProgressiveSyncWorker::new(Default::default())
+        .with_header_view(view)
+        .map_err(|e| format!("Invalid accepted headers: {e:?}"))?
+        .with_accepted_headers(headers);
+    let result = scan_cashcode(&mut service, &mut worker, &keys, from_height).await;
+    if let Some(view) = worker.into_header_view() {
+        runtime.publish_header_view(network, view).await;
+    }
+    let result = result?;
+    Ok(
+        serde_json::json!({ "from_height": result.from_height, "tip_height": result.tip.height,
+        "source": result.source.as_str(), "protocol": "Bip37", "evidence": format!("{:?}", result.evidence),
+        "includes_mempool": result.includes_mempool, "complete_requested_scope": true, "receipts": result.receipts }),
+    )
+}
+
+/// One accepted chain for one network: what the runtime verified, and the
+/// dense store its providers read back.
+///
+/// This lives on the host rather than in the stack. A stack is rebuilt every
+/// time policy, sources or credentials change, and verified header progress is
+/// not a property of a provider set -- rebuilding it with the stack would throw
+/// away every accepted header each time a user edits a setting and send the
+/// next scan back to genesis.
+struct AcceptedChain {
+    network: Network,
+    headers: Arc<SharedHeaders>,
+    view: VerifiedHeaderView,
+}
+
+/// The reviewed starting point for a network's header chain.
+///
+/// A verifier without a reviewed checkpoint is not trusted material. A network
+/// that ships none cannot verify headers at all, which is the honest outcome:
+/// the alternative is anchoring trust on whatever a peer served first.
+fn shipped_header_verifier(network: Network) -> Result<ShvMmrHeaderVerifier, String> {
+    match network {
+        Network::Chipnet => optn_runtime::header_verifier::shipped_chipnet_header_verifier()
+            .map_err(|error| format!("the shipped chipnet checkpoint is unusable: {error:?}")),
+        Network::Regtest => optn_runtime::header_verifier::regtest_header_verifier()
+            .map_err(|error| format!("the regtest genesis anchor is unusable: {error:?}")),
+        // Deliberate: no reviewed mainnet checkpoint ships with this build, so
+        // there is nothing to anchor mainnet header verification on. Routes
+        // that do not need verified headers keep working; BIP37 and Neutrino
+        // refuse rather than trusting an unverified chain.
+        Network::Mainnet => Err(
+            "no reviewed mainnet header checkpoint ships with this build; P2P header \
+             verification is unavailable on mainnet"
+                .into(),
+        ),
+    }
+}
+
+/// Process-owned chain stack. Old routes are retired before replacement probes;
+/// a policy change during probing cancels that build before publication.
+pub struct NativeChainRuntime {
+    owner: AppRuntime,
+    stack: RwLock<Option<NativeChainStack>>,
+    generation: AtomicU64,
+    secrets: RwLock<NativeChainSecrets>,
+    credential_revision: AtomicU64,
+    network_settings: NetworkSettingsStore,
+    rebuild_lock: Mutex<()>,
+    /// Survives stack rebuilds; replaced only when the network changes.
+    accepted: Mutex<Option<AcceptedChain>>,
+}
+
+impl NativeChainRuntime {
+    /// Create an inactive host with no published routes or supplied credentials.
+    fn new(owner: AppRuntime, network_settings: NetworkSettingsStore) -> Self {
+        Self {
+            owner,
+            stack: RwLock::new(None),
+            generation: AtomicU64::new(0),
+            secrets: RwLock::new(NativeChainSecrets::default()),
+            credential_revision: AtomicU64::new(0),
+            network_settings,
+            rebuild_lock: Mutex::new(()),
+            accepted: Mutex::new(None),
+        }
+    }
+
+    /// The accepted chain for `network`, created on first use.
+    ///
+    /// A network switch starts a fresh one: a verified view belongs to exactly
+    /// one chain, and carrying it across would be asserting that headers proven
+    /// on one network say something about another.
+    async fn accepted_chain(
+        &self,
+        network: Network,
+    ) -> Result<(Arc<SharedHeaders>, VerifiedHeaderView), String> {
+        let mut guard = self.accepted.lock().await;
+        let matches = matches!(guard.as_ref(), Some(chain) if chain.network == network);
+        if !matches {
+            let verifier = shipped_header_verifier(network)?;
+            *guard = Some(AcceptedChain {
+                network,
+                headers: optn_chain_native::new_accepted_header_store(&network.to_string()),
+                view: VerifiedHeaderView::new(network, verifier),
+            });
+        }
+        let chain = guard.as_ref().expect("the accepted chain was just created");
+        Ok((chain.headers.clone(), chain.view.clone()))
+    }
+
+    /// Keep the header progress a completed sync pass reached.
+    ///
+    /// Ignored if the network changed underneath the pass, because the view
+    /// then describes a chain this host is no longer on.
+    async fn publish_header_view(&self, network: Network, view: VerifiedHeaderView) {
+        let mut guard = self.accepted.lock().await;
+        if let Some(chain) = guard.as_mut() {
+            if chain.network == network {
+                chain.view = view;
+            }
+        }
+    }
+
+    /// Start the process-owned worker that rebuilds routes as persisted policy
+    /// or runtime selections change. No service is installed until a build finishes.
+    pub fn spawn(app_runtime: AppRuntime, network_settings: NetworkSettingsStore) -> Arc<Self> {
+        let native = Arc::new(Self::new(app_runtime.clone(), network_settings));
+        let worker = native.clone();
+        tauri::async_runtime::spawn(async move {
+            worker.run().await;
+        });
+        native
+    }
+
+    /// Rebuild while observing selections, cancelling an in-flight build when they
+    /// change. Stop when the runtime owner no longer acknowledges or publishes state.
+    async fn run(&self) {
+        loop {
+            let selection = self.selection(&self.owner.state()).await;
+            let changed = self.wait_for_selection_change(&selection);
+            tokio::pin!(changed);
+            tokio::select! {
+                alive = self.rebuild_selection() => {
+                    if !alive {
+                        return;
+                    }
+                    if !changed.await {
+                        return;
+                    }
+                }
+                changed = &mut changed => {
+                    if !changed {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Retire active sync routes before replacing credentials and rebuilding.
+    /// The owner's current state selects the network; the caller snapshot is ignored.
+    /// If the owner is closed, credential replacement stops after invalidation.
+    pub async fn replace_secrets(&self, secrets: NativeChainSecrets, _state: &AppState) {
+        // Stop callers before changing credentials or waiting on the old
+        // service. Otherwise a refresh can publish a result obtained with the
+        // credentials that are being replaced.
+        if !self
+            .invalidate_current_wallet_sync("native chain credentials changed")
+            .await
+        {
+            return;
+        }
+        {
+            let mut current = self.secrets.write().await;
+            *current = secrets;
+            self.credential_revision.fetch_add(1, Ordering::SeqCst);
+        }
+        self.rebuild_selection_after_invalidation("native chain credentials changed")
+            .await;
+    }
+
+    /// Rebuild from the owner's latest state, ignoring potentially stale caller
+    /// snapshots. Configuration and probe failures are exposed by the accessors.
+    pub async fn rebuild_from_app_state(&self, _state: &AppState) {
+        self.rebuild_selection().await;
+    }
+
+    /// Read persisted policy on the blocking pool without holding the stack lock.
+    /// Missing files return `None`; reader or validation failures remain errors.
+    async fn persisted_selection(
+        &self,
+        network: Network,
+    ) -> Result<Option<(SourceCatalog, ConnectionPolicy)>, String> {
+        let settings = self.network_settings.clone();
+        tokio::task::spawn_blocking(move || settings.chain_selection(network))
+            .await
+            .map_err(|_| "network settings reader stopped".to_string())?
+    }
+
+    /// Resolve the snapshot's network through persisted policy, retaining read
+    /// errors so invalid configuration cannot silently select a fallback route.
+    async fn selection(&self, state: &AppState) -> NativeSelection {
+        Self::resolve_selection(state, self.persisted_selection(state.network).await)
+    }
+
+    /// Fall back to legacy app settings only when a persisted policy is absent.
+    /// Invalid persisted settings remain errors instead of enabling another route.
+    fn resolve_selection(
+        state: &AppState,
+        persisted: Result<Option<(SourceCatalog, ConnectionPolicy)>, String>,
+    ) -> NativeSelection {
+        (
+            state.network,
+            persisted.map(|selection| {
+                selection.unwrap_or_else(|| catalog_and_policy_from_app_state(state))
+            }),
+        )
+    }
+
+    /// Wait for an app or persisted policy change; return false when the owner closes.
+    /// File changes are observed by bounded polling alongside state notifications.
+    async fn wait_for_selection_change(&self, previous: &NativeSelection) -> bool {
+        let mut state = self.owner.subscribe_state();
+        // ponytail: bounded file polling; use native filesystem notifications
+        // if sub-second cross-process settings propagation is required.
+        let mut poll = tokio::time::interval(Duration::from_secs(2));
+        poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            if self.selection(&self.owner.state()).await != *previous {
+                return true;
+            }
+            tokio::select! {
+                _ = poll.tick() => {},
+                result = state.changed() => {
+                    if result.is_err() { return false; }
+                }
+            }
+        }
+    }
+
+    /// Cancel active wallet sync before waiting for a replacement build; return
+    /// false if the owner cannot acknowledge that cancellation.
+    async fn rebuild_selection(&self) -> bool {
+        // This must complete before the rebuild lock or the old service mutex
+        // is awaited. The owner is the actor that owns the active sync lease.
+        if !self
+            .invalidate_current_wallet_sync("native chain policy changed")
+            .await
+        {
+            return false;
+        }
+        self.rebuild_selection_after_invalidation("native chain policy changed")
+            .await
+    }
+
+    /// Revoke published routes and invalidate pending builds before cancelling the
+    /// owner's sync lease. Returns false when the owner cannot acknowledge cancellation.
+    async fn invalidate_current_wallet_sync(&self, reason: &str) -> bool {
+        // The generation also retires an unpublished build whose stack is not
+        // visible yet. Hold the read guard while revoking so a final stack
+        // write cannot pass publication without observing this invalidation.
+        {
+            let stack = self.stack.read().await;
+            self.generation.fetch_add(1, Ordering::SeqCst);
+            if let Some(stack) = stack.as_ref() {
+                stack.revocation.revoke();
+            }
+        }
+        self.owner
+            .invalidate_wallet_sync(reason.to_owned())
+            .await
+            .is_ok()
+    }
+
+    /// Serialize replacement probes and publish only while the captured network,
+    /// policy, credentials, and generation remain current. Stale builds are discarded;
+    /// false means the owner could not acknowledge invalidation.
+    async fn rebuild_selection_after_invalidation(&self, reason: &str) -> bool {
+        let _rebuild = self.rebuild_lock.lock().await;
+        if !self.invalidate_current_wallet_sync(reason).await {
+            return false;
+        }
+        let generation = self.generation.load(Ordering::SeqCst);
+        // Re-read the owner's state after cancellation and lock acquisition so
+        // a stale caller snapshot cannot select a different network.
+        let captured_selection = self.selection(&self.owner.state()).await;
+        let (network, selection) = captured_selection.clone();
+        let previous = self
+            .stack
+            .read()
+            .await
+            .as_ref()
+            .map(|stack| stack.service.clone());
+        if let Some(previous) = previous {
+            // Revoke routes even for callers holding an Arc to the old service.
+            *previous.lock().await.catalog_mut() = SourceCatalog::default();
+        }
+        *self.stack.write().await = None;
+        let (catalog, policy) = match selection {
+            Ok(selection) => selection,
+            Err(error) => {
+                let persisted = self.persisted_selection(network).await;
+                let mut stack = self.stack.write().await;
+                let current = self.owner.state();
+                if current.network != network
+                    || Self::resolve_selection(&current, persisted) != captured_selection
+                    || self.generation.load(Ordering::SeqCst) != generation
+                {
+                    return true;
+                }
+                *stack = Some(NativeChainStack::unavailable(error));
+                return true;
+            }
+        };
+        let (credential_revision, secrets) = {
+            let current = self.secrets.read().await;
+            (
+                self.credential_revision.load(Ordering::SeqCst),
+                current.clone(),
+            )
+        };
+        // Providers read the host's accepted chain, so a rebuild swaps routes
+        // without discarding verified headers. A network with no reviewed
+        // checkpoint gets a stack whose P2P scans will refuse for want of
+        // accepted headers, which is correct; other protocols still work.
+        let replacement = match self.accepted_chain(network).await {
+            Ok((headers, _)) => {
+                build_native_chain_stack_with_headers(
+                    catalog,
+                    policy,
+                    &network.to_string(),
+                    &secrets,
+                    headers,
+                )
+                .await
+            }
+            Err(_) => {
+                build_native_chain_stack(catalog, policy, &network.to_string(), &secrets).await
+            }
+        };
+        // Disk I/O must not hold the stack lock. Resolve any app-state fallback
+        // from the current owner only after the read and lock acquisition.
+        let persisted = self.persisted_selection(network).await;
+        let mut stack = self.stack.write().await;
+        let current = self.owner.state();
+        if current.network != network
+            || Self::resolve_selection(&current, persisted) != captured_selection
+            || self.credential_revision.load(Ordering::SeqCst) != credential_revision
+            || self.generation.load(Ordering::SeqCst) != generation
+        {
+            return true;
+        }
+        *stack = Some(replacement);
+        true
+    }
+
+    /// Invoke a synchronous callback with the current service handle under the
+    /// stack read lock. Returns `None` during replacement; retained handles can
+    /// subsequently be revoked by a policy or credential change.
+    pub async fn with_service<T>(
+        &self,
+        f: impl FnOnce(&Arc<Mutex<ChainService>>) -> T,
+    ) -> Option<T> {
+        let guard = self.stack.read().await;
+        guard.as_ref().map(|stack| f(&stack.service))
+    }
+
+    /// The host supplies its selected provider; HD discovery and durable
+    /// publication remain the same runtime use case invoked by the CLI.
+    pub async fn refresh_wallet(&self) -> Result<(), String> {
+        self.sync_wallet_from(None).await
+    }
+
+    /// Rescan this wallet from `height`, inclusive.
+    ///
+    /// Keys are untouched, and so is the accepted chain every other wallet and
+    /// provider shares: only this wallet's scan floor moves. Nothing is
+    /// cleared first, so balances, history and anything pending stay on screen
+    /// while the scan runs and are replaced only by a result.
+    pub async fn rescan_wallet_from(&self, height: u32) -> Result<(), String> {
+        // Record the instruction before the work, so the interface can show
+        // what was asked for even if the scan then fails or is slow.
+        self.owner
+            .dispatch(optn_app::AppAction::RequestRescanFrom { height })
+            .await
+            .map_err(|_| "The wallet runtime is no longer running.")?;
+        self.sync_wallet_from(Some(height)).await
+    }
+
+    async fn sync_wallet_from(&self, floor: Option<u32>) -> Result<(), String> {
+        let service = self
+            .with_service(Arc::clone)
+            .await
+            .ok_or("Chain source is still connecting. Select a source in Settings and retry.")?;
+        let mut service = service
+            .try_lock()
+            .map_err(|_| "A chain operation is already running. Please wait.")?;
+        let state = self.owner.state();
+        let wallet = state
+            .wallet
+            .as_ref()
+            .ok_or("Open a wallet before refreshing.")?;
+        let xpub = wallet
+            .account_xpub
+            .clone()
+            .ok_or("This wallet has no HD account to synchronize.")?;
+        // The worker joins the host's accepted chain rather than starting its
+        // own. Without this it verified headers into a view that was thrown
+        // away when the refresh returned, and published nothing to the store
+        // the providers read, so BIP37 and Neutrino refreshes could never match
+        // a verified tip and every P2P sync failed.
+        let network = state.network;
+        let mut worker = optn_runtime::sync_worker::ProgressiveSyncWorker::new(Default::default());
+        match self.accepted_chain(network).await {
+            Ok((headers, view)) => {
+                worker = worker
+                    .with_header_view(view)
+                    .map_err(|error| format!("Verified header context is unusable: {error:?}"))?
+                    .with_accepted_headers(headers);
+            }
+            Err(reason) => {
+                // Electrum and RPC routes do not need verified headers; the
+                // P2P ones will decline on their own.
+                log::warn!("continuing without verified header context: {reason}");
+            }
+        }
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(300),
+            self.owner.sync_hd_wallet_from_floor(
+                &mut service,
+                &mut worker,
+                xpub,
+                optn_runtime::hd_sync::HdSyncLimits::default(),
+                floor,
+            ),
+        )
+        .await;
+        // Keep whatever progress the pass reached, including when it then
+        // failed for an unrelated reason. Headers already accepted stay
+        // accepted; discarding them would re-download them next time.
+        if let Some(view) = worker.into_header_view() {
+            self.publish_header_view(network, view).await;
+        }
+        let decision = outcome
+            .map_err(|_| "Wallet refresh timed out; retained history remains stale.")?
+            .map_err(|error| error.to_string())?;
+        if decision != optn_runtime::reconciliation::ReconciliationDecision::Accepted {
+            return Err("Refresh was incomplete; retained history remains stale.".into());
+        }
+        Ok(())
+    }
+
+    /// Snapshot probe failures from the installed stack. An empty result also
+    /// covers an absent stack and must not be treated as proof of connectivity.
+    pub async fn failures(&self) -> Vec<NativeChainProbeFailure> {
+        self.stack
+            .read()
+            .await
+            .as_ref()
+            .map(|stack| stack.failures.clone())
+            .unwrap_or_default()
+    }
+
+    /// Return the installed stack's configuration error, if any. An absent
+    /// stack returns `None` even though a replacement may still be pending.
+    pub async fn configuration_error(&self) -> Option<String> {
+        self.stack
+            .read()
+            .await
+            .as_ref()
+            .and_then(|stack| stack.configuration_error.clone())
+    }
+}
+/// Compatibility bridge from the existing app-wide server settings into the
+/// richer source catalog. Endpoints sharing a host are grouped into one source,
+/// so a user-run node+Fulcrum installation naturally appears as one combined
+/// source without inventing a generic "Home Server" name.
+pub fn catalog_and_policy_from_app_state(state: &AppState) -> (SourceCatalog, ConnectionPolicy) {
+    let mut by_host = BTreeMap::<String, ChainSource>::new();
+    let network_servers = state.servers.for_network(state.network);
+
+    // A legacy default is not yet a durable source-catalog choice. Do not open
+    // a native provider connection until the user has explicitly configured a
+    // route; bootstrap selection belongs to the persisted policy overlay.
+    if let Some(electrum_entry) = network_servers.electrum.as_deref() {
+        if let Ok(parsed) = parse_electrum_endpoint(electrum_entry, DEFAULT_WSS_PORT) {
+            upsert_user_source(
+                &mut by_host,
+                parsed.host(),
+                Endpoint {
+                    kind: if parsed.encrypted() {
+                        EndpointKind::ElectrumTls
+                    } else {
+                        EndpointKind::ElectrumTcp
+                    },
+                    host: parsed.host().to_owned(),
+                    port: Some(parsed.port()),
+                },
+            );
+        }
+    }
+
+    if let Some(peer_entry) = network_servers.peer.as_deref() {
+        if let Ok(parsed) = parse_peer_endpoint(peer_entry, NODE_HINT_PORT) {
+            upsert_user_source(
+                &mut by_host,
+                parsed.host(),
+                Endpoint {
+                    kind: EndpointKind::BchP2p,
+                    host: parsed.host().to_owned(),
+                    port: Some(parsed.port()),
+                },
+            );
+        }
+    }
+
+    let mut catalog = SourceCatalog::default();
+    for source in by_host.into_values() {
+        // IDs are produced from unique normalized hosts, so duplicate insertion
+        // is an internal bug rather than a user-facing condition.
+        catalog
+            .insert(source)
+            .expect("host-grouped source ids are unique");
+    }
+
+    // A wallet with configured sources and an empty catalog means Auto has
+    // nothing to choose between: it opens, finds no route, and asks its holder
+    // to type in a server before it will show them a balance. The shipped
+    // bootstrap catalog is what it starts from instead.
+    //
+    // Two conditions, and both matter.
+    //
+    // Only when the holder has chosen nothing, because a configured wallet
+    // quietly gaining a public server it never asked for is the failure this
+    // ordering avoids. The shipped entries are never written into the durable
+    // overlay either: they are a starting point, not a stored preference.
+    //
+    // And only once a wallet is open. An installed application sitting on its
+    // landing screen has no reason to touch the network, and reaching for a
+    // public server before anyone has asked for anything announces that someone
+    // installed this wallet to a host that did not need to know.
+    if catalog.iter().next().is_none() && state.wallet.is_some() {
+        let bootstrap = optn_runtime::bootstrap::shipped_bootstrap_catalog(state.network);
+        for (priority, candidate) in bootstrap.candidates().enumerate() {
+            let source = bootstrap.materialize_source(candidate, priority as u16);
+            // Deterministic ids from normalized endpoints; a collision here
+            // would be a bug in the catalog rather than anything a user did.
+            catalog
+                .insert(source)
+                .expect("bootstrap source ids are unique");
+        }
+    }
+    (catalog, ConnectionPolicy::auto())
+}
+
+/// Group endpoints by normalized host, deduplicating exact endpoints while
+/// retaining the first label. Capabilities remain unproven until discovery.
+fn upsert_user_source(by_host: &mut BTreeMap<String, ChainSource>, host: &str, endpoint: Endpoint) {
+    let key = host.trim().trim_end_matches('.').to_ascii_lowercase();
+    let entry = by_host.entry(key.clone()).or_insert_with(|| ChainSource {
+        id: SourceId::new(format!("host:{key}")),
+        label: host.to_owned(),
+        origin: SourceOrigin::UserAdded,
+        endpoints: Vec::new(),
+        capabilities: CapabilitySet::default(),
+        disposition: SourceDisposition::Enabled,
+        priority: 0,
+    });
+    if !entry.endpoints.contains(&endpoint) {
+        entry.endpoints.push(endpoint);
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use optn_app::{AppAction, AppState, OpenedWallet, ServerKind, WalletKind};
+    use optn_core::network::Network;
+    use optn_runtime::chain::{
+        build_selection_plan, Capability, CapabilityConfidence, CapabilityDiscovery,
+        ProtocolFamily, ProviderHealth,
+    };
+    use optn_runtime::chain_service::{
+        BackendObservation, ChainBackend, ChainBackendError, ChainFuture, ChainOperation,
+        ChainRequest,
+    };
+    use optn_runtime::hd_sync::HdSyncLimits;
+    use optn_runtime::sync_worker::ProgressiveSyncWorker;
+    use optn_runtime::wallet_sync::WalletSyncError;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::sync::Notify;
+
+    fn test_directory(label: &str) -> std::path::PathBuf {
+        static NEXT_DIRECTORY: AtomicUsize = AtomicUsize::new(0);
+        let time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        // Windows wall-clock timestamps can repeat across concurrent tests.
+        let sequence = NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "optn-{label}-{}-{time}-{sequence}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn queued_settings_read_keeps_executor_and_stack_available() {
+        use std::{
+            future::{poll_fn, Future},
+            task::Poll,
+        };
+        let executor = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        executor.block_on(async {
+            let directory = test_directory("queued-settings");
+            assert!(!directory.exists()); // Missing config: no filesystem mutations or network probes.
+            let runtime = AppRuntime::spawn(AppState::default());
+            let native = Arc::new(NativeChainRuntime::new(
+                runtime.clone(),
+                NetworkSettingsStore::new(directory),
+            ));
+            let (release, held) = std::sync::mpsc::channel::<()>();
+            let (entered, started) = tokio::sync::oneshot::channel();
+            let blocking = tokio::task::spawn_blocking(move || {
+                entered.send(()).unwrap();
+                let _ = held.recv(); // Dropping release also unblocks on assertion failure.
+            });
+            started.await.unwrap();
+            let initial = AppState::default();
+            let mut rebuilding = Box::pin(native.rebuild_from_app_state(&initial));
+            tokio::time::timeout(Duration::from_secs(2), async {
+                while native.generation.load(Ordering::SeqCst) < 2 {
+                    assert!(poll_fn(|cx| Poll::Ready(rebuilding.as_mut().poll(cx)))
+                        .await
+                        .is_pending());
+                    runtime.dispatch(AppAction::ClearNotice).await.unwrap();
+                }
+                // Consume the invalidation reply and drive exactly to the queued
+                // settings read before changing the network. No scheduling sleeps.
+                runtime.dispatch(AppAction::ClearNotice).await.unwrap();
+                assert!(
+                    poll_fn(|cx| Poll::Ready(rebuilding.as_mut().poll(cx)))
+                        .await
+                        .is_pending(),
+                    "settings I/O must await the blocking pool"
+                );
+                assert!(native.with_service(Arc::clone).await.is_none());
+                assert!(native.configuration_error().await.is_none());
+                // A policy change while disk I/O waits must invalidate publication.
+                runtime
+                    .dispatch(AppAction::SetNetwork(Network::Chipnet))
+                    .await
+                    .unwrap();
+            })
+            .await
+            .unwrap();
+            drop(release);
+            blocking.await.unwrap();
+            tokio::time::timeout(Duration::from_secs(2), rebuilding)
+                .await
+                .unwrap();
+            assert!(
+                native.with_service(Arc::clone).await.is_none(),
+                "old network must not publish after the asynchronous read"
+            );
+            native.rebuild_from_app_state(&AppState::default()).await;
+            assert!(native.with_service(Arc::clone).await.is_some());
+            assert_eq!(native.selection(&runtime.state()).await.0, Network::Chipnet);
+        });
+    }
+
+    struct PendingWalletBackend {
+        source: SourceId,
+        endpoint: Endpoint,
+        capabilities: CapabilitySet,
+        started: Arc<Notify>,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl ChainBackend for PendingWalletBackend {
+        fn source_id(&self) -> &SourceId {
+            &self.source
+        }
+
+        fn protocol(&self) -> ProtocolFamily {
+            ProtocolFamily::Electrum
+        }
+
+        fn endpoint(&self) -> Option<&Endpoint> {
+            Some(&self.endpoint)
+        }
+
+        fn capabilities(&self) -> &CapabilitySet {
+            &self.capabilities
+        }
+
+        fn health(&self) -> ProviderHealth {
+            ProviderHealth::Healthy
+        }
+
+        fn supports(&self, operation: ChainOperation) -> bool {
+            operation == ChainOperation::WalletRefresh
+        }
+
+        fn execute<'a>(
+            &'a self,
+            _request: &'a ChainRequest,
+        ) -> ChainFuture<'a, BackendObservation> {
+            let started = Arc::clone(&self.started);
+            let calls = Arc::clone(&self.calls);
+            Box::pin(async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                started.notify_one();
+                std::future::pending::<Result<BackendObservation, ChainBackendError>>().await
+            })
+        }
+    }
+
+    struct PendingHdRefresh {
+        native: Arc<NativeChainRuntime>,
+        runtime: AppRuntime,
+        settings_directory: std::path::PathBuf,
+        old_service: Arc<Mutex<ChainService>>,
+        xpub: String,
+        calls: Arc<AtomicUsize>,
+        task: tokio::task::JoinHandle<
+            Result<optn_runtime::reconciliation::ReconciliationDecision, WalletSyncError>,
+        >,
+    }
+
+    struct PendingNativeProbe {
+        native: Arc<NativeChainRuntime>,
+        runtime: AppRuntime,
+        directory: std::path::PathBuf,
+        driver: tokio::task::JoinHandle<()>,
+        listener: tokio::net::TcpListener,
+        socket: tokio::net::TcpStream,
+        task: tokio::task::JoinHandle<()>,
+    }
+
+    async fn pending_native_probe() -> PendingNativeProbe {
+        use optn_chain_native::network_config::NetworkConfigFile;
+        use optn_runtime::network_config::{
+            NetworkConfigEnvelope, NetworkConfigStore, UserNetworkOverlay,
+        };
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind local probe listener");
+        let port = listener
+            .local_addr()
+            .expect("local probe listener address")
+            .port();
+        let directory = test_directory("native-selection");
+        std::fs::create_dir(&directory).expect("test probe directory");
+        let path = directory.join("network-mainnet.json");
+        let source = ChainSource {
+            id: SourceId::new("pending-native-probe"),
+            label: "Pending native probe".into(),
+            origin: SourceOrigin::UserAdded,
+            endpoints: vec![Endpoint {
+                kind: EndpointKind::ElectrumTcp,
+                host: "127.0.0.1".into(),
+                port: Some(port),
+            }],
+            capabilities: CapabilitySet::default(),
+            disposition: SourceDisposition::Enabled,
+            priority: 0,
+        };
+        NetworkConfigFile::new(path)
+            .store_atomic(&NetworkConfigEnvelope::current(
+                "test",
+                UserNetworkOverlay {
+                    user_sources: vec![source],
+                    ..Default::default()
+                },
+            ))
+            .expect("store pending probe selection");
+
+        let (runtime, driver) = AppRuntime::new(AppState::default());
+        let driver = tokio::spawn(driver.run());
+        let native = Arc::new(NativeChainRuntime::new(
+            runtime.clone(),
+            NetworkSettingsStore::new(directory.clone()),
+        ));
+        let rebuild_native = native.clone();
+        let task = tokio::spawn(async move {
+            rebuild_native
+                .rebuild_from_app_state(&AppState::default())
+                .await;
+        });
+        let (socket, _) = tokio::time::timeout(Duration::from_secs(2), listener.accept())
+            .await
+            .expect("native probe reached local listener")
+            .expect("accept pending native probe");
+
+        PendingNativeProbe {
+            native,
+            runtime,
+            directory,
+            driver,
+            listener,
+            socket,
+            task,
+        }
+    }
+
+    async fn pending_hd_refresh() -> PendingHdRefresh {
+        // This is the published BIP39 test vector, used only to derive public
+        // test material for the shared HD path.
+        let public_wallet =
+            optn_core::hd::Wallet::from_mnemonic(optn_core::hd::BIP39_TEST_VECTOR_MNEMONIC, "")
+                .expect("published BIP39 test vector");
+        let xpub = public_wallet
+            .account_xpub(Network::Chipnet, 0)
+            .expect("public account xpub");
+        let receive = optn_core::watch_only::address_under_account(Network::Chipnet, &xpub, 0, 0)
+            .expect("public receive address")
+            .address;
+
+        let mut initial = AppState {
+            network: Network::Chipnet,
+            wallet: Some(OpenedWallet {
+                kind: WalletKind::WatchOnly,
+                name: "public HD cancellation test".into(),
+                receive_address: receive,
+                master_fingerprint: None,
+                account_path: "m/44'/1'/0'".into(),
+                multisig_policy: None,
+                account_xpub: Some(xpub.clone()),
+            }),
+            ..Default::default()
+        };
+        // A source of this fixture's own, so rebuilding resolves against
+        // loopback rather than the shipped bootstrap catalog. These tests are
+        // about revocation and lifecycle: a closed port refuses immediately,
+        // while reaching a public server would make them slow, flaky and
+        // dependent on somebody else's uptime.
+        initial.apply(AppAction::SetServer {
+            kind: ServerKind::Electrum,
+            entry: "127.0.0.1:1".into(),
+        });
+        let runtime = AppRuntime::spawn(initial);
+        let settings_directory = test_directory("native-refresh-cancel");
+        std::fs::create_dir(&settings_directory).expect("test settings directory");
+        let native = Arc::new(NativeChainRuntime::new(
+            runtime.clone(),
+            NetworkSettingsStore::new(settings_directory.clone()),
+        ));
+
+        let source = SourceId::new("pending-refresh");
+        let endpoint = Endpoint {
+            kind: EndpointKind::ElectrumTcp,
+            host: "pending.test".into(),
+            port: Some(50001),
+        };
+        let mut capabilities = CapabilitySet::default();
+        capabilities.record(
+            Capability::UtxoQuery,
+            CapabilityConfidence::Advertised,
+            CapabilityDiscovery::ExplicitConfiguration,
+        );
+        let mut catalog = SourceCatalog::default();
+        catalog
+            .insert(ChainSource {
+                id: source.clone(),
+                label: "Pending test source".into(),
+                origin: SourceOrigin::UserAdded,
+                endpoints: vec![endpoint.clone()],
+                capabilities: capabilities.clone(),
+                disposition: SourceDisposition::Enabled,
+                priority: 0,
+            })
+            .expect("unique pending source");
+        let started = Arc::new(Notify::new());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut service = ChainService::new(catalog, ConnectionPolicy::auto());
+        service.register(Arc::new(PendingWalletBackend {
+            source,
+            endpoint,
+            capabilities,
+            started: Arc::clone(&started),
+            calls: Arc::clone(&calls),
+        }));
+        let revocation = service.revocation();
+        let service = Arc::new(Mutex::new(service));
+        native.stack.write().await.replace(NativeChainStack {
+            revocation,
+            service: service.clone(),
+            event_sources: Vec::new(),
+            failures: Vec::new(),
+            configuration_error: None,
+            headers: optn_chain_native::new_accepted_header_store("chipnet"),
+        });
+
+        let old_service = service.clone();
+        let refresh_runtime = runtime.clone();
+        let refresh_xpub = xpub.clone();
+        let task = tokio::spawn(async move {
+            let mut worker = ProgressiveSyncWorker::new(Default::default());
+            let mut service = old_service.lock().await;
+            refresh_runtime
+                .sync_hd_wallet(
+                    &mut service,
+                    &mut worker,
+                    refresh_xpub,
+                    HdSyncLimits::default(),
+                )
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(2), started.notified())
+            .await
+            .expect("shared HD refresh reached the pending provider");
+        assert!(service.try_lock().is_err(), "refresh must hold old service");
+
+        PendingHdRefresh {
+            native,
+            runtime,
+            settings_directory,
+            old_service: service,
+            xpub,
+            calls,
+            task,
+        }
+    }
+
+    async fn assert_cancelled(refresh: PendingHdRefresh, reason: &str) {
+        let PendingHdRefresh {
+            native: _native,
+            runtime,
+            settings_directory,
+            old_service: _old_service,
+            xpub: _xpub,
+            calls: _calls,
+            task,
+        } = refresh;
+        let result = tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("policy change must release the pending refresh")
+            .expect("refresh task must not panic");
+        assert!(matches!(result, Err(WalletSyncError::Superseded)));
+        assert!(
+            runtime.state().coins.is_empty(),
+            "stale refresh was published"
+        );
+        let status = runtime.subscribe_wallet_sync();
+        assert!(!status.borrow().sync.history_fresh);
+        assert!(!status.borrow().sync.utxos_fresh);
+        assert_eq!(
+            status.borrow().sync.degraded_reason.as_deref(),
+            Some(reason)
+        );
+        let network_config = settings_directory.join("network-chipnet.json");
+        let _ = std::fs::remove_file(&network_config);
+        let _ = std::fs::remove_file(network_config.with_extension("lock"));
+        std::fs::remove_dir(settings_directory).expect("remove test settings directory");
+    }
+
+    #[tokio::test]
+    async fn external_policy_reload_cancels_pending_shared_hd_refresh() {
+        use optn_chain_native::network_config::NetworkConfigFile;
+        use optn_runtime::network_config::{
+            NetworkConfigEnvelope, NetworkConfigStore, UserNetworkOverlay,
+        };
+
+        let refresh = pending_hd_refresh().await;
+        let policy = ConnectionPolicy::own_infrastructure();
+        NetworkConfigFile::new(refresh.settings_directory.join("network-chipnet.json"))
+            .store_atomic(&NetworkConfigEnvelope::current(
+                "test",
+                UserNetworkOverlay {
+                    connection_policy: policy.clone(),
+                    ..Default::default()
+                },
+            ))
+            .expect("store external policy");
+        let stale_state = AppState {
+            network: Network::Mainnet,
+            ..Default::default()
+        };
+        refresh.native.rebuild_from_app_state(&stale_state).await;
+
+        let service = refresh
+            .native
+            .with_service(Arc::clone)
+            .await
+            .expect("replacement service");
+        assert_eq!(service.lock().await.policy(), &policy);
+        assert_cancelled(refresh, "native chain policy changed").await;
+    }
+
+    #[tokio::test]
+    async fn secrets_reload_cancels_pending_shared_hd_refresh() {
+        let refresh = pending_hd_refresh().await;
+        let mut secrets = NativeChainSecrets::default();
+        secrets.set_rpc_txindex(&SourceId::new("pending-refresh"), true);
+        refresh
+            .native
+            .replace_secrets(secrets, &AppState::default())
+            .await;
+        assert_cancelled(refresh, "native chain credentials changed").await;
+    }
+
+    #[tokio::test]
+    async fn revoked_old_service_arc_cannot_start_during_held_rebuild_lock() {
+        let mut refresh = pending_hd_refresh().await;
+        let rebuild_guard = refresh.native.rebuild_lock.lock().await;
+        let rebuild_native = refresh.native.clone();
+        let rebuild = tokio::spawn(async move {
+            rebuild_native
+                .rebuild_from_app_state(&AppState::default())
+                .await;
+        });
+
+        let first = tokio::time::timeout(Duration::from_secs(2), &mut refresh.task)
+            .await
+            .expect("owner invalidation must release the pending refresh")
+            .expect("first refresh task must not panic");
+        assert!(matches!(first, Err(WalletSyncError::Superseded)));
+        let old_revocation = refresh.old_service.lock().await.revocation();
+        assert!(
+            old_revocation.is_revoked(),
+            "old service must be revoked before rebuild waits"
+        );
+
+        let old_service = refresh.old_service.clone();
+        let second_runtime = refresh.runtime.clone();
+        let second_xpub = refresh.xpub.clone();
+        let mut second = tokio::spawn(async move {
+            let mut worker = ProgressiveSyncWorker::new(Default::default());
+            let mut service = old_service.lock().await;
+            second_runtime
+                .sync_hd_wallet(
+                    &mut service,
+                    &mut worker,
+                    second_xpub,
+                    HdSyncLimits::default(),
+                )
+                .await
+        });
+        let second_result = tokio::time::timeout(Duration::from_secs(2), &mut second)
+            .await
+            .expect("revoked old service must reject fresh work")
+            .expect("second refresh task must not panic");
+        assert!(matches!(second_result, Err(WalletSyncError::Superseded)));
+        assert_eq!(
+            refresh.calls.load(Ordering::SeqCst),
+            1,
+            "revoked old service must not start another provider call"
+        );
+        assert!(
+            refresh.runtime.state().coins.is_empty(),
+            "revoked old service published stale coins"
+        );
+        assert!(
+            refresh
+                .runtime
+                .subscribe_wallet_sync()
+                .borrow()
+                .authoritative
+                .is_none(),
+            "revoked old service published an authoritative snapshot"
+        );
+
+        drop(rebuild_guard);
+        // Ten seconds rather than two. The bound was calibrated when a rebuild
+        // resolved an empty catalog and therefore did no work at all; now there
+        // is a source to probe, and probing a closed port still costs a
+        // connect attempt per endpoint. The assertions either side of this are
+        // the actual subject -- that the revoked service starts nothing and the
+        // rebuild completes once the lock is free -- and neither is relaxed.
+        tokio::time::timeout(Duration::from_secs(10), rebuild)
+            .await
+            .expect("rebuild must finish after the lock is released")
+            .expect("rebuild task must not panic");
+        assert_eq!(
+            refresh.old_service.lock().await.catalog().iter().count(),
+            0,
+            "old service catalog must be cleared during rebuild"
+        );
+
+        let network_config = refresh.settings_directory.join("network-chipnet.json");
+        let _ = std::fs::remove_file(&network_config);
+        let _ = std::fs::remove_file(network_config.with_extension("lock"));
+        std::fs::remove_dir(refresh.settings_directory).expect("remove test settings directory");
+    }
+
+    #[tokio::test]
+    async fn same_selection_reload_does_not_publish_a_superseded_probe() {
+        let PendingNativeProbe {
+            native,
+            runtime: _runtime,
+            directory,
+            driver,
+            listener,
+            socket,
+            task,
+        } = pending_native_probe().await;
+        let second_native = native.clone();
+        let second = tokio::spawn(async move {
+            second_native
+                .rebuild_from_app_state(&AppState::default())
+                .await;
+        });
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if native.generation.load(Ordering::SeqCst) >= 2 {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("same-selection reload must invalidate the pending probe");
+        // Keep the second rebuild from reaching its post-lock work; the first
+        // build must be rejected solely by the generation change.
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        driver.abort();
+        let _ = driver.await;
+        drop(socket);
+        drop(listener);
+
+        tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("superseded probe must finish")
+            .expect("superseded probe task must not panic");
+        tokio::time::timeout(Duration::from_secs(2), second)
+            .await
+            .expect("same-selection rebuild must finish after owner close")
+            .expect("same-selection rebuild task must not panic");
+        assert!(
+            native.stack.read().await.is_none(),
+            "same-selection invalidation allowed the old probe to publish"
+        );
+
+        let network_config = directory.join("network-mainnet.json");
+        let _ = std::fs::remove_file(&network_config);
+        let _ = std::fs::remove_file(network_config.with_extension("lock"));
+        std::fs::remove_dir(directory).expect("remove test probe directory");
+    }
+
+    #[tokio::test]
+    async fn credential_reload_during_probe_does_not_publish_old_credentials() {
+        let PendingNativeProbe {
+            native,
+            runtime: _runtime,
+            directory,
+            driver,
+            listener,
+            socket,
+            task,
+        } = pending_native_probe().await;
+        let replacement_native = native.clone();
+        let mut secrets = NativeChainSecrets::default();
+        secrets.set_rpc_txindex(&SourceId::new("pending-native-probe"), true);
+        let replacement = tokio::spawn(async move {
+            replacement_native
+                .replace_secrets(secrets, &AppState::default())
+                .await;
+        });
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if native.credential_revision.load(Ordering::SeqCst) == 1 {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("credential reload must advance its revision");
+        driver.abort();
+        let _ = driver.await;
+        drop(socket);
+        drop(listener);
+
+        tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("credential-superseded probe must finish")
+            .expect("credential-superseded probe task must not panic");
+        assert!(
+            native.stack.read().await.is_none(),
+            "credential-superseded probe published an old stack"
+        );
+        tokio::time::timeout(Duration::from_secs(2), replacement)
+            .await
+            .expect("closed owner must stop the replacement rebuild")
+            .expect("replacement task must not panic");
+
+        let network_config = directory.join("network-mainnet.json");
+        let _ = std::fs::remove_file(&network_config);
+        let _ = std::fs::remove_file(network_config.with_extension("lock"));
+        std::fs::remove_dir(directory).expect("remove test probe directory");
+    }
+
+    async fn wait_for_policy(native: &NativeChainRuntime, policy: &ConnectionPolicy) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(service) = native.with_service(Arc::clone).await {
+                    if service.lock().await.policy() == policy
+                        && native.configuration_error().await.is_none()
+                    {
+                        return;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("host applies policy without restart");
+    }
+
+    #[tokio::test]
+    async fn policy_change_cancels_an_unfinished_local_probe() {
+        use optn_chain_native::network_config::NetworkConfigFile;
+        use optn_runtime::network_config::{
+            NetworkConfigEnvelope, NetworkConfigStore, UserNetworkOverlay,
+        };
+        use tokio::io::AsyncReadExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let directory = test_directory("probe-cancel");
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("network-mainnet.json");
+        let file = NetworkConfigFile::new(path.clone());
+        let source = ChainSource {
+            id: SourceId::new("local-test"),
+            label: "Local test".into(),
+            origin: SourceOrigin::UserAdded,
+            endpoints: vec![Endpoint {
+                kind: EndpointKind::ElectrumTcp,
+                host: "127.0.0.1".into(),
+                port: Some(port),
+            }],
+            capabilities: CapabilitySet::default(),
+            disposition: SourceDisposition::Enabled,
+            priority: 0,
+        };
+        file.store_atomic(&NetworkConfigEnvelope::current(
+            "test",
+            UserNetworkOverlay {
+                user_sources: vec![source],
+                ..Default::default()
+            },
+        ))
+        .unwrap();
+        let runtime = AppRuntime::spawn(AppState::default());
+        let native = Arc::new(NativeChainRuntime::new(
+            runtime.clone(),
+            NetworkSettingsStore::new(directory.clone()),
+        ));
+        let worker = native.clone();
+        let task = tokio::spawn(async move { worker.run().await });
+        let (mut socket, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
+            .await
+            .unwrap()
+            .unwrap();
+        // Keep the server handshake unanswered while replacing the source policy.
+        file.store_atomic(&NetworkConfigEnvelope::current(
+            "test",
+            UserNetworkOverlay {
+                connection_policy: ConnectionPolicy::own_infrastructure(),
+                ..Default::default()
+            },
+        ))
+        .unwrap();
+        wait_for_policy(&native, &ConnectionPolicy::own_infrastructure()).await;
+        let mut bytes = Vec::new();
+        tokio::time::timeout(Duration::from_secs(3), socket.read_to_end(&mut bytes))
+            .await
+            .expect("cancelled probe closes its socket")
+            .unwrap();
+        assert_eq!(
+            native
+                .with_service(Arc::clone)
+                .await
+                .unwrap()
+                .lock()
+                .await
+                .catalog()
+                .iter()
+                .count(),
+            0
+        );
+        task.abort();
+        let _ = task.await;
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_file(path.with_extension("lock")).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn running_host_reloads_external_policy_and_recovers_from_corruption() {
+        use optn_chain_native::network_config::NetworkConfigFile;
+        use optn_runtime::network_config::{
+            NetworkConfigEnvelope, NetworkConfigStore, UserNetworkOverlay,
+        };
+        let directory = test_directory("host-policy");
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("network-mainnet.json");
+        let file = NetworkConfigFile::new(path.clone());
+        let settings = NetworkSettingsStore::new(directory.clone());
+        let runtime = AppRuntime::spawn(AppState::default());
+        let native = Arc::new(NativeChainRuntime::new(runtime.clone(), settings));
+        let worker = native.clone();
+        let task = tokio::spawn(async move { worker.run().await });
+        wait_for_policy(&native, &ConnectionPolicy::auto()).await;
+        let previous = native.with_service(Arc::clone).await.unwrap();
+        let mut state = AppState::default();
+        state.apply(AppAction::SetServer {
+            kind: ServerKind::Peer,
+            entry: "unused.invalid:8333".into(),
+        });
+        // Register catalog data only: this test never creates a network adapter.
+        *previous.lock().await.catalog_mut() = catalog_and_policy_from_app_state(&state).0;
+
+        let policy = ConnectionPolicy::own_infrastructure();
+        file.store_atomic(&NetworkConfigEnvelope::current(
+            "test",
+            UserNetworkOverlay {
+                connection_policy: policy.clone(),
+                ..Default::default()
+            },
+        ))
+        .unwrap();
+        wait_for_policy(&native, &policy).await;
+        assert_eq!(previous.lock().await.catalog().iter().count(), 0);
+
+        std::fs::write(&path, b"{").unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while native.configuration_error().await.is_none() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("corrupt configuration disables the stack");
+        let recovered = NetworkConfigEnvelope::current("test", UserNetworkOverlay::default());
+        // External repair of the deliberately corrupt file.
+        std::fs::write(
+            &path,
+            optn_runtime::network_config::encode_envelope_json(&recovered).unwrap(),
+        )
+        .unwrap();
+        wait_for_policy(&native, &ConnectionPolicy::auto()).await;
+        task.abort();
+        let _ = task.await;
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_file(path.with_extension("lock")).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+    }
+
+    #[test]
+    fn same_host_node_and_electrum_are_one_source_with_independent_routes() {
+        let mut state = AppState::default();
+        state.network = Network::Mainnet;
+        state.apply(AppAction::SetServer {
+            kind: ServerKind::Electrum,
+            entry: "box.example:50002".into(),
+        });
+        state.apply(AppAction::SetServer {
+            kind: ServerKind::Peer,
+            entry: "box.example:8333".into(),
+        });
+        let (catalog, _) = catalog_and_policy_from_app_state(&state);
+        let sources = catalog.iter().collect::<Vec<_>>();
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].label, "box.example");
+        assert!(sources[0]
+            .endpoints
+            .iter()
+            .any(|endpoint| endpoint.kind == EndpointKind::ElectrumTls));
+        assert!(sources[0]
+            .endpoints
+            .iter()
+            .any(|endpoint| endpoint.kind == EndpointKind::BchP2p));
+    }
+
+    #[test]
+    fn default_state_has_no_native_route_before_a_source_is_configured() {
+        let state = AppState::default();
+        let (catalog, policy) = catalog_and_policy_from_app_state(&state);
+        assert!(catalog.iter().next().is_none());
+        assert!(build_selection_plan(&catalog, &policy).primary.is_empty());
+    }
+
+    /// A fresh install can reach the network without being asked to type a
+    /// server address first.
+    ///
+    /// This is the difference between "Auto" meaning something and meaning
+    /// "pick from the empty set". The catalog used to be empty here, so the
+    /// wallet opened with no eligible route at all.
+    #[test]
+    fn a_fresh_install_starts_from_the_shipped_catalog() {
+        for network in [Network::Mainnet, Network::Chipnet] {
+            let mut state = AppState::default();
+            state.network = network;
+            state.apply(AppAction::OpenCreatedWallet {
+                name: "Fresh".into(),
+                receive_address: "bitcoincash:qq0000000000000000000000000000000000000000".into(),
+                account_path: "m/44'/145'/0'".into(),
+            });
+            let (catalog, policy) = catalog_and_policy_from_app_state(&state);
+            assert!(
+                catalog.iter().next().is_some(),
+                "{network} has no source to select on a fresh install"
+            );
+            assert!(policy.protocols.contains(ProtocolFamily::Electrum));
+            for source in catalog.iter() {
+                assert!(
+                    matches!(
+                        source.origin,
+                        optn_runtime::chain::SourceOrigin::Bootstrap { .. }
+                    ),
+                    "a shipped starting point must be marked bootstrap so it can be \
+                     disabled or banned but never silently treated as the user's own"
+                );
+            }
+        }
+    }
+
+    /// A holder's own server is the catalog. A configured wallet must not
+    /// quietly gain a public server it never chose.
+    #[test]
+    fn a_configured_source_replaces_the_shipped_catalog_rather_than_joining_it() {
+        let mut state = AppState::default();
+        state.network = Network::Chipnet;
+        state.apply(AppAction::SetServer {
+            kind: ServerKind::Electrum,
+            entry: "my-own-node.example:50002".into(),
+        });
+
+        let (catalog, _) = catalog_and_policy_from_app_state(&state);
+        let hosts: Vec<_> = catalog
+            .iter()
+            .flat_map(|source| {
+                source
+                    .endpoints
+                    .iter()
+                    .map(|endpoint| endpoint.host.clone())
+            })
+            .collect();
+        assert_eq!(hosts, vec!["my-own-node.example".to_owned()]);
+        for source in catalog.iter() {
+            assert_eq!(source.origin, optn_runtime::chain::SourceOrigin::UserAdded);
+        }
+    }
+
+    /// Regtest is a chain the operator started. It gets no discovery hints.
+    #[test]
+    fn regtest_is_not_pointed_at_public_infrastructure() {
+        let mut state = AppState::default();
+        state.network = Network::Regtest;
+        state.apply(AppAction::OpenCreatedWallet {
+            name: "Local".into(),
+            receive_address: "bchreg:qq0000000000000000000000000000000000000000".into(),
+            account_path: "m/44'/1'/0'".into(),
+        });
+        let (catalog, _) = catalog_and_policy_from_app_state(&state);
+        assert!(catalog.iter().next().is_none());
+    }
+
+    /// An installed wallet nobody has opened yet does not touch the network.
+    ///
+    /// Reaching for a public server before anyone has asked for anything
+    /// announces that someone installed this wallet to a host with no need to
+    /// know it.
+    #[test]
+    fn no_wallet_open_means_no_route_and_no_probe() {
+        let state = AppState::default();
+        assert!(state.wallet.is_none());
+        let (catalog, policy) = catalog_and_policy_from_app_state(&state);
+        assert!(catalog.iter().next().is_none());
+        assert!(build_selection_plan(&catalog, &policy).primary.is_empty());
+    }
+}

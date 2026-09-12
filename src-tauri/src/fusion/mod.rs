@@ -27,6 +27,8 @@ use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
 
 pub mod blame;
+#[cfg(test)]
+mod component_vectors;
 pub mod components;
 pub mod covert;
 pub mod electrum_input;

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
 // OptnKeyManager talks to the OS keychain (tauri-plugin-keyring-api) and OS
 // biometry (@choochmeque/tauri-plugin-biometry-api) -- neither exists outside
@@ -38,6 +38,12 @@ vi.mock('@choochmeque/tauri-plugin-biometry-api', () => ({
 }));
 
 describe('OptnKeyManager', () => {
+  afterEach(async () => {
+    // lock/reset synchronously wipe credentials, then lazily load the spend-auth
+    // cache cleanup. Let that real cleanup finish before resetModules/teardown.
+    await vi.dynamicImportSettled();
+  });
+
   beforeEach(async () => {
     keychain.clear();
     biometricStore.clear();

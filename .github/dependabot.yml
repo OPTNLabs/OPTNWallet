@@ -9,6 +9,36 @@ updates:
       default-days: 7
     open-pull-requests-limit: 0
     versioning-strategy: increase
+
+  # Keep all independent Rust dependency graphs current. The root workspace
+  # deliberately excludes optn-core, optn-cli, and src-tauri, so Dependabot
+  # must scan those manifest roots explicitly rather than assuming one Cargo
+  # workspace covers the wallet.
+  #
+  # GitHub reads this file from the default branch (main). Version PRs target
+  # `dev`, matching npm and Actions. Security PRs still open against `main`
+  # when target-branch is set:
+  # https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file#target-branch
+  - package-ecosystem: cargo
+    directories:
+      - /
+      - /crates/optn-core
+      - /crates/optn-cli
+      - /src-tauri
+    target-branch: dev
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 8
+    groups:
+      rust-compatible-updates:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
   - package-ecosystem: github-actions
     directory: /
     target-branch: dev

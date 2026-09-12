@@ -1,0 +1,15 @@
+[build]
+target = "index-tauri.html"
+dist = "dist"
+public_url = "./"
+filehash = true
+inject_scripts = true
+
+[watch]
+ignore = ["../../src-tauri", "../../android", "../../ios"]
+
+[serve]
+addresses = ["0.0.0.0"]
+port = 1420
+open = false
+ws_protocol = "ws"
