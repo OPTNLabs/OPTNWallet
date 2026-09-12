@@ -543,6 +543,13 @@ mod watch_only_file_tests {
     use crate::hd::BIP39_TEST_VECTOR_MNEMONIC;
     use k256::elliptic_curve::rand_core::{OsRng, RngCore};
 
+    // Drawn a byte at a time rather than zero-initialised and then overwritten.
+    // The two are identical at runtime -- `fill_bytes` replaces every byte --
+    // but taint analysis follows the `[0; N]` literal into the salt and nonce
+    // arguments below and reports six hard-coded cryptographic values, because
+    // it cannot see that the placeholder never survives. Removing the
+    // placeholder answers the finding without weakening the rule: a real
+    // constant reaching a salt or nonce would still be reported.
     fn random_bytes<const N: usize>() -> [u8; N] {
         std::array::from_fn(|_| OsRng.next_u32() as u8)
     }
