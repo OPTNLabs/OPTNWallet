@@ -2810,6 +2810,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 if let Some(reason) = rpa::send_block_reason(&decoded) {
                     return Err(CliError::Usage(reason));
                 }
+                validate_rpa_payment_amount(*sats)?;
                 let wallet = read_wallet(cli).await?;
                 let paid = if configured_chain(cli)?.is_some() {
                     rpa_pay_selected(cli, &wallet, &decoded, *sats, *fee_rate, *gap, *from_height)
@@ -3370,6 +3371,17 @@ async fn rpa_pay_selected(
     Ok(paid)
 }
 
+const RPA_P2PKH_DUST: u64 = 546;
+
+fn validate_rpa_payment_amount(sats: u64) -> Result<()> {
+    if sats < RPA_P2PKH_DUST {
+        return Err(CliError::Usage(
+            "Cash Code payment must be at least 546 sats (P2PKH dust threshold)".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn build_rpa_payment(
     network: Network,
     wallet: &Wallet,
@@ -3378,6 +3390,7 @@ fn build_rpa_payment(
     fee_rate: u64,
     spendable: Vec<(tx::Utxo, String, String)>,
 ) -> Result<RpaSpend> {
+    validate_rpa_payment_amount(sats)?;
     let coin = default_coin_type(network);
     if spendable.is_empty() {
         return Err(CliError::Usage(
@@ -3443,10 +3456,14 @@ fn build_rpa_payment(
         let stealth = rpa::payment_address(&code.spend_pubkey, &secret, network, 0)?;
 
         let mut outputs = vec![tx::Output::new(sats, stealth.script_pubkey())];
-        const DUST: u64 = 546;
-        if change_value >= DUST {
+        let actual_change = if change_value >= RPA_P2PKH_DUST {
+            change_value
+        } else {
+            0
+        };
+        if actual_change != 0 {
             outputs.push(tx::Output::new(
-                change_value,
+                actual_change,
                 wallet
                     .address(network, &hd::address_path(coin, 0, true, 0))?
                     .script_pubkey(),
@@ -3472,8 +3489,8 @@ fn build_rpa_payment(
                 ground.grind_tries,
                 ground.sequence,
                 stealth,
-                fee,
-                change_value,
+                input_total - sats - actual_change,
+                actual_change,
             ));
             break;
         }
@@ -3890,10 +3907,9 @@ fn hex(bytes: &[u8]) -> String {
 mod rpa_sweep_tests {
     use super::*;
 
-    #[test]
-    fn shared_funding_builds_a_detectable_cashcode_payment_without_broadcast() {
+    fn payment_fixture(value: u64) -> (Wallet, rpa::Cashcode, Vec<(tx::Utxo, String, String)>) {
         // Public BIP39 test vector only, never a live wallet.
-        let wallet = Wallet::from_mnemonic("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about", "").unwrap();
+        let wallet = Wallet::from_mnemonic(optn_core::hd::BIP39_TEST_VECTOR_MNEMONIC, "").unwrap();
         let scan = [21u8; 32];
         let spend = [22u8; 32];
         let code = rpa::decode(&rpa::encode(
@@ -3912,12 +3928,21 @@ mod rpa_sweep_tests {
             tx::Utxo {
                 txid: internal,
                 vout: 1,
-                value: 50_000,
+                value,
                 script_pubkey: address.script_pubkey(),
             },
             path,
             hex(&display),
         )];
+        (wallet, code, funding)
+    }
+
+    #[test]
+    fn shared_funding_builds_a_detectable_cashcode_payment_without_broadcast() {
+        let (wallet, code, funding) = payment_fixture(50_000);
+        let scan = [21u8; 32];
+        let spend = [22u8; 32];
+        let internal: [u8; 32] = std::array::from_fn(|index| index as u8);
         let paid = build_rpa_payment(Network::Chipnet, &wallet, &code, 10_000, 1, funding).unwrap();
         assert_eq!(paid.broadcast_state, "not_broadcast");
         assert!(paid.txid.is_none());
@@ -3933,6 +3958,64 @@ mod rpa_sweep_tests {
         assert_eq!(matches[0].address, paid.stealth_address);
         assert_eq!(matches[0].value, 10_000);
         assert_eq!(tx::decode(&raw).unwrap().inputs[0].0, internal);
+    }
+
+    #[test]
+    fn payment_dust_boundaries_and_actual_change_match_serialized_outputs() {
+        let (wallet, mut code, funding) = payment_fixture(10_000);
+        // Exercise output accounting quickly; the test above retains the real
+        // 16-bit Cash Code grind. This internal builder fixture is not a wire code.
+        code.prefix_bits = 4;
+        let rejected = build_rpa_payment(Network::Chipnet, &wallet, &code, 545, 1, funding.clone());
+        assert!(
+            matches!(rejected, Err(CliError::Usage(message)) if message.contains("at least 546"))
+        );
+        let minimum =
+            build_rpa_payment(Network::Chipnet, &wallet, &code, 546, 1, funding.clone()).unwrap();
+        let decoded = tx::decode(&decode_hex(&minimum.raw_hex).unwrap()).unwrap();
+        assert_eq!(decoded.outputs[0].value, 546);
+        assert_eq!(
+            decoded
+                .outputs
+                .iter()
+                .map(|output| output.value)
+                .sum::<u64>()
+                + minimum.fee,
+            10_000
+        );
+        let dust_change =
+            build_rpa_payment(Network::Chipnet, &wallet, &code, 9674, 1, funding).unwrap();
+        let decoded = tx::decode(&decode_hex(&dust_change.raw_hex).unwrap()).unwrap();
+        assert_eq!(decoded.outputs.len(), 1);
+        assert_eq!(decoded.outputs[0].value, 9674);
+        assert_eq!(dust_change.change, 0);
+        assert_eq!(dust_change.fee, 326);
+    }
+
+    #[tokio::test]
+    async fn payment_dust_is_rejected_before_wallet_or_funding_access() {
+        let (_, code, _) = payment_fixture(0);
+        let encoded = rpa::encode(
+            &code.scan_pubkey,
+            &code.spend_pubkey,
+            Network::Chipnet,
+            rpa::RPA_PREFIX_BITS,
+        );
+        let cli = Cli::try_parse_from([
+            "optn",
+            "--network",
+            "chipnet",
+            "--wallet",
+            "nonexistent-dust-test-wallet",
+            "rpa",
+            "pay",
+            &encoded,
+            "545",
+            "--dry-run",
+        ])
+        .unwrap();
+        let error = run(&cli).await.unwrap_err().to_string();
+        assert!(error.contains("at least 546"), "{error}");
     }
 
     #[tokio::test]
