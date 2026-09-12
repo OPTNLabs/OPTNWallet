@@ -301,6 +301,7 @@ export async function readRpaUnspentOutputs(
 ): Promise<RpaUnspentOutput[]> {
   const numericId = Number(walletId);
   if (!Number.isInteger(numericId) || numericId <= 0) return [];
+  await loadStoredWalletSpecialActivities(numericId);
   return readStoredRpaPayload(numericId).unspentOutputs ?? [];
 }
 
@@ -784,6 +785,11 @@ export async function scanRpaActivity(params: {
                 Math.trunc(toSafeNumber(current.value, outputValueSats(output)))
               ),
               height: Math.trunc(toSafeNumber(current.height)),
+              rpaOrigin: {
+                prevoutTxid: prevoutHash,
+                prevoutIndex,
+                senderPubkey: pubkeyHex,
+              },
             });
           }
         }

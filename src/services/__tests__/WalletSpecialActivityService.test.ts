@@ -82,6 +82,7 @@ vi.mock('../../apis/WalletManager/WalletManager', () => ({
 
 import {
   claimRpaTransaction,
+  readRpaUnspentOutputs,
   scanCauldronActivity,
   scanRpaActivity,
 } from '../WalletSpecialActivityService';
@@ -91,11 +92,72 @@ describe('WalletSpecialActivityService', () => {
     vi.clearAllMocks();
   });
 
+  it('waits for persisted RPA activity before returning coins after restart', async () => {
+    const { default: DatabaseService } = await import(
+      '../../apis/DatabaseManager/DatabaseService'
+    );
+    const { store } = await import('../../state/store');
+    const originalDatabase = DatabaseService();
+    const originalState = store.getState();
+    const output = {
+      txHash: 'ab'.repeat(32),
+      outputIndex: 0,
+      address: 'bchtest:qexpected',
+      valueSats: 1500,
+      height: 42,
+    };
+    let ready!: () => void;
+    const started = new Promise<void>((resolve) => {
+      ready = resolve;
+    });
+    const query = {
+      bind: vi.fn(),
+      free: vi.fn(),
+      step: vi.fn().mockReturnValueOnce(true).mockReturnValue(false),
+      getAsObject: () => ({
+        activity_type: 'rpa',
+        network_type: Network.CHIPNET,
+        derivation_path: "m/44'/1'/0'",
+        status: 'complete',
+        payload_json: JSON.stringify({
+          unspentSats: 1500,
+          unspentOutputs: [output],
+        }),
+        updated_at: '2026-09-12T00:00:00Z',
+      }),
+    };
+    vi.mocked(DatabaseService).mockReturnValue({
+      ...originalDatabase,
+      ensureDatabaseStarted: () => started,
+      getDatabase: () => ({ run: vi.fn(), prepare: () => query }),
+    } as unknown as ReturnType<typeof DatabaseService>);
+    vi.mocked(store.dispatch).mockImplementationOnce((action) => {
+      const { record } = (action as unknown as { payload: { record: unknown } })
+        .payload;
+      vi.mocked(store.getState).mockReturnValue({
+        ...originalState,
+        walletSpecialActivity: { byWallet: { 7: { rpa: record } } },
+      } as ReturnType<typeof store.getState>);
+      return action;
+    });
+    try {
+      const result = readRpaUnspentOutputs(7);
+      expect(query.bind).not.toHaveBeenCalled();
+      ready();
+      expect(await result).toEqual([output]);
+      expect(query.bind).toHaveBeenCalledWith([7]);
+    } finally {
+      vi.mocked(DatabaseService).mockReturnValue(originalDatabase);
+      vi.mocked(store.getState).mockReturnValue(originalState);
+    }
+  });
+
   it('verifies RPA candidates and counts only currently unspent outputs', async () => {
     const adapter = {
       request: vi.fn(async (method: string) => {
         if (method === 'blockchain.headers.subscribe') return { height: 1000 };
-        if (method === 'blockchain.reusable.get_history') return [{ tx_hash: 'tx1' }];
+        if (method === 'blockchain.reusable.get_history')
+          return [{ tx_hash: 'tx1' }];
         if (method === 'blockchain.reusable.get_mempool') return [];
         if (method === 'blockchain.transaction.get') {
           return {
@@ -134,6 +196,11 @@ describe('WalletSpecialActivityService', () => {
         address: 'bchtest:qexpected',
         valueSats: 1500,
         height: 42,
+        rpaOrigin: {
+          prevoutTxid: 'prevtx',
+          prevoutIndex: 0,
+          senderPubkey: `02${'11'.repeat(32)}`,
+        },
       },
     ]);
     expect(deriveRpaKeysMock).toHaveBeenCalledWith(
@@ -157,7 +224,8 @@ describe('WalletSpecialActivityService', () => {
         if (method === 'server.features') {
           return { rpa: { history_block_limit: 60, prefix_bits_min: 8 } };
         }
-        if (method === 'blockchain.rpa.get_history') return [{ tx_hash: 'tx1' }];
+        if (method === 'blockchain.rpa.get_history')
+          return [{ tx_hash: 'tx1' }];
         if (method === 'blockchain.rpa.get_mempool') return [];
         if (method === 'blockchain.transaction.get') {
           return {
@@ -194,16 +262,19 @@ describe('WalletSpecialActivityService', () => {
       940,
       -1
     );
-    expect(adapter.request.mock.calls.some((call) =>
-      String(call[0]).includes('reusable')
-    )).toBe(false);
+    expect(
+      adapter.request.mock.calls.some((call) =>
+        String(call[0]).includes('reusable')
+      )
+    ).toBe(false);
   });
 
   it('does not treat a spent RPA output as part of the balance', async () => {
     const adapter = {
       request: vi.fn(async (method: string) => {
         if (method === 'blockchain.headers.subscribe') return { height: 1000 };
-        if (method === 'blockchain.reusable.get_history') return [{ tx_hash: 'tx1' }];
+        if (method === 'blockchain.reusable.get_history')
+          return [{ tx_hash: 'tx1' }];
         if (method === 'blockchain.reusable.get_mempool') return [];
         if (method === 'blockchain.transaction.get') {
           return {
@@ -278,7 +349,9 @@ describe('WalletSpecialActivityService', () => {
       request: vi.fn(async (method: string) => {
         if (method === 'blockchain.headers.subscribe') return { height: 1000 };
         if (method === 'blockchain.reusable.get_history') {
-          throw new Error('Unsupported request: blockchain.reusable.get_history');
+          throw new Error(
+            'Unsupported request: blockchain.reusable.get_history'
+          );
         }
         throw new Error(`Unexpected method: ${method}`);
       }),
@@ -341,9 +414,11 @@ describe('WalletSpecialActivityService', () => {
       'blockchain.reusable.get_history',
       expect.anything()
     );
-    expect(adapter.request.mock.calls.some((call) =>
-      String(call[0]).includes('reusable')
-    )).toBe(false);
+    expect(
+      adapter.request.mock.calls.some((call) =>
+        String(call[0]).includes('reusable')
+      )
+    ).toBe(false);
   });
 
   it('queries Cauldron using the active wallet branches and summarizes pool balances', async () => {
