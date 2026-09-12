@@ -40,18 +40,38 @@ export async function scanNodeRpa(
   const { host, port } = parseNodeTarget(target, network);
   const state = store.getState();
   const torRequired = selectTorEnabled(state);
+  const torAuto = selectTorAuto(state);
+  const torHost = selectTorHost(state);
+  const torPort = selectTorPortManual(state);
+  const assertCurrentScope = () => {
+    const current = store.getState();
+    if (
+      selectWalletId(current) !== walletId ||
+      selectCurrentNetwork(current) !== network ||
+      activeNode(network) !== target ||
+      selectTorEnabled(current) !== torRequired ||
+      selectTorAuto(current) !== torAuto ||
+      selectTorHost(current) !== torHost ||
+      selectTorPortManual(current) !== torPort
+    ) {
+      throw new Error(
+        'Wallet, source or privacy policy changed during RPA scan.'
+      );
+    }
+  };
   const route = torRequired
     ? await resolveFusionTransport(host, {
         enabled: true,
-        auto: selectTorAuto(state),
-        host: selectTorHost(state),
-        manualPort: selectTorPortManual(state),
+        auto: torAuto,
+        host: torHost,
+        manualPort: torPort,
       })
     : { type: 'direct' as const };
   if (route.type === 'unavailable')
     throw new Error(`RPA node scan: ${route.reason}`);
   // Unknown birthday means full history, never silently scan only recent blocks.
   const fromHeight = (await getBirthHeight(walletId)) ?? 1;
+  assertCurrentScope();
   const scanPrivate = Array.from(keys.scanPrivkey);
   try {
     const result = await invoke<{
@@ -68,16 +88,7 @@ export async function scanNodeRpa(
       torHost: route.type === 'tor' ? route.tor.host : null,
       torPort: route.type === 'tor' ? route.tor.port : null,
     });
-    if (
-      selectWalletId(store.getState()) !== walletId ||
-      selectCurrentNetwork(store.getState()) !== network ||
-      activeNode(network) !== target ||
-      selectTorEnabled(store.getState()) !== torRequired
-    ) {
-      throw new Error(
-        'Wallet, source or privacy policy changed during RPA scan.'
-      );
-    }
+    assertCurrentScope();
     // Token-bearing outputs must not enter the BCH-only RPA coin selector.
     const unspentOutputs = result.receipts
       .filter((r) => r.unspent && r.token == null)

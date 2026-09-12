@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   wallet: 7,
   target: 'selected-node:48333',
   tor: true,
+  torPort: 9050,
 }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke }));
 vi.mock('../../../state/store', () => ({ store: { getState: () => ({}) } }));
@@ -21,7 +22,7 @@ vi.mock('../../../state/slices/experimentalSlice', () => ({
   selectTorEnabled: () => mocks.tor,
   selectTorAuto: () => true,
   selectTorHost: () => '127.0.0.1',
-  selectTorPortManual: () => 9050,
+  selectTorPortManual: () => mocks.torPort,
 }));
 vi.mock('../backendSelection', () => ({ activeNode: () => mocks.target }));
 vi.mock('../DesktopWalletManager', () => ({ getBirthHeight: mocks.birth }));
@@ -56,6 +57,7 @@ beforeEach(() => {
   mocks.wallet = 7;
   mocks.target = 'selected-node:48333';
   mocks.tor = true;
+  mocks.torPort = 9050;
   mocks.birth.mockResolvedValue(90);
   mocks.route.mockResolvedValue({
     type: 'tor',
@@ -115,6 +117,27 @@ it('does not connect without required Tor', async () => {
 it('does not publish results into a switched wallet', async () => {
   mocks.invoke.mockImplementation(async () => {
     mocks.wallet = 8;
+    return { receipts: [] };
+  });
+  await expect(scanNodeRpa(7, Network.CHIPNET, keys())).rejects.toThrow(
+    /changed during/
+  );
+});
+
+it('does not start a scan after the selected source changes while loading its birthday', async () => {
+  mocks.birth.mockImplementationOnce(async () => {
+    mocks.target = 'other-node:48333';
+    return 90;
+  });
+  await expect(scanNodeRpa(7, Network.CHIPNET, keys())).rejects.toThrow(
+    /changed during/
+  );
+  expect(mocks.invoke).not.toHaveBeenCalled();
+});
+
+it('does not publish results after changing the Tor proxy', async () => {
+  mocks.invoke.mockImplementationOnce(async () => {
+    mocks.torPort = 9150;
     return { receipts: [] };
   });
   await expect(scanNodeRpa(7, Network.CHIPNET, keys())).rejects.toThrow(
