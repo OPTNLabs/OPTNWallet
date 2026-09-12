@@ -6,7 +6,7 @@
  * Bottom: separate Airgap section (Keystone only for now).
  */
 
-import { useState, type FC } from 'react';
+import { useEffect, useState, type FC } from 'react';
 import { lockingBytecodeToCashAddress } from '@bitauth/libauth';
 
 import { Network } from '../../../state/slices/networkSlice';
@@ -215,10 +215,13 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
   };
 
   const handleKeystoneFrame = (text: string) => {
-    const next = [...keystoneFrames, text.trim()];
-    setKeystoneFrames(next);
+    setKeystoneFrames((previous) => [...previous, text.trim()]);
+  };
+
+  useEffect(() => {
+    if (!keystoneScanning || keystoneFrames.length === 0) return;
     try {
-      const parsed = parseKeystoneAccount(next);
+      const parsed = parseKeystoneAccount(keystoneFrames);
       setKeystoneAccount(parsed);
       setKeystoneScanning(false);
       setError('');
@@ -226,12 +229,12 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (/part of the animated/i.test(message)) return;
-      setKeystoneFrames([]);
       setKeystoneAccount(null);
       setError(message);
       setKeystoneScanning(false);
+      setKeystoneFrames([]);
     }
-  };
+  }, [keystoneFrames, keystoneScanning, walletName]);
 
   const handleCreateKeystone = async () => {
     if (!walletName.trim()) {

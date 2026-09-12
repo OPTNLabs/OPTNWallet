@@ -431,6 +431,31 @@ impl From<ChainProtocol> for ProtocolFamily {
 
 #[derive(Subcommand)]
 enum RpaCommand {
+    /// Sweep discovered BCH-only Cash Code receipts to one ordinary address.
+    Sweep {
+        destination: String,
+        #[arg(long)]
+        from_height: u32,
+        #[arg(long, default_value_t = 0)]
+        account: u32,
+        #[arg(long, default_value_t = 1)]
+        fee_rate: u64,
+        /// Sign and show the transaction without broadcasting it.
+        #[arg(long, conflicts_with = "yes")]
+        dry_run: bool,
+        /// Authorize sweeping all discovered non-token receipts, minus the fee.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Discover and reconcile Cash Code receipts using the selected shared chain
+    /// policy. BIP37 downloads complete blocks locally; there is no server fallback.
+    Discover {
+        /// Inclusive wallet birth height; never silently restricted to recent blocks.
+        #[arg(long)]
+        from_height: u32,
+        #[arg(long, default_value_t = 0)]
+        account: u32,
+    },
     /// Print this wallet's cashcode.
     Code {
         /// BIP44 account index.
@@ -763,7 +788,12 @@ fn timeout_seconds(cli: &Cli) -> u64 {
     cli.timeout.unwrap_or({
         if matches!(
             &cli.command,
-            Command::Rescan { .. } | Command::History { .. } | Command::Wallet { .. }
+            Command::Rescan { .. }
+                | Command::History { .. }
+                | Command::Wallet { .. }
+                | Command::Rpa {
+                    action: RpaCommand::Discover { .. } | RpaCommand::Sweep { .. }
+                }
         ) {
             300
         } else {
@@ -2519,6 +2549,155 @@ async fn run(cli: &Cli) -> Result<Value> {
         },
         Command::Skills => Ok(skills::manifest(skills::Policy::from_env()?)),
         Command::Rpa { action } => match action {
+            RpaCommand::Sweep {
+                destination,
+                from_height,
+                account,
+                fee_rate,
+                dry_run,
+                yes,
+            } => {
+                use optn_runtime::chain_service::{
+                    ChainBackendError, ChainOperation, ChainServiceError,
+                };
+                if !*dry_run && !*yes {
+                    return Err(CliError::Usage(
+                        "Cash Code sweep requires --dry-run or --yes".into(),
+                    ));
+                }
+                parse_address(destination, cli.network)?;
+                let selection = configured_chain(cli)?.ok_or_else(|| CliError::Usage("Cash Code sweep requires a saved shared source policy; host overrides are not permitted".into()))?;
+                let wallet = read_wallet(cli).await?;
+                let keys = optn_runtime::rpa_receive::CashcodeScanKeys::from_wallet(
+                    &wallet,
+                    cli.network,
+                    optn_core::hd::AccountPath::new(cli.network.default_coin_type(), *account)?,
+                )
+                .map_err(CliError::Usage)?;
+                let worker = hd_sync_worker(cli.network, &selection.policy)?;
+                let budget = std::time::Duration::from_secs(timeout_seconds(cli));
+                let stack = tokio::time::timeout(
+                    budget,
+                    build_native_chain_stack(
+                        selection.catalog,
+                        selection.policy,
+                        &cli.network.to_string(),
+                        &NativeChainSecrets::default(),
+                    ),
+                )
+                .await
+                .map_err(|_| {
+                    CliError::Network("Cash Code source connection timed out before signing".into())
+                })?;
+                let mut worker = worker.with_accepted_headers(stack.headers.clone());
+                let mut service = stack.service.lock().await;
+                let scan = tokio::time::timeout(budget, optn_runtime::rpa_receive::scan_cashcode(&mut service, &mut worker, &keys, *from_height))
+                    .await.map_err(|_| CliError::Network("Cash Code discovery timed out before signing; no transaction was broadcast".into()))?.map_err(CliError::Network)?;
+                let sweep = optn_runtime::rpa_receive::prepare_cashcode_sweep(
+                    &keys,
+                    &scan,
+                    destination,
+                    *fee_rate,
+                )
+                .map_err(CliError::Usage)?;
+                let state = if *dry_run {
+                    "not_broadcast"
+                } else {
+                    let route = service.routes_for_operation(ChainOperation::Broadcast).into_iter().find(|route|
+                        route.source == scan.source && route.protocol == scan.protocol && route.endpoint == scan.endpoint)
+                        .ok_or_else(|| CliError::Network("The exact discovery endpoint cannot broadcast; no fallback is allowed".into()))?;
+                    match tokio::time::timeout(
+                        budget,
+                        service.execute_on_route(
+                            &route,
+                            &ChainRequest::Broadcast {
+                                raw_tx: sweep.raw.clone(),
+                                txid: sweep.txid,
+                            },
+                        ),
+                    )
+                    .await
+                    {
+                        Ok(Ok(observed)) if matches!(observed.value, ChainPayload::BroadcastObserved { txid } if txid == sweep.txid) => {
+                            "submitted"
+                        }
+                        Ok(Err(
+                            ChainServiceError::NoEligibleProvider
+                            | ChainServiceError::RouteUnavailable,
+                        )) => "unavailable",
+                        Ok(Err(ChainServiceError::Exhausted { attempts }))
+                            if !attempts.is_empty()
+                                && attempts.iter().all(|attempt| {
+                                    matches!(attempt.error, ChainBackendError::Rejected(_))
+                                }) =>
+                        {
+                            "rejected"
+                        }
+                        _ => "uncertain",
+                    }
+                };
+                let mut display = sweep.txid;
+                display.reverse();
+                Ok(
+                    json!({ "ok": matches!(state, "not_broadcast" | "submitted"), "network": cli.network.to_string(),
+                    "dry_run": dry_run, "state": state, "txid": hex(&display), "destination": destination,
+                    "amount_sats": sweep.amount_sats, "fee_sats": sweep.fee_sats, "inputs": sweep.input_count,
+                    "raw_hex": if *dry_run { Some(hex(&sweep.raw)) } else { None },
+                    "source": scan.source.as_str(), "protocol": format!("{:?}", scan.protocol), "includes_mempool": scan.includes_mempool,
+                    "warning": if !scan.includes_mempool { Some("Confirmed-chain-only scan: unconfirmed spends were not checked. Submitted is not confirmation; never blindly retry an uncertain broadcast.") }
+                        else if state == "uncertain" { Some("Broadcast acceptance is uncertain. Check this txid before retrying.") } else { None } }),
+                )
+            }
+            RpaCommand::Discover {
+                from_height,
+                account,
+            } => {
+                let selection = configured_chain(cli)?.ok_or_else(|| CliError::Usage(
+                    "Cash Code discovery requires a saved exact source policy; use network select --protocol. Host overrides cannot select a fallback.".into()
+                ))?;
+                let wallet = read_wallet(cli).await?;
+                let keys = optn_runtime::rpa_receive::CashcodeScanKeys::from_wallet(
+                    &wallet,
+                    cli.network,
+                    optn_core::hd::AccountPath::new(cli.network.default_coin_type(), *account)?,
+                )
+                .map_err(CliError::Usage)?;
+                let worker = hd_sync_worker(cli.network, &selection.policy)?;
+                let result = tokio::time::timeout(
+                    std::time::Duration::from_secs(timeout_seconds(cli)),
+                    async {
+                        let stack = build_native_chain_stack(
+                            selection.catalog,
+                            selection.policy,
+                            &cli.network.to_string(),
+                            &NativeChainSecrets::default(),
+                        )
+                        .await;
+                        let mut worker = worker.with_accepted_headers(stack.headers.clone());
+                        let mut service = stack.service.lock().await;
+                        optn_runtime::rpa_receive::scan_cashcode(
+                            &mut service,
+                            &mut worker,
+                            &keys,
+                            *from_height,
+                        )
+                        .await
+                    },
+                )
+                .await
+                .map_err(|_| {
+                    CliError::Network(
+                        "Cash Code discovery timed out; no complete result is available".into(),
+                    )
+                })?
+                .map_err(CliError::Network)?;
+                Ok(
+                    json!({ "ok": true, "network": cli.network.to_string(), "from_height": result.from_height,
+                    "tip_height": result.tip.height, "source": result.source.as_str(), "protocol": format!("{:?}", result.protocol),
+                    "evidence": format!("{:?}", result.evidence), "complete_requested_scope": true, "includes_mempool": result.includes_mempool,
+                    "receipts": result.receipts }),
+                )
+            }
             RpaCommand::Code { account } => {
                 let wallet = read_wallet(cli).await?;
                 let coin = default_coin_type(cli.network);
@@ -3476,6 +3655,40 @@ fn decode_hex(s: &str) -> Result<Vec<u8>> {
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[cfg(test)]
+mod rpa_sweep_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn sweep_requires_confirmation_before_wallet_or_network_access() {
+        let cli = Cli::try_parse_from([
+            "optn",
+            "--network",
+            "chipnet",
+            "rpa",
+            "sweep",
+            "not-an-address",
+            "--from-height",
+            "1",
+        ])
+        .unwrap();
+        let error = run(&cli).await.unwrap_err().to_string();
+        assert!(error.contains("requires --dry-run or --yes"), "{error}");
+        assert!(Cli::try_parse_from([
+            "optn",
+            "rpa",
+            "sweep",
+            "destination",
+            "--from-height",
+            "1",
+            "--dry-run",
+            "--yes"
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from(["optn", "rpa", "sweep", "destination", "--dry-run"]).is_err());
+    }
 }
 
 #[cfg(test)]

@@ -33,6 +33,108 @@ use optn_runtime::header_view::VerifiedHeaderView;
 
 type NativeSelection = (Network, Result<(SourceCatalog, ConnectionPolicy), String>);
 
+/// Thin legacy-wallet adapter: public endpoint selection plus an already
+/// authorized scan key, never a seed or authority to sign. The selected node is
+/// the ONLY registered route. SOCKS failures cannot fall back to direct TCP.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn cashcode_scan_node(
+    runtime: tauri::State<'_, Arc<NativeChainRuntime>>,
+    network: String,
+    host: String,
+    port: u16,
+    from_height: u32,
+    scan_private: Vec<u8>,
+    spend_public: Vec<u8>,
+    tor_required: Option<bool>,
+    tor_host: Option<String>,
+    tor_port: Option<u16>,
+) -> Result<serde_json::Value, String> {
+    use optn_chain_native::{Bip37Backend, Bip37Config, Bip37Transport};
+    use optn_runtime::{
+        chain::ProtocolFamily,
+        rpa_receive::{scan_cashcode, CashcodeScanKeys},
+        sync_worker::ProgressiveSyncWorker,
+    };
+    // Take ownership of the sensitive IPC buffer before any fallible work.
+    let keys = CashcodeScanKeys::from_scan_bytes(&network, scan_private, spend_public)?;
+    let network = network.parse::<Network>()?;
+    if port == 0 || from_height == 0 {
+        return Err("Cash Code scan needs a node port and nonzero birth height".into());
+    }
+    let peer = parse_peer_endpoint(&host, port).map_err(|e| e.to_string())?;
+    if peer.port() != port {
+        return Err("Node host and explicit port disagree".into());
+    }
+    let transport = if tor_required.unwrap_or(true) && !crate::fusion::is_local_server(peer.host())
+    {
+        let proxy_port = tor_port.unwrap_or(9050);
+        if proxy_port == 0 {
+            return Err("Invalid Tor SOCKS port".into());
+        }
+        let proxy = parse_peer_endpoint(tor_host.as_deref().unwrap_or("127.0.0.1"), proxy_port)
+            .map_err(|e| e.to_string())?;
+        if proxy.port() != proxy_port {
+            return Err("Tor proxy host and explicit port disagree".into());
+        }
+        if !crate::fusion::tor::is_tor_port(proxy.host(), proxy_port).await {
+            return Err(
+                "Configured Tor SOCKS proxy is unavailable; direct fallback is forbidden".into(),
+            );
+        }
+        Bip37Transport::Tor {
+            proxy_host: proxy.host().to_owned(),
+            proxy_port,
+        }
+    } else {
+        Bip37Transport::Direct
+    };
+    let (headers, view) = runtime.accepted_chain(network).await?;
+    let id = SourceId::new("selected-cashcode-node");
+    let endpoint = Endpoint {
+        kind: EndpointKind::BchP2p,
+        host: peer.host().to_owned(),
+        port: Some(port),
+    };
+    let mut catalog = SourceCatalog::default();
+    catalog
+        .insert(ChainSource {
+            id: id.clone(),
+            label: "Selected Cash Code node".into(),
+            origin: SourceOrigin::UserAdded,
+            endpoints: vec![endpoint.clone()],
+            capabilities: Default::default(),
+            disposition: SourceDisposition::Enabled,
+            priority: 0,
+        })
+        .map_err(|e| format!("Invalid node selection: {e:?}"))?;
+    let mut service = ChainService::new(
+        catalog,
+        ConnectionPolicy::exact(id.clone(), ProtocolFamily::Bip37),
+    );
+    let mut config = Bip37Config::new(id, endpoint, network.to_string());
+    config.transport = transport;
+    service.register(Arc::new(
+        Bip37Backend::connect(config, headers.clone())
+            .await
+            .map_err(|e| format!("Selected node unavailable: {e:?}"))?,
+    ));
+    let mut worker = ProgressiveSyncWorker::new(Default::default())
+        .with_header_view(view)
+        .map_err(|e| format!("Invalid accepted headers: {e:?}"))?
+        .with_accepted_headers(headers);
+    let result = scan_cashcode(&mut service, &mut worker, &keys, from_height).await;
+    if let Some(view) = worker.into_header_view() {
+        runtime.publish_header_view(network, view).await;
+    }
+    let result = result?;
+    Ok(
+        serde_json::json!({ "from_height": result.from_height, "tip_height": result.tip.height,
+        "source": result.source.as_str(), "protocol": "Bip37", "evidence": format!("{:?}", result.evidence),
+        "includes_mempool": result.includes_mempool, "complete_requested_scope": true, "receipts": result.receipts }),
+    )
+}
+
 /// One accepted chain for one network: what the runtime verified, and the
 /// dense store its providers read back.
 ///

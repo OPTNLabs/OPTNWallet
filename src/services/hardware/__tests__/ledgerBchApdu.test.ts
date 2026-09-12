@@ -93,6 +93,7 @@ describe('ledger BCH APDUs', () => {
     // A reply cut short would otherwise yield an address that still looks
     // like one, and an address is the last thing worth guessing at.
     const publicKey = new Uint8Array(65).fill(0x02);
+    publicKey[0] = 0x04;
     const addressBytes = new TextEncoder().encode('bchtest:qq00');
     const full = new Uint8Array([
       publicKey.length,
@@ -106,6 +107,24 @@ describe('ledger BCH APDUs', () => {
       expect(() => parseWalletPublicKey(full.subarray(0, cut))).toThrow();
     }
     expect(() => parseWalletPublicKey(full)).not.toThrow();
+  });
+
+  it('refuses a non-Ledger public key shape', () => {
+    const addressBytes = new TextEncoder().encode('bchtest:qq00');
+    const reply = (publicKey: Uint8Array) =>
+      new Uint8Array([
+        publicKey.length,
+        ...publicKey,
+        addressBytes.length,
+        ...addressBytes,
+        ...new Uint8Array(32),
+      ]);
+    expect(() => parseWalletPublicKey(reply(new Uint8Array(33).fill(0x02)))).toThrow(
+      /invalid length/
+    );
+    expect(() => parseWalletPublicKey(reply(new Uint8Array(65).fill(0x02)))).toThrow(
+      /not uncompressed/
+    );
   });
 
   it('turns a status word into something the user can act on', () => {

@@ -49,6 +49,8 @@ import { DesktopWalletPickerActions } from '../DesktopWalletPickerActions';
 
 afterEach(() => {
   cleanup();
+  capability.hardwareWallet = true;
+  capability.watchOnlyWallet = true;
 });
 
 describe('DesktopWalletPickerActions hardware toggle', () => {

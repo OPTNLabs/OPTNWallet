@@ -12,9 +12,8 @@
 //                               block's merkle proof). Electrum is NOT consulted
 //                               for those queries — one backend at a time.
 //
-// A node can't answer everything (it has no address index), so protocol/chore
-// methods still go to Electrum. Anything the node genuinely can't serve falls
-// back rather than breaking the wallet.
+// Unsupported wallet queries fail closed: an implicit Electrum fallback would
+// reveal the selected node wallet's addresses, RPA prefixes, or candidate inputs.
 //
 // NOTE: the swap plugin deliberately lets a replacement import the module it
 // replaces (importer === target short-circuits), so the import below resolves to
@@ -85,29 +84,35 @@ const BROADCAST_METHOD = 'blockchain.transaction.broadcast';
 
 /** A node scan is expensive; reuse it briefly across the burst of per-address calls. */
 const SCAN_TTL_MS = 30_000;
-let scanCache: { key: string; at: number; result: NodeSyncResult } | null = null;
-let inflight: Promise<NodeSyncResult> | null = null;
+let scanCache: { key: string; at: number; result: NodeSyncResult } | null =
+  null;
+const inflight = new Map<string, Promise<NodeSyncResult>>();
 
-async function scanFor(target: string, walletId: number): Promise<NodeSyncResult> {
+async function scanFor(
+  target: string,
+  walletId: number
+): Promise<NodeSyncResult> {
   const network = selectCurrentNetwork(store.getState());
   const key = `${target}|${network}|${walletId}`;
   const now = Date.now();
   if (scanCache && scanCache.key === key && now - scanCache.at < SCAN_TTL_MS) {
     return scanCache.result;
   }
-  if (inflight) return inflight;
+  const pending = inflight.get(key);
+  if (pending) return pending;
 
   const { host, port } = parseNodeTarget(target, network);
-  inflight = (async () => {
+  const scan = (async () => {
     try {
       const result = await nodeSync(host, port, network, walletId);
       scanCache = { key, at: Date.now(), result };
       return result;
     } finally {
-      inflight = null;
+      inflight.delete(key);
     }
   })();
-  return inflight;
+  inflight.set(key, scan);
+  return scan;
 }
 
 /** Drop the cached scan (e.g. after a broadcast or a backend/network change). */
@@ -129,6 +134,10 @@ async function dropStaleNetworkSocket(
   upstream: ReturnType<typeof UpstreamElectrumServer>
 ): Promise<void> {
   const network = selectCurrentNetwork(store.getState());
+  if (getBackend(network).kind === 'node') {
+    await upstream.electrumDisconnect();
+    return;
+  }
   const servers = getElectrumServers(network);
   if (servers.length === 0) return;
   const current =
@@ -148,10 +157,31 @@ export default function ElectrumServer() {
 
   async function ensureFreshConnection(): Promise<void> {
     await dropStaleNetworkSocket(upstream);
+    if (getBackend(selectCurrentNetwork(store.getState())).kind === 'node')
+      return;
     return upstream.ensureFreshConnection();
   }
 
-  async function request(method: string, ...params: ElectrumParams): Promise<RequestResponse> {
+  async function electrumConnect(customServer?: string) {
+    await dropStaleNetworkSocket(upstream);
+    if (getBackend(selectCurrentNetwork(store.getState())).kind === 'node') {
+      throw new Error('Node backend does not open an Electrum connection.');
+    }
+    return upstream.electrumConnect(customServer);
+  }
+
+  async function electrumReconnect(customServer?: string) {
+    await dropStaleNetworkSocket(upstream);
+    if (getBackend(selectCurrentNetwork(store.getState())).kind === 'node') {
+      throw new Error('Node backend does not open an Electrum connection.');
+    }
+    return upstream.electrumReconnect(customServer);
+  }
+
+  async function request(
+    method: string,
+    ...params: ElectrumParams
+  ): Promise<RequestResponse> {
     await dropStaleNetworkSocket(upstream);
     const network = selectCurrentNetwork(store.getState());
     assertOnCurrentNetwork(method, params, network);
@@ -161,11 +191,20 @@ export default function ElectrumServer() {
     if (backend.kind !== 'node') return upstream.request(method, ...params);
 
     const walletId = selectWalletId(store.getState());
-    if (!walletId || walletId <= 0) return upstream.request(method, ...params);
+    if (!walletId || walletId <= 0) {
+      throw new Error(
+        'Node backend requires an active wallet; Electrum fallback is disabled.'
+      );
+    }
 
     if (method === BROADCAST_METHOD) {
       const { host, port } = parseNodeTarget(backend.target, network);
-      const txid = await nodeBroadcast(host, port, network, String(params[0] ?? ''));
+      const txid = await nodeBroadcast(
+        host,
+        port,
+        network,
+        String(params[0] ?? '')
+      );
       invalidateNodeScan(); // our UTXO set just changed
       return txid as unknown as RequestResponse;
     }
@@ -188,9 +227,9 @@ export default function ElectrumServer() {
       })) as unknown as RequestResponse;
     }
 
-    // Everything else (headers, tx.get, server.*, subscribe chores) has no BIP37
-    // equivalent — a node has no address index — so use Electrum for those.
-    return upstream.request(method, ...params);
+    throw new Error(
+      `Node backend cannot serve ${method}; Electrum fallback is disabled.`
+    );
   }
 
   async function requestMany(
@@ -240,11 +279,44 @@ export default function ElectrumServer() {
   // Guarded too, and this is the important one: an address that reaches
   // upstream.subscribe() enters the resubscribe-on-reconnect registry, where it
   // re-breaks every future socket long after the switch that produced it.
-  async function subscribe(method: string, params?: ElectrumParams): Promise<void> {
+  async function subscribe(
+    method: string,
+    params?: ElectrumParams
+  ): Promise<void> {
     await dropStaleNetworkSocket(upstream);
-    assertOnCurrentNetwork(method, params, selectCurrentNetwork(store.getState()));
+    assertOnCurrentNetwork(
+      method,
+      params,
+      selectCurrentNetwork(store.getState())
+    );
+    if (getBackend(selectCurrentNetwork(store.getState())).kind === 'node') {
+      throw new Error('Node backend does not register Electrum subscriptions.');
+    }
     return upstream.subscribe(method, params);
   }
 
-  return { ...upstream, request, requestMany, subscribe, ensureFreshConnection };
+  async function subscribeMany(
+    method: string,
+    paramsList: ElectrumParams[]
+  ): Promise<number> {
+    const network = selectCurrentNetwork(store.getState());
+    if (getBackend(network).kind === 'node') {
+      throw new Error('Node backend does not register Electrum subscriptions.');
+    }
+    for (const params of paramsList)
+      assertOnCurrentNetwork(method, params, network);
+    await dropStaleNetworkSocket(upstream);
+    return upstream.subscribeMany(method, paramsList);
+  }
+
+  return {
+    ...upstream,
+    electrumConnect,
+    electrumReconnect,
+    request,
+    requestMany,
+    subscribe,
+    subscribeMany,
+    ensureFreshConnection,
+  };
 }

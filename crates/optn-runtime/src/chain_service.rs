@@ -65,6 +65,12 @@ pub enum ChainOperation {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChainRequest {
+    /// Complete all-transaction block batch for LOCAL Cash Code detection.
+    /// No wallet key, prefix, script, or outpoint crosses this contract.
+    CashcodeBlockRange {
+        from_height: u32,
+        to_height: u32,
+    },
     WalletRefresh {
         interests: Vec<WalletInterest>,
         from_height: Option<u32>,
@@ -89,6 +95,7 @@ pub enum ChainRequest {
 impl ChainRequest {
     pub const fn operation(&self) -> ChainOperation {
         match self {
+            Self::CashcodeBlockRange { .. } => ChainOperation::WalletRefresh,
             Self::WalletRefresh { .. } => ChainOperation::WalletRefresh,
             Self::TransactionLookup { .. } => ChainOperation::TransactionLookup,
             Self::Broadcast { .. } => ChainOperation::Broadcast,

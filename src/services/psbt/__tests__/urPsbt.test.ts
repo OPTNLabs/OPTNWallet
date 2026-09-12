@@ -45,7 +45,7 @@ const psbt = () =>
 describe('UR crypto-psbt transport', () => {
   it('keeps 50/8 as the SeedCash-safe default while exposing bounded densities', () => {
     expect(DEFAULT_UR_FRAGMENT_LENGTH).toBe(50);
-    expect(PSBT_UR_FRAGMENT_LENGTHS).toEqual([50, 100, 200, 400]);
+    expect(PSBT_UR_FRAGMENT_LENGTHS).toEqual([50, 100, 200, 400, 450]);
     expect(PSBT_UR_QR_MARGIN_MODULES).toBe(8);
     expect(PSBT_UR_QR_DISPLAY_SIZE).toBeGreaterThanOrEqual(400);
     expect(PSBT_UR_QR_ERROR_LEVEL).toBe('L');

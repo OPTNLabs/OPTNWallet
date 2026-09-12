@@ -26,7 +26,7 @@ import { URRegistryDecoder } from '@keystonehq/bc-ur-registry';
  * exposes 100/200/400 as explicit user-selected densities. Extra frames only
  * cost seconds; a dense QR that will not scan fails the whole air-gap.
  */
-export const PSBT_UR_FRAGMENT_LENGTHS = [50, 100, 200, 400] as const;
+export const PSBT_UR_FRAGMENT_LENGTHS = [50, 100, 200, 400, 450] as const;
 
 export type PsbtUrFragmentLength =
   (typeof PSBT_UR_FRAGMENT_LENGTHS)[number];

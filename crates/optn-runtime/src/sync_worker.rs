@@ -643,13 +643,15 @@ impl ProgressiveSyncWorker {
         Err(ProgressiveSyncError::Exhausted)
     }
 
-    async fn prime_headers_on_same_route(
+    pub(crate) async fn prime_headers_on_same_route(
         &mut self,
         service: &mut ChainService,
         wallet_route: &CapabilityRoute,
     ) -> Result<(), ProgressiveSyncError> {
-        // Work on a candidate so a failed route cannot poison another route's
-        // trusted cursor. Publish only after the complete bounded header pass.
+        // Verify each batch before publishing it. P2P getheaders needs the
+        // accepted hash of the preceding batch as its next locator. A later
+        // failure leaves both authorities at the last fully verified batch;
+        // it never marks wallet history fresh or accepts the failed batch.
         let mut view = self
             .header_view
             .clone()
@@ -674,7 +676,6 @@ impl ProgressiveSyncWorker {
             .height
             .checked_add(1)
             .ok_or(ProgressiveSyncError::HeaderSafetyLimit)?;
-        let mut staged: Vec<(u32, BlockHeaderBytes)> = Vec::new();
         for _ in 0..self.config.max_header_batches {
             let request = ChainRequest::HeaderSync {
                 start_height: start,
@@ -697,32 +698,30 @@ impl ProgressiveSyncWorker {
                 return Err(ProgressiveSyncError::InvalidHeaderRange);
             }
             if headers.is_empty() {
-                return self.publish_headers(view, staged);
+                return Ok(());
             }
             let returned = u32::try_from(headers.len())
                 .map_err(|_| ProgressiveSyncError::HeaderSafetyLimit)?;
             let batch: Vec<BlockHeaderBytes> = headers.into_iter().map(BlockHeaderBytes).collect();
             view.extend(&batch)
                 .map_err(ProgressiveSyncError::HeaderView)?;
-            // Held rather than written: a later batch in this pass can still
-            // fail, and a half-advanced store is a chain nobody verified.
-            staged.extend(
-                batch
-                    .into_iter()
-                    .enumerate()
-                    .map(|(offset, header)| (start_height + offset as u32, header)),
-            );
+            let staged = batch
+                .into_iter()
+                .enumerate()
+                .map(|(offset, header)| (start_height + offset as u32, header))
+                .collect();
+            self.publish_headers(view.clone(), staged)?;
             start = start_height
                 .checked_add(returned)
                 .ok_or(ProgressiveSyncError::HeaderSafetyLimit)?;
             if returned < self.config.header_batch_size.max(1) {
-                return self.publish_headers(view, staged);
+                return Ok(());
             }
         }
         Err(ProgressiveSyncError::HeaderSafetyLimit)
     }
 
-    /// Commit one bounded header pass: the verified view and the dense store
+    /// Commit one bounded verified batch: the verified view and the dense store
     /// advance together, or neither does.
     ///
     /// The join is checked before anything is written, so a batch that does not
@@ -783,6 +782,7 @@ pub(crate) mod tests {
         wallet_evidence: Evidence,
         /// Every floor this backend was asked to scan from, in order.
         asked_from: Arc<std::sync::Mutex<Vec<Option<u32>>>>,
+        locator_store: Option<Arc<SharedHeaders>>,
     }
     impl ChainBackend for WalletBackend {
         fn source_id(&self) -> &SourceId {
@@ -813,6 +813,16 @@ pub(crate) mod tests {
                     count,
                 } = request
                 {
+                    if *start_height > 1 {
+                        if let Some(store) = &self.locator_store {
+                            use crate::header_store::BlockHeaderSource;
+                            if store.hash_at(start_height - 1).is_none() {
+                                return Err(crate::chain_service::ChainBackendError::Rejected(
+                                    "previous batch is not available as an accepted locator".into(),
+                                ));
+                            }
+                        }
+                    }
                     return Ok(BackendObservation {
                         payload: ChainPayload::Headers {
                             start_height: start_height + self.header_height_offset,
@@ -859,6 +869,22 @@ pub(crate) mod tests {
         header_height_offset: u32,
         wallet_evidence: Evidence,
     ) -> ChainService {
+        service_with_header_locator(
+            protocol,
+            headers,
+            header_height_offset,
+            wallet_evidence,
+            None,
+        )
+    }
+
+    fn service_with_header_locator(
+        protocol: ProtocolFamily,
+        headers: Vec<[u8; 80]>,
+        header_height_offset: u32,
+        wallet_evidence: Evidence,
+        locator_store: Option<Arc<SharedHeaders>>,
+    ) -> ChainService {
         let id = SourceId::new("server");
         let endpoint = Endpoint {
             kind: if protocol == ProtocolFamily::Electrum {
@@ -902,6 +928,7 @@ pub(crate) mod tests {
             header_height_offset,
             wallet_evidence,
             asked_from: Arc::new(std::sync::Mutex::new(Vec::new())),
+            locator_store,
         }));
         service
     }
@@ -950,6 +977,7 @@ pub(crate) mod tests {
             header_height_offset: 0,
             wallet_evidence: Evidence::ServerAssertion,
             asked_from: asked_from.clone(),
+            locator_store: None,
         }));
         (service, asked_from)
     }
@@ -957,6 +985,10 @@ pub(crate) mod tests {
     // Synthetic low-difficulty chain, used only to exercise verifier wiring.
     // These parameters and checkpoint must never be used for a real network.
     fn header_fixture() -> (ShvMmrHeaderVerifier, Vec<[u8; 80]>) {
+        header_fixture_to(2)
+    }
+
+    pub(crate) fn header_fixture_to(end: u32) -> (ShvMmrHeaderVerifier, Vec<[u8; 80]>) {
         use optn_core::asert::{next_bits, AsertAnchor, AsertParams};
         use optn_core::header_pow::verify_declared_pow;
         let params = AsertParams {
@@ -972,7 +1004,7 @@ pub(crate) mod tests {
         };
         let mut previous_hash = [0; 32];
         let mut headers = Vec::new();
-        for height in 0u32..=2 {
+        for height in 0u32..=end {
             let mut header = [0u8; 80];
             header[0..4].copy_from_slice(&1u32.to_le_bytes());
             header[4..36].copy_from_slice(&previous_hash);
@@ -1022,7 +1054,10 @@ pub(crate) mod tests {
                         .collect::<Vec<_>>(),
                 )
                 .unwrap();
-            let initial = verifier.state().unwrap();
+            let mut accepted_prefix = verifier.clone();
+            accepted_prefix
+                .extend(&[BlockHeaderBytes(headers[0])])
+                .unwrap();
             let (tip_header, tip_proof) = expected.tip_checkpoint_proof().unwrap();
             let checkpoint = expected.checkpoint();
             let restored = ShvMmrHeaderVerifier::from_checkpoint_proof(
@@ -1079,7 +1114,7 @@ pub(crate) mod tests {
                 .is_err());
             assert_eq!(
                 rejected.header_verifier().unwrap().state().unwrap(),
-                initial
+                accepted_prefix.state().unwrap()
             );
 
             let mut gap_service =
@@ -1092,7 +1127,7 @@ pub(crate) mod tests {
             );
             assert_eq!(
                 rejected.header_verifier().unwrap().state().unwrap(),
-                initial
+                accepted_prefix.state().unwrap()
             );
 
             // This backend advertises wallet tip 7 even though only headers
@@ -1477,11 +1512,12 @@ pub(crate) mod tests {
             .with_header_verifier(Network::Chipnet, verifier)
             .unwrap()
             .with_accepted_headers(store.clone());
-        let mut service = service_with_headers(
+        let mut service = service_with_header_locator(
             ProtocolFamily::Bip37,
             headers.clone(),
             0,
             Evidence::ServerAssertion,
+            Some(store.clone()),
         );
         let route = service
             .routes_for_operation(ChainOperation::WalletRefresh)
@@ -1513,17 +1549,12 @@ pub(crate) mod tests {
         }
     }
 
-    /// A rejected pass advances neither half.
-    ///
-    /// The first batch verifies and the second does not. Publishing the first
-    /// anyway would leave the store holding headers the view never accepted,
-    /// which is the split-authority this store exists to prevent.
+    /// A rejected later batch leaves both authorities at the accepted prefix.
     #[tokio::test]
-    async fn a_rejected_header_pass_publishes_nothing() {
+    async fn a_rejected_header_batch_preserves_only_the_verified_prefix() {
         use crate::header_store::BlockHeaderSource;
 
         let (verifier, headers) = header_fixture();
-        let initial = verifier.state().unwrap();
         let config = ProgressiveSyncConfig {
             header_batch_size: 1,
             ..Default::default()
@@ -1550,13 +1581,13 @@ pub(crate) mod tests {
             .await
             .is_err());
 
-        assert_eq!(worker.header_verifier().unwrap().state().unwrap(), initial);
+        assert_eq!(worker.header_verifier().unwrap().state().unwrap().height, 1);
+        assert_eq!(store.retained_span(), Some((1, 1)));
         assert_eq!(
-            store.retained_span(),
-            None,
-            "a failed header pass published headers into the accepted store"
+            store.tip(),
+            worker.header_view().and_then(VerifiedHeaderView::tip)
         );
-        assert_eq!(store.tip(), None);
+        assert_eq!(store.hash_at(2), None);
     }
 
     /// A floor and a baseline are different requests.

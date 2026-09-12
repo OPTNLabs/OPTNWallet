@@ -116,6 +116,59 @@ pub struct RpaKeys {
     pub spend_pubkey: [u8; 33],
 }
 
+/// Validate a native receiver's scan scalar without exposing any spend key.
+pub fn scan_public_key(scan_private: &[u8; 32]) -> Result<[u8; 33]> {
+    let key = k256::SecretKey::from_slice(scan_private)
+        .map_err(|_| CliError::Protocol("invalid Cash Code scan key".into()))?;
+    Ok(key
+        .public_key()
+        .to_encoded_point(true)
+        .as_bytes()
+        .try_into()
+        .expect("compressed key"))
+}
+
+/// Reconstruct one received Cash Code coin's signing key from its public origin.
+/// Refuse a recipe which does not control the exact network/output script.
+pub fn signing_key_for_receipt(
+    scan_private: &[u8; 32],
+    spend_private: &[u8; 32],
+    prevout_txid: &str,
+    prevout_index: u32,
+    sender_public: &[u8; 33],
+    expected_address: &str,
+    network: Network,
+) -> Result<k256::ecdsa::SigningKey> {
+    crate::coins::Outpoint::parse(prevout_txid, prevout_index)
+        .map_err(|_| CliError::Protocol("invalid Cash Code origin outpoint".into()))?;
+    let expected = Address::decode(expected_address).map_err(CliError::Protocol)?;
+    if expected.prefix != network.prefix() {
+        return Err(CliError::Protocol(
+            "Cash Code receipt belongs to another network".into(),
+        ));
+    }
+    let secret = zeroize::Zeroizing::new(shared_secret(
+        scan_private,
+        sender_public,
+        prevout_txid,
+        prevout_index,
+    )?);
+    let private = zeroize::Zeroizing::new(spending_key(spend_private, &secret, 0)?);
+    let key = k256::ecdsa::SigningKey::from_slice(private.as_ref())
+        .map_err(|_| CliError::Protocol("invalid Cash Code derived signing key".into()))?;
+    let actual = Address::from_hash(
+        network.prefix(),
+        AddressKind::P2pkh,
+        hash160(key.verifying_key().to_encoded_point(true).as_bytes()),
+    );
+    if actual.script_pubkey() != expected.script_pubkey() {
+        return Err(CliError::Protocol(
+            "Cash Code origin does not control this output".into(),
+        ));
+    }
+    Ok(key)
+}
+
 pub fn derive_keys_from_paths(
     mnemonic: &str,
     passphrase: &str,
@@ -678,7 +731,10 @@ pub fn scan_transaction(
     spend_pubkey: &[u8; 33],
     network: Network,
 ) -> Result<Vec<RpaMatch>> {
-    let (inputs, outputs) = parse_transaction(raw)?;
+    let (inputs, _) = parse_transaction(raw)?;
+    // CashTokens prefixes are not part of the locking script. Reuse the strict
+    // transaction decoder so token-bearing RPA payments are not lost.
+    let outputs = crate::tx::decode(raw)?.outputs;
     let mut matches = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
@@ -692,14 +748,14 @@ pub fn scan_transaction(
         let expected = payment_address(spend_pubkey, &secret, network, 0)?;
         let expected_script = expected.script_pubkey();
 
-        for (index, (value, script)) in outputs.iter().enumerate() {
-            if script != &expected_script || !seen.insert(index) {
+        for (index, output) in outputs.iter().enumerate() {
+            if output.script_pubkey != expected_script || !seen.insert(index) {
                 continue;
             }
             matches.push(RpaMatch {
                 output_index: index as u32,
                 address: expected.encode(),
-                value: *value,
+                value: output.value,
                 prevout_txid: txid_display.clone(),
                 prevout_index: *vout,
                 sender_pubkey_hex: sender_pubkey.iter().map(|b| format!("{b:02x}")).collect(),
@@ -962,6 +1018,99 @@ mod tests {
             crate::tx::decode(&raw).expect("decodes").outputs[0].value,
             50_000 - fee
         );
+    }
+
+    #[test]
+    fn detected_origin_reconstructs_a_verifiable_signature_and_spent_output() {
+        use crate::tx::{Output, Transaction, Utxo};
+        use k256::ecdsa::{signature::hazmat::PrehashVerifier, Signature, SigningKey};
+        let scan_private = small_key(21);
+        let spend_private = small_key(22);
+        let sender_private = small_key(23);
+        let sender = SigningKey::from_slice(&sender_private).unwrap();
+        let wire_parent = core::array::from_fn::<_, 32, _>(|index| index as u8);
+        let mut display_parent = wire_parent;
+        display_parent.reverse();
+        let parent = crate::coins::Outpoint::new(display_parent, 7);
+        let secret = shared_secret(
+            &sender_private,
+            &pubkey_of(&scan_private),
+            &parent.txid_hex(),
+            7,
+        )
+        .unwrap();
+        let address =
+            payment_address(&pubkey_of(&spend_private), &secret, Network::Chipnet, 0).unwrap();
+        let sender_address = Address::from_hash(
+            Network::Chipnet.prefix(),
+            AddressKind::P2pkh,
+            hash160(&pubkey_of(&sender_private)),
+        );
+        let incoming = Transaction::new(
+            vec![Utxo {
+                txid: wire_parent,
+                vout: 7,
+                value: 51000,
+                script_pubkey: sender_address.script_pubkey(),
+            }],
+            vec![Output::new(50000, address.script_pubkey())],
+        )
+        .sign(&[sender])
+        .unwrap();
+        let found = scan_transaction(
+            &incoming,
+            &scan_private,
+            &pubkey_of(&spend_private),
+            Network::Chipnet,
+        )
+        .unwrap();
+        assert_eq!(found.len(), 1);
+        let receipt = &found[0];
+        assert_eq!(receipt.prevout_txid, parent.txid_hex());
+        let key = signing_key_for_receipt(
+            &scan_private,
+            &spend_private,
+            &receipt.prevout_txid,
+            receipt.prevout_index,
+            &pubkey_of(&sender_private),
+            &receipt.address,
+            Network::Chipnet,
+        )
+        .unwrap();
+        let transaction = Transaction::new(
+            vec![Utxo {
+                txid: crate::header_hash::sha256d(&incoming),
+                vout: receipt.output_index,
+                value: receipt.value,
+                script_pubkey: address.script_pubkey(),
+            }],
+            vec![Output::new(49500, sender_address.script_pubkey())],
+        );
+        let (raw, scripts) = transaction
+            .sign_detailed(std::slice::from_ref(&key))
+            .unwrap();
+        let sig_length = scripts[0][0] as usize;
+        assert_eq!(scripts[0][sig_length], crate::tx::SIGHASH_ALL_FORKID as u8);
+        let signature = Signature::from_der(&scripts[0][1..sig_length]).unwrap();
+        key.verifying_key()
+            .verify_prehash(&transaction.sighash(0).unwrap(), &signature)
+            .unwrap();
+        assert!(crate::tx::unspent_outputs(
+            [incoming.as_slice(), raw.as_slice()],
+            &[address.script_pubkey()]
+        )
+        .unwrap()
+        .is_empty());
+        assert!(signing_key_for_receipt(
+            &scan_private,
+            &spend_private,
+            &receipt.prevout_txid,
+            receipt.prevout_index + 1,
+            &pubkey_of(&sender_private),
+            &receipt.address,
+            Network::Chipnet
+        )
+        .is_err());
     }
 
     #[test]

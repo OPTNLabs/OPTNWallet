@@ -151,8 +151,14 @@ export function parseWalletPublicKey(response: Uint8Array): WalletPublicKey {
   need(1, 'public key length');
   const publicKeyLength = response[offset];
   offset += 1;
+  if (publicKeyLength !== 65) {
+    throw new Error('the device returned a public key with an invalid length');
+  }
   need(publicKeyLength, 'public key');
   const publicKey = toHex(response.subarray(offset, offset + publicKeyLength));
+  if (response[offset] !== 0x04) {
+    throw new Error('the device returned a public key that is not uncompressed');
+  }
   offset += publicKeyLength;
 
   need(1, 'address length');
@@ -167,8 +173,8 @@ export function parseWalletPublicKey(response: Uint8Array): WalletPublicKey {
   need(32, 'chain code');
   const chainCode = toHex(response.subarray(offset, offset + 32));
 
-  if (publicKeyLength === 0 || addressLength === 0) {
-    throw new Error('the device returned an empty public key or address');
+  if (addressLength === 0) {
+    throw new Error('the device returned an empty address');
   }
   return { publicKey, address, chainCode };
 }

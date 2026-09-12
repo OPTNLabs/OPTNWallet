@@ -4,6 +4,7 @@ use super::double_sha256;
 
 #[derive(Debug, Clone)]
 pub struct MerkleBlock {
+    pub total_transactions: u32,
     pub header: [u8; 80],
     pub valid: bool,
     pub matched_txids: Vec<[u8; 32]>,
@@ -118,6 +119,7 @@ pub fn parse_merkleblock(payload: &[u8]) -> Result<MerkleBlock, String> {
     let flag_bits_ok = pm.bit_idx.div_ceil(8) == pm.flags.len();
     let root_ok = root == header[36..68];
     Ok(MerkleBlock {
+        total_transactions: total,
         header,
         valid: !pm.bad && all_hashes_used && flag_bits_ok && root_ok,
         matched_txids: pm.matched,

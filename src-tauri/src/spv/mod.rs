@@ -470,15 +470,20 @@ pub struct HeaderWalk {
 }
 
 impl HeaderWalk {
-    pub fn for_network(network: &str, locator: [u8; 32], height: u32, time: i64) -> Self {
-        let parsed = network.parse::<Network>().unwrap_or(Network::Mainnet);
-        Self {
+    pub fn for_network(
+        network: &str,
+        locator: [u8; 32],
+        height: u32,
+        time: i64,
+    ) -> Result<Self, String> {
+        let parsed = network.parse::<Network>()?;
+        Ok(Self {
             expected_prev: locator,
             locator_height: height,
             locator_time: time,
             params: AsertParams::for_network(parsed),
             anchor: AsertAnchor::for_network(parsed),
-        }
+        })
     }
 
     fn check(&self) -> AsertCheck {
@@ -567,7 +572,7 @@ pub async fn fetch_headers_after(
         port,
         network,
         transport,
-        HeaderWalk::for_network(network, locator, 0, 0),
+        HeaderWalk::for_network(network, locator, 0, 0)?,
     )
     .await
 }
@@ -1085,6 +1090,15 @@ pub async fn broadcast_tx(
 mod tests {
     use super::*;
 
+    #[test]
+    fn header_walk_rejects_unknown_networks_instead_of_using_mainnet() {
+        assert!(HeaderWalk::for_network("testnet3", [0; 32], 0, 0).is_err());
+        assert!(HeaderWalk::for_network("unknown", [0; 32], 0, 0).is_err());
+        for network in ["mainnet", "chipnet", "testnet4", "testnet", "regtest"] {
+            assert!(HeaderWalk::for_network(network, [0; 32], 0, 0).is_ok());
+        }
+    }
+
     /// Live: filterload + request block 1 as a merkleblock from a public node,
     /// and verify the partial merkle tree against its header.
     ///   OPTN_NODE_HOST=bch.imaginary.cash cargo test -p optn-wallet-desktop \
@@ -1202,7 +1216,11 @@ mod tests {
     }
 
     async fn sync_one_header(raw: [u8; 80], locator: [u8; 32]) -> Result<Vec<HeaderInfo>, String> {
-        sync_one_header_from(raw, HeaderWalk::for_network("mainnet", locator, 0, 0)).await
+        sync_one_header_from(
+            raw,
+            HeaderWalk::for_network("mainnet", locator, 0, 0).unwrap(),
+        )
+        .await
     }
 
     async fn sync_one_header_from(

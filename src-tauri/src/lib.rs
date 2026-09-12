@@ -730,20 +730,23 @@ async fn bip37_headers(
     tor_host: Option<String>,
     tor_port: Option<u16>,
 ) -> Result<Vec<spv::HeaderInfo>, String> {
-    let start = match locator.as_deref().filter(|s| !s.is_empty()) {
+    let locator = locator.as_deref().filter(|s| !s.is_empty());
+    let start = match locator {
         Some(h) => parse_block_hash(h)?,
         None => spv::genesis_hash(&network),
+    };
+    let (locator_height, locator_time) = match locator {
+        Some(_) => (
+            locator_height.ok_or("resuming headers requires locator height")?,
+            locator_time.ok_or("resuming headers requires locator time")?,
+        ),
+        None => (0, 0),
     };
     let transport = match (tor_host.as_deref(), tor_port) {
         (Some(h), Some(p)) => fusion::Transport::Tor { host: h, port: p },
         _ => fusion::Transport::Direct,
     };
-    let walk = spv::HeaderWalk::for_network(
-        &network,
-        start,
-        locator_height.unwrap_or(0),
-        locator_time.unwrap_or(0),
-    );
+    let walk = spv::HeaderWalk::for_network(&network, start, locator_height, locator_time)?;
     spv::fetch_headers_after_from(&host, port, &network, transport, walk).await
 }
 
@@ -1146,6 +1149,7 @@ pub fn run() {
             fusion_tor_detect,
             fusion_tor_check,
             bip37_node_probe,
+            chain_runtime::cashcode_scan_node,
             bip37_headers,
             bip37_scan,
             bip37_broadcast,
@@ -1284,6 +1288,23 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn resumed_headers_require_both_cursor_fields_before_connecting() {
+        for (height, time) in [(None, Some(1)), (Some(1), None), (None, None)] {
+            let result = super::bip37_headers(
+                "127.0.0.1".into(),
+                1,
+                "chipnet".into(),
+                Some("00".repeat(32)),
+                height,
+                time,
+                None,
+                None,
+            )
+            .await;
+            assert!(result.unwrap_err().contains("resuming headers requires"));
+        }
+    }
     use super::*;
 
     #[tokio::test]

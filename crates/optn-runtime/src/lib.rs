@@ -38,6 +38,8 @@ pub mod network_config;
 /// Evidence-aware wallet-state reconciliation. Partial/failed providers never
 /// erase a previously known-good snapshot.
 pub mod reconciliation;
+/// Native-only Cash Code discovery and public spending recipes.
+pub mod rpa_receive;
 /// Progressive capability-route wallet synchronization.
 pub mod sync_worker;
 /// Broadcast state tracking. Timeout/offline ambiguity is preserved rather than

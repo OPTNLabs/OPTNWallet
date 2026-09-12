@@ -51,7 +51,7 @@ impl NetworkSettingsStore {
     /// into the legacy server fields; missing files leave existing fields unchanged.
     pub fn restore(&self, state: &mut AppState) -> Result<(), String> {
         let mut restored = state.clone();
-        for network in [Network::Mainnet, Network::Chipnet] {
+        for network in [Network::Mainnet, Network::Chipnet, Network::Regtest] {
             let Some(envelope) = self.file_for(network).load()? else {
                 continue;
             };
@@ -132,7 +132,16 @@ fn envelope_from_state(
     Ok(NetworkConfigEnvelope::current(
         bootstrap_catalog_version_seen,
         UserNetworkOverlay {
-            user_sources: catalog.iter().cloned().collect(),
+            user_sources: catalog
+                .iter()
+                .filter(|source| {
+                    !matches!(
+                        source.origin,
+                        optn_runtime::chain::SourceOrigin::Bootstrap { .. }
+                    )
+                })
+                .cloned()
+                .collect(),
             bootstrap_overrides: BTreeMap::new(),
             connection_policy: policy,
             explorer,
@@ -189,6 +198,26 @@ fn explorer_endpoint(entry: &str) -> Result<Endpoint, String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn opening_a_wallet_does_not_persist_bootstrap_sources() {
+        let state = AppState {
+            wallet: Some(optn_app::OpenedWallet {
+                kind: optn_app::WalletKind::WatchOnly,
+                name: "bootstrap persistence test".into(),
+                receive_address: String::new(),
+                master_fingerprint: None,
+                account_path: "m/44'/145'/0'".into(),
+                multisig_policy: None,
+                account_xpub: None,
+            }),
+            ..Default::default()
+        };
+        let (catalog, _) = catalog_and_policy_from_app_state(&state);
+        assert!(catalog.iter().next().is_some());
+        let envelope = envelope_from_state(&state, Network::Mainnet, "test".into()).unwrap();
+        assert!(envelope.overlay.user_sources.is_empty());
+    }
+
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};
     static TEMP_ID: AtomicU64 = AtomicU64::new(0);
@@ -239,8 +268,13 @@ mod tests {
                 "https://explorer.example",
             )
             .unwrap();
+        state
+            .servers
+            .set(Network::Regtest, ServerKind::Electrum, "127.0.0.1:50001")
+            .unwrap();
         store.save_for_network(&state, Network::Mainnet).unwrap();
         store.save_for_network(&state, Network::Chipnet).unwrap();
+        store.save_for_network(&state, Network::Regtest).unwrap();
 
         let mut restored = AppState::default();
         store.restore(&mut restored).unwrap();
@@ -267,6 +301,14 @@ mod tests {
                 .explorer
                 .as_deref(),
             Some("https://explorer.example")
+        );
+        assert_eq!(
+            restored
+                .servers
+                .for_network(Network::Regtest)
+                .electrum
+                .as_deref(),
+            Some("127.0.0.1:50001")
         );
         assert!(restored
             .servers

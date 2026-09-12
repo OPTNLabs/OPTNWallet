@@ -68,8 +68,8 @@ describe('watch-only UR encode (CLI/GUI shared)', () => {
     expect([...(last.psbt as Uint8Array)]).toEqual([...psbt]);
   });
 
-  it('supports the 50/100/200/400 density menu and keeps 50 as default', () => {
-    expect(PSBT_UR_FRAGMENT_LENGTHS).toEqual([50, 100, 200, 400]);
+  it('supports the 50/100/200/400/450 density menu and keeps 50 as default', () => {
+    expect(PSBT_UR_FRAGMENT_LENGTHS).toEqual([50, 100, 200, 400, 450]);
     expect(parseWatchOnlyUrFragmentLength(undefined)).toBe(50);
 
     const psbt = encodeUnsignedPsbt([input()], [output()]);

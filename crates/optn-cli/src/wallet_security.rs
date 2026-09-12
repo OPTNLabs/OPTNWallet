@@ -492,7 +492,13 @@ pub async fn read_managed_wallet(cli: &crate::Cli) -> Result<optn_core::hd::Wall
             *account,
         )?,
         crate::Command::Rpa {
-            action: crate::RpaCommand::Code { account } | crate::RpaCommand::Scan { account, .. },
+            action:
+                crate::RpaCommand::Code { account }
+                | crate::RpaCommand::Scan { account, .. }
+                | crate::RpaCommand::Discover { account, .. },
+        } => optn_core::hd::AccountPath::new(cli.network.default_coin_type(), *account)?,
+        crate::Command::Rpa {
+            action: crate::RpaCommand::Sweep { account, .. },
         } => optn_core::hd::AccountPath::new(cli.network.default_coin_type(), *account)?,
         crate::Command::Rescan {
             account_path: Some(path),
@@ -510,7 +516,9 @@ pub async fn read_managed_wallet(cli: &crate::Cli) -> Result<optn_core::hd::Wall
     let reads_rpa = matches!(
         cli.command,
         crate::Command::Rpa {
-            action: crate::RpaCommand::Code { .. } | crate::RpaCommand::Scan { .. },
+            action: crate::RpaCommand::Code { .. }
+                | crate::RpaCommand::Scan { .. }
+                | crate::RpaCommand::Discover { .. },
         }
     );
     let scope = if !reads_rpa

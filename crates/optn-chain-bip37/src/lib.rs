@@ -328,10 +328,21 @@ impl Bip37Backend {
         interests: &[WalletInterest],
         from_height: Option<u32>,
     ) -> Result<BackendObservation, ChainBackendError> {
+        self.wallet_refresh_range(interests, from_height, None)
+            .await
+    }
+
+    async fn wallet_refresh_range(
+        &self,
+        interests: &[WalletInterest],
+        from_height: Option<u32>,
+        to_height: Option<u32>,
+    ) -> Result<BackendObservation, ChainBackendError> {
         if !self.probe.serves_bloom {
             return Err(ChainBackendError::Unsupported);
         }
         let mut bloom_items = Vec::<Vec<u8>>::new();
+        let mut scan_all = false;
         for interest in interests {
             match interest {
                 WalletInterest::Script(script) => {
@@ -346,10 +357,23 @@ impl Bip37Backend {
                         bloom_items.push(outpoint.to_vec());
                     }
                 }
-                WalletInterest::RpaPrefix(_) => return Err(ChainBackendError::Unsupported),
+                WalletInterest::RpaPrefix(prefix) => {
+                    if prefix.is_empty()
+                        || prefix.len() > 4
+                        || !prefix.bytes().all(|b| b.is_ascii_hexdigit())
+                    {
+                        return Err(ChainBackendError::Rejected(
+                            "invalid Cash Code scan prefix".into(),
+                        ));
+                    }
+                    // Standard BIP37 cannot match an input-hash prefix. Request
+                    // all transactions, then let the runtime perform local RPA
+                    // detection. Never put a wallet's prefix or scan key on wire.
+                    scan_all = true;
+                }
             }
         }
-        if bloom_items.is_empty() {
+        if bloom_items.is_empty() && !scan_all {
             return Err(ChainBackendError::Rejected(
                 "BIP37 refresh has no bloom-compatible wallet interests".into(),
             ));
@@ -373,14 +397,17 @@ impl Bip37Backend {
                 "no accepted headers yet; header sync must run first".into(),
             ));
         };
-        let blocks = self
-            .headers
-            .range_inclusive(start, tip_height)
-            .map_err(|error| {
-                ChainBackendError::Rejected(format!(
-                    "accepted headers do not cover {start}..={tip_height}: {error:?}"
-                ))
-            })?;
+        let end = to_height.unwrap_or(tip_height);
+        if scan_all && (start > end || end > tip_height || end - start >= 144) {
+            return Err(ChainBackendError::Rejected(
+                "Cash Code block batch must be an accepted range of at most 144 blocks".into(),
+            ));
+        }
+        let blocks = self.headers.range_inclusive(start, end).map_err(|error| {
+            ChainBackendError::Rejected(format!(
+                "accepted headers do not cover {start}..={tip_height}: {error:?}"
+            ))
+        })?;
         let tip = self
             .headers
             .tip()
@@ -397,6 +424,7 @@ impl Bip37Backend {
             &self.config.transport,
             &blocks,
             &bloom_items,
+            scan_all,
         )
         .await
         .map_err(ChainBackendError::Protocol)?;
@@ -693,6 +721,17 @@ impl ChainBackend for Bip37Backend {
     fn execute<'a>(&'a self, request: &'a ChainRequest) -> ChainFuture<'a, BackendObservation> {
         Box::pin(async move {
             match request {
+                ChainRequest::CashcodeBlockRange {
+                    from_height,
+                    to_height,
+                } => {
+                    self.wallet_refresh_range(
+                        &[WalletInterest::RpaPrefix("0".into())],
+                        Some(*from_height),
+                        Some(*to_height),
+                    )
+                    .await
+                }
                 ChainRequest::WalletRefresh {
                     interests,
                     from_height,
@@ -1121,6 +1160,7 @@ async fn scan_blocks_observed(
     transport: &Bip37Transport,
     blocks: &[(u32, [u8; 32])],
     bloom_items: &[Vec<u8>],
+    scan_all: bool,
 ) -> Result<Vec<ObservedTransaction>, String> {
     let magic = params_for(network).magic;
     let mut stream = connect_peer(host, port, transport).await?;
@@ -1128,7 +1168,11 @@ async fn scan_blocks_observed(
     if !probe.serves_bloom {
         return Err("peer does not advertise NODE_BLOOM".into());
     }
-    let mut filter = BloomFilter::new(bloom_items.len().max(1) * 2, 0.0001, nonce() as u32);
+    let mut filter = if scan_all {
+        BloomFilter::match_all()
+    } else {
+        BloomFilter::new(bloom_items.len().max(1) * 2, 0.0001, nonce() as u32)
+    };
     for item in bloom_items {
         filter.insert(item)
     }
@@ -1141,6 +1185,7 @@ async fn scan_blocks_observed(
         .await
         .map_err(|e| format!("filterload failed: {e}"))?;
     let mut observed = Vec::new();
+    let mut observed_bytes = 0usize;
     for (height, block_hash) in blocks {
         stream
             .write_all(&encode_message(
@@ -1158,9 +1203,16 @@ async fn scan_blocks_observed(
         // The block hash comes from the accepted header store, which is where
         // proof-of-work, linkage and difficulty were checked, so requiring the
         // returned header to hash to it is what makes the proof mean anything.
-        let mut proven: Option<Vec<[u8; 32]>> = None;
-        let mut delivered: Vec<[u8; 32]> = Vec::new();
-        for _ in 0..MAX_MESSAGES {
+        let mut proven: Option<std::collections::BTreeSet<[u8; 32]>> = None;
+        let mut delivered = std::collections::BTreeSet::new();
+        // An all-match merkleblock can legitimately contain more than 1000
+        // transactions. Bound chatter separately from its committed tx count.
+        let mut messages = 0usize;
+        loop {
+            if messages >= MAX_MESSAGES + proven.as_ref().map_or(0, |txids| txids.len()) {
+                break;
+            }
+            messages += 1;
             let (cmd, payload) = read_message(&mut stream, magic, io_timeout(transport)).await?;
             match cmd.as_str() {
                 "merkleblock" => {
@@ -1178,7 +1230,20 @@ async fn scan_blocks_observed(
                             "peer answered the request for block {height} with a different block"
                         ));
                     }
-                    proven = Some(mb.matched_txids);
+                    if scan_all && mb.matched_txids.len() != mb.total_transactions as usize {
+                        return Err(
+                            "local Cash Code scan requires every transaction in the block".into(),
+                        );
+                    }
+                    let hashes = mb
+                        .matched_txids
+                        .iter()
+                        .copied()
+                        .collect::<std::collections::BTreeSet<_>>();
+                    if hashes.len() != mb.matched_txids.len() {
+                        return Err("merkleblock contains duplicate transaction identities".into());
+                    }
+                    proven = Some(hashes);
                 }
                 "tx" => {
                     // BIP37 sends the proof ahead of the transactions it
@@ -1196,10 +1261,17 @@ async fn scan_blocks_observed(
                             "peer sent a transaction the merkle proof for block {height} does not commit to"
                         ));
                     }
-                    if delivered.contains(&parsed.txid) {
+                    if !delivered.insert(parsed.txid) {
                         continue;
                     }
-                    delivered.push(parsed.txid);
+                    observed_bytes = observed_bytes
+                        .checked_add(parsed.raw.len())
+                        .ok_or("scan byte count overflow")?;
+                    if scan_all && observed_bytes > 32 * 1024 * 1024 {
+                        return Err(
+                            "local Cash Code scan exceeds the 32 MiB response budget".into()
+                        );
+                    }
                     observed.push(ObservedTransaction {
                         txid: parsed.txid,
                         raw: parsed.raw,
@@ -1354,7 +1426,6 @@ mod tests {
             shv_status: Mutex::new(None),
         };
         for unsupported in [
-            WalletInterest::rpa_prefix("ab").unwrap(),
             WalletInterest::script(vec![0x51]),
             WalletInterest::script(vec![]),
         ] {
@@ -2049,6 +2120,14 @@ mod tests {
             port: u16,
             accepted: [u8; 80],
         ) -> Result<BackendObservation, ChainBackendError> {
+            refresh_scope_against(port, accepted, false).await
+        }
+
+        async fn refresh_scope_against(
+            port: u16,
+            accepted: [u8; 80],
+            rpa: bool,
+        ) -> Result<BackendObservation, ChainBackendError> {
             let headers = Arc::new(SharedHeaders::default());
             headers.write(|store| store.insert_hash_only(7, double_sha256(&accepted)));
             let backend = Bip37Backend::connect(
@@ -2067,14 +2146,41 @@ mod tests {
             .expect("the scripted peer completes a handshake");
             backend
                 .execute(&ChainRequest::WalletRefresh {
-                    interests: vec![WalletInterest::script(vec![
-                        0x76, 0xa9, 0x14, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11,
-                        0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x88,
-                        0xac,
-                    ])],
+                    interests: if rpa {
+                        vec![WalletInterest::rpa_prefix("abcd").unwrap()]
+                    } else {
+                        vec![WalletInterest::script(vec![
+                            0x76, 0xa9, 0x14, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11,
+                            0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x88,
+                            0xac,
+                        ])]
+                    },
                     from_height: Some(7),
                 })
                 .await
+        }
+
+        #[tokio::test]
+        async fn local_rpa_scan_requires_all_transactions_from_the_accepted_block() {
+            let raw = payment(0x11);
+            let txid = double_sha256(&raw);
+            let header = header_over(&txid, 0x11);
+            let payload = merkleblock_payload(&header, &txid);
+            let port = spawn_peer(payload.clone(), vec![raw.clone()]).await;
+            let observation = refresh_scope_against(port, header, true).await.unwrap();
+            let ChainPayload::WalletRefresh { transactions, .. } = observation.payload else {
+                panic!("expected wallet refresh");
+            };
+            assert_eq!(transactions.len(), 1);
+            assert_eq!(transactions[0].raw, raw);
+
+            // A valid partial tree with an unmatched leaf proves inclusion of
+            // its root, but does not prove a complete local RPA scan.
+            let mut omitted = payload;
+            *omitted.last_mut().unwrap() = 0;
+            let port = spawn_peer(omitted, vec![]).await;
+            assert!(matches!(refresh_scope_against(port, header, true).await,
+                Err(ChainBackendError::Protocol(message)) if message.contains("every transaction")));
         }
 
         #[tokio::test]

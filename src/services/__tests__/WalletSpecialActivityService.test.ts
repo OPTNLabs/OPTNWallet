@@ -83,6 +83,7 @@ vi.mock('../../apis/WalletManager/WalletManager', () => ({
 import {
   claimRpaTransaction,
   readRpaUnspentOutputs,
+  loadStoredWalletSpecialActivities,
   scanCauldronActivity,
   scanRpaActivity,
 } from '../WalletSpecialActivityService';
@@ -91,6 +92,100 @@ describe('WalletSpecialActivityService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
+
+  it('does not offer retained coins from a failed scan for spending', async () => {
+    const { store } = await import('../../state/store');
+    const originalState = store.getState();
+    vi.mocked(store.getState).mockReturnValue({
+      ...originalState,
+      walletSpecialActivity: {
+        byWallet: {
+          7: {
+            rpa: {
+              activityType: 'rpa',
+              status: 'error',
+              payload: { unspentOutputs: [{ valueSats: 50002 }] },
+            },
+          },
+        },
+      },
+    } as unknown as ReturnType<typeof store.getState>);
+    try {
+      expect(await readRpaUnspentOutputs(7)).toEqual([]);
+    } finally {
+      vi.mocked(store.getState).mockReturnValue(originalState);
+    }
+  });
+
+  it('does not offer a prior-network RPA record after switching the same wallet', async () => {
+    const { store } = await import('../../state/store');
+    const originalState = store.getState();
+    vi.mocked(store.getState).mockReturnValue({
+      ...originalState,
+      wallet_id: { currentWalletId: 7, networkType: Network.MAINNET },
+      walletSpecialActivity: {
+        byWallet: {
+          7: {
+            rpa: {
+              activityType: 'rpa',
+              status: 'complete',
+              network: Network.CHIPNET,
+              payload: { unspentOutputs: [{ valueSats: 50002 }] },
+            },
+          },
+        },
+      },
+    } as unknown as ReturnType<typeof store.getState>);
+    try {
+      expect(await readRpaUnspentOutputs(7)).toEqual([]);
+    } finally {
+      vi.mocked(store.getState).mockReturnValue(originalState);
+    }
+  });
+
+  it.each([true, false])(
+    'hydrates by freshness rather than larger balance (newer storage: %s)',
+    async (newer) => {
+      const { default: DatabaseService } = await import(
+        '../../apis/DatabaseManager/DatabaseService'
+      );
+      const { store } = await import('../../state/store');
+      const originalDatabase = DatabaseService();
+      const originalState = store.getState();
+      const existing = {
+        updatedAt: '2026-09-12T12:00:00Z',
+        payload: { unspentSats: 1500, unspentOutputs: [] },
+      };
+      const query = {
+        bind: vi.fn(),
+        free: vi.fn(),
+        step: vi.fn().mockReturnValueOnce(true).mockReturnValue(false),
+        getAsObject: () => ({
+          activity_type: 'rpa',
+          network_type: Network.CHIPNET,
+          derivation_path: "m/44'/1'/0'",
+          status: 'complete',
+          payload_json: JSON.stringify({ unspentSats: 0, unspentOutputs: [] }),
+          updated_at: newer ? '2026-09-12T13:00:00Z' : '2026-09-12T11:00:00Z',
+        }),
+      };
+      vi.mocked(store.getState).mockReturnValue({
+        ...originalState,
+        walletSpecialActivity: { byWallet: { 7: { rpa: existing } } },
+      } as unknown as ReturnType<typeof store.getState>);
+      vi.mocked(DatabaseService).mockReturnValue({
+        ...originalDatabase,
+        getDatabase: () => ({ run: vi.fn(), prepare: () => query }),
+      } as unknown as ReturnType<typeof DatabaseService>);
+      try {
+        await loadStoredWalletSpecialActivities(7);
+        expect(store.dispatch).toHaveBeenCalledTimes(newer ? 1 : 0);
+      } finally {
+        vi.mocked(DatabaseService).mockReturnValue(originalDatabase);
+        vi.mocked(store.getState).mockReturnValue(originalState);
+      }
+    }
+  );
 
   it('waits for persisted RPA activity before returning coins after restart', async () => {
     const { default: DatabaseService } = await import(
@@ -381,6 +476,7 @@ describe('WalletSpecialActivityService', () => {
         valueSats: 1500,
         prevoutHash: 'cc'.repeat(32),
         prevoutIndex: 0,
+        senderPubkey: `02${'11'.repeat(32)}`,
       },
     ]);
     const adapter = {
@@ -409,6 +505,11 @@ describe('WalletSpecialActivityService', () => {
       txHash: txid,
       outputIndex: 0,
       valueSats: 1500,
+      rpaOrigin: {
+        prevoutTxid: 'cc'.repeat(32),
+        prevoutIndex: 0,
+        senderPubkey: `02${'11'.repeat(32)}`,
+      },
     });
     expect(adapter.request).not.toHaveBeenCalledWith(
       'blockchain.reusable.get_history',
@@ -420,6 +521,44 @@ describe('WalletSpecialActivityService', () => {
       )
     ).toBe(false);
   });
+
+  it.each(['spent', 'unavailable', 'wrong value'])(
+    'does not claim an unverified RPA coin: %s',
+    async (state) => {
+      const txid = 'ab'.repeat(32);
+      const detect = await import('../RpaDetect');
+      vi.spyOn(detect, 'matchRpaPaymentsInRawTx').mockReturnValue([
+        {
+          outputIndex: 0,
+          address: 'bchtest:qexpected',
+          valueSats: 1500,
+          prevoutHash: 'cc'.repeat(32),
+          prevoutIndex: 0,
+          senderPubkey: `02${'11'.repeat(32)}`,
+        },
+      ]);
+      const adapter = {
+        request: vi.fn(async (method: string) => {
+          if (method === 'blockchain.transaction.get') return '00'.repeat(20);
+          if (state === 'unavailable') throw new Error('offline');
+          return state === 'spent'
+            ? []
+            : [{ tx_hash: txid, tx_pos: 0, value: 9999 }];
+        }),
+      };
+      const result = claimRpaTransaction({ walletId: 7, txid, adapter });
+      if (state === 'spent') {
+        expect((await result).payload).toMatchObject({
+          unspentSats: 0,
+          unspentOutputs: [],
+        });
+      } else {
+        await expect(result).rejects.toThrow(
+          state === 'unavailable' ? /offline/ : /value does not match/
+        );
+      }
+    }
+  );
 
   it('queries Cauldron using the active wallet branches and summarizes pool balances', async () => {
     const pool = {

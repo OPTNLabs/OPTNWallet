@@ -418,6 +418,13 @@ impl CoinSet {
             coin.label = prior.and_then(|coin| coin.label.clone());
             coin.freeze = prior.and_then(|coin| coin.freeze);
             coin.fuse_depth = prior.map_or(0, |coin| coin.fuse_depth);
+            // Script-based refreshes cannot reconstruct Cash Code key origins.
+            // Keep the locally established recipe only for the same output address.
+            if let Some(prior) = prior.filter(|prior| prior.address == coin.address) {
+                if prior.source.is_rpa() {
+                    coin.source = prior.source.clone();
+                }
+            }
         }
         self.coins = outputs;
         Ok(())
@@ -648,6 +655,29 @@ mod fusion_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chain_refresh_preserves_cashcode_origin_but_removes_spent_coins() {
+        let observed = coin(1, 5000);
+        let received = Coin::from_rpa_payment(
+            observed.outpoint(),
+            observed.value_sats(),
+            observed.address(),
+            "ab".repeat(32),
+            1,
+            format!("02{}", "11".repeat(32)),
+        )
+        .unwrap();
+        let source = received.source().clone();
+        let mut set = CoinSet::new();
+        set.insert(received).unwrap();
+        set.replace_chain_outputs(vec![observed.clone()]).unwrap();
+        assert_eq!(set.get(observed.outpoint()).unwrap().source(), &source);
+        assert_eq!(set.rpa_sats(), 5000);
+        set.replace_chain_outputs(vec![]).unwrap();
+        assert_eq!(set.rpa_sats(), 0);
+        assert!(set.get(observed.outpoint()).is_none());
+    }
 
     #[test]
     fn overflowing_observations_preserve_the_previous_coin_set() {

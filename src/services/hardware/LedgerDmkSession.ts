@@ -81,6 +81,7 @@ interface DmkLike {
     sessionId: string;
     apdu: Uint8Array;
   }): Promise<{ data: Uint8Array; statusCode: Uint8Array }>;
+  disconnect(args: { sessionId: string }): Promise<void>;
   close?(): Promise<void>;
 }
 
@@ -90,6 +91,16 @@ interface ActiveSession {
 }
 
 let active: ActiveSession | null = null;
+let sessionChanges: Promise<void> = Promise.resolve();
+
+function replaceActiveSession(next: ActiveSession | null): Promise<void> {
+  const change = sessionChanges.then(async () => {
+    if (active) await active.dmk.disconnect({ sessionId: active.sessionId });
+    active = next;
+  });
+  sessionChanges = change.catch(() => {});
+  return change;
+}
 
 /**
  * Serialise an APDU: class, instruction, both parameters, a one-byte length,
@@ -130,6 +141,7 @@ export async function dmkGetWalletPublicKey(
   path: string,
   options: { verify?: boolean; format?: AddressFormat } = {}
 ): Promise<WalletPublicKey> {
+  await sessionChanges;
   const session = active;
   if (!session) {
     throw new Error(
@@ -151,12 +163,15 @@ export async function dmkGetWalletPublicKey(
 }
 
 /** Hand this module a live session. Used by the connect flow and by tests. */
-export function setActiveSession(dmk: DmkLike, sessionId: string): void {
-  active = { dmk, sessionId };
+export async function setActiveSession(
+  dmk: DmkLike,
+  sessionId: string
+): Promise<void> {
+  await replaceActiveSession({ dmk, sessionId });
 }
 
-export function clearActiveSession(): void {
-  active = null;
+export async function clearActiveSession(): Promise<void> {
+  await replaceActiveSession(null);
 }
 
 export function hasActiveSession(): boolean {

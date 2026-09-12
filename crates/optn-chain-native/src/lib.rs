@@ -12,7 +12,7 @@
 use optn_chain_bchn::{BchnRpcBackend, BchnRpcConfig, RpcAuth};
 pub mod network_config;
 pub mod wallet_checkpoint;
-use optn_chain_bip37::{Bip37Backend, Bip37Config, Bip37Transport};
+pub use optn_chain_bip37::{Bip37Backend, Bip37Config, Bip37Transport};
 use optn_chain_electrum::{ElectrumBackend, ElectrumConfig, ElectrumTransport};
 use optn_chain_neutrino::{NeutrinoBackend, NeutrinoConfig, NeutrinoTransport};
 use optn_chain_zmq::{BchnZmqConfig, BchnZmqEventSource};
