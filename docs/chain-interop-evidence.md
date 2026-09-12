@@ -17,6 +17,32 @@ a rule; nothing in it proves interoperability.
 
 ## Environment
 
+### Managed watch-only import, persistence and CLI resume — 2026-09-12
+
+Windows/Rust 1.98, `34ade590` plus the accompanying runtime, GUI/CLI and live-test
+changes: the public BIP39 HD fixture at `m/44'/1'/0'` used the exact Chipnet
+Electrum selection through Tor. The revised `chipnet_wallet_runtime` test
+passed at height 323126 with two transactions and one output (72.38 seconds;
+93.11 seconds after making the child-process pipe draining robust).
+
+Unlike the earlier manually restored public checkpoint test, this run imports
+through `WalletSecurityRequest::ImportWatchOnly`, writes the encrypted account
+and checkpoint using the production native storage adapters, then syncs.
+After locking and creating a new runtime, the saved-wallet list discovers the
+record; opening it restores identical history, coins and partial scan coverage
+as stale. Live sync restores freshness. A separate real CLI process then opens
+the same saved wallet and resumes using the same persisted source selection.
+Both CLI paths and the typed GUI transport agree on totals. Route failure
+retains stale observations; lock clears the runtime view. Account xpub and
+password do not appear in CLI replies or the stored account ciphertext.
+
+`cargo test --locked --manifest-path crates/optn-cli/Cargo.toml --test chipnet_wallet_runtime -- --ignored --nocapture`
+
+Evidence remains `ServerAssertion`, not SPV. This is managed-runtime/CLI live
+evidence, not a packaged GUI test or a SeedCash signing round trip. The Rust
+GUI's typed and scanned-account save controls compile against this same
+request; a fresh APK must still confirm the restart fix on the emulator.
+
 ### Chipnet manual rescan and restart — 2026-09-12
 
 Windows, `a9b5d6f4` plus the accompanying shared rescan changes. The same

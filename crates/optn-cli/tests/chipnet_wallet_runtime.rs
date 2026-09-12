@@ -2,7 +2,7 @@
 //! exact Chipnet source, with no keys, signing, broadcasting, or mainnet mode.
 //! Run: cargo test --manifest-path crates/optn-cli/Cargo.toml --test chipnet_wallet_runtime -- --ignored --nocapture
 
-use optn_app::{AppAction, AppState, OpenedWallet, WalletKind};
+use optn_app::{AppAction, AppState, SecretText, WalletKind};
 use optn_chain_native::{build_native_chain_stack, NativeChainSecrets};
 use optn_core::{
     cashaddr::Address,
@@ -20,7 +20,8 @@ use optn_runtime::{
     sync_worker::ProgressiveSyncWorker,
     AppRuntime, DirectTransport,
 };
-use optn_transport::{AppTransport, WireState};
+use optn_transport::{AppTransport, WalletSecurityRequest as Request, WireState};
+use std::io::{Read, Write};
 use std::time::Duration;
 
 #[tokio::test]
@@ -37,9 +38,6 @@ async fn chipnet_hd_account_reaches_shared_runtime_and_transport() {
             .account_xpub_at(account)
             .unwrap()
     });
-    let address = optn_core::watch_only::address_under_account(Network::Chipnet, &xpub, 0, 0)
-        .unwrap()
-        .address;
     let source = SourceId::new("chipnet-live-exact");
     let mut catalog = SourceCatalog::default();
     catalog
@@ -73,22 +71,47 @@ async fn chipnet_hd_account_reaches_shared_runtime_and_transport() {
         "Chipnet probe failed: {:?}",
         stack.failures
     );
-    let initial_wallet = AppState {
-        network: Network::Chipnet,
-        wallet: Some(OpenedWallet {
-            kind: WalletKind::WatchOnly,
-            name: "Live Chipnet HD account".into(),
-            receive_address: address.clone(),
-            master_fingerprint: None,
-            account_path: account.to_string(),
-            multisig_policy: None,
-            account_xpub: Some(xpub.clone()),
-        }),
-        ..Default::default()
+    let wallet_dir = tempfile::tempdir().unwrap();
+    let managed_runtime = || {
+        let security = optn_runtime::wallet_security::WalletSecurity::new(
+            Box::new(
+                optn_platform_native::wallet_storage::NativeWalletStorage::new(
+                    wallet_dir.path().to_owned(),
+                ),
+            ),
+            None,
+        )
+        .with_checkpoints(Box::new(
+            optn_chain_native::wallet_checkpoint::WalletCheckpointDirectory(
+                wallet_dir.path().join(".state"),
+            ),
+        ));
+        let (runtime, driver) =
+            AppRuntime::new_with_security(AppState::default(), security).unwrap();
+        tokio::spawn(driver.run());
+        runtime
     };
-    let runtime = AppRuntime::spawn(initial_wallet.clone());
+    let runtime = managed_runtime();
+    let imported = runtime
+        .wallet_security(Request::ImportWatchOnly {
+            name: "Live Chipnet HD account".into(),
+            account_xpub: SecretText::new(xpub.clone()),
+            master_fingerprint: String::new(),
+            network: "chipnet".into(),
+            account_path: account.to_string(),
+            password: SecretText::new("public-live-fixture".into()),
+            confirmation: SecretText::new("public-live-fixture".into()),
+        })
+        .await
+        .unwrap();
+    let handle = imported.active.unwrap();
+    assert_eq!(
+        runtime.state().wallet.as_ref().unwrap().kind,
+        WalletKind::WatchOnly
+    );
     let transport = DirectTransport::new(runtime.clone());
-    let mut worker = ProgressiveSyncWorker::new(Default::default());
+    let mut worker =
+        ProgressiveSyncWorker::new(Default::default()).with_accepted_headers(stack.headers.clone());
     let mut service = stack.service.lock().await;
     let decision = tokio::time::timeout(
         Duration::from_secs(300),
@@ -152,27 +175,8 @@ async fn chipnet_hd_account_reaches_shared_runtime_and_transport() {
     assert_eq!(restored.coins, app.coins);
     assert_eq!(restored.wallet_sync.scan_coverage, Some(coverage));
 
-    // Persist the real observation through the same atomic encrypted adapter
-    // used by the native GUI and saved-wallet CLI. The random key protects only
-    // this disposable public-account checkpoint; it grants no spending authority.
-    let checkpoint_dir = tempfile::tempdir().unwrap();
-    let checkpoint_file = optn_chain_native::wallet_checkpoint::WalletCheckpointFile::new(
-        checkpoint_dir.path().join("live.state"),
-    );
-    // Drawn straight from the OS rather than zero-initialised and then
-    // overwritten. The two are identical at runtime -- `fill_bytes` replaces
-    // every byte -- but taint analysis follows the `[0u8; N]` literal into
-    // `derive_key` and reports a hard-coded salt, because it cannot see that
-    // the placeholder never survives. Writing it this way removes the
-    // placeholder rather than the warning, so the finding stays meaningful if
-    // a real constant ever does reach a salt.
-    let password: [u8; 32] = rand::random();
-    let salt: [u8; optn_core::wallet_pack::SALT_LEN] = rand::random();
-    let password: String = password.iter().map(|byte| format!("{byte:02x}")).collect();
-    let key = optn_core::wallet_pack::derive_key(&password, &salt).unwrap();
-    checkpoint_file
-        .store(&runtime.wallet_checkpoint().await.unwrap(), &key, None)
-        .unwrap();
+    let wallet_bytes = std::fs::read(wallet_dir.path().join(&handle)).unwrap();
+    assert!(!String::from_utf8_lossy(&wallet_bytes).contains(&xpub));
 
     // A real successful observation followed by route loss must retain coins
     // and evidence, with stale status rather than a fresh empty wallet.
@@ -199,13 +203,15 @@ async fn chipnet_hd_account_reaches_shared_runtime_and_transport() {
     drop(runtime);
     drop(service);
 
-    let restarted = AppRuntime::spawn(initial_wallet);
-    let (checkpoint, _) = checkpoint_file
-        .load(&key)
-        .unwrap()
-        .expect("saved checkpoint");
+    let restarted = managed_runtime();
+    assert!(restarted.state().wallet.is_none());
+    let listed = restarted.wallet_security(Request::Status).await.unwrap();
+    assert!(listed.wallets.iter().any(|wallet| wallet.handle == handle));
     restarted
-        .restore_wallet_checkpoint(checkpoint)
+        .wallet_security(Request::Open {
+            handle: handle.clone(),
+            password: SecretText::new("public-live-fixture".into()),
+        })
         .await
         .unwrap();
     let before_refresh = restarted.state();
@@ -232,7 +238,8 @@ async fn chipnet_hd_account_reaches_shared_runtime_and_transport() {
         restart_stack.failures
     );
     let mut restart_service = restart_stack.service.lock().await;
-    let mut restart_worker = ProgressiveSyncWorker::new(Default::default());
+    let mut restart_worker = ProgressiveSyncWorker::new(Default::default())
+        .with_accepted_headers(restart_stack.headers.clone());
     let resumed = tokio::time::timeout(
         Duration::from_secs(300),
         restarted.sync_hd_wallet(
@@ -301,9 +308,6 @@ async fn chipnet_hd_account_reaches_shared_runtime_and_transport() {
             .output()
             .unwrap()
     };
-    std::fs::remove_file(config.with_extension("lock")).unwrap();
-    std::fs::remove_file(config).unwrap();
-    std::fs::remove_dir(directory).unwrap();
     {
         let value: serde_json::Value = serde_json::from_slice(&output.stdout).expect("CLI JSON");
         assert!(output.status.success(), "CLI read failed: {value}");
@@ -317,6 +321,85 @@ async fn chipnet_hd_account_reaches_shared_runtime_and_transport() {
         assert_eq!(value["account_path"], account.to_string());
         assert!(value["scanned_addresses"].as_u64().unwrap() >= 60);
     }
-    println!("Chipnet HD/Tor: height={}, transactions={}, outputs={}, evidence=ServerAssertion; CLI HD rescan, transport parity, encrypted restart/resume, outage retention, and lock clearing passed",
+    restarted.dispatch(AppAction::LockWallet).await.unwrap();
+    drop(restarted);
+    let mut console = std::process::Command::new(env!("CARGO_BIN_EXE_optn"))
+        .args([
+            "--json",
+            "--network",
+            "chipnet",
+            "--timeout",
+            "300",
+            "--network-config-dir",
+        ])
+        .arg(&directory)
+        .arg("--wallet-directory")
+        .arg(wallet_dir.path())
+        .args(["wallet", "--stdio"])
+        .env_remove("OPTN_MNEMONIC")
+        .env_remove("OPTN_PASSPHRASE")
+        .env("OPTN_POLICY", "secret")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let requests = [
+        serde_json::json!({"request":{"command":"open","handle":handle,"password":"public-live-fixture"}}),
+        serde_json::json!({"chain":"sync"}),
+        serde_json::json!({"chain":"history"}),
+    ];
+    {
+        let mut input = console.stdin.take().unwrap();
+        for request in requests {
+            writeln!(input, "{request}").unwrap();
+        }
+    }
+    // Drain both pipes while the child runs: several history replies can
+    // exceed the platform pipe capacity before the process reaches EOF.
+    let mut stdout = console.stdout.take().unwrap();
+    let mut stderr = console.stderr.take().unwrap();
+    let stdout_reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout.read_to_end(&mut bytes).unwrap();
+        bytes
+    });
+    let stderr_reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stderr.read_to_end(&mut bytes).unwrap();
+        bytes
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(360);
+    while console.try_wait().unwrap().is_none() {
+        if std::time::Instant::now() >= deadline {
+            console.kill().unwrap();
+            let _ = console.wait();
+            panic!("managed CLI live sync exceeded its deadline");
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let mut output = console.wait_with_output().unwrap();
+    output.stdout = stdout_reader.join().unwrap();
+    output.stderr = stderr_reader.join().unwrap();
+    assert!(output.status.success(), "managed CLI process failed");
+    let replies: Vec<serde_json::Value> = serde_json::Deserializer::from_slice(&output.stdout)
+        .into_iter()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(replies.len(), 4);
+    assert!(replies.iter().all(|reply| reply["ok"] == true));
+    assert_eq!(replies[0]["wallet_sync"]["history_fresh"], false);
+    assert_eq!(replies[2]["wallet_sync"]["history_fresh"], true);
+    assert_eq!(replies[2]["wallet_sync"]["utxos_fresh"], true);
+    assert_eq!(replies[2]["wallet_sync"]["confirmed_sats"], confirmed);
+    assert_eq!(replies[2]["wallet_sync"]["pending_sats"], pending);
+    assert_eq!(replies[2]["wallet_sync"]["scan_coverage"]["from_height"], 1);
+    assert_eq!(replies[3]["locked"], true);
+    assert!(!String::from_utf8_lossy(&output.stdout).contains(&xpub));
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("public-live-fixture"));
+    std::fs::remove_file(config.with_extension("lock")).unwrap();
+    std::fs::remove_file(config).unwrap();
+    std::fs::remove_dir(directory).unwrap();
+    println!("Chipnet HD/Tor: height={}, transactions={}, outputs={}, evidence=ServerAssertion; CLI HD rescan, managed watch-only import/sync/restart/CLI resume, transport parity, outage retention, and lock clearing passed",
         observed.value.tip.as_ref().unwrap().height, observed.value.transactions.len(), app.coins.len());
 }

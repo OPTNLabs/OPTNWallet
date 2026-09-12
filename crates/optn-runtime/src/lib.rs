@@ -405,6 +405,7 @@ impl AppRuntimeDriver {
                         request,
                         WalletSecurityRequest::Open { .. }
                             | WalletSecurityRequest::Create { .. }
+                            | WalletSecurityRequest::ImportWatchOnly { .. }
                             | WalletSecurityRequest::UnlockBiometric { .. }
                     );
                     let authenticates =
@@ -504,6 +505,7 @@ impl AppRuntimeDriver {
                             action,
                             AppAction::OpenCreatedWallet { .. }
                                 | AppAction::OpenImportedWallet { .. }
+                                | AppAction::OpenWatchOnlyWallet(_)
                         )
                     {
                         self.state.notice = Some(

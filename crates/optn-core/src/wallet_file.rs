@@ -407,7 +407,7 @@ impl WatchOnlyFile {
             ));
         }
         if account_xpub.len() > 256
-            || !account_xpub.trim().starts_with("xpub")
+            || !(account_xpub.trim().starts_with("xpub") || account_xpub.trim().starts_with("tpub"))
             || master_fingerprint.len() > 64
         {
             return Err(invalid());
@@ -840,6 +840,15 @@ mod watch_only_file_tests {
             &checkpoint_entropy()
         )
         .is_err());
+        assert!(make(
+            &private.to_string(bip32::Prefix::TPRV),
+            "",
+            "",
+            "",
+            account,
+            &checkpoint_entropy()
+        )
+        .is_err());
         let file = make(&public, "", "", "", account, &checkpoint_entropy()).unwrap();
         let unlocked = file.unlock("").unwrap();
         assert_eq!(unlocked.network, Network::Regtest);
@@ -847,5 +856,19 @@ mod watch_only_file_tests {
         let mut bad_rotation = entropy(6);
         bad_rotation[..32].copy_from_slice(&checkpoint_entropy());
         assert!(file.change_password("", "", "", &bad_rotation).is_err());
+
+        let public_parsed = crate::watch_only::parse_account_xpub(&public).unwrap();
+        let tpub = public_parsed.to_string(bip32::Prefix::TPUB);
+        assert_eq!(
+            crate::watch_only::parse_account_xpub(&tpub)
+                .unwrap()
+                .to_string(bip32::Prefix::XPUB),
+            public
+        );
+        let from_tpub = make(&tpub, "", "", "", account, &checkpoint_entropy())
+            .expect("a valid account tpub must normalize to canonical xpub");
+        let reopened = from_tpub.unlock("").unwrap();
+        assert_eq!(reopened.account_xpub, public);
+        assert_eq!(reopened.account, account);
     }
 }

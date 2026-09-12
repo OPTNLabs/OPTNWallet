@@ -351,21 +351,7 @@ fn WatchOnlySetup(transport: UiTransport, state: RwSignal<AppState>) -> impl Int
                             </div>
                         </dl>
 
-                        <button
-                            class="primary"
-                            type="button"
-                            on:click=move |_| {
-                                if let Some(preview) = preview.get_untracked() {
-                                    dispatch_action(
-                                        transport,
-                                        state,
-                                        AppAction::OpenWatchOnlyWallet(preview),
-                                    );
-                                }
-                            }
-                        >
-                            "Open watch-only wallet"
-                        </button>
+                        <security::SaveWatchOnly transport=transport state=state preview=preview error=error />
                     </section>
                 </Show>
             </section>
