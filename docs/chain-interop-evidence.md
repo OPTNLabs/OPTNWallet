@@ -17,6 +17,28 @@ a rule; nothing in it proves interoperability.
 
 ## Environment
 
+### Chipnet shared-runtime restart verification — 2026-09-12
+
+Executed on Windows against PR63 code at `61b11bc3` plus the accompanying
+`chipnet_wallet_runtime` test extension. The test uses a published public HD
+account, the exact persisted Chipnet Electrum selection, and a verified local
+Tor SOCKS route. It does not sign or broadcast transactions.
+
+`cargo test --locked --manifest-path crates/optn-cli/Cargo.toml --test chipnet_wallet_runtime -- --ignored --nocapture`
+
+Result: PASS in 77.80 seconds; height 323116, two transactions, one unspent output.
+The test verifies receive/change/DeFi HD discovery, matching CLI and typed
+transport totals, stale retention after route failure, lock clearing, atomic
+encrypted checkpoint storage, a new runtime restoring identical coins/history
+as stale, and a live resync restoring freshness. The actual CLI `rescan` command
+uses the same durable source policy. Evidence remains `ServerAssertion`; this
+run does not establish SPV verification, packaged GUI behavior, or SeedCash
+signing. Earlier local-node results below remain separate evidence.
+
+Build note: use separate Cargo target directories for the workspace and the
+excluded CLI workspace. A reused shared target produced an inconsistent cached
+ECDSA type error; a fresh CLI target compiled and passed without a code change.
+
 Recorded at OPTN commit `a69a055a` on `agent/rpa-shared-vectors` (PR #63).
 
 ### BCHD — BIP37 and compact filters

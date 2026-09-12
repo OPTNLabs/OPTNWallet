@@ -21,6 +21,7 @@ use optn_runtime::{
     AppRuntime, DirectTransport,
 };
 use optn_transport::{AppTransport, WireState};
+use rand::RngCore;
 use std::time::Duration;
 
 #[tokio::test]
@@ -73,7 +74,7 @@ async fn chipnet_hd_account_reaches_shared_runtime_and_transport() {
         "Chipnet probe failed: {:?}",
         stack.failures
     );
-    let runtime = AppRuntime::spawn(AppState {
+    let initial_wallet = AppState {
         network: Network::Chipnet,
         wallet: Some(OpenedWallet {
             kind: WalletKind::WatchOnly,
@@ -85,7 +86,8 @@ async fn chipnet_hd_account_reaches_shared_runtime_and_transport() {
             account_xpub: Some(xpub.clone()),
         }),
         ..Default::default()
-    });
+    };
+    let runtime = AppRuntime::spawn(initial_wallet.clone());
     let transport = DirectTransport::new(runtime.clone());
     let mut worker = ProgressiveSyncWorker::new(Default::default());
     let mut service = stack.service.lock().await;
@@ -141,6 +143,23 @@ async fn chipnet_hd_account_reaches_shared_runtime_and_transport() {
     let restored = AppState::try_from(wire).expect("typed transport round trip");
     assert_eq!(restored.coins, app.coins);
 
+    // Persist the real observation through the same atomic encrypted adapter
+    // used by the native GUI and saved-wallet CLI. The random key protects only
+    // this disposable public-account checkpoint; it grants no spending authority.
+    let checkpoint_dir = tempfile::tempdir().unwrap();
+    let checkpoint_file = optn_chain_native::wallet_checkpoint::WalletCheckpointFile::new(
+        checkpoint_dir.path().join("live.state"),
+    );
+    let mut password = [0u8; 32];
+    let mut salt = [0u8; optn_core::wallet_pack::SALT_LEN];
+    rand::rngs::OsRng.fill_bytes(&mut password);
+    rand::rngs::OsRng.fill_bytes(&mut salt);
+    let password: String = password.iter().map(|byte| format!("{byte:02x}")).collect();
+    let key = optn_core::wallet_pack::derive_key(&password, &salt).unwrap();
+    checkpoint_file
+        .store(&runtime.wallet_checkpoint().await.unwrap(), &key, None)
+        .unwrap();
+
     // A real successful observation followed by route loss must retain coins
     // and evidence, with stale status rather than a fresh empty wallet.
     *service.catalog_mut() = SourceCatalog::default();
@@ -162,6 +181,58 @@ async fn chipnet_hd_account_reaches_shared_runtime_and_transport() {
         .borrow()
         .authoritative
         .is_none());
+    drop(transport);
+    drop(runtime);
+    drop(service);
+
+    let restarted = AppRuntime::spawn(initial_wallet);
+    let (checkpoint, _) = checkpoint_file
+        .load(&key)
+        .unwrap()
+        .expect("saved checkpoint");
+    restarted
+        .restore_wallet_checkpoint(checkpoint)
+        .await
+        .unwrap();
+    let before_refresh = restarted.state();
+    assert_eq!(before_refresh.coins, app.coins);
+    assert_eq!(before_refresh.wallet_sync.history, app.wallet_sync.history);
+    assert!(!before_refresh.wallet_sync.utxos_fresh);
+    assert!(!before_refresh.wallet_sync.history_fresh);
+    assert!(!before_refresh.fusion.session_armed);
+    let restart_stack = tokio::time::timeout(
+        Duration::from_secs(60),
+        build_native_chain_stack(
+            catalog.clone(),
+            ConnectionPolicy::exact(source.clone(), ProtocolFamily::Electrum),
+            "chipnet",
+            &NativeChainSecrets::default(),
+        ),
+    )
+    .await
+    .expect("bounded restart probe");
+    assert!(
+        restart_stack.failures.is_empty(),
+        "{:?}",
+        restart_stack.failures
+    );
+    let mut restart_service = restart_stack.service.lock().await;
+    let mut restart_worker = ProgressiveSyncWorker::new(Default::default());
+    let resumed = tokio::time::timeout(
+        Duration::from_secs(300),
+        restarted.sync_hd_wallet(
+            &mut restart_service,
+            &mut restart_worker,
+            xpub.clone(),
+            HdSyncLimits::default(),
+        ),
+    )
+    .await
+    .expect("bounded resume")
+    .expect("resumed publication");
+    assert_eq!(resumed, ReconciliationDecision::Accepted);
+    assert!(restarted.state().wallet_sync.utxos_fresh);
+    assert!(restarted.state().wallet_sync.history_fresh);
     // Exercise the actual command dispatcher with the same persisted selection.
     let directory = std::env::temp_dir().join(format!(
         "optn-chipnet-live-{}-{}",
@@ -227,6 +298,6 @@ async fn chipnet_hd_account_reaches_shared_runtime_and_transport() {
         assert_eq!(value["account_path"], account.to_string());
         assert!(value["scanned_addresses"].as_u64().unwrap() >= 60);
     }
-    println!("Chipnet HD/Tor: height={}, transactions={}, outputs={}, evidence=ServerAssertion; CLI HD rescan, transport parity, outage retention, and lock clearing passed",
+    println!("Chipnet HD/Tor: height={}, transactions={}, outputs={}, evidence=ServerAssertion; CLI HD rescan, transport parity, encrypted restart/resume, outage retention, and lock clearing passed",
         observed.value.tip.as_ref().unwrap().height, observed.value.transactions.len(), app.coins.len());
 }

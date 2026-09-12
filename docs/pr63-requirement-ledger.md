@@ -29,6 +29,17 @@ in #63, not a separate wallet architecture.
 
 ## #75 — chain, sources, verification
 
+Latest bounded evidence (2026-09-12): the live Chipnet test now exercises HD
+sync, matching CLI/transport totals, encrypted checkpoint restart, stale-state
+retention and live resume. See `docs/chain-interop-evidence.md`. This closes that
+runtime/CLI evidence gap, not the packaged GUI or whole-issue milestone.
+
+CashFusion recovery: the protocol engine is now `crates/optn-fusion`; the shared
+app/transport policy and session state are committed. Wallet/network changes,
+locking and disable/cancel actions revoke session consent. A running shared
+Fusion driver, durable per-wallet Auto preferences and its UI/CLI controls are
+still integration work; model/transport tests do not prove paid rounds run.
+
 ### Definition of done
 
 | # | Requirement | Status | Entry point / evidence | Gap |
