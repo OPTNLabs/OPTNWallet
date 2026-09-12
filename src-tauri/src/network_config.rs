@@ -8,16 +8,14 @@ use crate::chain_runtime::catalog_and_policy_from_app_state;
 use optn_app::{AppState, NetworkServers, ServerKind};
 use optn_chain_native::network_config::NetworkConfigFile;
 use optn_core::network::Network;
-use optn_runtime::chain::{ConnectionPolicy, Endpoint, EndpointKind, SourceCatalog};
+use optn_runtime::chain::{ConnectionPolicy, Endpoint, EndpointKind, SourceCatalog, SourceOrigin};
 use optn_runtime::network_config::{
-    legacy_network_servers_from_overlay, resolve_shipped_chain_selection, NetworkConfigEnvelope,
-    NetworkConfigStore, UserNetworkOverlay,
+    legacy_network_servers_from_overlay, legacy_server_policy, resolve_shipped_chain_selection,
+    NetworkConfigEnvelope, NetworkConfigStore, UserNetworkOverlay, LEGACY_SERVER_CATALOG_VERSION,
 };
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-
-const LEGACY_CATALOG_VERSION: &str = "legacy-server-overrides-v1";
 
 /// Tauri-owned files, one per chain network because the runtime envelope has no
 /// network discriminator.
@@ -93,7 +91,7 @@ impl NetworkSettingsStore {
                     legacy_network_servers_from_overlay(&existing.overlay)?;
                     existing.bootstrap_catalog_version_seen
                 }
-                None => LEGACY_CATALOG_VERSION.into(),
+                None => LEGACY_SERVER_CATALOG_VERSION.into(),
             };
             envelope_from_state(state, network, catalog_version)
         })
@@ -119,7 +117,15 @@ fn envelope_from_state(
 ) -> Result<NetworkConfigEnvelope, String> {
     let mut scoped = state.clone();
     scoped.network = network;
-    let (catalog, policy) = catalog_and_policy_from_app_state(&scoped);
+    let (catalog, _) = catalog_and_policy_from_app_state(&scoped);
+    // The open-wallet bridge supplies bootstrap defaults when overrides are
+    // cleared. Persist only the holder's sources; the reader supplies defaults.
+    let user_sources = catalog
+        .iter()
+        .filter(|source| matches!(source.origin, SourceOrigin::UserAdded))
+        .cloned()
+        .collect::<Vec<_>>();
+    let policy = legacy_server_policy(&user_sources);
     let explorer = scoped
         .servers
         .for_network(network)
@@ -130,7 +136,7 @@ fn envelope_from_state(
     Ok(NetworkConfigEnvelope::current(
         bootstrap_catalog_version_seen,
         UserNetworkOverlay {
-            user_sources: catalog.iter().cloned().collect(),
+            user_sources,
             bootstrap_overrides: BTreeMap::new(),
             connection_policy: policy,
             explorer,
@@ -271,6 +277,105 @@ mod tests {
             .for_network(Network::Mainnet)
             .peer
             .is_none());
+    }
+
+    #[test]
+    fn saved_server_overrides_select_only_configured_sources_after_restart() {
+        use optn_runtime::chain::{build_selection_plan, SourceId, SourceScope};
+
+        for overrides in [
+            vec![(ServerKind::Electrum, "127.0.0.1:1")],
+            vec![(ServerKind::Peer, "127.0.0.2:1")],
+            vec![
+                (ServerKind::Electrum, "127.0.0.1:1"),
+                (ServerKind::Peer, "127.0.0.2:1"),
+            ],
+        ] {
+            let directory = TestDirectory::new();
+            let store = directory.store();
+            let mut state = AppState::default();
+            let expected = overrides
+                .iter()
+                .map(|(_, entry)| {
+                    SourceId::new(format!("host:{}", entry.split(':').next().unwrap()))
+                })
+                .collect::<std::collections::BTreeSet<_>>();
+            for (kind, entry) in overrides {
+                state.servers.set(Network::Chipnet, kind, entry).unwrap();
+            }
+            store.save_for_network(&state, Network::Chipnet).unwrap();
+            let envelope = store.chipnet.load().unwrap().unwrap();
+            assert_eq!(
+                envelope.overlay.connection_policy.primary_scope,
+                SourceScope::Explicit(expected.clone())
+            );
+            assert!(envelope.overlay.connection_policy.fallback_scope.is_none());
+            let reopened = directory.store();
+            let mut restored = AppState::default();
+            reopened.restore(&mut restored).unwrap();
+            assert_eq!(restored.servers, state.servers);
+            let (catalog, policy) = reopened.chain_selection(Network::Chipnet).unwrap().unwrap();
+            assert!(catalog
+                .iter()
+                .any(|source| matches!(source.origin, SourceOrigin::Bootstrap { .. })));
+            let selection = build_selection_plan(&catalog, &policy);
+            assert_eq!(
+                selection
+                    .primary
+                    .into_iter()
+                    .collect::<std::collections::BTreeSet<_>>(),
+                expected
+            );
+            assert!(
+                selection.fallback.is_empty(),
+                "a failed override must not fall back to public infrastructure"
+            );
+        }
+    }
+
+    #[test]
+    fn clearing_servers_while_open_persists_empty_auto_overlay_not_bootstrap_sources() {
+        use optn_app::AppAction;
+        use optn_runtime::chain::build_selection_plan;
+
+        let directory = TestDirectory::new();
+        let store = directory.store();
+        let mut state = AppState {
+            network: Network::Chipnet,
+            ..AppState::default()
+        };
+        state.apply(AppAction::OpenCreatedWallet {
+            name: "Public source-selection fixture".into(),
+            receive_address: "bchtest:qqaz6s295ncfs53m86qj0uw6sl8u2kuw0ymst35fx4".into(),
+            account_path: "m/44'/1'/0'".into(),
+        });
+        state
+            .servers
+            .set(Network::Chipnet, ServerKind::Electrum, "127.0.0.1:1")
+            .unwrap();
+        store.save_for_network(&state, Network::Chipnet).unwrap();
+        state.apply(AppAction::UseNetworkDefaultServers);
+        assert!(state.wallet.is_some());
+        assert!(state.servers.for_network(Network::Chipnet).is_empty());
+        let (defaults, default_policy) = catalog_and_policy_from_app_state(&state);
+        assert!(
+            defaults.iter().next().is_some(),
+            "exercise the open-wallet bootstrap bridge"
+        );
+        store.save_for_network(&state, Network::Chipnet).unwrap();
+        let envelope = store.chipnet.load().unwrap().unwrap();
+        assert!(envelope.overlay.user_sources.is_empty());
+        assert!(envelope.overlay.bootstrap_overrides.is_empty());
+        assert_eq!(envelope.overlay.connection_policy, ConnectionPolicy::auto());
+        let reopened = directory.store();
+        let mut restored = AppState::default();
+        reopened.restore(&mut restored).unwrap();
+        assert!(restored.servers.for_network(Network::Chipnet).is_empty());
+        let (catalog, policy) = reopened.chain_selection(Network::Chipnet).unwrap().unwrap();
+        assert_eq!(
+            build_selection_plan(&catalog, &policy),
+            build_selection_plan(&defaults, &default_policy)
+        );
     }
 
     #[test]

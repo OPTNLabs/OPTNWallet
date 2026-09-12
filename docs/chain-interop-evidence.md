@@ -17,6 +17,40 @@ a rule; nothing in it proves interoperability.
 
 ## Environment
 
+### Packaged Android watch-only restart and source-selection regression — 2026-09-12
+
+Rust Leptos debug APK from Actions run `34693926047`, artifact `10297522988`:
+PR head `a7af43d9d01cf1852f515f47ce0c25edacc7adad`, compiled merge
+`3a84faa04e5453286e746b9dedac3952e69ad06e`, target `aarch64-linux-android`.
+SHA-256: `359ff38efec1acb144b37636da36bdfbeaa675d8bdbfeb022a1506c97a87c34a`.
+
+Installed on an isolated Android 36 x86_64 emulator using its ARM64 translation.
+All wallet actions used the rendered controls. The public BIP39 account at
+`m/44'/1'/0'` was validated, saved with a test password, and opened. The guest
+stayed in airplane mode; an ADB reverse mapping connected guest localhost 9150
+to the explicitly authorized host Tor service only while a Chipnet wallet was
+open. No signing, broadcast, user wallet, or mainnet operation was involved.
+
+The GUI synchronized against `chipnet.imaginary.cash:50002`: 39,774 sats,
+one unspent output, two history entries, tip 323130, `ServerAssertion` evidence.
+History showed a 50,000-sat receipt and a 10,226-sat debit including fees,
+matching the CLI fixture. Removing the bridge and force-stopping/restarting the
+app preserved the saved-wallet listing. A wrong password was rejected; the
+correct password restored the same address allocation, balance and history
+offline, explicitly labelled as saved data requiring refresh.
+
+**This APK also exposed a privacy regression:** selecting `127.0.0.1:1` in
+Servers saved the field but synchronization silently selected the public
+bootstrap Electrum source. The legacy overlay writer used unrestricted Auto;
+the shared reader merged public defaults into that selection. The accompanying
+Rust repair restricts legacy overrides to their configured source IDs and
+applies the same compatibility rule when GUI/CLI reopen old saved settings.
+Its component/native/CLI checks do not replace retesting a rebuilt APK.
+
+This proves packaged watch-only persistence and stale-state restoration. It
+does not establish correct source isolation in the named APK, native Android
+Tor startup, SPV/MMR verification, SeedCash signing, or complete #71/#75 parity.
+
 ### Managed watch-only import, persistence and CLI resume — 2026-09-12
 
 Windows/Rust 1.98, `34ade590` plus the accompanying runtime, GUI/CLI and live-test
@@ -41,7 +75,7 @@ password do not appear in CLI replies or the stored account ciphertext.
 Evidence remains `ServerAssertion`, not SPV. This is managed-runtime/CLI live
 evidence, not a packaged GUI test or a SeedCash signing round trip. The Rust
 GUI's typed and scanned-account save controls compile against this same
-request; a fresh APK must still confirm the restart fix on the emulator.
+request; the separate APK evidence above covers the typed-account restart flow.
 
 ### Chipnet manual rescan and restart — 2026-09-12
 

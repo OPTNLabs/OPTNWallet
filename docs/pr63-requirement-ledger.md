@@ -32,7 +32,10 @@ in #63, not a separate wallet architecture.
 Latest bounded evidence (2026-09-12): the live Chipnet test now exercises HD
 sync, matching CLI/transport totals, encrypted checkpoint restart, stale-state
 retention and live resume. See `docs/chain-interop-evidence.md`. This closes that
-runtime/CLI evidence gap, not the packaged GUI or whole-issue milestone.
+runtime/CLI evidence gap, not the whole-issue milestone. A packaged Android
+watch-only run at `a7af43d9` also preserved the saved wallet, password gate,
+balance and history after offline restart. That APK exposed a server-override
+fallback bug; the source-isolation repair requires a rebuilt APK verification.
 
 Fresh source selection now mounts the same reviewed Rust bootstrap catalog in
 native GUI and CLI. CLI Auto reached Chipnet through `shared-native-policy`
@@ -54,7 +57,7 @@ still integration work; model/transport tests do not prove paid rounds run.
 | 1 | Auto is the default and operation-aware | **PARTIAL** | `optn-runtime/src/bootstrap.rs::shipped_bootstrap_catalog`, wired in `src-tauri/src/chain_runtime.rs::catalog_and_policy_from_app_state`; `a_fresh_install_starts_from_the_shipped_catalog` | The catalog is no longer empty on a fresh install. Operation-aware selection exists in `build_selection_plan`; the shipped set is one endpoint per network, not the upstream feeds §21.3 lists |
 | 2 | Users can pin policies/providers | **INTEGRATION** | `optn-runtime/src/network_config.rs`, `UserNetworkOverlay` | Durable model exists; the UI exposes one Electrum + one peer + one explorer rather than the full model (§21.7) |
 | 3 | Privacy / own-infrastructure fail closed | **INTEGRATION** | `ConnectionPolicy`, `optn-chain-native::build_native_chain_stack`; `remote_full_node_adapters_remain_fail_closed_even_with_tor` | Enforced at stack build. Not yet exercised end to end against a live policy change |
-| 4 | Tor modelled as transport policy, not a provider | **PROVEN** | `Bip37Transport` / `NeutrinoTransport` / `TorStatus`; `verified_tor_route_is_used_for_remote_electrum`, `plain_tcp_listener_is_not_a_tor_socks_proxy` | — |
+| 4 | Tor modelled as transport policy, not a provider | **PARTIAL** | `Bip37Transport` / `NeutrinoTransport` / `TorStatus`; routing component checks | A SOCKS greeting currently promotes conventional localhost ports to `Verified` without managed-process ownership or explicit external-proxy trust. Leptos startup does not consume the existing Tor manager's readiness; CLI needs the same transport choice |
 | 5 | Tor-required routes ineligible, no direct/DNS fallback | **INTEGRATION** | `needs_default_tor_proxy`, `endpoint_can_use_native_tor` | Unit-level. No test drives a Tor-required policy against a live route change |
 | 6 | Electrum and BIP37 preserved behind provider interfaces | **PROVEN** | `optn-chain-electrum`, `optn-chain-bip37`; live BCHD run in `docs/chain-interop-evidence.md` | — |
 | 7 | Neutrino capability-gated, does not block Auto startup | **PROVEN** | `optn-chain-neutrino::connect` records `CompactFilters` only after the genesis-filter probe commits; `a_regtest_node_does_not_answer_for_mainnet` | — |
@@ -97,9 +100,9 @@ still integration work; model/transport tests do not prove paid rounds run.
 | Four theme modes | **PROVEN** | `optn_app::ThemeMode` — Light, Gray, Green, Dark | — |
 | Default / Cyberpunk skins | **PROVEN** | `optn_app::UiSkin` | — |
 | Theme/skin persist without touching keys | **INTEGRATION** | `AppAction::SetTheme` / `SetSkin` | Persistence across restart not asserted |
-| Landing: Create / Import / Watch Only | **PROVEN** (desktop) / **DEVICE EVIDENCE** (mobile) | `optn-ui/src/onboarding.rs`; matrix `watch_only` is `e2e` on Windows and Linux, `e2e-declared` on Android | iOS and F-Droid have no packaged assertion |
+| Landing: Create / Import / Watch Only | **PROVEN** (desktop/Android landing) | `optn-ui/src/onboarding.rs`; Android APK `a7af43d9` displayed all three paths and completed typed watch-only onboarding | iOS and F-Droid have no packaged assertion; Android seed create/import and scanned-account flows need separate verification |
 | Watch Only never gains signing authority | **PROVEN** (component/runtime) | `WalletKind::WatchOnly`; `WalletSecurity::wallet_for_operation`; `watch_only_password_and_biometrics_never_grant_signing_authority` | Password/biometric storage authentication cannot return a private wallet for Spend, Reveal, Background or Chat |
-| Watch-only persistence and reopen | **INTEGRATION**; packaged verification pending | `WalletSecurityRequest::ImportWatchOnly`, encrypted `WatchOnlyFile`, shared checkpoint lifecycle, GUI `SaveWatchOnly` (typed and scanned accounts), CLI `wallet` → `watch` / `import_watch_only`; connected runtime and real stdio-process tests | The APK at `4f3face1` lost this account after force-stop. The shared storage fix is now wired and tested; a new APK must verify the correction on the emulator. Public browser previews remain explicitly temporary |
+| Watch-only persistence and reopen | **PROVEN** (runtime/CLI, Android typed import) | `WalletSecurityRequest::ImportWatchOnly`, encrypted `WatchOnlyFile`, shared checkpoint lifecycle, GUI `SaveWatchOnly`, CLI `wallet` → `watch` / `import_watch_only`; `a7af43d9` APK reopened encrypted Chipnet account/history offline after force-stop and rejected a wrong password | The earlier `4f3face1` loss is corrected. Scanned import and macOS need packaged verification. Public browser previews remain explicitly temporary; source-isolation regression in the tested APK is tracked separately |
 | Master fingerprint asked once, persisted | **INTEGRATION** | `OpenedWallet::master_fingerprint` | Matrix evidence is `unit` on every surface except Android `e2e-declared` |
 | Home / portfolio | **PARTIAL** | `AppRoute::WalletHome` | Exists; not audited against `docs/ui-overhaul` |
 | Assets | **INTEGRATION** | `optn_app::assets_view_model`; `categories_total_across_every_coin_that_carries_them` | Leads with held categories rather than outpoints. Category is still raw hex until BCMR resolution is wired to it |

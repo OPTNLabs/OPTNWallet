@@ -283,6 +283,93 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn chipnet_server_dispatch_restricts_selection_until_explicit_default_reset() {
+        use crate::appearance::tests::TestDirectory;
+        use optn_app::{AppAction, AppState, ServerKind};
+        use optn_core::network::Network;
+        use optn_runtime::chain::{build_selection_plan, ConnectionPolicy, SourceId};
+
+        let directory = TestDirectory::new();
+        let appearance = directory.store();
+        let network_settings = NetworkSettingsStore::new(directory.0.clone());
+        let mut state = AppState {
+            network: Network::Chipnet,
+            ..AppState::default()
+        };
+        state.apply(AppAction::OpenCreatedWallet {
+            name: "Public source-selection fixture".into(),
+            receive_address: "bchtest:qqaz6s295ncfs53m86qj0uw6sl8u2kuw0ymst35fx4".into(),
+            account_path: "m/44'/1'/0'".into(),
+        });
+        let runtime = optn_runtime::AppRuntime::spawn(state);
+        dispatch_action(
+            &runtime,
+            &appearance,
+            &network_settings,
+            AppAction::SetServer {
+                kind: ServerKind::Electrum,
+                entry: "127.0.0.1:1".into(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            runtime
+                .state()
+                .servers
+                .for_network(Network::Chipnet)
+                .electrum
+                .as_deref(),
+            Some("127.0.0.1:1")
+        );
+        let (catalog, policy) = network_settings
+            .chain_selection(Network::Chipnet)
+            .unwrap()
+            .unwrap();
+        let selection = build_selection_plan(&catalog, &policy);
+        assert_eq!(selection.primary, [SourceId::new("host:127.0.0.1")]);
+        assert!(selection.fallback.is_empty());
+
+        // The acknowledgement must survive a new adapter reading the actual file.
+        let restarted = NetworkSettingsStore::new(directory.0.clone());
+        let mut restored = AppState::default();
+        restarted.restore(&mut restored).unwrap();
+        assert_eq!(restored.servers, runtime.state().servers);
+        let (catalog, policy) = restarted
+            .chain_selection(Network::Chipnet)
+            .unwrap()
+            .unwrap();
+        assert_eq!(build_selection_plan(&catalog, &policy), selection);
+
+        dispatch_action(
+            &runtime,
+            &appearance,
+            &network_settings,
+            AppAction::UseNetworkDefaultServers,
+        )
+        .await
+        .unwrap();
+        assert!(runtime.state().wallet.is_some());
+        assert!(runtime
+            .state()
+            .servers
+            .for_network(Network::Chipnet)
+            .is_empty());
+        let (catalog, policy) = restarted
+            .chain_selection(Network::Chipnet)
+            .unwrap()
+            .unwrap();
+        let defaults = optn_runtime::bootstrap::shipped_source_catalog(Network::Chipnet);
+        assert_eq!(policy, ConnectionPolicy::auto());
+        assert_eq!(
+            build_selection_plan(&catalog, &policy),
+            build_selection_plan(&defaults, &ConnectionPolicy::auto())
+        );
+        restarted.restore(&mut restored).unwrap();
+        assert!(restored.servers.for_network(Network::Chipnet).is_empty());
+    }
+
+    #[tokio::test]
     async fn replacing_an_inactive_network_saves_that_network_without_switching() {
         use crate::appearance::tests::TestDirectory;
         use crate::network_config::NetworkSettingsStore;
