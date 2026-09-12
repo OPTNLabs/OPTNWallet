@@ -17,7 +17,7 @@
 //! occasionally what an informed user wants and never what a default should
 //! do.
 //!
-//! **Mainnet is refused by the encoder, not by convention.** The air-gap path
+//! **Mainnet is refused by envelope validation and finalization.** The air-gap path
 //! is chipnet-only while it is being proven, and "we agreed not to" is not a
 //! control.
 //!
@@ -252,6 +252,19 @@ pub struct Psbt {
 /// wire parser the RPA scanner uses, rather than a second one written here —
 /// two transaction parsers that disagree is a class of bug worth not having.
 pub fn parse(raw: &[u8]) -> Result<Psbt> {
+    Ok(parse_maps(raw)?.psbt)
+}
+
+type Fields = Vec<(Vec<u8>, Vec<u8>)>;
+
+struct ParsedMaps {
+    psbt: Psbt,
+    global: Fields,
+    inputs: Vec<Fields>,
+    outputs: Vec<Fields>,
+}
+
+fn parse_maps(raw: &[u8]) -> Result<ParsedMaps> {
     if raw.len() < PSBT_MAGIC.len() || &raw[..PSBT_MAGIC.len()] != PSBT_MAGIC {
         return Err(CliError::Protocol(
             "not a PSBT: the magic bytes are missing".into(),
@@ -295,6 +308,7 @@ pub fn parse(raw: &[u8]) -> Result<Psbt> {
     }
 
     let mut inputs = Vec::with_capacity(tx_inputs.len());
+    let mut input_maps = Vec::with_capacity(tx_inputs.len());
     for index in 0..tx_inputs.len() {
         let fields = cursor
             .read_map(&[
@@ -311,9 +325,11 @@ pub fn parse(raw: &[u8]) -> Result<Psbt> {
             ])
             .map_err(|error| CliError::Protocol(format!("input {index}: {error}")))?;
         inputs.push(input_from_fields(index, &fields)?);
+        input_maps.push(fields);
     }
+    let mut outputs = Vec::with_capacity(tx_outputs.len());
     for index in 0..tx_outputs.len() {
-        cursor
+        let fields = cursor
             .read_map(&[
                 OUT_REDEEM_SCRIPT,
                 0x01,
@@ -322,6 +338,7 @@ pub fn parse(raw: &[u8]) -> Result<Psbt> {
                 OUT_CASHTOKEN,
             ])
             .map_err(|error| CliError::Protocol(format!("output {index}: {error}")))?;
+        outputs.push(fields);
     }
     if cursor.at != raw.len() {
         return Err(CliError::Protocol(
@@ -329,11 +346,179 @@ pub fn parse(raw: &[u8]) -> Result<Psbt> {
         ));
     }
 
-    Ok(Psbt {
-        unsigned_tx,
-        inputs,
-        output_count: tx_outputs.len(),
+    Ok(ParsedMaps {
+        psbt: Psbt {
+            unsigned_tx,
+            inputs,
+            output_count: tx_outputs.len(),
+        },
+        global,
+        inputs: input_maps,
+        outputs,
     })
+}
+
+/// Finalize a signed return against the exact PSBT approved by the caller.
+///
+/// Initial SeedCash scope: Chipnet, token-free P2PKH, SIGHASH_ALL|FORKID,
+/// complete non-witness parent transactions, and one partial signature per
+/// input. Signers must retain all metadata; map order may change. No finalized
+/// script from the signer is trusted. The result is raw transaction bytes,
+/// not a broadcast or a claim that the committed prevouts remain unspent.
+pub fn finalize_p2pkh(
+    original_psbt: &[u8],
+    signed_psbt: &[u8],
+    network: Network,
+) -> Result<Vec<u8>> {
+    use crate::tx::{self, Output, Transaction, Utxo};
+
+    if network != Network::Chipnet {
+        return Err(CliError::Usage("PSBT finalization is chipnet-only".into()));
+    }
+    let original = parse_maps(original_psbt)?;
+    let signed = parse_maps(signed_psbt)?;
+    let invalid =
+        || CliError::Protocol("signed PSBT does not retain the approved P2PKH intent".into());
+    if original.psbt.unsigned_tx != signed.psbt.unsigned_tx
+        || !same_fields(&original.global, &signed.global, false)
+        || original.inputs.len() != signed.inputs.len()
+        || original.outputs.len() != signed.outputs.len()
+        || original
+            .outputs
+            .iter()
+            .zip(&signed.outputs)
+            .any(|(a, b)| !same_fields(a, b, false))
+    {
+        return Err(invalid());
+    }
+    let decoded = tx::decode(&original.psbt.unsigned_tx)?;
+    if decoded.inputs.is_empty() || decoded.outputs.is_empty() {
+        return Err(invalid());
+    }
+    // The v145 fields displayed by a signer must agree with the embedded tx.
+    for (fields, output) in original.outputs.iter().zip(&decoded.outputs) {
+        if output.token.is_some()
+            || fields
+                .iter()
+                .any(|(key, _)| matches!(key[0], OUT_REDEEM_SCRIPT | 0x01 | OUT_CASHTOKEN))
+            || field_value(fields, OUT_AMOUNT).is_some_and(|v| v != output.value.to_le_bytes())
+            || field_value(fields, OUT_SCRIPT).is_some_and(|v| v != output.script_pubkey)
+        {
+            return Err(invalid());
+        }
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    let mut inputs = Vec::with_capacity(decoded.inputs.len());
+    let mut signatures = Vec::with_capacity(decoded.inputs.len());
+    for (index, ((txid, vout, sequence), fields)) in
+        decoded.inputs.iter().zip(&original.inputs).enumerate()
+    {
+        let returned = &signed.inputs[index];
+        let metadata = &original.psbt.inputs[index];
+        if !seen.insert((*txid, *vout))
+            || !same_fields(fields, returned, true)
+            || metadata.sighash_type != Some(SIGHASH_ALL_FORKID)
+            || metadata.origins.len() != 1
+            || fields.iter().any(|(key, _)| {
+                matches!(
+                    key[0],
+                    IN_PARTIAL_SIG | IN_WITNESS_UTXO | IN_REDEEM_SCRIPT | 0x05 | 0x07 | 0x08
+                )
+            })
+        {
+            return Err(invalid());
+        }
+        let mut display_txid = *txid;
+        display_txid.reverse();
+        if field_value(fields, IN_PREVIOUS_TXID).is_some_and(|v| v != display_txid)
+            || field_value(fields, IN_OUTPUT_INDEX).is_some_and(|v| v != vout.to_le_bytes())
+            || field_value(fields, IN_SEQUENCE).is_some_and(|v| v != sequence.to_le_bytes())
+        {
+            return Err(invalid());
+        }
+        let parent = field_value(fields, IN_NON_WITNESS_UTXO).ok_or_else(invalid)?;
+        if tx::double_sha256(parent) != *txid {
+            return Err(invalid());
+        }
+        let parent = tx::decode(parent)?;
+        let prevout = parent.outputs.get(*vout as usize).ok_or_else(invalid)?;
+        let origin = &metadata.origins[0];
+        let script = &prevout.script_pubkey;
+        if prevout.token.is_some()
+            || script.len() != 25
+            || script[..3] != [0x76, 0xa9, 0x14]
+            || script[23..] != [0x88, 0xac]
+            || script[3..23] != crate::hd::hash160(&origin.pubkey)
+        {
+            return Err(invalid());
+        }
+        let mut partials = returned.iter().filter(|(key, _)| key[0] == IN_PARTIAL_SIG);
+        let (key, signature) = partials.next().ok_or_else(invalid)?;
+        if partials.next().is_some() || key[1..] != origin.pubkey {
+            return Err(invalid());
+        }
+        inputs.push(Utxo {
+            txid: *txid,
+            vout: *vout,
+            value: prevout.value,
+            script_pubkey: script.clone(),
+        });
+        signatures.push((&origin.pubkey, signature));
+    }
+    // Refuse inflation/overflow independently of signature validity.
+    let input_value = inputs
+        .iter()
+        .try_fold(0u64, |sum, input| sum.checked_add(input.value))
+        .ok_or_else(invalid)?;
+    let output_value = decoded
+        .outputs
+        .iter()
+        .try_fold(0u64, |sum, output| sum.checked_add(output.value))
+        .ok_or_else(invalid)?;
+    if output_value > input_value {
+        return Err(invalid());
+    }
+    let sequences: Vec<_> = decoded.inputs.iter().map(|input| input.2).collect();
+    let transaction = Transaction {
+        version: decoded.version,
+        inputs,
+        outputs: decoded
+            .outputs
+            .into_iter()
+            .map(|output| Output::new(output.value, output.script_pubkey))
+            .collect(),
+        locktime: decoded.locktime,
+        sequence: 0xffff_ffff,
+    };
+    let scripts = signatures
+        .iter()
+        .enumerate()
+        .map(|(index, (key, signature))| {
+            let digest =
+                tx::double_sha256(&transaction.sighash_preimage_with_sequences(index, &sequences)?);
+            tx::verified_p2pkh_script_sig(key.as_slice(), signature, &digest)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    transaction.serialize_with_sequences(&scripts, &sequences)
+}
+
+fn field_value(fields: &Fields, kind: u8) -> Option<&[u8]> {
+    fields
+        .iter()
+        .find(|(key, _)| key.as_slice() == [kind])
+        .map(|(_, value)| value.as_slice())
+}
+
+fn same_fields(original: &Fields, returned: &Fields, allow_signatures: bool) -> bool {
+    let retained: std::collections::BTreeMap<_, _> = returned
+        .iter()
+        .filter(|(key, _)| !allow_signatures || key[0] != IN_PARTIAL_SIG)
+        .map(|(key, value)| (key, value))
+        .collect();
+    retained.len() == original.len()
+        && original
+            .iter()
+            .all(|(key, value)| retained.get(key) == Some(&value))
 }
 
 fn input_from_fields(index: usize, fields: &[(Vec<u8>, Vec<u8>)]) -> Result<PsbtInput> {
@@ -1131,7 +1316,7 @@ mod tests {
     }
 
     #[test]
-    fn the_only_accepted_air_gap_sighash_is_c1() {
+    fn explicit_air_gap_sighashes_default_to_all_forkid() {
         // The rule this module exists for. A wrong sighash is not caught by the
         // device, or by this wallet at signing time -- only by the network, at
         // broadcast, long after the device has been put away.
@@ -1219,7 +1404,7 @@ mod tests {
     }
 
     #[test]
-    fn mainnet_is_refused_by_the_encoder_rather_than_by_convention() {
+    fn watch_only_envelope_validation_refuses_mainnet() {
         let raw = psbt_with_sighash(Some(WATCH_ONLY_SIGHASH));
         let error =
             check_watch_only(&raw, Network::Mainnet).expect_err("mainnet air-gap is not proven");
@@ -1360,7 +1545,7 @@ mod tests {
     }
 
     #[test]
-    fn the_sighash_is_not_a_parameter_the_caller_can_get_wrong() {
+    fn unsigned_encoder_defaults_to_all_forkid_and_validates_explicit_choices() {
         // The rule is stated once. A builder that could write anything else
         // would be a second place for it to be wrong, so the only sighash the
         // encoder can produce is the one the verifier accepts.
@@ -1645,5 +1830,340 @@ mod tests {
             );
         }
         assert_eq!(SeedCashQr::fragment_label(77), None);
+    }
+
+    fn seedcash_signed_fixture() -> (Vec<u8>, Vec<u8>) {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../src/services/psbt/__tests__/fixtures/seedcash-signed-roundtrip.json"
+        ))
+        .unwrap();
+        let unhex = |name: &str| {
+            fixture[name]
+                .as_str()
+                .unwrap()
+                .as_bytes()
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+                .collect()
+        };
+        (unhex("unsigned_hex"), unhex("signed_hex"))
+    }
+
+    fn encode_maps(maps: &ParsedMaps) -> Vec<u8> {
+        let mut raw = PSBT_MAGIC.to_vec();
+        for fields in std::iter::once(&maps.global)
+            .chain(&maps.inputs)
+            .chain(&maps.outputs)
+        {
+            for (key, value) in fields {
+                record(&mut raw, key, value);
+            }
+            raw.push(0);
+        }
+        raw
+    }
+
+    #[test]
+    fn finalize_p2pkh_accepts_captured_seedcash_schnorr_return() {
+        let (original, signed) = seedcash_signed_fixture();
+        let raw = finalize_p2pkh(&original, &signed, Network::Chipnet).unwrap();
+        let decoded = crate::tx::decode(&raw).unwrap();
+        assert_eq!(
+            decoded.outputs.iter().map(|o| o.value).sum::<u64>(),
+            999_750
+        );
+        let (inputs, _) = parse_transaction(&raw).unwrap();
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].2.len(), 100);
+        assert_eq!(inputs[0].2[0], 65); // BCH Schnorr plus 0x41
+        assert_eq!(inputs[0].2[65], 0x41);
+        assert_eq!(inputs[0].2[66], 33);
+        // SeedCash legitimately reorders input fields; all maps may reorder.
+        let mut reordered = parse_maps(&signed).unwrap();
+        reordered.global.reverse();
+        for fields in reordered.inputs.iter_mut().chain(&mut reordered.outputs) {
+            fields.reverse();
+        }
+        assert_eq!(
+            finalize_p2pkh(&original, &encode_maps(&reordered), Network::Chipnet).unwrap(),
+            raw
+        );
+    }
+
+    #[test]
+    fn finalize_p2pkh_binds_every_retained_field_and_rejects_stripping() {
+        let (original, signed) = seedcash_signed_fixture();
+        // Exercise each global/input/output value and removal independently.
+        // This includes the unsigned tx, parent UTXO, origin and sighash.
+        let signed_maps = parse_maps(&signed).unwrap();
+        let lengths: Vec<_> = std::iter::once(&signed_maps.global)
+            .chain(&signed_maps.inputs)
+            .chain(&signed_maps.outputs)
+            .map(Vec::len)
+            .collect();
+        for (map_index, count) in lengths.into_iter().enumerate() {
+            for field_index in 0..count {
+                for remove in [false, true] {
+                    let mut altered = parse_maps(&signed).unwrap();
+                    let fields = std::iter::once(&mut altered.global)
+                        .chain(&mut altered.inputs)
+                        .chain(&mut altered.outputs)
+                        .nth(map_index)
+                        .unwrap();
+                    if remove {
+                        fields.remove(field_index);
+                    } else {
+                        fields[field_index].1[0] ^= 1;
+                    }
+                    assert!(
+                        finalize_p2pkh(&original, &encode_maps(&altered), Network::Chipnet)
+                            .is_err(),
+                        "map {map_index} field {field_index} removal {remove}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn finalize_p2pkh_rejects_missing_malformed_and_wrong_key_signatures() {
+        let (original, signed) = seedcash_signed_fixture();
+        assert!(finalize_p2pkh(&original, &original, Network::Chipnet).is_err());
+        for replacement in [vec![], vec![0x41], vec![0; 65], vec![0x30, 0x01, 0x41]] {
+            let mut altered = parse_maps(&signed).unwrap();
+            altered.inputs[0]
+                .iter_mut()
+                .find(|(k, _)| k[0] == IN_PARTIAL_SIG)
+                .unwrap()
+                .1 = replacement;
+            assert!(finalize_p2pkh(&original, &encode_maps(&altered), Network::Chipnet).is_err());
+        }
+        let mut altered = parse_maps(&signed).unwrap();
+        altered.inputs[0]
+            .iter_mut()
+            .find(|(k, _)| k[0] == IN_PARTIAL_SIG)
+            .unwrap()
+            .0[1] ^= 1;
+        assert!(finalize_p2pkh(&original, &encode_maps(&altered), Network::Chipnet).is_err());
+        let mut altered = parse_maps(&signed).unwrap();
+        let mut extra = altered.inputs[0]
+            .iter()
+            .find(|(k, _)| k[0] == IN_PARTIAL_SIG)
+            .unwrap()
+            .clone();
+        extra.0[1] ^= 1;
+        altered.inputs[0].push(extra);
+        assert!(finalize_p2pkh(&original, &encode_maps(&altered), Network::Chipnet).is_err());
+        assert!(finalize_p2pkh(&signed, &signed, Network::Chipnet).is_err());
+    }
+
+    #[test]
+    fn finalize_p2pkh_checks_parent_hash_and_display_fields_even_when_retained() {
+        let (original, signed) = seedcash_signed_fixture();
+        for field in [
+            IN_NON_WITNESS_UTXO,
+            IN_PREVIOUS_TXID,
+            IN_OUTPUT_INDEX,
+            IN_SEQUENCE,
+        ] {
+            let mut a = parse_maps(&original).unwrap();
+            let mut b = parse_maps(&signed).unwrap();
+            for maps in [&mut a, &mut b] {
+                // Altering only the parent's version preserves the committed
+                // output amount/script and signature digest, but changes txid.
+                maps.inputs[0]
+                    .iter_mut()
+                    .find(|(key, _)| key.as_slice() == [field])
+                    .unwrap()
+                    .1[0] ^= 1;
+            }
+            assert!(finalize_p2pkh(&encode_maps(&a), &encode_maps(&b), Network::Chipnet).is_err());
+        }
+        for field in [OUT_AMOUNT, OUT_SCRIPT] {
+            let mut a = parse_maps(&original).unwrap();
+            let mut b = parse_maps(&signed).unwrap();
+            for maps in [&mut a, &mut b] {
+                maps.outputs[0]
+                    .iter_mut()
+                    .find(|(key, _)| key.as_slice() == [field])
+                    .unwrap()
+                    .1[0] ^= 1;
+            }
+            assert!(finalize_p2pkh(&encode_maps(&a), &encode_maps(&b), Network::Chipnet).is_err());
+        }
+        // An amount-and-script record is not proof of its outpoint's parent.
+        let mut a = parse_maps(&original).unwrap();
+        let mut b = parse_maps(&signed).unwrap();
+        for maps in [&mut a, &mut b] {
+            let parent = maps.inputs[0]
+                .iter_mut()
+                .find(|(key, _)| key.as_slice() == [IN_NON_WITNESS_UTXO])
+                .unwrap();
+            let output = crate::tx::decode(&parent.1).unwrap().outputs.remove(0);
+            parent.0 = vec![IN_WITNESS_UTXO];
+            parent.1 = output.value.to_le_bytes().to_vec();
+            parent.1.extend(compact_size(output.script_pubkey.len()));
+            parent.1.extend(output.script_pubkey);
+        }
+        assert!(finalize_p2pkh(&encode_maps(&a), &encode_maps(&b), Network::Chipnet).is_err());
+    }
+
+    #[test]
+    fn finalize_p2pkh_refuses_unsupported_network_and_script_metadata() {
+        let (original, signed) = seedcash_signed_fixture();
+        assert!(finalize_p2pkh(&original, &signed, Network::Mainnet).is_err());
+        for (output, kind) in [
+            (false, IN_REDEEM_SCRIPT),
+            (false, 0x05),
+            (false, 0x07),
+            (false, 0x08),
+            (true, OUT_CASHTOKEN),
+            (true, OUT_REDEEM_SCRIPT),
+        ] {
+            let mut a = parse_maps(&original).unwrap();
+            let mut b = parse_maps(&signed).unwrap();
+            for maps in [&mut a, &mut b] {
+                let fields = if output {
+                    &mut maps.outputs[0]
+                } else {
+                    &mut maps.inputs[0]
+                };
+                fields.push((vec![kind], vec![0x51]));
+            }
+            assert!(finalize_p2pkh(&encode_maps(&a), &encode_maps(&b), Network::Chipnet).is_err());
+        }
+        for sighash in [0x42u32, 0x43, 0xc1, 0xc2, 0xc3] {
+            let mut a = parse_maps(&original).unwrap();
+            let mut b = parse_maps(&signed).unwrap();
+            for maps in [&mut a, &mut b] {
+                maps.inputs[0]
+                    .iter_mut()
+                    .find(|(k, _)| k[0] == IN_SIGHASH_TYPE)
+                    .unwrap()
+                    .1 = sighash.to_le_bytes().to_vec();
+            }
+            assert!(finalize_p2pkh(&encode_maps(&a), &encode_maps(&b), Network::Chipnet).is_err());
+        }
+    }
+
+    #[test]
+    fn finalize_p2pkh_verifies_ecdsa_and_preserves_each_sequence() {
+        use crate::tx::{self, Output, Transaction, Utxo};
+        use k256::ecdsa::{signature::hazmat::PrehashSigner, Signature, SigningKey};
+        use k256::elliptic_curve::rand_core::OsRng;
+
+        let keys = [
+            SigningKey::random(&mut OsRng),
+            SigningKey::random(&mut OsRng),
+        ];
+        let sequences = [0xffff_fffd, 42];
+        let mut specs = Vec::new();
+        let mut utxos = Vec::new();
+        for (index, key) in keys.iter().enumerate() {
+            let pubkey: [u8; 33] = key
+                .verifying_key()
+                .to_encoded_point(true)
+                .as_bytes()
+                .try_into()
+                .unwrap();
+            let script: Vec<_> = [0x76, 0xa9, 0x14]
+                .into_iter()
+                .chain(crate::hd::hash160(&pubkey))
+                .chain([0x88, 0xac])
+                .collect();
+            let parent = Transaction::new(
+                vec![Utxo {
+                    txid: [0; 32],
+                    vout: index as u32,
+                    value: 10_000,
+                    script_pubkey: vec![],
+                }],
+                vec![Output::new(10_000, script.clone())],
+            )
+            .serialize_with_sequences(&[vec![]], &[0xffff_ffff])
+            .unwrap();
+            let txid = tx::double_sha256(&parent);
+            let mut display = txid;
+            display.reverse();
+            specs.push(PsbtInputSpec {
+                txid_display: display,
+                vout: 0,
+                sequence: Some(sequences[index]),
+                satoshis: 10_000,
+                locking_bytecode: script.clone(),
+                previous_transaction: Some(parent),
+                redeem_script: None,
+                partial_signatures: vec![],
+                derivations: vec![KeyOrigin {
+                    pubkey,
+                    fingerprint: [0; 4],
+                    path: vec![0x8000_002c, 0x8000_0091, 0x8000_0002, 0, index as u32],
+                }],
+            });
+            utxos.push(Utxo {
+                txid,
+                vout: 0,
+                value: 10_000,
+                script_pubkey: script,
+            });
+        }
+        let outputs = [PsbtOutputSpec {
+            satoshis: 19_000,
+            locking_bytecode: specs[0].locking_bytecode.clone(),
+            redeem_script: None,
+            derivations: vec![],
+            token_prefix: None,
+        }];
+        let mut original = parse_maps(&encode_unsigned(&specs, &outputs, &[]).unwrap()).unwrap();
+        // Non-default version and locktime must survive as well as sequences.
+        let unsigned = &mut original
+            .global
+            .iter_mut()
+            .find(|(k, _)| k[0] == GLOBAL_UNSIGNED_TX)
+            .unwrap()
+            .1;
+        unsigned[..4].copy_from_slice(&1u32.to_le_bytes());
+        let end = unsigned.len();
+        unsigned[end - 4..].copy_from_slice(&123u32.to_le_bytes());
+        let original = encode_maps(&original);
+        let transaction = Transaction {
+            version: 1,
+            inputs: utxos,
+            outputs: vec![Output::new(19_000, outputs[0].locking_bytecode.clone())],
+            locktime: 123,
+            sequence: 0,
+        };
+        let mut signed = parse_maps(&original).unwrap();
+        let mut expected_scripts = Vec::new();
+        for (index, key) in keys.iter().enumerate() {
+            let digest = tx::double_sha256(
+                &transaction
+                    .sighash_preimage_with_sequences(index, &sequences)
+                    .unwrap(),
+            );
+            let signature: Signature = key.sign_prehash(&digest).unwrap();
+            let signature = signature.normalize_s().unwrap_or(signature);
+            let mut bytes = signature.to_der().as_bytes().to_vec();
+            bytes.push(0x41);
+            let pubkey = specs[index].derivations[0].pubkey;
+            expected_scripts.push(tx::verified_p2pkh_script_sig(&pubkey, &bytes, &digest).unwrap());
+            signed.inputs[index].push(([vec![IN_PARTIAL_SIG], pubkey.to_vec()].concat(), bytes));
+        }
+        let finalized = finalize_p2pkh(&original, &encode_maps(&signed), Network::Chipnet).unwrap();
+        assert_eq!(
+            finalized,
+            transaction
+                .serialize_with_sequences(&expected_scripts, &sequences)
+                .unwrap()
+        );
+        let decoded = tx::decode(&finalized).unwrap();
+        assert_eq!(decoded.version, 1);
+        assert_eq!(decoded.locktime, 123);
+        assert_eq!(
+            decoded.inputs.iter().map(|i| i.2).collect::<Vec<_>>(),
+            sequences
+        );
     }
 }

@@ -13,6 +13,7 @@
 
 pub mod addon;
 pub mod airgap;
+pub mod airgap_spend;
 pub mod asert;
 pub mod bcmr;
 pub mod cashaddr;
