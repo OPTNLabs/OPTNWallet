@@ -111,6 +111,10 @@
       "integration_id": 15368
     },
     {
+      "context": "Preview (macos-arm64-leptos)",
+      "integration_id": 15368
+    },
+    {
       "context": "Preview (macos-x64)",
       "integration_id": 15368
     },
