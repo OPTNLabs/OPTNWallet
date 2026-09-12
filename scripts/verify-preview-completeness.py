@@ -6,6 +6,7 @@ temporary directory. No wallet or network is involved.
 """
 
 import os
+import hashlib
 from pathlib import Path
 import shutil
 import subprocess
@@ -108,3 +109,24 @@ with tempfile.TemporaryDirectory(prefix="optn-preview-probe-") as temporary:
     if "present=true" not in (directory / "probe-output.txt").read_text(encoding="utf-8"):
         raise AssertionError("CLI probe did not enable its build matrix")
 print("CLI deletion fails the probe instead of skipping its build matrix")
+
+android = workflow("tauri-rust-ui-mobile.yml")["jobs"]["android"]
+with tempfile.TemporaryDirectory(prefix="optn-rust-apk-") as temporary:
+    directory = Path(temporary)
+    body = step(android, "Verify APK")["run"]
+    environment = {"GITHUB_SHA": "fixture-merge", "PR_HEAD_SHA": "fixture-head"}
+    apk = directory / "src-tauri/gen/android/app/build/outputs/apk/arm64/debug/app-arm64-debug.apk"
+    apk.parent.mkdir(parents=True)
+    check(body, directory, False, "missing Rust APK", environment)
+    apk.write_bytes(b"")
+    check(body, directory, False, "empty Rust APK", environment)
+    apk.write_bytes(b"synthetic Rust APK")
+    check(body, directory, True, "one Rust APK", environment)
+    artifact = directory / "artifacts/optn-leptos-android-aarch64-debug.apk"
+    assert artifact.read_bytes() == apk.read_bytes()
+    assert hashlib.sha256(artifact.read_bytes()).hexdigest() in (directory / "artifacts/SHA256SUMS").read_text()
+    assert "pr_head_sha=fixture-head" in (directory / "artifacts/build-info.txt").read_text()
+    extra = apk.with_name("extra-debug.apk")
+    extra.write_bytes(b"unexpected duplicate")
+    check(body, directory, False, "ambiguous Rust APK set", environment)
+print("Rust APK delivery rejects missing, empty and ambiguous builds; preserves checksum and revision")
