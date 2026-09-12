@@ -544,9 +544,7 @@ mod watch_only_file_tests {
     use k256::elliptic_curve::rand_core::{OsRng, RngCore};
 
     fn random_bytes<const N: usize>() -> [u8; N] {
-        let mut bytes = [0; N];
-        OsRng.fill_bytes(&mut bytes);
-        bytes
+        std::array::from_fn(|_| OsRng.next_u32() as u8)
     }
 
     fn entropy() -> [u8; 56] {
