@@ -21,7 +21,6 @@ use optn_runtime::{
     AppRuntime, DirectTransport,
 };
 use optn_transport::{AppTransport, WireState};
-use rand::RngCore;
 use std::time::Duration;
 
 #[tokio::test]
@@ -150,10 +149,15 @@ async fn chipnet_hd_account_reaches_shared_runtime_and_transport() {
     let checkpoint_file = optn_chain_native::wallet_checkpoint::WalletCheckpointFile::new(
         checkpoint_dir.path().join("live.state"),
     );
-    let mut password = [0u8; 32];
-    let mut salt = [0u8; optn_core::wallet_pack::SALT_LEN];
-    rand::rngs::OsRng.fill_bytes(&mut password);
-    rand::rngs::OsRng.fill_bytes(&mut salt);
+    // Drawn straight from the OS rather than zero-initialised and then
+    // overwritten. The two are identical at runtime -- `fill_bytes` replaces
+    // every byte -- but taint analysis follows the `[0u8; N]` literal into
+    // `derive_key` and reports a hard-coded salt, because it cannot see that
+    // the placeholder never survives. Writing it this way removes the
+    // placeholder rather than the warning, so the finding stays meaningful if
+    // a real constant ever does reach a salt.
+    let password: [u8; 32] = rand::random();
+    let salt: [u8; optn_core::wallet_pack::SALT_LEN] = rand::random();
     let password: String = password.iter().map(|byte| format!("{byte:02x}")).collect();
     let key = optn_core::wallet_pack::derive_key(&password, &salt).unwrap();
     checkpoint_file
