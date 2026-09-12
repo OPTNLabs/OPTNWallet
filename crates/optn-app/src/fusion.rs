@@ -488,6 +488,18 @@ pub fn fusion_view_model(
     }
 }
 
+impl Default for AutoFusionSettings {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Default for FusionSession {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -712,17 +724,5 @@ mod tests {
         let view = fusion_view_model(policy(true, true, false), &session, false, true);
         assert!(!view.can_start);
         assert_eq!(view.status, "No wallet open");
-    }
-}
-
-impl Default for AutoFusionSettings {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Default for FusionSession {
-    fn default() -> Self {
-        Self::new()
     }
 }
