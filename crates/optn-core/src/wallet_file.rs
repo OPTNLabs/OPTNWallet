@@ -541,13 +541,20 @@ impl WatchOnlyFile {
 mod watch_only_file_tests {
     use super::*;
     use crate::hd::BIP39_TEST_VECTOR_MNEMONIC;
+    use k256::elliptic_curve::rand_core::{OsRng, RngCore};
 
-    fn entropy(round: u8) -> [u8; 56] {
-        std::array::from_fn(|i| round.wrapping_mul(71).wrapping_add(i as u8))
+    fn random_bytes<const N: usize>() -> [u8; N] {
+        let mut bytes = [0; N];
+        OsRng.fill_bytes(&mut bytes);
+        bytes
     }
 
-    fn checkpoint_entropy() -> [u8; 32] {
-        std::array::from_fn(|i| (i as u8).wrapping_mul(13).wrapping_add(3))
+    fn entropy() -> [u8; 56] {
+        random_bytes()
+    }
+
+    fn password() -> Zeroizing<String> {
+        Zeroizing::new(STANDARD.encode(random_bytes::<32>()))
     }
 
     fn xpub() -> String {
@@ -557,7 +564,7 @@ mod watch_only_file_tests {
             .unwrap()
     }
 
-    fn create(password: &str) -> WatchOnlyFile {
+    fn create(password: &str, checkpoint_key: &[u8; 32]) -> WatchOnlyFile {
         WatchOnlyFile::create(
             "Public watch fixture",
             &xpub(),
@@ -566,15 +573,18 @@ mod watch_only_file_tests {
             password,
             Network::Chipnet,
             AccountPath::new(145, 2).unwrap(),
-            &entropy(1),
-            &checkpoint_entropy(),
+            &entropy(),
+            checkpoint_key,
         )
         .unwrap()
     }
 
     #[test]
     fn encrypted_watch_only_round_trip_and_rotation_keep_private_checkpoint_key() {
-        let file = create("");
+        let password = password();
+        let new_password = self::password();
+        let checkpoint_key = Zeroizing::new(random_bytes::<32>());
+        let file = create(&password, &checkpoint_key);
         let encoded = file.encode().unwrap();
         let text = std::str::from_utf8(&encoded).unwrap();
         assert!(text.contains("Public watch fixture"));
@@ -583,24 +593,24 @@ mod watch_only_file_tests {
             "chipnet".into(),
             "m/44'/145'/2'".into(),
             "a1b2c3d4".into(),
-            STANDARD.encode(checkpoint_entropy()),
+            STANDARD.encode(*checkpoint_key),
         ] {
             assert!(!text.contains(&private));
         }
         let parsed = WatchOnlyFile::parse(&encoded).unwrap();
-        let unlocked = parsed.unlock("").unwrap();
+        let unlocked = parsed.unlock(&password).unwrap();
         assert_eq!(unlocked.network, Network::Chipnet);
         assert_eq!(unlocked.account.path(), "m/44'/145'/2'");
         assert_eq!(unlocked.account_xpub, xpub());
         assert_eq!(unlocked.master_fingerprint.as_deref(), Some("a1b2c3d4"));
-        assert_eq!(unlocked.checkpoint_key.expose(), &checkpoint_entropy());
+        assert_eq!(unlocked.checkpoint_key.expose(), &*checkpoint_key);
         assert_ne!(
             unlocked.checkpoint_key.expose().as_slice(),
-            &entropy(1)[..32]
+            STANDARD.decode(&file.kdf_salt).unwrap()
         );
         assert_eq!(format!("{parsed:?}"), "WatchOnlyFile(<redacted>)");
         assert_eq!(format!("{unlocked:?}"), "UnlockedWatchOnly(<redacted>)");
-        let checkpoint_nonce: [u8; 12] = entropy(9)[32..44].try_into().unwrap();
+        let checkpoint_nonce = random_bytes::<12>();
         let checkpoint = wallet_pack::seal(
             &unlocked.checkpoint_key,
             &checkpoint_nonce,
@@ -608,19 +618,14 @@ mod watch_only_file_tests {
         )
         .unwrap();
         let rotated = parsed
-            .change_password(
-                "",
-                "new fixture password",
-                "new fixture password",
-                &entropy(2),
-            )
+            .change_password(&password, &new_password, &new_password, &entropy())
             .unwrap();
         assert_ne!(rotated.kdf_salt, parsed.kdf_salt);
         assert_ne!(rotated.encrypted_payload, parsed.encrypted_payload);
-        assert!(rotated.unlock("").is_err());
+        assert!(rotated.unlock(&password).is_err());
         let reopened = WatchOnlyFile::parse(&rotated.encode().unwrap())
             .unwrap()
-            .unlock("new fixture password")
+            .unlock(&new_password)
             .unwrap();
         assert_eq!(reopened.checkpoint_key, unlocked.checkpoint_key);
         assert_eq!(reopened.account_xpub, unlocked.account_xpub);
@@ -638,14 +643,16 @@ mod watch_only_file_tests {
 
     #[test]
     fn watch_only_authentication_and_record_types_fail_closed() {
-        let file = create("fixture password");
+        let password = password();
+        let wrong_password = self::password();
+        let file = create(&password, &random_bytes());
         let original = file.encode().unwrap();
-        assert!(file.unlock("wrong fixture password").is_err());
+        assert!(file.unlock(&wrong_password).is_err());
         assert!(file
-            .change_password("wrong fixture password", "", "", &entropy(2))
+            .change_password(&wrong_password, &password, &password, &entropy())
             .is_err());
         assert!(WalletFile::parse(&original).is_err());
-        let key = password_key("fixture password", &file.kdf_salt).unwrap();
+        let key = password_key(&password, &file.kdf_salt).unwrap();
         let mut tampered = file.clone();
         let mut ciphertext = STANDARD
             .decode(
@@ -657,32 +664,28 @@ mod watch_only_file_tests {
             .unwrap();
         *ciphertext.last_mut().unwrap() ^= 1;
         tampered.encrypted_payload = format!("{SECRET_PREFIX}{}", STANDARD.encode(ciphertext));
-        assert!(tampered.unlock("fixture password").is_err());
+        assert!(tampered.unlock(&password).is_err());
         tampered = file.clone();
-        tampered.kdf_salt = STANDARD.encode(&entropy(2)[..32]);
-        assert!(tampered.unlock("fixture password").is_err());
+        tampered.kdf_salt = STANDARD.encode(random_bytes::<32>());
+        assert!(tampered.unlock(&password).is_err());
         tampered = file.clone();
         tampered.name = "Another listed name".into();
-        assert!(tampered.unlock("fixture password").is_err());
+        assert!(tampered.unlock(&password).is_err());
         tampered = file.clone();
         // Even a valid seed plaintext encrypted with this password/key is not
         // a watch-only payload, and cannot gain public-account storage authority.
-        tampered.encrypted_payload = WalletFile::encrypt(
-            &key,
-            &entropy(3)[32..44].try_into().unwrap(),
-            BIP39_TEST_VECTOR_MNEMONIC,
-        )
-        .unwrap();
-        assert!(tampered.unlock("fixture password").is_err());
+        tampered.encrypted_payload =
+            WalletFile::encrypt(&key, &random_bytes(), BIP39_TEST_VECTOR_MNEMONIC).unwrap();
+        assert!(tampered.unlock(&password).is_err());
         let seed = WalletFile::create(
             "Public seed fixture",
             BIP39_TEST_VECTOR_MNEMONIC,
             "",
-            "",
-            "",
+            &password,
+            &password,
             Network::Chipnet,
             AccountPath::default_for(Network::Chipnet),
-            &entropy(4),
+            &entropy(),
         )
         .unwrap();
         assert!(WatchOnlyFile::parse(&seed.encode().unwrap()).is_err());
@@ -691,7 +694,8 @@ mod watch_only_file_tests {
 
     #[test]
     fn watch_only_header_parsing_is_bounded_strict_and_rechecked_on_unlock() {
-        let file = create("");
+        let password = password();
+        let file = create(&password, &random_bytes());
         let value = serde_json::to_value(&file).unwrap();
         for (field, replacement) in [
             ("format", serde_json::json!("optn-wallet")),
@@ -724,15 +728,16 @@ mod watch_only_file_tests {
         let mut changed = file;
         changed.version = 2;
         assert!(changed.encode().is_err());
-        assert!(changed.unlock("").is_err());
+        assert!(changed.unlock(&password).is_err());
     }
 
     #[test]
     fn watch_only_rejects_authenticated_malformed_or_noncanonical_payloads() {
-        let file = create("");
-        let (payload, _) = file.payload("").unwrap();
+        let password = password();
+        let file = create(&password, &random_bytes());
+        let (payload, _) = file.payload(&password).unwrap();
         let value = serde_json::to_value(&payload).unwrap();
-        let key = password_key("", &file.kdf_salt).unwrap();
+        let key = password_key(&password, &file.kdf_salt).unwrap();
         let mutations = [
             ("format", serde_json::json!("optn-wallet")),
             ("version", serde_json::json!(2)),
@@ -751,18 +756,18 @@ mod watch_only_file_tests {
             ("checkpointKey", serde_json::json!(file.kdf_salt)),
             ("mnemonic", serde_json::json!(BIP39_TEST_VECTOR_MNEMONIC)),
         ];
-        for (i, (field, replacement)) in mutations.into_iter().enumerate() {
+        for (field, replacement) in mutations {
             let mut malformed = value.clone();
             malformed[field] = replacement;
             let mut changed = file.clone();
             changed.encrypted_payload = WalletFile::encrypt(
                 &key,
-                &entropy(i as u8 + 10)[32..44].try_into().unwrap(),
+                &random_bytes(),
                 &serde_json::to_string(&malformed).unwrap(),
             )
             .unwrap();
             assert!(
-                changed.unlock("").is_err(),
+                changed.unlock(&password).is_err(),
                 "accepted payload field {field}"
             );
         }
@@ -772,12 +777,18 @@ mod watch_only_file_tests {
     fn watch_only_creation_validates_public_origin_password_and_independent_entropy() {
         let public = xpub();
         let account = AccountPath::new(145, 2).unwrap();
+        let password = password();
+        let checkpoint_key = Zeroizing::new(random_bytes::<32>());
+        let mut short = self::password();
+        short.truncate(5);
+        let oversized = password.repeat(129);
         let make = |xpub: &str,
                     fingerprint: &str,
                     password: &str,
                     confirmation: &str,
                     origin,
-                    key: &[u8; 32]| {
+                    key: &[u8; 32],
+                    entropy: &[u8; 56]| {
             WatchOnlyFile::create(
                 "Public origin fixture",
                 xpub,
@@ -786,76 +797,122 @@ mod watch_only_file_tests {
                 confirmation,
                 Network::Regtest,
                 origin,
-                &entropy(5),
+                entropy,
                 key,
             )
         };
         assert!(make(
             &public,
             "",
-            "short",
-            "short",
+            &short,
+            &short,
             account,
-            &checkpoint_entropy()
+            &checkpoint_key,
+            &entropy()
         )
         .is_err());
-        assert!(make(&public, "", "", "mismatch", account, &checkpoint_entropy()).is_err());
         assert!(make(
             &public,
             "",
-            &"p".repeat(4097),
-            &"p".repeat(4097),
+            &password,
+            &self::password(),
             account,
-            &checkpoint_entropy()
+            &checkpoint_key,
+            &entropy()
         )
         .is_err());
-        assert!(make(&public, "zzzzzzzz", "", "", account, &checkpoint_entropy()).is_err());
         assert!(make(
             &public,
             "",
+            &oversized,
+            &oversized,
+            account,
+            &checkpoint_key,
+            &entropy()
+        )
+        .is_err());
+        assert!(make(
+            &public,
+            "zzzzzzzz",
+            &password,
+            &password,
+            account,
+            &checkpoint_key,
+            &entropy()
+        )
+        .is_err());
+        assert!(make(
+            &public,
             "",
-            "",
+            &password,
+            &password,
             AccountPath::new(145, 1).unwrap(),
-            &checkpoint_entropy()
+            &checkpoint_key,
+            &entropy()
+        )
+        .is_err());
+        let shared_entropy = entropy();
+        assert!(make(
+            &public,
+            "",
+            &password,
+            &password,
+            account,
+            &shared_entropy[..32].try_into().unwrap(),
+            &shared_entropy
         )
         .is_err());
         assert!(make(
             &public,
             "",
-            "",
-            "",
+            &password,
+            &password,
             account,
-            &entropy(5)[..32].try_into().unwrap()
+            &[0; 32],
+            &entropy()
         )
         .is_err());
-        assert!(make(&public, "", "", "", account, &[0; 32]).is_err());
         let private =
-            bip32::XPrv::derive_from_path([1; 32], &account.path().parse().unwrap()).unwrap();
+            bip32::XPrv::derive_from_path(random_bytes::<32>(), &account.path().parse().unwrap())
+                .unwrap();
         assert!(make(
             &private.to_string(bip32::Prefix::XPRV),
             "",
-            "",
-            "",
+            &password,
+            &password,
             account,
-            &checkpoint_entropy()
+            &checkpoint_key,
+            &entropy()
         )
         .is_err());
         assert!(make(
             &private.to_string(bip32::Prefix::TPRV),
             "",
-            "",
-            "",
+            &password,
+            &password,
             account,
-            &checkpoint_entropy()
+            &checkpoint_key,
+            &entropy()
         )
         .is_err());
-        let file = make(&public, "", "", "", account, &checkpoint_entropy()).unwrap();
-        let unlocked = file.unlock("").unwrap();
+        let file = make(
+            &public,
+            "",
+            &password,
+            &password,
+            account,
+            &checkpoint_key,
+            &entropy(),
+        )
+        .unwrap();
+        let unlocked = file.unlock(&password).unwrap();
         assert_eq!(unlocked.network, Network::Regtest);
         assert_eq!(unlocked.master_fingerprint, None);
-        let mut bad_rotation = entropy(6);
-        bad_rotation[..32].copy_from_slice(&checkpoint_entropy());
-        assert!(file.change_password("", "", "", &bad_rotation).is_err());
+        let mut bad_rotation = entropy();
+        bad_rotation[..32].copy_from_slice(&*checkpoint_key);
+        assert!(file
+            .change_password(&password, &password, &password, &bad_rotation)
+            .is_err());
 
         let public_parsed = crate::watch_only::parse_account_xpub(&public).unwrap();
         let tpub = public_parsed.to_string(bip32::Prefix::TPUB);
@@ -865,10 +922,35 @@ mod watch_only_file_tests {
                 .to_string(bip32::Prefix::XPUB),
             public
         );
-        let from_tpub = make(&tpub, "", "", "", account, &checkpoint_entropy())
-            .expect("a valid account tpub must normalize to canonical xpub");
-        let reopened = from_tpub.unlock("").unwrap();
+        let from_tpub = make(
+            &tpub,
+            "",
+            &password,
+            &password,
+            account,
+            &random_bytes(),
+            &entropy(),
+        )
+        .expect("a valid account tpub must normalize to canonical xpub");
+        let reopened = from_tpub.unlock(&password).unwrap();
         assert_eq!(reopened.account_xpub, public);
         assert_eq!(reopened.account, account);
+
+        // The supported no-password mode must still round-trip encrypted storage.
+        let no_password = String::new();
+        let passwordless = make(
+            &public,
+            "",
+            &no_password,
+            &no_password,
+            account,
+            &random_bytes(),
+            &entropy(),
+        )
+        .unwrap();
+        assert_eq!(
+            passwordless.unlock(&no_password).unwrap().account_xpub,
+            public
+        );
     }
 }
