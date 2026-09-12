@@ -6,6 +6,15 @@ source fix. The existing GLib backport and Linux regression/Valgrind checks
 remain. The renamed `codeqlVendorCoverage.test.mts` requires unrestricted
 source coverage and preserves the workflow and GLib regression assertions.
 
+The refreshed PR-specific inventory at `a9b5d6f4` has 14 open alerts:
+GLib #113–124 and Fusion #146–147. The full paginated review-thread inventory
+has ten unresolved threads, all CodeQL annotations; no unresolved non-CodeQL
+bot thread was returned. The default-branch alert inventory is different and
+must not be used as PR63's count. The earlier GLib report's exclusion paragraph
+describes superseded configuration. Restoring coverage has not repaired those
+findings. The existing concrete-type/path assessment remains a source review,
+not a successful scanner result or blanket proof of unsafe-code safety.
+
 Alerts [146](https://github.com/OPTNLabs/OPTNWallet/security/code-scanning/146)
 and [147](https://github.com/OPTNLabs/OPTNWallet/security/code-scanning/147)
 identify the fixed CBC IV in `crates/optn-fusion/src/encrypt.rs`.
