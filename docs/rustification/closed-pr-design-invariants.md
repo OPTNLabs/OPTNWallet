@@ -40,7 +40,7 @@ CI stays deterministic. Refresh it when closed PR history materially changes.
 | #28 | CashConnect identity is separate from spend keys and chat Nostr identity. Exact outputs/fees/tokens/change and duplicate execution are review gates. |
 | #29, #61 | Cash Code/RPA preserves network separation, compressed-key address derivation, legacy-paycode acceptance, capability tiers, and fail-closed unsupported-code behavior. |
 | #32 | Automatic Fusion is opt-in and wallet-scoped; wallet changes disarm the session. Product readiness controls visibility of dev-only apps. |
-| #34, #60 | SeedCash consumes raw PSBT bytes in `crypto-psbt` URs. `0xc1` sighash and camera-readable density are interoperability constraints, not styling preferences. |
+| #34, #60 | SeedCash consumes raw PSBT bytes in `crypto-psbt` URs. Preserve explicit sighash commitments and camera-readable density. Current core and the captured signing fixture use `0x41` by default; historical `0xc1` is the advanced ANYONECANPAY mode. |
 | #35 | UTXO state must reconcile across workers, discovery, Electrum, wallet changes, and lifecycle events. Stale snapshots are never chain truth. |
 | #50 | Native macOS edit semantics matter for connector URI fields; Cmd+C/V must remain normal platform behavior. |
 | #53, #62 | Verify shipped artifacts, not merely build commands: exact versions/formats/architectures, signatures, Mach-O dependencies, and bundled helper executables are gates. |

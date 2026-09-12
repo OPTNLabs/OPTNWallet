@@ -163,11 +163,13 @@ plus `menu_bar`, asserted for every command in both states.
 These had no home in the Rust core at all. `crates/optn-core/src/psbt.rs` now
 carries them:
 
-- **Every input must declare `PSBT_IN_SIGHASH_TYPE = 0xc1`.** An absent field is
-  refused exactly as firmly as a wrong one, because SeedCash falls back to
-  `0x41` when it is missing and a signature over the wrong sighash is only
-  rejected at broadcast — long after the device has been put away.
-- **Mainnet is refused by the encoder, not by convention.**
+- **Every input must explicitly declare the same supported sighash.** The current
+  default is `0x41` (ALL|FORKID), confirmed by the captured SeedCash signing fixture.
+  The historical `0xc1` mode adds ANYONECANPAY and is an advanced choice, not the
+  default. The connected single-signature finalizer currently accepts `0x41` only;
+  absent or changed commitments are refused before returning a transaction.
+- **Mainnet is refused by the air-gap workflow and finalizer.** The low-level
+  PSBT serializer has no network parameter; callers must use the checked workflow.
 - **The UR carries a raw PSBT**, because stock SeedCash calls `parse_psbt` on the
   CBOR field directly and never unwraps a byte string; a BCR-2020-006 wrapper
   reaches it as `59019070736274ff…` and raises `invalid PSBT magic`. A wrapped
