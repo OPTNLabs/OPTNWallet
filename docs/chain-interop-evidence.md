@@ -17,6 +17,53 @@ a rule; nothing in it proves interoperability.
 
 ## Environment
 
+### Corrected Android server-override behavior — 2026-09-12
+
+Actions run `34695691936`, artifact `10299220620`, built the Rust Leptos debug
+APK from PR head `0e7da05811bdf4e9365ff4c4a70c3fd5720364a5` and merge
+`47bec4e17b38ec126e624713c881536e44257079`.
+SHA-256: `27c2a981aac6c49ac90def165be7800ff8444869079ed0c48ff39b7a10e562d7`.
+
+The isolated Android 36 emulator required replacement installation because CI
+debug signing keys differ between runs. Only its public-fixture encrypted
+wallet/checkpoint and Chipnet settings were copied across; this is a persisted
+data compatibility check, not proof of an in-place signed Android upgrade.
+The saved wallet opened with its test password and restored 39,774 sats, one
+output, two transactions and the same allocated receive address as stale.
+
+With the host Tor bridge available, the old saved `127.0.0.1:1` override now
+caused refresh to report no permitted wallet route and retain stale data. It
+did not become up to date through the public source, as the earlier APK did.
+Settings still displayed the selected local server. Explicitly changing the
+field to `chipnet.imaginary.cash:50002` persisted an `explicit` source-ID scope
+with no fallback. GUI refresh then reported `host:chipnet.imaginary.cash`, tip
+323133 and the same 39,774-sat balance. The native file and rendered controls
+agreed on the selected source.
+
+A second force-stop/restart retained that explicit live-server selection and
+the encrypted observations as stale. Refresh resumed successfully through the
+same source without re-entering it. The Android-generated encrypted wallet,
+checkpoint and settings were also copied into an isolated Windows fixture
+directory and opened by the standalone CLI built at `df197b38`:
+
+`optn --network chipnet --network-config-dir <fixture> --timeout 180 wallet --directory <fixture>/wallets --stdio`
+
+Status, open, history, sync and history replies restored 39,774 sats and two
+transactions at tip 323133, first stale and then fresh. The selected source
+remained `host:chipnet.imaginary.cash`; observed process connections used
+localhost Tor 9150. This exercises the real portable storage and CLI process,
+not a separately constructed wallet. CLI stdio does not expose the UTXO count;
+the one-output observation belongs to the GUI and earlier runtime tests.
+
+The macOS ARM64 Rust Leptos debug DMG at the same PR head was built by fork
+workflow run `34695691021`; its checksum and build metadata were verified.
+SHA-256: `d88af1ae6ef6a2e463ce14829ab4bb747c59d40a429ba3f3400fd93249c34fef`.
+This is macOS build/package evidence, not a macOS launch or signing test.
+
+The Android result closes the specific server-override fallback regression.
+It remains read-only `ServerAssertion` evidence using an authorized host Tor
+bridge, not bundled Android Tor startup, SPV/MMR or SeedCash signing.
+
 ### Packaged Android watch-only restart and source-selection regression — 2026-09-12
 
 Rust Leptos debug APK from Actions run `34693926047`, artifact `10297522988`:
