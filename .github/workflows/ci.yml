@@ -123,33 +123,15 @@ jobs:
   web-ci:
     needs: [secrets-scan, dependency-audit]
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
-      - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - name: Canonical quality gate
+        uses: ./.github/actions/quality-gate
         with:
           node-version: '22.23.2'
-          cache: npm
-
-      - name: Install deps
-        run: npm ci
-
-      - name: Unit tests
-        run: npm run test:core
-
-      - name: App tests
-        run: npm run test:apps
-
-      - name: UI tests
-        run: npm run test:ui
-
-      - name: Addon manifest validation
-        run: npm run addons:validate
-
-      - name: Build web (sanity)
-        run: npm run build
+          run-build: 'true'
 
       - name: Upload web dist
         if: github.event_name == 'push' && always()

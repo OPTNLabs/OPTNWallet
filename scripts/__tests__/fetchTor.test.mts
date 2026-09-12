@@ -1,15 +1,59 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import {
   TOR_ARCHIVE_SHA256,
   TOR_VERSION,
   LINUX_AARCH64_TOR_SOURCE,
   bundleFileNames,
+  download,
   getLinuxAarch64TorSourceArtifact,
   getTorArtifact,
 } from '../fetch-tor.mts';
+
+it('retries transient Tor downloads and fails closed without staging a partial file', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'fetch-tor-retry-'));
+  const destination = join(directory, 'archive');
+  const body = Buffer.from('fixture archive');
+  const fetchMock = vi
+    .fn()
+    .mockRejectedValueOnce(new Error('connection reset'))
+    .mockResolvedValueOnce(new Response(body));
+  vi.useFakeTimers();
+  vi.stubGlobal('fetch', fetchMock);
+  try {
+    const result = download(
+      'https://archive.torproject.org/fixture',
+      destination
+    );
+    await vi.runAllTimersAsync();
+    expect(await result).toEqual(body);
+    expect(readFileSync(destination)).toEqual(body);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    fetchMock.mockReset().mockRejectedValue(new Error('offline'));
+    const failedDestination = join(directory, 'failed-archive');
+    const failed = expect(
+      download('https://archive.torproject.org/fixture', failedDestination)
+    ).rejects.toThrow('offline');
+    await vi.runAllTimersAsync();
+    await failed;
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(existsSync(failedDestination)).toBe(false);
+  } finally {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 describe('pinned Tor Expert Bundle', () => {
   it('resolves every desktop target to the immutable Tor archive', () => {
