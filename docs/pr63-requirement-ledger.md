@@ -98,8 +98,8 @@ still integration work; model/transport tests do not prove paid rounds run.
 | Default / Cyberpunk skins | **PROVEN** | `optn_app::UiSkin` | — |
 | Theme/skin persist without touching keys | **INTEGRATION** | `AppAction::SetTheme` / `SetSkin` | Persistence across restart not asserted |
 | Landing: Create / Import / Watch Only | **PROVEN** (desktop) / **DEVICE EVIDENCE** (mobile) | `optn-ui/src/onboarding.rs`; matrix `watch_only` is `e2e` on Windows and Linux, `e2e-declared` on Android | iOS and F-Droid have no packaged assertion |
-| Watch Only never gains signing authority | **PROVEN** | `WalletKind::WatchOnly`; `optn-core/src/watch_only.rs` | — |
-| Packaged watch-only reopen | **MISSING** | Android 36 emulator, Rust Leptos APK at head `4f3face1`: Chipnet public-account validation and home worked offline | Force-stop/relaunch returned to landing without restoring the account. Shared durable public-wallet storage/listing needs integration |
+| Watch Only never gains signing authority | **PROVEN** (component/runtime) | `WalletKind::WatchOnly`; `WalletSecurity::wallet_for_operation`; `watch_only_password_and_biometrics_never_grant_signing_authority` | Password/biometric storage authentication cannot return a private wallet for Spend, Reveal, Background or Chat |
+| Watch-only persistence and reopen | **INTEGRATION**; packaged verification pending | `WalletSecurityRequest::ImportWatchOnly`, encrypted `WatchOnlyFile`, shared checkpoint lifecycle, GUI `SaveWatchOnly` (typed and scanned accounts), CLI `wallet` → `watch` / `import_watch_only`; connected runtime and real stdio-process tests | The APK at `4f3face1` lost this account after force-stop. The shared storage fix is now wired and tested; a new APK must verify the correction on the emulator. Public browser previews remain explicitly temporary |
 | Master fingerprint asked once, persisted | **INTEGRATION** | `OpenedWallet::master_fingerprint` | Matrix evidence is `unit` on every surface except Android `e2e-declared` |
 | Home / portfolio | **PARTIAL** | `AppRoute::WalletHome` | Exists; not audited against `docs/ui-overhaul` |
 | Assets | **INTEGRATION** | `optn_app::assets_view_model`; `categories_total_across_every_coin_that_carries_them` | Leads with held categories rather than outpoints. Category is still raw hex until BCMR resolution is wired to it |
@@ -121,7 +121,7 @@ still integration work; model/transport tests do not prove paid rounds run.
 
 | Blocker | Needs |
 | --- | --- |
-| Packaged Android Play / F-Droid APK and iOS app asserting Watch Only on landing | Android SDK + signing config, and an Apple developer environment with a device or simulator. Nothing in this environment can produce or run them |
+| Signed Android Play / F-Droid and packaged iOS verification | This host now has an Android SDK and isolated Android 36 emulator; a Rust debug APK rendered landing and watch-only import. Store signing and iOS device/simulator verification remain separate requirements |
 | Hardware wallet signing evidence | Physical Ledger / Trezor / Keystone devices |
 | Mainnet header verification | A reviewed mainnet checkpoint to ship. `shipped_header_verifier` refuses mainnet rather than trusting whatever a peer serves first — deliberate, and a data decision rather than a code one |
 | Fulcrum/Electrum real-node evidence | A reachable Fulcrum instance; regtest has no Electrum server |

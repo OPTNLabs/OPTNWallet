@@ -231,6 +231,122 @@ fn issued_receive_addresses_survive_cli_restart_and_wrong_epochs_do_not_allocate
 }
 
 #[test]
+fn managed_watch_only_import_survives_stdio_restart_without_exposing_xpub() {
+    let directory = test_directory();
+    let xpub = optn_core::hd::Wallet::from_mnemonic(optn_core::hd::BIP39_TEST_VECTOR_MNEMONIC, "")
+        .unwrap()
+        .account_xpub_at(optn_core::hd::AccountPath::new(1, 7).unwrap())
+        .unwrap();
+    let password = "managed-public-fixture-password";
+    let wrong_password = "incorrect-public-fixture-password";
+    let assert_hidden = |output: &Output| {
+        for bytes in [&output.stdout, &output.stderr] {
+            let text = String::from_utf8_lossy(bytes);
+            assert!(
+                !text.contains(&xpub),
+                "stdio must not echo the account xpub"
+            );
+            assert!(!text.contains(password));
+            assert!(!text.contains(wrong_password));
+        }
+    };
+    let import = json!({"request": {
+        "command": "import_watch_only",
+        "name": "Saved public account",
+        "account_xpub": xpub,
+        "master_fingerprint": "73c5da0a",
+        "password": password,
+        "confirmation": password,
+        "network": "chipnet",
+        "account_path": "m/44'/1'/7'",
+    }});
+    let next = json!({"request": {"command": "next_receive", "epoch": 1}});
+    let imported = run_cli(
+        directory.path(),
+        &["wallet", "--stdio"],
+        &format!("{import}\n{next}\n"),
+    );
+    assert!(imported.status.success());
+    assert_hidden(&imported);
+    let replies = responses(&imported);
+    assert_eq!(replies.len(), 3);
+    assert_eq!(replies[0]["ok"], true);
+    assert_eq!(replies[0]["security"]["has_password"], true);
+    assert_eq!(replies[0]["hd_addresses"]["current_receive"], 0);
+    assert_eq!(replies[1]["ok"], true);
+    assert_eq!(replies[1]["hd_addresses"]["current_receive"], 1);
+    assert_eq!(replies[2]["locked"], true);
+    let handle = replies[0]["security"]["active"].as_str().unwrap();
+    let receive = optn_core::watch_only::address_under_account(
+        optn_core::network::Network::Chipnet,
+        &xpub,
+        0,
+        1,
+    )
+    .unwrap()
+    .address;
+    assert_eq!(replies[1]["receive_address"], receive);
+    let record = std::fs::read(directory.path().join(handle)).unwrap();
+    assert!(!record
+        .windows(xpub.len())
+        .any(|window| window == xpub.as_bytes()));
+    let checkpoint_files = std::fs::read_dir(directory.path().join(".state"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.is_file())
+        .collect::<Vec<_>>();
+    assert!(!checkpoint_files.is_empty());
+    for path in checkpoint_files {
+        let bytes = std::fs::read(path).unwrap();
+        assert!(!bytes
+            .windows(xpub.len())
+            .any(|window| window == xpub.as_bytes()));
+    }
+
+    // A separate process must discover the record while locked and must not
+    // install any wallet authority after the deliberately incorrect password.
+    let status = json!({"request": {"command": "status"}});
+    let wrong = json!({"request": {
+        "command": "open", "handle": handle, "password": wrong_password,
+    }});
+    let open = json!({"request": {
+        "command": "open", "handle": handle, "password": password,
+    }});
+    let restarted = run_cli(
+        directory.path(),
+        &["wallet", "--stdio"],
+        &format!("{status}\n{wrong}\n{status}\n{open}\n"),
+    );
+    assert!(restarted.status.success());
+    assert_hidden(&restarted);
+    let replies = responses(&restarted);
+    assert_eq!(replies.len(), 5);
+    assert_eq!(replies[0]["ok"], true);
+    assert!(replies[0]["security"]["active"].is_null());
+    assert_eq!(
+        replies[0]["security"]["wallets"],
+        json!([
+            {"handle": handle, "name": "Saved public account"}
+        ])
+    );
+    assert_eq!(replies[1]["ok"], false);
+    assert_eq!(replies[2]["ok"], true);
+    assert!(replies[2]["security"]["active"].is_null());
+    assert!(replies[2]["receive_address"].is_null());
+    assert!(replies[2]["hd_addresses"].is_null());
+    assert_eq!(replies[3]["ok"], true);
+    assert_eq!(replies[3]["security"]["active"], handle);
+    assert_eq!(replies[3]["receive_address"], receive);
+    assert_eq!(replies[3]["hd_addresses"]["current_receive"], 1);
+    assert_eq!(replies[3]["wallet_sync"]["history_fresh"], false);
+    assert_eq!(replies[4]["locked"], true);
+    assert_eq!(
+        std::fs::read(directory.path().join(handle)).unwrap(),
+        record
+    );
+}
+
+#[test]
 fn migrated_ciphertext_password_and_account_work_through_the_real_cli() {
     let directory = test_directory();
     let path = directory.path().join("public-vector.optn");

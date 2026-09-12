@@ -239,7 +239,7 @@ pub async fn run(directory: Option<PathBuf>, stdio: bool, cli: &crate::Cli) -> R
             println!("{output}");
         }
     } else {
-        eprintln!("Wallet commands: list, open <file>, import, receive [--acknowledge-gap], sync, rescan <height>, history, password, autolock <minutes>, lock, authorize, reveal, quit");
+        eprintln!("Wallet commands: list, open <file>, import, watch, receive [--acknowledge-gap], sync, rescan <height>, history, password, autolock <minutes>, lock, authorize, reveal, quit");
         loop {
             eprint!("wallet> ");
             io::stderr().flush().ok();
@@ -292,28 +292,56 @@ pub async fn run(directory: Option<PathBuf>, stdio: bool, cli: &crate::Cli) -> R
                     handle: argument.into(),
                     password: password("Wallet password (empty if none): ")?,
                 }),
-                "import" => {
+                "import" | "watch" => {
                     eprint!("Wallet name: ");
                     io::stderr().flush().ok();
                     let mut name = String::new();
                     io::stdin()
                         .read_line(&mut name)
                         .map_err(|_| CliError::Usage("Could not read name.".into()))?;
-                    let mnemonic = password("Recovery phrase: ")?;
+                    let material = password(if command == "watch" {
+                        "Account xPub: "
+                    } else {
+                        "Recovery phrase: "
+                    })?;
                     let new = password("New password (empty for none): ")?;
                     let confirmation = password("Confirm new password: ")?;
-                    Some(Request::Create {
-                        name: name.trim().into(),
-                        mnemonic,
-                        bip39_passphrase: SecretText::default(),
-                        password: new,
-                        confirmation,
-                        network: runtime.state().network.to_string(),
-                        account_path: optn_core::hd::AccountPath::default_for(
+                    if command == "watch" {
+                        let default_path = optn_core::watch_only::account_preview(
                             runtime.state().network,
-                        )
-                        .path(),
-                    })
+                            material.expose(),
+                        )?
+                        .account_path;
+                        let account_path =
+                            password(&format!("Account path (empty for {default_path}): "))?;
+                        let fingerprint = password("Master fingerprint (optional): ")?;
+                        Some(Request::ImportWatchOnly {
+                            name: name.trim().into(),
+                            account_xpub: material,
+                            master_fingerprint: fingerprint.expose().trim().into(),
+                            password: new,
+                            confirmation,
+                            network: runtime.state().network.to_string(),
+                            account_path: if account_path.expose().trim().is_empty() {
+                                default_path
+                            } else {
+                                account_path.expose().trim().into()
+                            },
+                        })
+                    } else {
+                        Some(Request::Create {
+                            name: name.trim().into(),
+                            mnemonic: material,
+                            bip39_passphrase: SecretText::default(),
+                            password: new,
+                            confirmation,
+                            network: runtime.state().network.to_string(),
+                            account_path: optn_core::hd::AccountPath::default_for(
+                                runtime.state().network,
+                            )
+                            .path(),
+                        })
+                    }
                 }
                 "password" => Some(Request::ChangePassword {
                     current: if status.has_password == Some(false) {

@@ -21,6 +21,16 @@ pub enum WalletSecurityRequest {
         network: String,
         account_path: String,
     },
+    ImportWatchOnly {
+        name: String,
+        account_xpub: SecretText,
+        #[serde(default)]
+        master_fingerprint: String,
+        password: SecretText,
+        confirmation: SecretText,
+        network: String,
+        account_path: String,
+    },
     Open {
         handle: String,
         password: SecretText,

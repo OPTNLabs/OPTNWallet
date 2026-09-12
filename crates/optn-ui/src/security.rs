@@ -59,6 +59,52 @@ pub fn NewPasswordFields(
 }
 
 #[component]
+pub fn SaveWatchOnly(
+    transport: UiTransport,
+    state: RwSignal<AppState>,
+    preview: RwSignal<Option<optn_app::WatchOnlySetupPreview>>,
+    error: RwSignal<Option<String>>,
+    #[prop(default = "watch-only-save")] test_id: &'static str,
+) -> impl IntoView {
+    let password = RwSignal::new(String::new());
+    let confirmation = RwSignal::new(String::new());
+    let status = RwSignal::new(None);
+    let busy = RwSignal::new(false);
+    view! {
+        <Show when=|| cfg!(feature = "tauri-transport")>
+            <NewPasswordFields password=password confirmation=confirmation />
+            <p class="muted">"A password protects the saved account and history on this device. Leave it empty for no password protection. This wallet cannot sign transactions."</p>
+        </Show>
+        <Show when=|| !cfg!(feature = "tauri-transport")>
+            <p class="muted">"This preview is temporary and will be lost when this page closes."</p>
+        </Show>
+        <button class="primary" type="button" data-testid=test_id disabled=move || busy.get()
+            on:click=move |_| {
+                if busy.get_untracked() { return; }
+                if let Some(preview) = preview.get_untracked() {
+                    if cfg!(feature = "tauri-transport") {
+                        let request = Request::ImportWatchOnly {
+                            name: preview.wallet_name,
+                            account_xpub: SecretText::new(preview.account_xpub),
+                            master_fingerprint: preview.master_fingerprint.unwrap_or_default(),
+                            account_path: preview.account_path,
+                            network: state.get_untracked().network.to_string(),
+                            password: SecretText::new(password.get_untracked()),
+                            confirmation: SecretText::new(confirmation.get_untracked()),
+                        };
+                        password.set(String::new()); confirmation.set(String::new());
+                        submit(transport, state, request, status, error, busy);
+                    } else {
+                        crate::dispatch_action(transport, state, optn_app::AppAction::OpenWatchOnlyWallet(preview));
+                    }
+                }
+            }>
+            {if cfg!(feature = "tauri-transport") { "Save and open watch-only wallet" } else { "Open temporary watch-only wallet" }}
+        </button>
+    }
+}
+
+#[component]
 pub fn ConfirmPassword(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
     let prompt_epoch = state.get_untracked().lock.unlock_epoch;
     let password = RwSignal::new(String::new());

@@ -1,8 +1,11 @@
 //! Wallet-password lifecycle shared by native GUI and CLI hosts.
 use crate::wallet_checkpoint::{WalletCheckpoint, WalletCheckpointStorage};
 use crate::wallet_sync::WalletReconciliation;
-use optn_app::{AppAction, AppState, AutoLockMinutes, Network, SecretText};
-use optn_core::{hd, wallet_file::WalletFile};
+use optn_app::{AppAction, AppState, AutoLockMinutes, Network, SecretText, WalletKind};
+use optn_core::{
+    hd,
+    wallet_file::{WalletFile, WatchOnlyFile},
+};
 use optn_platform::{WalletBiometrics, WalletStorage};
 use optn_transport::{
     StoredWallet, TransportError, WalletSecurityRequest as Request, WalletSecurityStatus,
@@ -33,10 +36,68 @@ fn policy_error(error: optn_platform::PlatformError) -> TransportError {
     failure(format!("Wallet auto-lock policy: {cause}."))
 }
 
+enum StoredWalletFile {
+    Seed(WalletFile),
+    WatchOnly(WatchOnlyFile),
+}
+
+impl StoredWalletFile {
+    fn parse(bytes: &[u8]) -> optn_core::error::Result<Self> {
+        WalletFile::parse(bytes)
+            .map(Self::Seed)
+            .or_else(|_| WatchOnlyFile::parse(bytes).map(Self::WatchOnly))
+    }
+
+    fn name(&self) -> &str {
+        match self {
+            Self::Seed(file) => &file.name,
+            Self::WatchOnly(file) => &file.name,
+        }
+    }
+
+    fn kind(&self) -> WalletKind {
+        match self {
+            Self::Seed(_) => WalletKind::Seed,
+            Self::WatchOnly(_) => WalletKind::WatchOnly,
+        }
+    }
+
+    fn verify_password(&self, password: &str) -> optn_core::error::Result<()> {
+        match self {
+            Self::Seed(file) => file.unlock(password).map(|_| ()),
+            Self::WatchOnly(file) => file.unlock(password).map(|_| ()),
+        }
+    }
+
+    fn change_password(
+        &self,
+        old: &str,
+        password: &str,
+        confirmation: &str,
+        entropy: &[u8; 56],
+    ) -> optn_core::error::Result<Self> {
+        match self {
+            Self::Seed(file) => file
+                .change_password(old, password, confirmation, entropy)
+                .map(Self::Seed),
+            Self::WatchOnly(file) => file
+                .change_password(old, password, confirmation, entropy)
+                .map(Self::WatchOnly),
+        }
+    }
+
+    fn encode(&self) -> optn_core::error::Result<Vec<u8>> {
+        match self {
+            Self::Seed(file) => file.encode(),
+            Self::WatchOnly(file) => file.encode(),
+        }
+    }
+}
+
 struct Session {
     handle: String,
     bytes: Vec<u8>,
-    file: WalletFile,
+    file: StoredWalletFile,
     password: SecretText,
     epoch: u64,
     xpub: String,
@@ -68,6 +129,11 @@ impl WalletSecurity {
         now_ms: u64,
     ) -> Result<hd::Wallet, TransportError> {
         let session = self.bound(state, state.lock.unlock_epoch)?;
+        // Storage authentication never grants a watch-only account signing keys,
+        // including the background/chat paths that normally skip reauthentication.
+        let StoredWalletFile::Seed(file) = &session.file else {
+            return Err(TransportError::Unsupported);
+        };
         if scope == optn_app::AuthScope::Spend && state.surface.is_viewer_only() {
             return Err(TransportError::Unsupported);
         }
@@ -88,10 +154,7 @@ impl WalletSecurity {
         if state.lock.prompt.is_some() {
             return Err(TransportError::AuthenticationRequired);
         }
-        session
-            .file
-            .unlock(session.password.expose())
-            .map_err(crypto)
+        file.unlock(session.password.expose()).map_err(crypto)
     }
     pub fn is_open(&self, state: &AppState) -> bool {
         self.bound(state, state.lock.unlock_epoch).is_ok()
@@ -188,6 +251,7 @@ impl WalletSecurity {
         if self.session.as_ref().is_some_and(|session| {
             session.epoch != state.lock.unlock_epoch
                 || session.network != state.network
+                || state.wallet.as_ref().map(|wallet| wallet.kind) != Some(session.file.kind())
                 || state
                     .wallet
                     .as_ref()
@@ -215,6 +279,7 @@ impl WalletSecurity {
         if epoch != state.lock.unlock_epoch
             || session.epoch != epoch
             || session.network != state.network
+            || state.wallet.as_ref().map(|wallet| wallet.kind) != Some(session.file.kind())
             || state
                 .wallet
                 .as_ref()
@@ -238,10 +303,10 @@ impl WalletSecurity {
         for handle in self.storage.list().map_err(platform)? {
             // A malformed file is not an empty wallet and must never be overwritten.
             if let Ok(bytes) = self.storage.read(&handle) {
-                if let Ok(file) = WalletFile::parse(&bytes) {
+                if let Ok(file) = StoredWalletFile::parse(&bytes) {
                     wallets.push(StoredWallet {
                         handle,
-                        name: file.name,
+                        name: file.name().to_owned(),
                     });
                 }
             }
@@ -276,8 +341,8 @@ impl WalletSecurity {
         password: SecretText,
     ) -> Result<(), TransportError> {
         let bytes = self.storage.read(&handle).map_err(platform)?;
-        let file = WalletFile::parse(&bytes).map_err(crypto)?;
-        if file.source_id > 0
+        let file = StoredWalletFile::parse(&bytes).map_err(crypto)?;
+        if matches!(&file, StoredWalletFile::Seed(file) if file.source_id > 0)
             && self
                 .storage
                 .auto_lock_minutes()
@@ -286,20 +351,59 @@ impl WalletSecurity {
         {
             return Err(failure("Choose the auto-lock setting you used before, then open this wallet. Your existing file is unchanged."));
         }
-        if file.wallet_type != "standard" {
-            return Err(failure(
-                "This wallet type needs its dedicated restore flow. The file has not been changed.",
-            ));
-        }
-        let wallet = file.unlock(password.expose()).map_err(crypto)?;
-        let (network, account) = file.account(state.network).map_err(crypto)?;
-        let xpub = wallet.account_xpub_at(account).map_err(crypto)?;
-        let address = wallet
-            .address(network, &account.address_path(false, 0))
-            .map_err(crypto)?
-            .encode();
+        let (network, account, xpub, open, key) = match &file {
+            StoredWalletFile::Seed(file) => {
+                if file.wallet_type != "standard" {
+                    return Err(failure(
+                        "This wallet type needs its dedicated restore flow. The file has not been changed.",
+                    ));
+                }
+                let wallet = file.unlock(password.expose()).map_err(crypto)?;
+                let (network, account) = file.account(state.network).map_err(crypto)?;
+                let xpub = wallet.account_xpub_at(account).map_err(crypto)?;
+                let address = wallet
+                    .address(network, &account.address_path(false, 0))
+                    .map_err(crypto)?
+                    .encode();
+                let key = self
+                    .checkpoints
+                    .as_ref()
+                    .map(|_| wallet.checkpoint_key(network, account))
+                    .transpose()
+                    .map_err(crypto)?;
+                (
+                    network,
+                    account,
+                    xpub,
+                    AppAction::OpenImportedWallet {
+                        name: file.name.clone(),
+                        receive_address: address,
+                        account_path: account.path(),
+                    },
+                    key,
+                )
+            }
+            StoredWalletFile::WatchOnly(file) => {
+                let unlocked = file.unlock(password.expose()).map_err(crypto)?;
+                let preview = optn_app::watch_only_setup_preview_at(
+                    unlocked.network,
+                    &file.name,
+                    &unlocked.account_xpub,
+                    unlocked.master_fingerprint.as_deref().unwrap_or_default(),
+                    unlocked.account,
+                )
+                .map_err(failure)?;
+                (
+                    unlocked.network,
+                    unlocked.account,
+                    unlocked.account_xpub.clone(),
+                    AppAction::OpenWatchOnlyWallet(preview),
+                    Some(unlocked.checkpoint_key.clone()),
+                )
+            }
+        };
         let mut checkpoint = if let Some(storage) = &self.checkpoints {
-            let key = wallet.checkpoint_key(network, account).map_err(crypto)?;
+            let key = key.ok_or_else(|| failure("Wallet checkpoint key is unavailable."))?;
             let id = optn_core::header_hash::sha256d(
                 format!("{handle}\0{network}\0{account}").as_bytes(),
             );
@@ -322,11 +426,7 @@ impl WalletSecurity {
         let mut candidate = state.clone();
         candidate.reduce(AppAction::LockWallet);
         candidate.reduce(AppAction::SetNetwork(network));
-        candidate.reduce(AppAction::OpenImportedWallet {
-            name: file.name.clone(),
-            receive_address: address,
-            account_path: account.path(),
-        });
+        candidate.reduce(open);
         let opened = candidate
             .wallet
             .as_mut()
@@ -474,11 +574,67 @@ impl WalletSecurity {
                     .map_err(platform)?;
                 self.open(state, handle, password)?;
             }
+            Request::ImportWatchOnly {
+                name,
+                account_xpub,
+                master_fingerprint,
+                password,
+                confirmation,
+                network,
+                account_path,
+            } => {
+                if !state
+                    .features
+                    .enabled(state.surface, optn_app::FeatureFlag::WatchOnly)
+                {
+                    return Err(failure("Watch-only is turned off."));
+                }
+                let network: Network = network.parse().map_err(failure)?;
+                let account = hd::parse_account_path(&account_path).map_err(crypto)?;
+                let entropy = self.storage.entropy().map_err(platform)?;
+                // Independent secret entropy: the KDF salt is public and must
+                // never double as the key protecting wallet history.
+                let secret_entropy = Zeroizing::new(self.storage.entropy().map_err(platform)?);
+                let checkpoint_entropy = Zeroizing::new(
+                    secret_entropy[..32]
+                        .try_into()
+                        .map_err(|_| failure("Invalid wallet entropy."))?,
+                );
+                let file = WatchOnlyFile::create(
+                    &name,
+                    account_xpub.expose(),
+                    &master_fingerprint,
+                    password.expose(),
+                    confirmation.expose(),
+                    network,
+                    account,
+                    &entropy,
+                    &checkpoint_entropy,
+                )
+                .map_err(crypto)?;
+                let suffix = entropy[..8]
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>();
+                let handle = format!("wallet-{suffix}.optn");
+                self.storage
+                    .save(&handle, None, &file.encode().map_err(crypto)?)
+                    .map_err(platform)?;
+                self.open(state, handle, password)?;
+            }
             Request::Authenticate { password, epoch } => {
                 let session = self.bound(state, epoch)?;
-                let _verified = session.file.unlock(password.expose()).map_err(crypto)?;
+                session
+                    .file
+                    .verify_password(password.expose())
+                    .map_err(crypto)?;
                 if state.lock.prompt.is_none() {
                     return Err(failure("No authentication request is pending."));
+                }
+                if session.file.kind() == WalletKind::WatchOnly
+                    && state.lock.prompt != Some(optn_app::AuthScope::Reveal)
+                {
+                    return Err(TransportError::Unsupported);
                 }
                 state.reduce(AppAction::ConfirmAuth { now_ms });
             }
@@ -557,7 +713,10 @@ impl WalletSecurity {
                 if enabled {
                     let password =
                         password.ok_or_else(|| failure("Confirm the wallet password."))?;
-                    let _verified = session.file.unlock(password.expose()).map_err(crypto)?;
+                    session
+                        .file
+                        .verify_password(password.expose())
+                        .map_err(crypto)?;
                     bio.enroll(&session.handle, password.expose().as_bytes())
                         .map_err(platform)?;
                 } else {
@@ -664,6 +823,112 @@ pub(crate) mod tests {
     }
     fn secret(value: &str) -> SecretText {
         SecretText::new(value.into())
+    }
+
+    #[tokio::test]
+    async fn watch_only_password_and_biometrics_never_grant_signing_authority() {
+        use optn_app::AuthScope;
+        let storage = Storage::default();
+        let biometric = Biometric::default();
+        let xpub = hd::Wallet::from_mnemonic(hd::BIP39_TEST_VECTOR_MNEMONIC, "")
+            .unwrap()
+            .account_xpub_at(hd::AccountPath::default_for(Network::Chipnet))
+            .unwrap();
+        let mut security =
+            WalletSecurity::new(Box::new(storage.clone()), Some(Box::new(biometric.clone())));
+        let mut state = AppState::default();
+        let history = WalletReconciliation::default();
+        let request = || Request::ImportWatchOnly {
+            name: "Public watch-only authentication fixture".into(),
+            account_xpub: secret(&xpub),
+            master_fingerprint: "A1B2C3D4".into(),
+            password: secret("test-password"),
+            confirmation: secret("test-password"),
+            network: "chipnet".into(),
+            account_path: "m/44'/1'/0'".into(),
+        };
+        storage.fail_next_entropy();
+        assert!(security.handle(&mut state, request(), 1, &history).is_err());
+        assert!(storage.list().unwrap().is_empty());
+        assert!(state.wallet.is_none());
+        let status = security.handle(&mut state, request(), 2, &history).unwrap();
+        let handle = status.active.unwrap();
+        let scopes = [
+            AuthScope::Spend,
+            AuthScope::Reveal,
+            AuthScope::Background,
+            AuthScope::Chat,
+        ];
+        for scope in scopes {
+            assert!(matches!(
+                security.wallet_for_operation(&mut state, scope, 3),
+                Err(TransportError::Unsupported)
+            ));
+        }
+        assert!(state.lock.prompt.is_none());
+        // The display kind is part of the authenticated binding, not authority
+        // that a renderer can upgrade to seed-backed by changing public state.
+        let mut forged = state.clone();
+        forged.wallet.as_mut().unwrap().kind = WalletKind::Seed;
+        assert!(security.is_open(&state));
+        assert!(!security.is_open(&forged));
+        state.reduce(AppAction::RequestReveal { now_ms: 4 });
+        security
+            .handle(
+                &mut state,
+                Request::Authenticate {
+                    password: secret("test-password"),
+                    epoch: status.epoch,
+                },
+                4,
+                &history,
+            )
+            .unwrap();
+        assert!(
+            state.identity_revealed,
+            "public identity disclosure can be authenticated"
+        );
+        security
+            .handle(
+                &mut state,
+                Request::SetBiometric {
+                    enabled: true,
+                    password: Some(secret("test-password")),
+                    epoch: status.epoch,
+                },
+                5,
+                &history,
+            )
+            .unwrap();
+        state.reduce(AppAction::LockWallet);
+        security
+            .handle(&mut state, Request::UnlockBiometric { handle }, 6, &history)
+            .unwrap();
+        assert_eq!(state.wallet.as_ref().unwrap().kind, WalletKind::WatchOnly);
+        assert_eq!(
+            state.wallet.as_ref().unwrap().master_fingerprint.as_deref(),
+            Some("a1b2c3d4")
+        );
+        for scope in scopes {
+            assert!(matches!(
+                security.wallet_for_operation(&mut state, scope, 7),
+                Err(TransportError::Unsupported)
+            ));
+        }
+        let (runtime, driver) = crate::AppRuntime::new_with_security(state, security).unwrap();
+        tokio::spawn(driver.run());
+        runtime.dispatch(AppAction::LockWallet).await.unwrap();
+        runtime
+            .dispatch(AppAction::OpenWatchOnlyWallet(
+                optn_app::watch_only_setup_preview(Network::Chipnet, "Unsaved account", &xpub, "")
+                    .unwrap(),
+            ))
+            .await
+            .unwrap();
+        assert!(
+            runtime.state().wallet.is_none(),
+            "managed hosts cannot bypass durable wallet open"
+        );
     }
 
     #[test]

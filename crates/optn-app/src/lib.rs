@@ -2619,6 +2619,25 @@ pub fn watch_only_setup_preview(
     })
 }
 
+/// Preserve an explicitly supplied public-account origin (for example a
+/// SeedCash export) without relabelling its hardened account index.
+pub fn watch_only_setup_preview_at(
+    network: Network,
+    wallet_name: &str,
+    account_xpub: &str,
+    master_fingerprint: &str,
+    account: AccountPath,
+) -> Result<WatchOnlySetupPreview, String> {
+    let mut preview =
+        watch_only_setup_preview(network, wallet_name, account_xpub, master_fingerprint)?;
+    let derived = parse_account_path(&preview.account_path).map_err(|error| error.to_string())?;
+    if derived.account() != account.account() {
+        return Err("The account path index does not match the exported public key.".into());
+    }
+    preview.account_path = account.path();
+    Ok(preview)
+}
+
 /// Vendors onboarding offers, surfaced from `optn-platform` so the renderer
 /// does not keep its own list.
 pub use optn_platform::{HardwareTransport, HardwareVendor, TransportSupport};
@@ -5188,6 +5207,45 @@ mod tests {
         );
         trezor.disconnect();
         assert_eq!(trezor.vendor, Some(HardwareVendor::Trezor));
+    }
+
+    #[test]
+    fn watch_only_explicit_origin_survives_preview_and_rejects_another_account() {
+        let account = AccountPath::new(145, 2).unwrap();
+        let xpub = optn_core::hd::Wallet::from_mnemonic(BIP39_TEST_VECTOR_MNEMONIC, "")
+            .unwrap()
+            .account_xpub_at(account)
+            .unwrap();
+        let default =
+            watch_only_setup_preview(Network::Chipnet, "Public origin", &xpub, "a1b2c3d4").unwrap();
+        let selected = watch_only_setup_preview_at(
+            Network::Chipnet,
+            "Public origin",
+            &xpub,
+            "a1b2c3d4",
+            account,
+        )
+        .unwrap();
+        assert_eq!(default.account_path, "m/44'/1'/2'");
+        assert_eq!(selected.account_path, "m/44'/145'/2'");
+        assert_eq!(selected.receive_address, default.receive_address);
+        assert_eq!(selected.master_fingerprint.as_deref(), Some("a1b2c3d4"));
+        assert!(watch_only_setup_preview_at(
+            Network::Chipnet,
+            "Public origin",
+            &xpub,
+            "",
+            AccountPath::new(145, 0).unwrap()
+        )
+        .is_err());
+        assert!(watch_only_setup_preview_at(
+            Network::Chipnet,
+            "Public origin",
+            "not a key",
+            "",
+            account
+        )
+        .is_err());
     }
 
     #[test]

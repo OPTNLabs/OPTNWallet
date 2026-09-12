@@ -16,11 +16,11 @@
 
 use crate::derivation::DerivationPicker;
 use crate::scan::can_scan;
-use crate::{dispatch_action, UiTransport};
+use crate::UiTransport;
 use leptos::prelude::*;
 use optn_app::{
-    classify_scanned_account, watch_only_setup_preview, AccountPath, AppAction, AppState,
-    ScannedAccount, WatchOnlySetupPreview,
+    classify_scanned_account, watch_only_setup_preview_at, AccountPath, AppState, ScannedAccount,
+    WatchOnlySetupPreview,
 };
 
 #[component]
@@ -31,8 +31,15 @@ pub fn AirgapSection(transport: UiTransport, state: RwSignal<AppState>) -> impl 
     let scanned_xpub = RwSignal::new(String::new());
     let status = RwSignal::new(None::<String>);
     let error = RwSignal::new(None::<String>);
+    let path_error = RwSignal::new(None::<String>);
     let preview = RwSignal::new(None::<WatchOnlySetupPreview>);
     let busy = RwSignal::new(false);
+    let network = Memo::new(move |_| state.with(|state| state.network));
+    Effect::new(move |_| {
+        let _ = (network.get(), account.get(), path_error.get());
+        scanned_xpub.with(|_| ());
+        preview.set(None);
+    });
 
     // No device produced this name, because no device was picked.
     let default_name = move || "Scanned wallet".to_owned();
@@ -42,6 +49,8 @@ pub fn AirgapSection(transport: UiTransport, state: RwSignal<AppState>) -> impl 
             return;
         }
         busy.set(true);
+        preview.set(None);
+        scanned_xpub.set(String::new());
         error.set(None);
         status.set(Some("Point the camera at the account QR…".into()));
         let scanner = transport.get_value();
@@ -94,6 +103,11 @@ pub fn AirgapSection(transport: UiTransport, state: RwSignal<AppState>) -> impl 
 
     let validate = move |event: leptos::ev::SubmitEvent| {
         event.prevent_default();
+        if let Some(message) = path_error.get_untracked() {
+            error.set(Some(message));
+            preview.set(None);
+            return;
+        }
         let name = {
             let typed = wallet_name.get_untracked();
             if typed.trim().is_empty() {
@@ -102,11 +116,12 @@ pub fn AirgapSection(transport: UiTransport, state: RwSignal<AppState>) -> impl 
                 typed
             }
         };
-        match watch_only_setup_preview(
+        match watch_only_setup_preview_at(
             state.get_untracked().network,
             &name,
             &scanned_xpub.get_untracked(),
             &fingerprint.get_untracked(),
+            account.get_untracked(),
         ) {
             Ok(next) => {
                 error.set(None);
@@ -188,7 +203,7 @@ pub fn AirgapSection(transport: UiTransport, state: RwSignal<AppState>) -> impl 
                     </Show>
 
                     <Show when=move || true>
-                        <DerivationPicker state=state selected=account error=error />
+                        <DerivationPicker state=state selected=account error=path_error />
                     </Show>
 
                     <label class="field">
@@ -206,9 +221,9 @@ pub fn AirgapSection(transport: UiTransport, state: RwSignal<AppState>) -> impl 
                         />
                     </label>
 
-                    <Show when=move || error.get().is_some()>
+                    <Show when=move || error.get().is_some() || path_error.get().is_some()>
                         <p class="form-error" role="alert">
-                            {move || error.get().unwrap_or_default()}
+                            {move || path_error.get().or_else(|| error.get()).unwrap_or_default()}
                         </p>
                     </Show>
 
@@ -254,22 +269,7 @@ pub fn AirgapSection(transport: UiTransport, state: RwSignal<AppState>) -> impl 
                             }}</dd>
                         </div>
                     </dl>
-                    <button
-                        class="primary"
-                        type="button"
-                        data-testid="airgap-open"
-                        on:click=move |_| {
-                            if let Some(ready) = preview.get_untracked() {
-                                dispatch_action(
-                                    transport,
-                                    state,
-                                    AppAction::OpenWatchOnlyWallet(ready),
-                                );
-                            }
-                        }
-                    >
-                        "Open airgap wallet"
-                    </button>
+                    <crate::security::SaveWatchOnly transport=transport state=state preview=preview error=error test_id="airgap-open" />
                 </section>
             </Show>
         </section>
