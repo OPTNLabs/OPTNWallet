@@ -27,6 +27,8 @@ vi.mock('../../../state/slices/experimentalSlice', () => ({
 vi.mock('../backendSelection', () => ({ activeNode: () => mocks.target }));
 vi.mock('../DesktopWalletManager', () => ({ getBirthHeight: mocks.birth }));
 vi.mock('../FusionTorResolver', () => ({
+  isLocalFusionDestination: (host: string) =>
+    ['localhost', '127.0.0.1', '::1'].includes(host),
   resolveFusionTransport: mocks.route,
 }));
 vi.mock('../../../utils/servers/userNodes', () => ({
@@ -111,6 +113,15 @@ it('does not connect without required Tor', async () => {
   await expect(scanNodeRpa(7, Network.CHIPNET, keys())).rejects.toThrow(
     /Tor unavailable/
   );
+  expect(mocks.invoke).not.toHaveBeenCalled();
+});
+
+it('does not scan a remote node directly when Tor is disabled', async () => {
+  mocks.tor = false;
+  await expect(scanNodeRpa(7, Network.CHIPNET, keys())).rejects.toThrow(
+    /Tor is required for Cash Code scans/
+  );
+  expect(mocks.route).not.toHaveBeenCalled();
   expect(mocks.invoke).not.toHaveBeenCalled();
 });
 

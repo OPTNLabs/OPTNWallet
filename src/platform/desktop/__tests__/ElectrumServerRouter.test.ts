@@ -239,6 +239,24 @@ describe('ElectrumServerRouter cross-network address guard', () => {
     expect(upstreamRequest).toHaveBeenCalledOnce();
   });
 
+  it('rechecks the backend after stale-socket cleanup before registering subscriptions', async () => {
+    upstreamGetCurrentServer.mockReturnValue('mainnet.example.com');
+    upstreamDisconnect.mockImplementationOnce(async () => {
+      backend = { kind: 'node', target: 'selected-node:48333' };
+      return true;
+    });
+    const { default: ElectrumServer } = await import('../ElectrumServerRouter');
+
+    await expect(
+      ElectrumServer().subscribeMany('blockchain.address.subscribe', [
+        [CHIPNET_ADDR],
+      ])
+    ).rejects.toThrow(/Node backend does not register/);
+
+    expect(upstreamDisconnect).toHaveBeenCalledOnce();
+    expect(upstreamSubscribeMany).not.toHaveBeenCalled();
+  });
+
   it('keeps the socket when it already belongs to the current network pool', async () => {
     upstreamGetCurrentServer.mockReturnValue('chipnet.example.com');
     const { default: ElectrumServer } = await import('../ElectrumServerRouter');

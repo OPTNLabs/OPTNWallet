@@ -193,6 +193,54 @@ describe('ledger DMK session', () => {
     expect(disconnected).toEqual(['first']);
   });
 
+  it('waits for an in-flight APDU before disconnecting its session', async () => {
+    let signalStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    let finishApdu!: (response: {
+      data: Uint8Array;
+      statusCode: Uint8Array;
+    }) => void;
+    const response = new Promise<{
+      data: Uint8Array;
+      statusCode: Uint8Array;
+    }>((resolve) => {
+      finishApdu = resolve;
+    });
+    const disconnected: string[] = [];
+    const first = {
+      async sendApdu() {
+        signalStarted();
+        return response;
+      },
+      async disconnect({ sessionId }: { sessionId: string }) {
+        disconnected.push(sessionId);
+      },
+    };
+    const second = fakeDevice({
+      data: walletReply('bchtest:qq00'),
+      status: 0x9000,
+    });
+    await setActiveSession(first, 'first');
+
+    const request = dmkGetWalletPublicKey("44'/145'/0'");
+    await started;
+    const replacement = setActiveSession(second.dmk, 'second');
+    await Promise.resolve();
+    expect(disconnected).toEqual([]);
+
+    finishApdu({
+      data: walletReply('bchtest:qq00'),
+      statusCode: new Uint8Array([0x90, 0x00]),
+    });
+    await request;
+    await replacement;
+
+    expect(disconnected).toEqual(['first']);
+    expect(hasActiveSession()).toBe(true);
+  });
+
   it('serializes overlapping replacements and clear without losing a session', async () => {
     const disconnected: string[] = [];
     let release!: () => void;

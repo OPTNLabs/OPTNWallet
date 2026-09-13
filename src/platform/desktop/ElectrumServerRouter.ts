@@ -299,13 +299,13 @@ export default function ElectrumServer() {
     method: string,
     paramsList: ElectrumParams[]
   ): Promise<number> {
+    await dropStaleNetworkSocket(upstream);
     const network = selectCurrentNetwork(store.getState());
     if (getBackend(network).kind === 'node') {
       throw new Error('Node backend does not register Electrum subscriptions.');
     }
     for (const params of paramsList)
       assertOnCurrentNetwork(method, params, network);
-    await dropStaleNetworkSocket(upstream);
     return upstream.subscribeMany(method, paramsList);
   }
 

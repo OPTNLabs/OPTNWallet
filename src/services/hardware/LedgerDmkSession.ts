@@ -93,13 +93,20 @@ interface ActiveSession {
 let active: ActiveSession | null = null;
 let sessionChanges: Promise<void> = Promise.resolve();
 
+function enqueueSessionOperation<T>(operation: () => Promise<T>): Promise<T> {
+  const result = sessionChanges.then(operation);
+  sessionChanges = result.then(
+    () => undefined,
+    () => undefined
+  );
+  return result;
+}
+
 function replaceActiveSession(next: ActiveSession | null): Promise<void> {
-  const change = sessionChanges.then(async () => {
+  return enqueueSessionOperation(async () => {
     if (active) await active.dmk.disconnect({ sessionId: active.sessionId });
     active = next;
   });
-  sessionChanges = change.catch(() => {});
-  return change;
 }
 
 /**
@@ -141,25 +148,26 @@ export async function dmkGetWalletPublicKey(
   path: string,
   options: { verify?: boolean; format?: AddressFormat } = {}
 ): Promise<WalletPublicKey> {
-  await sessionChanges;
-  const session = active;
-  if (!session) {
-    throw new Error(
-      'No Ledger session is open. Connect the device before asking it for an account.'
-    );
-  }
+  return enqueueSessionOperation(async () => {
+    const session = active;
+    if (!session) {
+      throw new Error(
+        'No Ledger session is open. Connect the device before asking it for an account.'
+      );
+    }
 
-  const response = await session.dmk.sendApdu({
-    sessionId: session.sessionId,
-    apdu: encodeApdu(buildGetWalletPublicKey(path, options)),
+    const response = await session.dmk.sendApdu({
+      sessionId: session.sessionId,
+      apdu: encodeApdu(buildGetWalletPublicKey(path, options)),
+    });
+
+    const status = statusOf(response.statusCode);
+    const problem = describeStatusWord(status);
+    if (problem) {
+      throw new Error(problem);
+    }
+    return parseWalletPublicKey(response.data);
   });
-
-  const status = statusOf(response.statusCode);
-  const problem = describeStatusWord(status);
-  if (problem) {
-    throw new Error(problem);
-  }
-  return parseWalletPublicKey(response.data);
 }
 
 /** Hand this module a live session. Used by the connect flow and by tests. */

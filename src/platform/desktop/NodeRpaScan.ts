@@ -14,7 +14,10 @@ import type { RpaActivityPayload } from '../../services/WalletSpecialActivitySer
 import { parseNodeTarget } from '../../utils/servers/userNodes';
 import { activeNode } from './backendSelection';
 import { getBirthHeight } from './DesktopWalletManager';
-import { resolveFusionTransport } from './FusionTorResolver';
+import {
+  isLocalFusionDestination,
+  resolveFusionTransport,
+} from './FusionTorResolver';
 
 type Receipt = {
   txid: string;
@@ -59,14 +62,19 @@ export async function scanNodeRpa(
       );
     }
   };
-  const route = torRequired
-    ? await resolveFusionTransport(host, {
-        enabled: true,
-        auto: torAuto,
-        host: torHost,
-        manualPort: torPort,
-      })
-    : { type: 'direct' as const };
+  const route = isLocalFusionDestination(host)
+    ? { type: 'direct' as const }
+    : torRequired
+      ? await resolveFusionTransport(host, {
+          enabled: true,
+          auto: torAuto,
+          host: torHost,
+          manualPort: torPort,
+        })
+      : {
+          type: 'unavailable' as const,
+          reason: 'Tor is required for Cash Code scans to remote nodes.',
+        };
   if (route.type === 'unavailable')
     throw new Error(`RPA node scan: ${route.reason}`);
   // Unknown birthday means full history, never silently scan only recent blocks.

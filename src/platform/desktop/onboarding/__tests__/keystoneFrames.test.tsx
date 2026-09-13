@@ -35,6 +35,8 @@ vi.mock('../../CameraQrScanner', () => ({
       onClick={() => {
         onResult('frame-one');
         onResult('frame-two');
+        onResult('frame-one');
+        onResult('frame-three');
       }}
     >
       two frames
@@ -44,9 +46,9 @@ vi.mock('../../CameraQrScanner', () => ({
 import { WatchOnlyWalletPreview } from '../WatchOnlyWalletPreview';
 
 afterEach(cleanup);
-it('retains frames arriving in one render batch', () => {
+it('deduplicates repeated frames arriving in one render batch', () => {
   parse.mockImplementation((frames: string[]) => {
-    if (frames.length < 2) throw new Error('part of the animated export');
+    if (frames.length < 3) throw new Error('part of the animated export');
     return {
       masterFingerprintHex: '11223344',
       accountPath: "m/44'/145'/0'",
@@ -57,6 +59,6 @@ it('retains frames arriving in one render batch', () => {
   fireEvent.click(screen.getByRole('button', { name: /Keystone/ }));
   fireEvent.click(screen.getByRole('button', { name: 'watchOnly.scanCamera' }));
   fireEvent.click(screen.getByRole('button', { name: 'two frames' }));
-  expect(parse).toHaveBeenCalledWith(['frame-one', 'frame-two']);
+  expect(parse).toHaveBeenCalledWith(['frame-one', 'frame-two', 'frame-three']);
   expect(screen.getByText('11223344')).toBeTruthy();
 });

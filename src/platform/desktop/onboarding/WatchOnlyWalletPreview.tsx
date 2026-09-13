@@ -215,7 +215,10 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
   };
 
   const handleKeystoneFrame = (text: string) => {
-    setKeystoneFrames((previous) => [...previous, text.trim()]);
+    const frame = text.trim();
+    setKeystoneFrames((previous) =>
+      previous.includes(frame) ? previous : [...previous, frame]
+    );
   };
 
   useEffect(() => {

@@ -8,7 +8,7 @@
 use crate::network_config::NetworkSettingsStore;
 use optn_app::AppState;
 use optn_core::endpoint::{
-    parse_electrum_endpoint, parse_peer_endpoint, DEFAULT_WSS_PORT, NODE_HINT_PORT,
+    parse_electrum_endpoint, parse_peer_endpoint, PeerEndpoint, DEFAULT_WSS_PORT, NODE_HINT_PORT,
 };
 use optn_core::network::Network;
 use optn_runtime::chain::{
@@ -32,6 +32,47 @@ use optn_runtime::header_verifier::ShvMmrHeaderVerifier;
 use optn_runtime::header_view::VerifiedHeaderView;
 
 type NativeSelection = (Network, Result<(SourceCatalog, ConnectionPolicy), String>);
+
+/// Authorize the renderer's scan target against the node selected in native
+/// application state. The renderer may describe the target, but cannot choose
+/// a different peer for a native connection.
+fn authorize_cashcode_peer(
+    state: &AppState,
+    network: Network,
+    requested_host: &str,
+    requested_port: u16,
+) -> Result<PeerEndpoint, String> {
+    if state.network != network {
+        return Err("Cash Code scan network is no longer selected".into());
+    }
+    let selected_entry = state
+        .servers
+        .for_network(network)
+        .peer
+        .as_deref()
+        .ok_or_else(|| "No native node is selected for this network".to_string())?;
+    let selected = parse_peer_endpoint(selected_entry, NODE_HINT_PORT)
+        .map_err(|error| format!("Invalid native node selection: {error}"))?;
+    let requested =
+        parse_peer_endpoint(requested_host, requested_port).map_err(|error| error.to_string())?;
+    if requested.port() != requested_port {
+        return Err("Node host and explicit port disagree".into());
+    }
+    if requested != selected {
+        return Err("Cash Code scan target does not match the native selected node".into());
+    }
+    Ok(selected)
+}
+
+/// Remote BIP37 scans always require Tor. IPC can ask for the stricter route,
+/// but cannot turn the native privacy requirement off.
+fn cashcode_tor_required(peer: &PeerEndpoint, requested: Option<bool>) -> Result<bool, String> {
+    let required = !crate::fusion::is_local_server(peer.host());
+    if required && requested == Some(false) {
+        return Err("Tor is required for Cash Code scans to remote nodes".into());
+    }
+    Ok(required)
+}
 
 /// Thin legacy-wallet adapter: public endpoint selection plus an already
 /// authorized scan key, never a seed or authority to sign. The selected node is
@@ -62,12 +103,9 @@ pub async fn cashcode_scan_node(
     if port == 0 || from_height == 0 {
         return Err("Cash Code scan needs a node port and nonzero birth height".into());
     }
-    let peer = parse_peer_endpoint(&host, port).map_err(|e| e.to_string())?;
-    if peer.port() != port {
-        return Err("Node host and explicit port disagree".into());
-    }
-    let transport = if tor_required.unwrap_or(true) && !crate::fusion::is_local_server(peer.host())
-    {
+    let peer = authorize_cashcode_peer(&runtime.owner.state(), network, &host, port)?;
+    let tor_required = cashcode_tor_required(&peer, tor_required)?;
+    let transport = if tor_required {
         let proxy_port = tor_port.unwrap_or(9050);
         if proxy_port == 0 {
             return Err("Invalid Tor SOCKS port".into());
@@ -89,6 +127,7 @@ pub async fn cashcode_scan_node(
     } else {
         Bip37Transport::Direct
     };
+
     let (headers, view) = runtime.accepted_chain(network).await?;
     let id = SourceId::new("selected-cashcode-node");
     let endpoint = Endpoint {
@@ -114,11 +153,16 @@ pub async fn cashcode_scan_node(
     );
     let mut config = Bip37Config::new(id, endpoint, network.to_string());
     config.transport = transport;
-    service.register(Arc::new(
-        Bip37Backend::connect(config, headers.clone())
-            .await
-            .map_err(|e| format!("Selected node unavailable: {e:?}"))?,
-    ));
+    // Tor probing and header-store setup await. Recheck native state immediately
+    // before opening the selected peer so a stale renderer request is rejected.
+    let current_peer = authorize_cashcode_peer(&runtime.owner.state(), network, &host, port)?;
+    if current_peer != peer {
+        return Err("Native node selection changed during Cash Code scan setup".into());
+    }
+    let backend = Bip37Backend::connect(config, headers.clone())
+        .await
+        .map_err(|e| format!("Selected node unavailable: {e:?}"))?;
+    service.register(Arc::new(backend));
     let mut worker = ProgressiveSyncWorker::new(Default::default())
         .with_header_view(view)
         .map_err(|e| format!("Invalid accepted headers: {e:?}"))?
@@ -717,6 +761,38 @@ mod tests {
             "optn-{label}-{}-{time}-{sequence}",
             std::process::id()
         ))
+    }
+
+    #[test]
+    fn cashcode_scan_peer_must_match_the_native_network_selection() {
+        let mut state = AppState::default();
+        state.network = Network::Chipnet;
+        state.apply(AppAction::SetServer {
+            kind: ServerKind::Peer,
+            entry: "selected.example:48333".into(),
+        });
+
+        let selected = authorize_cashcode_peer(&state, Network::Chipnet, "selected.example", 48333)
+            .expect("the configured node is authorized");
+        assert_eq!(selected.host(), "selected.example");
+        assert_eq!(selected.port(), 48333);
+        assert!(
+            authorize_cashcode_peer(&state, Network::Chipnet, "attacker.example", 48333,).is_err()
+        );
+        assert!(
+            authorize_cashcode_peer(&state, Network::Mainnet, "selected.example", 48333,).is_err()
+        );
+    }
+
+    #[test]
+    fn remote_cashcode_scans_cannot_disable_tor() {
+        let remote = parse_peer_endpoint("node.example:8333", NODE_HINT_PORT).unwrap();
+        assert!(cashcode_tor_required(&remote, None).unwrap());
+        assert!(cashcode_tor_required(&remote, Some(true)).unwrap());
+        assert!(cashcode_tor_required(&remote, Some(false)).is_err());
+
+        let local = parse_peer_endpoint("127.0.0.1:8333", NODE_HINT_PORT).unwrap();
+        assert!(!cashcode_tor_required(&local, Some(false)).unwrap());
     }
 
     #[test]
