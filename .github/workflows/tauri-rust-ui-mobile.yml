@@ -91,6 +91,8 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699
+        with:
+          packages: platform-tools
 
       - name: Install pinned Android SDK and NDK
         run: |
@@ -179,6 +181,23 @@ jobs:
 
       - name: Initialize Tauri iOS
         run: npx tauri ios init --ci --config src-tauri/tauri.leptos.mobile.conf.json
+
+      - name: Resolve Tauri Swift package dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fetch --manifest-path src-tauri/Cargo.toml --target aarch64-apple-ios-sim
+
+          tauri_version="$(awk '$0 == "name = \"tauri\"" { getline; gsub(/version = \"|\"/, ""); print; exit }' src-tauri/Cargo.lock)"
+          cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+          tauri_source="$(find "$cargo_home/registry/src" -maxdepth 3 -type d -name "tauri-$tauri_version" -print -quit)"
+
+          if [[ -z "$tauri_version" || -z "$tauri_source" ]]; then
+            echo "Could not locate the locked Tauri crate source for SwiftPM resolution." >&2
+            exit 1
+          fi
+
+          swift package --package-path "$tauri_source/mobile/ios-api" resolve
 
       - name: Build Tauri Leptos iOS simulator
         run: npx tauri ios build --debug --target aarch64-sim --ci --config src-tauri/tauri.leptos.mobile.conf.json
