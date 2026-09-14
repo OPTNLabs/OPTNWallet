@@ -28,6 +28,24 @@
     @com.getcapacitor.PluginMethod <methods>;
 }
 
+# The Capacitor barcode plugin's AAR contains an unused ML Kit backend beside
+# ZXing. Wallet calls force ZXing for every Android scan, and build.gradle
+# excludes ML Kit and the Play Services barcode artifact from every flavor to
+# keep the F-Droid classpath free of proprietary scanner code. R8 still inspects
+# the AAR's unreachable ML Kit helper and otherwise fails on these optional
+# backend types; allow only the exact missing symbols reported by the release
+# build. The release artifact gate separately verifies that scanner binaries
+# are not packaged.
+-dontwarn com.google.android.gms.tasks.OnFailureListener
+-dontwarn com.google.android.gms.tasks.OnSuccessListener
+-dontwarn com.google.android.gms.tasks.Task
+-dontwarn com.google.mlkit.vision.barcode.BarcodeScanner
+-dontwarn com.google.mlkit.vision.barcode.BarcodeScannerOptions
+-dontwarn com.google.mlkit.vision.barcode.BarcodeScannerOptions$Builder
+-dontwarn com.google.mlkit.vision.barcode.BarcodeScanning
+-dontwarn com.google.mlkit.vision.barcode.common.Barcode
+-dontwarn com.google.mlkit.vision.common.InputImage
+
 # Remove noisy Android logs from release builds.
 -assumenosideeffects class android.util.Log {
     public static int v(...);

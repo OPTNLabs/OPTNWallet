@@ -282,6 +282,48 @@ type UTXOFetchOptions = {
   onProgress?: (completedCount: number, totalCount: number) => void;
 };
 
+/**
+ * Detected RPA payments, as ordinary spendable UTXOs.
+ *
+ * Each carries the `rpaOrigin` that TransactionBuilderHelper needs to rebuild
+ * its spending key: an RPA address is not in the keys table and never will be,
+ * so the origin has to arrive with the coin or signing fails at the last step.
+ *
+ * Missing origins are skipped rather than surfaced. A record written before
+ * origins were stored cannot be signed for, and offering it for selection
+ * would turn a stale record into a failed send.
+ */
+async function collectRpaSpendableUtxos(
+  walletId: number,
+  reservedOutpoints: Set<string>
+): Promise<UTXO[]> {
+  try {
+    const { readRpaUnspentOutputs } = await import(
+      './WalletSpecialActivityService'
+    );
+    const outputs = await readRpaUnspentOutputs(walletId);
+    return outputs
+      .filter((output) => output.rpaOrigin && output.valueSats > 0)
+      .map((output) => ({
+        wallet_id: walletId,
+        address: output.address,
+        height: output.height,
+        tx_hash: output.txHash,
+        tx_pos: output.outputIndex,
+        value: output.valueSats,
+        amount: output.valueSats,
+        token: null,
+        rpaOrigin: output.rpaOrigin,
+      }))
+      .filter((utxo) => !reservedOutpoints.has(outpointKey(utxo)));
+  } catch (e) {
+    // A wallet with no RPA record, or a read failure, must not take the
+    // ordinary coins down with it.
+    logError('UTXOService.collectRpaSpendableUtxos', e, { walletId });
+    return [];
+  }
+}
+
 const UTXOService = {
   async fetchAndStoreUTXOs(walletId: number, address: string): Promise<UTXO[]> {
     try {
@@ -589,6 +631,14 @@ const UTXOService = {
           (utxo) => !pendingOutpoints.has(outpointKey(utxo))
         ),
         ...pendingBchUtxos,
+        // Payments received at this wallet's Cash Code. They live in the RPA
+        // activity record rather than the address tables, because their
+        // one-time addresses were never derived at an HD path -- which is why
+        // they were absent here, and therefore absent from coin selection, and
+        // therefore unspendable despite being detected and counted.
+        ...(await collectRpaSpendableUtxos(walletId, reservedOutpoints)).filter(
+          (utxo) => !pendingOutpoints.has(outpointKey(utxo))
+        ),
       ];
       const tokenUtxos = [...dbTokenUtxos, ...pendingTokenUtxos].reduce<UTXO[]>(
         (acc, utxo) => {

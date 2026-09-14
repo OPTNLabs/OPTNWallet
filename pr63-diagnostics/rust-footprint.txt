@@ -1,0 +1,11 @@
+RUST_SOURCE_FILES=145
+RUST_SOURCE_LINES=67338
+COUNTED_SOURCE_FILES=1217
+COUNTED_SOURCE_LINES=317769
+RUST_SOURCE_LINE_SHARE=21.19%
+.ts: files=799 lines=180100
+.tsx: files=267 lines=67528
+.rs: files=145 lines=67338
+.css: files=3 lines=1994
+.js: files=1 lines=769
+.html: files=2 lines=40

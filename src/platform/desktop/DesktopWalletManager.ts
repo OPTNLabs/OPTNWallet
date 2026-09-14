@@ -336,7 +336,7 @@ export async function createWalletWithPassword(
   // Record the chain tip as this wallet's birth height: it cannot hold coins
   // from before it existed, so a BIP37 node only has to scan birth..tip rather
   // than the whole chain (one merkleblock round-trip per block). Best-effort —
-  // if the tip isn't known the node scan falls back to a recent window.
+  // if the tip isn't known, keep it unknown instead of inventing a scan floor.
   await recordBirthHeight(walletId);
 
   // Auto-mirror the wallet to a file in the default wallets folder (EC-style).
@@ -392,19 +392,30 @@ export async function rollbackCreatedWallet(walletId: number): Promise<void> {
 /**
  * Store the current chain tip as `walletId`'s birth height. Called on creation;
  * a wallet can't have coins older than itself, so a BIP37 scan starts here.
- * Best-effort: a failure just means the node scan uses its recent-window
- * fallback instead of full history.
+ * Best-effort and bounded: offline wallet creation must not wait through
+ * multiple network retries. An unknown birthday never means a recent-window scan.
  */
 async function recordBirthHeight(walletId: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const { default: ElectrumService } = await import(
       '../../services/ElectrumService'
     );
-    const tip = (await ElectrumService.getLatestBlock()) as {
+    const tip = (await Promise.race([
+      ElectrumService.getLatestBlock(),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), 5000);
+      }),
+    ])) as {
       height?: unknown;
     } | null;
     const height = tip?.height;
-    if (typeof height !== 'number' || height <= 0) return;
+    if (
+      typeof height !== 'number' ||
+      !Number.isSafeInteger(height) ||
+      height <= 0
+    )
+      return;
     const dbService = DatabaseService();
     const db = dbService.getDatabase();
     if (!db) return;
@@ -415,6 +426,8 @@ async function recordBirthHeight(walletId: number): Promise<void> {
     await dbService.flushDatabaseToFile(walletId);
   } catch {
     /* best effort */
+  } finally {
+    clearTimeout(timer);
   }
 }
 

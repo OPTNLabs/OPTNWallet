@@ -25,7 +25,11 @@ vi.mock('@capacitor/core', async (importOriginal) => {
 });
 
 vi.mock('../../services/BcmrService', () => ({
-  default: vi.fn().mockImplementation(() => bcmrInstance),
+  // `new BcmrService()` at module scope in the hook: the implementation has to
+  // be constructible, which an arrow function is not.
+  default: vi.fn().mockImplementation(function () {
+    return bcmrInstance;
+  }),
 }));
 
 import {

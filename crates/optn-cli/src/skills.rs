@@ -27,6 +27,8 @@ use crate::error::{CliError, Result};
 pub enum Capability {
     /// Reads chain or local state. Cannot move funds or touch a secret.
     Read,
+    /// Changes persisted settings without handling wallet secrets.
+    Configure,
     /// Handles the recovery phrase or a key derived from it.
     Secret,
     /// Produces a signature. Nothing is broadcast.
@@ -39,6 +41,7 @@ impl Capability {
     pub fn as_str(self) -> &'static str {
         match self {
             Capability::Read => "read",
+            Capability::Configure => "configure",
             Capability::Secret => "secret",
             Capability::Sign => "sign",
             Capability::Spend => "spend",
@@ -48,6 +51,7 @@ impl Capability {
     fn describe(self) -> &'static str {
         match self {
             Capability::Read => "reads chain or local state",
+            Capability::Configure => "changes persisted settings",
             Capability::Secret => "handles the recovery phrase or a derived key",
             Capability::Sign => "produces a signature; broadcasts nothing",
             Capability::Spend => "moves funds, or authorises a debit",
@@ -79,11 +83,12 @@ impl Policy {
     pub fn parse(value: &str) -> Result<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "read" | "read-only" | "readonly" => Ok(Policy(Capability::Read)),
+            "configure" => Ok(Policy(Capability::Configure)),
             "secret" => Ok(Policy(Capability::Secret)),
             "sign" => Ok(Policy(Capability::Sign)),
             "spend" | "full" | "all" => Ok(Policy(Capability::Spend)),
             other => Err(CliError::Usage(format!(
-                "unknown policy '{other}' (expected read, secret, sign or spend)"
+                "unknown policy '{other}' (expected read, configure, secret, sign or spend)"
             ))),
         }
     }
@@ -127,9 +132,41 @@ pub struct Skill {
 /// manifest and that the gate therefore never classifies.
 pub const SKILLS: &[Skill] = &[
     Skill {
+        name: "wallet",
+        capability: Capability::Secret,
+        summary: "Manage encrypted native wallets, passwords and lock policy through the shared Rust runtime.",
+        needs_wallet: false,
+        needs_network: false,
+        requires_confirmation: false,
+    },
+    Skill {
         name: "ping",
         capability: Capability::Read,
         summary: "Check the Electrum server is reachable and report its version.",
+        needs_wallet: false,
+        needs_network: true,
+        requires_confirmation: false,
+    },
+    Skill {
+        name: "network",
+        capability: Capability::Read,
+        summary: "Inspect the shared source catalog and protocol policy without opening a chain connection.",
+        needs_wallet: false,
+        needs_network: false,
+        requires_confirmation: false,
+    },
+    Skill {
+        name: "network select",
+        capability: Capability::Configure,
+        summary: "Persist an exact source and protocol selection shared with the desktop runtime.",
+        needs_wallet: false,
+        needs_network: false,
+        requires_confirmation: false,
+    },
+    Skill {
+        name: "network headers",
+        capability: Capability::Read,
+        summary: "Fetch live headers and verify predecessor link, declared PoW, and ASERT.",
         needs_wallet: false,
         needs_network: true,
         requires_confirmation: false,
@@ -339,7 +376,7 @@ pub const SKILLS: &[Skill] = &[
         // `rpa pay` with them.
         name: "rpa",
         capability: Capability::Spend,
-        summary: "Reusable payment addresses. `code`, `decode` and `scan` read; `pay` spends.",
+        summary: "Cash Code: `code`, `decode`, `scan`, `discover` read; `pay` and `sweep` spend.",
         needs_wallet: true,
         needs_network: true,
         requires_confirmation: true,
@@ -378,6 +415,7 @@ pub fn enforce(policy: Policy, command: &str) -> Result<()> {
 fn capability_descriptions() -> Vec<Value> {
     [
         Capability::Read,
+        Capability::Configure,
         Capability::Secret,
         Capability::Sign,
         Capability::Spend,
@@ -397,9 +435,10 @@ pub fn manifest(policy: Policy) -> Value {
             "source": if std::env::var("OPTN_POLICY").is_ok() { "OPTN_POLICY" } else { "default" },
             "levels": [
                 { "name": "read",   "admits": ["read"] },
-                { "name": "secret", "admits": ["read", "secret"] },
-                { "name": "sign",   "admits": ["read", "secret", "sign"] },
-                { "name": "spend",  "admits": ["read", "secret", "sign", "spend"] },
+                { "name": "configure", "admits": ["read", "configure"] },
+                { "name": "secret", "admits": ["read", "configure", "secret"] },
+                { "name": "sign",   "admits": ["read", "configure", "secret", "sign"] },
+                { "name": "spend",  "admits": ["read", "configure", "secret", "sign", "spend"] },
             ],
         },
         "capabilities": capability_descriptions(),

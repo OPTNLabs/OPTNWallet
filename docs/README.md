@@ -6,6 +6,9 @@ Technical documentation for contributors and third-party integrators.
 
 - [Contributing Guide](../CONTRIBUTING.md)
   - Setup, quality checks, Docker paths, and pull-request expectations.
+- [Production-ready definition](./production-ready.md)
+  - Green CI is necessary and not sufficient. Machine-readable parity matrix
+    and the 18 release gates.
 - [Build and Release Scripts](./build-and-release.md)
   - Commands for Android APK/AAB builds and iOS Capacitor preparation.
 - [Docker contributor lab](./docker-dev.md)
@@ -13,6 +16,8 @@ Technical documentation for contributors and third-party integrators.
     end-user install path.
 - [Docker vs releases](./docker-release-model.md)
   - Images update **from** git tags; installers stay the primary ship.
+- [Wallet UI layouts](./ui-overhaul/README.md)
+  - Product screens for the UI overhaul (home, portfolio, send, receive, actions).
 - [Wallet Architecture](./wallet-architecture.md)
   - Runtime shape, major modules, and where responsibilities live.
 - [Wallet Ledger & Sync Design](./wallet-ledger-sync-design.md)

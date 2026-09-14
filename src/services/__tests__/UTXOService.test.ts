@@ -55,9 +55,13 @@ vi.mock('../ElectrumService', () => ({
 }));
 
 vi.mock('../BcmrService', () => ({
-  default: vi.fn(() => ({
-    getSnapshot: vi.fn(async () => null),
-  })),
+  // `new BcmrService()` in UTXOService: the implementation must be
+  // constructible, which an arrow function is not.
+  default: vi.fn(function () {
+    return {
+      getSnapshot: vi.fn(async () => null),
+    };
+  }),
 }));
 
 vi.mock('../../apis/TransactionManager/TransactionManager', () => ({
@@ -85,6 +89,11 @@ vi.mock('../../apis/AddressManager/AddressManager', () => ({
   default: vi.fn(() => ({
     fetchTokenAddresses: fetchTokenAddressesMock,
   })),
+}));
+
+const readRpaUnspentOutputsMock = vi.fn(async () => [] as unknown[]);
+vi.mock('../WalletSpecialActivityService', () => ({
+  readRpaUnspentOutputs: readRpaUnspentOutputsMock,
 }));
 
 vi.mock('../../state/store', () => ({
@@ -689,6 +698,91 @@ describe('UTXOService', () => {
     expect(result.allUtxos).toEqual([]);
     expect(decodeTransactionMock).toHaveBeenCalledWith(expect.any(Uint8Array));
   });
+
+  it('offers detected Cash Code payments to coin selection, with their origin', async () => {
+    // The gap this closes: an RPA payment was detected and counted in the
+    // balance, yet absent from every send, because it lives in the activity
+    // record rather than the address tables and nothing bridged the two.
+    fetchAddressesByWalletIdMock.mockResolvedValue([
+      { address: 'bitcoincash:q1', tokenAddress: 'bitcoincash:z1' },
+    ]);
+    fetchUTXOsFromDatabaseMock.mockResolvedValue({
+      utxosMap: {},
+      cashTokenUtxosMap: {},
+    });
+    readRpaUnspentOutputsMock.mockResolvedValue([
+      {
+        txHash: 'rpatx',
+        outputIndex: 0,
+        address: 'bitcoincash:qstealth',
+        valueSats: 50000,
+        height: 800000,
+        rpaOrigin: {
+          prevoutTxid: 'senderprevout',
+          prevoutIndex: 1,
+          senderPubkey: '02aa',
+        },
+      },
+      {
+        // Written before origins were recorded. Its key cannot be rebuilt, so
+        // offering it would turn a stale record into a failed send.
+        txHash: 'legacyrecord',
+        outputIndex: 0,
+        address: 'bitcoincash:qold',
+        valueSats: 10000,
+        height: 799000,
+      },
+    ]);
+
+    const { default: UTXOService } = await import('../UTXOService');
+    const result = await UTXOService.fetchAllWalletUtxos(11);
+
+    const rpa = result.allUtxos.filter((utxo) => utxo.rpaOrigin);
+    expect(rpa).toHaveLength(1);
+    expect(rpa[0]).toEqual(
+      expect.objectContaining({
+        tx_hash: 'rpatx',
+        tx_pos: 0,
+        value: 50000,
+        wallet_id: 11,
+        rpaOrigin: {
+          prevoutTxid: 'senderprevout',
+          prevoutIndex: 1,
+          senderPubkey: '02aa',
+        },
+      })
+    );
+    expect(
+      result.allUtxos.some((utxo) => utxo.tx_hash === 'legacyrecord')
+    ).toBe(false);
+  });
+
+  it('keeps ordinary coins when the RPA record cannot be read', async () => {
+    fetchAddressesByWalletIdMock.mockResolvedValue([
+      { address: 'bitcoincash:q1', tokenAddress: 'bitcoincash:z1' },
+    ]);
+    fetchUTXOsFromDatabaseMock.mockResolvedValue({
+      utxosMap: {
+        'bitcoincash:q1': [
+          {
+            tx_hash: 'ordinary',
+            tx_pos: 0,
+            value: 1000,
+            address: 'bitcoincash:q1',
+            height: 1,
+          },
+        ],
+      },
+      cashTokenUtxosMap: {},
+    });
+    readRpaUnspentOutputsMock.mockRejectedValue(new Error('no record'));
+
+    const { default: UTXOService } = await import('../UTXOService');
+    const result = await UTXOService.fetchAllWalletUtxos(11);
+
+    expect(result.allUtxos.map((utxo) => utxo.tx_hash)).toContain('ordinary');
+  });
+
 });
 
 it('soft-fails transport loss — returns last SQL snapshot, does not wipe', async () => {

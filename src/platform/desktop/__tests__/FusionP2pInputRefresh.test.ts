@@ -212,13 +212,16 @@ describe('P2P Fusion broadcast reconciliation', () => {
         visibility: async () => ({ seen: false, confirmed: false }),
       })
     ).txid;
-    invokeMock
-      .mockResolvedValueOnce({
-        txid: expected,
-        relaySubmitted: true,
-        observerSeen: false,
-      })
-      .mockResolvedValueOnce(true);
+    // One queued reply for the one call this test makes. A second was queued
+    // here and never consumed, and a leftover one-time reply is not cleared by
+    // `clearAllMocks` -- it sat in the queue and was handed to the next test
+    // that called `invoke`, which then saw `true` where it expected a signer
+    // response and blamed the signer.
+    invokeMock.mockResolvedValueOnce({
+      txid: expected,
+      relaySubmitted: true,
+      observerSeen: false,
+    });
 
     const { broadcastP2pTransactionTorOnly } = await import(
       '../FusionP2pService'
@@ -246,7 +249,13 @@ describe('P2P Fusion broadcast reconciliation', () => {
 
 describe('P2P Fusion native signing boundary', () => {
   beforeEach(() => {
-    vi.restoreAllMocks();
+    // Clear call history, do not restore. There is no `vi.spyOn` in this file,
+    // so `restoreAllMocks` had no spy to put back -- what it does reach is the
+    // module-level `vi.fn(impl)` mocks, whose construction-time
+    // implementations it discards. That left helpers like `isOwnRoundKey`
+    // returning undefined instead of false, and the native signing path then
+    // failed in a way that pointed at the signer rather than at the mock.
+    vi.clearAllMocks();
     reservedOutpointsMock.mockReturnValue(new Set<string>());
   });
 
