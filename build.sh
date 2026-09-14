@@ -1,3 +1,12 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -Eeuo pipefail
 
-rm -rf dist/; npm run build; npx cap copy; npx cap sync; cd android/; ./gradlew assembleDebug; adb install -r app/build/outputs/apk/debug/app-debug.apk; cd ..
+repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+cd "$repo_root"
+
+npm run typecheck:core
+npm run android:prepare
+(
+  cd android
+  ./gradlew installPlayDebug
+)
