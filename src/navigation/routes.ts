@@ -3,6 +3,7 @@ export const ROUTE_PATHS = {
   landing: '/landing',
   createWallet: '/createwallet',
   importWallet: '/importwallet',
+  watchOnlyWallet: '/watch-only',
   multisigSetup: '/multisig/setup',
   multisigWorkspace: '/multisig/:wallet_id/*',
   home: '/home/:wallet_id',

@@ -30,6 +30,23 @@ export interface UTXO {
   abi?: object[]; // ABI for contract-related UTXOs
   id?: string;
   isPaperWallet?: boolean;
+  /**
+   * Set when this output was received at the wallet's Cash Code.
+   *
+   * An ordinary coin's key is looked up from its address, because the address
+   * was derived at a known HD path. An RPA payment lands at a one-time P2PKH
+   * whose key is the spend key tweaked by an ECDH secret, and that secret
+   * depends on which outpoint the *sender* spent -- nothing recoverable from
+   * the address. So the origin travels with the coin, and
+   * TransactionBuilderHelper rebuilds the key from it at signing time.
+   *
+   * The recipe, never the secret: both fields are public and already on chain.
+   */
+  rpaOrigin?: {
+    prevoutTxid: string;
+    prevoutIndex: number;
+    senderPubkey: string;
+  };
   unlocker?: unknown;
   // **New Fields**
   contractFunction?: string;

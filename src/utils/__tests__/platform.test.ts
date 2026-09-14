@@ -29,11 +29,24 @@ describe('platform', () => {
   });
 
   it('recognizes the Tauri desktop WebView', () => {
+    isNativePlatformMock.mockReturnValue(false);
+    getPlatformMock.mockReturnValue('web');
     vi.stubGlobal('window', {});
     expect(isDesktopPlatform()).toBe(false);
 
     vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
+    vi.stubGlobal('navigator', { userAgent: 'Mozilla/5.0 (Windows NT 10.0)' });
     expect(isDesktopPlatform()).toBe(true);
+  });
+
+  it('does not treat a Tauri Android WebView as desktop', () => {
+    isNativePlatformMock.mockReturnValue(false);
+    getPlatformMock.mockReturnValue('web');
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
+    vi.stubGlobal('navigator', {
+      userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel) AppleWebKit/537.36',
+    });
+    expect(isDesktopPlatform()).toBe(false);
   });
 
   it('reports web as non-native', () => {

@@ -12,8 +12,9 @@
 //     -> that key's pubkey hash IS the output's locking bytecode
 //     -> recipient sweeps it and the VM accepts that too
 //
-// Run for a cashcode: target and a legacy paycode: target, since both must
-// pay the same compressed form.
+// Run for a cashcode: target only. A legacy paycode: target is covered by
+// the opposite assertion — that it never reaches any of this — because
+// paying one under compressed Cash Code rules is precisely the bug.
 import { describe, expect, it } from 'vitest';
 import * as bip39 from 'bip39';
 import {
@@ -41,7 +42,8 @@ import {
   deriveRpaKeys,
   deriveSpendingKey,
   encodePaycode,
-  type RpaPrefixFamily,
+  getRpaSendBlockReason,
+  looksLikeRpaPaycode,
 } from '../RpaService';
 import { finalizeRpaPayment } from '../RpaSender';
 import { matchRpaPaymentsInRawTx } from '../RpaDetect';
@@ -111,7 +113,7 @@ function expectVmAccepts(
   expect(verdict).toBe(true);
 }
 
-async function runRoundTrip(family: RpaPrefixFamily): Promise<void> {
+async function runRoundTrip(): Promise<void> {
   // Recipient publishes a code
   const recipient = await deriveRpaKeys(
     bip39.generateMnemonic(),
@@ -122,12 +124,11 @@ async function runRoundTrip(family: RpaPrefixFamily): Promise<void> {
     recipient.scanPubkey,
     recipient.spendPubkey,
     Network.CHIPNET,
-    8,
-    family
+    8
   );
+  expect(code.startsWith('cashcodetest:')).toBe(true);
   const decoded = decodePaycode(code);
   expect(decoded).not.toBeNull();
-  expect(decoded!.legacy).toBe(family === 'legacy-paycode');
 
   // Sender holds one funded P2PKH coin
   const sender = randomKeypair();
@@ -236,10 +237,29 @@ async function runRoundTrip(family: RpaPrefixFamily): Promise<void> {
 
 describe('RPA round trip: pay a code, then spend what lands', () => {
   it('cashcode: payment is valid, detected, and spendable by the recipient', async () => {
-    await runRoundTrip('cashcode');
+    await runRoundTrip();
   });
 
-  it('legacy paycode: payment is valid, detected, and spendable by the recipient', async () => {
-    await runRoundTrip('legacy-paycode');
+  it('a legacy paycode stops at validation, before any of that happens', () => {
+    // The counterpart to the round trip above. Everything that test exercises
+    // -- dummy destination, ECDH payment address, prefix grinding, signing,
+    // broadcast -- is downstream of the gate checked here, so proving the
+    // recipient never gets past validation is what proves none of it runs on
+    // a legacy code.
+    //
+    // Frozen fixture from test-vectors/rpa.json: checksum-valid, real curve
+    // points, and no longer producible by any encoder in the codebase.
+    const legacy =
+      'paycodetest:qqz3qqu7j2x2wfa6j46degrj48nv9454uhqym9pn6a855u65nkrd4xpukqpuhc49jym04j3wt34r23pv8mk60qjtmakqnqt0qr8jr77xzcx7jzqqqqqqqhpvc6fef';
+
+    // Refused, and named.
+    expect(getRpaSendBlockReason(legacy, Network.CHIPNET)).toMatch(
+      /not supported/i
+    );
+    // Never routed into the RPA path...
+    expect(looksLikeRpaPaycode(legacy)).toBe(false);
+    // ...and with no decode, there are no scan/spend keys to derive a payment
+    // address from in the first place.
+    expect(decodePaycode(legacy)).toBeNull();
   });
 });

@@ -10,6 +10,7 @@ import {
   computeSharedSecret,
   getRpaSendBlockReason,
   getRpaKeyPaths,
+  isLegacyPaycode,
   looksLikeRpaPaycode,
   rpaGrindString,
   RPA_PREFIX_BITS,
@@ -253,45 +254,67 @@ describe('RpaService', () => {
     expect(chipnet.startsWith('paycode')).toBe(false);
   });
 
-  it('still accepts legacy paycode strings so old codes keep working', async () => {
-    const keys = await deriveRpaKeys(TEST_MNEMONIC, PASSPHRASE, Network.MAINNET);
-    const legacyMainnet = encodePaycode(
-      keys.scanPubkey,
-      keys.spendPubkey,
-      Network.MAINNET,
-      RPA_PREFIX_BITS,
-      'legacy-paycode'
-    );
-    const legacyChipnet = encodePaycode(
-      keys.scanPubkey,
-      keys.spendPubkey,
-      Network.CHIPNET,
-      RPA_PREFIX_BITS,
-      'legacy-paycode'
-    );
-    expect(legacyMainnet.startsWith('paycode:')).toBe(true);
-    expect(legacyChipnet.startsWith('paycodetest:')).toBe(true);
+  // Frozen fixtures, copied from test-vectors/rpa.json. Nothing in the
+  // codebase can generate a legacy PayCode any more -- which is the point --
+  // so these are literals. Both are checksum-valid for their own prefix and
+  // carry real curve points, so every structural check downstream of the
+  // prefix would pass: they are exactly the strings that would otherwise be
+  // decoded and paid to a compressed-derived address their owner never
+  // derived.
+  const LEGACY_MAINNET_FIXTURE =
+    'paycode:qqq3qql4u7sr0pnmlv5yvu49cj4mxqdupq965k5wt69mtaauu4fpfa2sjsp9p0d4s4725qx94j76x33ndw88ruy5yxun7fz5zt0epxjxrg5hkgsqqqqqqjl7alqx5';
+  const LEGACY_CHIPNET_FIXTURE =
+    'paycodetest:qqz3qqu7j2x2wfa6j46degrj48nv9454uhqym9pn6a855u65nkrd4xpukqpuhc49jym04j3wt34r23pv8mk60qjtmakqnqt0qr8jr77xzcx7jzqqqqqqqhpvc6fef';
 
-    for (const code of [legacyMainnet, legacyChipnet]) {
-      expect(looksLikeRpaPaycode(code)).toBe(true);
-      const decoded = decodePaycode(code);
-      expect(decoded).not.toBeNull();
-      expect(decoded!.legacy).toBe(true);
-      expect(Buffer.from(decoded!.scanPubkey).toString('hex')).toBe(
-        Buffer.from(keys.scanPubkey).toString('hex')
-      );
-      expect(Buffer.from(decoded!.spendPubkey).toString('hex')).toBe(
-        Buffer.from(keys.spendPubkey).toString('hex')
-      );
+  it('refuses legacy paycode strings at every layer', async () => {
+    for (const [code, network] of [
+      [LEGACY_MAINNET_FIXTURE, Network.MAINNET],
+      [LEGACY_CHIPNET_FIXTURE, Network.CHIPNET],
+    ] as const) {
+      // Named, so the refusal can say what was pasted...
+      expect(isLegacyPaycode(code)).toBe(true);
+      // ...but never routed into the RPA send path...
+      expect(looksLikeRpaPaycode(code)).toBe(false);
+      // ...and never decoded into keys a sender could derive against.
+      expect(decodePaycode(code)).toBeNull();
+
+      // The gate useSimpleSend consults before it selects coins, builds,
+      // grinds, signs or broadcasts.
+      const reason = getRpaSendBlockReason(code, network);
+      expect(reason).toMatch(/not supported/i);
+      expect(reason).toMatch(/Cash Code/);
+      expect(reason).toMatch(/No transaction was created/);
     }
+  });
 
-    // A legacy code is a valid send target, not something we refuse.
-    expect(getRpaSendBlockReason(legacyMainnet, Network.MAINNET)).toBeNull();
-    expect(getRpaSendBlockReason(legacyChipnet, Network.CHIPNET)).toBeNull();
-
-    const cashcode = encodePaycode(keys.scanPubkey, keys.spendPubkey, Network.MAINNET);
+  it('still accepts a cashcode carrying the very same keys', async () => {
+    // Guards the test above from passing for the wrong reason. If a legacy
+    // code were refused because of its payload or checksum rather than its
+    // prefix, this would fail too.
+    const keys = await deriveRpaKeys(TEST_MNEMONIC, PASSPHRASE, Network.MAINNET);
+    const cashcode = encodePaycode(
+      keys.scanPubkey,
+      keys.spendPubkey,
+      Network.MAINNET
+    );
+    expect(cashcode.startsWith('cashcode:')).toBe(true);
+    expect(isLegacyPaycode(cashcode)).toBe(false);
     expect(looksLikeRpaPaycode(cashcode)).toBe(true);
-    expect(decodePaycode(cashcode)!.legacy).toBe(false);
+    expect(decodePaycode(cashcode)).not.toBeNull();
+    expect(getRpaSendBlockReason(cashcode, Network.MAINNET)).toBeNull();
+  });
+
+  it('cannot be asked to emit a legacy paycode', async () => {
+    // encodePaycode has no prefix-family parameter at all now. An encoder
+    // able to stamp `paycode:` would be a way to manufacture the strings the
+    // gate above refuses.
+    const keys = await deriveRpaKeys(TEST_MNEMONIC, PASSPHRASE, Network.MAINNET);
+    for (const network of [Network.MAINNET, Network.CHIPNET]) {
+      const code = encodePaycode(keys.scanPubkey, keys.spendPubkey, network);
+      expect(code.startsWith('paycode')).toBe(false);
+      expect(isLegacyPaycode(code)).toBe(false);
+    }
+    expect(encodePaycode.length).toBeLessThanOrEqual(4);
   });
 
   it('uses network-specific coin-type key paths for mainnet and chipnet', async () => {

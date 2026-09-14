@@ -98,6 +98,16 @@ def emit_keys() -> None:
     )
 
 
+def _partial_signature_count(psbt_bytes) -> int:
+    """How many PSBT_IN_PARTIAL_SIG (0x02) entries the inputs carry."""
+    return sum(
+        1
+        for input_map in parse_psbt(bytes(psbt_bytes))["inputs"]
+        for key, _ in input_map
+        if key and key[0] == 0x02
+    )
+
+
 def sign(unsigned_path: str, signed_path: str) -> None:
     wallet = build_wallet()
     with open(unsigned_path, "r", encoding="utf-8") as handle:
@@ -122,7 +132,18 @@ def sign(unsigned_path: str, signed_path: str) -> None:
                 "missing or misencoding PSBT_IN_BIP32_DERIVATION (0x06)."
             )
 
+    before = _partial_signature_count(psbt_bytes)
     signed = sign_with_wallet(psbt_bytes, wallet)
+
+    # The post-condition to the check above. That one asks whether SeedCash
+    # recognises an input; this asks whether it actually signed one. A signer
+    # that returns the PSBT untouched looks like success to every caller, and
+    # the round trip would "pass" having proved nothing.
+    if _partial_signature_count(signed) <= before:
+        raise SystemExit(
+            "SeedCash returned the PSBT without adding a partial signature. "
+            "Check BIP32 derivation metadata and signer ownership."
+        )
 
     with open(signed_path, "w", encoding="utf-8") as handle:
         handle.write(bytes(signed).hex())

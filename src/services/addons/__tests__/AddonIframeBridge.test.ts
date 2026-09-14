@@ -17,14 +17,19 @@ vi.mock(import('@capacitor/core'), async (importOriginal) => {
 });
 
 vi.mock('../../../apis/TransactionManager/TransactionManager', () => ({
-  default: () => ({ addOutput: vi.fn(), buildTransaction: vi.fn() }),
+  default: function () {
+    return { addOutput: vi.fn(), buildTransaction: vi.fn() };
+  },
 }));
 
 vi.mock('../../BcmrService', () => ({
-  default: vi.fn().mockImplementation(() => ({
-    getSnapshot: vi.fn(),
-    resolveIdentityRegistry: vi.fn(),
-  })),
+  // `new BcmrService()` in the SDK: the implementation must be constructible.
+  default: vi.fn().mockImplementation(function () {
+    return {
+      getSnapshot: vi.fn(),
+      resolveIdentityRegistry: vi.fn(),
+    };
+  }),
 }));
 
 // Grants ONLY wallet:context:read — everything else must be rejected.

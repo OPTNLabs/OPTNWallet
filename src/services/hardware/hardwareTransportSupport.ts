@@ -12,6 +12,7 @@ export type HardwareTransport =
   | 'webusb'
   | 'webble'
   | 'camera'
+  | 'nfc'
   | 'iframe'
   | 'native-usb';
 
@@ -20,7 +21,13 @@ export interface TransportSupport {
   webusb: boolean;
   webble: boolean;
   camera: boolean;
-  /** Cross-origin connect pages (browser Trezor Connect / OneKey web SDK). */
+  /**
+   * Tap-to-sign. Web NFC is Chrome-on-Android only, and no desktop browser
+   * has it — which is why a Tangem never appears on a laptop or in an
+   * extension without any rule saying so.
+   */
+  nfc: boolean;
+  /** Cross-origin connect pages (browser OneKey web SDK). */
   iframe: boolean;
   /** Tauri hidapi path — Ledger / Trezor One / OneKey HID. */
   nativeUsb: boolean;
@@ -37,11 +44,17 @@ export function detectTransportSupport(
       })
     | undefined;
 
+  // Web NFC exposes NDEFReader on the global rather than anything on
+  // navigator, so it is detected separately from the rest.
+  const hasWebNfc =
+    typeof globalThis !== 'undefined' && 'NDEFReader' in globalThis;
+
   return {
     webhid: !!n && typeof n.hid === 'object' && n.hid !== null,
     webusb: !!n && typeof n.usb === 'object' && n.usb !== null,
     webble: !!n && typeof n.bluetooth === 'object' && n.bluetooth !== null,
     camera: !!n?.mediaDevices && typeof n.mediaDevices.getUserMedia === 'function',
+    nfc: hasWebNfc,
     iframe: typeof window !== 'undefined',
     nativeUsb: isDesktopPlatform(),
   };
@@ -50,9 +63,15 @@ export function detectTransportSupport(
 /** Transports each device can actually be driven over, in preference order. */
 const DEVICE_TRANSPORTS: Record<string, HardwareTransport[]> = {
   ledger: ['native-usb', 'webhid', 'webble'],
-  trezor: ['native-usb', 'iframe'],
+  // No iframe any more: that was @trezor/connect-web, removed for carrying
+  // high-severity advisories through the Stellar SDK. The browser path is
+  // being rebuilt on @trezor/transport (WebUSB).
+  trezor: ['native-usb'],
   onekey: ['native-usb', 'iframe'],
   keystone: ['camera'],
+  // A card. Tap or nothing, which is what keeps it off desktops and out of
+  // extensions without either being named here.
+  tangem: ['nfc'],
 };
 
 /**
@@ -72,13 +91,28 @@ export function unsupportedReason(
   if (ok) return null;
 
   if (transports.includes('webhid') || transports.includes('native-usb')) {
-    return (
-      'This build cannot reach USB hardware wallets. Use the desktop app ' +
-      '(native USB) or a browser with WebHID. It is not your cable or device.'
-    );
+    // Two different situations wear the same shape. A Ledger has a browser
+    // route this build happens to lack; a Trezor has none at all since
+    // connect-web was removed, so sending someone to "a browser with WebHID"
+    // sends them after a browser that cannot help either. Derived from the
+    // transport list rather than naming a vendor, so a device that gains a
+    // browser route later starts giving the other answer on its own.
+    const hasABrowserRoute = transports.some((t) => t !== 'native-usb');
+    return hasABrowserRoute
+      ? 'This build cannot reach USB hardware wallets. Use the desktop app ' +
+          '(native USB) or a browser with WebHID. It is not your cable or device.'
+      : 'This device can only be reached over native USB, which this build ' +
+          'does not have. Use the desktop app — no browser can reach it yet. ' +
+          'It is not your cable or device.';
   }
   if (transports.includes('camera')) {
     return 'No camera is available, so QR-based signing cannot be used here.';
+  }
+  if (transports.includes('nfc')) {
+    return (
+      'This device is tapped rather than plugged in, and this build has no ' +
+      'NFC. Use the phone app.'
+    );
   }
   return 'This build cannot reach this device yet.';
 }

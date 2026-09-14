@@ -1,7 +1,13 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 import type { RootState } from '../store';
 
-export type HardwareWalletType = 'none' | 'trezor' | 'ledger' | 'onekey' | 'keystone';
+export type HardwareWalletType =
+  | 'none'
+  | 'trezor'
+  | 'ledger'
+  | 'onekey'
+  | 'keystone'
+  | 'tangem';
 
 export type LedgerTransport = 'usb' | 'ble';
 
