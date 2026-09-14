@@ -4,6 +4,7 @@ import { store } from '../state/store';
 import { Network } from '../state/slices/networkSlice';
 import type { UTXO } from '../types/types';
 import { hexToBin } from '../utils/hex';
+import { isDesktopPlatform } from '../utils/platform';
 import getElectrumAdapter, { type ElectrumAdapter } from './ElectrumAdapter';
 import {
   computeSharedSecret,
@@ -12,10 +13,7 @@ import {
   rpaGrindString,
   RPA_PREFIX_BITS,
 } from './RpaService';
-import {
-  matchRpaPaymentsInRawTx,
-  normalizeRpaTxid,
-} from './RpaDetect';
+import { matchRpaPaymentsInRawTx, normalizeRpaTxid } from './RpaDetect';
 import type {
   CauldronPool,
   CauldronWalletPoolPosition,
@@ -31,6 +29,20 @@ export type RpaUnspentOutput = {
   address: string;
   valueSats: number;
   height: number;
+  /**
+   * How to rebuild this output's spending key.
+   *
+   * Recorded at detection because it cannot be recovered later from the
+   * address: an RPA output's key depends on which outpoint the *sender* spent.
+   * Without it the payment is detectable and unspendable, which is what these
+   * records used to be. Public data, already on chain -- the recipe, not the
+   * secret.
+   */
+  rpaOrigin?: {
+    prevoutTxid: string;
+    prevoutIndex: number;
+    senderPubkey: string;
+  };
 };
 
 export type RpaActivityPayload = {
@@ -274,6 +286,31 @@ function emptyRpaPayload(enabled: boolean, error?: string): RpaActivityPayload {
   };
 }
 
+/**
+ * The RPA payments this wallet has detected and not yet spent.
+ *
+ * Exported so UTXOService can offer them to coin selection. They are held
+ * here rather than in the address tables because their one-time addresses
+ * were never derived at an HD path, and that storage split is exactly why
+ * they used to be visible in the balance and absent from every send.
+ */
+export async function readRpaUnspentOutputs(
+  walletId: number
+): Promise<RpaUnspentOutput[]> {
+  const numericId = Number(walletId);
+  if (!Number.isInteger(numericId) || numericId <= 0) return [];
+  await loadStoredWalletSpecialActivities(numericId);
+  const record =
+    store.getState().walletSpecialActivity?.byWallet?.[numericId]?.rpa;
+  if (
+    record &&
+    (record.status !== 'complete' ||
+      !walletScopeIsCurrent(numericId, record.network))
+  )
+    return [];
+  return readStoredRpaPayload(numericId).unspentOutputs ?? [];
+}
+
 function readStoredRpaPayload(walletId: number): RpaActivityPayload {
   const existing =
     store.getState().walletSpecialActivity?.byWallet?.[walletId]?.rpa ?? null;
@@ -452,6 +489,7 @@ export async function loadStoredWalletSpecialActivities(
   query.free();
 
   for (const record of records) {
+    if (!walletScopeIsCurrent(walletId, record.network)) continue;
     const currentState = store.getState() as unknown as {
       wallet_id?: { currentWalletId?: number | null };
     };
@@ -469,35 +507,26 @@ export async function loadStoredWalletSpecialActivities(
       const existing =
         store.getState().walletSpecialActivity?.byWallet?.[walletId]?.rpa ??
         null;
-      const existingSats = existing
-        ? Number(
-            'unspentSats' in existing.payload
-              ? existing.payload.unspentSats
-              : 0
-          ) ||
-          (existing.payload &&
-          'unspentOutputs' in existing.payload
-            ? existing.payload.unspentOutputs.reduce(
-                (sum, output) => sum + (Number(output.valueSats) || 0),
-                0
-              )
-            : 0)
-        : 0;
-      const incomingSats =
-        'unspentSats' in record.payload
-          ? Number(record.payload.unspentSats) ||
-            record.payload.unspentOutputs.reduce(
-              (sum, output) => sum + (Number(output.valueSats) || 0),
-              0
-            )
-          : 0;
-      // Home reloads storage on mount. Never replace a live Check result
-      // with an older empty Sync row.
-      if (existingSats > incomingSats) continue;
+      // A newer empty snapshot may prove previously received coins spent.
+      // Freshness, never the larger balance, decides which observation wins.
+      if (
+        existing &&
+        Date.parse(existing.updatedAt) >= Date.parse(record.updatedAt)
+      )
+        continue;
     }
     store.dispatch(setWalletSpecialActivity({ walletId, record }));
   }
   return records;
+}
+
+function walletScopeIsCurrent(walletId: number, network?: Network): boolean {
+  const scope = store.getState().wallet_id;
+  return (
+    !scope ||
+    (scope.currentWalletId === walletId &&
+      (!network || scope.networkType === network))
+  );
 }
 
 export async function clearWalletSpecialActivities(
@@ -559,6 +588,7 @@ async function mapWithConcurrency<T, R>(
 }
 
 export async function scanRpaActivity(params: {
+  walletId?: number;
   mnemonic: string;
   passphrase: string;
   network: Network;
@@ -572,60 +602,74 @@ export async function scanRpaActivity(params: {
   const { mnemonic, passphrase, network, accountPath } = params;
   const adapter = params.adapter ?? getElectrumAdapter();
   const keys = await deriveRpaKeys(mnemonic, passphrase, network, accountPath);
-  // Official Fulcrum / Selene: blockchain.rpa.get_history(prefix, from, to).
-  // EC 4.4.6 still uses deprecated blockchain.reusable.get_history.
-  const grind = rpaGrindString(keys.scanPubkey, RPA_PREFIX_BITS);
-  const rememberedTxids = (params.knownTxids ?? [])
-    .map((txid) => toNonEmptyString(txid)?.toLowerCase())
-    .filter((txid): txid is string => Boolean(txid));
-
-  let history: RpaHistoryEntry[] = [];
-  let serverSupported = true;
-  let serverError: string | undefined;
   try {
-    let tip = 0;
-    try {
-      const header = (await adapter.request(
-        'blockchain.headers.subscribe'
-      )) as { height?: number };
-      tip = toSafeNumber(header?.height, 0);
-    } catch {
-      tip = 0;
+    if (!params.adapter && isDesktopPlatform()) {
+      const { activeNode } = await import(
+        '../platform/desktop/backendSelection'
+      );
+      if (activeNode(network)) {
+        if (!params.walletId)
+          throw new Error('Node RPA discovery requires an active wallet.');
+        const { scanNodeRpa } = await import('../platform/desktop/NodeRpaScan');
+        return {
+          status: 'complete',
+          payload: await scanNodeRpa(params.walletId, network, keys),
+        };
+      }
     }
-    history = await fetchRpaCandidateHistory(adapter, grind, tip);
-  } catch (error) {
-    serverSupported = false;
-    serverError = normalizeActivityError(error);
-    if (rememberedTxids.length === 0) {
-      return {
-        status: 'unavailable',
-        payload: {
-          ...emptyRpaPayload(true),
-          error: serverError,
-        },
-      };
-    }
-  }
+    // Official Fulcrum / Selene: blockchain.rpa.get_history(prefix, from, to).
+    // EC 4.4.6 still uses deprecated blockchain.reusable.get_history.
+    const grind = rpaGrindString(keys.scanPubkey, RPA_PREFIX_BITS);
+    const rememberedTxids = (params.knownTxids ?? [])
+      .map((txid) => toNonEmptyString(txid)?.toLowerCase())
+      .filter((txid): txid is string => Boolean(txid));
 
-  const candidates = Array.from(
-    new Set([
-      ...(Array.isArray(history) ? history : [])
-        .map(
-          (entry) =>
-            (
-              toNonEmptyString(entry.tx_hash) ?? toNonEmptyString(entry.txid)
-            )?.toLowerCase() ?? null
-        )
-        .filter((txid): txid is string => Boolean(txid)),
-      ...rememberedTxids,
-    ])
-  );
-  const matchedOutputKeys = new Set<string>();
-  const unspentOutputs: RpaUnspentOutput[] = [];
-  let detectedPaymentCount = 0;
-
-  await mapWithConcurrency(candidates, 4, async (txid) => {
+    let history: RpaHistoryEntry[] = [];
+    let serverSupported = true;
+    let serverError: string | undefined;
     try {
+      let tip = 0;
+      try {
+        const header = (await adapter.request(
+          'blockchain.headers.subscribe'
+        )) as { height?: number };
+        tip = toSafeNumber(header?.height, 0);
+      } catch {
+        tip = 0;
+      }
+      history = await fetchRpaCandidateHistory(adapter, grind, tip);
+    } catch (error) {
+      serverSupported = false;
+      serverError = normalizeActivityError(error);
+      if (rememberedTxids.length === 0) {
+        return {
+          status: 'unavailable',
+          payload: {
+            ...emptyRpaPayload(true),
+            error: serverError,
+          },
+        };
+      }
+    }
+
+    const candidates = Array.from(
+      new Set([
+        ...(Array.isArray(history) ? history : [])
+          .map(
+            (entry) =>
+              (
+                toNonEmptyString(entry.tx_hash) ?? toNonEmptyString(entry.txid)
+              )?.toLowerCase() ?? null
+          )
+          .filter((txid): txid is string => Boolean(txid)),
+        ...rememberedTxids,
+      ])
+    );
+    const matchedOutputKeys = new Set<string>();
+    const unspentOutputs: RpaUnspentOutput[] = [];
+    let detectedPaymentCount = 0;
+
+    await mapWithConcurrency(candidates, 4, async (txid) => {
       let rawHex: string | null = null;
       try {
         rawHex = await fetchRawTxHex(adapter, txid);
@@ -639,33 +683,33 @@ export async function scanRpaActivity(params: {
           if (matchedOutputKeys.has(outputKey)) continue;
           matchedOutputKeys.add(outputKey);
           detectedPaymentCount += 1;
-          let listUnspent: unknown;
-          try {
-            listUnspent = await adapter.request(
-              'blockchain.address.listunspent',
-              match.address
-            );
-          } catch {
-            continue;
-          }
-          if (!Array.isArray(listUnspent)) continue;
-          const current = (
-            listUnspent as Array<Record<string, unknown>>
-          ).find(
+          const listUnspent = await adapter.request(
+            'blockchain.address.listunspent',
+            match.address
+          );
+          if (!Array.isArray(listUnspent))
+            throw new Error('RPA unspent state is unavailable.');
+          const current = (listUnspent as Array<Record<string, unknown>>).find(
             (utxo) =>
               toNonEmptyString(utxo.tx_hash)?.toLowerCase() === txid &&
               toSafeNumber(utxo.tx_pos, -1) === match.outputIndex
           );
           if (!current) continue;
+          if (toSafeNumber(current.value, -1) !== match.valueSats)
+            throw new Error(
+              'RPA unspent value does not match the transaction.'
+            );
           unspentOutputs.push({
             txHash: txid,
             outputIndex: match.outputIndex,
             address: match.address,
-            valueSats: Math.max(
-              0,
-              Math.trunc(toSafeNumber(current.value, match.valueSats))
-            ),
+            valueSats: match.valueSats,
             height: Math.trunc(toSafeNumber(current.height)),
+            rpaOrigin: {
+              prevoutTxid: match.prevoutHash,
+              prevoutIndex: match.prevoutIndex,
+              senderPubkey: match.senderPubkey,
+            },
           });
         }
         if (matched.length > 0) return undefined;
@@ -721,16 +765,12 @@ export async function scanRpaActivity(params: {
             matchedOutputKeys.add(outputKey);
             detectedPaymentCount += 1;
 
-            let listUnspent: unknown;
-            try {
-              listUnspent = await adapter.request(
-                'blockchain.address.listunspent',
-                expectedAddress
-              );
-            } catch {
-              continue;
-            }
-            if (!Array.isArray(listUnspent)) continue;
+            const listUnspent = await adapter.request(
+              'blockchain.address.listunspent',
+              expectedAddress
+            );
+            if (!Array.isArray(listUnspent))
+              throw new Error('RPA unspent state is unavailable.');
             const current = (
               listUnspent as Array<Record<string, unknown>>
             ).find(
@@ -739,43 +779,52 @@ export async function scanRpaActivity(params: {
                 toSafeNumber(utxo.tx_pos, -1) === outputIndex
             );
             if (!current) continue;
+            if (toSafeNumber(current.value, -1) !== outputValueSats(output))
+              throw new Error(
+                'RPA unspent value does not match the transaction.'
+              );
 
             unspentOutputs.push({
               txHash: txid,
               outputIndex,
               address: expectedAddress,
-              valueSats: Math.max(
-                0,
-                Math.trunc(toSafeNumber(current.value, outputValueSats(output)))
-              ),
+              valueSats: outputValueSats(output),
               height: Math.trunc(toSafeNumber(current.height)),
+              rpaOrigin: {
+                prevoutTxid: prevoutHash,
+                prevoutIndex,
+                senderPubkey: pubkeyHex,
+              },
             });
           }
         }
       }
-    } catch {
-      // A malformed or unavailable candidate must not prevent other candidates
-      // from producing a current unspent snapshot.
-    }
-    return undefined;
-  });
+      return undefined;
+    });
 
-  return {
-    status: serverSupported || unspentOutputs.length > 0 ? 'complete' : 'unavailable',
-    payload: withRpaTotals({
-      enabled: true,
-      serverSupported,
-      detectedPaymentCount,
-      unspentOutputs,
-      knownTxids: Array.from(
-        new Set([
-          ...rememberedTxids,
-          ...unspentOutputs.map((output) => output.txHash.toLowerCase()),
-        ])
-      ),
-      ...(serverError ? { error: serverError } : {}),
-    }),
-  };
+    return {
+      status:
+        serverSupported || unspentOutputs.length > 0
+          ? 'complete'
+          : 'unavailable',
+      payload: withRpaTotals({
+        enabled: true,
+        serverSupported,
+        detectedPaymentCount,
+        unspentOutputs,
+        knownTxids: Array.from(
+          new Set([
+            ...rememberedTxids,
+            ...unspentOutputs.map((output) => output.txHash.toLowerCase()),
+          ])
+        ),
+        ...(serverError ? { error: serverError } : {}),
+      }),
+    };
+  } finally {
+    keys.scanPrivkey.fill(0);
+    keys.spendPrivkey.fill(0);
+  }
 }
 
 function poolId(pool: CauldronPool): string {
@@ -893,10 +942,16 @@ export async function syncWalletSpecialActivities(params: {
   activityTypes?: WalletSpecialActivityType[];
   isCurrent?: () => boolean;
 }): Promise<WalletSpecialActivityRecord[]> {
-  const isCurrent = params.isCurrent ?? (() => true);
+  let scanNetwork: Network | undefined;
+  const isCurrent = () =>
+    walletScopeIsCurrent(params.walletId, scanNetwork) &&
+    (params.isCurrent?.() ?? true);
   if (!isCurrent()) return [];
 
   const context = await getWalletContext(params.walletId);
+  scanNetwork = context.network;
+  if (!isCurrent()) return [];
+  await loadStoredWalletSpecialActivities(params.walletId);
   if (!isCurrent()) return [];
   const requestedTypes = new Set(
     params.activityTypes ?? (['rpa', 'cauldron'] as WalletSpecialActivityType[])
@@ -920,32 +975,15 @@ export async function syncWalletSpecialActivities(params: {
     } else {
       try {
         ({ status, payload } = await scanRpaActivity({
+          walletId: params.walletId,
           mnemonic: context.mnemonic,
           passphrase: context.passphrase,
           network: context.network,
           accountPath: context.derivationPath,
           knownTxids: collectKnownTxids(previous),
         }));
-        if (!payload.serverSupported && previous.unspentOutputs.length > 0) {
-          payload = withRpaTotals({
-            ...payload,
-            unspentOutputs: mergeRpaOutputs(
-              previous.unspentOutputs,
-              payload.unspentOutputs
-            ),
-            knownTxids: collectKnownTxids({
-              ...previous,
-              ...payload,
-              unspentOutputs: mergeRpaOutputs(
-                previous.unspentOutputs,
-                payload.unspentOutputs
-              ),
-            }),
-          });
-          status = 'complete';
-        }
       } catch (error) {
-        status = previous.unspentOutputs.length > 0 ? 'complete' : 'error';
+        status = 'error';
         payload = withRpaTotals({
           ...previous,
           enabled: true,
@@ -1032,6 +1070,30 @@ export async function claimRpaTransaction(params: {
   }
 
   const context = await getWalletContext(params.walletId);
+  if (!params.adapter && isDesktopPlatform()) {
+    const { activeNode } = await import('../platform/desktop/backendSelection');
+    if (activeNode(context.network)) {
+      // Check locally in the full selected-node scan; never upload this txid to Electrum.
+      const [record] = await syncWalletSpecialActivities({
+        walletId: params.walletId,
+        activityTypes: ['rpa'],
+      });
+      if (
+        !record ||
+        record.status !== 'complete' ||
+        !('knownTxids' in record.payload)
+      ) {
+        throw new Error(
+          record?.payload.error ?? 'Node RPA scan did not complete.'
+        );
+      }
+      if (!record.payload.knownTxids?.includes(txid))
+        throw new Error(
+          'No matching RPA payment found in the selected node scan.'
+        );
+      return record;
+    }
+  }
   const keys = await deriveRpaKeys(
     context.mnemonic,
     context.passphrase,
@@ -1061,44 +1123,43 @@ export async function claimRpaTransaction(params: {
 
   const incoming: RpaUnspentOutput[] = [];
   for (const match of matched) {
-    let height = 0;
-    let valueSats = match.valueSats;
-    let listed = false;
-    try {
-      const listUnspent = await adapter.request(
-        'blockchain.address.listunspent',
-        match.address
+    const listUnspent = await adapter.request(
+      'blockchain.address.listunspent',
+      match.address
+    );
+    if (!Array.isArray(listUnspent)) {
+      throw new Error(
+        'Could not verify whether the Cash Code payment is unspent.'
       );
-      if (Array.isArray(listUnspent)) {
-        const current = (listUnspent as Array<Record<string, unknown>>).find(
-          (utxo) =>
-            toNonEmptyString(utxo.tx_hash)?.toLowerCase() === txid &&
-            toSafeNumber(utxo.tx_pos, -1) === match.outputIndex
-        );
-        if (current) {
-          listed = true;
-          valueSats = Math.max(
-            0,
-            Math.trunc(toSafeNumber(current.value, match.valueSats))
-          );
-          height = Math.trunc(toSafeNumber(current.height));
-        }
-      }
-    } catch {
-      listed = false;
+    }
+    const current = (listUnspent as Array<Record<string, unknown>>).find(
+      (utxo) =>
+        toNonEmptyString(utxo.tx_hash)?.toLowerCase() === txid &&
+        toSafeNumber(utxo.tx_pos, -1) === match.outputIndex
+    );
+    if (!current) continue;
+    if (toSafeNumber(current.value, -1) !== match.valueSats) {
+      throw new Error('Cash Code UTXO value does not match its transaction.');
     }
     incoming.push({
       txHash: txid,
       outputIndex: match.outputIndex,
       address: match.address,
-      valueSats,
-      height: listed ? height : 0,
+      valueSats: match.valueSats,
+      height: Math.trunc(toSafeNumber(current.height)),
+      rpaOrigin: {
+        prevoutTxid: match.prevoutHash,
+        prevoutIndex: match.prevoutIndex,
+        senderPubkey: match.senderPubkey,
+      },
     });
   }
 
   const existingPayload = readStoredRpaPayload(params.walletId);
   const unspentOutputs = mergeRpaOutputs(
-    existingPayload.unspentOutputs,
+    existingPayload.unspentOutputs.filter(
+      (output) => output.txHash.toLowerCase() !== txid
+    ),
     incoming
   );
   const payload = withRpaTotals({
@@ -1126,6 +1187,8 @@ export async function claimRpaTransaction(params: {
     payload,
     updatedAt: new Date().toISOString(),
   };
+  if (!walletScopeIsCurrent(params.walletId, context.network))
+    throw new Error('Wallet changed during RPA transaction check.');
   persistActivity(record);
   store.dispatch(
     setWalletSpecialActivity({ walletId: params.walletId, record })

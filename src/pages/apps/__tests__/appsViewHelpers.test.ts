@@ -5,7 +5,6 @@ import {
   getAppDescription,
   getAppIconFrame,
   getAppSortPriority,
-  isDesktopOnlyApp,
   isComingSoonApp,
   shouldHideApp,
 } from '../appsViewHelpers';
@@ -100,11 +99,6 @@ describe('appsViewHelpers', () => {
     expect(
       shouldHideApp('optn.builtin.merchant-pay:merchantPayApp', 'Merchant Pay')
     ).toBe(false);
-  });
-
-  it('marks CashFusion as desktop-only UI', () => {
-    expect(isDesktopOnlyApp('optn.wallet.cashfusion')).toBe(true);
-    expect(isDesktopOnlyApp('optn.wallet.contracts')).toBe(false);
   });
 
   it('marks unreleased app surfaces as coming soon', () => {

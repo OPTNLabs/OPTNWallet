@@ -37,7 +37,7 @@ const DEVICES: {
   type: HardwareWalletType;
   label: string;
   subtitle: string;
-  connectionType: 'usb-bridge' | 'usb-ble' | 'qr' | 'software';
+  connectionType: 'usb-bridge' | 'usb-ble' | 'qr' | 'nfc' | 'software';
   sdkNote: string;
   steps: string[];
   /** Not wired to a real signing path yet — selectable in the UI but cannot
@@ -55,14 +55,13 @@ const DEVICES: {
   {
     type: 'trezor',
     label: 'Trezor',
-    subtitle: 'Desktop: native USB HID (Trezor One). Browser: Connect-web',
+    subtitle: 'Desktop: native USB HID (Trezor One). Browser: not yet wired',
     connectionType: 'usb-bridge',
-    sdkNote:
-      'Desktop: @trezor/protobuf + hidapi · Browser: @trezor/connect-web',
+    sdkNote: 'Desktop: @trezor/protobuf + hidapi · Browser: @trezor/transport',
     steps: [
       'Desktop app: plug in Trezor One over USB (Model T/Safe WebUSB coming later)',
       'Unlock with PIN on the device',
-      'Browser build still uses Trezor Connect / Suite Bridge',
+      'Browser: being rebuilt on @trezor/transport WebUSB — use the desktop app for now',
     ],
   },
   {
@@ -96,6 +95,19 @@ const DEVICES: {
     subtitle: 'Air-gapped QR signing — not yet supported',
     connectionType: 'qr',
     sdkNote: '@keystonehq/sdk + bc-ur-registry-btc',
+    steps: [],
+    disabled: true,
+  },
+  {
+    type: 'tangem',
+    label: 'Tangem',
+    subtitle: 'Tap-to-sign card — phone only, not yet supported',
+    connectionType: 'nfc',
+    // Both JavaScript bridges are archived (tangem-sdk-react-native and
+    // tangem-sdk-cordova, last pushed 2025-07-23; the Cordova package on npm
+    // has not been published since 2023). The supported route is a native
+    // plugin over their Swift and Kotlin SDKs.
+    sdkNote: 'tangem-sdk-ios (Swift) · tangem-sdk-android (Kotlin) — native only',
     steps: [],
     disabled: true,
   },

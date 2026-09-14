@@ -1,0 +1,9 @@
+[package]
+name = "optn-platform-apple"
+version = "1.7.3"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Apple-only capability provider behind optn-platform. Optional Opal adapters stay gated."
+
+[dependencies]
+optn-platform = { path = "../optn-platform", version = "=1.7.3" }

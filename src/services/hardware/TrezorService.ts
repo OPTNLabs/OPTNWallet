@@ -2,10 +2,22 @@
  * Trezor service.
  *
  * Desktop (Tauri): native USB HID + @trezor/protobuf (Suite / Electron Cash model).
- * Browser:         @trezor/connect-web (iframe + Bridge/WebUSB).
+ * Browser:         not yet wired. See `browserNotWired` below.
+ *
+ * This used to reach for @trezor/connect-web in the browser. That package
+ * pulls @trezor/connect, which pulls @trezor/blockchain-link, which pulls the
+ * whole @stellar/stellar-sdk, which pulls a `toml` parser carrying two
+ * high-severity advisories with no fixed release. It was the only source of
+ * every high-severity finding in this repository's production dependency tree,
+ * for a Bitcoin Cash wallet that has no use for Stellar.
+ *
+ * The replacement is @trezor/transport, which speaks the same protobuf and
+ * protocol this file's native session already uses, ships a `webusb` backend
+ * for browsers, and depends on none of that. Wiring it is a separate piece of
+ * work because it needs a physical device to verify; until then the browser
+ * paths say so plainly rather than pretending.
  */
 
-import type TrezorConnectType from '@trezor/connect-web';
 import { isDesktopPlatform } from '../../utils/platform';
 import { TrezorNativeSession } from './TrezorNativeSession';
 
@@ -41,29 +53,23 @@ export interface TrezorOutputChange {
 
 export type TrezorOutput = TrezorOutputExternal | TrezorOutputChange;
 
-const BCH_COIN = 'Bch';
 const BCH_COIN_NAME = 'Bcash'; // protobuf coin_name for GetPublicKey / SignTx
 
-let webInitialized = false;
-let TrezorConnect: typeof TrezorConnectType | null = null;
-
-async function getWebConnect(): Promise<typeof TrezorConnectType> {
-  if (!TrezorConnect) {
-    const mod = await import('@trezor/connect-web');
-    TrezorConnect = mod.default;
-  }
-  if (!webInitialized) {
-    await TrezorConnect.init({
-      lazyLoad: true,
-      manifest: {
-        email: 'support@optnlabs.com',
-        appUrl: 'https://optnlabs.com',
-        appName: 'OPTN Wallet',
-      },
-    });
-    webInitialized = true;
-  }
-  return TrezorConnect;
+/**
+ * The browser has no Trezor transport yet.
+ *
+ * Thrown rather than returned so a caller cannot mistake it for a device that
+ * answered. Says which surface, what is missing, and what still works, because
+ * "Trezor failed" tells someone nothing they can act on.
+ */
+function browserNotWired(action: string): never {
+  throw new Error(
+    `Trezor ${action} is not available in the browser yet. The desktop app ` +
+      'reaches the device over USB. Browser support is being rebuilt on ' +
+      '@trezor/transport (WebUSB) after @trezor/connect-web was removed for ' +
+      'carrying high-severity advisories through @stellar/stellar-sdk. ' +
+      'Keystone over QR and watch-only both work here in the meantime.'
+  );
 }
 
 export async function trezorGetPublicKey(
@@ -84,23 +90,7 @@ export async function trezorGetPublicKey(
     }
   }
 
-  const connect = await getWebConnect();
-  const result = await connect.getPublicKey({
-    path: derivationPath,
-    coin: BCH_COIN,
-  });
-  if (!result.success) {
-    const errPayload = result.payload as { error: string };
-    throw new Error(errPayload.error || 'Trezor: failed to get public key');
-  }
-  const label =
-    (result as unknown as { payload: { device?: { label?: string } } }).payload
-      ?.device?.label ?? 'Trezor';
-  return {
-    xpub: result.payload.xpub,
-    path: derivationPath,
-    label,
-  };
+  return browserNotWired('account export');
 }
 
 export async function trezorGetAddress(
@@ -125,46 +115,31 @@ export async function trezorGetAddress(
     }
   }
 
-  const connect = await getWebConnect();
-  const result = await connect.getAddress({
-    path,
-    coin: BCH_COIN,
-    showOnTrezor: true,
-  });
-  if (!result.success) {
-    const errPayload = result.payload as { error: string };
-    throw new Error(errPayload.error || 'Trezor: failed to get address');
-  }
-  return { address: result.payload.address };
+  return browserNotWired('address confirmation');
 }
 
 export async function trezorSignTransaction(
   inputs: TrezorInput[],
   outputs: TrezorOutput[]
 ): Promise<TrezorSignResult> {
+  void inputs;
+  void outputs;
   if (isDesktopPlatform()) {
-    // Full SignTx multi-round (TxRequest) is large; keep Connect-web parity via
-    // a clear error until the interactive SignTx loop is wired. Connect path
-    // remains for browser. Desktop users can still load xpub / verify address.
+    // Full SignTx multi-round (TxRequest) is large and not wired yet. This
+    // used to tell people to sign in the browser instead, which stopped being
+    // true when @trezor/connect-web was removed -- the browser path throws on
+    // the next line. Naming a route that does not exist is worse than naming
+    // none, so the message now offers only what actually works.
     throw new Error(
-      'Desktop native Trezor signing (SignTx multi-round) is next. ' +
-        'Connect and xpub already use native USB. Use the browser build for signing until then, or continue with software/watch-only.'
+      'Trezor signing is not available yet: the desktop multi-round SignTx ' +
+        'flow is still being written, and there is no browser transport since ' +
+        '@trezor/connect-web was removed for security advisories. Connect and ' +
+        'account export do work over native USB. To spend today, use a ' +
+        'software wallet, or a watch-only wallet with an air-gapped signer.'
     );
   }
 
-  const connect = await getWebConnect();
-  const result = await connect.signTransaction({
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    inputs: inputs as any,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    outputs: outputs as any,
-    coin: BCH_COIN,
-  });
-  if (!result.success) {
-    const errPayload = result.payload as { error: string };
-    throw new Error(errPayload.error || 'Trezor: signing failed');
-  }
-  return { serializedTx: result.payload.serializedTx };
+  return browserNotWired('signing');
 }
 
 export function pathToAddressN(path: string): number[] {

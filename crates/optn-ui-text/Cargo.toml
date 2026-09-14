@@ -1,0 +1,12 @@
+[package]
+name = "optn-ui-text"
+version = "1.7.3"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "A second renderer using no UI framework. Exists to prove the renderer is replaceable."
+
+[dependencies]
+# Exactly what any renderer is allowed: the application's view models and the
+# typed transport. No UI framework, no shell, no async runtime.
+optn-app = { path = "../optn-app", version = "=1.7.3" }
+optn-transport = { path = "../optn-transport", version = "=1.7.3" }

@@ -16,15 +16,10 @@ import {
   cashAddressToLockingBytecode,
   decodeTransaction,
   encodeTransaction,
-  encodeTransactionInput,
-  generateSigningSerializationBCH,
   hash256,
   hexToBin,
   binToHex,
   secp256k1,
-  SigningSerializationFlag,
-  type CompilationContextBCH,
-  type Input,
   type Output,
   type TransactionCommon,
 } from '@bitauth/libauth';
@@ -37,10 +32,14 @@ import {
   derivePaymentAddress,
   type DecodedPaycode,
 } from './RpaService';
+// The attempt budget is the shared core's to decide. This file and the CLI
+// each used to hardcode 100_000, which at a 16-bit prefix is only ~1.5x the
+// mean and exhausts about a fifth of the time.
+import {
+  ensureOptnCore,
+  grindRpaTransaction as coreGrindRpaTransaction,
+} from '../wasm/optn-core';
 
-const HASHTYPE =
-  SigningSerializationFlag.allOutputs | SigningSerializationFlag.forkId;
-const MAX_GRIND_TRIES = 100_000;
 /** BIP68: bit 31 set disables relative locktime. */
 export const RPA_SEQUENCE_DISABLE_LOCKTIME = 0x80000000;
 
@@ -67,7 +66,16 @@ export type RpaFinalizeResult =
       finalOutputs: TransactionOutput[];
       grindTries: number;
     }
-  | { ok: false; error: string };
+  | {
+      ok: false;
+      error: string;
+      /**
+       * The grind ran out of attempts on this coin selection. Deterministic,
+       * so resending unchanged fails identically -- the caller should reselect
+       * coins, which changes input 0 and re-rolls the search.
+       */
+      retryWithDifferentCoins?: true;
+    };
 
 function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
   if (a.length !== b.length) return false;
@@ -84,18 +92,7 @@ function lockingOf(address: string): Uint8Array {
 }
 
 function p2pkhScriptFromPubkey(pubkey: Uint8Array): Uint8Array {
-  return Uint8Array.from([
-    0x76, 0xa9, 0x14, ...hash160(pubkey), 0x88, 0xac,
-  ]);
-}
-
-function pushScriptSig(sigWithType: Uint8Array, pubkey: Uint8Array): Uint8Array {
-  return Uint8Array.from([
-    sigWithType.length,
-    ...sigWithType,
-    pubkey.length,
-    ...pubkey,
-  ]);
+  return Uint8Array.from([0x76, 0xa9, 0x14, ...hash160(pubkey), 0x88, 0xac]);
 }
 
 function prefixHexChars(prefixBits: number): number {
@@ -112,7 +109,9 @@ export function rpaPrefixTargetHex(
   prefixBits: number
 ): string {
   const chars = prefixHexChars(prefixBits);
-  return binToHex(scanPubkey).slice(2, 2 + chars).toLowerCase();
+  return binToHex(scanPubkey)
+    .slice(2, 2 + chars)
+    .toLowerCase();
 }
 
 export function serializedInputPrefixHex(
@@ -138,38 +137,7 @@ function sortOutputsBip69(outputs: Output[]): Output[] {
   });
 }
 
-function signAllInputs(
-  transaction: TransactionCommon,
-  sourceOutputs: Output[],
-  keys: Array<{ priv: Uint8Array; pub: Uint8Array }>
-): void {
-  for (let i = 0; i < transaction.inputs.length; i++) {
-    const key = keys[i];
-    const context: CompilationContextBCH = {
-      inputIndex: i,
-      sourceOutputs,
-      transaction,
-    };
-    const preimage = generateSigningSerializationBCH(context, {
-      coveredBytecode: p2pkhScriptFromPubkey(key.pub),
-      signingSerializationType: Uint8Array.of(HASHTYPE),
-    });
-    const sighash = hash256(preimage);
-    const sig = secp256k1.signMessageHashSchnorr(key.priv, sighash);
-    if (typeof sig === 'string') {
-      throw new Error(`schnorr sign failed: ${sig}`);
-    }
-    transaction.inputs[i].unlockingBytecode = pushScriptSig(
-      Uint8Array.from([...sig, HASHTYPE]),
-      key.pub
-    );
-  }
-}
-
-function cashAddressFromLocking(
-  locking: Uint8Array,
-  network: Network
-): string {
+function cashAddressFromLocking(locking: Uint8Array, network: Network): string {
   const pkh =
     locking.length === 25 && locking[0] === 0x76 && locking[2] === 0x14
       ? locking.slice(3, 23)
@@ -224,9 +192,12 @@ export async function finalizeRpaPayment(args: {
 
   const decoded = decodeTransaction(hexToBin(rawTxHex));
   if (typeof decoded === 'string') {
-    return { ok: false, error: `Could not read the draft transaction: ${decoded}` };
+    return {
+      ok: false,
+      error: `Could not read the draft transaction: ${decoded}`,
+    };
   }
-  const transaction = decoded as TransactionCommon;
+  let transaction = decoded as TransactionCommon;
   if (transaction.inputs.length !== utxos.length) {
     return {
       ok: false,
@@ -239,7 +210,10 @@ export async function finalizeRpaPayment(args: {
     bytesEqual(output.lockingBytecode, dummyLocking)
   );
   if (dummyIndex < 0) {
-    return { ok: false, error: 'Internal error: dummy paycode output is missing.' };
+    return {
+      ok: false,
+      error: 'Internal error: dummy paycode output is missing.',
+    };
   }
 
   const first = utxos[0];
@@ -267,53 +241,103 @@ export async function finalizeRpaPayment(args: {
       bytesEqual(output.lockingBytecode, dummyLocking)
     )
   ) {
-    return { ok: false, error: 'Internal error: dummy destination was not replaced.' };
+    return {
+      ok: false,
+      error: 'Internal error: dummy destination was not replaced.',
+    };
   }
   if (
     !transaction.outputs.some((output) =>
       bytesEqual(output.lockingBytecode, stealthLocking)
     )
   ) {
-    return { ok: false, error: 'Internal error: stealth destination was not written.' };
+    return {
+      ok: false,
+      error: 'Internal error: stealth destination was not written.',
+    };
   }
 
-  const sourceOutputs: Output[] = utxos.map((utxo, i) => ({
-    lockingBytecode: p2pkhScriptFromPubkey(inputKeys[i].pub),
-    valueSatoshis: BigInt(utxo.amount ?? utxo.value ?? 0),
-  }));
-
-  const target = rpaPrefixTargetHex(paycode.scanPubkey, paycode.prefixBits);
+  // Signing, serialization, hashing and the grind itself all happen in the
+  // shared Rust core. This file used to run its own loop beside the CLI's --
+  // two implementations of one protocol step, each with its own 100_000
+  // ceiling -- and the failure mode of drift here is silent: a payment that
+  // is on chain, valid, and invisible to the recipient scanning for it.
+  //
+  // The wallet keeps what is genuinely the wallet's: assembly, output order,
+  // and review.
   for (const input of transaction.inputs) {
-    if ((input.sequenceNumber >>> 0) < RPA_SEQUENCE_DISABLE_LOCKTIME) {
+    if (input.sequenceNumber >>> 0 < RPA_SEQUENCE_DISABLE_LOCKTIME) {
       input.sequenceNumber = 0xffffffff;
     }
   }
-  let grindTries = 0;
-  let matched: Input | null = null;
 
-  for (let offset = 0; offset < MAX_GRIND_TRIES; offset++) {
-    grindTries = offset + 1;
-    transaction.inputs[0].sequenceNumber = rpaGrindSequence(offset);
-    signAllInputs(transaction, sourceOutputs, inputKeys);
-    const serialized = encodeTransactionInput(transaction.inputs[0]);
-    if (serializedInputPrefixHex(serialized, paycode.prefixBits) === target) {
-      matched = transaction.inputs[0];
-      break;
-    }
-    if (offset % 64 === 63) {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 0);
-      });
+  ensureOptnCore();
+  const prevoutValues = new BigUint64Array(
+    utxos.map((utxo) => BigInt(utxo.amount ?? utxo.value ?? 0))
+  );
+  const prevoutScriptList = inputKeys.map(({ pub }) =>
+    p2pkhScriptFromPubkey(pub)
+  );
+  const prevoutScriptLens = new Uint32Array(
+    prevoutScriptList.map((script) => script.length)
+  );
+  const prevoutScripts = new Uint8Array(
+    prevoutScriptLens.reduce((total, len) => total + len, 0)
+  );
+  {
+    let at = 0;
+    for (const script of prevoutScriptList) {
+      prevoutScripts.set(script, at);
+      at += script.length;
     }
   }
+  const privkeys = new Uint8Array(inputKeys.length * 32);
+  inputKeys.forEach(({ priv }, i) => privkeys.set(priv, i * 32));
 
-  if (!matched) {
+  const ground = JSON.parse(
+    coreGrindRpaTransaction(
+      encodeTransaction(transaction),
+      prevoutValues,
+      prevoutScripts,
+      prevoutScriptLens,
+      privkeys,
+      paycode.scanPubkey,
+      paycode.prefixBits
+    )
+  ) as
+    | { exhausted: true }
+    | {
+        exhausted: false;
+        rawHex: string;
+        grindTries: number;
+        sequence: number;
+      };
+  privkeys.fill(0);
+
+  if (ground.exhausted) {
+    // Reaching here needs the core's budget to run out, about a 1-in-2900
+    // event. Changing the coin genuinely does fix it -- a different input 0 is
+    // a different outpoint and so an independent search -- but the grind is
+    // deterministic, so repeating the same send repeats the same failure, and
+    // choosing the next coin is the wallet's job rather than the user's. The
+    // caller reselects and calls again.
     return {
       ok: false,
+      retryWithDifferentCoins: true,
       error:
-        'Could not find a matching signature prefix for this paycode. Try again with a different coin.',
+        'Could not find a matching signature prefix for this Cash Code with the coins selected.',
     };
   }
+
+  const grindTries = ground.grindTries;
+  const groundTx = decodeTransaction(hexToBin(ground.rawHex));
+  if (typeof groundTx === 'string') {
+    return {
+      ok: false,
+      error: `Core returned an undecodable transaction: ${groundTx}`,
+    };
+  }
+  transaction = groundTx;
 
   const txHex = binToHex(encodeTransaction(transaction));
   return {

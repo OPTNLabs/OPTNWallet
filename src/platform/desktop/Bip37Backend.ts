@@ -93,20 +93,39 @@ async function syncHeaders(
   host: string,
   port: number,
   network: Network,
-  fromHash?: string
+  fromHash?: string,
+  fromHeight?: number,
+  fromTime?: number
 ): Promise<string[]> {
+  if (
+    fromHash &&
+    (!Number.isInteger(fromHeight) ||
+      !Number.isInteger(fromTime) ||
+      fromHeight! < 0 ||
+      fromHeight! > 0xffffffff ||
+      fromTime! < 0)
+  ) {
+    throw new Error('Resuming headers requires the saved height and time.');
+  }
   const blockHashes: string[] = [];
   let locator = fromHash ?? null;
+  let locatorHeight = fromHeight ?? 0;
+  let locatorTime = fromTime ?? 0;
   for (let i = 0; i < MAX_HEADER_BATCHES; i++) {
     const headers = await invoke<HeaderInfo[]>('bip37_headers', {
       host,
       port,
       network: netLabel(network),
       locator,
+      locatorHeight,
+      locatorTime,
     });
     if (headers.length === 0) break;
     for (const h of headers) blockHashes.push(h.hash);
-    locator = headers[headers.length - 1].hash;
+    const last = headers[headers.length - 1];
+    locator = last.hash;
+    locatorHeight += headers.length;
+    locatorTime = last.time;
     if (headers.length < HEADERS_PER_BATCH) break; // reached the tip
   }
   return blockHashes;
@@ -122,14 +141,32 @@ export async function nodeSync(
   port: number,
   network: Network,
   walletId: number,
-  opts?: { fromHash?: string; scanWindow?: number }
+  opts?: {
+    fromHash?: string;
+    fromHeight?: number;
+    fromTime?: number;
+    scanWindow?: number;
+  }
 ): Promise<NodeSyncResult> {
   const { hashes, hashToAddress } = await watchedHashes(walletId);
   if (hashes.length === 0) {
-    return { byAddress: new Map(), totalSats: 0, tipHash: null, scannedBlocks: 0, watchedAddresses: 0 };
+    return {
+      byAddress: new Map(),
+      totalSats: 0,
+      tipHash: null,
+      scannedBlocks: 0,
+      watchedAddresses: 0,
+    };
   }
 
-  const allBlocks = await syncHeaders(host, port, network, opts?.fromHash);
+  const allBlocks = await syncHeaders(
+    host,
+    port,
+    network,
+    opts?.fromHash,
+    opts?.fromHeight,
+    opts?.fromTime
+  );
 
   // allBlocks[i] is the block at height i+1 (the walk starts AFTER genesis), so
   // a wallet born at height H only needs blocks from index H-1 onward — it
@@ -140,7 +177,9 @@ export async function nodeSync(
   const birth = await getBirthHeight(walletId);
   const blockHashes =
     birth && birth > 0
-      ? allBlocks.slice(Math.max(0, birth - 1))
+      ? allBlocks.slice(
+          Math.max(0, birth - (opts?.fromHash ? opts.fromHeight! : 0) - 1)
+        )
       : allBlocks.slice(-(opts?.scanWindow ?? DEFAULT_SCAN_WINDOW));
 
   const res = await invoke<ScanResult>('bip37_scan', {

@@ -132,6 +132,7 @@ describe('watch-only UR CLI', () => {
       // The Chipnet-only rule is a property of this channel, not a detail.
       expect(USAGE).toMatch(/Chipnet only/);
       expect(USAGE).toMatch(/Never reads keys/);
+      expect(USAGE).toContain('--fragment-length 50|100|200|400');
     });
 
     it('runs the vectors command against the committed file', () => {
