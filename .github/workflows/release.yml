@@ -704,7 +704,7 @@ jobs:
           fi
 
           mkdir -p macos-app-zips
-          ZIP_PATH="macos-app-zips/OPTNWallet-macos-${arch}${suffix}.app.zip"
+          ZIP_PATH="macos-app-zips/OPTNWallet-${RELEASE_TAG}-macos-${arch}${suffix}.app.zip"
           ditto -c -k --keepParent "$APP_PATH" "$ZIP_PATH"
           unzip -t "$ZIP_PATH"
           test -s "$ZIP_PATH"
