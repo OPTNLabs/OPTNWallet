@@ -313,8 +313,8 @@ jobs:
         with:
           name: android-release
           path: |
-            android/**/outputs/apk/release/*.apk
-            android/**/outputs/bundle/release/*.aab
+            android/**/outputs/apk/*/release/*.apk
+            android/**/outputs/bundle/playRelease/*.aab
           retention-days: 30
           if-no-files-found: error
 
