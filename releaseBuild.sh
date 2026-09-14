@@ -1,3 +1,7 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -Eeuo pipefail
 
-cd android/; ./gradlew assembleRelease; cd ..
+repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+cd "$repo_root"
+
+exec npm run android:apk:prod
