@@ -942,14 +942,15 @@ export async function syncWalletSpecialActivities(params: {
   activityTypes?: WalletSpecialActivityType[];
   isCurrent?: () => boolean;
 }): Promise<WalletSpecialActivityRecord[]> {
-  let scanNetwork: Network | undefined;
-  const isCurrent = () =>
-    walletScopeIsCurrent(params.walletId, scanNetwork) &&
+  const isCurrentBeforeContext = () =>
+    walletScopeIsCurrent(params.walletId) &&
     (params.isCurrent?.() ?? true);
-  if (!isCurrent()) return [];
+  if (!isCurrentBeforeContext()) return [];
 
   const context = await getWalletContext(params.walletId);
-  scanNetwork = context.network;
+  const isCurrent = () =>
+    walletScopeIsCurrent(params.walletId, context.network) &&
+    (params.isCurrent?.() ?? true);
   if (!isCurrent()) return [];
   await loadStoredWalletSpecialActivities(params.walletId);
   if (!isCurrent()) return [];
