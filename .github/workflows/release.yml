@@ -1616,7 +1616,7 @@ jobs:
           done < <(find artifacts -type f \( \
             -name '*.apk' -o -name '*.aab' -o -name '*.exe' -o -name '*.msi' \
             -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \
-            -o -name '*.zip' \
+            -o -name '*.zip' -o -name '*.flatpak' -o -name 'optn-*' \
             -o -name 'OPTNWallet-*-linux-riscv64-unbundled' \
           \) -print0)
 
@@ -1763,7 +1763,7 @@ jobs:
             find . -maxdepth 1 -type f \( \
               -name '*.apk' -o -name '*.aab' -o -name '*.exe' -o -name '*.msi' \
               -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \
-              -o -name '*.zip' \
+              -o -name '*.zip' -o -name '*.flatpak' -o -name 'optn-*' \
               -o -name 'OPTNWallet-*-linux-riscv64-unbundled' \
             \) -print0 | sed -z 's#^\./##' | sort -z | xargs -0 sha256sum
           ) > "OPTNWallet-${RELEASE_TAG#v}-sha256.txt"
@@ -1783,7 +1783,9 @@ jobs:
             release-files/*.deb
             release-files/*.rpm
             release-files/*.zip
+            release-files/*.flatpak
             release-files/OPTNWallet-*-linux-riscv64-unbundled
+            release-files/optn-*
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2

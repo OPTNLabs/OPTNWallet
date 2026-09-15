@@ -479,6 +479,16 @@ describe('release workflow', () => {
     expect(publishNeeds(), 'publish job needs').toContain('cli');
   });
 
+  it('assembles, checksums, and attests extensionless CLI and Flatpak assets', () => {
+    // Unix CLI binaries are extensionless and Flatpaks use .flatpak. Both
+    // still need to reach the release set, checksum file, and provenance
+    // attestation like every other published artifact.
+    expect(workflow).toMatch(/-name '\*\.flatpak'/);
+    expect(workflow).toMatch(/-name 'optn-\*'/);
+    expect(workflow).toContain('release-files/*.flatpak');
+    expect(workflow).toContain('release-files/optn-*');
+  });
+
   it('arms the CLI requirement from a probe rather than from the artifacts', () => {
     // The crate lands in a separate pull request. Requiring binaries no branch
     // can build breaks one merge order; building binaries nothing requires
