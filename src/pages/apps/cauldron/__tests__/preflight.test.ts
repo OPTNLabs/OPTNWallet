@@ -680,4 +680,43 @@ describe('cauldron preflight helpers', () => {
     expect(resolved.missingVisiblePoolCount).toBe(0);
     expect(resolved.confirmedPools).toEqual([confirmedPool, confirmedPool]);
   });
+
+  it('bypasses the short chain-query cache when a route step requires fresh LP state', async () => {
+    const withdrawPublicKeyHash = new Uint8Array(20);
+    const pool = makePool({
+      txHash: '62'.repeat(32),
+      outputIndex: 3,
+      parameters: { withdrawPublicKeyHash },
+      output: {
+        amountSatoshis: 2400n,
+        tokenCategory: 'ac'.repeat(32),
+        tokenAmount: 900n,
+        lockingBytecode: buildCauldronPoolV0LockingBytecode({
+          withdrawPublicKeyHash,
+        }),
+      },
+    });
+    const queryUnspentByLockingBytecode = vi.fn(async () => ({
+      data: {
+        output: [
+          {
+            transaction_hash: pool.txHash,
+            output_index: pool.outputIndex,
+          },
+        ],
+      },
+    }));
+    const sdk: ChaingraphSdk = {
+      chain: { queryUnspentByLockingBytecode },
+    };
+
+    await fetchCurrentQuotedPoolsFromChain({ sdk, quotedPools: [pool] });
+    await fetchCurrentQuotedPoolsFromChain({
+      sdk,
+      quotedPools: [pool],
+      forceRefresh: true,
+    });
+
+    expect(queryUnspentByLockingBytecode).toHaveBeenCalledTimes(2);
+  });
 });

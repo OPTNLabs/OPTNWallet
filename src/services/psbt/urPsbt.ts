@@ -22,11 +22,28 @@ import { URRegistryDecoder } from '@keystonehq/bc-ur-registry';
  * Fragment size, in bytes of the UR payload.
  *
  * Paytaca PstQrDialog e66cafa9d-era used chunkSize=50 (padding=8). SeedCash
- * cameras could read that density. Later Paytaca densified to 200/4 (and a
- * 150/4 attempt); phone cameras fail those. Extra frames only cost seconds;
- * a dense QR that will not scan fails the whole air-gap.
+ * cameras could read that density. OPTN keeps 50 as the safe default and
+ * exposes 100/200/400 as explicit user-selected densities. Extra frames only
+ * cost seconds; a dense QR that will not scan fails the whole air-gap.
  */
-export const DEFAULT_UR_FRAGMENT_LENGTH = 50;
+export const PSBT_UR_FRAGMENT_LENGTHS = [50, 100, 200, 400, 450] as const;
+
+export type PsbtUrFragmentLength =
+  (typeof PSBT_UR_FRAGMENT_LENGTHS)[number];
+
+/**
+ * Conservative default for SeedCash camera compatibility.
+ *
+ * Users may raise the density when their signer camera can resolve it; keeping
+ * 50 as the default preserves the known-good Paytaca-era behavior.
+ */
+export const DEFAULT_UR_FRAGMENT_LENGTH: PsbtUrFragmentLength = 50;
+
+export function isPsbtUrFragmentLength(
+  value: number
+): value is PsbtUrFragmentLength {
+  return (PSBT_UR_FRAGMENT_LENGTHS as readonly number[]).includes(value);
+}
 
 /**
  * User-selectable UR fragment lengths. Lower values make larger, easier-to-scan
@@ -158,6 +175,14 @@ export interface UrScanProgress {
 export class UrPsbtScanner {
   private decoder = new URRegistryDecoder();
 
+  /** Frames the camera handed us that were not readable. Diagnostic only. */
+  private damaged = 0;
+
+  /** How many frames were unreadable so far. Zero on a clean scan. */
+  get damagedFrames(): number {
+    return this.damaged;
+  }
+
   /** Feed one scanned frame. Returns the progress after it. */
   receive(frame: string): UrScanProgress {
     const text = frame.trim();
@@ -166,7 +191,26 @@ export class UrPsbtScanner {
     // poison the decoder and force the user to start over.
     if (!/^ur:/i.test(text)) return this.progress();
 
-    this.decoder.receivePart(text.toLowerCase());
+    try {
+      this.decoder.receivePart(text.toLowerCase());
+    } catch {
+      // A half-caught frame throws out of the bytewords decoder -- "Invalid
+      // Bytewords: value not in lookup table" is the usual one. This is
+      // **normal** while a camera reads an animated QR: the shutter catches a
+      // frame mid-repaint and gets something that still scans as a QR but is
+      // not a whole UR part.
+      //
+      // It is not fatal, and the decoder is not poisoned by it: the fountain
+      // decoder keeps every part it has already accepted, so dropping this one
+      // and carrying on still recovers the payload from later frames. That is
+      // asserted against frames SeedCash's own encoder produced.
+      //
+      // This matters most on exactly the transfer that was reported failing.
+      // A *signed* PSBT is larger than the unsigned one, so it needs more
+      // frames, so the chance of at least one bad read approaches certainty --
+      // which made the longest transfers the least likely to ever finish.
+      this.damaged += 1;
+    }
     return this.progress();
   }
 
@@ -202,5 +246,6 @@ export class UrPsbtScanner {
   /** Start over — e.g. the user aborted, or scanned the wrong device's screen. */
   reset(): void {
     this.decoder = new URRegistryDecoder();
+    this.damaged = 0;
   }
 }

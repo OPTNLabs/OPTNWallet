@@ -1,4 +1,6 @@
-import { readFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -29,7 +31,10 @@ const assetWorkflows = [
   'desktop-riscv64.yml',
 ].map((name) => ({
   name,
-  contents: readFileSync(resolve(repoRoot, '.github', 'workflows', name), 'utf8'),
+  contents: readFileSync(
+    resolve(repoRoot, '.github', 'workflows', name),
+    'utf8'
+  ),
 }));
 
 const releaseAssets = readFileSync(
@@ -66,6 +71,139 @@ function publishNeeds(): string {
 }
 
 describe('release workflow', () => {
+  describe('Android instrumentation guard', () => {
+    const android = assetWorkflows.find(
+      ({ name }) => name === 'android-preview.yml'
+    )!.contents;
+    const run = android.match(
+      /^ {12}run_instrumentation\(\) \{[\s\S]*?^ {12}\}/m
+    )?.[0];
+    const method = 'useAppContext';
+    // Git for Windows supplies Bash; derive its location from the installed Git.
+    const bash =
+      process.env.BASH ||
+      (process.platform === 'win32'
+        ? resolve(
+            execFileSync('git', ['--exec-path'], { encoding: 'utf8' }).trim(),
+            '../../../bin/bash.exe'
+          )
+        : 'bash');
+    // Replay the AndroidJUnitRunner transcript from CI run 34218705281,
+    // with only the GitHub step/timestamp prefix removed.
+    const status = (code: number, total = 1) =>
+      `INSTRUMENTATION_STATUS: class=com.getcapacitor.myapp.ExampleInstrumentedTest\n` +
+      `INSTRUMENTATION_STATUS: current=1\nINSTRUMENTATION_STATUS: id=AndroidJUnitRunner\n` +
+      `INSTRUMENTATION_STATUS: numtests=${total}\n` +
+      `INSTRUMENTATION_STATUS: stream=${code === 1 ? '\ncom.getcapacitor.myapp.ExampleInstrumentedTest:' : '.'}\n` +
+      `INSTRUMENTATION_STATUS: test=${method}\n` +
+      `INSTRUMENTATION_STATUS_CODE: ${code}\n`;
+    const finish = (count: number) =>
+      `INSTRUMENTATION_RESULT: stream=\n\nTime: 0.072\n\nOK (${count} test${count === 1 ? '' : 's'})\n\n\nINSTRUMENTATION_CODE: -1\n`;
+    const passed = status(1) + status(0) + finish(1);
+    const cases: [string, string, boolean, number?][] = [
+      ['captured CI success', passed, true],
+      ['CRLF', passed.replaceAll('\n', '\r\n'), true],
+      [
+        'assumption does not prove the milestone',
+        status(1) + status(-4) + finish(1),
+        false,
+      ],
+      [
+        'ignored alongside an executed test',
+        status(1, 2) + status(-3, 2) + status(1, 2) + status(0, 2) + finish(1),
+        false,
+      ],
+      [
+        'assertion failure with runner success',
+        status(1) + status(-2) + finish(1),
+        false,
+      ],
+      [
+        'test error with runner success',
+        status(1) + status(-1) + finish(1),
+        false,
+      ],
+      ['unknown status', status(1) + status(-5) + finish(1), false],
+      ['unknown positive status', status(1) + status(2) + finish(1), false],
+      ['zero tests', finish(0), false],
+      ['only ignored tests', status(1) + status(-3) + finish(0), false],
+      ['runner code alone', 'INSTRUMENTATION_CODE: -1\n', false],
+      [
+        'no JUnit summary',
+        status(1) + status(0) + 'INSTRUMENTATION_CODE: -1\n',
+        false,
+      ],
+      ['no terminal status', status(1) + finish(1), false],
+      ['no start status', status(0) + finish(1), false],
+      ['missing expected test', status(1, 2) + status(0, 2) + finish(1), false],
+      ['JUnit count mismatch', status(1) + status(0) + finish(2), false],
+      ['wrong method', passed.replaceAll(method, 'otherTest'), false],
+      [
+        'wrong class',
+        passed.replaceAll('ExampleInstrumentedTest', 'OtherTest'),
+        false,
+      ],
+      ['duplicate successful test', status(1) + status(0) + passed, false],
+      ['JUnit failure', passed + 'FAILURES!!!\n', false],
+      [
+        'missing count',
+        passed.replaceAll('INSTRUMENTATION_STATUS: numtests=1\n', ''),
+        false,
+      ],
+      [
+        'runner failure',
+        passed + 'INSTRUMENTATION_FAILED: runner crashed\n',
+        false,
+      ],
+      [
+        'runner shortMsg',
+        passed + 'INSTRUMENTATION_RESULT: shortMsg=Process crashed\n',
+        false,
+      ],
+      [
+        'cancelled runner',
+        passed.replace('INSTRUMENTATION_CODE: -1', 'INSTRUMENTATION_CODE: 0'),
+        false,
+      ],
+      [
+        'missing final code',
+        passed.replace('INSTRUMENTATION_CODE: -1\n', ''),
+        false,
+      ],
+      ['duplicate final code', passed + 'INSTRUMENTATION_CODE: -1\n', false],
+      ['adb failure after complete output', passed, false, 1],
+      ['adb timeout after complete output', passed, false, 124],
+    ];
+    it.each(cases)('%s', (name, input, expected, adbExit = 0) => {
+      expect(run).toBeTruthy();
+      const directory = mkdtempSync(resolve(tmpdir(), 'optn-instrumentation-'));
+      try {
+        const result = spawnSync(
+          bash,
+          [
+            '-c',
+            `set -euo pipefail\ntimeout() { cat; return "$MOCK_ADB_EXIT"; }\nadb_with_timeout() { :; }\nflavour=test\nemulator_serial=test\n${run}\nrun_instrumentation ${method}`,
+          ],
+          {
+            cwd: repoRoot,
+            input,
+            encoding: 'utf8',
+            timeout: 5_000,
+            env: {
+              ...process.env,
+              RUNNER_TEMP: directory,
+              MOCK_ADB_EXIT: String(adbExit),
+            },
+          }
+        );
+        expect(result.error, name).toBeUndefined();
+        expect(result.status === 0, `${name}: ${result.stderr}`).toBe(expected);
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    });
+  });
+
   it('pins every external action to an immutable full commit SHA', () => {
     for (const [name, contents] of [
       ['release', workflow],
@@ -177,7 +315,9 @@ describe('release workflow', () => {
     // build is wrapped in a retry for the hdiutil "Resource busy" flake on
     // macOS. Assert the invocation and the wiring separately rather than
     // pinning the exact string, which broke the moment a retry was added.
-    expect(desktopPreviewWorkflow).toContain('npx tauri build --debug --target');
+    expect(desktopPreviewWorkflow).toContain(
+      'npx tauri build --debug --target'
+    );
     expect(desktopPreviewWorkflow).toContain('${{ matrix.target }}');
     // One artifact per format, not a catch-all over bundle/**. A single glob
     // uploaded whatever happened to exist, so a bundler that quietly stopped
@@ -247,7 +387,9 @@ describe('release workflow', () => {
     // Now declared in packaging/release-assets.json, which the workflow
     // generates its checks from.
     expect(releaseAssets).toContain('OPTNWallet-${VERSION}-linux-x64.flatpak');
-    expect(releaseAssets).toContain('OPTNWallet-${VERSION}-linux-arm64.flatpak');
+    expect(releaseAssets).toContain(
+      'OPTNWallet-${VERSION}-linux-arm64.flatpak'
+    );
 
     // Preview builds it too: a manifest that stops working should fail on the
     // pull request, not at release time.
@@ -337,6 +479,22 @@ describe('release workflow', () => {
     expect(publishNeeds(), 'publish job needs').toContain('cli');
   });
 
+  it('assembles, checksums, and attests extensionless CLI and Flatpak assets', () => {
+    // Unix CLI binaries are extensionless and Flatpaks use .flatpak. Both
+    // still need to reach the release set, checksum file, and provenance
+    // attestation like every other published artifact.
+    const findStart = workflow.indexOf('done < <(find artifacts');
+    const findEnd = workflow.indexOf(') -print0)', findStart);
+    const assemblyFind = workflow.slice(findStart, findEnd);
+    expect(assemblyFind).toContain("-name '*.flatpak'");
+    expect(assemblyFind).toContain(
+      "-o \\( -path 'artifacts/cli-*/*' -a -name 'optn-*' \\)"
+    );
+    expect(assemblyFind).not.toContain("-o -name 'optn-*'");
+    expect(workflow).toContain('release-files/*.flatpak');
+    expect(workflow).toContain('release-files/optn-*');
+  });
+
   it('arms the CLI requirement from a probe rather than from the artifacts', () => {
     // The crate lands in a separate pull request. Requiring binaries no branch
     // can build breaks one merge order; building binaries nothing requires
@@ -351,18 +509,20 @@ describe('release workflow', () => {
     // looking at which artifacts happen to have been produced -- an artifact
     // listing cannot tell a failed build from a crate that was never here.
     expect(workflow).toContain('if [ -f crates/optn-cli/Cargo.toml ]; then');
-    expect(workflow).toMatch(/cli_present: \x24\x7b\x7b steps\.\w+\.outputs\.present \x7d\x7d/);
-    expect(workflow).toContain(
-      'needs.resolve.outputs.cli_present }}" = \'true\''
+    expect(workflow).toMatch(
+      /cli_present: \x24\x7b\x7b steps\.\w+\.outputs\.present \x7d\x7d/
     );
-    expect(workflow).toContain("require_asset \"artifacts/cli-$label\"");
+    expect(workflow).toContain(
+      "needs.resolve.outputs.cli_present }}\" = 'true'"
+    );
+    expect(workflow).toContain('require_asset "artifacts/cli-$label"');
   });
 
   it('verifies each cross-built CLI binary is the architecture it claims', () => {
     // A misconfigured linker silently emits a host binary, which would ship
     // labelled riscv64 and fail to start on the only machines that need it.
-    expect(workflow).toContain("riscv64gc-*) file \"$SRC\" | grep -q 'RISC-V'");
-    expect(workflow).toContain("armv7-*)     file \"$SRC\" | grep -q 'ARM'");
+    expect(workflow).toContain('riscv64gc-*) file "$SRC" | grep -q \'RISC-V\'');
+    expect(workflow).toContain('armv7-*)     file "$SRC" | grep -q \'ARM\'');
   });
   it('builds the CLI in preview for every target the release ships', () => {
     // The release matrix and the preview matrix must agree, or a target is
@@ -390,7 +550,9 @@ describe('release workflow', () => {
     // touch that path, and stays "Expected" forever. The probe is what makes
     // always-on cheap.
     expect(cliPreviewWorkflow).toMatch(/^\s{2}probe:\s*$/m);
-    expect(cliPreviewWorkflow).toContain('if [ -f crates/optn-cli/Cargo.toml ]; then');
+    expect(cliPreviewWorkflow).toContain(
+      'if [ -f crates/optn-cli/Cargo.toml ]; then'
+    );
     // No path filter at all: a path-filtered required check never runs on a
     // branch that does not touch that path, and stays "Expected" forever.
     expect(cliPreviewWorkflow).not.toContain('paths:');
@@ -419,7 +581,10 @@ describe('release workflow', () => {
       const trigger = contents.match(
         /pull_request:[\s\S]*?branches: \[([^\]]+)\]/
       );
-      expect(trigger, `${name} should filter pull_request branches`).not.toBeNull();
+      expect(
+        trigger,
+        `${name} should filter pull_request branches`
+      ).not.toBeNull();
 
       const branches = trigger![1].split(',').map((b) => b.trim());
       for (const branch of ['dev', 'staging', 'main']) {
@@ -427,12 +592,45 @@ describe('release workflow', () => {
       }
     }
   });
+  it('keeps the desktop RISC-V build always-on and blocking', () => {
+    const riscv = assetWorkflows.find(
+      ({ name }) => name === 'desktop-riscv64.yml'
+    )!.contents;
+    expect(riscv).not.toMatch(/^\s*(?:paths|paths-ignore|continue-on-error):/m);
+    expect(riscv).toContain('targets: riscv64gc-unknown-linux-gnu');
+    expect(riscv).toContain('if-no-files-found: error');
+  });
+
+  it('exercises wallet creation, lock and reopen in an isolated native profile', () => {
+    const e2e = readFileSync(
+      resolve(repoRoot, '.github/workflows/desktop-e2e.yml'),
+      'utf8'
+    );
+    const lifecycle = readFileSync(
+      resolve(repoRoot, 'scripts/run-e2e-lifecycle.mjs'),
+      'utf8'
+    );
+    expect(e2e).toContain('npm run test:e2e:lifecycle');
+    expect(e2e.indexOf('npm run test:e2e:lifecycle')).toBeGreaterThan(
+      e2e.indexOf('npx tauri build --debug --no-bundle')
+    );
+    expect(lifecycle).toContain('mkdtempSync');
+    expect(lifecycle).toContain(
+      'environment.XDG_DATA_HOME = temporaryDataHome'
+    );
+    expect(lifecycle).toContain("environment.TAURI_E2E_ALLOW_MUTATION = '1'");
+  });
   it('drives the asset checks from one config, with a loud opt-out', () => {
     // The list of what ships and the check that it shipped are generated from
     // the same file, so they cannot drift. Two hand-maintained lists would,
     // and the half that drifts silently is the one that stops rejecting.
     const config = JSON.parse(releaseAssets) as {
-      assets: { label: string; pattern: string; required?: boolean; reason?: string }[];
+      assets: {
+        label: string;
+        pattern: string;
+        required?: boolean;
+        reason?: string;
+      }[];
     };
     expect(config.assets.length).toBeGreaterThan(20);
 
@@ -441,7 +639,10 @@ describe('release workflow', () => {
     // rather than silent.
     for (const asset of config.assets) {
       if (asset.required === false) {
-        expect(asset.reason, `${asset.label} is waived with no reason`).toBeTruthy();
+        expect(
+          asset.reason,
+          `${asset.label} is waived with no reason`
+        ).toBeTruthy();
       }
     }
 

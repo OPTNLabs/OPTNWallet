@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { UTXO } from '../../../../types/types';
 import {
+  chooseBestCauldronFundingCandidate,
   isWalletFundingUtxo,
   selectFundingUtxosByToken,
   selectLargestBchUtxos,
@@ -25,6 +26,49 @@ function makeUtxo(overrides?: Partial<UTXO>): UTXO {
 }
 
 describe('cauldron funding helpers', () => {
+  it('prefers BCH expansion when it removes a fee premium caused by dust change', () => {
+    const tokenOnly = { id: 'token-only' };
+    const withBchChange = { id: 'with-bch-change' };
+
+    expect(
+      chooseBestCauldronFundingCandidate([
+        {
+          value: tokenOnly,
+          feePremiumSatoshis: 431n,
+          inputCount: 1,
+          expansionCount: 0,
+        },
+        {
+          value: withBchChange,
+          feePremiumSatoshis: 0n,
+          inputCount: 2,
+          expansionCount: 1,
+        },
+      ])
+    ).toBe(withBchChange);
+  });
+
+  it('prefers fewer inputs when candidates have the same fee premium', () => {
+    const fewerInputs = { id: 'fewer-inputs' };
+
+    expect(
+      chooseBestCauldronFundingCandidate([
+        {
+          value: { id: 'more-inputs' },
+          feePremiumSatoshis: 0n,
+          inputCount: 3,
+          expansionCount: 2,
+        },
+        {
+          value: fewerInputs,
+          feePremiumSatoshis: 0n,
+          inputCount: 2,
+          expansionCount: 1,
+        },
+      ])
+    ).toBe(fewerInputs);
+  });
+
   it('rejects contract-managed utxos from wallet funding', () => {
     expect(
       isWalletFundingUtxo(

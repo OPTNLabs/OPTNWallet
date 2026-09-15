@@ -1,0 +1,21 @@
+[package]
+name = "optn-ui-egui"
+version = "1.7.3"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "A third renderer, on a real immediate-mode GUI toolkit, proving the renderer swaps."
+
+# Excluded from the workspace on purpose. It exists to demonstrate that a
+# renderer built on a genuine GUI toolkit needs only optn-app and
+# optn-transport; it must not put a windowing stack into the CI matrix that
+# also cross-compiles for riscv64 and armv7.
+
+[dependencies]
+# Exactly what any renderer gets: view models and the typed transport.
+optn-app = { path = "../optn-app", version = "=1.7.3" }
+optn-transport = { path = "../optn-transport", version = "=1.7.3" }
+# The toolkit itself. `egui` alone -- no `eframe`, no winit, no glow -- so the
+# whole renderer runs headlessly under `Context::run_ui` in tests. Default
+# features are kept for `default_fonts`: without a font, layout is degenerate
+# and a click test would be measuring nothing.
+egui = "0.36"

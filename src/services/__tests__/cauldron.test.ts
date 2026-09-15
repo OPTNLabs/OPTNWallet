@@ -33,6 +33,7 @@ import {
   buildCauldronPoolWithdrawRequest,
   buildCauldronMerchantPaymentRequest,
   buildCauldronTradeRequest,
+  CAULDRON_TARGET_FEE_RATE_SATS_PER_BYTE,
   assertSignedTransactionCovenantValidity,
   assertSignedTransactionFeeSufficiency,
   analyzeCauldronMarketLiquidity,
@@ -520,7 +521,8 @@ describe('Cauldron service', () => {
       ],
       recipientAddress: TEST_CASHADDR,
       changeAddress: TEST_CASHADDR,
-      feeRateSatsPerByte: 1n,
+      // A caller cannot accidentally lower the protocol fee floor.
+      feeRateSatsPerByte: 0n,
     });
 
     expect(built.signRequest.inputPaths).toEqual([[1, 'receive', 0]]);
@@ -838,7 +840,8 @@ describe('Cauldron service', () => {
       walletInputs: [walletInput],
       recipientAddress: TEST_CASHADDR,
       changeAddress: TEST_CASHADDR,
-      feeRateSatsPerByte: 1n,
+      // A caller cannot accidentally lower the protocol fee floor.
+      feeRateSatsPerByte: 0n,
     });
 
     const signed = signRequestForTest({
@@ -847,6 +850,13 @@ describe('Cauldron service', () => {
     });
 
     expectVmAccepts(signed);
+    const signedFee = calculateSignedTransactionFeeSatoshis(
+      binToHex(encodeTransaction(signed.transaction)),
+      built.sourceOutputs
+    );
+    expect(signedFee.actualFeeSatoshis).toBe(
+      signedFee.transactionSizeBytes * CAULDRON_TARGET_FEE_RATE_SATS_PER_BYTE
+    );
     expect(signed.transaction.outputs[0]?.valueSatoshis).toBe(1_545_050_219n);
     expect(signed.transaction.outputs[1]?.valueSatoshis).toBe(2_044_130_514n);
     expect(signed.transaction.outputs[2]?.token?.amount).toBe(12n);
@@ -897,7 +907,8 @@ describe('Cauldron service', () => {
       recipientAddress: TEST_CASHADDR,
       changeAddress: TEST_CASHADDR,
       tokenChangeAddress: TEST_CASHADDR,
-      feeRateSatsPerByte: 1n,
+      // A caller cannot accidentally lower the protocol fee floor.
+      feeRateSatsPerByte: 0n,
     });
 
     const signed = signRequestForTest({
@@ -909,6 +920,13 @@ describe('Cauldron service', () => {
     });
 
     expectVmAccepts(signed);
+    const signedFee = calculateSignedTransactionFeeSatoshis(
+      binToHex(encodeTransaction(signed.transaction)),
+      built.sourceOutputs
+    );
+    expect(signedFee.actualFeeSatoshis).toBe(
+      signedFee.transactionSizeBytes * CAULDRON_TARGET_FEE_RATE_SATS_PER_BYTE
+    );
     expect(signed.transaction.outputs[0]?.valueSatoshis).toBe(946_936_390n);
     expect(signed.transaction.outputs[0]?.token?.amount).toBe(13n);
   });
@@ -1033,6 +1051,10 @@ describe('Cauldron service', () => {
         transactionLabel: 'Cauldron swap',
       })
     ).not.toThrow();
+    expect(built.settlementOutputs[1]?.valueSatoshis).toBe(1000n);
+    expect(built.settlementOutputs[2]?.valueSatoshis).toBe(
+      100_000_800n - built.estimatedFeeSatoshis - 1000n
+    );
   });
 
   it('measures the actual fee paid by a signed Cauldron transaction', () => {

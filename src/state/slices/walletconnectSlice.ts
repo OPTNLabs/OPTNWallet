@@ -273,6 +273,7 @@ const walletconnectSlice = createSlice({
       action: PayloadAction<PendingProposalPayload>
     ) => {
       state.pendingProposal = action.payload;
+      if (action.payload) state.connectionFailed = false;
     },
     clearPendingProposal: (state) => {
       state.pendingProposal = null;
@@ -321,26 +322,36 @@ const walletconnectSlice = createSlice({
     },
   },
   extraReducers: (builder) => {
+    builder.addCase(initWalletConnect.pending, (state) => {
+      state.connectionFailed = false;
+    });
+    builder.addCase(wcPair.pending, (state) => {
+      state.connectionFailed = false;
+    });
     builder.addCase(initWalletConnect.fulfilled, (state, action) => {
       state.web3wallet = action.payload.web3wallet;
       state.activeSessions = action.payload.activeSessions;
     });
-    builder.addCase(initWalletConnect.rejected, (_, action) => {
+    builder.addCase(initWalletConnect.rejected, (state, action) => {
+      state.connectionFailed = true;
       logError('walletconnect.init.rejected', action.error);
     });
 
     builder.addCase(approveSessionProposal.fulfilled, (state) => {
+      state.connectionFailed = false;
       state.pendingProposal = null;
       if (state.web3wallet) {
         state.activeSessions = state.web3wallet.getActiveSessions();
       }
     });
 
-    builder.addCase(approveSessionProposal.rejected, (_, action) => {
+    builder.addCase(approveSessionProposal.rejected, (state, action) => {
+      state.connectionFailed = true;
       logError('walletconnect.approveSessionProposal.rejected', action.error);
     });
 
     builder.addCase(rejectSessionProposal.fulfilled, (state) => {
+      state.connectionFailed = false;
       state.pendingProposal = null;
       if (state.web3wallet) {
         state.activeSessions = state.web3wallet.getActiveSessions();
@@ -354,7 +365,8 @@ const walletconnectSlice = createSlice({
       logError('walletconnect.handleWcRequest.rejected', action.error);
     });
 
-    builder.addCase(wcPair.rejected, (_, action) => {
+    builder.addCase(wcPair.rejected, (state, action) => {
+      state.connectionFailed = true;
       logError('walletconnect.wcPair.rejected', action.error);
     });
 

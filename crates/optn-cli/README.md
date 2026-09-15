@@ -78,7 +78,16 @@ and signs without broadcasting so you can inspect the result first.
 ## Networks
 
 `--network mainnet` (default) or `--network chipnet`. The network selects the
-default Electrum server and is checked against the address prefix.
+selected Electrum server and is checked against the address prefix. With no
+`--host`, `--port`, or `--no-tls` override, the CLI reads the same network-
+scoped settings file as the desktop wallet. It uses the normal app-config
+directory plus `com.optilabs.wallet`, or an explicit `--network-config-dir`
+or `OPTN_NETWORK_CONFIG_DIR` for scripts and portable profiles.
+
+Some legacy direct-Electrum commands cannot enforce a richer shared source
+policy and refuse it instead of silently falling back to a public server.
+`rescan` uses the shared native path described below. Explicit endpoint flags
+remain a deliberate override.
 
 That check matters more than it looks. Querying mainnet for a `bchtest:`
 address does not fail — the server simply reports no history, which reads
@@ -124,6 +133,51 @@ other BCH tooling may sit under a coin type this wallet would not pick:
 each across accounts `0` and `1`. That set comes from
 `docs/bch-derivation-paths.md`, not from guesswork. `--gap` controls how many
 addresses per chain are checked before an account is considered empty.
+
+## Rescanning an HD account
+
+`rescan` is the account refresh path shared with the native runtime. It scans
+the receiving (`/0`), change (`/1`), and existing DeFi/Cauldron (`/2`) branches
+of one BIP44 account. RPA branch `/3` is not an ordinary P2PKH branch and is
+not included.
+
+```bash
+optn rescan
+optn --timeout 120 rescan --account-path "m/44'/145'/1'" --xpub "$XPUB" --all
+```
+
+By default each branch must end with a gap of 20 consecutive addresses with no
+history, and a branch may derive at most 200 addresses. The rescan expands a
+branch after it finds history and fails incomplete if the branch reaches the
+cap before the gap. Usage comes from transaction history, not the current
+balance: an address whose funds were fully spent still keeps the gap open.
+Use `--gap` and `--max-addresses` to change those limits; the cap must be at
+least the gap and no more than 10,000. `--all` also prints empty scanned
+addresses.
+
+`--account-path` selects the exact account origin in the form
+`m/44'/coin_type'/account'`; it defaults to account 0 at the network's normal
+coin type. This lets a restored account keep a nondefault coin type. `--xpub`
+supplies that account's public key, so this invocation does not read
+`OPTN_MNEMONIC`, the keychain, or stdin for a recovery phrase. The supplied
+xpub must name the selected account index. The command remains statically
+classified as `secret` by `optn skills`, so `OPTN_POLICY=read` still refuses
+it; use `OPTN_POLICY=secret` or a higher policy for watch-only rescans.
+
+Without `--host`, `--port`, or `--no-tls`, `rescan` loads the exact persisted
+per-network source catalog and policy and builds the native chain stack. With
+no persisted policy, it creates a native Electrum selection from the network
+default; endpoint flags create an explicit native Electrum selection instead.
+Loopback sources connect directly. Selected remote Electrum, BIP37, and
+Neutrino routes require a verified SOCKS Tor proxy at `127.0.0.1:9050` or
+`127.0.0.1:9150`; otherwise that route is refused without a direct fallback.
+Remote BCHN RPC and ZMQ sources are currently unavailable on this native path.
+Other CLI commands are partly legacy Electrum paths, so do not infer their
+routing from `rescan`.
+
+`--timeout` applies to the whole native account rescan, including route setup
+and HD discovery. Its default is 300 seconds; pass `--timeout` to override it.
+A timeout or incomplete branch does not report a complete account.
 
 ## Paying for HTTP with x402
 
@@ -400,8 +454,10 @@ script      76a91476a04053bda0a88bda5177b86a15c3b29f55987388ac
 scripthash  71b6a00546326a622c2a484e88a81909706a0cce15009aa87fd9a6569ca84c93
 ```
 
-**Timeouts.** `--timeout` is 30 seconds. A server that accepts the connection
-and never answers produces exit code 3 with the endpoint named.
+**Timeouts.** `--timeout` defaults to 30 seconds except for `rescan`, whose
+whole-account budget defaults to 300 seconds. An explicit value overrides
+either default. A server that accepts the connection and never answers produces
+exit code 3 with the endpoint named.
 
 **A specific server.** `--host` and `--port` override the network default.
 `--no-tls` exists for a local server on a plaintext port; do not use it across

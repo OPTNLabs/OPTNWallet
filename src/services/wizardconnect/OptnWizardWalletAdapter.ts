@@ -13,6 +13,7 @@ import { deriveRpaGateXpub } from '../RpaService';
 import { store } from '../../state/store';
 import { signWithTrezor, signWithLedger, signWithOneKey } from '../hardware/hardwareWalletSigning';
 import getElectrumAdapter from '../ElectrumAdapter';
+import { decodeWizardConnectTransaction } from './transaction';
 
 
 type WalletSnapshot = {
@@ -119,6 +120,11 @@ export class OptnWizardWalletAdapter implements WalletAdapter {
   }
 
   async signTransaction(request: SignTransactionRequest): Promise<SignTransactionResult> {
+    const decoded = decodeWizardConnectTransaction(request.transaction);
+    request = {
+      ...request,
+      transaction: { ...request.transaction, ...decoded },
+    };
     const state = store.getState() as unknown as { hardwareWallet?: { type: string; connected: boolean } };
     const hw = state.hardwareWallet;
 

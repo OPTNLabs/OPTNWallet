@@ -4,7 +4,10 @@ import { describe, expect, it, vi } from 'vitest';
 
 import MerchantPayApp from '../MerchantPayApp';
 import { Network } from '../../../../state/slices/networkSlice';
-import { buildMerchantPaymentRequest } from '../merchantPayRequest';
+import {
+  buildMerchantPaymentRequest,
+  planMerchantTargetPayment,
+} from '../merchantPayRequest';
 import { toTokenAwareCashAddress } from '../../../../utils/cashAddress';
 import { CAULDRON_NATIVE_BCH } from '../../../../services/cauldron';
 import { I18nContext } from '../../../../i18n/I18nContext';
@@ -50,31 +53,76 @@ vi.mock('../../../../components/ui/WalletScreen', () => ({
 vi.mock('../../../../services/cauldron', () => ({
   CAULDRON_NATIVE_BCH: 'bch',
   CauldronApiClient: class {},
-  fetchNormalizedCauldronPools: vi.fn(),
-  planAggregatedTradeForTargetDemand: vi.fn(
-    (pools, _supply, demand, amount) => {
-      const pool = pools[0];
-      if (!pool) return null;
-      const trade = {
-        supplyTokenId: CAULDRON_NATIVE_BCH,
-        demandTokenId: demand,
-        supply: 8_400_000n,
-        demand: amount,
-        tradeFee: 10n,
-        pool,
-      };
-      return {
-        trades: [trade],
-        summary: {
-          supply: trade.supply,
-          demand: trade.demand,
-          tradeFee: trade.tradeFee,
-          rateNumerator: 1n,
-          rateDenominator: 1n,
-        },
-      };
-    }
+  buildCauldronPoolV0ExchangeUnlockingBytecode: vi.fn(
+    () => new Uint8Array([0x51])
   ),
+  fetchNormalizedCauldronPools: vi.fn(),
+  planAggregatedTradeForTargetSupply: vi.fn((pools, supply, demand, amount) => {
+    const pool = pools[0];
+    if (!pool) return null;
+    const trade = {
+      supplyTokenId: supply,
+      demandTokenId: demand,
+      supply: amount,
+      demand: 1_000n,
+      tradeFee: 10n,
+      pool,
+    };
+    return {
+      trades: [trade],
+      summary: {
+        supply: trade.supply,
+        demand: trade.demand,
+        tradeFee: trade.tradeFee,
+        rateNumerator: 1n,
+        rateDenominator: 1n,
+      },
+    };
+  }),
+  planMerchantTradeForTargetSupply: vi.fn((pools, supply, demand, amount) => {
+    const pool = pools[0];
+    if (!pool) return null;
+    const trade = {
+      supplyTokenId: supply,
+      demandTokenId: demand,
+      supply: amount,
+      demand: 1_000n,
+      tradeFee: 10n,
+      pool,
+    };
+    return {
+      trades: [trade],
+      summary: {
+        supply: trade.supply,
+        demand: trade.demand,
+        tradeFee: trade.tradeFee,
+        rateNumerator: 1n,
+        rateDenominator: 1n,
+      },
+    };
+  }),
+  planMerchantTradeForTargetDemand: vi.fn((pools, _supply, demand, amount) => {
+    const pool = pools[0];
+    if (!pool) return null;
+    const trade = {
+      supplyTokenId: CAULDRON_NATIVE_BCH,
+      demandTokenId: demand,
+      supply: 8_400_000n,
+      demand: amount,
+      tradeFee: 10n,
+      pool,
+    };
+    return {
+      trades: [trade],
+      summary: {
+        supply: trade.supply,
+        demand: trade.demand,
+        tradeFee: trade.tradeFee,
+        rateNumerator: 1n,
+        rateDenominator: 1n,
+      },
+    };
+  }),
 }));
 
 vi.mock('../../cauldron/preflight', () => ({
@@ -101,6 +149,91 @@ vi.mock('../../shared/useSmoothResetTransition', () => ({
 }));
 
 describe('MerchantPayApp', () => {
+  it('quotes the merchant price and splits the BCH payment by ratio', () => {
+    const targetPlan = planMerchantTargetPayment({
+      pools: [{} as never],
+      merchantAsset: 'token',
+      incomingAsset: 'bch',
+      merchantAmountAtomic: 1_000n,
+      conversionBps: 5_000n,
+      stablecoinTokenId: 'aa'.repeat(32),
+    });
+
+    expect(targetPlan?.planned?.summary.demand).toBe(1_000n);
+    expect(targetPlan?.customerPaysAtomic).toBe(8_400_000n);
+    expect(targetPlan?.directIncomingAmountAtomic).toBe(4_200_000n);
+  });
+
+  it('keeps the conversion ratio available when the merchant price is BCH', () => {
+    const targetPlan = planMerchantTargetPayment({
+      pools: [{} as never],
+      merchantAsset: 'bch',
+      incomingAsset: 'bch',
+      merchantAmountAtomic: 1_000n,
+      conversionBps: 5_000n,
+      stablecoinTokenId: 'aa'.repeat(32),
+    });
+
+    expect(targetPlan?.planned?.summary.supply).toBe(500n);
+    expect(targetPlan?.planned?.summary.demand).toBe(1_000n);
+    expect(targetPlan?.customerPaysAtomic).toBe(1_000n);
+    expect(targetPlan?.directIncomingAmountAtomic).toBe(500n);
+  });
+
+  it('handles zero conversion without requiring a route or dividing by zero', () => {
+    const targetPlan = planMerchantTargetPayment({
+      pools: [],
+      merchantAsset: 'bch',
+      incomingAsset: 'bch',
+      merchantAmountAtomic: 1_000n,
+      conversionBps: 0n,
+      stablecoinTokenId: 'aa'.repeat(32),
+    });
+
+    expect(targetPlan).toEqual({
+      planned: null,
+      customerPaysAtomic: 1_000n,
+      directIncomingAmountAtomic: 1_000n,
+      conversionBps: 0n,
+    });
+  });
+
+  it('can quote a PUSD price with zero conversion using the BCH equivalent', () => {
+    const targetPlan = planMerchantTargetPayment({
+      pools: [{} as never],
+      merchantAsset: 'token',
+      incomingAsset: 'bch',
+      merchantAmountAtomic: 1_000n,
+      conversionBps: 0n,
+      stablecoinTokenId: 'aa'.repeat(32),
+    });
+
+    expect(targetPlan).toEqual({
+      planned: null,
+      customerPaysAtomic: 8_400_000n,
+      directIncomingAmountAtomic: 8_400_000n,
+      conversionBps: 0n,
+    });
+  });
+
+  it('uses a direct payment when both assets match', () => {
+    const targetPlan = planMerchantTargetPayment({
+      pools: [],
+      merchantAsset: 'token',
+      incomingAsset: 'token',
+      merchantAmountAtomic: 500n,
+      conversionBps: 10_000n,
+      stablecoinTokenId: 'aa'.repeat(32),
+    });
+
+    expect(targetPlan).toEqual({
+      planned: null,
+      customerPaysAtomic: 500n,
+      directIncomingAmountAtomic: 500n,
+      conversionBps: 0n,
+    });
+  });
+
   it('renders the merchant screen without enabling wallet scrolling', () => {
     const html = renderToStaticMarkup(
       <I18nContext.Provider
@@ -121,8 +254,14 @@ describe('MerchantPayApp', () => {
     );
 
     expect(html).toContain('data-scrollable="false"');
-    expect(html).toContain('Choose stablecoin.');
-    expect(html).toContain('Continue');
+    expect(html).toContain('PUSD');
+    expect(html).toContain('Customer pays');
+    expect(html).toContain('Merchant receives');
+    expect(html).toContain('merchant-settlement-toggle');
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).not.toContain('merchant-conversion-slider');
+    expect(html).toContain('Request payment');
+    expect(html).toContain('Request 0.00 PUSD');
   });
 
   it('builds a merchant transaction proposal from the current LP route', async () => {
@@ -210,5 +349,40 @@ describe('MerchantPayApp', () => {
     expect(request.merchantAddressBaselineOutpoints).toEqual([
       `${'aa'.repeat(32)}:1`,
     ]);
+
+    const refreshedRequest = await buildMerchantPaymentRequest({
+      sdk: {
+        utxos: {
+          listForAddress: vi.fn(async () => []),
+        },
+        wallet: {
+          listAddresses: vi.fn(async () => [
+            {
+              address: 'bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a',
+            },
+          ]),
+        },
+      } as never,
+      currentNetwork: Network.MAINNET,
+      merchantAddress: request.merchantAddress,
+      selectedStablecoin: {
+        tokenId,
+        symbol: 'MUSD',
+        name: 'Moria USD',
+        decimals: 2,
+      },
+      draftQuote: {
+        createdAt: Date.now(),
+        expiresAt: Date.now() + 120_000,
+        merchantReceivesAtomic: 1_000n,
+        merchantReceivesDisplay: '10.00 MUSD',
+        customerPaysSats: 8_400_000n,
+        customerPaysDisplay: '0.084 BCH',
+        routePoolCount: 2,
+        quoteProtectionBps: 100n,
+        trades: [trade],
+      },
+    });
+    expect(refreshedRequest.merchantAddress).toBe(request.merchantAddress);
   });
 });

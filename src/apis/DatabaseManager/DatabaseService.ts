@@ -38,10 +38,8 @@ let db: Database | null = null;
 // The initialised sql.js module, kept so saves can merge into the latest
 // IndexedDB snapshot without replacing this window's live database handle.
 let sqlModule: Awaited<ReturnType<typeof initSqlJs>> | null = null;
-// In-flight start, so concurrent ensureDatabaseStarted() calls share ONE
-// startDatabase() instead of each loading a snapshot and racing to save it
-// back — that race silently dropped freshly-created wallets (a stale parallel
-// load would overwrite IndexedDB after a newer write).
+// Both startup entry points share one load, including migrations and the
+// initial save. Reopening onboarding must not replace unsaved wallet rows.
 let startPromise: Promise<Database | null> | null = null;
 
 // ** Debounce state **
@@ -270,6 +268,26 @@ const migrations: Array<(db: Database) => Promise<void>> = [
     // inventory, derived-key mapping, and resumable PSBT sessions in the
     // common database so desktop and Capacitor/mobile use the same model.
     createMultisigTables(db);
+  },
+  async (db) => {
+    // Migrate persisted merge targets too: local-only lazy columns otherwise
+    // lose watch-only public metadata during wallet-scoped saves.
+    const columns = new Set<string>();
+    const statement = db.prepare('PRAGMA table_info(wallets);');
+    try {
+      while (statement.step()) {
+        const row = statement.getAsObject() as Record<string, unknown>;
+        if (typeof row.name === 'string') columns.add(row.name);
+      }
+    } finally {
+      statement.free();
+    }
+
+    for (const column of ['account_xpub', 'master_fingerprint', 'multisig_policy']) {
+      if (!columns.has(column)) {
+        db.run(`ALTER TABLE wallets ADD COLUMN ${column} TEXT;`);
+      }
+    }
   },
   // Add future migrations here as needed
 ];
@@ -614,14 +632,21 @@ const resyncDatabaseFromDisk = async (): Promise<void> => {
   // Under the save lock: swapping `db` out from under an in-flight save would
   // export a half-replaced database.
   await withExclusiveSaveLock(async () => {
+    const latest = new SQLModule.Database(savedBytes);
+    try {
+      await applyPendingMigrations(latest);
+    } catch (error) {
+      latest.close();
+      throw error;
+    }
     db?.close();
-    db = new SQLModule.Database(savedBytes);
+    db = latest;
     globalBaseline = snapshotGlobalTables(db);
     replaceWalletBaselines(db);
   });
 };
 
-const startDatabase = async (): Promise<Database | null> => {
+const loadDatabase = async (): Promise<Database | null> => {
   const SQLModule = await initSqlJs({
     locateFile: () => `/sql-wasm.wasm`,
   });
@@ -655,16 +680,24 @@ const startDatabase = async (): Promise<Database | null> => {
   return db;
 };
 
-const ensureDatabaseStarted = async (): Promise<void> => {
-  if (db) return;
-  if (!startPromise) {
-    startPromise = startDatabase();
-    // Allow a retry if the very first start fails, but never run two at once.
-    startPromise.catch(() => {
+const startDatabase = (): Promise<Database | null> => {
+  if (startPromise) return startPromise;
+  if (db) return Promise.resolve(db);
+  startPromise = loadDatabase()
+    .catch((error: unknown) => {
+      db?.close();
+      db = null;
+      sqlModule = null;
+      throw error;
+    })
+    .finally(() => {
       startPromise = null;
     });
-  }
-  await startPromise;
+  return startPromise;
+};
+
+const ensureDatabaseStarted = async (): Promise<void> => {
+  await startDatabase();
 };
 
 const queueSave = async (

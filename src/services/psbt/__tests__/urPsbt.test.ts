@@ -9,6 +9,7 @@ import {
   extractPsbtFromUrCbor,
   startsWithPsbtMagic,
   DEFAULT_UR_FRAGMENT_LENGTH,
+  PSBT_UR_FRAGMENT_LENGTHS,
   PSBT_UR_QR_DISPLAY_SIZE,
   PSBT_UR_QR_ERROR_LEVEL,
   PSBT_UR_QR_MARGIN_MODULES,
@@ -42,8 +43,9 @@ const psbt = () =>
   );
 
 describe('UR crypto-psbt transport', () => {
-  it('keeps SeedCash-readable UR density (Paytaca-era 50/8, not 150/200)', () => {
+  it('keeps 50/8 as the SeedCash-safe default while exposing bounded densities', () => {
     expect(DEFAULT_UR_FRAGMENT_LENGTH).toBe(50);
+    expect(PSBT_UR_FRAGMENT_LENGTHS).toEqual([50, 100, 200, 400, 450]);
     expect(PSBT_UR_QR_MARGIN_MODULES).toBe(8);
     expect(PSBT_UR_QR_DISPLAY_SIZE).toBeGreaterThanOrEqual(400);
     expect(PSBT_UR_QR_ERROR_LEVEL).toBe('L');
@@ -148,7 +150,10 @@ describe('UR crypto-psbt transport', () => {
     const frames = encodePsbtToUrFrames(psbt(), 60);
     const scanner = new UrPsbtScanner();
     scanner.receive(frames.next());
+    scanner.receive('UR:CRYPTO-PSBT/7-11/NOTBYTEWORDSATALL');
+    expect(scanner.damagedFrames).toBe(1);
     scanner.reset();
+    expect(scanner.damagedFrames).toBe(0);
     expect(scanner.receive('not-a-ur').progress).toBe(0);
   });
 });

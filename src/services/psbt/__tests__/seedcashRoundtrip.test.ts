@@ -60,101 +60,106 @@ function p2pkhScript(publicKey: Uint8Array): Uint8Array {
 }
 
 describeLive('SeedCash round trip', () => {
-  it('signs an OPTN PSBT and the result executes on the BCH VM', () => {
-    const keys = JSON.parse(seedcash(['keys'])) as {
-      xpub: string;
-      fingerprint: string;
-      accountPath: string;
-    };
+  it.each([1, 2])(
+    'signs an OPTN PSBT with %i inputs and executes on the BCH VM',
+    (inputCount) => {
+      const keys = JSON.parse(seedcash(['keys'])) as {
+        xpub: string;
+        fingerprint: string;
+        accountPath: string;
+      };
 
-    // Derive the change-branch key the same way the watch-only wallet does, so
-    // the input is one SeedCash can claim through its fingerprint.
-    const account = decodeHdPublicKey(keys.xpub);
-    if (typeof account === 'string') throw new Error(account);
-    const child = deriveHdPathRelative(account.node, '1/0');
-    if (typeof child === 'string') throw new Error(child);
-    const publicKey = child.publicKey;
+      // Derive the change-branch key the same way the watch-only wallet does, so
+      // the input is one SeedCash can claim through its fingerprint.
+      const account = decodeHdPublicKey(keys.xpub);
+      if (typeof account === 'string') throw new Error(account);
+      const child = deriveHdPathRelative(account.node, '1/0');
+      if (typeof child === 'string') throw new Error(child);
+      const publicKey = child.publicKey;
 
-    const lockingBytecode = p2pkhScript(publicKey);
-    const satoshis = 50_000n;
+      const lockingBytecode = p2pkhScript(publicKey);
+      const satoshis = 50_000n;
 
-    // A real parent transaction paying the watched address, so the PSBT can
-    // carry PSBT_IN_NON_WITNESS_UTXO. Its txid is whatever it hashes to —
-    // the decoder checks that against the outpoint, so it cannot be invented.
-    const parent = {
-      version: 2,
-      inputs: [
-        {
-          outpointTransactionHash: new Uint8Array(32).fill(0x11),
-          outpointIndex: 0,
-          unlockingBytecode: new Uint8Array(),
-          sequenceNumber: 0xffffffff,
-        },
-      ],
-      outputs: [{ lockingBytecode, valueSatoshis: satoshis }],
-      locktime: 0,
-    };
-    const parentBytes = encodeTransaction(parent);
-    const parentTxid = binToHex(hash256(parentBytes).slice().reverse());
+      // A real parent transaction paying the watched address, so the PSBT can
+      // carry PSBT_IN_NON_WITNESS_UTXO. Its txid is whatever it hashes to —
+      // the decoder checks that against the outpoint, so it cannot be invented.
+      const parent = {
+        version: 2,
+        inputs: [
+          {
+            outpointTransactionHash: new Uint8Array(32).fill(0x11),
+            outpointIndex: 0,
+            unlockingBytecode: new Uint8Array(),
+            sequenceNumber: 0xffffffff,
+          },
+        ],
+        outputs: Array.from({ length: inputCount }, (_, vout) => ({
+          lockingBytecode,
+          valueSatoshis: satoshis + BigInt(vout),
+        })),
+        locktime: 0,
+      };
+      const parentBytes = encodeTransaction(parent);
+      const parentTxid = binToHex(hash256(parentBytes).slice().reverse());
 
-    const inputs = [
-      {
+      const inputs = Array.from({ length: inputCount }, (_, vout) => ({
         txid: parentTxid,
-        vout: 0,
-        satoshis,
+        vout,
+        satoshis: parent.outputs[vout].valueSatoshis,
         lockingBytecodeHex: binToHex(lockingBytecode),
         publicKeyHex: binToHex(publicKey),
         branchIndex: 1 as const,
         addressIndex: 0,
         previousTransactionHex: binToHex(parentBytes),
-      },
-    ];
-    const built = buildWatchOnlyPsbt({
-      inputs,
-      recipient: encodeCashAddress({
-        payload: Uint8Array.from([0x99, ...new Uint8Array(19).fill(0x77)]),
-        prefix: 'bchtest',
-        type: 'p2pkh',
-      }).address,
-      amountSats: 30_000n,
-      changeAddress: encodeCashAddress({
-        payload: hash160(publicKey),
-        prefix: 'bchtest',
-        type: 'p2pkh',
-      }).address,
-      accountPath: keys.accountPath,
-      masterFingerprint: hexToBin(keys.fingerprint),
-    });
+      }));
+      const built = buildWatchOnlyPsbt({
+        inputs,
+        recipient: encodeCashAddress({
+          payload: Uint8Array.from([0x99, ...new Uint8Array(19).fill(0x77)]),
+          prefix: 'bchtest',
+          type: 'p2pkh',
+        }).address,
+        amountSats: 30_000n,
+        changeAddress: encodeCashAddress({
+          payload: hash160(publicKey),
+          prefix: 'bchtest',
+          type: 'p2pkh',
+        }).address,
+        accountPath: keys.accountPath,
+        masterFingerprint: hexToBin(keys.fingerprint),
+      });
 
-    const proposal = {
-      rawUnsignedHex: built.rawUnsignedHex,
-      inputs,
-      outputs: built.outputs,
-      sighashType: built.sighashType,
-    };
+      const proposal = {
+        rawUnsignedHex: built.rawUnsignedHex,
+        inputs,
+        outputs: built.outputs,
+        sighashType: built.sighashType,
+      };
 
-    const dir = mkdtempSync(join(tmpdir(), 'seedcash-'));
-    const unsignedPath = join(dir, 'unsigned.hex');
-    const signedPath = join(dir, 'signed.hex');
-    writeFileSync(unsignedPath, binToHex(built.psbtBytes));
-    seedcash(['sign', unsignedPath, signedPath]);
-    const signed = hexToBin(readFileSync(signedPath, 'utf8').trim());
+      const dir = mkdtempSync(join(tmpdir(), 'seedcash-'));
+      const unsignedPath = join(dir, 'unsigned.hex');
+      const signedPath = join(dir, 'signed.hex');
+      writeFileSync(unsignedPath, binToHex(built.psbtBytes));
+      seedcash(['sign', unsignedPath, signedPath]);
+      const signed = hexToBin(readFileSync(signedPath, 'utf8').trim());
 
-    const inspected = inspectImportedPsbt(signed, proposal);
-    expect(inspected.state).toBe('complete');
+      const inspected = inspectImportedPsbt(signed, proposal);
+      expect(inspected.state).toBe('complete');
 
-    const rawTxHex = mergeImportedSignatures(signed, proposal);
+      const rawTxHex = mergeImportedSignatures(signed, proposal);
 
-    // The real gate: run the finished transaction against consensus rules.
-    // A wrong dummy element, signature algorithm or sighash byte all survive
-    // every structural check above and die precisely here.
-    const vm = createVirtualMachineBCH();
-    const transaction = decodeTransaction(hexToBin(rawTxHex));
-    if (typeof transaction === 'string') throw new Error(transaction);
-    const verdict = vm.verify({
-      sourceOutputs: [{ lockingBytecode, valueSatoshis: satoshis }],
-      transaction,
-    });
-    expect(verdict).toBe(true);
-  });
+      // The real gate: run the finished transaction against consensus rules.
+      // A wrong dummy element, signature algorithm or sighash byte all survive
+      // every structural check above and die precisely here.
+      const vm = createVirtualMachineBCH();
+      const transaction = decodeTransaction(hexToBin(rawTxHex));
+      if (typeof transaction === 'string') throw new Error(transaction);
+      expect(transaction.inputs).toHaveLength(inputCount);
+      const verdict = vm.verify({
+        sourceOutputs: parent.outputs,
+        transaction,
+      });
+      expect(verdict).toBe(true);
+    }
+  );
 });

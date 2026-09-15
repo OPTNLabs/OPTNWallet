@@ -5,7 +5,6 @@ import {
   getAppDescription,
   getAppIconFrame,
   getAppSortPriority,
-  isDesktopOnlyApp,
   isComingSoonApp,
   shouldHideApp,
 } from '../appsViewHelpers';
@@ -102,11 +101,6 @@ describe('appsViewHelpers', () => {
     ).toBe(false);
   });
 
-  it('marks CashFusion as desktop-only UI', () => {
-    expect(isDesktopOnlyApp('optn.wallet.cashfusion')).toBe(true);
-    expect(isDesktopOnlyApp('optn.wallet.contracts')).toBe(false);
-  });
-
   it('marks unreleased app surfaces as coming soon', () => {
     expect(isComingSoonApp('optn.builtin.fundme:fundmeApp', 'FundMe')).toBe(
       true
@@ -116,7 +110,7 @@ describe('appsViewHelpers', () => {
     ).toBe(true);
     expect(
       isComingSoonApp('optn.builtin.demo:merchantPayApp', 'Merchant Pay')
-    ).toBe(true);
+    ).toBe(false);
     expect(
       isComingSoonApp('optn.builtin.cauldron:cauldronSwapApp', 'Cauldron')
     ).toBe(false);

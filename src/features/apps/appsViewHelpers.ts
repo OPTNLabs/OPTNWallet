@@ -7,9 +7,7 @@ export function isComingSoonApp(appId: string, appName: string): boolean {
     normalizedId.endsWith(':fundmeapp') ||
     normalizedName === 'fundme' ||
     normalizedId.endsWith(':paryonworkspaceapp') ||
-    normalizedName.includes('paryonusd') ||
-    normalizedId.endsWith(':merchantpayapp') ||
-    normalizedName === 'merchant pay'
+    normalizedName.includes('paryonusd')
   );
 }
 
@@ -166,8 +164,4 @@ export function shouldHideApp(appId: string, appName: string): boolean {
   const normalizedId = appId.toLowerCase();
   const normalizedName = appName.toLowerCase();
   return normalizedId.endsWith(':authguard') || normalizedName === 'authguard';
-}
-
-export function isDesktopOnlyApp(appId: string): boolean {
-  return normalizeAppKey(appId) === 'optn.wallet.cashfusion';
 }

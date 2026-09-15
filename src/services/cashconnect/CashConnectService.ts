@@ -42,6 +42,7 @@ type Seed = {
 
 let wallet: Wallet | undefined;
 let walletId = 0;
+let lifecycleGeneration = 0;
 let proposalWaiter: CashConnectProposalWaiter | null = null;
 let actionWaiter: CashConnectActionWaiter | null = null;
 let unsubscribeUtxoRefresh: (() => void) | null = null;
@@ -66,15 +67,24 @@ export function bindCashConnectUi(next: UiHooks): void {
 }
 
 function walletNetwork(info: { networkType?: Network | null }): Network {
-  return info.networkType === Network.MAINNET ? Network.MAINNET : Network.CHIPNET;
+  return info.networkType === Network.MAINNET
+    ? Network.MAINNET
+    : Network.CHIPNET;
 }
 
 function expectedChain(network: Network): SessionProposalResponse['chain'] {
   return network === Network.MAINNET ? 'bitcoincash' : 'bchtest';
 }
 
-function assertCashConnectActive(expectedWalletId: number): void {
-  if (!wallet || walletId !== expectedWalletId) {
+function assertCashConnectActive(
+  expectedWalletId: number,
+  generation: number
+): void {
+  if (
+    !wallet ||
+    walletId !== expectedWalletId ||
+    generation !== lifecycleGeneration
+  ) {
     throw new Error('CashConnect request aborted');
   }
 }
@@ -85,132 +95,156 @@ export function isCashConnectActive(expectedWalletId: number): boolean {
 
 export async function startCashConnect(nextWalletId: number): Promise<void> {
   if (wallet && walletId === nextWalletId) return;
-  await stopCashConnect();
-
-  const info = await WalletManager().getWalletInfo(nextWalletId);
-  const metadata = await WalletManager().getWalletMetadata(nextWalletId);
-  if (
-    !info?.mnemonic ||
-    metadata?.walletType === 'watch-only' ||
-    metadata?.walletType === 'hardware'
-  ) {
-    return;
-  }
-
-  const nextSeed: Seed = {
-    mnemonic: info.mnemonic,
-    passphrase: info.passphrase ?? '',
-    network: walletNetwork(info),
-    accountPath: info.derivation_path,
-  };
-  const identityKey = await deriveCashConnectIdentityKey(nextSeed);
-  let client: Wallet;
+  // stop invalidates callbacks synchronously, before waiting for the SDK.
+  const stopping = stopCashConnect();
+  const generation = lifecycleGeneration;
+  const isCurrent = () => generation === lifecycleGeneration;
   try {
-    client = new Wallet({
-      cashConnectPrivateKey: identityKey,
-      store: new MemoryStore<WalletSession>(),
-      eventCallbacks: {
-        onSessionsUpdated(sessions) {
-          hooks?.onSessions(sessions);
-        },
-        onSessionProposal(proposal) {
-          const walletChain = expectedChain(nextSeed.network);
-          if (proposal.chain !== walletChain) {
-            const dappNet =
-              proposal.chain === 'bitcoincash' ? 'Mainnet' : 'Chipnet';
-            const walletNet =
-              nextSeed.network === Network.MAINNET ? 'Mainnet' : 'Chipnet';
-            return Promise.reject(
-              new Error(
-                `This CashConnect dApp is ${dappNet}. This wallet is ${walletNet}. Open a ${dappNet} wallet to connect.`
-              )
-            );
-          }
-          hooks?.onProposal(proposal);
-          return new Promise<SessionCreateRequest>((resolve, reject) => {
-            proposalWaiter = {
-              resolve: () =>
-                resolve({ allowedTokens: proposal.allowedTokens ?? [] }),
-              reject,
-            };
-          });
-        },
-        onExecuteAction(session, request, response, signal) {
-          if (signal.aborted || !isCashConnectActive(nextWalletId)) {
-            return Promise.reject(new Error('CashConnect request aborted'));
-          }
-          if (!doesActionRequireApproval(session, request.action)) {
-            return Promise.resolve();
-          }
-          hooks?.onAction({ session, request, response });
-          return new Promise<void>((resolve, reject) => {
-            actionWaiter = { resolve, reject };
-            signal.addEventListener(
-              'abort',
-              () => {
-                hooks?.onClearAction();
-                actionWaiter = null;
-                reject(new Error('DApp cancelled the request'));
-              },
-              { once: true }
-            );
-          });
-        },
-        onError(error) {
-          hooks?.onError(error.message);
-        },
-      },
-      contextCallbacks: {
-        getSpendableUTXOs: () => {
-          assertCashConnectActive(nextWalletId);
-          return getSpendableUTXOsForCashConnect(nextWalletId, nextSeed);
-        },
-        getChangeTemplateDirective: () => {
-          assertCashConnectActive(nextWalletId);
-          return getChangeTemplateDirectiveForCashConnect(
-            nextWalletId,
-            nextSeed
-          );
-        },
-        getSourceOutput: (hash, index) => {
-          assertCashConnectActive(nextWalletId);
-          return getSourceOutputForCashConnect(hash, index);
-        },
-      },
-    });
-  } finally {
-    zeroize(identityKey);
-  }
+    await stopping;
+    if (!isCurrent()) return;
 
-  wallet = client;
-  walletId = nextWalletId;
-  unsubscribeUtxoRefresh = subscribeWalletUtxoRefresh((refreshedWalletId) => {
-    if (refreshedWalletId !== nextWalletId) return;
-    void notifyCashConnectBalancesChanged();
-  });
+    const info = await WalletManager().getWalletInfo(nextWalletId);
+    if (!isCurrent()) return;
+    const metadata = await WalletManager().getWalletMetadata(nextWalletId);
+    if (!isCurrent()) return;
+    if (
+      !info?.mnemonic ||
+      metadata?.walletType === 'watch-only' ||
+      metadata?.walletType === 'hardware'
+    ) {
+      return;
+    }
 
-  try {
-    await client.start();
-    if (wallet !== client) {
-      throw new Error('CashConnect startup was cancelled');
-    }
-    hooks?.onSessions(client.getActiveSessions());
-  } catch (error) {
-    if (wallet === client) {
-      wallet = undefined;
-      walletId = 0;
-    }
+    const nextSeed: Seed = {
+      mnemonic: info.mnemonic,
+      passphrase: info.passphrase ?? '',
+      network: walletNetwork(info),
+      accountPath: info.derivation_path,
+    };
+    const identityKey = await deriveCashConnectIdentityKey(nextSeed);
+    let client: Wallet;
     try {
-      await client.stop();
-    } catch (stopError) {
-      logError('CashConnectService.start.stopAfterFailure', stopError);
-      throw stopError;
+      if (!isCurrent()) return;
+      client = new Wallet({
+        cashConnectPrivateKey: identityKey,
+        store: new MemoryStore<WalletSession>(),
+        eventCallbacks: {
+          onSessionsUpdated(sessions) {
+            if (isCurrent()) hooks?.onSessions(sessions);
+          },
+          onSessionProposal(proposal) {
+            if (!isCurrent())
+              return Promise.reject(new Error('CashConnect request aborted'));
+            const walletChain = expectedChain(nextSeed.network);
+            if (proposal.chain !== walletChain) {
+              const dappNet =
+                proposal.chain === 'bitcoincash' ? 'Mainnet' : 'Chipnet';
+              const walletNet =
+                nextSeed.network === Network.MAINNET ? 'Mainnet' : 'Chipnet';
+              return Promise.reject(
+                new Error(
+                  `This CashConnect dApp is ${dappNet}. This wallet is ${walletNet}. Open a ${dappNet} wallet to connect.`
+                )
+              );
+            }
+            hooks?.onProposal(proposal);
+            return new Promise<SessionCreateRequest>((resolve, reject) => {
+              proposalWaiter = {
+                resolve: () =>
+                  resolve({ allowedTokens: proposal.allowedTokens ?? [] }),
+                reject,
+              };
+            });
+          },
+          onExecuteAction(session, request, response, signal) {
+            if (
+              signal.aborted ||
+              !isCurrent() ||
+              !isCashConnectActive(nextWalletId)
+            ) {
+              return Promise.reject(new Error('CashConnect request aborted'));
+            }
+            if (!doesActionRequireApproval(session, request.action)) {
+              return Promise.resolve();
+            }
+            hooks?.onAction({ session, request, response });
+            return new Promise<void>((resolve, reject) => {
+              actionWaiter = { resolve, reject };
+              signal.addEventListener(
+                'abort',
+                () => {
+                  if (isCurrent()) {
+                    hooks?.onClearAction();
+                    actionWaiter = null;
+                  }
+                  reject(new Error('DApp cancelled the request'));
+                },
+                { once: true }
+              );
+            });
+          },
+          onError(error) {
+            if (isCurrent()) hooks?.onError(error.message);
+          },
+        },
+        contextCallbacks: {
+          getSpendableUTXOs: () => {
+            assertCashConnectActive(nextWalletId, generation);
+            return getSpendableUTXOsForCashConnect(nextWalletId, nextSeed);
+          },
+          getChangeTemplateDirective: () => {
+            assertCashConnectActive(nextWalletId, generation);
+            return getChangeTemplateDirectiveForCashConnect(
+              nextWalletId,
+              nextSeed
+            );
+          },
+          getSourceOutput: (hash, index) => {
+            assertCashConnectActive(nextWalletId, generation);
+            return getSourceOutputForCashConnect(hash, index);
+          },
+        },
+      });
+    } finally {
+      zeroize(identityKey);
     }
-    throw error;
+
+    wallet = client;
+    walletId = nextWalletId;
+    unsubscribeUtxoRefresh = subscribeWalletUtxoRefresh((refreshedWalletId) => {
+      if (refreshedWalletId !== nextWalletId) return;
+      void notifyCashConnectBalancesChanged();
+    });
+
+    try {
+      await client.start();
+      if (wallet !== client) {
+        throw new Error('CashConnect startup was cancelled');
+      }
+      hooks?.onSessions(client.getActiveSessions());
+    } catch (error) {
+      if (wallet === client) {
+        wallet = undefined;
+        walletId = 0;
+        unsubscribeUtxoRefresh?.();
+        unsubscribeUtxoRefresh = null;
+      }
+      try {
+        await client.stop();
+      } catch (stopError) {
+        logError('CashConnectService.start.stopAfterFailure', stopError);
+        throw stopError;
+      }
+      throw error;
+    }
+  } catch (error) {
+    // Lock/switch cancellation is expected, not a new connection error popup.
+    if (isCurrent()) throw error;
   }
 }
 
 export async function stopCashConnect(): Promise<void> {
+  lifecycleGeneration += 1;
   proposalWaiter?.reject(new Error('CashConnect stopped'));
   actionWaiter?.reject(new Error('CashConnect stopped'));
   proposalWaiter = null;
@@ -222,13 +256,18 @@ export async function stopCashConnect(): Promise<void> {
   const previous = wallet;
   wallet = undefined;
   walletId = 0;
-  if (previous) await previous.stop();
   hooks?.onSessions({});
+  if (previous) await previous.stop();
 }
 
 export async function pairCashConnect(uri: string): Promise<void> {
   if (!wallet) throw new Error('CashConnect is not started');
-  await wallet.pair(uri);
+  const generation = lifecycleGeneration;
+  try {
+    await wallet.pair(uri);
+  } catch (error) {
+    if (generation === lifecycleGeneration) throw error;
+  }
 }
 
 export async function disconnectCashConnectSession(

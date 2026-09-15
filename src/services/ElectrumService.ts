@@ -38,6 +38,7 @@ import {
   resolveInputParticipants,
 } from './electrum/transaction';
 import { isDesktopPlatform } from '../utils/platform';
+import { Network } from '../state/slices/networkSlice';
 import {
   clearBlockHeaderListeners,
   registerAddressSubscription,
@@ -354,9 +355,10 @@ const ElectrumService = {
 
   async getUTXOsMany(
     addresses: string[],
-    onProgress?: (completedCount: number, totalCount: number) => void
+    onProgress?: (completedCount: number, totalCount: number) => void,
+    network?: Network
   ): Promise<Record<string, UTXO[]>> {
-    const server = ElectrumServer();
+    const server = ElectrumServer(network);
     const uniqueAddresses = Array.from(new Set(addresses.filter(Boolean)));
     const results: Record<string, UTXO[]> = {};
     const pending: string[] = [];

@@ -1,0 +1,16 @@
+[package]
+name = "optn-transport-tauri"
+version = "1.7.3"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Tauri WebView transport adapter for OPTN Wallet."
+
+[dependencies]
+optn-app = { path = "../optn-app", version = "=1.7.3" }
+optn-transport = { path = "../optn-transport", version = "=1.7.3" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
+serde-wasm-bindgen = "0.6"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"

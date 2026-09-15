@@ -27,6 +27,7 @@ import {
   fetchActiveWalletUtxos,
   isActiveWalletSession,
 } from '../../services/WalletUtxoRefreshService';
+import { refreshWalletTransactionHistory } from '../../services/WalletHistoryRefreshService';
 import { refreshUTXOWorkerSubscriptions } from '../../workers/UTXOWorkerService';
 import { logError } from '../../utils/errorHandling';
 import { Network } from '../../state/slices/networkSlice';
@@ -44,11 +45,13 @@ import HomeConnectPopup from '../../components/home/HomeConnectPopup';
 import { preloadTokenMetadata } from '../../hooks/useSharedTokenMetadata';
 import { useHomeConnect } from './useHomeConnect';
 import { useI18n } from '../../i18n/useI18n';
+import { unitFor } from '../../utils/unitLabel';
 
 type QuickActionButtonProps = {
   title: string;
   icon: React.ReactNode;
   onClick: () => void;
+  testId?: string;
 };
 
 function getQuickActionTextClass(title: string) {
@@ -57,10 +60,16 @@ function getQuickActionTextClass(title: string) {
   }`;
 }
 
-function QuickActionButton({ title, icon, onClick }: QuickActionButtonProps) {
+function QuickActionButton({
+  title,
+  icon,
+  onClick,
+  testId,
+}: QuickActionButtonProps) {
   return (
     <button
       type="button"
+      data-testid={testId}
       onClick={onClick}
       className="wallet-card flex min-h-[4.9rem] min-w-0 flex-[1_1_0%] items-center gap-2 rounded-2xl px-3 py-2.5 text-left transition hover:brightness-[0.98]"
     >
@@ -89,6 +98,9 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
   const fetchingUTXOsRedux = useSelector(
     (state: RootState) => state.utxos.fetchingUTXOs
   );
+  const sessionGeneration = useSelector(
+    (state: RootState) => state.wallet_id.sessionGeneration ?? 0
+  );
   const addressDiscoveryInProgress = useSelector(
     (state: RootState) => state.utxos.addressDiscoveryInProgress
   );
@@ -105,6 +117,7 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
   const bchUsdQuote = useSelector(
     (state: RootState) => state.priceFeed['BCH-USD']?.price
   );
+  const unit = unitFor(currentNetwork);
   const [displayMode, setDisplayMode] = useState<'BCH' | 'USD'>('BCH');
   const autoSyncWalletRef = useRef<number | null>(null);
   const homeConnect = useHomeConnect();
@@ -163,6 +176,16 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
       }
       await refreshUTXOWorkerSubscriptions();
 
+      // Keep Recent Activity aligned with the refreshed balance. Desktop Sync
+      // already uses this shared full-history pass; Capacitor must not leave a
+      // received payment invisible until the Transactions screen is opened.
+      await refreshWalletTransactionHistory({
+        walletId: currentWalletId,
+        dispatch,
+        sessionGeneration,
+        force: true,
+      });
+
       // Continue the full HD address scan after the known-address balance is
       // visible. UTXOService exposes its discovery state to the UI while this
       // follow-up work runs.
@@ -202,7 +225,13 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
       // Always clear Syncing for this click — even if the session ended mid-flight.
       dispatch(setFetchingUTXOs(false));
     }
-  }, [currentWalletId, dbService, dispatch, fetchingUTXOsRedux]);
+  }, [
+    currentWalletId,
+    dbService,
+    dispatch,
+    fetchingUTXOsRedux,
+    sessionGeneration,
+  ]);
 
   useEffect(() => {
     if (viewerOnly || !currentWalletId || fetchingUTXOsRedux) return;
@@ -283,7 +312,7 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
                 >
                   <div className="text-2xl font-bold wallet-text-strong">
                     {displayMode === 'BCH'
-                      ? `${totalBch.toFixed(8)} BCH`
+                      ? `${totalBch.toFixed(8)} ${unit}`
                       : totalUsd !== null
                         ? `$${totalUsd.toFixed(2)} USD`
                         : t('home.usdUnavailable')}
@@ -293,7 +322,7 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
                       ? totalUsd !== null
                         ? `$${totalUsd.toFixed(2)} USD`
                         : t('home.usdPriceUnavailable')
-                      : `${totalBch.toFixed(8)} BCH`}
+                      : `${totalBch.toFixed(8)} ${unit}`}
                   </div>
                   {stealthSats > 0 && (
                     <div className="text-[10px] wallet-muted mt-0.5">
@@ -345,6 +374,7 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
             <div className="flex items-stretch gap-2.5">
               <QuickActionButton
                 title={t('home.receive')}
+                testId="home-receive-action"
                 icon={<FaArrowDown />}
                 onClick={() =>
                   navigate('/receive', {
@@ -355,6 +385,7 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
               {!viewerOnly && (
                 <QuickActionButton
                   title={t('home.send')}
+                  testId="home-send-action"
                   icon={<FaArrowUp />}
                   onClick={() =>
                     navigate('/send', {
@@ -445,6 +476,9 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
           onClose={homeConnect.closePopup}
           scanning={homeConnect.scanning}
           submitting={homeConnect.submitting}
+          streamScanning={homeConnect.streamScanning}
+          onStreamScan={homeConnect.scanStreamQr}
+          onStreamComplete={homeConnect.completeStreamScan}
         />
       ) : null}
     </WalletScreen>

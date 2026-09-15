@@ -55,9 +55,17 @@ export const remainingTranslations = {
     'wc.enterUri': 'Enter WalletConnect URI',
     'wc.scanQr': 'Scan QR',
     'wc.connect': 'Connect',
+    'homeConnect.scanTitle': 'Scan',
+    'homeConnect.scanDescription':
+      'Scan a payment, address, or wallet connection.',
+    'homeConnect.scanButton': 'Scan QR',
+    'homeConnect.enterManually': 'Enter manually',
+    'homeConnect.manualPlaceholder':
+      'Paste a payment, address, or wallet connection',
+    'homeConnect.continue': 'Continue',
     'homeConnect.description':
-      'Paste or scan a CashConnect invite, WalletConnect URI, Wizard URI, or payment address. Approve requests stay on Home.',
-    'homeConnect.placeholder': 'bch-cc-v1:… or wc:… or wiz://…',
+      'Paste or scan a CashConnect invite, WalletConnect URI, Wizard URI, payment address, or Merchant Pay QR proposal. For Merchant Pay, use the QR or machine-readable proposal—not the details summary.',
+    'homeConnect.placeholder': 'bch-cc-v1:… wc:… wiz://… or Merchant Pay QR',
     'homeConnect.pasteUri':
       'Paste or scan a connection URI or payment address.',
     'wc.noQr': 'No QR code detected. Try again.',
@@ -1085,6 +1093,14 @@ export const remainingTranslations = {
     'wc.enterUri': 'Introduce la URI de WalletConnect',
     'wc.scanQr': 'Escanear QR',
     'wc.connect': 'Conectar',
+    'homeConnect.scanTitle': 'Escanear',
+    'homeConnect.scanDescription':
+      'Escanea un pago, una dirección o una conexión de billetera.',
+    'homeConnect.scanButton': 'Escanear QR',
+    'homeConnect.enterManually': 'Introducir manualmente',
+    'homeConnect.manualPlaceholder':
+      'Pega un pago, una dirección o una conexión de billetera',
+    'homeConnect.continue': 'Continuar',
     'homeConnect.description':
       'Pega o escanea una invitación de CashConnect, una URI de WalletConnect o una dirección de pago. Las solicitudes se aprueban desde Inicio.',
     'homeConnect.placeholder': 'bch-cc-v1:… o wc:…',
@@ -2156,6 +2172,12 @@ export const remainingTranslations = {
     'wc.enterUri': '输入 WalletConnect URI',
     'wc.scanQr': '扫描二维码',
     'wc.connect': '连接',
+    'homeConnect.scanTitle': '扫描',
+    'homeConnect.scanDescription': '扫描付款、地址或钱包连接。',
+    'homeConnect.scanButton': '扫描二维码',
+    'homeConnect.enterManually': '手动输入',
+    'homeConnect.manualPlaceholder': '粘贴付款、地址或钱包连接',
+    'homeConnect.continue': '继续',
     'homeConnect.description':
       '粘贴或扫描 CashConnect 邀请、WalletConnect URI 或付款地址。请在首页批准请求。',
     'homeConnect.placeholder': 'bch-cc-v1:… 或 wc:…',

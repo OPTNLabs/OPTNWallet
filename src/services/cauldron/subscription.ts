@@ -44,11 +44,17 @@ export function parseCauldronServerEntry(entry: string, defaultPort = 50004) {
       throw new Error('Cauldron Rostrum server must use a WebSocket URL');
     }
     if (url.protocol === 'ws:' && !isLoopbackHost(url.hostname)) {
-      throw new Error('Unencrypted Cauldron Rostrum WebSocket requires a loopback host');
+      throw new Error(
+        'Unencrypted Cauldron Rostrum WebSocket requires a loopback host'
+      );
     }
     return {
       host: url.hostname,
-      port: url.port ? Number(url.port) : url.protocol === 'wss:' ? 50004 : 50003,
+      port: url.port
+        ? Number(url.port)
+        : url.protocol === 'wss:'
+          ? 50004
+          : 50003,
       encrypted: url.protocol === 'wss:',
     };
   }
@@ -61,7 +67,11 @@ export function parseCauldronServerEntry(entry: string, defaultPort = 50004) {
   };
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  label: string
+): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeout = setTimeout(
@@ -69,7 +79,9 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
       ms
     );
   });
-  return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeout));
+  return Promise.race([promise, timeoutPromise]).finally(() =>
+    clearTimeout(timeout)
+  );
 }
 
 function normalizeTokenId(value: unknown): string {
@@ -101,7 +113,10 @@ export class CauldronSubscriptionService {
   private client: ECClient | null = null;
   private connectPromise: Promise<ECClient> | null = null;
   private subscribedTokens = new Set<string>();
-  private poolRowsByToken = new Map<string, Map<string, CauldronActivePoolRow>>();
+  private poolRowsByToken = new Map<
+    string,
+    Map<string, CauldronActivePoolRow>
+  >();
   private listenersByToken = new Map<string, Set<CauldronPoolUpdateCallback>>();
   private network: Network;
 
@@ -117,15 +132,24 @@ export class CauldronSubscriptionService {
     this.connectPromise = (async () => {
       for (const entry of servers) {
         const { host, port, encrypted } = parseCauldronServerEntry(entry);
-        const socket = new ElectrumWebSocket(host, port, encrypted, CONNECT_TIMEOUT_MS);
+        const socket = new ElectrumWebSocket(
+          host,
+          port,
+          encrypted,
+          CONNECT_TIMEOUT_MS
+        );
         const client = new ElectrumClient<ElectrumClientEvents>(
           'OPTNWallet-Cauldron',
-          '1.0.0',
+          '1.4',
           socket
         );
 
         try {
-          await withTimeout(client.connect(), CONNECT_TIMEOUT_MS, `connect(${entry})`);
+          await withTimeout(
+            client.connect(),
+            CONNECT_TIMEOUT_MS,
+            `connect(${entry})`
+          );
           client.on('notification', (notification: CauldronNotification) =>
             this.handleNotification(notification)
           );
@@ -133,7 +157,11 @@ export class CauldronSubscriptionService {
           return client;
         } catch {
           try {
-            await client.disconnect(true);
+            await withTimeout(
+              client.disconnect(true),
+              CONNECT_TIMEOUT_MS,
+              `disconnect(${entry})`
+            );
           } catch {
             // ignore disconnect errors while failing over
           }
@@ -177,15 +205,20 @@ export class CauldronSubscriptionService {
       typeof eventPayload === 'object' &&
       (eventPayload as { type?: unknown }).type === 'initial';
 
-    const tokenRows = isInitial ? new Map<string, CauldronActivePoolRow>() : (
-      this.poolRowsByToken.get(tokenId) ?? new Map<string, CauldronActivePoolRow>()
-    );
+    const tokenRows = isInitial
+      ? new Map<string, CauldronActivePoolRow>()
+      : this.poolRowsByToken.get(tokenId) ??
+        new Map<string, CauldronActivePoolRow>();
 
     for (const row of rows) {
       const spentHash =
-        typeof row.spent_utxo_hash === 'string' ? row.spent_utxo_hash.toLowerCase() : '';
+        typeof row.spent_utxo_hash === 'string'
+          ? row.spent_utxo_hash.toLowerCase()
+          : '';
       const newHash =
-        typeof row.new_utxo_hash === 'string' ? row.new_utxo_hash.toLowerCase() : '';
+        typeof row.new_utxo_hash === 'string'
+          ? row.new_utxo_hash.toLowerCase()
+          : '';
       const isWithdrawn = row.is_withdrawn === true;
 
       if (spentHash) {
@@ -224,13 +257,17 @@ export class CauldronSubscriptionService {
 
     const client = await this.connect();
     if (!this.subscribedTokens.has(normalizedTokenId)) {
-      const snapshot = await client.request(
-        'cauldron.contract.subscribe',
-        2,
-        normalizedTokenId
+      const snapshot = await withTimeout(
+        client.request('cauldron.contract.subscribe', 2, normalizedTokenId),
+        CONNECT_TIMEOUT_MS,
+        `cauldron.contract.subscribe(${normalizedTokenId})`
       );
       this.processSubscriptionPayload([2, normalizedTokenId, snapshot]);
-      await client.subscribe('cauldron.contract.subscribe', 2, normalizedTokenId);
+      await withTimeout(
+        client.subscribe('cauldron.contract.subscribe', 2, normalizedTokenId),
+        CONNECT_TIMEOUT_MS,
+        `cauldron.contract.subscribe notification(${normalizedTokenId})`
+      );
       this.subscribedTokens.add(normalizedTokenId);
     } else {
       this.emit(normalizedTokenId);
@@ -276,7 +313,9 @@ export class CauldronSubscriptionService {
 
 const services = new Map<Network, CauldronSubscriptionService>();
 
-export function getCauldronSubscriptionService(network: Network): CauldronSubscriptionService {
+export function getCauldronSubscriptionService(
+  network: Network
+): CauldronSubscriptionService {
   const existing = services.get(network);
   if (existing) return existing;
   const service = new CauldronSubscriptionService(network);

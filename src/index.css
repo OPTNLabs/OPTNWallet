@@ -361,7 +361,7 @@
   }
 
   .wallet-popup-backdrop {
-    @apply fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-3 backdrop-blur-[2px];
+    @apply fixed inset-0 z-[100] flex items-center justify-center bg-black/45 p-3 backdrop-blur-[2px];
   }
 
   .wallet-popup-panel {
@@ -448,6 +448,20 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .wallet-cauldron-slippage-select {
+    color: var(--wallet-text-strong);
+    background-color: var(--wallet-surface-strong);
+    border-color: var(--wallet-accent);
+    color-scheme: light;
+  }
+  .wallet-cauldron-slippage-select option {
+    color: var(--wallet-text-strong);
+    background-color: var(--wallet-surface-strong);
+  }
+  html.dark .wallet-cauldron-slippage-select {
+    color-scheme: dark;
   }
 
   .wallet-muted {

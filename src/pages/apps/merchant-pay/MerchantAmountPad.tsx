@@ -1,4 +1,5 @@
 import type { CSSProperties } from 'react';
+import { useEffect, useRef } from 'react';
 
 import { useAddonI18n } from '../../../i18n/useAddonI18n';
 import { sanitizeDecimalInput } from '../../../services/cauldron/amount';
@@ -11,7 +12,10 @@ type MerchantAmountPadProps = {
   onChange: (next: string) => void;
   onClear?: () => void;
   className?: string;
+  showAmountCard?: boolean;
   showHint?: boolean;
+  amountLabel?: string;
+  hint?: string;
 };
 
 const keypad = [
@@ -52,73 +56,106 @@ export default function MerchantAmountPad({
   onChange,
   onClear,
   className = '',
+  showAmountCard = true,
   showHint = true,
+  amountLabel = 'Amount to receive',
+  hint = 'Enter the stablecoin amount you want to receive.',
 }: MerchantAmountPadProps) {
   const { t: addonT } = useAddonI18n();
+  const amountRef = useRef(amount);
+  const pendingAmountRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (pendingAmountRef.current === null) {
+      amountRef.current = amount;
+    } else if (pendingAmountRef.current === amount) {
+      pendingAmountRef.current = null;
+    }
+  }, [amount]);
+
+  const handleKey = (key: string) => {
+    const next = applyKey(amountRef.current, key, decimals);
+    amountRef.current = next;
+    pendingAmountRef.current = next;
+    onChange(next);
+  };
   const displayValue = amount.trim() || '0';
 
   return (
-    <div className={`flex h-full min-h-0 flex-col gap-2 ${className}`.trim()}>
-      <div
-        className="shrink-0 rounded-[24px] border px-3 py-2.5"
-        style={{
-          background:
-            'linear-gradient(180deg, color-mix(in oklab, var(--wallet-surface-strong) 92%, #ffffff 8%) 0%, var(--wallet-surface-strong) 100%)',
-          borderColor: 'var(--wallet-border)',
-          boxShadow: 'var(--wallet-shadow-card)',
-        }}
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-[10px] uppercase tracking-[0.22em] wallet-muted opacity-70">
-              {addonT('module.amountToReceive', 'Amount to receive')}
+    <div className={`flex min-h-0 flex-col gap-2 ${className}`.trim()}>
+      {showAmountCard ? (
+        <div
+          className="shrink-0 rounded-[24px] border px-3 py-2.5"
+          style={{
+            background:
+              'linear-gradient(180deg, color-mix(in oklab, var(--wallet-surface-strong) 92%, #ffffff 8%) 0%, var(--wallet-surface-strong) 100%)',
+            borderColor: 'var(--wallet-border)',
+            boxShadow: 'var(--wallet-shadow-card)',
+          }}
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-[10px] uppercase tracking-[0.22em] wallet-muted opacity-70">
+                {amountLabel ||
+                  addonT('module.amountToReceive', 'Amount to receive')}
+              </div>
+              <div
+                className="mt-1 break-words text-[clamp(2.2rem,8vw,3.5rem)] font-black leading-none tracking-tight wallet-text-strong"
+                data-testid="merchant-amount-display"
+                aria-live="polite"
+              >
+                {displayValue}
+              </div>
+              {showHint ? (
+                <p className="mt-1 text-xs leading-5 wallet-muted">
+                  {hint ||
+                    addonT(
+                      'module.enterStablecoinAmount',
+                      'Enter the stablecoin amount you want to receive.'
+                    )}
+                </p>
+              ) : null}
             </div>
-            <div className="mt-1 break-words text-[clamp(2.2rem,8vw,3.5rem)] font-black leading-none tracking-tight wallet-text-strong">
-              {displayValue}
-            </div>
-            {showHint ? (
-              <p className="mt-1 text-xs leading-5 wallet-muted">
-                {addonT(
-                  'module.enterStablecoinAmount',
-                  'Enter the stablecoin amount you want to receive.'
-                )}
-              </p>
-            ) : null}
-          </div>
 
-          <div className="flex shrink-0 flex-col items-end gap-2">
-            <div
-              className="rounded-full border px-2.5 py-1 text-xs font-semibold wallet-text-strong"
-              style={keyStyle}
-            >
-              {symbol}
+            <div className="flex shrink-0 flex-col items-end gap-2">
+              <div
+                className="rounded-full border px-2.5 py-1 text-xs font-semibold wallet-text-strong"
+                style={keyStyle}
+              >
+                {symbol}
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (onClear) {
+                    amountRef.current = '';
+                    pendingAmountRef.current = null;
+                    onClear();
+                  } else {
+                    amountRef.current = '';
+                    pendingAmountRef.current = null;
+                    onChange('');
+                  }
+                }}
+                className="rounded-full border px-2.5 py-1 text-[11px] font-semibold wallet-text-strong transition"
+                style={keyStyle}
+                disabled={disabled}
+              >
+                {addonT('module.clear', 'Clear')}
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                if (onClear) {
-                  onClear();
-                } else {
-                  onChange('');
-                }
-              }}
-              className="rounded-full border px-2.5 py-1 text-[11px] font-semibold wallet-text-strong transition"
-              style={keyStyle}
-              disabled={disabled}
-            >
-              {addonT('module.clear', 'Clear')}
-            </button>
           </div>
         </div>
-      </div>
+      ) : null}
 
       <div className="grid min-h-0 flex-1 grid-cols-3 grid-rows-4 gap-2">
         {keypad.flat().map((key) => (
           <button
             key={key}
             type="button"
-            onClick={() => onChange(applyKey(amount, key, decimals))}
-            className="flex h-full min-h-0 items-center justify-center rounded-3xl border px-2 py-0 text-2xl font-bold leading-none wallet-text-strong transition sm:text-[1.75rem]"
+            onClick={() => handleKey(key)}
+            data-testid={`merchant-key-${key === '.' ? 'decimal' : key === '⌫' ? 'backspace' : key}`}
+            aria-label={key === '⌫' ? 'Backspace' : `Enter ${key}`}
+            className="flex h-full min-h-[3rem] items-center justify-center rounded-3xl border px-2 py-0 text-2xl font-bold leading-none wallet-text-strong transition sm:text-[1.75rem]"
             style={keyStyle}
             disabled={disabled || (key === '.' && decimals === 0)}
           >

@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from 'react-dom/server';
-import { StaticRouter } from 'react-router-dom/server';
+import { StaticRouter } from 'react-router-dom';
 import { Provider } from 'react-redux';
 import { describe, expect, it } from 'vitest';
 
@@ -77,4 +77,5 @@ describe('WatchOnlySend workspace', () => {
     expect(html).not.toContain('Increase QR density');
     expect(html).not.toContain('Decrease QR density');
   });
+
 });

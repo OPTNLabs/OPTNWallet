@@ -5,6 +5,7 @@ import type { RootState } from '../../state/store';
 import WizardDappAvatar from './WizardDappAvatar';
 import { useI18n } from '../../i18n/useI18n';
 import { formatDate } from '../../i18n/format';
+import { wizardConnectionStatus } from '../../utils/connectionStatus';
 
 interface Props {
   connectionId: string;
@@ -52,7 +53,7 @@ const WizardConnectionSettingsModal: React.FC<Props> = ({
               {title}
             </p>
             <span className="wallet-muted text-xs sm:text-sm">
-              {connection.status.status}
+              {t(wizardConnectionStatus(connection.status.status))}
             </span>
             <div className="mt-1 text-xs sm:text-sm leading-relaxed break-words">
               {description ? (
@@ -66,7 +67,7 @@ const WizardConnectionSettingsModal: React.FC<Props> = ({
 
         <div className="wallet-surface-strong border border-[var(--wallet-border)] rounded p-3 text-left space-y-2 mb-4">
           <div className="text-xs uppercase tracking-wide wallet-muted">
-            {t('wizard.connectedOn')}
+            {t('connection.attemptStarted')}
           </div>
           <div className="wallet-text-strong">{connectedAt}</div>
         </div>

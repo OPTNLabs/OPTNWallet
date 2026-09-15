@@ -31,15 +31,23 @@ const messages: AddonModuleLocaleMessages = {
     'module.expired': 'Expired',
     'module.creating': 'Creating…',
     'module.createRequest': 'Create request',
+    'module.request': 'Request',
     'module.customerPays': 'Customer pays',
+    'module.paymentRequest': 'Payment request',
+    'module.estimatedCustomerPayment': 'Estimated payment',
+    'module.haveCustomerScan':
+      'Have the customer scan this QR with OPTN Wallet.',
+    'module.paymentRequestDescription':
+      'The customer pays BCH. ParyonUSD is delivered directly to your wallet in one transaction.',
+    'module.refreshPaymentRequest': 'Refresh payment request',
     'module.copyDetails': 'Copy details',
     'module.expires': 'Expires',
     'module.paymentConfirmedTitle': 'Payment confirmed',
     'module.paymentConfirmedMessage':
-      'The exact stablecoin output is confirmed at the merchant address.',
-    'module.paymentPendingTitle': 'Payment seen · pending',
+      'Received {amount} at the merchant address.',
+    'module.paymentPendingTitle': 'Payment received · 0-conf',
     'module.paymentPendingMessage':
-      'The exact stablecoin output is in the mempool. Wait for confirmation before completing the sale.',
+      'Received {amount}. Accepted at 0-conf; confirmation may follow.',
     'module.requestExpiredTitle': 'Request expired',
     'module.requestExpiredMessage':
       'This proposal is no longer valid for a new buyer transaction.',
@@ -47,12 +55,12 @@ const messages: AddonModuleLocaleMessages = {
     'module.monitoringUnavailableMessage':
       'OPTN will retry checking the merchant address automatically.',
     'module.waitingBuyerTitle': 'Waiting for buyer',
-    'module.waitingBuyerMessage':
-      'No matching stablecoin output has been detected yet.',
+    'module.waitingBuyerMessage': 'Waiting for {amount}.',
     'module.scanProposalDescription':
       'Scan this transaction proposal with OPTN Wallet. The merchant has prepared the Cauldron LP inputs; the buyer adds BCH inputs and change, signs, and broadcasts one transaction that delivers {symbol} directly to the merchant.',
     'module.showQr': 'Show QR code',
-    'module.requestExpired': 'This request expired.',
+    'module.requestExpired':
+      'The exchange quote expired. The payment amount is still {amount}.',
     'module.share': 'Share',
     'module.new': 'New',
     'module.scanTransactionProposal': 'Scan transaction proposal',
@@ -109,15 +117,23 @@ const messages: AddonModuleLocaleMessages = {
     'module.expired': 'Caducada',
     'module.creating': 'Creando…',
     'module.createRequest': 'Crear solicitud',
+    'module.request': 'Solicitud',
     'module.customerPays': 'Paga el cliente',
+    'module.paymentRequest': 'Solicitud de pago',
+    'module.estimatedCustomerPayment': 'Pago estimado',
+    'module.haveCustomerScan':
+      'Pide al cliente que escanee este QR con OPTN Wallet.',
+    'module.paymentRequestDescription':
+      'El cliente paga BCH. ParyonUSD se entrega directamente en tu cartera en una sola transacción.',
+    'module.refreshPaymentRequest': 'Actualizar solicitud de pago',
     'module.copyDetails': 'Copiar detalles',
     'module.expires': 'Caduca',
     'module.paymentConfirmedTitle': 'Pago confirmado',
     'module.paymentConfirmedMessage':
-      'La salida exacta de stablecoin está confirmada en la dirección del comercio.',
-    'module.paymentPendingTitle': 'Pago detectado · pendiente',
+      'Se recibió {amount} en la dirección del comercio.',
+    'module.paymentPendingTitle': 'Pago recibido · 0-conf',
     'module.paymentPendingMessage':
-      'La salida exacta de stablecoin está en el mempool. Espera la confirmación antes de completar la venta.',
+      'Se recibió {amount}. Este flujo interno lo acepta sin confirmaciones; la confirmación puede llegar después.',
     'module.requestExpiredTitle': 'Solicitud caducada',
     'module.requestExpiredMessage':
       'Esta propuesta ya no es válida para una nueva transacción del comprador.',
@@ -125,12 +141,12 @@ const messages: AddonModuleLocaleMessages = {
     'module.monitoringUnavailableMessage':
       'OPTN volverá a comprobar automáticamente la dirección del comercio.',
     'module.waitingBuyerTitle': 'Esperando al comprador',
-    'module.waitingBuyerMessage':
-      'Todavía no se ha detectado ninguna salida de stablecoin coincidente.',
+    'module.waitingBuyerMessage': 'Esperando {amount}.',
     'module.scanProposalDescription':
       'Escanea esta propuesta de transacción con OPTN Wallet. El comercio ha preparado las entradas LP de Cauldron; el comprador añade entradas BCH y cambio, firma y transmite una transacción que entrega {symbol} directamente al comercio.',
     'module.showQr': 'Mostrar código QR',
-    'module.requestExpired': 'Esta solicitud ha caducado.',
+    'module.requestExpired':
+      'La cotización ha caducado; el importe sigue siendo {amount}.',
     'module.share': 'Compartir',
     'module.new': 'Nueva',
     'module.scanTransactionProposal': 'Escanear propuesta de transacción',
@@ -189,15 +205,23 @@ const messages: AddonModuleLocaleMessages = {
     'module.expired': 'Expirada',
     'module.creating': 'Criando…',
     'module.createRequest': 'Criar solicitação',
+    'module.request': 'Solicitação',
     'module.customerPays': 'Cliente paga',
+    'module.paymentRequest': 'Solicitação de pagamento',
+    'module.estimatedCustomerPayment': 'Pagamento estimado',
+    'module.haveCustomerScan':
+      'Peça ao cliente para escanear este QR com a OPTN Wallet.',
+    'module.paymentRequestDescription':
+      'O cliente paga BCH. ParyonUSD é entregue diretamente na sua carteira em uma única transação.',
+    'module.refreshPaymentRequest': 'Atualizar solicitação de pagamento',
     'module.copyDetails': 'Copiar detalhes',
     'module.expires': 'Expira',
     'module.paymentConfirmedTitle': 'Pagamento confirmado',
     'module.paymentConfirmedMessage':
-      'A saída exata de stablecoin foi confirmada no endereço do comerciante.',
-    'module.paymentPendingTitle': 'Pagamento visto · pendente',
+      'O valor {amount} foi recebido no endereço do comerciante.',
+    'module.paymentPendingTitle': 'Pagamento recebido · 0-conf',
     'module.paymentPendingMessage':
-      'A saída exata de stablecoin está no mempool. Aguarde a confirmação antes de concluir a venda.',
+      '{amount} foi recebido. Este fluxo interno aceita o pagamento sem confirmações; a confirmação pode ocorrer depois.',
     'module.requestExpiredTitle': 'Solicitação expirada',
     'module.requestExpiredMessage':
       'Esta proposta não é mais válida para uma nova transação do comprador.',
@@ -205,12 +229,12 @@ const messages: AddonModuleLocaleMessages = {
     'module.monitoringUnavailableMessage':
       'A OPTN tentará verificar o endereço do comerciante novamente automaticamente.',
     'module.waitingBuyerTitle': 'Aguardando o comprador',
-    'module.waitingBuyerMessage':
-      'Nenhuma saída de stablecoin correspondente foi detectada ainda.',
+    'module.waitingBuyerMessage': 'Aguardando {amount}.',
     'module.scanProposalDescription':
       'Escaneie esta proposta de transação com a OPTN Wallet. O comerciante preparou as entradas LP do Cauldron; o comprador adiciona entradas BCH e troco, assina e transmite uma transação que entrega {symbol} diretamente ao comerciante.',
     'module.showQr': 'Mostrar código QR',
-    'module.requestExpired': 'Esta solicitação expirou.',
+    'module.requestExpired':
+      'A cotação expirou; o valor do pagamento continua sendo {amount}.',
     'module.share': 'Compartilhar',
     'module.new': 'Nova',
     'module.scanTransactionProposal': 'Escanear proposta de transação',
@@ -267,24 +291,31 @@ const messages: AddonModuleLocaleMessages = {
     'module.expired': '已过期',
     'module.creating': '正在创建…',
     'module.createRequest': '创建请求',
+    'module.request': '请求',
     'module.customerPays': '客户支付',
+    'module.paymentRequest': '支付请求',
+    'module.estimatedCustomerPayment': '预计支付',
+    'module.haveCustomerScan': '请客户使用 OPTN Wallet 扫描此二维码。',
+    'module.paymentRequestDescription':
+      '客户支付 BCH。ParyonUSD 将在一笔交易中直接发送到您的钱包。',
+    'module.refreshPaymentRequest': '刷新支付请求',
     'module.copyDetails': '复制详情',
     'module.expires': '到期',
     'module.paymentConfirmedTitle': '支付已确认',
-    'module.paymentConfirmedMessage': '精确的稳定币输出已在商户地址确认。',
-    'module.paymentPendingTitle': '已看到支付 · 待处理',
+    'module.paymentConfirmedMessage': '商户地址已收到 {amount}。',
+    'module.paymentPendingTitle': '已收到支付 · 0-conf',
     'module.paymentPendingMessage':
-      '精确的稳定币输出已进入内存池。完成销售前请等待确认。',
+      '已收到 {amount}。此内部流程接受零确认；之后仍可能获得确认。',
     'module.requestExpiredTitle': '请求已过期',
     'module.requestExpiredMessage': '此提案不再适用于新的买方交易。',
     'module.monitoringUnavailableTitle': '监控不可用',
     'module.monitoringUnavailableMessage': 'OPTN 将自动重试检查商户地址。',
     'module.waitingBuyerTitle': '等待买方',
-    'module.waitingBuyerMessage': '尚未检测到匹配的稳定币输出。',
+    'module.waitingBuyerMessage': '正在等待 {amount}。',
     'module.scanProposalDescription':
       '使用 OPTN Wallet 扫描此交易提案。商户已准备 Cauldron LP 输入；买方添加 BCH 输入和找零，签名并广播一笔直接向商户支付 {symbol} 的交易。',
     'module.showQr': '显示二维码',
-    'module.requestExpired': '此请求已过期。',
+    'module.requestExpired': '报价已过期；支付金额仍为 {amount}。',
     'module.share': '分享',
     'module.new': '新建',
     'module.scanTransactionProposal': '扫描交易提案',
@@ -337,24 +368,31 @@ const messages: AddonModuleLocaleMessages = {
     'module.expired': '已過期',
     'module.creating': '正在建立…',
     'module.createRequest': '建立請求',
+    'module.request': '請求',
     'module.customerPays': '客戶支付',
+    'module.paymentRequest': '付款請求',
+    'module.estimatedCustomerPayment': '預估付款',
+    'module.haveCustomerScan': '請客戶使用 OPTN Wallet 掃描此 QR 碼。',
+    'module.paymentRequestDescription':
+      '客戶支付 BCH。ParyonUSD 會在單筆交易中直接送達您的錢包。',
+    'module.refreshPaymentRequest': '重新整理付款請求',
     'module.copyDetails': '複製詳細資料',
     'module.expires': '到期',
     'module.paymentConfirmedTitle': '付款已確認',
-    'module.paymentConfirmedMessage': '精確的穩定幣輸出已在商戶地址確認。',
-    'module.paymentPendingTitle': '已看到付款 · 待處理',
+    'module.paymentConfirmedMessage': '商戶地址已收到 {amount}。',
+    'module.paymentPendingTitle': '已收到付款 · 0-conf',
     'module.paymentPendingMessage':
-      '精確的穩定幣輸出已進入記憶池。完成銷售前請等待確認。',
+      '已收到 {amount}。此內部流程接受零確認；之後仍可能獲得確認。',
     'module.requestExpiredTitle': '請求已過期',
     'module.requestExpiredMessage': '此提案不再適用於新的買方交易。',
     'module.monitoringUnavailableTitle': '監控無法使用',
     'module.monitoringUnavailableMessage': 'OPTN 將自動重試檢查商戶地址。',
     'module.waitingBuyerTitle': '等待買方',
-    'module.waitingBuyerMessage': '尚未偵測到相符的穩定幣輸出。',
+    'module.waitingBuyerMessage': '正在等待 {amount}。',
     'module.scanProposalDescription':
       '使用 OPTN Wallet 掃描此交易提案。商戶已準備 Cauldron LP 輸入；買方新增 BCH 輸入和找零，簽署並廣播一筆直接向商戶支付 {symbol} 的交易。',
     'module.showQr': '顯示 QR 碼',
-    'module.requestExpired': '此請求已過期。',
+    'module.requestExpired': '報價已過期；付款金額仍為 {amount}。',
     'module.share': '分享',
     'module.new': '新增',
     'module.scanTransactionProposal': '掃描交易提案',
@@ -409,15 +447,22 @@ const messages: AddonModuleLocaleMessages = {
     'module.expired': 'Đã hết hạn',
     'module.creating': 'Đang tạo…',
     'module.createRequest': 'Tạo yêu cầu',
+    'module.request': 'Yêu cầu',
     'module.customerPays': 'Khách hàng trả',
+    'module.paymentRequest': 'Yêu cầu thanh toán',
+    'module.estimatedCustomerPayment': 'Khoản thanh toán ước tính',
+    'module.haveCustomerScan':
+      'Yêu cầu khách hàng quét QR này bằng OPTN Wallet.',
+    'module.paymentRequestDescription':
+      'Khách hàng thanh toán BCH. ParyonUSD được gửi trực tiếp vào ví của bạn trong một giao dịch.',
+    'module.refreshPaymentRequest': 'Làm mới yêu cầu thanh toán',
     'module.copyDetails': 'Sao chép chi tiết',
     'module.expires': 'Hết hạn',
     'module.paymentConfirmedTitle': 'Đã xác nhận thanh toán',
-    'module.paymentConfirmedMessage':
-      'Đầu ra stablecoin chính xác đã được xác nhận tại địa chỉ người bán.',
-    'module.paymentPendingTitle': 'Đã thấy thanh toán · đang chờ',
+    'module.paymentConfirmedMessage': 'Đã nhận {amount} tại địa chỉ người bán.',
+    'module.paymentPendingTitle': 'Đã nhận thanh toán · 0-conf',
     'module.paymentPendingMessage':
-      'Đầu ra stablecoin chính xác đang ở mempool. Hãy chờ xác nhận trước khi hoàn tất giao dịch bán.',
+      'Đã nhận {amount}. Luồng nội bộ này chấp nhận khi chưa có xác nhận; xác nhận có thể đến sau.',
     'module.requestExpiredTitle': 'Yêu cầu đã hết hạn',
     'module.requestExpiredMessage':
       'Đề xuất này không còn hợp lệ cho giao dịch mới của người mua.',
@@ -425,11 +470,12 @@ const messages: AddonModuleLocaleMessages = {
     'module.monitoringUnavailableMessage':
       'OPTN sẽ tự động thử kiểm tra địa chỉ người bán lại.',
     'module.waitingBuyerTitle': 'Đang chờ người mua',
-    'module.waitingBuyerMessage': 'Chưa phát hiện đầu ra stablecoin phù hợp.',
+    'module.waitingBuyerMessage': 'Đang chờ {amount}.',
     'module.scanProposalDescription':
       'Quét đề xuất giao dịch này bằng OPTN Wallet. Người bán đã chuẩn bị đầu vào LP Cauldron; người mua thêm đầu vào BCH và tiền thừa, ký và phát giao dịch để chuyển {symbol} trực tiếp cho người bán.',
     'module.showQr': 'Hiện mã QR',
-    'module.requestExpired': 'Yêu cầu này đã hết hạn.',
+    'module.requestExpired':
+      'Báo giá đã hết hạn; số tiền thanh toán vẫn là {amount}.',
     'module.share': 'Chia sẻ',
     'module.new': 'Mới',
     'module.scanTransactionProposal': 'Quét đề xuất giao dịch',
@@ -486,15 +532,22 @@ const messages: AddonModuleLocaleMessages = {
     'module.expired': 'منتهية',
     'module.creating': 'جارٍ الإنشاء…',
     'module.createRequest': 'إنشاء طلب',
+    'module.request': 'طلب',
     'module.customerPays': 'يدفع العميل',
+    'module.paymentRequest': 'طلب دفع',
+    'module.estimatedCustomerPayment': 'الدفع المقدر',
+    'module.haveCustomerScan':
+      'اطلب من العميل مسح رمز QR هذا باستخدام OPTN Wallet.',
+    'module.paymentRequestDescription':
+      'يدفع العميل BCH. يتم تسليم ParyonUSD مباشرة إلى محفظتك في معاملة واحدة.',
+    'module.refreshPaymentRequest': 'تحديث طلب الدفع',
     'module.copyDetails': 'نسخ التفاصيل',
     'module.expires': 'تنتهي',
     'module.paymentConfirmedTitle': 'تم تأكيد الدفع',
-    'module.paymentConfirmedMessage':
-      'تم تأكيد مخرج العملة المستقرة المحدد في عنوان التاجر.',
-    'module.paymentPendingTitle': 'تمت رؤية الدفعة · معلقة',
+    'module.paymentConfirmedMessage': 'تم استلام {amount} في عنوان التاجر.',
+    'module.paymentPendingTitle': 'تم استلام الدفعة · 0-conf',
     'module.paymentPendingMessage':
-      'مخرج العملة المستقرة المحدد موجود في مجمع الذاكرة. انتظر التأكيد قبل إكمال البيع.',
+      'تم استلام {amount}. يقبل هذا التدفق الداخلي الدفعة دون تأكيدات؛ وقد يأتي التأكيد لاحقًا.',
     'module.requestExpiredTitle': 'انتهت صلاحية الطلب',
     'module.requestExpiredMessage':
       'لم يعد هذا الاقتراح صالحًا لمعاملة مشترٍ جديدة.',
@@ -502,11 +555,11 @@ const messages: AddonModuleLocaleMessages = {
     'module.monitoringUnavailableMessage':
       'سيعيد OPTN فحص عنوان التاجر تلقائيًا.',
     'module.waitingBuyerTitle': 'بانتظار المشتري',
-    'module.waitingBuyerMessage': 'لم يتم اكتشاف مخرج عملة مستقرة مطابق بعد.',
+    'module.waitingBuyerMessage': 'في انتظار {amount}.',
     'module.scanProposalDescription':
       'امسح اقتراح المعاملة هذا باستخدام OPTN Wallet. أعدّ التاجر مدخلات مجمع Cauldron؛ يضيف المشتري مدخلات BCH والباقي، ثم يوقّع ويبث معاملة واحدة تسلّم {symbol} مباشرة إلى التاجر.',
     'module.showQr': 'إظهار رمز QR',
-    'module.requestExpired': 'انتهت صلاحية هذا الطلب.',
+    'module.requestExpired': 'انتهت صلاحية السعر؛ وما زال مبلغ الدفع {amount}.',
     'module.share': 'مشاركة',
     'module.new': 'جديد',
     'module.scanTransactionProposal': 'مسح اقتراح المعاملة',
@@ -563,15 +616,22 @@ const messages: AddonModuleLocaleMessages = {
     'module.expired': 'Expiré',
     'module.creating': 'Création…',
     'module.createRequest': 'Créer la demande',
+    'module.request': 'Demande',
     'module.customerPays': 'Le client paie',
+    'module.paymentRequest': 'Demande de paiement',
+    'module.estimatedCustomerPayment': 'Paiement estimé',
+    'module.haveCustomerScan':
+      'Demandez au client de scanner ce QR avec OPTN Wallet.',
+    'module.paymentRequestDescription':
+      'Le client paie en BCH. Le ParyonUSD est livré directement dans votre portefeuille en une seule transaction.',
+    'module.refreshPaymentRequest': 'Actualiser la demande de paiement',
     'module.copyDetails': 'Copier les détails',
     'module.expires': 'Expire',
     'module.paymentConfirmedTitle': 'Paiement confirmé',
-    'module.paymentConfirmedMessage':
-      'La sortie exacte de stablecoin est confirmée à l’adresse du marchand.',
-    'module.paymentPendingTitle': 'Paiement détecté · en attente',
+    'module.paymentConfirmedMessage': '{amount} reçu à l’adresse du marchand.',
+    'module.paymentPendingTitle': 'Paiement reçu · 0-conf',
     'module.paymentPendingMessage':
-      'La sortie exacte de stablecoin est dans le mempool. Attendez la confirmation avant de finaliser la vente.',
+      '{amount} reçu. Ce flux interne accepte le paiement sans confirmation ; la confirmation peut arriver ensuite.',
     'module.requestExpiredTitle': 'Demande expirée',
     'module.requestExpiredMessage':
       'Cette proposition n’est plus valide pour une nouvelle transaction acheteur.',
@@ -579,12 +639,12 @@ const messages: AddonModuleLocaleMessages = {
     'module.monitoringUnavailableMessage':
       'OPTN réessaiera automatiquement de vérifier l’adresse du marchand.',
     'module.waitingBuyerTitle': 'En attente de l’acheteur',
-    'module.waitingBuyerMessage':
-      'Aucune sortie de stablecoin correspondante n’a encore été détectée.',
+    'module.waitingBuyerMessage': 'En attente de {amount}.',
     'module.scanProposalDescription':
       'Scannez cette proposition de transaction avec OPTN Wallet. Le marchand a préparé les entrées LP Cauldron ; l’acheteur ajoute les entrées BCH et la monnaie, signe et diffuse une transaction qui remet {symbol} directement au marchand.',
     'module.showQr': 'Afficher le code QR',
-    'module.requestExpired': 'Cette demande a expiré.',
+    'module.requestExpired':
+      'Le cours a expiré ; le montant du paiement reste {amount}.',
     'module.share': 'Partager',
     'module.new': 'Nouveau',
     'module.scanTransactionProposal': 'Scanner la proposition de transaction',
@@ -644,15 +704,23 @@ const messages: AddonModuleLocaleMessages = {
     'module.expired': '만료됨',
     'module.creating': '생성 중…',
     'module.createRequest': '요청 생성',
+    'module.request': '요청',
     'module.customerPays': '고객 결제',
+    'module.paymentRequest': '결제 요청',
+    'module.estimatedCustomerPayment': '예상 결제',
+    'module.haveCustomerScan':
+      '고객에게 OPTN Wallet으로 이 QR을 스캔하도록 안내하세요.',
+    'module.paymentRequestDescription':
+      '고객은 BCH를 결제합니다. ParyonUSD는 한 번의 거래로 지갑에 직접 전달됩니다.',
+    'module.refreshPaymentRequest': '결제 요청 새로 고침',
     'module.copyDetails': '세부 정보 복사',
     'module.expires': '만료',
     'module.paymentConfirmedTitle': '결제 확인됨',
     'module.paymentConfirmedMessage':
-      '정확한 스테이블코인 출력이 가맹점 주소에서 확인되었습니다.',
-    'module.paymentPendingTitle': '결제 확인 · 대기 중',
+      '가맹점 주소에서 {amount}을(를) 받았습니다.',
+    'module.paymentPendingTitle': '결제 수신 · 0-conf',
     'module.paymentPendingMessage':
-      '정확한 스테이블코인 출력이 멤풀에 있습니다. 판매를 완료하기 전에 확인을 기다리세요.',
+      '{amount}을(를) 받았습니다. 이 내부 흐름은 확인 0건 상태를 허용하며, 확인은 나중에 이루어질 수 있습니다.',
     'module.requestExpiredTitle': '요청 만료됨',
     'module.requestExpiredMessage':
       '이 제안은 새 구매자 거래에 더 이상 유효하지 않습니다.',
@@ -660,12 +728,12 @@ const messages: AddonModuleLocaleMessages = {
     'module.monitoringUnavailableMessage':
       'OPTN이 가맹점 주소 확인을 자동으로 다시 시도합니다.',
     'module.waitingBuyerTitle': '구매자 대기 중',
-    'module.waitingBuyerMessage':
-      '일치하는 스테이블코인 출력이 아직 감지되지 않았습니다.',
+    'module.waitingBuyerMessage': '{amount}을(를) 기다리는 중입니다.',
     'module.scanProposalDescription':
       'OPTN Wallet으로 이 거래 제안을 스캔하세요. 가맹점이 Cauldron LP 입력을 준비했으며, 구매자는 BCH 입력과 잔돈을 추가하고 서명한 뒤 {symbol}을 가맹점에 직접 전달하는 거래 하나를 브로드캐스트합니다.',
     'module.showQr': 'QR 코드 표시',
-    'module.requestExpired': '이 요청은 만료되었습니다.',
+    'module.requestExpired':
+      '환율이 만료되었습니다. 결제 금액은 여전히 {amount}입니다.',
     'module.share': '공유',
     'module.new': '새로 만들기',
     'module.scanTransactionProposal': '거래 제안 스캔',
@@ -722,27 +790,35 @@ const messages: AddonModuleLocaleMessages = {
     'module.expired': '期限切れ',
     'module.creating': '作成中…',
     'module.createRequest': '請求を作成',
+    'module.request': 'リクエスト',
     'module.customerPays': '顧客の支払い',
+    'module.paymentRequest': '支払いリクエスト',
+    'module.estimatedCustomerPayment': '推定支払い',
+    'module.haveCustomerScan':
+      '顧客に OPTN Wallet でこの QR をスキャンしてもらいます。',
+    'module.paymentRequestDescription':
+      '顧客は BCH を支払います。ParyonUSD は 1 回の取引でウォレットに直接届けられます。',
+    'module.refreshPaymentRequest': '支払いリクエストを更新',
     'module.copyDetails': '詳細をコピー',
     'module.expires': '有効期限',
     'module.paymentConfirmedTitle': '支払いを確認しました',
     'module.paymentConfirmedMessage':
-      '正確なステーブルコイン出力が加盟店アドレスで確認されました。',
-    'module.paymentPendingTitle': '支払いを検出 · 保留中',
+      '加盟店アドレスで {amount} を受け取りました。',
+    'module.paymentPendingTitle': '支払いを受信 · 0-conf',
     'module.paymentPendingMessage':
-      '正確なステーブルコイン出力がメンプールにあります。販売を完了する前に承認を待ってください。',
+      '{amount} を受け取りました。この内部フローでは未承認でも受け付けます。承認は後から行われる場合があります。',
     'module.requestExpiredTitle': '請求の期限切れ',
     'module.requestExpiredMessage': 'この提案は新しい購入者取引には無効です。',
     'module.monitoringUnavailableTitle': '監視を利用できません',
     'module.monitoringUnavailableMessage':
       'OPTNは加盟店アドレスの確認を自動的に再試行します。',
     'module.waitingBuyerTitle': '購入者を待っています',
-    'module.waitingBuyerMessage':
-      '一致するステーブルコイン出力はまだ検出されていません。',
+    'module.waitingBuyerMessage': '{amount} を待っています。',
     'module.scanProposalDescription':
       'OPTN Walletでこの取引提案をスキャンしてください。加盟店はCauldron LP入力を準備済みです。購入者はBCH入力とおつりを追加し、署名して、{symbol}を加盟店へ直接届ける1件の取引をブロードキャストします。',
     'module.showQr': 'QRコードを表示',
-    'module.requestExpired': 'この請求は期限切れです。',
+    'module.requestExpired':
+      '見積もりの期限が切れました。支払い金額は {amount} のままです。',
     'module.share': '共有',
     'module.new': '新規',
     'module.scanTransactionProposal': '取引提案をスキャン',
@@ -800,15 +876,22 @@ const messages: AddonModuleLocaleMessages = {
     'module.expired': 'Истекло',
     'module.creating': 'Создание…',
     'module.createRequest': 'Создать запрос',
+    'module.request': 'Запрос',
     'module.customerPays': 'Платит клиент',
+    'module.paymentRequest': 'Запрос на оплату',
+    'module.estimatedCustomerPayment': 'Расчётный платёж',
+    'module.haveCustomerScan':
+      'Попросите клиента отсканировать этот QR-код в OPTN Wallet.',
+    'module.paymentRequestDescription':
+      'Клиент платит BCH. ParyonUSD поступает прямо в ваш кошелёк одной транзакцией.',
+    'module.refreshPaymentRequest': 'Обновить запрос на оплату',
     'module.copyDetails': 'Копировать детали',
     'module.expires': 'Истекает',
     'module.paymentConfirmedTitle': 'Платёж подтверждён',
-    'module.paymentConfirmedMessage':
-      'Точный выход стейблкоина подтверждён на адресе продавца.',
-    'module.paymentPendingTitle': 'Платёж найден · ожидает подтверждения',
+    'module.paymentConfirmedMessage': 'На адрес продавца поступило {amount}.',
+    'module.paymentPendingTitle': 'Платёж получен · 0-conf',
     'module.paymentPendingMessage':
-      'Точный выход стейблкоина находится в мемпуле. Дождитесь подтверждения перед завершением продажи.',
+      'Получено {amount}. Этот внутренний поток принимает платёж без подтверждений; подтверждение может появиться позже.',
     'module.requestExpiredTitle': 'Срок запроса истёк',
     'module.requestExpiredMessage':
       'Это предложение больше недействительно для новой транзакции покупателя.',
@@ -816,12 +899,12 @@ const messages: AddonModuleLocaleMessages = {
     'module.monitoringUnavailableMessage':
       'OPTN автоматически повторит проверку адреса продавца.',
     'module.waitingBuyerTitle': 'Ожидание покупателя',
-    'module.waitingBuyerMessage':
-      'Подходящий выход стейблкоина пока не обнаружен.',
+    'module.waitingBuyerMessage': 'Ожидание {amount}.',
     'module.scanProposalDescription':
       'Отсканируйте это предложение транзакции в OPTN Wallet. Продавец подготовил входы LP Cauldron; покупатель добавляет входы BCH и сдачу, подписывает и отправляет одну транзакцию, которая напрямую передаёт продавцу {symbol}.',
     'module.showQr': 'Показать QR-код',
-    'module.requestExpired': 'Срок этого запроса истёк.',
+    'module.requestExpired':
+      'Срок котировки истёк; сумма платежа по-прежнему составляет {amount}.',
     'module.share': 'Поделиться',
     'module.new': 'Новый',
     'module.scanTransactionProposal': 'Сканировать предложение транзакции',
@@ -878,15 +961,23 @@ const messages: AddonModuleLocaleMessages = {
     'module.expired': 'Ya ƙare',
     'module.creating': 'Ana ƙirƙira…',
     'module.createRequest': 'Ƙirƙiri buƙata',
+    'module.request': 'Buƙata',
     'module.customerPays': 'Abokin ciniki ya biya',
+    'module.paymentRequest': 'Buƙatar biyan kuɗi',
+    'module.estimatedCustomerPayment': 'Kiyasin biyan kuɗi',
+    'module.haveCustomerScan':
+      'Ka sa abokin ciniki ya duba wannan QR da OPTN Wallet.',
+    'module.paymentRequestDescription':
+      'Abokin ciniki yana biyan BCH. Ana aika ParyonUSD kai tsaye zuwa walat ɗinka a ciniki guda.',
+    'module.refreshPaymentRequest': 'Sabunta buƙatar biyan kuɗi',
     'module.copyDetails': 'Kwafi bayanai',
     'module.expires': 'Zai ƙare',
     'module.paymentConfirmedTitle': 'An tabbatar da biyan kuɗi',
     'module.paymentConfirmedMessage':
-      'An tabbatar da ainihin stablecoin output a adireshin mai siyarwa.',
-    'module.paymentPendingTitle': 'An ga biyan kuɗi · yana jira',
+      'An karɓi {amount} a adireshin mai siyarwa.',
+    'module.paymentPendingTitle': 'An karɓi biyan kuɗi · 0-conf',
     'module.paymentPendingMessage':
-      'Ainihin stablecoin output yana cikin mempool. Jira tabbaci kafin kammala sayarwa.',
+      'An karɓi {amount}. Wannan tsarin cikin gida yana karɓar biyan ba tare da tabbaci ba; tabbaci na iya zuwa daga baya.',
     'module.requestExpiredTitle': 'Buƙata ta ƙare',
     'module.requestExpiredMessage':
       'Wannan shawarar ba ta da inganci ga sabuwar cinikin mai siya.',
@@ -894,12 +985,12 @@ const messages: AddonModuleLocaleMessages = {
     'module.monitoringUnavailableMessage':
       'OPTN zai sake gwada duba adireshin mai siyarwa ta atomatik.',
     'module.waitingBuyerTitle': 'Ana jiran mai siya',
-    'module.waitingBuyerMessage':
-      'Ba a gano stablecoin output da ya dace ba tukuna.',
+    'module.waitingBuyerMessage': 'Ana jiran {amount}.',
     'module.scanProposalDescription':
       'Duba wannan shawarar ciniki da OPTN Wallet. Mai siyarwa ya shirya abubuwan shigar Cauldron LP; mai siya ya ƙara BCH inputs da canji, ya sa hannu, sannan ya watsa ciniki guda da ke aika {symbol} kai tsaye ga mai siyarwa.',
     'module.showQr': 'Nuna QR code',
-    'module.requestExpired': 'Wannan buƙata ta ƙare.',
+    'module.requestExpired':
+      'Farashin ya ƙare; adadin biyan har yanzu {amount} ne.',
     'module.share': 'Raba',
     'module.new': 'Sabo',
     'module.scanTransactionProposal': 'Duba shawarar ciniki',

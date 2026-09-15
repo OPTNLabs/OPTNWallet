@@ -20,6 +20,7 @@ export type MultisigSpendSession = {
   policyId: string;
   unsignedTxHash: string;
   psbtBytes: Uint8Array;
+  feeRateSatPerByte: number | undefined;
   stage: MultisigSpendStage;
   signatures: string[];
   rawTxHex: string | null;
@@ -47,6 +48,12 @@ function asString(value: unknown): string {
 function asNumber(value: unknown): number {
   const number = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(number) ? number : 0;
+}
+
+function asOptionalPositiveNumber(value: unknown): number | undefined {
+  if (value === null || value === undefined || value === '') return undefined;
+  const number = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(number) && number > 0 ? number : undefined;
 }
 
 function asBytes(value: unknown): Uint8Array {
@@ -93,6 +100,7 @@ function rowToSession(row: Record<string, unknown>): MultisigSpendSession {
     policyId: asString(row.policy_id),
     unsignedTxHash: asString(row.unsigned_tx_hash),
     psbtBytes: asBytes(row.psbt_bytes),
+    feeRateSatPerByte: asOptionalPositiveNumber(row.fee_rate_sat_per_byte),
     stage: asString(row.stage) as MultisigSpendStage,
     signatures,
     rawTxHex: row.raw_tx_hex === null ? null : asString(row.raw_tx_hex),
@@ -108,6 +116,7 @@ export async function getMultisigSpendSession(
   const { db } = await database();
   const query = db.prepare(
     `SELECT session_id, wallet_id, policy_id, unsigned_tx_hash, psbt_bytes,
+            fee_rate_sat_per_byte,
             stage, signatures_json, raw_tx_hex, retry_count, created_at, updated_at
        FROM multisig_spend_sessions WHERE session_id = ?`
   );
@@ -126,6 +135,7 @@ export async function listMultisigSpendSessions(
   const { db } = await database();
   const query = db.prepare(
     `SELECT session_id, wallet_id, policy_id, unsigned_tx_hash, psbt_bytes,
+            fee_rate_sat_per_byte,
             stage, signatures_json, raw_tx_hex, retry_count, created_at, updated_at
        FROM multisig_spend_sessions
       WHERE wallet_id = ?
@@ -151,6 +161,7 @@ export async function createMultisigSpendSession(args: {
   policyId: string;
   unsignedTxHash: string;
   psbtBytes: Uint8Array;
+  feeRateSatPerByte?: number;
 }): Promise<MultisigSpendSession> {
   if (!args.policyId || !args.unsignedTxHash || args.psbtBytes.length === 0) {
     throw new Error(
@@ -160,6 +171,7 @@ export async function createMultisigSpendSession(args: {
   const { service, db } = await database();
   const existingQuery = db.prepare(
     `SELECT session_id, wallet_id, policy_id, unsigned_tx_hash, psbt_bytes,
+            fee_rate_sat_per_byte,
             stage, signatures_json, raw_tx_hex, retry_count, created_at, updated_at
        FROM multisig_spend_sessions
       WHERE wallet_id = ? AND unsigned_tx_hash = ?`
@@ -183,12 +195,13 @@ export async function createMultisigSpendSession(args: {
         }
         const update = db.prepare(
           `UPDATE multisig_spend_sessions
-              SET psbt_bytes = ?, updated_at = ?
+              SET psbt_bytes = ?, fee_rate_sat_per_byte = ?, updated_at = ?
             WHERE session_id = ?`
         );
         try {
           update.run([
             Uint8Array.from(args.psbtBytes),
+            args.feeRateSatPerByte ?? null,
             new Date().toISOString(),
             existing.sessionId,
           ]);
@@ -211,9 +224,10 @@ export async function createMultisigSpendSession(args: {
   const timestamp = new Date().toISOString();
   const insert = db.prepare(
     `INSERT INTO multisig_spend_sessions
-       (session_id, wallet_id, policy_id, unsigned_tx_hash, psbt_bytes, stage,
+       (session_id, wallet_id, policy_id, unsigned_tx_hash, psbt_bytes,
+        fee_rate_sat_per_byte, stage,
         signatures_json, retry_count, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, 'intent', '[]', 0, ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?, 'intent', '[]', 0, ?, ?)`
   );
   try {
     insert.run([
@@ -222,6 +236,7 @@ export async function createMultisigSpendSession(args: {
       args.policyId,
       args.unsignedTxHash,
       Uint8Array.from(args.psbtBytes),
+      args.feeRateSatPerByte ?? null,
       timestamp,
       timestamp,
     ]);
