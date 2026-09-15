@@ -2,7 +2,9 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main, staging, dev]
+    # Pull requests cover dev/staging. Keep the full post-merge check on main
+    # without running the same suite again for every promotion push.
+    branches: [main]
     paths-ignore:
       - 'docs/**'
       - '**/*.md'

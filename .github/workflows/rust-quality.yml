@@ -16,7 +16,7 @@ on:
       - 'vendor/glib-0.18.5/**'
       - '.github/workflows/rust-quality.yml'
   push:
-    branches: [dev, staging]
+    branches: [main]
   workflow_dispatch:
 
 permissions:

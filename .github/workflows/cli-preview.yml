@@ -11,7 +11,8 @@ name: CLI Preview
 # else, and a required check that never runs stays "Expected" forever.
 #
 # The CLI is part of the supported application. Removing its crate must fail
-# this workflow, rather than silently skipping all seven targets.
+# this workflow, rather than silently skipping all seven targets. Pull requests
+# cover dev/staging; a main push provides post-merge validation.
 
 on:
   pull_request:
@@ -19,7 +20,7 @@ on:
     # that would otherwise reach a release without these asset checks.
     branches: [dev, staging, main]
   push:
-    branches: [dev, staging]
+    branches: [main]
   workflow_dispatch:
 
 concurrency:

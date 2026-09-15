@@ -6,7 +6,7 @@ name: Extension Preview
 # required checks still match.
 
 # Mirrors desktop-preview.yml — builds the Chrome/Firefox extension MVP on
-# every push/PR and uploads the unpacked build output as an artifact,
+# every PR and main post-merge push, and uploads the unpacked build output as an artifact,
 # so a reviewer can download it and load it directly without building locally.
 
 on:
@@ -19,7 +19,7 @@ on:
     # that would otherwise reach a release without these asset checks.
     branches: [dev, staging, main]
   push:
-    branches: [dev, staging]
+    branches: [main]
   # Allows a maintainer to recover the required check when GitHub does not
   # create the pull_request run for a head update.
   workflow_dispatch:

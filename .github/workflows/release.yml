@@ -3,14 +3,14 @@ name: Publish Release
 on:
   push:
     # Merging is the release trigger. Nothing here creates a tag by hand any
-    # more: main publishes a stable release, staging publishes a beta
-    # prerelease, and dev publishes an alpha prerelease, so every merge still
-    # produces downloadable binaries without filling the stable release list.
-    # Channel names live in the tag (alpha/beta), never as -dev.N or -staging.N.
+    # more: main publishes a stable release and staging publishes a beta
+    # prerelease. Dev changes are validated by pull requests and can be built
+    # intentionally with workflow_dispatch; they do not start the full release
+    # matrix on every development push.
+    # Channel names live in the tag (beta), never as -staging.N.
     branches:
       - main
       - staging
-      - dev
     tags:
       - 'v*.*.*'
   workflow_dispatch:
@@ -93,12 +93,8 @@ jobs:
             # before it. Channel is beta, never the branch name, so we never
             # publish v${version}-staging.N.
             tag="v${version}-beta.${GITHUB_RUN_NUMBER}"
-          elif [ "$GITHUB_REF_NAME" = 'dev' ]; then
-            # Same uniqueness as staging. Channel is alpha, never the branch
-            # name, so we never publish v${version}-dev.N.
-            tag="v${version}-alpha.${GITHUB_RUN_NUMBER}"
           else
-            echo "::error::unsupported release branch ${GITHUB_REF_NAME}; expected main, staging, or dev"
+            echo "::error::unsupported release branch ${GITHUB_REF_NAME}; expected main or staging"
             exit 1
           fi
 
@@ -160,9 +156,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # Only stable releases must come from main. A dev prerelease exists
-      # precisely to ship binaries from a branch that has not reached main yet,
-      # so applying this to it would reject every prerelease by definition.
+      # Only stable releases must come from main. A manually dispatched
+      # prerelease may intentionally be built from a branch that has not
+      # reached main yet, so applying this to it would reject every prerelease.
       - name: Verify release commit is on main
         if: needs.resolve.outputs.prerelease != 'true'
         run: |
@@ -302,6 +298,9 @@ jobs:
       # build that ships ML Kit is not eligible for the store at all, and that
       # is not something to discover after publishing.
       - name: Verify no proprietary barcode scanner is bundled
+        # Keep missing signing configuration from producing misleading
+        # secondary no-APK failures after the gated build is skipped.
+        if: steps.signing.outcome == 'success'
         run: |
           mapfile -t apks < <(find android -type f -name '*.apk' | sort)
           if [ "${#apks[@]}" -eq 0 ]; then
@@ -311,6 +310,10 @@ jobs:
           bash scripts/assert-no-proprietary-scanner.sh "${apks[@]}"
 
       - name: Upload Android release files
+        # The signed build is intentionally gated on signing availability.
+        if: steps.signing.outcome == 'success'
+        id: upload_android_release
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: android-release
@@ -319,6 +322,32 @@ jobs:
             android/**/outputs/bundle/playRelease/*.aab
           retention-days: 30
           if-no-files-found: error
+
+      - name: Retry Android release upload
+        id: retry_android_release_upload
+        if: steps.signing.outcome == 'success' && steps.upload_android_release.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: android-release
+          path: |
+            android/**/outputs/apk/*/release/*.apk
+            android/**/outputs/bundle/playRelease/*.aab
+          retention-days: 30
+          if-no-files-found: error
+          overwrite: true
+
+      - name: Final retry Android release upload
+        if: steps.signing.outcome == 'success' && steps.upload_android_release.outcome == 'failure' && steps.retry_android_release_upload.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: android-release
+          path: |
+            android/**/outputs/apk/*/release/*.apk
+            android/**/outputs/bundle/playRelease/*.aab
+          retention-days: 30
+          if-no-files-found: error
+          overwrite: true
 
   extension:
     name: Build browser extensions
@@ -371,6 +400,8 @@ jobs:
           test "$(unzip -p "OPTNWallet-${RELEASE_TAG}-firefox.zip" manifest.json | jq -r .version)" = "${RELEASE_VERSION}"
 
       - name: Upload extension release files
+        id: upload_extension_release
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: browser-extensions
@@ -379,6 +410,32 @@ jobs:
             OPTNWallet-${{ env.RELEASE_TAG }}-firefox.zip
           retention-days: 30
           if-no-files-found: error
+
+      - name: Retry extension release upload
+        id: retry_extension_release_upload
+        if: steps.upload_extension_release.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: browser-extensions
+          path: |
+            OPTNWallet-${{ env.RELEASE_TAG }}-chrome.zip
+            OPTNWallet-${{ env.RELEASE_TAG }}-firefox.zip
+          retention-days: 30
+          if-no-files-found: error
+          overwrite: true
+
+      - name: Final retry extension release upload
+        if: steps.upload_extension_release.outcome == 'failure' && steps.retry_extension_release_upload.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: browser-extensions
+          path: |
+            OPTNWallet-${{ env.RELEASE_TAG }}-chrome.zip
+            OPTNWallet-${{ env.RELEASE_TAG }}-firefox.zip
+          retention-days: 30
+          if-no-files-found: error
+          overwrite: true
 
   desktop:
     name: Build desktop (${{ matrix.platform }})
@@ -714,12 +771,36 @@ jobs:
 
       - name: Upload macOS .app zip
         if: startsWith(matrix.platform, 'macos')
+        id: upload_macos_app
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ matrix.artifact-name }}-app
           path: macos-app-zips/*.app.zip
           retention-days: 30
           if-no-files-found: error
+
+      - name: Retry macOS .app zip upload
+        id: retry_macos_app_upload
+        if: startsWith(matrix.platform, 'macos') && steps.upload_macos_app.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ matrix.artifact-name }}-app
+          path: macos-app-zips/*.app.zip
+          retention-days: 30
+          if-no-files-found: error
+          overwrite: true
+
+      - name: Final retry macOS .app zip upload
+        if: startsWith(matrix.platform, 'macos') && steps.upload_macos_app.outcome == 'failure' && steps.retry_macos_app_upload.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ matrix.artifact-name }}-app
+          path: macos-app-zips/*.app.zip
+          retention-days: 30
+          if-no-files-found: error
+          overwrite: true
 
       - name: Smoke-test packaged Linux Tor
         if: startsWith(matrix.platform, 'ubuntu')
@@ -730,12 +811,36 @@ jobs:
           npx --no-install tsx scripts/smoke-tor-artifact.mts "$APPIMAGE_PATH" "${{ matrix.tor-target }}"
 
       - name: Upload desktop release files
+        id: upload_desktop_release
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ matrix.artifact-name }}
           path: src-tauri/target/${{ matrix.target }}/release/bundle/**
           retention-days: 30
           if-no-files-found: error
+
+      - name: Retry desktop release upload
+        id: retry_desktop_release_upload
+        if: steps.upload_desktop_release.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: src-tauri/target/${{ matrix.target }}/release/bundle/**
+          retention-days: 30
+          if-no-files-found: error
+          overwrite: true
+
+      - name: Final retry desktop release upload
+        if: steps.upload_desktop_release.outcome == 'failure' && steps.retry_desktop_release_upload.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: src-tauri/target/${{ matrix.target }}/release/bundle/**
+          retention-days: 30
+          if-no-files-found: error
+          overwrite: true
 
   ios:
     name: Build iOS simulator
@@ -797,12 +902,36 @@ jobs:
           ls -lh "$ZIP_NAME"
 
       - name: Upload iOS simulator release
+        id: upload_ios_release
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ios-release
           path: OPTNWallet-*-ios-simulator.zip
           retention-days: 30
           if-no-files-found: error
+
+      - name: Retry iOS simulator release upload
+        id: retry_ios_release_upload
+        if: steps.upload_ios_release.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ios-release
+          path: OPTNWallet-*-ios-simulator.zip
+          retention-days: 30
+          if-no-files-found: error
+          overwrite: true
+
+      - name: Final retry iOS simulator release upload
+        if: steps.upload_ios_release.outcome == 'failure' && steps.retry_ios_release_upload.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ios-release
+          path: OPTNWallet-*-ios-simulator.zip
+          retention-days: 30
+          if-no-files-found: error
+          overwrite: true
 
   riscv64:
     name: Build desktop (linux-riscv64)
@@ -903,12 +1032,36 @@ jobs:
           test -s "$DEST"
 
       - name: Upload the unbundled riscv64 ELF
+        id: upload_riscv64_release
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: desktop-linux-riscv64
           path: OPTNWallet-*-linux-riscv64-unbundled
           retention-days: 30
           if-no-files-found: error
+
+      - name: Retry riscv64 release upload
+        id: retry_riscv64_release_upload
+        if: steps.upload_riscv64_release.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: desktop-linux-riscv64
+          path: OPTNWallet-*-linux-riscv64-unbundled
+          retention-days: 30
+          if-no-files-found: error
+          overwrite: true
+
+      - name: Final retry riscv64 release upload
+        if: steps.upload_riscv64_release.outcome == 'failure' && steps.retry_riscv64_release_upload.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: desktop-linux-riscv64
+          path: OPTNWallet-*-linux-riscv64-unbundled
+          retention-days: 30
+          if-no-files-found: error
+          overwrite: true
 
   # Flatpak is how a large share of Linux desktop users install anything, and
   # Tauri has no bundler target for it — so it is built here, by hand, from the
@@ -1064,12 +1217,36 @@ jobs:
           sudo flatpak uninstall -y com.optilabs.wallet
 
       - name: Upload the Flatpak
+        id: upload_flatpak_release
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: flatpak-${{ matrix.label }}
           path: build/*.flatpak
           retention-days: 30
           if-no-files-found: error
+
+      - name: Retry Flatpak release upload
+        id: retry_flatpak_release_upload
+        if: steps.upload_flatpak_release.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: flatpak-${{ matrix.label }}
+          path: build/*.flatpak
+          retention-days: 30
+          if-no-files-found: error
+          overwrite: true
+
+      - name: Final retry Flatpak release upload
+        if: steps.upload_flatpak_release.outcome == 'failure' && steps.retry_flatpak_release_upload.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: flatpak-${{ matrix.label }}
+          path: build/*.flatpak
+          retention-days: 30
+          if-no-files-found: error
+          overwrite: true
 
   # The `optn` CLI ships as a release asset like everything else.
   #
@@ -1185,12 +1362,36 @@ jobs:
 
       - name: Upload the CLI binary
         if: env.CLI_PRESENT == 'true'
+        id: upload_cli_release
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: cli-${{ matrix.label }}
           path: cli-release/*
           retention-days: 30
           if-no-files-found: error
+
+      - name: Retry CLI binary upload
+        id: retry_cli_release_upload
+        if: env.CLI_PRESENT == 'true' && steps.upload_cli_release.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cli-${{ matrix.label }}
+          path: cli-release/*
+          retention-days: 30
+          if-no-files-found: error
+          overwrite: true
+
+      - name: Final retry CLI binary upload
+        if: env.CLI_PRESENT == 'true' && steps.upload_cli_release.outcome == 'failure' && steps.retry_cli_release_upload.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cli-${{ matrix.label }}
+          path: cli-release/*
+          retention-days: 30
+          if-no-files-found: error
+          overwrite: true
 
   publish:
     name: Publish GitHub release
@@ -1304,7 +1505,10 @@ jobs:
               # Gradle's pre-flavour output carries no version to check. The
               # flavoured names do (optn-wallet-<version>-<flavour>-release.apk)
               # and are validated like everything else.
-              app-release.apk|app-release.aab) ;;
+              # Gradle's release bundle task emits this unversioned Play
+              # filename even though the APK outputs are versioned by the
+              # application variant configuration.
+              app-release.apk|app-release.aab|app-play-release.aab) ;;
               *"$VERSION_CORE"*) ;;
               *)
                 echo "::error::$base does not carry version $VERSION_CORE; \
@@ -1374,13 +1578,15 @@ jobs:
               # Already named by the flatpak job, which knows its own arch;
               # matching on the filename here would only re-derive it.
               *.flatpak)         place "$src" "$base" ;;
+              # The RISC-V release job already gives this binary a
+              # version-bearing filename; keep it ahead of the generic CLI rule.
+              OPTNWallet-*-linux-riscv64-unbundled)
+                place "$src" "OPTNWallet-${VERSION}-linux-riscv64-unbundled" ;;
               # Already named by the cli job, which knows its own target.
               optn-*)            place "$src" "$base" ;;
               *-chrome.zip)      place "$src" "OPTNWallet-${VERSION}-chrome.zip" ;;
               *-firefox.zip)     place "$src" "OPTNWallet-${VERSION}-firefox.zip" ;;
               *-ios-simulator.zip) place "$src" "OPTNWallet-${VERSION}-ios-simulator.zip" ;;
-              OPTNWallet-*-linux-riscv64-unbundled|optn-wallet-desktop)
-                place "$src" "OPTNWallet-${VERSION}-linux-riscv64-unbundled" ;;
               # *.app.zip after chrome/firefox so those rules cannot steal it.
               *.app.zip)
                 suffix=""
@@ -1403,7 +1609,7 @@ jobs:
             -name '*.apk' -o -name '*.aab' -o -name '*.exe' -o -name '*.msi' \
             -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \
             -o -name '*.zip' \
-            -o -name 'OPTNWallet-*-linux-riscv64-unbundled' -o -name 'optn-wallet-desktop' \
+            -o -name 'OPTNWallet-*-linux-riscv64-unbundled' \
           \) -print0)
 
           find release-files -type f -print | sort
