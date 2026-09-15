@@ -64,11 +64,22 @@ def verify_results(job, name, successful):
     body = step(job, name)["run"]
     with tempfile.TemporaryDirectory(prefix="optn-preview-results-") as temporary:
         directory = Path(temporary)
-        check(body, directory, True, name, successful)
+        # The real guard runs in both PR and push contexts. These synthetic
+        # result cases exercise the packaged/release branch, so pin the event
+        # explicitly instead of inheriting GITHUB_EVENT_NAME=pull_request from
+        # the CI job that invokes this script.
+        release_environment = {**successful, "GITHUB_EVENT_NAME": "push"}
+        check(body, directory, True, name, release_environment)
         for variable, value in successful.items():
             failures = ("false", "") if value == "true" else ("failure", "cancelled", "skipped", "")
             for failure in failures:
-                check(body, directory, False, f"{name}: {variable}={failure}", {**successful, variable: failure})
+                check(
+                    body,
+                    directory,
+                    False,
+                    f"{name}: {variable}={failure}",
+                    {**successful, variable: failure, "GITHUB_EVENT_NAME": "push"},
+                )
     print(f"{name}: unsuccessful or absent dependencies rejected")
 
 
