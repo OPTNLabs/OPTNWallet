@@ -111,6 +111,10 @@ jobs:
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: './src-tauri -> target'
+          # The default key includes only the workflow job id. Make the
+          # target explicit so the same platform/target can reuse its cache
+          # across preview runs without mixing native and cross-target output.
+          shared-key: tauri-${{ matrix.target }}
 
       - name: Install npm dependencies
         run: npm ci
@@ -123,7 +127,7 @@ jobs:
         # first so a transient CDN disconnect does not waste the full build.
         # Asset URLs are checked against fixed digests; a changed upstream
         # asset fails closed instead of executing an unreviewed replacement.
-        if: startsWith(matrix.platform, 'ubuntu')
+        if: startsWith(matrix.platform, 'ubuntu') && github.event_name != 'pull_request'
         shell: bash
         env:
           # Read-only, and used by exactly one fetch below: the api.github.com
@@ -232,10 +236,10 @@ jobs:
           echo "signed $count bundled Tor binaries"
 
       - name: Build Tauri (debug)
-        # No --bundles: tauri.conf.json already says targets "all", and a preview
-        # that skipped a format would stop being a preview of what ships. Linux
-        # builds the AppImage here too, which is the only place linuxdeploy runs
-        # before release.yml gates a release on the resulting file.
+        # Release/manual preview runs with bundles: tauri.conf.json says targets
+        # "all", and the package checks below ensure no format silently drops.
+        # Pull requests use --no-bundle so they validate native compilation
+        # without repeating the slow installer work that release.yml performs.
         #
         # --verbose because the AppImage bundler swallows linuxdeploy's stderr:
         # a failure prints `failed to run linuxdeploy` and nothing else, which
@@ -258,9 +262,19 @@ jobs:
           set -euo pipefail
           target='${{ matrix.target }}'
           build() {
-            npx tauri build --debug --target "$target" --verbose
+            if [ "${{ github.event_name }}" = 'pull_request' ]; then
+              # Pull requests already have the required Linux E2E binary
+              # check. Compile every native desktop target here, but defer
+              # installer/AppImage packaging to the staging/main release
+              # matrix. Packaging an uncached Linux AppImage was measured at
+              # 50-56 minutes and was the dominant PR-cycle bottleneck.
+              npx tauri build --debug --no-bundle --target "$target" --verbose
+            else
+              npx tauri build --debug --target "$target" --verbose
+            fi
           }
-          if [ "${{ runner.os }}" != 'macOS' ]; then
+          if [ "${{ github.event_name }}" = 'pull_request' ] ||
+            [ "${{ runner.os }}" != 'macOS' ]; then
             build
             exit 0
           fi
@@ -285,8 +299,21 @@ jobs:
             attempt=$((attempt + 1))
           done
 
+      - name: Verify the unbundled native binary
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          BINARY="$(find "src-tauri/target/${{ matrix.target }}/debug" \
+            -maxdepth 1 -type f \
+            \( -name 'optn-wallet-desktop' -o -name 'optn-wallet-desktop.exe' \) \
+            -print -quit)"
+          test -n "$BINARY"
+          test -s "$BINARY"
+          echo "native preview binary: $BINARY"
+
       - name: Smoke-test packaged Linux Tor
-        if: startsWith(matrix.platform, 'ubuntu')
+        if: startsWith(matrix.platform, 'ubuntu') && github.event_name != 'pull_request'
         shell: bash
         run: |
           APPIMAGE_PATH="$(find "src-tauri/target/${{ matrix.target }}/debug/bundle" -type f -name '*.AppImage' -print -quit)"
@@ -300,7 +327,7 @@ jobs:
       # a bundler that quietly stopped emitting a format kept every preview green
       # until release day.
       - name: Verify the macOS bundle can actually launch
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && github.event_name != 'pull_request'
         shell: bash
         run: |
           set -euo pipefail
@@ -312,6 +339,7 @@ jobs:
           bash scripts/verify-macos-bundle.sh "$APP_PATH"
 
       - name: Verify every expected bundle was produced
+        if: github.event_name != 'pull_request'
         shell: bash
         run: |
           BUNDLE="src-tauri/target/${{ matrix.target }}/debug/bundle"
@@ -345,7 +373,7 @@ jobs:
       # meant downloading the deb and rpm too, and no format was individually
       # assertable.
       - name: Upload NSIS installer
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && github.event_name != 'pull_request'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: preview-${{ matrix.label }}-nsis
@@ -354,7 +382,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload MSI installer
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && github.event_name != 'pull_request'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: preview-${{ matrix.label }}-msi
@@ -363,7 +391,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload disk image
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && github.event_name != 'pull_request'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: preview-${{ matrix.label }}-dmg
@@ -372,7 +400,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload AppImage
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && github.event_name != 'pull_request'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: preview-${{ matrix.label }}-appimage
@@ -381,7 +409,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload DEB package
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && github.event_name != 'pull_request'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: preview-${{ matrix.label }}-deb
@@ -390,7 +418,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload RPM package
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && github.event_name != 'pull_request'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: preview-${{ matrix.label }}-rpm
@@ -405,6 +433,9 @@ jobs:
   flatpak-preview:
     name: Preview Flatpak (${{ matrix.label }})
     needs: build-desktop-preview
+    # Flatpak consumes the packaged DEB. Keep it in full/manual preview and
+    # release validation; PRs use the faster unbundled native build above.
+    if: github.event_name != 'pull_request'
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -541,20 +572,30 @@ jobs:
           DESKTOP_RESULT: ${{ needs.build-desktop-preview.result }}
           FLATPAK_RESULT: ${{ needs.flatpak-preview.result }}
         run: |
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            if [ "$DESKTOP_RESULT" != success ]; then
+              echo '::error::a required native desktop preview failed, was cancelled, or was skipped'
+              exit 1
+            fi
+            exit 0
+          fi
           if [ "$DESKTOP_RESULT" != success ] || [ "$FLATPAK_RESULT" != success ]; then
-            echo '::error::a required desktop or Flatpak build failed, was cancelled, or was skipped'
+            echo '::error::a required packaged desktop or Flatpak build failed, was cancelled, or was skipped'
             exit 1
           fi
 
       - name: Download every preview artifact
+        if: github.event_name != 'pull_request'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: artifacts
 
       - name: List what arrived
+        if: github.event_name != 'pull_request'
         run: find artifacts -type f -print | sort
 
       - name: Verify nothing dropped
+        if: github.event_name != 'pull_request'
         run: |
           missing=0
           expect() {

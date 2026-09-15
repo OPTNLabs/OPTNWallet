@@ -348,6 +348,48 @@ describe('release workflow', () => {
     expect(previewTimeout).toBeGreaterThanOrEqual(60);
   });
 
+  it('keeps pull-request desktop validation unbundled and reuses target caches', () => {
+    // Full installer packaging is repeated by the staging/main release matrix.
+    // Pull requests still compile every native target, while avoiding the
+    // uncached Linux AppImage/DEB/RPM bottleneck measured in the CI audit.
+    expect(desktopPreviewWorkflow).toContain(
+      'npx tauri build --debug --no-bundle --target "$target" --verbose'
+    );
+    expect(desktopPreviewWorkflow).toContain(
+      "if: startsWith(matrix.platform, 'ubuntu') && github.event_name != 'pull_request'"
+    );
+    expect(desktopPreviewWorkflow).toContain(
+      'shared-key: tauri-${{ matrix.target }}'
+    );
+    expect(desktopPreviewWorkflow).toContain(
+      'if: github.event_name != \'pull_request\''
+    );
+    expect(desktopPreviewWorkflow).toContain(
+      'if: github.event_name == \'pull_request\''
+    );
+    expect(desktopPreviewWorkflow).toContain(
+      'Verify the unbundled native binary'
+    );
+  });
+
+  it('keeps full desktop packaging on main pushes and manual previews', () => {
+    // The fast path is limited to pull_request events. Main promotion and a
+    // maintainer-triggered preview must still exercise the packages that ship.
+    expect(desktopPreviewWorkflow).toMatch(
+      /push:\n    branches: \[main\]/
+    );
+    expect(desktopPreviewWorkflow).toContain('workflow_dispatch:');
+    expect(desktopPreviewWorkflow).toContain(
+      'npx tauri build --debug --target "$target" --verbose'
+    );
+    expect(workflow).toMatch(
+      /branches:\n      - main\n      - staging/
+    );
+    expect(workflow).toContain(
+      'shared-key: tauri-${{ matrix.target }}'
+    );
+  });
+
   it('ships Linux x64 and ARM64 AppImages as the portable all-distro Linux path', () => {
     expect(workflow).toContain('target: x86_64-pc-windows-msvc');
     expect(workflow).toContain('target: x86_64-unknown-linux-gnu');

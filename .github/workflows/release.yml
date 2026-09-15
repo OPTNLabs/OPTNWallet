@@ -514,6 +514,9 @@ jobs:
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: './src-tauri -> target'
+          # Match desktop-preview's target-specific cache so promotion does
+          # not discard the compilation work already completed in validation.
+          shared-key: tauri-${{ matrix.target }}
 
       - name: Install dependencies
         run: npm ci
