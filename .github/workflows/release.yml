@@ -1304,7 +1304,7 @@ jobs:
               # Gradle's pre-flavour output carries no version to check. The
               # flavoured names do (optn-wallet-<version>-<flavour>-release.apk)
               # and are validated like everything else.
-              app-release.apk|app-release.aab|optn-wallet-desktop) ;;
+              app-release.apk|app-release.aab) ;;
               *"$VERSION_CORE"*) ;;
               *)
                 echo "::error::$base does not carry version $VERSION_CORE; \
@@ -1374,9 +1374,9 @@ jobs:
               # Already named by the flatpak job, which knows its own arch;
               # matching on the filename here would only re-derive it.
               *.flatpak)         place "$src" "$base" ;;
-              # This RISC-V desktop binary has no version-bearing filename;
-              # handle it before the generic CLI rule below.
-              OPTNWallet-*-linux-riscv64-unbundled|optn-wallet-desktop)
+              # The RISC-V release job already gives this binary a
+              # version-bearing filename; keep it ahead of the generic CLI rule.
+              OPTNWallet-*-linux-riscv64-unbundled)
                 place "$src" "OPTNWallet-${VERSION}-linux-riscv64-unbundled" ;;
               # Already named by the cli job, which knows its own target.
               optn-*)            place "$src" "$base" ;;
@@ -1405,7 +1405,7 @@ jobs:
             -name '*.apk' -o -name '*.aab' -o -name '*.exe' -o -name '*.msi' \
             -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \
             -o -name '*.zip' \
-            -o -name 'OPTNWallet-*-linux-riscv64-unbundled' -o -name 'optn-wallet-desktop' \
+            -o -name 'OPTNWallet-*-linux-riscv64-unbundled' \
           \) -print0)
 
           find release-files -type f -print | sort
