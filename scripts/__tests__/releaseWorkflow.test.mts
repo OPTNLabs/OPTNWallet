@@ -483,8 +483,14 @@ describe('release workflow', () => {
     // Unix CLI binaries are extensionless and Flatpaks use .flatpak. Both
     // still need to reach the release set, checksum file, and provenance
     // attestation like every other published artifact.
-    expect(workflow).toMatch(/-name '\*\.flatpak'/);
-    expect(workflow).toMatch(/-name 'optn-\*'/);
+    const findStart = workflow.indexOf('done < <(find artifacts');
+    const findEnd = workflow.indexOf(') -print0)', findStart);
+    const assemblyFind = workflow.slice(findStart, findEnd);
+    expect(assemblyFind).toContain("-name '*.flatpak'");
+    expect(assemblyFind).toContain(
+      "-o \\( -path 'artifacts/cli-*/*' -a -name 'optn-*' \\)"
+    );
+    expect(assemblyFind).not.toContain("-o -name 'optn-*'");
     expect(workflow).toContain('release-files/*.flatpak');
     expect(workflow).toContain('release-files/optn-*');
   });
