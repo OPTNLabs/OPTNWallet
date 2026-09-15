@@ -1304,7 +1304,7 @@ jobs:
               # Gradle's pre-flavour output carries no version to check. The
               # flavoured names do (optn-wallet-<version>-<flavour>-release.apk)
               # and are validated like everything else.
-              app-release.apk|app-release.aab) ;;
+              app-release.apk|app-release.aab|optn-wallet-desktop) ;;
               *"$VERSION_CORE"*) ;;
               *)
                 echo "::error::$base does not carry version $VERSION_CORE; \
@@ -1374,13 +1374,15 @@ jobs:
               # Already named by the flatpak job, which knows its own arch;
               # matching on the filename here would only re-derive it.
               *.flatpak)         place "$src" "$base" ;;
+              # This RISC-V desktop binary has no version-bearing filename;
+              # handle it before the generic CLI rule below.
+              OPTNWallet-*-linux-riscv64-unbundled|optn-wallet-desktop)
+                place "$src" "OPTNWallet-${VERSION}-linux-riscv64-unbundled" ;;
               # Already named by the cli job, which knows its own target.
               optn-*)            place "$src" "$base" ;;
               *-chrome.zip)      place "$src" "OPTNWallet-${VERSION}-chrome.zip" ;;
               *-firefox.zip)     place "$src" "OPTNWallet-${VERSION}-firefox.zip" ;;
               *-ios-simulator.zip) place "$src" "OPTNWallet-${VERSION}-ios-simulator.zip" ;;
-              OPTNWallet-*-linux-riscv64-unbundled|optn-wallet-desktop)
-                place "$src" "OPTNWallet-${VERSION}-linux-riscv64-unbundled" ;;
               # *.app.zip after chrome/firefox so those rules cannot steal it.
               *.app.zip)
                 suffix=""
