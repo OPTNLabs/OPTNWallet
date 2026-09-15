@@ -3,7 +3,7 @@ name: Security analysis
 on:
   pull_request:
   push:
-    branches: [main, staging, dev]
+    branches: [main]
   schedule:
     - cron: '37 3 * * 1'
   workflow_dispatch:

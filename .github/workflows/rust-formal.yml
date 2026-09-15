@@ -12,7 +12,7 @@ on:
       - 'rust-toolchain.toml'
       - '.github/workflows/rust-formal.yml'
   push:
-    branches: [dev, staging]
+    branches: [main]
     paths:
       - 'Cargo.toml'
       - 'Cargo.lock'

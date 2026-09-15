@@ -1,7 +1,7 @@
 name: Desktop Preview
 
-# Mirrors android-preview.yml — builds on every push/PR to dev
-# Produces unsigned debug builds for every native desktop target
+# Mirrors android-preview.yml — builds on every PR and main post-merge push.
+# Produces unsigned debug builds for every native desktop target.
 
 on:
   # This check is required by the dev/staging ruleset. Keep the workflow
@@ -11,7 +11,7 @@ on:
     # that would otherwise reach a release without these asset checks.
     branches: [dev, staging, main]
   push:
-    branches: [dev, staging]
+    branches: [main]
   # Allows a maintainer to recover the required check when GitHub does not
   # create the pull_request run for a head update.
   workflow_dispatch:

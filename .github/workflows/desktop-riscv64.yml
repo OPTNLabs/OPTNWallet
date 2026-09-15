@@ -23,7 +23,7 @@ on:
     # that put main on the previews applies here.
     branches: [dev, staging, main]
   push:
-    branches: [dev, staging, main]
+    branches: [main]
 
 concurrency:
   group: desktop-riscv64-${{ github.ref }}
