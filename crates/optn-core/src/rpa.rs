@@ -330,6 +330,71 @@ pub fn send_block_reason(code: &Cashcode) -> Option<String> {
     None
 }
 
+/// How many nSequence values to try before reshaping the transaction.
+pub fn grind_budget(prefix_bits: u8) -> Result<u32> {
+    if !matches!(prefix_bits, 4 | 8 | 12 | 16) {
+        return Err(CliError::Usage(format!(
+            "unsupported Cash Code prefix size: {prefix_bits} bits"
+        )));
+    }
+    Ok(8u32 << prefix_bits)
+}
+
+/// The nSequence to try on attempt `offset`, counting down from `0xffffffff`.
+///
+/// Staying at or above `0x8000_0000` keeps bit 31 set, which is what marks a
+/// sequence BIP68-final: below it the value becomes a relative timelock.
+pub fn grind_sequence(offset: u32) -> Result<u32> {
+    0xffff_ffffu32
+        .checked_sub(offset)
+        .filter(|s| *s >= 0x8000_0000)
+        .ok_or_else(|| {
+            CliError::Usage("RPA grind exhausted BIP68-final nSequence values".to_string())
+        })
+}
+
+/// What a successful grind produces.
+pub struct GroundTransaction {
+    /// The signed transaction, ready to broadcast.
+    pub raw: Vec<u8>,
+    /// Attempts used, counting the one that matched.
+    pub grind_tries: u32,
+    /// The nSequence that matched.
+    pub sequence: u32,
+}
+
+/// Grind `transaction`'s nSequence until input 0 hashes to the recipient's
+/// scan prefix, and return the signed result.
+///
+/// `Ok(None)` means the budget ran out. That is a reshape signal, not an
+/// error: the caller should choose different coins.
+pub fn grind_transaction(
+    transaction: &mut crate::tx::Transaction,
+    keys: &[k256::ecdsa::SigningKey],
+    scan_pubkey: &[u8; 33],
+    prefix_bits: u8,
+) -> Result<Option<GroundTransaction>> {
+    let target = grind_string(scan_pubkey, prefix_bits)?.to_lowercase();
+    let budget = grind_budget(prefix_bits)?;
+    for offset in 0..budget {
+        transaction.sequence = grind_sequence(offset)?;
+        let (raw, script_sigs) = transaction.sign_detailed(keys)?;
+        let serialized = transaction.serialize_input(0, &script_sigs[0])?;
+        let digest: String = crate::tx::double_sha256(&serialized)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        if digest.starts_with(&target) {
+            return Ok(Some(GroundTransaction {
+                raw,
+                grind_tries: offset + 1,
+                sequence: transaction.sequence,
+            }));
+        }
+    }
+    Ok(None)
+}
+
 /// The hex a sender grinds the input hash to match: the scan pubkey's hex
 /// after the 02/03 byte, truncated to `prefix_bits`.
 pub fn grind_string(scan_pubkey: &[u8; 33], prefix_bits: u8) -> Result<String> {
@@ -921,6 +986,21 @@ mod tests {
         assert_eq!(grind_string(&scan, 16).unwrap(), "5CBD");
         assert_eq!(grind_string(&scan, 8).unwrap(), "5C");
         assert!(grind_string(&scan, 10).is_err());
+    }
+
+    #[test]
+    fn grind_sequences_stay_bip68_final() {
+        assert_eq!(grind_sequence(0).unwrap(), 0xffff_ffff);
+        assert_eq!(grind_sequence(1).unwrap(), 0xffff_fffe);
+        let budget = grind_budget(16).unwrap();
+        for offset in [0, 1, budget / 2, budget - 1] {
+            assert!(
+                grind_sequence(offset).unwrap() >= 0x8000_0000,
+                "offset {offset} left the BIP68-final range"
+            );
+        }
+        assert_eq!(grind_sequence(0x7fff_ffff).unwrap(), 0x8000_0000);
+        assert!(grind_sequence(0x8000_0000).is_err());
     }
 
     #[test]

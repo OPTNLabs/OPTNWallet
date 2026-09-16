@@ -51,6 +51,8 @@ pub mod tx;
 pub mod wallet_file;
 pub mod wallet_pack;
 pub mod watch_only;
+/// Cross-output (XO) skeleton. Not a P2PKH wrapper and not a BIP44 path.
+pub mod xo;
 
 /// The wallet's binding surface. wasm32 only, so no other target pays for it.
 #[cfg(target_arch = "wasm32")]

@@ -268,50 +268,93 @@ fn architecture() {
         &mut failures,
     );
 
+    // A fourth crate, Dioxus, is still a plugin on the same seam: optn-app
+    // and optn-transport only, plus Dioxus SSR. A windowing stack here would
+    // break the no-display swap proof the same way eframe would for egui.
+    let dioxus_ui_manifest = read(&root.join("crates/optn-ui-dioxus/Cargo.toml"));
+    require_dependency(
+        "crates/optn-ui-dioxus",
+        &dioxus_ui_manifest,
+        "optn-app",
+        &mut failures,
+    );
+    require_dependency(
+        "crates/optn-ui-dioxus",
+        &dioxus_ui_manifest,
+        "optn-transport",
+        &mut failures,
+    );
+    require_dependency(
+        "crates/optn-ui-dioxus",
+        &dioxus_ui_manifest,
+        "dioxus",
+        &mut failures,
+    );
+    forbid_dependencies(
+        "crates/optn-ui-dioxus",
+        &dioxus_ui_manifest,
+        &[
+            "optn-core",
+            "optn-runtime",
+            "optn-platform",
+            "optn-platform-native",
+        ],
+        &mut failures,
+    );
+    for framework in FRAMEWORK_NAMES {
+        if *framework == "dioxus" {
+            continue;
+        }
+        if manifest_body(&dioxus_ui_manifest)
+            .to_lowercase()
+            .contains(framework)
+        {
+            failures.push(format!(
+                "crates/optn-ui-dioxus depends on '{framework}'; it renders on dioxus alone, and a \
+                 second framework there would mean the toolkits are not interchangeable"
+            ));
+        }
+    }
+    forbid_dependencies(
+        "crates/optn-ui-dioxus",
+        &dioxus_ui_manifest,
+        &["dioxus-desktop", "wry", "tao", "winit", "egui", "eframe"],
+        &mut failures,
+    );
+    // dioxus-ssr is the no-display backend; a desktop/web renderer is not.
+
     // "The renderer is swappable" is a claim with a number in it: one line.
-    // Both renderer crates carry the same host block -- the same script through
+    // Renderer crates carry the same host block -- the same script through
     // the same `optn_transport::run`, asserting the same facts -- and the only
     // line that may differ between them is the `type Ui<T> = ...` alias naming
     // the renderer. Checked rather than stated, because a claim about a diff
     // stops being true the moment someone edits one side.
-    let text_host = host_block(&read(&root.join("crates/optn-ui-text/src/lib.rs")));
-    let egui_host = host_block(&read(&root.join("crates/optn-ui-egui/src/lib.rs")));
-    match (text_host, egui_host) {
-        (Some(text), Some(egui)) => {
-            let differences: Vec<(usize, &str, &str)> = text
-                .iter()
-                .zip(egui.iter())
-                .enumerate()
-                .filter(|(_, (a, b))| a != b)
-                .map(|(index, (a, b))| (index, a.as_str(), b.as_str()))
-                .collect();
-            if text.len() != egui.len() {
-                failures.push(format!(
-                    "the two renderers' host blocks are {} and {} lines; swapping renderers must \
-                     be one line, so they have to stay the same block",
-                    text.len(),
-                    egui.len()
-                ));
-            } else if differences.len() != 1 {
-                failures.push(format!(
-                    "the two renderers' host blocks differ on {} lines; only the `type Ui` alias \
-                     may differ, or swapping renderers is not one line: {:?}",
-                    differences.len(),
-                    differences
-                ));
-            } else if !differences[0].1.trim_start().starts_with("type Ui<T> =") {
-                failures.push(format!(
-                    "the one line that differs between the renderers' host blocks is not the \
-                     renderer alias: {:?}",
-                    differences[0]
-                ));
+    let renderer_hosts = [
+        (
+            "crates/optn-ui-text",
+            host_block(&read(&root.join("crates/optn-ui-text/src/lib.rs"))),
+        ),
+        (
+            "crates/optn-ui-egui",
+            host_block(&read(&root.join("crates/optn-ui-egui/src/lib.rs"))),
+        ),
+        (
+            "crates/optn-ui-dioxus",
+            host_block(&read(&root.join("crates/optn-ui-dioxus/src/lib.rs"))),
+        ),
+    ];
+    for (index, (left_name, left_host)) in renderer_hosts.iter().enumerate() {
+        for (right_name, right_host) in renderer_hosts.iter().skip(index + 1) {
+            match (left_host, right_host) {
+                (Some(left), Some(right)) => {
+                    compare_host_blocks(left_name, left, right_name, right, &mut failures);
+                }
+                _ => failures.push(format!(
+                    "{left_name} or {right_name} has no host block; the swap is only demonstrated \
+                     while every renderer drives optn_transport::run through the same script"
+                )),
             }
         }
-        _ => failures.push(
-            "one of the renderer crates has no host block; the swap is only demonstrated while \
-             both drive optn_transport::run through the same script"
-                .into(),
-        ),
     }
 
     let opal_reference_manifest = read(&root.join("apple/OPTNOpalReference/Package.swift"));
@@ -525,6 +568,43 @@ fn architecture() {
         eprintln!("architecture boundary violation: {failure}");
     }
     std::process::exit(1);
+}
+
+fn compare_host_blocks(
+    left_name: &str,
+    left: &[String],
+    right_name: &str,
+    right: &[String],
+    failures: &mut Vec<String>,
+) {
+    let differences: Vec<(usize, &str, &str)> = left
+        .iter()
+        .zip(right.iter())
+        .enumerate()
+        .filter(|(_, (a, b))| a != b)
+        .map(|(index, (a, b))| (index, a.as_str(), b.as_str()))
+        .collect();
+    if left.len() != right.len() {
+        failures.push(format!(
+            "{left_name} and {right_name} host blocks are {} and {} lines; swapping renderers must \
+             be one line, so they have to stay the same block",
+            left.len(),
+            right.len()
+        ));
+    } else if differences.len() != 1 {
+        failures.push(format!(
+            "{left_name} and {right_name} host blocks differ on {} lines; only the `type Ui` alias \
+             may differ, or swapping renderers is not one line: {:?}",
+            differences.len(),
+            differences
+        ));
+    } else if !differences[0].1.trim_start().starts_with("type Ui<T> =") {
+        failures.push(format!(
+            "the one line that differs between {left_name} and {right_name} host blocks is not the \
+             renderer alias: {:?}",
+            differences[0]
+        ));
+    }
 }
 
 /// The shared host block a renderer crate carries, if it carries one.

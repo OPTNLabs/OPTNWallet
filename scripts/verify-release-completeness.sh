@@ -3,7 +3,7 @@
 #
 # The release asserts its own asset set, but nothing asserted the assertion. A
 # pattern with a typo, a rule that silently matches nothing, a guard broad
-# enough to accept anything — each looks correct in review and each removes the
+# enough to accept anything ??? each looks correct in review and each removes the
 # protection entirely.
 #
 # So this executes the workflow's own shell against a synthetic release built
@@ -83,7 +83,7 @@ step = next(
 io.open(sys.argv[2], 'w', encoding='utf-8', newline='\n').write(step['run'])
 PY
 
-# The full set, from the same config the check reads. Filenames only — a
+# The full set, from the same config the check reads. Filenames only ??? a
 # pattern like *_amd64.deb needs a concrete name to stand in for it.
 "$PY_BIN" - "$CONFIG" "$VERSION" > "$WORK/assets.txt" <<'PY'
 import json, sys

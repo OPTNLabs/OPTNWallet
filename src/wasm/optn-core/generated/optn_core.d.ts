@@ -106,6 +106,28 @@ export function fusionScalarSum(packed: Uint8Array): Uint8Array;
 export function fusionVerifySchnorr(pubkey: Uint8Array, signature: Uint8Array, message: Uint8Array): boolean;
 
 /**
+ * How many nSequence values to try before reshaping the transaction.
+ */
+export function grindBudget(prefix_bits: number): number;
+
+/**
+ * Sign and grind an assembled RPA payment, in the shared core.
+ *
+ * `raw_tx` is the assembled transaction with the stealth output already in
+ * place. `prevout_values` and the concatenated `prevout_scripts` (split by
+ * `prevout_script_lens`) describe the outputs being spent, in input order.
+ * `privkeys` is 32 bytes per input, in the same order.
+ *
+ * Returns `{"exhausted":true}` rather than throwing when the budget runs out.
+ */
+export function grindRpaTransaction(raw_tx: Uint8Array, prevout_values: BigUint64Array, prevout_scripts: Uint8Array, prevout_script_lens: Uint32Array, privkeys: Uint8Array, scan_pubkey: Uint8Array, prefix_bits: number): string;
+
+/**
+ * The nSequence for grind attempt `offset`, kept BIP68-final.
+ */
+export function grindSequence(offset: number): number;
+
+/**
  * The hex a sender grinds the input hash to match.
  */
 export function grindString(scan_pubkey: Uint8Array, prefix_bits: number): string;
@@ -175,6 +197,9 @@ export interface InitOutput {
     readonly fusionScalarIsCanonical: (a: number, b: number) => number;
     readonly fusionScalarSum: (a: number, b: number) => [number, number, number, number];
     readonly fusionVerifySchnorr: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
+    readonly grindBudget: (a: number) => [number, number, number];
+    readonly grindRpaTransaction: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => [number, number, number, number];
+    readonly grindSequence: (a: number) => [number, number, number];
     readonly grindString: (a: number, b: number, c: number) => [number, number, number, number];
     readonly looksLikeRpa: (a: number, b: number) => number;
     readonly paymentAddress: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];

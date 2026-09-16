@@ -126,6 +126,7 @@ enum RuntimeRequest {
         oneshot::Sender<Result<optn_core::hd::Wallet, TransportError>>,
     ),
     Action(AppAction, oneshot::Sender<()>),
+    Observation(AppAction, oneshot::Sender<()>),
     Security(
         WalletSecurityRequest,
         u64,
@@ -268,6 +269,29 @@ impl AppRuntime {
         let (applied_tx, applied_rx) = oneshot::channel();
         self.action_tx
             .send(RuntimeRequest::Action(action, applied_tx))
+            .await
+            .map_err(|_| RuntimeStopped)?;
+        applied_rx.await.map_err(|_| RuntimeStopped)
+    }
+
+    /// Publish a wallet observation the interface is not allowed to make.
+    ///
+    /// [`Self::dispatch`] uses `reduce_intent`, which refuses
+    /// `SetTokenIdentity`. Hash-verified BCMR results enter through this path.
+    pub async fn observe(&self, action: AppAction) -> Result<(), RuntimeStopped> {
+        if !matches!(
+            action,
+            AppAction::SetTokenIdentity { .. }
+                | AppAction::SetFusionPhase(_)
+                | AppAction::SetTorReady(_)
+                | AppAction::InsertCoin(_)
+                | AppAction::SetStealthSats(_)
+        ) {
+            return Err(RuntimeStopped);
+        }
+        let (applied_tx, applied_rx) = oneshot::channel();
+        self.action_tx
+            .send(RuntimeRequest::Observation(action, applied_tx))
             .await
             .map_err(|_| RuntimeStopped)?;
         applied_rx.await.map_err(|_| RuntimeStopped)
@@ -520,6 +544,12 @@ impl AppRuntimeDriver {
                         result
                     };
                     let _ = reply.send(result);
+                }
+                RuntimeRequest::Observation(action, applied) => {
+                    if let Some(event) = self.state.reduce(action) {
+                        self.publish(event);
+                    }
+                    let _ = applied.send(());
                 }
                 RuntimeRequest::Action(action, applied) => {
                     if self.security.is_some()
