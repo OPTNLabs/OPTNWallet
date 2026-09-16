@@ -14,11 +14,10 @@
 //! let painted = optn_transport::run::<_, Ui<_>>(transport, &script)?;
 //! ```
 //!
-//! `optn-ui-text` and `optn-ui-egui` both implement it — one drawing plain
-//! text with no framework at all, the other laying widgets out through a real
-//! immediate-mode toolkit with its own event model. Each crate runs the same
-//! script through [`run`] and asserts the same facts about what came back, so
-//! the claim is a compiled artifact rather than a paragraph.
+//! `optn-ui-text`, `optn-ui-egui`, and `optn-ui-dioxus` all implement it —
+//! plain text, an immediate-mode toolkit, and Dioxus SSR. Each crate runs the
+//! same script through [`run`] and asserts the same facts about what came
+//! back, so the claim is a compiled artifact rather than a paragraph.
 //!
 //! Note what the trait does *not* carry: no wallet type, no view model, no
 //! screen struct. A renderer that needed one of those in the seam would be a

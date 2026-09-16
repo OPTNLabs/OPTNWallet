@@ -166,6 +166,69 @@ pub fn publication_in<'a>(
     output_scripts.into_iter().find_map(parse_publication)
 }
 
+/// Name, ticker and decimals taken from a hash-verified BCMR registry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegistryNames {
+    pub name: String,
+    pub ticker: Option<String>,
+    pub decimals: u8,
+}
+
+/// Parse the identity fields for `category_hex` from verified registry bytes.
+///
+/// Only call this on contents whose hash already matched a publication. A
+/// registry that cannot name this category is not a name.
+pub fn names_for_category(contents: &[u8], category_hex: &str) -> Option<RegistryNames> {
+    let json: serde_json::Value = serde_json::from_slice(contents).ok()?;
+    let identities = json.get("identities")?.as_object()?;
+    let wanted = category_hex.to_ascii_lowercase();
+    let mut best: Option<(u64, RegistryNames)> = None;
+    for snapshots in identities.values() {
+        let Some(obj) = snapshots.as_object() else {
+            continue;
+        };
+        for (timestamp, snapshot) in obj {
+            let token = match snapshot.get("token") {
+                Some(token) => token,
+                None => continue,
+            };
+            let category = match token.get("category").and_then(|value| value.as_str()) {
+                Some(category) => category,
+                None => continue,
+            };
+            if category.to_ascii_lowercase() != wanted {
+                continue;
+            }
+            let name = match snapshot.get("name").and_then(|value| value.as_str()) {
+                Some(name) if !name.is_empty() => name.to_owned(),
+                _ => continue,
+            };
+            let ticker = token
+                .get("symbol")
+                .and_then(|value| value.as_str())
+                .filter(|symbol| !symbol.is_empty())
+                .map(str::to_owned);
+            let decimals = token
+                .get("decimals")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0)
+                .min(u64::from(u8::MAX)) as u8;
+            let stamp = timestamp.parse::<u64>().unwrap_or(0);
+            if best.as_ref().is_none_or(|(known, _)| *known <= stamp) {
+                best = Some((
+                    stamp,
+                    RegistryNames {
+                        name,
+                        ticker,
+                        decimals,
+                    },
+                ));
+            }
+        }
+    }
+    best.map(|(_, names)| names)
+}
+
 /// One data push, or `None` if the script is malformed or truncated.
 fn read_push<'a>(script: &'a [u8], pos: &mut usize) -> Option<&'a [u8]> {
     let opcode = *script.get(*pos)?;
@@ -370,5 +433,20 @@ mod tests {
         script.extend_from_slice(uri.as_bytes());
         let publication = parse_publication(&script).expect("a publication");
         assert_eq!(publication.uris, vec![uri]);
+    }
+
+    #[test]
+    fn a_registry_names_the_category_it_commits_to() {
+        let category = "aa".repeat(32);
+        let body = format!(
+            r#"{{"identities":{{"{}":{{"1700000000":{{"name":"Bitcats","token":{{"category":"{category}","symbol":"BCAT","decimals":2}}}}}}}}}}"#,
+            "00".repeat(32)
+        );
+        let names = names_for_category(body.as_bytes(), &category).expect("named");
+        assert_eq!(names.name, "Bitcats");
+        assert_eq!(names.ticker.as_deref(), Some("BCAT"));
+        assert_eq!(names.decimals, 2);
+        assert_eq!(names_for_category(body.as_bytes(), &"bb".repeat(32)), None);
+        assert_eq!(names_for_category(b"not json", &category), None);
     }
 }

@@ -28,6 +28,7 @@ members = [
 exclude = [
   "crates/optn-cli",
   "crates/optn-ui-egui",
+  "crates/optn-ui-dioxus",
   "crates/optn-core",
   "src-tauri",
 ]

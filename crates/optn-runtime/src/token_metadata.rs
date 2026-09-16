@@ -25,6 +25,7 @@
 
 use std::time::Duration;
 
+use optn_app::{AppAction, IdentityStatus, TokenIdentity};
 use optn_core::bcmr::RegistryPublication;
 
 /// Bounds a fetch must respect.
@@ -197,6 +198,60 @@ pub fn fall_back_to_cached(
         },
         None => otherwise,
     }
+}
+
+fn category_hex(bytes: &[u8; 32]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Turn resolved metadata into the observation the application accepts.
+///
+/// Renderers never call this. The hash check already happened in [`resolve`];
+/// this only names the category and marks how far the identity got.
+pub fn observe_identity(category: [u8; 32], metadata: IdentityMetadata) -> AppAction {
+    let category_hex = category_hex(&category);
+    let parsed = metadata
+        .verified_contents()
+        .and_then(|bytes| optn_core::bcmr::names_for_category(bytes, &category_hex));
+    let identity = match (&metadata, parsed) {
+        (IdentityMetadata::Current { .. }, Some(names)) => TokenIdentity {
+            name: names.name,
+            ticker: names.ticker,
+            decimals: names.decimals,
+            status: IdentityStatus::Verified,
+        },
+        (IdentityMetadata::LastKnown { .. }, Some(names)) => TokenIdentity {
+            name: names.name,
+            ticker: names.ticker,
+            decimals: names.decimals,
+            status: IdentityStatus::Stale,
+        },
+        (IdentityMetadata::Unpublished, _) => TokenIdentity {
+            name: category_hex.clone(),
+            ticker: None,
+            decimals: 0,
+            status: IdentityStatus::Unpublished,
+        },
+        (IdentityMetadata::Unresolved { .. }, _) | (_, None) => TokenIdentity {
+            name: category_hex.clone(),
+            ticker: None,
+            decimals: 0,
+            status: IdentityStatus::Unresolved,
+        },
+    };
+    AppAction::SetTokenIdentity {
+        category_hex,
+        identity,
+    }
+}
+
+/// Resolve a publication, then publish the observation.
+pub fn observe_publication(
+    category: [u8; 32],
+    publication: &RegistryPublication,
+    attempts: &[(String, FetchAttempt)],
+) -> AppAction {
+    observe_identity(category, resolve(publication, attempts))
 }
 
 impl IdentityMetadata {
@@ -444,5 +499,182 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    const ALPHA: [u8; 32] = [0xaa; 32];
+
+    fn registry_body(name: &str, category: [u8; 32]) -> Vec<u8> {
+        let hex = category_hex(&category);
+        format!(
+            r#"{{"identities":{{"{}":{{"1700000000":{{"name":"{name}","token":{{"category":"{hex}","symbol":"BCAT","decimals":2}}}}}}}}}}"#,
+            "00".repeat(32)
+        )
+        .into_bytes()
+    }
+
+    fn coin(seed: u8, sats: u64, token: Option<optn_core::token::TokenData>) -> optn_app::Coin {
+        let outpoint = optn_app::Outpoint::new([seed; 32], u32::from(seed));
+        let coin = optn_app::Coin::new(outpoint, sats, format!("bitcoincash:q{seed}"))
+            .expect("a non-zero coin");
+        match token {
+            Some(token) => coin.with_token(token),
+            None => coin,
+        }
+    }
+
+    fn nft(category: [u8; 32], commitment: &[u8]) -> optn_core::token::TokenData {
+        optn_core::token::TokenData {
+            category,
+            amount: 0,
+            nft: Some(optn_core::token::Nft {
+                capability: optn_core::token::Capability::None,
+                commitment: commitment.to_vec(),
+            }),
+        }
+    }
+
+    fn wallet_with(coins: Vec<optn_app::Coin>) -> optn_app::AppState {
+        let mut state = optn_app::AppState::for_surface(optn_app::AppSurface::Desktop);
+        for coin in coins {
+            state.coins.insert(coin).expect("distinct outpoints");
+        }
+        state
+    }
+
+    /// Hash-matching publication bytes become the Current name on Assets and
+    /// My NFTs. This drives [`observe_publication`], not a pre-built identity.
+    #[test]
+    fn hash_matching_publication_becomes_current_identity_on_assets_and_nfts() {
+        let body = registry_body("Bitcats", ALPHA);
+        let publication = publication(&body, &["example.com"]);
+        let mut state = wallet_with(vec![
+            coin(
+                1,
+                1_000,
+                Some(optn_core::token::TokenData::fungible(ALPHA, 10)),
+            ),
+            coin(2, 1_000, Some(nft(ALPHA, b"\x01"))),
+        ]);
+        state.reduce(observe_publication(
+            ALPHA,
+            &publication,
+            &[("https://example.com/x".into(), Ok(body))],
+        ));
+
+        let assets = optn_app::assets_view_model(&state);
+        let identity = assets.categories[0]
+            .identity
+            .as_ref()
+            .expect("resolved identity");
+        assert_eq!(identity.name, "Bitcats");
+        assert_eq!(identity.status, IdentityStatus::Verified);
+        assert_eq!(identity.status.caveat(), None);
+        let nfts = optn_app::nfts_view_model(&state);
+        assert_eq!(
+            nfts.nfts[0]
+                .identity
+                .as_ref()
+                .map(|item| item.name.as_str()),
+            Some("Bitcats")
+        );
+    }
+
+    #[test]
+    fn a_mismatched_hash_is_not_shown_as_current() {
+        let body = registry_body("Bitcats", ALPHA);
+        let publication = publication(&body, &["example.com"]);
+        let mut state = wallet_with(vec![coin(
+            1,
+            1_000,
+            Some(optn_core::token::TokenData::fungible(ALPHA, 10)),
+        )]);
+        state.reduce(observe_publication(
+            ALPHA,
+            &publication,
+            &[(
+                "https://example.com/x".into(),
+                Ok(b"something else".to_vec()),
+            )],
+        ));
+        let assets = optn_app::assets_view_model(&state);
+        assert_eq!(assets.categories.len(), 1);
+        let identity = assets.categories[0]
+            .identity
+            .as_ref()
+            .expect("unresolved still named");
+        assert_ne!(identity.status, IdentityStatus::Verified);
+        assert_eq!(identity.status, IdentityStatus::Unresolved);
+        assert!(identity.status.caveat().is_some());
+        assert_ne!(identity.name, "Bitcats");
+    }
+
+    #[test]
+    fn unpublished_and_unresolved_keep_the_coin_visible_with_a_caveat() {
+        let mut unpublished = wallet_with(vec![coin(
+            1,
+            1_000,
+            Some(optn_core::token::TokenData::fungible(ALPHA, 10)),
+        )]);
+        unpublished.reduce(observe_identity(ALPHA, IdentityMetadata::Unpublished));
+        let assets = optn_app::assets_view_model(&unpublished);
+        assert_eq!(assets.categories.len(), 1);
+        let identity = assets.categories[0].identity.as_ref().expect("status");
+        assert_eq!(identity.status, IdentityStatus::Unpublished);
+        assert_eq!(identity.status.caveat(), Some("no registry published"));
+
+        let mut unresolved = wallet_with(vec![coin(
+            2,
+            1_000,
+            Some(optn_core::token::TokenData::fungible(ALPHA, 10)),
+        )]);
+        unresolved.reduce(observe_identity(
+            ALPHA,
+            IdentityMetadata::Unresolved {
+                reason: UnresolvedReason::AuthchainIncomplete,
+            },
+        ));
+        let assets = optn_app::assets_view_model(&unresolved);
+        assert_eq!(assets.categories.len(), 1);
+        let identity = assets.categories[0].identity.as_ref().expect("status");
+        assert_eq!(identity.status, IdentityStatus::Unresolved);
+        assert_eq!(identity.status.caveat(), Some("unverified"));
+    }
+
+    #[tokio::test]
+    async fn the_runtime_publishes_verified_identity_and_a_renderer_cannot() {
+        let body = registry_body("Bitcats", ALPHA);
+        let publication = publication(&body, &["example.com"]);
+        let state = wallet_with(vec![coin(
+            1,
+            1_000,
+            Some(optn_core::token::TokenData::fungible(ALPHA, 10)),
+        )]);
+        let runtime = crate::AppRuntime::spawn(state);
+        let action = observe_publication(
+            ALPHA,
+            &publication,
+            &[("https://example.com/x".into(), Ok(body))],
+        );
+        runtime.dispatch(action.clone()).await.expect("dispatch");
+        assert!(
+            runtime.state().token_identities.is_empty(),
+            "a renderer dispatch must not publish a name"
+        );
+        runtime.observe(action).await.expect("observe");
+        let assets = optn_app::assets_view_model(&runtime.state());
+        assert_eq!(
+            assets.categories[0]
+                .identity
+                .as_ref()
+                .map(|identity| identity.name.as_str()),
+            Some("Bitcats")
+        );
+        assert_eq!(
+            assets.categories[0]
+                .identity
+                .as_ref()
+                .map(|identity| identity.status),
+            Some(IdentityStatus::Verified)
+        );
     }
 }
