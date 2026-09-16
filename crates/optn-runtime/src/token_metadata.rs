@@ -27,9 +27,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use optn_app::{AppAction, AppState, IdentityStatus, TokenIdentity};
-use optn_core::bcmr::RegistryPublication;
+use optn_core::bcmr::{publication_in, RegistryPublication};
 
+use crate::authchain::{
+    self, AuthchainBudget, AuthchainResolution, AuthchainStep, ChainTransaction,
+};
 use crate::capability_planner::{candidate_plans, CapabilityPlan, TokenCapabilityOperation};
+use crate::chain::Evidence;
+use crate::chain_service::ObservedTransaction;
 
 /// Bounds a fetch must respect.
 ///
@@ -273,6 +278,8 @@ pub enum OwnedCategoryIdentity {
     },
     /// The authhead publishes nothing. Distinct from an incomplete walk.
     Unpublished,
+    /// The walk did not reach an authhead. Never Current.
+    Unresolved,
 }
 
 /// Capability plans a live resolver may use to obtain an authhead.
@@ -290,6 +297,165 @@ pub fn owned_token_categories(app: &AppState) -> BTreeSet<[u8; 32]> {
         .iter()
         .filter_map(|coin| coin.token().map(|token| token.category))
         .collect()
+}
+
+/// Observed transactions plus registry fetch attempts for one identity walk.
+///
+/// Fetch bytes are transport results, not an identity. The collector still
+/// walks the authchain; a missing authhead never becomes Current.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdentityCollection {
+    pub transactions: Vec<ChainTransaction>,
+    pub fetch_attempts: Vec<(String, FetchAttempt)>,
+    pub evidence: Evidence,
+}
+
+impl IdentityCollection {
+    /// Decode snapshot transactions into the provider-neutral authchain shape.
+    pub fn from_observed(
+        transactions: &[ObservedTransaction],
+        fetch_attempts: Vec<(String, FetchAttempt)>,
+        evidence: Evidence,
+    ) -> Self {
+        let transactions = transactions
+            .iter()
+            .filter_map(|observed| {
+                let decoded = optn_core::tx::decode(&observed.raw).ok()?;
+                Some(ChainTransaction {
+                    txid: observed.txid,
+                    inputs: decoded
+                        .inputs
+                        .into_iter()
+                        .map(|(txid, vout, _)| (txid, vout))
+                        .collect(),
+                    outputs: decoded
+                        .outputs
+                        .into_iter()
+                        .map(|output| output.script_pubkey)
+                        .collect(),
+                    block_height: observed.block_height,
+                })
+            })
+            .collect();
+        Self {
+            transactions,
+            fetch_attempts,
+            evidence,
+        }
+    }
+}
+
+/// Walk every owned category through the BCMR authchain plans.
+///
+/// Timeout, missing history, and a missing authbase are unresolved — never an
+/// authhead. An authhead with no publication is unpublished. Fetch attempts
+/// are applied only after that walk.
+pub fn collect_owned_token_identities(
+    categories: impl IntoIterator<Item = [u8; 32]>,
+    collection: &IdentityCollection,
+) -> BTreeMap<[u8; 32], OwnedCategoryIdentity> {
+    let mut observations = BTreeMap::new();
+    if owned_identity_plans().is_empty() {
+        return observations;
+    }
+    let by_id: BTreeMap<_, _> = collection
+        .transactions
+        .iter()
+        .map(|tx| (tx.txid, tx))
+        .collect();
+    let mut spender: BTreeMap<[u8; 32], &ChainTransaction> = BTreeMap::new();
+    for tx in &collection.transactions {
+        for (prev, vout) in &tx.inputs {
+            if *vout == 0 {
+                spender.insert(*prev, tx);
+            }
+        }
+    }
+    for category in categories {
+        observations.insert(
+            category,
+            resolve_owned_category(category, &by_id, &spender, collection),
+        );
+    }
+    observations
+}
+
+fn resolve_owned_category(
+    category: [u8; 32],
+    by_id: &BTreeMap<[u8; 32], &ChainTransaction>,
+    spender: &BTreeMap<[u8; 32], &ChainTransaction>,
+    collection: &IdentityCollection,
+) -> OwnedCategoryIdentity {
+    let mut walk = AuthchainResolution::begin(category, AuthchainBudget::default());
+    let mut pending = walk.next_step();
+    let step = loop {
+        match pending {
+            AuthchainStep::Query { txid } => {
+                pending = match by_id.get(&txid) {
+                    None => walk.accept(authchain::IdentityStatus::Unknown(
+                        authchain::UnknownReason::IncompleteHistory,
+                    )),
+                    Some(tx) => {
+                        walk.inspect(tx);
+                        let status = match spender.get(&txid) {
+                            Some(successor) => {
+                                authchain::IdentityStatus::SpentBy((*successor).clone())
+                            }
+                            None => authchain::IdentityStatus::Unspent {
+                                evidence: collection.evidence.clone(),
+                            },
+                        };
+                        walk.accept(status)
+                    }
+                };
+            }
+            other => break other,
+        }
+    };
+    identity_from_step(step, collection)
+}
+
+fn identity_from_step(
+    step: AuthchainStep,
+    collection: &IdentityCollection,
+) -> OwnedCategoryIdentity {
+    match step {
+        AuthchainStep::Resolved(head) => identity_from_outputs(&head.outputs, collection),
+        AuthchainStep::Burned { .. } => OwnedCategoryIdentity::Unpublished,
+        AuthchainStep::Query { .. }
+        | AuthchainStep::Incomplete { .. }
+        | AuthchainStep::InvalidEvidence { .. }
+        | AuthchainStep::ConflictingEvidence { .. } => OwnedCategoryIdentity::Unresolved,
+    }
+}
+
+fn identity_from_outputs(
+    outputs: &[Vec<u8>],
+    collection: &IdentityCollection,
+) -> OwnedCategoryIdentity {
+    let Some(publication) = publication_in(outputs.iter().map(Vec::as_slice)) else {
+        return OwnedCategoryIdentity::Unpublished;
+    };
+    let attempts = publication
+        .uris
+        .iter()
+        .map(|uri| {
+            let resolved = RegistryPublication::resolve_uri(uri);
+            let attempt = collection
+                .fetch_attempts
+                .iter()
+                .find(|(candidate, _)| candidate == &resolved || candidate == uri)
+                .map(|(_, attempt)| attempt.clone())
+                .unwrap_or(Err(FetchError::Transport {
+                    detail: "registry was not fetched".into(),
+                }));
+            (resolved, attempt)
+        })
+        .collect();
+    OwnedCategoryIdentity::Observed {
+        publication,
+        attempts,
+    }
 }
 
 /// Publish identities for every owned token category through
@@ -312,7 +478,7 @@ pub fn apply_owned_token_identities(
             Some(OwnedCategoryIdentity::Unpublished) => {
                 observe_identity(category, IdentityMetadata::Unpublished)
             }
-            None => observe_identity(
+            Some(OwnedCategoryIdentity::Unresolved) | None => observe_identity(
                 category,
                 IdentityMetadata::Unresolved {
                     reason: UnresolvedReason::AuthchainIncomplete,
@@ -747,21 +913,63 @@ mod tests {
         );
     }
 
-    fn observations(
-        category: [u8; 32],
-        identity: OwnedCategoryIdentity,
-    ) -> BTreeMap<[u8; 32], OwnedCategoryIdentity> {
-        let mut map = BTreeMap::new();
-        map.insert(category, identity);
-        map
+    fn p2pkh() -> Vec<u8> {
+        let mut script = vec![0x76, 0xa9, 0x14];
+        script.extend_from_slice(&[0u8; 20]);
+        script.extend_from_slice(&[0x88, 0xac]);
+        script
     }
 
-    /// The live publisher, not `reduce(SetTokenIdentity)`, is what names a
-    /// matching registry on Assets and My NFTs.
+    fn publication_script(contents: &[u8], uri: &str) -> Vec<u8> {
+        let hash = RegistryPublication::committing_to(contents, vec![uri.to_owned()]).content_hash;
+        let mut script = optn_core::bcmr::PUBLICATION_PREFIX.to_vec();
+        script.push(32);
+        script.extend_from_slice(&hash);
+        script.push(u8::try_from(uri.len()).expect("short uri"));
+        script.extend_from_slice(uri.as_bytes());
+        script
+    }
+
+    fn collection(
+        contents: &[u8],
+        uri: &str,
+        attempt: FetchAttempt,
+        authbase: bool,
+        publishes: bool,
+    ) -> IdentityCollection {
+        let transactions = if authbase {
+            let outputs = if publishes {
+                vec![p2pkh(), publication_script(contents, uri)]
+            } else {
+                vec![p2pkh()]
+            };
+            vec![ChainTransaction {
+                txid: ALPHA,
+                inputs: vec![],
+                outputs,
+                block_height: Some(1),
+            }]
+        } else {
+            Vec::new()
+        };
+        IdentityCollection {
+            transactions,
+            fetch_attempts: vec![(RegistryPublication::resolve_uri(uri), attempt)],
+            evidence: crate::chain::Evidence::ServerAssertion,
+        }
+    }
+
+    fn publish_collected(state: &mut optn_app::AppState, collection: &IdentityCollection) {
+        let observations =
+            collect_owned_token_identities(owned_token_categories(state), collection);
+        apply_owned_token_identities(state, &observations);
+    }
+
+    /// The live collector, not a pre-built identity, is what names a matching
+    /// registry on Assets and My NFTs.
     #[test]
     fn live_publisher_makes_matching_bytes_the_current_name() {
         let body = registry_body("Bitcats", ALPHA);
-        let publication = publication(&body, &["example.com"]);
         let mut state = wallet_with(vec![
             coin(
                 1,
@@ -770,15 +978,9 @@ mod tests {
             ),
             coin(2, 1_000, Some(nft(ALPHA, b"\x01"))),
         ]);
-        apply_owned_token_identities(
+        publish_collected(
             &mut state,
-            &observations(
-                ALPHA,
-                OwnedCategoryIdentity::Observed {
-                    publication,
-                    attempts: vec![("https://example.com/x".into(), Ok(body))],
-                },
-            ),
+            &collection(&body, "example.com", Ok(body.clone()), true, true),
         );
         let assets = optn_app::assets_view_model(&state);
         let identity = assets.categories[0]
@@ -801,23 +1003,19 @@ mod tests {
     #[test]
     fn live_publisher_does_not_show_a_hash_mismatch_as_current() {
         let body = registry_body("Bitcats", ALPHA);
-        let publication = publication(&body, &["example.com"]);
         let mut state = wallet_with(vec![coin(
             1,
             1_000,
             Some(optn_core::token::TokenData::fungible(ALPHA, 10)),
         )]);
-        apply_owned_token_identities(
+        publish_collected(
             &mut state,
-            &observations(
-                ALPHA,
-                OwnedCategoryIdentity::Observed {
-                    publication,
-                    attempts: vec![(
-                        "https://example.com/x".into(),
-                        Ok(b"something else".to_vec()),
-                    )],
-                },
+            &collection(
+                &body,
+                "example.com",
+                Ok(b"something else".to_vec()),
+                true,
+                true,
             ),
         );
         let assets = optn_app::assets_view_model(&state);
@@ -833,14 +1031,15 @@ mod tests {
 
     #[test]
     fn live_publisher_keeps_unpublished_and_unresolved_coins_with_a_caveat() {
+        let body = registry_body("Bitcats", ALPHA);
         let mut unpublished = wallet_with(vec![coin(
             1,
             1_000,
             Some(optn_core::token::TokenData::fungible(ALPHA, 10)),
         )]);
-        apply_owned_token_identities(
+        publish_collected(
             &mut unpublished,
-            &observations(ALPHA, OwnedCategoryIdentity::Unpublished),
+            &collection(&body, "example.com", Ok(body.clone()), true, false),
         );
         let assets = optn_app::assets_view_model(&unpublished);
         assert_eq!(assets.categories.len(), 1);
@@ -853,7 +1052,10 @@ mod tests {
             1_000,
             Some(optn_core::token::TokenData::fungible(ALPHA, 10)),
         )]);
-        apply_owned_token_identities(&mut unresolved, &BTreeMap::new());
+        publish_collected(
+            &mut unresolved,
+            &collection(&body, "example.com", Ok(body.clone()), false, false),
+        );
         let assets = optn_app::assets_view_model(&unresolved);
         assert_eq!(assets.categories.len(), 1);
         let identity = assets.categories[0].identity.as_ref().expect("status");
@@ -864,12 +1066,16 @@ mod tests {
 
     #[test]
     fn live_publisher_leaves_a_renderer_unable_to_inject_a_name() {
+        let body = registry_body("Bitcats", ALPHA);
         let mut state = wallet_with(vec![coin(
             1,
             1_000,
             Some(optn_core::token::TokenData::fungible(ALPHA, 10)),
         )]);
-        apply_owned_token_identities(&mut state, &BTreeMap::new());
+        publish_collected(
+            &mut state,
+            &collection(&body, "example.com", Ok(body.clone()), false, false),
+        );
         state.reduce_intent(optn_app::AppAction::SetTokenIdentity {
             category_hex: category_hex(&ALPHA),
             identity: TokenIdentity {

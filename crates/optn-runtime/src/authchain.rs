@@ -206,6 +206,18 @@ impl AuthchainResolution {
         self.current
     }
 
+    /// Record the body of the transaction [`Self::next_step`] just named.
+    ///
+    /// A zero-hop authhead is the authbase itself. Without this, `Unspent`
+    /// would resolve with empty outputs and a publication sitting on that
+    /// transaction would be invisible.
+    pub fn inspect(&mut self, tx: &ChainTransaction) {
+        if tx.txid == self.current {
+            self.current_outputs = tx.outputs.clone();
+            self.current_height = tx.block_height;
+        }
+    }
+
     pub const fn hops(&self) -> u32 {
         self.hops
     }
@@ -391,6 +403,33 @@ mod tests {
             outputs,
             block_height: Some(100),
         }
+    }
+
+    #[test]
+    fn inspecting_the_authbase_keeps_its_outputs_on_a_zero_hop_head() {
+        let base = txid(1);
+        let outputs = vec![p2pkh(), publication([9; 32])];
+        let mut walk = AuthchainResolution::begin(base, AuthchainBudget::default());
+        walk.inspect(&ChainTransaction {
+            txid: base,
+            inputs: vec![],
+            outputs: outputs.clone(),
+            block_height: Some(1),
+        });
+        let AuthchainStep::Resolved(resolved) = walk.accept(IdentityStatus::Unspent {
+            evidence: Evidence::ServerAssertion,
+        }) else {
+            panic!("an unspent authbase is a zero-hop authhead");
+        };
+        assert_eq!(resolved.authhead, base);
+        assert_eq!(resolved.hops, 0);
+        assert_eq!(resolved.outputs, outputs);
+        assert_eq!(
+            publication_in(resolved.outputs.iter().map(Vec::as_slice))
+                .expect("publication")
+                .content_hash,
+            [9; 32]
+        );
     }
 
     #[test]
