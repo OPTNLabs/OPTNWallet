@@ -535,7 +535,36 @@ export function grindString(scan_pubkey, prefix_bits) {
 }
 
 /**
- * True if the string carries any RPA prefix, cashcode or legacy paycode.
+ * True if the string carries a legacy PayCode prefix.
+ * @param {string} candidate
+ * @returns {boolean}
+ */
+export function isLegacyPaycode(candidate) {
+    const ptr0 = passStringToWasm0(candidate, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.isLegacyPaycode(ptr0, len0);
+    return ret !== 0;
+}
+
+/**
+ * The message to show for a legacy PayCode.
+ * @returns {string}
+ */
+export function legacyPaycodeRejection() {
+    let deferred1_0;
+    let deferred1_1;
+    try {
+        const ret = wasm.legacyPaycodeRejection();
+        deferred1_0 = ret[0];
+        deferred1_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+    }
+}
+
+/**
+ * True if the string is a Cash Code this wallet can pay.
  * @param {string} candidate
  * @returns {boolean}
  */

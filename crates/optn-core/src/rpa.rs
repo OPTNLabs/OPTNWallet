@@ -21,8 +21,9 @@
 //! would invalidate every code already handed out.
 //!
 //! Codes are emitted as `cashcode:` / `cashcodetest:`. Legacy `paycode:` /
-//! `paycodetest:` strings are still accepted as send targets so codes already
-//! handed out keep working; nothing here ever emits one.
+//! `paycodetest:` strings are refused: they were derived under different
+//! rules, and paying one with Cash Code math lands coins where the owner
+//! cannot scan.
 
 use hmac::{Hmac, Mac};
 use k256::elliptic_curve::sec1::ToEncodedPoint;
@@ -53,8 +54,24 @@ const CASHCODE_TESTNET: &str = "cashcodetest";
 const LEGACY_MAINNET: &str = "paycode";
 const LEGACY_TESTNET: &str = "paycodetest";
 
-const MAINNET_PREFIXES: [&str; 2] = [CASHCODE_MAINNET, LEGACY_MAINNET];
-const TESTNET_PREFIXES: [&str; 2] = [CASHCODE_TESTNET, LEGACY_TESTNET];
+const MAINNET_PREFIXES: [&str; 1] = [CASHCODE_MAINNET];
+const TESTNET_PREFIXES: [&str; 1] = [CASHCODE_TESTNET];
+
+/// The message a user sees when they paste a legacy PayCode.
+pub const LEGACY_PAYCODE_REJECTION: &str =
+    "Legacy PayCode addresses are not supported. Use a Cash Code address.";
+
+/// True if the string carries a legacy PayCode prefix.
+pub fn is_legacy_paycode(candidate: &str) -> bool {
+    let bare = candidate
+        .trim()
+        .split('?')
+        .next()
+        .unwrap_or("")
+        .to_lowercase();
+    bare.starts_with(&format!("{LEGACY_MAINNET}:"))
+        || bare.starts_with(&format!("{LEGACY_TESTNET}:"))
+}
 
 /// Payload is version + prefix_bits + scan(33) + spend(33) + expiry(4).
 const PAYLOAD_LEN: usize = 72;
@@ -184,7 +201,9 @@ pub fn encode_with_family(
     encode_payload(prefix, &with_kind)
 }
 
-/// True if the string carries any RPA prefix, cashcode or legacy paycode.
+/// True if the string is a Cash Code this wallet can pay.
+///
+/// A legacy PayCode returns false. Use [`is_legacy_paycode`] to name why.
 pub fn looks_like_rpa(candidate: &str) -> bool {
     let bare = candidate
         .trim()
@@ -198,9 +217,11 @@ pub fn looks_like_rpa(candidate: &str) -> bool {
         .any(|p| bare.starts_with(&format!("{p}:")))
 }
 
-/// Decode a cashcode or a legacy paycode. Rejects a bad checksum before any
-/// sender-side work happens.
+/// Decode a Cash Code. A legacy PayCode is refused by prefix first.
 pub fn decode(code: &str) -> Result<Cashcode> {
+    if is_legacy_paycode(code) {
+        return Err(CliError::Usage(LEGACY_PAYCODE_REJECTION.to_string()));
+    }
     let bare = code.trim().split('?').next().unwrap_or("");
     let has_lower = bare != bare.to_uppercase();
     let has_upper = bare != bare.to_lowercase();
@@ -858,8 +879,7 @@ mod tests {
     }
 
     #[test]
-    fn accepts_a_legacy_paycode_string() {
-        // Built by hand, since nothing here emits one.
+    fn rejects_a_legacy_paycode_string() {
         let scan = pubkey_of(&small_key(7));
         let spend = pubkey_of(&small_key(13));
         let mut payload = [0u8; PAYLOAD_LEN];
@@ -872,11 +892,13 @@ mod tests {
         let legacy = encode_payload(LEGACY_TESTNET, &with_kind);
 
         assert!(legacy.starts_with("paycodetest:"));
-        assert!(looks_like_rpa(&legacy));
-        let decoded = decode(&legacy).unwrap();
-        assert!(decoded.legacy);
-        assert_eq!(decoded.scan_pubkey, scan);
-        assert_eq!(decoded.spend_pubkey, spend);
+        assert!(!looks_like_rpa(&legacy));
+        assert!(is_legacy_paycode(&legacy));
+        let error = decode(&legacy).expect_err("legacy PayCode must not decode");
+        assert!(
+            error.to_string().contains("not supported"),
+            "legacy rejected for the wrong reason: {error}"
+        );
     }
 
     #[test]
@@ -1224,13 +1246,19 @@ mod shared_vectors {
                 "{name} cashcode"
             );
 
-            // The legacy form must still decode, and be flagged as legacy.
-            let legacy = decode(w["legacyPaycode"].as_str().unwrap()).unwrap();
-            assert!(legacy.legacy, "{name} legacy flag");
-            assert_eq!(
-                hex_of(&legacy.scan_pubkey),
-                w["scanPubkey"].as_str().unwrap()
+            let legacy = w["legacyPaycode"].as_str().unwrap();
+            assert!(is_legacy_paycode(legacy), "{name} legacy must be named");
+            assert!(
+                !looks_like_rpa(legacy),
+                "{name} legacy must not look payable"
             );
+            let error = decode(legacy).expect_err("{name} legacy must not decode");
+            assert!(
+                error.to_string().contains("not supported"),
+                "{name} legacy rejected for the wrong reason: {error}"
+            );
+            assert!(looks_like_rpa(w["cashcode"].as_str().unwrap()));
+            assert!(!is_legacy_paycode(w["cashcode"].as_str().unwrap()));
             assert!(!decode(w["cashcode"].as_str().unwrap()).unwrap().legacy);
 
             let secret =

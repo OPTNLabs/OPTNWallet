@@ -129,11 +129,7 @@ describe('shared RPA vectors', () => {
         )
       ).toBe(w.legacyPaycode);
 
-      // A legacy code must still decode, and be flagged as legacy.
-      const legacy = decodePaycode(w.legacyPaycode);
-      expect(legacy).not.toBeNull();
-      expect(legacy!.legacy).toBe(true);
-      expect(binToHex(legacy!.scanPubkey)).toBe(w.scanPubkey);
+      expect(decodePaycode(w.legacyPaycode)).toBeNull();
       expect(decodePaycode(w.cashcode)!.legacy).toBe(false);
 
       const secret = computeSharedSecret(

@@ -4,7 +4,7 @@
 //
 // Protocol summary:
 //   - Recipient shares a static "cashcode" (scan_pubkey + spend_pubkey, CashAddr
-//     encoded). Legacy "paycode" strings are still accepted as send targets.
+//     encoded). Legacy "paycode" strings are refused: they are not Cash Codes.
 //   - Sender derives a unique one-time address via ECDH(sender_privkey, scan_pubkey) + outpoint hash
 //   - Sender grinds signature nonce until input hash prefix matches scan_pubkey prefix
 //   - Recipient queries an RPA-capable Electrum server (Fulcrum-RPA) using their cashcode prefix
@@ -44,6 +44,8 @@ import {
   encodeCashcode as coreEncodeCashcode,
   ensureOptnCore,
   grindString as coreGrindString,
+  isLegacyPaycode as coreIsLegacyPaycode,
+  legacyPaycodeRejection as coreLegacyPaycodeRejection,
   looksLikeRpa as coreLooksLikeRpa,
   paymentAddress as corePaymentAddress,
   sendBlockReason as coreSendBlockReason,
@@ -241,14 +243,21 @@ export function looksLikeRpaPaycode(recipient: string): boolean {
   return coreLooksLikeRpa(recipient);
 }
 
+export function isLegacyPaycode(recipient: string): boolean {
+  ensureOptnCore();
+  return coreIsLegacyPaycode(recipient);
+}
+
 /**
- * Block only invalid / wrong-network paycodes. A valid paycode is sent
- * through finalizeRpaPayment (dummy dest → ECDH dest → prefix grind).
+ * Block invalid / wrong-network codes, and legacy PayCodes outright.
  */
 export function getRpaSendBlockReason(
   recipient: string,
   network: Network
 ): string | null {
+  if (isLegacyPaycode(recipient)) {
+    return `${coreLegacyPaycodeRejection()} No transaction was created.`;
+  }
   if (!looksLikeRpaPaycode(recipient)) return null;
 
   const decoded = decodePaycode(recipient);
