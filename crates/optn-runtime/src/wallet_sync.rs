@@ -13,7 +13,6 @@ use crate::{
 };
 use optn_app::{AppEvent, AppState};
 use optn_core::{cashaddr::Address, network::Network};
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, oneshot, watch};
 
@@ -346,9 +345,9 @@ pub(super) struct WalletSyncSession {
     abandoned: Option<oneshot::Receiver<()>>,
     state: WalletReconciliation,
     state_tx: watch::Sender<WalletReconciliation>,
-    /// Authhead publications already walked for this session. Empty means every
-    /// owned category stays unresolved rather than current.
-    identity_observations: BTreeMap<[u8; 32], crate::token_metadata::OwnedCategoryIdentity>,
+    /// Registry fetch attempts for this session. Transport results only; the
+    /// authchain walk still decides whether they may become Current.
+    registry_fetches: Vec<(String, crate::token_metadata::FetchAttempt)>,
 }
 
 impl WalletSyncSession {
@@ -411,18 +410,17 @@ impl WalletSyncSession {
                 abandoned: None,
                 state: WalletReconciliation::default(),
                 state_tx,
-                identity_observations: BTreeMap::new(),
+                registry_fetches: Vec::new(),
             },
             state_rx,
         )
     }
 
-    #[cfg(test)]
-    pub(super) fn set_identity_observations(
+    pub(super) fn record_registry_fetches(
         &mut self,
-        observations: BTreeMap<[u8; 32], crate::token_metadata::OwnedCategoryIdentity>,
+        fetches: Vec<(String, crate::token_metadata::FetchAttempt)>,
     ) {
-        self.identity_observations = observations;
+        self.registry_fetches = fetches;
     }
 
     pub(super) fn on_event(&mut self, event: &AppEvent) {
@@ -432,7 +430,7 @@ impl WalletSyncSession {
                 self.cancellation_tx = None;
                 self.abandoned = None;
                 self.state = WalletReconciliation::default();
-                self.identity_observations.clear();
+                self.registry_fetches.clear();
                 self.publish_status();
             }
             AppEvent::ServersChanged | AppEvent::WalletRebuilt => {
@@ -898,10 +896,22 @@ impl WalletSyncSession {
                 self.publish_status();
                 return Err(WalletSyncError::InvalidSnapshot(reason));
             }
-            crate::token_metadata::apply_owned_token_identities(
-                &mut candidate_app,
-                &self.identity_observations,
+            let evidence = next
+                .authoritative
+                .as_ref()
+                .expect("accepted candidate")
+                .evidence
+                .clone();
+            let collection = crate::token_metadata::IdentityCollection::from_observed(
+                &snapshot.transactions,
+                self.registry_fetches.clone(),
+                evidence,
             );
+            let observations = crate::token_metadata::collect_owned_token_identities(
+                crate::token_metadata::owned_token_categories(&candidate_app),
+                &collection,
+            );
+            crate::token_metadata::apply_owned_token_identities(&mut candidate_app, &observations);
             candidate_app.wallet_sync = match snapshot.wallet_view() {
                 Ok(view) => view,
                 Err(error) => {
@@ -1564,8 +1574,6 @@ mod tests {
         assert!(status.borrow().authoritative.is_none());
     }
 
-    const ALPHA: [u8; 32] = [0xaa; 32];
-
     fn registry_body(name: &str, category: [u8; 32]) -> Vec<u8> {
         let hex: String = category.iter().map(|byte| format!("{byte:02x}")).collect();
         format!(
@@ -1573,6 +1581,59 @@ mod tests {
             "00".repeat(32)
         )
         .into_bytes()
+    }
+
+    fn raw_tx(inputs: &[([u8; 32], u32)], outputs: &[(u64, &[u8])]) -> Vec<u8> {
+        let mut raw = vec![2, 0, 0, 0];
+        raw.extend_from_slice(&optn_core::tx::varint(inputs.len() as u64));
+        for (txid, vout) in inputs {
+            raw.extend_from_slice(txid);
+            raw.extend_from_slice(&vout.to_le_bytes());
+            raw.push(0);
+            raw.extend_from_slice(&0xffff_ffffu32.to_le_bytes());
+        }
+        raw.extend_from_slice(&optn_core::tx::varint(outputs.len() as u64));
+        for (value, script) in outputs {
+            raw.extend_from_slice(&value.to_le_bytes());
+            raw.extend_from_slice(&optn_core::tx::varint(script.len() as u64));
+            raw.extend_from_slice(script);
+        }
+        raw.extend_from_slice(&[0; 4]);
+        raw
+    }
+
+    fn p2pkh() -> Vec<u8> {
+        let mut script = vec![0x76, 0xa9, 0x14];
+        script.extend_from_slice(&[0u8; 20]);
+        script.extend_from_slice(&[0x88, 0xac]);
+        script
+    }
+
+    fn publication_script(contents: &[u8], uri: &str) -> Vec<u8> {
+        let hash =
+            optn_core::bcmr::RegistryPublication::committing_to(contents, vec![uri.to_owned()])
+                .content_hash;
+        let mut script = optn_core::bcmr::PUBLICATION_PREFIX.to_vec();
+        script.push(32);
+        script.extend_from_slice(&hash);
+        script.push(u8::try_from(uri.len()).expect("short uri"));
+        script.extend_from_slice(uri.as_bytes());
+        script
+    }
+
+    fn genesis_raw() -> Vec<u8> {
+        let identity = p2pkh();
+        raw_tx(&[], &[(546, &identity)])
+    }
+
+    fn authhead_raw(parent: [u8; 32], contents: &[u8], uri: &str, publishes: bool) -> Vec<u8> {
+        let identity = p2pkh();
+        if publishes {
+            let publication = publication_script(contents, uri);
+            raw_tx(&[(parent, 0)], &[(546, &identity), (0, &publication)])
+        } else {
+            raw_tx(&[(parent, 0)], &[(546, &identity)])
+        }
     }
 
     fn token_raw(script: &[u8], tokens: &[optn_core::token::TokenData]) -> Vec<u8> {
@@ -1589,19 +1650,52 @@ mod tests {
         raw
     }
 
-    fn token_candidate(tokens: &[optn_core::token::TokenData]) -> WalletReconciliation {
+    fn identity_candidate(
+        include_authchain: bool,
+        publishes: bool,
+        extra_nft: bool,
+        body_for: impl Fn([u8; 32]) -> Vec<u8>,
+    ) -> (WalletReconciliation, [u8; 32], Vec<u8>) {
         let script = Address::decode(&address()).unwrap().script_pubkey();
-        let raw = token_raw(&script, tokens);
+        let genesis = genesis_raw();
+        let category = optn_core::header_hash::sha256d(&genesis);
+        let body = body_for(category);
+        let mut tokens = vec![optn_core::token::TokenData::fungible(category, 10)];
+        if extra_nft {
+            tokens.push(optn_core::token::TokenData {
+                category,
+                amount: 0,
+                nft: Some(optn_core::token::Nft {
+                    capability: optn_core::token::Capability::None,
+                    commitment: b"\x01".to_vec(),
+                }),
+            });
+        }
+        let holder = token_raw(&script, &tokens);
+        let mut transactions = vec![ObservedTransaction {
+            txid: optn_core::header_hash::sha256d(&holder),
+            raw: holder,
+            block_height: None,
+        }];
+        if include_authchain {
+            let head = authhead_raw(category, &body, "example.com", publishes);
+            transactions.push(ObservedTransaction {
+                txid: category,
+                raw: genesis,
+                block_height: None,
+            });
+            transactions.push(ObservedTransaction {
+                txid: optn_core::header_hash::sha256d(&head),
+                raw: head,
+                block_height: None,
+            });
+        }
         let mut state = WalletReconciliation::default();
         state.reconcile_candidate(
             WalletNetworkSnapshot {
                 hd: None,
                 interests: vec![WalletInterest::script(script)],
-                transactions: vec![ObservedTransaction {
-                    txid: optn_core::header_hash::sha256d(&raw),
-                    raw,
-                    block_height: None,
-                }],
+                transactions,
                 tip: None,
             },
             SourceId::new("fixture"),
@@ -1609,25 +1703,28 @@ mod tests {
             None,
             true,
         );
-        state
+        (state, category, body)
     }
 
-    fn finish_with_tokens(
-        observations: BTreeMap<[u8; 32], crate::token_metadata::OwnedCategoryIdentity>,
-        tokens: Vec<optn_core::token::TokenData>,
+    fn finish_collected(
+        include_authchain: bool,
+        publishes: bool,
+        extra_nft: bool,
+        attempt: impl Fn(&[u8]) -> crate::token_metadata::FetchAttempt,
     ) -> AppState {
+        let (candidate, _, body) =
+            identity_candidate(include_authchain, publishes, extra_nft, |category| {
+                registry_body("Bitcats", category)
+            });
         let mut app = observation_app();
         let (mut session, _) = WalletSyncSession::new();
-        session.set_identity_observations(observations);
+        session.record_registry_fetches(vec![(
+            optn_core::bcmr::RegistryPublication::resolve_uri("example.com"),
+            attempt(&body),
+        )]);
         let lease = session.begin(&app, vec![address()], 0).unwrap();
         assert_eq!(
-            session.finish(
-                &mut app,
-                lease,
-                token_candidate(&tokens),
-                |_, _| Ok(()),
-                |_| true,
-            ),
+            session.finish(&mut app, lease, candidate, |_, _| Ok(()), |_| true),
             Ok(ReconciliationDecision::Accepted)
         );
         app
@@ -1635,33 +1732,21 @@ mod tests {
 
     #[test]
     fn wallet_sync_finish_publishes_matching_identity_on_assets_and_nfts() {
-        use crate::token_metadata::OwnedCategoryIdentity;
         use optn_app::IdentityStatus;
-        use optn_core::bcmr::RegistryPublication;
 
-        let body = registry_body("Bitcats", ALPHA);
-        let publication = RegistryPublication::committing_to(&body, vec!["example.com".into()]);
-        let mut observations = BTreeMap::new();
-        observations.insert(
-            ALPHA,
-            OwnedCategoryIdentity::Observed {
-                publication,
-                attempts: vec![("https://example.com/x".into(), Ok(body))],
-            },
-        );
-        let mut app = finish_with_tokens(
-            observations,
-            vec![
-                optn_core::token::TokenData::fungible(ALPHA, 10),
-                optn_core::token::TokenData {
-                    category: ALPHA,
-                    amount: 0,
-                    nft: Some(optn_core::token::Nft {
-                        capability: optn_core::token::Capability::None,
-                        commitment: b"\x01".to_vec(),
-                    }),
-                },
-            ],
+        let (candidate, category, body) = identity_candidate(true, true, true, |category| {
+            registry_body("Bitcats", category)
+        });
+        let mut app = observation_app();
+        let (mut session, _) = WalletSyncSession::new();
+        session.record_registry_fetches(vec![(
+            optn_core::bcmr::RegistryPublication::resolve_uri("example.com"),
+            Ok(body),
+        )]);
+        let lease = session.begin(&app, vec![address()], 0).unwrap();
+        assert_eq!(
+            session.finish(&mut app, lease, candidate, |_, _| Ok(()), |_| true),
+            Ok(ReconciliationDecision::Accepted)
         );
         let assets = optn_app::assets_view_model(&app);
         let identity = assets.categories[0]
@@ -1680,7 +1765,7 @@ mod tests {
             Some("Bitcats")
         );
         app.reduce_intent(AppAction::SetTokenIdentity {
-            category_hex: "aa".repeat(32),
+            category_hex: category.iter().map(|byte| format!("{byte:02x}")).collect(),
             identity: optn_app::TokenIdentity {
                 name: "Totally Real Coin".into(),
                 ticker: None,
@@ -1699,27 +1784,9 @@ mod tests {
 
     #[test]
     fn wallet_sync_finish_does_not_treat_a_mismatch_as_current() {
-        use crate::token_metadata::OwnedCategoryIdentity;
         use optn_app::IdentityStatus;
-        use optn_core::bcmr::RegistryPublication;
 
-        let body = registry_body("Bitcats", ALPHA);
-        let publication = RegistryPublication::committing_to(&body, vec!["example.com".into()]);
-        let mut observations = BTreeMap::new();
-        observations.insert(
-            ALPHA,
-            OwnedCategoryIdentity::Observed {
-                publication,
-                attempts: vec![(
-                    "https://example.com/x".into(),
-                    Ok(b"something else".to_vec()),
-                )],
-            },
-        );
-        let app = finish_with_tokens(
-            observations,
-            vec![optn_core::token::TokenData::fungible(ALPHA, 10)],
-        );
+        let app = finish_collected(true, true, false, |_| Ok(b"something else".to_vec()));
         let identity = optn_app::assets_view_model(&app).categories[0]
             .identity
             .clone()
@@ -1731,15 +1798,9 @@ mod tests {
 
     #[test]
     fn wallet_sync_finish_keeps_unpublished_and_unresolved_coins_visible() {
-        use crate::token_metadata::OwnedCategoryIdentity;
         use optn_app::IdentityStatus;
 
-        let mut unpublished = BTreeMap::new();
-        unpublished.insert(ALPHA, OwnedCategoryIdentity::Unpublished);
-        let app = finish_with_tokens(
-            unpublished,
-            vec![optn_core::token::TokenData::fungible(ALPHA, 10)],
-        );
+        let app = finish_collected(true, false, false, |body| Ok(body.to_vec()));
         let identity = optn_app::assets_view_model(&app).categories[0]
             .identity
             .clone()
@@ -1748,10 +1809,7 @@ mod tests {
         assert_eq!(identity.status.caveat(), Some("no registry published"));
         assert_eq!(app.coins.len(), 1);
 
-        let app = finish_with_tokens(
-            BTreeMap::new(),
-            vec![optn_core::token::TokenData::fungible(ALPHA, 10)],
-        );
+        let app = finish_collected(false, false, false, |body| Ok(body.to_vec()));
         let identity = optn_app::assets_view_model(&app).categories[0]
             .identity
             .clone()
