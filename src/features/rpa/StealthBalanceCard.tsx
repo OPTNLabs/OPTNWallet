@@ -52,9 +52,8 @@ export const StealthBalanceCard: React.FC<StealthBalanceCardProps> = ({
           : null
       );
       setServerNote(
-        activity.serverSupported
-          ? null
-          : activity.error ?? t('rpa.serverUnsupported')
+        activity.error ??
+          (activity.serverSupported ? null : t('rpa.serverUnsupported'))
       );
     },
     [locale, t]
@@ -171,7 +170,7 @@ export const StealthBalanceCard: React.FC<StealthBalanceCardProps> = ({
 
       <div className="space-y-1.5">
         <label className="block text-[10px] wallet-muted">
-          Chipnet Electrum cannot find Cash Code payments. Paste the sender txid:
+          Optional: check a sender transaction id using the selected backend:
         </label>
         <div className="flex gap-2">
           <input
@@ -194,9 +193,9 @@ export const StealthBalanceCard: React.FC<StealthBalanceCardProps> = ({
       </div>
 
       <p className="text-[10px] wallet-muted leading-relaxed">
-        Sync uses Fulcrum RPA (blockchain.rpa.get_history). On Chipnet that is
-        chipnet.bch.ninja. If Sync is empty, switch Servers to that host, or
-        Check the sender txid below.
+        Sync uses the selected Fulcrum RPA index or scans the selected BIP37
+        node locally. Node scans do not fall back to Electrum and can take
+        longer.
       </p>
     </div>
   );

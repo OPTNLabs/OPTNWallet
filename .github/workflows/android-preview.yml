@@ -7,7 +7,9 @@ on:
     # that would otherwise reach a release without these asset checks.
     branches: [dev, staging, main]
   push:
-    branches: [dev, staging]
+    # Pull requests provide the required dev/staging validation. Keep a
+    # post-merge check on main without duplicating every promotion run.
+    branches: [main]
   # Allows a maintainer to recover the required check when GitHub does not
   # create the pull_request run for a head update.
   workflow_dispatch:
@@ -43,6 +45,8 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699
+        with:
+          packages: platform-tools
 
       - name: Enable Gradle cache
         uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb

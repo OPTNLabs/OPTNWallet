@@ -376,7 +376,7 @@ pub const SKILLS: &[Skill] = &[
         // `rpa pay` with them.
         name: "rpa",
         capability: Capability::Spend,
-        summary: "Reusable payment addresses. `code`, `decode` and `scan` read; `pay` spends.",
+        summary: "Cash Code: `code`, `decode`, `scan`, `discover` read; `pay` and `sweep` spend.",
         needs_wallet: true,
         needs_network: true,
         requires_confirmation: true,
