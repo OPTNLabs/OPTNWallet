@@ -684,6 +684,7 @@ fn managed_rescan_persists_the_selected_hd_account_and_reopens_it_after_restart(
                         json!([])
                     }
                     "blockchain.headers.subscribe" => Value::Null,
+                    "blockchain.block.headers" => json!({"count": 0, "hex": "", "max": 2016}),
                     method => panic!("unexpected loopback request: {method}"),
                 };
                 writeln!(
