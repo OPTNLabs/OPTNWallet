@@ -377,8 +377,9 @@ pub fn regtest_header_verifier() -> Result<ShvMmrHeaderVerifier, ShvMmrError> {
 /// Trusted Chipnet checkpoint at height 0 plus Chipnet ASERT context.
 ///
 /// BIP37/Neutrino workers must attach this (or a later host-authenticated
-/// checkpoint) before publishing balances. Electrum first-paint stays
-/// `ServerAssertion` and must not be labeled MMR.
+/// checkpoint) before publishing balances. Electrum wallet first-paint stays
+/// `ServerAssertion` even after headers are linked; MMR/`HeaderLinked` is
+/// reported only for the header chain the verifier actually extended.
 pub fn shipped_chipnet_header_verifier() -> Result<ShvMmrHeaderVerifier, ShvMmrError> {
     let header = decode_header_hex(CHIPNET_GENESIS_HEADER_HEX);
     let commitment = header_leaf(&header);

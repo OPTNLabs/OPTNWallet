@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 use bip39::{Language, Mnemonic};
 use optn_chain_native::{build_native_chain_stack, NativeChainSecrets};
 use optn_multisig_core::{inspect_p2sh20, Network as MultisigNetwork};
-use optn_runtime::chain::{build_selection_plan, ProtocolFamily};
+use optn_runtime::chain::{build_selection_plan, EndpointKind, ProtocolFamily};
 use optn_runtime::chain_service::{ChainOperation, ChainPayload, ChainRequest};
 use optn_runtime::tx_broadcast::{BroadcastCoordinator, BroadcastState};
 
@@ -848,15 +848,59 @@ fn shared_network_status(cli: &Cli) -> Result<Value> {
     }))
 }
 
-async fn verify_selected_headers(cli: &Cli, start: Option<u32>, count: u32) -> Result<Value> {
-    if count < 2 {
-        return Err(CliError::Usage(
-            "header verification needs at least 2 consecutive headers".into(),
-        ));
+async fn fetch_headers_window(
+    cli: &Cli,
+    start: Option<u32>,
+    count: u32,
+) -> Result<(Vec<[u8; 80]>, u32, Option<u32>, String)> {
+    if let Some(selection) = configured_chain(cli)? {
+        let plan = build_selection_plan(&selection.catalog, &selection.policy);
+        let p2p = plan.primary.iter().any(|id| {
+            selection.catalog.get(id).is_some_and(|source| {
+                source
+                    .endpoints
+                    .iter()
+                    .any(|endpoint| matches!(endpoint.kind, EndpointKind::BchP2p))
+            })
+        });
+        if p2p {
+            let start_height = start.unwrap_or(1).max(1);
+            let stack = build_native_chain_stack(
+                selection.catalog,
+                selection.policy,
+                &cli.network.to_string(),
+                &NativeChainSecrets::default(),
+            )
+            .await;
+            let observation = stack
+                .service
+                .lock()
+                .await
+                .execute(&ChainRequest::HeaderSync {
+                    start_height,
+                    count,
+                })
+                .await
+                .map_err(|error| CliError::Network(format!("header sync failed: {error:?}")))?;
+            let ChainPayload::Headers {
+                start_height,
+                headers,
+            } = observation.value
+            else {
+                return Err(CliError::Protocol(
+                    "header route returned an unexpected payload".into(),
+                ));
+            };
+            return Ok((
+                headers,
+                start_height,
+                None,
+                observation.source.as_str().to_owned(),
+            ));
+        }
     }
     let client = client_for(cli)?;
     let (tip_height, _) = client.tip().await?;
-    let count = count.min(2016);
     let start_height = match start {
         Some(height) => height,
         None => tip_height.saturating_sub(count.saturating_sub(1)),
@@ -869,21 +913,72 @@ async fn verify_selected_headers(cli: &Cli, start: Option<u32>, count: u32) -> R
     let available = tip_height.saturating_sub(start_height).saturating_add(1);
     let count = count.min(available);
     let headers = client.block_headers(start_height, count).await?;
+    Ok((headers, start_height, Some(tip_height), client.endpoint()))
+}
+
+async fn verify_selected_headers(cli: &Cli, start: Option<u32>, count: u32) -> Result<Value> {
+    if count < 2 {
+        return Err(CliError::Usage(
+            "header verification needs at least 2 consecutive headers".into(),
+        ));
+    }
+    let count = count.min(2016);
+    let (headers, start_height, tip_height, via) = fetch_headers_window(cli, start, count).await?;
     if headers.len() < 2 {
         return Err(CliError::Protocol(
             "server returned fewer than 2 headers".into(),
         ));
     }
     let checked = verify_header_batch(cli.network, start_height, &headers)?;
+    let mut header_verifier = false;
+    let mut mmr = false;
+    let mut header_height = None;
+    let mut header_commitment = None;
+    let mut header_evidence = None;
+    if cli.network == Network::Chipnet {
+        let linked = if start_height == 1 {
+            headers.clone()
+        } else {
+            fetch_headers_window(cli, Some(1), count.max(2)).await?.0
+        };
+        if linked.len() >= 2 {
+            use optn_runtime::chain::{BlockHeaderBytes, HeaderVerifier};
+            let mut verifier = optn_runtime::header_verifier::shipped_chipnet_header_verifier()
+                .map_err(|error| {
+                    CliError::Protocol(format!("Chipnet header verifier: {error:?}"))
+                })?;
+            let batch: Vec<_> = linked.iter().copied().map(BlockHeaderBytes).collect();
+            verifier.extend(&batch).map_err(|error| {
+                CliError::Protocol(format!("Chipnet header extend failed: {error:?}"))
+            })?;
+            let state = verifier
+                .state()
+                .map_err(|error| CliError::Protocol(format!("Chipnet header state: {error:?}")))?;
+            header_verifier = true;
+            mmr = state.height > 0;
+            header_height = Some(state.height);
+            header_commitment = Some(hex(&state.commitment));
+            header_evidence = Some(if mmr {
+                "HeaderMmrProven"
+            } else {
+                "GenesisAttached"
+            });
+        }
+    }
     Ok(json!({
         "ok": true,
         "network": cli.network.to_string(),
-        "endpoint": client.endpoint(),
+        "endpoint": via,
         "tip_height": tip_height,
         "start_height": start_height,
         "count": headers.len(),
         "asert": true,
         "evidence": "HeaderLinked",
+        "header_verifier": header_verifier,
+        "mmr": mmr,
+        "header_height": header_height,
+        "header_commitment": header_commitment,
+        "header_evidence": header_evidence,
         "last_height": start_height + u32::try_from(headers.len().saturating_sub(1))
             .map_err(|_| CliError::Protocol("header count exceeds u32".into()))?,
         "last_hash": hex(&checked),
@@ -1378,15 +1473,19 @@ async fn rescan_shared_wallet(
         let confirmed_total = state.wallet_sync.confirmed_sats.ok_or_else(|| CliError::Protocol("HD balance is unavailable".into()))?;
         let unconfirmed_total = state.wallet_sync.pending_sats;
         let total = state.wallet_sync.total_sats().ok_or_else(|| CliError::Protocol("HD total balance overflow".into()))?;
+        let (header_verifier, mmr, header_height, header_commitment, header_evidence) =
+            header_verifier_report(&worker);
         Ok(json!({"ok":true, "hd":true,
             "complete":state.wallet_sync.scan_coverage.map_or(true, |coverage| coverage.skipped_below.is_none()),
             "network":cli.network.to_string(),
             "account_path":account.to_string(), "gap":gap, "max_addresses":cap,
             "selection":"shared-native-policy", "source":snapshot.source.as_str(),
             "evidence":format!("{:?}",snapshot.evidence),
-            "header_verifier": worker.header_verifier().is_some(),
-            "mmr": worker.header_verifier().is_some()
-                && !matches!(snapshot.evidence, optn_runtime::chain::Evidence::ServerAssertion),
+            "header_verifier": header_verifier,
+            "mmr": mmr,
+            "header_height": header_height,
+            "header_commitment": header_commitment,
+            "header_evidence": header_evidence,
             "branches":optn_core::watch_only::HD_SCAN_BRANCHES, "last_used":book.last_used,
             "scanned_addresses":snapshot.value.interests.len(), "confirmed":confirmed_total,
             "unconfirmed":unconfirmed_total, "total":total, "utxos":state.coins.len(), "addresses":addresses,
@@ -1399,23 +1498,64 @@ fn hd_sync_worker(
     policy: &optn_runtime::chain::ConnectionPolicy,
 ) -> Result<optn_runtime::sync_worker::ProgressiveSyncWorker> {
     use optn_runtime::chain::ProtocolFamily;
-    let worker = optn_runtime::sync_worker::ProgressiveSyncWorker::new(Default::default());
+    use optn_runtime::sync_worker::ProgressiveSyncConfig;
     let p2p = policy.protocols.contains(ProtocolFamily::Bip37)
         || policy.protocols.contains(ProtocolFamily::Neutrino);
-    if !p2p {
-        return Ok(worker);
-    }
     if network != Network::Chipnet {
-        return Err(CliError::Usage(
-            "BIP37/Neutrino refresh needs a host-authenticated header checkpoint for this network"
-                .into(),
+        if p2p {
+            return Err(CliError::Usage(
+                "BIP37/Neutrino refresh needs a host-authenticated header checkpoint for this network"
+                    .into(),
+            ));
+        }
+        return Ok(optn_runtime::sync_worker::ProgressiveSyncWorker::new(
+            Default::default(),
         ));
     }
+    let mut config = ProgressiveSyncConfig::default();
+    if !p2p {
+        // Electrum: one real linked batch so the verifier is used. Wallet
+        // evidence stays ServerAssertion; do not walk all Chipnet headers on
+        // every balance query.
+        config.max_verified_headers_per_pass = Some(config.header_batch_size.max(1));
+    }
+    let worker = optn_runtime::sync_worker::ProgressiveSyncWorker::new(config);
     let verifier = optn_runtime::header_verifier::shipped_chipnet_header_verifier()
         .map_err(|e| CliError::Usage(format!("Chipnet header verifier: {e:?}")))?;
     worker
         .with_header_verifier(network, verifier)
         .map_err(|e| CliError::Usage(format!("header verifier: {e:?}")))
+}
+
+fn header_verifier_report(
+    worker: &optn_runtime::sync_worker::ProgressiveSyncWorker,
+) -> (
+    bool,
+    bool,
+    Option<u32>,
+    Option<String>,
+    Option<&'static str>,
+) {
+    match worker.header_verifier() {
+        None => (false, false, None, None, None),
+        Some(verifier) => match verifier.state() {
+            Ok(state) => {
+                let advanced = state.height > 0;
+                (
+                    true,
+                    advanced,
+                    Some(state.height),
+                    Some(hex(&state.commitment)),
+                    Some(if advanced {
+                        "HeaderMmrProven"
+                    } else {
+                        "GenesisAttached"
+                    }),
+                )
+            }
+            Err(_) => (true, false, None, None, Some("GenesisAttached")),
+        },
+    }
 }
 
 async fn run(cli: &Cli) -> Result<Value> {

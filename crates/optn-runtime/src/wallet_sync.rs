@@ -13,6 +13,7 @@ use crate::{
 };
 use optn_app::{AppEvent, AppState};
 use optn_core::{cashaddr::Address, network::Network};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, oneshot, watch};
 
@@ -345,6 +346,9 @@ pub(super) struct WalletSyncSession {
     abandoned: Option<oneshot::Receiver<()>>,
     state: WalletReconciliation,
     state_tx: watch::Sender<WalletReconciliation>,
+    /// Authhead publications already walked for this session. Empty means every
+    /// owned category stays unresolved rather than current.
+    identity_observations: BTreeMap<[u8; 32], crate::token_metadata::OwnedCategoryIdentity>,
 }
 
 impl WalletSyncSession {
@@ -407,9 +411,18 @@ impl WalletSyncSession {
                 abandoned: None,
                 state: WalletReconciliation::default(),
                 state_tx,
+                identity_observations: BTreeMap::new(),
             },
             state_rx,
         )
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_identity_observations(
+        &mut self,
+        observations: BTreeMap<[u8; 32], crate::token_metadata::OwnedCategoryIdentity>,
+    ) {
+        self.identity_observations = observations;
     }
 
     pub(super) fn on_event(&mut self, event: &AppEvent) {
@@ -419,6 +432,7 @@ impl WalletSyncSession {
                 self.cancellation_tx = None;
                 self.abandoned = None;
                 self.state = WalletReconciliation::default();
+                self.identity_observations.clear();
                 self.publish_status();
             }
             AppEvent::ServersChanged | AppEvent::WalletRebuilt => {
@@ -884,6 +898,10 @@ impl WalletSyncSession {
                 self.publish_status();
                 return Err(WalletSyncError::InvalidSnapshot(reason));
             }
+            crate::token_metadata::apply_owned_token_identities(
+                &mut candidate_app,
+                &self.identity_observations,
+            );
             candidate_app.wallet_sync = match snapshot.wallet_view() {
                 Ok(view) => view,
                 Err(error) => {
@@ -922,6 +940,7 @@ impl WalletSyncSession {
             app.hd_addresses = candidate_app.hd_addresses;
             app.wallet = candidate_app.wallet;
             app.wallet_sync = candidate_app.wallet_sync;
+            app.token_identities = candidate_app.token_identities;
             // A prepared spend may refer to outputs removed by this refresh.
             app.spend = None;
         }
@@ -1543,5 +1562,202 @@ mod tests {
             Err(WalletSyncError::NoWallet)
         ));
         assert!(status.borrow().authoritative.is_none());
+    }
+
+    const ALPHA: [u8; 32] = [0xaa; 32];
+
+    fn registry_body(name: &str, category: [u8; 32]) -> Vec<u8> {
+        let hex: String = category.iter().map(|byte| format!("{byte:02x}")).collect();
+        format!(
+            r#"{{"identities":{{"{}":{{"1700000000":{{"name":"{name}","token":{{"category":"{hex}","symbol":"BCAT","decimals":2}}}}}}}}}}"#,
+            "00".repeat(32)
+        )
+        .into_bytes()
+    }
+
+    fn token_raw(script: &[u8], tokens: &[optn_core::token::TokenData]) -> Vec<u8> {
+        let mut raw = vec![2, 0, 0, 0, 0];
+        raw.extend_from_slice(&optn_core::tx::varint(tokens.len() as u64));
+        for token in tokens {
+            let prefix = token.encode_prefix().expect("token prefix");
+            raw.extend_from_slice(&1000u64.to_le_bytes());
+            raw.extend_from_slice(&optn_core::tx::varint((prefix.len() + script.len()) as u64));
+            raw.extend_from_slice(&prefix);
+            raw.extend_from_slice(script);
+        }
+        raw.extend_from_slice(&[0; 4]);
+        raw
+    }
+
+    fn token_candidate(tokens: &[optn_core::token::TokenData]) -> WalletReconciliation {
+        let script = Address::decode(&address()).unwrap().script_pubkey();
+        let raw = token_raw(&script, tokens);
+        let mut state = WalletReconciliation::default();
+        state.reconcile_candidate(
+            WalletNetworkSnapshot {
+                hd: None,
+                interests: vec![WalletInterest::script(script)],
+                transactions: vec![ObservedTransaction {
+                    txid: optn_core::header_hash::sha256d(&raw),
+                    raw,
+                    block_height: None,
+                }],
+                tip: None,
+            },
+            SourceId::new("fixture"),
+            Evidence::ServerAssertion,
+            None,
+            true,
+        );
+        state
+    }
+
+    fn finish_with_tokens(
+        observations: BTreeMap<[u8; 32], crate::token_metadata::OwnedCategoryIdentity>,
+        tokens: Vec<optn_core::token::TokenData>,
+    ) -> AppState {
+        let mut app = observation_app();
+        let (mut session, _) = WalletSyncSession::new();
+        session.set_identity_observations(observations);
+        let lease = session.begin(&app, vec![address()], 0).unwrap();
+        assert_eq!(
+            session.finish(
+                &mut app,
+                lease,
+                token_candidate(&tokens),
+                |_, _| Ok(()),
+                |_| true,
+            ),
+            Ok(ReconciliationDecision::Accepted)
+        );
+        app
+    }
+
+    #[test]
+    fn wallet_sync_finish_publishes_matching_identity_on_assets_and_nfts() {
+        use crate::token_metadata::OwnedCategoryIdentity;
+        use optn_app::IdentityStatus;
+        use optn_core::bcmr::RegistryPublication;
+
+        let body = registry_body("Bitcats", ALPHA);
+        let publication = RegistryPublication::committing_to(&body, vec!["example.com".into()]);
+        let mut observations = BTreeMap::new();
+        observations.insert(
+            ALPHA,
+            OwnedCategoryIdentity::Observed {
+                publication,
+                attempts: vec![("https://example.com/x".into(), Ok(body))],
+            },
+        );
+        let mut app = finish_with_tokens(
+            observations,
+            vec![
+                optn_core::token::TokenData::fungible(ALPHA, 10),
+                optn_core::token::TokenData {
+                    category: ALPHA,
+                    amount: 0,
+                    nft: Some(optn_core::token::Nft {
+                        capability: optn_core::token::Capability::None,
+                        commitment: b"\x01".to_vec(),
+                    }),
+                },
+            ],
+        );
+        let assets = optn_app::assets_view_model(&app);
+        let identity = assets.categories[0]
+            .identity
+            .as_ref()
+            .expect("resolved identity");
+        assert_eq!(identity.name, "Bitcats");
+        assert_eq!(identity.status, IdentityStatus::Verified);
+        assert_eq!(identity.status.caveat(), None);
+        let nfts = optn_app::nfts_view_model(&app);
+        assert_eq!(
+            nfts.nfts[0]
+                .identity
+                .as_ref()
+                .map(|item| item.name.as_str()),
+            Some("Bitcats")
+        );
+        app.reduce_intent(AppAction::SetTokenIdentity {
+            category_hex: "aa".repeat(32),
+            identity: optn_app::TokenIdentity {
+                name: "Totally Real Coin".into(),
+                ticker: None,
+                decimals: 0,
+                status: IdentityStatus::Verified,
+            },
+        });
+        assert_eq!(
+            optn_app::assets_view_model(&app).categories[0]
+                .identity
+                .as_ref()
+                .map(|item| item.name.as_str()),
+            Some("Bitcats")
+        );
+    }
+
+    #[test]
+    fn wallet_sync_finish_does_not_treat_a_mismatch_as_current() {
+        use crate::token_metadata::OwnedCategoryIdentity;
+        use optn_app::IdentityStatus;
+        use optn_core::bcmr::RegistryPublication;
+
+        let body = registry_body("Bitcats", ALPHA);
+        let publication = RegistryPublication::committing_to(&body, vec!["example.com".into()]);
+        let mut observations = BTreeMap::new();
+        observations.insert(
+            ALPHA,
+            OwnedCategoryIdentity::Observed {
+                publication,
+                attempts: vec![(
+                    "https://example.com/x".into(),
+                    Ok(b"something else".to_vec()),
+                )],
+            },
+        );
+        let app = finish_with_tokens(
+            observations,
+            vec![optn_core::token::TokenData::fungible(ALPHA, 10)],
+        );
+        let identity = optn_app::assets_view_model(&app).categories[0]
+            .identity
+            .clone()
+            .expect("named");
+        assert_eq!(identity.status, IdentityStatus::Unresolved);
+        assert_ne!(identity.name, "Bitcats");
+        assert!(identity.status.caveat().is_some());
+    }
+
+    #[test]
+    fn wallet_sync_finish_keeps_unpublished_and_unresolved_coins_visible() {
+        use crate::token_metadata::OwnedCategoryIdentity;
+        use optn_app::IdentityStatus;
+
+        let mut unpublished = BTreeMap::new();
+        unpublished.insert(ALPHA, OwnedCategoryIdentity::Unpublished);
+        let app = finish_with_tokens(
+            unpublished,
+            vec![optn_core::token::TokenData::fungible(ALPHA, 10)],
+        );
+        let identity = optn_app::assets_view_model(&app).categories[0]
+            .identity
+            .clone()
+            .expect("status");
+        assert_eq!(identity.status, IdentityStatus::Unpublished);
+        assert_eq!(identity.status.caveat(), Some("no registry published"));
+        assert_eq!(app.coins.len(), 1);
+
+        let app = finish_with_tokens(
+            BTreeMap::new(),
+            vec![optn_core::token::TokenData::fungible(ALPHA, 10)],
+        );
+        let identity = optn_app::assets_view_model(&app).categories[0]
+            .identity
+            .clone()
+            .expect("status");
+        assert_eq!(identity.status, IdentityStatus::Unresolved);
+        assert_eq!(identity.status.caveat(), Some("unverified"));
+        assert_eq!(app.coins.len(), 1);
     }
 }
