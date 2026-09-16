@@ -129,7 +129,19 @@ pub fn decode_cashcode(code: &str) -> Result<String, JsValue> {
     ))
 }
 
-/// True if the string carries any RPA prefix, cashcode or legacy paycode.
+/// True if the string carries a legacy PayCode prefix.
+#[wasm_bindgen(js_name = isLegacyPaycode)]
+pub fn is_legacy_paycode(candidate: &str) -> bool {
+    rpa::is_legacy_paycode(candidate)
+}
+
+/// The message to show for a legacy PayCode.
+#[wasm_bindgen(js_name = legacyPaycodeRejection)]
+pub fn legacy_paycode_rejection() -> String {
+    rpa::LEGACY_PAYCODE_REJECTION.to_string()
+}
+
+/// True if the string is a Cash Code this wallet can pay.
 #[wasm_bindgen(js_name = looksLikeRpa)]
 pub fn looks_like_rpa(candidate: &str) -> bool {
     rpa::looks_like_rpa(candidate)

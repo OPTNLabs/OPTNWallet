@@ -133,7 +133,17 @@ export function grindSequence(offset: number): number;
 export function grindString(scan_pubkey: Uint8Array, prefix_bits: number): string;
 
 /**
- * True if the string carries any RPA prefix, cashcode or legacy paycode.
+ * True if the string carries a legacy PayCode prefix.
+ */
+export function isLegacyPaycode(candidate: string): boolean;
+
+/**
+ * The message to show for a legacy PayCode.
+ */
+export function legacyPaycodeRejection(): string;
+
+/**
+ * True if the string is a Cash Code this wallet can pay.
  */
 export function looksLikeRpa(candidate: string): boolean;
 
@@ -201,6 +211,8 @@ export interface InitOutput {
     readonly grindRpaTransaction: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => [number, number, number, number];
     readonly grindSequence: (a: number) => [number, number, number];
     readonly grindString: (a: number, b: number, c: number) => [number, number, number, number];
+    readonly isLegacyPaycode: (a: number, b: number) => number;
+    readonly legacyPaycodeRejection: () => [number, number];
     readonly looksLikeRpa: (a: number, b: number) => number;
     readonly paymentAddress: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
     readonly rpaKeyPaths: (a: number, b: number) => [number, number];

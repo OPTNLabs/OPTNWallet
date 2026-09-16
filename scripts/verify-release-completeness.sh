@@ -19,7 +19,7 @@ CONFIG="packaging/release-assets.json"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-VERSION="1.7.3"
+VERSION="1.7.4"
 export RELEASE_TAG="v$VERSION"
 
 # Whichever interpreter has PyYAML. CI installs it for python3; a developer

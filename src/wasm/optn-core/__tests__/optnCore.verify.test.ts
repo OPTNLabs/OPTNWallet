@@ -15,6 +15,8 @@ import {
   encodeCashcode,
   ensureOptnCore,
   grindString,
+  isLegacyPaycode,
+  legacyPaycodeRejection,
   looksLikeRpa,
   paymentAddress,
   sendBlockReason,
@@ -113,11 +115,12 @@ describe('optn-core through wasm', () => {
       expect(decoded.spendPubkey).toBe(w.spendPubkey);
       expect(decoded.legacy).toBe(false);
 
-      // Legacy paycodes stay acceptable, and are flagged as legacy.
-      expect(looksLikeRpa(w.legacyPaycode)).toBe(true);
-      expect(JSON.parse(decodeCashcode(w.legacyPaycode)).legacy).toBe(true);
+      expect(looksLikeRpa(w.legacyPaycode)).toBe(false);
+      expect(isLegacyPaycode(w.legacyPaycode)).toBe(true);
+      expect(() => decodeCashcode(w.legacyPaycode)).toThrow(/not supported/i);
+      expect(legacyPaycodeRejection()).toMatch(/not supported/i);
+      expect(isLegacyPaycode(w.cashcode)).toBe(false);
 
-      // Neither form is offline-only nor prefix-0, so neither is blocked.
       expect(sendBlockReason(w.cashcode)).toBeUndefined();
 
       const secret = sharedSecret(
