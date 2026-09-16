@@ -20,9 +20,9 @@ RepoType: git
 Repo: https://github.com/OPTNLabs/OPTNWallet.git
 
 Builds:
-  - versionName: 1.7.3
-    versionCode: 19
-    commit: v1.7.3
+  - versionName: 1.7.4
+    versionCode: 20
+    commit: v1.7.4
     subdir: android/app
     # The fdroid flavour, not the default. `play` links Play In-App Updates;
     # this one does not, which is the entire reason the flavour exists.
@@ -57,5 +57,5 @@ Builds:
 
 AutoUpdateMode: Version
 UpdateCheckMode: Tags ^v[0-9]
-CurrentVersion: 1.7.3
-CurrentVersionCode: 19
+CurrentVersion: 1.7.4
+CurrentVersionCode: 20

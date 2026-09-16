@@ -10,13 +10,14 @@ name: iOS Preview
 # a signed App Store IPA.
 
 on:
-  # Mirror Android Preview: always-on, no path filters, [dev, staging].
+  # Mirror Android Preview: always-on, no path filters. Pull requests cover
+  # dev/staging and main pushes provide post-merge validation.
   pull_request:
     # main included: a pull request straight to main is exactly the path
     # that would otherwise reach a release without these asset checks.
     branches: [dev, staging, main]
   push:
-    branches: [dev, staging]
+    branches: [main]
   # Allows a maintainer to recover the required check when GitHub does not
   # create the pull_request run for a head update.
   workflow_dispatch:

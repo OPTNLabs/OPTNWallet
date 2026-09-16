@@ -383,7 +383,7 @@ describe('release workflow', () => {
     expect(desktopPreviewWorkflow).toContain(
       'targets: ${{ matrix.rust-targets || matrix.target }}'
     );
-    expect(desktopPreviewWorkflow).toContain('toolchain: 1.98.0');
+    expect(desktopPreviewWorkflow).toContain('toolchain: 1.98.1');
     expect(desktopPreviewWorkflow).toContain(
       'cargo install trunk --version 0.21.14 --locked'
     );

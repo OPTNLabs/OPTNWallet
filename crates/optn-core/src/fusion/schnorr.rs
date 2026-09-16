@@ -1,18 +1,18 @@
 // BCH Schnorr signatures + the CashFusion blind-signature protocol.
 //
 // Matches Electron Cash (electroncash/schnorr.py) exactly, so blind signatures
-// built here unblind to signatures a fusion server — and BCH consensus — will
+// built here unblind to signatures a fusion server ??? and BCH consensus ??? will
 // accept.
 //
 // BCH Schnorr convention: signature is R.x(32) || s(32); challenge
 //   e = sha256(R.x || compressed(P) || msg32); verification checks
 //   R = s*G - e*P has R.x == the signature's R.x AND jacobi(R.y, p) == +1.
-// The Jacobi (quadratic-residue) rule is why only R.x travels — the verifier
+// The Jacobi (quadratic-residue) rule is why only R.x travels ??? the verifier
 // reconstructs the unique R whose y is a QR.
 //
 // Blind scheme (electroncash/schnorr.py BlindSignatureRequest), signer holds
 // pubkey P=x*G and nonce R=k*G:
-//   a,b random;  R' = c*(R + a*G + b*P),  c = ±1 chosen so jacobi(R'.y)=+1
+//   a,b random;  R' = c*(R + a*G + b*P),  c = ??1 chosen so jacobi(R'.y)=+1
 //   e' = sha256(R'.x || compressed(P) || msg32);  e = (c*e' + b) mod n   [-> signer]
 //   signer returns s = k + e*x;  s' = c*(s + a) mod n
 //   unblinded signature = R'.x || s'
@@ -21,7 +21,7 @@
 // This lived twice: once here in Rust for the desktop backend and once in
 // TypeScript for the browser-side P2P round, whose own header said the two had
 // to match. Two hand-kept implementations of a blind signature scheme is the
-// kind of duplication that goes wrong quietly — the failure is not a crash but
+// kind of duplication that goes wrong quietly ??? the failure is not a crash but
 // a signature the other side rejects, mid-round.
 //
 // Randomness is the caller's. `a`, `b` and the issuer's key and nonces are
@@ -222,7 +222,7 @@ pub struct BlindSignatureRequest {
 
 impl BlindSignatureRequest {
     /// Blinding factors are parameters rather than drawn here. They must be
-    /// uniform, secret, and never reused — a repeated `a` across two requests
+    /// uniform, secret, and never reused ??? a repeated `a` across two requests
     /// against the same nonce breaks unlinkability.
     pub fn new_with_blinding(
         round_pubkey: &[u8],
@@ -237,7 +237,7 @@ impl BlindSignatureRequest {
         // R_new = R + a*G + b*P
         let r_new = r_point + ProjectivePoint::GENERATOR * a + pubkey_point * b;
         if bool::from(r_new.is_identity()) {
-            return Err("blinded R is the identity — retry".into());
+            return Err("blinded R is the identity ??? retry".into());
         }
         let (rx_new, ry_new) = affine_xy(&r_new);
         // c = jacobi(R_new.y): +1 if QR else -1.
@@ -279,7 +279,7 @@ impl BlindSignatureRequest {
         if check {
             let pubkey = compressed(&self.pubkey_point);
             if !verify(&pubkey, &sig, &self.message_hash) {
-                return Err("blind signature verification failed — issuer cheated".into());
+                return Err("blind signature verification failed ??? issuer cheated".into());
             }
         }
         Ok(sig)
@@ -290,10 +290,10 @@ impl BlindSignatureRequest {
 /// coordinator role.
 ///
 /// Holds a round private key `x` and a pool of one-shot nonces `k_i`. Each
-/// `R_i = k_i·G` is published once; signing a blinded challenge at index `i`
+/// `R_i = k_i??G` is published once; signing a blinded challenge at index `i`
 /// **consumes** `k_i`. Reusing a nonce across two different challenges would
 /// leak `x` (classic Schnorr nonce reuse), so the second call at the same index
-/// is a hard error — not a silent re-sign.
+/// is a hard error ??? not a silent re-sign.
 pub struct BlindIssuer {
     x: Scalar,
     /// `Some(k)` while unused; `None` once the slot is consumed. Index is stable
@@ -316,12 +316,12 @@ impl BlindIssuer {
         })
     }
 
-    /// Compressed round pubkey `P = x·G` — published in StartRound.
+    /// Compressed round pubkey `P = x??G` ??? published in StartRound.
     pub fn pubkey(&self) -> [u8; 33] {
         compressed(&(ProjectivePoint::GENERATOR * self.x))
     }
 
-    /// Compressed nonce point `R_i = k_i·G` for an unused slot. Errors if the
+    /// Compressed nonce point `R_i = k_i??G` for an unused slot. Errors if the
     /// index is out of range or the slot was already consumed (there is no `k`
     /// left to re-derive R from).
     pub fn r_point(&self, index: usize) -> Result<[u8; 33], String> {
@@ -351,7 +351,7 @@ impl BlindIssuer {
     }
 
     /// Sign a blinded challenge `e` at `index`, consuming that slot. Returns the
-    /// 32-byte scalar `s = k + e·x`. A second call at the same index fails —
+    /// 32-byte scalar `s = k + e??x`. A second call at the same index fails ???
     /// it never reuses `k`.
     pub fn sign(&mut self, index: usize, e_bytes: &[u8; 32]) -> Result<[u8; 32], String> {
         if index >= self.nonces.len() {

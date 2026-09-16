@@ -69,6 +69,20 @@ if substitutions == 0:
 io.open(sys.argv[2], 'w', encoding='utf-8', newline='\n').write(body)
 PY
 
+# Extract the release assembler too. The completeness check can be perfectly
+# correct while the assembler never feeds it one of the downloaded artifacts.
+# Keep this preflight tied to the workflow body so filename-filter changes are
+# exercised before a real release run.
+"$PY_BIN" - "$WF" "$WORK/assemble.sh" <<'PY'
+import io, sys, yaml
+workflow = yaml.safe_load(io.open(sys.argv[1], encoding='utf-8'))
+step = next(
+    s for s in workflow['jobs']['publish']['steps']
+    if s.get('name') == 'Assemble release files'
+)
+io.open(sys.argv[2], 'w', encoding='utf-8', newline='\n').write(step['run'])
+PY
+
 # The full set, from the same config the check reads. Filenames only — a
 # pattern like *_amd64.deb needs a concrete name to stand in for it.
 "$PY_BIN" - "$CONFIG" "$VERSION" > "$WORK/assets.txt" <<'PY'
@@ -134,6 +148,51 @@ if [ "$uncaught" -eq 0 ]; then
   echo "every one of the ${#ASSETS[@]} assets is caught when removed"
 else
   echo "::error::$uncaught asset(s) are not actually protected"
+fi
+
+echo
+echo "assembler preflight"
+ASSEMBLY="$WORK/assembly"
+mkdir -p \
+  "$ASSEMBLY/artifacts/desktop-linux/usr/bin" \
+  "$ASSEMBLY/artifacts/cli-linux-x64" \
+  "$ASSEMBLY/artifacts/flatpak-linux-x64"
+
+# Desktop artifacts are uploaded recursively, so they legitimately contain an
+# extensionless `optn-wallet-desktop` executable. The CLI artifact is the only
+# place where an extensionless `optn-*` file should be harvested. This fixture
+# catches a broad find expression before it can fail a hosted release run.
+printf x > "$ASSEMBLY/artifacts/desktop-linux/usr/bin/optn-wallet-desktop"
+printf x > "$ASSEMBLY/artifacts/cli-linux-x64/optn-$VERSION-linux-x64"
+printf x > "$ASSEMBLY/artifacts/flatpak-linux-x64/OPTNWallet-$VERSION-linux-x64.flatpak"
+
+if (
+  cd "$ASSEMBLY" || exit 1
+  RELEASE_TAG="$RELEASE_TAG" bash "$WORK/assemble.sh" >/dev/null
+); then
+  :
+else
+  echo "::error::release assembler rejected a valid synthetic artifact set"
+  uncaught=$((uncaught + 1))
+fi
+
+if [ -e "$ASSEMBLY/release-files/optn-wallet-desktop" ]; then
+  echo "::error::release assembler harvested an internal desktop executable"
+  uncaught=$((uncaught + 1))
+else
+  echo "internal desktop executable is ignored"
+fi
+if [ -s "$ASSEMBLY/release-files/optn-$VERSION-linux-x64" ]; then
+  echo "CLI binary is assembled"
+else
+  echo "::error::CLI binary was dropped by the release assembler"
+  uncaught=$((uncaught + 1))
+fi
+if [ -s "$ASSEMBLY/release-files/OPTNWallet-$VERSION-linux-x64.flatpak" ]; then
+  echo "Flatpak is assembled"
+else
+  echo "::error::Flatpak was dropped by the release assembler"
+  uncaught=$((uncaught + 1))
 fi
 
 # And an asset nobody accounted for must be rejected too.

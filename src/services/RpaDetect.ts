@@ -24,8 +24,19 @@ export type RpaMatchedOutput = {
   outputIndex: number;
   address: string;
   valueSats: number;
+  /**
+   * The sender input the ECDH secret derives from, and the sender's
+   * compressed pubkey on it.
+   *
+   * Together these are the recipe for this output's spending key. An ordinary
+   * coin's key is found from its address, because the address came from a
+   * known HD path; this one's cannot be, so the origin has to travel with the
+   * output or the payment is detectable and unspendable. Both values are
+   * public and already on chain.
+   */
   prevoutHash: string;
   prevoutIndex: number;
+  senderPubkey: string;
 };
 
 export function matchRpaPaymentsInRawTx(
