@@ -312,6 +312,13 @@ pub struct ProgressiveSyncConfig {
     pub header_batch_size: u32,
     /// Safety bound against a malicious peer that never terminates header sync.
     pub max_header_batches: u32,
+    /// Stop a header pass after this many newly verified headers and keep them.
+    ///
+    /// `None` walks until the peer returns a short batch (BIP37/Neutrino need
+    /// the verified tip). Electrum wallet evidence stays a server assertion, so
+    /// a single real batch is enough to advance the MMR without walking the
+    /// whole chain on every refresh.
+    pub max_verified_headers_per_pass: Option<u32>,
 }
 
 impl Default for ProgressiveSyncConfig {
@@ -320,6 +327,7 @@ impl Default for ProgressiveSyncConfig {
             header_start_height: 1,
             header_batch_size: 2_000,
             max_header_batches: 1_000,
+            max_verified_headers_per_pass: None,
         }
     }
 }
@@ -544,10 +552,7 @@ impl ProgressiveSyncWorker {
         }
 
         for route in routes {
-            if matches!(
-                route.protocol,
-                ProtocolFamily::Bip37 | ProtocolFamily::Neutrino
-            ) {
+            if self.header_view.is_some() {
                 if let Err(error) = self.prime_headers_on_same_route(service, &route).await {
                     self.reconciliation
                         .record_failure(format!("header prerequisite failed: {error:?}"));
@@ -675,6 +680,14 @@ impl ProgressiveSyncWorker {
             .checked_add(1)
             .ok_or(ProgressiveSyncError::HeaderSafetyLimit)?;
         let mut staged: Vec<(u32, BlockHeaderBytes)> = Vec::new();
+        let mut advanced = 0u32;
+        let pass_limit = if wallet_route.protocol == ProtocolFamily::Electrum {
+            self.config
+                .max_verified_headers_per_pass
+                .or(Some(self.config.header_batch_size.max(1)))
+        } else {
+            self.config.max_verified_headers_per_pass
+        };
         for _ in 0..self.config.max_header_batches {
             let request = ChainRequest::HeaderSync {
                 start_height: start,
@@ -715,7 +728,12 @@ impl ProgressiveSyncWorker {
             start = start_height
                 .checked_add(returned)
                 .ok_or(ProgressiveSyncError::HeaderSafetyLimit)?;
-            if returned < self.config.header_batch_size.max(1) {
+            advanced = advanced
+                .checked_add(returned)
+                .ok_or(ProgressiveSyncError::HeaderSafetyLimit)?;
+            if returned < self.config.header_batch_size.max(1)
+                || pass_limit.is_some_and(|limit| advanced >= limit)
+            {
                 return self.publish_headers(view, staged);
             }
         }
@@ -1106,6 +1124,83 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn electrum_primes_a_real_header_batch_and_keeps_server_assertion_wallet_evidence() {
+        let (verifier, headers) = header_fixture();
+        let genesis_height = verifier.state().unwrap().height;
+        assert_eq!(genesis_height, 0);
+        let config = ProgressiveSyncConfig {
+            header_batch_size: 1,
+            max_verified_headers_per_pass: Some(2),
+            ..Default::default()
+        };
+        let mut worker = ProgressiveSyncWorker::new(config)
+            .with_header_verifier(Network::Chipnet, verifier)
+            .unwrap();
+        let mut service = service_with_headers(
+            ProtocolFamily::Electrum,
+            headers,
+            0,
+            Evidence::ServerAssertion,
+        );
+        let outcome = worker
+            .refresh(&mut service, vec![], None)
+            .await
+            .expect("Electrum may publish a server-asserted wallet after headers link");
+        assert_eq!(outcome.decision, ReconciliationDecision::Accepted);
+        let height = worker.header_verifier().unwrap().state().unwrap().height;
+        assert!(
+            height > genesis_height,
+            "Electrum must extend a real batch, not leave genesis unused: {height}"
+        );
+        let snapshot = worker
+            .reconciliation()
+            .authoritative
+            .as_ref()
+            .expect("accepted snapshot");
+        assert!(
+            matches!(snapshot.evidence, Evidence::ServerAssertion),
+            "linked headers must not relabel Electrum wallet evidence: {:?}",
+            snapshot.evidence
+        );
+        assert_ne!(
+            snapshot.value.tip.as_ref().map(|tip| tip.height),
+            Some(height),
+            "Electrum wallet tip is still a server assertion, not the verified header tip"
+        );
+    }
+
+    #[tokio::test]
+    async fn electrum_header_cap_stops_after_a_real_batch() {
+        let (verifier, headers) = header_fixture();
+        let config = ProgressiveSyncConfig {
+            header_batch_size: 1,
+            max_verified_headers_per_pass: Some(1),
+            ..Default::default()
+        };
+        let mut worker = ProgressiveSyncWorker::new(config)
+            .with_header_verifier(Network::Chipnet, verifier)
+            .unwrap();
+        let mut service = service_with_headers(
+            ProtocolFamily::Electrum,
+            headers.clone(),
+            0,
+            Evidence::ServerAssertion,
+        );
+        let route = service
+            .routes_for_operation(ChainOperation::WalletRefresh)
+            .remove(0);
+        worker
+            .prime_headers_on_same_route(&mut service, &route)
+            .await
+            .unwrap();
+        assert_eq!(
+            worker.header_verifier().unwrap().state().unwrap().height,
+            1,
+            "the cap must keep a real extended batch without walking the rest of the fixture"
+        );
+    }
+
+    #[tokio::test]
     async fn p2p_refresh_cannot_accept_a_snapshot_without_trusted_headers() {
         for protocol in [ProtocolFamily::Bip37, ProtocolFamily::Neutrino] {
             let mut service = wallet_service(protocol);
@@ -1131,6 +1226,7 @@ pub(crate) mod tests {
             header_start_height: 1,
             header_batch_size: 2,
             max_header_batches: 8,
+            max_verified_headers_per_pass: None,
         })
         .with_header_verifier(Network::Chipnet, verifier)
         .expect("a trusted verifier enables verified P2P sync");

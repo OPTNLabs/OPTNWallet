@@ -23,10 +23,13 @@
 //! byte, redirect and time limits are what stop a hostile server from doing
 //! damage before the check ever happens.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
-use optn_app::{AppAction, IdentityStatus, TokenIdentity};
+use optn_app::{AppAction, AppState, IdentityStatus, TokenIdentity};
 use optn_core::bcmr::RegistryPublication;
+
+use crate::capability_planner::{candidate_plans, CapabilityPlan, TokenCapabilityOperation};
 
 /// Bounds a fetch must respect.
 ///
@@ -252,6 +255,72 @@ pub fn observe_publication(
     attempts: &[(String, FetchAttempt)],
 ) -> AppAction {
     observe_identity(category, resolve(publication, attempts))
+}
+
+/// What the live wallet-sync finish path already knows about one owned category.
+///
+/// Publications and fetch bytes come from the runtime's authchain walk and
+/// [`TokenCapabilityOperation::BcmrAuthhead`] plans. A missing map entry is
+/// not unpublished: it means this wallet did not reach an authhead, so the
+/// identity stays unresolved. Timeout and incomplete lookup must never become
+/// an authhead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OwnedCategoryIdentity {
+    /// Authhead publication plus the fetch attempts already made for it.
+    Observed {
+        publication: RegistryPublication,
+        attempts: Vec<(String, FetchAttempt)>,
+    },
+    /// The authhead publishes nothing. Distinct from an incomplete walk.
+    Unpublished,
+}
+
+/// Capability plans a live resolver may use to obtain an authhead.
+///
+/// Direct `BcmrAuthhead` and spender-derived walks are both valid. Neither
+/// plan names Electrum, Fulcrum, BIP37, or Neutrino, so a BIP37-only policy
+/// cannot pick up an Electrum shortcut from this module.
+pub fn owned_identity_plans() -> Vec<CapabilityPlan> {
+    candidate_plans(TokenCapabilityOperation::BcmrAuthhead)
+}
+
+/// Categories this wallet currently holds, from its own coins.
+pub fn owned_token_categories(app: &AppState) -> BTreeSet<[u8; 32]> {
+    app.coins
+        .iter()
+        .filter_map(|coin| coin.token().map(|token| token.category))
+        .collect()
+}
+
+/// Publish identities for every owned token category through
+/// [`observe_publication`] / [`observe_identity`] and `reduce`.
+///
+/// This is the live wallet-sync publisher. A renderer cannot call it: finish
+/// does, after coins have been applied. A category with no observation is
+/// unresolved, never current. Hash mismatch is not current. Unpublished keeps
+/// the coin visible with a caveat.
+pub fn apply_owned_token_identities(
+    app: &mut AppState,
+    observations: &BTreeMap<[u8; 32], OwnedCategoryIdentity>,
+) {
+    for category in owned_token_categories(app) {
+        let action = match observations.get(&category) {
+            Some(OwnedCategoryIdentity::Observed {
+                publication,
+                attempts,
+            }) => observe_publication(category, publication, attempts),
+            Some(OwnedCategoryIdentity::Unpublished) => {
+                observe_identity(category, IdentityMetadata::Unpublished)
+            }
+            None => observe_identity(
+                category,
+                IdentityMetadata::Unresolved {
+                    reason: UnresolvedReason::AuthchainIncomplete,
+                },
+            ),
+        };
+        app.reduce(action);
+    }
 }
 
 impl IdentityMetadata {
@@ -676,5 +745,179 @@ mod tests {
                 .map(|identity| identity.status),
             Some(IdentityStatus::Verified)
         );
+    }
+
+    fn observations(
+        category: [u8; 32],
+        identity: OwnedCategoryIdentity,
+    ) -> BTreeMap<[u8; 32], OwnedCategoryIdentity> {
+        let mut map = BTreeMap::new();
+        map.insert(category, identity);
+        map
+    }
+
+    /// The live publisher, not `reduce(SetTokenIdentity)`, is what names a
+    /// matching registry on Assets and My NFTs.
+    #[test]
+    fn live_publisher_makes_matching_bytes_the_current_name() {
+        let body = registry_body("Bitcats", ALPHA);
+        let publication = publication(&body, &["example.com"]);
+        let mut state = wallet_with(vec![
+            coin(
+                1,
+                1_000,
+                Some(optn_core::token::TokenData::fungible(ALPHA, 10)),
+            ),
+            coin(2, 1_000, Some(nft(ALPHA, b"\x01"))),
+        ]);
+        apply_owned_token_identities(
+            &mut state,
+            &observations(
+                ALPHA,
+                OwnedCategoryIdentity::Observed {
+                    publication,
+                    attempts: vec![("https://example.com/x".into(), Ok(body))],
+                },
+            ),
+        );
+        let assets = optn_app::assets_view_model(&state);
+        let identity = assets.categories[0]
+            .identity
+            .as_ref()
+            .expect("resolved identity");
+        assert_eq!(identity.name, "Bitcats");
+        assert_eq!(identity.status, IdentityStatus::Verified);
+        assert_eq!(identity.status.caveat(), None);
+        let nfts = optn_app::nfts_view_model(&state);
+        assert_eq!(
+            nfts.nfts[0]
+                .identity
+                .as_ref()
+                .map(|item| item.name.as_str()),
+            Some("Bitcats")
+        );
+    }
+
+    #[test]
+    fn live_publisher_does_not_show_a_hash_mismatch_as_current() {
+        let body = registry_body("Bitcats", ALPHA);
+        let publication = publication(&body, &["example.com"]);
+        let mut state = wallet_with(vec![coin(
+            1,
+            1_000,
+            Some(optn_core::token::TokenData::fungible(ALPHA, 10)),
+        )]);
+        apply_owned_token_identities(
+            &mut state,
+            &observations(
+                ALPHA,
+                OwnedCategoryIdentity::Observed {
+                    publication,
+                    attempts: vec![(
+                        "https://example.com/x".into(),
+                        Ok(b"something else".to_vec()),
+                    )],
+                },
+            ),
+        );
+        let assets = optn_app::assets_view_model(&state);
+        assert_eq!(assets.categories.len(), 1);
+        let identity = assets.categories[0]
+            .identity
+            .as_ref()
+            .expect("unresolved still named");
+        assert_eq!(identity.status, IdentityStatus::Unresolved);
+        assert!(identity.status.caveat().is_some());
+        assert_ne!(identity.name, "Bitcats");
+    }
+
+    #[test]
+    fn live_publisher_keeps_unpublished_and_unresolved_coins_with_a_caveat() {
+        let mut unpublished = wallet_with(vec![coin(
+            1,
+            1_000,
+            Some(optn_core::token::TokenData::fungible(ALPHA, 10)),
+        )]);
+        apply_owned_token_identities(
+            &mut unpublished,
+            &observations(ALPHA, OwnedCategoryIdentity::Unpublished),
+        );
+        let assets = optn_app::assets_view_model(&unpublished);
+        assert_eq!(assets.categories.len(), 1);
+        let identity = assets.categories[0].identity.as_ref().expect("status");
+        assert_eq!(identity.status, IdentityStatus::Unpublished);
+        assert_eq!(identity.status.caveat(), Some("no registry published"));
+
+        let mut unresolved = wallet_with(vec![coin(
+            2,
+            1_000,
+            Some(optn_core::token::TokenData::fungible(ALPHA, 10)),
+        )]);
+        apply_owned_token_identities(&mut unresolved, &BTreeMap::new());
+        let assets = optn_app::assets_view_model(&unresolved);
+        assert_eq!(assets.categories.len(), 1);
+        let identity = assets.categories[0].identity.as_ref().expect("status");
+        assert_eq!(identity.status, IdentityStatus::Unresolved);
+        assert_eq!(identity.status.caveat(), Some("unverified"));
+        assert_ne!(identity.status, IdentityStatus::Verified);
+    }
+
+    #[test]
+    fn live_publisher_leaves_a_renderer_unable_to_inject_a_name() {
+        let mut state = wallet_with(vec![coin(
+            1,
+            1_000,
+            Some(optn_core::token::TokenData::fungible(ALPHA, 10)),
+        )]);
+        apply_owned_token_identities(&mut state, &BTreeMap::new());
+        state.reduce_intent(optn_app::AppAction::SetTokenIdentity {
+            category_hex: category_hex(&ALPHA),
+            identity: TokenIdentity {
+                name: "Totally Real Coin".into(),
+                ticker: None,
+                decimals: 0,
+                status: IdentityStatus::Verified,
+            },
+        });
+        let assets = optn_app::assets_view_model(&state);
+        let identity = assets.categories[0].identity.as_ref().expect("status");
+        assert_ne!(identity.name, "Totally Real Coin");
+        assert_eq!(identity.status, IdentityStatus::Unresolved);
+    }
+
+    #[test]
+    fn identity_plans_stay_provider_neutral() {
+        use crate::capability_planner::LocalDerivation;
+        use crate::chain::Capability;
+
+        let plans = owned_identity_plans();
+        assert!(
+            plans.iter().any(|plan| matches!(
+                plan,
+                CapabilityPlan::Direct {
+                    capability: Capability::BcmrAuthhead
+                }
+            )),
+            "a direct authhead capability remains available"
+        );
+        assert!(
+            plans.iter().any(|plan| matches!(
+                plan,
+                CapabilityPlan::Derived {
+                    derivation: LocalDerivation::BcmrAuthheadFromSpenderLookup,
+                    ..
+                }
+            )),
+            "a BIP37-only wallet can still walk via spender lookup"
+        );
+        for plan in &plans {
+            for capability in plan.requirements() {
+                assert_ne!(
+                    *capability,
+                    Capability::ElectrumProtocol,
+                    "authhead plans must not require Electrum"
+                );
+            }
+        }
     }
 }
