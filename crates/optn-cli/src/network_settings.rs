@@ -387,8 +387,13 @@ mod tests {
             let mut lookups = 0;
             let mut broadcasts = 0;
             // One probe per invocation, then its lookup or full HD refresh rounds.
-            for _ in 0..17 {
-                let (socket, _) = listener.accept().await.unwrap();
+            loop {
+                let Ok(Ok((socket, _))) =
+                    tokio::time::timeout(std::time::Duration::from_millis(750), listener.accept())
+                        .await
+                else {
+                    break;
+                };
                 let mut stream = BufReader::new(socket);
                 loop {
                     let mut line = String::new();
@@ -403,6 +408,9 @@ mod tests {
                         }
                         "server.peers.subscribe" => json!([]),
                         "blockchain.headers.subscribe" => json!({"height":7,"hex":"00".repeat(80)}),
+                        "blockchain.block.headers" => {
+                            json!({"count": 0, "hex": "", "max": 2016})
+                        }
                         "blockchain.scripthash.get_history" => {
                             json!([{"tx_hash":expected_txid,"height":5}])
                         }

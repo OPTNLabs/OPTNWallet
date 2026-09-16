@@ -3607,13 +3607,21 @@ mod header_batch_tests {
     }
 
     #[test]
-    fn electrum_hd_worker_does_not_claim_mmr() {
+    fn electrum_hd_worker_attaches_verifier_without_claiming_mmr() {
         let policy = optn_runtime::chain::ConnectionPolicy::exact(
             optn_runtime::chain::SourceId::new("cli-electrum"),
             optn_runtime::chain::ProtocolFamily::Electrum,
         );
         let worker = super::hd_sync_worker(Network::Chipnet, &policy).unwrap();
-        assert!(worker.header_verifier().is_none());
+        let verifier = worker
+            .header_verifier()
+            .expect("Chipnet Electrum attaches the shipped verifier");
+        assert!(verifier.has_difficulty_context());
+        assert_eq!(verifier.state().unwrap().height, 0);
+        let (_, mmr, header_height, _, header_evidence) = super::header_verifier_report(&worker);
+        assert!(!mmr, "genesis attach is not MMR");
+        assert_eq!(header_height, Some(0));
+        assert_eq!(header_evidence, Some("GenesisAttached"));
     }
 
     #[test]
