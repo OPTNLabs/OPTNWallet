@@ -416,6 +416,7 @@ impl WalletSyncSession {
         )
     }
 
+    #[cfg(test)]
     pub(super) fn record_registry_fetches(
         &mut self,
         fetches: Vec<(String, crate::token_metadata::FetchAttempt)>,
