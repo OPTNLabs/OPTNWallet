@@ -96,8 +96,10 @@ export function connectSigningSerialization(context_json, covered, mode) {
 }
 
 /**
- * Decode a cashcode or legacy paycode. Returns JSON, or throws with the
- * reason the code was rejected.
+ * Decode a Cash Code. Returns JSON, or throws with the reason the code was
+ * rejected — including a legacy `paycode:`, which throws rather than
+ * decoding. There is no `legacy` field on the result: nothing that decodes
+ * here is legacy.
  * @param {string} code
  * @returns {string}
  */
@@ -153,17 +155,16 @@ export function deriveRpaKeys(mnemonic, passphrase, scan_path, spend_path) {
 /**
  * Encode a scan/spend pair as a `cashcode:` string.
  *
- * `legacy` stamps the old `paycode:` prefix instead. Nothing in the wallet
- * passes it: it exists so tests and migration tooling can build the form that
- * must keep being accepted on input.
+ * There is no `legacy` argument. The legacy `paycode:` prefix is a different
+ * implementation that OPTN does not support, and an encoder able to stamp it
+ * would be a way to manufacture the very strings `decodeCashcode` refuses.
  * @param {Uint8Array} scan_pubkey
  * @param {Uint8Array} spend_pubkey
  * @param {string} network
  * @param {number} prefix_bits
- * @param {boolean | null} [legacy]
  * @returns {string}
  */
-export function encodeCashcode(scan_pubkey, spend_pubkey, network, prefix_bits, legacy) {
+export function encodeCashcode(scan_pubkey, spend_pubkey, network, prefix_bits) {
     let deferred5_0;
     let deferred5_1;
     try {
@@ -173,7 +174,7 @@ export function encodeCashcode(scan_pubkey, spend_pubkey, network, prefix_bits, 
         const len1 = WASM_VECTOR_LEN;
         const ptr2 = passStringToWasm0(network, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len2 = WASM_VECTOR_LEN;
-        const ret = wasm.encodeCashcode(ptr0, len0, ptr1, len1, ptr2, len2, prefix_bits, isLikeNone(legacy) ? 0xFFFFFF : legacy ? 1 : 0);
+        const ret = wasm.encodeCashcode(ptr0, len0, ptr1, len1, ptr2, len2, prefix_bits);
         var ptr4 = ret[0];
         var len4 = ret[1];
         if (ret[3]) {
@@ -434,6 +435,9 @@ export function fusionVerifySchnorr(pubkey, signature, message) {
 
 /**
  * How many nSequence values to try before reshaping the transaction.
+ *
+ * Exported so the wallet grinds as hard as the CLI does. Both previously
+ * hardcoded 100_000, which at 16 bits exhausts about a fifth of the time.
  * @param {number} prefix_bits
  * @returns {number}
  */
@@ -448,12 +452,25 @@ export function grindBudget(prefix_bits) {
 /**
  * Sign and grind an assembled RPA payment, in the shared core.
  *
+ * The desktop sender used to run its own grind: its own signing, its own
+ * serialization, its own SHA-256, and its own 100_000 ceiling, in parallel
+ * with the CLI's. Two implementations of the same protocol step is precisely
+ * the failure this crate exists to prevent, and the failure mode is quiet —
+ * a sender that grinds differently produces a payment that is on chain,
+ * valid, and invisible to the recipient scanning for it.
+ *
+ * The caller still assembles the transaction, because output ordering and
+ * review are the wallet's concern. Everything from signing onwards is here.
+ *
  * `raw_tx` is the assembled transaction with the stealth output already in
  * place. `prevout_values` and the concatenated `prevout_scripts` (split by
- * `prevout_script_lens`) describe the outputs being spent, in input order.
- * `privkeys` is 32 bytes per input, in the same order.
+ * `prevout_script_lens`) describe the outputs being spent, in input order,
+ * because a sighash needs the value and script of the coin it spends and
+ * neither is present in the transaction itself. `privkeys` is 32 bytes per
+ * input, in the same order.
  *
- * Returns `{"exhausted":true}` rather than throwing when the budget runs out.
+ * Returns `{"exhausted":true}` rather than throwing when the budget runs
+ * out: that is a reshape signal, and the wallet should reselect coins.
  * @param {Uint8Array} raw_tx
  * @param {BigUint64Array} prevout_values
  * @param {Uint8Array} prevout_scripts
@@ -535,7 +552,6 @@ export function grindString(scan_pubkey, prefix_bits) {
 }
 
 /**
- * True if the string carries a legacy PayCode prefix.
  * @param {string} candidate
  * @returns {boolean}
  */
@@ -547,7 +563,8 @@ export function isLegacyPaycode(candidate) {
 }
 
 /**
- * The message to show for a legacy PayCode.
+ * The message to show for a legacy PayCode. Exported rather than duplicated
+ * in TypeScript so the wallet and the CLI refuse it in the same words.
  * @returns {string}
  */
 export function legacyPaycodeRejection() {
@@ -564,7 +581,9 @@ export function legacyPaycodeRejection() {
 }
 
 /**
- * True if the string is a Cash Code this wallet can pay.
+ * True if the string is a Cash Code this wallet can pay. A legacy
+ * `paycode:` is not, and returns false — use `isLegacyPaycode` to tell the
+ * user why their string was refused.
  * @param {string} candidate
  * @returns {boolean}
  */
@@ -801,10 +820,6 @@ function getUint8ArrayMemory0() {
         cachedUint8ArrayMemory0 = new Uint8Array(wasm.memory.buffer);
     }
     return cachedUint8ArrayMemory0;
-}
-
-function isLikeNone(x) {
-    return x === undefined || x === null;
 }
 
 function passArray32ToWasm0(arg, malloc) {
