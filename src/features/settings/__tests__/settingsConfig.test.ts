@@ -131,16 +131,23 @@ describe('settingsConfig', () => {
     expect(aboutRow?.description).toMatch(/Bitcoin Cash Contracts info/i);
   });
 
-  it('keeps language selection under About & support', () => {
+  it('keeps appearance and language selection under About & support', () => {
     const about = getSettingsGroupRows('about', false, Network.MAINNET);
 
+    // Appearance sits beside Language because both are app presentation, not
+    // wallet state: changing either touches no key, wallet or network.
     expect(about.map((row) => row.key)).toEqual([
+      'appearance',
       'language',
       'about',
       'terms',
       'contact',
     ]);
     expect(about[0]).toMatchObject({
+      action: 'panel',
+      target: 'appearance',
+    });
+    expect(about[1]).toMatchObject({
       action: 'panel',
       target: 'language',
     });

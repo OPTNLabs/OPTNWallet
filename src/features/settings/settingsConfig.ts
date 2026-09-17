@@ -2,6 +2,7 @@ import { ROUTE_PATHS } from '../../navigation/routes';
 import { Network } from '../../state/slices/networkSlice';
 
 export type SettingsPanelKey =
+  | 'appearance'
   | 'recovery'
   | 'about'
   | 'terms'
@@ -38,6 +39,13 @@ export type SettingsRowConfig = {
 };
 
 export const WALLET_ROWS: SettingsRowConfig[] = [
+  {
+    key: 'appearance',
+    title: 'Appearance',
+    description: 'Theme mode and skin',
+    action: 'panel',
+    target: 'appearance',
+  },
   {
     key: 'language',
     title: 'Language',
@@ -280,6 +288,7 @@ export const CONNECTION_ROWS: SettingsRowConfig[] = [
 ];
 
 export const ABOUT_ROWS: SettingsRowConfig[] = [
+  WALLET_ROWS.find((row) => row.key === 'appearance')!,
   WALLET_ROWS.find((row) => row.key === 'language')!,
   {
     key: 'about',
