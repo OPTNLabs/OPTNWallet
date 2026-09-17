@@ -1361,7 +1361,7 @@ mod tests {
         let runtime = runtime().await;
         let transport = DirectTransport::new(runtime.clone());
         let coin = optn_app::chipnet_demo_coin(4000, 1).unwrap();
-        for action in [AppAction::InsertCoin(coin), AppAction::SetStealthSats(5000)] {
+        for action in [AppAction::InsertCoin(coin)] {
             // Same typed conversion used by remote GUI commands, then the
             // direct transport used by in-process interfaces.
             let wire = optn_transport::WireAction::from(action);
@@ -1375,7 +1375,9 @@ mod tests {
             );
             let state = transport.snapshot().await.unwrap();
             assert!(state.coins.is_empty());
-            assert_eq!(state.stealth_sats, 0);
+            // Stealth is a breakdown of the coin set now, so an empty coin
+            // set is the whole assertion: there is no second pool to check.
+            assert_eq!(state.coins.rpa_sats(), 0);
             assert!(state.notice.unwrap().contains("sync service"));
         }
     }

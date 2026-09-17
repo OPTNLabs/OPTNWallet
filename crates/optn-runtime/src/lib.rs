@@ -287,7 +287,6 @@ impl AppRuntime {
                 | AppAction::SetFusionPhase(_)
                 | AppAction::SetTorReady(_)
                 | AppAction::InsertCoin(_)
-                | AppAction::SetStealthSats(_)
         ) {
             return Err(RuntimeStopped);
         }

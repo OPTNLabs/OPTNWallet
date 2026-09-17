@@ -568,9 +568,6 @@ pub enum WireActionKind {
         category_hex: String,
         identity: WireTokenIdentity,
     },
-    SetStealthSats {
-        sats: u64,
-    },
     StartFusion,
     CancelFusion,
     SetAutoFusionEnabled {
@@ -1013,7 +1010,11 @@ pub struct WireState {
     pub spend: Option<WireSpendPlan>,
     #[serde(default)]
     pub hardware: WireHardwareSession,
-    /// RPA stealth sats, kept apart from the coin list.
+    /// How much of the balance arrived through a Cash Code.
+    ///
+    /// Derived from the coins beside it, never a second number that can
+    /// disagree with them. Sent so a host can show the split without
+    /// recomputing it, and ignored on decode for the same reason.
     #[serde(default)]
     pub stealth_sats: u64,
     /// Verified token identities, keyed by category id in display order.
@@ -1603,7 +1604,6 @@ impl From<AppAction> for WireAction {
             AppAction::DisconnectHardware => WireActionKind::DisconnectHardware,
             AppAction::HideWalletIdentity => WireActionKind::HideWalletIdentity,
             AppAction::RequestRescanFrom { height } => WireActionKind::RequestRescanFrom { height },
-            AppAction::SetStealthSats(sats) => WireActionKind::SetStealthSats { sats },
             AppAction::StartFusion => WireActionKind::StartFusion,
             AppAction::CancelFusion => WireActionKind::CancelFusion,
             AppAction::SetAutoFusionEnabled(enabled) => {
@@ -1806,7 +1806,6 @@ impl TryFrom<WireAction> for AppAction {
             WireActionKind::DisconnectHardware => Self::DisconnectHardware,
             WireActionKind::HideWalletIdentity => Self::HideWalletIdentity,
             WireActionKind::RequestRescanFrom { height } => Self::RequestRescanFrom { height },
-            WireActionKind::SetStealthSats { sats } => Self::SetStealthSats(sats),
             WireActionKind::StartFusion => Self::StartFusion,
             WireActionKind::CancelFusion => Self::CancelFusion,
             WireActionKind::SetAutoFusionEnabled { enabled } => Self::SetAutoFusionEnabled(enabled),
@@ -1973,7 +1972,8 @@ impl From<&AppState> for WireState {
             fusion: (&value.fusion).into(),
             auto_fusion: value.auto_fusion.into(),
             tor_ready: value.tor_ready,
-            stealth_sats: value.stealth_sats,
+            // Derived from those coins, never tracked beside them.
+            stealth_sats: value.coins.rpa_sats(),
             token_identities: value
                 .token_identities
                 .iter()
@@ -2139,7 +2139,6 @@ impl TryFrom<WireState> for AppState {
             fusion: value.fusion.into(),
             auto_fusion: value.auto_fusion.into(),
             tor_ready: value.tor_ready,
-            stealth_sats: value.stealth_sats,
             token_identities: value
                 .token_identities
                 .into_iter()
@@ -2520,11 +2519,6 @@ mod tests {
                 assert!(!state.identity_revealed);
                 assert!(transport.next_event().await.unwrap().is_none());
 
-                transport
-                    .dispatch(AppAction::SetStealthSats(999_999))
-                    .await
-                    .unwrap();
-                assert_eq!(transport.snapshot().await.unwrap().stealth_sats, 0);
                 transport
                     .dispatch(AppAction::InsertCoin(
                         optn_app::chipnet_demo_coin(10_000, 1).unwrap(),

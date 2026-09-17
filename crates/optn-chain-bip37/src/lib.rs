@@ -430,6 +430,7 @@ impl Bip37Backend {
             &self.config.transport,
             &blocks,
             &bloom_items,
+            scan_all,
         )
         .await
         .map_err(ChainBackendError::Protocol)?;
@@ -1165,6 +1166,7 @@ async fn scan_blocks_observed(
     transport: &Bip37Transport,
     blocks: &[(u32, [u8; 32])],
     bloom_items: &[Vec<u8>],
+    scan_all: bool,
 ) -> Result<Vec<ObservedTransaction>, String> {
     let magic = params_for(network).magic;
     let mut stream = connect_peer(host, port, transport).await?;
@@ -1172,7 +1174,11 @@ async fn scan_blocks_observed(
     if !probe.serves_bloom {
         return Err("peer does not advertise NODE_BLOOM".into());
     }
-    let mut filter = BloomFilter::new(bloom_items.len().max(1) * 2, 0.0001, nonce() as u32);
+    let mut filter = if scan_all {
+        BloomFilter::match_all()
+    } else {
+        BloomFilter::new(bloom_items.len().max(1) * 2, 0.0001, nonce() as u32)
+    };
     for item in bloom_items {
         filter.insert(item)
     }
@@ -1185,6 +1191,7 @@ async fn scan_blocks_observed(
         .await
         .map_err(|e| format!("filterload failed: {e}"))?;
     let mut observed = Vec::new();
+    let mut observed_bytes = 0usize;
     for (height, block_hash) in blocks {
         stream
             .write_all(&encode_message(
@@ -1222,6 +1229,15 @@ async fn scan_blocks_observed(
                             "peer answered the request for block {height} with a different block"
                         ));
                     }
+                    // A match-all filter must return a match-all block. A peer
+                    // that quietly omits transactions would make "no Cash Code
+                    // payment here" indistinguishable from "we were not shown
+                    // the transaction that carried one".
+                    if scan_all && mb.matched_txids.len() != mb.total_transactions as usize {
+                        return Err(
+                            "local Cash Code scan requires every transaction in the block".into(),
+                        );
+                    }
                     proven = Some(mb.matched_txids);
                 }
                 "tx" => {
@@ -1244,6 +1260,17 @@ async fn scan_blocks_observed(
                         continue;
                     }
                     delivered.push(parsed.txid);
+                    // Asking for whole blocks means the peer decides how much
+                    // it sends. Bounded so a hostile or unlucky range cannot
+                    // grow the response without limit.
+                    observed_bytes = observed_bytes
+                        .checked_add(parsed.raw.len())
+                        .ok_or("scan byte count overflow")?;
+                    if scan_all && observed_bytes > 32 * 1024 * 1024 {
+                        return Err(
+                            "local Cash Code scan exceeds the 32 MiB response budget".into()
+                        );
+                    }
                     observed.push(ObservedTransaction {
                         txid: parsed.txid,
                         raw: parsed.raw,
