@@ -224,7 +224,7 @@ impl AppRuntimeDriver {
                 let event = self.wallet_sync.persist_annotation(
                     &mut candidate,
                     self.state.clone(),
-                    |app, sync| security.persist_checkpoint(app, sync),
+                    |app, sync| security.persist_checkpoint(app, sync, None),
                     |app| guard.allows(app, reply.is_closed()),
                 );
                 self.state = candidate;
