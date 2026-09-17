@@ -55,6 +55,7 @@ import { isDesktopPlatform } from '../../utils/platform';
 import { hasCapability } from '../../platform/capabilities';
 import { useI18n } from '../../i18n/useI18n';
 import { LanguageSettings } from './LanguageSettings';
+import { AppearanceSettings } from './AppearanceSettings';
 import { MerchantPaySettings } from './MerchantPaySettings';
 import type { TranslationKey } from '../../i18n/resources';
 
@@ -240,6 +241,8 @@ const Settings: React.FC = () => {
         return <RecoveryPhrase />;
       case 'language':
         return <LanguageSettings />;
+      case 'appearance':
+        return <AppearanceSettings />;
       case 'about':
         return <AboutView />;
       case 'terms':
@@ -296,6 +299,8 @@ const Settings: React.FC = () => {
         return t('settings.about');
       case 'language':
         return t('settings.language');
+      case 'appearance':
+        return 'Appearance';
       case 'terms':
         return t('settings.terms');
       case 'contact':

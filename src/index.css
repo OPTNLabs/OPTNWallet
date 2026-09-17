@@ -199,6 +199,78 @@
     --wallet-nav-text: #ebfff4;
   }
 
+  /*
+   * Gray and Dark refine the dark palette above rather than replacing it.
+   * `html.dark` stays on for every dark-surfaced mode, so Tailwind's `dark:`
+   * variants and the existing component CSS keep working and a new mode can
+   * only change colour, never drop styling. Values follow the same tokens the
+   * Rust renderer uses (`crates/optn-ui/style.css`) so the two agree.
+   */
+  html.dark.theme-gray {
+    --wallet-bg: #1c2128;
+    --wallet-bg-gradient: linear-gradient(180deg, #232931 0%, #1c2128 58%, #171b21 100%);
+    --wallet-text: #d6dde4;
+    --wallet-text-strong: #e8edf2;
+    --wallet-border: #39414b;
+    --wallet-card-bg: rgba(37, 43, 52, 0.82);
+    --wallet-surface: #252b34;
+    --wallet-surface-strong: #2d343e;
+    --wallet-accent-soft: #30414d;
+    --wallet-link: #9fd9bd;
+    --wallet-btn-secondary-bg: #2d343e;
+    --wallet-btn-secondary-hover: #39414b;
+    --wallet-btn-secondary-text: #e8edf2;
+    --wallet-segment-inactive-bg: #2d343e;
+    --wallet-segment-inactive-hover: #39414b;
+    --wallet-segment-inactive-text: #d6dde4;
+    --wallet-selectable-active-bg: #2f3b44;
+    --wallet-selectable-active-border: #4a5a66;
+    --wallet-selectable-inactive-bg: rgba(37, 43, 52, 0.8);
+    --wallet-selectable-inactive-border: #39414b;
+    --wallet-nav-from: rgba(61, 214, 140, 0.85);
+    --wallet-nav-to: rgba(45, 168, 111, 0.85);
+  }
+
+  html.dark.theme-dark {
+    --wallet-bg: #000000;
+    --wallet-bg-gradient: linear-gradient(180deg, #070707 0%, #000000 60%, #000000 100%);
+    --wallet-text: #d5d5d5;
+    --wallet-text-strong: #f3f3f3;
+    --wallet-border: #262626;
+    --wallet-card-bg: rgba(10, 10, 10, 0.9);
+    --wallet-surface: #0a0a0a;
+    --wallet-surface-strong: #131313;
+    --wallet-accent-soft: #10291e;
+    --wallet-btn-secondary-bg: #131313;
+    --wallet-btn-secondary-hover: #1e1e1e;
+    --wallet-btn-secondary-text: #f3f3f3;
+    --wallet-segment-inactive-bg: #131313;
+    --wallet-segment-inactive-hover: #1e1e1e;
+    --wallet-segment-inactive-text: #d5d5d5;
+    --wallet-selectable-active-bg: #16231d;
+    --wallet-selectable-active-border: #2d5a44;
+    --wallet-selectable-inactive-bg: rgba(10, 10, 10, 0.85);
+    --wallet-selectable-inactive-border: #262626;
+    --wallet-nav-from: rgba(49, 219, 144, 0.82);
+    --wallet-nav-to: rgba(30, 150, 99, 0.82);
+  }
+
+  /*
+   * A skin restyles chrome on top of the chosen mode; it must not become a
+   * second palette. Only accent, border and letter-spacing move, so contrast
+   * for body text stays whatever the mode already guaranteed.
+   */
+  html.skin-cyberpunk {
+    --wallet-accent: #39ff14;
+    --wallet-accent-strong: #2ee00c;
+    --wallet-link: #7cff5c;
+    --wallet-border: rgba(57, 255, 20, 0.35);
+    --wallet-focus-ring: rgba(57, 255, 20, 0.35);
+    --wallet-nav-from: rgba(57, 255, 20, 0.85);
+    --wallet-nav-to: rgba(28, 190, 8, 0.85);
+    letter-spacing: 0.02em;
+  }
+
   html.native-contained {
     --safe-top: 0px;
     --safe-bottom: 0px;
@@ -894,4 +966,24 @@
 }
 .overflow-y-auto::-webkit-scrollbar-thumb:hover {
   background-color: var(--wallet-scrollbar-thumb-hover);
+}
+
+/*
+ * Theme swatches. Deliberately outside @layer: the class name is composed at
+ * runtime from the mode, so Tailwind's content scanner cannot see it and would
+ * tree-shake these rules out of the bundle if they sat in @layer components.
+ * Fixed colours, because a swatch has to show the mode it offers rather than
+ * the one currently applied.
+ */
+.theme-swatch-light {
+  background: linear-gradient(135deg, #ffffff 0%, #eef4f1 100%);
+}
+.theme-swatch-gray {
+  background: linear-gradient(135deg, #252b34 0%, #1c2128 100%);
+}
+.theme-swatch-green {
+  background: linear-gradient(135deg, #0b3327 0%, #06251c 100%);
+}
+.theme-swatch-dark {
+  background: linear-gradient(135deg, #131313 0%, #000000 100%);
 }
