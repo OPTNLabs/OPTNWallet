@@ -499,6 +499,7 @@ impl ChainBackend for ElectrumBackend {
     fn execute<'a>(&'a self, request: &'a ChainRequest) -> ChainFuture<'a, BackendObservation> {
         Box::pin(async move {
             match request {
+                ChainRequest::CashcodeBlockRange { .. } => Err(ChainBackendError::Unsupported),
                 ChainRequest::WalletRefresh {
                     interests,
                     from_height,

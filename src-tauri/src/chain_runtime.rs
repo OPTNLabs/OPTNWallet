@@ -8,7 +8,7 @@
 use crate::network_config::NetworkSettingsStore;
 use optn_app::AppState;
 use optn_core::endpoint::{
-    parse_electrum_endpoint, parse_peer_endpoint, DEFAULT_WSS_PORT, NODE_HINT_PORT,
+    parse_electrum_endpoint, parse_peer_endpoint, PeerEndpoint, DEFAULT_WSS_PORT, NODE_HINT_PORT,
 };
 use optn_core::network::Network;
 use optn_runtime::chain::{
@@ -32,6 +32,152 @@ use optn_runtime::header_verifier::ShvMmrHeaderVerifier;
 use optn_runtime::header_view::VerifiedHeaderView;
 
 type NativeSelection = (Network, Result<(SourceCatalog, ConnectionPolicy), String>);
+
+/// Authorize the renderer's scan target against the node selected in native
+/// application state. The renderer may describe the target, but cannot choose
+/// a different peer for a native connection.
+fn authorize_cashcode_peer(
+    state: &AppState,
+    network: Network,
+    requested_host: &str,
+    requested_port: u16,
+) -> Result<PeerEndpoint, String> {
+    if state.network != network {
+        return Err("Cash Code scan network is no longer selected".into());
+    }
+    let selected_entry = state
+        .servers
+        .for_network(network)
+        .peer
+        .as_deref()
+        .ok_or_else(|| "No native node is selected for this network".to_string())?;
+    let selected = parse_peer_endpoint(selected_entry, NODE_HINT_PORT)
+        .map_err(|error| format!("Invalid native node selection: {error}"))?;
+    let requested =
+        parse_peer_endpoint(requested_host, requested_port).map_err(|error| error.to_string())?;
+    if requested.port() != requested_port {
+        return Err("Node host and explicit port disagree".into());
+    }
+    if requested != selected {
+        return Err("Cash Code scan target does not match the native selected node".into());
+    }
+    Ok(selected)
+}
+
+/// Remote BIP37 scans always require Tor. IPC can ask for the stricter route,
+/// but cannot turn the native privacy requirement off.
+fn cashcode_tor_required(peer: &PeerEndpoint, requested: Option<bool>) -> Result<bool, String> {
+    let required = !crate::fusion::is_local_server(peer.host());
+    if required && requested == Some(false) {
+        return Err("Tor is required for Cash Code scans to remote nodes".into());
+    }
+    Ok(required)
+}
+
+/// Thin legacy-wallet adapter: public endpoint selection plus an already
+/// authorized scan key, never a seed or authority to sign. The selected node is
+/// the ONLY registered route. SOCKS failures cannot fall back to direct TCP.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn cashcode_scan_node(
+    runtime: tauri::State<'_, Arc<NativeChainRuntime>>,
+    network: String,
+    host: String,
+    port: u16,
+    from_height: u32,
+    scan_private: Vec<u8>,
+    spend_public: Vec<u8>,
+    tor_required: Option<bool>,
+    tor_host: Option<String>,
+    tor_port: Option<u16>,
+) -> Result<serde_json::Value, String> {
+    use optn_chain_native::{Bip37Backend, Bip37Config, Bip37Transport};
+    use optn_runtime::{
+        chain::ProtocolFamily,
+        rpa_receive::{scan_cashcode, CashcodeScanKeys},
+        sync_worker::ProgressiveSyncWorker,
+    };
+    // Take ownership of the sensitive IPC buffer before any fallible work.
+    let keys = CashcodeScanKeys::from_scan_bytes(&network, scan_private, spend_public)?;
+    let network = network.parse::<Network>()?;
+    if port == 0 || from_height == 0 {
+        return Err("Cash Code scan needs a node port and nonzero birth height".into());
+    }
+    let peer = authorize_cashcode_peer(&runtime.owner.state(), network, &host, port)?;
+    let tor_required = cashcode_tor_required(&peer, tor_required)?;
+    let transport = if tor_required {
+        let proxy_port = tor_port.unwrap_or(9050);
+        if proxy_port == 0 {
+            return Err("Invalid Tor SOCKS port".into());
+        }
+        let proxy = parse_peer_endpoint(tor_host.as_deref().unwrap_or("127.0.0.1"), proxy_port)
+            .map_err(|e| e.to_string())?;
+        if proxy.port() != proxy_port {
+            return Err("Tor proxy host and explicit port disagree".into());
+        }
+        if !crate::fusion::tor::is_tor_port(proxy.host(), proxy_port).await {
+            return Err(
+                "Configured Tor SOCKS proxy is unavailable; direct fallback is forbidden".into(),
+            );
+        }
+        Bip37Transport::Tor {
+            proxy_host: proxy.host().to_owned(),
+            proxy_port,
+        }
+    } else {
+        Bip37Transport::Direct
+    };
+
+    let (headers, view) = runtime.accepted_chain(network).await?;
+    let id = SourceId::new("selected-cashcode-node");
+    let endpoint = Endpoint {
+        kind: EndpointKind::BchP2p,
+        host: peer.host().to_owned(),
+        port: Some(port),
+    };
+    let mut catalog = SourceCatalog::default();
+    catalog
+        .insert(ChainSource {
+            id: id.clone(),
+            label: "Selected Cash Code node".into(),
+            origin: SourceOrigin::UserAdded,
+            endpoints: vec![endpoint.clone()],
+            capabilities: Default::default(),
+            disposition: SourceDisposition::Enabled,
+            priority: 0,
+        })
+        .map_err(|e| format!("Invalid node selection: {e:?}"))?;
+    let mut service = ChainService::new(
+        catalog,
+        ConnectionPolicy::exact(id.clone(), ProtocolFamily::Bip37),
+    );
+    let mut config = Bip37Config::new(id, endpoint, network.to_string());
+    config.transport = transport;
+    // Tor probing and header-store setup await. Recheck native state immediately
+    // before opening the selected peer so a stale renderer request is rejected.
+    let current_peer = authorize_cashcode_peer(&runtime.owner.state(), network, &host, port)?;
+    if current_peer != peer {
+        return Err("Native node selection changed during Cash Code scan setup".into());
+    }
+    let backend = Bip37Backend::connect(config, headers.clone())
+        .await
+        .map_err(|e| format!("Selected node unavailable: {e:?}"))?;
+    service.register(Arc::new(backend));
+    let mut worker = ProgressiveSyncWorker::new(Default::default())
+        .with_header_view(view)
+        .map_err(|e| format!("Invalid accepted headers: {e:?}"))?
+        .with_accepted_headers(headers);
+    let result = scan_cashcode(&mut service, &mut worker, &keys, from_height).await;
+    if let Some(view) = worker.into_header_view() {
+        runtime.publish_header_view(network, view).await;
+    }
+    let result = result?;
+    Ok(
+        serde_json::json!({ "from_height": result.from_height, "tip_height": result.tip.height,
+        "source": result.source.as_str(), "protocol": "Bip37", "evidence": format!("{:?}", result.evidence),
+        "includes_mempool": result.includes_mempool, "complete_requested_scope": true, "receipts": result.receipts }),
+    )
+}
 
 /// One accepted chain for one network: what the runtime verified, and the
 /// dense store its providers read back.
@@ -382,9 +528,9 @@ impl NativeChainRuntime {
         // Record the instruction before the work, so the interface can show
         // what was asked for even if the scan then fails or is slow.
         self.owner
-            .request_wallet_rescan(height)
+            .dispatch(optn_app::AppAction::RequestRescanFrom { height })
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(|_| "The wallet runtime is no longer running.")?;
         self.sync_wallet_from(Some(height)).await
     }
 
@@ -541,7 +687,15 @@ pub fn catalog_and_policy_from_app_state(state: &AppState) -> (SourceCatalog, Co
     // public server before anyone has asked for anything announces that someone
     // installed this wallet to a host that did not need to know.
     if catalog.iter().next().is_none() && state.wallet.is_some() {
-        catalog = optn_runtime::bootstrap::shipped_source_catalog(state.network);
+        let bootstrap = optn_runtime::bootstrap::shipped_bootstrap_catalog(state.network);
+        for (priority, candidate) in bootstrap.candidates().enumerate() {
+            let source = bootstrap.materialize_source(candidate, priority as u16);
+            // Deterministic ids from normalized endpoints; a collision here
+            // would be a bug in the catalog rather than anything a user did.
+            catalog
+                .insert(source)
+                .expect("bootstrap source ids are unique");
+        }
     }
     (catalog, ConnectionPolicy::auto())
 }
@@ -594,6 +748,38 @@ mod tests {
             "optn-{label}-{}-{time}-{sequence}",
             std::process::id()
         ))
+    }
+
+    #[test]
+    fn cashcode_scan_peer_must_match_the_native_network_selection() {
+        let mut state = AppState::default();
+        state.network = Network::Chipnet;
+        state.apply(AppAction::SetServer {
+            kind: ServerKind::Peer,
+            entry: "selected.example:48333".into(),
+        });
+
+        let selected = authorize_cashcode_peer(&state, Network::Chipnet, "selected.example", 48333)
+            .expect("the configured node is authorized");
+        assert_eq!(selected.host(), "selected.example");
+        assert_eq!(selected.port(), 48333);
+        assert!(
+            authorize_cashcode_peer(&state, Network::Chipnet, "attacker.example", 48333,).is_err()
+        );
+        assert!(
+            authorize_cashcode_peer(&state, Network::Mainnet, "selected.example", 48333,).is_err()
+        );
+    }
+
+    #[test]
+    fn remote_cashcode_scans_cannot_disable_tor() {
+        let remote = parse_peer_endpoint("node.example:8333", NODE_HINT_PORT).unwrap();
+        assert!(cashcode_tor_required(&remote, None).unwrap());
+        assert!(cashcode_tor_required(&remote, Some(true)).unwrap());
+        assert!(cashcode_tor_required(&remote, Some(false)).is_err());
+
+        let local = parse_peer_endpoint("127.0.0.1:8333", NODE_HINT_PORT).unwrap();
+        assert!(!cashcode_tor_required(&local, Some(false)).unwrap());
     }
 
     #[test]

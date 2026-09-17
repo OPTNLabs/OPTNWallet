@@ -648,7 +648,7 @@ impl ProgressiveSyncWorker {
         Err(ProgressiveSyncError::Exhausted)
     }
 
-    async fn prime_headers_on_same_route(
+    pub(crate) async fn prime_headers_on_same_route(
         &mut self,
         service: &mut ChainService,
         wallet_route: &CapabilityRoute,
@@ -975,6 +975,13 @@ pub(crate) mod tests {
     // Synthetic low-difficulty chain, used only to exercise verifier wiring.
     // These parameters and checkpoint must never be used for a real network.
     fn header_fixture() -> (ShvMmrHeaderVerifier, Vec<[u8; 80]>) {
+        header_fixture_to(2)
+    }
+
+    /// The same chain, carried to an arbitrary height. Cash Code discovery
+    /// scans a block range rather than a pair, so its tests need more than
+    /// three headers from the one fixture that already proves the wiring.
+    pub(crate) fn header_fixture_to(end: u32) -> (ShvMmrHeaderVerifier, Vec<[u8; 80]>) {
         use optn_core::asert::{next_bits, AsertAnchor, AsertParams};
         use optn_core::header_pow::verify_declared_pow;
         let params = AsertParams {
@@ -990,7 +997,7 @@ pub(crate) mod tests {
         };
         let mut previous_hash = [0; 32];
         let mut headers = Vec::new();
-        for height in 0u32..=2 {
+        for height in 0u32..=end {
             let mut header = [0u8; 80];
             header[0..4].copy_from_slice(&1u32.to_le_bytes());
             header[4..36].copy_from_slice(&previous_hash);
