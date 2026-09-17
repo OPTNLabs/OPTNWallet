@@ -56,6 +56,11 @@ fn skin_copy(skin: UiSkin) -> (&'static str, &'static str) {
 fn network_copy(network: Network) -> (&'static str, &'static str) {
     match network {
         Network::Mainnet => ("Mainnet", "Real BCH network"),
+        // Named individually because the screen is the only place the three
+        // test chains differ: they share `bchtest:`, so an address cannot say
+        // which one a wallet is on.
+        Network::Testnet3 => ("Testnet3", "Long-running BCH test network"),
+        Network::Testnet4 => ("Testnet4", "Shorter BCH test network"),
         Network::Chipnet => ("Chipnet", "BCH testing network"),
         // Its own prefix, genesis and no retargeting -- named so a regtest
         // wallet is never mistaken on screen for one on a shared network.

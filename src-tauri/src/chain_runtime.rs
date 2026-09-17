@@ -49,25 +49,12 @@ struct AcceptedChain {
 
 /// The reviewed starting point for a network's header chain.
 ///
-/// A verifier without a reviewed checkpoint is not trusted material. A network
-/// that ships none cannot verify headers at all, which is the honest outcome:
-/// the alternative is anchoring trust on whatever a peer served first.
+/// Every network anchors at its own genesis, which is published chain identity
+/// rather than trust in whatever a peer served first. The runtime owns the
+/// table so the shell cannot decide a network is unsupported by omission.
 fn shipped_header_verifier(network: Network) -> Result<ShvMmrHeaderVerifier, String> {
-    match network {
-        Network::Chipnet => optn_runtime::header_verifier::shipped_chipnet_header_verifier()
-            .map_err(|error| format!("the shipped chipnet checkpoint is unusable: {error:?}")),
-        Network::Regtest => optn_runtime::header_verifier::regtest_header_verifier()
-            .map_err(|error| format!("the regtest genesis anchor is unusable: {error:?}")),
-        // Deliberate: no reviewed mainnet checkpoint ships with this build, so
-        // there is nothing to anchor mainnet header verification on. Routes
-        // that do not need verified headers keep working; BIP37 and Neutrino
-        // refuse rather than trusting an unverified chain.
-        Network::Mainnet => Err(
-            "no reviewed mainnet header checkpoint ships with this build; P2P header \
-             verification is unavailable on mainnet"
-                .into(),
-        ),
-    }
+    optn_runtime::header_verifier::shipped_header_verifier(network)
+        .map_err(|error| format!("the shipped {network} genesis anchor is unusable: {error:?}"))
 }
 
 /// Process-owned chain stack. Old routes are retired before replacement probes;

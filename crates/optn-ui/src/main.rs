@@ -230,9 +230,13 @@ fn WatchOnlySetup(transport: UiTransport, state: RwSignal<AppState>) -> impl Int
                             {move || match state.get().network {
                                 Network::Mainnet => "Expected account path: m/44'/145'/account'",
                                 // Grouped exactly as Network::default_coin_type
-                                // groups them: regtest shares testnet's SLIP-44
-                                // coin type, so the two hints cannot drift apart.
-                                Network::Chipnet | Network::Regtest => {
+                                // groups them: every test chain shares
+                                // testnet's SLIP-44 coin type, so the two hints
+                                // cannot drift apart.
+                                Network::Testnet3
+                                | Network::Testnet4
+                                | Network::Chipnet
+                                | Network::Regtest => {
                                     "Expected account path: m/44'/1'/account'"
                                 }
                             }}
