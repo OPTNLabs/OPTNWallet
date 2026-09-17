@@ -5,6 +5,7 @@ mod menu;
 pub mod app_transport;
 mod appearance;
 pub mod chain_runtime;
+mod chain_sources;
 #[cfg(desktop)]
 pub mod clipboard;
 pub mod electrum_tcp;
@@ -1116,6 +1117,11 @@ pub fn run() {
     builder
         .invoke_handler(tauri::generate_handler![
             app_transport::optn_app_dispatch,
+            chain_sources::optn_chain_sources,
+            chain_sources::optn_chain_set_policy,
+            chain_sources::optn_chain_set_source_disposition,
+            chain_sources::optn_chain_add_source,
+            chain_sources::optn_chain_remove_source,
             app_transport::optn_app_snapshot,
             app_transport::optn_wallet_refresh,
             app_transport::optn_wallet_rescan,

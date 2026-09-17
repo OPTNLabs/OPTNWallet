@@ -723,10 +723,381 @@ impl From<StoredProtocol> for ProtocolFamily {
     }
 }
 
+/// The policy choices a person actually makes, as #75 names them.
+///
+/// A preset is a readable name for a `ConnectionPolicy`, not a second policy
+/// model: every one of these round-trips through [`ChainPolicyPreset::policy`]
+/// and back, so a surface can offer names while the runtime keeps enforcing the
+/// policy itself. A policy that no preset describes stays [`Self::Custom`]
+/// rather than being rounded to the nearest one, because silently relaxing
+/// "own infrastructure only" into "auto" is exactly the leak #75 forbids.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChainPolicyPreset {
+    /// Operation-aware selection across every enabled source.
+    Auto,
+    /// Client-side filtering only: no wallet scripts handed to indexed servers.
+    Privacy,
+    /// Only sources the holder declared as their own infrastructure.
+    OwnInfrastructure,
+    ElectrumOnly,
+    Bip37Only,
+    NeutrinoOnly,
+    /// Something this list cannot name; left exactly as persisted.
+    Custom,
+}
+
+impl ChainPolicyPreset {
+    /// The policy this preset means. `Custom` has none by definition.
+    pub fn policy(self) -> Option<ConnectionPolicy> {
+        Some(match self {
+            Self::Auto => ConnectionPolicy::auto(),
+            Self::Privacy => {
+                // Bloom/compact-filter SPV asks for blocks, not for "tell me
+                // about this address", which is the distinction #75 draws
+                // between Privacy and Auto.
+                let mut protocols = ProtocolSet::only(ProtocolFamily::Bip37);
+                protocols.insert(ProtocolFamily::Neutrino);
+                ConnectionPolicy {
+                    protocols,
+                    primary_scope: SourceScope::AllEnabled,
+                    fallback_scope: None,
+                    preferred: Vec::new(),
+                }
+            }
+            Self::OwnInfrastructure => ConnectionPolicy::own_infrastructure(),
+            Self::ElectrumOnly => protocol_only(ProtocolFamily::Electrum),
+            Self::Bip37Only => protocol_only(ProtocolFamily::Bip37),
+            Self::NeutrinoOnly => protocol_only(ProtocolFamily::Neutrino),
+            Self::Custom => return None,
+        })
+    }
+
+    /// Name a persisted policy, or report that no name fits it.
+    pub fn describe(policy: &ConnectionPolicy) -> Self {
+        for candidate in [
+            Self::Auto,
+            Self::Privacy,
+            Self::OwnInfrastructure,
+            Self::ElectrumOnly,
+            Self::Bip37Only,
+            Self::NeutrinoOnly,
+        ] {
+            if candidate.policy().as_ref() == Some(policy) {
+                return candidate;
+            }
+        }
+        Self::Custom
+    }
+}
+
+fn protocol_only(protocol: ProtocolFamily) -> ConnectionPolicy {
+    ConnectionPolicy {
+        protocols: ProtocolSet::only(protocol),
+        primary_scope: SourceScope::AllEnabled,
+        fallback_scope: None,
+        preferred: Vec::new(),
+    }
+}
+
+/// Make a legacy envelope's effective policy explicit before editing it.
+///
+/// A file written by the one-server settings bridge carries the legacy catalog
+/// marker, and its `Auto` policy does not mean auto: the reader narrows it to
+/// the saved overrides so adding bootstrap discovery cannot widen an existing
+/// choice. An editor that writes richer intent has to stop relying on that
+/// reader rule, so the effective policy is written down first and only then is
+/// the marker advanced. Without this step, saving any unrelated change would
+/// silently turn "only my server" into "auto over every shipped server".
+pub fn promote_legacy_policy(envelope: &mut NetworkConfigEnvelope) {
+    if envelope.bootstrap_catalog_version_seen != LEGACY_SERVER_CATALOG_VERSION {
+        return;
+    }
+    if envelope.overlay.connection_policy == ConnectionPolicy::auto() {
+        envelope.overlay.connection_policy = legacy_server_policy(&envelope.overlay.user_sources);
+    }
+    envelope.bootstrap_catalog_version_seen = SHIPPED_CATALOG_VERSION.to_owned();
+}
+
+/// Marker for envelopes whose policy field means exactly what it says.
+pub const SHIPPED_CATALOG_VERSION: &str = "optn-shipped-v1";
+
+/// Apply a named policy to the overlay.
+///
+/// `Custom` is refused: it is the answer to "what is this policy called", not
+/// an instruction, and accepting it would quietly overwrite an advanced policy
+/// with whatever this function guessed.
+pub fn set_policy_preset(
+    overlay: &mut UserNetworkOverlay,
+    preset: ChainPolicyPreset,
+) -> Result<(), String> {
+    let policy = preset
+        .policy()
+        .ok_or("a custom policy cannot be selected by name")?;
+    overlay.connection_policy = policy;
+    Ok(())
+}
+
+/// Enable, disable or ban one source.
+///
+/// A bootstrap entry is recorded as an override rather than edited, because the
+/// shipped catalog is replaced on update and a copy would be silently restored
+/// to whatever the new base says. User sources carry their disposition
+/// directly, since nothing else supplies them.
+pub fn set_source_disposition(
+    overlay: &mut UserNetworkOverlay,
+    id: &SourceId,
+    disposition: SourceDisposition,
+) -> Result<(), String> {
+    if let Some(source) = overlay
+        .user_sources
+        .iter_mut()
+        .find(|source| &source.id == id)
+    {
+        source.disposition = disposition;
+        return Ok(());
+    }
+    overlay.bootstrap_overrides.insert(id.clone(), disposition);
+    Ok(())
+}
+
+/// Add a source the holder typed in.
+///
+/// The id is derived from the endpoint rather than supplied, so adding the same
+/// host twice is refused instead of producing two entries that the selection
+/// plan would treat as independent.
+pub fn add_user_source(
+    overlay: &mut UserNetworkOverlay,
+    label: &str,
+    endpoint: Endpoint,
+    infrastructure_group: Option<&str>,
+) -> Result<SourceId, String> {
+    let host = endpoint.host.trim().trim_end_matches('.').to_ascii_lowercase();
+    if host.is_empty() {
+        return Err("a source needs a host".into());
+    }
+    let id = SourceId::new(format!("host:{host}"));
+    // Store the normalized host, not what was typed. The id already collapses
+    // case and a trailing dot, so keeping the raw spelling made the same server
+    // added twice look like two different endpoints under one source -- and
+    // handed the dialer a name that differs from the one the id promised.
+    let endpoint = Endpoint {
+        host: host.clone(),
+        ..endpoint
+    };
+    if let Some(existing) = overlay
+        .user_sources
+        .iter_mut()
+        .find(|source| source.id == id)
+    {
+        if existing.endpoints.contains(&endpoint) {
+            return Err(format!("{host} is already a source"));
+        }
+        existing.endpoints.push(endpoint);
+        return Ok(id);
+    }
+    let label = label.trim();
+    overlay.user_sources.push(ChainSource {
+        id: id.clone(),
+        label: if label.is_empty() {
+            host.clone()
+        } else {
+            label.to_owned()
+        },
+        origin: match infrastructure_group {
+            // "Own infrastructure" is a claim about ownership, so it is the
+            // holder's to make; it is also what `OwnInfrastructure` policy and
+            // the direct-dial rule key off, which is why it is not inferred
+            // from the address.
+            Some(group) if !group.trim().is_empty() => SourceOrigin::UserInfrastructure {
+                group: group.trim().to_owned(),
+            },
+            _ => SourceOrigin::UserAdded,
+        },
+        endpoints: vec![endpoint],
+        capabilities: CapabilitySet::default(),
+        disposition: SourceDisposition::Enabled,
+        priority: 0,
+    });
+    Ok(id)
+}
+
+/// Remove a source the holder added. Bootstrap entries are disabled, not
+/// deleted, so the base catalog stays recoverable for a later refresh.
+pub fn remove_user_source(
+    overlay: &mut UserNetworkOverlay,
+    id: &SourceId,
+) -> Result<(), String> {
+    let before = overlay.user_sources.len();
+    overlay.user_sources.retain(|source| &source.id != id);
+    if overlay.user_sources.len() == before {
+        return Err("that source is not one this device added; disable it instead".into());
+    }
+    // A policy that still names the removed source would select nothing at all.
+    overlay.connection_policy.preferred.retain(|kept| kept != id);
+    if let SourceScope::Explicit(selected) = &mut overlay.connection_policy.primary_scope {
+        selected.remove(id);
+        if selected.is_empty() {
+            overlay.connection_policy = ConnectionPolicy::auto();
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::chain::{BootstrapProject, SourceOrigin};
+
+    #[test]
+    fn editing_a_legacy_file_keeps_its_narrower_meaning() {
+        // The legacy reader treats Auto-with-overrides as "only these". Writing
+        // richer intent leaves that reader rule behind, so the narrower policy
+        // has to become explicit in the same write or the next launch would
+        // quietly reach for every shipped public server instead.
+        let mut overlay = UserNetworkOverlay::default();
+        let endpoint = Endpoint {
+            kind: EndpointKind::ElectrumTls,
+            host: "mine.example".into(),
+            port: Some(50002),
+        };
+        add_user_source(&mut overlay, "Mine", endpoint, None).unwrap();
+        let mut envelope = NetworkConfigEnvelope::current(LEGACY_SERVER_CATALOG_VERSION, overlay);
+        let before = resolve_shipped_chain_selection(Network::Chipnet, Some(&envelope))
+            .unwrap()
+            .1;
+
+        promote_legacy_policy(&mut envelope);
+
+        assert_eq!(envelope.bootstrap_catalog_version_seen, SHIPPED_CATALOG_VERSION);
+        assert_eq!(envelope.overlay.connection_policy, before);
+        assert_ne!(envelope.overlay.connection_policy, ConnectionPolicy::auto());
+        assert_eq!(
+            resolve_shipped_chain_selection(Network::Chipnet, Some(&envelope))
+                .unwrap()
+                .1,
+            before
+        );
+    }
+
+    #[test]
+    fn every_named_policy_round_trips_and_an_unnamed_one_stays_custom() {
+        for preset in [
+            ChainPolicyPreset::Auto,
+            ChainPolicyPreset::Privacy,
+            ChainPolicyPreset::OwnInfrastructure,
+            ChainPolicyPreset::ElectrumOnly,
+            ChainPolicyPreset::Bip37Only,
+            ChainPolicyPreset::NeutrinoOnly,
+        ] {
+            let policy = preset.policy().expect("a named preset has a policy");
+            assert_eq!(ChainPolicyPreset::describe(&policy), preset);
+        }
+        assert_eq!(ChainPolicyPreset::Custom.policy(), None);
+
+        // An advanced policy no name describes must not be rounded to the
+        // nearest preset: reporting "auto" for a pinned single source is how a
+        // surface would later overwrite it with a public fallback.
+        let pinned = ConnectionPolicy::exact(SourceId::new("host:node.example"), ProtocolFamily::Bip37);
+        assert_eq!(ChainPolicyPreset::describe(&pinned), ChainPolicyPreset::Custom);
+
+        let mut overlay = UserNetworkOverlay::default();
+        assert!(set_policy_preset(&mut overlay, ChainPolicyPreset::Custom).is_err());
+        overlay.connection_policy = pinned.clone();
+        assert!(set_policy_preset(&mut overlay, ChainPolicyPreset::Custom).is_err());
+        assert_eq!(overlay.connection_policy, pinned, "a refused edit changes nothing");
+    }
+
+    #[test]
+    fn privacy_never_selects_an_address_querying_protocol() {
+        // The point of Privacy in #75 is that wallet scripts are not handed to
+        // a public indexed server, so Electrum must be absent by construction.
+        let policy = ChainPolicyPreset::Privacy.policy().unwrap();
+        assert!(!policy.protocols.contains(ProtocolFamily::Electrum));
+        assert!(policy.protocols.contains(ProtocolFamily::Bip37));
+        assert!(policy.protocols.contains(ProtocolFamily::Neutrino));
+    }
+
+    #[test]
+    fn a_disabled_bootstrap_source_is_recorded_as_an_override() {
+        // Bootstrap entries are replaced wholesale on update. Editing a copy
+        // would let the next release silently re-enable something banned here.
+        let mut overlay = UserNetworkOverlay::default();
+        let id = SourceId::new("bootstrap:electrum-tls:server.example:50002");
+        set_source_disposition(&mut overlay, &id, SourceDisposition::Banned).unwrap();
+        assert_eq!(
+            overlay.bootstrap_overrides.get(&id),
+            Some(&SourceDisposition::Banned)
+        );
+        assert!(overlay.user_sources.is_empty());
+    }
+
+    #[test]
+    fn adding_a_source_twice_is_refused_rather_than_duplicated() {
+        let mut overlay = UserNetworkOverlay::default();
+        let endpoint = Endpoint {
+            kind: EndpointKind::ElectrumTls,
+            host: "Node.Example.".into(),
+            port: Some(50002),
+        };
+        let id = add_user_source(&mut overlay, "Home", endpoint.clone(), None).unwrap();
+        // The id normalizes the host, so case and a trailing dot cannot produce
+        // a second entry the selection plan would treat as another server.
+        assert_eq!(id, SourceId::new("host:node.example"));
+        let again = Endpoint {
+            host: "node.example".into(),
+            ..endpoint.clone()
+        };
+        assert!(add_user_source(&mut overlay, "Home", again, None).is_err());
+        assert_eq!(overlay.user_sources.len(), 1);
+
+        // A second protocol on the same host joins that source instead.
+        let peer = Endpoint {
+            kind: EndpointKind::BchP2p,
+            host: "node.example".into(),
+            port: Some(8333),
+        };
+        add_user_source(&mut overlay, "Home", peer, None).unwrap();
+        assert_eq!(overlay.user_sources.len(), 1);
+        assert_eq!(overlay.user_sources[0].endpoints.len(), 2);
+    }
+
+    #[test]
+    fn declaring_a_group_marks_the_source_as_own_infrastructure() {
+        let mut overlay = UserNetworkOverlay::default();
+        let endpoint = Endpoint {
+            kind: EndpointKind::BchP2p,
+            host: "10.0.0.2".into(),
+            port: Some(8333),
+        };
+        add_user_source(&mut overlay, "Rack", endpoint, Some(" home ")).unwrap();
+        assert!(matches!(
+            &overlay.user_sources[0].origin,
+            SourceOrigin::UserInfrastructure { group } if group == "home"
+        ));
+        assert!(overlay.user_sources[0].is_user_infrastructure());
+    }
+
+    #[test]
+    fn removing_a_pinned_source_does_not_leave_a_policy_selecting_nothing() {
+        let mut overlay = UserNetworkOverlay::default();
+        let endpoint = Endpoint {
+            kind: EndpointKind::ElectrumTls,
+            host: "node.example".into(),
+            port: Some(50002),
+        };
+        let id = add_user_source(&mut overlay, "Home", endpoint, None).unwrap();
+        overlay.connection_policy = ConnectionPolicy::exact(id.clone(), ProtocolFamily::Electrum);
+
+        remove_user_source(&mut overlay, &id).unwrap();
+        assert!(overlay.user_sources.is_empty());
+        // Left as Explicit({}) the wallet would have had no route at all and no
+        // way to say why, so the policy falls back to the named default.
+        assert_eq!(overlay.connection_policy, ConnectionPolicy::auto());
+
+        // A bootstrap entry is not this device's to delete.
+        assert!(remove_user_source(&mut overlay, &SourceId::new("bootstrap:x")).is_err());
+    }
 
     fn bootstrap(id: &str) -> ChainSource {
         ChainSource {

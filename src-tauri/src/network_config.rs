@@ -10,8 +10,9 @@ use optn_chain_native::network_config::NetworkConfigFile;
 use optn_core::network::Network;
 use optn_runtime::chain::{ConnectionPolicy, Endpoint, EndpointKind, SourceCatalog, SourceOrigin};
 use optn_runtime::network_config::{
-    legacy_network_servers_from_overlay, legacy_server_policy, resolve_shipped_chain_selection,
-    NetworkConfigEnvelope, NetworkConfigStore, UserNetworkOverlay, LEGACY_SERVER_CATALOG_VERSION,
+    legacy_network_servers_from_overlay, legacy_server_policy, promote_legacy_policy,
+    resolve_shipped_chain_selection, NetworkConfigEnvelope, NetworkConfigStore, UserNetworkOverlay,
+    LEGACY_SERVER_CATALOG_VERSION, SHIPPED_CATALOG_VERSION,
 };
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -107,6 +108,30 @@ impl NetworkSettingsStore {
             envelope_from_state(state, network, catalog_version)
         })
         .map(|_| ())
+    }
+
+    /// Edit the durable overlay for one network.
+    ///
+    /// Unlike `save_for_network`, which is the compatibility bridge for the
+    /// one-server settings shape, this writes the model itself: user sources,
+    /// bootstrap dispositions and the connection policy. A legacy file has its
+    /// effective policy made explicit first, so editing one setting cannot
+    /// widen an existing "only my server" choice into public Auto.
+    pub fn update_overlay(
+        &self,
+        network: Network,
+        edit: impl FnOnce(&mut UserNetworkOverlay) -> Result<(), String>,
+    ) -> Result<(), String> {
+        self.file_for(network)
+            .update(|existing| {
+                let mut envelope = existing.unwrap_or_else(|| {
+                    NetworkConfigEnvelope::current(SHIPPED_CATALOG_VERSION, Default::default())
+                });
+                promote_legacy_policy(&mut envelope);
+                edit(&mut envelope.overlay)?;
+                Ok(envelope)
+            })
+            .map(|_| ())
     }
 
     /// Select the file whose contents belong exclusively to this chain network.
