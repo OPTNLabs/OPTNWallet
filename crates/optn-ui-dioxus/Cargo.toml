@@ -15,5 +15,5 @@ description = "A third renderer plugin on Dioxus, proving the host-block swap."
 optn-app = { path = "../optn-app", version = "=1.7.3" }
 optn-transport = { path = "../optn-transport", version = "=1.7.3" }
 # Headless SSR only — no dioxus-desktop, wry, tao, or winit.
-dioxus = { version = "0.6", default-features = false, features = ["macro", "html", "signals"] }
-dioxus-ssr = { version = "0.6", default-features = false }
+dioxus = { version = "0.7", default-features = false, features = ["macro", "html", "signals"] }
+dioxus-ssr = { version = "0.7", default-features = false }

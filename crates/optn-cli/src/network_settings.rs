@@ -127,9 +127,13 @@ fn config_directory(configured_directory: Option<&Path>) -> Option<PathBuf> {
         .or_else(|| dirs::config_dir().map(|directory| directory.join(APP_CONFIG_IDENTIFIER)))
 }
 
+/// One file per network. The three test chains share an address prefix, so
+/// only this separation keeps a testnet4 server out of a chipnet wallet.
 fn file_name(network: Network) -> &'static str {
     match network {
         Network::Mainnet => "network-mainnet.json",
+        Network::Testnet3 => "network-testnet3.json",
+        Network::Testnet4 => "network-testnet4.json",
         Network::Chipnet => "network-chipnet.json",
         // Its own file, so a regtest source can never be read by a wallet on
         // a network anyone else uses.

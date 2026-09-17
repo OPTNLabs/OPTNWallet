@@ -155,6 +155,8 @@ pub enum WireSkin {
 #[serde(rename_all = "snake_case")]
 pub enum WireNetwork {
     Mainnet,
+    Testnet3,
+    Testnet4,
     Chipnet,
     Regtest,
 }
@@ -1338,6 +1340,8 @@ impl From<Network> for WireNetwork {
     fn from(value: Network) -> Self {
         match value {
             Network::Mainnet => Self::Mainnet,
+            Network::Testnet3 => Self::Testnet3,
+            Network::Testnet4 => Self::Testnet4,
             Network::Chipnet => Self::Chipnet,
             Network::Regtest => Self::Regtest,
         }
@@ -1348,6 +1352,8 @@ impl From<WireNetwork> for Network {
     fn from(value: WireNetwork) -> Self {
         match value {
             WireNetwork::Mainnet => Self::Mainnet,
+            WireNetwork::Testnet3 => Self::Testnet3,
+            WireNetwork::Testnet4 => Self::Testnet4,
             WireNetwork::Chipnet => Self::Chipnet,
             WireNetwork::Regtest => Self::Regtest,
         }

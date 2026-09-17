@@ -1645,11 +1645,13 @@ async fn run(cli: &Cli) -> Result<Value> {
             } => {
                 let network = match cli.network {
                     Network::Mainnet => MultisigNetwork::Mainnet,
-                    // The multisig core models two chains. Regtest shares
-                    // chipnet's address encoding, which is all this inspection
-                    // depends on, and saying so beats silently widening that
-                    // crate's own network model.
-                    Network::Chipnet | Network::Regtest => MultisigNetwork::Chipnet,
+                    // The multisig core models two chains. Every test chain
+                    // shares chipnet's address encoding, which is all this
+                    // inspection depends on, and saying so beats silently
+                    // widening that crate's own network model.
+                    Network::Testnet3 | Network::Testnet4 | Network::Chipnet | Network::Regtest => {
+                        MultisigNetwork::Chipnet
+                    }
                 };
                 let public_key_refs = public_keys.iter().map(String::as_str).collect::<Vec<_>>();
                 let inspection = inspect_p2sh20(network, *threshold, &public_key_refs)

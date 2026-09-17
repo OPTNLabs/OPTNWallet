@@ -22,6 +22,11 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct NetworkSettingsStore {
     mainnet: NetworkConfigFile,
+    /// The three test chains share `bchtest:` but not a server: a testnet4
+    /// node completes a chipnet handshake and then serves a different chain,
+    /// so a shared file would silently point a wallet at the wrong one.
+    testnet3: NetworkConfigFile,
+    testnet4: NetworkConfigFile,
     chipnet: NetworkConfigFile,
     /// Its own file for the same reason the others have theirs: a locally
     /// mined chain's sources must not be readable by a wallet on a network
@@ -33,22 +38,28 @@ pub struct NetworkSettingsStore {
 }
 
 impl NetworkSettingsStore {
-    /// Bind separate mainnet and Chipnet files without loading or creating them.
+    /// Bind one file per network without loading or creating any of them.
     pub fn new(directory: PathBuf) -> Self {
         Self {
             mainnet: NetworkConfigFile::new(directory.join("network-mainnet.json")),
+            testnet3: NetworkConfigFile::new(directory.join("network-testnet3.json")),
+            testnet4: NetworkConfigFile::new(directory.join("network-testnet4.json")),
             chipnet: NetworkConfigFile::new(directory.join("network-chipnet.json")),
             regtest: NetworkConfigFile::new(directory.join("network-regtest.json")),
             write_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
-    /// Restore both networks into a clone, publishing only after all reads succeed.
-    /// Rich overlays remain available to the chain runtime without being flattened
-    /// into the legacy server fields; missing files leave existing fields unchanged.
+    /// Restore every network into a clone, publishing only after all reads
+    /// succeed. Rich overlays remain available to the chain runtime without
+    /// being flattened into the legacy server fields; missing files leave
+    /// existing fields unchanged.
+    ///
+    /// Driven by `Network::ALL` rather than a list written out here, so a new
+    /// network cannot be added and then silently left unrestored.
     pub fn restore(&self, state: &mut AppState) -> Result<(), String> {
         let mut restored = state.clone();
-        for network in [Network::Mainnet, Network::Chipnet] {
+        for network in Network::ALL {
             let Some(envelope) = self.file_for(network).load()? else {
                 continue;
             };
@@ -102,6 +113,8 @@ impl NetworkSettingsStore {
     fn file_for(&self, network: Network) -> &NetworkConfigFile {
         match network {
             Network::Mainnet => &self.mainnet,
+            Network::Testnet3 => &self.testnet3,
+            Network::Testnet4 => &self.testnet4,
             Network::Chipnet => &self.chipnet,
             Network::Regtest => &self.regtest,
         }

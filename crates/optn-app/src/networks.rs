@@ -13,20 +13,22 @@ pub const RELOAD_LABEL: &str = "Reload and resync current wallet";
 pub const RELOADING_LABEL: &str = "Reloading wallet…";
 pub const COMING_SOON_LABEL: &str = "Coming soon";
 
+/// A network the product names but does not yet offer.
+///
+/// Testnet3 and testnet4 used to live here. They are selectable now, so what
+/// remains is regtest: a chain the wallet fully supports but which only means
+/// something to someone running their own node, and so is not a choice to put
+/// in front of an ordinary holder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum PlannedNetwork {
-    Testnet3,
-    Testnet4,
     Regtest,
 }
 
 impl PlannedNetwork {
-    pub const ALL: &'static [Self] = &[Self::Testnet3, Self::Testnet4, Self::Regtest];
+    pub const ALL: &'static [Self] = &[Self::Regtest];
 
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Testnet3 => "Testnet3",
-            Self::Testnet4 => "Testnet4",
             Self::Regtest => "Regtest",
         }
     }
@@ -52,6 +54,8 @@ pub struct NetworkSettingsViewModel {
 const fn label_of(network: Network) -> &'static str {
     match network {
         Network::Mainnet => "Mainnet",
+        Network::Testnet3 => "Testnet3",
+        Network::Testnet4 => "Testnet4",
         Network::Chipnet => "Chipnet",
         Network::Regtest => "Regtest",
     }
@@ -60,6 +64,8 @@ const fn label_of(network: Network) -> &'static str {
 const fn description_of(network: Network) -> &'static str {
     match network {
         Network::Mainnet => "Live BCH network — real funds",
+        Network::Testnet3 => "The long-running BCH testnet — test funds only",
+        Network::Testnet4 => "The shorter BCH testnet — test funds only",
         Network::Chipnet => "BCH testnet for upcoming CHIPs — test funds only",
         Network::Regtest => "A chain you mine locally — for testing only",
     }
@@ -80,6 +86,8 @@ pub fn chrome_network_pill(state: &crate::AppState) -> String {
 pub const fn chrome_network_label(network: Network) -> &'static str {
     match network {
         Network::Mainnet => "MAINNET",
+        Network::Testnet3 => "TESTNET3",
+        Network::Testnet4 => "TESTNET4",
         Network::Chipnet => "CHIPNET",
         Network::Regtest => "REGTEST",
     }
@@ -100,15 +108,20 @@ pub fn chrome_sync_status(sync: &crate::WalletSyncView) -> &'static str {
 pub fn network_settings_view_model(active: Network, busy: bool) -> NetworkSettingsViewModel {
     NetworkSettingsViewModel {
         description: NETWORK_DESCRIPTION,
-        available: [Network::Mainnet, Network::Chipnet]
-            .into_iter()
-            .map(|network| NetworkOption {
-                network,
-                label: label_of(network),
-                description: description_of(network),
-                active: network == active,
-            })
-            .collect(),
+        available: [
+            Network::Mainnet,
+            Network::Testnet3,
+            Network::Testnet4,
+            Network::Chipnet,
+        ]
+        .into_iter()
+        .map(|network| NetworkOption {
+            network,
+            label: label_of(network),
+            description: description_of(network),
+            active: network == active,
+        })
+        .collect(),
         coming_soon: PlannedNetwork::ALL,
         busy,
         reload_label: if busy { RELOADING_LABEL } else { RELOAD_LABEL },
@@ -323,23 +336,70 @@ pub enum NetworkSourceIntent {
 mod tests {
     use super::*;
 
+    /// Regtest is the only network still announced rather than offered.
+    ///
+    /// Testnet3 and testnet4 were here until the typed `Network` could name
+    /// them; the chain layer already knew their genesis and magic, so what
+    /// kept them unreachable was this list and an alias that resolved both to
+    /// chipnet.
     #[test]
-    fn planned_networks_are_listed_but_cannot_be_selected() {
+    fn only_regtest_is_announced_rather_than_offered() {
         let vm = network_settings_view_model(Network::Mainnet, false);
         assert_eq!(
             vm.coming_soon.iter().map(|n| n.label()).collect::<Vec<_>>(),
-            vec!["Testnet3", "Testnet4", "Regtest"]
+            vec!["Regtest"]
         );
-        assert_eq!(vm.available.len(), 2);
-        assert!(vm
+
+        let offered: Vec<Network> = vm.available.iter().map(|option| option.network).collect();
+        assert_eq!(
+            offered,
+            vec![
+                Network::Mainnet,
+                Network::Testnet3,
+                Network::Testnet4,
+                Network::Chipnet
+            ]
+        );
+
+        // Everything is either offered or announced, so a network cannot be
+        // added and then left off the screen entirely.
+        assert_eq!(offered.len() + vm.coming_soon.len(), Network::ALL.len());
+    }
+
+    /// No two rows carry the same name, so a user picking "Testnet4" cannot be
+    /// picking chipnet: they share an address prefix and an ASERT anchor, and
+    /// the label is the only thing that separates them on screen.
+    #[test]
+    fn every_offered_network_is_named_distinctly() {
+        let vm = network_settings_view_model(Network::Mainnet, false);
+        let mut labels: Vec<&str> = vm.available.iter().map(|option| option.label).collect();
+        let offered = labels.len();
+        labels.sort_unstable();
+        labels.dedup();
+        assert_eq!(labels.len(), offered, "two offered networks share a label");
+
+        let mut copy: Vec<&str> = vm
             .available
             .iter()
-            .all(|option| matches!(option.network, Network::Mainnet | Network::Chipnet)));
+            .map(|option| option.description)
+            .collect();
+        copy.sort_unstable();
+        copy.dedup();
+        assert_eq!(
+            copy.len(),
+            offered,
+            "two offered networks share a description"
+        );
     }
 
     #[test]
     fn exactly_one_network_is_active_and_it_follows_the_wallet() {
-        for active in [Network::Mainnet, Network::Chipnet] {
+        for active in [
+            Network::Mainnet,
+            Network::Testnet3,
+            Network::Testnet4,
+            Network::Chipnet,
+        ] {
             let vm = network_settings_view_model(active, false);
             let live: Vec<_> = vm
                 .available
@@ -359,8 +419,13 @@ mod tests {
         assert_eq!(vm.reload_label, "Reload and resync current wallet");
         assert_eq!(COMING_SOON_LABEL, "Coming soon");
         assert_eq!(vm.available[0].description, "Live BCH network — real funds");
+        let chipnet = vm
+            .available
+            .iter()
+            .find(|option| option.network == Network::Chipnet)
+            .expect("chipnet is offered");
         assert_eq!(
-            vm.available[1].description,
+            chipnet.description,
             "BCH testnet for upcoming CHIPs — test funds only"
         );
     }
