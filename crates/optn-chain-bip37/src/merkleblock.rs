@@ -4,11 +4,6 @@ use super::double_sha256;
 
 #[derive(Debug, Clone)]
 pub struct MerkleBlock {
-    /// How many transactions the block claims to hold, from the proof itself.
-    ///
-    /// Surfaced because a match-all scan has to check that the matched set is
-    /// the whole set: without it, a peer omitting transactions is
-    /// indistinguishable from a block that genuinely had none to match.
     pub total_transactions: u32,
     pub header: [u8; 80],
     pub valid: bool,

@@ -1462,18 +1462,23 @@ mod tests {
             .await
             .expect("cancelled probe closes its socket")
             .unwrap();
-        assert_eq!(
-            native
-                .with_service(Arc::clone)
-                .await
-                .unwrap()
-                .lock()
-                .await
-                .catalog()
-                .iter()
-                .count(),
-            0
+        // Eligibility, not catalog membership. The published catalog mounts
+        // the reviewed defaults for the network, and a catalog entry is not
+        // permission to probe it -- so counting entries would now be counting
+        // the shipped bootstrap set. What must hold is that an
+        // own-infrastructure policy selects nothing from it: the local source
+        // the cancelled probe was for is `UserAdded`, not own infrastructure,
+        // and own-infrastructure never gains a public fallback.
+        let service = native.with_service(Arc::clone).await.unwrap();
+        let guard = service.lock().await;
+        let plan = build_selection_plan(guard.catalog(), guard.policy());
+        assert!(
+            plan.primary.is_empty() && plan.fallback.is_empty(),
+            "own infrastructure selected {:?} / {:?} with no own-infrastructure source",
+            plan.primary,
+            plan.fallback
         );
+        drop(guard);
         task.abort();
         let _ = task.await;
         std::fs::remove_file(&path).unwrap();

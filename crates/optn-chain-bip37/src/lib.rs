@@ -34,9 +34,10 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Tor gets its own budget: a SOCKS connect is a circuit build, not a TCP
 /// handshake. Measured against a live daemon, an isolated circuit to one
 /// peer usually lands in 2-5s but occasionally takes over 20s, and a
-/// genesis-to-tip header sync is ~160 sequential connections. Sharing the
+/// genesis-to-tip header sync needs ~160 sequential batches. Sharing the
 /// direct-TCP timeout made the privacy route the one route that could
-/// never finish. Stream isolation per connection is kept.
+/// never finish. Each new connection is isolated; consecutive public-header
+/// batches reuse their established connection to the exact selected peer.
 const TOR_CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
 const IO_TIMEOUT: Duration = Duration::from_secs(15);
 /// Reading a message body over Tor is bounded by circuit bandwidth, not by
@@ -52,9 +53,9 @@ const fn io_timeout(transport: &Bip37Transport) -> Duration {
         Bip37Transport::Tor { .. } => TOR_IO_TIMEOUT,
     }
 }
-const RELAY_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_PAYLOAD: usize = 2 * 1024 * 1024;
 const MAX_MESSAGES: usize = 1000;
+const MAX_RELAY_MESSAGES: usize = 30;
 const MSG_TX: u32 = 1;
 const MSG_FILTERED_BLOCK: u32 = 3;
 
@@ -175,6 +176,8 @@ pub struct Bip37Backend {
     /// again. A cooldown, not a verdict: the peer keeps every other capability
     /// it has, and is asked again once the time passes.
     shv_status: Mutex<Option<ShvCapabilityStatus>>,
+    /// Public-header transport only, never a source of accepted chain state.
+    header_stream: Mutex<Option<TcpStream>>,
 }
 
 /// Diagnostic state for one peer's proof route.
@@ -260,6 +263,7 @@ impl Bip37Backend {
             probe,
             headers,
             shv_status: Mutex::new(None),
+            header_stream: Mutex::new(None),
         })
     }
 
@@ -291,15 +295,57 @@ impl Bip37Backend {
             .endpoint
             .port
             .unwrap_or_else(|| params_for(&self.config.network).default_port);
-        let mut headers = fetch_headers_after_raw(
-            &self.config.endpoint.host,
-            port,
-            &self.config.network,
-            &self.config.transport,
-            locator,
-        )
-        .await
-        .map_err(ChainBackendError::Protocol)?;
+        // Taking the stream before awaiting also makes cancellation safe: an
+        // interrupted reply cannot leave unread bytes for the next request.
+        let mut slot = self.header_stream.lock().await;
+        let mut retried = false;
+        let mut headers = loop {
+            let mut stream = match slot.take() {
+                Some(stream) => stream,
+                None => {
+                    let mut stream =
+                        connect_peer(&self.config.endpoint.host, port, &self.config.transport)
+                            .await
+                            .map_err(ChainBackendError::Protocol)?;
+                    handshake(
+                        &mut stream,
+                        params_for(&self.config.network).magic,
+                        io_timeout(&self.config.transport),
+                    )
+                    .await
+                    .map_err(|error| {
+                        ChainBackendError::Protocol(format!(
+                            "header sync from height {start_height}, handshake: {error}"
+                        ))
+                    })?;
+                    stream
+                }
+            };
+            let result = fetch_headers_on_stream(
+                &mut stream,
+                params_for(&self.config.network).magic,
+                io_timeout(&self.config.transport),
+                locator,
+            )
+            .await;
+            match result {
+                Ok(headers) => {
+                    *slot = Some(stream);
+                    break headers;
+                }
+                Err(error) if !retried && header_transport_interrupted(&error) => {
+                    // One fresh isolated connection to the SAME selected peer,
+                    // requesting the SAME runtime-accepted locator. No provider,
+                    // proxy, or proof fallback is permitted.
+                    retried = true;
+                }
+                Err(error) => {
+                    return Err(ChainBackendError::Protocol(format!(
+                        "header sync from height {start_height}: {error}"
+                    )))
+                }
+            }
+        };
         headers.truncate(count as usize);
         // Deliberately not stored here. These are unverified until the runtime
         // has checked linkage, proof-of-work and difficulty; writing them into
@@ -332,12 +378,6 @@ impl Bip37Backend {
             .await
     }
 
-    /// The same scan, bounded at the top as well as the bottom.
-    ///
-    /// Cash Code detection asks for a complete block batch rather than an
-    /// open-ended refresh: every transaction in the range has to come back so
-    /// the runtime can do the matching locally, which is only affordable over
-    /// a bounded window.
     async fn wallet_refresh_range(
         &self,
         interests: &[WalletInterest],
@@ -411,7 +451,7 @@ impl Bip37Backend {
         }
         let blocks = self.headers.range_inclusive(start, end).map_err(|error| {
             ChainBackendError::Rejected(format!(
-                "accepted headers do not cover {start}..={end}: {error:?}"
+                "accepted headers do not cover {start}..={tip_height}: {error:?}"
             ))
         })?;
         let tip = self
@@ -683,7 +723,7 @@ impl Bip37Backend {
         handshake(&mut stream, magic, io_timeout(&self.config.transport))
             .await
             .map_err(ChainBackendError::Protocol)?;
-        relay_tx_on_stream(
+        let outcome = relay_tx_on_stream(
             &mut stream,
             magic,
             raw_tx,
@@ -692,11 +732,7 @@ impl Bip37Backend {
         )
         .await
         .map_err(ChainBackendError::Protocol)?;
-        Ok(BackendObservation {
-            payload: ChainPayload::BroadcastObserved { txid },
-            evidence: Evidence::ServerAssertion,
-            chain_tip: None,
-        })
+        relay_observation(outcome, txid)
     }
 }
 
@@ -1101,6 +1137,13 @@ fn build_getheaders_payload(locator: &[u8; 32]) -> Vec<u8> {
     p.extend_from_slice(&[0u8; 32]);
     p
 }
+
+fn header_transport_interrupted(error: &str) -> bool {
+    error == "getheaders request deadline exceeded"
+        || error.starts_with("getheaders response: read failed:")
+        || error.starts_with("getheaders response: timed out waiting for node message")
+        || error.starts_with("getheaders send failed:")
+}
 fn parse_headers_payload(payload: &[u8]) -> Result<Vec<[u8; 80]>, String> {
     let mut pos = 0;
     let count = read_varint(payload, &mut pos)? as usize;
@@ -1120,36 +1163,55 @@ pub async fn fetch_headers_after_raw(
 ) -> Result<Vec<[u8; 80]>, String> {
     let magic = params_for(network).magic;
     let mut stream = connect_peer(host, port, transport).await?;
-    handshake(&mut stream, magic, io_timeout(transport)).await?;
-    stream
-        .write_all(&encode_message(
-            magic,
-            "getheaders",
-            &build_getheaders_payload(&locator),
-        ))
+    handshake(&mut stream, magic, io_timeout(transport))
         .await
-        .map_err(|e| format!("getheaders send failed: {e}"))?;
-    for _ in 0..100 {
-        let (cmd, payload) = read_message(&mut stream, magic, io_timeout(transport)).await?;
-        if cmd == "headers" {
-            let raws = parse_headers_payload(&payload)?;
-            let mut expected = locator;
-            for raw in &raws {
-                let prev: [u8; 32] = raw[4..36].try_into().unwrap();
-                if prev != expected {
-                    return Err("header chain does not link to locator/previous header".into());
+        .map_err(|error| format!("getheaders handshake: {error}"))?;
+    fetch_headers_on_stream(&mut stream, magic, io_timeout(transport), locator).await
+}
+
+async fn fetch_headers_on_stream<S: AsyncReadExt + AsyncWriteExt + Unpin>(
+    stream: &mut S,
+    magic: [u8; 4],
+    budget: Duration,
+    locator: [u8; 32],
+) -> Result<Vec<[u8; 80]>, String> {
+    // One deadline covers writes, reads, and ping chatter. No phase can
+    // indefinitely extend a caller's public-header request.
+    tokio::time::timeout(budget, async {
+        stream
+            .write_all(&encode_message(
+                magic,
+                "getheaders",
+                &build_getheaders_payload(&locator),
+            ))
+            .await
+            .map_err(|e| format!("getheaders send failed: {e}"))?;
+        for _ in 0..100 {
+            let (cmd, payload) = read_message(stream, magic, budget)
+                .await
+                .map_err(|error| format!("getheaders response: {error}"))?;
+            if cmd == "headers" {
+                let raws = parse_headers_payload(&payload)?;
+                let mut expected = locator;
+                for raw in &raws {
+                    let prev: [u8; 32] = raw[4..36].try_into().unwrap();
+                    if prev != expected {
+                        return Err("header chain does not link to locator/previous header".into());
+                    }
+                    expected = double_sha256(raw)
                 }
-                expected = double_sha256(raw)
+                return Ok(raws);
             }
-            return Ok(raws);
+            if cmd == "ping" {
+                let _ = stream
+                    .write_all(&encode_message(magic, "pong", &payload))
+                    .await;
+            }
         }
-        if cmd == "ping" {
-            let _ = stream
-                .write_all(&encode_message(magic, "pong", &payload))
-                .await;
-        }
-    }
-    Err("node did not return headers".into())
+        Err("node did not return headers".into())
+    })
+    .await
+    .map_err(|_| "getheaders request deadline exceeded".to_owned())?
 }
 
 fn build_getdata(kind: u32, hash: &[u8; 32]) -> Vec<u8> {
@@ -1209,9 +1271,16 @@ async fn scan_blocks_observed(
         // The block hash comes from the accepted header store, which is where
         // proof-of-work, linkage and difficulty were checked, so requiring the
         // returned header to hash to it is what makes the proof mean anything.
-        let mut proven: Option<Vec<[u8; 32]>> = None;
-        let mut delivered: Vec<[u8; 32]> = Vec::new();
-        for _ in 0..MAX_MESSAGES {
+        let mut proven: Option<std::collections::BTreeSet<[u8; 32]>> = None;
+        let mut delivered = std::collections::BTreeSet::new();
+        // An all-match merkleblock can legitimately contain more than 1000
+        // transactions. Bound chatter separately from its committed tx count.
+        let mut messages = 0usize;
+        loop {
+            if messages >= MAX_MESSAGES + proven.as_ref().map_or(0, |txids| txids.len()) {
+                break;
+            }
+            messages += 1;
             let (cmd, payload) = read_message(&mut stream, magic, io_timeout(transport)).await?;
             match cmd.as_str() {
                 "merkleblock" => {
@@ -1229,16 +1298,20 @@ async fn scan_blocks_observed(
                             "peer answered the request for block {height} with a different block"
                         ));
                     }
-                    // A match-all filter must return a match-all block. A peer
-                    // that quietly omits transactions would make "no Cash Code
-                    // payment here" indistinguishable from "we were not shown
-                    // the transaction that carried one".
                     if scan_all && mb.matched_txids.len() != mb.total_transactions as usize {
                         return Err(
                             "local Cash Code scan requires every transaction in the block".into(),
                         );
                     }
-                    proven = Some(mb.matched_txids);
+                    let hashes = mb
+                        .matched_txids
+                        .iter()
+                        .copied()
+                        .collect::<std::collections::BTreeSet<_>>();
+                    if hashes.len() != mb.matched_txids.len() {
+                        return Err("merkleblock contains duplicate transaction identities".into());
+                    }
+                    proven = Some(hashes);
                 }
                 "tx" => {
                     // BIP37 sends the proof ahead of the transactions it
@@ -1256,13 +1329,9 @@ async fn scan_blocks_observed(
                             "peer sent a transaction the merkle proof for block {height} does not commit to"
                         ));
                     }
-                    if delivered.contains(&parsed.txid) {
+                    if !delivered.insert(parsed.txid) {
                         continue;
                     }
-                    delivered.push(parsed.txid);
-                    // Asking for whole blocks means the peer decides how much
-                    // it sends. Bounded so a hostile or unlucky range cannot
-                    // grow the response without limit.
                     observed_bytes = observed_bytes
                         .checked_add(parsed.raw.len())
                         .ok_or("scan byte count overflow")?;
@@ -1316,47 +1385,375 @@ fn inventory_contains_tx(payload: &[u8], expected: &[u8; 32]) -> Result<bool, St
     }
     Ok(found)
 }
-async fn relay_tx_on_stream<S: AsyncReadExt + AsyncWriteExt + Unpin>(
+/// A peer processed the message sequence, not proof of mempool acceptance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TxRelayOutcome {
+    Processed,
+    Uncertain,
+    Rejected(String),
+}
+
+fn relay_observation(
+    outcome: TxRelayOutcome,
+    txid: [u8; 32],
+) -> Result<BackendObservation, ChainBackendError> {
+    match outcome {
+        TxRelayOutcome::Processed => Ok(BackendObservation {
+            payload: ChainPayload::BroadcastObserved { txid },
+            evidence: Evidence::ServerAssertion,
+            chain_tip: None,
+        }),
+        TxRelayOutcome::Uncertain => Err(ChainBackendError::Timeout),
+        TxRelayOutcome::Rejected(reason) => Err(ChainBackendError::Rejected(reason)),
+    }
+}
+
+fn matching_tx_rejection(payload: &[u8], expected: &[u8; 32]) -> Result<Option<String>, String> {
+    let mut pos = 0;
+    let command_len = read_varint(payload, &mut pos)?;
+    if command_len > 12 {
+        return Err("oversized reject command".into());
+    }
+    let command = take(payload, &mut pos, command_len as usize)?;
+    if command != b"tx" {
+        return Ok(None);
+    }
+    let code = take(payload, &mut pos, 1)?[0];
+    let reason_len = read_varint(payload, &mut pos)?;
+    if reason_len > 256 {
+        return Err("oversized transaction rejection reason".into());
+    }
+    let reason = take(payload, &mut pos, reason_len as usize)?;
+    if payload.get(pos..) != Some(expected.as_slice()) {
+        return Ok(None);
+    }
+    let reason: String = reason
+        .iter()
+        .map(|byte| {
+            if byte.is_ascii_graphic() || *byte == b' ' {
+                *byte as char
+            } else {
+                '?'
+            }
+        })
+        .collect();
+    Ok(Some(format!(
+        "peer rejected transaction (code {code}): {reason}"
+    )))
+}
+
+/// Announce once, transfer only on matching getdata, then keep the stream alive
+/// until a post-transfer nonce-matched pong or matching transaction rejection.
+/// The single deadline covers all writes/reads; no automatic retransmission.
+pub async fn relay_tx_on_stream<S: AsyncReadExt + AsyncWriteExt + Unpin>(
     stream: &mut S,
     magic: [u8; 4],
     raw_tx: &[u8],
     txid: [u8; 32],
     io_timeout: Duration,
-) -> Result<bool, String> {
-    stream
-        .write_all(&encode_message(magic, "inv", &build_getdata(MSG_TX, &txid)))
-        .await
-        .map_err(|e| format!("inv send failed: {e}"))?;
+) -> Result<TxRelayOutcome, String> {
+    if raw_tx.is_empty() || double_sha256(raw_tx) != txid {
+        return Err("relay transaction bytes do not match txid".into());
+    }
     let exchange = async {
-        for _ in 0..30 {
+        stream
+            .write_all(&encode_message(magic, "inv", &build_getdata(MSG_TX, &txid)))
+            .await
+            .map_err(|error| format!("inv send failed: {error}"))?;
+        let mut transferred = false;
+        let ping_nonce = nonce().to_le_bytes();
+        for _ in 0..MAX_RELAY_MESSAGES {
             let (cmd, payload) = read_message(stream, magic, io_timeout).await?;
             match cmd.as_str() {
-                "getdata" if inventory_contains_tx(&payload, &txid)? => {
+                "getdata" if !transferred && inventory_contains_tx(&payload, &txid)? => {
                     stream
                         .write_all(&encode_message(magic, "tx", raw_tx))
                         .await
                         .map_err(|e| format!("tx send failed: {e}"))?;
-                    return Ok(true);
+                    transferred = true;
+                    stream
+                        .write_all(&encode_message(magic, "ping", &ping_nonce))
+                        .await
+                        .map_err(|error| format!("relay progress ping failed: {error}"))?;
                 }
-                "reject" => return Err("relay rejected transaction".into()),
+                "pong" if transferred && payload == ping_nonce => {
+                    return Ok(TxRelayOutcome::Processed)
+                }
+                "reject" => {
+                    if let Some(reason) = matching_tx_rejection(&payload, &txid)? {
+                        return Ok(TxRelayOutcome::Rejected(reason));
+                    }
+                }
                 "ping" => {
-                    let _ = stream
+                    stream
                         .write_all(&encode_message(magic, "pong", &payload))
-                        .await;
+                        .await
+                        .map_err(|error| format!("relay pong failed: {error}"))?;
                 }
                 _ => {}
             }
         }
-        Ok(false)
+        Ok::<_, String>(TxRelayOutcome::Uncertain)
     };
-    match tokio::time::timeout(RELAY_RESPONSE_TIMEOUT, exchange).await {
+    match tokio::time::timeout(io_timeout, exchange).await {
+        Ok(Err(error))
+            if [
+                "timed out",
+                "read failed:",
+                "inv send failed:",
+                "tx send failed:",
+                "relay progress ping failed:",
+                "relay pong failed:",
+            ]
+            .iter()
+            .any(|prefix| error.starts_with(prefix)) =>
+        {
+            Ok(TxRelayOutcome::Uncertain)
+        }
         Ok(v) => v,
-        Err(_) => Ok(false),
+        Err(_) => Ok(TxRelayOutcome::Uncertain),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test(start_paused = true)]
+    async fn relay_no_getdata_and_stalled_writes_never_become_observed() {
+        let raw = vec![1, 2, 3];
+        let txid = double_sha256(&raw);
+        for capacity in [1, 4096] {
+            let (mut client, _unread_peer) = tokio::io::duplex(capacity);
+            let outcome = relay_tx_on_stream(
+                &mut client,
+                params_for("chipnet").magic,
+                &raw,
+                txid,
+                Duration::from_secs(2),
+            )
+            .await
+            .unwrap();
+            assert_eq!(outcome, TxRelayOutcome::Uncertain);
+            assert!(matches!(
+                relay_observation(outcome, txid),
+                Err(ChainBackendError::Timeout)
+            ));
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn relay_requires_matching_post_transfer_progress_and_captures_matching_reject() {
+        for mode in 0..5 {
+            let raw = vec![1, 2, 3];
+            let txid = double_sha256(&raw);
+            let magic = params_for("chipnet").magic;
+            let (mut client, mut server) = tokio::io::duplex(4096);
+            let peer = tokio::spawn(async move {
+                assert_eq!(
+                    read_message(&mut server, magic, IO_TIMEOUT)
+                        .await
+                        .unwrap()
+                        .0,
+                    "inv"
+                );
+                server
+                    .write_all(&encode_message(
+                        magic,
+                        "getdata",
+                        &build_getdata(MSG_TX, &txid),
+                    ))
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    read_message(&mut server, magic, IO_TIMEOUT).await.unwrap(),
+                    ("tx".into(), vec![1, 2, 3])
+                );
+                let (command, ping) = read_message(&mut server, magic, IO_TIMEOUT).await.unwrap();
+                assert_eq!(command, "ping");
+                if mode == 4 {
+                    return;
+                } // Disconnect after transfer is not successful processing.
+                if mode == 1 || mode == 3 {
+                    let mut rejected = vec![2, b't', b'x', 0x10, 3, b'b', b'a', b'd'];
+                    rejected.extend_from_slice(if mode == 1 { &txid } else { &[9; 32] });
+                    server
+                        .write_all(&encode_message(magic, "reject", &rejected))
+                        .await
+                        .unwrap();
+                    if mode == 1 {
+                        return;
+                    }
+                    server
+                        .write_all(&encode_message(magic, "reject", &[3, b'i', b'n', b'v']))
+                        .await
+                        .unwrap();
+                }
+                let payload = if mode == 2 { vec![0; 8] } else { ping };
+                server
+                    .write_all(&encode_message(magic, "pong", &payload))
+                    .await
+                    .unwrap();
+                if mode == 2 {
+                    std::future::pending::<()>().await;
+                }
+            });
+            let result =
+                relay_tx_on_stream(&mut client, magic, &raw, txid, Duration::from_secs(2)).await;
+            match mode {
+                0 | 3 => assert_eq!(result.unwrap(), TxRelayOutcome::Processed),
+                1 => assert!(
+                    matches!(result.unwrap(), TxRelayOutcome::Rejected(reason) if reason.contains("bad"))
+                ),
+                2 => assert_eq!(result.unwrap(), TxRelayOutcome::Uncertain),
+                4 => assert_eq!(result.unwrap(), TxRelayOutcome::Uncertain),
+                _ => unreachable!(),
+            }
+            if mode == 2 {
+                peer.abort();
+            } else {
+                peer.await.unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn header_reconnect_never_retries_invalid_protocol_or_linkage() {
+        assert!(header_transport_interrupted(
+            "getheaders response: read failed: early eof"
+        ));
+        assert!(header_transport_interrupted(
+            "getheaders request deadline exceeded"
+        ));
+        assert!(!header_transport_interrupted(
+            "header chain does not link to locator/previous header"
+        ));
+        assert!(!header_transport_interrupted(
+            "getheaders response: wrong network magic"
+        ));
+        assert!(!header_transport_interrupted(
+            "getheaders response: checksum mismatch"
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn header_request_write_stall_is_bounded() {
+        let (mut client, _unread_peer) = tokio::io::duplex(1);
+        let result = fetch_headers_on_stream(
+            &mut client,
+            params_for("chipnet").magic,
+            Duration::from_secs(2),
+            genesis_hash("chipnet"),
+        )
+        .await;
+        assert_eq!(result.unwrap_err(), "getheaders request deadline exceeded");
+    }
+
+    #[tokio::test]
+    async fn consecutive_header_batches_reuse_the_selected_peer_connection() {
+        header_batch_connection_fixture(false).await;
+    }
+
+    #[tokio::test]
+    async fn a_closed_header_stream_reconnects_to_the_same_peer_and_locator() {
+        header_batch_connection_fixture(true).await;
+    }
+
+    async fn header_batch_connection_fixture(disconnect: bool) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let mut raw = [0u8; 80];
+        raw[4..36].copy_from_slice(&genesis_hash("chipnet"));
+        let hash = double_sha256(&raw);
+        let peer = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let magic = params_for("chipnet").magic;
+            assert_eq!(peer_read_message(&mut socket).await.unwrap().0, "version");
+            socket
+                .write_all(&encode_message(magic, "version", &build_version_payload(2)))
+                .await
+                .unwrap();
+            let mut requests = 0;
+            while requests < 2 {
+                let (command, payload) = peer_read_message(&mut socket).await.unwrap();
+                if command != "getheaders" {
+                    continue;
+                }
+                let expected = if requests == 0 {
+                    genesis_hash("chipnet")
+                } else {
+                    hash
+                };
+                assert_eq!(&payload[5..37], &expected);
+                let response = if requests == 0 {
+                    let mut response = vec![1];
+                    response.extend_from_slice(&raw);
+                    response.push(0);
+                    response
+                } else {
+                    vec![0]
+                };
+                socket
+                    .write_all(&encode_message(magic, "headers", &response))
+                    .await
+                    .unwrap();
+                requests += 1;
+                if requests == 1 && disconnect {
+                    drop(socket);
+                    socket = listener.accept().await.unwrap().0;
+                    assert_eq!(peer_read_message(&mut socket).await.unwrap().0, "version");
+                    socket
+                        .write_all(&encode_message(magic, "version", &build_version_payload(2)))
+                        .await
+                        .unwrap();
+                }
+            }
+        });
+        let store = Arc::new(optn_runtime::header_store::SharedHeaders::default());
+        store.write(|headers| headers.insert_hash_only(0, genesis_hash("chipnet")));
+        let mut backend = backend_at(port, false);
+        backend.headers = store.clone();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            backend.header_sync(1, 1).await.unwrap();
+            store.write(|headers| headers.insert_hash_only(1, hash));
+            backend.header_sync(2, 1).await.unwrap();
+            peer.await.unwrap();
+        })
+        .await
+        .expect("two header requests must use the single accepted connection");
+    }
+
+    /// Opt-in, read-only transport diagnostic. No wallet inputs or keys are used.
+    #[tokio::test]
+    #[ignore = "requires an explicitly selected Chipnet peer and local Tor SOCKS proxy"]
+    async fn live_chipnet_tor_header_batches() {
+        let host = std::env::var("OPTN_BIP37_TEST_HOST").expect("explicit test peer required");
+        let port = std::env::var("OPTN_BIP37_TEST_PORT")
+            .unwrap_or_else(|_| "48333".into())
+            .parse()
+            .unwrap();
+        let proxy_port = std::env::var("OPTN_BIP37_TEST_TOR_PORT")
+            .unwrap_or_else(|_| "9050".into())
+            .parse()
+            .unwrap();
+        let transport = Bip37Transport::Tor {
+            proxy_host: "127.0.0.1".into(),
+            proxy_port,
+        };
+        let mut locator = genesis_hash("chipnet");
+        for batch in 0..3 {
+            let started = std::time::Instant::now();
+            let headers = fetch_headers_after_raw(&host, port, "chipnet", &transport, locator)
+                .await
+                .unwrap_or_else(|error| panic!("batch {batch}: {error}"));
+            eprintln!(
+                "public header batch {batch}: {} headers in {:?}",
+                headers.len(),
+                started.elapsed()
+            );
+            assert_eq!(headers.len(), 2000);
+            locator = double_sha256(headers.last().unwrap());
+        }
+    }
+
     /// A network with parameters of its own must have a genesis of its own.
     ///
     /// Both tables end in a catch-all that returns mainnet. A network added to
@@ -1423,10 +1820,8 @@ mod tests {
             },
             headers: test_headers(),
             shv_status: Mutex::new(None),
+            header_stream: Mutex::new(None),
         };
-        // An RPA prefix is deliberately absent: it is supported, by requesting
-        // every transaction in a bounded range and matching locally. Putting
-        // it back here would re-assert the behaviour PR #89 replaced.
         for unsupported in [
             WalletInterest::script(vec![0x51]),
             WalletInterest::script(vec![]),
@@ -1466,6 +1861,7 @@ mod tests {
             },
             headers: test_headers(),
             shv_status: Mutex::new(None),
+            header_stream: Mutex::new(None),
         };
         let mut script = vec![0x76, 0xa9, 0x14];
         script.extend_from_slice(&[9; 20]);
@@ -1517,6 +1913,7 @@ mod tests {
             probe,
             headers: test_headers(),
             shv_status: Mutex::new(None),
+            header_stream: Mutex::new(None),
         }
     }
 
@@ -1736,6 +2133,7 @@ mod tests {
             probe: probe(serves_shv),
             headers: test_headers(),
             shv_status: Mutex::new(None),
+            header_stream: Mutex::new(None),
         }
     }
 
@@ -2122,6 +2520,14 @@ mod tests {
             port: u16,
             accepted: [u8; 80],
         ) -> Result<BackendObservation, ChainBackendError> {
+            refresh_scope_against(port, accepted, false).await
+        }
+
+        async fn refresh_scope_against(
+            port: u16,
+            accepted: [u8; 80],
+            rpa: bool,
+        ) -> Result<BackendObservation, ChainBackendError> {
             let headers = Arc::new(SharedHeaders::default());
             headers.write(|store| store.insert_hash_only(7, double_sha256(&accepted)));
             let backend = Bip37Backend::connect(
@@ -2140,14 +2546,41 @@ mod tests {
             .expect("the scripted peer completes a handshake");
             backend
                 .execute(&ChainRequest::WalletRefresh {
-                    interests: vec![WalletInterest::script(vec![
-                        0x76, 0xa9, 0x14, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11,
-                        0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x88,
-                        0xac,
-                    ])],
+                    interests: if rpa {
+                        vec![WalletInterest::rpa_prefix("abcd").unwrap()]
+                    } else {
+                        vec![WalletInterest::script(vec![
+                            0x76, 0xa9, 0x14, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11,
+                            0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x88,
+                            0xac,
+                        ])]
+                    },
                     from_height: Some(7),
                 })
                 .await
+        }
+
+        #[tokio::test]
+        async fn local_rpa_scan_requires_all_transactions_from_the_accepted_block() {
+            let raw = payment(0x11);
+            let txid = double_sha256(&raw);
+            let header = header_over(&txid, 0x11);
+            let payload = merkleblock_payload(&header, &txid);
+            let port = spawn_peer(payload.clone(), vec![raw.clone()]).await;
+            let observation = refresh_scope_against(port, header, true).await.unwrap();
+            let ChainPayload::WalletRefresh { transactions, .. } = observation.payload else {
+                panic!("expected wallet refresh");
+            };
+            assert_eq!(transactions.len(), 1);
+            assert_eq!(transactions[0].raw, raw);
+
+            // A valid partial tree with an unmatched leaf proves inclusion of
+            // its root, but does not prove a complete local RPA scan.
+            let mut omitted = payload;
+            *omitted.last_mut().unwrap() = 0;
+            let port = spawn_peer(omitted, vec![]).await;
+            assert!(matches!(refresh_scope_against(port, header, true).await,
+                Err(ChainBackendError::Protocol(message)) if message.contains("every transaction")));
         }
 
         #[tokio::test]

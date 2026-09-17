@@ -738,12 +738,15 @@ async fn bip37_headers(
         (Some(h), Some(p)) => fusion::Transport::Tor { host: h, port: p },
         _ => fusion::Transport::Direct,
     };
+    // Fallible on purpose: an unrecognised network name is refused here rather
+    // than walked against mainnet's genesis, which is what the string-keyed
+    // tables underneath would otherwise do. The `?` is the whole point.
     let walk = spv::HeaderWalk::for_network(
         &network,
         start,
         locator_height.unwrap_or(0),
         locator_time.unwrap_or(0),
-    );
+    )?;
     spv::fetch_headers_after_from(&host, port, &network, transport, walk).await
 }
 
