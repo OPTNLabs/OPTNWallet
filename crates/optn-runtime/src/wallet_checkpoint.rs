@@ -290,6 +290,15 @@ impl WalletCheckpoint {
         Ok(self)
     }
 
+    /// The same, from progress the runtime already holds encoded.
+    pub fn with_stored_header_progress(
+        mut self,
+        progress: StoredHeaderProgress,
+    ) -> Result<Self, String> {
+        self.header_progress = Some(progress);
+        Ok(self)
+    }
+
     /// The header progress a restored checkpoint carries, if it has any.
     ///
     /// Absent on records written before this existed, and on wallets that have
