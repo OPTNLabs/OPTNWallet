@@ -2698,7 +2698,8 @@ async fn run(cli: &Cli) -> Result<Value> {
                 Ok(json!({
                     "ok": true,
                     "prefix": d.prefix,
-                    "legacy": d.legacy,
+                    // No `legacy` field: a legacy PayCode never decodes, so
+                    // nothing that reaches here could be one.
                     "network": d.network().to_string(),
                     "version": d.version,
                     "prefix_bits": d.prefix_bits,
@@ -2796,7 +2797,6 @@ async fn run(cli: &Cli) -> Result<Value> {
                     "dry_run": *dry_run,
                     "network": cli.network.to_string(),
                     "txid": paid.txid,
-                    "legacy_code": decoded.legacy,
                     "stealth_address": paid.stealth_address,
                     "sats": sats,
                     "fee": paid.fee,

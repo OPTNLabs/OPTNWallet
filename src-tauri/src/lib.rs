@@ -1147,6 +1147,7 @@ pub fn run() {
             fusion_tor_detect,
             fusion_tor_check,
             bip37_node_probe,
+            chain_runtime::cashcode_scan_node,
             bip37_headers,
             bip37_scan,
             bip37_broadcast,

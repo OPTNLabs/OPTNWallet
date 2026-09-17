@@ -86,150 +86,64 @@ pub fn derive_rpa_keys(
 
 /// Encode a scan/spend pair as a `cashcode:` string.
 ///
-/// `legacy` stamps the old `paycode:` prefix instead. Nothing in the wallet
-/// passes it: it exists so tests and migration tooling can build the form that
-/// must keep being accepted on input.
+/// There is no `legacy` argument. The legacy `paycode:` prefix is a different
+/// implementation that OPTN does not support, and an encoder able to stamp it
+/// would be a way to manufacture the very strings `decodeCashcode` refuses.
 #[wasm_bindgen(js_name = encodeCashcode)]
 pub fn encode_cashcode(
     scan_pubkey: &[u8],
     spend_pubkey: &[u8],
     network: &str,
     prefix_bits: u8,
-    legacy: Option<bool>,
 ) -> Result<String, JsValue> {
-    let family = if legacy.unwrap_or(false) {
-        rpa::PrefixFamily::LegacyPaycode
-    } else {
-        rpa::PrefixFamily::Cashcode
-    };
-    Ok(rpa::encode_with_family(
+    Ok(rpa::encode(
         &array33(scan_pubkey, "scan pubkey")?,
         &array33(spend_pubkey, "spend pubkey")?,
         network_from(network)?,
         prefix_bits,
-        family,
     ))
 }
 
-/// Decode a cashcode or legacy paycode. Returns JSON, or throws with the
-/// reason the code was rejected.
+/// Decode a Cash Code. Returns JSON, or throws with the reason the code was
+/// rejected — including a legacy `paycode:`, which throws rather than
+/// decoding. There is no `legacy` field on the result: nothing that decodes
+/// here is legacy.
 #[wasm_bindgen(js_name = decodeCashcode)]
 pub fn decode_cashcode(code: &str) -> Result<String, JsValue> {
     let c = rpa::decode(code).map_err(err)?;
     let hex = |b: &[u8]| -> String { b.iter().map(|x| format!("{x:02x}")).collect() };
     Ok(format!(
-        r#"{{"version":{},"prefixBits":{},"scanPubkey":"{}","spendPubkey":"{}","expiry":{},"prefix":"{}","legacy":{}}}"#,
+        r#"{{"version":{},"prefixBits":{},"scanPubkey":"{}","spendPubkey":"{}","expiry":{},"prefix":"{}"}}"#,
         c.version,
         c.prefix_bits,
         hex(&c.scan_pubkey),
         hex(&c.spend_pubkey),
         c.expiry,
         c.prefix,
-        c.legacy
     ))
-}
-
-/// True if the string carries a legacy PayCode prefix.
-#[wasm_bindgen(js_name = isLegacyPaycode)]
-pub fn is_legacy_paycode(candidate: &str) -> bool {
-    rpa::is_legacy_paycode(candidate)
-}
-
-/// The message to show for a legacy PayCode.
-#[wasm_bindgen(js_name = legacyPaycodeRejection)]
-pub fn legacy_paycode_rejection() -> String {
-    rpa::LEGACY_PAYCODE_REJECTION.to_string()
-}
-
-/// True if the string is a Cash Code this wallet can pay.
-#[wasm_bindgen(js_name = looksLikeRpa)]
-pub fn looks_like_rpa(candidate: &str) -> bool {
-    rpa::looks_like_rpa(candidate)
-}
-
-/// Why this code must not be paid on-chain, or `undefined` if it may be.
-#[wasm_bindgen(js_name = sendBlockReason)]
-pub fn send_block_reason(code: &str) -> Result<Option<String>, JsValue> {
-    let c = rpa::decode(code).map_err(err)?;
-    Ok(rpa::send_block_reason(&c))
-}
-
-/// ECDH plus the outpoint, per the reference implementation. `txid` is the
-/// display (big-endian) form, as block explorers show it.
-#[wasm_bindgen(js_name = sharedSecret)]
-pub fn shared_secret(
-    privkey: &[u8],
-    counterpart_pubkey: &[u8],
-    txid: &str,
-    vout: u32,
-) -> Result<Vec<u8>, JsValue> {
-    rpa::shared_secret(
-        &array32(privkey, "private key")?,
-        &array33(counterpart_pubkey, "counterpart pubkey")?,
-        txid,
-        vout,
-    )
-    .map(|s| s.to_vec())
-    .map_err(err)
-}
-
-/// The one-time P2PKH a sender pays: CKD_pub of the spend key, hashed
-/// compressed.
-#[wasm_bindgen(js_name = paymentAddress)]
-pub fn payment_address(
-    spend_pubkey: &[u8],
-    secret: &[u8],
-    network: &str,
-    index: u32,
-) -> Result<String, JsValue> {
-    rpa::payment_address(
-        &array33(spend_pubkey, "spend pubkey")?,
-        &array32(secret, "shared secret")?,
-        network_from(network)?,
-        index,
-    )
-    .map(|a| a.encode())
-    .map_err(err)
-}
-
-/// The private key that spends a payment at `index`.
-#[wasm_bindgen(js_name = spendingKey)]
-pub fn spending_key(spend_privkey: &[u8], secret: &[u8], index: u32) -> Result<Vec<u8>, JsValue> {
-    rpa::spending_key(
-        &array32(spend_privkey, "spend private key")?,
-        &array32(secret, "shared secret")?,
-        index,
-    )
-    .map(|k| k.to_vec())
-    .map_err(err)
-}
-
-/// The hex a sender grinds the input hash to match.
-#[wasm_bindgen(js_name = grindString)]
-pub fn grind_string(scan_pubkey: &[u8], prefix_bits: u8) -> Result<String, JsValue> {
-    rpa::grind_string(&array33(scan_pubkey, "scan pubkey")?, prefix_bits).map_err(err)
-}
-
-/// How many nSequence values to try before reshaping the transaction.
-#[wasm_bindgen(js_name = grindBudget)]
-pub fn grind_budget(prefix_bits: u8) -> Result<u32, JsValue> {
-    rpa::grind_budget(prefix_bits).map_err(err)
-}
-
-/// The nSequence for grind attempt `offset`, kept BIP68-final.
-#[wasm_bindgen(js_name = grindSequence)]
-pub fn grind_sequence(offset: u32) -> Result<u32, JsValue> {
-    rpa::grind_sequence(offset).map_err(err)
 }
 
 /// Sign and grind an assembled RPA payment, in the shared core.
 ///
+/// The desktop sender used to run its own grind: its own signing, its own
+/// serialization, its own SHA-256, and its own 100_000 ceiling, in parallel
+/// with the CLI's. Two implementations of the same protocol step is precisely
+/// the failure this crate exists to prevent, and the failure mode is quiet —
+/// a sender that grinds differently produces a payment that is on chain,
+/// valid, and invisible to the recipient scanning for it.
+///
+/// The caller still assembles the transaction, because output ordering and
+/// review are the wallet's concern. Everything from signing onwards is here.
+///
 /// `raw_tx` is the assembled transaction with the stealth output already in
 /// place. `prevout_values` and the concatenated `prevout_scripts` (split by
-/// `prevout_script_lens`) describe the outputs being spent, in input order.
-/// `privkeys` is 32 bytes per input, in the same order.
+/// `prevout_script_lens`) describe the outputs being spent, in input order,
+/// because a sighash needs the value and script of the coin it spends and
+/// neither is present in the transaction itself. `privkeys` is 32 bytes per
+/// input, in the same order.
 ///
-/// Returns `{"exhausted":true}` rather than throwing when the budget runs out.
+/// Returns `{"exhausted":true}` rather than throwing when the budget runs
+/// out: that is a reshape signal, and the wallet should reselect coins.
 #[wasm_bindgen(js_name = grindRpaTransaction)]
 pub fn grind_rpa_transaction(
     raw_tx: &[u8],
@@ -303,12 +217,110 @@ pub fn grind_rpa_transaction(
         Some(g) => {
             let hex: String = g.raw.iter().map(|b| format!("{b:02x}")).collect();
             Ok(format!(
-                r#"{{"exhausted":false,"rawHex":"{hex}","grindTries":{},"sequence":{}}}"#,
-                g.grind_tries, g.sequence
+                r#"{{"exhausted":false,"rawHex":"{}","grindTries":{},"sequence":{}}}"#,
+                hex, g.grind_tries, g.sequence
             ))
         }
         None => Ok(r#"{"exhausted":true}"#.to_string()),
     }
+}
+
+/// How many nSequence values to try before reshaping the transaction.
+///
+/// Exported so the wallet grinds as hard as the CLI does. Both previously
+/// hardcoded 100_000, which at 16 bits exhausts about a fifth of the time.
+#[wasm_bindgen(js_name = grindBudget)]
+pub fn grind_budget(prefix_bits: u8) -> Result<u32, JsValue> {
+    rpa::grind_budget(prefix_bits).map_err(err)
+}
+
+/// The nSequence for grind attempt `offset`, kept BIP68-final.
+#[wasm_bindgen(js_name = grindSequence)]
+pub fn grind_sequence(offset: u32) -> Result<u32, JsValue> {
+    rpa::grind_sequence(offset).map_err(err)
+}
+
+#[wasm_bindgen(js_name = isLegacyPaycode)]
+pub fn is_legacy_paycode(candidate: &str) -> bool {
+    rpa::is_legacy_paycode(candidate)
+}
+
+/// The message to show for a legacy PayCode. Exported rather than duplicated
+/// in TypeScript so the wallet and the CLI refuse it in the same words.
+#[wasm_bindgen(js_name = legacyPaycodeRejection)]
+pub fn legacy_paycode_rejection() -> String {
+    rpa::LEGACY_PAYCODE_REJECTION.to_string()
+}
+
+/// True if the string is a Cash Code this wallet can pay. A legacy
+/// `paycode:` is not, and returns false — use `isLegacyPaycode` to tell the
+/// user why their string was refused.
+#[wasm_bindgen(js_name = looksLikeRpa)]
+pub fn looks_like_rpa(candidate: &str) -> bool {
+    rpa::looks_like_rpa(candidate)
+}
+
+/// Why this code must not be paid on-chain, or `undefined` if it may be.
+#[wasm_bindgen(js_name = sendBlockReason)]
+pub fn send_block_reason(code: &str) -> Result<Option<String>, JsValue> {
+    let c = rpa::decode(code).map_err(err)?;
+    Ok(rpa::send_block_reason(&c))
+}
+
+/// ECDH plus the outpoint, per the reference implementation. `txid` is the
+/// display (big-endian) form, as block explorers show it.
+#[wasm_bindgen(js_name = sharedSecret)]
+pub fn shared_secret(
+    privkey: &[u8],
+    counterpart_pubkey: &[u8],
+    txid: &str,
+    vout: u32,
+) -> Result<Vec<u8>, JsValue> {
+    rpa::shared_secret(
+        &array32(privkey, "private key")?,
+        &array33(counterpart_pubkey, "counterpart pubkey")?,
+        txid,
+        vout,
+    )
+    .map(|s| s.to_vec())
+    .map_err(err)
+}
+
+/// The one-time P2PKH a sender pays: CKD_pub of the spend key, hashed
+/// compressed.
+#[wasm_bindgen(js_name = paymentAddress)]
+pub fn payment_address(
+    spend_pubkey: &[u8],
+    secret: &[u8],
+    network: &str,
+    index: u32,
+) -> Result<String, JsValue> {
+    rpa::payment_address(
+        &array33(spend_pubkey, "spend pubkey")?,
+        &array32(secret, "shared secret")?,
+        network_from(network)?,
+        index,
+    )
+    .map(|a| a.encode())
+    .map_err(err)
+}
+
+/// The private key that spends a payment at `index`.
+#[wasm_bindgen(js_name = spendingKey)]
+pub fn spending_key(spend_privkey: &[u8], secret: &[u8], index: u32) -> Result<Vec<u8>, JsValue> {
+    rpa::spending_key(
+        &array32(spend_privkey, "spend private key")?,
+        &array32(secret, "shared secret")?,
+        index,
+    )
+    .map(|k| k.to_vec())
+    .map_err(err)
+}
+
+/// The hex a sender grinds the input hash to match.
+#[wasm_bindgen(js_name = grindString)]
+pub fn grind_string(scan_pubkey: &[u8], prefix_bits: u8) -> Result<String, JsValue> {
+    rpa::grind_string(&array33(scan_pubkey, "scan pubkey")?, prefix_bits).map_err(err)
 }
 
 /// Payments to this wallet inside one raw transaction, as a JSON array.
@@ -335,8 +347,16 @@ pub fn scan_transaction(
         .iter()
         .map(|m| {
             format!(
-                r#"{{"outputIndex":{},"address":"{}","valueSats":{},"prevoutHash":"{}","prevoutIndex":{}}}"#,
-                m.output_index, m.address, m.value, m.prevout_txid, m.prevout_index
+                r#"{{"outputIndex":{},"address":"{}","valueSats":{},"prevoutHash":"{}","prevoutIndex":{},"senderPubkey":"{}"}}"#,
+                m.output_index,
+                m.address,
+                m.value,
+                m.prevout_txid,
+                m.prevout_index,
+                // The other half of the ECDH, so a wallet can rebuild the
+                // spending key later without refetching this transaction.
+                // Public: it is already in the scriptSig on chain.
+                m.sender_pubkey_hex
             )
         })
         .collect();

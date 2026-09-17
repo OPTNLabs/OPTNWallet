@@ -15,15 +15,22 @@
 //! compressed keys; upstream PR #3225 calls that unintentional. We follow the
 //! spec, matching the desktop wallet's `RpaService.ts`.
 //!
-//! The name shown to a user is **Cash Code**. The wire prefix does not
-//! follow it: codes are still emitted as `cashcode:` / `cashcodetest:` and
-//! legacy `paycode:` strings are still accepted, because renaming a prefix
-//! would invalidate every code already handed out.
+//! The name shown to a user is **Cash Code**, and `cashcode:` /
+//! `cashcodetest:` is the only prefix family this module encodes or accepts.
 //!
-//! Codes are emitted as `cashcode:` / `cashcodetest:`. Legacy `paycode:` /
-//! `paycodetest:` strings are refused: they were derived under different
-//! rules, and paying one with Cash Code math lands coins where the owner
-//! cannot scan.
+//! `paycode:` / `paycodetest:` is Electron Cash's **legacy PayCode**, a
+//! different implementation, and it is rejected outright. That is not
+//! backward compatibility and the two prefixes are not interchangeable: a
+//! legacy PayCode carries keys its owner derived under the legacy rules,
+//! including `use_uncompressed = True`. Decoding one here and then deriving
+//! the destination with the compressed Cash Code rules above yields a P2PKH
+//! address the legacy recipient never derived and cannot scan for, so the
+//! payment would be unspendable by them while looking perfectly successful to
+//! the sender. Rejecting the prefix is the only safe reading of it; the
+//! distinct `cashcode:` prefix exists precisely to keep the two apart.
+//!
+//! Supporting legacy PayCode would mean implementing its semantics, not
+//! relabelling its prefix. This module does not do that.
 
 use hmac::{Hmac, Mac};
 use k256::elliptic_curve::sec1::ToEncodedPoint;
@@ -51,6 +58,11 @@ const VERSION_TESTNET: u8 = 0x05;
 
 const CASHCODE_MAINNET: &str = "cashcode";
 const CASHCODE_TESTNET: &str = "cashcodetest";
+
+/// Electron Cash's legacy PayCode prefixes. Recognised only so a legacy
+/// string can be refused by name — never to decode one. Keeping them out of
+/// the accepted-prefix lists below is what makes the refusal structural
+/// rather than a check someone can forget to call.
 const LEGACY_MAINNET: &str = "paycode";
 const LEGACY_TESTNET: &str = "paycodetest";
 
@@ -58,10 +70,17 @@ const MAINNET_PREFIXES: [&str; 1] = [CASHCODE_MAINNET];
 const TESTNET_PREFIXES: [&str; 1] = [CASHCODE_TESTNET];
 
 /// The message a user sees when they paste a legacy PayCode.
+///
+/// Deliberately not phrased as a temporary limitation: OPTN does not
+/// implement legacy PayCode, so there is nothing here to wait for.
 pub const LEGACY_PAYCODE_REJECTION: &str =
     "Legacy PayCode addresses are not supported. Use a Cash Code address.";
 
 /// True if the string carries a legacy PayCode prefix.
+///
+/// Callers use this to explain the refusal. It is deliberately separate from
+/// [`looks_like_rpa`], which answers "is this a recipient we can pay" — and
+/// for a legacy PayCode the answer to that is no.
 pub fn is_legacy_paycode(candidate: &str) -> bool {
     let bare = candidate
         .trim()
@@ -97,6 +116,59 @@ pub struct RpaKeys {
     pub spend_pubkey: [u8; 33],
 }
 
+/// Validate a native receiver's scan scalar without exposing any spend key.
+pub fn scan_public_key(scan_private: &[u8; 32]) -> Result<[u8; 33]> {
+    let key = k256::SecretKey::from_slice(scan_private)
+        .map_err(|_| CliError::Protocol("invalid Cash Code scan key".into()))?;
+    Ok(key
+        .public_key()
+        .to_encoded_point(true)
+        .as_bytes()
+        .try_into()
+        .expect("compressed key"))
+}
+
+/// Reconstruct one received Cash Code coin's signing key from its public origin.
+/// Refuse a recipe which does not control the exact network/output script.
+pub fn signing_key_for_receipt(
+    scan_private: &[u8; 32],
+    spend_private: &[u8; 32],
+    prevout_txid: &str,
+    prevout_index: u32,
+    sender_public: &[u8; 33],
+    expected_address: &str,
+    network: Network,
+) -> Result<k256::ecdsa::SigningKey> {
+    crate::coins::Outpoint::parse(prevout_txid, prevout_index)
+        .map_err(|_| CliError::Protocol("invalid Cash Code origin outpoint".into()))?;
+    let expected = Address::decode(expected_address).map_err(CliError::Protocol)?;
+    if expected.prefix != network.prefix() {
+        return Err(CliError::Protocol(
+            "Cash Code receipt belongs to another network".into(),
+        ));
+    }
+    let secret = zeroize::Zeroizing::new(shared_secret(
+        scan_private,
+        sender_public,
+        prevout_txid,
+        prevout_index,
+    )?);
+    let private = zeroize::Zeroizing::new(spending_key(spend_private, &secret, 0)?);
+    let key = k256::ecdsa::SigningKey::from_slice(private.as_ref())
+        .map_err(|_| CliError::Protocol("invalid Cash Code derived signing key".into()))?;
+    let actual = Address::from_hash(
+        network.prefix(),
+        AddressKind::P2pkh,
+        hash160(key.verifying_key().to_encoded_point(true).as_bytes()),
+    );
+    if actual.script_pubkey() != expected.script_pubkey() {
+        return Err(CliError::Protocol(
+            "Cash Code origin does not control this output".into(),
+        ));
+    }
+    Ok(key)
+}
+
 pub fn derive_keys_from_paths(
     mnemonic: &str,
     passphrase: &str,
@@ -112,7 +184,12 @@ pub fn derive_keys_from_paths(
     })
 }
 
-/// A decoded cashcode (or legacy paycode).
+/// A decoded cashcode.
+///
+/// There is no `legacy` flag: a legacy PayCode never decodes, so every value
+/// of this type came from a `cashcode:` / `cashcodetest:` string. A flag
+/// would only invite a caller to decode one and then decide what to do,
+/// which is the mistake this module exists to prevent.
 #[derive(Debug, Clone)]
 pub struct Cashcode {
     pub version: u8,
@@ -122,8 +199,6 @@ pub struct Cashcode {
     pub expiry: u32,
     /// The prefix the string actually carried.
     pub prefix: String,
-    /// True when this came from a legacy `paycode:` / `paycodetest:` string.
-    pub legacy: bool,
 }
 
 impl Cashcode {
@@ -142,38 +217,15 @@ impl Cashcode {
 /// three bits and caps it at 64 bytes, and this payload is 73 with the kind
 /// byte. Electron Cash's `cashaddr.py` added encode_rpa/decode_rpa for the
 /// same reason — same charset and checksum, no version byte, no length cap.
-/// Which prefix family to stamp on an encoded code.
 ///
-/// The wallet and the CLI only ever emit `Cashcode`. `LegacyPaycode` exists so
-/// tests and migration tooling can build the old form that must keep being
-/// accepted; no production caller passes it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PrefixFamily {
-    Cashcode,
-    LegacyPaycode,
-}
-
+/// There is no prefix-family parameter: `cashcode:` / `cashcodetest:` is the
+/// only prefix this crate emits, and no caller — production or test — can ask
+/// it for a legacy PayCode.
 pub fn encode(
     scan_pubkey: &[u8; 33],
     spend_pubkey: &[u8; 33],
     network: Network,
     prefix_bits: u8,
-) -> String {
-    encode_with_family(
-        scan_pubkey,
-        spend_pubkey,
-        network,
-        prefix_bits,
-        PrefixFamily::Cashcode,
-    )
-}
-
-pub fn encode_with_family(
-    scan_pubkey: &[u8; 33],
-    spend_pubkey: &[u8; 33],
-    network: Network,
-    prefix_bits: u8,
-    family: PrefixFamily,
 ) -> String {
     let mut payload = [0u8; PAYLOAD_LEN];
     payload[0] = match network {
@@ -189,17 +241,11 @@ pub fn encode_with_family(
     payload[35..68].copy_from_slice(spend_pubkey);
     // 68..72 stay zero: no expiry.
 
-    let prefix = match (family, network) {
-        (PrefixFamily::Cashcode, Network::Mainnet) => CASHCODE_MAINNET,
-        (
-            PrefixFamily::Cashcode,
-            Network::Testnet3 | Network::Testnet4 | Network::Chipnet | Network::Regtest,
-        ) => CASHCODE_TESTNET,
-        (PrefixFamily::LegacyPaycode, Network::Mainnet) => LEGACY_MAINNET,
-        (
-            PrefixFamily::LegacyPaycode,
-            Network::Testnet3 | Network::Testnet4 | Network::Chipnet | Network::Regtest,
-        ) => LEGACY_TESTNET,
+    let prefix = match network {
+        Network::Mainnet => CASHCODE_MAINNET,
+        Network::Testnet3 | Network::Testnet4 | Network::Chipnet | Network::Regtest => {
+            CASHCODE_TESTNET
+        }
     };
 
     // Leading kind byte, as the desktop wallet and Electron Cash both write.
@@ -209,9 +255,13 @@ pub fn encode_with_family(
     encode_payload(prefix, &with_kind)
 }
 
-/// True if the string is a Cash Code this wallet can pay.
+/// True if the string carries a prefix this wallet can actually pay — that
+/// is, a Cash Code.
 ///
-/// A legacy PayCode returns false. Use [`is_legacy_paycode`] to name why.
+/// A legacy PayCode returns false. The question this answers is "route this
+/// recipient down the RPA path", and routing a legacy PayCode there is the
+/// bug. Use [`is_legacy_paycode`] to tell a user *why* their string was
+/// refused.
 pub fn looks_like_rpa(candidate: &str) -> bool {
     let bare = candidate
         .trim()
@@ -225,7 +275,13 @@ pub fn looks_like_rpa(candidate: &str) -> bool {
         .any(|p| bare.starts_with(&format!("{p}:")))
 }
 
-/// Decode a Cash Code. A legacy PayCode is refused by prefix first.
+/// Decode a Cash Code. Rejects a bad checksum before any sender-side work
+/// happens.
+///
+/// A legacy PayCode is refused here, first, by prefix — before the checksum
+/// is even looked at. A legacy string is perfectly well-formed and would pass
+/// every structural check below, so nothing later in this function would stop
+/// it; the refusal has to be up front or it does not happen at all.
 pub fn decode(code: &str) -> Result<Cashcode> {
     if is_legacy_paycode(code) {
         return Err(CliError::Usage(LEGACY_PAYCODE_REJECTION.to_string()));
@@ -321,7 +377,6 @@ pub fn decode(code: &str) -> Result<Cashcode> {
         // Little-endian, matching the desktop wallet's decoder.
         expiry: u32::from_le_bytes([p[68], p[69], p[70], p[71]]),
         prefix: prefix.to_string(),
-        legacy: prefix == LEGACY_MAINNET || prefix == LEGACY_TESTNET,
     })
 }
 
@@ -359,7 +414,26 @@ pub fn send_block_reason(code: &Cashcode) -> Option<String> {
     None
 }
 
-/// How many nSequence values to try before reshaping the transaction.
+/// How many nSequence values a sender should be willing to try before giving
+/// up on one transaction shape.
+///
+/// The grind looks for an input hash whose hex begins with `prefix_bits/4`
+/// characters, so each attempt succeeds with probability 2^-prefix_bits and
+/// the count needed is geometric with mean 2^prefix_bits. A fixed budget is
+/// therefore wrong at both ends: 100_000 was ~1.5x the mean at 16 bits, which
+/// exhausts about 21.7% of the time (1 - e^-1.53), while at 4 bits the same
+/// number is 6000x more than could ever be needed.
+///
+/// Eight times the mean puts exhaustion near 1 in 2900 (e^-8). That is the
+/// useful knob: an attempt costs a signature and two SHA-256s, about 36us
+/// measured, and the *typical* grind still stops at the mean — roughly 2.4s
+/// at 16 bits — no matter how high the ceiling is. Raising it only lengthens
+/// the rare unlucky tail, to about 19s, and the caller is expected to reshape
+/// the transaction rather than surface even that.
+///
+/// Kept here rather than in each sender so the CLI and the wallet cannot
+/// disagree about how hard they try; both had their own `MAX_GRIND_TRIES` of
+/// 100_000, which is exactly the sort of drift this crate exists to stop.
 pub fn grind_budget(prefix_bits: u8) -> Result<u32> {
     if !matches!(prefix_bits, 4 | 8 | 12 | 16) {
         return Err(CliError::Usage(format!(
@@ -372,7 +446,11 @@ pub fn grind_budget(prefix_bits: u8) -> Result<u32> {
 /// The nSequence to try on attempt `offset`, counting down from `0xffffffff`.
 ///
 /// Staying at or above `0x8000_0000` keeps bit 31 set, which is what marks a
-/// sequence BIP68-final: below it the value becomes a relative timelock.
+/// sequence BIP68-final: below it the value becomes a relative timelock and
+/// the transaction stops being spendable on the terms the sender intended.
+/// That leaves 2^31 usable values, far more than any budget above, but the
+/// bound has to be enforced rather than assumed — the desktop sender already
+/// says so in a comment, and this is that comment made executable.
 pub fn grind_sequence(offset: u32) -> Result<u32> {
     0xffff_ffffu32
         .checked_sub(offset)
@@ -395,8 +473,16 @@ pub struct GroundTransaction {
 /// Grind `transaction`'s nSequence until input 0 hashes to the recipient's
 /// scan prefix, and return the signed result.
 ///
+/// This is the loop itself, not just a constant, and it lives here because the
+/// alternative is what the repository actually had: one copy in the CLI and
+/// another in the desktop sender, each signing and hashing independently and
+/// each with its own ceiling. A sender that grinds differently from the
+/// recipient's expectations does not fail loudly — it produces a payment that
+/// is on chain, correct, and invisible to the person who was paid.
+///
 /// `Ok(None)` means the budget ran out. That is a reshape signal, not an
-/// error: the caller should choose different coins.
+/// error: the caller should choose different coins, which changes input 0 and
+/// so re-rolls the search, and only report failure once it is out of coins.
 pub fn grind_transaction(
     transaction: &mut crate::tx::Transaction,
     keys: &[k256::ecdsa::SigningKey],
@@ -584,6 +670,13 @@ pub struct RpaMatch {
     /// Display-order txid of the input the secret was derived from.
     pub prevout_txid: String,
     pub prevout_index: u32,
+    /// The sender's compressed pubkey on that input, hex.
+    ///
+    /// Public, and the other half of the ECDH. A wallet that records this
+    /// alongside the outpoint can rebuild the secret later without refetching
+    /// the funding transaction — which is what lets a received payment become
+    /// an ordinary spendable coin rather than a balance it can only look at.
+    pub sender_pubkey_hex: String,
     /// The ECDH secret this match came from, so the caller can derive the
     /// spending key without recomputing it. Never serialise this.
     pub secret: [u8; 32],
@@ -642,7 +735,10 @@ pub fn scan_transaction(
     spend_pubkey: &[u8; 33],
     network: Network,
 ) -> Result<Vec<RpaMatch>> {
-    let (inputs, outputs) = parse_transaction(raw)?;
+    let (inputs, _) = parse_transaction(raw)?;
+    // CashTokens prefixes are not part of the locking script. Reuse the strict
+    // transaction decoder so token-bearing RPA payments are not lost.
+    let outputs = crate::tx::decode(raw)?.outputs;
     let mut matches = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
@@ -656,16 +752,17 @@ pub fn scan_transaction(
         let expected = payment_address(spend_pubkey, &secret, network, 0)?;
         let expected_script = expected.script_pubkey();
 
-        for (index, (value, script)) in outputs.iter().enumerate() {
-            if script != &expected_script || !seen.insert(index) {
+        for (index, output) in outputs.iter().enumerate() {
+            if output.script_pubkey != expected_script || !seen.insert(index) {
                 continue;
             }
             matches.push(RpaMatch {
                 output_index: index as u32,
                 address: expected.encode(),
-                value: *value,
+                value: output.value,
                 prevout_txid: txid_display.clone(),
                 prevout_index: *vout,
+                sender_pubkey_hex: sender_pubkey.iter().map(|b| format!("{b:02x}")).collect(),
                 secret,
             });
         }
@@ -842,6 +939,228 @@ mod tests {
         assert_eq!(sender, receiver);
     }
 
+    /// A payment received at a Cash Code has to survive the whole journey
+    /// from detection to signature, not merely be detected.
+    ///
+    /// This is the regression for the gap that made a real chipnet payment
+    /// unmovable: `scan_transaction` found it, `spending_key_address` proved
+    /// the wallet controlled it, and it still could not be spent, because
+    /// nothing turned the match into a coin the spend planner would consider.
+    /// Each step below is one that used to be missing.
+    #[test]
+    fn a_received_rpa_payment_is_detected_then_selected_then_signed() {
+        use crate::coins::{Coin, CoinSet, Outpoint};
+
+        // Display-order hex, which is what `shared_secret` takes.
+        let display = |b: &[u8]| -> String { b.iter().map(|x| format!("{x:02x}")).collect() };
+
+        // Recipient publishes a code; sender pays it from a P2PKH coin.
+        let scan_priv = small_key(21);
+        let spend_priv = small_key(22);
+        let scan_pub = pubkey_of(&scan_priv);
+        let spend_pub = pubkey_of(&spend_priv);
+        let sender_priv = small_key(23);
+
+        let funding_txid = [0x5au8; 32];
+        let secret = shared_secret(&sender_priv, &scan_pub, &display(&funding_txid), 1).unwrap();
+        let stealth = payment_address(&spend_pub, &secret, Network::Chipnet, 0).unwrap();
+
+        // 1. Detection says the wallet controls it.
+        let controlled = spending_key_address(&spend_priv, &secret, 0, Network::Chipnet).unwrap();
+        assert_eq!(controlled.encode(), stealth.encode());
+
+        // 2. The match becomes a coin, carrying the outpoint the secret came
+        //    from rather than the secret itself.
+        let coin = Coin::from_rpa_payment(
+            Outpoint::new([0x77u8; 32], 0),
+            50_000,
+            stealth.encode(),
+            display(&funding_txid),
+            1,
+            display(&pubkey_of(&sender_priv)),
+        )
+        .expect("an RPA match is a coin");
+        assert!(coin.is_rpa());
+
+        // 3. It lands in the wallet's coin set as spendable, and shows up in
+        //    the private-receipts breakdown without being a separate pool.
+        let mut coins = CoinSet::default();
+        coins.insert(coin.clone()).expect("insert");
+        assert_eq!(coins.spendable_sats(), 50_000);
+        assert_eq!(coins.rpa_sats(), 50_000);
+
+        // 4. Coin selection picks it like any other coin. This is the step
+        //    that did not exist: the balance was visible and unspendable.
+        let pool = vec![crate::tx::Utxo {
+            txid: [0x77u8; 32],
+            vout: 0,
+            value: coin.value_sats(),
+            script_pubkey: stealth.script_pubkey(),
+        }];
+        let (chosen, fee) = crate::tx::select_coins(&pool, 10_000, 1, 2).expect("selected");
+        assert_eq!(chosen.len(), 1);
+
+        // 5. And the key that signs it is derivable from the origin the coin
+        //    carried, which is the whole reason for carrying it.
+        let stealth_priv = spending_key(&spend_priv, &secret, 0).expect("spending key");
+        let signing = k256::ecdsa::SigningKey::from_slice(&stealth_priv).expect("signing key");
+        let spend_to =
+            Address::from_hash(Network::Chipnet.prefix(), AddressKind::P2pkh, [0x31u8; 20]);
+        let transaction = crate::tx::Transaction::new(
+            chosen,
+            vec![crate::tx::Output::new(
+                50_000 - fee,
+                spend_to.script_pubkey(),
+            )],
+        );
+        let raw = transaction.sign(&[signing]).expect("sign the RPA coin");
+        assert!(!raw.is_empty());
+
+        // The signature has to be over this coin's own script, so a wallet
+        // that derived the wrong key would not get this far.
+        assert_eq!(
+            crate::tx::decode(&raw).expect("decodes").outputs[0].value,
+            50_000 - fee
+        );
+    }
+
+    #[test]
+    fn detected_origin_reconstructs_a_verifiable_signature_and_spent_output() {
+        use crate::tx::{Output, Transaction, Utxo};
+        use k256::ecdsa::{signature::hazmat::PrehashVerifier, Signature, SigningKey};
+        let scan_private = small_key(21);
+        let spend_private = small_key(22);
+        let sender_private = small_key(23);
+        let sender = SigningKey::from_slice(&sender_private).unwrap();
+        let wire_parent = core::array::from_fn::<_, 32, _>(|index| index as u8);
+        let mut display_parent = wire_parent;
+        display_parent.reverse();
+        let parent = crate::coins::Outpoint::new(display_parent, 7);
+        let secret = shared_secret(
+            &sender_private,
+            &pubkey_of(&scan_private),
+            &parent.txid_hex(),
+            7,
+        )
+        .unwrap();
+        let address =
+            payment_address(&pubkey_of(&spend_private), &secret, Network::Chipnet, 0).unwrap();
+        let sender_address = Address::from_hash(
+            Network::Chipnet.prefix(),
+            AddressKind::P2pkh,
+            hash160(&pubkey_of(&sender_private)),
+        );
+        let incoming = Transaction::new(
+            vec![Utxo {
+                txid: wire_parent,
+                vout: 7,
+                value: 51000,
+                script_pubkey: sender_address.script_pubkey(),
+            }],
+            vec![Output::new(50000, address.script_pubkey())],
+        )
+        .sign(&[sender])
+        .unwrap();
+        let found = scan_transaction(
+            &incoming,
+            &scan_private,
+            &pubkey_of(&spend_private),
+            Network::Chipnet,
+        )
+        .unwrap();
+        assert_eq!(found.len(), 1);
+        let receipt = &found[0];
+        assert_eq!(receipt.prevout_txid, parent.txid_hex());
+        let key = signing_key_for_receipt(
+            &scan_private,
+            &spend_private,
+            &receipt.prevout_txid,
+            receipt.prevout_index,
+            &pubkey_of(&sender_private),
+            &receipt.address,
+            Network::Chipnet,
+        )
+        .unwrap();
+        let transaction = Transaction::new(
+            vec![Utxo {
+                txid: crate::header_hash::sha256d(&incoming),
+                vout: receipt.output_index,
+                value: receipt.value,
+                script_pubkey: address.script_pubkey(),
+            }],
+            vec![Output::new(49500, sender_address.script_pubkey())],
+        );
+        let (raw, scripts) = transaction
+            .sign_detailed(std::slice::from_ref(&key))
+            .unwrap();
+        let sig_length = scripts[0][0] as usize;
+        assert_eq!(scripts[0][sig_length], crate::tx::SIGHASH_ALL_FORKID as u8);
+        let signature = Signature::from_der(&scripts[0][1..sig_length]).unwrap();
+        key.verifying_key()
+            .verify_prehash(&transaction.sighash(0).unwrap(), &signature)
+            .unwrap();
+        assert!(crate::tx::unspent_outputs(
+            [incoming.as_slice(), raw.as_slice()],
+            &[address.script_pubkey()]
+        )
+        .unwrap()
+        .is_empty());
+        assert!(signing_key_for_receipt(
+            &scan_private,
+            &spend_private,
+            &receipt.prevout_txid,
+            receipt.prevout_index + 1,
+            &pubkey_of(&sender_private),
+            &receipt.address,
+            Network::Chipnet
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn the_grind_budget_scales_with_the_prefix_and_clears_the_old_ceiling() {
+        // Eight times the mean at every supported width. The point of the
+        // change is the 16-bit case: 100_000 was ~1.5x the mean there, and
+        // 1 - e^-1.53 of transactions exhausted it.
+        for bits in [4u8, 8, 12, 16] {
+            let mean = 1u32 << bits;
+            assert_eq!(grind_budget(bits).unwrap(), 8 * mean, "{bits} bits");
+        }
+        assert!(
+            grind_budget(16).unwrap() > 100_000,
+            "16-bit budget must exceed the ceiling that was failing"
+        );
+        // And it is not merely bigger everywhere: at 4 bits the old fixed
+        // number was absurdly generous, and the budget is now proportionate.
+        assert!(grind_budget(4).unwrap() < 100_000);
+        assert!(
+            grind_budget(5).is_err(),
+            "unsupported width must be refused"
+        );
+    }
+
+    #[test]
+    fn grind_sequences_stay_bip68_final() {
+        assert_eq!(grind_sequence(0).unwrap(), 0xffff_ffff);
+        assert_eq!(grind_sequence(1).unwrap(), 0xffff_fffe);
+
+        // Every offset the largest budget can reach must still have bit 31
+        // set, or the sender would silently turn a final input into a relative
+        // timelock partway through grinding.
+        let budget = grind_budget(16).unwrap();
+        for offset in [0, 1, budget / 2, budget - 1] {
+            assert!(
+                grind_sequence(offset).unwrap() >= 0x8000_0000,
+                "offset {offset} left the BIP68-final range"
+            );
+        }
+
+        // The boundary itself is the last usable value, and one past it fails
+        // rather than wrapping into timelock territory.
+        assert_eq!(grind_sequence(0x7fff_ffff).unwrap(), 0x8000_0000);
+        assert!(grind_sequence(0x8000_0000).is_err());
+    }
+
     #[test]
     fn emits_cashcode_and_never_paycode() {
         let scan = pubkey_of(&small_key(7));
@@ -864,7 +1183,6 @@ mod tests {
         assert_eq!(decoded.spend_pubkey, spend);
         assert_eq!(decoded.prefix_bits, RPA_PREFIX_BITS);
         assert_eq!(decoded.expiry, 0);
-        assert!(!decoded.legacy);
         assert_eq!(decoded.network(), Network::Chipnet);
         assert!(looks_like_rpa(&code));
     }
@@ -886,27 +1204,66 @@ mod tests {
         assert!(decode(&swapped).is_err());
     }
 
-    #[test]
-    fn rejects_a_legacy_paycode_string() {
+    /// Build a legacy PayCode string by hand.
+    ///
+    /// Test-only on purpose: nothing in the crate emits one any more, and the
+    /// point of these fixtures is to have a *well-formed* legacy string —
+    /// correct payload, correct checksum for its own prefix — so a rejection
+    /// test proves the prefix was refused rather than that a malformed string
+    /// happened to fail some later check.
+    fn handmade_legacy_paycode(prefix: &str, version: u8) -> String {
         let scan = pubkey_of(&small_key(7));
         let spend = pubkey_of(&small_key(13));
         let mut payload = [0u8; PAYLOAD_LEN];
-        payload[0] = VERSION_TESTNET;
+        payload[0] = version;
         payload[1] = RPA_PREFIX_BITS;
         payload[2..35].copy_from_slice(&scan);
         payload[35..68].copy_from_slice(&spend);
         let mut with_kind = vec![0x00];
         with_kind.extend_from_slice(&payload);
-        let legacy = encode_payload(LEGACY_TESTNET, &with_kind);
+        encode_payload(prefix, &with_kind)
+    }
 
-        assert!(legacy.starts_with("paycodetest:"));
-        assert!(!looks_like_rpa(&legacy));
-        assert!(is_legacy_paycode(&legacy));
-        let error = decode(&legacy).expect_err("legacy PayCode must not decode");
-        assert!(
-            error.to_string().contains("not supported"),
-            "legacy rejected for the wrong reason: {error}"
-        );
+    #[test]
+    fn rejects_a_legacy_paycode_string() {
+        for (prefix, version) in [
+            (LEGACY_MAINNET, VERSION_MAINNET),
+            (LEGACY_TESTNET, VERSION_TESTNET),
+        ] {
+            let legacy = handmade_legacy_paycode(prefix, version);
+            assert!(legacy.starts_with(&format!("{prefix}:")), "{legacy}");
+
+            // Not a payable recipient, so the send path never routes it into
+            // RPA derivation in the first place.
+            assert!(!looks_like_rpa(&legacy), "{prefix} must not look payable");
+            // And named, so the wallet can say why rather than "bad address".
+            assert!(is_legacy_paycode(&legacy), "{prefix} must be recognised");
+
+            let error = decode(&legacy).expect_err("legacy PayCode must not decode");
+            assert!(
+                error.to_string().contains("not supported"),
+                "{prefix} rejected for the wrong reason: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_legacy_paycode_is_refused_on_its_prefix_not_its_checksum() {
+        // The fixture above is checksum-valid for `paycodetest:`. If the
+        // refusal were really a checksum failure it would be indistinguishable
+        // from a typo, and repairing the checksum would let a legacy code
+        // through. Truncating the last character changes the checksum without
+        // touching the prefix: both forms must still be refused as legacy.
+        let legacy = handmade_legacy_paycode(LEGACY_TESTNET, VERSION_TESTNET);
+        let broken_checksum = &legacy[..legacy.len() - 1];
+
+        for candidate in [legacy.as_str(), broken_checksum] {
+            let error = decode(candidate).expect_err("must not decode");
+            assert!(
+                error.to_string().contains("not supported"),
+                "expected the legacy refusal, got: {error}"
+            );
+        }
     }
 
     #[test]
@@ -967,7 +1324,6 @@ mod tests {
                 spend_pubkey: spend,
                 expiry: 0,
                 prefix: String::new(),
-                legacy: false,
             };
             assert_eq!(code.network(), network);
             let reason = send_block_reason(&code).expect("offline-only must be refused");
@@ -987,7 +1343,6 @@ mod tests {
                 spend_pubkey: spend,
                 expiry: 0,
                 prefix: String::new(),
-                legacy: false,
             };
             assert!(send_block_reason(&code).is_none());
         }
@@ -1002,7 +1357,6 @@ mod tests {
             spend_pubkey: pubkey_of(&small_key(13)),
             expiry: 0,
             prefix: String::new(),
-            legacy: false,
         };
         // grind_string is where this would otherwise surface, late.
         assert!(grind_string(&code.scan_pubkey, 0).is_err());
@@ -1016,21 +1370,6 @@ mod tests {
         assert_eq!(grind_string(&scan, 16).unwrap(), "5CBD");
         assert_eq!(grind_string(&scan, 8).unwrap(), "5C");
         assert!(grind_string(&scan, 10).is_err());
-    }
-
-    #[test]
-    fn grind_sequences_stay_bip68_final() {
-        assert_eq!(grind_sequence(0).unwrap(), 0xffff_ffff);
-        assert_eq!(grind_sequence(1).unwrap(), 0xffff_fffe);
-        let budget = grind_budget(16).unwrap();
-        for offset in [0, 1, budget / 2, budget - 1] {
-            assert!(
-                grind_sequence(offset).unwrap() >= 0x8000_0000,
-                "offset {offset} left the BIP68-final range"
-            );
-        }
-        assert_eq!(grind_sequence(0x7fff_ffff).unwrap(), 0x8000_0000);
-        assert!(grind_sequence(0x8000_0000).is_err());
     }
 
     #[test]
@@ -1254,20 +1593,23 @@ mod shared_vectors {
                 "{name} cashcode"
             );
 
+            // The legacy form carries the same keys as the cashcode beside
+            // it and is checksum-valid, so decoding it would "work" — and
+            // would then derive a destination under compressed Cash Code
+            // rules that its legacy owner never derived. It must be refused.
             let legacy = w["legacyPaycode"].as_str().unwrap();
+            assert!(!looks_like_rpa(legacy), "{name} legacy must not be payable");
             assert!(is_legacy_paycode(legacy), "{name} legacy must be named");
-            assert!(
-                !looks_like_rpa(legacy),
-                "{name} legacy must not look payable"
-            );
             let error = decode(legacy).expect_err("{name} legacy must not decode");
             assert!(
                 error.to_string().contains("not supported"),
                 "{name} legacy rejected for the wrong reason: {error}"
             );
+
+            // The cashcode beside it stays payable, so the assertion above is
+            // about the prefix and not about these particular keys.
             assert!(looks_like_rpa(w["cashcode"].as_str().unwrap()));
             assert!(!is_legacy_paycode(w["cashcode"].as_str().unwrap()));
-            assert!(!decode(w["cashcode"].as_str().unwrap()).unwrap().legacy);
 
             let secret =
                 shared_secret(&sender_privkey, &scan_pubkey, outpoint_txid, outpoint_index)

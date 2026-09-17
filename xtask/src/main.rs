@@ -559,6 +559,8 @@ fn architecture() {
         }
     }
 
+    cashcode_policy(&root, &mut failures);
+
     if failures.is_empty() {
         println!("architecture boundary check: PASS");
         return;
@@ -568,6 +570,72 @@ fn architecture() {
         eprintln!("architecture boundary violation: {failure}");
     }
     std::process::exit(1);
+}
+
+/// An encoder or a prefix family that can stamp a legacy `paycode:`.
+///
+/// `'legacy-paycode'` is the TypeScript spelling of the same idea. Single
+/// quotes are kept deliberately: `rust_code_only` strips double-quoted
+/// strings and every comment, so prose explaining why the family is gone
+/// does not trip this, and a live TS union member does.
+const LEGACY_PAYCODE_APIS: &[&str] = &["PrefixFamily", "encode_with_family", "'legacy-paycode'"];
+
+/// PR #89's decision, enforced where a merge cannot quietly revert it.
+///
+/// OPTN accepts `cashcode:` / `cashcodetest:` and refuses `paycode:` /
+/// `paycodetest:`. That is not a naming preference. A legacy PayCode carries
+/// keys its owner derived under the legacy rules, so deriving a destination
+/// from one with CashCode's compressed semantics pays an address the legacy
+/// recipient never derived and cannot scan for.
+///
+/// This lives in xtask rather than in `optn-core`'s own tests because the way
+/// it was actually lost was a merge that replaced `rpa.rs` wholesale -- tests
+/// included. A test inside the file cannot guard the file. This check reads
+/// the tree from outside it, so reverting the policy fails the architecture
+/// job instead of waiting for someone to read a 400-line diff.
+fn cashcode_policy(root: &Path, failures: &mut Vec<String>) {
+    // The refusal itself, and the fact that `decode` reaches it. Refusing by
+    // prefix has to happen *before* the checksum: a legacy string is
+    // perfectly well formed, so a checksum will not reject it.
+    let rpa_path = root.join("crates/optn-core/src/rpa.rs");
+    let rpa = rust_code_only(&read(&rpa_path));
+    for required in ["fn is_legacy_paycode", "if is_legacy_paycode(code)"] {
+        if !rpa.contains(required) {
+            failures.push(format!(
+                "crates/optn-core/src/rpa.rs no longer contains '{required}'; PR #89 made \
+                 Cash Code exclusive and decoding a legacy PayCode under compressed semantics \
+                 pays an address its recipient cannot scan for"
+            ));
+        }
+    }
+
+    // No surface may offer a way to *produce* one either. An encoder able to
+    // stamp the prefix is a way to manufacture the very strings `decode`
+    // refuses, which turns the refusal into an inconvenience.
+    let mut scanned = Vec::new();
+    for directory in ["crates", "src"] {
+        scanned.extend(walk_files(&root.join(directory)));
+    }
+    for path in scanned {
+        let is_source = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| matches!(extension, "rs" | "ts" | "tsx"));
+        if !is_source {
+            continue;
+        }
+        let code = rust_code_only(&read(&path));
+        for api in LEGACY_PAYCODE_APIS {
+            if code.contains(api) {
+                failures.push(format!(
+                    "{} declares or uses legacy PayCode emit API '{api}'; OPTN emits \
+                     cashcode: only, and an encoder for the legacy prefix defeats the \
+                     refusal in optn-core's decode",
+                    path.display()
+                ));
+            }
+        }
+    }
 }
 
 fn compare_host_blocks(

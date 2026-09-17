@@ -328,10 +328,27 @@ impl Bip37Backend {
         interests: &[WalletInterest],
         from_height: Option<u32>,
     ) -> Result<BackendObservation, ChainBackendError> {
+        self.wallet_refresh_range(interests, from_height, None)
+            .await
+    }
+
+    /// The same scan, bounded at the top as well as the bottom.
+    ///
+    /// Cash Code detection asks for a complete block batch rather than an
+    /// open-ended refresh: every transaction in the range has to come back so
+    /// the runtime can do the matching locally, which is only affordable over
+    /// a bounded window.
+    async fn wallet_refresh_range(
+        &self,
+        interests: &[WalletInterest],
+        from_height: Option<u32>,
+        to_height: Option<u32>,
+    ) -> Result<BackendObservation, ChainBackendError> {
         if !self.probe.serves_bloom {
             return Err(ChainBackendError::Unsupported);
         }
         let mut bloom_items = Vec::<Vec<u8>>::new();
+        let mut scan_all = false;
         for interest in interests {
             match interest {
                 WalletInterest::Script(script) => {
@@ -346,10 +363,23 @@ impl Bip37Backend {
                         bloom_items.push(outpoint.to_vec());
                     }
                 }
-                WalletInterest::RpaPrefix(_) => return Err(ChainBackendError::Unsupported),
+                WalletInterest::RpaPrefix(prefix) => {
+                    if prefix.is_empty()
+                        || prefix.len() > 4
+                        || !prefix.bytes().all(|b| b.is_ascii_hexdigit())
+                    {
+                        return Err(ChainBackendError::Rejected(
+                            "invalid Cash Code scan prefix".into(),
+                        ));
+                    }
+                    // Standard BIP37 cannot match an input-hash prefix. Request
+                    // all transactions, then let the runtime perform local RPA
+                    // detection. Never put a wallet's prefix or scan key on wire.
+                    scan_all = true;
+                }
             }
         }
-        if bloom_items.is_empty() {
+        if bloom_items.is_empty() && !scan_all {
             return Err(ChainBackendError::Rejected(
                 "BIP37 refresh has no bloom-compatible wallet interests".into(),
             ));
@@ -373,14 +403,17 @@ impl Bip37Backend {
                 "no accepted headers yet; header sync must run first".into(),
             ));
         };
-        let blocks = self
-            .headers
-            .range_inclusive(start, tip_height)
-            .map_err(|error| {
-                ChainBackendError::Rejected(format!(
-                    "accepted headers do not cover {start}..={tip_height}: {error:?}"
-                ))
-            })?;
+        let end = to_height.unwrap_or(tip_height);
+        if scan_all && (start > end || end > tip_height || end - start >= 144) {
+            return Err(ChainBackendError::Rejected(
+                "Cash Code block batch must be an accepted range of at most 144 blocks".into(),
+            ));
+        }
+        let blocks = self.headers.range_inclusive(start, end).map_err(|error| {
+            ChainBackendError::Rejected(format!(
+                "accepted headers do not cover {start}..={end}: {error:?}"
+            ))
+        })?;
         let tip = self
             .headers
             .tip()
@@ -693,6 +726,17 @@ impl ChainBackend for Bip37Backend {
     fn execute<'a>(&'a self, request: &'a ChainRequest) -> ChainFuture<'a, BackendObservation> {
         Box::pin(async move {
             match request {
+                ChainRequest::CashcodeBlockRange {
+                    from_height,
+                    to_height,
+                } => {
+                    self.wallet_refresh_range(
+                        &[WalletInterest::RpaPrefix("0".into())],
+                        Some(*from_height),
+                        Some(*to_height),
+                    )
+                    .await
+                }
                 ChainRequest::WalletRefresh {
                     interests,
                     from_height,
@@ -1353,8 +1397,10 @@ mod tests {
             headers: test_headers(),
             shv_status: Mutex::new(None),
         };
+        // An RPA prefix is deliberately absent: it is supported, by requesting
+        // every transaction in a bounded range and matching locally. Putting
+        // it back here would re-assert the behaviour PR #89 replaced.
         for unsupported in [
-            WalletInterest::rpa_prefix("ab").unwrap(),
             WalletInterest::script(vec![0x51]),
             WalletInterest::script(vec![]),
         ] {

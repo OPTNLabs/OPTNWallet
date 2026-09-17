@@ -302,6 +302,7 @@ impl ChainBackend for BchnRpcBackend {
     fn execute<'a>(&'a self, request: &'a ChainRequest) -> ChainFuture<'a, BackendObservation> {
         Box::pin(async move {
             match request {
+                ChainRequest::CashcodeBlockRange { .. } => Err(ChainBackendError::Unsupported),
                 ChainRequest::TransactionLookup { txid } => self.transaction_lookup(*txid).await,
                 ChainRequest::Broadcast { raw_tx, txid } => self.broadcast(raw_tx, *txid).await,
                 ChainRequest::HeaderSync {
