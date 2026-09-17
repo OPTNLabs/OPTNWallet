@@ -100,7 +100,6 @@ describe('RpaSender', () => {
         spendPubkey: recipient.spendPubkey,
         expiry: 0,
         prefix: 'cashcodetest',
-        legacy: false,
       },
       utxos: [
         {
