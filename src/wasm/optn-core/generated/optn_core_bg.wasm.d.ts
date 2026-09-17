@@ -8,7 +8,7 @@ export const connectSignP2pkh: (a: number, b: number, c: number, d: number, e: n
 export const connectSigningSerialization: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
 export const decodeCashcode: (a: number, b: number) => [number, number, number, number];
 export const deriveRpaKeys: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number];
-export const encodeCashcode: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
+export const encodeCashcode: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
 export const fusionBlindIssuerNoncePoint: (a: number, b: number) => [number, number, number, number];
 export const fusionBlindIssuerPublicKey: (a: number, b: number) => [number, number, number, number];
 export const fusionBlindIssuerSign: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];

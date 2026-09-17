@@ -113,7 +113,8 @@ describe('optn-core through wasm', () => {
       const decoded = JSON.parse(decodeCashcode(w.cashcode));
       expect(decoded.scanPubkey).toBe(w.scanPubkey);
       expect(decoded.spendPubkey).toBe(w.spendPubkey);
-      expect(decoded.legacy).toBe(false);
+      // No `legacy` field any more: nothing that decodes here is legacy.
+      expect(decoded).not.toHaveProperty('legacy');
 
       expect(looksLikeRpa(w.legacyPaycode)).toBe(false);
       expect(isLegacyPaycode(w.legacyPaycode)).toBe(true);
