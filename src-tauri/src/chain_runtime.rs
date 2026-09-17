@@ -597,6 +597,20 @@ impl NativeChainRuntime {
         Ok(())
     }
 
+    /// Tip of the accepted chain this host has verified, if it has one.
+    ///
+    /// Read from the same view the providers are held to, so a screen showing
+    /// it is showing what P2P routes are actually checked against rather than
+    /// a number a server reported.
+    pub async fn verified_tip(&self, network: Network) -> Option<(u32, [u8; 32])> {
+        let guard = self.accepted.lock().await;
+        let chain = guard.as_ref()?;
+        if chain.network != network {
+            return None;
+        }
+        chain.view.tip()
+    }
+
     /// Snapshot probe failures from the installed stack. An empty result also
     /// covers an absent stack and must not be treated as proof of connectivity.
     pub async fn failures(&self) -> Vec<NativeChainProbeFailure> {
