@@ -470,15 +470,20 @@ pub struct HeaderWalk {
 }
 
 impl HeaderWalk {
-    pub fn for_network(network: &str, locator: [u8; 32], height: u32, time: i64) -> Self {
-        let parsed = network.parse::<Network>().unwrap_or(Network::Mainnet);
-        Self {
+    pub fn for_network(
+        network: &str,
+        locator: [u8; 32],
+        height: u32,
+        time: i64,
+    ) -> Result<Self, String> {
+        let parsed = network.parse::<Network>()?;
+        Ok(Self {
             expected_prev: locator,
             locator_height: height,
             locator_time: time,
             params: AsertParams::for_network(parsed),
             anchor: AsertAnchor::for_network(parsed),
-        }
+        })
     }
 
     fn check(&self) -> AsertCheck {
@@ -567,7 +572,7 @@ pub async fn fetch_headers_after(
         port,
         network,
         transport,
-        HeaderWalk::for_network(network, locator, 0, 0),
+        HeaderWalk::for_network(network, locator, 0, 0)?,
     )
     .await
 }
@@ -828,7 +833,6 @@ pub async fn scan_blocks(
 // broadcastTransaction when a node is the active backend.
 
 const MSG_TX: u32 = 1;
-const RELAY_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 const OBSERVER_RESPONSE_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_RELAY_MESSAGES: usize = 30;
 
@@ -897,8 +901,8 @@ async fn connect_peer(
 /// Announce `tx_bytes` and send them only if this peer requests the exact txid.
 ///
 /// The stream is generic so the complete inv/getdata/tx exchange can be tested
-/// over an in-memory duplex. `Ok(false)` means the bounded request window ended
-/// without the peer asking for this transaction; an explicit reject is an error.
+/// over an in-memory duplex. The shared adapter requires post-transfer peer
+/// progress too. `Ok(false)` is uncertain, never a successful submission.
 async fn relay_tx_on_stream<S>(
     stream: &mut S,
     magic: [u8; 4],
@@ -908,46 +912,12 @@ async fn relay_tx_on_stream<S>(
 where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
 {
-    let inv = encode_message(magic, "inv", &build_inv_tx(&expected_txid));
-    tokio::time::timeout(IO_TIMEOUT, stream.write_all(&inv))
-        .await
-        .map_err(|_| "timed out sending inv".to_string())?
-        .map_err(|e| format!("send failed: {e}"))?;
-
-    let exchange = async {
-        for _ in 0..MAX_RELAY_MESSAGES {
-            let (command, payload) = read_message(stream, magic).await?;
-            match command.as_str() {
-                "getdata" if inventory_contains_tx(&payload, &expected_txid)? => {
-                    let tx_message = encode_message(magic, "tx", tx_bytes);
-                    tokio::time::timeout(IO_TIMEOUT, stream.write_all(&tx_message))
-                        .await
-                        .map_err(|_| "timed out sending tx".to_string())?
-                        .map_err(|e| format!("send failed: {e}"))?;
-                    return Ok(true);
-                }
-                "reject" => {
-                    return Err(format!(
-                        "relay rejected tx {}",
-                        txid_display(&expected_txid)
-                    ))
-                }
-                "ping" => {
-                    let pong = encode_message(magic, "pong", &payload);
-                    tokio::time::timeout(IO_TIMEOUT, stream.write_all(&pong))
-                        .await
-                        .map_err(|_| "timed out sending pong".to_string())?
-                        .map_err(|e| format!("send failed: {e}"))?;
-                }
-                _ => {}
-            }
-        }
-        Ok(false)
-    };
-
-    match tokio::time::timeout(RELAY_RESPONSE_TIMEOUT, exchange).await {
-        Ok(result) => result,
-        Err(_) => Ok(false),
+    match optn_chain_native::relay_tx_on_stream(stream, magic, tx_bytes, expected_txid, IO_TIMEOUT)
+        .await?
+    {
+        optn_chain_native::TxRelayOutcome::Processed => Ok(true),
+        optn_chain_native::TxRelayOutcome::Uncertain => Ok(false),
+        optn_chain_native::TxRelayOutcome::Rejected(reason) => Err(reason),
     }
 }
 
@@ -1075,15 +1045,39 @@ pub async fn broadcast_tx(
     let mut stream = connect_peer(host, port, transport).await?;
 
     handshake(&mut stream, magic).await?;
-    let _submitted = relay_tx_on_stream(&mut stream, magic, &tx_bytes, txid_internal).await?;
-    // Preserve the original broadcast contract: no request within the bounded
-    // window means the peer may already have the transaction.
+    let submitted = relay_tx_on_stream(&mut stream, magic, &tx_bytes, txid_internal).await?;
+    if !submitted {
+        return Err(format!("broadcast outcome is uncertain for {display_txid}; peer processing was not observed; do not blindly rebroadcast"));
+    }
     Ok(display_txid)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn header_walk_rejects_unknown_networks_instead_of_using_mainnet() {
+        // `testnet3` used to be refused here because the typed `Network` had
+        // no such variant -- the name resolved to nothing. It is a real
+        // network now, so it walks like any other; what must still be refused
+        // is a name that names no chain, and `bchtest`, which three chains
+        // share and therefore identifies none of them.
+        for refused in ["unknown", "bchtest", ""] {
+            assert!(
+                HeaderWalk::for_network(refused, [0; 32], 0, 0).is_err(),
+                "{refused} must not resolve to a chain"
+            );
+        }
+        for network in [
+            "mainnet", "chipnet", "testnet3", "testnet4", "testnet", "regtest",
+        ] {
+            assert!(
+                HeaderWalk::for_network(network, [0; 32], 0, 0).is_ok(),
+                "{network} must walk its own chain"
+            );
+        }
+    }
 
     /// Live: filterload + request block 1 as a merkleblock from a public node,
     /// and verify the partial merkle tree against its header.
@@ -1202,7 +1196,11 @@ mod tests {
     }
 
     async fn sync_one_header(raw: [u8; 80], locator: [u8; 32]) -> Result<Vec<HeaderInfo>, String> {
-        sync_one_header_from(raw, HeaderWalk::for_network("mainnet", locator, 0, 0)).await
+        sync_one_header_from(
+            raw,
+            HeaderWalk::for_network("mainnet", locator, 0, 0).unwrap(),
+        )
+        .await
     }
 
     async fn sync_one_header_from(
@@ -1385,12 +1383,55 @@ mod tests {
                 let (command, payload) = read_message(&mut server, magic).await.unwrap();
                 assert_eq!(command, "tx");
                 assert_eq!(payload, expected_tx);
+                let (command, payload) = read_message(&mut server, magic).await.unwrap();
+                assert_eq!(command, "ping");
+                server
+                    .write_all(&encode_message(magic, "pong", &payload))
+                    .await
+                    .unwrap();
             });
 
             assert!(relay_tx_on_stream(&mut client, magic, &tx, expected_txid)
                 .await
                 .unwrap());
             server_task.await.unwrap();
+        });
+    }
+
+    #[test]
+    fn relay_without_transfer_cannot_make_legacy_broadcast_succeed() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let magic = params_for("chipnet").magic;
+            let peer = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                assert_eq!(read_message(&mut stream, magic).await.unwrap().0, "version");
+                stream
+                    .write_all(&encode_message(magic, "version", &build_version_payload(1)))
+                    .await
+                    .unwrap();
+                loop {
+                    if read_message(&mut stream, magic).await.unwrap().0 == "inv" {
+                        break;
+                    }
+                }
+                // No getdata: disconnect cannot be interpreted as already-known success.
+            });
+            let result = broadcast_tx(
+                "127.0.0.1",
+                port,
+                "chipnet",
+                Transport::Direct,
+                vec![1, 2, 3],
+            )
+            .await;
+            assert!(matches!(result, Err(reason) if reason.contains("uncertain")));
+            peer.await.unwrap();
         });
     }
 
@@ -1407,8 +1448,10 @@ mod tests {
             let (mut client, mut server) = tokio::io::duplex(4096);
             let server_task = tokio::spawn(async move {
                 let _ = read_message(&mut server, magic).await.unwrap();
+                let mut rejection = vec![2, b't', b'x', 0x10, 3, b'b', b'a', b'd'];
+                rejection.extend_from_slice(&expected_txid);
                 server
-                    .write_all(&encode_message(magic, "reject", &[]))
+                    .write_all(&encode_message(magic, "reject", &rejection))
                     .await
                     .unwrap();
             });

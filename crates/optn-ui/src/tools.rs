@@ -206,7 +206,7 @@ pub fn WalletHome(transport: UiTransport, state: RwSignal<AppState>) -> impl Int
                     <h1 class="balance">
                         {move || {
                             let current = state.get();
-                            current.wallet_sync.total_sats().and_then(|total| total.checked_add(current.stealth_sats))
+                            current.wallet_sync.total_sats().and_then(|total| total.checked_add(portfolio_totals(&current).stealth_sats))
                                 .map(format_bch).unwrap_or_else(|| "Balance unknown".into())
                         }}
                     </h1>

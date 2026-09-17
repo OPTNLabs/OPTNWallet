@@ -12,10 +12,14 @@
 use optn_chain_bchn::{BchnRpcBackend, BchnRpcConfig, RpcAuth};
 pub mod network_config;
 pub mod wallet_checkpoint;
-// Re-exported because the shell's Cash Code node scan builds a BIP37 route
-// directly: it is one bounded block batch against the selected peer, not a
-// wallet refresh, so it needs the backend type rather than the stack.
-pub use optn_chain_bip37::{Bip37Backend, Bip37Config, Bip37Transport};
+// Re-exported because the shell reaches BIP37 directly in two places: the
+// Cash Code node scan builds one bounded block batch against the selected
+// peer rather than a wallet refresh, and the legacy broadcast path relays a
+// transaction on an already-open stream. Both need the backend types rather
+// than the stack.
+pub use optn_chain_bip37::{
+    relay_tx_on_stream, Bip37Backend, Bip37Config, Bip37Transport, TxRelayOutcome,
+};
 use optn_chain_electrum::{ElectrumBackend, ElectrumConfig, ElectrumTransport};
 use optn_chain_neutrino::{NeutrinoBackend, NeutrinoConfig, NeutrinoTransport};
 use optn_chain_zmq::{BchnZmqConfig, BchnZmqEventSource};
