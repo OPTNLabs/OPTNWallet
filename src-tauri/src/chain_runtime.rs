@@ -971,7 +971,12 @@ mod tests {
                 .rebuild_from_app_state(&AppState::default())
                 .await;
         });
-        let (socket, _) = tokio::time::timeout(Duration::from_secs(2), listener.accept())
+        // Generous on purpose. A rebuild detects Tor before it constructs any
+        // provider, and that detection is two SOCKS probes with a 1500 ms
+        // budget each -- so the probe cannot possibly arrive inside the two
+        // seconds this used to allow, and did not on a host where a closed
+        // loopback port is slow to refuse.
+        let (socket, _) = tokio::time::timeout(Duration::from_secs(10), listener.accept())
             .await
             .expect("native probe reached local listener")
             .expect("accept pending native probe");
@@ -1374,8 +1379,14 @@ mod tests {
         std::fs::remove_dir(directory).expect("remove test probe directory");
     }
 
+    /// Wait for the host to publish a service carrying `policy`.
+    ///
+    /// The budget has to cover a whole rebuild, and a rebuild detects Tor
+    /// first: two SOCKS probes at 1500 ms each, before any provider is built.
+    /// Five seconds left almost no margin for that on a loaded host, and the
+    /// suite runs several of these concurrently.
     async fn wait_for_policy(native: &NativeChainRuntime, policy: &ConnectionPolicy) {
-        tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::time::timeout(Duration::from_secs(20), async {
             loop {
                 if let Some(service) = native.with_service(Arc::clone).await {
                     if service.lock().await.policy() == policy
@@ -1486,12 +1497,17 @@ mod tests {
         let worker = native.clone();
         let task = tokio::spawn(async move { worker.run().await });
         wait_for_policy(&native, &ConnectionPolicy::auto()).await;
-        let previous = native.with_service(Arc::clone).await.unwrap();
         let mut state = AppState::default();
         state.apply(AppAction::SetServer {
             kind: ServerKind::Peer,
             entry: "unused.invalid:8333".into(),
         });
+        // Captured immediately before the change that supersedes it, and not
+        // a moment earlier. A rebuild clears the outgoing service's catalog at
+        // the start of its own pass, so an Arc taken further back can be
+        // emptied by an unrelated pass and then refilled here -- which asserts
+        // nothing about revocation.
+        let previous = native.with_service(Arc::clone).await.unwrap();
         // Register catalog data only: this test never creates a network adapter.
         *previous.lock().await.catalog_mut() = catalog_and_policy_from_app_state(&state).0;
 
@@ -1505,7 +1521,19 @@ mod tests {
         ))
         .unwrap();
         wait_for_policy(&native, &policy).await;
-        assert_eq!(previous.lock().await.catalog().iter().count(), 0);
+        // Revocation happens at the start of the rebuild that supersedes this
+        // service, and `wait_for_policy` returns as soon as the *policy* is
+        // visible -- which can be a moment earlier. Wait for the revocation
+        // itself rather than assuming it has already landed; the assertion is
+        // still that the superseded routes go away, only now it cannot pass or
+        // fail on scheduling.
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while previous.lock().await.catalog().iter().next().is_some() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("a superseded service loses its routes");
 
         std::fs::write(&path, b"{").unwrap();
         tokio::time::timeout(Duration::from_secs(5), async {
