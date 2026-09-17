@@ -168,6 +168,10 @@ fn needs_default_tor_proxy(catalog: &SourceCatalog, policy: &ConnectionPolicy) -
     catalog.iter().any(|source| {
         source.is_enabled()
             && selected.contains(&source.id)
+            // Declared own infrastructure is dialled directly, so it does not
+            // put the stack through Tor detection either -- two probes at
+            // 1500 ms each that nothing would then use.
+            && !source.is_user_infrastructure()
             && source.endpoints.iter().any(|endpoint| {
                 !is_loopback_host(&endpoint.host) && endpoint_can_use_native_tor(endpoint, policy)
             })
@@ -203,7 +207,34 @@ async fn is_tor_socks_port(host: &str, port: u16) -> bool {
     )
 }
 
-fn native_chain_route(endpoint: &Endpoint, tor_status: TorStatus) -> TorRoute {
+/// How a chain route to `endpoint` on `source` may be made, or that it may not.
+///
+/// Fails closed like the Fusion rule it borrows, with one difference that
+/// matters: a source the user has *declared* as their own infrastructure is
+/// reached directly, exactly as loopback is.
+///
+/// Tor is there to stop a third-party server learning that this IP is asking
+/// about these addresses. Your own node already knows — it is yours, and it is
+/// the node the wallet is asking on your behalf. Routing to it over Tor buys
+/// nothing and costs the mode its purpose: `is_loopback_host` recognises only
+/// `127.0.0.0/8`, `localhost` and `::1`, so a self-hosted node one room away on
+/// a LAN address, or on a private mesh, was refused as "remote" and
+/// own-infrastructure-only could not reach any own infrastructure that was not
+/// on this machine.
+///
+/// The declaration is what carries this, not the address: `UserInfrastructure`
+/// is a group the holder wrote down (`SourceOrigin::UserInfrastructure`), and
+/// `SourceScope::UserInfrastructure` already selects on exactly that. A plain
+/// `UserAdded` endpoint -- a public server someone pasted in -- is still a
+/// third party and still needs Tor.
+fn native_chain_route(
+    source: &ChainSource,
+    endpoint: &Endpoint,
+    tor_status: TorStatus,
+) -> TorRoute {
+    if source.is_user_infrastructure() {
+        return TorRoute::Direct;
+    }
     tor_route(&endpoint.host, tor_status)
 }
 
@@ -372,7 +403,7 @@ async fn build_native_chain_stack_with_tor_status(
                 continue;
             }
 
-            let route = native_chain_route(endpoint, tor_status);
+            let route = native_chain_route(&source, endpoint, tor_status);
             if route.is_refused() {
                 record_remote_route_failure(
                     &mut failures,
@@ -523,6 +554,29 @@ mod tests {
     use super::*;
     use optn_runtime::chain::ProtocolSet;
 
+    /// A public endpoint someone pasted in: a third party, needing Tor.
+    fn pasted_source() -> ChainSource {
+        ChainSource {
+            id: SourceId::new("pasted"),
+            label: "Pasted".into(),
+            origin: optn_runtime::chain::SourceOrigin::UserAdded,
+            endpoints: Vec::new(),
+            capabilities: Default::default(),
+            disposition: optn_runtime::chain::SourceDisposition::Enabled,
+            priority: 0,
+        }
+    }
+
+    /// A node the holder declared as theirs.
+    fn declared_own_source() -> ChainSource {
+        ChainSource {
+            origin: optn_runtime::chain::SourceOrigin::UserInfrastructure {
+                group: "home".into(),
+            },
+            ..pasted_source()
+        }
+    }
+
     #[test]
     fn native_direct_dial_reuses_the_core_loopback_rule() {
         for host in ["localhost", "LOCALHOST", "127.0.0.1", "127.13.9.2", "::1"] {
@@ -532,7 +586,7 @@ mod tests {
                 port: Some(50002),
             };
             assert_eq!(
-                native_chain_route(&endpoint, TorStatus::Absent),
+                native_chain_route(&pasted_source(), &endpoint, TorStatus::Absent),
                 TorRoute::Direct,
                 "{host}"
             );
@@ -544,10 +598,61 @@ mod tests {
                 port: Some(50002),
             };
             assert!(
-                native_chain_route(&endpoint, TorStatus::Absent).is_refused(),
+                native_chain_route(&pasted_source(), &endpoint, TorStatus::Absent).is_refused(),
                 "{host}"
             );
         }
+    }
+
+    /// Own infrastructure is reachable off this machine, with no Tor.
+    ///
+    /// The whole point of the mode is a node the holder runs; before this, an
+    /// own-infrastructure policy could only reach `127.0.0.0/8`, so a node on
+    /// a LAN address or a private mesh was refused as "remote" and the mode
+    /// had nothing it could select. Tor protects you from a third-party
+    /// server; your own node is not one.
+    #[test]
+    fn declared_own_infrastructure_dials_directly_without_tor() {
+        let own = declared_own_source();
+        for host in [
+            "192.168.1.50",
+            "100.100.51.120",
+            "node.internal",
+            "10.0.0.9",
+        ] {
+            let endpoint = Endpoint {
+                kind: EndpointKind::ElectrumTcp,
+                host: host.into(),
+                port: Some(50001),
+            };
+            assert_eq!(
+                native_chain_route(&own, &endpoint, TorStatus::Absent),
+                TorRoute::Direct,
+                "declared own infrastructure at {host} must not require Tor"
+            );
+            // The same address, merely pasted in, is still a third party.
+            assert!(
+                native_chain_route(&pasted_source(), &endpoint, TorStatus::Absent).is_refused(),
+                "an undeclared {host} must still fail closed"
+            );
+        }
+    }
+
+    /// And it does not drag the stack through Tor detection it will not use.
+    #[test]
+    fn own_infrastructure_does_not_ask_for_a_tor_proxy() {
+        let mut catalog = SourceCatalog::default();
+        let mut source = declared_own_source();
+        source.endpoints = vec![Endpoint {
+            kind: EndpointKind::ElectrumTcp,
+            host: "100.100.51.120".into(),
+            port: Some(50001),
+        }];
+        catalog.insert(source).expect("insert");
+        assert!(!needs_default_tor_proxy(
+            &catalog,
+            &ConnectionPolicy::own_infrastructure()
+        ));
     }
 
     #[test]
@@ -557,7 +662,11 @@ mod tests {
             host: "public.example".into(),
             port: Some(50002),
         };
-        let route = native_chain_route(&endpoint, TorStatus::Verified { socks_port: 9050 });
+        let route = native_chain_route(
+            &pasted_source(),
+            &endpoint,
+            TorStatus::Verified { socks_port: 9050 },
+        );
 
         match electrum_transport(&endpoint, route).expect("verified route") {
             ElectrumTransport::Tor {
