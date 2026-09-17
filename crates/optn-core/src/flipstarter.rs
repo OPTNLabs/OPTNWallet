@@ -330,6 +330,35 @@ pub fn chipnet_demo_coin(value_sats: u64, slot: u8) -> Result<Coin, CoinError> {
     Ok(coin)
 }
 
+/// A chipnet coin that arrived through a Cash Code, for tests and demos.
+///
+/// The same shape as [`chipnet_demo_coin`] but carrying an RPA origin, so
+/// callers can check that a received RPA payment behaves as an ordinary
+/// spendable coin rather than as a separate balance.
+pub fn rpa_demo_coin(value_sats: u64, slot: u8) -> Result<Coin, CoinError> {
+    let mut txid = [0u8; 32];
+    txid[0] = 0x4a;
+    txid[1] = 0x9c;
+    txid[31] = slot;
+    let hash = [slot.saturating_add(0x51); 20];
+    let address = Address::from_hash(
+        Network::Chipnet.prefix(),
+        crate::cashaddr::AddressKind::P2pkh,
+        hash,
+    )
+    .encode();
+    Coin::from_rpa_payment(
+        Outpoint::new(txid, 0),
+        value_sats,
+        address,
+        // Display-order txid of the sender input the secret derives from.
+        format!("{:064x}", 0xabcd_0000u32 + u32::from(slot)),
+        1,
+        // A plausible compressed pubkey; these fixtures are never signed with.
+        format!("02{:062x}", 0xfeed_0000u32 + u32::from(slot)),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

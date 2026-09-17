@@ -249,7 +249,9 @@ mod tests {
             receive_address: opened.receive_address,
             account_path: opened.account_path,
         });
-        state.apply(AppAction::SetStealthSats(50_000));
+        state.apply(AppAction::InsertCoin(
+            optn_app::rpa_demo_coin(50_000, 2).unwrap(),
+        ));
         state.apply(AppAction::Navigate(AppRoute::Settings));
         state
     }
@@ -465,7 +467,9 @@ mod tests {
             receive_address: opened.receive_address,
             account_path: opened.account_path,
         });
-        state.apply(AppAction::SetStealthSats(50_000));
+        state.apply(AppAction::InsertCoin(
+            optn_app::rpa_demo_coin(50_000, 2).unwrap(),
+        ));
 
         let text = painted_text(&state);
         assert!(text.iter().any(|t| t == "egui"), "{text:?}");

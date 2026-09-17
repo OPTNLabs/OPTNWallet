@@ -19,22 +19,27 @@ pub struct PortfolioTotals {
     pub spendable_sats: u64,
     /// UTXOs held by a freeze, a pledge, or token custody protection.
     pub reserved_sats: u64,
-    /// RPA stealth funds. Never part of the UTXO totals above.
+    /// How much of `spendable_sats` arrived through a Cash Code.
+    ///
+    /// A breakdown, not a third pool. RPA payments are ordinary coins in the
+    /// wallet's coin set and are selected for spending like any other; this
+    /// exists so the home screen can say how much of the balance was received
+    /// privately, which is worth surfacing.
     pub stealth_sats: u64,
 }
 
 impl PortfolioTotals {
     /// Everything the wallet controls.
     ///
-    /// Saturating because a balance is not worth wrapping: a wrapped total
-    /// would read as near zero on a wallet that holds a great deal.
+    /// `stealth_sats` is deliberately not added here. It used to be, because
+    /// RPA funds sat outside the coin set and would otherwise have gone
+    /// unreported; now they are coins, already inside `spendable_sats`, and
+    /// adding them again would report the balance twice.
     pub const fn total_sats(&self) -> u64 {
-        self.spendable_sats
-            .saturating_add(self.reserved_sats)
-            .saturating_add(self.stealth_sats)
+        self.spendable_sats.saturating_add(self.reserved_sats)
     }
 
-    /// The UTXO half alone, which is what a spend can draw on today.
+    /// What a spend can draw on, which is now the whole of it.
     pub const fn utxo_sats(&self) -> u64 {
         self.spendable_sats.saturating_add(self.reserved_sats)
     }
@@ -45,13 +50,29 @@ impl PortfolioTotals {
         self.stealth_sats > 0
     }
 
-    /// `0.00100000 BCH spendable + 0.00050000 BCH stealth`, or `None` when
-    /// there is no stealth balance to account for.
+    /// The part of the spendable balance that did not arrive through a Cash
+    /// Code.
+    ///
+    /// `spendable_sats` counts RPA coins, so this is the complement, and the
+    /// two together are the whole of it. Saturating only out of caution: a
+    /// breakdown larger than the thing it breaks down would be a bug
+    /// elsewhere, and reporting zero beats reporting an enormous number.
+    pub const fn ordinary_sats(&self) -> u64 {
+        self.spendable_sats.saturating_sub(self.stealth_sats)
+    }
+
+    /// `0.00100000 BCH + 0.00050000 BCH stealth`, or `None` when there is no
+    /// stealth balance to account for.
+    ///
+    /// The two figures are disjoint and sum to `spendable_sats`, which is the
+    /// only way to write this that a reader can add up. Saying
+    /// "<spendable> spendable + <stealth> stealth" while stealth is *inside*
+    /// spendable invites exactly the wrong arithmetic.
     pub fn split_label(&self) -> Option<String> {
         self.shows_split().then(|| {
             format!(
-                "{} spendable + {} stealth",
-                format_bch(self.spendable_sats),
+                "{} + {} stealth",
+                format_bch(self.ordinary_sats()),
                 format_bch(self.stealth_sats)
             )
         })
@@ -79,15 +100,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn stealth_is_added_to_the_total_and_never_folded_into_the_utxo_set() {
+    fn stealth_is_a_breakdown_of_the_balance_and_is_never_counted_twice() {
+        // 100_000 spendable, of which 50_000 arrived through a Cash Code.
         let totals = PortfolioTotals {
             spendable_sats: 100_000,
             reserved_sats: 20_000,
             stealth_sats: 50_000,
         };
-        // The hazard this module exists for: counted once, in the total.
-        assert_eq!(totals.utxo_sats(), 120_000, "stealth is not a UTXO");
-        assert_eq!(totals.total_sats(), 170_000);
+        // The hazard now: stealth is inside `spendable_sats`, so adding it to
+        // the total would report half the balance twice. This used to assert
+        // 170_000, back when RPA funds sat outside the coin set entirely and
+        // had to be added to be seen at all.
+        assert_eq!(totals.utxo_sats(), 120_000);
+        assert_eq!(totals.total_sats(), 120_000, "stealth is already counted");
+        assert!(
+            totals.stealth_sats <= totals.spendable_sats,
+            "a breakdown cannot exceed the thing it breaks down"
+        );
     }
 
     #[test]
@@ -101,6 +130,7 @@ mod tests {
         assert_eq!(plain.split_label(), None);
         assert_eq!(plain.total_sats(), 100_000);
 
+        // 100_000 spendable, of which 50_000 came through a Cash Code.
         let stealthy = PortfolioTotals {
             stealth_sats: 50_000,
             ..plain
@@ -108,8 +138,15 @@ mod tests {
         assert!(stealthy.shows_split());
         assert_eq!(
             stealthy.split_label().as_deref(),
-            Some("0.00100000 BCH spendable + 0.00050000 BCH stealth")
+            Some("0.00050000 BCH + 0.00050000 BCH stealth")
         );
+        // The two halves of the label are disjoint and add up to the balance,
+        // which is the property that makes the label readable at all.
+        assert_eq!(
+            stealthy.ordinary_sats() + stealthy.stealth_sats,
+            stealthy.spendable_sats
+        );
+        assert_eq!(stealthy.total_sats(), 100_000, "and the total is unchanged");
     }
 
     #[test]

@@ -56,6 +56,15 @@ pub struct BloomFilter {
 }
 
 impl BloomFilter {
+    /// Request every transaction without disclosing wallet keys or RPA prefixes.
+    pub fn match_all() -> Self {
+        Self {
+            data: vec![0xff],
+            n_hash_funcs: 1,
+            tweak: 0,
+        }
+    }
+
     pub fn new(n_elements: usize, fp_rate: f64, tweak: u32) -> Self {
         let n = n_elements.max(1) as f64;
         let size_bits = (-1.0 / (LN2 * LN2) * n * fp_rate.ln())
@@ -103,6 +112,18 @@ impl BloomFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_scan_filter_contains_everything_and_no_wallet_material() {
+        let filter = BloomFilter::match_all();
+        for item in [vec![], vec![0], vec![0xff; 33], vec![0xab; 36]] {
+            assert!(filter.contains(&item));
+        }
+        assert_eq!(
+            filter.to_filterload_payload(0),
+            vec![1, 255, 1, 0, 0, 0, 0, 0, 0, 0, 0]
+        );
+    }
 
     fn hex(s: &str) -> Vec<u8> {
         (0..s.len())
