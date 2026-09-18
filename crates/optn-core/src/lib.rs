@@ -23,6 +23,7 @@ pub mod connect;
 pub mod discovery;
 pub mod endpoint;
 pub mod error;
+pub mod explorer;
 pub mod fee;
 pub mod flipstarter;
 pub mod fundme;

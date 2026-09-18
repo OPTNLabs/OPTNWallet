@@ -23,10 +23,7 @@ import { fetchCurrentLiquidityPoolsFromChain } from '../cauldron/preflight';
 import { parseDecimalToAtomic } from '../../../services/cauldron/amount';
 import { formatAtomicTokenAmount } from '../../../utils/tokenPresentation';
 import { shortenAddress } from '../../../utils/shortenHash';
-import {
-  buildTxUrl,
-  DEFAULT_EXPLORER_ID,
-} from '../../../utils/servers/explorers';
+import { useExplorerLink } from '../../../utils/servers/useExplorerLink';
 import { useSmoothResetTransition } from '../shared/useSmoothResetTransition';
 import MerchantAmountPad from './MerchantAmountPad';
 import {
@@ -1119,15 +1116,12 @@ export default function MerchantPayApp({
                   { amount: merchantOutputSummary }
                 ),
               };
+  const explorer = useExplorerLink();
   const paymentExplorerUrl =
     paymentMonitor?.txid &&
     (displayedPaymentMonitorStatus === 'pending' ||
       displayedPaymentMonitorStatus === 'confirmed')
-      ? buildTxUrl(
-          { kind: 'preset', id: DEFAULT_EXPLORER_ID },
-          currentNetwork,
-          paymentMonitor.txid
-        )
+      ? explorer.tx(currentNetwork, paymentMonitor.txid)
       : null;
   const paymentDetected =
     displayedPaymentMonitorStatus === 'pending' ||

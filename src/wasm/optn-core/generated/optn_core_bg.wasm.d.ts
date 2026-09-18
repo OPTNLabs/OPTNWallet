@@ -9,6 +9,11 @@ export const connectSigningSerialization: (a: number, b: number, c: number, d: n
 export const decodeCashcode: (a: number, b: number) => [number, number, number, number];
 export const deriveRpaKeys: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number];
 export const encodeCashcode: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
+export const explorerCustomUrl: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
+export const explorerDefaultPresetId: () => [number, number];
+export const explorerPolicyForChainPolicy: (a: number, b: number) => [number, number];
+export const explorerPresetUrl: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
+export const explorerPresets: () => [number, number];
 export const fusionBlindIssuerNoncePoint: (a: number, b: number) => [number, number, number, number];
 export const fusionBlindIssuerPublicKey: (a: number, b: number) => [number, number, number, number];
 export const fusionBlindIssuerSign: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];

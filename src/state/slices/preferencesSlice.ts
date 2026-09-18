@@ -24,6 +24,12 @@ type PreferencesState = {
   customFeeSatPerByte: number;
   /** Default share of an incoming Merchant Pay amount converted to the other asset. */
   merchantPayDefaultConversionBps: number;
+  // The chain connection policy, mirrored from the Rust runtime so explorer
+  // links obey it. Not a preference the user sets here -- it is set in Chain
+  // Sources, read back from the runtime, and kept because it is persisted:
+  // without that, a restart would briefly treat "own infrastructure only" as
+  // Auto and allow exactly the public lookup that policy forbids.
+  chainPolicy: string;
 };
 
 const initialState: PreferencesState = {
@@ -36,6 +42,7 @@ const initialState: PreferencesState = {
   feeMode: 'auto',
   customFeeSatPerByte: 1.1,
   merchantPayDefaultConversionBps: DEFAULT_MERCHANT_PAY_CONVERSION_BPS,
+  chainPolicy: 'auto',
 };
 
 const preferencesSlice = createSlice({
@@ -76,6 +83,9 @@ const preferencesSlice = createSlice({
       state.customFeeSatPerByte =
         Number.isFinite(value) && value > 0 ? value : 1.1;
     },
+    setChainPolicy: (state, action: PayloadAction<string>) => {
+      state.chainPolicy = action.payload;
+    },
     setMerchantPayDefaultConversionBps: (
       state,
       action: PayloadAction<number>
@@ -98,6 +108,7 @@ export const {
   setExplorerCustom,
   setFeeMode,
   setCustomFeeSatPerByte,
+  setChainPolicy,
   setMerchantPayDefaultConversionBps,
 } = preferencesSlice.actions;
 
@@ -130,6 +141,12 @@ export const selectExplorerChoice = createSelector(
       ? { kind: 'custom', tx: customTx || '', address: customAddress || '' }
       : { kind: 'preset', id }
 );
+
+// Falls back to the fail-closed reading, not to 'auto': state persisted before
+// this field existed says nothing about the policy, and guessing "public is
+// fine" is the one guess that can leak.
+export const selectChainPolicy = (state: RootState): string =>
+  state.preferences.chainPolicy ?? 'own_infrastructure';
 
 export const selectExplorerCustom = createSelector(
   [

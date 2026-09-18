@@ -18,7 +18,7 @@ import {
   setFeeMode,
   setCustomFeeSatPerByte,
 } from '../../state/slices/preferencesSlice';
-import { EXPLORER_PRESETS } from '../../utils/servers/explorers';
+import { getExplorerPresets } from '../../utils/servers/explorers';
 import {
   getUserServers,
   addUserServer,
@@ -485,7 +485,7 @@ export const ServerSettings: React.FC = () => {
           onChange={(e) => dispatch(setExplorerId(e.target.value))}
           className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-sm wallet-text-strong outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
         >
-          {EXPLORER_PRESETS.map((e) => (
+          {getExplorerPresets().map((e) => (
             <option key={e.id} value={e.id}>
               {e.label}
             </option>

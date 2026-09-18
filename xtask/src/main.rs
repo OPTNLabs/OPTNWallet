@@ -560,6 +560,7 @@ fn architecture() {
     }
 
     cashcode_policy(&root, &mut failures);
+    explorer_policy(&root, &mut failures);
 
     if failures.is_empty() {
         println!("architecture boundary check: PASS");
@@ -636,6 +637,127 @@ fn cashcode_policy(root: &Path, failures: &mut Vec<String>) {
             }
         }
     }
+}
+
+/// The hostnames of the public explorers OPTN can offer.
+///
+/// Any one of these outside the core module means a surface built a link for
+/// itself, which is how the renderer used to hand a txid to a public site
+/// while the wallet was set to use only the holder's own infrastructure.
+/// Only hosts that are explorers and nothing else. `bch.ninja` is deliberately
+/// absent: `chipnet.bch.ninja` is also an Electrum server this wallet dials,
+/// so naming it would flag chain configuration that has nothing to do with
+/// explorer links.
+const PUBLIC_EXPLORER_HOSTS: &[&str] = &[
+    "bchexplorer.cash",
+    "explorer.imaginary.cash",
+    "blockchair.com",
+    "3xpl.com",
+    "tokenexplorer.cash",
+];
+
+/// #75 row 15: one place decides whether an explorer link may be built.
+///
+/// The rule is not "explorers are dangerous" -- an explorer link is navigation
+/// and nothing here touches consensus. It is that the decision is governed by
+/// the connection policy, and a second copy of that decision is how a policy
+/// ends up enforced on one surface and not another. That is not hypothetical:
+/// `src/utils/servers/explorers.ts` held one, with no notion of the policy at
+/// all.
+fn explorer_policy(root: &Path, failures: &mut Vec<String>) {
+    let core = root.join("crates/optn-core/src/explorer.rs");
+    let code = rust_code_only(&read(&core));
+    for required in ["ExplorerPolicy::UserOwnedOnly", "PublicExplorerRefused"] {
+        if !code.contains(required) {
+            failures.push(format!(
+                "crates/optn-core/src/explorer.rs no longer contains '{required}'; without \
+                 the fail-closed arm an own-infrastructure-only wallet hands transaction \
+                 ids to a public website"
+            ));
+        }
+    }
+
+    let allowed = [
+        Path::new("crates/optn-core/src/explorer.rs"),
+        // Names them to assert this guard works.
+        Path::new("xtask/src/main.rs"),
+    ];
+    let mut scanned = Vec::new();
+    for directory in ["crates", "src", "src-tauri"] {
+        scanned.extend(walk_files(&root.join(directory)));
+    }
+    scanned.extend(walk_files(&root.join("xtask")));
+    for path in scanned {
+        let is_source = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| matches!(extension, "rs" | "ts" | "tsx"));
+        if !is_source {
+            continue;
+        }
+        let relative = path.strip_prefix(root).unwrap_or(&path);
+        if allowed.iter().any(|permitted| relative == *permitted) {
+            continue;
+        }
+        if relative.starts_with("crates/optn-runtime/src/explorer.rs") {
+            continue;
+        }
+        // A test may name a host, to assert what the core produced or to print
+        // a link for whoever is reading the run. Nothing a test builds reaches
+        // a holder, so the rule that matters here does not apply to it.
+        let is_test = relative.components().any(|component| {
+            matches!(
+                component.as_os_str().to_str(),
+                Some("tests") | Some("__tests__")
+            )
+        }) || relative
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.contains(".test.") || name.contains(".live."));
+        if is_test {
+            continue;
+        }
+        // Deliberately NOT `rust_code_only`: it treats the `//` in `https://`
+        // as the start of a line comment and eats the rest of the line, so a
+        // hardcoded explorer URL -- the exact thing being looked for -- is
+        // invisible to it. Whole comment lines are dropped instead, which is
+        // enough to let prose name an explorer while code may not.
+        let code = code_lines_only(&read(&path));
+        for host in PUBLIC_EXPLORER_HOSTS {
+            if code.contains(host) {
+                failures.push(format!(
+                    "{} names the public explorer '{host}'; explorer URLs are built in \
+                     crates/optn-core/src/explorer.rs so the connection policy governs \
+                     them on every surface",
+                    relative.display()
+                ));
+            }
+        }
+    }
+}
+
+/// Source with whole-line comments removed.
+///
+/// Coarse on purpose. `rust_code_only` strips string literals, which is right
+/// for an API-name check and wrong for a URL check: the URL lives *in* the
+/// string. This keeps strings and drops only lines that are entirely comment,
+/// so a doc comment may discuss an explorer while a line of code may not name
+/// one.
+fn code_lines_only(source: &str) -> String {
+    source
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim_start();
+            !(trimmed.starts_with("//")
+                || trimmed.starts_with("/*")
+                || trimmed.starts_with('*')
+                || trimmed.starts_with("#"))
+        })
+        .collect::<Vec<_>>()
+        .join(
+            "
+",
+        )
 }
 
 fn compare_host_blocks(
