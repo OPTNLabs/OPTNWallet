@@ -84,6 +84,8 @@ pub(super) enum WalletSyncRequest {
         Box<crate::wallet_checkpoint::StoredHeaderProgress>,
         oneshot::Sender<()>,
     ),
+    /// The header progress a restored checkpoint brought back, if any.
+    RestoredHeaderProgress(oneshot::Sender<Option<crate::wallet_checkpoint::StoredHeaderProgress>>),
     Checkpoint(oneshot::Sender<Result<WalletCheckpoint, WalletSyncError>>),
     Restore(
         Box<WalletCheckpoint>,
@@ -149,6 +151,26 @@ impl AppRuntime {
             .map_err(|_| WalletSyncError::Closed)?;
         received.await.map_err(|_| WalletSyncError::Closed)?
     }
+    /// The verified header progress this wallet last had sealed, if any.
+    ///
+    /// Restored on open, before any pass runs. A host seeds its worker from
+    /// this so the accumulator resumes at the height the wallet reached
+    /// rather than at genesis; `None` means a fresh wallet, a record written
+    /// before progress was persisted, or a wallet that has never completed a
+    /// header pass -- all of which correctly start from the shipped anchor.
+    pub async fn restored_header_progress(
+        &self,
+    ) -> Result<Option<crate::wallet_checkpoint::StoredHeaderProgress>, WalletSyncError> {
+        let (reply, received) = oneshot::channel();
+        self.action_tx
+            .send(RuntimeRequest::WalletSync(
+                WalletSyncRequest::RestoredHeaderProgress(reply),
+            ))
+            .await
+            .map_err(|_| WalletSyncError::Closed)?;
+        received.await.map_err(|_| WalletSyncError::Closed)
+    }
+
     /// Hand verified header progress to the runtime for its next save.
     ///
     /// Called by whoever drives the sync worker, because that is where the
@@ -540,6 +562,12 @@ impl WalletSyncSession {
 
     /// Open/restore callers validate account ownership before installing it.
     pub(super) fn install_checkpoint(&mut self, checkpoint: WalletCheckpoint, app: &mut AppState) {
+        // Carried into the session so the host can seed its worker with the
+        // accumulator this wallet last verified, instead of starting over at
+        // genesis. Kept as the session's current progress too: if the next
+        // pass never publishes, the seal that follows should preserve what
+        // was already durable rather than drop back to nothing.
+        self.header_progress = checkpoint.header_progress().cloned();
         app.wallet_sync = checkpoint
             .state
             .authoritative
@@ -604,6 +632,9 @@ impl WalletSyncSession {
             WalletSyncRequest::PublishHeaderProgress(progress, reply) => {
                 self.header_progress = Some(*progress);
                 let _ = reply.send(());
+            }
+            WalletSyncRequest::RestoredHeaderProgress(reply) => {
+                let _ = reply.send(self.header_progress.clone());
             }
             WalletSyncRequest::Checkpoint(reply) => {
                 let captured = WalletCheckpoint::capture(app, &self.state)
