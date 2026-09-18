@@ -71,6 +71,13 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup-ini
   # bindings that differ from CI's, and the gate then fails for a reason that
   # has nothing to do with the change under test.
   && cargo install wasm-bindgen-cli --version 0.2.127 --locked \
+  # A login shell rebuilds PATH from /etc/profile and drops what ENV set, and
+  # the compose service's entrypoint is `bash -lc`. Without this, cargo is on
+  # PATH for `docker build` and `docker run` and missing for exactly the
+  # command a contributor actually types.
+  && printf '%s\n' 'export PATH=/usr/local/cargo/bin:$PATH' \
+       > /etc/profile.d/10-rust.sh \
+  && chmod 0644 /etc/profile.d/10-rust.sh \
   # Writable by uid 1000 so cargo works after `USER node` without handing the
   # build cache to root.
   && chmod -R a+w "${CARGO_HOME}" "${RUSTUP_HOME}"
@@ -81,12 +88,16 @@ WORKDIR /optn
 USER node
 
 # Fail the build rather than ship an image that cannot run half the gates.
+#
+# Checked through a login shell as well, because that is what the compose
+# service runs and it is the case that silently loses PATH.
 RUN cargo --version \
   && rustc --version \
   && rustfmt --version \
   && cargo clippy --version \
   && rustup target list --installed | grep -qx wasm32-unknown-unknown \
-  && wasm-bindgen --version
+  && wasm-bindgen --version \
+  && bash -lc 'cargo --version && wasm-bindgen --version' >/dev/null
 
 # tini as PID 1 for clean signals when used as long-running lab
 ENTRYPOINT ["/usr/bin/tini", "--"]
