@@ -696,7 +696,7 @@ fn explorer_policy(root: &Path, failures: &mut Vec<String>) {
             continue;
         }
         let relative = path.strip_prefix(root).unwrap_or(&path);
-        if allowed.iter().any(|permitted| relative == *permitted) {
+        if allowed.contains(&relative) {
             continue;
         }
         if relative.starts_with("crates/optn-runtime/src/explorer.rs") {

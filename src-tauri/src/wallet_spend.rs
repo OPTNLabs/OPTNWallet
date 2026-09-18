@@ -269,8 +269,8 @@ pub async fn optn_wallet_send(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
+    // No `use super::*`: the fixture below names every type it builds, and a
+    // glob that imports nothing used is a warning under `-D warnings`.
     #[test]
     fn a_token_output_is_never_offered_as_ordinary_change_or_input() {
         // Spending a token-carrying output as plain BCH destroys the tokens it
