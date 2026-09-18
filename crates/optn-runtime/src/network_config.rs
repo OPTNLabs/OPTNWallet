@@ -872,7 +872,11 @@ pub fn add_user_source(
     endpoint: Endpoint,
     infrastructure_group: Option<&str>,
 ) -> Result<SourceId, String> {
-    let host = endpoint.host.trim().trim_end_matches('.').to_ascii_lowercase();
+    let host = endpoint
+        .host
+        .trim()
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
     if host.is_empty() {
         return Err("a source needs a host".into());
     }
@@ -924,17 +928,17 @@ pub fn add_user_source(
 
 /// Remove a source the holder added. Bootstrap entries are disabled, not
 /// deleted, so the base catalog stays recoverable for a later refresh.
-pub fn remove_user_source(
-    overlay: &mut UserNetworkOverlay,
-    id: &SourceId,
-) -> Result<(), String> {
+pub fn remove_user_source(overlay: &mut UserNetworkOverlay, id: &SourceId) -> Result<(), String> {
     let before = overlay.user_sources.len();
     overlay.user_sources.retain(|source| &source.id != id);
     if overlay.user_sources.len() == before {
         return Err("that source is not one this device added; disable it instead".into());
     }
     // A policy that still names the removed source would select nothing at all.
-    overlay.connection_policy.preferred.retain(|kept| kept != id);
+    overlay
+        .connection_policy
+        .preferred
+        .retain(|kept| kept != id);
     if let SourceScope::Explicit(selected) = &mut overlay.connection_policy.primary_scope {
         selected.remove(id);
         if selected.is_empty() {
@@ -969,7 +973,10 @@ mod tests {
 
         promote_legacy_policy(&mut envelope);
 
-        assert_eq!(envelope.bootstrap_catalog_version_seen, SHIPPED_CATALOG_VERSION);
+        assert_eq!(
+            envelope.bootstrap_catalog_version_seen,
+            SHIPPED_CATALOG_VERSION
+        );
         assert_eq!(envelope.overlay.connection_policy, before);
         assert_ne!(envelope.overlay.connection_policy, ConnectionPolicy::auto());
         assert_eq!(
@@ -998,14 +1005,21 @@ mod tests {
         // An advanced policy no name describes must not be rounded to the
         // nearest preset: reporting "auto" for a pinned single source is how a
         // surface would later overwrite it with a public fallback.
-        let pinned = ConnectionPolicy::exact(SourceId::new("host:node.example"), ProtocolFamily::Bip37);
-        assert_eq!(ChainPolicyPreset::describe(&pinned), ChainPolicyPreset::Custom);
+        let pinned =
+            ConnectionPolicy::exact(SourceId::new("host:node.example"), ProtocolFamily::Bip37);
+        assert_eq!(
+            ChainPolicyPreset::describe(&pinned),
+            ChainPolicyPreset::Custom
+        );
 
         let mut overlay = UserNetworkOverlay::default();
         assert!(set_policy_preset(&mut overlay, ChainPolicyPreset::Custom).is_err());
         overlay.connection_policy = pinned.clone();
         assert!(set_policy_preset(&mut overlay, ChainPolicyPreset::Custom).is_err());
-        assert_eq!(overlay.connection_policy, pinned, "a refused edit changes nothing");
+        assert_eq!(
+            overlay.connection_policy, pinned,
+            "a refused edit changes nothing"
+        );
     }
 
     #[test]
