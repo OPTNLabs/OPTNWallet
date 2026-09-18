@@ -651,6 +651,61 @@ describe('release workflow', () => {
     }
     expect(cliPreviewWorkflow).toMatch(/complete:[\s\S]*?if: always\(\)/);
   });
+
+  it('ships a CLI binary for exactly the platforms the manifest declares', () => {
+    // The lists above are written out, which is readable but means a new
+    // `when: "cli"` asset can be declared and never built: the release-time
+    // completeness gate would catch it, but only after every other platform
+    // had already compiled. Deriving the expectation from the manifest moves
+    // that failure onto the pull request, and closes the other direction too
+    // -- a matrix entry nothing publishes wastes a runner on every release.
+    const declared = (
+      JSON.parse(releaseAssets) as {
+        assets: { label: string; pattern: string; when?: string }[];
+      }
+    ).assets.filter((asset) => asset.when === 'cli');
+    expect(declared.length, 'CLI assets declared').toBeGreaterThan(0);
+
+    // `optn-${VERSION}-linux-x64` and `optn-${VERSION}-windows-x64.exe` both
+    // carry the matrix label between the version and any extension.
+    const labels = declared.map((asset) => {
+      const match = /^optn-\$\{VERSION\}-(.+?)(?:\.exe)?$/.exec(asset.pattern);
+      expect(match, `unparsable CLI pattern ${asset.pattern}`).not.toBeNull();
+      return match![1];
+    });
+
+    // The `cli` job only, not the whole file: `label:` is a matrix key other
+    // jobs use too, and a set comparison against all of them would compare the
+    // manifest to every platform the release builds.
+    const matrixLabels = (contents: string, jobId: string) => {
+      // `\r?$` throughout: these files are read from the working tree, which
+      // on Windows has CRLF, and a bare `$` would match nothing there.
+      const job = new RegExp(
+        `^ {2}${jobId}:\\r?$[\\s\\S]*?(?=^ {2}\\S)`,
+        'm'
+      ).exec(contents);
+      expect(job, `a ${jobId} job must exist`).not.toBeNull();
+      return new Set(
+        [...job![0].matchAll(/^ +label: (\S+)\r?$/gm)].map((match) => match[1])
+      );
+    };
+
+    for (const label of labels) {
+      expect(cliPreviewWorkflow, `preview builds CLI ${label}`).toContain(
+        `label: ${label}`
+      );
+    }
+    // Set equality, so both directions fail loudly: a declared asset with no
+    // builder, and a builder whose output nothing publishes.
+    expect(
+      matrixLabels(workflow, 'cli'),
+      'the release CLI matrix and the manifest must name the same platforms'
+    ).toEqual(new Set(labels));
+    expect(
+      matrixLabels(cliPreviewWorkflow, 'build'),
+      'the preview CLI matrix must match the release one'
+    ).toEqual(new Set(labels));
+  });
   it('runs every asset check on pull requests to main as well', () => {
     // main is where releases are cut from. A pull request straight to it was
     // the one path that reached a release without any of these checks: the

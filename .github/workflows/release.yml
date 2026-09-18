@@ -108,12 +108,12 @@ jobs:
 
           # A stable tag that already exists means this merge carried no version
           # bump. Re-releasing it would either fail on the existing tag or
-          # quietly replace published binaries, so stop instead ??? and say why,
+          # quietly replace published binaries, so stop instead — and say why,
           # because a silently skipped release is its own bug report.
           if [ "$GITHUB_REF_TYPE" != 'tag' ] && [ "$GITHUB_EVENT_NAME" != 'workflow_dispatch' ]; then
             if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
               publish=false
-              echo "::notice::${tag} already exists ??? bump the version in package.json to publish a new release."
+              echo "::notice::${tag} already exists — bump the version in package.json to publish a new release."
             fi
           fi
 
@@ -464,7 +464,7 @@ jobs:
             tor-target: linux-x86_64
             artifact-name: desktop-linux
           # Native ARM runner. AppImage is the portable ship for every Linux distro
-          # (Ubuntu, Fedora, Arch, ???) on aarch64 ??? same role as x64 AppImage.
+          # (Ubuntu, Fedora, Arch, …) on aarch64 — same role as x64 AppImage.
           - platform: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             tor-target: linux-aarch64
@@ -599,7 +599,7 @@ jobs:
           # does not reach a loose executable there, which is how v1.7.3 shipped
           # an unsigned Tor (#46). On Apple Silicon AMFI refuses to execute an
           # unsigned Mach-O and SIGKILLs it, so CashFusion reported only "tor
-          # exited before finishing bootstrap" ??? the process never started.
+          # exited before finishing bootstrap" — the process never started.
           #
           # Signing here, before the bundle is assembled, means the app
           # signature seals binaries that are already valid. Re-signing
@@ -734,8 +734,8 @@ jobs:
           test "$(lipo -archs "$TOR_EXECUTABLE")" = "${{ matrix.expected-arch }}"
 
           # `codesign --verify --deep --strict` above passes on a bundle whose
-          # loose Resources binaries are unsigned ??? it walks nested bundles, not
-          # stray executables ??? which is exactly how #46 shipped green. This
+          # loose Resources binaries are unsigned — it walks nested bundles, not
+          # stray executables — which is exactly how #46 shipped green. This
           # checks every Mach-O in the bundle for a signature and for load paths
           # that only exist on a build machine.
           bash scripts/verify-macos-bundle.sh "$APP_PATH"
@@ -882,7 +882,7 @@ jobs:
         run: pod install
 
       # Unsigned simulator compile only. Do not invent Apple certs.
-      # CODE_SIGNING_ALLOWED=NO / CODE_SIGNING_REQUIRED=NO ??? no provisioning.
+      # CODE_SIGNING_ALLOWED=NO / CODE_SIGNING_REQUIRED=NO — no provisioning.
       - name: Build iOS Simulator app
         run: npm run ios:sim:dev
 
@@ -1067,7 +1067,7 @@ jobs:
           overwrite: true
 
   # Flatpak is how a large share of Linux desktop users install anything, and
-  # Tauri has no bundler target for it ??? so it is built here, by hand, from the
+  # Tauri has no bundler target for it — so it is built here, by hand, from the
   # deb the desktop job already produced. Without this job the release simply
   # has no Flatpak, which is the kind of silent gap the rest of this workflow
   # exists to prevent.
@@ -1257,8 +1257,8 @@ jobs:
   # than assuming. Both merge orders then behave: with the crate absent nothing
   # is built and nothing is required, and the moment it lands the binaries
   # become mandatory without anyone remembering to come back here. The
-  # alternative ??? requiring assets no branch can build, or building assets
-  # nothing requires ??? is broken in one order or the other.
+  # alternative — requiring assets no branch can build, or building assets
+  # nothing requires — is broken in one order or the other.
   cli:
     name: Build CLI (${{ matrix.label }})
     needs: [resolve, quality]
@@ -1312,8 +1312,8 @@ jobs:
         run: |
           sudo apt-get update
           # Both the compiler and the target libc headers. gcc-*-cross alone
-          # provides no headers, so a crate that compiles C ??? ring does, for
-          # curve25519 ??? falls back to the host's /usr/include and fails on a
+          # provides no headers, so a crate that compiles C — ring does, for
+          # curve25519 — falls back to the host's /usr/include and fails on a
           # missing bits/libc-header-start.h. The error names the host header,
           # which points away from the actual cause.
           sudo apt-get install -y --no-install-recommends ${{ matrix.cross-package }}
@@ -1443,7 +1443,7 @@ jobs:
           require_asset artifacts/desktop-macos-intel '*.dmg' 'macOS Intel DMG'
           require_asset artifacts/desktop-macos-arm-app '*.app.zip' 'macOS Apple Silicon .app zip'
           require_asset artifacts/desktop-macos-intel-app '*.app.zip' 'macOS Intel .app zip'
-          # AppImage = distro-portable Linux ship (works across Ubuntu/Debian/Fedora/Arch/???).
+          # AppImage = distro-portable Linux ship (works across Ubuntu/Debian/Fedora/Arch/…).
           # deb/rpm are convenience packages for those package managers only.
           require_asset artifacts/desktop-linux '*.AppImage' 'Linux x64 AppImage (portable, all distros)'
           require_asset artifacts/desktop-linux-arm '*.AppImage' 'Linux ARM64 AppImage (portable, all distros)'
@@ -1573,7 +1573,7 @@ jobs:
               *.deb|*.rpm)       place "$src" "$base" ;;
               # Two APKs are produced now, one per store flavour. A single
               # *.apk rule sent both to the same destination, which the
-              # duplicate guard would have caught as a release failure ??? the
+              # duplicate guard would have caught as a release failure — the
               # F-Droid build would never have shipped. They are named apart.
               *-fdroid-release.apk) place "$src" "OPTNWallet-${VERSION}-android-fdroid.apk" ;;
               *-play-release.apk)   place "$src" "OPTNWallet-${VERSION}-android-play.apk" ;;
@@ -1659,19 +1659,15 @@ jobs:
           exit "$foreign"
 
       # The per-artifact checks above run before renaming and confirm each
-      # producer uploaded something. This confirms the finished set: every
-      # asset that should reach users is present under its published name, and
-      # nothing unexpected rode along.
-      #
-      # Two separate failures are possible and both matter. A missing asset
-      # means a platform silently did not ship ??? the F-Droid APK and the iOS
-      # zip are the ones most likely to go unnoticed, because nobody testing on
-      # desktop would see either. An unexpected asset means something reached
-      # the release that no rule accounted for.
-      # The per-artifact checks above run before renaming and confirm each
       # producer uploaded something. This confirms the finished set, in both
       # directions: every asset that should reach users is present under its
       # published name, and nothing unexpected rode along.
+      #
+      # Two separate failures are possible and both matter. A missing asset
+      # means a platform silently did not ship — the F-Droid APK and the iOS
+      # zip are the ones most likely to go unnoticed, because nobody testing on
+      # desktop would see either. An unexpected asset means something reached
+      # the release that no rule accounted for.
       #
       # Both halves are generated from packaging/release-assets.json, so the
       # list of what ships and the check that it shipped cannot drift apart.
@@ -1806,9 +1802,9 @@ jobs:
             - Windows x64: `.exe` and `.msi` installers
             - macOS Apple Silicon (M1 and later): `.dmg` and `.app.zip`
             - macOS Intel: `.dmg` and `.app.zip`
-            - **Linux (all distros): portable `.AppImage`** ??? x64 and ARM64. One file runs on Ubuntu, Debian, Fedora, Arch, and most other desktop Linux without a distro-specific package.
+            - **Linux (all distros): portable `.AppImage`** — x64 and ARM64. One file runs on Ubuntu, Debian, Fedora, Arch, and most other desktop Linux without a distro-specific package.
             - Linux x64 and ARM64 also ship native `.deb` and `.rpm` for users who prefer package managers
-            - Linux riscv64: unbundled ELF (`-linux-riscv64-unbundled`). No AppImage, deb, or rpm ??? linuxdeploy cannot cross-compile those formats.
+            - Linux riscv64: unbundled ELF (`-linux-riscv64-unbundled`). No AppImage, deb, or rpm — linuxdeploy cannot cross-compile those formats.
             - Chrome/Chromium and Firefox extension bundles: `.zip`
             - Android: signed `.apk` for direct installation and `.aab` for Play distribution
             - iOS: unsigned simulator `.zip` attached; not a signed IPA
