@@ -1,5 +1,6 @@
 #[allow(dead_code)] // menu bar is built on the JS side now; kept for reference
 #[cfg(desktop)]
+mod app_update;
 mod menu;
 
 pub mod app_transport;
@@ -1122,6 +1123,7 @@ pub fn run() {
             chain_sources::optn_chain_sources,
             chain_sources::optn_chain_set_policy,
             chain_sources::optn_chain_trust_socks_proxy,
+            app_update::optn_check_for_update,
             chain_sources::optn_chain_set_source_disposition,
             chain_sources::optn_chain_add_source,
             chain_sources::optn_chain_remove_source,

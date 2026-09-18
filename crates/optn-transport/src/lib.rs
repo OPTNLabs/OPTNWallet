@@ -103,6 +103,38 @@ pub trait AppTransport {
         Box::pin(async { Err(TransportError::Unsupported) })
     }
 
+    /// The proxy situation the chain layer is actually working with.
+    ///
+    /// Renderers must not probe for a proxy themselves -- a Leptos build has
+    /// no sockets, and a renderer that guessed would be a second copy of the
+    /// rule that decides whether traffic is safe to send. It asks, and the
+    /// shell answers with what its own chain stack concluded.
+    ///
+    /// The Leptos surface previously had no way to ask at all, so a holder
+    /// there saw every public source refused for want of Tor with nothing
+    /// saying so and nothing to press.
+    fn tor_status<'a>(&'a self) -> TransportFuture<'a, WireTorStatus> {
+        Box::pin(async { Err(TransportError::Unsupported) })
+    }
+
+    /// Start the shell's own Tor and wait for it to bootstrap.
+    ///
+    /// Returns the status afterwards, so a caller need not poll to find out
+    /// whether it worked.
+    fn start_tor<'a>(&'a self) -> TransportFuture<'a, WireTorStatus> {
+        Box::pin(async { Err(TransportError::Unsupported) })
+    }
+
+    /// Confirm, or withdraw confirmation, that a loopback SOCKS port is the
+    /// holder's own Tor.
+    ///
+    /// A greeting cannot establish this and neither can a renderer; only the
+    /// person who knows what runs on their machine can. See
+    /// `optn-core/src/tor.rs`.
+    fn trust_socks_port<'a>(&'a self, _port: u16, _trusted: bool) -> TransportFuture<'a, ()> {
+        Box::pin(async { Err(TransportError::Unsupported) })
+    }
+
     /// Write a user-visible value through the host clipboard.
     ///
     /// This stays at the transport boundary for the same reason as camera
@@ -110,6 +142,41 @@ pub trait AppTransport {
     /// a renderer must not select a platform fallback on its own.
     fn write_clipboard<'a>(&'a self, _text: String) -> TransportFuture<'a, ()> {
         Box::pin(async { Err(TransportError::Unsupported) })
+    }
+}
+
+/// What the shell found when it went looking for a proxy.
+///
+/// `Unverified` is the case worth carrying separately: a SOCKS proxy
+/// answered, but every SOCKS proxy answers identically and nothing shows that
+/// one is Tor. "Start Tor" and "confirm the Tor you already run" are different
+/// actions, and a screen that cannot tell the two apart offers the wrong one
+/// half the time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WireTorState {
+    /// Usable: owned by this shell, or confirmed by the holder.
+    Verified,
+    /// A proxy answered; nothing vouches for it.
+    Unverified,
+    /// Nothing is listening, and something needs one.
+    Absent,
+    /// No selected source would go through a proxy anyway.
+    NotNeeded,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireTorStatus {
+    pub state: WireTorState,
+    /// The port a proxy answered on, trusted or not.
+    pub socks_port: Option<u16>,
+    /// How far the shell's own Tor has bootstrapped, when it is starting.
+    pub bootstrap_percent: u8,
+}
+
+impl WireTorStatus {
+    pub const fn usable(self) -> bool {
+        matches!(self.state, WireTorState::Verified | WireTorState::NotNeeded)
     }
 }
 
