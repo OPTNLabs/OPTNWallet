@@ -495,7 +495,10 @@ const DesktopLandingPage = () => {
         autoLockMinutes
       );
       if (!engine.opened && engine.reason) {
-        console.warn('[DesktopLandingPage] engine wallet not opened:', engine.reason);
+        console.warn(
+          '[DesktopLandingPage] engine wallet not opened:',
+          engine.reason
+        );
       }
       finishOpen(openingId, attempt.value);
     } catch (err) {

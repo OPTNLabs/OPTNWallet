@@ -208,7 +208,12 @@
    */
   html.dark.theme-gray {
     --wallet-bg: #1c2128;
-    --wallet-bg-gradient: linear-gradient(180deg, #232931 0%, #1c2128 58%, #171b21 100%);
+    --wallet-bg-gradient: linear-gradient(
+      180deg,
+      #232931 0%,
+      #1c2128 58%,
+      #171b21 100%
+    );
     --wallet-text: #d6dde4;
     --wallet-text-strong: #e8edf2;
     --wallet-border: #39414b;
@@ -233,7 +238,12 @@
 
   html.dark.theme-dark {
     --wallet-bg: #000000;
-    --wallet-bg-gradient: linear-gradient(180deg, #070707 0%, #000000 60%, #000000 100%);
+    --wallet-bg-gradient: linear-gradient(
+      180deg,
+      #070707 0%,
+      #000000 60%,
+      #000000 100%
+    );
     --wallet-text: #d5d5d5;
     --wallet-text-strong: #f3f3f3;
     --wallet-border: #262626;

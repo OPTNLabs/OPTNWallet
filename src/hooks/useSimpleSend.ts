@@ -4,10 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
 
 import { RootState } from '../state/store';
-import {
-  selectWalletId,
-  selectWalletType,
-} from '../state/slices/walletSlice';
+import { selectWalletId, selectWalletType } from '../state/slices/walletSlice';
 import useFetchWalletAddresses from './useFetchWalletAddresses';
 import { signHardwarePayment } from '../services/hardware/hardwareSignTransaction';
 
@@ -69,9 +66,7 @@ export default function useSimpleSend() {
   const feeMode = useSelector(selectFeeMode);
   const customFeeSatPerByte = useSelector(selectCustomFeeSatPerByte);
   const spendOnlyFusedCoins = useSelector(selectSpendOnlyFusedCoins);
-  const reduxUtxosByAddress = useSelector(
-    (s: RootState) => s.utxos.utxos
-  );
+  const reduxUtxosByAddress = useSelector((s: RootState) => s.utxos.utxos);
   const preferInternalChangeForBch = false;
 
   // Wallet addresses + default change (also gives tokenAddress mapping)
@@ -218,16 +213,12 @@ export default function useSimpleSend() {
       // Paint the same coins Home already shows, then overlay SQL so Send
       // cannot briefly look like "only the receive UTXOs".
       if (!cancelled && homeBchUtxos.length > 0) {
-        setDbUtxos((prev) =>
-          prev.length > 0 ? prev : homeBchUtxos
-        );
+        setDbUtxos((prev) => (prev.length > 0 ? prev : homeBchUtxos));
       }
       const { allUtxos, tokenUtxos } =
         await UTXOService.fetchAllWalletUtxos(walletId);
       if (!cancelled) {
-        setDbUtxos(
-          mergeSpendableBchUtxos(allUtxos || [], homeBchUtxos)
-        );
+        setDbUtxos(mergeSpendableBchUtxos(allUtxos || [], homeBchUtxos));
         setTokenUtxos(tokenUtxos || []);
         setWalletUtxosLoaded(true);
       }
@@ -311,17 +302,24 @@ export default function useSimpleSend() {
 
       if (!preferInternalChangeForBch) {
         if (!cancelled) {
-          setPreferredBchChangeAddress(getLegacyDefaultChangeAddress(addresses));
+          setPreferredBchChangeAddress(
+            getLegacyDefaultChangeAddress(addresses)
+          );
         }
         return;
       }
 
       try {
-        const preferred = await getPreferredBchChangeAddress(walletId, addresses);
+        const preferred = await getPreferredBchChangeAddress(
+          walletId,
+          addresses
+        );
         if (!cancelled) setPreferredBchChangeAddress(preferred);
       } catch {
         if (!cancelled) {
-          setPreferredBchChangeAddress(getLegacyDefaultChangeAddress(addresses));
+          setPreferredBchChangeAddress(
+            getLegacyDefaultChangeAddress(addresses)
+          );
         }
       }
     })();
@@ -393,8 +391,9 @@ export default function useSimpleSend() {
   // Form – NFT
   const [selectedNftCommitment, setSelectedNftCommitment] =
     useState<string>('');
-  const [amountDisplayMode, setAmountDisplayModeState] =
-    useState<'bch' | 'usd'>('bch');
+  const [amountDisplayMode, setAmountDisplayModeState] = useState<
+    'bch' | 'usd'
+  >('bch');
   const [amountBchState, setAmountBchState] = useState<string>('');
   const [amountUsdState, setAmountUsdState] = useState<string>('');
 
@@ -466,7 +465,9 @@ export default function useSimpleSend() {
 
   const setAmountToken = useCallback(
     (nextValue: string) => {
-      setAmountTokenState(normalizeDecimalInput(nextValue, selectedTokenDecimals));
+      setAmountTokenState(
+        normalizeDecimalInput(nextValue, selectedTokenDecimals)
+      );
     },
     [selectedTokenDecimals]
   );
@@ -578,7 +579,9 @@ export default function useSimpleSend() {
           !parsedRecipient.isValidAddress ||
           !validateRecipient(normalizedRecipient)
         ) {
-          setError('Please enter a valid destination address for this network.');
+          setError(
+            'Please enter a valid destination address for this network.'
+          );
           setMode('error');
           return;
         }
@@ -591,7 +594,9 @@ export default function useSimpleSend() {
 
       // ===== BCH =====
       if (assetType === 'bch') {
-        const targetSats = parseAmountToSats(amountBch || parsedRecipient.amountRaw || '');
+        const targetSats = parseAmountToSats(
+          amountBch || parsedRecipient.amountRaw || ''
+        );
         if (targetSats <= 0) {
           setError('Amount must be greater than 0.');
           setMode('error');
@@ -637,7 +642,9 @@ export default function useSimpleSend() {
               'spend'
             );
             if (!priv) {
-              setError('Could not unlock a selected coin to pay this Cash Code.');
+              setError(
+                'Could not unlock a selected coin to pay this Cash Code.'
+              );
               setMode('error');
               return;
             }
@@ -811,9 +818,7 @@ export default function useSimpleSend() {
           selectedChangeAddress,
           dbUtxos: feePool,
         });
-        const outputs = [
-          feePlanner.makeTokenOutputForRecipientNFT(nftInput),
-        ];
+        const outputs = [feePlanner.makeTokenOutputForRecipientNFT(nftInput)];
 
         // Fixed NFT input; add BCH until fee+buffer are covered (BCH change only).
         const built = await feePlanner.addBchInputsUntilBuild(
@@ -867,6 +872,7 @@ export default function useSimpleSend() {
     tokenChangeAddress,
     applyCoinControl,
     isHardwareWallet,
+    heldOutpoints,
   ]);
 
   // "Max": fills the BCH amount field with the full spendable balance minus
@@ -940,7 +946,8 @@ export default function useSimpleSend() {
         hardwareWallet: isHardwareWallet,
       });
       const estimated = freshPlanner.estimateSweepAllBch(50);
-      const result = estimated ?? (await freshPlanner.sweepAllBchUntilBuild(50));
+      const result =
+        estimated ?? (await freshPlanner.sweepAllBchUntilBuild(50));
       if (!result.ok) {
         setError(
           'err' in result ? result.err : 'Unable to compute max amount.'
@@ -1010,26 +1017,28 @@ export default function useSimpleSend() {
           changeAddress: selectedChangeAddress || undefined,
           onProgress: (_stage, detail) => {
             setSendStatus(
-              detail ||
-                'Confirm the transaction on your Ledger (both buttons)…'
+              detail || 'Confirm the transaction on your Ledger (both buttons)…'
             );
           },
         });
         setSendStatus('Broadcasting signed transaction…');
       }
 
-      const { txid: sentId, errorMessage, broadcastState: sentState } =
-        await TransactionService.sendTransaction(rawHex, selectedForTx, {
-          source: 'simple-send',
-          sourceLabel: isHardwareWallet ? 'Hardware Send' : 'Simple Send',
-          recipientSummary: normalizedRecipient,
-          amountSummary:
-            assetType === 'bch'
-              ? `${amountBch || parsedRecipient.amountRaw || ''} BCH`
-              : assetType === 'ft'
-                ? `${amountToken} tokens`
-                : 'NFT transfer',
-        });
+      const {
+        txid: sentId,
+        errorMessage,
+        broadcastState: sentState,
+      } = await TransactionService.sendTransaction(rawHex, selectedForTx, {
+        source: 'simple-send',
+        sourceLabel: isHardwareWallet ? 'Hardware Send' : 'Simple Send',
+        recipientSummary: normalizedRecipient,
+        amountSummary:
+          assetType === 'bch'
+            ? `${amountBch || parsedRecipient.amountRaw || ''} BCH`
+            : assetType === 'ft'
+              ? `${amountToken} tokens`
+              : 'NFT transfer',
+      });
       if (errorMessage) throw new Error(errorMessage);
       if (!sentId) throw new Error('Broadcast failed with no txid returned.');
       setTxid(sentId);

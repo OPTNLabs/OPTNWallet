@@ -99,7 +99,9 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
 
   const applyHolds = useCallback((rows: CoinHold[]) => {
     setHolds(
-      Object.fromEntries(rows.map((hold) => [holdKey(hold.txid, hold.vout), hold]))
+      Object.fromEntries(
+        rows.map((hold) => [holdKey(hold.txid, hold.vout), hold])
+      )
     );
   }, []);
 

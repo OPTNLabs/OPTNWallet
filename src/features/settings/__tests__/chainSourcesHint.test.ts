@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import { describe, expect, it } from 'vitest';
-import { refusedForWantOfTor } from '../ChainSourcesSettings';
+import { refusedForWantOfTor } from '../chainSourceStatus';
 import type { ChainSource } from '../../../platform/desktop/chainSourcesBridge';
 
 const source = (errors: string[]): ChainSource => ({
@@ -26,7 +26,9 @@ describe('chain source refusals', () => {
   it('names Tor only when every refusal is about Tor', () => {
     expect(
       refusedForWantOfTor([
-        source(['remote native chain route requires a verified Tor SOCKS proxy']),
+        source([
+          'remote native chain route requires a verified Tor SOCKS proxy',
+        ]),
       ])
     ).toBe(true);
 
@@ -34,7 +36,9 @@ describe('chain source refusals', () => {
     // starting Tor would not fix it, and the real error is already shown.
     expect(
       refusedForWantOfTor([
-        source(['remote native chain route requires a verified Tor SOCKS proxy']),
+        source([
+          'remote native chain route requires a verified Tor SOCKS proxy',
+        ]),
         source(['connection refused']),
       ])
     ).toBe(false);
