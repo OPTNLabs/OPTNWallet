@@ -26,6 +26,7 @@ import {
   rollbackCreatedWallet,
 } from '../DesktopWalletManager';
 import { validateNewWalletPassword } from '../passwordPolicy';
+import { openWalletInEngine } from '../engineWalletBridge';
 import { defaultDesktopAccountPath } from '../desktopDerivationDefaults';
 import { useI18n } from '../../../i18n/useI18n';
 import { getBip39LanguageForLocale } from '../../../services/Bip39Service';
@@ -61,6 +62,13 @@ const DesktopCreateWalletPage = () => {
   const hasInitialized = useRef(false);
   const navigate = useNavigate();
   const currentNetwork = useSelector(selectCurrentNetwork);
+  // The holder's own app-lock choice, carried to the runtime with the wallet.
+  // Read defensively: this page also renders in stores that carry only the
+  // slices it needs, and an absent choice means there is nothing to carry.
+  const autoLockMinutes = useSelector(
+    (state: { appLock?: { autoLockMinutes?: number } }) =>
+      state.appLock?.autoLockMinutes
+  );
   const dispatch = useDispatch();
   const { locale, t } = useI18n();
   const [derivationPath, setDerivationPath] = useState(() =>
@@ -172,6 +180,21 @@ const DesktopCreateWalletPage = () => {
         })
       );
       dispatch(setNetwork(currentNetwork));
+      // Open the same file in the Rust runtime, as unlocking does. Creating a
+      // wallet skips the password dialog, so without this the engine would
+      // hold whichever wallet was opened before this one -- and synchronize
+      // that account instead of the new one.
+      const engine = await openWalletInEngine(
+        walletId,
+        password,
+        autoLockMinutes
+      );
+      if (!engine.opened && engine.reason) {
+        console.warn(
+          '[DesktopCreateWalletPage] engine wallet not opened:',
+          engine.reason
+        );
+      }
       window.dispatchEvent(new CustomEvent('optn:wallets-changed'));
       navigate(`/home/${walletId}`);
 
