@@ -19,6 +19,12 @@ import {
   integratedTorStatus,
   startIntegratedTor,
 } from '../../platform/desktop/FusionStatusService';
+import {
+  readEngineWalletSync,
+  refreshEngineWallet,
+  type EngineWalletSync,
+} from '../../platform/desktop/engineWalletBridge';
+import { SATSINBITCOIN } from '../../utils/constants';
 
 /**
  * Every chain source for the active network, as the Rust runtime sees them.
@@ -78,12 +84,15 @@ export function ChainSourcesSettings() {
   const [label, setLabel] = useState('');
   const [kind, setKind] = useState(ENDPOINT_KINDS[0].value);
   const [ownInfrastructure, setOwnInfrastructure] = useState(false);
+  const [engineSync, setEngineSync] = useState<EngineWalletSync | null>(null);
+  const [syncing, setSyncing] = useState(false);
   const [torStarting, setTorStarting] = useState(false);
   const [torProgress, setTorProgress] = useState<number | null>(null);
 
   const refresh = useCallback(async () => {
     try {
       setView(await readChainSources());
+      setEngineSync(await readEngineWalletSync());
       setError('');
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
@@ -249,6 +258,58 @@ export function ChainSourcesSettings() {
           {view.protocols.length > 0 ? ` · ${view.protocols.join(', ')}` : ''}
         </p>
       </div>
+
+      {engineSync && (
+        <div className="rounded-xl border border-[var(--wallet-border)] wallet-surface-strong p-3">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs font-semibold wallet-text-strong">
+              Shared engine sync
+            </p>
+            <button
+              type="button"
+              disabled={syncing || engineSync.refreshing}
+              data-testid="engine-refresh-wallet"
+              className="wallet-btn-secondary px-2.5 py-1 text-xs"
+              onClick={() => {
+                setSyncing(true);
+                setError('');
+                void refreshEngineWallet()
+                  .then(() => refresh())
+                  .catch((failure) =>
+                    setError(
+                      failure instanceof Error
+                        ? failure.message
+                        : String(failure)
+                    )
+                  )
+                  .finally(() => setSyncing(false));
+              }}
+            >
+              {syncing || engineSync.refreshing ? 'Syncing…' : 'Sync now'}
+            </button>
+          </div>
+          <p className="mt-1 text-[11px] wallet-muted">
+            {/*
+              Reported separately from the balance on Home, which still comes
+              from this renderer's own Electrum path. Showing them as one number
+              would hide a disagreement, and a disagreement is the thing worth
+              seeing while the two are being converged.
+            */}
+            {engineSync.confirmedSats === null
+              ? 'This account has not been synchronized by the shared engine yet.'
+              : `${(engineSync.confirmedSats / SATSINBITCOIN).toFixed(8)} BCH confirmed${
+                  engineSync.pendingSats
+                    ? ` · ${engineSync.pendingSats > 0 ? '+' : ''}${engineSync.pendingSats} sats pending`
+                    : ''
+                }`}
+            {engineSync.source ? ` · ${engineSync.source}` : ''}
+            {engineSync.tipHeight ? ` · tip ${engineSync.tipHeight}` : ''}
+          </p>
+          {engineSync.error && (
+            <p className="mt-1 text-[11px] text-amber-400">{engineSync.error}</p>
+          )}
+        </div>
+      )}
 
       <div className="space-y-2">
         {view.sources.map((source) => {
