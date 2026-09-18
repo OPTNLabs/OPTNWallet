@@ -896,4 +896,119 @@ mod tests {
             );
         }
     }
+
+    /// Build a source at `host:port`, public or declared as the holder's own.
+    fn live_source(id: &str, host: &str, port: u16, own: bool) -> ChainSource {
+        ChainSource {
+            id: SourceId::new(id),
+            label: id.into(),
+            origin: if own {
+                optn_runtime::chain::SourceOrigin::UserInfrastructure {
+                    group: "live-test".into(),
+                }
+            } else {
+                optn_runtime::chain::SourceOrigin::UserAdded
+            },
+            endpoints: vec![Endpoint {
+                kind: EndpointKind::ElectrumTls,
+                host: host.into(),
+                port: Some(port),
+            }],
+            capabilities: Default::default(),
+            disposition: optn_runtime::chain::SourceDisposition::Enabled,
+            priority: 0,
+        }
+    }
+
+    async fn stack_for(source: ChainSource) -> NativeChainStack {
+        let mut catalog = SourceCatalog::default();
+        let policy = ConnectionPolicy::auto();
+        catalog.insert(source).expect("insert");
+        build_native_chain_stack(catalog, policy, "chipnet", &NativeChainSecrets::default()).await
+    }
+
+    /// A public endpoint is never dialled without Tor, and the holder's own is
+    /// never made to wait for it.
+    ///
+    /// Issue #75's rows 3 and 5 both said "not exercised end to end against a
+    /// live route change", and both are the same invariant seen from two
+    /// sides: what may be reached depends on who owns it, not on what the
+    /// address looks like.
+    ///
+    /// Opt-in, because it reaches real hosts:
+    ///
+    ///   OPTN_LIVE_PUBLIC_ELECTRUM=chipnet.imaginary.cash:50002     ///   OPTN_LIVE_OWN_ELECTRUM=<your node>:50001     ///   cargo test --manifest-path crates/optn-chain-native/Cargo.toml     ///     -- --ignored --nocapture live_route
+    ///
+    /// Tor is detected, not required: with a verified SOCKS proxy the public
+    /// route becomes eligible, and without one it must be refused. Both are
+    /// asserted, so the test says something either way rather than only when
+    /// the environment happens to suit it.
+    #[tokio::test]
+    #[ignore = "reaches real hosts; see the doc comment for the variables it needs"]
+    async fn live_route_eligibility_follows_ownership_not_address_shape() {
+        let public = std::env::var("OPTN_LIVE_PUBLIC_ELECTRUM").ok();
+        let own = std::env::var("OPTN_LIVE_OWN_ELECTRUM").ok();
+        assert!(
+            public.is_some() || own.is_some(),
+            "set OPTN_LIVE_PUBLIC_ELECTRUM and/or OPTN_LIVE_OWN_ELECTRUM"
+        );
+
+        let split = |value: &str| -> (String, u16) {
+            let (host, port) = value.rsplit_once(':').expect("host:port");
+            (host.to_owned(), port.parse().expect("port"))
+        };
+
+        if let Some(endpoint) = public.as_deref() {
+            let (host, port) = split(endpoint);
+            let stack = stack_for(live_source("live-public", &host, port, false)).await;
+            let refused = stack
+                .failures
+                .iter()
+                .any(|failure| failure.error == REMOTE_NATIVE_CHAIN_TOR_UNAVAILABLE);
+            // Which way it went depends on the host's Tor, and the invariant
+            // is the same either way: a public endpoint is reached through
+            // Tor or not at all.
+            match default_tor_status(
+                &{
+                    let mut catalog = SourceCatalog::default();
+                    catalog
+                        .insert(live_source("live-public", &host, port, false))
+                        .expect("insert");
+                    catalog
+                },
+                &ConnectionPolicy::auto(),
+            )
+            .await
+            {
+                TorStatus::Verified { .. } => assert!(
+                    !refused,
+                    "a verified Tor proxy is available and the public route was                      still refused: {:?}",
+                    stack.failures
+                ),
+                TorStatus::Unverified { .. } | TorStatus::Absent => assert!(
+                    refused,
+                    "no verified Tor proxy, so the public route must be refused                      rather than dialled directly; failures were {:?}",
+                    stack.failures
+                ),
+            }
+        }
+
+        if let Some(endpoint) = own.as_deref() {
+            let (host, port) = split(endpoint);
+            let stack = stack_for(live_source("live-own", &host, port, true)).await;
+            // Declared own infrastructure is dialled directly whatever Tor is
+            // doing. Tor hides you from a third-party server; your own node is
+            // not one, and requiring it there is what made
+            // own-infrastructure-only unable to reach any own infrastructure
+            // that was not on this machine.
+            assert!(
+                !stack
+                    .failures
+                    .iter()
+                    .any(|failure| failure.error == REMOTE_NATIVE_CHAIN_TOR_UNAVAILABLE),
+                "the holder's own node was refused for want of Tor: {:?}",
+                stack.failures
+            );
+        }
+    }
 }
