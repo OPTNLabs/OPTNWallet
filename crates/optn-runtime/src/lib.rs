@@ -56,6 +56,7 @@ pub mod wallet_birthday;
 pub mod wallet_checkpoint;
 /// Private ciphertext sessions and password verification shared by native hosts.
 pub mod wallet_security;
+pub mod wallet_spend;
 /// Session-bound publication of provider observations into application state.
 pub mod wallet_sync;
 
