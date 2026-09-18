@@ -470,14 +470,22 @@ impl NativeChainRuntime {
         // without discarding verified headers. A network with no reviewed
         // checkpoint gets a stack whose P2P scans will refuse for want of
         // accepted headers, which is correct; other protocols still work.
+        // The application runs its own Tor on a port deliberately outside the
+        // conventional pair, so it never collides with a Tor the holder already
+        // runs. Without naming it here that proxy is invisible: every public
+        // route is refused for want of Tor while this application's own Tor is
+        // running a few lines away. Verification is unchanged -- an unverified
+        // or unrelated listener on that port is still refused.
+        let proxy_ports = [crate::INTEGRATED_TOR_SOCKS_PORT];
         let replacement = match self.accepted_chain(network).await {
             Ok((headers, _)) => {
-                build_native_chain_stack_with_headers(
+                optn_chain_native::build_native_chain_stack_with_headers_via(
                     catalog,
                     policy,
                     &network.to_string(),
                     &secrets,
                     headers,
+                    &proxy_ports,
                 )
                 .await
             }

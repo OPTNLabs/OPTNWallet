@@ -806,7 +806,7 @@ async fn bip37_broadcast(
 //
 // SOCKS port for the app's own Tor — deliberately not 9050/9150 so it never
 // clashes with a Tor the user is already running.
-const INTEGRATED_TOR_SOCKS_PORT: u16 = 9251;
+pub(crate) const INTEGRATED_TOR_SOCKS_PORT: u16 = 9251;
 
 /// Resolve where the tor binary + geoip data live: a dev override via
 /// OPTN_TOR_BIN, otherwise the bundled resource dir (resources/tor/).
@@ -1123,6 +1123,7 @@ pub fn run() {
             chain_sources::optn_chain_set_source_disposition,
             chain_sources::optn_chain_add_source,
             chain_sources::optn_chain_remove_source,
+            chain_sources::optn_chain_rebuild,
             coin_holds::optn_coin_holds,
             coin_holds::optn_coin_freeze,
             coin_holds::optn_coin_unfreeze,

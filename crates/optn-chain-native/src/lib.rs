@@ -179,19 +179,45 @@ fn needs_default_tor_proxy(catalog: &SourceCatalog, policy: &ConnectionPolicy) -
     })
 }
 
-async fn default_tor_status(catalog: &SourceCatalog, policy: &ConnectionPolicy) -> TorStatus {
+/// Does this stack need a proxy at all, and where might one be listening?
+///
+/// The application can run a Tor of its own on a port deliberately outside the
+/// usual pair, so that it never collides with a Tor the holder already runs.
+/// Probing only 9050/9150 meant that proxy was invisible: every public route
+/// was refused for want of Tor while the application's own Tor was running.
+/// Hosts pass their port here; the verification is unchanged, so an unverified
+/// or wrong process on that port still refuses.
+pub async fn tor_status_for(
+    catalog: &SourceCatalog,
+    policy: &ConnectionPolicy,
+    extra_socks_ports: &[u16],
+) -> TorStatus {
     if !needs_default_tor_proxy(catalog, policy) {
         return TorStatus::Absent;
     }
 
-    // ponytail: default Tor ports only; add a typed persisted proxy route when
-    // the shared network overlay owns custom proxy configuration.
-    for &socks_port in optn_core::tor::AUTODETECT_SOCKS_PORTS {
+    for &socks_port in extra_socks_ports
+        .iter()
+        .chain(optn_core::tor::AUTODETECT_SOCKS_PORTS)
+    {
         if is_tor_socks_port(DEFAULT_TOR_HOST, socks_port).await {
             return TorStatus::Verified { socks_port };
         }
     }
     TorStatus::Absent
+}
+
+async fn default_tor_status(catalog: &SourceCatalog, policy: &ConnectionPolicy) -> TorStatus {
+    tor_status_for(catalog, policy, &[]).await
+}
+
+/// Whether any selected source would have to be reached through a proxy.
+///
+/// A host asks this before starting its own Tor: bootstrapping one for a stack
+/// that only dials loopback or the holder's own infrastructure would be a
+/// pointless minute of waiting.
+pub fn requires_tor_proxy(catalog: &SourceCatalog, policy: &ConnectionPolicy) -> bool {
+    needs_default_tor_proxy(catalog, policy)
 }
 
 async fn is_tor_socks_port(host: &str, port: u16) -> bool {
@@ -352,7 +378,20 @@ pub async fn build_native_chain_stack_with_headers(
     secrets: &NativeChainSecrets,
     headers: Arc<optn_runtime::header_store::SharedHeaders>,
 ) -> NativeChainStack {
-    let tor_status = default_tor_status(&catalog, &policy).await;
+    build_native_chain_stack_with_headers_via(catalog, policy, network, secrets, headers, &[]).await
+}
+
+/// As above, but also considering proxy ports the host knows about — its own
+/// Tor, for instance, which does not listen on the conventional pair.
+pub async fn build_native_chain_stack_with_headers_via(
+    catalog: SourceCatalog,
+    policy: ConnectionPolicy,
+    network: &str,
+    secrets: &NativeChainSecrets,
+    headers: Arc<optn_runtime::header_store::SharedHeaders>,
+    extra_socks_ports: &[u16],
+) -> NativeChainStack {
+    let tor_status = tor_status_for(&catalog, &policy, extra_socks_ports).await;
     build_native_chain_stack_with_tor_status(
         catalog,
         policy,

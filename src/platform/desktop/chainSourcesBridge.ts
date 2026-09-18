@@ -112,6 +112,16 @@ export function removeChainSource(
   });
 }
 
+/**
+ * Rebuild routes now.
+ *
+ * Routes are rebuilt when the selection changes, and a proxy coming up is not
+ * one — so after starting Tor the sources stay refused until something asks.
+ */
+export function rebuildChainRoutes(): Promise<void> {
+  return invoke('optn_chain_rebuild');
+}
+
 export const CHAIN_POLICY_LABELS: Record<ChainPolicy, string> = {
   auto: 'Auto',
   privacy: 'Privacy',
