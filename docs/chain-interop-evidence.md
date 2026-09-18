@@ -178,6 +178,33 @@ Recorded at OPTN commit `a69a055a` on `agent/rpa-shared-vectors` (PR #63).
 
 Compact filters are on by default; `--nocfilters` would disable them.
 
+### Route eligibility, against a public host and a private one
+
+`live_route_eligibility_follows_ownership_not_address_shape`, in
+`crates/optn-chain-native/src/lib.rs`. Opt-in; it reaches real hosts.
+
+    OPTN_LIVE_PUBLIC_ELECTRUM=chipnet.imaginary.cash:50002     OPTN_LIVE_OWN_ELECTRUM=<your node>:50001     cargo test --manifest-path crates/optn-chain-native/Cargo.toml       -- --ignored --nocapture live_route
+
+Run against `dperson/torproxy` on `127.0.0.1:9050` — one of
+`AUTODETECT_SOCKS_PORTS` — and then again with that container stopped. The
+same policy and the same sources both times; only Tor changed.
+
+| Tor | Public `chipnet.imaginary.cash:50002` | Declared own node, private mesh |
+| --- | --- | --- |
+| verified on 9050 | eligible; served 10 headers, ASERT and MMR verified | eligible |
+| stopped | refused: *"remote native chain route requires a verified Tor SOCKS proxy"* | eligible |
+
+The bottom-left cell is the one that matters: no direct fallback, no DNS
+attempt, nothing. The bottom-right is the other half of the same rule — Tor
+is there to stop a third-party server learning which addresses this IP asks
+about, and the holder's own node is not a third party. Requiring it there is
+what had made own-infrastructure-only unable to reach any own infrastructure
+that was not on `127.0.0.0/8`.
+
+The test asserts both rows, choosing which by probing Tor itself, so it says
+something whichever way the host happens to be configured rather than only
+passing in a convenient environment.
+
 ### A real reorg, against BCHD regtest
 
 `a_reorg_is_refused_then_rewound_and_pruning_keeps_the_commitment`, in
