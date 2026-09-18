@@ -92,6 +92,21 @@ impl NetworkSettingsStore {
             .transpose()
     }
 
+    /// Loopback SOCKS ports the holder has confirmed are their own Tor.
+    ///
+    /// A missing or unreadable file yields none. That direction is the only
+    /// safe one: failing to read the trust list must never be the thing that
+    /// grants trust, and the consequence of yielding none is a refused route
+    /// with a message saying how to confirm the proxy -- not a leak.
+    pub fn trusted_socks_ports(&self, network: Network) -> Vec<u16> {
+        self.file_for(network)
+            .load()
+            .ok()
+            .flatten()
+            .map(|envelope| envelope.overlay.trusted_socks_ports)
+            .unwrap_or_default()
+    }
+
     /// Validate and atomically save the selected network before its reducer
     /// event is published. A richer on-disk overlay is deliberately rejected
     /// here so this compatibility bridge cannot overwrite it.
@@ -178,6 +193,9 @@ fn envelope_from_state(
             bootstrap_overrides: BTreeMap::new(),
             connection_policy: policy,
             explorer,
+            // A legacy server record predates the trust list and says nothing
+            // about a proxy, so nothing is trusted by converting one.
+            trusted_socks_ports: Vec::new(),
         },
     ))
 }

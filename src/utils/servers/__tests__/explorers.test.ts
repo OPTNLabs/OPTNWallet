@@ -34,7 +34,12 @@ const OWN = {
 describe('explorer links follow the chain policy', () => {
   it('opens a public explorer under a public policy', () => {
     expect(
-      buildTxUrl({ kind: 'preset', id: 'bchexplorer' }, Network.MAINNET, TXID, 'auto')
+      buildTxUrl(
+        { kind: 'preset', id: 'bchexplorer' },
+        Network.MAINNET,
+        TXID,
+        'auto'
+      )
     ).toBe(`https://bchexplorer.cash/tx/${TXID}`);
   });
 

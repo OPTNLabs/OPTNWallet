@@ -1121,6 +1121,7 @@ pub fn run() {
             app_transport::optn_app_dispatch,
             chain_sources::optn_chain_sources,
             chain_sources::optn_chain_set_policy,
+            chain_sources::optn_chain_trust_socks_proxy,
             chain_sources::optn_chain_set_source_disposition,
             chain_sources::optn_chain_add_source,
             chain_sources::optn_chain_remove_source,

@@ -17,11 +17,7 @@
 
 import { useMemo } from 'react';
 import { useSelector } from 'react-redux';
-import {
-  buildAddressUrl,
-  buildTxUrl,
-  explorerPolicyFor,
-} from './explorers';
+import { buildAddressUrl, buildTxUrl, explorerPolicyFor } from './explorers';
 import {
   selectChainPolicy,
   selectExplorerChoice,
@@ -58,7 +54,7 @@ export function useExplorerLink(): ExplorerLinks {
     return {
       tx,
       address,
-      reason: available ? null : (REASONS[resolved] ?? null),
+      reason: available ? null : REASONS[resolved] ?? null,
     };
   }, [choice, policy]);
 }

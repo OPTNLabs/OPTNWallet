@@ -70,6 +70,21 @@ pub fn shared_chain_selection(
     Ok(Some(SharedChainSelection { catalog, policy }))
 }
 
+/// Loopback SOCKS ports the holder confirmed are their own Tor.
+///
+/// The CLI has no Tor of its own to own, so a confirmed port is the only way
+/// it can use one at all. Read from the same overlay the desktop writes, which
+/// is what makes "I confirmed my Tor" mean the same thing on both.
+///
+/// A missing or unreadable file yields none, which refuses rather than leaks.
+pub fn trusted_socks_ports(network: Network, configured_directory: Option<&Path>) -> Vec<u16> {
+    shared_envelope(network, configured_directory)
+        .ok()
+        .flatten()
+        .map(|envelope| envelope.overlay.trusted_socks_ports)
+        .unwrap_or_default()
+}
+
 /// Load the desktop-selected encrypted Electrum endpoint for one network.
 ///
 /// Missing settings deliberately return `None`, preserving the CLI's built-in

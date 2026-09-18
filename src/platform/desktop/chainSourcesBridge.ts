@@ -46,6 +46,20 @@ export type ChainSource = {
   failures: ChainSourceFailure[];
 };
 
+/**
+ * What the host found when it went looking for a proxy.
+ *
+ * `unverified` is the case worth separating: a SOCKS proxy answered, but every
+ * SOCKS proxy answers identically and nothing shows that one is Tor. The
+ * holder is the only one who knows, so the screen asks them rather than
+ * guessing — and until they say, routes that need Tor refuse.
+ */
+export type TorProxyView = {
+  status: 'verified' | 'unverified' | 'absent' | 'not_needed';
+  socks_port: number | null;
+  trusted_ports: number[];
+};
+
 export type ChainSourcesView = {
   network: string;
   policy: ChainPolicy;
@@ -55,6 +69,7 @@ export type ChainSourcesView = {
   configuration_error: string | null;
   wallet_routes: number;
   verified_tip: { height: number; hash: string } | null;
+  tor: TorProxyView;
 };
 
 export function readChainSources(network?: string): Promise<ChainSourcesView> {
@@ -120,6 +135,26 @@ export function removeChainSource(
  */
 export function rebuildChainRoutes(): Promise<void> {
   return invoke('optn_chain_rebuild');
+}
+
+/**
+ * Confirm, or withdraw confirmation, that a loopback SOCKS port is the
+ * holder's own Tor.
+ *
+ * Probing cannot answer this, so a person does. Loopback only: a SOCKS proxy
+ * elsewhere on the network sees the traffic and the address it came from,
+ * which is what Tor was being asked to hide.
+ */
+export function trustSocksProxy(
+  port: number,
+  trusted: boolean,
+  network?: string
+): Promise<void> {
+  return invoke('optn_chain_trust_socks_proxy', {
+    port,
+    trusted,
+    network: network ?? null,
+  });
 }
 
 export const CHAIN_POLICY_LABELS: Record<ChainPolicy, string> = {
