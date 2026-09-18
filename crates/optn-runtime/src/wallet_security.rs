@@ -192,6 +192,7 @@ impl WalletSecurity {
         &mut self,
         app: &AppState,
         state: &WalletReconciliation,
+        header_progress: Option<&crate::wallet_checkpoint::StoredHeaderProgress>,
     ) -> Result<(), TransportError> {
         let Some(storage) = &self.checkpoints else {
             return Ok(());
@@ -201,7 +202,14 @@ impl WalletSecurity {
             .checkpoint
             .as_ref()
             .ok_or_else(|| failure("Wallet checkpoint session is unavailable."))?;
-        let checkpoint = WalletCheckpoint::capture(app, state).map_err(failure)?;
+        let mut checkpoint = WalletCheckpoint::capture(app, state).map_err(failure)?;
+        // Sealed with the record, because a commitment a file asserts about
+        // itself proves nothing; the AEAD is what makes it trustworthy.
+        if let Some(progress) = header_progress {
+            checkpoint = checkpoint
+                .with_stored_header_progress(progress.clone())
+                .map_err(failure)?;
+        }
         let revision = storage
             .store(&binding.id, &checkpoint, &binding.key, binding.revision)
             .map_err(failure)?;
@@ -526,7 +534,7 @@ impl WalletSecurity {
                     .map_err(crypto)?;
                 crate::wallet_checkpoint::update_receive_address(&mut candidate)
                     .map_err(failure)?;
-                self.persist_checkpoint(&candidate, history)?;
+                self.persist_checkpoint(&candidate, history, None)?;
                 *state = candidate;
                 self.checkpoint_published();
             }

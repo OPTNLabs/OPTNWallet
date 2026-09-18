@@ -3,7 +3,7 @@
 //! A checkpoint never restores unlock authority, spend approval, or freshness.
 
 use crate::{
-    chain::{Evidence, Hash32, SourceId},
+    chain::{CheckpointProvenance, Evidence, Hash32, HeaderCheckpoint, SourceId},
     chain_service::{ChainTip, ObservedTransaction},
     hd_sync::{HdAccountScan, HdSyncLimits, MAX_HD_BRANCH_ADDRESSES},
     sync_worker::WalletNetworkSnapshot,
@@ -59,11 +59,61 @@ pub struct WalletCheckpoint {
     pub(crate) rescan_requested: Option<u32>,
     pub(crate) state: WalletReconciliation,
     pub(crate) coins: CoinSet,
+    pub(crate) header_progress: Option<StoredHeaderProgress>,
 }
 
 impl std::fmt::Debug for WalletCheckpoint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("WalletCheckpoint(<private wallet metadata>)")
+    }
+}
+
+/// Verified header progress, carried inside the sealed checkpoint.
+///
+/// A restored view is only worth anything against a commitment the holder can
+/// trust, and a file may not assert its own: an attacker who can rewrite the
+/// blob can rewrite a commitment beside it and the two will agree. So both
+/// travel inside the AEAD container the host already authenticates, and
+/// `VerifiedHeaderView::restore` takes its trusted value from the same sealed
+/// record rather than from a second file that could be edited independently.
+///
+/// Public chain material either way -- headers are not secret. What the seal
+/// buys is integrity, which is the only property that matters here.
+#[derive(Clone)]
+pub struct StoredHeaderProgress {
+    /// `VerifiedHeaderView::encode` output.
+    pub view: String,
+    pub trusted: HeaderCheckpoint,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredHeaderView {
+    view: String,
+    height: u32,
+    commitment: Hash32,
+    provenance: String,
+}
+
+fn provenance_name(provenance: &CheckpointProvenance) -> &'static str {
+    match provenance {
+        CheckpointProvenance::SelfDerived => "self-derived",
+        CheckpointProvenance::ShippedReviewed => "shipped-reviewed",
+        CheckpointProvenance::SampledIndependentSources => "sampled-independent-sources",
+        CheckpointProvenance::UserProvided => "user-provided",
+    }
+}
+
+/// Unknown provenance is refused rather than downgraded. Reading a record
+/// written by a newer build as "self-derived" would silently weaken the claim
+/// the holder's own wallet made about where its trust came from.
+fn provenance_from_name(name: &str) -> Result<CheckpointProvenance, String> {
+    match name {
+        "self-derived" => Ok(CheckpointProvenance::SelfDerived),
+        "shipped-reviewed" => Ok(CheckpointProvenance::ShippedReviewed),
+        "sampled-independent-sources" => Ok(CheckpointProvenance::SampledIndependentSources),
+        "user-provided" => Ok(CheckpointProvenance::UserProvided),
+        other => Err(format!("unknown header checkpoint provenance '{other}'")),
     }
 }
 
@@ -86,6 +136,10 @@ struct StoredCheckpoint {
     scan_coverage: Option<(u32, Option<u32>, bool)>,
     #[serde(default)]
     rescan_requested: Option<u32>,
+    /// Absent in records written before header progress was persisted, which
+    /// simply resume from the shipped genesis anchor as they always did.
+    #[serde(default)]
+    header_view: Option<StoredHeaderView>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -201,6 +255,10 @@ impl WalletCheckpoint {
             rescan_requested: app.wallet_sync.rescan_requested,
             state: state.clone(),
             coins: app.coins.clone(),
+            // The view lives on the sync worker, which the host owns; it is
+            // attached with `with_header_progress` rather than read from
+            // application state, which never holds it.
+            header_progress: None,
         };
         if state.authoritative.is_some() && book.is_none() {
             return Err("an HD checkpoint requires an account-wide snapshot".into());
@@ -212,6 +270,42 @@ impl WalletCheckpoint {
         }
         checkpoint.validate_wallet(app)?;
         Ok(checkpoint)
+    }
+
+    /// Attach verified header progress to a checkpoint about to be sealed.
+    ///
+    /// Called by the host, which owns both the sync worker the view comes from
+    /// and the storage the checkpoint goes to. The runtime never reads it back
+    /// out of application state, because it is not there.
+    pub fn with_header_progress(
+        mut self,
+        view: &crate::header_view::VerifiedHeaderView,
+    ) -> Result<Self, String> {
+        let trusted = view.checkpoint();
+        let encoded = view.encode().map_err(|error| format!("{error:?}"))?;
+        self.header_progress = Some(StoredHeaderProgress {
+            view: encoded,
+            trusted,
+        });
+        Ok(self)
+    }
+
+    /// The same, from progress the runtime already holds encoded.
+    pub fn with_stored_header_progress(
+        mut self,
+        progress: StoredHeaderProgress,
+    ) -> Result<Self, String> {
+        self.header_progress = Some(progress);
+        Ok(self)
+    }
+
+    /// The header progress a restored checkpoint carries, if it has any.
+    ///
+    /// Absent on records written before this existed, and on wallets that have
+    /// never completed a header pass. Both resume from the shipped genesis
+    /// anchor, which is what happened for every record until now.
+    pub fn header_progress(&self) -> Option<&StoredHeaderProgress> {
+        self.header_progress.as_ref()
     }
 
     pub(crate) fn validate_wallet(&self, app: &AppState) -> Result<(), String> {
@@ -303,6 +397,15 @@ impl WalletCheckpoint {
             branch_lengths: (0..4)
                 .map(|branch| book.map_or(0, |book| book.branches[branch].len() as u32))
                 .collect(),
+            header_view: self
+                .header_progress
+                .as_ref()
+                .map(|progress| StoredHeaderView {
+                    view: progress.view.clone(),
+                    height: progress.trusted.height,
+                    commitment: progress.trusted.commitment,
+                    provenance: provenance_name(&progress.trusted.provenance).to_owned(),
+                }),
             source: snapshot.map(|snapshot| snapshot.source.clone()),
             evidence: snapshot.map(|snapshot| snapshot.evidence.clone()),
             tip: snapshot.and_then(|snapshot| snapshot.chain_tip),
@@ -362,6 +465,20 @@ impl WalletCheckpoint {
         {
             return Err("scan preferences require checkpoint format v3".into());
         }
+        // Decoded before either construction path so a record that carries
+        // header progress cannot resume without it on one branch and with it
+        // on the other.
+        let header_progress = match stored.header_view.as_ref() {
+            None => None,
+            Some(sealed) => Some(StoredHeaderProgress {
+                view: sealed.view.clone(),
+                trusted: HeaderCheckpoint {
+                    height: sealed.height,
+                    commitment: sealed.commitment,
+                    provenance: provenance_from_name(&sealed.provenance)?,
+                },
+            }),
+        };
         let scan_coverage =
             stored
                 .scan_coverage
@@ -423,6 +540,7 @@ impl WalletCheckpoint {
                     rescan_requested: stored.rescan_requested,
                     state: WalletReconciliation::default(),
                     coins: CoinSet::new(),
+                    header_progress,
                 });
             }
             _ => return Err("invalid checkpoint scan provenance".into()),
@@ -498,6 +616,7 @@ impl WalletCheckpoint {
             rescan_requested: stored.rescan_requested,
             state,
             coins,
+            header_progress,
         })
     }
 }
@@ -528,6 +647,7 @@ mod tests {
                 account_path: account.to_string(),
                 account_xpub: wallet.account_xpub_at(account).unwrap(),
                 branch_lengths: vec![0; 4],
+                header_view: None,
                 source: None,
                 evidence: None,
                 tip: None,
@@ -546,6 +666,69 @@ mod tests {
         let mut bytes = nonce.to_vec();
         bytes.extend(wallet_pack::seal(key, &nonce, &serde_json::to_vec(stored).unwrap()).unwrap());
         bytes
+    }
+
+    /// Header progress survives the seal, and resumes above genesis.
+    ///
+    /// This is the whole point of persisting it: before, every restart
+    /// restarted the accumulator at height 0, so a wallet on a chain of any
+    /// length re-walked the chain before it could do anything at all.
+    #[test]
+    fn sealed_header_progress_resumes_above_genesis() {
+        use crate::header_verifier::shipped_header_verifier;
+        use crate::header_view::VerifiedHeaderView;
+
+        let (key, mut stored) = fixture();
+        let verifier = shipped_header_verifier(Network::Chipnet).expect("chipnet anchor");
+        let view = VerifiedHeaderView::new(Network::Chipnet, verifier);
+        let trusted = view.checkpoint();
+
+        stored.header_view = Some(StoredHeaderView {
+            view: view.encode().expect("encodes"),
+            height: trusted.height,
+            commitment: trusted.commitment,
+            provenance: provenance_name(&trusted.provenance).to_owned(),
+        });
+
+        let reopened = WalletCheckpoint::open(&key, &encoded(&key, &stored, 40)).expect("opens");
+        let progress = reopened
+            .header_progress()
+            .expect("a sealed record carries its header progress");
+        assert_eq!(progress.trusted, trusted);
+
+        // And it restores into a working view against its own sealed
+        // commitment -- the value a plain file could not be trusted to assert.
+        let restored =
+            VerifiedHeaderView::restore(&progress.view, Network::Chipnet, &progress.trusted)
+                .expect("restores");
+        assert_eq!(restored.checkpoint(), trusted);
+    }
+
+    /// A record with no header progress still opens, and resumes as before.
+    #[test]
+    fn a_record_without_header_progress_still_opens() {
+        let (key, stored) = fixture();
+        let reopened = WalletCheckpoint::open(&key, &encoded(&key, &stored, 41)).expect("opens");
+        assert!(reopened.header_progress().is_none());
+    }
+
+    /// Provenance a newer build wrote is refused, not quietly downgraded.
+    ///
+    /// Reading it as "self-derived" would weaken what the holder's own wallet
+    /// recorded about where its trust came from, which is the one field here
+    /// whose whole job is to say that.
+    #[test]
+    fn unknown_header_provenance_is_refused() {
+        let (key, mut stored) = fixture();
+        stored.header_view = Some(StoredHeaderView {
+            view: "{}".into(),
+            height: 0,
+            commitment: [7; 32],
+            provenance: "attested-by-a-future-build".into(),
+        });
+        let error = WalletCheckpoint::open(&key, &encoded(&key, &stored, 42))
+            .expect_err("unknown provenance must not open");
+        assert!(error.contains("provenance"), "{error}");
     }
 
     #[test]
