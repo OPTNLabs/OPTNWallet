@@ -6,6 +6,7 @@ pub mod app_transport;
 mod appearance;
 pub mod chain_runtime;
 mod chain_sources;
+mod coin_holds;
 #[cfg(desktop)]
 pub mod clipboard;
 pub mod electrum_tcp;
@@ -1122,6 +1123,9 @@ pub fn run() {
             chain_sources::optn_chain_set_source_disposition,
             chain_sources::optn_chain_add_source,
             chain_sources::optn_chain_remove_source,
+            coin_holds::optn_coin_holds,
+            coin_holds::optn_coin_freeze,
+            coin_holds::optn_coin_unfreeze,
             app_transport::optn_app_snapshot,
             app_transport::optn_wallet_refresh,
             app_transport::optn_wallet_rescan,

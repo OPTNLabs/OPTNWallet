@@ -24,6 +24,11 @@ import { SATSINBITCOIN } from '../utils/constants';
 import UTXOService from '../services/UTXOService';
 import { outpointKey } from '../platform/desktop/CoinLabelService';
 import { applySpendOnlyFusedPolicy } from '../platform/desktop/fusionSpendPolicy';
+import {
+  heldOutpointSet,
+  holdKey,
+  readCoinHolds,
+} from '../platform/desktop/coinHoldsBridge';
 import { selectSpendOnlyFusedCoins } from '../state/slices/experimentalSlice';
 import {
   selectNftInput,
@@ -136,9 +141,47 @@ export default function useSimpleSend() {
     []
   );
 
+  // Coins the shared hold record says are not free to spend. Read from the
+  // runtime rather than tracked here: the same record is what a pledge and a
+  // fusion round hold coins with.
+  const [heldOutpoints, setHeldOutpoints] = useState<ReadonlySet<string>>(
+    () => new Set<string>()
+  );
+  useEffect(() => {
+    let cancelled = false;
+    if (!walletId) {
+      setHeldOutpoints(new Set<string>());
+      return;
+    }
+    void readCoinHolds(walletId)
+      .then((holds) => {
+        if (!cancelled) setHeldOutpoints(heldOutpointSet(holds));
+      })
+      .catch((error) => {
+        // Failing open would spend a frozen coin. The send still refuses on an
+        // empty pool, and the reason is worth seeing.
+        console.error('[send] could not read coin holds:', error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [walletId]);
+
   const applyCoinControl = useCallback(
     (pool: UTXO[]): UTXO[] | { error: string } => {
-      let next = pool;
+      // Held coins leave the pool before anything else looks at it. A hold can
+      // belong to a Flipstarter pledge or a running Fusion round, and spending
+      // one of those double-spends that round's own inputs -- so this is a
+      // selection rule, not a warning to show afterwards.
+      let next = pool.filter(
+        (u) => !heldOutpoints.has(holdKey(u.tx_hash, u.tx_pos))
+      );
+      if (next.length === 0 && pool.length > 0) {
+        return {
+          error:
+            'Every available coin is frozen or reserved. Unfreeze one in Assets, or wait for the pledge or fusion holding it.',
+        };
+      }
       if (coinControlEnabled) {
         if (selectedCoinKeys.size === 0) {
           return {
@@ -158,7 +201,13 @@ export default function useSimpleSend() {
       }
       return applySpendOnlyFusedPolicy(walletId, next, spendOnlyFusedCoins);
     },
-    [coinControlEnabled, selectedCoinKeys, walletId, spendOnlyFusedCoins]
+    [
+      coinControlEnabled,
+      selectedCoinKeys,
+      walletId,
+      spendOnlyFusedCoins,
+      heldOutpoints,
+    ]
   );
   useEffect(() => {
     if (!hydrated) return;
@@ -667,7 +716,7 @@ export default function useSimpleSend() {
           selectedCategory,
           tokenUtxos,
           tokAmt,
-          { preferConfirmed: false, maxInputs: 100 }
+          { preferConfirmed: false, maxInputs: 100, heldOutpoints }
         );
         if (!tokenInputs.length) {
           setError('No token UTXOs available for the selected category.');
@@ -746,6 +795,7 @@ export default function useSimpleSend() {
         const nftInput = selectNftInput(selectedCategory, tokenUtxos, {
           preferConfirmed: false,
           commitmentHex: selectedNftCommitment || undefined,
+          heldOutpoints,
         });
         if (!nftInput) {
           setError('No NFT UTXO found for this category/commitment.');

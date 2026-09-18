@@ -21,6 +21,7 @@ pub mod capability_planner;
 pub mod chain;
 /// Runtime-owned operation-aware provider selection and bounded failover.
 pub mod chain_service;
+pub mod coin_holds;
 /// Query-before-apply gate for lossy event-stream sequence gaps.
 pub mod event_recovery;
 /// Provider-neutral normalized chain event streams. Event delivery is never
