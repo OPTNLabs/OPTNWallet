@@ -179,36 +179,83 @@ fn needs_default_tor_proxy(catalog: &SourceCatalog, policy: &ConnectionPolicy) -
     })
 }
 
-/// Does this stack need a proxy at all, and where might one be listening?
+/// Where a proxy may be, and why this wallet would trust it.
 ///
-/// The application can run a Tor of its own on a port deliberately outside the
-/// usual pair, so that it never collides with a Tor the holder already runs.
-/// Probing only 9050/9150 meant that proxy was invisible: every public route
-/// was refused for want of Tor while the application's own Tor was running.
-/// Hosts pass their port here; the verification is unchanged, so an unverified
-/// or wrong process on that port still refuses.
+/// The split is the whole point. Answering a SOCKS5 greeting proves a SOCKS5
+/// proxy is listening and nothing more: every no-auth proxy answers the same
+/// three bytes, and Tor has no reply that distinguishes it from a corporate
+/// proxy, an SSH dynamic forward, or something hostile that forwards in the
+/// clear. Trust therefore comes from where the proxy came from.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TorProxyTrust<'a> {
+    /// Ports of proxies this process started and owns.
+    ///
+    /// The application runs a Tor of its own on a port deliberately outside
+    /// the conventional pair so it never collides with one the holder already
+    /// runs. Owning the process is what makes it trusted; naming the port here
+    /// is also what makes it visible at all, since auto-detection would never
+    /// look there.
+    pub managed: &'a [u16],
+    /// Loopback ports the holder has confirmed are their own Tor.
+    ///
+    /// Persisted in `UserNetworkOverlay::trusted_socks_ports`. One deliberate
+    /// act, once, rather than a probe that cannot tell the difference.
+    pub trusted: &'a [u16],
+}
+
+/// Does this stack need a proxy at all, and is there one it may use?
+///
+/// A conventional port that answers but has neither provenance comes back
+/// [`TorStatus::Unverified`] rather than [`TorStatus::Verified`]: something is
+/// there, the holder can say whether it is theirs, and until they do the
+/// routes that need Tor refuse instead of handing their traffic to a stranger.
 pub async fn tor_status_for(
     catalog: &SourceCatalog,
     policy: &ConnectionPolicy,
-    extra_socks_ports: &[u16],
+    trust: TorProxyTrust<'_>,
 ) -> TorStatus {
     if !needs_default_tor_proxy(catalog, policy) {
         return TorStatus::Absent;
     }
 
-    for &socks_port in extra_socks_ports
-        .iter()
-        .chain(optn_core::tor::AUTODETECT_SOCKS_PORTS)
-    {
-        if is_tor_socks_port(DEFAULT_TOR_HOST, socks_port).await {
+    for &socks_port in trust.managed.iter().chain(trust.trusted) {
+        if socks_answers(DEFAULT_TOR_HOST, socks_port).await {
             return TorStatus::Verified { socks_port };
+        }
+    }
+
+    // Nothing with provenance answered. Look at the conventional ports anyway,
+    // because "a proxy is there but I cannot tell whether it is yours" is a
+    // far more useful thing to report than "no Tor found" -- it is the
+    // difference between a holder starting Tor and a holder confirming the Tor
+    // they already have.
+    for &socks_port in optn_core::tor::AUTODETECT_SOCKS_PORTS {
+        if socks_answers(DEFAULT_TOR_HOST, socks_port).await {
+            return TorStatus::Unverified { socks_port };
         }
     }
     TorStatus::Absent
 }
 
+/// Convenience for callers that own no proxy and carry no trust list.
+pub async fn tor_status_with_managed(
+    catalog: &SourceCatalog,
+    policy: &ConnectionPolicy,
+    managed: &[u16],
+) -> TorStatus {
+    tor_status_for(
+        catalog,
+        policy,
+        TorProxyTrust {
+            managed,
+            trusted: &[],
+        },
+    )
+    .await
+}
+
 async fn default_tor_status(catalog: &SourceCatalog, policy: &ConnectionPolicy) -> TorStatus {
-    tor_status_for(catalog, policy, &[]).await
+    tor_status_for(catalog, policy, TorProxyTrust::default()).await
 }
 
 /// Whether any selected source would have to be reached through a proxy.
@@ -220,7 +267,13 @@ pub fn requires_tor_proxy(catalog: &SourceCatalog, policy: &ConnectionPolicy) ->
     needs_default_tor_proxy(catalog, policy)
 }
 
-async fn is_tor_socks_port(host: &str, port: u16) -> bool {
+/// Does *a SOCKS5 proxy* answer here?
+///
+/// Named for what it establishes. It used to be called `is_tor_socks_port`,
+/// which is not what a `05 01 00` greeting and an `05 00` reply show: that
+/// exchange is the SOCKS5 no-auth handshake and every such proxy completes it.
+/// Whether the proxy is Tor is decided by provenance, in `tor_status_for`.
+async fn socks_answers(host: &str, port: u16) -> bool {
     let probe = async {
         let mut stream = TcpStream::connect((host, port)).await.ok()?;
         stream.write_all(&[0x05, 0x01, 0x00]).await.ok()?;
@@ -378,20 +431,30 @@ pub async fn build_native_chain_stack_with_headers(
     secrets: &NativeChainSecrets,
     headers: Arc<optn_runtime::header_store::SharedHeaders>,
 ) -> NativeChainStack {
-    build_native_chain_stack_with_headers_via(catalog, policy, network, secrets, headers, &[]).await
+    build_native_chain_stack_with_headers_via(
+        catalog,
+        policy,
+        network,
+        secrets,
+        headers,
+        TorProxyTrust::default(),
+    )
+    .await
 }
 
-/// As above, but also considering proxy ports the host knows about — its own
-/// Tor, for instance, which does not listen on the conventional pair.
+/// As above, but also carrying which proxies this host may trust — its own
+/// Tor, which does not listen on the conventional pair, and any the holder has
+/// confirmed. A conventional port with neither provenance is reported as
+/// unverified and the routes that need Tor refuse.
 pub async fn build_native_chain_stack_with_headers_via(
     catalog: SourceCatalog,
     policy: ConnectionPolicy,
     network: &str,
     secrets: &NativeChainSecrets,
     headers: Arc<optn_runtime::header_store::SharedHeaders>,
-    extra_socks_ports: &[u16],
+    trust: TorProxyTrust<'_>,
 ) -> NativeChainStack {
-    let tor_status = tor_status_for(&catalog, &policy, extra_socks_ports).await;
+    let tor_status = tor_status_for(&catalog, &policy, trust).await;
     build_native_chain_stack_with_tor_status(
         catalog,
         policy,
@@ -678,6 +741,148 @@ mod tests {
         }
     }
 
+    /// A remote source, so Tor detection actually runs.
+    fn public_catalog() -> SourceCatalog {
+        let mut catalog = SourceCatalog::default();
+        let mut source = pasted_source();
+        source.endpoints = vec![Endpoint {
+            kind: EndpointKind::ElectrumTls,
+            host: "electrum.example.org".into(),
+            port: Some(50002),
+        }];
+        catalog.insert(source).expect("insert");
+        catalog
+    }
+
+    /// A TCP listener that completes the SOCKS5 no-auth greeting and nothing
+    /// else, which is all any SOCKS5 proxy does -- Tor included.
+    async fn fake_socks_proxy() -> (u16, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a loopback port");
+        let port = listener.local_addr().expect("addr").port();
+        let handle = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut greeting = [0u8; 3];
+                if stream.read_exact(&mut greeting).await.is_err() {
+                    continue;
+                }
+                let _ = stream.write_all(&[0x05, 0x00]).await;
+            }
+        });
+        (port, handle)
+    }
+
+    #[tokio::test]
+    async fn a_socks_greeting_alone_does_not_make_a_proxy_trusted() {
+        // The row-4 hole. This listener is not Tor -- it is thirty lines of
+        // test code -- and it answers the greeting exactly as Tor does, which
+        // is the whole problem: there is no reply that tells them apart. Before
+        // this, any process holding 9050 was promoted to Verified and handed
+        // traffic the wallet believed was anonymised.
+        let (port, handle) = fake_socks_proxy().await;
+        let catalog = public_catalog();
+        let policy = ConnectionPolicy::auto();
+
+        // Found, and refused: something is there, but nothing says it is Tor.
+        let found = tor_status_for(
+            &catalog,
+            &policy,
+            TorProxyTrust {
+                managed: &[],
+                trusted: &[],
+            },
+        )
+        .await;
+        // Auto-detection only looks at 9050/9150, so an ephemeral port is not
+        // even seen -- the meaningful assertion is that it is never usable.
+        assert_eq!(found.usable_port(), None);
+
+        // Named as merely present: still unusable.
+        let probed = socks_answers(DEFAULT_TOR_HOST, port).await;
+        assert!(probed, "the fake proxy must answer, or this proves nothing");
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn provenance_is_what_makes_a_proxy_usable() {
+        // The same listener, the same greeting, the same bytes on the wire.
+        // Only where it came from changes, and that is the whole rule.
+        let (port, handle) = fake_socks_proxy().await;
+        let catalog = public_catalog();
+        let policy = ConnectionPolicy::auto();
+
+        let owned = tor_status_for(
+            &catalog,
+            &policy,
+            TorProxyTrust {
+                managed: &[port],
+                trusted: &[],
+            },
+        )
+        .await;
+        assert_eq!(
+            owned,
+            TorStatus::Verified { socks_port: port },
+            "a proxy this process started and owns is usable"
+        );
+
+        let confirmed = tor_status_for(
+            &catalog,
+            &policy,
+            TorProxyTrust {
+                managed: &[],
+                trusted: &[port],
+            },
+        )
+        .await;
+        assert_eq!(
+            confirmed,
+            TorStatus::Verified { socks_port: port },
+            "a proxy the holder confirmed is usable"
+        );
+
+        let neither = tor_status_for(
+            &catalog,
+            &policy,
+            TorProxyTrust {
+                managed: &[],
+                trusted: &[],
+            },
+        )
+        .await;
+        assert_ne!(
+            neither,
+            TorStatus::Verified { socks_port: port },
+            "the same proxy without provenance must not be usable"
+        );
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn a_trusted_port_that_stops_answering_is_not_still_trusted() {
+        // Trust is in the port, not in the listener. If the holder's Tor is
+        // not running, the confirmation must not make its absence look like
+        // presence.
+        let (port, handle) = fake_socks_proxy().await;
+        handle.abort();
+        // Give the abort a moment to release the socket.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let status = tor_status_for(
+            &public_catalog(),
+            &ConnectionPolicy::auto(),
+            TorProxyTrust {
+                managed: &[],
+                trusted: &[port],
+            },
+        )
+        .await;
+        assert_ne!(status, TorStatus::Verified { socks_port: port });
+    }
+
     /// And it does not drag the stack through Tor detection it will not use.
     #[test]
     fn own_infrastructure_does_not_ask_for_a_tor_proxy() {
@@ -737,7 +942,7 @@ mod tests {
                 let _ = stream.write_all(b"HTTP/1.1 200 OK\r\n\r\n").await;
             }
         });
-        assert!(!is_tor_socks_port(DEFAULT_TOR_HOST, port).await);
+        assert!(!socks_answers(DEFAULT_TOR_HOST, port).await);
     }
 
     #[tokio::test]

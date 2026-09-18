@@ -10,6 +10,7 @@ import {
   ENDPOINT_KINDS,
   readChainSources,
   rebuildChainRoutes,
+  trustSocksProxy,
   removeChainSource,
   SELECTABLE_CHAIN_POLICIES,
   setChainPolicy,
@@ -165,6 +166,68 @@ export function ChainSourcesSettings() {
             : ' · no verified headers yet'}
         </p>
       </div>
+
+      {view.tor.status === 'unverified' && view.tor.socks_port !== null && (
+        <div className="rounded-lg border border-[var(--wallet-warning-border)] bg-[var(--wallet-warning-bg)] px-3 py-2 text-xs text-[var(--wallet-warning-text)]">
+          <p>
+            A SOCKS proxy is listening on port {view.tor.socks_port}, but this
+            wallet cannot tell whether it is Tor — every SOCKS proxy answers the
+            same way, so a corporate proxy or an SSH tunnel looks identical.
+            Until you confirm it, public sources stay refused rather than
+            sending traffic through a proxy that may not be anonymising it.
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button
+              type="button"
+              data-testid="trust-socks-proxy"
+              className="wallet-btn-secondary px-3 py-1.5 text-xs"
+              onClick={() => {
+                const port = view.tor.socks_port;
+                if (port === null) return;
+                void trustSocksProxy(port, true)
+                  .then(() => rebuildChainRoutes())
+                  .then(() => refresh())
+                  .catch((failure) =>
+                    setError(
+                      failure instanceof Error
+                        ? failure.message
+                        : String(failure)
+                    )
+                  );
+              }}
+            >
+              Yes, {view.tor.socks_port} is my Tor
+            </button>
+          </div>
+        </div>
+      )}
+
+      {view.tor.trusted_ports.length > 0 && (
+        <p className="wallet-muted text-xs">
+          Trusted proxy ports: {view.tor.trusted_ports.join(', ')}.{' '}
+          <button
+            type="button"
+            data-testid="untrust-socks-proxies"
+            className="underline"
+            onClick={() => {
+              void Promise.all(
+                view.tor.trusted_ports.map((port) =>
+                  trustSocksProxy(port, false)
+                )
+              )
+                .then(() => rebuildChainRoutes())
+                .then(() => refresh())
+                .catch((failure) =>
+                  setError(
+                    failure instanceof Error ? failure.message : String(failure)
+                  )
+                );
+            }}
+          >
+            Withdraw
+          </button>
+        </p>
+      )}
 
       {refusedForWantOfTor(view.sources) && (
         <div className="rounded-lg border border-[var(--wallet-warning-border)] bg-[var(--wallet-warning-bg)] px-3 py-2 text-xs text-[var(--wallet-warning-text)]">

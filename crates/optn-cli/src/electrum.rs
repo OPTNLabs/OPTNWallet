@@ -66,6 +66,11 @@ pub struct Client {
     port: u16,
     tls: bool,
     timeout_secs: u64,
+    /// Loopback SOCKS ports the holder confirmed are their own Tor.
+    ///
+    /// Empty means this client may not use a proxy at all, which refuses
+    /// remote hosts rather than dialling them directly.
+    trusted_socks_ports: Vec<u16>,
 }
 
 impl Client {
@@ -80,7 +85,18 @@ impl Client {
             port,
             tls,
             timeout_secs,
+            trusted_socks_ports: Vec::new(),
         })
+    }
+
+    /// Declare which loopback SOCKS ports the holder confirmed are their Tor.
+    ///
+    /// Without this a remote host is refused even with Tor running, which is
+    /// the intended direction: a proxy nobody vouched for is a proxy that may
+    /// be forwarding in the clear.
+    pub fn trusting_socks_ports(mut self, ports: Vec<u16>) -> Self {
+        self.trusted_socks_ports = ports;
+        self
     }
 
     pub fn endpoint(&self) -> String {
@@ -181,7 +197,10 @@ impl Client {
     async fn connect(&self, addr: &str) -> Result<TcpStream> {
         let local_route = tor_route(&self.host, TorStatus::Absent);
         let route = if local_route.is_refused() {
-            route_for_host(&self.host, default_tor_status().await)?
+            route_for_host(
+                &self.host,
+                tor_status_with_trust(&self.trusted_socks_ports).await,
+            )?
         } else {
             local_route
         };
@@ -330,20 +349,38 @@ fn route_for_host(host: &str, tor_status: TorStatus) -> Result<TorRoute> {
     }
 }
 
-async fn default_tor_status() -> TorStatus {
-    // ponytail: default Tor ports only; add a typed persisted proxy route when
-    // the shared network overlay owns custom proxy configuration.
-    for &socks_port in AUTODETECT_SOCKS_PORTS {
-        if is_tor_socks_proxy(DEFAULT_TOR_HOST, socks_port).await {
+/// What this process may use as Tor.
+///
+/// `trusted` are loopback ports the holder confirmed, read from the shared
+/// network overlay so the confirmation means the same thing here as in the
+/// desktop app. The CLI starts no Tor of its own, so it owns no process and
+/// has nothing else to go on.
+///
+/// A proxy merely *found* on a conventional port is reported
+/// [`TorStatus::Unverified`] and refused: a SOCKS5 greeting is answered
+/// identically by every no-auth proxy, and treating that as proof would hand
+/// traffic to something that may be forwarding it in the clear.
+async fn tor_status_with_trust(trusted: &[u16]) -> TorStatus {
+    for &socks_port in trusted {
+        if socks_answers(DEFAULT_TOR_HOST, socks_port).await {
             return TorStatus::Verified { socks_port };
+        }
+    }
+    for &socks_port in AUTODETECT_SOCKS_PORTS {
+        if socks_answers(DEFAULT_TOR_HOST, socks_port).await {
+            return TorStatus::Unverified { socks_port };
         }
     }
     TorStatus::Absent
 }
 
-/// The Rust core owns the fail-closed route decision. This Tauri-free shell
-/// performs only the local SOCKS capability probe needed to supply that input.
-async fn is_tor_socks_proxy(host: &str, port: u16) -> bool {
+/// Does *a SOCKS5 proxy* answer here?
+///
+/// The Rust core owns the fail-closed route decision; this shell performs only
+/// the local probe. Named for what the probe establishes: `05 01 00` in and
+/// `05 00` out is the SOCKS5 no-auth handshake, which every such proxy
+/// completes. It does not identify Tor, and nothing in SOCKS does.
+async fn socks_answers(host: &str, port: u16) -> bool {
     let probe = async {
         let mut stream = TcpStream::connect((host, port)).await.ok()?;
         stream.write_all(&[0x05, 0x01, 0x00]).await.ok()?;
@@ -394,7 +431,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_plain_listener_is_not_mistaken_for_tor() {
+    async fn a_plain_listener_is_not_even_a_socks_proxy() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move {
@@ -405,6 +442,45 @@ mod tests {
             }
         });
 
-        assert!(!is_tor_socks_proxy("127.0.0.1", port).await);
+        assert!(!socks_answers("127.0.0.1", port).await);
+    }
+
+    #[tokio::test]
+    async fn an_unconfirmed_socks_proxy_is_reported_but_not_used() {
+        // A listener that speaks SOCKS5 and is not Tor -- which is every
+        // no-auth SOCKS proxy, as far as the protocol can tell. With no
+        // confirmation from the holder it must not become a usable route.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut greeting = [0u8; 3];
+                if stream.read_exact(&mut greeting).await.is_err() {
+                    continue;
+                }
+                let _ = stream.write_all(&[0x05, 0x00]).await;
+            }
+        });
+
+        assert!(socks_answers("127.0.0.1", port).await, "it speaks SOCKS5");
+
+        // Confirmed: usable.
+        assert_eq!(
+            tor_status_with_trust(&[port]).await,
+            TorStatus::Verified { socks_port: port }
+        );
+
+        // Unconfirmed: whatever is found, it is never this port as Verified.
+        assert_ne!(
+            tor_status_with_trust(&[]).await,
+            TorStatus::Verified { socks_port: port }
+        );
+
+        // And a remote host through no usable proxy is refused, not dialled.
+        assert!(route_for_host(
+            "electrum.example.org",
+            TorStatus::Unverified { socks_port: port }
+        )
+        .is_err());
     }
 }

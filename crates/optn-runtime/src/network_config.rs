@@ -36,6 +36,19 @@ pub struct UserNetworkOverlay {
     pub connection_policy: ConnectionPolicy,
     /// Optional self-hosted explorer endpoint. Navigation only; never chain truth.
     pub explorer: Option<Endpoint>,
+    /// Loopback SOCKS ports the holder has confirmed are their own Tor.
+    ///
+    /// Trust in a proxy cannot come from probing it: every no-auth SOCKS5
+    /// proxy answers a greeting identically, and nothing in the protocol
+    /// separates Tor from a corporate proxy or an SSH dynamic forward. So it
+    /// comes from provenance instead -- a proxy this application started and
+    /// owns needs no entry here, and anything else needs the holder to say
+    /// once that it is theirs.
+    ///
+    /// Loopback only by design. A SOCKS proxy somewhere else on the network
+    /// sees both the traffic and the address it came from, which is what Tor
+    /// is being asked to hide.
+    pub trusted_socks_ports: Vec<u16>,
 }
 
 impl Default for UserNetworkOverlay {
@@ -45,6 +58,7 @@ impl Default for UserNetworkOverlay {
             bootstrap_overrides: BTreeMap::new(),
             connection_policy: ConnectionPolicy::auto(),
             explorer: None,
+            trusted_socks_ports: Vec::new(),
         }
     }
 }
@@ -322,6 +336,10 @@ struct StoredOverlay {
     bootstrap_overrides: BTreeMap<String, StoredDisposition>,
     connection_policy: StoredPolicy,
     explorer: Option<StoredEndpoint>,
+    /// Absent in records written before this field existed, which is the
+    /// safe reading: no proxy was trusted then either.
+    #[serde(default)]
+    trusted_socks_ports: Vec<u16>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -464,6 +482,7 @@ impl StoredOverlay {
             bootstrap_overrides,
             connection_policy: StoredPolicy::from_policy(&value.connection_policy),
             explorer: value.explorer.as_ref().map(StoredEndpoint::from_endpoint),
+            trusted_socks_ports: value.trusted_socks_ports.clone(),
         })
     }
 
@@ -484,6 +503,7 @@ impl StoredOverlay {
                 .explorer
                 .map(StoredEndpoint::into_endpoint)
                 .transpose()?,
+            trusted_socks_ports: self.trusted_socks_ports,
         })
     }
 }

@@ -344,6 +344,17 @@ impl NativeChainRuntime {
             .map_err(|_| "network settings reader stopped".to_string())?
     }
 
+    /// Proxies the holder has confirmed, off the blocking pool.
+    ///
+    /// Read alongside the policy rather than cached, so revoking trust takes
+    /// effect at the next stack rebuild instead of at the next restart.
+    async fn trusted_socks_ports(&self, network: Network) -> Vec<u16> {
+        let settings = self.network_settings.clone();
+        tokio::task::spawn_blocking(move || settings.trusted_socks_ports(network))
+            .await
+            .unwrap_or_default()
+    }
+
     /// Resolve the snapshot's network through persisted policy, retaining read
     /// errors so invalid configuration cannot silently select a fallback route.
     async fn selection(&self, state: &AppState) -> NativeSelection {
@@ -476,7 +487,19 @@ impl NativeChainRuntime {
         // route is refused for want of Tor while this application's own Tor is
         // running a few lines away. Verification is unchanged -- an unverified
         // or unrelated listener on that port is still refused.
-        let proxy_ports = [crate::INTEGRATED_TOR_SOCKS_PORT];
+        let managed_ports = [crate::INTEGRATED_TOR_SOCKS_PORT];
+        // A proxy the holder confirmed is theirs. Read from the same overlay
+        // the policy came from, so trust travels with the configuration rather
+        // than living in a second place that can disagree with it.
+        //
+        // A separate load from the policy's, so a write landing between the two
+        // can be observed half-applied. Only one direction of that matters and
+        // it is not this one: a fresh read can return only what is on disk, so
+        // trust can never be *invented* here. The reverse -- one rebuild still
+        // honouring a confirmation the holder revoked a moment earlier -- is
+        // possible and self-corrects at the next rebuild, which a revocation
+        // triggers anyway.
+        let trusted_ports = self.trusted_socks_ports(network).await;
         let replacement = match self.accepted_chain(network).await {
             Ok((headers, _)) => {
                 optn_chain_native::build_native_chain_stack_with_headers_via(
@@ -485,7 +508,10 @@ impl NativeChainRuntime {
                     &network.to_string(),
                     &secrets,
                     headers,
-                    &proxy_ports,
+                    optn_chain_native::TorProxyTrust {
+                        managed: &managed_ports,
+                        trusted: &trusted_ports,
+                    },
                 )
                 .await
             }

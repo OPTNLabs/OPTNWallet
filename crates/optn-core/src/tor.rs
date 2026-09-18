@@ -10,10 +10,15 @@
 //! - **A loopback destination is direct.** A fusion server on `127.0.0.1` is
 //!   the developer's own, there is no network hop to observe, and routing it
 //!   through Tor would only break it.
-//! - **Anything else needs Tor, and Tor that answered.** A SOCKS port being
-//!   open is not evidence it is Tor; something else may be listening, or a
-//!   proxy that quietly forwards in the clear. The port must have been probed
-//!   and have answered as Tor.
+//! - **Anything else needs Tor, and Tor this wallet has reason to trust.** A
+//!   SOCKS port being open is not evidence it is Tor; something else may be
+//!   listening, or a proxy that quietly forwards in the clear. Nor is a
+//!   successful SOCKS5 greeting evidence: every no-auth SOCKS5 proxy answers
+//!   one, and there is no reply that distinguishes Tor from the rest. So the
+//!   trust comes from provenance, not from fingerprinting -- either this
+//!   application started the proxy and owns the process, or the holder pointed
+//!   at one and said it is theirs. Anything merely *found* listening on a
+//!   conventional port is [`TorStatus::Unverified`], and unusable.
 //! - **No Tor, no connection.** Not a warning, not a fallback to direct: the
 //!   attempt is refused. A privacy control with a fallback is a privacy
 //!   control that does nothing the first time it matters.
@@ -40,15 +45,18 @@ pub const AUTODETECT_SOCKS_PORTS: &[u16] = &[TOR_DAEMON_SOCKS_PORT, TOR_BROWSER_
 /// What the runtime found when it went looking for Tor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TorStatus {
-    /// A SOCKS proxy answered, and answered *as Tor*.
+    /// A SOCKS proxy answered on a port this wallet has reason to trust:
+    /// either a Tor this application started and owns, or one the holder
+    /// declared as theirs.
     Verified { socks_port: u16 },
-    /// Something is listening on the port, but it has not been shown to be
-    /// Tor.
+    /// A SOCKS proxy answered, but nothing establishes that it is Tor.
     ///
-    /// Deliberately not usable. An open port is not evidence: another service
-    /// may hold it, or a proxy that forwards in the clear, and connecting
-    /// through it would leak exactly what Tor was there to hide while looking
-    /// like it had not.
+    /// Deliberately not usable, and deliberately not decided by probing. A
+    /// SOCKS5 greeting is answered by every no-auth SOCKS5 proxy alive, and
+    /// nothing in the protocol distinguishes Tor from a corporate proxy, an
+    /// SSH dynamic forward, or something hostile that forwards in the clear.
+    /// Treating a greeting as proof would leak exactly what Tor was there to
+    /// hide, while looking like it had not.
     Unverified { socks_port: u16 },
     /// Nothing found.
     Absent,
@@ -108,8 +116,8 @@ impl FusionLeg {
 pub enum Refusal {
     /// No Tor was found at all.
     NoTor,
-    /// A proxy is there, but nothing has shown it to be Tor.
-    TorNotVerified { socks_port: u16 },
+    /// A proxy is there, but nothing establishes it is Tor.
+    TorNotTrusted { socks_port: u16 },
 }
 
 impl Refusal {
@@ -121,10 +129,12 @@ impl Refusal {
                  then check it. Remote CashFusion is blocked without it.",
                 leg.label()
             ),
-            Self::TorNotVerified { socks_port } => format!(
-                "{} needs Tor. Something is listening on port {socks_port}, but it has not \
-                 answered as Tor, and connecting through an unverified proxy would leak the \
-                 address Tor is there to hide.",
+            Self::TorNotTrusted { socks_port } => format!(
+                "{} needs Tor. A SOCKS proxy is listening on port {socks_port}, but every \
+                 SOCKS proxy answers the same way and nothing here shows that one is Tor -- \
+                 connecting through it would leak the address Tor is there to hide. Start the \
+                 built-in Tor, or, if the proxy on {socks_port} is your own Tor, confirm it in \
+                 Settings so this wallet may use it.",
                 leg.label()
             ),
         }
@@ -168,7 +178,7 @@ pub fn route(host: &str, tor: TorStatus) -> Route {
     match tor {
         TorStatus::Verified { socks_port } => Route::Through { socks_port },
         TorStatus::Unverified { socks_port } => {
-            Route::Refused(Refusal::TorNotVerified { socks_port })
+            Route::Refused(Refusal::TorNotTrusted { socks_port })
         }
         TorStatus::Absent => Route::Refused(Refusal::NoTor),
     }
@@ -224,7 +234,7 @@ mod tests {
     }
 
     #[test]
-    fn an_open_port_is_not_evidence_that_it_is_tor() {
+    fn a_socks_greeting_is_not_evidence_that_it_is_tor() {
         // The distinction that makes this fail closed rather than merely look
         // like it. Something else may hold the port, or a proxy that forwards
         // in the clear -- and connecting through it would leak exactly what Tor
@@ -235,10 +245,14 @@ mod tests {
         let refused = route("fusion.example.org", unverified);
         assert_eq!(
             refused,
-            Route::Refused(Refusal::TorNotVerified { socks_port: 9050 })
+            Route::Refused(Refusal::TorNotTrusted { socks_port: 9050 })
         );
         let message = refused.refusal(FusionLeg::Pool).expect("a reason");
-        assert!(message.contains("has not answered as Tor"), "{message}");
+        assert!(
+            message.contains("nothing here shows that one is Tor"),
+            "{message}"
+        );
+        assert!(message.contains("confirm it in"), "{message}");
 
         // Verified, and the same port is used.
         let verified = TorStatus::Verified { socks_port: 9050 };

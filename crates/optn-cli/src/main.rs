@@ -757,6 +757,10 @@ fn command_name(command: &Command) -> &'static str {
 }
 
 fn client_for(cli: &Cli) -> Result<Client> {
+    // Read once, applied to whichever endpoint is chosen below: which proxy
+    // the holder trusts does not depend on which server they are talking to.
+    let trusted =
+        network_settings::trusted_socks_ports(cli.network, cli.network_config_dir.as_deref());
     if cli.host.is_some() || cli.port.is_some() || cli.no_tls {
         return Client::new(
             cli.host
@@ -765,7 +769,8 @@ fn client_for(cli: &Cli) -> Result<Client> {
             cli.port.unwrap_or_else(|| cli.network.default_port()),
             !cli.no_tls,
             timeout_seconds(cli),
-        );
+        )
+        .map(|client| client.trusting_socks_ports(trusted));
     }
 
     let endpoint =
@@ -785,6 +790,7 @@ fn client_for(cli: &Cli) -> Result<Client> {
             timeout_seconds(cli),
         ),
     }
+    .map(|client| client.trusting_socks_ports(trusted))
 }
 
 fn timeout_seconds(cli: &Cli) -> u64 {

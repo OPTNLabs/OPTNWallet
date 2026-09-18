@@ -91,6 +91,24 @@ pub struct ChainSourcesView {
     pub wallet_routes: usize,
     /// Tip of the accepted chain this host has verified (SHV/MMR), if any.
     pub verified_tip: Option<VerifiedTipView>,
+    /// What this host found when it went looking for a proxy.
+    pub tor: TorProxyView,
+}
+
+/// The proxy situation, for a screen that has to explain a refusal.
+///
+/// "No Tor found" and "a proxy is there but I cannot tell whether it is yours"
+/// call for different actions from the holder -- start Tor, or confirm the Tor
+/// they already run -- and a screen that cannot tell them apart can only offer
+/// the wrong one half the time.
+#[derive(Debug, Clone, Serialize)]
+pub struct TorProxyView {
+    /// `verified` | `unverified` | `absent` | `not_needed`.
+    pub status: String,
+    /// The port a proxy answered on, whether or not it is trusted.
+    pub socks_port: Option<u16>,
+    /// Ports the holder has already confirmed.
+    pub trusted_ports: Vec<u16>,
 }
 
 fn endpoint_view(endpoint: &Endpoint) -> EndpointView {
@@ -281,6 +299,11 @@ pub async fn optn_chain_sources(
         }
     };
 
+    let settings = (*network_settings).clone();
+    let trusted_ports = tokio::task::spawn_blocking(move || settings.trusted_socks_ports(network))
+        .await
+        .unwrap_or_default();
+
     let live = native
         .with_service(|service| {
             let service = service.try_lock().ok()?;
@@ -333,7 +356,42 @@ pub async fn optn_chain_sources(
                     hash: hex::encode(display),
                 }
             }),
+        tor: tor_view(&catalog, &policy, &trusted_ports).await,
     })
+}
+
+/// Ask the same question the stack builder asks, with the same trust.
+///
+/// Reported rather than recomputed differently: a screen that told the holder
+/// "Tor verified" while the routes were refusing for want of it would be worse
+/// than saying nothing.
+async fn tor_view(
+    catalog: &optn_runtime::chain::SourceCatalog,
+    policy: &ConnectionPolicy,
+    trusted: &[u16],
+) -> TorProxyView {
+    let managed = [crate::INTEGRATED_TOR_SOCKS_PORT];
+    let status = optn_chain_native::tor_status_for(
+        catalog,
+        policy,
+        optn_chain_native::TorProxyTrust {
+            managed: &managed,
+            trusted,
+        },
+    )
+    .await;
+    let needed = optn_chain_native::requires_tor_proxy(catalog, policy);
+    let (label, socks_port) = match status {
+        optn_core::tor::TorStatus::Verified { socks_port } => ("verified", Some(socks_port)),
+        optn_core::tor::TorStatus::Unverified { socks_port } => ("unverified", Some(socks_port)),
+        optn_core::tor::TorStatus::Absent if needed => ("absent", None),
+        optn_core::tor::TorStatus::Absent => ("not_needed", None),
+    };
+    TorProxyView {
+        status: label.to_owned(),
+        socks_port,
+        trusted_ports: trusted.to_vec(),
+    }
 }
 
 /// Rebuild routes now, without waiting for a settings change.
@@ -402,6 +460,42 @@ pub async fn optn_chain_set_policy(
         .map_err(|_| "unknown connection policy".to_string())?;
     edit_overlay(&network_settings, network, move |overlay| {
         set_policy_preset(overlay, preset)
+    })
+    .await
+}
+
+/// Confirm, or withdraw confirmation, that a loopback SOCKS port is the
+/// holder's own Tor.
+///
+/// This exists because probing cannot answer the question. Every no-auth
+/// SOCKS5 proxy completes the same greeting, and nothing in the protocol
+/// separates Tor from a corporate proxy, an SSH dynamic forward, or something
+/// forwarding in the clear. A Tor this application started needs no
+/// confirmation -- it owns the process. Anything else is one deliberate act by
+/// the person who knows what is running on their own machine.
+///
+/// Loopback only. A SOCKS proxy elsewhere on the network sees both the traffic
+/// and the address it came from, which is what Tor was being asked to hide, so
+/// there is no port number that makes trusting a remote one correct.
+#[tauri::command]
+pub async fn optn_chain_trust_socks_proxy(
+    runtime: tauri::State<'_, optn_runtime::AppRuntime>,
+    network_settings: tauri::State<'_, NetworkSettingsStore>,
+    network: Option<String>,
+    port: u16,
+    trusted: bool,
+) -> Result<(), String> {
+    let network = network_or_current(&runtime, network)?;
+    if port == 0 {
+        return Err("0 is not a port".into());
+    }
+    edit_overlay(&network_settings, network, move |overlay| {
+        overlay.trusted_socks_ports.retain(|entry| *entry != port);
+        if trusted {
+            overlay.trusted_socks_ports.push(port);
+            overlay.trusted_socks_ports.sort_unstable();
+        }
+        Ok(())
     })
     .await
 }
