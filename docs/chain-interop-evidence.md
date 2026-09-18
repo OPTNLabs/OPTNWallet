@@ -178,6 +178,40 @@ Recorded at OPTN commit `a69a055a` on `agent/rpa-shared-vectors` (PR #63).
 
 Compact filters are on by default; `--nocfilters` would disable them.
 
+### A real reorg, against BCHD regtest
+
+`a_reorg_is_refused_then_rewound_and_pruning_keeps_the_commitment`, in
+`crates/optn-chain-neutrino/tests/regtest_live.rs`. Run it with the node
+below listening, `--ignored`.
+
+| | |
+| --- | --- |
+| Node | `zquestz/bchd:latest`, bchd 0.22.2 |
+| Flags | `--regtest --regtestanyhost --txindex --notls --listen=0.0.0.0:18444 --rpclisten=0.0.0.0:18443` |
+| Genesis | `0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206`, which is the value `REGTEST_GENESIS_HEADER_HEX` hashes to |
+| The reorg | a block the wallet had already verified, dropped with `invalidateblock`, then six mined over it |
+
+Three things it establishes, none of which had been driven against a node
+that reorganised:
+
+- **Pruning does not move the commitment.** Headers below a floor are
+  dropped and `VerifiedHeaderView::checkpoint()` is unchanged. Pruning is a
+  storage decision; if it moved the root, a pruned wallet could no longer say
+  which chain it had verified.
+- **A forked branch is refused, not extended onto.** After the reorg the node
+  serves a different branch from the fork point, and `extend` returns an
+  error. A verifier that accepted it would carry a chain the node has
+  abandoned.
+- **Recovery is a rebuild, not a rewind.** `rewind_to` is the index half only
+  — the accumulator is append-only, as `header_view.rs` says in place — so
+  the test pins that rewinding alone still refuses the new branch, and that
+  building again from the shipped anchor reaches the node's longer branch with
+  a commitment that differs from the pre-reorg one.
+
+What it does not establish: re-proving a *pruned* range needs an SHV peer, and
+BCHD does not serve `getshv`. That half is covered separately below, against
+BCHN.
+
 ### Bitcoin Cash Node — SHV
 
 | | |
