@@ -239,6 +239,47 @@ What it does not establish: re-proving a *pruned* range needs an SHV peer, and
 BCHD does not serve `getshv`. That half is covered separately below, against
 BCHN.
 
+### ZMQ notifications, against Bitcoin Cash Node
+
+`crates/optn-chain-zmq/tests/bchn_live.rs`, three tests, run with `--ignored`
+against the node below.
+
+| | |
+| --- | --- |
+| Node | `zquestz/bitcoin-cash-node:latest`, BCHN 29.1.0 (`v29.1.0-b31ed10b4`) |
+| Flags | `-regtest -server -listen=0 -zmqpubrawtx/-zmqpubhashtx/-zmqpubrawblock/-zmqpubhashblock=tcp://0.0.0.0:28332` |
+| Confirmed by | `getzmqnotifications` listing all four publishers on one socket |
+| Services | `0000000000000425` — NODE_NETWORK, NODE_BLOOM, NODE_BITCOIN_CASH; bit 9 clear, so this build advertises no SHV |
+
+What it establishes:
+
+- **The two block topics agree, and the node holds the block.** The hash this
+  crate computes from the first 80 bytes of a `rawblock` is the same hash
+  `hashblock` reports, and `getblockheader` on it succeeds. The event
+  identifies a block. It does not prove one.
+- **The two transaction topics agree on one txid**, so a consumer woken by
+  `hashtx` can match what `rawtx` would have reported.
+- **Sequence numbers advance by one per topic**, which is what makes a
+  dropped notification detectable rather than silent. BCHN does send the
+  frame; without it a gap would be indistinguishable from a quiet node.
+
+**A bug this found.** BCHN publishes the `hash*` topics with the uint256
+reversed — `data[31 - i] = hash.begin()[i]` in the publisher — so those frames
+carry display order while `sha256d` over a `rawtx` or `rawblock` body yields
+internal order. `parse_hash` took the frame as it arrived, so the same
+transaction reached the runtime under two byte-reversed txids depending on
+which topic reported it, and the one from `hashtx` matched nothing the wallet
+held: a wake-up about a payment, reversed into a payment that does not exist.
+
+It survived unit testing because the fixture was 32 equal bytes, which is its
+own reversal. Only a real node could produce a hash that is not a palindrome.
+Fixed in `parse_hash`, with the byte order now stated on `ChainEventKind`
+itself, where the next provider author will look.
+
+What it does not establish: double-spend proofs. `rawds`/`hashds` are
+subscribed and parsed, but regtest with one node produces none, so that topic
+is still component evidence only.
+
 ### Bitcoin Cash Node — SHV
 
 | | |
