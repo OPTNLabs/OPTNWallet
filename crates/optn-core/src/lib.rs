@@ -32,6 +32,11 @@ pub mod header_hash;
 pub mod header_mmr;
 pub mod header_pow;
 pub mod header_time;
+/// Ledger Bitcoin Cash APDUs. Ledger ships no signer kit for this chain, so
+/// the app-binder is ours; keeping it here means every surface encodes the
+/// same bytes rather than each carrying an encoder that can disagree with the
+/// device about what an address is.
+pub mod ledger;
 pub mod multisig;
 pub mod multisig_session;
 pub mod network;
