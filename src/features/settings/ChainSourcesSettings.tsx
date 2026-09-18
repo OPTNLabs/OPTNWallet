@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useDispatch } from 'react-redux';
+import { setChainPolicy as rememberChainPolicy } from '../../state/slices/preferencesSlice';
 import SectionCard from '../../components/ui/SectionCard';
 import {
   addChainSource,
@@ -72,15 +74,24 @@ export function ChainSourcesSettings() {
   const [torStarting, setTorStarting] = useState(false);
   const [torProgress, setTorProgress] = useState<number | null>(null);
 
+  const dispatch = useDispatch();
+
   const refresh = useCallback(async () => {
     try {
-      setView(await readChainSources());
+      const current = await readChainSources();
+      setView(current);
+      // Mirror the runtime's policy into the renderer, because explorer links
+      // obey it too: a holder on "own infrastructure only" has not agreed to
+      // tell a public explorer which transactions are theirs. Persisted with
+      // the preferences, so the answer is already right at the next start
+      // rather than briefly reading as Auto.
+      dispatch(rememberChainPolicy(current.policy));
       setEngineSync(await readEngineWalletSync());
       setError('');
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
     }
-  }, []);
+  }, [dispatch]);
 
   useEffect(() => {
     void refresh();

@@ -695,3 +695,124 @@ pub fn ledger_parse_wallet_public_key(response: &[u8]) -> Result<String, JsValue
 pub fn ledger_status_word(status: u16) -> String {
     crate::ledger::describe_status_word(status).unwrap_or_default()
 }
+
+// ---------------------------------------------------------------------------
+// Block explorer routing (#75 row 15)
+//
+// The renderer used to hold its own copy of the presets and build these URLs
+// itself, with no notion of the connection policy -- so a holder on "own
+// infrastructure only" could open a transaction and hand its txid to a public
+// website. These entry points make the Rust the only place that decides.
+// ---------------------------------------------------------------------------
+
+fn explorer_object<'a>(
+    kind: &str,
+    value: &'a str,
+) -> Result<crate::explorer::ExplorerObject<'a>, JsValue> {
+    match kind {
+        "tx" | "txid" | "transaction" => Ok(crate::explorer::ExplorerObject::Transaction(value)),
+        "address" => Ok(crate::explorer::ExplorerObject::Address(value)),
+        "block" => Ok(crate::explorer::ExplorerObject::Block(value)),
+        other => Err(JsValue::from_str(&format!(
+            "not something an explorer can show: {other}"
+        ))),
+    }
+}
+
+fn explorer_policy(name: &str) -> crate::explorer::ExplorerPolicy {
+    crate::explorer::ExplorerPolicy::for_chain_policy(name)
+}
+
+/// Quote a string as JSON. serde_json rather than a hand-rolled escaper: the
+/// presets are all plain ASCII today, so a homemade one would look correct
+/// forever and break the first time a label carried a quote.
+fn json_string(value: &str) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
+}
+
+/// Every shipped preset, as JSON, so the settings picker lists exactly what
+/// the router will accept.
+#[wasm_bindgen(js_name = explorerPresets)]
+pub fn explorer_presets() -> String {
+    let entries: Vec<String> = crate::explorer::PRESETS
+        .iter()
+        .map(|entry| {
+            let mut fields = vec![
+                format!("\"id\":{}", json_string(entry.id)),
+                format!("\"label\":{}", json_string(entry.label)),
+                format!("\"tx\":{}", json_string(entry.tx)),
+                format!("\"address\":{}", json_string(entry.address)),
+            ];
+            if let Some(block) = entry.block {
+                fields.push(format!("\"block\":{}", json_string(block)));
+            }
+            if let Some(tx) = entry.chipnet_tx {
+                fields.push(format!("\"chipnetTx\":{}", json_string(tx)));
+            }
+            if let Some(address) = entry.chipnet_address {
+                fields.push(format!("\"chipnetAddress\":{}", json_string(address)));
+            }
+            format!("{{{}}}", fields.join(","))
+        })
+        .collect();
+    format!("[{}]", entries.join(","))
+}
+
+/// The preset used when the holder has not chosen one.
+#[wasm_bindgen(js_name = explorerDefaultPresetId)]
+pub fn explorer_default_preset_id() -> String {
+    crate::explorer::DEFAULT_PRESET_ID.to_string()
+}
+
+/// What a chain connection policy means for explorer links:
+/// `public-allowed`, `user-owned-only` or `disabled`.
+#[wasm_bindgen(js_name = explorerPolicyForChainPolicy)]
+pub fn explorer_policy_for_chain_policy(policy: &str) -> String {
+    match explorer_policy(policy) {
+        crate::explorer::ExplorerPolicy::PublicAllowed => "public-allowed",
+        crate::explorer::ExplorerPolicy::UserOwnedOnly => "user-owned-only",
+        crate::explorer::ExplorerPolicy::Disabled => "disabled",
+    }
+    .to_string()
+}
+
+/// A link to one of the shipped public explorers, or an error explaining why
+/// the policy refuses it.
+#[wasm_bindgen(js_name = explorerPresetUrl)]
+pub fn explorer_preset_url(
+    preset_id: &str,
+    network: &str,
+    kind: &str,
+    value: &str,
+    chain_policy: &str,
+) -> Result<String, JsValue> {
+    crate::explorer::explorer_url(
+        &crate::explorer::ExplorerChoice::Preset(preset_id.to_string()),
+        network_from(network)?,
+        explorer_object(kind, value)?,
+        explorer_policy(chain_policy),
+    )
+    .map_err(|error| JsValue::from_str(&error.to_string()))
+}
+
+/// A link to the holder's own explorer, from the templates they supplied.
+#[wasm_bindgen(js_name = explorerCustomUrl)]
+pub fn explorer_custom_url(
+    tx_template: &str,
+    address_template: &str,
+    network: &str,
+    kind: &str,
+    value: &str,
+    chain_policy: &str,
+) -> Result<String, JsValue> {
+    crate::explorer::explorer_url(
+        &crate::explorer::ExplorerChoice::Custom {
+            tx: tx_template.to_string(),
+            address: address_template.to_string(),
+        },
+        network_from(network)?,
+        explorer_object(kind, value)?,
+        explorer_policy(chain_policy),
+    )
+    .map_err(|error| JsValue::from_str(&error.to_string()))
+}

@@ -22,7 +22,9 @@ import type { SupportedLocale } from '../../i18n/types';
 type Props = {
   txid: string;
   txHeight: number;
-  explorerUrl: string;
+  // `null` when the chain policy permits no explorer for this wallet. Not an
+  // error state: see utils/servers/useExplorerLink.
+  explorerUrl: string | null;
   walletAddresses: Set<string>;
   onClose: () => void;
 };
@@ -316,14 +318,16 @@ export default function TransactionDetailPopup({
               </div>
             </div>
             <div className="col-span-2">
-              <a
-                href={explorerUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-sm underline wallet-text-strong"
-              >
-                {t('history.openExplorer')}
-              </a>
+              {explorerUrl ? (
+                <a
+                  href={explorerUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-sm underline wallet-text-strong"
+                >
+                  {t('history.openExplorer')}
+                </a>
+              ) : null}
             </div>
           </div>
         </section>

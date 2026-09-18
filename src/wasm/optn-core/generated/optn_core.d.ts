@@ -38,6 +38,34 @@ export function deriveRpaKeys(mnemonic: string, passphrase: string, scan_path: s
 export function encodeCashcode(scan_pubkey: Uint8Array, spend_pubkey: Uint8Array, network: string, prefix_bits: number): string;
 
 /**
+ * A link to the holder's own explorer, from the templates they supplied.
+ */
+export function explorerCustomUrl(tx_template: string, address_template: string, network: string, kind: string, value: string, chain_policy: string): string;
+
+/**
+ * The preset used when the holder has not chosen one.
+ */
+export function explorerDefaultPresetId(): string;
+
+/**
+ * What a chain connection policy means for explorer links:
+ * `public-allowed`, `user-owned-only` or `disabled`.
+ */
+export function explorerPolicyForChainPolicy(policy: string): string;
+
+/**
+ * A link to one of the shipped public explorers, or an error explaining why
+ * the policy refuses it.
+ */
+export function explorerPresetUrl(preset_id: string, network: string, kind: string, value: string, chain_policy: string): string;
+
+/**
+ * Every shipped preset, as JSON, so the settings picker lists exactly what
+ * the router will accept.
+ */
+export function explorerPresets(): string;
+
+/**
  * Compressed one-shot nonce point published for a credential slot.
  */
 export function fusionBlindIssuerNoncePoint(nonce: Uint8Array): Uint8Array;
@@ -244,6 +272,11 @@ export interface InitOutput {
     readonly decodeCashcode: (a: number, b: number) => [number, number, number, number];
     readonly deriveRpaKeys: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number];
     readonly encodeCashcode: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
+    readonly explorerCustomUrl: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
+    readonly explorerDefaultPresetId: () => [number, number];
+    readonly explorerPolicyForChainPolicy: (a: number, b: number) => [number, number];
+    readonly explorerPresetUrl: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
+    readonly explorerPresets: () => [number, number];
     readonly fusionBlindIssuerNoncePoint: (a: number, b: number) => [number, number, number, number];
     readonly fusionBlindIssuerPublicKey: (a: number, b: number) => [number, number, number, number];
     readonly fusionBlindIssuerSign: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];

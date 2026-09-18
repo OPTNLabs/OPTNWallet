@@ -5,8 +5,7 @@ import { useParams } from 'react-router-dom';
 import { createSelector } from 'reselect';
 import { shortenTxHash } from '../../utils/shortenHash';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
-import { selectExplorerChoice } from '../../state/slices/preferencesSlice';
-import { buildTxUrl } from '../../utils/servers/explorers';
+import { useExplorerLink } from '../../utils/servers/useExplorerLink';
 import { useTransactionHistoryFetch } from './useTransactionHistoryFetch';
 import { useTransactionHistoryPagination } from './useTransactionHistoryPagination';
 import PageHeader from '../../components/ui/PageHeader';
@@ -84,7 +83,7 @@ const TransactionHistory: React.FC = () => {
     handleLastPage,
   } = useTransactionHistoryPagination({ transactions });
 
-  const explorerChoice = useSelector(selectExplorerChoice);
+  const explorer = useExplorerLink();
 
   useEffect(() => {
     let cancelled = false;
@@ -288,11 +287,7 @@ const TransactionHistory: React.FC = () => {
           <TransactionDetailPopup
             txid={selectedTx.txid}
             txHeight={selectedTx.height}
-            explorerUrl={buildTxUrl(
-              explorerChoice,
-              currentNetwork,
-              selectedTx.txid
-            )}
+            explorerUrl={explorer.tx(currentNetwork, selectedTx.txid)}
             walletAddresses={walletAddresses}
             onClose={() => setSelectedTx(null)}
           />
