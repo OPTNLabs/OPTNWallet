@@ -184,6 +184,35 @@ pub fn route(host: &str, tor: TorStatus) -> Route {
     }
 }
 
+/// How an outbound request that is not chain traffic should be made.
+///
+/// An update check is the case this exists for. It is not a fusion leg and not
+/// a wallet query, but it is still a connection to a third party that reveals
+/// an address and that this software is running there, so it follows the
+/// holder's connection policy rather than inventing a laxer one for itself.
+///
+/// `public_allowed` is that policy, not a guess about the network: it is true
+/// when the holder's chain policy permits public sources at all. The
+/// distinction matters because "every source I use happens to be local" is not
+/// the same statement as "I do not want public connections" -- keying off the
+/// former would refuse update checks to someone running their own node on
+/// plain Auto, who never asked for that.
+///
+/// Tor is used whenever it is usable, on both branches. The policy decides
+/// whether its absence is a refusal or merely an absence.
+pub fn outbound_route(public_allowed: bool, tor: TorStatus) -> Route {
+    match tor.usable_port() {
+        Some(socks_port) => Route::Through { socks_port },
+        None if public_allowed => Route::Direct,
+        None => match tor {
+            TorStatus::Unverified { socks_port } => {
+                Route::Refused(Refusal::TorNotTrusted { socks_port })
+            }
+            _ => Route::Refused(Refusal::NoTor),
+        },
+    }
+}
+
 /// Whether a whole round may start.
 ///
 /// A round touches every leg, so it is only safe to begin if each of its
@@ -309,6 +338,33 @@ mod tests {
         );
         assert_eq!(TOR_DAEMON_SOCKS_PORT, 9050);
         assert_eq!(TOR_BROWSER_SOCKS_PORT, 9150);
+    }
+
+    #[test]
+    fn an_outbound_check_follows_the_policy_not_the_network_shape() {
+        // Someone on Auto who happens to run their own node has not asked for
+        // public connections to stop. Refusing their update check would be a
+        // setting they never chose.
+        assert_eq!(outbound_route(true, TorStatus::Absent), Route::Direct);
+        // Tor is still preferred whenever it is usable.
+        assert_eq!(
+            outbound_route(true, TorStatus::Verified { socks_port: 9050 }),
+            Route::Through { socks_port: 9050 }
+        );
+        // A holder who did ask for no public connections gets the refusal
+        // their policy implies, rather than a quiet request on their behalf.
+        assert_eq!(
+            outbound_route(false, TorStatus::Absent),
+            Route::Refused(Refusal::NoTor)
+        );
+        assert_eq!(
+            outbound_route(false, TorStatus::Unverified { socks_port: 9050 }),
+            Route::Refused(Refusal::TorNotTrusted { socks_port: 9050 })
+        );
+        assert_eq!(
+            outbound_route(false, TorStatus::Verified { socks_port: 9150 }),
+            Route::Through { socks_port: 9150 }
+        );
     }
 
     #[test]

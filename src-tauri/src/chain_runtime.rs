@@ -344,6 +344,41 @@ impl NativeChainRuntime {
             .map_err(|_| "network settings reader stopped".to_string())?
     }
 
+    /// The proxy situation for an outbound request that is not chain traffic.
+    ///
+    /// An update check is a connection to a third party like any other, so it
+    /// asks the same question with the same trust rather than inventing a
+    /// second, laxer answer for itself. The catalog and policy are the live
+    /// ones, so a holder on own-infrastructure-only gets the refusal their
+    /// policy implies instead of a quiet request to github.com.
+    pub async fn tor_status_for_update_check(&self) -> (bool, optn_core::tor::TorStatus) {
+        let network = self.owner.state().network;
+        let (catalog, policy) = match self.persisted_selection(network).await {
+            Ok(Some(selection)) => selection,
+            // No persisted policy yet: use the same app-state bridge the stack
+            // does, so this is never more permissive than the chain layer.
+            _ => catalog_and_policy_from_app_state(&self.owner.state()),
+        };
+        let managed = [crate::INTEGRATED_TOR_SOCKS_PORT];
+        let trusted = self.trusted_socks_ports(network).await;
+        let status = optn_chain_native::tor_status_for(
+            &catalog,
+            &policy,
+            optn_chain_native::TorProxyTrust {
+                managed: &managed,
+                trusted: &trusted,
+            },
+        )
+        .await;
+        // Whether the holder permits public connections at all, read from the
+        // policy itself rather than from what their sources happen to be.
+        let public_allowed = matches!(
+            optn_runtime::explorer::explorer_policy_for(&policy),
+            optn_core::explorer::ExplorerPolicy::PublicAllowed
+        );
+        (public_allowed, status)
+    }
+
     /// Proxies the holder has confirmed, off the blocking pool.
     ///
     /// Read alongside the policy rather than cached, so revoking trust takes
@@ -1491,7 +1526,14 @@ mod tests {
         ));
         let worker = native.clone();
         let task = tokio::spawn(async move { worker.run().await });
-        let (mut socket, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
+        // 20s, not 5s. The runtime notices a settings change through a 2s
+        // poll, so this waits about 4s on an idle machine -- an 800ms margin
+        // that a loaded one eats, and then the failure reads as a broken
+        // cancellation rather than a slow test. Measured at 4.03s over six
+        // runs, with and without the trust-list read, so the tightness is
+        // structural and not something a change to the rebuild path caused.
+        // A passing test does not get slower for this; only a hanging one does.
+        let (mut socket, _) = tokio::time::timeout(Duration::from_secs(20), listener.accept())
             .await
             .unwrap()
             .unwrap();

@@ -28,6 +28,7 @@ import WizardConnectPanel from '../../components/wizardconnect/WizardConnectPane
 import CashConnectPanel from '../../components/cashconnect/CashConnectPanel';
 import { AppLockSettings } from '../../platform/desktop/AppLockSettings';
 import { RebuildWalletSettings } from '../../platform/desktop/RebuildWalletSettings';
+import AppUpdateSettings from './AppUpdateSettings';
 import { ExportColdArchiveSettings } from '../../platform/desktop/ExportColdArchiveSettings';
 import { WalletInfoSettings } from './WalletInfoSettings';
 
@@ -266,6 +267,10 @@ const Settings: React.FC = () => {
         return desktop ? <ExportColdArchiveSettings /> : null;
       case 'rebuild-wallet':
         return desktop ? <RebuildWalletSettings /> : null;
+      // Desktop only: the mobile builds are updated by their stores, and the
+      // web build is whatever the server served.
+      case 'updates':
+        return desktop ? <AppUpdateSettings /> : null;
       case 'network':
         return <NetworkSettings />;
       case 'faucet':
@@ -341,6 +346,8 @@ const Settings: React.FC = () => {
         return t('settings.network');
       case 'faucet':
         return t('settingsPanels.faucet');
+      case 'updates':
+        return 'Updates';
       default:
         return '';
     }

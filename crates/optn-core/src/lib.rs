@@ -47,6 +47,7 @@ pub mod network;
 pub mod nip44;
 pub mod nostr_identity;
 pub mod psbt;
+pub mod release_channel;
 pub mod rpa;
 pub mod scan;
 pub mod sources;
