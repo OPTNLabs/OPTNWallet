@@ -54,7 +54,10 @@ impl Default for CoinHolds {
 pub enum CoinHoldError {
     /// A file from a newer build. Rewriting it would drop holds this build
     /// cannot see, and a dropped hold is a coin that gets spent.
-    UnsupportedSchema { found: u32, current: u32 },
+    UnsupportedSchema {
+        found: u32,
+        current: u32,
+    },
     InvalidOutpoint,
     UnknownReason(String),
     AlreadyHeld(FreezeReason),
@@ -156,9 +159,8 @@ impl CoinHolds {
             reason: reason.as_str().to_owned(),
             note,
         });
-        self.holds.sort_by(|left, right| {
-            (&left.txid, left.vout).cmp(&(&right.txid, right.vout))
-        });
+        self.holds
+            .sort_by(|left, right| (&left.txid, left.vout).cmp(&(&right.txid, right.vout)));
         Ok(())
     }
 
@@ -178,7 +180,12 @@ impl CoinHolds {
 
     /// Release a hold whose owner is finishing with it — a pledge cancelled, a
     /// fusion round over. Not reachable from a coin list.
-    pub fn release_for(&mut self, txid: &str, vout: u32, reason: FreezeReason) -> Result<(), CoinHoldError> {
+    pub fn release_for(
+        &mut self,
+        txid: &str,
+        vout: u32,
+        reason: FreezeReason,
+    ) -> Result<(), CoinHoldError> {
         let index = self.position(txid, vout).ok_or(CoinHoldError::NotHeld)?;
         let held = parse_reason(&self.holds[index].reason)?;
         if held != reason {
@@ -224,7 +231,10 @@ mod tests {
                 holds.release_user_hold(TXID, 0),
                 Err(CoinHoldError::NotUserReversible(reason))
             );
-            assert!(holds.is_held(TXID, 0), "the refused release changed nothing");
+            assert!(
+                holds.is_held(TXID, 0),
+                "the refused release changed nothing"
+            );
 
             // Its owner can still finish with it.
             holds.release_for(TXID, 0, reason).unwrap();
@@ -268,7 +278,9 @@ mod tests {
         // Two spellings becoming two entries would leave a filter finding one
         // of them and spending the other.
         let mut holds = CoinHolds::default();
-        holds.hold(&TXID.to_uppercase(), 0, FreezeReason::User, None).unwrap();
+        holds
+            .hold(&TXID.to_uppercase(), 0, FreezeReason::User, None)
+            .unwrap();
         assert!(holds.is_held(TXID, 0));
         assert!(holds.hold(TXID, 0, FreezeReason::User, None).is_err());
         assert_eq!(
