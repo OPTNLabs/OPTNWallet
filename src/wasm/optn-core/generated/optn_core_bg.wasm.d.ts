@@ -26,6 +26,11 @@ export const grindRpaTransaction: (a: number, b: number, c: number, d: number, e
 export const grindSequence: (a: number) => [number, number, number];
 export const grindString: (a: number, b: number, c: number) => [number, number, number, number];
 export const isLegacyPaycode: (a: number, b: number) => number;
+export const ledgerAddressFormat: (a: number, b: number) => [number, number, number];
+export const ledgerEncodeBip32Path: (a: number, b: number) => [number, number, number, number];
+export const ledgerGetWalletPublicKey: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+export const ledgerParseWalletPublicKey: (a: number, b: number) => [number, number, number, number];
+export const ledgerStatusWord: (a: number) => [number, number];
 export const legacyPaycodeRejection: () => [number, number];
 export const looksLikeRpa: (a: number, b: number) => number;
 export const paymentAddress: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];

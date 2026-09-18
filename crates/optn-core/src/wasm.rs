@@ -22,14 +22,15 @@ use zeroize::Zeroize;
 use crate::network::Network;
 use crate::rpa;
 
+/// Deferred to `Network`'s own parser rather than a second list here.
+///
+/// Two lists drift: this one knew mainnet and chipnet only, so the wallet's
+/// web surface could not name testnet3, testnet4 or regtest even after the
+/// typed core could. `FromStr` refuses an unknown or ambiguous name, which is
+/// the behaviour this boundary wants anyway.
 fn network_from(name: &str) -> Result<Network, JsValue> {
-    match name {
-        "mainnet" => Ok(Network::Mainnet),
-        "chipnet" => Ok(Network::Chipnet),
-        other => Err(JsValue::from_str(&format!(
-            "unknown network '{other}' (expected 'mainnet' or 'chipnet')"
-        ))),
-    }
+    name.parse::<Network>()
+        .map_err(|error| JsValue::from_str(&error))
 }
 
 fn array33(bytes: &[u8], what: &str) -> Result<[u8; 33], JsValue> {
@@ -612,4 +613,85 @@ pub fn sign_p2pkh(context_json: &str, private_key: Vec<u8>, mode: u8) -> Result<
 #[wasm_bindgen(js_name = connectP2pkhLock)]
 pub fn p2pkh_lock(public_key: &[u8]) -> Result<Vec<u8>, String> {
     connect::p2pkh_lock(public_key)
+}
+
+// ---------------------------------------------------------------------------
+// Ledger Bitcoin Cash APDUs.
+//
+// Exposed so `src/services/hardware/ledgerBchApdu.ts` becomes a call-through
+// instead of a second encoder. Ledger ships no signer kit for this chain, so
+// the app-binder is ours -- and two copies of it are two things that can
+// disagree with the device about which address a path holds.
+// ---------------------------------------------------------------------------
+
+fn ledger_format(name: &str) -> Result<crate::ledger::AddressFormat, JsValue> {
+    use crate::ledger::AddressFormat;
+    match name {
+        "legacy" => Ok(AddressFormat::Legacy),
+        "p2sh" => Ok(AddressFormat::P2sh),
+        "bech32" => Ok(AddressFormat::Bech32),
+        "cashaddr" => Ok(AddressFormat::Cashaddr),
+        other => Err(JsValue::from_str(&format!(
+            "unknown Ledger address format '{other}'"
+        ))),
+    }
+}
+
+/// The P2 value for an address encoding. `cashaddr` is 3.
+#[wasm_bindgen(js_name = ledgerAddressFormat)]
+pub fn ledger_address_format(name: &str) -> Result<u8, JsValue> {
+    Ok(ledger_format(name)?.code())
+}
+
+/// A BIP32 path as the Bitcoin app expects it: count byte, then big-endian
+/// u32 per level with the high bit set on hardened levels.
+#[wasm_bindgen(js_name = ledgerEncodeBip32Path)]
+pub fn ledger_encode_bip32_path(path: &str) -> Result<Vec<u8>, JsValue> {
+    crate::ledger::encode_bip32_path(path).map_err(err)
+}
+
+/// GET WALLET PUBLIC KEY, as JSON so the renderer can frame it.
+///
+/// `format` defaults to cashaddr when empty: a Ledger asked for the app
+/// default returns a legacy address, which is a real address on the same
+/// chain that no modern Bitcoin Cash wallet displays.
+#[wasm_bindgen(js_name = ledgerGetWalletPublicKey)]
+pub fn ledger_get_wallet_public_key(
+    path: &str,
+    verify: bool,
+    format: &str,
+) -> Result<String, JsValue> {
+    let format = if format.is_empty() {
+        crate::ledger::AddressFormat::default()
+    } else {
+        ledger_format(format)?
+    };
+    let apdu = crate::ledger::build_get_wallet_public_key(path, verify, format).map_err(err)?;
+    let hex = |bytes: &[u8]| -> String { bytes.iter().map(|b| format!("{b:02x}")).collect() };
+    Ok(format!(
+        r#"{{"cla":{},"ins":{},"p1":{},"p2":{},"data":"{}","apdu":"{}"}}"#,
+        apdu.cla,
+        apdu.ins,
+        apdu.p1,
+        apdu.p2,
+        hex(&apdu.data),
+        hex(&apdu.to_bytes()),
+    ))
+}
+
+/// Read the device's reply. Every length is checked against what arrived, so
+/// a truncated reply is refused rather than read as a short address.
+#[wasm_bindgen(js_name = ledgerParseWalletPublicKey)]
+pub fn ledger_parse_wallet_public_key(response: &[u8]) -> Result<String, JsValue> {
+    let parsed = crate::ledger::parse_wallet_public_key(response).map_err(err)?;
+    Ok(format!(
+        r#"{{"publicKey":"{}","address":"{}","chainCode":"{}"}}"#,
+        parsed.public_key, parsed.address, parsed.chain_code,
+    ))
+}
+
+/// A status word as something the holder can act on. Empty string is success.
+#[wasm_bindgen(js_name = ledgerStatusWord)]
+pub fn ledger_status_word(status: u16) -> String {
+    crate::ledger::describe_status_word(status).unwrap_or_default()
 }

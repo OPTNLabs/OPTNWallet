@@ -563,6 +563,118 @@ export function isLegacyPaycode(candidate) {
 }
 
 /**
+ * The P2 value for an address encoding. `cashaddr` is 3.
+ * @param {string} name
+ * @returns {number}
+ */
+export function ledgerAddressFormat(name) {
+    const ptr0 = passStringToWasm0(name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.ledgerAddressFormat(ptr0, len0);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return ret[0];
+}
+
+/**
+ * A BIP32 path as the Bitcoin app expects it: count byte, then big-endian
+ * u32 per level with the high bit set on hardened levels.
+ * @param {string} path
+ * @returns {Uint8Array}
+ */
+export function ledgerEncodeBip32Path(path) {
+    const ptr0 = passStringToWasm0(path, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.ledgerEncodeBip32Path(ptr0, len0);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * GET WALLET PUBLIC KEY, as JSON so the renderer can frame it.
+ *
+ * `format` defaults to cashaddr when empty: a Ledger asked for the app
+ * default returns a legacy address, which is a real address on the same
+ * chain that no modern Bitcoin Cash wallet displays.
+ * @param {string} path
+ * @param {boolean} verify
+ * @param {string} format
+ * @returns {string}
+ */
+export function ledgerGetWalletPublicKey(path, verify, format) {
+    let deferred4_0;
+    let deferred4_1;
+    try {
+        const ptr0 = passStringToWasm0(path, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(format, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.ledgerGetWalletPublicKey(ptr0, len0, verify, ptr1, len1);
+        var ptr3 = ret[0];
+        var len3 = ret[1];
+        if (ret[3]) {
+            ptr3 = 0; len3 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred4_0 = ptr3;
+        deferred4_1 = len3;
+        return getStringFromWasm0(ptr3, len3);
+    } finally {
+        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+    }
+}
+
+/**
+ * Read the device's reply. Every length is checked against what arrived, so
+ * a truncated reply is refused rather than read as a short address.
+ * @param {Uint8Array} response
+ * @returns {string}
+ */
+export function ledgerParseWalletPublicKey(response) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passArray8ToWasm0(response, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.ledgerParseWalletPublicKey(ptr0, len0);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
+ * A status word as something the holder can act on. Empty string is success.
+ * @param {number} status
+ * @returns {string}
+ */
+export function ledgerStatusWord(status) {
+    let deferred1_0;
+    let deferred1_1;
+    try {
+        const ret = wasm.ledgerStatusWord(status);
+        deferred1_0 = ret[0];
+        deferred1_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+    }
+}
+
+/**
  * The message to show for a legacy PayCode. Exported rather than duplicated
  * in TypeScript so the wallet and the CLI refuse it in the same words.
  * @returns {string}

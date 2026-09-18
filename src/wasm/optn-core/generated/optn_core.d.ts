@@ -153,6 +153,37 @@ export function grindString(scan_pubkey: Uint8Array, prefix_bits: number): strin
 export function isLegacyPaycode(candidate: string): boolean;
 
 /**
+ * The P2 value for an address encoding. `cashaddr` is 3.
+ */
+export function ledgerAddressFormat(name: string): number;
+
+/**
+ * A BIP32 path as the Bitcoin app expects it: count byte, then big-endian
+ * u32 per level with the high bit set on hardened levels.
+ */
+export function ledgerEncodeBip32Path(path: string): Uint8Array;
+
+/**
+ * GET WALLET PUBLIC KEY, as JSON so the renderer can frame it.
+ *
+ * `format` defaults to cashaddr when empty: a Ledger asked for the app
+ * default returns a legacy address, which is a real address on the same
+ * chain that no modern Bitcoin Cash wallet displays.
+ */
+export function ledgerGetWalletPublicKey(path: string, verify: boolean, format: string): string;
+
+/**
+ * Read the device's reply. Every length is checked against what arrived, so
+ * a truncated reply is refused rather than read as a short address.
+ */
+export function ledgerParseWalletPublicKey(response: Uint8Array): string;
+
+/**
+ * A status word as something the holder can act on. Empty string is success.
+ */
+export function ledgerStatusWord(status: number): string;
+
+/**
  * The message to show for a legacy PayCode. Exported rather than duplicated
  * in TypeScript so the wallet and the CLI refuse it in the same words.
  */
@@ -230,6 +261,11 @@ export interface InitOutput {
     readonly grindSequence: (a: number) => [number, number, number];
     readonly grindString: (a: number, b: number, c: number) => [number, number, number, number];
     readonly isLegacyPaycode: (a: number, b: number) => number;
+    readonly ledgerAddressFormat: (a: number, b: number) => [number, number, number];
+    readonly ledgerEncodeBip32Path: (a: number, b: number) => [number, number, number, number];
+    readonly ledgerGetWalletPublicKey: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+    readonly ledgerParseWalletPublicKey: (a: number, b: number) => [number, number, number, number];
+    readonly ledgerStatusWord: (a: number) => [number, number];
     readonly legacyPaycodeRejection: () => [number, number];
     readonly looksLikeRpa: (a: number, b: number) => number;
     readonly paymentAddress: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
