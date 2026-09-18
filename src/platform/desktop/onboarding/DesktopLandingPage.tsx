@@ -37,6 +37,7 @@ import {
 } from '../DesktopWalletManager';
 import type { WalletFileV1 } from '../walletFile';
 import { resolveBiometricEnrollment } from '../biometricEnrollment';
+import { openWalletInEngine } from '../engineWalletBridge';
 import { DesktopWalletPickerActions } from './DesktopWalletPickerActions';
 import { WatchOnlyWalletPreview } from './WatchOnlyWalletPreview';
 import { HardwareWalletWizard } from './HardwareWalletWizard';
@@ -127,6 +128,17 @@ const DesktopLandingPage = () => {
   const location = useLocation();
   const dispatch = useDispatch();
   const currentNetwork = useSelector(selectCurrentNetwork);
+  // The holder's own app-lock choice, carried to the runtime when it opens the
+  // same wallet file. The runtime refuses a file from another interface until
+  // it has one, rather than adopting a default nobody picked.
+  //
+  // Read defensively: this page also renders in stores that carry only the
+  // slices it strictly needs, and an absent choice means there is nothing to
+  // carry rather than "zero minutes".
+  const autoLockMinutes = useSelector(
+    (state: { appLock?: { autoLockMinutes?: number } }) =>
+      state.appLock?.autoLockMinutes
+  );
   const { t } = useI18n();
 
   useEffect(() => {
@@ -471,6 +483,22 @@ const DesktopLandingPage = () => {
       if (attempt.status === 'rejected') {
         setError(t('desktopWallet.incorrectFilePassword'));
         return;
+      }
+      // Open the same file in the Rust runtime so the shared engine can
+      // synchronize this account through the multi-source chain stack. Both
+      // sides read the same `.optn`; this is the same wallet, not a copy.
+      // Best-effort: the wallet is already open here, so a runtime that
+      // declines must not fail an unlock the user just completed.
+      const engine = await openWalletInEngine(
+        openingId,
+        password,
+        autoLockMinutes
+      );
+      if (!engine.opened && engine.reason) {
+        console.warn(
+          '[DesktopLandingPage] engine wallet not opened:',
+          engine.reason
+        );
       }
       finishOpen(openingId, attempt.value);
     } catch (err) {

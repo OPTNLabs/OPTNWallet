@@ -34,6 +34,7 @@ import {
 } from '../../utils/servers/userNodes';
 import { Bip37NodeRow } from './Bip37NodeSettings';
 import { ServerPrivacySettings } from './ServerPrivacySettings';
+import { ChainSourcesSettings } from './ChainSourcesSettings';
 import {
   getBackend,
   setBackend,
@@ -257,6 +258,14 @@ export const ServerSettings: React.FC = () => {
 
   return (
     <div className="flex flex-col gap-4">
+      {/*
+        The multi-source model the Rust runtime actually enforces. The controls
+        below it still edit the single Electrum server and single peer the
+        legacy settings shape can hold, which is a narrow view of this same
+        catalog -- so this sits above them rather than replacing them.
+      */}
+      {desktop && <ChainSourcesSettings />}
+
       {/* Which single backend serves this wallet */}
       <div className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-3 flex items-center justify-between gap-3">
         <div className="min-w-0">

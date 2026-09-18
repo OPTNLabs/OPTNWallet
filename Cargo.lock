@@ -2265,6 +2265,7 @@ dependencies = [
  "optn-core",
  "optn-runtime",
  "rand_core 0.6.4",
+ "serde_json",
  "tokio",
 ]
 
