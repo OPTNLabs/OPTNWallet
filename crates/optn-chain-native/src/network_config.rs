@@ -59,7 +59,10 @@ impl NetworkConfigStore for NetworkConfigFile {
     }
 }
 
-pub(crate) fn lock_file(path: &Path) -> io::Result<File> {
+/// Shared by every durable native store in this crate, so atomic write,
+/// bounded read and the sidecar lock have one implementation rather than one
+/// per file kind.
+pub fn lock_file(path: &Path) -> io::Result<File> {
     let parent = path.parent().ok_or_else(|| {
         io::Error::new(io::ErrorKind::InvalidInput, "data directory is unavailable")
     })?;
@@ -73,7 +76,7 @@ pub(crate) fn lock_file(path: &Path) -> io::Result<File> {
     Ok(lock)
 }
 
-pub(crate) fn read_bounded(path: &Path, max: u64) -> Result<Option<Vec<u8>>, String> {
+pub fn read_bounded(path: &Path, max: u64) -> Result<Option<Vec<u8>>, String> {
     let file = match File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -89,7 +92,7 @@ pub(crate) fn read_bounded(path: &Path, max: u64) -> Result<Option<Vec<u8>>, Str
     Ok(Some(bytes))
 }
 
-pub(crate) fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
+pub fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let directory = path.parent().ok_or_else(|| {
         io::Error::new(io::ErrorKind::InvalidInput, "data directory is unavailable")
     })?;
