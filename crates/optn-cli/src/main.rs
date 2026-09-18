@@ -1326,6 +1326,16 @@ async fn address_selected_chain(cli: &Cli, address: &str, include_outputs: bool)
             .map_err(|error| {
                 CliError::Network(format!("shared wallet refresh failed: {error:?}"))
             })?;
+        // Hand the verified accumulator back before reporting. A restart then
+        // resumes where this pass reached instead of walking the chain from
+        // genesis again, which on a long chain is the difference between a
+        // refresh that finishes and one that times out.
+        if let Some(view) = worker.header_view() {
+            runtime
+                .publish_header_progress(view)
+                .await
+                .map_err(|error| CliError::Network(format!("header progress: {error}")))?;
+        }
         let status = runtime.subscribe_wallet_sync().borrow().clone();
         if !status.sync.history_fresh || !status.sync.utxos_fresh {
             return Err(CliError::Network("wallet refresh did not publish a fresh snapshot".into()));
@@ -1470,6 +1480,16 @@ async fn rescan_shared_wallet(
         runtime.sync_hd_wallet(&mut *stack.service.lock().await, &mut worker, xpub,
             optn_runtime::hd_sync::HdSyncLimits { gap_limit: gap, addresses_per_branch: cap })
             .await.map_err(|error| CliError::Network(format!("HD rescan incomplete: {error}")))?;
+        // Hand the verified accumulator back before reporting. A restart then
+        // resumes where this pass reached instead of walking the chain from
+        // genesis again, which on a long chain is the difference between a
+        // refresh that finishes and one that times out.
+        if let Some(view) = worker.header_view() {
+            runtime
+                .publish_header_progress(view)
+                .await
+                .map_err(|error| CliError::Network(format!("header progress: {error}")))?;
+        }
         let status = runtime.subscribe_wallet_sync().borrow().clone();
         if !status.sync.history_fresh || !status.sync.utxos_fresh {
             return Err(CliError::Network("HD rescan did not publish a complete account".into()));
@@ -1544,6 +1564,35 @@ fn header_verifier_report(
             Err(_) => (true, false, None, None, Some("GenesisAttached")),
         },
     }
+}
+
+/// Seed a worker with the accumulator this wallet last had sealed.
+///
+/// `None` is the ordinary case for a fresh wallet, a record written before
+/// header progress was persisted, or one that has never completed a pass --
+/// all of which start from the shipped genesis anchor, as every run did
+/// before this existed.
+async fn seed_header_progress(
+    runtime: &optn_runtime::AppRuntime,
+    network: Network,
+    worker: optn_runtime::sync_worker::ProgressiveSyncWorker,
+) -> Result<optn_runtime::sync_worker::ProgressiveSyncWorker> {
+    let Some(progress) = runtime
+        .restored_header_progress()
+        .await
+        .map_err(|error| CliError::Network(format!("restored header progress: {error}")))?
+    else {
+        return Ok(worker);
+    };
+    let view = optn_runtime::header_view::VerifiedHeaderView::restore(
+        &progress.view,
+        network,
+        &progress.trusted,
+    )
+    .map_err(|error| CliError::Usage(format!("stored header progress is unusable: {error:?}")))?;
+    worker
+        .with_header_view(view)
+        .map_err(|error| CliError::Usage(format!("stored header view: {error:?}")))
 }
 
 fn hd_sync_worker(

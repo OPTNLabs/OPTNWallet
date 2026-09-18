@@ -633,7 +633,7 @@ impl AppRuntimeDriver {
                             event = Some(self.wallet_sync.persist_annotation(
                                 &mut self.state,
                                 previous,
-                                |app, sync| security.persist_checkpoint(app, sync),
+                                |app, sync| security.persist_checkpoint(app, sync, None),
                                 |app| guard.allows(app, applied.is_closed()),
                             ));
                             if event == Some(AppEvent::CoinsChanged) {

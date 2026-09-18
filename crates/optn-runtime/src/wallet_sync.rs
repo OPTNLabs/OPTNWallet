@@ -75,6 +75,17 @@ pub(super) struct WalletSyncLease {
 }
 
 pub(super) enum WalletSyncRequest {
+    /// Verified header progress from a completed pass, for the next save.
+    ///
+    /// The view lives on the worker the host drives, so the host hands it in
+    /// rather than the runtime reaching for it. Held until a checkpoint is
+    /// sealed, which is the only thing that can authenticate it.
+    PublishHeaderProgress(
+        Box<crate::wallet_checkpoint::StoredHeaderProgress>,
+        oneshot::Sender<()>,
+    ),
+    /// The header progress a restored checkpoint brought back, if any.
+    RestoredHeaderProgress(oneshot::Sender<Option<crate::wallet_checkpoint::StoredHeaderProgress>>),
     Checkpoint(oneshot::Sender<Result<WalletCheckpoint, WalletSyncError>>),
     Restore(
         Box<WalletCheckpoint>,
@@ -140,6 +151,53 @@ impl AppRuntime {
             .map_err(|_| WalletSyncError::Closed)?;
         received.await.map_err(|_| WalletSyncError::Closed)?
     }
+    /// The verified header progress this wallet last had sealed, if any.
+    ///
+    /// Restored on open, before any pass runs. A host seeds its worker from
+    /// this so the accumulator resumes at the height the wallet reached
+    /// rather than at genesis; `None` means a fresh wallet, a record written
+    /// before progress was persisted, or a wallet that has never completed a
+    /// header pass -- all of which correctly start from the shipped anchor.
+    pub async fn restored_header_progress(
+        &self,
+    ) -> Result<Option<crate::wallet_checkpoint::StoredHeaderProgress>, WalletSyncError> {
+        let (reply, received) = oneshot::channel();
+        self.action_tx
+            .send(RuntimeRequest::WalletSync(
+                WalletSyncRequest::RestoredHeaderProgress(reply),
+            ))
+            .await
+            .map_err(|_| WalletSyncError::Closed)?;
+        received.await.map_err(|_| WalletSyncError::Closed)
+    }
+
+    /// Hand verified header progress to the runtime for its next save.
+    ///
+    /// Called by whoever drives the sync worker, because that is where the
+    /// view is: the runtime does not reach into the host for it, and nothing
+    /// is written until a checkpoint is sealed. Encoding here rather than at
+    /// save time means a view that cannot be encoded is refused while the
+    /// caller still has somewhere to report it.
+    pub async fn publish_header_progress(
+        &self,
+        view: &crate::header_view::VerifiedHeaderView,
+    ) -> Result<(), WalletSyncError> {
+        let progress = crate::wallet_checkpoint::StoredHeaderProgress {
+            view: view
+                .encode()
+                .map_err(|error| WalletSyncError::InvalidSnapshot(format!("{error:?}")))?,
+            trusted: view.checkpoint(),
+        };
+        let (reply, received) = oneshot::channel();
+        self.action_tx
+            .send(RuntimeRequest::WalletSync(
+                WalletSyncRequest::PublishHeaderProgress(Box::new(progress), reply),
+            ))
+            .await
+            .map_err(|_| WalletSyncError::Closed)?;
+        received.await.map_err(|_| WalletSyncError::Closed)
+    }
+
     /// Synchronize the selected HD account from public material only, covering
     /// receive/change/DeFi until each branch reaches its history-based gap.
     /// No partial round publishes coins; session invalidation applies to the
@@ -348,6 +406,8 @@ pub(super) struct WalletSyncSession {
     /// Registry fetch attempts for this session. Transport results only; the
     /// authchain walk still decides whether they may become Current.
     registry_fetches: Vec<(String, crate::token_metadata::FetchAttempt)>,
+    /// The most recent verified header progress, awaiting a seal.
+    header_progress: Option<crate::wallet_checkpoint::StoredHeaderProgress>,
 }
 
 impl WalletSyncSession {
@@ -411,6 +471,7 @@ impl WalletSyncSession {
                 state: WalletReconciliation::default(),
                 state_tx,
                 registry_fetches: Vec::new(),
+                header_progress: None,
             },
             state_rx,
         )
@@ -501,6 +562,12 @@ impl WalletSyncSession {
 
     /// Open/restore callers validate account ownership before installing it.
     pub(super) fn install_checkpoint(&mut self, checkpoint: WalletCheckpoint, app: &mut AppState) {
+        // Carried into the session so the host can seed its worker with the
+        // accumulator this wallet last verified, instead of starting over at
+        // genesis. Kept as the session's current progress too: if the next
+        // pass never publishes, the seal that follows should preserve what
+        // was already durable rather than drop back to nothing.
+        self.header_progress = checkpoint.header_progress().cloned();
         app.wallet_sync = checkpoint
             .state
             .authoritative
@@ -562,11 +629,23 @@ impl WalletSyncSession {
         guard: crate::PublicationGuard<'_>,
     ) {
         match request {
+            WalletSyncRequest::PublishHeaderProgress(progress, reply) => {
+                self.header_progress = Some(*progress);
+                let _ = reply.send(());
+            }
+            WalletSyncRequest::RestoredHeaderProgress(reply) => {
+                let _ = reply.send(self.header_progress.clone());
+            }
             WalletSyncRequest::Checkpoint(reply) => {
-                let _ = reply.send(
-                    WalletCheckpoint::capture(app, &self.state)
-                        .map_err(WalletSyncError::InvalidSnapshot),
-                );
+                let captured = WalletCheckpoint::capture(app, &self.state)
+                    .map_err(WalletSyncError::InvalidSnapshot)
+                    .and_then(|checkpoint| match self.header_progress.as_ref() {
+                        None => Ok(checkpoint),
+                        Some(progress) => checkpoint
+                            .with_stored_header_progress(progress.clone())
+                            .map_err(WalletSyncError::InvalidSnapshot),
+                    });
+                let _ = reply.send(captured);
             }
             WalletSyncRequest::Restore(checkpoint, reply) => {
                 let outcome = if self.active.is_some()
@@ -626,12 +705,18 @@ impl WalletSyncSession {
                     generation: lease.generation,
                     ..guard
                 };
+                // Cloned before `finish` borrows the session, and passed to
+                // the save so a restart resumes the accumulator where this
+                // pass left it instead of at genesis.
+                let progress = self.header_progress.clone();
                 let outcome = self.finish(
                     app,
                     lease,
                     *result,
                     |app, state| match security.as_deref_mut() {
-                        Some(security) => security.persist_checkpoint(app, state),
+                        Some(security) => {
+                            security.persist_checkpoint(app, state, progress.as_ref())
+                        }
                         None => Ok(()),
                     },
                     |app| guard.allows(app, reply.is_closed()),
@@ -1257,6 +1342,33 @@ mod tests {
             assert!(app.spend.is_none());
             assert!(!status.borrow().sync.utxos_fresh);
         }
+    }
+
+    /// The host can hand verified header progress to the runtime.
+    ///
+    /// The new plumbing: the view lives on the worker the host drives, the
+    /// seal happens inside the runtime, and neither could see the other's
+    /// half before this. What the runtime then does with it -- sealing it
+    /// into the checkpoint and restoring from it -- is pinned in
+    /// `wallet_checkpoint`'s own tests, which can build an HD session this
+    /// address-observation fixture deliberately does not have.
+    #[tokio::test]
+    async fn the_host_can_publish_verified_header_progress() {
+        use crate::header_verifier::shipped_header_verifier;
+        use crate::header_view::VerifiedHeaderView;
+
+        let runtime = runtime().await;
+        let verifier = shipped_header_verifier(Network::Chipnet).expect("anchor");
+        let view = VerifiedHeaderView::new(Network::Chipnet, verifier);
+
+        runtime
+            .publish_header_progress(&view)
+            .await
+            .expect("the runtime accepts published progress");
+
+        // Encoded at the boundary, so a view that cannot be encoded is
+        // refused while the caller still has somewhere to report it.
+        assert!(view.encode().is_ok());
     }
 
     #[tokio::test]

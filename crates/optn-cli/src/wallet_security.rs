@@ -84,7 +84,11 @@ async fn sync_wallet(cli: &crate::Cli, runtime: &AppRuntime, floor: Option<u32>)
                 &cli.network.to_string(),
                 &optn_chain_native::NativeChainSecrets::default(),
             ).await;
-            let mut worker = worker.with_accepted_headers(stack.headers.clone());
+            let worker = worker.with_accepted_headers(stack.headers.clone());
+            // Resume the accumulator this wallet last had sealed. Without it
+            // every refresh re-verifies the chain from genesis, which on a
+            // long chain exceeds the deadline before any wallet work starts.
+            let mut worker = crate::seed_header_progress(&runtime, cli.network, worker).await?;
             let decision = runtime.sync_hd_wallet_from_floor(
                 &mut *stack.service.lock().await,
                 &mut worker,
@@ -94,6 +98,13 @@ async fn sync_wallet(cli: &crate::Cli, runtime: &AppRuntime, floor: Option<u32>)
             ).await.map_err(|error| CliError::Network(error.to_string()))?;
             if decision != optn_runtime::reconciliation::ReconciliationDecision::Accepted {
                 return Err(CliError::Network("Wallet refresh was incomplete; retained history remains stale.".into()));
+            }
+            // Published before returning, so the next open resumes here. The
+            // runtime seals it with the wallet's own checkpoint; nothing is
+            // durable until that happens.
+            if let Some(view) = worker.header_view() {
+                runtime.publish_header_progress(view).await
+                    .map_err(|error| CliError::Network(format!("header progress: {error}")))?;
             }
             Ok(())
         },
