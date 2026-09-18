@@ -6,9 +6,9 @@ pub mod app_transport;
 mod appearance;
 pub mod chain_runtime;
 mod chain_sources;
-mod coin_holds;
 #[cfg(desktop)]
 pub mod clipboard;
+mod coin_holds;
 pub mod electrum_tcp;
 pub mod fusion;
 #[cfg(desktop)]
@@ -21,6 +21,7 @@ pub mod platform;
 pub mod platform_mobile;
 pub mod spv;
 mod wallet_security;
+mod wallet_spend;
 
 async fn verified_fusion_proxy<'a>(
     destination_hosts: &[&str],
@@ -1127,6 +1128,8 @@ pub fn run() {
             coin_holds::optn_coin_holds,
             coin_holds::optn_coin_freeze,
             coin_holds::optn_coin_unfreeze,
+            wallet_spend::optn_wallet_prepare_spend,
+            wallet_spend::optn_wallet_send,
             app_transport::optn_app_snapshot,
             app_transport::optn_wallet_refresh,
             app_transport::optn_wallet_rescan,
