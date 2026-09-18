@@ -331,6 +331,21 @@ pub async fn optn_chain_sources(
     })
 }
 
+/// Rebuild routes now, without waiting for a settings change.
+///
+/// Routes are rebuilt when the selection changes, and a proxy appearing is not
+/// a selection change: starting Tor left every public source refused until
+/// something unrelated was edited. Retrying is the holder's instruction, so it
+/// is a command rather than a background poll.
+#[tauri::command]
+pub async fn optn_chain_rebuild(
+    runtime: tauri::State<'_, optn_runtime::AppRuntime>,
+    native: tauri::State<'_, Arc<NativeChainRuntime>>,
+) -> Result<(), String> {
+    native.rebuild_from_app_state(&runtime.state()).await;
+    Ok(())
+}
+
 #[derive(Debug, Deserialize)]
 pub struct AddSourceRequest {
     pub network: Option<String>,

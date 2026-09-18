@@ -7,6 +7,7 @@ import {
   DEFAULT_PORTS,
   ENDPOINT_KINDS,
   readChainSources,
+  rebuildChainRoutes,
   removeChainSource,
   SELECTABLE_CHAIN_POLICIES,
   setChainPolicy,
@@ -14,6 +15,10 @@ import {
   type ChainSource,
   type ChainSourcesView,
 } from '../../platform/desktop/chainSourcesBridge';
+import {
+  integratedTorStatus,
+  startIntegratedTor,
+} from '../../platform/desktop/FusionStatusService';
 
 /**
  * Every chain source for the active network, as the Rust runtime sees them.
@@ -73,6 +78,8 @@ export function ChainSourcesSettings() {
   const [label, setLabel] = useState('');
   const [kind, setKind] = useState(ENDPOINT_KINDS[0].value);
   const [ownInfrastructure, setOwnInfrastructure] = useState(false);
+  const [torStarting, setTorStarting] = useState(false);
+  const [torProgress, setTorProgress] = useState<number | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -155,11 +162,49 @@ export function ChainSourcesSettings() {
       </div>
 
       {refusedForWantOfTor(view.sources) && (
-        <p className="rounded-lg border border-[var(--wallet-warning-border)] bg-[var(--wallet-warning-bg)] px-3 py-2 text-xs text-[var(--wallet-warning-text)]">
-          Public sources are reached through Tor, and no verified proxy was
-          found. Start integrated Tor further down this screen, or add a source
-          you marked as your own — those are dialled directly.
-        </p>
+        <div className="rounded-lg border border-[var(--wallet-warning-border)] bg-[var(--wallet-warning-bg)] px-3 py-2 text-xs text-[var(--wallet-warning-text)]">
+          <p>
+            Public sources are reached through Tor, and no verified proxy is
+            running. A source you mark as your own is dialled directly instead.
+          </p>
+          <button
+            type="button"
+            disabled={torStarting}
+            data-testid="start-tor-for-chain"
+            className="wallet-btn-secondary mt-2 px-3 py-1.5 text-xs"
+            onClick={() => {
+              setTorStarting(true);
+              setTorProgress(0);
+              // Bootstrap can take a minute on a slow or filtered network, so
+              // report progress rather than leaving a dead button. The routes
+              // rebuild on their own once the proxy verifies.
+              const poll = setInterval(() => {
+                void integratedTorStatus()
+                  .then((status) => setTorProgress(status.bootstrap_percent))
+                  .catch(() => undefined);
+              }, 1500);
+              void startIntegratedTor()
+                // The proxy exists now; the stack still holds routes built
+                // when it did not, so ask for a rebuild before reading back.
+                .then(() => rebuildChainRoutes())
+                .then(() => refresh())
+                .catch((failure) =>
+                  setError(
+                    failure instanceof Error ? failure.message : String(failure)
+                  )
+                )
+                .finally(() => {
+                  clearInterval(poll);
+                  setTorStarting(false);
+                  setTorProgress(null);
+                });
+            }}
+          >
+            {torStarting
+              ? `Starting Tor… ${torProgress ?? 0}%`
+              : 'Start Tor for chain routes'}
+          </button>
+        </div>
       )}
 
       {view.configuration_error && (
