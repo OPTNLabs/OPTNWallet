@@ -1,4 +1,4 @@
-// CashFusion Pedersen commitments ??? matches Electron Cash byte-for-byte.
+// CashFusion Pedersen commitments — matches Electron Cash byte-for-byte.
 //
 // A Pedersen commitment hides a component's amount while letting the round
 // verify that it balances. It is additively homomorphic:
@@ -11,9 +11,9 @@
 // makes the nonce term cancel in that check.
 //
 // Reference (Electron Cash, electroncash_plugins/fusion/):
-//   pedersen.py  ??? commitment = amount*H + nonce*G; amount_commitment is the
+//   pedersen.py  — commitment = amount*H + nonce*G; amount_commitment is the
 //                  65-byte UNCOMPRESSED point (0x04 prefix); scalars big-endian.
-//   protocol.py  ??? H = PedersenSetup(b'\x02CashFusion gives us fungibility.'):
+//   protocol.py  — H = PedersenSetup(b'\x02CashFusion gives us fungibility.'):
 //                  the 33 bytes ARE the compressed encoding of H (0x02 even-y
 //                  prefix + the 32-ASCII-byte string as the x-coordinate). A
 //                  nothing-up-my-sleeve point with unknown discrete log vs G.
