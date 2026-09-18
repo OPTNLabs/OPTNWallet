@@ -80,7 +80,11 @@ describe('chain sources bridge', () => {
       },
     });
 
-    await addChainSource({ label: '', kind: 'electrum-tls', host: 'a.example' });
+    await addChainSource({
+      label: '',
+      kind: 'electrum-tls',
+      host: 'a.example',
+    });
     expect(invoke).toHaveBeenLastCalledWith('optn_chain_add_source', {
       request: {
         label: '',

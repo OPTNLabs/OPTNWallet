@@ -134,8 +134,10 @@ export const CHAIN_POLICY_LABELS: Record<ChainPolicy, string> = {
 
 export const CHAIN_POLICY_DESCRIPTIONS: Record<ChainPolicy, string> = {
   auto: 'Pick a healthy capable source for each operation',
-  privacy: 'Client-side filtering only — addresses are not sent to indexed servers',
-  own_infrastructure: 'Only sources you marked as your own. Never falls back to public ones',
+  privacy:
+    'Client-side filtering only — addresses are not sent to indexed servers',
+  own_infrastructure:
+    'Only sources you marked as your own. Never falls back to public ones',
   electrum_only: 'Electrum protocol servers only',
   bip37_only: 'Bloom-filter SPV peers only',
   neutrino_only: 'Compact-filter SPV peers only',

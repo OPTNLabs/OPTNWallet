@@ -16,7 +16,12 @@ const coin = (txid: string, pos: number, sats: number): UTXO =>
     address: 'bitcoincash:qtest',
   }) as unknown as UTXO;
 
-const tokenCoin = (txid: string, pos: number, amount: bigint, nft = false): UTXO =>
+const tokenCoin = (
+  txid: string,
+  pos: number,
+  amount: bigint,
+  nft = false
+): UTXO =>
   ({
     ...coin(txid, pos, 1000),
     token: {
@@ -35,18 +40,26 @@ describe('coin selection respects held coins', () => {
     // spending it double-spends that round's own inputs. Preferring it because
     // it is large is exactly the failure this prevents.
     const held = new Set([`${A}:0`]);
-    const result = selectForBch(BigInt(90_000), [coin(A, 0, 100_000), coin(B, 0, 95_000)], {
-      heldOutpoints: held,
-    });
+    const result = selectForBch(
+      BigInt(90_000),
+      [coin(A, 0, 100_000), coin(B, 0, 95_000)],
+      {
+        heldOutpoints: held,
+      }
+    );
     expect(result.selected.map((u) => u.tx_hash)).toEqual([B]);
   });
 
   it('matches a held coin whatever case the txid arrives in', () => {
     // The record stores lower-case; a UTXO from another source may not.
     const held = new Set([`${A}:1`]);
-    const result = selectForBch(BigInt(1_000), [coin(A.toUpperCase(), 1, 50_000)], {
-      heldOutpoints: held,
-    });
+    const result = selectForBch(
+      BigInt(1_000),
+      [coin(A.toUpperCase(), 1, 50_000)],
+      {
+        heldOutpoints: held,
+      }
+    );
     expect(result.selected).toEqual([]);
   });
 
@@ -66,7 +79,9 @@ describe('coin selection respects held coins', () => {
     expect(tokenInputs.map((u) => u.tx_hash)).toEqual([B]);
 
     expect(
-      selectNftInput('cat', [tokenCoin(A, 0, 0n, true)], { heldOutpoints: held })
+      selectNftInput('cat', [tokenCoin(A, 0, 0n, true)], {
+        heldOutpoints: held,
+      })
     ).toBeNull();
   });
 });

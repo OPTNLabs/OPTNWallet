@@ -25,6 +25,7 @@ import {
   type EngineWalletSync,
 } from '../../platform/desktop/engineWalletBridge';
 import { SATSINBITCOIN } from '../../utils/constants';
+import { refusedForWantOfTor } from './chainSourceStatus';
 
 /**
  * Every chain source for the active network, as the Rust runtime sees them.
@@ -35,24 +36,6 @@ import { SATSINBITCOIN } from '../../utils/constants';
  * one is allowed to answer, and which of them the current policy actually
  * selected — including when the answer is "none, and here is why".
  */
-/**
- * Do the refusals name Tor?
- *
- * A public source is reached through a verified local SOCKS proxy and is
- * refused outright when there is none — the route fails closed rather than
- * connecting directly, which is the point. Read cold, "requires a verified Tor
- * SOCKS proxy" on every row looks like a broken wallet, so the section says
- * what to do about it. Own infrastructure is dialled directly, which is why
- * that is offered as the other answer.
- */
-export function refusedForWantOfTor(sources: ChainSource[]): boolean {
-  const failures = sources.flatMap((source) => source.failures);
-  return (
-    failures.length > 0 &&
-    failures.every((failure) => /tor/i.test(failure.error))
-  );
-}
-
 function statusLine(source: ChainSource): { text: string; tone: string } {
   if (source.disposition === 'banned') {
     return { text: 'Banned', tone: 'text-red-400' };
@@ -160,7 +143,9 @@ export function ChainSourcesSettings() {
   return (
     <SectionCard className="p-4 space-y-4">
       <div>
-        <p className="text-sm font-semibold wallet-text-strong">Chain sources</p>
+        <p className="text-sm font-semibold wallet-text-strong">
+          Chain sources
+        </p>
         <p className="mt-1 text-xs wallet-muted">
           {view.network} · {view.wallet_routes} route
           {view.wallet_routes === 1 ? '' : 's'} able to sync right now
@@ -306,7 +291,9 @@ export function ChainSourcesSettings() {
             {engineSync.tipHeight ? ` · tip ${engineSync.tipHeight}` : ''}
           </p>
           {engineSync.error && (
-            <p className="mt-1 text-[11px] text-amber-400">{engineSync.error}</p>
+            <p className="mt-1 text-[11px] text-amber-400">
+              {engineSync.error}
+            </p>
           )}
         </div>
       )}
@@ -373,7 +360,9 @@ export function ChainSourcesSettings() {
                       disabled={busy}
                       aria-label={`Remove ${source.label}`}
                       className="px-1.5 py-1 text-xs text-red-400/70 hover:text-red-400"
-                      onClick={() => void run(() => removeChainSource(source.id))}
+                      onClick={() =>
+                        void run(() => removeChainSource(source.id))
+                      }
                     >
                       🗑
                     </button>

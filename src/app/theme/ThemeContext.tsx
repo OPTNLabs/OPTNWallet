@@ -12,7 +12,9 @@ import {
   readEngineAppearance,
 } from '../../platform/desktop/appearanceBridge';
 
-export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({
+  children,
+}) => {
   const [mode, setMode] = useState<ThemeMode>(getInitialTheme);
   const [skin, setSkin] = useState<UiSkin>(getInitialSkin);
   // Hydration must not be echoed back as a fresh choice: dispatching what the
@@ -54,10 +56,13 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       // surfaces, or true black. Every mode including Light and Gray is
       // offered in Settings -> Appearance, so this control does not have to
       // grow a third state to keep them reachable.
-      toggleMode: () => setMode((previous) => (previous === 'dark' ? 'green' : 'dark')),
+      toggleMode: () =>
+        setMode((previous) => (previous === 'dark' ? 'green' : 'dark')),
     }),
     [mode, skin]
   );
 
-  return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
+  return (
+    <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>
+  );
 };

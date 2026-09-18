@@ -28,7 +28,9 @@ export type EngineWalletSync = {
 };
 
 /** The runtime addresses a wallet by its file name. */
-export async function engineHandleFor(walletId: number): Promise<string | null> {
+export async function engineHandleFor(
+  walletId: number
+): Promise<string | null> {
   const relative = await findWalletFileRelForSourceId(walletId);
   if (!relative) return null;
   const name = relative.split('/').pop();
