@@ -88,7 +88,7 @@ async fn sync_wallet(cli: &crate::Cli, runtime: &AppRuntime, floor: Option<u32>)
             // Resume the accumulator this wallet last had sealed. Without it
             // every refresh re-verifies the chain from genesis, which on a
             // long chain exceeds the deadline before any wallet work starts.
-            let mut worker = crate::seed_header_progress(&runtime, cli.network, worker).await?;
+            let mut worker = crate::seed_header_progress(runtime, cli.network, worker).await?;
             let decision = runtime.sync_hd_wallet_from_floor(
                 &mut *stack.service.lock().await,
                 &mut worker,
