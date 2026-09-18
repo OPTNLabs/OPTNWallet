@@ -277,14 +277,23 @@ mod tests {
         // holds, so those outputs are dropped before selection ever sees them.
         // Proven here on the projection itself: the filter is one line and its
         // absence is invisible until someone loses an NFT.
+        use optn_core::token::TokenData;
         use optn_core::tx::{DecodedOutput, UnspentOutput};
+        // Written out rather than defaulted: `TokenData` has no `Default`, and
+        // it should not gain one -- an all-zero category is not a category any
+        // output actually carries, so a default would be a value that looks
+        // like a token and names nothing.
         let with_token = UnspentOutput {
             txid: [7u8; 32],
             vout: 0,
             output: DecodedOutput {
                 value: 1_000,
                 script_pubkey: vec![0x76, 0xa9],
-                token: Some(Default::default()),
+                token: Some(TokenData {
+                    category: [9u8; 32],
+                    amount: 1,
+                    nft: None,
+                }),
             },
         };
         assert!(with_token.output.token.is_some());
