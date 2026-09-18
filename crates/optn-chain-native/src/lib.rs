@@ -10,6 +10,7 @@
 //! model. Tauri and the CLI build this same stack.
 
 use optn_chain_bchn::{BchnRpcBackend, BchnRpcConfig, RpcAuth};
+pub mod coin_holds_file;
 pub mod network_config;
 pub mod wallet_checkpoint;
 // Re-exported because the shell reaches BIP37 directly in two places: the
