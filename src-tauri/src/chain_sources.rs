@@ -21,8 +21,8 @@ use optn_runtime::chain::{
 };
 use optn_runtime::chain_service::ChainOperation;
 use optn_runtime::network_config::{
-    add_user_source, remove_user_source, set_policy_preset,
-    set_source_disposition, ChainPolicyPreset,
+    add_user_source, remove_user_source, set_policy_preset, set_source_disposition,
+    ChainPolicyPreset,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -173,7 +173,9 @@ const fn scope_label(scope: &SourceScope) -> &'static str {
 }
 
 fn parse_network(value: &str) -> Result<Network, String> {
-    value.parse().map_err(|_| format!("unknown network '{value}'"))
+    value
+        .parse()
+        .map_err(|_| format!("unknown network '{value}'"))
 }
 
 fn source_views(
@@ -254,10 +256,9 @@ pub async fn optn_chain_sources(
         None => runtime.state().network,
     };
     let settings = (*network_settings).clone();
-    let persisted =
-        tokio::task::spawn_blocking(move || settings.chain_selection(network))
-            .await
-            .map_err(|_| "network settings reader stopped".to_string())??;
+    let persisted = tokio::task::spawn_blocking(move || settings.chain_selection(network))
+        .await
+        .map_err(|_| "network settings reader stopped".to_string())??;
     let (catalog, policy) = match persisted {
         Some(selection) => selection,
         None => {
@@ -319,15 +320,19 @@ pub async fn optn_chain_sources(
         // Height 0 is the shipped genesis anchor, not a header this host
         // verified from a peer. Reporting it as "verified header 0" reads as
         // progress that has not happened.
-        verified_tip: native.verified_tip(network).await.filter(|(height, _)| *height > 0).map(|(height, hash)| {
-            let mut display = hash;
-            // Block hashes are read big-endian; the store keeps wire order.
-            display.reverse();
-            VerifiedTipView {
-                height,
-                hash: hex::encode(display),
-            }
-        }),
+        verified_tip: native
+            .verified_tip(network)
+            .await
+            .filter(|(height, _)| *height > 0)
+            .map(|(height, hash)| {
+                let mut display = hash;
+                // Block hashes are read big-endian; the store keeps wire order.
+                display.reverse();
+                VerifiedTipView {
+                    height,
+                    hash: hex::encode(display),
+                }
+            }),
     })
 }
 

@@ -55,10 +55,7 @@ fn views(holds: &optn_runtime::coin_holds::CoinHolds) -> Vec<CoinHoldView> {
 }
 
 #[tauri::command]
-pub fn optn_coin_holds(
-    app: tauri::AppHandle,
-    wallet_id: u32,
-) -> Result<Vec<CoinHoldView>, String> {
+pub fn optn_coin_holds(app: tauri::AppHandle, wallet_id: u32) -> Result<Vec<CoinHoldView>, String> {
     Ok(views(&holds_file(&app, wallet_id)?.load()?))
 }
 

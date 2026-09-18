@@ -6,10 +6,9 @@ pub mod app_transport;
 mod appearance;
 pub mod chain_runtime;
 mod chain_sources;
-mod coin_holds;
-mod wallet_spend;
 #[cfg(desktop)]
 pub mod clipboard;
+mod coin_holds;
 pub mod electrum_tcp;
 pub mod fusion;
 #[cfg(desktop)]
@@ -22,6 +21,7 @@ pub mod platform;
 pub mod platform_mobile;
 pub mod spv;
 mod wallet_security;
+mod wallet_spend;
 
 async fn verified_fusion_proxy<'a>(
     destination_hosts: &[&str],

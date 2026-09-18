@@ -14,7 +14,6 @@
 use optn_core::{
     error::{CliError, Result},
     hd::{self, Wallet},
-
     tx::{self, Output, Transaction, Utxo},
     watch_only::HdAddressBook,
 };
@@ -100,7 +99,9 @@ pub fn prepare_spend(
         return Err(CliError::Usage("enter an amount to send".into()));
     }
     if request.destination_script.is_empty() {
-        return Err(CliError::Usage("the destination has no locking script".into()));
+        return Err(CliError::Usage(
+            "the destination has no locking script".into(),
+        ));
     }
 
     let available: Vec<Utxo> = coins
@@ -290,7 +291,9 @@ mod tests {
         let wallet = wallet();
         let mut coins = vec![coin(6, 50_000, "m/44'/1'/0'/0/0", &wallet)];
         coins[0].path = "not-a-path".into();
-        assert!(prepare_spend(&wallet, &coins, &request(&wallet, 10_000, BTreeSet::new())).is_err());
+        assert!(
+            prepare_spend(&wallet, &coins, &request(&wallet, 10_000, BTreeSet::new())).is_err()
+        );
 
         assert!(prepare_spend(&wallet, &[], &request(&wallet, 10_000, BTreeSet::new())).is_err());
         assert!(prepare_spend(&wallet, &coins, &request(&wallet, 0, BTreeSet::new())).is_err());
