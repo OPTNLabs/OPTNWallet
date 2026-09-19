@@ -93,6 +93,26 @@ For every connected feature change:
    headless renderer proofs, live workflows and packaged-device tests are distinct;
    none establishes all-renderer parity by itself.
 
+### CLI interaction contract
+
+Keep `optn wallet` as the persistent human wallet prompt, one-shot commands for
+individual operations, and `optn wallet --stdio` for private structured automation.
+All three use shared Rust behavior. A visual TUI and line-editor dependency are
+optional future UX work, not prerequisites for #75. Do not create a second wallet
+adapter trait, key store or signing implementation for a new terminal presentation.
+
+Passwords use hidden prompts or private input, never command arguments or saved
+command history. Persistent sessions still need backend auto-lock and explicit
+sensitive-operation authorization; an interactive prompt is not a security sandbox.
+
+Inside the wallet prompt, `network status` lists the shared configuration and
+`network select <id> --protocol <protocol>` selects an existing source. Advanced
+`network configure <JSON>` accepts the typed selection object; one-shot
+`optn network configure <file>` reads it from a file. The private stdio equivalent
+uses `{"network":{"op":"status"}}`, or `select`/`configure` operations with their
+corresponding fields. Source edits invalidate retained sync freshness before saving;
+the holder must sync again before freshness-dependent spending can proceed.
+
 ### Security boundaries are not framework guarantees
 
 Keep ordinary wallet operations behind typed backend actions; never add raw-key

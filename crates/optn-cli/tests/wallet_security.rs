@@ -859,3 +859,38 @@ fn source_selection_is_shared_durable_and_invalid_edits_preserve_the_file() {
     assert!(!run_cli(restored.path(), &import_args, "").status.success());
     assert_eq!(std::fs::read(&restored_config).unwrap(), accepted);
 }
+
+#[test]
+fn wallet_prompt_and_private_stdio_share_source_settings() {
+    let directory = test_directory();
+    let selection = json!({
+        "protocols":["Bip37"], "primary_scope":"MyInfrastructure",
+        "fallback_scope":null, "preferred":[]
+    });
+    let input = format!("network configure {selection}\nnetwork status\nquit\n");
+    let output = run_cli(directory.path(), &["wallet"], &input);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let prompt = responses(&output);
+    assert_eq!(prompt.len(), 2);
+    assert_eq!(prompt[0]["ok"], true);
+    assert_eq!(prompt[1]["policy"]["primary_scope"], "UserInfrastructure");
+    let config = directory.path().join("network-config/network-chipnet.json");
+    let before = std::fs::read(&config).unwrap();
+    let input = concat!(
+        "{\"network\":{\"op\":\"status\"}}\n",
+        "{\"network\":{\"op\":\"select\",\"source\":\"missing-source\",\"protocol\":\"bip37\"}}\n",
+        "{\"network\":{\"op\":\"status\",\"secret\":\"must-not-echo\"}}\n"
+    );
+    let output = run_cli(directory.path(), &["wallet", "--stdio"], input);
+    assert!(output.status.success());
+    let replies = responses(&output);
+    assert_eq!(replies[0]["policy"], prompt[1]["policy"]);
+    assert_eq!(replies[1]["ok"], false);
+    assert_eq!(replies[2]["error"], "Invalid wallet command.");
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("must-not-echo"));
+    assert_eq!(std::fs::read(&config).unwrap(), before);
+}

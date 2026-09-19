@@ -33,6 +33,9 @@ fn password(prompt: &str) -> Result<SecretText> {
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum Input {
+    Network {
+        network: NetworkCommand,
+    },
     Airgap {
         airgap: optn_transport::AirgapRequest,
     },
@@ -46,6 +49,88 @@ enum Input {
         chain: ChainCommand,
     },
 }
+
+#[derive(Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+enum NetworkCommand {
+    Status {},
+    Select {
+        source: String,
+        protocol: crate::ChainProtocol,
+    },
+    Configure {
+        selection: optn_transport::chain_sources::WireConnectionPolicy,
+    },
+}
+
+async fn network_reply(cli: &crate::Cli, runtime: &AppRuntime, command: NetworkCommand) -> Value {
+    let result = async {
+        let skill = match &command {
+            NetworkCommand::Status {} => "network",
+            NetworkCommand::Select { .. } => "network select",
+            NetworkCommand::Configure { .. } => "network configure",
+        };
+        crate::skills::enforce(crate::skills::Policy::from_env()?, skill)?;
+        if runtime.state().network != cli.network {
+            return Err(CliError::Usage(
+                "Wallet and source-settings networks differ.".into(),
+            ));
+        }
+        if !matches!(command, NetworkCommand::Status {}) {
+            // Invalidate before persistence: no prior spend/air-gap intent may
+            // survive a source change, even if its subsequent file write fails.
+            runtime
+                .invalidate_wallet_sync("Source settings changed; sync the wallet again.".into())
+                .await
+                .map_err(|error| CliError::Usage(error.to_string()))?;
+        }
+        match command {
+            NetworkCommand::Status {} => {}
+            NetworkCommand::Select { source, protocol } => crate::network_settings::select_source(
+                cli.network,
+                cli.network_config_dir.as_deref(),
+                &source,
+                protocol.into(),
+            )
+            .map_err(CliError::Usage)?,
+            NetworkCommand::Configure { selection } => crate::network_settings::configure_sources(
+                cli.network,
+                cli.network_config_dir.as_deref(),
+                &selection,
+            )
+            .map_err(CliError::Usage)?,
+        }
+        crate::shared_network_status(cli)
+    }
+    .await;
+    match result {
+        Ok(value) => value,
+        Err(error) => json!({"ok":false,"error":error.to_string()}),
+    }
+}
+
+fn network_prompt(argument: &str) -> Result<NetworkCommand> {
+    use clap::ValueEnum;
+    if let Some(json) = argument.strip_prefix("configure ") {
+        return serde_json::from_str(json)
+            .map(|selection| NetworkCommand::Configure { selection })
+            .map_err(|_| {
+                CliError::Usage("Use network configure followed by a selection JSON object.".into())
+            });
+    }
+    let parts = crate::console::split(argument)?;
+    match parts.as_slice() {
+        [] => Ok(NetworkCommand::Status {}),
+        [status] if status == "status" => Ok(NetworkCommand::Status {}),
+        [select, source, flag, protocol] if select == "select" && flag == "--protocol" => {
+            Ok(NetworkCommand::Select { source: source.clone(), protocol: crate::ChainProtocol::from_str(protocol, false)
+                .map_err(|_| CliError::Usage("Use electrum, bip37, neutrino, node-rpc or node-events.".into()))? })
+        },
+        _ => Err(CliError::Usage("Use network status, network select <id> --protocol <protocol>, or network configure <JSON>.".into())),
+    }
+}
+
+const WALLET_HELP: &str = "Wallet commands: help, list, open <file>, import, watch, receive [--acknowledge-gap], sync, rescan <height>, history, network status, network select <id> --protocol <protocol>, network configure <JSON>, airgap <request JSON>, password, autolock <minutes>, lock, authorize, reveal, quit";
 
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -179,7 +264,7 @@ async fn execute(
     input: Input,
 ) -> std::result::Result<WalletSecurityStatus, TransportError> {
     match input {
-        Input::Airgap { .. } => Err(TransportError::Unsupported),
+        Input::Airgap { .. } | Input::Network { .. } => Err(TransportError::Unsupported),
         Input::Chain { chain } => {
             if !matches!(chain, ChainCommand::History) {
                 let floor = match chain {
@@ -252,6 +337,7 @@ pub async fn run(directory: Option<PathBuf>, stdio: bool, cli: &crate::Cli) -> R
         while let Some(line) = private_line(&mut input, 262_144)? {
             let output = match serde_json::from_str::<Input>(&line) {
                 Ok(Input::Airgap { airgap }) => airgap_reply(&runtime, airgap).await,
+                Ok(Input::Network { network }) => network_reply(cli, &runtime, network).await,
                 Ok(input) => match execute(cli, &runtime, input).await {
                     Ok(status) => success_reply(&runtime.state(), status),
                     Err(error) => json!({"ok": false, "error": message(error)}),
@@ -261,7 +347,7 @@ pub async fn run(directory: Option<PathBuf>, stdio: bool, cli: &crate::Cli) -> R
             println!("{output}");
         }
     } else {
-        eprintln!("Wallet commands: list, open <file>, import, watch, receive [--acknowledge-gap], sync, rescan <height>, history, airgap <request JSON>, password, autolock <minutes>, lock, authorize, reveal, quit");
+        eprintln!("{WALLET_HELP}");
         loop {
             eprint!("wallet> ");
             io::stderr().flush().ok();
@@ -281,6 +367,17 @@ pub async fn run(directory: Option<PathBuf>, stdio: bool, cli: &crate::Cli) -> R
                 .map_err(|error| CliError::Usage(message(error)))?;
             let request = match command {
                 "quit" | "exit" => break,
+                "help" => {
+                    eprintln!("{WALLET_HELP}");
+                    continue;
+                }
+                "network" => {
+                    match network_prompt(argument) {
+                        Ok(command) => println!("{}", network_reply(cli, &runtime, command).await),
+                        Err(error) => eprintln!("{error}"),
+                    }
+                    continue;
+                }
                 "list" => Some(Request::Status),
                 "airgap" => {
                     match serde_json::from_str::<optn_transport::AirgapRequest>(argument) {
@@ -626,6 +723,33 @@ pub async fn read_managed_wallet(cli: &crate::Cli) -> Result<optn_core::hd::Wall
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn source_edit_invalidates_freshness_before_persisting() {
+        use clap::Parser;
+        let directory = tempfile::tempdir().unwrap();
+        let mut cli =
+            crate::Cli::try_parse_from(["optn", "--network", "chipnet", "wallet"]).unwrap();
+        cli.network_config_dir = Some(directory.path().to_path_buf());
+        let runtime = AppRuntime::spawn(AppState {
+            network: optn_app::Network::Chipnet,
+            wallet_sync: optn_app::WalletSyncView {
+                history_fresh: true,
+                utxos_fresh: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        assert!(runtime.state().wallet_sync.utxos_fresh);
+        let command = network_prompt(r#"configure {"protocols":["Bip37"],"primary_scope":"MyInfrastructure","fallback_scope":null,"preferred":[]}"#).unwrap();
+        let reply = network_reply(&cli, &runtime, command).await;
+        assert_eq!(reply["ok"], true);
+        assert!(!runtime.state().wallet_sync.history_fresh);
+        assert!(!runtime.state().wallet_sync.utxos_fresh);
+        assert!(directory.path().join("network-chipnet.json").exists());
+        assert!(network_prompt("select node --protocol bogus").is_err());
+        assert!(network_prompt("select node --protocol bip37 unexpected").is_err());
+    }
 
     #[tokio::test]
     async fn console_history_preserves_retained_projection_and_sync_requires_open_wallet() {
