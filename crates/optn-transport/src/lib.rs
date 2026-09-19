@@ -26,7 +26,10 @@ pub mod host;
 pub use airgap::{AirgapRequest, AirgapResponse};
 pub mod security;
 pub use host::{block_on_ready, run, Renderer};
-pub use security::{StoredWallet, WalletSecurityRequest, WalletSecurityStatus};
+pub use security::{
+    StoredWallet, WalletBirthdayInput, WalletBirthdayView, WalletSecurityRequest,
+    WalletSecurityStatus,
+};
 
 use serde::{Deserialize, Serialize};
 use std::{
