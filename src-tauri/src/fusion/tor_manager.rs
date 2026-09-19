@@ -190,6 +190,15 @@ pub fn status() -> TorStatus {
     }
 }
 
+/// The SOCKS port is managed only while this process's tracked child has
+/// completed its bootstrap. A listener on the integrated port is never enough:
+/// it may belong to another process.
+pub fn owned_socks_port() -> Option<u16> {
+    (RUNNING.load(Ordering::SeqCst) && SPAWNED.load(Ordering::SeqCst))
+        .then(|| SOCKS_PORT.load(Ordering::SeqCst))
+        .filter(|port| *port != 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,6 +253,7 @@ mod tests {
         let observed = status();
         assert!(!observed.running);
         assert_eq!(observed.bootstrap_percent, 0);
+        assert_eq!(owned_socks_port(), None);
         reset_status();
     }
 
@@ -255,10 +265,13 @@ mod tests {
         observe_child_log("[notice] Bootstrapped 100% (done): Done");
         assert!(status().running);
         assert_eq!(status().bootstrap_percent, 100);
+        SOCKS_PORT.store(9251, Ordering::SeqCst);
+        assert_eq!(owned_socks_port(), Some(9251));
 
         observe_child_exit();
         assert!(!status().running);
         assert_eq!(status().bootstrap_percent, 0);
         assert!(!SPAWNED.load(Ordering::SeqCst));
+        assert_eq!(owned_socks_port(), None);
     }
 }

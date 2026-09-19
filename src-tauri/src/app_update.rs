@@ -27,7 +27,6 @@ use std::time::Duration;
 /// update source is a configurable place to be told to install something.
 const RELEASES_API: &str = "https://api.github.com/repos/OPTNLabs/OPTNWallet/releases";
 const RELEASES_PAGE: &str = "https://github.com/OPTNLabs/OPTNWallet/releases";
-const UPDATE_HOST: &str = "api.github.com";
 
 /// This build, from the crate version the release workflow also tags with.
 fn current_version() -> String {
