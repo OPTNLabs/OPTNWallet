@@ -1320,8 +1320,10 @@ dependencies = [
  "optn-core",
  "optn-runtime",
  "rand_core 0.6.4",
+ "reqwest",
  "serde_json",
  "tokio",
+ "url",
 ]
 
 [[package]]
