@@ -59,19 +59,19 @@ const DIRECTORY_CONFIG: Record<
   { title: string; description: string; origin: ChainSource['origin'] }
 > = {
   public: {
-    title: 'Public source directory',
+    title: 'Public Sources',
     description:
       'Browse the maintained public sources for this network. Opening this directory does not contact them.',
     origin: 'bootstrap',
   },
   own: {
-    title: 'My infrastructure',
+    title: 'My Infrastructure',
     description:
       "Sources added here are marked as infrastructure you control and follow the wallet's current routing choices.",
     origin: 'own-infrastructure',
   },
   custom: {
-    title: 'My custom sources',
+    title: 'Custom Sources',
     description:
       "User-added sources stay in the custom directory and follow the wallet's current routing choices.",
     origin: 'user',
@@ -716,7 +716,7 @@ export function ChainSourcesSettings({
               className="block text-xs font-semibold wallet-text-strong"
               htmlFor="chain-policy"
             >
-              Connection policy
+              Routing choice
             </label>
             <select
               id="chain-policy"

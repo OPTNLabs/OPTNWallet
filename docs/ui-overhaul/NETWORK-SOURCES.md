@@ -16,8 +16,8 @@ not the replacement Leptos shell. New navigation belongs within that visual desi
 This is a constraint on the complete interface, not just its palette. The native
 Network pilot was useful as a feature prototype; it is not permission to replace
 Home, Portfolio, Send/Receive or the wallet's navigation. In the retained desktop
-UI, Settings -> Wallet -> Servers -> Network sources opens the new directory and
-routing flow in place, with a return to the existing server settings.
+UI, the existing Settings entry opens Network directly. Its directories, routing,
+privacy, explorer and fee controls use the existing skin and one-level Back navigation.
 
 ## Terms
 
