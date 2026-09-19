@@ -33,7 +33,6 @@ import {
   removeUserNode,
 } from '../../utils/servers/userNodes';
 import { Bip37NodeRow } from './Bip37NodeSettings';
-import { ServerPrivacySettings } from './ServerPrivacySettings';
 import { ChainSourcesSettings } from './ChainSourcesSettings';
 import {
   getBackend,
@@ -65,11 +64,12 @@ function readLastHealthy(): string {
   return readStorageItem(getPreferredStorage(), LAST_HEALTHY_KEY) ?? '';
 }
 
-export const ServerSettings: React.FC = () => {
+export const ServerSettings: React.FC<{
+  backRef?: React.MutableRefObject<(() => void) | null>;
+}> = ({ backRef }) => {
   const dispatch = useDispatch();
   const { t } = useI18n();
   const desktop = isDesktopPlatform();
-  const [showSources, setShowSources] = useState(false);
   const currentNetwork = useSelector(selectCurrentNetwork);
   const defaultServers = getElectrumServers(currentNetwork);
   const explorerId = useSelector(selectExplorerId);
@@ -159,13 +159,14 @@ export const ServerSettings: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    if (desktop) return;
     const saved = readUserServer();
     if (saved) {
       setCustomServer(saved);
       setAutoMode(false);
     }
     refreshCurrent();
-  }, [refreshCurrent]);
+  }, [desktop, refreshCurrent]);
 
   const handleConnect = async () => {
     setConnecting(true);
@@ -309,41 +310,69 @@ export const ServerSettings: React.FC = () => {
     </div>
   );
 
-  if (desktop && showSources) {
-    return (
-      <div className="flex flex-col gap-4">
-        <button
-          type="button"
-          className="wallet-btn-secondary self-start px-3 py-2 text-sm"
-          onClick={() => setShowSources(false)}
-        >
-          Back to server settings
-        </button>
-        <ChainSourcesSettings explorerSettings={explorerSettings} />
+  const feeSettings = (
+    <>
+      {/* Transaction fee */}
+      <div className="flex flex-col gap-2 border-t border-[var(--wallet-border)] pt-4">
+        <p className="text-xs font-semibold wallet-muted uppercase tracking-wide">
+          {t('server.transactionFee')}
+        </p>
+        <p className="text-xs wallet-muted">{t('server.feeDescription')}</p>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => dispatch(setFeeMode('auto'))}
+            className={`flex-1 rounded-xl border px-3 py-2 text-sm font-semibold transition-colors ${
+              feeMode === 'auto'
+                ? 'border-[var(--wallet-accent)] text-[var(--wallet-accent)] bg-[var(--wallet-accent)]/10'
+                : 'border-[var(--wallet-border)] wallet-muted'
+            }`}
+          >
+            {t('server.automatic')}
+          </button>
+          <button
+            type="button"
+            onClick={() => dispatch(setFeeMode('custom'))}
+            className={`flex-1 rounded-xl border px-3 py-2 text-sm font-semibold transition-colors ${
+              feeMode === 'custom'
+                ? 'border-[var(--wallet-accent)] text-[var(--wallet-accent)] bg-[var(--wallet-accent)]/10'
+                : 'border-[var(--wallet-border)] wallet-muted'
+            }`}
+          >
+            {t('server.customFee')}
+          </button>
+        </div>
+        {feeMode === 'custom' && (
+          <label className="flex items-center gap-2 text-sm wallet-text-strong">
+            <input
+              type="number"
+              min={1}
+              step={0.1}
+              value={customFeeSatPerByte}
+              onChange={(e) =>
+                dispatch(setCustomFeeSatPerByte(Number(e.target.value)))
+              }
+              className="w-28 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-sm wallet-text-strong outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
+            />
+            <span className="text-xs wallet-muted">{t('server.feeUnit')}</span>
+          </label>
+        )}
       </div>
+    </>
+  );
+
+  if (desktop) {
+    return (
+      <ChainSourcesSettings
+        explorerSettings={explorerSettings}
+        feeSettings={feeSettings}
+        backRef={backRef}
+      />
     );
   }
 
   return (
     <div className="flex flex-col gap-4">
-      {desktop && (
-        <button
-          type="button"
-          className="wallet-surface-strong flex w-full items-center justify-between rounded-xl border border-[var(--wallet-border)] p-3 text-left"
-          onClick={() => setShowSources(true)}
-        >
-          <span>
-            <span className="block text-sm font-semibold wallet-text-strong">
-              Network sources
-            </span>
-            <span className="block text-xs wallet-muted">
-              Automatic routing · My infrastructure · Source preferences
-            </span>
-          </span>
-          <span aria-hidden="true">›</span>
-        </button>
-      )}
-
       {/* Which single backend serves this wallet */}
       <div className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-3 flex items-center justify-between gap-3">
         <div className="min-w-0">
@@ -552,54 +581,7 @@ export const ServerSettings: React.FC = () => {
 
       {!desktop && explorerSettings}
 
-      {/* Transaction fee */}
-      <div className="flex flex-col gap-2 border-t border-[var(--wallet-border)] pt-4">
-        <p className="text-xs font-semibold wallet-muted uppercase tracking-wide">
-          {t('server.transactionFee')}
-        </p>
-        <p className="text-xs wallet-muted">{t('server.feeDescription')}</p>
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={() => dispatch(setFeeMode('auto'))}
-            className={`flex-1 rounded-xl border px-3 py-2 text-sm font-semibold transition-colors ${
-              feeMode === 'auto'
-                ? 'border-[var(--wallet-accent)] text-[var(--wallet-accent)] bg-[var(--wallet-accent)]/10'
-                : 'border-[var(--wallet-border)] wallet-muted'
-            }`}
-          >
-            {t('server.automatic')}
-          </button>
-          <button
-            type="button"
-            onClick={() => dispatch(setFeeMode('custom'))}
-            className={`flex-1 rounded-xl border px-3 py-2 text-sm font-semibold transition-colors ${
-              feeMode === 'custom'
-                ? 'border-[var(--wallet-accent)] text-[var(--wallet-accent)] bg-[var(--wallet-accent)]/10'
-                : 'border-[var(--wallet-border)] wallet-muted'
-            }`}
-          >
-            {t('server.customFee')}
-          </button>
-        </div>
-        {feeMode === 'custom' && (
-          <label className="flex items-center gap-2 text-sm wallet-text-strong">
-            <input
-              type="number"
-              min={1}
-              step={0.1}
-              value={customFeeSatPerByte}
-              onChange={(e) =>
-                dispatch(setCustomFeeSatPerByte(Number(e.target.value)))
-              }
-              className="w-28 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-sm wallet-text-strong outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
-            />
-            <span className="text-xs wallet-muted">{t('server.feeUnit')}</span>
-          </label>
-        )}
-      </div>
-
-      {desktop && <ServerPrivacySettings />}
+      {feeSettings}
     </div>
   );
 };

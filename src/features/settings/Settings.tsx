@@ -61,6 +61,7 @@ import { MerchantPaySettings } from './MerchantPaySettings';
 import type { TranslationKey } from '../../i18n/resources';
 
 const Settings: React.FC = () => {
+  const serverBack = useRef<(() => void) | null>(null);
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
@@ -119,6 +120,8 @@ const Settings: React.FC = () => {
   };
 
   const getRowTitle = (row: SettingsRowConfig) => {
+    if (desktop && row.key === 'server') return 'Network';
+    if (desktop && row.key === 'network') return 'Blockchain network';
     const keys: Record<string, TranslationKey> = {
       language: 'settingsRows.language',
       network: 'settingsRows.network',
@@ -146,6 +149,8 @@ const Settings: React.FC = () => {
   };
 
   const getRowDescription = (row: SettingsRowConfig) => {
+    if (desktop && row.key === 'server')
+      return 'Sources · Routing · Privacy · Explorer';
     const keys: Record<string, TranslationKey> = {
       language: 'settingsRows.languageDescription',
       network: 'settingsRows.networkDescription',
@@ -280,7 +285,7 @@ const Settings: React.FC = () => {
       case 'derivation':
         return <DerivationPathSettings />;
       case 'server':
-        return <ServerSettings />;
+        return <ServerSettings backRef={serverBack} />;
       case 'console':
         return <ConsolePanel />;
       case 'experimental':
@@ -319,7 +324,7 @@ const Settings: React.FC = () => {
       case 'rebuild-wallet':
         return t('settingsPanels.rebuildWallet');
       case 'server':
-        return t('settingsPanels.server');
+        return desktop ? 'Network' : t('settingsPanels.server');
       case 'wallet-info':
         return t('settingsPanels.walletInfo');
       case 'derivation':
@@ -354,6 +359,10 @@ const Settings: React.FC = () => {
   };
 
   const handleBack = () => {
+    if (selectedOption === 'server' && serverBack.current) {
+      serverBack.current();
+      return;
+    }
     if (groupConfig) {
       setSelectedOption('');
       return;
