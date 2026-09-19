@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const FRAMEWORK_NAMES: &[&str] = &["leptos", "tauri", "dioxus", "capacitor"];
+const FRAMEWORK_NAMES: &[&str] = &["leptos", "tauri", "dioxus", "capacitor", "slint"];
 const APPLE_REFERENCE_DEPENDENCIES: &[&str] = &[
     "opalbase",
     "opalcrypto",
@@ -140,6 +140,7 @@ fn architecture() {
         root.join("crates/optn-platform-apple/Cargo.toml"),
         root.join("crates/optn-runtime/Cargo.toml"),
         root.join("crates/optn-chain-native/Cargo.toml"),
+        root.join("crates/optn-transport-native/Cargo.toml"),
         root.join("crates/optn-transport/Cargo.toml"),
     ];
 
@@ -322,6 +323,122 @@ fn architecture() {
         &mut failures,
     );
     // dioxus-ssr is the no-display backend; a desktop/web renderer is not.
+
+    // Slint is an excluded native pilot. Keep it on the same renderer seam as
+    // the other pilots: shared application views and typed transport in the
+    // native composition, with the shared native adapter allowed only as its
+    // host seam. The protected crates must remain independent of the GUI
+    // toolkit.
+    for (scope, manifest) in [
+        ("crates/optn-core", root.join("crates/optn-core/Cargo.toml")),
+        ("crates/optn-app", root.join("crates/optn-app/Cargo.toml")),
+        (
+            "crates/optn-runtime",
+            root.join("crates/optn-runtime/Cargo.toml"),
+        ),
+        (
+            "crates/optn-transport",
+            root.join("crates/optn-transport/Cargo.toml"),
+        ),
+        (
+            "crates/optn-platform",
+            root.join("crates/optn-platform/Cargo.toml"),
+        ),
+        (
+            "crates/optn-platform-native",
+            root.join("crates/optn-platform-native/Cargo.toml"),
+        ),
+        (
+            "crates/optn-platform-apple",
+            root.join("crates/optn-platform-apple/Cargo.toml"),
+        ),
+    ] {
+        let manifest = read(&manifest);
+        forbid_dependencies(scope, &manifest, &["slint", "slint-build"], &mut failures);
+    }
+
+    let slint_ui_manifest = read(&root.join("crates/optn-ui-slint/Cargo.toml"));
+    require_dependency(
+        "crates/optn-ui-slint",
+        &slint_ui_manifest,
+        "optn-app",
+        &mut failures,
+    );
+    require_dependency(
+        "crates/optn-ui-slint",
+        &slint_ui_manifest,
+        "optn-transport",
+        &mut failures,
+    );
+    require_dependency(
+        "crates/optn-ui-slint",
+        &slint_ui_manifest,
+        "optn-transport-native",
+        &mut failures,
+    );
+    require_dependency(
+        "crates/optn-ui-slint",
+        &slint_ui_manifest,
+        "slint",
+        &mut failures,
+    );
+    forbid_dependencies(
+        "crates/optn-ui-slint",
+        &slint_ui_manifest,
+        &[
+            "optn-core",
+            "optn-runtime",
+            "optn-platform",
+            "optn-platform-native",
+            "optn-platform-apple",
+            "optn-chain-native",
+            "optn-transport-tauri",
+            "tauri",
+            "leptos",
+            "webview",
+            "wry",
+            "tao",
+            "dioxus",
+            "capacitor",
+        ],
+        &mut failures,
+    );
+    let slint_lib =
+        rust_code_only(&read(&root.join("crates/optn-ui-slint/src/lib.rs"))).to_lowercase();
+    if slint_lib.contains("optn_transport_native") {
+        failures.push(
+            "crates/optn-ui-slint/src/lib.rs imports 'optn_transport_native'; the native adapter belongs in the host binary"
+                .to_string(),
+        );
+    }
+    for (unit, path) in [
+        (
+            "crates/optn-ui-slint/src/lib.rs",
+            root.join("crates/optn-ui-slint/src/lib.rs"),
+        ),
+        (
+            "crates/optn-ui-slint/src/main.rs",
+            root.join("crates/optn-ui-slint/src/main.rs"),
+        ),
+    ] {
+        let source = rust_code_only(&read(&path)).to_lowercase();
+        for (name, token) in [
+            ("optn-core", "optn_core::"),
+            ("Tauri", "tauri::"),
+            ("Leptos", "leptos::"),
+            ("Dioxus", "dioxus::"),
+            ("egui", "egui::"),
+            ("wry", "wry::"),
+            ("webview", "webview"),
+            ("optn-transport-tauri", "optn_transport_tauri"),
+        ] {
+            if source.contains(token) {
+                failures.push(format!(
+                    "{unit} refers directly to {name}; the Slint host and renderer library stay framework-neutral apart from Slint"
+                ));
+            }
+        }
+    }
 
     // "The renderer is swappable" is a claim with a number in it: one line.
     // Renderer crates carry the same host block -- the same script through

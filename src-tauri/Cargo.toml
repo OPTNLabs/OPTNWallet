@@ -74,6 +74,7 @@ optn-platform = { path = "../crates/optn-platform", version = "=1.7.3" }
 optn-runtime = { path = "../crates/optn-runtime", version = "=1.7.3" }
 optn-platform-native = { path = "../crates/optn-platform-native", version = "=1.7.3", features = ["wallet-storage"] }
 optn-transport = { path = "../crates/optn-transport", version = "=1.7.3" }
+optn-transport-native = { path = "../crates/optn-transport-native", version = "=1.7.3" }
 # Concrete chain transports are shell-owned. Runtime/application crates only see
 # provider-neutral capability/evidence traits.
 optn-chain-native = { path = "../crates/optn-chain-native", version = "=1.7.3" }

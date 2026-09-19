@@ -20,7 +20,10 @@ dependency coordination; #71 owns product UI and #75 owns providers/sync/privacy
 #84 is the separate Vitest dependency migration, not the architecture issue.
 
 For renderer changes, follow `RUSTIFICATION.md#renderer-contract-preserve-choice-share-behavior`.
-Retain React; Dioxus is currently a headless proof, and Slint remains undecided.
+Retain React; Dioxus is currently a headless proof. Slint has an opt-in native
+Network Sources pilot, not a replacement wallet or a new default renderer.
+The v1.7.4 release remains the visual reference; pilot test windows do not prove
+visual parity. See `crates/optn-ui-slint/README.md` for its tested scope.
 Renderer choice must not introduce a separate wallet/runtime or erase another UI.
 Shared behavior does not establish screen or packaged-platform parity.
 

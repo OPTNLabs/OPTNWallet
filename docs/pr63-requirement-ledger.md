@@ -37,6 +37,18 @@ in #63, not a separate wallet architecture.
 
 ## #75 — chain, sources, verification
 
+Native renderer pilot (2026-09-19): `crates/optn-ui-slint` is an opt-in Windows
+Network Sources test window, not a replacement for the v1.7.4 UI. Native view
+callbacks exercised add, ban, pin, preference, selected pools, removal and
+Automatic through `optn-transport-native` and durable rereads. Four adapter
+tests cover malformed input, bootstrap removal refusal, bans after reopening,
+and removal retaining an empty explicit pool. Tauri reuses the extracted source
+projection (four focused tests). Architecture and strict pilot/adapter Clippy
+pass. Native snapshots cover wide, narrow and short windows plus
+maximize/minimize/restore. This establishes bounded settings integration, not
+live sync, visual parity, wallet actions or mobile/macOS completion. Reproduce
+with `crates/optn-ui-slint/README.md`; all shipping renderer/platform gates remain.
+
 Latest bounded evidence (2026-09-19): a real Windows Tauri/Leptos watch-only HD wallet synced 39,774 sats and two history entries through explicitly confirmed Tor. With Tor stopped, process restart restored the same balance/history marked stale; an offline refresh retained it, and a later live refresh restored freshness. See `docs/chain-interop-evidence.md`. This is Electrum server-assertion evidence, not live SHV/MMR or all-platform completion.
 
 Earlier bounded evidence (2026-09-12): the live Chipnet test now exercises HD

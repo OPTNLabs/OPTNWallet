@@ -14,13 +14,13 @@
 
 use crate::chain_runtime::NativeChainRuntime;
 use crate::network_config::NetworkSettingsStore;
+use optn_transport_native::{protocol_label, scope_label, source_views};
 use optn_core::network::Network;
 use optn_runtime::chain::{
-    build_selection_plan, Capability, CapabilityConfidence, CapabilityDiscovery, ChainSource,
     ConnectionPolicy, Endpoint, EndpointKind, ProtocolFamily, SourceCatalog, SourceDisposition,
-    SourceId, SourceOrigin, SourceScope,
+    SourceId,
 };
-use optn_runtime::chain_service::{ChainOperation, RegisteredCapabilityObservation};
+use optn_runtime::chain_service::ChainOperation;
 use optn_runtime::network_config::{
     add_user_source, remove_user_source, set_policy_preset, set_source_disposition,
     ChainPolicyPreset,
@@ -28,26 +28,6 @@ use optn_runtime::network_config::{
 use std::sync::Arc;
 
 pub use optn_transport::chain_sources::*;
-
-fn endpoint_view(endpoint: &Endpoint) -> EndpointView {
-    EndpointView {
-        kind: endpoint_kind_label(endpoint.kind).to_owned(),
-        host: endpoint.host.clone(),
-        port: endpoint.port,
-    }
-}
-
-const fn endpoint_kind_label(kind: EndpointKind) -> &'static str {
-    match kind {
-        EndpointKind::BchP2p => "p2p",
-        EndpointKind::ElectrumTls => "electrum-tls",
-        EndpointKind::ElectrumTcp => "electrum-tcp",
-        EndpointKind::BchnRpc => "node-rpc",
-        EndpointKind::BchnZmq => "node-zmq",
-        EndpointKind::ExplorerHttp => "explorer-http",
-        EndpointKind::ExplorerHttps => "explorer-https",
-    }
-}
 
 fn parse_endpoint_kind(value: &str) -> Result<EndpointKind, String> {
     Ok(match value {
@@ -62,34 +42,6 @@ fn parse_endpoint_kind(value: &str) -> Result<EndpointKind, String> {
     })
 }
 
-const fn protocol_label(protocol: ProtocolFamily) -> &'static str {
-    match protocol {
-        ProtocolFamily::Electrum => "electrum",
-        ProtocolFamily::Bip37 => "bip37",
-        ProtocolFamily::Neutrino => "neutrino",
-        ProtocolFamily::BchnRpc => "node-rpc",
-        ProtocolFamily::BchnZmq => "node-zmq",
-    }
-}
-
-fn origin_view(origin: &SourceOrigin) -> (String, Option<String>) {
-    match origin {
-        SourceOrigin::Bootstrap { .. } => ("bootstrap".into(), None),
-        SourceOrigin::UserAdded => ("user".into(), None),
-        SourceOrigin::UserInfrastructure { group } => {
-            ("own-infrastructure".into(), Some(group.clone()))
-        }
-    }
-}
-
-const fn disposition_label(disposition: SourceDisposition) -> &'static str {
-    match disposition {
-        SourceDisposition::Enabled => "enabled",
-        SourceDisposition::Disabled => "disabled",
-        SourceDisposition::Banned => "banned",
-    }
-}
-
 fn parse_disposition(value: &str) -> Result<SourceDisposition, String> {
     Ok(match value {
         "enabled" => SourceDisposition::Enabled,
@@ -99,189 +51,9 @@ fn parse_disposition(value: &str) -> Result<SourceDisposition, String> {
     })
 }
 
-const fn scope_label(scope: &SourceScope) -> &'static str {
-    match scope {
-        SourceScope::AllEnabled => "all-enabled",
-        SourceScope::PublicEnabled => "public-enabled",
-        SourceScope::UserInfrastructure => "own-infrastructure",
-        SourceScope::Explicit(_) => "explicit",
-    }
-}
-
 fn parse_network(value: &str) -> Result<Network, String> {
-    value
-        .parse()
-        .map_err(|_| format!("unknown network '{value}'"))
+    value.parse().map_err(|_| format!("unknown network '{value}'"))
 }
-
-const fn protocol_capability(protocol: ProtocolFamily) -> Capability {
-    match protocol {
-        ProtocolFamily::Electrum => Capability::ElectrumProtocol,
-        ProtocolFamily::Bip37 => Capability::Bip37BloomFiltering,
-        ProtocolFamily::Neutrino => Capability::CompactFilters,
-        ProtocolFamily::BchnRpc => Capability::RpcQueries,
-        ProtocolFamily::BchnZmq => Capability::ZmqEvents,
-    }
-}
-
-fn protocol_status(
-    source: &ChainSource,
-    endpoint: &Endpoint,
-    protocol: ProtocolFamily,
-    registered: &[RegisteredCapabilityObservation],
-) -> SourceProtocolStatus {
-    if let Some(observation) = registered.iter().find(|observation| {
-        observation.source == source.id
-            && observation.protocol == protocol
-            && observation.endpoint.as_ref() == Some(endpoint)
-            && observation.capability == protocol_capability(protocol)
-    }) {
-        capability_status(observation.confidence)
-    } else if source.capabilities.protocol_supported(protocol) {
-        // Catalog claims are source-level metadata, never endpoint proof.
-        // A wallet-refresh route can be eligible on Advertised confidence, so
-        // it likewise cannot promote this endpoint to Verified.
-        SourceProtocolStatus::Advertised
-    } else {
-        SourceProtocolStatus::Unknown
-    }
-}
-
-const fn capability_status(confidence: CapabilityConfidence) -> SourceProtocolStatus {
-    match confidence {
-        CapabilityConfidence::Unknown => SourceProtocolStatus::Unknown,
-        CapabilityConfidence::Advertised => SourceProtocolStatus::Advertised,
-        CapabilityConfidence::Verified => SourceProtocolStatus::Verified,
-        CapabilityConfidence::Rejected => SourceProtocolStatus::Rejected,
-    }
-}
-
-fn capability_discovery_label(discovery: &CapabilityDiscovery) -> String {
-    match discovery {
-        CapabilityDiscovery::P2pServiceBit { bit, name } => {
-            format!("p2p-service-bit:{name}:{bit}")
-        }
-        CapabilityDiscovery::ElectrumServerVersion => "electrum-server-version".into(),
-        CapabilityDiscovery::ElectrumServerFeatures => "electrum-server-features".into(),
-        CapabilityDiscovery::ElectrumPeerDiscovery => "electrum-peer-discovery".into(),
-        CapabilityDiscovery::ExplicitConfiguration => "explicit-configuration".into(),
-        CapabilityDiscovery::BootstrapMetadata => "bootstrap-metadata".into(),
-        CapabilityDiscovery::ActiveProbe => "active-probe".into(),
-    }
-}
-
-fn source_views(
-    catalog: &SourceCatalog,
-    policy: &ConnectionPolicy,
-    live: &[(SourceId, ProtocolFamily, Option<Endpoint>)],
-    registered: &[RegisteredCapabilityObservation],
-    failures: &[optn_chain_native::NativeChainProbeFailure],
-) -> Vec<ChainSourceView> {
-    let plan = build_selection_plan(catalog, policy);
-    let mut sources: Vec<_> = catalog.iter().cloned().collect();
-    // Selection order first, then priority: the list reads the way the runtime
-    // will actually try them.
-    sources.sort_by_key(|source: &ChainSource| {
-        let rank = if plan.primary.contains(&source.id) {
-            0
-        } else if plan.fallback.contains(&source.id) {
-            1
-        } else {
-            2
-        };
-        (rank, source.priority, source.label.clone())
-    });
-
-    sources
-        .into_iter()
-        .map(|source| {
-            let (origin, group) = origin_view(&source.origin);
-            ChainSourceView {
-                role: if plan.primary.contains(&source.id) {
-                    Some("primary".into())
-                } else if plan.fallback.contains(&source.id) {
-                    Some("fallback".into())
-                } else {
-                    None
-                },
-                live_protocols: live
-                    .iter()
-                    .filter(|(id, _, _)| id == &source.id)
-                    .map(|(_, protocol, _)| protocol_label(*protocol).to_owned())
-                    .collect(),
-                failures: failures
-                    .iter()
-                    .filter(|failure| failure.source == source.id)
-                    .map(|failure| SourceFailureView {
-                        protocol: protocol_label(failure.protocol).to_owned(),
-                        endpoint: endpoint_view(&failure.endpoint),
-                        error: failure.error.clone(),
-                    })
-                    .collect(),
-                id: source.id.as_str().to_owned(),
-                label: source.label.clone(),
-                origin,
-                group,
-                disposition: disposition_label(source.disposition).to_owned(),
-                priority: source.priority,
-                can_remove: source.can_remove(),
-                endpoints: source.endpoints.iter().map(endpoint_view).collect(),
-                capabilities: source
-                    .capabilities
-                    .iter()
-                    .map(|(capability, _)| capability.label().to_owned())
-                    .collect(),
-                capability_details: source
-                    .capabilities
-                    .iter()
-                    .map(|(capability, claim)| SourceCapabilityView {
-                        name: capability.label().to_owned(),
-                        confidence: capability_status(claim.confidence),
-                        discovery: capability_discovery_label(&claim.discovery),
-                    })
-                    .collect(),
-                registered_capability_details: registered
-                    .iter()
-                    .filter(|observation| observation.source == source.id)
-                    .map(|observation| SourceRouteCapabilityView {
-                        endpoint: observation.endpoint.as_ref().map(endpoint_view),
-                        protocol: protocol_label(observation.protocol).to_owned(),
-                        name: observation.capability.label().to_owned(),
-                        confidence: capability_status(observation.confidence),
-                        discovery: capability_discovery_label(&observation.discovery),
-                    })
-                    .collect(),
-                protocol_statuses: source
-                    .endpoints
-                    .iter()
-                    .flat_map(|endpoint| {
-                        let source_for_status = &source;
-                        [
-                            ProtocolFamily::Electrum,
-                            ProtocolFamily::Bip37,
-                            ProtocolFamily::Neutrino,
-                            ProtocolFamily::BchnRpc,
-                            ProtocolFamily::BchnZmq,
-                        ]
-                        .into_iter()
-                        .filter(move |protocol| endpoint.kind.can_probe_protocol(*protocol))
-                        .map(move |protocol| SourceProtocolView {
-                            endpoint: endpoint_view(endpoint),
-                            protocol: protocol_label(protocol).to_owned(),
-                            status: protocol_status(
-                                source_for_status,
-                                endpoint,
-                                protocol,
-                                registered,
-                            ),
-                        })
-                    })
-                    .collect(),
-            }
-        })
-        .collect()
-}
-
 /// Every source for a network, with the policy and what the live stack made of it.
 #[tauri::command]
 pub async fn optn_chain_sources(
@@ -729,6 +501,11 @@ pub async fn optn_chain_rpc_credentials(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use optn_transport_native::{disposition_label, endpoint_kind_label};
+    use optn_runtime::{
+        chain::{ChainSource, SourceOrigin},
+        chain_service::RegisteredCapabilityObservation,
+    };
 
     #[test]
     fn endpoint_kind_labels_round_trip() {
