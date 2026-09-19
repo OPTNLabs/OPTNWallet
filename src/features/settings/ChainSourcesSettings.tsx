@@ -87,6 +87,7 @@ const SERVICE_FILTERS = [
   { value: 'neutrino', label: 'Compact filters' },
   { value: 'node-rpc', label: 'Node RPC' },
   { value: 'node-zmq', label: 'Notifications' },
+  { value: 'ipfs-gateway', label: 'IPFS gateway' },
 ];
 
 const ROUTING_PROTOCOLS: {
@@ -130,6 +131,7 @@ function serviceBadgeText(kind: string): string {
   if (kind === 'p2p') return 'BIP37 / P2P';
   if (kind === 'node-rpc') return 'RPC';
   if (kind === 'node-zmq') return 'ZMQ';
+  if (kind === 'ipfs-gateway') return 'IPFS';
   return kind;
 }
 
@@ -561,10 +563,42 @@ export function ChainSourcesSettings({
               </div>
             );
           })}
+          {(view?.unavailable_services?.length ?? 0) > 0 && (
+            <fieldset className="space-y-2">
+              <legend className="text-sm font-semibold wallet-text-strong">
+                Metadata and indexing services
+              </legend>
+              <p className="text-xs wallet-muted">
+                Optional services for this source. Local Rust BCMR resolution
+                remains separate from external indexers.
+              </p>
+              {view?.unavailable_services?.map((service) => (
+                <div key={service.id}>
+                  <label className="flex items-center gap-2 text-sm wallet-muted">
+                    <input
+                      type="checkbox"
+                      disabled
+                      checked={false}
+                      aria-describedby={`unavailable-${service.id}`}
+                    />
+                    {service.label}
+                  </label>
+                  <p
+                    id={`unavailable-${service.id}`}
+                    className="text-xs wallet-muted"
+                  >
+                    {service.reason}
+                  </p>
+                </div>
+              ))}
+            </fieldset>
+          )}
           <p className="text-xs wallet-muted">
             P2P support is verified separately. RPC may require authentication.
             ZMQ provides notifications, not wallet synchronization. Fulcrum is a
-            separate service and is never assumed.
+            separate service and is never assumed. IPFS gateways use HTTPS at
+            /ipfs/ through verified Tor; enter the HTTPS port (usually 443).
+            Registry hashes are checked in Rust.
           </p>
           <button
             type="button"

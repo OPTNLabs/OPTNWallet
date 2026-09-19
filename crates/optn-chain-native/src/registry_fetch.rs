@@ -33,6 +33,94 @@ impl RegistryFetcher for VerifiedRegistryTor {
     }
 }
 
+pub struct ConfiguredRegistryFetcher {
+    tor: VerifiedRegistryTor,
+    gateways: Vec<Url>,
+    allow_publisher_https: bool,
+}
+
+impl ConfiguredRegistryFetcher {
+    pub fn new(tor: VerifiedRegistryTor, gateways: Vec<Url>, allow_publisher_https: bool) -> Self {
+        Self {
+            tor,
+            gateways: gateways.into_iter().take(16).collect(),
+            allow_publisher_https,
+        }
+    }
+}
+
+impl RegistryFetcher for ConfiguredRegistryFetcher {
+    fn fetch<'a>(
+        &'a self,
+        uri: &'a str,
+        limits: FetchLimits,
+    ) -> std::pin::Pin<Box<dyn Future<Output = FetchAttempt> + Send + 'a>> {
+        Box::pin(async move {
+            if !uri.starts_with("ipfs://") {
+                if !self.allow_publisher_https {
+                    return Err(refused(
+                        "source policy does not permit public registry retrieval",
+                    ));
+                }
+                return fetch_publication_uri(uri, self.tor, limits).await;
+            }
+            let path = ipfs_path(uri)?;
+            if self.gateways.is_empty() {
+                return Err(refused("no permitted IPFS gateway is configured"));
+            }
+            let client = registry_client(self.tor, limits)?;
+            within_deadline(limits.deadline, async {
+                let mut last = Err(refused("no usable IPFS gateway"));
+                for gateway in &self.gateways {
+                    let mut target = registry_url(gateway.as_str())?;
+                    if target.path() != "/" || target.query().is_some() {
+                        return Err(refused("gateway must be an HTTPS origin"));
+                    }
+                    target.set_path(&path);
+                    last = fetch_url_scoped(&client, target, limits, true).await;
+                    if last.is_ok() {
+                        break;
+                    }
+                }
+                last
+            })
+            .await
+        })
+    }
+}
+
+fn refused(detail: &str) -> FetchError {
+    FetchError::PolicyRefused {
+        detail: detail.into(),
+    }
+}
+
+fn ipfs_path(uri: &str) -> Result<String, FetchError> {
+    let value = uri
+        .strip_prefix("ipfs://")
+        .ok_or_else(|| refused("invalid IPFS URI"))?;
+    if value.len() > 4096 || value.contains(['?', '#', '@', '%', '\\']) {
+        return Err(refused("unsupported IPFS URI"));
+    }
+    let mut segments = value.split('/');
+    let cid = segments.next().unwrap_or_default();
+    // Preserve case: CIDv0 base58 is case sensitive. The publication hash,
+    // rather than trusting the gateway or this syntactic CID check, authenticates bytes.
+    if cid.len() < 10 || cid.len() > 128 || !cid.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return Err(refused("invalid IPFS content identifier"));
+    }
+    if segments.any(|part| {
+        part == "."
+            || part == ".."
+            || part
+                .bytes()
+                .any(|b| b.is_ascii_control() || b.is_ascii_whitespace())
+    }) {
+        return Err(refused("invalid IPFS path"));
+    }
+    Ok(format!("/ipfs/{value}"))
+}
+
 /// Resolve a publication URI and retrieve its bounded bytes over the supplied
 /// verified Tor route.
 ///
@@ -125,7 +213,17 @@ async fn within_deadline<T>(
         .unwrap_or(Err(FetchError::Timeout))
 }
 
-async fn fetch_url(client: &Client, mut current: Url, limits: FetchLimits) -> FetchAttempt {
+async fn fetch_url(client: &Client, current: Url, limits: FetchLimits) -> FetchAttempt {
+    fetch_url_scoped(client, current, limits, false).await
+}
+
+async fn fetch_url_scoped(
+    client: &Client,
+    mut current: Url,
+    limits: FetchLimits,
+    same_origin: bool,
+) -> FetchAttempt {
+    let origin = current.origin();
     for redirects in 0..=limits.max_redirects {
         let mut response = client
             .get(current.clone())
@@ -151,6 +249,9 @@ async fn fetch_url(client: &Client, mut current: Url, limits: FetchLimits) -> Fe
                     detail: "registry redirect location is invalid".into(),
                 })?;
             current = registry_url(next.as_str())?;
+            if same_origin && current.origin() != origin {
+                return Err(refused("gateway redirect leaves the selected source"));
+            }
             continue;
         }
         if !response.status().is_success() {
@@ -196,6 +297,36 @@ fn fetch_error(error: reqwest::Error) -> FetchError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn configured_gateway_preserves_cid_and_refuses_unselected_routes() {
+        let cid = "QmYwAPJzv5CZsnAzt8auVZRnGkD8ZKC6NAkbwfEfEbKxQv";
+        assert_eq!(
+            ipfs_path(&format!("ipfs://{cid}/registry.json")).unwrap(),
+            format!("/ipfs/{cid}/registry.json")
+        );
+        for suffix in [
+            "/../secret",
+            "/%2e%2e/secret",
+            "?url=https://evil.example",
+            "#x",
+            "/a b",
+            "/a\\b",
+        ] {
+            assert!(ipfs_path(&format!("ipfs://{cid}{suffix}")).is_err());
+        }
+        let fetcher =
+            ConfiguredRegistryFetcher::new(VerifiedRegistryTor { socks_port: 0 }, vec![], false);
+        for uri in [
+            format!("ipfs://{cid}"),
+            "https://publisher.example/file".into(),
+        ] {
+            assert!(matches!(
+                fetcher.fetch(&uri, FetchLimits::default()).await,
+                Err(FetchError::PolicyRefused { .. })
+            ));
+        }
+    }
 
     #[test]
     fn bare_authorities_use_https_well_known_uri() {

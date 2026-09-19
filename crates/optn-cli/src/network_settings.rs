@@ -147,11 +147,21 @@ pub fn add_source(
     request: &optn_transport::chain_sources::AddSourceRequest,
 ) -> Result<(), String> {
     validate_request_network(network, request.network.as_deref())?;
-    let endpoint = Endpoint {
+    if request.services.len() > 15 {
+        return Err("A source supports at most sixteen services per edit".into());
+    }
+    let mut endpoints = vec![Endpoint {
         kind: parse_endpoint_kind(&request.kind)?,
         host: request.host.clone(),
         port: request.port,
-    };
+    }];
+    for service in &request.services {
+        endpoints.push(Endpoint {
+            kind: parse_endpoint_kind(&service.kind)?,
+            host: request.host.clone(),
+            port: service.port,
+        });
+    }
     let directory =
         config_directory(directory).ok_or("network configuration directory is unavailable")?;
     NetworkConfigFile::new(directory.join(file_name(network)))
@@ -163,10 +173,10 @@ pub fn add_source(
                 )
             });
             optn_runtime::network_config::promote_legacy_policy(&mut envelope);
-            optn_runtime::network_config::add_user_source(
+            optn_runtime::network_config::add_user_source_services(
                 &mut envelope.overlay,
                 &request.label,
-                endpoint.clone(),
+                endpoints.clone(),
                 request.infrastructure_group.as_deref(),
             )?;
             Ok(envelope)
@@ -287,6 +297,7 @@ fn parse_endpoint_kind(value: &str) -> Result<EndpointKind, String> {
         "electrum-tcp" => Ok(EndpointKind::ElectrumTcp),
         "node-rpc" => Ok(EndpointKind::BchnRpc),
         "node-zmq" => Ok(EndpointKind::BchnZmq),
+        "ipfs-gateway" => Ok(EndpointKind::IpfsGatewayHttps),
         "explorer-https" => Ok(EndpointKind::ExplorerHttps),
         "explorer-http" => Ok(EndpointKind::ExplorerHttp),
         other => Err(format!("unknown endpoint kind '{other}'")),

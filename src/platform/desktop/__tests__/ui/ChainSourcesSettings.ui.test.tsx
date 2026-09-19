@@ -33,6 +33,23 @@ afterEach(cleanup);
 it('browses without probes and sends explicit selection through the old UI', async () => {
   const endpoint = { kind: 'p2p', host: 'public.example', port: 48333 };
   const view: ChainSourcesView = {
+    unavailable_services: [
+      {
+        id: 'bcmr-indexer',
+        label: 'External BCMR indexer',
+        reason: 'Provider adapter unavailable',
+      },
+      {
+        id: 'token-indexer',
+        label: 'Token indexer',
+        reason: 'Provider adapter unavailable',
+      },
+      {
+        id: 'metadata-proxy',
+        label: 'Metadata proxy / cache',
+        reason: 'Provider adapter unavailable',
+      },
+    ],
     network: 'chipnet',
     policy: 'auto',
     protocols: ['bip37'],
@@ -178,10 +195,17 @@ it('browses without probes and sends explicit selection through the old UI', asy
     target: { value: 'node.home' },
   });
   fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+  for (const service of view.unavailable_services ?? []) {
+    const entry = screen.getByRole('checkbox', { name: service.label });
+    expect(entry).toBeDisabled();
+    expect(entry).not.toBeChecked();
+    expect(entry).toHaveAccessibleDescription(service.reason);
+  }
   for (const [label, port] of [
     ['BCH peer (BIP37 / Neutrino)', '48333'],
     ['Node RPC', '48332'],
     ['Node ZMQ', '28332'],
+    ['IPFS gateway (HTTPS)', '443'],
   ]) {
     fireEvent.click(screen.getByRole('checkbox', { name: label }));
     fireEvent.change(screen.getByLabelText(`${label} port`), {
@@ -226,6 +250,7 @@ it('browses without probes and sends explicit selection through the old UI', asy
         services: [
           { kind: 'node-rpc', port: 48332 },
           { kind: 'node-zmq', port: 28332 },
+          { kind: 'ipfs-gateway', port: 443 },
         ],
       },
     })

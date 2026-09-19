@@ -127,7 +127,17 @@ pub struct VerifiedTipView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnavailableSourceService {
+    pub id: String,
+    pub label: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChainSourcesView {
+    /// Visible setup entries whose provider adapters cannot execute yet.
+    #[serde(default)]
+    pub unavailable_services: Vec<UnavailableSourceService>,
     pub network: String,
     /// `auto` | `privacy` | `own_infrastructure` | `electrum_only` |
     /// `bip37_only` | `neutrino_only` | `custom`.
