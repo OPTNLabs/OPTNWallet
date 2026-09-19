@@ -452,5 +452,15 @@ process. Evidence is outside Git in `artifacts/issue75-live-20260919`.
 This GUI run was offline: it does not prove live date-based P2P recovery,
 automatic header acquisition, signing, broadcast or other packaged platforms.
 Trusted fresh-wallet creation anchors are not inferred from caller-supplied
-mnemonics. An outstanding manual rescan still takes precedence; its explicit
-clear control remains pending.
+mnemonics. An outstanding manual rescan takes precedence until explicitly cleared.
+
+The follow-up `ClearRescan` command uses the same durable storage/session guard
+and leaves birthday provenance intact. Its connected runtime test restores the
+birthday's floor after an override; the CLI process test clears and reopens
+without resurrecting the override. A Windows GUI build (SHA-256
+`0e454f6b9407339e890a382e3bb6aa2adb395040c265103598b3f7455d93e8cd`,
+base `66204fa8` plus this follow-up) visibly requested a height-zero manual
+rescan while offline, displayed the override without reopening the settings
+pane, and cleared it through the confirmation control. The cached 39,774 sats
+remained visible and stale. This is offline control/persistence evidence,
+not a successful network rescan.

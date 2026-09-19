@@ -806,6 +806,34 @@ fn managed_rescan_persists_the_selected_hd_account_and_reopens_it_after_restart(
     );
     assert_eq!(responses(&output)[0]["ok"], true);
     assert_eq!(disk.load(&id, &key).unwrap().unwrap().1, revision);
+    assert_eq!(responses(&output)[0]["security"]["manual_rescan_from"], 0);
+    let open =
+        json!({"request":{"command":"open","handle":"public.optn","password":"old-password"}});
+    let stale = json!({"request":{"command":"clear_rescan","epoch":0}});
+    let clear = json!({"request":{"command":"clear_rescan","epoch":1}});
+    let output = run_cli(
+        directory.path(),
+        &["wallet", "--stdio"],
+        &format!("{open}\n{stale}\n{clear}\n"),
+    );
+    assert!(output.status.success());
+    let replies = responses(&output);
+    assert_eq!(replies[1]["ok"], false);
+    assert_eq!(replies[2]["ok"], true, "{:?}", replies[2]);
+    assert!(replies[2]["security"]["manual_rescan_from"].is_null());
+    assert_eq!(
+        replies[2]["security"]["restore_birthday"]["kind"],
+        "unknown"
+    );
+    let output = run_cli(
+        directory.path(),
+        &["wallet", "--stdio"],
+        &format!("{open}\n"),
+    );
+    assert!(output.status.success());
+    let reply = &responses(&output)[0];
+    assert!(reply["security"]["manual_rescan_from"].is_null());
+    assert!(reply["wallet_sync"]["scan_coverage"].is_null());
 }
 
 #[test]

@@ -38,6 +38,9 @@ pub enum WalletSecurityRequest {
         epoch: u64,
         birthday: WalletBirthdayInput,
     },
+    ClearRescan {
+        epoch: u64,
+    },
     NextReceive {
         epoch: u64,
         #[serde(default)]
@@ -103,6 +106,8 @@ pub struct WalletSecurityStatus {
     /// open or the host has not installed restore metadata yet.
     #[serde(default)]
     pub restore_birthday: Option<WalletBirthdayView>,
+    #[serde(default)]
+    pub manual_rescan_from: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

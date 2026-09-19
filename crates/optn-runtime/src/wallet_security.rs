@@ -369,6 +369,12 @@ impl WalletSecurity {
                     block_hash: anchor.block_hash,
                 },
             }),
+            manual_rescan_from: active.and_then(|session| {
+                session
+                    .restore_state
+                    .manual_rescan
+                    .map(|rescan| rescan.from_height)
+            }),
         })
     }
 
@@ -559,7 +565,7 @@ impl WalletSecurity {
         }
         match request {
             Request::Status => {}
-            Request::SetBirthday { epoch, birthday } => {
+            Request::SetBirthday { epoch, .. } | Request::ClearRescan { epoch } => {
                 self.bound(state, epoch)?;
                 if self.checkpoints.is_none() {
                     return Err(failure("Durable wallet restore storage is unavailable."));
@@ -568,16 +574,25 @@ impl WalletSecurity {
                     .restore_state()
                     .cloned()
                     .ok_or_else(|| failure("Unlock the wallet first."))?;
-                let birthday = match birthday {
-                    WalletBirthdayInput::Unknown => WalletBirthday::Unknown,
-                    WalletBirthdayInput::Height { height } => {
-                        WalletBirthday::ImportedAtHeight { height }
+                let changed = if let Request::SetBirthday { birthday, .. } = request {
+                    let birthday = match birthday {
+                        WalletBirthdayInput::Unknown => WalletBirthday::Unknown,
+                        WalletBirthdayInput::Height { height } => {
+                            WalletBirthday::ImportedAtHeight { height }
+                        }
+                        WalletBirthdayInput::Time { requested_time } => {
+                            WalletBirthday::ImportedAtTime { requested_time }
+                        }
+                    };
+                    next.set_birthday(birthday).map_err(failure)?
+                } else {
+                    let changed = next.manual_rescan.is_some();
+                    next.clear_rescan_request();
+                    if changed {
+                        next.scanned_through = None;
                     }
-                    WalletBirthdayInput::Time { requested_time } => {
-                        WalletBirthday::ImportedAtTime { requested_time }
-                    }
+                    changed
                 };
-                let changed = next.set_birthday(birthday).map_err(failure)?;
                 if changed {
                     // A corrected imported hint invalidates the old coverage
                     // projection before the new sealed state is exposed.

@@ -154,7 +154,7 @@ fn birthday_prompt(argument: &str) -> Result<optn_transport::security::WalletBir
     }
 }
 
-const WALLET_HELP: &str = "Wallet commands: help, list, open <file>, import, watch, receive [--acknowledge-gap], sync, rescan <height>, birthday unknown|height <block>|time <Unix seconds>, history, network status, network select <id> --protocol <protocol>, network configure <JSON>, airgap <request JSON>, password, autolock <minutes>, lock, authorize, reveal, quit";
+const WALLET_HELP: &str = "Wallet commands: help, list, open <file>, import, watch, receive [--acknowledge-gap], sync, rescan <height>|clear, birthday unknown|height <block>|time <Unix seconds>, history, network status, network select <id> --protocol <protocol>, network configure <JSON>, airgap <request JSON>, password, autolock <minutes>, lock, authorize, reveal, quit";
 
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -415,6 +415,9 @@ pub async fn run(directory: Option<PathBuf>, stdio: bool, cli: &crate::Cli) -> R
                     }
                     continue;
                 }
+                "rescan" if argument == "clear" => Some(Request::ClearRescan {
+                    epoch: status.epoch,
+                }),
                 "sync" | "history" | "rescan" => {
                     let chain = match command {
                         "sync" => ChainCommand::Sync,
