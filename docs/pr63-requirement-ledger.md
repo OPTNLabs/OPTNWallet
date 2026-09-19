@@ -257,3 +257,23 @@ and credential afterward.
 This does not prove a live funded node wallet roundtrip, macOS/Linux keychain
 behavior, or mobile credential storage. Mobile/browser controls remain disabled
 or unsupported. Linux native keyring entries last for the login session.
+
+
+## Fusion cryptographic alert review (2026-09-19)
+
+GitHub reports alerts #129/#130 open on `main` commit `bfc7a149` and fixed
+on the older PR63 merge analysis `898cebb1`. The alerted shell file has moved to
+`crates/optn-fusion/src/encrypt.rs`; path movement alone is not a cryptographic
+repair or evidence that a new scan is clean. No alert was dismissed and no
+scanner exclusion was added.
+
+[Electron Cash's reference implementation](https://github.com/Electron-Cash/Electron-Cash/blob/master/electroncash_plugins/fusion/encrypt.py)
+uses a zero CBC IV and a freshly generated ephemeral ECDH key per encryption.
+The [CashFusion audit, KS-SBCF-F-01](https://electroncash.org/fusionaudit.pdf)
+explains why the constant IV depends on avoiding key reuse. OPTN obtains a new,
+nonzero scalar from OS randomness in every `encrypt` call, derives the key there,
+and authenticates the tag before decrypting. A regression now checks that two
+encryptions of the same padded proof produce different ephemeral public keys
+and ciphertexts, while both decrypt successfully. All seven encryption tests
+and strict Fusion Clippy pass. This is a bounded implementation review, not a
+new protocol audit or a claim that the still-open main-branch alerts were closed.
