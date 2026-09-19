@@ -497,3 +497,31 @@ all six presets, reads the saved policy from a separate process, and rejects
 invalid presets without changing the configuration. Wallet-session edits
 invalidate sync freshness before persistence. This is interface/persistence
 evidence, not a live sync result for every protocol or a GUI verification claim.
+
+## Packaged Windows source controls (2026-09-19)
+
+The real Tauri/Leptos settings screen initially recreated its selected row on
+every one-second application snapshot. A source-name draft disappeared after
+2.5 seconds, and the source catalog could remain on "Updating sources..." even
+though native IPC returned the catalog. Memoizing the selected settings row
+preserves its local state and pending work until navigation changes.
+
+After rebuilding WASM and the native executable, the same public Chipnet fixture
+passed these interactions through the rendered controls: loading the catalog,
+retaining the source-name draft across snapshots, selecting Own Infrastructure
+and Auto, saving an explicit source with no fallback, leaving/reopening Settings,
+and restarting/unlocking the process with the saved policy retained. The test
+restored the fixture's Electrum policy afterward. Native readback confirmed the
+policy produced by each control. No signing or broadcast occurred.
+
+Executable SHA-256:
+`0ecfc0282228a78dde5149bfe6dc75d15c339fa452f75c3f18e64bc92fe6d39e`.
+It was built from `c4a7833c` plus the settings fix and pending provider work;
+the provider work is not validated by this GUI check.
+
+This was an offline Windows interaction/persistence check with zero usable
+routes, not live connectivity or Android/macOS evidence. Strict WASM UI Clippy,
+Trunk/native builds and the architecture boundary check passed. Reproduction:
+open a disposable wallet, Settings > Servers, type a source-name draft, wait
+over two snapshot periods, then save a policy and restart/reopen the wallet.
+The draft must remain while on the screen; the saved policy must survive restart.

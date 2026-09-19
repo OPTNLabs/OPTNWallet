@@ -78,10 +78,16 @@ fn now_ms() -> u64 {
 
 #[component]
 pub fn SettingsPage(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
+    // The app receives a fresh authoritative snapshot every second. A selected
+    // row owns local form state and in-flight IPC, so it must remount only
+    // when the selected row actually changes, not for unrelated balance or
+    // sync-status updates in that snapshot.
+    let focused_row = Memo::new(move |_| state.get().settings_focus);
+
     view! {
         <WalletChrome transport=transport state=state>
             <section class="page">
-                <Show when=move || state.get().settings_focus.is_none()>
+                <Show when=move || focused_row.get().is_none()>
                     <h1>"Settings"</h1>
                     <p class="lede">"Wallet controls. CashFusion is a desktop flag."</p>
                     <AppearanceSection transport=transport state=state />
@@ -105,7 +111,7 @@ pub fn SettingsPage(transport: UiTransport, state: RwSignal<AppState>) -> impl I
                         </button>
                     </For>
                 </Show>
-                <Show when=move || state.get().settings_focus.is_some()>
+                <Show when=move || focused_row.get().is_some()>
                     <button
                         class="text-link back"
                         type="button"
@@ -113,7 +119,7 @@ pub fn SettingsPage(transport: UiTransport, state: RwSignal<AppState>) -> impl I
                     >
                         {move || format!("‹ {}", state.get().flow().back_label)}
                     </button>
-                    {move || state.get().settings_focus.map(|row| {
+                    {move || focused_row.get().map(|row| {
                         view! { <SettingsRow transport=transport state=state row=row /> }
                     })}
                 </Show>
