@@ -395,8 +395,9 @@ Actual isolated Windows GUI checks passed directory search, public ban/navigatio
 absence of public removal, user source add/remove, distinct routing/privacy/
 explorer controls, ZMQ separation, restored settings and a 390px viewport without
 horizontal overflow. Native strict Clippy, WASM strict Clippy, stylesheet checks,
-source projection tests and the unchanged architecture gate pass. The final
-BIP37/compact-filter directory filter additions are compile-checked separately.
+source projection tests and the unchanged architecture gate pass. A rebuilt
+Windows GUI also passed BIP37/compact-filter choice navigation and preference
+addition/removal followed by Save selection, restoring the original configuration.
 See `docs/ui-overhaul/NETWORK-SOURCES.md` for the product contract.
 
 Automatic service discovery, arbitrary transport-policy editing, authenticated

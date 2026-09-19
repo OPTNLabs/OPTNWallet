@@ -212,6 +212,11 @@ pub fn ChainSourcesSection(transport: UiTransport, state: RwSignal<AppState>) ->
                                 <button class="secondary" type="button" disabled=move || action.pending().get() on:click=move |_| {
                                     draft.update(|draft|if let Some(value)=draft {let id=id.get_value();value.preferred.retain(|existing|existing!=&id);value.preferred.insert(0,id);});
                                 }>"Prefer first"</button>
+                                <Show when=move || draft.get().is_some_and(|value|value.preferred.contains(&id.get_value()))>
+                                    <button class="secondary" type="button" disabled=move || action.pending().get() on:click=move |_| {
+                                        draft.update(|draft|if let Some(value)=draft {value.preferred.retain(|source|source!=&id.get_value());});
+                                    }>"Remove preference"</button>
+                                </Show>
                                 <p class="muted">{move || draft.get().and_then(|value|value.preferred.iter().position(|source|source==&id.get_value())).map(|rank|format!("Preference {}",rank+1))}</p>
                             </div>
                         }
