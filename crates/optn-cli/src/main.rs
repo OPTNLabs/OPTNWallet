@@ -1634,7 +1634,7 @@ fn hd_sync_worker(
         .map_err(|e| CliError::Usage(format!("header verifier: {e:?}")))
 }
 
-async fn run(cli: &Cli) -> Result<Value> {
+fn authorize_command(cli: &Cli) -> Result<()> {
     // Before anything else, including opening a connection. A refusal should
     // cost nothing and reveal nothing about the wallet.
     skills::enforce(skills::Policy::from_env()?, command_name(&cli.command))?;
@@ -1663,6 +1663,11 @@ async fn run(cli: &Cli) -> Result<Value> {
     if let Command::Wallet { .. } = &cli.command {
         unreachable!("wallet console is handled in main before run()");
     }
+    Ok(())
+}
+
+async fn run(cli: &Cli) -> Result<Value> {
+    authorize_command(cli)?;
     match &cli.command {
         Command::Wallet { .. } => unreachable!("handled before network setup"),
         Command::Network {
@@ -2534,119 +2539,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 }
             }
         }
-        Command::Console { json } => {
-            use std::io::Write;
-
-            let mut base = vec!["--network".to_string(), cli.network.to_string()];
-            if cli.profile != "default" {
-                base.push("--profile".to_string());
-                base.push(cli.profile.clone());
-            }
-            append_network_config_dir(&mut base, cli.network_config_dir.as_deref())?;
-            let policy = skills::Policy::from_env()?;
-
-            eprintln!("optn console — {} ({})", cli.network, policy.ceiling());
-            eprintln!("`help` lists commands, `quit` leaves.");
-
-            let stdin = std::io::stdin();
-            loop {
-                eprint!("optn> ");
-                let _ = std::io::stderr().flush();
-
-                // Release stdin before dispatch so wallet authentication can read it.
-                let mut line = String::new();
-                if stdin
-                    .read_line(&mut line)
-                    .map_err(|e| CliError::Usage(format!("could not read input: {e}")))?
-                    == 0
-                {
-                    break;
-                }
-
-                let parsed = match console::parse(&line) {
-                    Ok(parsed) => parsed,
-                    Err(error) => {
-                        eprintln!("error: {error}");
-                        continue;
-                    }
-                };
-
-                match parsed {
-                    console::Line::Empty => continue,
-                    console::Line::Quit => break,
-                    console::Line::Help => {
-                        // From the manifest, so it cannot list a command the
-                        // gate would refuse or omit one it allows.
-                        for skill in skills::SKILLS {
-                            let mark = if policy.admits(skill.capability) {
-                                ' '
-                            } else {
-                                'x'
-                            };
-                            eprintln!(
-                                "  {mark} {:<12} {:<7} {}",
-                                skill.name,
-                                skill.capability.as_str(),
-                                skill.summary
-                            );
-                        }
-                        eprintln!("  (x = refused by the current policy)");
-                        continue;
-                    }
-                    console::Line::Command(args) => {
-                        let argv = console::argv(&base, &args, *json);
-                        // Clap's nested parser can exceed the Windows main-thread stack
-                        // while this dispatch frame is live. Parse on the blocking pool.
-                        let parsed = tokio::task::spawn_blocking(move || Cli::try_parse_from(argv))
-                            .await
-                            .map_err(|_| {
-                                CliError::Internal("Console argument parsing failed.".into())
-                            })?;
-                        let mut parsed_cli = match parsed {
-                            Ok(parsed) => parsed,
-                            Err(error) => {
-                                // clap already formats this well; printing it
-                                // whole is better than paraphrasing it.
-                                eprintln!("{error}");
-                                continue;
-                            }
-                        };
-
-                        parsed_cli.wallet = parsed_cli.wallet.or_else(|| cli.wallet.clone());
-                        parsed_cli.wallet_directory = parsed_cli
-                            .wallet_directory
-                            .or_else(|| cli.wallet_directory.clone());
-                        parsed_cli.password_stdin |= cli.password_stdin;
-                        // Only reuse authentication for the same resolved wallet selection.
-                        // An explicit override keeps the parser's fresh session.
-                        if parsed_cli.wallet == cli.wallet
-                            && parsed_cli.wallet_directory == cli.wallet_directory
-                            && parsed_cli.network == cli.network
-                        {
-                            parsed_cli.wallet_session = std::sync::Arc::clone(&cli.wallet_session);
-                        }
-
-                        match dispatch(&parsed_cli).await {
-                            Ok(value) => {
-                                if *json {
-                                    println!(
-                                        "{}",
-                                        serde_json::to_string_pretty(&value).unwrap_or_default()
-                                    );
-                                } else {
-                                    print_human(&parsed_cli.command, &value);
-                                }
-                            }
-                            // Printed, not returned: one bad command should not
-                            // end the session.
-                            Err(error) => eprintln!("error: {error}"),
-                        }
-                    }
-                }
-            }
-
-            Ok(json!({ "ok": true, "console": "closed" }))
-        }
+        Command::Console { .. } => unreachable!("console is handled by dispatch"),
         Command::Serve {
             port,
             bind,
@@ -3364,7 +3257,125 @@ async fn run(cli: &Cli) -> Result<Value> {
 /// for most development, so every production entry point crosses this heap
 /// boundary before polling that future.
 fn dispatch(cli: &Cli) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + '_>> {
-    Box::pin(run(cli))
+    match &cli.command {
+        Command::Console { json } => Box::pin(run_console(cli, json)),
+        _ => Box::pin(run(cli)),
+    }
+}
+
+// Keep the prompt outside the large command future: each entered command must
+// not poll underneath another copy of the full command dispatcher on Windows.
+async fn run_console(cli: &Cli, json: &bool) -> Result<Value> {
+    authorize_command(cli)?;
+    use std::io::Write;
+
+    let mut base = vec!["--network".to_string(), cli.network.to_string()];
+    if cli.profile != "default" {
+        base.push("--profile".to_string());
+        base.push(cli.profile.clone());
+    }
+    append_network_config_dir(&mut base, cli.network_config_dir.as_deref())?;
+    let policy = skills::Policy::from_env()?;
+
+    eprintln!("optn console — {} ({})", cli.network, policy.ceiling());
+    eprintln!("`help` lists commands, `quit` leaves.");
+
+    let stdin = std::io::stdin();
+    loop {
+        eprint!("optn> ");
+        let _ = std::io::stderr().flush();
+
+        // Release stdin before dispatch so wallet authentication can read it.
+        let mut line = String::new();
+        if stdin
+            .read_line(&mut line)
+            .map_err(|e| CliError::Usage(format!("could not read input: {e}")))?
+            == 0
+        {
+            break;
+        }
+
+        let parsed = match console::parse(&line) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                eprintln!("error: {error}");
+                continue;
+            }
+        };
+
+        match parsed {
+            console::Line::Empty => continue,
+            console::Line::Quit => break,
+            console::Line::Help => {
+                // From the manifest, so it cannot list a command the
+                // gate would refuse or omit one it allows.
+                for skill in skills::SKILLS {
+                    let mark = if policy.admits(skill.capability) {
+                        ' '
+                    } else {
+                        'x'
+                    };
+                    eprintln!(
+                        "  {mark} {:<12} {:<7} {}",
+                        skill.name,
+                        skill.capability.as_str(),
+                        skill.summary
+                    );
+                }
+                eprintln!("  (x = refused by the current policy)");
+                continue;
+            }
+            console::Line::Command(args) => {
+                let argv = console::argv(&base, &args, *json);
+                // Clap's nested parser can exceed the Windows main-thread stack
+                // while this dispatch frame is live. Parse on the blocking pool.
+                let parsed = tokio::task::spawn_blocking(move || Cli::try_parse_from(argv))
+                    .await
+                    .map_err(|_| CliError::Internal("Console argument parsing failed.".into()))?;
+                let mut parsed_cli = match parsed {
+                    Ok(parsed) => parsed,
+                    Err(error) => {
+                        // clap already formats this well; printing it
+                        // whole is better than paraphrasing it.
+                        eprintln!("{error}");
+                        continue;
+                    }
+                };
+
+                parsed_cli.wallet = parsed_cli.wallet.or_else(|| cli.wallet.clone());
+                parsed_cli.wallet_directory = parsed_cli
+                    .wallet_directory
+                    .or_else(|| cli.wallet_directory.clone());
+                parsed_cli.password_stdin |= cli.password_stdin;
+                // Only reuse authentication for the same resolved wallet selection.
+                // An explicit override keeps the parser's fresh session.
+                if parsed_cli.wallet == cli.wallet
+                    && parsed_cli.wallet_directory == cli.wallet_directory
+                    && parsed_cli.network == cli.network
+                {
+                    parsed_cli.wallet_session = std::sync::Arc::clone(&cli.wallet_session);
+                }
+
+                match dispatch(&parsed_cli).await {
+                    Ok(value) => {
+                        if *json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&value).unwrap_or_default()
+                            );
+                        } else {
+                            print_human(&parsed_cli.command, &value);
+                        }
+                    }
+                    // Printed, not returned: one bad command should not
+                    // end the session.
+                    Err(error) => eprintln!("error: {error}"),
+                }
+            }
+        }
+    }
+
+    Ok(json!({ "ok": true, "console": "closed" }))
 }
 
 /// A payment that has been built and signed, and broadcast unless previewed.
