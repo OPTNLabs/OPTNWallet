@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ChainSelection } from '../chainSourcesBridge';
 
 const invoke = vi.fn();
 vi.mock('@tauri-apps/api/core', () => ({
@@ -9,6 +10,7 @@ const {
   addChainSource,
   removeChainSource,
   readChainSources,
+  setChainSelection,
   setChainPolicy,
   setChainSourceDisposition,
   SELECTABLE_CHAIN_POLICIES,
@@ -55,6 +57,22 @@ describe('chain sources bridge', () => {
     expect(invoke).toHaveBeenCalledWith('optn_chain_remove_source', {
       source: 'host:node.example',
       network: 'chipnet',
+    });
+  });
+
+  it('passes advanced selection through the existing Rust command contract', async () => {
+    const selection: ChainSelection = {
+      protocols: ['FulcrumElectrum', 'BchnZmq'],
+      primary_scope: { Selected: ['host:node.example'] },
+      fallback_scope: 'MyInfrastructure',
+      preferred: ['host:node.example'],
+    };
+
+    await setChainSelection(selection, 'chipnet');
+
+    expect(invoke).toHaveBeenCalledWith('optn_chain_set_selection', {
+      network: 'chipnet',
+      selection,
     });
   });
 

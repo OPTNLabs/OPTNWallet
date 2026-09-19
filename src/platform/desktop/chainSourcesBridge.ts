@@ -31,6 +31,32 @@ export type ChainSourceFailure = {
   error: string;
 };
 
+export type ChainEvidenceConfidence =
+  | 'unknown'
+  | 'advertised'
+  | 'verified'
+  | 'rejected';
+
+export type ChainCapabilityDetail = {
+  name: string;
+  confidence: ChainEvidenceConfidence;
+  discovery: string;
+};
+
+export type ChainRegisteredCapabilityDetail = {
+  endpoint?: ChainEndpoint | null;
+  protocol: string;
+  name: string;
+  confidence: ChainEvidenceConfidence;
+  discovery: string;
+};
+
+export type ChainProtocolStatus = {
+  endpoint: ChainEndpoint;
+  protocol: string;
+  status: ChainEvidenceConfidence;
+};
+
 export type ChainSource = {
   id: string;
   label: string;
@@ -41,9 +67,37 @@ export type ChainSource = {
   can_remove: boolean;
   endpoints: ChainEndpoint[];
   capabilities: string[];
+  /** Rust catalog claims; absent on older hosts. */
+  capability_details?: ChainCapabilityDetail[];
+  /** Recorded backend claims; absent on older hosts and never route permission. */
+  registered_capability_details?: ChainRegisteredCapabilityDetail[];
+  /** Per-endpoint status reported by Rust; the renderer never probes here. */
+  protocol_statuses?: ChainProtocolStatus[];
   role: 'primary' | 'fallback' | null;
   live_protocols: string[];
   failures: ChainSourceFailure[];
+};
+
+export type ChainSelectionProtocol =
+  | 'FulcrumElectrum'
+  | 'Bip37'
+  | 'Neutrino'
+  | 'BchnRpc'
+  | 'BchnZmq';
+
+/** JSON shape of the existing Rust `WireSourceScope` enum. */
+export type ChainSourceScope =
+  | 'AllEnabled'
+  | 'PublicEnabled'
+  | 'MyInfrastructure'
+  | { Selected: string[] };
+
+/** JSON shape of the existing Rust `WireConnectionPolicy` contract. */
+export type ChainSelection = {
+  protocols: ChainSelectionProtocol[];
+  primary_scope: ChainSourceScope;
+  fallback_scope: ChainSourceScope | null;
+  preferred: string[];
 };
 
 /**
@@ -63,6 +117,8 @@ export type TorProxyView = {
 export type ChainSourcesView = {
   network: string;
   policy: ChainPolicy;
+  /** Present on hosts exposing the advanced Rust selection contract. */
+  selection?: ChainSelection;
   protocols: string[];
   scope: string;
   sources: ChainSource[];
@@ -83,6 +139,16 @@ export function setChainPolicy(
   network?: string
 ): Promise<void> {
   return invoke('optn_chain_set_policy', { policy, network: network ?? null });
+}
+
+export function setChainSelection(
+  selection: ChainSelection,
+  network?: string
+): Promise<void> {
+  return invoke('optn_chain_set_selection', {
+    network: network ?? null,
+    selection,
+  });
 }
 
 export function setChainSourceDisposition(
