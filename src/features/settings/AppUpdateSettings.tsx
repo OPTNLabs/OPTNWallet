@@ -7,12 +7,12 @@
  * ones, and neither is on until asked for. Someone who ticks both is on alpha,
  * which already includes the rest.
  *
- * This checks and links. It does not install. Installing an update is running
- * code fetched from the network, and the only thing that makes that safe is a
- * signature verified against a key the application shipped with — which this
- * project does not yet have. Offering a one-click install without one would be
- * a way to run arbitrary code on every holder's machine the moment anything
- * upstream was compromised. The button says what it does.
+ * Installing is offered only when this build can verify what it would run.
+ * A signed release is checked against the public key compiled into the
+ * application before a byte of it executes; a build with no key gets no
+ * install button at all, only the release link. There is deliberately no third
+ * state -- "install without verifying" is the flag that turns up set in a
+ * release.
  */
 
 import { useEffect, useState } from 'react';
@@ -20,6 +20,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import SectionCard from '../../components/ui/SectionCard';
 import {
   checkForUpdate,
+  installUpdate,
   type UpdateCheck,
 } from '../../platform/desktop/updateBridge';
 import {
@@ -36,6 +37,8 @@ export default function AppUpdateSettings() {
 
   const [result, setResult] = useState<UpdateCheck | null>(null);
   const [checking, setChecking] = useState(false);
+  const [installing, setInstalling] = useState(false);
+  const [installed, setInstalled] = useState('');
   const [error, setError] = useState('');
 
   // One check on open, so the screen is not a button that must be pressed to
@@ -100,14 +103,45 @@ export default function AppUpdateSettings() {
               <span className="font-mono">{result.available}</span> is
               available.
             </p>
-            <a
-              href={result.releases_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="wallet-btn-secondary mt-2 inline-block px-3 py-1.5 text-xs"
-            >
-              Open the release page ↗
-            </a>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              {result.verified_install && (
+                <button
+                  type="button"
+                  disabled={installing}
+                  data-testid="install-update"
+                  className="wallet-btn-primary px-3 py-1.5 text-xs"
+                  onClick={() => {
+                    setInstalling(true);
+                    setError('');
+                    installUpdate()
+                      .then((version) =>
+                        setInstalled(
+                          `${version} installed. Restart the wallet to use it.`
+                        )
+                      )
+                      .catch((failure) =>
+                        setError(
+                          failure instanceof Error
+                            ? failure.message
+                            : String(failure)
+                        )
+                      )
+                      .finally(() => setInstalling(false));
+                  }}
+                >
+                  {installing ? 'Verifying and installing…' : 'Install update'}
+                </button>
+              )}
+              <a
+                href={result.releases_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="wallet-btn-secondary inline-block px-3 py-1.5 text-xs"
+              >
+                Open the release page ↗
+              </a>
+            </div>
+            {installed && <p className="mt-2">{installed}</p>}
           </div>
         )}
 
@@ -141,10 +175,15 @@ export default function AppUpdateSettings() {
         </button>
 
         <p className="wallet-muted mt-2 text-xs">
-          Updates are checked, not installed. Downloads are opened in your
-          browser so you install them deliberately — this build has no update
-          signing key, and a one-click installer without one would be a way to
-          run unverified code on your machine.
+          {result?.verified_install
+            ? 'Updates are verified against a signing key built into this ' +
+              'application before anything is run. A download whose signature ' +
+              'does not match is refused, not warned about.'
+            : 'This build cannot verify updates, so it will not install one. ' +
+              'It reports what is available and opens the release page, and ' +
+              'you install deliberately — a one-click installer with nothing ' +
+              'to check the download against would be a way to run unverified ' +
+              'code on your machine.'}
         </p>
       </SectionCard>
 

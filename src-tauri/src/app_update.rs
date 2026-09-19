@@ -36,6 +36,13 @@ fn current_version() -> String {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct UpdateCheck {
+    /// Whether this build can verify an update's signature, and therefore
+    /// whether it may install one.
+    ///
+    /// False when no public key is configured. The check still works and still
+    /// links to the release page; what is withheld is the install button,
+    /// because installing what cannot be verified is the whole danger.
+    pub verified_install: bool,
     /// The running build, as a tag.
     pub current: String,
     /// `stable` | `beta` | `alpha`.
@@ -52,6 +59,7 @@ pub struct UpdateCheck {
 impl UpdateCheck {
     fn unavailable(channel: ReleaseChannel, reason: String) -> Self {
         Self {
+            verified_install: false,
             current: current_version(),
             channel: channel.as_str().to_owned(),
             available: None,
@@ -112,6 +120,7 @@ async fn published_tags(route: TorRoute) -> Result<Vec<String>, String> {
 /// `beta` and `alpha` are the two opt-ins; both false is stable only.
 #[tauri::command]
 pub async fn optn_check_for_update(
+    app: tauri::AppHandle,
     native: tauri::State<'_, std::sync::Arc<crate::chain_runtime::NativeChainRuntime>>,
     beta: bool,
     alpha: bool,
@@ -141,12 +150,76 @@ pub async fn optn_check_for_update(
     let current = current_version();
     let available = newest_offer(&current, channel, tags.iter().map(String::as_str));
     Ok(UpdateCheck {
+        verified_install: signature_checking_configured(&app),
         current,
         channel: channel.as_str().to_owned(),
         available,
         releases_url: RELEASES_PAGE.to_owned(),
         unavailable: None,
     })
+}
+
+/// Can this build verify an update before running it?
+///
+/// True only when a public key is configured, which is what
+/// `tauri-plugin-updater` checks a downloaded artifact's detached signature
+/// against. With no key the plugin errors, and that error is the correct
+/// answer: there is no such thing as an unverified install here, only no
+/// install.
+#[cfg(desktop)]
+fn signature_checking_configured(app: &tauri::AppHandle) -> bool {
+    use tauri_plugin_updater::UpdaterExt;
+    app.updater_builder().build().is_ok()
+}
+
+#[cfg(not(desktop))]
+fn signature_checking_configured(_app: &tauri::AppHandle) -> bool {
+    false
+}
+
+/// Download and install the update, verifying its signature first.
+///
+/// Every byte is checked against the public key compiled into this build
+/// before anything is run. A missing or wrong signature fails here, which is
+/// the only reason this command is allowed to exist at all -- the check-only
+/// path stays for builds that have no key.
+/// Registered on every platform so the handler list needs no `cfg` -- a
+/// conditional entry inside `generate_handler!` is the kind of thing that
+/// compiles here and breaks the Android build. Mobile simply refuses.
+#[tauri::command]
+pub async fn optn_install_update(app: tauri::AppHandle) -> Result<String, String> {
+    install_update(app).await
+}
+
+#[cfg(not(desktop))]
+async fn install_update(_app: tauri::AppHandle) -> Result<String, String> {
+    Err("this platform is updated through its app store".into())
+}
+
+#[cfg(desktop)]
+async fn install_update(app: tauri::AppHandle) -> Result<String, String> {
+    use tauri_plugin_updater::UpdaterExt;
+
+    let updater = app.updater_builder().build().map_err(|error| {
+        format!(
+            "This build cannot verify updates ({error}). Install from              {RELEASES_PAGE} instead."
+        )
+    })?;
+
+    let update = updater
+        .check()
+        .await
+        .map_err(|error| format!("could not check for an update: {error}"))?
+        .ok_or_else(|| "no update is available".to_string())?;
+
+    let version = update.version.clone();
+    // The plugin verifies the detached signature against the configured public
+    // key as it downloads; a failure here is a refusal, never a warning.
+    update
+        .download_and_install(|_, _| {}, || {})
+        .await
+        .map_err(|error| format!("the update did not verify and was not installed: {error}"))?;
+    Ok(version)
 }
 
 #[cfg(test)]

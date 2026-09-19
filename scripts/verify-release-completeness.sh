@@ -121,6 +121,11 @@ populate() {
   done
 }
 
+# The gate reads this to decide whether the signed-update set is expected. The
+# synthetic release contains every required asset, so the strict reading is the
+# one to verify against -- same reasoning as substituting the CLI probe above.
+export UPDATE_SIGNING=true
+
 echo "asset set: ${#ASSETS[@]} files, from $CONFIG"
 echo
 

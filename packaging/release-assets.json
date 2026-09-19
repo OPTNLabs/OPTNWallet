@@ -8,14 +8,20 @@
     "",
     "The general rule is that nothing drops: every entry is required:true and",
     "a release refuses to publish without it. required:false exists for the",
-    "niche case where a platform genuinely has to be skipped for one release —",
+    "niche case where a platform genuinely has to be skipped for one release \u2014",
     "a signing certificate expired, a store SDK broken upstream. It is",
     "deliberately loud: the run prints a warning naming what was waived, and",
     "the entry needs a `reason` explaining why, so a temporary waiver that was",
     "never reverted is visible in review rather than silent.",
     "",
     "`when: cli` marks assets that only exist once crates/optn-cli is in the",
-    "tree. A probe job decides, so either merge order behaves."
+    "tree. A probe job decides, so either merge order behaves.",
+    "",
+    "`when: updater` marks the signed-update set: the artifacts the installed",
+    "application downloads, their detached signatures, and the manifest that",
+    "names them. They exist only when an update signing key is configured, and",
+    "they are all-or-nothing -- a manifest without signatures, or signatures",
+    "without a manifest, is worse than publishing neither."
   ],
   "assets": [
     {
@@ -166,6 +172,54 @@
       "pattern": "optn-${VERSION}-windows-x64.exe",
       "required": true,
       "when": "cli"
+    },
+    {
+      "label": "Windows update artifact signature",
+      "pattern": "OPTNWallet-${VERSION}-windows-x64-setup.exe.sig",
+      "required": true,
+      "when": "updater"
+    },
+    {
+      "label": "macOS Apple Silicon update archive",
+      "pattern": "OPTNWallet-${VERSION}-macos-arm64.app.tar.gz",
+      "required": true,
+      "when": "updater"
+    },
+    {
+      "label": "macOS Apple Silicon update signature",
+      "pattern": "OPTNWallet-${VERSION}-macos-arm64.app.tar.gz.sig",
+      "required": true,
+      "when": "updater"
+    },
+    {
+      "label": "macOS Intel update archive",
+      "pattern": "OPTNWallet-${VERSION}-macos-x64.app.tar.gz",
+      "required": true,
+      "when": "updater"
+    },
+    {
+      "label": "macOS Intel update signature",
+      "pattern": "OPTNWallet-${VERSION}-macos-x64.app.tar.gz.sig",
+      "required": true,
+      "when": "updater"
+    },
+    {
+      "label": "Linux x64 update signature",
+      "pattern": "OPTNWallet-${VERSION}-linux-x64.AppImage.sig",
+      "required": true,
+      "when": "updater"
+    },
+    {
+      "label": "Linux ARM64 update signature",
+      "pattern": "OPTNWallet-${VERSION}-linux-arm64.AppImage.sig",
+      "required": true,
+      "when": "updater"
+    },
+    {
+      "label": "Update manifest",
+      "pattern": "latest.json",
+      "required": true,
+      "when": "updater"
     }
   ],
   "alsoPublished": [
