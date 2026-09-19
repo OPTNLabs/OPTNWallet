@@ -616,9 +616,10 @@ impl ChainBackend for NeutrinoBackend {
                     start_height,
                     count,
                     locator,
-                } => self
-                    .header_sync(*start_height, *count, Some(*locator))
-                    .await,
+                } => {
+                    self.header_sync(*start_height, *count, Some(*locator))
+                        .await
+                }
                 _ => Err(ChainBackendError::Unsupported),
             }
         })

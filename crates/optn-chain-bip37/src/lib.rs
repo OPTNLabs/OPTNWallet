@@ -791,9 +791,10 @@ impl ChainBackend for Bip37Backend {
                     start_height,
                     count,
                     locator,
-                } => self
-                    .header_sync(*start_height, *count, Some(*locator))
-                    .await,
+                } => {
+                    self.header_sync(*start_height, *count, Some(*locator))
+                        .await
+                }
                 ChainRequest::HistoricalHeaderProof {
                     height,
                     checkpoint_height,

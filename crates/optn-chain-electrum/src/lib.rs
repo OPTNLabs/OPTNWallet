@@ -510,9 +510,7 @@ impl ChainBackend for ElectrumBackend {
                     start_height,
                     count,
                 } => self.header_sync(*start_height, *count).await,
-                ChainRequest::HeaderSyncFromLocator { .. } => {
-                    Err(ChainBackendError::Unsupported)
-                }
+                ChainRequest::HeaderSyncFromLocator { .. } => Err(ChainBackendError::Unsupported),
                 ChainRequest::HistoricalHeaderProof {
                     height,
                     checkpoint_height,
