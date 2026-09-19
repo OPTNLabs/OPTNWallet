@@ -97,8 +97,8 @@ fn audit() {
             Err(error) => {
                 eprintln!(
                     "dependency audit: could not run cargo-audit ({error}). Install it with \
-                     `cargo install cargo-audit --locked`; a missing tool is a failed audit, not \
-                     a skipped one."
+ `cargo install cargo-audit --locked`; a missing tool is a failed audit, not \
+ a skipped one."
                 );
                 std::process::exit(1);
             }
@@ -172,7 +172,7 @@ fn architecture() {
             if text.contains(dependency) {
                 failures.push(format!(
                     "{} depends on Apple provider package '{dependency}'; wallet truth stays \
-                     in Rust and Apple adapters belong behind optn-platform",
+ in Rust and Apple adapters belong behind optn-platform",
                     manifest.display()
                 ));
             }
@@ -204,7 +204,7 @@ fn architecture() {
         {
             failures.push(format!(
                 "crates/optn-ui-text depends on '{framework}'; it exists to prove a renderer \
-                 needs only optn-app and optn-transport, so a framework there defeats it"
+ needs only optn-app and optn-transport, so a framework there defeats it"
             ));
         }
     }
@@ -255,7 +255,7 @@ fn architecture() {
         {
             failures.push(format!(
                 "crates/optn-ui-egui depends on '{framework}'; it renders on egui alone, and a \
-                 second framework there would mean the toolkits are not interchangeable"
+ second framework there would mean the toolkits are not interchangeable"
             ));
         }
     }
@@ -310,9 +310,9 @@ fn architecture() {
             .contains(framework)
         {
             failures.push(format!(
-                "crates/optn-ui-dioxus depends on '{framework}'; it renders on dioxus alone, and a \
-                 second framework there would mean the toolkits are not interchangeable"
-            ));
+ "crates/optn-ui-dioxus depends on '{framework}'; it renders on dioxus alone, and a \
+ second framework there would mean the toolkits are not interchangeable"
+ ));
         }
     }
     forbid_dependencies(
@@ -351,7 +351,7 @@ fn architecture() {
                 }
                 _ => failures.push(format!(
                     "{left_name} or {right_name} has no host block; the swap is only demonstrated \
-                     while every renderer drives optn_transport::run through the same script"
+ while every renderer drives optn_transport::run through the same script"
                 )),
             }
         }
@@ -373,8 +373,8 @@ fn architecture() {
     for forbidden in ["OpalBase", "OpalCrypto", "OpalFusion", "OpalHedge"] {
         if opal_reference_manifest.contains(forbidden) {
             failures.push(format!(
-                "apple/OPTNOpalReference must not link preview/secret-authority package '{forbidden}'"
-            ));
+ "apple/OPTNOpalReference must not link preview/secret-authority package '{forbidden}'"
+ ));
         }
     }
     if opal_reference_manifest.contains("branch:") {
@@ -409,9 +409,9 @@ fn architecture() {
             for dependency in APPLE_REFERENCE_DEPENDENCIES {
                 if text.contains(dependency) {
                     failures.push(format!(
-                        "{} refers to Apple/Opal package '{dependency}' in code; wallet truth                          stays in Rust and Apple adapters belong behind optn-platform",
-                        path.display()
-                    ));
+ "{} refers to Apple/Opal package '{dependency}' in code; wallet truth stays in Rust and Apple adapters belong behind optn-platform",
+ path.display()
+ ));
                 }
             }
         }
@@ -561,6 +561,7 @@ fn architecture() {
 
     cashcode_policy(&root, &mut failures);
     explorer_policy(&root, &mut failures);
+    tauri_handler_modules(&root, &mut failures);
 
     if failures.is_empty() {
         println!("architecture boundary check: PASS");
@@ -604,8 +605,8 @@ fn cashcode_policy(root: &Path, failures: &mut Vec<String>) {
         if !rpa.contains(required) {
             failures.push(format!(
                 "crates/optn-core/src/rpa.rs no longer contains '{required}'; PR #89 made \
-                 Cash Code exclusive and decoding a legacy PayCode under compressed semantics \
-                 pays an address its recipient cannot scan for"
+ Cash Code exclusive and decoding a legacy PayCode under compressed semantics \
+ pays an address its recipient cannot scan for"
             ));
         }
     }
@@ -630,8 +631,8 @@ fn cashcode_policy(root: &Path, failures: &mut Vec<String>) {
             if code.contains(api) {
                 failures.push(format!(
                     "{} declares or uses legacy PayCode emit API '{api}'; OPTN emits \
-                     cashcode: only, and an encoder for the legacy prefix defeats the \
-                     refusal in optn-core's decode",
+ cashcode: only, and an encoder for the legacy prefix defeats the \
+ refusal in optn-core's decode",
                     path.display()
                 ));
             }
@@ -671,8 +672,8 @@ fn explorer_policy(root: &Path, failures: &mut Vec<String>) {
         if !code.contains(required) {
             failures.push(format!(
                 "crates/optn-core/src/explorer.rs no longer contains '{required}'; without \
-                 the fail-closed arm an own-infrastructure-only wallet hands transaction \
-                 ids to a public website"
+ the fail-closed arm an own-infrastructure-only wallet hands transaction \
+ ids to a public website"
             ));
         }
     }
@@ -727,8 +728,8 @@ fn explorer_policy(root: &Path, failures: &mut Vec<String>) {
             if code.contains(host) {
                 failures.push(format!(
                     "{} names the public explorer '{host}'; explorer URLs are built in \
-                     crates/optn-core/src/explorer.rs so the connection policy governs \
-                     them on every surface",
+ crates/optn-core/src/explorer.rs so the connection policy governs \
+ them on every surface",
                     relative.display()
                 ));
             }
@@ -760,6 +761,124 @@ fn code_lines_only(source: &str) -> String {
         )
 }
 
+/// A `cfg`-gated module's commands must be gated the same way in the handler
+/// list.
+///
+/// `generate_handler!` does accept `#[cfg(...)]` on its entries -- `clipboard`
+/// and `hw` rely on it. What it cannot do is resolve `app_update::command` on a
+/// target where `mod app_update;` was compiled out. The two have to agree, and
+/// when they disagree the failure appears only on Android and iOS, which a
+/// typical dev box cannot build: there is no NDK, so the first sight of it is a
+/// red CI run twenty minutes later.
+///
+/// This is not hypothetical. Inserting `mod app_update;` directly beneath an
+/// existing `#[allow(dead_code)] #[cfg(desktop)]` pair silently took both
+/// attributes from `mod menu;` below it, breaking both mobile targets two ways
+/// at once: the new module vanished from them, and the old one appeared and
+/// failed on `tauri::menu`.
+/// Modules that must stay behind the cfg they are behind today.
+///
+/// Each of these compiles only on the platforms named: `menu` reaches for
+/// `tauri::menu`, `clipboard`/`hw`/`platform` use desktop-only APIs, and
+/// `platform_mobile` the reverse. Ungating one breaks a target that cannot be
+/// built on a normal dev box -- there is no Android NDK here -- so the failure
+/// arrives as a red CI run rather than a compile error.
+///
+/// The list exists because losing one of these gates is easy and silent: an
+/// item inserted between an attribute and its `mod` takes the attribute with
+/// it, leaving the module below ungated and the module above wrongly gated.
+/// That happened to `menu` and `app_update` in one edit.
+const PLATFORM_GATED_MODULES: &[(&str, &str)] = &[
+    ("menu", "cfg(desktop)"),
+    ("clipboard", "cfg(desktop)"),
+    ("hw", "cfg(desktop)"),
+    ("platform", "cfg(desktop)"),
+    ("app_update", "cfg(desktop)"),
+    ("platform_mobile", "cfg(mobile)"),
+];
+
+fn tauri_handler_modules(root: &Path, failures: &mut Vec<String>) {
+    let path = root.join("src-tauri/src/lib.rs");
+    let source = read(&path);
+    let Some(start) = source.find("tauri::generate_handler![") else {
+        failures.push(
+ "src-tauri/src/lib.rs has no generate_handler! list; if the command surface moved, update this check with it"
+ .to_string(),
+        );
+        return;
+    };
+
+    // Modules whose declaration carries a cfg, and the cfg text itself.
+    let lines: Vec<&str> = source.lines().collect();
+    let mut gated: Vec<(String, String)> = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        let Some(rest) = trimmed
+            .strip_prefix("pub mod ")
+            .or_else(|| trimmed.strip_prefix("mod "))
+        else {
+            continue;
+        };
+        let Some(name) = rest.strip_suffix(';') else {
+            continue;
+        };
+        for previous in lines[..index].iter().rev() {
+            let previous = previous.trim();
+            if previous.is_empty() || !previous.starts_with("#[") {
+                break;
+            }
+            if let Some(at) = previous.find("cfg(") {
+                let cfg = previous[at..].trim_end_matches(']').to_string();
+                gated.push((name.to_string(), cfg));
+                break;
+            }
+        }
+    }
+
+    for (module, required) in PLATFORM_GATED_MODULES {
+        match gated.iter().find(|(name, _)| name == module) {
+ Some((_, actual)) if actual == required => {}
+ Some((_, actual)) => failures.push(format!(
+ "src-tauri/src/lib.rs gates `mod {module};` with `#[{actual}]`, but it must be `#[{required}]`"
+ )),
+ None => failures.push(format!(
+ "src-tauri/src/lib.rs no longer gates `mod {module};` with `#[{required}]`. It compiles on those platforms only, so ungating it breaks a target this machine cannot build -- check whether an inserted item took the attribute"
+ )),
+        }
+    }
+
+    // Each handler entry, with whatever cfg attribute sits directly above it.
+    let list = &source[start..];
+    let list_end = list.find("])").unwrap_or(list.len());
+    let entries: Vec<&str> = list[..list_end].lines().skip(1).collect();
+    for (index, entry) in entries.iter().enumerate() {
+        let entry = entry.trim().trim_end_matches(',');
+        if entry.is_empty() || entry.starts_with("//") || entry.starts_with("#[") {
+            continue;
+        }
+        let Some((module, _)) = entry.split_once("::") else {
+            continue;
+        };
+        let Some((_, required)) = gated.iter().find(|(name, _)| name == module) else {
+            continue;
+        };
+        let attribute = entries[..index]
+            .iter()
+            .rev()
+            .map(|line| line.trim())
+            .take_while(|line| line.starts_with("#["))
+            .find(|line| line.contains("cfg("));
+        let satisfied = attribute
+            .and_then(|line| line.find("cfg(").map(|at| line[at..].trim_end_matches(']')))
+            .is_some_and(|cfg| cfg == required);
+        if !satisfied {
+            failures.push(format!(
+ "src-tauri/src/lib.rs declares `mod {module};` behind `#[{required}]`, but the generate_handler! entry `{entry}` is not gated the same way. On a target where the module is compiled out the macro still tries to resolve it, which fails on Android and iOS only"
+ ));
+        }
+    }
+}
+
 fn compare_host_blocks(
     left_name: &str,
     left: &[String],
@@ -776,23 +895,23 @@ fn compare_host_blocks(
         .collect();
     if left.len() != right.len() {
         failures.push(format!(
-            "{left_name} and {right_name} host blocks are {} and {} lines; swapping renderers must \
-             be one line, so they have to stay the same block",
-            left.len(),
-            right.len()
+ "{left_name} and {right_name} host blocks are {} and {} lines; swapping renderers must \
+ be one line, so they have to stay the same block",
+ left.len(),
+ right.len()
         ));
     } else if differences.len() != 1 {
         failures.push(format!(
-            "{left_name} and {right_name} host blocks differ on {} lines; only the `type Ui` alias \
-             may differ, or swapping renderers is not one line: {:?}",
-            differences.len(),
-            differences
+ "{left_name} and {right_name} host blocks differ on {} lines; only the `type Ui` alias \
+ may differ, or swapping renderers is not one line: {:?}",
+ differences.len(),
+ differences
         ));
     } else if !differences[0].1.trim_start().starts_with("type Ui<T> =") {
         failures.push(format!(
-            "the one line that differs between {left_name} and {right_name} host blocks is not the \
-             renderer alias: {:?}",
-            differences[0]
+ "the one line that differs between {left_name} and {right_name} host blocks is not the \
+ renderer alias: {:?}",
+ differences[0]
         ));
     }
 }
@@ -997,11 +1116,11 @@ for tab in tabs {\n\
         // A guard that fails on the import is one worth keeping, so this checks
         // both halves: prose passes, code does not.
         let prose = r##"
-            //! SwiftFulcrum is an independent implementation, named here to
-            //! explain why nothing in this crate reaches for it.
-            /* opalbase /* nested */ is likewise only discussed */
-            fn label() -> &'static str { "SwiftFulcrum" }
-            fn raw() -> &'static str { r#"opalcrypto"# }
+ //! SwiftFulcrum is an independent implementation, named here to
+ //! explain why nothing in this crate reaches for it.
+ /* opalbase /* nested */ is likewise only discussed */
+ fn label() -> &'static str { "SwiftFulcrum" }
+ fn raw() -> &'static str { r#"opalcrypto"# }
         "##;
         let stripped = rust_code_only(prose).to_lowercase();
         for dependency in APPLE_REFERENCE_DEPENDENCIES {

@@ -464,6 +464,54 @@ pub async fn optn_chain_set_policy(
     .await
 }
 
+/// The proxy situation, in the shape every renderer reads.
+///
+/// Separate from `optn_chain_sources` because the Leptos renderer wants this
+/// and not a catalog of every source: a screen that had to fetch the whole
+/// chain view to learn whether Tor is up would either be slow or would grow a
+/// second, lazier answer of its own.
+///
+/// The policy question is asked here, not in the renderer. A renderer that
+/// decided for itself whether a proxy is usable would be the second copy of
+/// the rule this whole area exists to avoid.
+#[tauri::command]
+pub async fn optn_tor_readiness(
+    runtime: tauri::State<'_, optn_runtime::AppRuntime>,
+    native: tauri::State<'_, Arc<NativeChainRuntime>>,
+    network_settings: tauri::State<'_, NetworkSettingsStore>,
+    network: Option<String>,
+) -> Result<optn_transport::WireTorStatus, String> {
+    let network = network_or_current(&runtime, network)?;
+    let settings = (*network_settings).clone();
+    let trusted = tokio::task::spawn_blocking(move || settings.trusted_socks_ports(network))
+        .await
+        .unwrap_or_default();
+    let settings = (*network_settings).clone();
+    let persisted = tokio::task::spawn_blocking(move || settings.chain_selection(network))
+        .await
+        .map_err(|_| "network settings reader stopped".to_string())??;
+    let (catalog, policy) = match persisted {
+        Some(selection) => selection,
+        None => crate::chain_runtime::catalog_and_policy_from_app_state(&runtime.state()),
+    };
+
+    let view = tor_view(&catalog, &policy, &trusted).await;
+    let _ = &native;
+    let state = match view.status.as_str() {
+        "verified" => optn_transport::WireTorState::Verified,
+        "unverified" => optn_transport::WireTorState::Unverified,
+        "absent" => optn_transport::WireTorState::Absent,
+        _ => optn_transport::WireTorState::NotNeeded,
+    };
+    Ok(optn_transport::WireTorStatus {
+        state,
+        socks_port: view.socks_port,
+        // How far this shell's own Tor has bootstrapped, so a renderer can
+        // show progress rather than a dead button.
+        bootstrap_percent: crate::fusion::tor_manager::status().bootstrap_percent,
+    })
+}
+
 /// Confirm, or withdraw confirmation, that a loopback SOCKS port is the
 /// holder's own Tor.
 ///

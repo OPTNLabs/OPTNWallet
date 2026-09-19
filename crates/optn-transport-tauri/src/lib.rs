@@ -123,6 +123,53 @@ mod wasm {
                 Ok(())
             })
         }
+
+        fn tor_status<'a>(&'a self) -> TransportFuture<'a, optn_transport::WireTorStatus> {
+            Box::pin(async move {
+                let value = invoke("optn_tor_readiness", Object::new().into()).await?;
+                serde_wasm_bindgen::from_value(value).map_err(|error| {
+                    TransportError::InvalidData(format!("unreadable Tor status: {error}"))
+                })
+            })
+        }
+
+        fn start_tor<'a>(&'a self) -> TransportFuture<'a, optn_transport::WireTorStatus> {
+            Box::pin(async move {
+                // Bootstrapping can take a minute on a filtered network, and
+                // the command waits for it. Reading the status back afterwards
+                // rather than trusting the start call means the answer is what
+                // the chain layer will actually see, not what starting a
+                // process implied.
+                invoke("tor_start", Object::new().into()).await?;
+                let value = invoke("optn_tor_readiness", Object::new().into()).await?;
+                serde_wasm_bindgen::from_value(value).map_err(|error| {
+                    TransportError::InvalidData(format!("unreadable Tor status: {error}"))
+                })
+            })
+        }
+
+        fn trust_socks_port<'a>(&'a self, port: u16, trusted: bool) -> TransportFuture<'a, ()> {
+            Box::pin(async move {
+                let args = Object::new();
+                Reflect::set(
+                    &args,
+                    &JsValue::from_str("port"),
+                    &JsValue::from_f64(port.into()),
+                )
+                .map_err(js_error)?;
+                Reflect::set(
+                    &args,
+                    &JsValue::from_str("trusted"),
+                    &JsValue::from_bool(trusted),
+                )
+                .map_err(js_error)?;
+                invoke("optn_chain_trust_socks_proxy", args.into()).await?;
+                // Routes were built while the proxy was untrusted, and nothing
+                // rebuilds them on a settings write alone.
+                invoke("optn_chain_rebuild", Object::new().into()).await?;
+                Ok(())
+            })
+        }
     }
 }
 

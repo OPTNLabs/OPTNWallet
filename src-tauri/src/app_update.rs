@@ -166,15 +166,9 @@ pub async fn optn_check_for_update(
 /// against. With no key the plugin errors, and that error is the correct
 /// answer: there is no such thing as an unverified install here, only no
 /// install.
-#[cfg(desktop)]
 fn signature_checking_configured(app: &tauri::AppHandle) -> bool {
     use tauri_plugin_updater::UpdaterExt;
     app.updater_builder().build().is_ok()
-}
-
-#[cfg(not(desktop))]
-fn signature_checking_configured(_app: &tauri::AppHandle) -> bool {
-    false
 }
 
 /// Download and install the update, verifying its signature first.
@@ -183,21 +177,9 @@ fn signature_checking_configured(_app: &tauri::AppHandle) -> bool {
 /// before anything is run. A missing or wrong signature fails here, which is
 /// the only reason this command is allowed to exist at all -- the check-only
 /// path stays for builds that have no key.
-/// Registered on every platform so the handler list needs no `cfg` -- a
-/// conditional entry inside `generate_handler!` is the kind of thing that
-/// compiles here and breaks the Android build. Mobile simply refuses.
+/// Download and install, verifying the signature first.
 #[tauri::command]
 pub async fn optn_install_update(app: tauri::AppHandle) -> Result<String, String> {
-    install_update(app).await
-}
-
-#[cfg(not(desktop))]
-async fn install_update(_app: tauri::AppHandle) -> Result<String, String> {
-    Err("this platform is updated through its app store".into())
-}
-
-#[cfg(desktop)]
-async fn install_update(app: tauri::AppHandle) -> Result<String, String> {
     use tauri_plugin_updater::UpdaterExt;
 
     let updater = app.updater_builder().build().map_err(|error| {

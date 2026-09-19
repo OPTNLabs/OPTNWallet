@@ -1,8 +1,11 @@
 #[allow(dead_code)] // menu bar is built on the JS side now; kept for reference
 #[cfg(desktop)]
-mod app_update;
 mod menu;
 
+// Desktop only, and its handler entries carry the same cfg -- mobile builds
+// are updated by their stores and have no business compiling an updater.
+#[cfg(desktop)]
+mod app_update;
 pub mod app_transport;
 mod appearance;
 pub mod chain_runtime;
@@ -1131,7 +1134,10 @@ pub fn run() {
             chain_sources::optn_chain_sources,
             chain_sources::optn_chain_set_policy,
             chain_sources::optn_chain_trust_socks_proxy,
+            chain_sources::optn_tor_readiness,
+            #[cfg(desktop)]
             app_update::optn_check_for_update,
+            #[cfg(desktop)]
             app_update::optn_install_update,
             chain_sources::optn_chain_set_source_disposition,
             chain_sources::optn_chain_add_source,
