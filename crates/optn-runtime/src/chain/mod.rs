@@ -569,7 +569,7 @@ pub struct ConnectionPolicy {
 impl ConnectionPolicy {
     pub fn auto() -> Self {
         Self {
-            protocols: ProtocolSet::wallet_sync(),
+            protocols: ProtocolSet::all(),
             primary_scope: SourceScope::AllEnabled,
             fallback_scope: None,
             preferred: Vec::new(),
@@ -578,7 +578,7 @@ impl ConnectionPolicy {
 
     pub fn own_infrastructure() -> Self {
         Self {
-            protocols: ProtocolSet::wallet_sync(),
+            protocols: ProtocolSet::all(),
             primary_scope: SourceScope::UserInfrastructure,
             fallback_scope: None,
             preferred: Vec::new(),

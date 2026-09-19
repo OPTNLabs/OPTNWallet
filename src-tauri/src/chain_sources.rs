@@ -116,6 +116,7 @@ pub async fn optn_chain_sources(
         (Vec::new(), Vec::new(), Vec::new())
     };
     let view = ChainSourcesView {
+        unavailable_services: optn_runtime::source_selection::unavailable_services(),
         network: network.to_string(),
         selection: optn_runtime::source_selection::view(&policy),
         policy: serde_json::to_value(ChainPolicyPreset::describe(&policy))

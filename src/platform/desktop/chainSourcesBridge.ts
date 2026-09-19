@@ -115,6 +115,7 @@ export type TorProxyView = {
 };
 
 export type ChainSourcesView = {
+  unavailable_services?: { id: string; label: string; reason: string }[];
   network: string;
   policy: ChainPolicy;
   /** Present on hosts exposing the advanced Rust selection contract. */
@@ -262,6 +263,7 @@ export const ENDPOINT_KINDS: { value: string; label: string }[] = [
   { value: 'p2p', label: 'BCH peer (BIP37 / Neutrino)' },
   { value: 'node-rpc', label: 'Node RPC' },
   { value: 'node-zmq', label: 'Node ZMQ' },
+  { value: 'ipfs-gateway', label: 'IPFS gateway (HTTPS)' },
 ];
 
 export const DEFAULT_PORTS: Record<string, number> = {

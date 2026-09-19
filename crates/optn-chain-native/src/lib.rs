@@ -207,6 +207,28 @@ fn policy_allows_public_registry(policy: &ConnectionPolicy) -> bool {
         || policy.fallback_scope.as_ref().is_some_and(allows_public)
 }
 
+fn configured_ipfs_gateways(catalog: &SourceCatalog, policy: &ConnectionPolicy) -> Vec<url::Url> {
+    let plan = optn_runtime::chain::build_endpoint_selection_plan(
+        catalog,
+        policy,
+        EndpointKind::IpfsGatewayHttps,
+    );
+    plan.primary
+        .iter()
+        .chain(&plan.fallback)
+        .filter_map(|id| catalog.get(id))
+        .flat_map(|source| &source.endpoints)
+        .filter(|endpoint| endpoint.kind == EndpointKind::IpfsGatewayHttps)
+        .filter_map(|endpoint| {
+            let mut url = url::Url::parse("https://gateway.invalid/").ok()?;
+            url.set_host(Some(&endpoint.host)).ok()?;
+            url.set_port(endpoint.port).ok()?;
+            Some(url)
+        })
+        .take(16)
+        .collect()
+}
+
 fn endpoint_can_use_native_tor(endpoint: &Endpoint, policy: &ConnectionPolicy) -> bool {
     match endpoint.kind {
         EndpointKind::ElectrumTls | EndpointKind::ElectrumTcp => {
@@ -221,6 +243,16 @@ fn endpoint_can_use_native_tor(endpoint: &Endpoint, policy: &ConnectionPolicy) -
 }
 
 fn needs_default_tor_proxy(catalog: &SourceCatalog, policy: &ConnectionPolicy) -> bool {
+    let gateways = optn_runtime::chain::build_endpoint_selection_plan(
+        catalog,
+        policy,
+        EndpointKind::IpfsGatewayHttps,
+    );
+    if !gateways.primary.is_empty() || !gateways.fallback.is_empty() {
+        // The bounded metadata HTTP adapter currently requires verified Tor,
+        // including when the configured gateway is owned by the user.
+        return true;
+    }
     let selected = selected_source_ids(catalog, policy);
     catalog.iter().any(|source| {
         source.is_enabled()
@@ -556,9 +588,14 @@ async fn build_native_chain_stack_with_tor_status(
     let sources = catalog.iter().cloned().collect::<Vec<_>>();
     let mut service = ChainService::new(catalog, policy.clone());
     if let TorStatus::Verified { socks_port } = tor_status {
-        if policy_allows_public_registry(&policy) {
-            service
-                .set_registry_fetcher(Arc::new(registry_fetch::VerifiedRegistryTor { socks_port }));
+        let gateways = configured_ipfs_gateways(service.catalog(), &policy);
+        let allow_publisher = policy_allows_public_registry(&policy);
+        if allow_publisher || !gateways.is_empty() {
+            service.set_registry_fetcher(Arc::new(registry_fetch::ConfiguredRegistryFetcher::new(
+                registry_fetch::VerifiedRegistryTor { socks_port },
+                gateways,
+                allow_publisher,
+            )));
         }
     }
     let mut event_sources: Vec<Arc<dyn NativeChainEventSource>> = Vec::new();
@@ -736,6 +773,84 @@ fn failure(
 mod tests {
     use super::*;
     use optn_runtime::chain::ProtocolSet;
+
+    #[tokio::test]
+    async fn configured_gateway_uses_source_policy_without_becoming_chain_provider() {
+        use optn_runtime::chain::{build_endpoint_selection_plan, SourceDisposition};
+        use optn_runtime::network_config::{add_user_source_services, UserNetworkOverlay};
+        let mut overlay = UserNetworkOverlay::default();
+        let own = add_user_source_services(
+            &mut overlay,
+            "My gateway",
+            vec![Endpoint {
+                kind: EndpointKind::IpfsGatewayHttps,
+                host: "gateway.example".into(),
+                port: Some(443),
+            }],
+            Some("home"),
+        )
+        .unwrap();
+        let public = add_user_source_services(
+            &mut overlay,
+            "Other gateway",
+            vec![Endpoint {
+                kind: EndpointKind::IpfsGatewayHttps,
+                host: "public.example".into(),
+                port: Some(8443),
+            }],
+            None,
+        )
+        .unwrap();
+        let mut catalog = SourceCatalog::default();
+        for source in overlay.user_sources {
+            catalog.insert(source).unwrap();
+        }
+        let mut policy = ConnectionPolicy::own_infrastructure();
+        policy.preferred = vec![public.clone()];
+        assert_eq!(
+            configured_ipfs_gateways(&catalog, &policy)
+                .iter()
+                .map(url::Url::as_str)
+                .collect::<Vec<_>>(),
+            vec!["https://gateway.example/"]
+        );
+        assert!(build_selection_plan(&catalog, &policy).primary.is_empty());
+        assert!(requires_tor_proxy(&catalog, &policy));
+        policy.fallback_scope = Some(SourceScope::PublicEnabled);
+        let plan = build_endpoint_selection_plan(&catalog, &policy, EndpointKind::IpfsGatewayHttps);
+        assert_eq!(plan.primary, vec![own.clone()]);
+        assert_eq!(plan.fallback, vec![public.clone()]);
+        catalog.get_mut(&public).unwrap().disposition = SourceDisposition::Banned;
+        assert_eq!(configured_ipfs_gateways(&catalog, &policy).len(), 1);
+        policy.fallback_scope = None;
+        let stack = build_native_chain_stack_with_tor_status(
+            catalog.clone(),
+            policy.clone(),
+            "chipnet",
+            &NativeChainSecrets::default(),
+            TorStatus::Verified { socks_port: 9050 },
+            None,
+        )
+        .await;
+        let service = stack.service.lock().await;
+        let fetcher = service
+            .registry_fetcher()
+            .expect("own gateway installs metadata transport");
+        assert!(
+            fetcher
+                .fetch(
+                    "https://publisher.example/registry.json",
+                    Default::default()
+                )
+                .await
+                .is_err(),
+            "own-only must not dial arbitrary publishers"
+        );
+        drop(service);
+        catalog.get_mut(&own).unwrap().disposition = SourceDisposition::Disabled;
+        assert!(configured_ipfs_gateways(&catalog, &policy).is_empty());
+        assert!(!requires_tor_proxy(&catalog, &policy));
+    }
 
     #[tokio::test]
     async fn registry_fetcher_requires_verified_tor_and_a_public_source_scope() {

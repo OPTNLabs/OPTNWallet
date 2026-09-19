@@ -149,3 +149,9 @@ atomic Rust overlay edit for the same host. Source details can append missing
 services without repeating identity or changing ownership. Existing services are
 shown as configured, never implicitly verified. Ports are not guessed from the
 host; automatic service detection and RPC credential setup remain separate work.
+
+### Configured metadata services (2026-09-19)
+
+IPFS gateway setup uses a source endpoint (`ipfs-gateway`, HTTPS host and explicit port), not a chain-sync protocol. Shared Rust source selection applies enabled/banned state, primary scope, explicit fallback and preferred order independently of chain protocol eligibility. The native adapter requires verified Tor, requests `/ipfs/{cid}/{path}`, and must retain the existing bounded bytes and BCMR publication-hash verification. No gateway is added automatically. Same-origin redirect enforcement prevents a gateway from broadening source scope.
+
+External BCMR indexer, token indexer and metadata proxy/cache entries remain visible but unavailable until their adapters are connected. Configuring an indexer must never synthesize a registry and treat it as hash-verified. Paytaca-compatible `/api/registries/{authbase}/latest/` is a candidate-byte API to integrate after local authhead resolution; TokenIndex normalized snapshots are not equivalent to original committed bytes. These are outstanding operations, not completed provider support.

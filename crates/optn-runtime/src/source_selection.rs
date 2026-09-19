@@ -8,6 +8,23 @@ use optn_transport::chain_sources::{
 };
 use std::collections::BTreeSet;
 
+/// Configuration visibility is not a capability claim or execution permission.
+/// Remove an entry only when its validated, policy-aware adapter is connected.
+pub fn unavailable_services() -> Vec<optn_transport::chain_sources::UnavailableSourceService> {
+    [
+        ("bcmr-indexer", "External BCMR indexer"),
+        ("token-indexer", "Token indexer"),
+        ("metadata-proxy", "Metadata proxy / cache"),
+    ]
+    .into_iter()
+    .map(|(id, label)| optn_transport::chain_sources::UnavailableSourceService {
+        id: id.into(),
+        label: label.into(),
+        reason: "Unavailable in this build: source configuration and the policy-aware provider adapter are not connected.".into(),
+    })
+    .collect()
+}
+
 const PROTOCOLS: [(ChainProtocolView, ProtocolFamily); 5] = [
     (ChainProtocolView::FulcrumElectrum, ProtocolFamily::Electrum),
     (ChainProtocolView::Bip37, ProtocolFamily::Bip37),
