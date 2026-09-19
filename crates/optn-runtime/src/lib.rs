@@ -37,6 +37,7 @@ pub mod header_verifier;
 pub mod header_view;
 /// Versioned user-network overlay and bootstrap-refresh migration scaffolding.
 pub mod network_config;
+pub mod rpc_credentials;
 /// Evidence-aware wallet-state reconciliation. Partial/failed providers never
 /// erase a previously known-good snapshot.
 pub mod reconciliation;

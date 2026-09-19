@@ -561,16 +561,50 @@ pub async fn optn_chain_add_source(
 #[tauri::command]
 pub async fn optn_chain_remove_source(
     runtime: tauri::State<'_, optn_runtime::AppRuntime>,
+    native: tauri::State<'_, Arc<NativeChainRuntime>>,
     network_settings: tauri::State<'_, NetworkSettingsStore>,
     network: Option<String>,
     source: String,
 ) -> Result<(), String> {
     let network = network_or_current(&runtime, network)?;
+    let selection = network_settings
+        .chain_selection(network)?
+        .ok_or("Source catalog is unavailable.")?;
+    let selected = selection
+        .0
+        .get(&SourceId::new(&source))
+        .ok_or("Source is unavailable.")?;
+    if !selected.can_remove() {
+        return Err("Bootstrap sources cannot be removed.".into());
+    }
+    native
+        .rpc_credentials(
+            network,
+            RpcCredentialRequest::Remove {
+                source: source.clone(),
+            },
+            false,
+        )
+        .await?;
     let id = SourceId::new(source);
     edit_overlay(&network_settings, network, move |overlay| {
         remove_user_source(overlay, &id)
     })
     .await
+}
+
+#[tauri::command]
+pub async fn optn_chain_rpc_credentials(
+    runtime: tauri::State<'_, optn_runtime::AppRuntime>,
+    native: tauri::State<'_, Arc<NativeChainRuntime>>,
+    network: String,
+    request: RpcCredentialRequest,
+) -> Result<RpcCredentialStatus, String> {
+    let selected = parse_network(&network)?;
+    if runtime.state().network != selected {
+        return Err("Wallet network changed.".into());
+    }
+    native.rpc_credentials(selected, request, true).await
 }
 
 #[cfg(test)]

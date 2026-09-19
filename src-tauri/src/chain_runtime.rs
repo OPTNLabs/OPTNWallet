@@ -341,6 +341,88 @@ impl NativeChainRuntime {
         }
     }
 
+    pub async fn rpc_credentials(
+        &self,
+        network: Network,
+        request: optn_transport::chain_sources::RpcCredentialRequest,
+        rebuild: bool,
+    ) -> Result<optn_transport::chain_sources::RpcCredentialStatus, String> {
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        {
+            let _ = (network, request, rebuild);
+            Err("RPC secure storage is unavailable on this platform.".into())
+        }
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            let changes = request.mutates();
+            let guard = self.rebuild_lock.lock().await;
+            if self.owner.state().network != network {
+                return Err("Wallet network changed.".into());
+            }
+            if changes
+                && !self
+                    .invalidate_current_wallet_sync("RPC credentials changed; sync again")
+                    .await
+            {
+                return Err("Wallet runtime unavailable.".into());
+            }
+            let (_, selection) = self.selection(&self.owner.state()).await;
+            let (catalog, _) = selection?;
+            let handle = tokio::runtime::Handle::current();
+            let result = tokio::task::spawn_blocking(move || {
+                handle.block_on(async move {
+                    use optn_runtime::rpc_credentials as rpc;
+                    use optn_transport::chain_sources::RpcCredentialRequest;
+                    let source = request.source().to_owned();
+                    let store =
+                        optn_platform_native::NativeSecureStorage::new(rpc::RPC_CREDENTIAL_SERVICE);
+                    match request {
+                        RpcCredentialRequest::Set {
+                            username, password, ..
+                        } => {
+                            rpc::set(
+                                &store,
+                                network,
+                                &catalog,
+                                &source,
+                                username.expose(),
+                                password.expose(),
+                            )
+                            .await?
+                        }
+                        RpcCredentialRequest::Remove { .. } => {
+                            rpc::remove(&store, network, &catalog, &source).await?;
+                            return Ok(optn_transport::chain_sources::RpcCredentialStatus {
+                                configured: false,
+                            });
+                        }
+                        RpcCredentialRequest::Status { .. } => {}
+                    }
+                    rpc::status(&store, network, &catalog, &source)
+                        .await
+                        .map(
+                            |status| optn_transport::chain_sources::RpcCredentialStatus {
+                                configured: status,
+                            },
+                        )
+                })
+            })
+            .await
+            .map_err(|_| "RPC secure storage worker stopped.".to_owned())?
+            .map_err(|_| {
+                "RPC credential operation failed; credentials were not exposed.".to_owned()
+            });
+            if changes {
+                self.credential_revision.fetch_add(1, Ordering::SeqCst);
+            }
+            drop(guard);
+            if changes && rebuild {
+                self.rebuild_from_app_state(&self.owner.state()).await;
+            }
+            result
+        }
+    }
+
     /// Retire active sync routes before replacing credentials and rebuilding.
     /// The owner's current state selects the network; the caller snapshot is ignored.
     /// If the owner is closed, credential replacement stops after invalidation.
@@ -548,6 +630,39 @@ impl NativeChainRuntime {
                 self.credential_revision.load(Ordering::SeqCst),
                 current.clone(),
             )
+        };
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        let secrets = {
+            let mut secrets = secrets;
+            let catalog = catalog.clone();
+            let policy = policy.clone();
+            let handle = tokio::runtime::Handle::current();
+            let loaded = tokio::task::spawn_blocking(move || {
+                handle.block_on(async move {
+                    use optn_runtime::rpc_credentials as rpc;
+                    let store =
+                        optn_platform_native::NativeSecureStorage::new(rpc::RPC_CREDENTIAL_SERVICE);
+                    rpc::load_selected(&store, network, &catalog, &policy).await
+                })
+            })
+            .await;
+            match loaded {
+                Ok(Ok(stored)) => secrets.merge(NativeChainSecrets::from_credentials(stored)),
+                _ => {
+                    // Keep retired routes unavailable; never retry with missing authentication.
+                    let mut stack = self.stack.write().await;
+                    if self.owner.state().network == network
+                        && self.generation.load(Ordering::SeqCst) == generation
+                        && self.credential_revision.load(Ordering::SeqCst) == credential_revision
+                    {
+                        *stack = Some(NativeChainStack::unavailable(
+                            "RPC secure storage is unavailable; credentials were not bypassed.",
+                        ));
+                    }
+                    return true;
+                }
+            }
+            secrets
         };
         // Providers read the host's accepted chain, so a rebuild swaps routes
         // without discarding verified headers. A network with no reviewed

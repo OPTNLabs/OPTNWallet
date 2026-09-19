@@ -18,17 +18,30 @@ use optn_runtime::chain_service::{
 };
 use reqwest::{Client, Url};
 use serde_json::{json, Value};
+use std::fmt;
 use std::time::Duration;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 // BCHN RPC replies include transaction hex, so keep the same ceiling as the
 // native Electrum transport rather than relying on reqwest's unbounded JSON
 // convenience reader.
 const MAX_RPC_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub enum RpcAuth {
     None,
     Basic { username: String, password: String },
+}
+
+impl fmt::Debug for RpcAuth {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::None => formatter.write_str("RpcAuth::None"),
+            // User names can identify an operator just as passwords can grant
+            // access. Neither belongs in a diagnostic or a test failure.
+            Self::Basic { .. } => formatter.write_str("RpcAuth::Basic([REDACTED])"),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -617,6 +630,29 @@ mod tests {
         );
         assert!(!capabilities.is_usable(Capability::FastHistory));
         assert!(!capabilities.is_usable(Capability::RpaIndex));
+    }
+
+    #[test]
+    fn rpc_auth_debug_never_formats_credentials() {
+        let auth = RpcAuth::Basic {
+            username: "operator@example".into(),
+            password: "correct-horse".into(),
+        };
+        let auth_debug = format!("{auth:?}");
+        assert!(!auth_debug.contains("operator@example"));
+        assert!(!auth_debug.contains("correct-horse"));
+        let config = BchnRpcConfig::new(
+            SourceId::new("local"),
+            Endpoint {
+                kind: EndpointKind::BchnRpc,
+                host: "127.0.0.1".into(),
+                port: Some(8332),
+            },
+            auth,
+        );
+        let config_debug = format!("{config:?}");
+        assert!(!config_debug.contains("operator@example"));
+        assert!(!config_debug.contains("correct-horse"));
     }
 
     fn response_server(headers: String, body: Vec<u8>) -> String {

@@ -84,6 +84,14 @@ pub trait AppTransport {
         Box::pin(async { Err(TransportError::Unsupported) })
     }
 
+    fn rpc_credentials<'a>(
+        &'a self,
+        _network: String,
+        _request: chain_sources::RpcCredentialRequest,
+    ) -> TransportFuture<'a, chain_sources::RpcCredentialStatus> {
+        Box::pin(async { Err(TransportError::Unsupported) })
+    }
+
     fn refresh_wallet<'a>(&'a self) -> TransportFuture<'a, ()> {
         Box::pin(async { Err(TransportError::Unsupported) })
     }

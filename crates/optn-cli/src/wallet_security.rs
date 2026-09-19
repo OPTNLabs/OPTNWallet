@@ -76,6 +76,9 @@ fn wallet_view_reply(state: &AppState, view: WalletView) -> Value {
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 enum NetworkCommand {
+    Credentials {
+        request: optn_transport::chain_sources::RpcCredentialRequest,
+    },
     Status {},
     Policy {
         preset: optn_runtime::network_config::ChainPolicyPreset,
@@ -93,6 +96,8 @@ async fn network_reply(cli: &crate::Cli, runtime: &AppRuntime, command: NetworkC
     let result = async {
         let skill = match &command {
             NetworkCommand::Status {} => "network",
+            NetworkCommand::Credentials { request } if !request.mutates() => "network",
+            NetworkCommand::Credentials { .. } => "network configure",
             NetworkCommand::Select { .. } => "network select",
             NetworkCommand::Configure { .. } => "network configure",
             NetworkCommand::Policy { .. } => "network configure",
@@ -103,7 +108,11 @@ async fn network_reply(cli: &crate::Cli, runtime: &AppRuntime, command: NetworkC
                 "Wallet and source-settings networks differ.".into(),
             ));
         }
-        if !matches!(command, NetworkCommand::Status {}) {
+        if match &command {
+            NetworkCommand::Status {} => false,
+            NetworkCommand::Credentials { request } => request.mutates(),
+            _ => true,
+        } {
             // Invalidate before persistence: no prior spend/air-gap intent may
             // survive a source change, even if its subsequent file write fails.
             runtime
@@ -112,6 +121,16 @@ async fn network_reply(cli: &crate::Cli, runtime: &AppRuntime, command: NetworkC
                 .map_err(|error| CliError::Usage(error.to_string()))?;
         }
         match command {
+            NetworkCommand::Credentials { request } => {
+                let status = crate::network_settings::rpc_credentials(
+                    cli.network,
+                    cli.network_config_dir.as_deref(),
+                    request,
+                )
+                .await
+                .map_err(CliError::Usage)?;
+                return Ok(json!({"ok":true,"configured":status.configured}));
+            }
             NetworkCommand::Status {} => {}
             NetworkCommand::Policy { preset } => crate::network_settings::set_policy_preset(
                 cli.network,
@@ -153,6 +172,16 @@ fn network_prompt(argument: &str) -> Result<NetworkCommand> {
     }
     let parts = crate::console::split(argument)?;
     match parts.as_slice() {
+        [credentials, operation, source] if credentials == "credentials" => {
+            use optn_transport::chain_sources::RpcCredentialRequest;
+            let request = match operation.as_str() {
+                "status" => RpcCredentialRequest::Status { source:source.clone() },
+                "remove" => RpcCredentialRequest::Remove { source:source.clone() },
+                "set" => RpcCredentialRequest::Set { source:source.clone(), username:password("RPC username (hidden): ")?, password:password("RPC password: ")? },
+                _ => return Err(CliError::Usage("Use network credentials set|status|remove <source>.".into())),
+            };
+            Ok(NetworkCommand::Credentials { request })
+        }
         [] => Ok(NetworkCommand::Status {}),
         [status] if status == "status" => Ok(NetworkCommand::Status {}),
         [policy, preset] if policy == "policy" => Ok(NetworkCommand::Policy {
@@ -162,7 +191,7 @@ fn network_prompt(argument: &str) -> Result<NetworkCommand> {
             Ok(NetworkCommand::Select { source: source.clone(), protocol: crate::ChainProtocol::from_str(protocol, false)
                 .map_err(|_| CliError::Usage("Use electrum, bip37, neutrino, node-rpc or node-events.".into()))? })
         },
-        _ => Err(CliError::Usage("Use network status, network policy <preset>, network select <id> --protocol <protocol>, or network configure <JSON>.".into())),
+        _ => Err(CliError::Usage("Use network status, network credentials set|status|remove <source>, network policy <preset>, network select <id> --protocol <protocol>, or network configure <JSON>.".into())),
     }
 }
 
@@ -190,7 +219,7 @@ fn birthday_prompt(argument: &str) -> Result<optn_transport::security::WalletBir
     }
 }
 
-const WALLET_HELP: &str = "Wallet commands: help, list, open <file>, import, watch, receive [--acknowledge-gap], sync, rescan <height>|clear, birthday unknown|height <block>|time <Unix seconds>, history, assets, nfts, network status, network policy <preset>, network select <id> --protocol <protocol>, network configure <JSON>, airgap <request JSON>, password, autolock <minutes>, lock, authorize, reveal, quit";
+const WALLET_HELP: &str = "Wallet commands: help, list, open <file>, import, watch, receive [--acknowledge-gap], sync, rescan <height>|clear, birthday unknown|height <block>|time <Unix seconds>, history, assets, nfts, network status, network credentials set|status|remove <source>, network policy <preset>, network select <id> --protocol <protocol>, network configure <JSON>, airgap <request JSON>, password, autolock <minutes>, lock, authorize, reveal, quit";
 
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
