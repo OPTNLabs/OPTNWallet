@@ -85,6 +85,7 @@ pub fn SettingsPage(transport: UiTransport, state: RwSignal<AppState>) -> impl I
                     <h1>"Settings"</h1>
                     <p class="lede">"Wallet controls. CashFusion is a desktop flag."</p>
                     <AppearanceSection transport=transport state=state />
+                    <TorSection transport=transport />
                     <For
                         each=move || settings_rows_snapshot(state)
                         key=|row| *row as u8
@@ -239,6 +240,135 @@ fn SettingsRow(
                 }.into_any(),
             }}
         </article>
+    }
+}
+
+/// What the chain layer found when it went looking for a proxy, and the one
+/// action that fixes it.
+///
+/// This renderer had no Tor awareness at all, which is #75 row 4's remaining
+/// half: a holder here saw every public source refused for want of Tor with
+/// nothing saying so and nothing to press. The React surface has had this for
+/// a while; the point is that both surfaces ask the runtime the same question
+/// rather than each deciding for itself what a listening proxy means.
+///
+/// Nothing is probed here. `tor_status` reports what the chain stack
+/// concluded, so a screen cannot disagree with the routes.
+#[component]
+fn TorSection(transport: UiTransport) -> impl IntoView {
+    let status = RwSignal::new(None::<optn_transport::WireTorStatus>);
+    let busy = RwSignal::new(false);
+    let error = RwSignal::new(None::<String>);
+
+    let refresh = move || {
+        let transport = transport.get_value();
+        leptos::task::spawn_local(async move {
+            match transport.tor_status().await {
+                Ok(value) => status.set(Some(value)),
+                // Unsupported is the honest answer on a shell with no chain
+                // runtime; it is not an error worth showing.
+                Err(optn_transport::TransportError::Unsupported) => status.set(None),
+                Err(failure) => error.set(Some(format!("{failure:?}"))),
+            }
+        });
+    };
+    leptos::prelude::Effect::new(move |_| refresh());
+
+    view! {
+        <Show when=move || {
+            status.get().is_some_and(|value| {
+                !matches!(value.state, optn_transport::WireTorState::NotNeeded)
+            })
+        }>
+            <div class="panel stack">
+                <p class="source-title">"Tor"</p>
+                {move || {
+                    let Some(value) = status.get() else { return view! { <></> }.into_any() };
+                    match value.state {
+                        optn_transport::WireTorState::Verified => view! {
+                            <p class="muted">
+                                {format!(
+                                    "Public sources are reached through the proxy on port {}.",
+                                    value.socks_port.unwrap_or_default(),
+                                )}
+                            </p>
+                        }
+                        .into_any(),
+                        optn_transport::WireTorState::Unverified => {
+                            let port = value.socks_port.unwrap_or_default();
+                            view! {
+                                <p class="muted">
+                                    {format!(
+                                        "A SOCKS proxy is listening on port {port}, but nothing                                          shows it is Tor -- every SOCKS proxy answers the same                                          way. Public sources stay refused until you confirm it.",
+                                    )}
+                                </p>
+                                <button
+                                    class="button"
+                                    type="button"
+                                    disabled=move || busy.get()
+                                    on:click=move |_| {
+                                        busy.set(true);
+                                        error.set(None);
+                                        let transport = transport.get_value();
+                                        leptos::task::spawn_local(async move {
+                                            if let Err(failure) =
+                                                transport.trust_socks_port(port, true).await
+                                            {
+                                                error.set(Some(format!("{failure:?}")));
+                                            }
+                                            busy.set(false);
+                                            refresh();
+                                        });
+                                    }
+                                >
+                                    {format!("Yes, {port} is my Tor")}
+                                </button>
+                            }
+                            .into_any()
+                        }
+                        optn_transport::WireTorState::Absent => view! {
+                            <p class="muted">
+                                "Public sources are reached through Tor, and none is running.                                  A source you marked as your own is dialled directly instead."
+                            </p>
+                            <button
+                                class="button"
+                                type="button"
+                                disabled=move || busy.get()
+                                on:click=move |_| {
+                                    busy.set(true);
+                                    error.set(None);
+                                    let transport = transport.get_value();
+                                    leptos::task::spawn_local(async move {
+                                        match transport.start_tor().await {
+                                            Ok(value) => status.set(Some(value)),
+                                            Err(failure) => {
+                                                error.set(Some(format!("{failure:?}")))
+                                            }
+                                        }
+                                        busy.set(false);
+                                    });
+                                }
+                            >
+                                {move || {
+                                    if busy.get() {
+                                        let percent = status
+                                            .get()
+                                            .map(|value| value.bootstrap_percent)
+                                            .unwrap_or_default();
+                                        format!("Starting Tor... {percent}%")
+                                    } else {
+                                        "Start Tor for chain routes".to_owned()
+                                    }
+                                }}
+                            </button>
+                        }
+                        .into_any(),
+                        optn_transport::WireTorState::NotNeeded => view! { <></> }.into_any(),
+                    }
+                }}
+                {move || error.get().map(|message| view! { <p class="error">{message}</p> })}
+            </div>
+        </Show>
     }
 }
 

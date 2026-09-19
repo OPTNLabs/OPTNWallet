@@ -4,9 +4,9 @@ mod menu;
 
 // Desktop only, and its handler entries carry the same cfg -- mobile builds
 // are updated by their stores and have no business compiling an updater.
+pub mod app_transport;
 #[cfg(desktop)]
 mod app_update;
-pub mod app_transport;
 mod appearance;
 pub mod chain_runtime;
 mod chain_sources;
