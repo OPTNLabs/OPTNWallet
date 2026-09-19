@@ -67,6 +67,14 @@ mod wasm {
             })
         }
 
+        fn rescan_from_height<'a>(&'a self, height: u32) -> TransportFuture<'a, ()> {
+            Box::pin(async move {
+                let args = command_args("height", &JsValue::from_f64(height.into()))?;
+                invoke("optn_wallet_rescan", args).await?;
+                Ok(())
+            })
+        }
+
         fn airgap<'a>(
             &'a self,
             request: optn_transport::AirgapRequest,
