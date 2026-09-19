@@ -259,6 +259,7 @@ fn TorSection(transport: UiTransport) -> impl IntoView {
     let status = RwSignal::new(None::<optn_transport::WireTorStatus>);
     let busy = RwSignal::new(false);
     let error = RwSignal::new(None::<String>);
+    let custom_port = RwSignal::new(String::new());
 
     let refresh = move || {
         let transport = transport.get_value();
@@ -366,6 +367,38 @@ fn TorSection(transport: UiTransport) -> impl IntoView {
                         optn_transport::WireTorState::NotNeeded => ().into_any(),
                     }
                 }}
+                <details>
+                    <summary>"Use Tor on another local port"</summary>
+                    <p class="muted">"Only confirm a Tor proxy you run or trust. A SOCKS listener alone does not prove it is Tor."</p>
+                    <label>
+                        "Local Tor SOCKS port"
+                        <input
+                            type="number" min="1" max="65535" step="1"
+                            prop:value=move || custom_port.get()
+                            on:input=move |event| custom_port.set(event_target_value(&event))
+                        />
+                    </label>
+                    <button
+                        class="secondary" type="button"
+                        disabled=move || busy.get()
+                        on:click=move |_| {
+                            let Ok(port) = custom_port.get().parse::<std::num::NonZeroU16>() else {
+                                error.set(Some("Enter a port from 1 to 65535.".into()));
+                                return;
+                            };
+                            busy.set(true);
+                            error.set(None);
+                            let transport = transport.get_value();
+                            leptos::task::spawn_local(async move {
+                                if let Err(failure) = transport.trust_socks_port(port.get(), true).await {
+                                    error.set(Some(format!("{failure:?}")));
+                                }
+                                busy.set(false);
+                                refresh();
+                            });
+                        }
+                    >"Confirm this is my Tor"</button>
+                </details>
                 {move || error.get().map(|message| view! { <p class="error">{message}</p> })}
             </div>
         </Show>
