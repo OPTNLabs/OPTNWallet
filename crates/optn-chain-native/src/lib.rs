@@ -218,6 +218,16 @@ pub async fn tor_status_for(
         return TorStatus::Absent;
     }
 
+    tor_status_from_trust(trust).await
+}
+
+/// Resolve a proxy's usable status from provenance alone.
+///
+/// This is shared by native consumers which are not chain routes themselves.
+/// The caller decides whether its destination requires Tor; this function owns
+/// the only answer to whether a loopback SOCKS listener is trusted enough to
+/// carry that traffic.
+pub async fn tor_status_from_trust(trust: TorProxyTrust<'_>) -> TorStatus {
     for &socks_port in trust.managed.iter().chain(trust.trusted) {
         if socks_answers(DEFAULT_TOR_HOST, socks_port).await {
             return TorStatus::Verified { socks_port };
@@ -252,10 +262,6 @@ pub async fn tor_status_with_managed(
         },
     )
     .await
-}
-
-async fn default_tor_status(catalog: &SourceCatalog, policy: &ConnectionPolicy) -> TorStatus {
-    tor_status_for(catalog, policy, TorProxyTrust::default()).await
 }
 
 /// Whether any selected source would have to be reached through a proxy.
@@ -412,7 +418,19 @@ pub async fn build_native_chain_stack(
     network: &str,
     secrets: &NativeChainSecrets,
 ) -> NativeChainStack {
-    let tor_status = default_tor_status(&catalog, &policy).await;
+    build_native_chain_stack_via(catalog, policy, network, secrets, TorProxyTrust::default()).await
+}
+
+/// Build a stack without a retained header store, carrying the host's proxy
+/// provenance just like the retained-header constructor below.
+pub async fn build_native_chain_stack_via(
+    catalog: SourceCatalog,
+    policy: ConnectionPolicy,
+    network: &str,
+    secrets: &NativeChainSecrets,
+    trust: TorProxyTrust<'_>,
+) -> NativeChainStack {
+    let tor_status = tor_status_for(&catalog, &policy, trust).await;
     build_native_chain_stack_with_tor_status(catalog, policy, network, secrets, tor_status, None)
         .await
 }
@@ -1173,18 +1191,7 @@ mod tests {
             // Which way it went depends on the host's Tor, and the invariant
             // is the same either way: a public endpoint is reached through
             // Tor or not at all.
-            match default_tor_status(
-                &{
-                    let mut catalog = SourceCatalog::default();
-                    catalog
-                        .insert(live_source("live-public", &host, port, false))
-                        .expect("insert");
-                    catalog
-                },
-                &ConnectionPolicy::auto(),
-            )
-            .await
-            {
+            match tor_status_from_trust(TorProxyTrust::default()).await {
                 TorStatus::Verified { .. } => assert!(
                     !refused,
                     "a verified Tor proxy is available and the public route was                      still refused: {:?}",

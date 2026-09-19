@@ -370,12 +370,12 @@ async fn tor_view(
     policy: &ConnectionPolicy,
     trusted: &[u16],
 ) -> TorProxyView {
-    let managed = [crate::INTEGRATED_TOR_SOCKS_PORT];
+    let managed = crate::fusion::tor_manager::owned_socks_port();
     let status = optn_chain_native::tor_status_for(
         catalog,
         policy,
         optn_chain_native::TorProxyTrust {
-            managed: &managed,
+            managed: managed.as_slice(),
             trusted,
         },
     )

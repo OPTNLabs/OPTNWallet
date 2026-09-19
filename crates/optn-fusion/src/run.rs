@@ -106,9 +106,10 @@ pub struct FusionRunParams<'a> {
     /// at both EC safety boundaries and to validate peer inputs during blame.
     /// It is never supplied by the Fusion server.
     pub lookup_endpoints: Vec<ElectrumEndpoint>,
-    /// Independent privacy policy for the lookup endpoint. Remote lookups must
-    /// use Tor even when the Fusion server itself is local.
-    pub lookup_transport: Transport<'a>,
+    /// Positively verified Tor route for remote lookup endpoints. The selected
+    /// route is resolved for each endpoint, so a loopback primary never makes
+    /// a remote fallback inherit its direct transport.
+    pub lookup_remote_transport: Option<Transport<'a>>,
     /// When to submit components / signatures, relative to StartRound receipt.
     /// Defaults (via `FusionTiming::default`) match protocol.py (+5s / +20s);
     /// the integration test shrinks them so it doesn't wait 20 real seconds.
@@ -489,6 +490,21 @@ fn global_indices_in_local_order(
         .collect()
 }
 
+fn lookup_transport_for<'a>(
+    endpoint: &ElectrumEndpoint,
+    remote_transport: Option<Transport<'a>>,
+) -> Result<Transport<'a>, String> {
+    if is_local_server(&endpoint.host) {
+        return Ok(Transport::Direct);
+    }
+    match remote_transport {
+        Some(Transport::Tor { host, port }) => Ok(Transport::Tor { host, port }),
+        Some(Transport::Direct) | None => {
+            Err("remote Electrum lookup has no verified Tor route".to_string())
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 /// Verify one peer input against the first Electrum server that can answer.
 ///
@@ -502,11 +518,12 @@ fn global_indices_in_local_order(
 /// gives one; only infrastructure failures move on to the next.
 async fn verify_input_anywhere(
     endpoints: &[ElectrumEndpoint],
-    transport: Transport<'_>,
+    remote_transport: Option<Transport<'_>>,
     input: &pb::InputComponent,
 ) -> Result<InputLookup, String> {
     let mut last_error = String::from("no Electrum server is configured for input lookup");
     for endpoint in endpoints {
+        let transport = lookup_transport_for(endpoint, remote_transport)?;
         match electrum_input::verify_input(endpoint, transport, input).await {
             Ok(found) => return Ok(found),
             Err(error) => {
@@ -524,7 +541,7 @@ async fn verify_input_anywhere(
 async fn revalidate_own_inputs(
     inputs: &[FusionInputKey],
     endpoints: &[ElectrumEndpoint],
-    transport: Transport<'_>,
+    remote_transport: Option<Transport<'_>>,
     boundary: &str,
 ) -> Result<(), String> {
     // Build the protobuf components once.
@@ -544,6 +561,7 @@ async fn revalidate_own_inputs(
 
     // Try batched lookups first — one TCP/Tor connection per endpoint.
     for endpoint in endpoints {
+        let transport = lookup_transport_for(endpoint, remote_transport)?;
         let refs: Vec<&pb::InputComponent> = components.iter().collect();
         match electrum_input::batch_verify_inputs(endpoint, transport, &refs).await {
             Ok(results) => {
@@ -573,7 +591,7 @@ async fn revalidate_own_inputs(
     // Fallback: per-input lookups over individual connections.
     for (idx, component) in components.iter().enumerate() {
         let _ = inputs[idx]; // keep the index meaningful for error messages.
-        match verify_input_anywhere(endpoints, transport, component).await {
+        match verify_input_anywhere(endpoints, remote_transport, component).await {
             Ok(InputLookup::Match) => {}
             Ok(InputLookup::Mismatch(reason)) => {
                 return Err(format!(
@@ -602,7 +620,7 @@ async fn run_blame_phase<S>(
     bad_components: &[u32],
     component_feerate: u64,
     lookup_endpoints: &[ElectrumEndpoint],
-    lookup_transport: Transport<'_>,
+    lookup_remote_transport: Option<Transport<'_>>,
 ) -> Result<(), String>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -648,7 +666,9 @@ where
     .map_err(|error| format!("could not validate relayed blame proofs: {error}"))?;
 
     for required in &review.inputs_requiring_blockchain_lookup {
-        match verify_input_anywhere(lookup_endpoints, lookup_transport, &required.input).await {
+        match verify_input_anywhere(lookup_endpoints, lookup_remote_transport, &required.input)
+            .await
+        {
             Ok(InputLookup::Match) => {}
             Ok(InputLookup::Mismatch(reason)) => {
                 review.blames.blames.push(
@@ -729,7 +749,7 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
         main_transport,
         remote_transport,
         lookup_endpoints,
-        lookup_transport,
+        lookup_remote_transport,
         timing,
         join_inactive_timeout,
         cancel,
@@ -970,7 +990,12 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
     let warmup_revalidate_started = Instant::now();
     cancellable(
         &cancel,
-        revalidate_own_inputs(&inputs, &lookup_endpoints, lookup_transport, "FusionBegin"),
+        revalidate_own_inputs(
+            &inputs,
+            &lookup_endpoints,
+            lookup_remote_transport,
+            "FusionBegin",
+        ),
     )
     .await?;
     log::info!(
@@ -1250,7 +1275,7 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
                 &[],
                 feerate,
                 &lookup_endpoints,
-                lookup_transport,
+                lookup_remote_transport,
             )
             .await?;
             continue;
@@ -1378,7 +1403,7 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
                 &result.bad_components,
                 feerate,
                 &lookup_endpoints,
-                lookup_transport,
+                lookup_remote_transport,
             )
             .await?;
             continue;
@@ -1518,6 +1543,34 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn remote_lookup_fallback_never_inherits_a_local_primarys_direct_route() {
+        let local = ElectrumEndpoint {
+            host: "127.0.0.1".into(),
+            port: 50001,
+            use_ssl: false,
+        };
+        let remote = ElectrumEndpoint {
+            host: "fallback.example".into(),
+            port: 50002,
+            use_ssl: true,
+        };
+        let proxy = Some(Transport::Tor {
+            host: "127.0.0.1",
+            port: 9050,
+        });
+        assert!(matches!(
+            lookup_transport_for(&local, proxy).unwrap(),
+            Transport::Direct
+        ));
+        assert!(matches!(
+            lookup_transport_for(&remote, proxy).unwrap(),
+            Transport::Tor { .. }
+        ));
+        assert!(lookup_transport_for(&remote, None).is_err());
+        assert!(lookup_transport_for(&remote, Some(Transport::Direct)).is_err());
+    }
+
     fn test_input_key(
         prev_txid: u8,
         prev_index: u32,
@@ -1613,14 +1666,9 @@ mod tests {
     #[tokio::test]
     async fn own_input_mismatch_fails_closed_before_named_boundary() {
         let (endpoint, server) = electrum_endpoint_once(r#"{"id":1,"result":[]}"#).await;
-        let error = revalidate_own_inputs(
-            &[live_test_input()],
-            &[endpoint],
-            Transport::Direct,
-            "PlayerCommit",
-        )
-        .await
-        .unwrap_err();
+        let error = revalidate_own_inputs(&[live_test_input()], &[endpoint], None, "PlayerCommit")
+            .await
+            .unwrap_err();
         server.await.unwrap();
         assert!(
             error.contains("stale or spent before PlayerCommit"),
@@ -1637,7 +1685,7 @@ mod tests {
         revalidate_own_inputs(
             &[live_test_input()],
             &[primary, fallback],
-            Transport::Direct,
+            None,
             "PlayerCommit",
         )
         .await
@@ -1654,7 +1702,7 @@ mod tests {
         revalidate_own_inputs(
             &[input],
             std::slice::from_ref(&endpoint),
-            Transport::Direct,
+            None,
             "PlayerCommit",
         )
         .await
@@ -1662,7 +1710,7 @@ mod tests {
         let error = revalidate_own_inputs(
             &[live_test_input()],
             &[endpoint],
-            Transport::Direct,
+            None,
             "transaction signing",
         )
         .await
@@ -1683,7 +1731,7 @@ mod tests {
         let error = revalidate_own_inputs(
             &[live_test_input()],
             &endpoints,
-            Transport::Direct,
+            None,
             "transaction signing",
         )
         .await
@@ -1715,12 +1763,7 @@ mod tests {
         });
         let error = cancellable(
             &cancel,
-            revalidate_own_inputs(
-                &[live_test_input()],
-                &[endpoint],
-                Transport::Direct,
-                "PlayerCommit",
-            ),
+            revalidate_own_inputs(&[live_test_input()], &[endpoint], None, "PlayerCommit"),
         )
         .await
         .unwrap_err();
@@ -2202,7 +2245,7 @@ mod tests {
                 main_transport: Transport::Direct,
                 remote_transport: None,
                 lookup_endpoints: vec![lookup_endpoint],
-                lookup_transport: Transport::Direct,
+                lookup_remote_transport: None,
                 // The protocol's real schedule compressed so the test is quick.
                 // Every value below is relative to covert_T0, and `comps_at` is
                 // a rendezvous rather than a deadline: all of the setup --
@@ -2334,7 +2377,7 @@ mod tests {
                 main_transport: Transport::Direct,
                 remote_transport: None,
                 lookup_endpoints: vec![lookup_endpoint],
-                lookup_transport: Transport::Direct,
+                lookup_remote_transport: None,
                 timing: FusionTiming {
                     warmup_expected: Duration::ZERO,
                     warmup_slop: Duration::from_millis(250),

@@ -27,11 +27,10 @@ pub mod spv;
 mod wallet_security;
 mod wallet_spend;
 
-async fn verified_fusion_proxy<'a>(
+async fn verified_fusion_proxy(
     destination_hosts: &[&str],
-    tor_host: Option<&'a str>,
-    tor_port: Option<u16>,
-) -> Result<Option<(&'a str, u16)>, String> {
+    trusted_ports: &[u16],
+) -> Result<Option<u16>, String> {
     if destination_hosts
         .iter()
         .all(|host| fusion::is_local_server(host))
@@ -39,30 +38,42 @@ async fn verified_fusion_proxy<'a>(
         return Ok(None);
     }
 
-    let (host, port) = match (tor_host, tor_port) {
-        (Some(host), Some(port)) if !host.trim().is_empty() && port > 0 => (host, port),
-        (Some(_), None) | (None, Some(_)) => {
-            return Err("CashFusion Tor proxy configuration is incomplete".into())
-        }
-        _ => return Err("CashFusion needs a verified Tor proxy for every remote endpoint".into()),
-    };
-
-    if !fusion::tor::is_tor_port(host, port).await {
-        return Err("CashFusion refused an unverified Tor proxy".into());
-    }
-    Ok(Some((host, port)))
+    let managed_port = fusion::tor_manager::owned_socks_port();
+    optn_chain_native::tor_status_from_trust(optn_chain_native::TorProxyTrust {
+        managed: managed_port.as_slice(),
+        trusted: trusted_ports,
+    })
+    .await
+    .usable_port()
+    .map(Some)
+    .ok_or_else(|| "CashFusion needs a verified Tor proxy for every remote endpoint".into())
 }
 
-fn fusion_transport_for_host<'a>(
+async fn verified_fusion_proxy_for_network(
+    destination_hosts: &[&str],
+    network_settings: &crate::network_config::NetworkSettingsStore,
+    network: optn_core::network::Network,
+) -> Result<Option<u16>, String> {
+    let settings = network_settings.clone();
+    let trusted_ports = tokio::task::spawn_blocking(move || settings.trusted_socks_ports(network))
+        .await
+        .unwrap_or_default();
+    verified_fusion_proxy(destination_hosts, &trusted_ports).await
+}
+
+fn fusion_transport_for_host(
     destination_host: &str,
-    verified_proxy: Option<(&'a str, u16)>,
-) -> Result<fusion::Transport<'a>, String> {
+    verified_proxy: Option<u16>,
+) -> Result<fusion::Transport<'static>, String> {
     if fusion::is_local_server(destination_host) {
         return Ok(fusion::Transport::Direct);
     }
-    let (host, port) = verified_proxy
+    let port = verified_proxy
         .ok_or_else(|| "CashFusion remote endpoint has no verified Tor route".to_string())?;
-    Ok(fusion::Transport::Tor { host, port })
+    Ok(fusion::Transport::Tor {
+        host: fusion::tor::DEFAULT_TOR_HOST,
+        port,
+    })
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -70,8 +81,8 @@ struct FusionStatusCacheKey {
     host: String,
     port: u16,
     use_ssl: bool,
-    tor_host: Option<String>,
-    tor_port: Option<u16>,
+    network: String,
+    socks_port: Option<u16>,
 }
 
 #[derive(Clone)]
@@ -141,8 +152,7 @@ async fn fetch_fusion_server_status(
     host: &str,
     port: u16,
     use_ssl: bool,
-    tor_host: Option<&str>,
-    tor_port: Option<u16>,
+    verified_proxy: Option<u16>,
 ) -> Result<fusion::FusionServerStatus, String> {
     log::info!(
         "[FusionTrace] status start host={} port={} ssl={}",
@@ -150,7 +160,6 @@ async fn fetch_fusion_server_status(
         port,
         use_ssl
     );
-    let verified_proxy = verified_fusion_proxy(&[host], tor_host, tor_port).await?;
     let transport = fusion_transport_for_host(host, verified_proxy)?;
     let result = fusion::server_status(host, port, use_ssl, transport, None).await;
     match &result {
@@ -178,7 +187,12 @@ async fn fusion_server_status(
     use_ssl: bool,
     tor_host: Option<String>,
     tor_port: Option<u16>,
+    runtime: tauri::State<'_, optn_runtime::AppRuntime>,
+    network_settings: tauri::State<'_, crate::network_config::NetworkSettingsStore>,
 ) -> Result<fusion::FusionServerStatus, String> {
+    // Legacy IPC fields remain accepted while the renderer migrates, but it
+    // cannot choose a proxy or convert a SOCKS greeting into Tor provenance.
+    let _ = (tor_host, tor_port);
     // Electron Cash's rule (plugin.py start_fusion), reproduced exactly: fusing
     // against a REMOTE server without Tor defeats the protocol's own privacy
     // guarantee — the server can re-link a player's covert connections by IP —
@@ -187,23 +201,24 @@ async fn fusion_server_status(
     if host.trim().is_empty() || port == 0 {
         return Err("CashFusion server endpoint is invalid".into());
     }
+    let network = runtime.state().network;
+    // Resolve provenance before consulting the cache. A revoked trust entry or
+    // exited managed child must fail now rather than reuse a prior success.
+    let verified_proxy =
+        verified_fusion_proxy_for_network(&[host.as_str()], &network_settings, network).await?;
 
     let key = FusionStatusCacheKey {
         host: host.trim().trim_end_matches('.').to_ascii_lowercase(),
         port,
         use_ssl,
-        tor_host: tor_host
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(|value| value.trim_end_matches('.').to_ascii_lowercase()),
-        tor_port,
+        network: network.to_string(),
+        socks_port: verified_proxy,
     };
     // All WebViews share the native process. Coalescing here prevents four
     // wallet windows from opening four identical Tor handshakes at once. The
     // short failure TTL still lets a manual retry observe a repaired server.
     shared_fusion_server_status(key, || {
-        fetch_fusion_server_status(&host, port, use_ssl, tor_host.as_deref(), tor_port)
+        fetch_fusion_server_status(&host, port, use_ssl, verified_proxy)
     })
     .await
 }
@@ -221,14 +236,18 @@ async fn fusion_join_status(
     use_ssl: bool,
     tiers: Vec<u64>,
     wait_secs: u64,
-    tor_host: Option<String>,
-    tor_port: Option<u16>,
+    runtime: tauri::State<'_, optn_runtime::AppRuntime>,
+    network_settings: tauri::State<'_, crate::network_config::NetworkSettingsStore>,
 ) -> Result<fusion::round::FusionJoinResult, String> {
     if host.trim().is_empty() || port == 0 {
         return Err("CashFusion server endpoint is invalid".into());
     }
-    let verified_proxy =
-        verified_fusion_proxy(&[host.as_str()], tor_host.as_deref(), tor_port).await?;
+    let verified_proxy = verified_fusion_proxy_for_network(
+        &[host.as_str()],
+        &network_settings,
+        runtime.state().network,
+    )
+    .await?;
     let transport = fusion_transport_for_host(&host, verified_proxy)?;
 
     fusion::round::join_pool_status(
@@ -259,6 +278,21 @@ struct FusionRunInputReq {
     pubkey: String,
     value: u64,
     privkey: String,
+}
+
+fn fusion_run_destination_hosts<'a>(
+    host: &'a str,
+    lookup_host: &'a str,
+    lookup_fallbacks: &'a [FusionLookupEndpointReq],
+) -> Vec<&'a str> {
+    std::iter::once(host)
+        .chain(std::iter::once(lookup_host))
+        .chain(
+            lookup_fallbacks
+                .iter()
+                .map(|endpoint| endpoint.host.as_str()),
+        )
+        .collect()
 }
 
 #[derive(serde::Serialize)]
@@ -333,9 +367,12 @@ async fn fusion_run(
     lookup_fallbacks: Vec<FusionLookupEndpointReq>,
     tor_host: Option<String>,
     tor_port: Option<u16>,
+    runtime: tauri::State<'_, optn_runtime::AppRuntime>,
+    network_settings: tauri::State<'_, crate::network_config::NetworkSettingsStore>,
     expected_hello: fusion::server_plan::ExpectedHello,
     join_inactive_timeout_ms: Option<u64>,
 ) -> Result<fusion::run::FusionOutcome, String> {
+    let _ = (tor_host, tor_port);
     log::info!(
         "[FusionTrace] round start id={} host={} port={} plans={} inputs={}",
         round_id,
@@ -354,15 +391,21 @@ async fn fusion_run(
     if lookup_host.trim().is_empty() || lookup_port == 0 {
         return Err("CashFusion peer-input lookup endpoint is invalid".into());
     }
-    let verified_proxy = verified_fusion_proxy(
-        &[host.as_str(), lookup_host.as_str()],
-        tor_host.as_deref(),
-        tor_port,
+    // The lookup transport is reused by each configured fallback. Resolve Tor
+    // against the complete destination set first, so a local primary cannot
+    // make a remote fallback inherit a direct route.
+    let destination_hosts = fusion_run_destination_hosts(&host, &lookup_host, &lookup_fallbacks);
+    let verified_proxy = verified_fusion_proxy_for_network(
+        &destination_hosts,
+        &network_settings,
+        runtime.state().network,
     )
     .await?;
     let transport = fusion_transport_for_host(&host, verified_proxy)?;
-    let lookup_transport = fusion_transport_for_host(&lookup_host, verified_proxy)?;
-    let remote_transport = verified_proxy.map(|(host, port)| fusion::Transport::Tor { host, port });
+    let remote_transport = verified_proxy.map(|port| fusion::Transport::Tor {
+        host: fusion::tor::DEFAULT_TOR_HOST,
+        port,
+    });
 
     let join_inactive_timeout = match join_inactive_timeout_ms {
         None => None,
@@ -419,7 +462,7 @@ async fn fusion_run(
             }
         }))
         .collect(),
-        lookup_transport,
+        lookup_remote_transport: remote_transport,
         timing: fusion::run::FusionTiming::default(),
         join_inactive_timeout,
         cancel,
@@ -541,7 +584,10 @@ async fn fusion_transaction_is_known(
     lookup_fallbacks: Vec<FusionLookupEndpointReq>,
     tor_host: Option<String>,
     tor_port: Option<u16>,
+    runtime: tauri::State<'_, optn_runtime::AppRuntime>,
+    network_settings: tauri::State<'_, crate::network_config::NetworkSettingsStore>,
 ) -> Result<bool, String> {
+    let _ = (tor_host, tor_port);
     let endpoints: Vec<fusion::electrum_input::ElectrumEndpoint> =
         std::iter::once(fusion::electrum_input::ElectrumEndpoint {
             host: lookup_host,
@@ -558,7 +604,9 @@ async fn fusion_transaction_is_known(
         .collect();
 
     let hosts: Vec<&str> = endpoints.iter().map(|e| e.host.as_str()).collect();
-    let verified_proxy = verified_fusion_proxy(&hosts, tor_host.as_deref(), tor_port).await?;
+    let verified_proxy =
+        verified_fusion_proxy_for_network(&hosts, &network_settings, runtime.state().network)
+            .await?;
 
     let mut last_error = String::from("no Electrum server could answer");
     for endpoint in &endpoints {
@@ -595,7 +643,10 @@ async fn fusion_relay_broadcast_and_observe(
     observer_port: u16,
     tor_host: Option<String>,
     tor_port: Option<u16>,
+    runtime: tauri::State<'_, optn_runtime::AppRuntime>,
+    network_settings: tauri::State<'_, crate::network_config::NetworkSettingsStore>,
 ) -> Result<spv::FusionRelayObservation, String> {
+    let _ = (tor_host, tor_port);
     if !fusion::fusion_execution_ready() {
         return Err(fusion::FUSION_EXECUTION_PAUSED_MESSAGE.into());
     }
@@ -607,36 +658,36 @@ async fn fusion_relay_broadcast_and_observe(
     validate_fusion_relay_request(&tx_hex, &network)?;
     let tx_bytes = decode_hex(&tx_hex).map_err(|_| "invalid transaction hex".to_string())?;
 
-    let any_remote = !fusion_relay_is_local(&relay_host) || !fusion_relay_is_local(&observer_host);
-    let tor_verified = if any_remote {
-        match (tor_host.as_deref(), tor_port) {
-            (Some(host), Some(port)) => fusion::tor::is_tor_port(host, port).await,
-            _ => false,
-        }
-    } else {
-        false
-    };
+    let verified_proxy = verified_fusion_proxy_for_network(
+        &[relay_host.as_str(), observer_host.as_str()],
+        &network_settings,
+        runtime.state().network,
+    )
+    .await?;
+    let tor_verified = verified_proxy.is_some();
     let (relay_route, observer_route) =
         fusion_relay_transport_policy(&relay_host, &observer_host, tor_verified)?;
 
-    let verified_proxy = match (tor_host.as_deref(), tor_port) {
-        (Some(host), Some(port)) if tor_verified => Some((host, port)),
-        _ => None,
-    };
     let relay_transport = match relay_route {
         FusionRelayRoute::Direct => fusion::Transport::Direct,
         FusionRelayRoute::Tor => {
-            let (host, port) =
+            let port =
                 verified_proxy.ok_or("verified Tor proxy details unavailable for remote relay")?;
-            fusion::Transport::Tor { host, port }
+            fusion::Transport::Tor {
+                host: fusion::tor::DEFAULT_TOR_HOST,
+                port,
+            }
         }
     };
     let observer_transport = match observer_route {
         FusionRelayRoute::Direct => fusion::Transport::Direct,
         FusionRelayRoute::Tor => {
-            let (host, port) = verified_proxy
+            let port = verified_proxy
                 .ok_or("verified Tor proxy details unavailable for remote observer")?;
-            fusion::Transport::Tor { host, port }
+            fusion::Transport::Tor {
+                host: fusion::tor::DEFAULT_TOR_HOST,
+                port,
+            }
         }
     };
 
@@ -655,18 +706,19 @@ async fn fusion_relay_broadcast_and_observe(
 
 /// Find a running Tor SOCKS proxy, mirroring Electron Cash's auto-detection
 /// (ports 9050 = daemon, 9150 = Tor Browser). Returns the port, or null if Tor
-/// isn't running. Verifies it's genuinely Tor, not just something listening.
+/// isn't running. This reports a SOCKS-capable candidate; settings confirmation
+/// or an app-owned child establishes the provenance needed for use.
 #[tauri::command]
 async fn fusion_tor_detect(host: Option<String>) -> Option<u16> {
     let host = host.unwrap_or_else(|| fusion::tor::DEFAULT_TOR_HOST.to_string());
     fusion::tor::scan_tor_port(&host).await
 }
 
-/// Check one specific host:port for a Tor proxy (used when the user pins a
-/// manual port rather than relying on auto-detection).
+/// Check one specific host:port for SOCKS capability. It is not a Tor identity
+/// proof and does not authorize the proxy for outbound Fusion traffic.
 #[tauri::command]
 async fn fusion_tor_check(host: String, port: u16) -> bool {
-    fusion::tor::is_tor_port(&host, port).await
+    fusion::tor::socks_answers(&host, port).await
 }
 
 // BIP37 SPV — Phase 1 node probe.
@@ -1381,8 +1433,8 @@ mod tests {
             host: "coalesce-test.invalid".into(),
             port: 8789,
             use_ssl: true,
-            tor_host: Some("127.0.0.1".into()),
-            tor_port: Some(9050),
+            network: "chipnet".into(),
+            socks_port: Some(9050),
         };
         let calls = std::sync::Arc::new(AtomicUsize::new(0));
 
@@ -1412,8 +1464,8 @@ mod tests {
             host: "failure-backoff-test.invalid".into(),
             port: 8789,
             use_ssl: true,
-            tor_host: Some("127.0.0.1".into()),
-            tor_port: Some(9050),
+            network: "chipnet".into(),
+            socks_port: Some(9050),
         };
         let calls = std::sync::Arc::new(AtomicUsize::new(0));
         let first_calls = calls.clone();
@@ -1435,6 +1487,31 @@ mod tests {
     }
 
     #[test]
+    fn fusion_status_cache_scopes_network_and_effective_proxy() {
+        let key = FusionStatusCacheKey {
+            host: "fusion.example".into(),
+            port: 8789,
+            use_ssl: true,
+            network: "chipnet".into(),
+            socks_port: Some(9050),
+        };
+        assert_ne!(
+            key,
+            FusionStatusCacheKey {
+                network: "mainnet".into(),
+                ..key.clone()
+            }
+        );
+        assert_ne!(
+            key,
+            FusionStatusCacheKey {
+                socks_port: Some(9150),
+                ..key.clone()
+            }
+        );
+    }
+
+    #[test]
     fn fusion_command_transport_requires_a_verified_proxy_for_remote_hosts() {
         for host in ["localhost", "127.0.0.1", "::1"] {
             assert!(matches!(
@@ -1447,12 +1524,61 @@ mod tests {
             .unwrap_err()
             .contains("verified Tor"));
         assert!(matches!(
-            fusion_transport_for_host("fusion.example", Some(("127.0.0.1", 9050))).unwrap(),
+            fusion_transport_for_host("fusion.example", Some(9050)).unwrap(),
             fusion::Transport::Tor {
                 host: "127.0.0.1",
                 port: 9050
             }
         ));
+    }
+
+    #[tokio::test]
+    async fn fusion_proxy_requires_provenance_for_a_remote_lookup_fallback() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut greeting = [0; 3];
+                if stream.read_exact(&mut greeting).await.is_ok() {
+                    let _ = stream.write_all(&[0x05, 0x00]).await;
+                }
+            }
+        });
+
+        let destinations = ["127.0.0.1", "remote-fallback.example"];
+        assert!(verified_fusion_proxy(&destinations, &[]).await.is_err());
+        assert_eq!(
+            verified_fusion_proxy(&destinations, &[port]).await,
+            Ok(Some(port))
+        );
+        server.abort();
+    }
+
+    #[test]
+    fn fusion_run_includes_every_lookup_fallback_in_proxy_decision() {
+        let fallbacks = vec![
+            FusionLookupEndpointReq {
+                host: "remote-fallback.example".into(),
+                port: 50002,
+                use_ssl: true,
+            },
+            FusionLookupEndpointReq {
+                host: "127.0.0.1".into(),
+                port: 50001,
+                use_ssl: false,
+            },
+        ];
+        assert_eq!(
+            fusion_run_destination_hosts("fusion.example", "localhost", &fallbacks),
+            vec![
+                "fusion.example",
+                "localhost",
+                "remote-fallback.example",
+                "127.0.0.1"
+            ]
+        );
     }
 
     #[test]

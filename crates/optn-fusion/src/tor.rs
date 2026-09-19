@@ -30,13 +30,13 @@ pub const DEFAULT_TOR_HOST: &str = "127.0.0.1";
 
 const PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
 
-/// Is a real Tor SOCKS proxy listening here?
+/// Does a SOCKS5 proxy answer here?
 ///
-/// Uses Electron Cash's own trick (covert.py `is_tor_port`): send a plain
-/// `GET\n` and check for Tor's distinctive refusal. Something merely *listening*
-/// on 9050 is not necessarily Tor — this actually confirms it, so we never route
-/// fusion traffic through an unknown proxy believing it is Tor.
-pub async fn is_tor_port(host: &str, port: u16) -> bool {
+/// The greeting establishes SOCKS capability only. It cannot authenticate Tor:
+/// any no-auth SOCKS proxy returns the same response. Native callers must use
+/// `optn-chain-native`'s provenance-aware trust decision before routing remote
+/// Fusion traffic through a candidate found here.
+pub async fn socks_answers(host: &str, port: u16) -> bool {
     let probe = async {
         let mut stream = TcpStream::connect((host, port)).await.ok()?;
         // Capability check only: external proxies remain explicitly user-trusted.
@@ -55,10 +55,10 @@ pub async fn is_tor_port(host: &str, port: u16) -> bool {
 }
 
 /// Find a running Tor proxy, mirroring plugin.py's `scan_torport`: try each
-/// known port and return the first that is genuinely Tor. `None` = no Tor.
+/// known port and return the first SOCKS-capable candidate. `None` = none.
 pub async fn scan_tor_port(host: &str) -> Option<u16> {
     for port in TOR_PORTS {
-        if is_tor_port(host, port).await {
+        if socks_answers(host, port).await {
             return Some(port);
         }
     }
@@ -109,7 +109,7 @@ mod tests {
             }
         });
 
-        assert!(!is_tor_port("127.0.0.1", port).await);
+        assert!(!socks_answers("127.0.0.1", port).await);
     }
 
     #[tokio::test]
@@ -123,12 +123,12 @@ mod tests {
                 let _ = stream.write_all(b"Tor is not an HTTP Proxy").await;
             }
         });
-        assert!(!is_tor_port("127.0.0.1", port).await);
+        assert!(!socks_answers("127.0.0.1", port).await);
     }
 
     #[tokio::test]
     async fn a_closed_port_is_not_tor() {
         // Port 1 is reserved and won't be listening.
-        assert!(!is_tor_port("127.0.0.1", 1).await);
+        assert!(!socks_answers("127.0.0.1", 1).await);
     }
 }

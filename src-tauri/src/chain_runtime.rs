@@ -74,6 +74,31 @@ fn cashcode_tor_required(peer: &PeerEndpoint, requested: Option<bool>) -> Result
     Ok(required)
 }
 
+/// Select Cash Code's transport from the same provenance-aware policy as the
+/// native chain stack. IPC may require Tor, but cannot nominate a proxy.
+async fn cashcode_transport(
+    peer: &PeerEndpoint,
+    catalog: &SourceCatalog,
+    policy: &ConnectionPolicy,
+    requested: Option<bool>,
+    trust: optn_chain_native::TorProxyTrust<'_>,
+) -> Result<optn_chain_native::Bip37Transport, String> {
+    if !cashcode_tor_required(peer, requested)? {
+        return Ok(optn_chain_native::Bip37Transport::Direct);
+    }
+
+    let proxy_port = optn_chain_native::tor_status_for(catalog, policy, trust)
+        .await
+        .usable_port()
+        .ok_or_else(|| {
+            "Cash Code needs a verified Tor proxy; direct fallback is forbidden".to_string()
+        })?;
+    Ok(optn_chain_native::Bip37Transport::Tor {
+        proxy_host: "127.0.0.1".into(),
+        proxy_port,
+    })
+}
+
 /// Thin legacy-wallet adapter: public endpoint selection plus an already
 /// authorized scan key, never a seed or authority to sign. The selected node is
 /// the ONLY registered route. SOCKS failures cannot fall back to direct TCP.
@@ -91,7 +116,7 @@ pub async fn cashcode_scan_node(
     tor_host: Option<String>,
     tor_port: Option<u16>,
 ) -> Result<serde_json::Value, String> {
-    use optn_chain_native::{Bip37Backend, Bip37Config, Bip37Transport};
+    use optn_chain_native::{Bip37Backend, Bip37Config};
     use optn_runtime::{
         chain::ProtocolFamily,
         rpa_receive::{scan_cashcode, CashcodeScanKeys},
@@ -104,29 +129,9 @@ pub async fn cashcode_scan_node(
         return Err("Cash Code scan needs a node port and nonzero birth height".into());
     }
     let peer = authorize_cashcode_peer(&runtime.owner.state(), network, &host, port)?;
-    let tor_required = cashcode_tor_required(&peer, tor_required)?;
-    let transport = if tor_required {
-        let proxy_port = tor_port.unwrap_or(9050);
-        if proxy_port == 0 {
-            return Err("Invalid Tor SOCKS port".into());
-        }
-        let proxy = parse_peer_endpoint(tor_host.as_deref().unwrap_or("127.0.0.1"), proxy_port)
-            .map_err(|e| e.to_string())?;
-        if proxy.port() != proxy_port {
-            return Err("Tor proxy host and explicit port disagree".into());
-        }
-        if !crate::fusion::tor::is_tor_port(proxy.host(), proxy_port).await {
-            return Err(
-                "Configured Tor SOCKS proxy is unavailable; direct fallback is forbidden".into(),
-            );
-        }
-        Bip37Transport::Tor {
-            proxy_host: proxy.host().to_owned(),
-            proxy_port,
-        }
-    } else {
-        Bip37Transport::Direct
-    };
+    // These legacy IPC fields remain accepted for compatibility, but a
+    // renderer cannot choose a proxy or turn a SOCKS greeting into trust.
+    let _ = (tor_host, tor_port);
 
     let (headers, view) = runtime.accepted_chain(network).await?;
     let id = SourceId::new("selected-cashcode-node");
@@ -147,10 +152,21 @@ pub async fn cashcode_scan_node(
             priority: 0,
         })
         .map_err(|e| format!("Invalid node selection: {e:?}"))?;
-    let mut service = ChainService::new(
-        catalog,
-        ConnectionPolicy::exact(id.clone(), ProtocolFamily::Bip37),
-    );
+    let policy = ConnectionPolicy::exact(id.clone(), ProtocolFamily::Bip37);
+    let managed_port = crate::fusion::tor_manager::owned_socks_port();
+    let trusted_ports = runtime.trusted_socks_ports(network).await;
+    let transport = cashcode_transport(
+        &peer,
+        &catalog,
+        &policy,
+        tor_required,
+        optn_chain_native::TorProxyTrust {
+            managed: managed_port.as_slice(),
+            trusted: &trusted_ports,
+        },
+    )
+    .await?;
+    let mut service = ChainService::new(catalog, policy);
     let mut config = Bip37Config::new(id, endpoint, network.to_string());
     config.transport = transport;
     // Tor probing and header-store setup await. Recheck native state immediately
@@ -359,13 +375,13 @@ impl NativeChainRuntime {
             // does, so this is never more permissive than the chain layer.
             _ => catalog_and_policy_from_app_state(&self.owner.state()),
         };
-        let managed = [crate::INTEGRATED_TOR_SOCKS_PORT];
+        let managed = crate::fusion::tor_manager::owned_socks_port();
         let trusted = self.trusted_socks_ports(network).await;
         let status = optn_chain_native::tor_status_for(
             &catalog,
             &policy,
             optn_chain_native::TorProxyTrust {
-                managed: &managed,
+                managed: managed.as_slice(),
                 trusted: &trusted,
             },
         )
@@ -516,13 +532,9 @@ impl NativeChainRuntime {
         // without discarding verified headers. A network with no reviewed
         // checkpoint gets a stack whose P2P scans will refuse for want of
         // accepted headers, which is correct; other protocols still work.
-        // The application runs its own Tor on a port deliberately outside the
-        // conventional pair, so it never collides with a Tor the holder already
-        // runs. Without naming it here that proxy is invisible: every public
-        // route is refused for want of Tor while this application's own Tor is
-        // running a few lines away. Verification is unchanged -- an unverified
-        // or unrelated listener on that port is still refused.
-        let managed_ports = [crate::INTEGRATED_TOR_SOCKS_PORT];
+        // The application-owned child is the sole managed provenance. Merely
+        // finding a listener on the integrated port cannot grant that trust.
+        let managed_port = crate::fusion::tor_manager::owned_socks_port();
         // A proxy the holder confirmed is theirs. Read from the same overlay
         // the policy came from, so trust travels with the configuration rather
         // than living in a second place that can disagree with it.
@@ -544,14 +556,24 @@ impl NativeChainRuntime {
                     &secrets,
                     headers,
                     optn_chain_native::TorProxyTrust {
-                        managed: &managed_ports,
+                        managed: managed_port.as_slice(),
                         trusted: &trusted_ports,
                     },
                 )
                 .await
             }
             Err(_) => {
-                build_native_chain_stack(catalog, policy, &network.to_string(), &secrets).await
+                optn_chain_native::build_native_chain_stack_via(
+                    catalog,
+                    policy,
+                    &network.to_string(),
+                    &secrets,
+                    optn_chain_native::TorProxyTrust {
+                        managed: managed_port.as_slice(),
+                        trusted: &trusted_ports,
+                    },
+                )
+                .await
             }
         };
         // Disk I/O must not hold the stack lock. Resolve any app-state fallback
@@ -835,8 +857,10 @@ mod tests {
 
     #[test]
     fn cashcode_scan_peer_must_match_the_native_network_selection() {
-        let mut state = AppState::default();
-        state.network = Network::Chipnet;
+        let mut state = AppState {
+            network: Network::Chipnet,
+            ..AppState::default()
+        };
         state.apply(AppAction::SetServer {
             kind: ServerKind::Peer,
             entry: "selected.example:48333".into(),
@@ -863,6 +887,71 @@ mod tests {
 
         let local = parse_peer_endpoint("127.0.0.1:8333", NODE_HINT_PORT).unwrap();
         assert!(!cashcode_tor_required(&local, Some(false)).unwrap());
+    }
+
+    #[tokio::test]
+    async fn cashcode_uses_only_a_provenance_confirmed_socks_proxy() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut greeting = [0; 3];
+                if stream.read_exact(&mut greeting).await.is_ok() {
+                    let _ = stream.write_all(&[0x05, 0x00]).await;
+                }
+            }
+        });
+
+        let peer = parse_peer_endpoint("node.example:8333", NODE_HINT_PORT).unwrap();
+        let id = SourceId::new("cashcode-test");
+        let endpoint = Endpoint {
+            kind: EndpointKind::BchP2p,
+            host: peer.host().to_owned(),
+            port: Some(peer.port()),
+        };
+        let mut catalog = SourceCatalog::default();
+        catalog
+            .insert(ChainSource {
+                id: id.clone(),
+                label: "Cash Code test node".into(),
+                origin: SourceOrigin::UserAdded,
+                endpoints: vec![endpoint],
+                capabilities: Default::default(),
+                disposition: SourceDisposition::Enabled,
+                priority: 0,
+            })
+            .unwrap();
+        let policy = ConnectionPolicy::exact(id, ProtocolFamily::Bip37);
+
+        assert!(cashcode_transport(
+            &peer,
+            &catalog,
+            &policy,
+            None,
+            optn_chain_native::TorProxyTrust::default(),
+        )
+        .await
+        .is_err());
+        assert_eq!(
+            cashcode_transport(
+                &peer,
+                &catalog,
+                &policy,
+                None,
+                optn_chain_native::TorProxyTrust {
+                    managed: &[],
+                    trusted: &[port],
+                },
+            )
+            .await,
+            Ok(optn_chain_native::Bip37Transport::Tor {
+                proxy_host: "127.0.0.1".into(),
+                proxy_port: port,
+            })
+        );
+        server.abort();
     }
 
     #[test]
@@ -1655,8 +1744,10 @@ mod tests {
 
     #[test]
     fn same_host_node_and_electrum_are_one_source_with_independent_routes() {
-        let mut state = AppState::default();
-        state.network = Network::Mainnet;
+        let mut state = AppState {
+            network: Network::Mainnet,
+            ..AppState::default()
+        };
         state.apply(AppAction::SetServer {
             kind: ServerKind::Electrum,
             entry: "box.example:50002".into(),
@@ -1696,8 +1787,10 @@ mod tests {
     #[test]
     fn a_fresh_install_starts_from_the_shipped_catalog() {
         for network in [Network::Mainnet, Network::Chipnet] {
-            let mut state = AppState::default();
-            state.network = network;
+            let mut state = AppState {
+                network,
+                ..AppState::default()
+            };
             state.apply(AppAction::OpenCreatedWallet {
                 name: "Fresh".into(),
                 receive_address: "bitcoincash:qq0000000000000000000000000000000000000000".into(),
@@ -1726,8 +1819,10 @@ mod tests {
     /// quietly gain a public server it never chose.
     #[test]
     fn a_configured_source_replaces_the_shipped_catalog_rather_than_joining_it() {
-        let mut state = AppState::default();
-        state.network = Network::Chipnet;
+        let mut state = AppState {
+            network: Network::Chipnet,
+            ..AppState::default()
+        };
         state.apply(AppAction::SetServer {
             kind: ServerKind::Electrum,
             entry: "my-own-node.example:50002".into(),
@@ -1752,8 +1847,10 @@ mod tests {
     /// Regtest is a chain the operator started. It gets no discovery hints.
     #[test]
     fn regtest_is_not_pointed_at_public_infrastructure() {
-        let mut state = AppState::default();
-        state.network = Network::Regtest;
+        let mut state = AppState {
+            network: Network::Regtest,
+            ..AppState::default()
+        };
         state.apply(AppAction::OpenCreatedWallet {
             name: "Local".into(),
             receive_address: "bchreg:qq0000000000000000000000000000000000000000".into(),
