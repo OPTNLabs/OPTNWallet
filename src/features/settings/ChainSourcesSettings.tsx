@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useCallback,
   useEffect,
   useRef,
@@ -45,6 +46,7 @@ type SourcePage =
   | 'public'
   | 'own'
   | 'custom'
+  | 'metadata'
   | 'details'
   | 'routing'
   | 'privacy'
@@ -109,6 +111,7 @@ function pageTitle(page: SourcePage): string {
   if (isDirectoryPage(page)) return DIRECTORY_CONFIG[page].title;
   return {
     overview: 'Network',
+    metadata: 'Metadata & indexing',
     details: 'Source details',
     routing: 'Routing',
     privacy: 'Privacy & Transport',
@@ -695,23 +698,39 @@ export function ChainSourcesSettings({
                 (source) => source.origin === config.origin
               ).length;
               return (
-                <button
-                  key={target}
-                  type="button"
-                  data-testid={`chain-sources-${target}`}
-                  className="wallet-surface-strong flex w-full items-center justify-between rounded-xl border border-[var(--wallet-border)] p-3 text-left"
-                  onClick={() => openDirectory(target)}
-                >
-                  <span>
-                    <span className="block text-sm font-semibold wallet-text-strong">
-                      {config.title}
+                <Fragment key={target}>
+                  <button
+                    key={target}
+                    type="button"
+                    data-testid={`chain-sources-${target}`}
+                    className="wallet-surface-strong flex w-full items-center justify-between rounded-xl border border-[var(--wallet-border)] p-3 text-left"
+                    onClick={() => openDirectory(target)}
+                  >
+                    <span>
+                      <span className="block text-sm font-semibold wallet-text-strong">
+                        {config.title}
+                      </span>
+                      <span className="block text-[11px] wallet-muted">
+                        {count} known source{count === 1 ? '' : 's'}
+                      </span>
                     </span>
-                    <span className="block text-[11px] wallet-muted">
-                      {count} known source{count === 1 ? '' : 's'}
-                    </span>
-                  </span>
-                  <span className="text-xs wallet-muted">Open</span>
-                </button>
+                    <span className="text-xs wallet-muted">Open</span>
+                  </button>
+                  {target === 'public' && (
+                    <button
+                      type="button"
+                      className="wallet-surface-strong w-full rounded-xl border border-[var(--wallet-border)] p-3 text-left"
+                      onClick={() => navigate('metadata')}
+                    >
+                      <span className="block text-sm font-semibold wallet-text-strong">
+                        Metadata &amp; indexing
+                      </span>
+                      <span className="block text-[11px] wallet-muted">
+                        BCMR · Paytaca-compatible services · Chaingraph · IPFS
+                      </span>
+                    </button>
+                  )}
+                </Fragment>
               );
             })}
             <button
@@ -1292,6 +1311,77 @@ export function ChainSourcesSettings({
             Shared engine sync is unavailable right now.
           </p>
         ))}
+
+      {page === 'metadata' && (
+        <section
+          aria-label="Metadata and indexing services"
+          className="space-y-3"
+        >
+          <p className="text-xs wallet-muted">
+            Token ownership comes from wallet sync. Rust verifies token identity
+            locally; optional services provide metadata or indexed queries
+            within your routing and privacy choices. Opening this page contacts
+            no providers.
+          </p>
+          {(view.unavailable_services ?? []).map((service) => (
+            <div
+              key={service.id}
+              className="rounded-xl border border-[var(--wallet-border)] p-3"
+            >
+              <button
+                type="button"
+                disabled
+                className="wallet-muted text-sm"
+                aria-describedby={`metadata-${service.id}`}
+              >
+                {service.label} � unavailable
+              </button>
+              <p id={`metadata-${service.id}`} className="text-xs wallet-muted">
+                {service.reason}
+              </p>
+            </div>
+          ))}
+          <div className="rounded-xl border border-[var(--wallet-border)] p-3 space-y-2">
+            <p className="text-sm font-semibold wallet-text-strong">
+              IPFS gateways
+            </p>
+            <p className="text-xs wallet-muted">
+              Configure an HTTPS gateway on a source. Requires verified Tor;
+              registry bytes are hash-checked by Rust.
+            </p>
+            {view.sources
+              .filter((source) =>
+                source.endpoints.some(
+                  (endpoint) => endpoint.kind === 'ipfs-gateway'
+                )
+              )
+              .map((source) => (
+                <button
+                  key={source.id}
+                  type="button"
+                  className="wallet-btn-secondary block px-3 py-2"
+                  onClick={() => openDetails(source)}
+                >
+                  {source.label}
+                </button>
+              ))}
+            <button
+              type="button"
+              className="wallet-btn-secondary px-3 py-2"
+              onClick={() => openDirectory('custom')}
+            >
+              External / custom sources
+            </button>
+            <button
+              type="button"
+              className="wallet-btn-secondary px-3 py-2"
+              onClick={() => openDirectory('own')}
+            >
+              My infrastructure
+            </button>
+          </div>
+        </section>
+      )}
 
       {isDirectoryPage(page) && (
         <>
