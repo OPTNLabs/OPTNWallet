@@ -1002,11 +1002,28 @@ pub fn add_user_source(
         host: host.clone(),
         ..endpoint
     };
+    let infrastructure_group = infrastructure_group
+        .map(str::trim)
+        .filter(|group| !group.is_empty());
     if let Some(existing) = overlay
         .user_sources
         .iter_mut()
         .find(|source| source.id == id)
     {
+        match (&existing.origin, infrastructure_group) {
+            (SourceOrigin::UserAdded, Some(_)) => {
+                return Err(format!(
+                    "{host} is already a custom source. Adding a service cannot change its ownership; remove this user-created source before re-adding it as infrastructure."
+                ));
+            }
+            (SourceOrigin::UserInfrastructure { group }, Some(requested)) if group != requested => {
+                return Err(format!(
+                    "{host} already belongs to infrastructure group '{group}'"
+                ));
+            }
+            (SourceOrigin::UserAdded | SourceOrigin::UserInfrastructure { .. }, _) => {}
+            _ => return Err(format!("{host} is not a user-managed source")),
+        }
         if existing.endpoints.contains(&endpoint) {
             return Err(format!("{host} is already a source"));
         }
@@ -1026,8 +1043,8 @@ pub fn add_user_source(
             // holder's to make; it is also what `OwnInfrastructure` policy and
             // the direct-dial rule key off, which is why it is not inferred
             // from the address.
-            Some(group) if !group.trim().is_empty() => SourceOrigin::UserInfrastructure {
-                group: group.trim().to_owned(),
+            Some(group) => SourceOrigin::UserInfrastructure {
+                group: group.to_owned(),
             },
             _ => SourceOrigin::UserAdded,
         },
@@ -1204,6 +1221,83 @@ mod tests {
             SourceOrigin::UserInfrastructure { group } if group == "home"
         ));
         assert!(overlay.user_sources[0].is_user_infrastructure());
+    }
+
+    #[test]
+    fn adding_a_group_to_an_existing_public_host_is_refused_without_promotion() {
+        let mut overlay = UserNetworkOverlay::default();
+        add_user_source(
+            &mut overlay,
+            "Public",
+            Endpoint {
+                kind: EndpointKind::ElectrumTls,
+                host: "node.example".into(),
+                port: Some(50002),
+            },
+            None,
+        )
+        .unwrap();
+
+        assert!(add_user_source(
+            &mut overlay,
+            "Mine",
+            Endpoint {
+                kind: EndpointKind::BchP2p,
+                host: "node.example".into(),
+                port: Some(8333),
+            },
+            Some("home"),
+        )
+        .is_err());
+        assert!(matches!(
+            overlay.user_sources[0].origin,
+            SourceOrigin::UserAdded
+        ));
+        assert_eq!(overlay.user_sources[0].endpoints.len(), 1);
+    }
+
+    #[test]
+    fn conflicting_group_for_an_existing_own_host_is_refused_but_ungrouped_append_keeps_it_own() {
+        let mut overlay = UserNetworkOverlay::default();
+        add_user_source(
+            &mut overlay,
+            "Home",
+            Endpoint {
+                kind: EndpointKind::ElectrumTls,
+                host: "node.example".into(),
+                port: Some(50002),
+            },
+            Some("home"),
+        )
+        .unwrap();
+
+        assert!(add_user_source(
+            &mut overlay,
+            "Office",
+            Endpoint {
+                kind: EndpointKind::BchP2p,
+                host: "node.example".into(),
+                port: Some(8333),
+            },
+            Some("office"),
+        )
+        .is_err());
+        add_user_source(
+            &mut overlay,
+            "Home",
+            Endpoint {
+                kind: EndpointKind::BchP2p,
+                host: "node.example".into(),
+                port: Some(8333),
+            },
+            None,
+        )
+        .unwrap();
+        assert!(matches!(
+            &overlay.user_sources[0].origin,
+            SourceOrigin::UserInfrastructure { group } if group == "home"
+        ));
+        assert_eq!(overlay.user_sources[0].endpoints.len(), 2);
     }
 
     #[test]

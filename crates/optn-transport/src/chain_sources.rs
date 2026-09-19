@@ -49,6 +49,42 @@ pub struct SourceFailureView {
     pub error: String,
 }
 
+/// Runtime evidence for one endpoint/protocol pair. This is a status, not
+/// authorization: source selection remains enforced by the runtime policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceProtocolStatus {
+    Unknown,
+    Advertised,
+    Verified,
+    Rejected,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceProtocolView {
+    pub endpoint: EndpointView,
+    pub protocol: String,
+    pub status: SourceProtocolStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceCapabilityView {
+    pub name: String,
+    pub confidence: SourceProtocolStatus,
+    pub discovery: String,
+}
+
+/// A claim currently held by a registered backend. It is separate from source
+/// catalog metadata and does not imply that policy or health permits use.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceRouteCapabilityView {
+    pub endpoint: Option<EndpointView>,
+    pub protocol: String,
+    pub name: String,
+    pub confidence: SourceProtocolStatus,
+    pub discovery: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChainSourceView {
     pub id: String,
@@ -64,6 +100,17 @@ pub struct ChainSourceView {
     pub can_remove: bool,
     pub endpoints: Vec<EndpointView>,
     pub capabilities: Vec<String>,
+    /// Source-level catalog claims. These are not endpoint evidence.
+    #[serde(default)]
+    pub capability_details: Vec<SourceCapabilityView>,
+    #[serde(default)]
+    pub registered_capability_details: Vec<SourceRouteCapabilityView>,
+    /// Per-endpoint protocol evidence. Catalog metadata can only advertise a
+    /// protocol; source-level verification/rejection remains in
+    /// `capability_details`. Native failures stay in `failures`, because a
+    /// transport refusal is not necessarily a capability verdict.
+    #[serde(default)]
+    pub protocol_statuses: Vec<SourceProtocolView>,
     /// In the current selection plan: `primary`, `fallback`, or absent.
     pub role: Option<String>,
     /// Protocols this source has a live provider for right now. An empty list
