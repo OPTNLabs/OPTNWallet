@@ -1,4 +1,4 @@
-# PR #63 requirement ledger — #71 and #75
+# PR #63 requirement ledger — #71, #75 and #83
 
 Current source and execution evidence establish what exists. Current issue
 requirements establish what must exist. A disagreement is a gap to reconcile;
@@ -21,7 +21,10 @@ reader can open and, where there is one, the test that holds it up.
 Record evidence as component, application integration, live workflow or packaged
 platform, with revision/environment where available. Existing rows need that
 distinction checked before being used as release evidence. Historical statements
-about unavailable tooling must be rechecked on the current host. #84 is the
+about unavailable tooling must be rechecked on the current host. [#83](https://github.com/OPTNLabs/OPTNWallet/issues/83)
+coordinates authority boundaries, dependency direction, trusted transports and
+untrusted add-on contracts. It does not replace the detailed #71/#75 requirements
+or imply that the #82 marketplace is complete. #84 is the
 closed Vitest dependency PR; its migration and coverage requirements are carried
 in #63, not a separate wallet architecture.
 
