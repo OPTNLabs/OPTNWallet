@@ -24,11 +24,29 @@ pub async fn build_stack(
     selection: SharedChainSelection,
 ) -> optn_chain_native::NativeChainStack {
     let trusted = trusted_socks_ports(network, directory);
+    let credentials = optn_platform_native::NativeSecureStorage::new(
+        optn_runtime::rpc_credentials::RPC_CREDENTIAL_SERVICE,
+    );
+    let secrets = match optn_runtime::rpc_credentials::load_selected(
+        &credentials,
+        network,
+        &selection.catalog,
+        &selection.policy,
+    )
+    .await
+    {
+        Ok(secrets) => optn_chain_native::NativeChainSecrets::from_credentials(secrets),
+        Err(_) => {
+            return optn_chain_native::NativeChainStack::unavailable(
+                "RPC secure storage is unavailable; credentials were not bypassed.",
+            )
+        }
+    };
     optn_chain_native::build_native_chain_stack_via(
         selection.catalog,
         selection.policy,
         &network.to_string(),
-        &optn_chain_native::NativeChainSecrets::default(),
+        &secrets,
         optn_chain_native::TorProxyTrust {
             managed: &[],
             trusted: &trusted,
@@ -248,6 +266,46 @@ fn file_name(network: Network) -> &'static str {
         // a network anyone else uses.
         Network::Regtest => "network-regtest.json",
     }
+}
+
+/// Private local request: public replies contain presence only.
+pub async fn rpc_credentials(
+    network: Network,
+    directory: Option<&Path>,
+    request: optn_transport::chain_sources::RpcCredentialRequest,
+) -> Result<optn_transport::chain_sources::RpcCredentialStatus, String> {
+    use optn_runtime::rpc_credentials as rpc;
+    use optn_transport::chain_sources::RpcCredentialRequest;
+    let selection =
+        shared_chain_selection(network, directory)?.ok_or("Source catalog is unavailable.")?;
+    let source = request.source().to_owned();
+    let store = optn_platform_native::NativeSecureStorage::new(rpc::RPC_CREDENTIAL_SERVICE);
+    let result = async {
+        match request {
+            RpcCredentialRequest::Set {
+                username, password, ..
+            } => {
+                rpc::set(
+                    &store,
+                    network,
+                    &selection.catalog,
+                    &source,
+                    username.expose(),
+                    password.expose(),
+                )
+                .await?
+            }
+            RpcCredentialRequest::Remove { .. } => {
+                rpc::remove(&store, network, &selection.catalog, &source).await?;
+                return Ok(false);
+            }
+            RpcCredentialRequest::Status { .. } => {}
+        }
+        rpc::status(&store, network, &selection.catalog, &source).await
+    }
+    .await
+    .map_err(|_| "RPC credential operation failed; no credentials were exposed.".to_owned())?;
+    Ok(optn_transport::chain_sources::RpcCredentialStatus { configured: result })
 }
 
 #[cfg(test)]

@@ -1318,6 +1318,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app_transport::optn_app_dispatch,
             chain_sources::optn_chain_sources,
+            chain_sources::optn_chain_rpc_credentials,
             chain_sources::optn_chain_set_policy,
             chain_sources::optn_chain_set_selection,
             chain_sources::optn_chain_export_configuration,

@@ -163,6 +163,23 @@ mod wasm {
             })
         }
 
+        fn rpc_credentials<'a>(
+            &'a self,
+            network: String,
+            request: optn_transport::chain_sources::RpcCredentialRequest,
+        ) -> TransportFuture<'a, optn_transport::chain_sources::RpcCredentialStatus> {
+            Box::pin(async move {
+                let args = command_args("network", &JsValue::from_str(&network))?;
+                let request = serde_wasm_bindgen::to_value(&request).map_err(|_| {
+                    TransportError::InvalidData("Invalid credential request.".into())
+                })?;
+                Reflect::set(&args, &JsValue::from_str("request"), &request).map_err(js_error)?;
+                let result = invoke("optn_chain_rpc_credentials", args).await?;
+                serde_wasm_bindgen::from_value(result)
+                    .map_err(|_| TransportError::InvalidData("Invalid credential status.".into()))
+            })
+        }
+
         fn airgap<'a>(
             &'a self,
             request: optn_transport::AirgapRequest,

@@ -1,6 +1,39 @@
 //! Typed source catalog shared across renderer adapters. Policy stays in the runtime.
 use serde::{Deserialize, Serialize};
 
+/// Private host request. Never include this in network exports or app snapshots.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RpcCredentialRequest {
+    Status {
+        source: String,
+    },
+    Set {
+        source: String,
+        username: optn_app::SecretText,
+        password: optn_app::SecretText,
+    },
+    Remove {
+        source: String,
+    },
+}
+
+impl RpcCredentialRequest {
+    pub fn source(&self) -> &str {
+        match self {
+            Self::Status { source } | Self::Set { source, .. } | Self::Remove { source } => source,
+        }
+    }
+    pub fn mutates(&self) -> bool {
+        !matches!(self, Self::Status { .. })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RpcCredentialStatus {
+    pub configured: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EndpointView {
     /// `electrum-tls`, `p2p`, … — the same labels the source ids are built from.

@@ -1059,3 +1059,99 @@ fn named_policy_selection_is_shared_by_prompt_stdio_and_reopened_cli() {
         assert_eq!(std::fs::read(&config).unwrap(), before);
     }
 }
+
+#[test]
+fn rpc_credentials_refuse_unknown_sources_without_echoing_private_input() {
+    let directory = test_directory();
+    let marker = format!(
+        "private-{}",
+        directory.path().file_name().unwrap().to_string_lossy()
+    );
+    let request = json!({"network":{"op":"credentials","request":{"op":"set","source":"absent","username":marker,"password":marker}}});
+    let output = run_cli(
+        directory.path(),
+        &["wallet", "--stdio"],
+        &format!("{request}\n"),
+    );
+    assert!(output.status.success());
+    assert_eq!(responses(&output)[0]["ok"], false);
+    assert!(!String::from_utf8_lossy(&output.stdout).contains(&marker));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains(&marker));
+}
+
+#[test]
+#[ignore = "uses a disposable entry in the real operating-system credential store"]
+fn rpc_credentials_survive_cli_restart_and_stay_out_of_export() {
+    use optn_runtime::chain::{Endpoint, EndpointKind};
+    use optn_runtime::network_config::{
+        add_user_source, NetworkConfigEnvelope, SHIPPED_CATALOG_VERSION,
+    };
+    let directory = test_directory();
+    let label = directory
+        .path()
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    let mut envelope = NetworkConfigEnvelope::current(SHIPPED_CATALOG_VERSION, Default::default());
+    let source = add_user_source(
+        &mut envelope.overlay,
+        &label,
+        Endpoint {
+            kind: EndpointKind::BchnRpc,
+            host: "127.0.0.1".into(),
+            port: Some(18443),
+        },
+        Some(&label),
+    )
+    .unwrap();
+    let unique = optn_runtime::chain::SourceId::new(format!("credential-test-{label}"));
+    envelope
+        .overlay
+        .user_sources
+        .iter_mut()
+        .find(|entry| entry.id == source)
+        .unwrap()
+        .id = unique.clone();
+    let source = unique;
+    let config = directory.path().join("network-config");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(
+        config.join("network-chipnet.json"),
+        optn_runtime::network_config::encode_envelope_json(&envelope).unwrap(),
+    )
+    .unwrap();
+    let marker = format!("private-{label}");
+    let call = |op: Value| {
+        run_cli(
+            directory.path(),
+            &["wallet", "--stdio"],
+            &format!("{}\n", json!({"network":{"op":"credentials","request":op}})),
+        )
+    };
+    let set =
+        call(json!({"op":"set","source":source.as_str(),"username":marker,"password":marker}));
+    let status = call(json!({"op":"status","source":source.as_str()}));
+    let exported = run_cli(directory.path(), &["network", "export"], "");
+    // Clean up before assertions so a failed check cannot leave the public test credential behind.
+    let removed = call(json!({"op":"remove","source":source.as_str()}));
+    let missing = call(json!({"op":"status","source":source.as_str()}));
+    for output in [&set, &status] {
+        assert!(output.status.success());
+        assert_eq!(
+            responses(output)[0]["configured"],
+            true,
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+    for output in [&removed, &missing] {
+        assert!(output.status.success());
+        assert_eq!(responses(output)[0]["configured"], false);
+    }
+    assert!(exported.status.success());
+    for output in [&set, &status, &removed, &missing, &exported] {
+        assert!(!String::from_utf8_lossy(&output.stdout).contains(&marker));
+        assert!(!String::from_utf8_lossy(&output.stderr).contains(&marker));
+    }
+}

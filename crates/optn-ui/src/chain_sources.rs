@@ -158,6 +158,7 @@ pub fn ChainSourcesSection(transport: UiTransport, state: RwSignal<AppState>) ->
                     <For each=move || catalog.get().map(|value| value.sources).unwrap_or_default() key=|source| format!("{}:{}:{}",source.id,source.disposition,source.live_protocols.join(",")) children=move |source| {
                         let id = StoredValue::new(source.id.clone());
                         let initial = source.disposition.clone();
+                        let has_rpc = source.endpoints.iter().any(|endpoint| endpoint.kind == "node-rpc");
                         view! {
                             <article class="panel">
                                 <p class="source-title">{source.label}</p>
@@ -174,6 +175,7 @@ pub fn ChainSourcesSection(transport: UiTransport, state: RwSignal<AppState>) ->
                                     {source.endpoints.into_iter().map(|endpoint| view! { <p class="mono">{format!("{} {}{}",endpoint.kind,endpoint.host,endpoint.port.map(|p|format!(":{p}")).unwrap_or_default())}</p> }).collect_view()}
                                     {source.failures.into_iter().map(|failure| view! { <p>{failure.error}</p> }).collect_view()}
                                 </details>
+                                {has_rpc.then(|| view! { <RpcCredentials transport=transport network=network state=state source=id.get_value() /> })}
                                 <Show when=move || source.can_remove>
                                     <button class="secondary" type="button" disabled=move || action.pending().get() on:click=move |_| { action.dispatch((network.get_untracked(),Some(ChainSourceEdit::Remove(id.get_value())))); }>"Remove source"</button>
                                 </Show>
@@ -240,5 +242,60 @@ fn toggle_source(scope: &mut WireSourceScope, id: String, checked: bool) {
         if checked {
             ids.push(id);
         }
+    }
+}
+
+#[component]
+fn RpcCredentials(transport: UiTransport, network: Memo<String>, state: RwSignal<AppState>, source: String) -> impl IntoView {
+    use optn_transport::chain_sources::RpcCredentialRequest;
+    let source = StoredValue::new(source);
+    let username = RwSignal::new(String::new());
+    let password = RwSignal::new(String::new());
+    let message = RwSignal::new(String::new());
+    let request = Action::new_local(
+        move |request: &std::sync::Mutex<Option<RpcCredentialRequest>>| {
+            let request = request.lock().ok().and_then(|mut value| value.take());
+            let selected = network.get_untracked();
+            let transport = transport.get_value();
+            async move {
+                let Some(request) = request else {
+                    return;
+                };
+                let result = transport.rpc_credentials(selected.clone(), request).await;
+                if network.try_get_untracked().as_ref() == Some(&selected) {
+                    message.try_set(match result {
+                        Ok(status) if status.configured => {
+                            "Credentials stored for this endpoint. Sync to refresh the wallet."
+                                .into()
+                        }
+                        Ok(_) => "No credentials stored for this endpoint.".into(),
+                        Err(_) => {
+                            "Credential operation failed or is unavailable on this platform.".into()
+                        }
+                    });
+                }
+            }
+        },
+    );
+    view! {
+        <details><summary>"Node RPC authentication"</summary>
+            <p class="muted">{move || (state.get().surface != optn_app::AppSurface::Desktop).then_some("Credential entry is currently available on desktop only.")}</p>
+            <fieldset disabled=move || state.get().surface != optn_app::AppSurface::Desktop>
+            <p class="muted">"Saved in this device's secure storage, excluded from settings backups. Linux credentials last for the login session."</p>
+            <form on:submit=move |event| {
+                event.prevent_default();
+                let value = RpcCredentialRequest::Set { source:source.get_value(), username:optn_app::SecretText::new(username.get_untracked()), password:optn_app::SecretText::new(password.get_untracked()) };
+                username.set(String::new()); password.set(String::new());
+                request.dispatch(std::sync::Mutex::new(Some(value)));
+            }>
+                <label class="field"><span>"RPC username"</span><input required autocomplete="off" prop:value=move || username.get() on:input=move |event| username.set(event_target_value(&event)) /></label>
+                <label class="field"><span>"RPC password"</span><input required type="password" autocomplete="new-password" prop:value=move || password.get() on:input=move |event| password.set(event_target_value(&event)) /></label>
+                <button type="submit" class="primary" disabled=move || request.pending().get()>"Save credentials"</button>
+            </form>
+            <button type="button" class="secondary" disabled=move || request.pending().get() on:click=move |_| {request.dispatch(std::sync::Mutex::new(Some(RpcCredentialRequest::Status {source:source.get_value()})));}>"Check saved credentials"</button>
+            <button type="button" class="secondary" disabled=move || request.pending().get() on:click=move |_| {request.dispatch(std::sync::Mutex::new(Some(RpcCredentialRequest::Remove {source:source.get_value()})));}>"Remove credentials"</button>
+            <p role="status">{move || message.get()}</p>
+            </fieldset>
+        </details>
     }
 }

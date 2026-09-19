@@ -1277,6 +1277,7 @@ dependencies = [
  "optn-runtime",
  "reqwest",
  "serde_json",
+ "zeroize",
 ]
 
 [[package]]
@@ -1365,6 +1366,7 @@ dependencies = [
  "optn-chain-native",
  "optn-core",
  "optn-multisig-core",
+ "optn-platform",
  "optn-platform-native",
  "optn-runtime",
  "optn-transport",
@@ -1430,6 +1432,7 @@ name = "optn-platform-native"
 version = "1.7.3"
 dependencies = [
  "getrandom 0.2.17",
+ "keyring",
  "optn-platform",
  "tempfile",
 ]

@@ -13,6 +13,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 # Keep RPC decimal fields lexically exact until the adapter converts them to
 # satoshis; the default float-backed `Number` can reformat one sat as `1e-8`.
 serde_json = { version = "1", features = ["arbitrary_precision"] }
+zeroize = "1"
 
 [dev-dependencies]
 tokio = { version = "1.53.1", features = ["macros", "rt"] }

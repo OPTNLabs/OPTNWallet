@@ -52,14 +52,30 @@ pub struct NativeChainSecrets {
 }
 
 impl NativeChainSecrets {
+    pub fn from_credentials(
+        credentials: Vec<optn_runtime::rpc_credentials::LoadedRpcCredential>,
+    ) -> Self {
+        let mut secrets = Self::default();
+        for credential in credentials {
+            secrets.set_rpc_basic_auth(
+                &credential.source,
+                &credential.endpoint,
+                credential.username.expose(),
+                credential.password.expose(),
+            );
+        }
+        secrets
+    }
+
     pub fn set_rpc_basic_auth(
         &mut self,
         source: &SourceId,
+        endpoint: &Endpoint,
         username: impl Into<String>,
         password: impl Into<String>,
     ) {
         self.rpc_auth.insert(
-            source.as_str().to_owned(),
+            rpc_endpoint_binding(source, endpoint),
             RpcAuth::Basic {
                 username: username.into(),
                 password: password.into(),
@@ -75,12 +91,40 @@ impl NativeChainSecrets {
         set_membership(&mut self.rpc_https, source.as_str(), enabled);
     }
 
-    fn rpc_auth(&self, source: &SourceId) -> RpcAuth {
+    /// Add persisted authentication without discarding host-probed settings.
+    /// The endpoint-bound map prevents a source row with another RPC endpoint
+    /// from inheriting the credential while the source-level compatibility
+    /// flags retain their existing semantics.
+    pub fn merge(&mut self, other: Self) {
+        self.rpc_auth.extend(other.rpc_auth);
+        self.rpc_txindex.extend(other.rpc_txindex);
+        self.rpc_https.extend(other.rpc_https);
+    }
+
+    fn rpc_auth(&self, source: &SourceId, endpoint: &Endpoint) -> RpcAuth {
         self.rpc_auth
-            .get(source.as_str())
+            .get(&rpc_endpoint_binding(source, endpoint))
             .cloned()
             .unwrap_or(RpcAuth::None)
     }
+}
+
+/// Source ids identify a catalog row, while an RPC password identifies one
+/// endpoint. A row may carry more than one RPC endpoint, so source-only keys
+/// would let a later endpoint inherit credentials intended for another node.
+fn rpc_endpoint_binding(source: &SourceId, endpoint: &Endpoint) -> String {
+    format!(
+        "{}\u{0}bchn-rpc\u{0}{}\u{0}{}",
+        source.as_str(),
+        endpoint
+            .host
+            .trim()
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .trim_end_matches('.')
+            .to_ascii_lowercase(),
+        endpoint.port.unwrap_or_default(),
+    )
 }
 
 fn set_membership(set: &mut BTreeSet<String>, value: &str, enabled: bool) {
@@ -629,7 +673,7 @@ async fn build_native_chain_stack_with_tor_status(
                     let mut config = BchnRpcConfig::new(
                         source.id.clone(),
                         endpoint.clone(),
-                        secrets.rpc_auth(&source.id),
+                        secrets.rpc_auth(&source.id, endpoint),
                     );
                     config.txindex = secrets.rpc_txindex.contains(source.id.as_str());
                     config.https = secrets.rpc_https.contains(source.id.as_str());

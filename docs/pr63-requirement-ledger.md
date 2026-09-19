@@ -104,7 +104,7 @@ still integration work; model/transport tests do not prove paid rounds run.
 | Sequential receive → spend lifecycle | **PROVEN** | `a_spend_is_found_through_an_outpoint_the_receive_scan_discovered`; spend invisible to a script-only scan | CashTokens/NFT/OP_RETURN/reorg/restart cases not covered |
 | Manual rescan, encrypted restart, GUI/CLI routing | **PROVEN** (runtime/CLI; bounded Windows GUI refresh/reopen) | `request_wallet_rescan`, encrypted checkpoints, Settings `rescan_wallet_from`, CLI `rescan --from-height`; CLI live floor checks and Windows GUI offline restart/online resume on 2026-09-19 | GUI custom-height interaction and current Android/macOS packages still need separate verification; normal HD refresh rechecks the configured floor, not only a suffix |
 | Wallet birthday | **PARTIAL** (durable imported hints connected) | Shared `SetBirthday`/`ClearRescan`, sealed checkpoint, atomic `BeginHd` floor resolution; CLI process restart and Windows GUI height/date reopen and manual-override clearing verified on 2026-09-19. Unknown imports explicitly scan from genesis; missing authenticated date evidence fails closed; legacy manual floors migrate | Automatic same-route header acquisition is connected and tested; requests retain their runtime generation across header I/O. Host-generated creation-anchor capture, restored historical-date evidence and live date acquisition remain to verify. Imported mnemonic input is never treated as proof of fresh wallet creation |
-| Local BCMR / authchain | **PARTIAL** | HD sync now invokes selected transaction/spentness routes, bounded registry retrieval and guarded identity publication. Connected synthetic sync checks accepted identity, unknown spentness, output mismatch, wrong registry hash, absent fetch transport and stale-state downgrade | Needs real-node/token workflow and authenticated RPC credential controls in GUI/CLI. Unknown successors outside wallet history need a selected spender-discovery capability; durable metadata cache and legacy TypeScript migration remain |
+| Local BCMR / authchain | **PARTIAL** | HD sync now invokes selected transaction/spentness routes, bounded registry retrieval and guarded identity publication. Connected synthetic sync checks accepted identity, unknown spentness, output mismatch, wrong registry hash, absent fetch transport and stale-state downgrade | Needs real-node/token workflow; desktop RPC credential controls and CLI private-input controls are connected (see evidence below). Unknown successors outside wallet history need a selected spender-discovery capability; durable metadata cache and legacy TypeScript migration remain |
 | Token capability execution | **INTEGRATION** | `optn-runtime/src/token_capability.rs`; refuses global totals from partial data | Planner and executor exist; no provider adapter routes through them |
 | Broadcast lifecycle | **PARTIAL** | `optn-runtime/src/tx_broadcast.rs` | Uncertain-broadcast reconciliation exists; Send/PSBT/hardware/Fusion are not yet on one lifecycle |
 
@@ -229,3 +229,31 @@ The shared identity collector no longer treats a missing spender in wallet-scope
 ### 2026-09-19: authenticated historical header recovery is connected
 
 CLI restores the sealed header view through the shared worker helper. The native GUI picks up restored header progress when a wallet opens after route-stack initialization. BIP37/Neutrino can acquire missing historical hashes using typed private locators; replay remains in a private store until it matches the accepted MMR commitment, then swaps atomically after a concurrent-store check. Recovery is bounded at 2,000,000 headers and stays on the selected route. Runtime suite: 267 passed, strict Clippy passed; native/CLI/provider checks passed. The connected regression observes the shared store during every replay request. This is integration-test evidence, not a live P2P restart or all-platform claim. Dense historical recovery may still need network replay after process restart; the saved wallet balance remains independently available as stale.
+
+
+## RPC credentials interaction evidence (2026-09-19)
+
+The Rust runtime owns endpoint/network/source-bound credential records through
+`SecureStorage`. Desktop GUI source rows expose save/status/remove; CLI wallet
+navigation accepts `network credentials set|status|remove <source>`, with hidden
+prompts, or private stdio `network.credentials` requests. Passwords are absent
+from public status, app snapshots and portable network exports. Native stack
+construction loads only selected RPC credentials; storage failure refuses the
+stack instead of silently retrying without authentication. Credential changes
+invalidate wallet freshness and retire old native routes. Removing a GUI source
+clears its local RPC credentials before deleting its configuration.
+
+Validation: eight connected store/provider tests, including exact Basic auth
+received by a loopback RPC server, changed-endpoint isolation, protocol exclusion,
+malformed records and escaped-password bounds. A real Windows secure-store CLI
+test saved, reopened in a new process, checked export exclusion, removed and
+reopened missing credentials. CLI wallet/security process tests and strict CLI,
+WASM GUI and native GUI Clippy pass; architecture gates remain unchanged.
+The built Windows GUI also passed save/status, cleared-input, export exclusion,
+and delete-source/re-add-with-no-credential interactions on a disposable loopback
+source. This used the isolated public Chipnet fixture and cleaned up its source
+and credential afterward.
+
+This does not prove a live funded node wallet roundtrip, macOS/Linux keychain
+behavior, or mobile credential storage. Mobile/browser controls remain disabled
+or unsupported. Linux native keyring entries last for the login session.
