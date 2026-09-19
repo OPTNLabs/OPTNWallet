@@ -118,3 +118,24 @@ navigation history (Routing opened from Source details returns to that source,
 then its directory, then Network), before leaving Network. No additional wrapper
 page or competing Back button is needed. Non-desktop legacy controls remain until
 their shared-runtime adapter is available; this is not cross-platform parity proof.
+
+
+### Connected follow-up (2026-09-19)
+
+Routing is the first overview card. Synchronization is read-only overview status;
+manual refresh is under Diagnostics. Wallet birthday is a separate per-wallet
+history-start destination, using the existing Rust `SetBirthday` / `ClearRescan`
+commands and captured session epoch. A manual rescan and a birthday are distinct.
+CashFusion retains its existing Auto/server-pool controls in its own destination.
+
+The shared bootstrap catalog now embeds pinned Electron Cash TLS lists (including
+five Chipnet records with exact ports) rather than one default host. These are
+known candidates, not verified/live sources. The existing durable overlay still
+controls bans, pins, fallback and preferences. No directory read performs feed
+fetches or capability probes.
+
+Still not established by these changes: the complete BCHN/Flowee/bchd/Knuth feed
+pipeline; live peer discovery; the guided host-first infrastructure probe flow;
+independent configurable transport policy across all retained wallet paths; full
+legacy wallet/runtime synchronization convergence; and packaged platform parity.
+Do not mark those requirements complete based on catalog or component tests.
