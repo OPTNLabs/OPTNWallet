@@ -708,7 +708,7 @@ async fn main() {
             Err(err) => emit_cli_error(&cli, *stdio, err),
         }
     }
-    match run(&cli).await {
+    match dispatch(&cli).await {
         Ok(value) => {
             if cli.json {
                 println!(
@@ -2611,9 +2611,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                             parsed_cli.wallet_session = std::sync::Arc::clone(&cli.wallet_session);
                         }
 
-                        // Boxed for the same reason as serve: the console is
-                        // reached from run, and reaches it back.
-                        match Box::pin(run(&parsed_cli)).await {
+                        match dispatch(&parsed_cli).await {
                             Ok(value) => {
                                 if *json {
                                     println!(
@@ -3344,6 +3342,16 @@ async fn run(cli: &Cli) -> Result<Value> {
     }
 }
 
+/// Keep the large command dispatcher off the caller's stack.
+///
+/// `run` also dispatches console and local RPC commands back into itself. The
+/// Windows executable has a smaller main-thread stack than the platforms used
+/// for most development, so every production entry point crosses this heap
+/// boundary before polling that future.
+fn dispatch(cli: &Cli) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + '_>> {
+    Box::pin(run(cli))
+}
+
 /// A payment that has been built and signed, and broadcast unless previewed.
 struct Spend {
     /// Set once broadcast; absent on a preview.
@@ -4002,9 +4010,7 @@ async fn listen(config: serve::Shared) -> Result<()> {
                         }
                     };
 
-                    // Boxed to break the recursion: `run` reaches `listen`
-                    // reaches `run`, and the future type would be infinite.
-                    match Box::pin(run(&parsed_cli)).await {
+                    match dispatch(&parsed_cli).await {
                         Ok(value) => Ok(reply(StatusCode::OK, serve::rpc_result(id, value))),
                         Err(error) => Ok(reply(
                             StatusCode::OK,
