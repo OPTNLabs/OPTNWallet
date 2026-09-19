@@ -1056,8 +1056,33 @@ pub fn add_user_source(
     Ok(id)
 }
 
-/// Remove a source the holder added. Bootstrap entries are disabled, not
-/// deleted, so the base catalog stays recoverable for a later refresh.
+/// Add a logical source's service bundle without exposing partial updates.
+pub fn add_user_source_services(
+    overlay: &mut UserNetworkOverlay,
+    label: &str,
+    endpoints: Vec<Endpoint>,
+    infrastructure_group: Option<&str>,
+) -> Result<SourceId, String> {
+    if endpoints.is_empty() || endpoints.len() > 16 {
+        return Err("Choose between one and sixteen services for this source".into());
+    }
+    let mut staged = overlay.clone();
+    let mut id = None;
+    for endpoint in endpoints {
+        let endpoint = StoredEndpoint::from_endpoint(&endpoint)
+            .into_endpoint()
+            .map_err(|error| format!("Invalid service endpoint: {error:?}"))?;
+        let added = add_user_source(&mut staged, label, endpoint, infrastructure_group)?;
+        if id.as_ref().is_some_and(|first| first != &added) {
+            return Err("Services on different hosts belong to separate sources".into());
+        }
+        id = Some(added);
+    }
+    *overlay = staged;
+    Ok(id.expect("nonempty services checked above"))
+}
+
+/// Remove a user-created source without broadening its selection policy.
 pub fn remove_user_source(overlay: &mut UserNetworkOverlay, id: &SourceId) -> Result<(), String> {
     let before = overlay.user_sources.len();
     overlay.user_sources.retain(|source| &source.id != id);
@@ -1083,6 +1108,65 @@ pub fn remove_user_source(overlay: &mut UserNetworkOverlay, id: &SourceId) -> Re
 mod tests {
     use super::*;
     use crate::chain::{BootstrapProject, SourceOrigin};
+
+    #[test]
+    fn service_bundle_is_one_source_and_rejects_partial_or_cross_host_updates() {
+        let mut overlay = UserNetworkOverlay::default();
+        let endpoints = vec![
+            Endpoint {
+                kind: EndpointKind::BchP2p,
+                host: "Node.Home.".into(),
+                port: Some(48333),
+            },
+            Endpoint {
+                kind: EndpointKind::BchnRpc,
+                host: "node.home".into(),
+                port: Some(48332),
+            },
+            Endpoint {
+                kind: EndpointKind::BchnZmq,
+                host: "node.home".into(),
+                port: Some(28332),
+            },
+        ];
+        let id =
+            add_user_source_services(&mut overlay, "My node", endpoints, Some("home")).unwrap();
+        assert_eq!(overlay.user_sources.len(), 1);
+        assert_eq!(overlay.user_sources[0].endpoints.len(), 3);
+        assert_eq!(overlay.user_sources[0].id, id);
+        assert!(overlay.user_sources[0].capabilities.iter().next().is_none());
+        let before = overlay.clone();
+        let electrum = Endpoint {
+            kind: EndpointKind::ElectrumTls,
+            host: "node.home".into(),
+            port: Some(50002),
+        };
+        let duplicate = overlay.user_sources[0].endpoints[0].clone();
+        assert!(add_user_source_services(
+            &mut overlay,
+            "Other",
+            vec![electrum.clone(), duplicate],
+            Some("home")
+        )
+        .is_err());
+        assert_eq!(overlay, before);
+        let other_host = Endpoint {
+            host: "other.home".into(),
+            ..electrum.clone()
+        };
+        assert!(add_user_source_services(
+            &mut overlay,
+            "Other",
+            vec![electrum.clone(), other_host],
+            Some("home")
+        )
+        .is_err());
+        assert_eq!(overlay, before);
+        add_user_source_services(&mut overlay, "Other", vec![electrum], Some("home")).unwrap();
+        assert_eq!(overlay.user_sources.len(), 1);
+        assert_eq!(overlay.user_sources[0].label, "My node");
+        assert_eq!(overlay.user_sources[0].endpoints.len(), 4);
+    }
 
     #[test]
     fn editing_a_legacy_file_keeps_its_narrower_meaning() {

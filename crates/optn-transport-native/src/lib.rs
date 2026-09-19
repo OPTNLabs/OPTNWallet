@@ -12,9 +12,9 @@ use optn_runtime::chain::{
 };
 use optn_runtime::chain_service::RegisteredCapabilityObservation;
 use optn_runtime::network_config::{
-    add_user_source, promote_legacy_policy, remove_user_source, resolve_shipped_chain_selection,
-    set_policy_preset, set_source_disposition, ChainPolicyPreset, NetworkConfigEnvelope,
-    NetworkConfigStore, UserNetworkOverlay, SHIPPED_CATALOG_VERSION,
+    promote_legacy_policy, remove_user_source, resolve_shipped_chain_selection, set_policy_preset,
+    set_source_disposition, ChainPolicyPreset, NetworkConfigEnvelope, NetworkConfigStore,
+    UserNetworkOverlay, SHIPPED_CATALOG_VERSION,
 };
 use optn_transport::chain_sources::{
     AddSourceRequest, ChainSourceEdit, ChainSourceView, EndpointView, SourceCapabilityView,
@@ -114,7 +114,7 @@ fn apply_edit(
             }
             set_source_disposition(overlay, &id, parse_disposition(&disposition)?)
         }
-        ChainSourceEdit::Add(request) => add(network, overlay, request),
+        ChainSourceEdit::Add(request) => add_source(network, overlay, request),
         ChainSourceEdit::Remove(source) => {
             let id = SourceId::new(source);
             let catalog = resolved_catalog(network, overlay)?;
@@ -139,7 +139,7 @@ fn resolved_catalog(
         .map_err(|error| format!("Invalid source catalog: {error:?}"))
 }
 
-fn add(
+pub fn add_source(
     network: Network,
     overlay: &mut UserNetworkOverlay,
     request: AddSourceRequest,
@@ -152,14 +152,25 @@ fn add(
             return Err("source network does not match this settings file".into());
         }
     }
-    add_user_source(
+    if request.services.len() > 15 {
+        return Err("A source supports at most sixteen services per edit".into());
+    }
+    let mut endpoints = vec![Endpoint {
+        kind: parse_endpoint_kind(&request.kind)?,
+        host: request.host.clone(),
+        port: request.port,
+    }];
+    for service in request.services {
+        endpoints.push(Endpoint {
+            kind: parse_endpoint_kind(&service.kind)?,
+            host: request.host.clone(),
+            port: service.port,
+        });
+    }
+    optn_runtime::network_config::add_user_source_services(
         overlay,
         &request.label,
-        Endpoint {
-            kind: parse_endpoint_kind(&request.kind)?,
-            host: request.host,
-            port: request.port,
-        },
+        endpoints,
         request.infrastructure_group.as_deref(),
     )
     .map(|_| ())
@@ -435,6 +446,7 @@ mod tests {
 
     fn add(host: &str) -> ChainSourceEdit {
         ChainSourceEdit::Add(AddSourceRequest {
+            services: Vec::new(),
             network: Some("chipnet".into()),
             label: "Home node".into(),
             kind: "electrum-tls".into(),
@@ -442,6 +454,66 @@ mod tests {
             port: Some(50002),
             infrastructure_group: Some("home".into()),
         })
+    }
+
+    #[test]
+    fn endpoint_kind_labels_round_trip() {
+        // The label is what the UI sends back when adding a source, so a label
+        // the shared adapter cannot parse would make its own list unusable.
+        for kind in [
+            EndpointKind::BchP2p,
+            EndpointKind::ElectrumTls,
+            EndpointKind::ElectrumTcp,
+            EndpointKind::BchnRpc,
+            EndpointKind::BchnZmq,
+            EndpointKind::ExplorerHttp,
+            EndpointKind::ExplorerHttps,
+        ] {
+            assert_eq!(parse_endpoint_kind(endpoint_kind_label(kind)), Ok(kind));
+        }
+        assert!(parse_endpoint_kind("smoke-signals").is_err());
+    }
+
+    #[test]
+    fn service_bundle_persists_as_one_source_and_bad_append_is_atomic() {
+        let (path, settings) = file("service-bundle");
+        let ChainSourceEdit::Add(mut request) = add("node.home") else {
+            unreachable!()
+        };
+        request.services = vec![
+            optn_transport::chain_sources::SourceService {
+                kind: "p2p".into(),
+                port: Some(48333),
+            },
+            optn_transport::chain_sources::SourceService {
+                kind: "node-rpc".into(),
+                port: Some(48332),
+            },
+            optn_transport::chain_sources::SourceService {
+                kind: "node-zmq".into(),
+                port: Some(28332),
+            },
+        ];
+        settings
+            .edit(ChainSourceEdit::Add(request.clone()))
+            .unwrap();
+        let reopened = SourceSettings::new(Network::Chipnet, path.clone())
+            .read()
+            .unwrap();
+        let own: Vec<_> = reopened
+            .sources
+            .iter()
+            .filter(|source| source.origin == "own-infrastructure")
+            .collect();
+        assert_eq!(own.len(), 1);
+        assert_eq!(own[0].endpoints.len(), 4);
+        let before = std::fs::read(&path).unwrap();
+        request.kind = "p2p".into();
+        request.port = Some(48334);
+        request.services[0].port = Some(0);
+        assert!(settings.edit(ChainSourceEdit::Add(request)).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
@@ -527,6 +599,7 @@ mod tests {
         let (path, settings) = file("invalid");
         assert!(settings
             .edit(ChainSourceEdit::Add(AddSourceRequest {
+                services: Vec::new(),
                 network: None,
                 label: "bad".into(),
                 kind: "unknown".into(),

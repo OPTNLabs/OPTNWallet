@@ -170,10 +170,12 @@ export function addChainSource(request: {
   port?: number | null;
   infrastructureGroup?: string | null;
   network?: string;
+  services?: { kind: string; port: number }[];
 }): Promise<void> {
   return invoke('optn_chain_add_source', {
     request: {
       label: request.label,
+      services: request.services ?? [],
       kind: request.kind,
       host: request.host,
       port: request.port ?? null,

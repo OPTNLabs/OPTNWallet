@@ -177,6 +177,15 @@ pub struct AddSourceRequest {
     /// is what `own_infrastructure` policy selects and what may be dialled
     /// directly rather than through Tor.
     pub infrastructure_group: Option<String>,
+    /// Additional services on the same logical host, committed with the first.
+    #[serde(default)]
+    pub services: Vec<SourceService>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceService {
+    pub kind: String,
+    pub port: Option<u16>,
 }
 
 #[derive(Debug, Clone)]
