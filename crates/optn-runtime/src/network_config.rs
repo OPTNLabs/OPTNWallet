@@ -1047,16 +1047,17 @@ pub fn remove_user_source(overlay: &mut UserNetworkOverlay, id: &SourceId) -> Re
     if overlay.user_sources.len() == before {
         return Err("that source is not one this device added; disable it instead".into());
     }
-    // A policy that still names the removed source would select nothing at all.
+    // Removing a source is not consent to expand the permitted route pool.
+    // An empty explicit scope intentionally stays offline until the holder edits it.
     overlay
         .connection_policy
         .preferred
         .retain(|kept| kept != id);
     if let SourceScope::Explicit(selected) = &mut overlay.connection_policy.primary_scope {
         selected.remove(id);
-        if selected.is_empty() {
-            overlay.connection_policy = ConnectionPolicy::auto();
-        }
+    }
+    if let Some(SourceScope::Explicit(selected)) = &mut overlay.connection_policy.fallback_scope {
+        selected.remove(id);
     }
     Ok(())
 }
@@ -1206,7 +1207,7 @@ mod tests {
     }
 
     #[test]
-    fn removing_a_pinned_source_does_not_leave_a_policy_selecting_nothing() {
+    fn removing_a_pinned_source_preserves_privacy_after_restart() {
         let mut overlay = UserNetworkOverlay::default();
         let endpoint = Endpoint {
             kind: EndpointKind::ElectrumTls,
@@ -1218,12 +1219,63 @@ mod tests {
 
         remove_user_source(&mut overlay, &id).unwrap();
         assert!(overlay.user_sources.is_empty());
-        // Left as Explicit({}) the wallet would have had no route at all and no
-        // way to say why, so the policy falls back to the named default.
-        assert_eq!(overlay.connection_policy, ConnectionPolicy::auto());
+        assert_eq!(
+            overlay.connection_policy.protocols,
+            ProtocolSet::only(ProtocolFamily::Electrum)
+        );
+        assert_eq!(
+            overlay.connection_policy.primary_scope,
+            SourceScope::Explicit(Default::default())
+        );
+        assert!(overlay.connection_policy.fallback_scope.is_none());
+        let saved = NetworkConfigEnvelope::current(SHIPPED_CATALOG_VERSION, overlay.clone());
+        let reopened = decode_envelope_json(&encode_envelope_json(&saved).unwrap()).unwrap();
+        let (catalog, policy) =
+            resolve_shipped_chain_selection(Network::Chipnet, Some(&reopened)).unwrap();
+        assert!(catalog.iter().any(|source| source.is_public()));
+        let plan = crate::chain::build_selection_plan(&catalog, &policy);
+        assert!(plan.primary.is_empty());
+        assert!(plan.fallback.is_empty());
 
         // A bootstrap entry is not this device's to delete.
         assert!(remove_user_source(&mut overlay, &SourceId::new("bootstrap:x")).is_err());
+    }
+
+    #[test]
+    fn removal_prunes_explicit_fallback_without_expanding_other_scopes() {
+        let mut overlay = UserNetworkOverlay::default();
+        let id = add_user_source(
+            &mut overlay,
+            "Home",
+            Endpoint {
+                kind: EndpointKind::BchP2p,
+                host: "node.example".into(),
+                port: Some(48333),
+            },
+            Some("home"),
+        )
+        .unwrap();
+        overlay.connection_policy = ConnectionPolicy::own_infrastructure();
+        overlay.connection_policy.preferred = vec![id.clone()];
+        overlay.connection_policy.fallback_scope =
+            Some(SourceScope::Explicit(BTreeSet::from([id.clone()])));
+        let protocols = overlay.connection_policy.protocols.clone();
+        remove_user_source(&mut overlay, &id).unwrap();
+        assert_eq!(
+            overlay.connection_policy.primary_scope,
+            SourceScope::UserInfrastructure
+        );
+        assert_eq!(overlay.connection_policy.protocols, protocols);
+        assert!(overlay.connection_policy.preferred.is_empty());
+        assert_eq!(
+            overlay.connection_policy.fallback_scope,
+            Some(SourceScope::Explicit(BTreeSet::new()))
+        );
+        let saved = NetworkConfigEnvelope::current(SHIPPED_CATALOG_VERSION, overlay);
+        let (catalog, policy) =
+            resolve_shipped_chain_selection(Network::Chipnet, Some(&saved)).unwrap();
+        let plan = crate::chain::build_selection_plan(&catalog, &policy);
+        assert!(plan.primary.is_empty() && plan.fallback.is_empty());
     }
 
     fn bootstrap(id: &str) -> ChainSource {
