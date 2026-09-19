@@ -8,6 +8,7 @@ OPTN currently uses:
 - **Tauri 2.x** as the current desktop/mobile shell
 - **optn-core** for reusable BCH/protocol logic
 - **optn-app** for framework-neutral application state and actions
+- **optn-runtime** for authoritative wallet sessions, durable state and reconciliation
 - **optn-chain-native** for Tauri-free native chain adapter composition shared by desktop and CLI
 - **optn-transport** for renderer-to-application communication contracts
 - **optn-platform** for OS capability contracts and provider metadata
@@ -18,17 +19,32 @@ choices, not architectural dependencies.
 
 ## Stable center
 
-```
-optn-core
-    ↑
-optn-app
-    ↑
-optn-transport ← renderer transport implementations
-    ↑
-renderer
+Runtime communication and ownership (arrows are calls, not Cargo dependencies):
 
-optn-platform ← capability providers
+```text
+GUI / CLI → trusted transport adapter → optn-runtime
+                                        ├─ optn-app: actions and projections
+                                        ├─ optn-core: pure wallet primitives
+                                        ├─ provider contracts: observations and evidence
+                                        └─ platform ports: storage, sockets and hardware
 ```
+
+Only the runtime owns authoritative wallet/session state. Providers return
+observations; platform adapters execute capabilities; neither publishes wallet
+state directly. `optn-app` is the application model, not another wallet backend.
+
+Current Cargo direction is distinct: `optn-app` depends on `optn-core`,
+`optn-transport` depends on `optn-app`, and `optn-runtime` consumes those crates
+and `optn-platform`. Transport contracts currently sit below the runtime;
+concrete transport adapters sit above it. Do not introduce a reverse dependency
+or claim the target layer diagram is already the literal Cargo graph.
+
+[#83](https://github.com/OPTNLabs/OPTNWallet/issues/83) coordinates these authority
+boundaries. #71 owns product UI, #75 owns providers/sync/privacy, #79 owns the
+transaction approval lifecycle, and #82 owns the add-on host/package lifecycle.
+Trusted UI transport is not an untrusted add-on API: guests must not receive
+unrestricted `AppAction`, raw signing templates, key material or broadcast
+authority. A manifest's claimed trust tier cannot grant host privileges.
 
 The architecture has four independently replaceable boundaries:
 
@@ -36,6 +52,100 @@ The architecture has four independently replaceable boundaries:
 2. **Shell** — Tauri today; another native host may replace it.
 3. **Transport** — local WASM, direct in-process Rust, Tauri IPC, or another transport.
 4. **Capability provider** — pure Rust, shell plugin, direct native FFI, or browser APIs.
+
+## Renderer contract: preserve choice, share behavior
+
+React remains supported during migration; do not delete it as a consequence of
+adding a Rust renderer. Leptos is the current Rust UI. Dioxus has a headless
+renderer proof in `crates/optn-ui-dioxus`, not a complete packaged wallet.
+Slint has an approved, bounded native Network Sources pilot in
+`crates/optn-ui-slint`. It uses native rendering without CSS or a WebView and is
+excluded from the shipping workspace matrix. It is not the selected replacement
+wallet. Its host calls the concrete `optn-transport-native` settings adapter;
+that adapter reuses runtime validation and native atomic configuration storage.
+Tauri consumes the same source projection. No UI dependency enters the shared
+core/runtime or CLI. Preserve every existing renderer and platform gate.
+
+Here, a renderer "plugin" means a reviewed interface adapter using the shared
+application/transport contracts. It does not mean loading arbitrary executable
+plugins into a process holding wallet keys. Build/package selection is sufficient
+until a runtime renderer switch is explicitly required and implemented.
+
+| Responsibility | Authoritative owner |
+| --- | --- |
+| BCH cryptography, derivation, transaction validation | `optn-core` |
+| Application actions, state, view models, capability decisions | `optn-app` and existing shared Rust policy modules |
+| Sync lifecycle, source routing, verification, persistence coordination | `optn-runtime`, with `optn-chain-native` for native chain composition |
+| Typed requests, responses and transport errors | `optn-transport`; host-specific transport adapters |
+| OS storage, hardware, clipboard and other capabilities | `optn-platform` contracts and platform providers |
+| Layout, focus, navigation presentation, accessibility | Each renderer |
+
+GUI and CLI are independent clients of the same Rust application/runtime. CLI
+must not depend on any GUI or shell framework. A renderer must not own a second
+wallet state machine, source selector, signing policy or persistence format.
+Existing React paths are migration work, not permission to duplicate new behavior
+in TypeScript. Route new behavior through the shared Rust contract and retain
+compatibility while moving legacy callers behind it.
+
+### Keeping interfaces in sync
+
+Change shared behavior once, then wire each supported interface to the same typed
+request and state/view model. Keep network/source selection, Tor policy, sync,
+verification, wallet state and error semantics consistent across GUI and CLI.
+Capability visibility, enabled/experimental preferences and execution permission
+remain separate shared decisions. A disabled control can explain a restriction;
+it cannot grant permission. Browser/extension restrictions must still be enforced
+behind the UI, including when a request is crafted directly.
+
+Desktop and mobile share behavior, not fixed pixel dimensions. Each renderer must
+adapt layout to available space, support desktop window resizing and preserve
+mobile usability. Screen markup, accessibility and platform integration still
+require work and verification per renderer; changing the shared core does not
+automatically implement a missing screen in React, Leptos, Dioxus or Slint.
+
+For every connected feature change:
+
+1. Implement and check the shared backend and durable state first.
+2. Update typed adapters and the applicable GUI/CLI consumers; preserve existing
+   consumers or explicitly record their remaining integration gaps.
+3. Check equivalent inputs, refusal cases, network switches and restart/resume
+   through the real interfaces, then verify affected platform packages.
+4. Record evidence and gaps in `docs/pr63-requirement-ledger.md`. Component tests,
+   headless renderer proofs, live workflows and packaged-device tests are distinct;
+   none establishes all-renderer parity by itself.
+
+### CLI interaction contract
+
+Keep `optn wallet` as the persistent human wallet prompt, one-shot commands for
+individual operations, and `optn wallet --stdio` for private structured automation.
+All three use shared Rust behavior. A visual TUI and line-editor dependency are
+optional future UX work, not prerequisites for #75. Do not create a second wallet
+adapter trait, key store or signing implementation for a new terminal presentation.
+
+Passwords use hidden prompts or private input, never command arguments or saved
+command history. Persistent sessions still need backend auto-lock and explicit
+sensitive-operation authorization; an interactive prompt is not a security sandbox.
+
+Inside the wallet prompt, `network status` lists the shared configuration and
+`network select <id> --protocol <protocol>` selects an existing source. Advanced
+`network configure <JSON>` accepts the typed selection object; one-shot
+`optn network configure <file>` reads it from a file. The private stdio equivalent
+uses `{"network":{"op":"status"}}`, or `select`/`configure` operations with their
+corresponding fields. Source edits invalidate retained sync freshness before saving;
+the holder must sync again before freshness-dependent spending can proceed.
+
+### Security boundaries are not framework guarantees
+
+Keep ordinary wallet operations behind typed backend actions; never add raw-key
+fields to general UI state or transport responses. Any recovery/export operation
+needs its own explicit authorization and narrowly scoped secret handling.
+Native storage providers and browser storage have different trust boundaries.
+
+WASM is not a secret vault against compromised host JavaScript: imported/exported
+linear memory can be accessible to that host. Native rendering does not make a
+wallet immune to exploits. `zeroize` clears memory; it does not encrypt it.
+Review the runtime, adapters, IPC validation, dependencies, storage and packages
+as well as cryptography. Do not infer security from renderer choice alone.
 
 ## Historical product contract
 
@@ -260,7 +370,7 @@ Wallet, transaction, crypto, protocol, and application-state logic remain unchan
 4. Define OS capabilities and provider metadata in `optn-platform`.
 5. Keep shell/native implementations behind providers.
 6. Select provider dependencies per capability rather than per shell.
-7. Migrate React screens to the Rust renderer incrementally.
+7. Wire screens to shared Rust behavior incrementally; retain React as an interface option.
 8. Prove Tauri Android/iOS parity before removing Capacitor.
 9. Prefer mature pure-Rust capability providers where they improve portability.
 10. Use shell plugins or thin native FFI where pure-Rust support is not production-ready.

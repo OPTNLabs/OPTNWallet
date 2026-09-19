@@ -92,6 +92,12 @@ pub enum ScanFloor {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UndecidableReason {
     NothingVerified,
+    /// The stored host creation anchor conflicts with the current verified
+    /// chain view. It must never be used as a scan floor after this result.
+    CreationAnchorMismatch,
+    /// The view is deeper than the creation anchor but has not supplied a
+    /// historical proof for that exact block yet.
+    CreationAnchorNotReauthenticated,
     /// Anchors exist but their medians have not been re-derived from
     /// authenticated headers since restore. The caller re-authenticates them
     /// and asks again rather than scanning on a value it cannot vouch for.
@@ -151,6 +157,12 @@ pub struct WalletRestoreState {
     pub manual_rescan: Option<ManualRescan>,
 }
 
+impl Default for WalletRestoreState {
+    fn default() -> Self {
+        Self::new(WalletBirthday::Unknown)
+    }
+}
+
 impl WalletRestoreState {
     pub const fn new(birthday: WalletBirthday) -> Self {
         Self {
@@ -192,6 +204,24 @@ impl WalletRestoreState {
         self.manual_rescan = None;
     }
 
+    /// Replace user supplied provenance.
+    ///
+    /// `CreatedAt` is intentionally not constructible through this method;
+    /// host creation proof is a separate authenticated operation. A changed
+    /// imported hint invalidates the accepted scan progress so the
+    /// next sync cannot present history proved under the old hint as current.
+    pub fn set_birthday(&mut self, birthday: WalletBirthday) -> Result<bool, &'static str> {
+        if matches!(&birthday, WalletBirthday::CreatedAt(_)) {
+            return Err("created-wallet birthday requires a host-authenticated anchor");
+        }
+        if self.birthday == birthday {
+            return Ok(false);
+        }
+        self.birthday = birthday;
+        self.scanned_through = None;
+        Ok(true)
+    }
+
     /// Where the birthday alone says a scan should start.
     ///
     /// `justified_lower_bound` is the caller's, with its justification. There
@@ -205,8 +235,12 @@ impl WalletRestoreState {
         justified_lower_bound: Option<&JustifiedLowerBound>,
     ) -> ScanFloor {
         match &self.birthday {
-            WalletBirthday::CreatedAt(anchor) => ScanFloor::Complete {
-                from_height: anchor.height,
+            WalletBirthday::CreatedAt(anchor) => match self.creation_anchor_still_holds(view) {
+                Some(true) => ScanFloor::Complete {
+                    from_height: anchor.height,
+                },
+                Some(false) => ScanFloor::Undecidable(UndecidableReason::CreationAnchorMismatch),
+                None => ScanFloor::Undecidable(UndecidableReason::CreationAnchorNotReauthenticated),
             },
             WalletBirthday::ImportedAtHeight { height } => ScanFloor::Complete {
                 from_height: *height,
@@ -396,15 +430,19 @@ mod tests {
     #[test]
     fn a_wallet_created_here_covers_everything_from_its_anchor() {
         let (view, headers) = view_with(&rising(40), 4);
+        let (tip_height, tip_hash) = view.tip().expect("a tip");
         let anchor = CreationAnchor {
-            height: 30,
-            block_hash: sha256d(&headers[30].0),
+            height: tip_height,
+            block_hash: tip_hash,
         };
         let state = WalletRestoreState::new(WalletBirthday::CreatedAt(anchor));
         assert_eq!(
             state.scan_floor(&view, 0, None),
-            ScanFloor::Complete { from_height: 30 }
+            ScanFloor::Complete {
+                from_height: tip_height
+            }
         );
+        let _ = headers;
     }
 
     #[test]
@@ -474,6 +512,10 @@ mod tests {
             block_hash: sha256d(&headers[0].0),
         }));
         assert_eq!(stale.creation_anchor_still_holds(&view), Some(false));
+        assert_eq!(
+            stale.scan_floor(&view, 0, None),
+            ScanFloor::Undecidable(UndecidableReason::CreationAnchorMismatch)
+        );
 
         // Below the tip the view alone cannot say; that needs a proof.
         let deep = WalletRestoreState::new(WalletBirthday::CreatedAt(CreationAnchor {
@@ -487,6 +529,11 @@ mod tests {
             WalletRestoreState::new(WalletBirthday::Unknown).creation_anchor_still_holds(&view),
             None
         );
+
+        assert!(matches!(
+            deep.scan_floor(&view, 0, None),
+            ScanFloor::Undecidable(UndecidableReason::CreationAnchorNotReauthenticated)
+        ));
     }
 
     #[test]
@@ -504,6 +551,40 @@ mod tests {
 
         state.invalidate_from(0);
         assert_eq!(state.scanned_through, None);
+    }
+
+    #[test]
+    fn imported_birthday_correction_invalidates_accepted_progress() {
+        let mut state = WalletRestoreState::new(WalletBirthday::Unknown);
+        state.record_scanned_through(900);
+        state.request_rescan_from(700);
+        assert!(state
+            .set_birthday(WalletBirthday::ImportedAtHeight { height: 0 })
+            .expect("user hint is accepted"));
+        assert_eq!(state.scanned_through, None);
+        assert_eq!(
+            state.manual_rescan,
+            Some(ManualRescan {
+                from_height: 700,
+                previous_scanned_through: Some(900)
+            })
+        );
+        assert!(!state
+            .set_birthday(WalletBirthday::ImportedAtHeight { height: 0 })
+            .expect("same hint is a no-op"));
+    }
+
+    #[test]
+    fn host_creation_anchor_cannot_be_supplied_as_imported_birthday() {
+        let mut state = WalletRestoreState::default();
+        let error = state
+            .set_birthday(WalletBirthday::CreatedAt(CreationAnchor {
+                height: 0,
+                block_hash: [1; 32],
+            }))
+            .expect_err("creation provenance needs host authentication");
+        assert!(error.contains("host-authenticated"));
+        assert_eq!(state, WalletRestoreState::default());
     }
 
     #[test]

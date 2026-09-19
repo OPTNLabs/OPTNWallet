@@ -33,25 +33,258 @@ fn password(prompt: &str) -> Result<SecretText> {
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum Input {
-    Security { request: Request },
-    Action { action: WireAction },
-    Chain { chain: ChainCommand },
+    View {
+        view: WalletView,
+    },
+    Network {
+        network: NetworkCommand,
+    },
+    Airgap {
+        airgap: optn_transport::AirgapRequest,
+    },
+    Security {
+        request: Request,
+    },
+    Action {
+        action: WireAction,
+    },
+    Chain {
+        chain: ChainCommand,
+    },
 }
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum WalletView {
+    Assets,
+    Nfts,
+}
+
+fn wallet_view_reply(state: &AppState, view: WalletView) -> Value {
+    if state.wallet.is_none() {
+        return json!({"ok":false,"error":"Open a wallet before viewing assets."});
+    }
+    let mut displayed = state.clone();
+    displayed.route = match view {
+        WalletView::Assets => optn_app::AppRoute::Coins,
+        WalletView::Nfts => optn_app::AppRoute::Nfts,
+    };
+    let screen = optn_ui_text::draw(&displayed);
+    json!({"ok":true,"title":screen.title,"lines":screen.lines})
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+enum NetworkCommand {
+    Credentials {
+        request: optn_transport::chain_sources::RpcCredentialRequest,
+    },
+    Status {},
+    Policy {
+        preset: optn_runtime::network_config::ChainPolicyPreset,
+    },
+    Select {
+        source: String,
+        protocol: crate::ChainProtocol,
+    },
+    Configure {
+        selection: optn_transport::chain_sources::WireConnectionPolicy,
+    },
+    Add {
+        request: optn_transport::chain_sources::AddSourceRequest,
+    },
+    Disposition {
+        source: String,
+        disposition: String,
+    },
+    Remove {
+        source: String,
+    },
+}
+
+async fn network_reply(cli: &crate::Cli, runtime: &AppRuntime, command: NetworkCommand) -> Value {
+    let result = async {
+        let skill = match &command {
+            NetworkCommand::Status {} => "network",
+            NetworkCommand::Credentials { request } if !request.mutates() => "network",
+            NetworkCommand::Credentials { .. } => "network configure",
+            NetworkCommand::Select { .. } => "network select",
+            NetworkCommand::Configure { .. } => "network configure",
+            NetworkCommand::Policy { .. }
+            | NetworkCommand::Add { .. }
+            | NetworkCommand::Disposition { .. }
+            | NetworkCommand::Remove { .. } => "network configure",
+        };
+        crate::skills::enforce(crate::skills::Policy::from_env()?, skill)?;
+        if runtime.state().network != cli.network {
+            return Err(CliError::Usage(
+                "Wallet and source-settings networks differ.".into(),
+            ));
+        }
+        if match &command {
+            NetworkCommand::Status {} => false,
+            NetworkCommand::Credentials { request } => request.mutates(),
+            _ => true,
+        } {
+            // Invalidate before persistence: no prior spend/air-gap intent may
+            // survive a source change, even if its subsequent file write fails.
+            runtime
+                .invalidate_wallet_sync("Source settings changed; sync the wallet again.".into())
+                .await
+                .map_err(|error| CliError::Usage(error.to_string()))?;
+        }
+        match command {
+            NetworkCommand::Credentials { request } => {
+                let status = crate::network_settings::rpc_credentials(
+                    cli.network,
+                    cli.network_config_dir.as_deref(),
+                    request,
+                )
+                .await
+                .map_err(CliError::Usage)?;
+                return Ok(json!({"ok":true,"configured":status.configured}));
+            }
+            NetworkCommand::Status {} => {}
+            NetworkCommand::Policy { preset } => crate::network_settings::set_policy_preset(
+                cli.network,
+                cli.network_config_dir.as_deref(),
+                preset,
+            )
+            .map_err(CliError::Usage)?,
+            NetworkCommand::Select { source, protocol } => crate::network_settings::select_source(
+                cli.network,
+                cli.network_config_dir.as_deref(),
+                &source,
+                protocol.into(),
+            )
+            .map_err(CliError::Usage)?,
+            NetworkCommand::Configure { selection } => crate::network_settings::configure_sources(
+                cli.network,
+                cli.network_config_dir.as_deref(),
+                &selection,
+            )
+            .map_err(CliError::Usage)?,
+            NetworkCommand::Add { request } => crate::network_settings::add_source(
+                cli.network,
+                cli.network_config_dir.as_deref(),
+                &request,
+            )
+            .map_err(CliError::Usage)?,
+            NetworkCommand::Disposition {
+                source,
+                disposition,
+            } => crate::network_settings::set_source_disposition(
+                cli.network,
+                cli.network_config_dir.as_deref(),
+                &source,
+                &disposition,
+            )
+            .map_err(CliError::Usage)?,
+            NetworkCommand::Remove { source } => crate::network_settings::remove_source(
+                cli.network,
+                cli.network_config_dir.as_deref(),
+                &source,
+            )
+            .await
+            .map_err(CliError::Usage)?,
+        }
+        crate::shared_network_status(cli)
+    }
+    .await;
+    match result {
+        Ok(value) => value,
+        Err(error) => json!({"ok":false,"error":error.to_string()}),
+    }
+}
+
+fn network_prompt(argument: &str) -> Result<NetworkCommand> {
+    use clap::ValueEnum;
+    if let Some(json) = argument.strip_prefix("configure ") {
+        return serde_json::from_str(json)
+            .map(|selection| NetworkCommand::Configure { selection })
+            .map_err(|_| {
+                CliError::Usage("Use network configure followed by a selection JSON object.".into())
+            });
+    }
+    if let Some(json) = argument.strip_prefix("add ") {
+        return serde_json::from_str(json)
+            .map(|request| NetworkCommand::Add { request })
+            .map_err(|_| {
+                CliError::Usage(
+                    "Use network add followed by an AddSourceRequest JSON object.".into(),
+                )
+            });
+    }
+    let parts = crate::console::split(argument)?;
+    match parts.as_slice() {
+        [credentials, operation, source] if credentials == "credentials" => {
+            use optn_transport::chain_sources::RpcCredentialRequest;
+            let request = match operation.as_str() {
+                "status" => RpcCredentialRequest::Status { source:source.clone() },
+                "remove" => RpcCredentialRequest::Remove { source:source.clone() },
+                "set" => RpcCredentialRequest::Set { source:source.clone(), username:password("RPC username (hidden): ")?, password:password("RPC password: ")? },
+                _ => return Err(CliError::Usage("Use network credentials set|status|remove <source>.".into())),
+            };
+            Ok(NetworkCommand::Credentials { request })
+        }
+        [] => Ok(NetworkCommand::Status {}),
+        [status] if status == "status" => Ok(NetworkCommand::Status {}),
+        [policy, preset] if policy == "policy" => Ok(NetworkCommand::Policy {
+            preset: crate::network_settings::parse_policy_preset(preset).map_err(CliError::Usage)?,
+        }),
+        [select, source, flag, protocol] if select == "select" && flag == "--protocol" => {
+            Ok(NetworkCommand::Select { source: source.clone(), protocol: crate::ChainProtocol::from_str(protocol, false)
+                .map_err(|_| CliError::Usage("Use electrum, bip37, neutrino, node-rpc or node-events.".into()))? })
+        },
+        [remove, source] if remove == "remove" => Ok(NetworkCommand::Remove { source: source.clone() }),
+        [disposition, source, value] if disposition == "disposition" => Ok(NetworkCommand::Disposition {
+            source: source.clone(), disposition: value.clone(),
+        }),
+        _ => Err(CliError::Usage("Use network status, network credentials set|status|remove <source>, network policy <preset>, network select <id> --protocol <protocol>, network add <JSON>, network disposition <id> enabled|disabled|banned, network remove <id>, or network configure <JSON>.".into())),
+    }
+}
+
+fn birthday_prompt(argument: &str) -> Result<optn_transport::security::WalletBirthdayInput> {
+    use optn_transport::security::WalletBirthdayInput;
+    let parts = crate::console::split(argument)?;
+    match parts.as_slice() {
+        [kind] if kind == "unknown" => Ok(WalletBirthdayInput::Unknown),
+        [kind, value] if kind == "height" || kind == "time" => {
+            let value = value.parse::<u32>().map_err(|_| {
+                CliError::Usage("Birthday height or Unix time must be a nonnegative u32.".into())
+            })?;
+            Ok(if kind == "height" {
+                WalletBirthdayInput::Height { height: value }
+            } else {
+                WalletBirthdayInput::Time {
+                    requested_time: value,
+                }
+            })
+        }
+        _ => Err(CliError::Usage(
+            "Use birthday unknown, birthday height <block>, or birthday time <Unix seconds>."
+                .into(),
+        )),
+    }
+}
+
+const WALLET_HELP: &str = "Wallet commands: help, list, open <file>, import, watch, receive [--acknowledge-gap], sync, rescan <height>|clear, birthday unknown|height <block>|time <Unix seconds>, history, assets, nfts, network status, network credentials set|status|remove <source>, network policy <preset>, network select <id> --protocol <protocol>, network add <JSON>, network disposition <id> enabled|disabled|banned, network remove <id>, network configure <JSON>, airgap <request JSON>, password, autolock <minutes>, lock, authorize, reveal, quit";
 
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum ChainCommand {
     Sync,
+    Rescan { from_height: u32 },
     History,
 }
 
-async fn sync_wallet(cli: &crate::Cli, runtime: &AppRuntime) -> Result<()> {
+async fn sync_wallet(cli: &crate::Cli, runtime: &AppRuntime, floor: Option<u32>) -> Result<()> {
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(crate::timeout_seconds(cli)),
         async {
             let selection = crate::configured_chain(cli)?.ok_or_else(|| {
                 CliError::Usage(
-                    "Select a persisted shared source with network select --protocol before syncing; wallet sync cannot use a default or --host override.".into(),
+                    "Wallet sync requires the shared source policy; remove the --host, --port or --no-tls override and use network select --protocol to select a source.".into(),
                 )
             })?;
             let state = runtime.state();
@@ -63,18 +296,23 @@ async fn sync_wallet(cli: &crate::Cli, runtime: &AppRuntime) -> Result<()> {
             let xpub = state.wallet.as_ref()
                 .and_then(|wallet| wallet.account_xpub.clone())
                 .ok_or_else(|| CliError::Usage("Open a saved HD wallet before syncing.".into()))?;
-            let stack = optn_chain_native::build_native_chain_stack(
-                selection.catalog,
-                selection.policy,
-                &cli.network.to_string(),
-                &optn_chain_native::NativeChainSecrets::default(),
-            ).await;
-            let mut worker = optn_runtime::sync_worker::ProgressiveSyncWorker::new(Default::default());
-            let decision = runtime.sync_hd_wallet(
+            let worker = crate::hd_sync_worker(cli.network, &selection.policy)?;
+            if let Some(height) = floor {
+                runtime.request_wallet_rescan(height).await
+                    .map_err(|error| CliError::Network(error.to_string()))?;
+            }
+            let stack = crate::network_settings::build_stack(cli.network, cli.network_config_dir.as_deref(), selection).await;
+            let worker = worker.with_accepted_headers(stack.headers.clone());
+            // Resume the accumulator this wallet last had sealed. Without it
+            // every refresh re-verifies the chain from genesis, which on a
+            // long chain exceeds the deadline before any wallet work starts.
+            let mut worker = crate::seed_header_progress(runtime, cli.network, worker).await?;
+            let decision = runtime.sync_hd_wallet_from_floor(
                 &mut *stack.service.lock().await,
                 &mut worker,
                 xpub,
                 optn_runtime::hd_sync::HdSyncLimits::default(),
+                floor,
             ).await.map_err(|error| CliError::Network(error.to_string()))?;
             if decision != optn_runtime::reconciliation::ReconciliationDecision::Accepted {
                 return Err(CliError::Network("Wallet refresh was incomplete; retained history remains stale.".into()));
@@ -98,7 +336,23 @@ fn success_reply(state: &AppState, status: WalletSecurityStatus) -> Value {
         "wallet_sync": WireState::from(state).wallet_sync})
 }
 
+async fn airgap_reply(runtime: &AppRuntime, request: optn_transport::AirgapRequest) -> Value {
+    match runtime.airgap(request).await {
+        Ok(response) => json!({"ok": true, "airgap": response, "sent": false}),
+        Err(error) => json!({"ok": false, "error": message(error)}),
+    }
+}
+
 fn print_history(sync: &optn_app::WalletSyncView) {
+    if let Some(height) = sync.rescan_requested {
+        println!("Rescan requested from height {height}; previous observations retained.");
+    }
+    if let Some(coverage) = sync.scan_coverage {
+        println!("Scan starts at height {}.", coverage.from_height);
+        if let Some(height) = coverage.skipped_below {
+            println!("History below {height} was not scanned; totals may omit earlier funds.");
+        }
+    }
     println!(
         "Source: {}  Evidence: {}",
         sync.source.as_deref().unwrap_or("unknown"),
@@ -143,9 +397,16 @@ async fn execute(
     input: Input,
 ) -> std::result::Result<WalletSecurityStatus, TransportError> {
     match input {
+        Input::Airgap { .. } | Input::Network { .. } | Input::View { .. } => {
+            Err(TransportError::Unsupported)
+        }
         Input::Chain { chain } => {
-            if matches!(chain, ChainCommand::Sync) {
-                sync_wallet(cli, runtime)
+            if !matches!(chain, ChainCommand::History) {
+                let floor = match chain {
+                    ChainCommand::Rescan { from_height } => Some(from_height),
+                    _ => None,
+                };
+                sync_wallet(cli, runtime, floor)
                     .await
                     .map_err(|error| TransportError::Other(error.to_string()))?;
             }
@@ -210,6 +471,9 @@ pub async fn run(directory: Option<PathBuf>, stdio: bool, cli: &crate::Cli) -> R
         let mut input = io::stdin().lock();
         while let Some(line) = private_line(&mut input, 262_144)? {
             let output = match serde_json::from_str::<Input>(&line) {
+                Ok(Input::View { view }) => wallet_view_reply(&runtime.state(), view),
+                Ok(Input::Airgap { airgap }) => airgap_reply(&runtime, airgap).await,
+                Ok(Input::Network { network }) => network_reply(cli, &runtime, network).await,
                 Ok(input) => match execute(cli, &runtime, input).await {
                     Ok(status) => success_reply(&runtime.state(), status),
                     Err(error) => json!({"ok": false, "error": message(error)}),
@@ -219,7 +483,7 @@ pub async fn run(directory: Option<PathBuf>, stdio: bool, cli: &crate::Cli) -> R
             println!("{output}");
         }
     } else {
-        eprintln!("Wallet commands: list, open <file>, import, receive [--acknowledge-gap], sync, history, password, autolock <minutes>, lock, authorize, reveal, quit");
+        eprintln!("{WALLET_HELP}");
         loop {
             eprint!("wallet> ");
             io::stderr().flush().ok();
@@ -239,12 +503,58 @@ pub async fn run(directory: Option<PathBuf>, stdio: bool, cli: &crate::Cli) -> R
                 .map_err(|error| CliError::Usage(message(error)))?;
             let request = match command {
                 "quit" | "exit" => break,
+                "help" => {
+                    eprintln!("{WALLET_HELP}");
+                    continue;
+                }
+                "network" => {
+                    match network_prompt(argument) {
+                        Ok(command) => println!("{}", network_reply(cli, &runtime, command).await),
+                        Err(error) => eprintln!("{error}"),
+                    }
+                    continue;
+                }
                 "list" => Some(Request::Status),
-                "sync" | "history" => {
-                    let chain = if command == "sync" {
-                        ChainCommand::Sync
+                "assets" | "nfts" => {
+                    let view = if command == "assets" {
+                        WalletView::Assets
                     } else {
-                        ChainCommand::History
+                        WalletView::Nfts
+                    };
+                    println!("{}", wallet_view_reply(&runtime.state(), view));
+                    continue;
+                }
+                "birthday" => match birthday_prompt(argument) {
+                    Ok(birthday) => Some(Request::SetBirthday {
+                        epoch: status.epoch,
+                        birthday,
+                    }),
+                    Err(error) => {
+                        eprintln!("{error}");
+                        continue;
+                    }
+                },
+                "airgap" => {
+                    match serde_json::from_str::<optn_transport::AirgapRequest>(argument) {
+                        Ok(request) => println!("{}", airgap_reply(&runtime, request).await),
+                        Err(_) => eprintln!("Use airgap followed by a prepare, finalize or cancel request JSON. Finalize verifies only; it never sends."),
+                    }
+                    continue;
+                }
+                "rescan" if argument == "clear" => Some(Request::ClearRescan {
+                    epoch: status.epoch,
+                }),
+                "sync" | "history" | "rescan" => {
+                    let chain = match command {
+                        "sync" => ChainCommand::Sync,
+                        "rescan" => match argument.parse() {
+                            Ok(from_height) => ChainCommand::Rescan { from_height },
+                            Err(_) => {
+                                eprintln!("Use rescan <height>; zero requests full history.");
+                                continue;
+                            }
+                        },
+                        _ => ChainCommand::History,
                     };
                     match execute(cli, &runtime, Input::Chain { chain }).await {
                         Ok(_) => print_history(&runtime.state().wallet_sync),
@@ -266,28 +576,56 @@ pub async fn run(directory: Option<PathBuf>, stdio: bool, cli: &crate::Cli) -> R
                     handle: argument.into(),
                     password: password("Wallet password (empty if none): ")?,
                 }),
-                "import" => {
+                "import" | "watch" => {
                     eprint!("Wallet name: ");
                     io::stderr().flush().ok();
                     let mut name = String::new();
                     io::stdin()
                         .read_line(&mut name)
                         .map_err(|_| CliError::Usage("Could not read name.".into()))?;
-                    let mnemonic = password("Recovery phrase: ")?;
+                    let material = password(if command == "watch" {
+                        "Account xPub: "
+                    } else {
+                        "Recovery phrase: "
+                    })?;
                     let new = password("New password (empty for none): ")?;
                     let confirmation = password("Confirm new password: ")?;
-                    Some(Request::Create {
-                        name: name.trim().into(),
-                        mnemonic,
-                        bip39_passphrase: SecretText::default(),
-                        password: new,
-                        confirmation,
-                        network: runtime.state().network.to_string(),
-                        account_path: optn_core::hd::AccountPath::default_for(
+                    if command == "watch" {
+                        let default_path = optn_core::watch_only::account_preview(
                             runtime.state().network,
-                        )
-                        .path(),
-                    })
+                            material.expose(),
+                        )?
+                        .account_path;
+                        let account_path =
+                            password(&format!("Account path (empty for {default_path}): "))?;
+                        let fingerprint = password("Master fingerprint (optional): ")?;
+                        Some(Request::ImportWatchOnly {
+                            name: name.trim().into(),
+                            account_xpub: material,
+                            master_fingerprint: fingerprint.expose().trim().into(),
+                            password: new,
+                            confirmation,
+                            network: runtime.state().network.to_string(),
+                            account_path: if account_path.expose().trim().is_empty() {
+                                default_path
+                            } else {
+                                account_path.expose().trim().into()
+                            },
+                        })
+                    } else {
+                        Some(Request::Create {
+                            name: name.trim().into(),
+                            mnemonic: material,
+                            bip39_passphrase: SecretText::default(),
+                            password: new,
+                            confirmation,
+                            network: runtime.state().network.to_string(),
+                            account_path: optn_core::hd::AccountPath::default_for(
+                                runtime.state().network,
+                            )
+                            .path(),
+                        })
+                    }
                 }
                 "password" => Some(Request::ChangePassword {
                     current: if status.has_password == Some(false) {
@@ -492,13 +830,7 @@ pub async fn read_managed_wallet(cli: &crate::Cli) -> Result<optn_core::hd::Wall
             *account,
         )?,
         crate::Command::Rpa {
-            action:
-                crate::RpaCommand::Code { account }
-                | crate::RpaCommand::Scan { account, .. }
-                | crate::RpaCommand::Discover { account, .. },
-        } => optn_core::hd::AccountPath::new(cli.network.default_coin_type(), *account)?,
-        crate::Command::Rpa {
-            action: crate::RpaCommand::Sweep { account, .. },
+            action: crate::RpaCommand::Code { account } | crate::RpaCommand::Scan { account, .. },
         } => optn_core::hd::AccountPath::new(cli.network.default_coin_type(), *account)?,
         crate::Command::Rescan {
             account_path: Some(path),
@@ -516,9 +848,7 @@ pub async fn read_managed_wallet(cli: &crate::Cli) -> Result<optn_core::hd::Wall
     let reads_rpa = matches!(
         cli.command,
         crate::Command::Rpa {
-            action: crate::RpaCommand::Code { .. }
-                | crate::RpaCommand::Scan { .. }
-                | crate::RpaCommand::Discover { .. },
+            action: crate::RpaCommand::Code { .. } | crate::RpaCommand::Scan { .. },
         }
     );
     let scope = if !reads_rpa
@@ -552,8 +882,64 @@ pub async fn read_managed_wallet(cli: &crate::Cli) -> Result<optn_core::hd::Wall
 mod tests {
     use super::*;
 
+    #[test]
+    fn birthday_prompt_accepts_import_hints_but_not_creation_claims() {
+        use optn_transport::security::WalletBirthdayInput;
+        assert_eq!(
+            birthday_prompt("unknown").unwrap(),
+            WalletBirthdayInput::Unknown
+        );
+        assert_eq!(
+            birthday_prompt("height 0").unwrap(),
+            WalletBirthdayInput::Height { height: 0 }
+        );
+        assert_eq!(
+            birthday_prompt("time 172800").unwrap(),
+            WalletBirthdayInput::Time {
+                requested_time: 172800
+            }
+        );
+        for invalid in [
+            "height -1",
+            "height 4294967296",
+            "time",
+            "unknown extra",
+            "created_at 1",
+            "height 1 extra",
+        ] {
+            assert!(birthday_prompt(invalid).is_err(), "accepted {invalid}");
+        }
+    }
+
     #[tokio::test]
-    async fn console_history_preserves_retained_projection_and_sync_requires_selection() {
+    async fn source_edit_invalidates_freshness_before_persisting() {
+        use clap::Parser;
+        let directory = tempfile::tempdir().unwrap();
+        let mut cli =
+            crate::Cli::try_parse_from(["optn", "--network", "chipnet", "wallet"]).unwrap();
+        cli.network_config_dir = Some(directory.path().to_path_buf());
+        let runtime = AppRuntime::spawn(AppState {
+            network: optn_app::Network::Chipnet,
+            wallet_sync: optn_app::WalletSyncView {
+                history_fresh: true,
+                utxos_fresh: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        assert!(runtime.state().wallet_sync.utxos_fresh);
+        let command = network_prompt("policy own-infrastructure").unwrap();
+        let reply = network_reply(&cli, &runtime, command).await;
+        assert_eq!(reply["ok"], true);
+        assert!(!runtime.state().wallet_sync.history_fresh);
+        assert!(!runtime.state().wallet_sync.utxos_fresh);
+        assert!(directory.path().join("network-chipnet.json").exists());
+        assert!(network_prompt("select node --protocol bogus").is_err());
+        assert!(network_prompt("select node --protocol bip37 unexpected").is_err());
+    }
+
+    #[tokio::test]
+    async fn console_history_preserves_retained_projection_and_sync_requires_open_wallet() {
         use clap::Parser;
         let directory = tempfile::tempdir().unwrap();
         let mut cli =
@@ -581,7 +967,7 @@ mod tests {
         assert_eq!(reply["wallet_sync"]["source"], Value::Null);
         let sync = serde_json::from_str(r#"{"chain":"sync"}"#).unwrap();
         let error = execute(&cli, &runtime, sync).await.unwrap_err();
-        assert!(message(error).contains("persisted shared source"));
+        assert!(message(error).contains("Open a saved HD wallet"));
         assert!(!runtime.state().wallet_sync.history_fresh);
         assert!(!runtime.state().wallet_sync.utxos_fresh);
 

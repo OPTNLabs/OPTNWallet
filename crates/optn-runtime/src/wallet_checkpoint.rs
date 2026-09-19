@@ -3,13 +3,14 @@
 //! A checkpoint never restores unlock authority, spend approval, or freshness.
 
 use crate::{
-    chain::{Evidence, Hash32, SourceId},
+    chain::{CheckpointProvenance, Evidence, Hash32, HeaderCheckpoint, SourceId},
     chain_service::{ChainTip, ObservedTransaction},
     hd_sync::{HdAccountScan, HdSyncLimits, MAX_HD_BRANCH_ADDRESSES},
     sync_worker::WalletNetworkSnapshot,
+    wallet_birthday::{WalletBirthday, WalletRestoreState},
     wallet_sync::WalletReconciliation,
 };
-use optn_app::AppState;
+use optn_app::{AppState, IdentityStatus, TokenIdentity};
 use optn_core::{
     cashaddr::Address,
     coins::{CoinSet, FreezeReason, Outpoint},
@@ -20,13 +21,21 @@ use optn_core::{
     watch_only::HdAddressAllocation,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 /// Bounded before both decryption and JSON decoding. No secrets are stored, but
 /// the public account and history are identifying and must remain encrypted.
 pub const MAX_CHECKPOINT_BYTES: usize = 64 * 1024 * 1024;
-const FORMAT: &str = "optn-hd-restart-v2";
+const FORMAT: &str = "optn-hd-restart-v3";
+const ALLOCATION_FORMAT: &str = "optn-hd-restart-v2";
 const LEGACY_FORMAT: &str = "optn-hd-restart-v1";
+/// A checkpoint is wallet-private, but it is still decoded before its content
+/// is projected. Keep cached presentation metadata bounded independently of
+/// the much larger transaction-history budget.
+const MAX_CACHED_TOKEN_IDENTITIES: usize = 4_096;
+const MAX_TOKEN_IDENTITY_NAME_BYTES: usize = 512;
+const MAX_TOKEN_IDENTITY_TICKER_BYTES: usize = 64;
+const TOKEN_CATEGORY_HEX_BYTES: usize = 64;
 
 /// Native persistence port. The runtime supplies a private-session key and an
 /// opaque account identifier; adapters supply atomic ciphertext storage only.
@@ -54,13 +63,71 @@ pub struct WalletCheckpoint {
     account: AccountPath,
     pub(crate) account_xpub: String,
     pub(crate) allocation: Option<HdAddressAllocation>,
+    pub(crate) scan_coverage: Option<optn_app::ScanCoverageView>,
+    pub(crate) rescan_requested: Option<u32>,
+    /// Authenticated, encrypted wallet-origin metadata. Legacy checkpoints
+    /// deserialize this as `Unknown`.
+    pub(crate) restore_state: WalletRestoreState,
     pub(crate) state: WalletReconciliation,
     pub(crate) coins: CoinSet,
+    /// Cached chain-authenticated presentation only. It is deliberately
+    /// downgraded before a restored checkpoint reaches application state.
+    token_identities: BTreeMap<String, TokenIdentity>,
+    pub(crate) header_progress: Option<StoredHeaderProgress>,
 }
 
 impl std::fmt::Debug for WalletCheckpoint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("WalletCheckpoint(<private wallet metadata>)")
+    }
+}
+
+/// Verified header progress, carried inside the sealed checkpoint.
+///
+/// A restored view is only worth anything against a commitment the holder can
+/// trust, and a file may not assert its own: an attacker who can rewrite the
+/// blob can rewrite a commitment beside it and the two will agree. So both
+/// travel inside the AEAD container the host already authenticates, and
+/// `VerifiedHeaderView::restore` takes its trusted value from the same sealed
+/// record rather than from a second file that could be edited independently.
+///
+/// Public chain material either way -- headers are not secret. What the seal
+/// buys is integrity, which is the only property that matters here.
+#[derive(Clone)]
+pub struct StoredHeaderProgress {
+    /// `VerifiedHeaderView::encode` output.
+    pub view: String,
+    pub trusted: HeaderCheckpoint,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredHeaderView {
+    view: String,
+    height: u32,
+    commitment: Hash32,
+    provenance: String,
+}
+
+fn provenance_name(provenance: &CheckpointProvenance) -> &'static str {
+    match provenance {
+        CheckpointProvenance::SelfDerived => "self-derived",
+        CheckpointProvenance::ShippedReviewed => "shipped-reviewed",
+        CheckpointProvenance::SampledIndependentSources => "sampled-independent-sources",
+        CheckpointProvenance::UserProvided => "user-provided",
+    }
+}
+
+/// Unknown provenance is refused rather than downgraded. Reading a record
+/// written by a newer build as "self-derived" would silently weaken the claim
+/// the holder's own wallet made about where its trust came from.
+fn provenance_from_name(name: &str) -> Result<CheckpointProvenance, String> {
+    match name {
+        "self-derived" => Ok(CheckpointProvenance::SelfDerived),
+        "shipped-reviewed" => Ok(CheckpointProvenance::ShippedReviewed),
+        "sampled-independent-sources" => Ok(CheckpointProvenance::SampledIndependentSources),
+        "user-provided" => Ok(CheckpointProvenance::UserProvided),
+        other => Err(format!("unknown header checkpoint provenance '{other}'")),
     }
 }
 
@@ -79,6 +146,61 @@ struct StoredCheckpoint {
     annotations: Vec<StoredAnnotation>,
     #[serde(default)]
     allocation: Option<HdAddressAllocation>,
+    #[serde(default)]
+    scan_coverage: Option<(u32, Option<u32>, bool)>,
+    #[serde(default)]
+    rescan_requested: Option<u32>,
+    /// Absent in checkpoints written before durable wallet birthday support;
+    /// absence is deliberately the conservative `Unknown` value.
+    #[serde(default)]
+    restore_state: WalletRestoreState,
+    /// Absent in records written before header progress was persisted, which
+    /// simply resume from the shipped genesis anchor as they always did.
+    #[serde(default)]
+    header_view: Option<StoredHeaderView>,
+    /// Older authenticated checkpoints did not carry token presentation.
+    #[serde(default)]
+    token_identities: BTreeMap<String, StoredTokenIdentity>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredTokenIdentity {
+    name: String,
+    ticker: Option<String>,
+    decimals: u8,
+    status: StoredIdentityStatus,
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum StoredIdentityStatus {
+    Verified,
+    Stale,
+    Unpublished,
+    Unresolved,
+}
+
+impl From<IdentityStatus> for StoredIdentityStatus {
+    fn from(status: IdentityStatus) -> Self {
+        match status {
+            IdentityStatus::Verified => Self::Verified,
+            IdentityStatus::Stale => Self::Stale,
+            IdentityStatus::Unpublished => Self::Unpublished,
+            IdentityStatus::Unresolved => Self::Unresolved,
+        }
+    }
+}
+
+impl From<StoredIdentityStatus> for IdentityStatus {
+    fn from(status: StoredIdentityStatus) -> Self {
+        match status {
+            StoredIdentityStatus::Verified => Self::Verified,
+            StoredIdentityStatus::Stale => Self::Stale,
+            StoredIdentityStatus::Unpublished => Self::Unpublished,
+            StoredIdentityStatus::Unresolved => Self::Unresolved,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -96,6 +218,100 @@ struct StoredAnnotation {
     label: Option<String>,
     freeze: Option<FreezeReason>,
     fuse_depth: u32,
+}
+
+fn validate_scan_coverage(
+    coverage: Option<optn_app::ScanCoverageView>,
+    tip: Option<(u32, Hash32)>,
+) -> Result<(), String> {
+    if coverage.is_some_and(|coverage| {
+        tip.is_none_or(|(height, _)| coverage.from_height > height)
+            || coverage
+                .skipped_below
+                .is_some_and(|skipped| skipped == 0 || skipped > coverage.from_height)
+            || (coverage.chosen_by_holder
+                && coverage.from_height > 0
+                && coverage.skipped_below != Some(coverage.from_height))
+    }) {
+        return Err("invalid stored wallet scan coverage".into());
+    }
+    Ok(())
+}
+
+fn category_key_is_valid(category: &str) -> bool {
+    category.len() == TOKEN_CATEGORY_HEX_BYTES
+        && category
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+fn identity_is_cacheable(category: &str, identity: &TokenIdentity) -> bool {
+    category_key_is_valid(category)
+        && !identity.name.is_empty()
+        && identity.name.len() <= MAX_TOKEN_IDENTITY_NAME_BYTES
+        && identity
+            .ticker
+            .as_ref()
+            .is_none_or(|ticker| ticker.len() <= MAX_TOKEN_IDENTITY_TICKER_BYTES)
+}
+
+fn stored_identity_is_cacheable(category: &str, identity: &StoredTokenIdentity) -> bool {
+    category_key_is_valid(category)
+        && !identity.name.is_empty()
+        && identity.name.len() <= MAX_TOKEN_IDENTITY_NAME_BYTES
+        && identity
+            .ticker
+            .as_ref()
+            .is_none_or(|ticker| ticker.len() <= MAX_TOKEN_IDENTITY_TICKER_BYTES)
+}
+
+fn cacheable_token_identities(
+    identities: &BTreeMap<String, TokenIdentity>,
+) -> BTreeMap<String, TokenIdentity> {
+    identities
+        .iter()
+        .filter(|(category, identity)| identity_is_cacheable(category, identity))
+        .take(MAX_CACHED_TOKEN_IDENTITIES)
+        .map(|(category, identity)| (category.clone(), identity.clone()))
+        .collect()
+}
+
+fn decode_token_identities(
+    stored: &BTreeMap<String, StoredTokenIdentity>,
+) -> Result<BTreeMap<String, TokenIdentity>, String> {
+    if stored.len() > MAX_CACHED_TOKEN_IDENTITIES {
+        return Err("too many cached token identities in wallet checkpoint".into());
+    }
+    stored
+        .iter()
+        .map(|(category, identity)| {
+            if !stored_identity_is_cacheable(category, identity) {
+                return Err("invalid cached token identity in wallet checkpoint".into());
+            }
+            Ok((
+                category.clone(),
+                TokenIdentity {
+                    name: identity.name.clone(),
+                    ticker: identity.ticker.clone(),
+                    decimals: identity.decimals,
+                    status: identity.status.into(),
+                },
+            ))
+        })
+        .collect()
+}
+
+fn validate_restore_state(
+    restore_state: &WalletRestoreState,
+    tip: Option<(u32, Hash32)>,
+) -> Result<(), String> {
+    if restore_state
+        .scanned_through
+        .is_some_and(|scanned| tip.is_some_and(|(height, _)| scanned > height))
+    {
+        return Err("stored wallet restore progress exceeds its chain tip".into());
+    }
+    Ok(())
 }
 
 pub(crate) fn update_receive_address(app: &mut AppState) -> Result<(), String> {
@@ -153,7 +369,11 @@ pub(crate) fn allocation_history(state: &WalletReconciliation) -> [Option<u32>; 
 }
 
 impl WalletCheckpoint {
-    pub(crate) fn capture(app: &AppState, state: &WalletReconciliation) -> Result<Self, String> {
+    pub(crate) fn capture(
+        app: &AppState,
+        state: &WalletReconciliation,
+        restore_state: &WalletRestoreState,
+    ) -> Result<Self, String> {
         let wallet = app
             .wallet
             .as_ref()
@@ -172,8 +392,16 @@ impl WalletCheckpoint {
                 .ok_or("the wallet has no HD account")?
                 .clone(),
             allocation: app.hd_addresses.clone(),
+            scan_coverage: app.wallet_sync.scan_coverage,
+            rescan_requested: app.wallet_sync.rescan_requested,
+            restore_state: restore_state.clone(),
             state: state.clone(),
             coins: app.coins.clone(),
+            token_identities: cacheable_token_identities(&app.token_identities),
+            // The view lives on the sync worker, which the host owns; it is
+            // attached with `with_header_progress` rather than read from
+            // application state, which never holds it.
+            header_progress: None,
         };
         if state.authoritative.is_some() && book.is_none() {
             return Err("an HD checkpoint requires an account-wide snapshot".into());
@@ -187,7 +415,81 @@ impl WalletCheckpoint {
         Ok(checkpoint)
     }
 
+    /// Attach verified header progress to a checkpoint about to be sealed.
+    ///
+    /// Called by the host, which owns both the sync worker the view comes from
+    /// and the storage the checkpoint goes to. The runtime never reads it back
+    /// out of application state, because it is not there.
+    pub fn with_header_progress(
+        mut self,
+        view: &crate::header_view::VerifiedHeaderView,
+    ) -> Result<Self, String> {
+        let trusted = view.checkpoint();
+        let encoded = view.encode().map_err(|error| format!("{error:?}"))?;
+        self.header_progress = Some(StoredHeaderProgress {
+            view: encoded,
+            trusted,
+        });
+        Ok(self)
+    }
+
+    /// The same, from progress the runtime already holds encoded.
+    pub fn with_stored_header_progress(
+        mut self,
+        progress: StoredHeaderProgress,
+    ) -> Result<Self, String> {
+        self.header_progress = Some(progress);
+        Ok(self)
+    }
+
+    /// The header progress a restored checkpoint carries, if it has any.
+    ///
+    /// Absent on records written before this existed, and on wallets that have
+    /// never completed a header pass. Both resume from the shipped genesis
+    /// anchor, which is what happened for every record until now.
+    pub fn header_progress(&self) -> Option<&StoredHeaderProgress> {
+        self.header_progress.as_ref()
+    }
+
+    /// The encrypted wallet-origin state restored with this checkpoint.
+    pub fn restore_state(&self) -> &WalletRestoreState {
+        &self.restore_state
+    }
+
+    /// Cached registry presentation cannot establish the current authchain on
+    /// a later run. Keep a previously verified name visible as last-known;
+    /// any absence/unpublished claim must be resolved again from live sources.
+    pub(crate) fn restored_token_identities(&self) -> BTreeMap<String, TokenIdentity> {
+        self.token_identities
+            .iter()
+            .map(|(category, identity)| {
+                let mut identity = identity.clone();
+                identity.status = match identity.status {
+                    IdentityStatus::Verified | IdentityStatus::Stale => IdentityStatus::Stale,
+                    IdentityStatus::Unpublished | IdentityStatus::Unresolved => {
+                        IdentityStatus::Unresolved
+                    }
+                };
+                (category.clone(), identity)
+            })
+            .collect()
+    }
+
     pub(crate) fn validate_wallet(&self, app: &AppState) -> Result<(), String> {
+        validate_scan_coverage(
+            self.scan_coverage,
+            self.state
+                .authoritative
+                .as_ref()
+                .and_then(|snapshot| snapshot.chain_tip),
+        )?;
+        validate_restore_state(
+            &self.restore_state,
+            self.state
+                .authoritative
+                .as_ref()
+                .and_then(|snapshot| snapshot.chain_tip),
+        )?;
         let wallet = app
             .wallet
             .as_ref()
@@ -256,6 +558,14 @@ impl WalletCheckpoint {
     /// nonce with OS randomness for each write; UI/transport never chooses one.
     pub fn seal(&self, key: &PackKey, nonce: &[u8; NONCE_LEN]) -> Result<Vec<u8>, String> {
         let snapshot = self.state.authoritative.as_ref();
+        validate_scan_coverage(
+            self.scan_coverage,
+            snapshot.and_then(|snapshot| snapshot.chain_tip),
+        )?;
+        validate_restore_state(
+            &self.restore_state,
+            snapshot.and_then(|snapshot| snapshot.chain_tip),
+        )?;
         let book = snapshot.and_then(|snapshot| snapshot.value.hd.as_ref());
         let stored = StoredCheckpoint {
             format: FORMAT.into(),
@@ -265,6 +575,15 @@ impl WalletCheckpoint {
             branch_lengths: (0..4)
                 .map(|branch| book.map_or(0, |book| book.branches[branch].len() as u32))
                 .collect(),
+            header_view: self
+                .header_progress
+                .as_ref()
+                .map(|progress| StoredHeaderView {
+                    view: progress.view.clone(),
+                    height: progress.trusted.height,
+                    commitment: progress.trusted.commitment,
+                    provenance: provenance_name(&progress.trusted.provenance).to_owned(),
+                }),
             source: snapshot.map(|snapshot| snapshot.source.clone()),
             evidence: snapshot.map(|snapshot| snapshot.evidence.clone()),
             tip: snapshot.and_then(|snapshot| snapshot.chain_tip),
@@ -288,6 +607,30 @@ impl WalletCheckpoint {
                 })
                 .collect(),
             allocation: self.allocation.clone(),
+            scan_coverage: self.scan_coverage.map(|coverage| {
+                (
+                    coverage.from_height,
+                    coverage.skipped_below,
+                    coverage.chosen_by_holder,
+                )
+            }),
+            rescan_requested: self.rescan_requested,
+            restore_state: self.restore_state.clone(),
+            token_identities: self
+                .token_identities
+                .iter()
+                .map(|(category, identity)| {
+                    (
+                        category.clone(),
+                        StoredTokenIdentity {
+                            name: identity.name.clone(),
+                            ticker: identity.ticker.clone(),
+                            decimals: identity.decimals,
+                            status: identity.status.into(),
+                        },
+                    )
+                })
+                .collect(),
         };
         let plaintext =
             serde_json::to_vec(&stored).map_err(|_| "cannot encode wallet checkpoint")?;
@@ -308,16 +651,65 @@ impl WalletCheckpoint {
             .map_err(|error| error.to_string())?;
         let stored: StoredCheckpoint =
             serde_json::from_slice(&plaintext).map_err(|_| "invalid wallet checkpoint data")?;
-        if ![FORMAT, LEGACY_FORMAT].contains(&stored.format.as_str()) {
+        if ![FORMAT, ALLOCATION_FORMAT, LEGACY_FORMAT].contains(&stored.format.as_str()) {
             return Err("unsupported wallet checkpoint format or source".into());
         }
+        if stored.format != FORMAT
+            && (stored.scan_coverage.is_some() || stored.rescan_requested.is_some())
+        {
+            return Err("scan preferences require checkpoint format v3".into());
+        }
+        // Decoded before either construction path so a record that carries
+        // header progress cannot resume without it on one branch and with it
+        // on the other.
+        let header_progress = match stored.header_view.as_ref() {
+            None => None,
+            Some(sealed) => Some(StoredHeaderProgress {
+                view: sealed.view.clone(),
+                trusted: HeaderCheckpoint {
+                    height: sealed.height,
+                    commitment: sealed.commitment,
+                    provenance: provenance_from_name(&sealed.provenance)?,
+                },
+            }),
+        };
+        let scan_coverage =
+            stored
+                .scan_coverage
+                .map(
+                    |(from_height, skipped_below, chosen_by_holder)| optn_app::ScanCoverageView {
+                        from_height,
+                        skipped_below,
+                        chosen_by_holder,
+                    },
+                );
+        validate_scan_coverage(scan_coverage, stored.tip)?;
+        // Checkpoints written before durable birthday metadata still carried
+        // the old floor projections. Preserve that intent in the shared
+        // restore state before the sync actor consumes the checkpoint.
+        let mut restore_state = stored.restore_state;
+        if matches!(&restore_state.birthday, WalletBirthday::Unknown)
+            && restore_state.manual_rescan.is_none()
+        {
+            let legacy_floor = stored.rescan_requested.or_else(|| {
+                scan_coverage
+                    .as_ref()
+                    .filter(|coverage| coverage.chosen_by_holder)
+                    .map(|coverage| coverage.from_height)
+            });
+            if let Some(height) = legacy_floor {
+                restore_state.request_rescan_from(height);
+            }
+        }
+        validate_restore_state(&restore_state, stored.tip)?;
+        let token_identities = decode_token_identities(&stored.token_identities)?;
         let branch_lengths: [u32; 4] =
             match (stored.format.as_str(), stored.branch_lengths.as_slice()) {
                 (LEGACY_FORMAT, [receive, change, old_defi]) if stored.allocation.is_none() => {
                     // v1 used branch 2. Never reinterpret that history as branch 7.
                     [*receive, *change, 0, *old_defi]
                 }
-                (FORMAT, [receive, change, defi, compatibility]) => {
+                (FORMAT | ALLOCATION_FORMAT, [receive, change, defi, compatibility]) => {
                     [*receive, *change, *defi, *compatibility]
                 }
                 _ => return Err("invalid checkpoint branch layout".into()),
@@ -343,10 +735,11 @@ impl WalletCheckpoint {
                 (source, evidence)
             }
             (None, None)
-                if stored.format == FORMAT
+                if [FORMAT, ALLOCATION_FORMAT].contains(&stored.format.as_str())
                     && stored.allocation.is_some()
                     && branch_lengths == [0; 4]
                     && stored.tip.is_none()
+                    && scan_coverage.is_none()
                     && stored.transactions.is_empty()
                     && stored.annotations.is_empty() =>
             {
@@ -356,8 +749,13 @@ impl WalletCheckpoint {
                     account,
                     account_xpub,
                     allocation: stored.allocation,
+                    scan_coverage: None,
+                    rescan_requested: stored.rescan_requested,
+                    restore_state,
                     state: WalletReconciliation::default(),
                     coins: CoinSet::new(),
+                    token_identities: BTreeMap::new(),
+                    header_progress,
                 });
             }
             _ => return Err("invalid checkpoint scan provenance".into()),
@@ -429,8 +827,13 @@ impl WalletCheckpoint {
             account,
             account_xpub,
             allocation: stored.allocation,
+            scan_coverage,
+            rescan_requested: stored.rescan_requested,
+            restore_state,
             state,
             coins,
+            token_identities,
+            header_progress,
         })
     }
 }
@@ -438,6 +841,7 @@ impl WalletCheckpoint {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::wallet_birthday::WalletBirthday;
     use optn_core::{
         hd::{Wallet, BIP39_TEST_VECTOR_MNEMONIC},
         watch_only::address_under_account,
@@ -461,22 +865,208 @@ mod tests {
                 account_path: account.to_string(),
                 account_xpub: wallet.account_xpub_at(account).unwrap(),
                 branch_lengths: vec![0; 4],
+                header_view: None,
                 source: None,
                 evidence: None,
                 tip: None,
                 transactions: vec![],
                 annotations: vec![],
+                scan_coverage: None,
+                rescan_requested: None,
+                restore_state: WalletRestoreState::default(),
                 allocation: Some(HdAddressAllocation::default()),
+                token_identities: BTreeMap::new(),
             },
         )
     }
 
     // Authenticated codec fixtures, never a production key or encryption entry point.
     fn encoded(key: &PackKey, stored: &StoredCheckpoint, sequence: u8) -> Vec<u8> {
+        encoded_value(key, &serde_json::to_value(stored).unwrap(), sequence)
+    }
+
+    fn encoded_value(key: &PackKey, value: &serde_json::Value, sequence: u8) -> Vec<u8> {
         let nonce = fixture_nonce(u64::from(sequence) + 1);
         let mut bytes = nonce.to_vec();
-        bytes.extend(wallet_pack::seal(key, &nonce, &serde_json::to_vec(stored).unwrap()).unwrap());
+        bytes.extend(wallet_pack::seal(key, &nonce, &serde_json::to_vec(value).unwrap()).unwrap());
         bytes
+    }
+
+    /// Header progress survives the seal, and resumes above genesis.
+    ///
+    /// This is the whole point of persisting it: before, every restart
+    /// restarted the accumulator at height 0, so a wallet on a chain of any
+    /// length re-walked the chain before it could do anything at all.
+    #[test]
+    fn sealed_header_progress_resumes_above_genesis() {
+        use crate::header_verifier::shipped_header_verifier;
+        use crate::header_view::VerifiedHeaderView;
+
+        let (key, mut stored) = fixture();
+        let verifier = shipped_header_verifier(Network::Chipnet).expect("chipnet anchor");
+        let view = VerifiedHeaderView::new(Network::Chipnet, verifier);
+        let trusted = view.checkpoint();
+
+        stored.header_view = Some(StoredHeaderView {
+            view: view.encode().expect("encodes"),
+            height: trusted.height,
+            commitment: trusted.commitment,
+            provenance: provenance_name(&trusted.provenance).to_owned(),
+        });
+
+        let reopened = WalletCheckpoint::open(&key, &encoded(&key, &stored, 40)).expect("opens");
+        let progress = reopened
+            .header_progress()
+            .expect("a sealed record carries its header progress");
+        assert_eq!(progress.trusted, trusted);
+
+        // And it restores into a working view against its own sealed
+        // commitment -- the value a plain file could not be trusted to assert.
+        let restored =
+            VerifiedHeaderView::restore(&progress.view, Network::Chipnet, &progress.trusted)
+                .expect("restores");
+        assert_eq!(restored.checkpoint(), trusted);
+    }
+
+    /// A record with no header progress still opens, and resumes as before.
+    #[test]
+    fn a_record_without_header_progress_still_opens() {
+        let (key, stored) = fixture();
+        let reopened = WalletCheckpoint::open(&key, &encoded(&key, &stored, 41)).expect("opens");
+        assert!(reopened.header_progress().is_none());
+    }
+
+    #[test]
+    fn durable_restore_state_survives_checkpoint_round_trip() {
+        let (key, mut stored) = fixture();
+        stored.restore_state = WalletRestoreState {
+            birthday: WalletBirthday::ImportedAtHeight { height: 12 },
+            scanned_through: Some(11),
+            manual_rescan: Some(crate::wallet_birthday::ManualRescan {
+                from_height: 12,
+                previous_scanned_through: Some(11),
+            }),
+        };
+        let reopened = WalletCheckpoint::open(&key, &encoded(&key, &stored, 43)).expect("opens");
+        assert_eq!(reopened.restore_state(), &stored.restore_state);
+    }
+
+    #[test]
+    fn legacy_checkpoint_without_restore_state_defaults_to_unknown() {
+        let (key, stored) = fixture();
+        let mut value = serde_json::to_value(&stored).expect("encodes");
+        value
+            .as_object_mut()
+            .expect("checkpoint object")
+            .remove("restore_state");
+        let reopened =
+            WalletCheckpoint::open(&key, &encoded_value(&key, &value, 44)).expect("opens");
+        assert_eq!(reopened.restore_state().birthday, WalletBirthday::Unknown);
+        assert_eq!(reopened.restore_state().scanned_through, None);
+        assert!(reopened.restored_token_identities().is_empty());
+    }
+
+    #[test]
+    fn cached_identity_decode_rejects_invalid_category_and_unbounded_labels() {
+        for (category, name) in [
+            ("AA".repeat(32), "Bitcats".into()),
+            ("aa".repeat(32), "x".repeat(513)),
+        ] {
+            let (key, mut stored) = fixture();
+            stored.token_identities.insert(
+                category,
+                StoredTokenIdentity {
+                    name,
+                    ticker: Some("BCAT".into()),
+                    decimals: 2,
+                    status: StoredIdentityStatus::Verified,
+                },
+            );
+            assert!(WalletCheckpoint::open(&key, &encoded(&key, &stored, 91)).is_err());
+        }
+    }
+
+    #[test]
+    fn legacy_floor_projection_migrates_to_manual_rescan() {
+        let (key, mut stored) = fixture();
+        stored.rescan_requested = Some(50);
+        let mut value = serde_json::to_value(&stored).expect("encodes");
+        value
+            .as_object_mut()
+            .expect("checkpoint object")
+            .remove("restore_state");
+        let reopened =
+            WalletCheckpoint::open(&key, &encoded_value(&key, &value, 46)).expect("opens");
+        assert_eq!(
+            reopened.restore_state().manual_rescan,
+            Some(crate::wallet_birthday::ManualRescan {
+                from_height: 50,
+                previous_scanned_through: None,
+            })
+        );
+
+        let (key, mut stored) = fixture();
+        stored.source = Some(SourceId::new("legacy-floor-fixture"));
+        stored.evidence = Some(Evidence::ServerAssertion);
+        stored.tip = Some((100, [3; 32]));
+        stored.branch_lengths = vec![1; 4];
+        stored.scan_coverage = Some((50, Some(50), true));
+        let mut value = serde_json::to_value(&stored).expect("encodes");
+        value
+            .as_object_mut()
+            .expect("checkpoint object")
+            .remove("restore_state");
+        let reopened =
+            WalletCheckpoint::open(&key, &encoded_value(&key, &value, 47)).expect("opens");
+        assert_eq!(
+            reopened.restore_state().manual_rescan,
+            Some(crate::wallet_birthday::ManualRescan {
+                from_height: 50,
+                previous_scanned_through: None,
+            })
+        );
+    }
+
+    #[test]
+    fn existing_imported_birthday_is_not_reinterpreted_as_legacy_floor() {
+        let (key, mut stored) = fixture();
+        stored.restore_state.birthday = WalletBirthday::ImportedAtHeight { height: 9 };
+        stored.rescan_requested = Some(50);
+        let reopened = WalletCheckpoint::open(&key, &encoded(&key, &stored, 48)).expect("opens");
+        assert_eq!(
+            reopened.restore_state().birthday,
+            WalletBirthday::ImportedAtHeight { height: 9 }
+        );
+        assert_eq!(reopened.restore_state().manual_rescan, None);
+    }
+
+    #[test]
+    fn restore_progress_above_authenticated_tip_is_refused() {
+        let (key, mut stored) = fixture();
+        stored.tip = Some((10, [2; 32]));
+        stored.restore_state.scanned_through = Some(11);
+        let error = WalletCheckpoint::open(&key, &encoded(&key, &stored, 45))
+            .expect_err("progress beyond the stored tip must fail closed");
+        assert!(error.contains("restore progress"), "{error}");
+    }
+
+    /// Provenance a newer build wrote is refused, not quietly downgraded.
+    ///
+    /// Reading it as "self-derived" would weaken what the holder's own wallet
+    /// recorded about where its trust came from, which is the one field here
+    /// whose whole job is to say that.
+    #[test]
+    fn unknown_header_provenance_is_refused() {
+        let (key, mut stored) = fixture();
+        stored.header_view = Some(StoredHeaderView {
+            view: "{}".into(),
+            height: 0,
+            commitment: [7; 32],
+            provenance: "attested-by-a-future-build".into(),
+        });
+        let error = WalletCheckpoint::open(&key, &encoded(&key, &stored, 42))
+            .expect_err("unknown provenance must not open");
+        assert!(error.contains("provenance"), "{error}");
     }
 
     #[test]
@@ -510,6 +1100,34 @@ mod tests {
             }
             assert!(WalletCheckpoint::open(&key, &encoded(&key, &stored, index + 2)).is_err());
         }
+    }
+
+    #[test]
+    fn v2_migrates_and_v3_retains_pending_rescan_without_inventing_coverage() {
+        let (key, mut stored) = fixture();
+        stored.format = ALLOCATION_FORMAT.into();
+        let previous = WalletCheckpoint::open(&key, &encoded(&key, &stored, 20)).unwrap();
+        assert_eq!(previous.scan_coverage, None);
+        assert_eq!(previous.rescan_requested, None);
+        stored.rescan_requested = Some(50);
+        assert!(WalletCheckpoint::open(&key, &encoded(&key, &stored, 21)).is_err());
+        stored.format = FORMAT.into();
+        let pending = WalletCheckpoint::open(&key, &encoded(&key, &stored, 22)).unwrap();
+        let resumed =
+            WalletCheckpoint::open(&key, &pending.seal(&key, &fixture_nonce(24)).unwrap()).unwrap();
+        assert_eq!(resumed.rescan_requested, Some(50));
+        assert!(resumed.state.authoritative.is_none());
+        assert_eq!(resumed.scan_coverage, None);
+        // A pending instruction is not proof that any range has been scanned.
+        stored.scan_coverage = Some((50, Some(50), true));
+        assert!(WalletCheckpoint::open(&key, &encoded(&key, &stored, 25)).is_err());
+        let mut invalid = pending;
+        invalid.scan_coverage = Some(optn_app::ScanCoverageView {
+            from_height: 50,
+            skipped_below: Some(50),
+            chosen_by_holder: true,
+        });
+        assert!(invalid.seal(&key, &fixture_nonce(27)).is_err());
     }
 
     #[test]

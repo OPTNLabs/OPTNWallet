@@ -32,7 +32,8 @@ use std::task::{Context, Poll, Waker};
 use optn_app::{
     assets_view_model, coins_view_model, flipstarter_view_model, format_bch, fundme_view_model,
     hardware_view_model, history_view_model, nfts_view_model, onboarding_actions, product_nav,
-    settings_view_model, AppAction, AppRoute, AppState, OnboardingAction, WalletKind,
+    settings_view_model, AppAction, AppRoute, AppState, OnboardingAction, TokenIdentity,
+    WalletKind,
 };
 use optn_transport::{AppTransport, Renderer, TransportError};
 
@@ -96,6 +97,23 @@ fn wallet_chrome(state: &AppState) -> Vec<String> {
             format!("{marker}{}", item.label())
         })
         .collect()
+}
+
+/// A token's name where one is verified, and the category itself otherwise.
+///
+/// The caveat is never dropped. "Bitcats" and "Bitcats (last known)" are
+/// different claims, and a holder deciding whether to spend needs the second
+/// one to look different from the first.
+fn category_label(identity: &Option<TokenIdentity>, category_hex: &str) -> String {
+    match identity {
+        Some(identity) => match identity.status.caveat() {
+            Some(caveat) => format!("{} ({caveat})", identity.name),
+            None => identity.name.clone(),
+        },
+        // Shown as itself. An unresolved token is still owned, and omitting it
+        // until a registry answers would make an owned asset disappear.
+        None => short_hex(category_hex),
+    }
 }
 
 /// Enough of a hash to recognise, without a line of hex nobody reads.
@@ -173,7 +191,7 @@ pub fn draw(state: &AppState) -> Screen {
             for category in assets.categories {
                 lines.push(format!(
                     "{} amount {} · {} coin(s){}",
-                    short_hex(&category.category_hex),
+                    category_label(&category.identity, &category.category_hex),
                     category.amount,
                     category.coins,
                     if category.nfts > 0 {
@@ -210,7 +228,7 @@ pub fn draw(state: &AppState) -> Screen {
                 // than showing nothing and implying the item is not there.
                 lines.push(format!(
                     "{} {} [{}] {}",
-                    short_hex(&nft.category_hex),
+                    category_label(&nft.identity, &nft.category_hex),
                     if nft.commitment_hex.is_empty() {
                         "no commitment".to_string()
                     } else {

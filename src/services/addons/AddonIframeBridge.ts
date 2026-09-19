@@ -5,17 +5,17 @@
 // by a real unit test rather than only by manual iframe testing.
 import type { AddonSDK } from '../AddonsSDK';
 import type { AddonLocale } from '../../types/addons';
+import { addonLegacyGuestCallAllowed } from '../../wasm/optn-core';
 
 const SANDBOX_URL = '/addon-sandbox.html';
 
 /**
  * Dispatch one {module, method, args} request from an addon against an
  * ALREADY capability-scoped AddonSDK instance (built by createAddonSDK — the
- * exact same object declarative apps use). This function does not implement
- * any authorization itself: every capability check already lives inside the
- * sdk's own methods (see AddonsSDK.ts's authorizeCapability calls), so an
- * addon asking for a module/method it wasn't granted throws from the sdk
- * call itself, not from anything here.
+ * exact same object declarative apps use). The shared Rust guest ceiling is
+ * checked first: a manifest/grant cannot turn this legacy bridge into a raw
+ * signing, transaction, storage-write or arbitrary-network API. SDK read grants
+ * are still checked by the selected method.
  */
 export async function dispatchAddonSdkCall(
   sdk: AddonSDK,
@@ -23,6 +23,9 @@ export async function dispatchAddonSdkCall(
   methodName: string,
   args: unknown[]
 ): Promise<unknown> {
+  if (!addonLegacyGuestCallAllowed(moduleName, methodName)) {
+    throw new Error('unknown SDK module/method or capability unavailable to an untrusted addon guest');
+  }
   const sdkRecord = sdk as unknown as Record<
     string,
     Record<string, unknown> | undefined

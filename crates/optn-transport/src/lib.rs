@@ -7,19 +7,29 @@
 //! crate; only these typed contracts are shared.
 
 use optn_app::{
+    fusion::{
+        AutoFusionSettings, FusionMode, FusionPhase, FusionSession, FusionStep, FusionWaitReason,
+    },
     parse_account_path, AppAction, AppEvent, AppLockState, AppRoute, AppState, AppSurface,
     AuthScope, AutoLockMinutes, CampaignOutput, Coin, ConnectState, CreateStep, FeatureFlag,
     FeatureFlags, FeeMode, FeePreferences, FeeRate, FlipstarterPledge, FreezeReason,
     HardwareSessionState, HardwareSetupPreview, HardwareVendor, HistoryEntry, HistoryKind,
-    ImportStep, LedgerLink, MultisigSetupPreview, MultisigStep, Network, NetworkServers,
-    OpenedWallet, Outpoint, PledgeStatus, ScanCoverageView, ServerKind, ServerOverrides,
-    SettingsRowId, SpendKind, SpendPlan, ThemeMode, UiSkin, WalletKind, WalletSyncView,
-    WatchOnlyKind, WatchOnlySetupPreview, RELAY_MINIMUM_FEE_RATE,
+    IdentityStatus, ImportStep, LedgerLink, MultisigSetupPreview, MultisigStep, Network,
+    NetworkServers, OpenedWallet, Outpoint, PledgeStatus, ScanCoverageView, ServerKind,
+    ServerOverrides, SettingsRowId, SpendKind, SpendPlan, ThemeMode, TokenIdentity, UiSkin,
+    WalletKind, WalletSyncView, WatchOnlyKind, WatchOnlySetupPreview, RELAY_MINIMUM_FEE_RATE,
 };
+use std::collections::BTreeMap;
+pub mod airgap;
+pub mod chain_sources;
 pub mod host;
+pub use airgap::{AirgapRequest, AirgapResponse};
 pub mod security;
 pub use host::{block_on_ready, run, Renderer};
-pub use security::{StoredWallet, WalletSecurityRequest, WalletSecurityStatus};
+pub use security::{
+    StoredWallet, WalletBirthdayInput, WalletBirthdayView, WalletSecurityRequest,
+    WalletSecurityStatus,
+};
 
 use serde::{Deserialize, Serialize};
 use std::{
@@ -50,6 +60,37 @@ pub trait AppTransport {
     fn dispatch<'a>(&'a self, action: AppAction) -> TransportFuture<'a, ()>;
     fn snapshot<'a>(&'a self) -> TransportFuture<'a, AppState>;
     fn next_event<'a>(&'a self) -> TransportFuture<'a, Option<AppEvent>>;
+
+    fn airgap<'a>(&'a self, _request: AirgapRequest) -> TransportFuture<'a, AirgapResponse> {
+        Box::pin(async { Err(TransportError::Unsupported) })
+    }
+
+    fn export_network_configuration<'a>(&'a self, _network: String) -> TransportFuture<'a, String> {
+        Box::pin(async { Err(TransportError::Unsupported) })
+    }
+
+    fn chain_sources<'a>(
+        &'a self,
+        _network: String,
+    ) -> TransportFuture<'a, chain_sources::ChainSourcesView> {
+        Box::pin(async { Err(TransportError::Unsupported) })
+    }
+
+    fn edit_chain_sources<'a>(
+        &'a self,
+        _network: String,
+        _edit: chain_sources::ChainSourceEdit,
+    ) -> TransportFuture<'a, ()> {
+        Box::pin(async { Err(TransportError::Unsupported) })
+    }
+
+    fn rpc_credentials<'a>(
+        &'a self,
+        _network: String,
+        _request: chain_sources::RpcCredentialRequest,
+    ) -> TransportFuture<'a, chain_sources::RpcCredentialStatus> {
+        Box::pin(async { Err(TransportError::Unsupported) })
+    }
 
     fn refresh_wallet<'a>(&'a self) -> TransportFuture<'a, ()> {
         Box::pin(async { Err(TransportError::Unsupported) })
@@ -93,6 +134,38 @@ pub trait AppTransport {
         Box::pin(async { Err(TransportError::Unsupported) })
     }
 
+    /// The proxy situation the chain layer is actually working with.
+    ///
+    /// Renderers must not probe for a proxy themselves -- a Leptos build has
+    /// no sockets, and a renderer that guessed would be a second copy of the
+    /// rule that decides whether traffic is safe to send. It asks, and the
+    /// shell answers with what its own chain stack concluded.
+    ///
+    /// The Leptos surface previously had no way to ask at all, so a holder
+    /// there saw every public source refused for want of Tor with nothing
+    /// saying so and nothing to press.
+    fn tor_status<'a>(&'a self) -> TransportFuture<'a, WireTorStatus> {
+        Box::pin(async { Err(TransportError::Unsupported) })
+    }
+
+    /// Start the shell's own Tor and wait for it to bootstrap.
+    ///
+    /// Returns the status afterwards, so a caller need not poll to find out
+    /// whether it worked.
+    fn start_tor<'a>(&'a self) -> TransportFuture<'a, WireTorStatus> {
+        Box::pin(async { Err(TransportError::Unsupported) })
+    }
+
+    /// Confirm, or withdraw confirmation, that a loopback SOCKS port is the
+    /// holder's own Tor.
+    ///
+    /// A greeting cannot establish this and neither can a renderer; only the
+    /// person who knows what runs on their machine can. See
+    /// `optn-core/src/tor.rs`.
+    fn trust_socks_port<'a>(&'a self, _port: u16, _trusted: bool) -> TransportFuture<'a, ()> {
+        Box::pin(async { Err(TransportError::Unsupported) })
+    }
+
     /// Write a user-visible value through the host clipboard.
     ///
     /// This stays at the transport boundary for the same reason as camera
@@ -100,6 +173,41 @@ pub trait AppTransport {
     /// a renderer must not select a platform fallback on its own.
     fn write_clipboard<'a>(&'a self, _text: String) -> TransportFuture<'a, ()> {
         Box::pin(async { Err(TransportError::Unsupported) })
+    }
+}
+
+/// What the shell found when it went looking for a proxy.
+///
+/// `Unverified` is the case worth carrying separately: a SOCKS proxy
+/// answered, but every SOCKS proxy answers identically and nothing shows that
+/// one is Tor. "Start Tor" and "confirm the Tor you already run" are different
+/// actions, and a screen that cannot tell the two apart offers the wrong one
+/// half the time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WireTorState {
+    /// Usable: owned by this shell, or confirmed by the holder.
+    Verified,
+    /// A proxy answered; nothing vouches for it.
+    Unverified,
+    /// Nothing is listening, and something needs one.
+    Absent,
+    /// No selected source would go through a proxy anyway.
+    NotNeeded,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireTorStatus {
+    pub state: WireTorState,
+    /// The port a proxy answered on, trusted or not.
+    pub socks_port: Option<u16>,
+    /// How far the shell's own Tor has bootstrapped, when it is starting.
+    pub bootstrap_percent: u8,
+}
+
+impl WireTorStatus {
+    pub const fn usable(self) -> bool {
+        matches!(self.state, WireTorState::Verified | WireTorState::NotNeeded)
     }
 }
 
@@ -145,6 +253,8 @@ pub enum WireSkin {
 #[serde(rename_all = "snake_case")]
 pub enum WireNetwork {
     Mainnet,
+    Testnet3,
+    Testnet4,
     Chipnet,
     Regtest,
 }
@@ -552,6 +662,24 @@ pub enum WireActionKind {
     RequestRescanFrom {
         height: u32,
     },
+    SetTokenIdentity {
+        category_hex: String,
+        identity: WireTokenIdentity,
+    },
+    StartFusion,
+    CancelFusion,
+    SetAutoFusionEnabled {
+        enabled: bool,
+    },
+    SetFusionMode {
+        mode: WireFusionMode,
+    },
+    SetFusionPhase {
+        phase: WireFusionPhase,
+    },
+    SetTorReady {
+        ready: bool,
+    },
     SetServer {
         kind: String,
         entry: String,
@@ -628,6 +756,320 @@ pub struct WireAction {
     pub action: WireActionKind,
 }
 
+/// A verified token identity as it crosses the renderer boundary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct WireTokenIdentity {
+    pub name: String,
+    pub ticker: Option<String>,
+    pub decimals: u8,
+    /// `verified` | `stale` | `unpublished` | `unresolved`.
+    ///
+    /// A string rather than a number so an older renderer that does not know a
+    /// status shows the caveat it cannot interpret rather than silently
+    /// treating it as current.
+    pub status: String,
+}
+
+fn identity_status_name(status: IdentityStatus) -> &'static str {
+    match status {
+        IdentityStatus::Verified => "verified",
+        IdentityStatus::Stale => "stale",
+        IdentityStatus::Unpublished => "unpublished",
+        IdentityStatus::Unresolved => "unresolved",
+    }
+}
+
+fn parse_identity_status(value: &str) -> IdentityStatus {
+    match value {
+        "verified" => IdentityStatus::Verified,
+        "stale" => IdentityStatus::Stale,
+        "unpublished" => IdentityStatus::Unpublished,
+        // Anything unrecognised is treated as unresolved rather than current.
+        // A status this build cannot read must never become a confident name.
+        _ => IdentityStatus::Unresolved,
+    }
+}
+
+impl From<&TokenIdentity> for WireTokenIdentity {
+    fn from(value: &TokenIdentity) -> Self {
+        Self {
+            name: value.name.clone(),
+            ticker: value.ticker.clone(),
+            decimals: value.decimals,
+            status: identity_status_name(value.status).to_owned(),
+        }
+    }
+}
+
+impl From<WireTokenIdentity> for TokenIdentity {
+    fn from(value: WireTokenIdentity) -> Self {
+        Self {
+            name: value.name,
+            ticker: value.ticker,
+            decimals: value.decimals,
+            status: parse_identity_status(&value.status),
+        }
+    }
+}
+
+/// Transport mirror of `fusion::FusionMode`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WireFusionMode {
+    #[default]
+    Server,
+    P2p,
+}
+
+impl From<FusionMode> for WireFusionMode {
+    fn from(value: FusionMode) -> Self {
+        match value {
+            FusionMode::Server => Self::Server,
+            FusionMode::P2p => Self::P2p,
+        }
+    }
+}
+
+impl From<WireFusionMode> for FusionMode {
+    fn from(value: WireFusionMode) -> Self {
+        match value {
+            WireFusionMode::Server => Self::Server,
+            WireFusionMode::P2p => Self::P2p,
+        }
+    }
+}
+
+/// Transport mirror of `fusion::FusionWaitReason`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WireFusionWaitReason {
+    #[default]
+    Cooldown,
+    Retry,
+    Rendezvous,
+    DepthReached,
+}
+
+impl From<FusionWaitReason> for WireFusionWaitReason {
+    fn from(value: FusionWaitReason) -> Self {
+        match value {
+            FusionWaitReason::Cooldown => Self::Cooldown,
+            FusionWaitReason::Retry => Self::Retry,
+            FusionWaitReason::Rendezvous => Self::Rendezvous,
+            FusionWaitReason::DepthReached => Self::DepthReached,
+        }
+    }
+}
+
+impl From<WireFusionWaitReason> for FusionWaitReason {
+    fn from(value: WireFusionWaitReason) -> Self {
+        match value {
+            WireFusionWaitReason::Cooldown => Self::Cooldown,
+            WireFusionWaitReason::Retry => Self::Retry,
+            WireFusionWaitReason::Rendezvous => Self::Rendezvous,
+            WireFusionWaitReason::DepthReached => Self::DepthReached,
+        }
+    }
+}
+
+/// Transport mirror of `fusion::FusionStep`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WireFusionStep {
+    #[default]
+    Joining,
+    Gathering,
+    Assembling,
+    Signing,
+    Blaming,
+}
+
+impl From<FusionStep> for WireFusionStep {
+    fn from(value: FusionStep) -> Self {
+        match value {
+            FusionStep::Joining => Self::Joining,
+            FusionStep::Gathering => Self::Gathering,
+            FusionStep::Assembling => Self::Assembling,
+            FusionStep::Signing => Self::Signing,
+            FusionStep::Blaming => Self::Blaming,
+        }
+    }
+}
+
+impl From<WireFusionStep> for FusionStep {
+    fn from(value: WireFusionStep) -> Self {
+        match value {
+            WireFusionStep::Joining => Self::Joining,
+            WireFusionStep::Gathering => Self::Gathering,
+            WireFusionStep::Assembling => Self::Assembling,
+            WireFusionStep::Signing => Self::Signing,
+            WireFusionStep::Blaming => Self::Blaming,
+        }
+    }
+}
+
+/// Transport mirror of `fusion::FusionPhase`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WireFusionPhase {
+    #[default]
+    Idle,
+    Waiting {
+        reason: WireFusionWaitReason,
+        until_ms: u64,
+    },
+    Running {
+        mode: WireFusionMode,
+        step: WireFusionStep,
+        #[serde(default)]
+        participants: Option<u32>,
+    },
+    Cancelling,
+    Completed {
+        txid: String,
+        fused_sats: u64,
+        at_ms: u64,
+    },
+    Failed {
+        message: String,
+        transient: bool,
+    },
+}
+
+impl From<FusionPhase> for WireFusionPhase {
+    fn from(value: FusionPhase) -> Self {
+        match value {
+            FusionPhase::Idle => Self::Idle,
+            FusionPhase::Waiting { reason, until_ms } => Self::Waiting {
+                reason: reason.into(),
+                until_ms,
+            },
+            FusionPhase::Running {
+                mode,
+                step,
+                participants,
+            } => Self::Running {
+                mode: mode.into(),
+                step: step.into(),
+                participants,
+            },
+            FusionPhase::Cancelling => Self::Cancelling,
+            FusionPhase::Completed {
+                txid,
+                fused_sats,
+                at_ms,
+            } => Self::Completed {
+                txid,
+                fused_sats,
+                at_ms,
+            },
+            FusionPhase::Failed { message, transient } => Self::Failed { message, transient },
+        }
+    }
+}
+
+impl From<WireFusionPhase> for FusionPhase {
+    fn from(value: WireFusionPhase) -> Self {
+        match value {
+            WireFusionPhase::Idle => Self::Idle,
+            WireFusionPhase::Waiting { reason, until_ms } => Self::Waiting {
+                reason: reason.into(),
+                until_ms,
+            },
+            WireFusionPhase::Running {
+                mode,
+                step,
+                participants,
+            } => Self::Running {
+                mode: mode.into(),
+                step: step.into(),
+                participants,
+            },
+            WireFusionPhase::Cancelling => Self::Cancelling,
+            WireFusionPhase::Completed {
+                txid,
+                fused_sats,
+                at_ms,
+            } => Self::Completed {
+                txid,
+                fused_sats,
+                at_ms,
+            },
+            WireFusionPhase::Failed { message, transient } => Self::Failed { message, transient },
+        }
+    }
+}
+
+/// Transport mirror of `fusion::FusionSession`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct WireFusionSession {
+    #[serde(default)]
+    pub phase: WireFusionPhase,
+    /// Never persisted on either side: a restart must not resume spending fees.
+    #[serde(default)]
+    pub session_armed: bool,
+    #[serde(default)]
+    pub rounds_completed: u32,
+    #[serde(default)]
+    pub fused_sats: u64,
+    #[serde(default)]
+    pub hold_reason: Option<String>,
+}
+
+impl From<&FusionSession> for WireFusionSession {
+    fn from(value: &FusionSession) -> Self {
+        Self {
+            phase: value.phase.clone().into(),
+            session_armed: value.session_armed,
+            rounds_completed: value.rounds_completed,
+            fused_sats: value.fused_sats,
+            hold_reason: value.hold_reason.clone(),
+        }
+    }
+}
+
+impl From<WireFusionSession> for FusionSession {
+    fn from(value: WireFusionSession) -> Self {
+        Self {
+            phase: value.phase.into(),
+            session_armed: value.session_armed,
+            rounds_completed: value.rounds_completed,
+            fused_sats: value.fused_sats,
+            hold_reason: value.hold_reason,
+        }
+    }
+}
+
+/// Transport mirror of `fusion::AutoFusionSettings`.
+///
+/// No master switch here either: it travels as `FeatureFlag::CashFusion`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct WireAutoFusionSettings {
+    #[serde(default)]
+    pub auto_fuse_enabled: bool,
+    #[serde(default)]
+    pub p2p_fusion_enabled: bool,
+}
+
+impl From<AutoFusionSettings> for WireAutoFusionSettings {
+    fn from(value: AutoFusionSettings) -> Self {
+        Self {
+            auto_fuse_enabled: value.auto_fuse_enabled,
+            p2p_fusion_enabled: value.p2p_fusion_enabled,
+        }
+    }
+}
+
+impl From<WireAutoFusionSettings> for AutoFusionSettings {
+    fn from(value: WireAutoFusionSettings) -> Self {
+        Self {
+            auto_fuse_enabled: value.auto_fuse_enabled,
+            p2p_fusion_enabled: value.p2p_fusion_enabled,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WireState {
     pub version: u16,
@@ -666,14 +1108,23 @@ pub struct WireState {
     pub spend: Option<WireSpendPlan>,
     #[serde(default)]
     pub hardware: WireHardwareSession,
-    /// How much of the wire snapshot's coins arrived through a Cash Code.
+    /// How much of the balance arrived through a Cash Code.
     ///
-    /// Derived from the coin list rather than carried beside it: RPA payments
-    /// are ordinary coins now, and a separately transmitted number is a
-    /// number that can disagree with them. Sent so a host can show the split
-    /// without recomputing it, and ignored on decode for the same reason.
+    /// Derived from the coins beside it, never a second number that can
+    /// disagree with them. Sent so a host can show the split without
+    /// recomputing it, and ignored on decode for the same reason.
     #[serde(default)]
     pub stealth_sats: u64,
+    /// Verified token identities, keyed by category id in display order.
+    #[serde(default)]
+    pub token_identities: BTreeMap<String, WireTokenIdentity>,
+    /// What Auto Fusion is doing.
+    #[serde(default)]
+    pub fusion: WireFusionSession,
+    #[serde(default)]
+    pub auto_fusion: WireAutoFusionSettings,
+    #[serde(default)]
+    pub tor_ready: bool,
     #[serde(default)]
     pub create_step: WireCreateStep,
     #[serde(default)]
@@ -889,6 +1340,7 @@ pub enum WireEventKind {
     AuthRequired,
     SpendAuthorized,
     WalletLocked,
+    FusionChanged,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -987,6 +1439,8 @@ impl From<Network> for WireNetwork {
     fn from(value: Network) -> Self {
         match value {
             Network::Mainnet => Self::Mainnet,
+            Network::Testnet3 => Self::Testnet3,
+            Network::Testnet4 => Self::Testnet4,
             Network::Chipnet => Self::Chipnet,
             Network::Regtest => Self::Regtest,
         }
@@ -997,6 +1451,8 @@ impl From<WireNetwork> for Network {
     fn from(value: WireNetwork) -> Self {
         match value {
             WireNetwork::Mainnet => Self::Mainnet,
+            WireNetwork::Testnet3 => Self::Testnet3,
+            WireNetwork::Testnet4 => Self::Testnet4,
             WireNetwork::Chipnet => Self::Chipnet,
             WireNetwork::Regtest => Self::Regtest,
         }
@@ -1246,6 +1702,23 @@ impl From<AppAction> for WireAction {
             AppAction::DisconnectHardware => WireActionKind::DisconnectHardware,
             AppAction::HideWalletIdentity => WireActionKind::HideWalletIdentity,
             AppAction::RequestRescanFrom { height } => WireActionKind::RequestRescanFrom { height },
+            AppAction::StartFusion => WireActionKind::StartFusion,
+            AppAction::CancelFusion => WireActionKind::CancelFusion,
+            AppAction::SetAutoFusionEnabled(enabled) => {
+                WireActionKind::SetAutoFusionEnabled { enabled }
+            }
+            AppAction::SetFusionMode(mode) => WireActionKind::SetFusionMode { mode: mode.into() },
+            AppAction::SetFusionPhase(phase) => WireActionKind::SetFusionPhase {
+                phase: phase.into(),
+            },
+            AppAction::SetTorReady(ready) => WireActionKind::SetTorReady { ready },
+            AppAction::SetTokenIdentity {
+                category_hex,
+                identity,
+            } => WireActionKind::SetTokenIdentity {
+                category_hex,
+                identity: WireTokenIdentity::from(&identity),
+            },
             AppAction::SetServer { kind, entry } => WireActionKind::SetServer {
                 kind: kind.id().to_string(),
                 entry,
@@ -1431,6 +1904,19 @@ impl TryFrom<WireAction> for AppAction {
             WireActionKind::DisconnectHardware => Self::DisconnectHardware,
             WireActionKind::HideWalletIdentity => Self::HideWalletIdentity,
             WireActionKind::RequestRescanFrom { height } => Self::RequestRescanFrom { height },
+            WireActionKind::StartFusion => Self::StartFusion,
+            WireActionKind::CancelFusion => Self::CancelFusion,
+            WireActionKind::SetAutoFusionEnabled { enabled } => Self::SetAutoFusionEnabled(enabled),
+            WireActionKind::SetFusionMode { mode } => Self::SetFusionMode(mode.into()),
+            WireActionKind::SetFusionPhase { phase } => Self::SetFusionPhase(phase.into()),
+            WireActionKind::SetTorReady { ready } => Self::SetTorReady(ready),
+            WireActionKind::SetTokenIdentity {
+                category_hex,
+                identity,
+            } => Self::SetTokenIdentity {
+                category_hex,
+                identity: TokenIdentity::from(identity),
+            },
             WireActionKind::SetServer { kind, entry } => Self::SetServer {
                 // An unknown kind is refused rather than defaulted: writing a
                 // node host into the Electrum slot would be silently wrong.
@@ -1574,8 +2060,6 @@ impl From<&AppState> for WireState {
                 .features
                 .enabled(value.surface, FeatureFlag::WatchOnly),
             coins: value.coins.iter().map(WireCoin::from).collect(),
-            // Derived from those coins, never tracked beside them.
-            stealth_sats: value.coins.rpa_sats(),
             wallet_sync: WireWalletSyncView::from(&value.wallet_sync),
             pledges: value.pledges.iter().map(WirePledge::from).collect(),
             notice: value.notice.clone(),
@@ -1583,6 +2067,16 @@ impl From<&AppState> for WireState {
             hd_addresses: value.hd_addresses.clone(),
             spend: value.spend.as_ref().map(WireSpendPlan::from),
             hardware: WireHardwareSession::from(&value.hardware),
+            fusion: (&value.fusion).into(),
+            auto_fusion: value.auto_fusion.into(),
+            tor_ready: value.tor_ready,
+            // Derived from those coins, never tracked beside them.
+            stealth_sats: value.coins.rpa_sats(),
+            token_identities: value
+                .token_identities
+                .iter()
+                .map(|(category, identity)| (category.clone(), WireTokenIdentity::from(identity)))
+                .collect(),
             create_step: value.create_step.into(),
             import_step: value.import_step.into(),
             settings_focus: value.settings_focus.map(settings_row_id).map(str::to_owned),
@@ -1740,6 +2234,14 @@ impl TryFrom<WireState> for AppState {
             // A decoded snapshot never arrives already revealed: the eye
             // toggle is authorised per session, not carried on the wire.
             identity_revealed: false,
+            fusion: value.fusion.into(),
+            auto_fusion: value.auto_fusion.into(),
+            tor_ready: value.tor_ready,
+            token_identities: value
+                .token_identities
+                .into_iter()
+                .map(|(category, identity)| (category, TokenIdentity::from(identity)))
+                .collect(),
             // Sessions and their pending requests are host-side and live: a
             // decoded snapshot must never arrive carrying a signature request,
             // or a stale frame could put an approval in front of the user.
@@ -1801,6 +2303,7 @@ impl From<AppEvent> for WireEvent {
             AppEvent::AuthRequired => WireEventKind::AuthRequired,
             AppEvent::SpendAuthorized => WireEventKind::SpendAuthorized,
             AppEvent::WalletLocked => WireEventKind::WalletLocked,
+            AppEvent::FusionChanged => WireEventKind::FusionChanged,
         };
         Self {
             version: WIRE_PROTOCOL_VERSION,
@@ -1845,6 +2348,7 @@ impl TryFrom<WireEvent> for AppEvent {
             WireEventKind::AuthRequired => Self::AuthRequired,
             WireEventKind::SpendAuthorized => Self::SpendAuthorized,
             WireEventKind::WalletLocked => Self::WalletLocked,
+            WireEventKind::FusionChanged => Self::FusionChanged,
         })
     }
 }
@@ -2469,5 +2973,155 @@ mod tests {
         assert_eq!(view.confirmed_sats, Some(10));
         assert_eq!(view.scan_coverage, None);
         assert_eq!(view.rescan_requested, None);
+    }
+
+    /// A token identity survives the renderer boundary with its status.
+    #[test]
+    fn wire_round_trip_preserves_a_token_identity_and_its_status() {
+        for status in [
+            IdentityStatus::Verified,
+            IdentityStatus::Stale,
+            IdentityStatus::Unpublished,
+            IdentityStatus::Unresolved,
+        ] {
+            let identity = TokenIdentity {
+                name: "Bitcats".into(),
+                ticker: Some("BCAT".into()),
+                decimals: 2,
+                status,
+            };
+            let decoded = TokenIdentity::from(WireTokenIdentity::from(&identity));
+            assert_eq!(decoded, identity);
+        }
+    }
+
+    /// A status this build does not recognise is never treated as current.
+    ///
+    /// A newer host adding a status must not make an older renderer show an
+    /// unverified name as though the chain had confirmed it.
+    #[test]
+    fn an_unknown_identity_status_degrades_to_unresolved() {
+        let wire = WireTokenIdentity {
+            name: "Bitcats".into(),
+            ticker: None,
+            decimals: 0,
+            status: "something-newer".into(),
+        };
+        assert_eq!(TokenIdentity::from(wire).status, IdentityStatus::Unresolved);
+    }
+
+    /// Every fusion phase survives the wire, including the ones carrying data.
+    ///
+    /// A phase that decoded to `Idle` would tell the holder nothing is running
+    /// while a round is mid-flight and their coins are reserved.
+    #[test]
+    fn wire_round_trip_preserves_every_fusion_phase() {
+        let phases = [
+            FusionPhase::Idle,
+            FusionPhase::Waiting {
+                reason: FusionWaitReason::Rendezvous,
+                until_ms: 1_712_000_000_000,
+            },
+            FusionPhase::Running {
+                mode: FusionMode::P2p,
+                step: FusionStep::Blaming,
+                participants: Some(7),
+            },
+            FusionPhase::Running {
+                mode: FusionMode::Server,
+                step: FusionStep::Gathering,
+                participants: None,
+            },
+            FusionPhase::Cancelling,
+            FusionPhase::Completed {
+                txid: "ab".repeat(32),
+                fused_sats: 1_234_567,
+                at_ms: 1_712_000_000_001,
+            },
+            FusionPhase::Failed {
+                message: "could not connect".into(),
+                transient: true,
+            },
+        ];
+        for phase in phases {
+            let decoded = FusionPhase::from(WireFusionPhase::from(phase.clone()));
+            assert_eq!(decoded, phase);
+
+            // And through JSON, which is what actually crosses the boundary.
+            let json = serde_json::to_string(&WireFusionPhase::from(phase.clone())).unwrap();
+            let back: WireFusionPhase = serde_json::from_str(&json).unwrap();
+            assert_eq!(FusionPhase::from(back), phase);
+        }
+    }
+
+    /// The session and its settings survive a full state snapshot.
+    #[test]
+    fn wire_round_trip_preserves_the_fusion_session() {
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        state.apply(AppAction::SetAutoFusionEnabled(true));
+        state.apply(AppAction::SetFusionMode(FusionMode::P2p));
+        state.apply(AppAction::SetTorReady(true));
+        state.fusion.session_armed = true;
+        state.fusion.rounds_completed = 3;
+        state.fusion.fused_sats = 900_000;
+        state.fusion.phase = FusionPhase::Running {
+            mode: FusionMode::P2p,
+            step: FusionStep::Signing,
+            participants: Some(4),
+        };
+
+        let decoded = AppState::try_from(WireState::from(&state)).unwrap();
+        assert_eq!(decoded.fusion, state.fusion);
+        assert_eq!(decoded.auto_fusion, state.auto_fusion);
+        assert!(decoded.tor_ready);
+    }
+
+    /// Each fusion action survives the wire as itself.
+    #[test]
+    fn wire_round_trip_preserves_fusion_actions() {
+        let actions = [
+            AppAction::StartFusion,
+            AppAction::CancelFusion,
+            AppAction::SetAutoFusionEnabled(true),
+            AppAction::SetFusionMode(FusionMode::P2p),
+            AppAction::SetFusionMode(FusionMode::Server),
+            AppAction::SetTorReady(true),
+            AppAction::SetFusionPhase(FusionPhase::Cancelling),
+        ];
+        for action in actions {
+            let decoded = AppAction::try_from(WireAction::from(action.clone())).unwrap();
+            assert_eq!(decoded, action);
+        }
+        assert_eq!(
+            AppEvent::try_from(WireEvent::from(AppEvent::FusionChanged)).unwrap(),
+            AppEvent::FusionChanged
+        );
+    }
+
+    /// A renderer built before fusion still decodes a snapshot, and decodes to
+    /// "nothing running, nothing permitted" rather than to an armed session.
+    #[test]
+    fn a_state_without_fusion_still_decodes_unarmed() {
+        let wire = WireFusionSession::default();
+        assert!(!wire.session_armed);
+        let session = FusionSession::from(wire);
+        assert_eq!(session, FusionSession::new());
+        assert!(
+            !session.session_armed,
+            "an absent session is not an armed one"
+        );
+        assert_eq!(session.phase, FusionPhase::Idle);
+    }
+
+    /// A renderer built before token identity still decodes a snapshot.
+    #[test]
+    fn a_state_without_token_identities_still_decodes() {
+        let wire = WireTokenIdentity::default();
+        assert_eq!(wire.status, "");
+        assert_eq!(
+            TokenIdentity::from(wire).status,
+            IdentityStatus::Unresolved,
+            "an absent status is not a verified one"
+        );
     }
 }

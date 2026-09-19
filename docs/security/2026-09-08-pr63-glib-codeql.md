@@ -1,5 +1,9 @@
 # PR63: GLib CodeQL path review, 2026-09-08
 
+**Coverage update, 2026-09-12:** `61b11bc3` removed the vendor exclusion
+described below. GLib is scanned again. Alerts #113–124 remain open on PR63;
+the current inventory is in [the September 12 report](2026-09-12-pr63-scan-coverage-and-fusion.md).
+
 Reviewed the 13 newly visible alerts #113-125 against source at
 `6dfcb3a24e7e36df4d142ff0607fb234d3bac755`. GitHub attributes these instances to
 merge analysis `c9d5bb8f2bac93faf2b7c31a951753936991e720`. This is a review of
@@ -66,6 +70,13 @@ Alerts #113-124 were rechecked against the exported SARIF's concrete source
 locations and return types. The generic cross-type paths remain unsupported by
 the source contracts described above. The unwind fix is not a claim that every
 GLib unsafe caller has been audited.
+
+> **Superseded, 2026-09-12.** The paragraph below describes the scan
+> configuration as it stood at this revision. `61b11bc3` removed the
+> `vendor/**` exclusion, so vendored GLib is scanned by CodeQL again. Read it
+> as a record of why the exclusion existed, not as current coverage — current
+> coverage is in
+> [the September 12 report](2026-09-12-pr63-scan-coverage-and-fusion.md).
 
 CodeQL analysis of first-party wallet/CLI/Tauri sources ignores `vendor/**`
 via `.github/codeql/codeql-config.yml` (GitHub's documented `paths-ignore` for
@@ -157,6 +168,11 @@ spawn) passed with zero errors, zero suppressed errors and zero definitely lost
 bytes, including the forked failure paths. The existing iterator and pointer
 slice regressions also passed, as did the run's workspace/core tests, dependency
 policy, feature/fuzz compilation and coverage jobs.
+
+> **Superseded, 2026-09-12.** The count below is this revision's, taken while
+> `vendor/**` was excluded from CodeQL. The scoped inventory at `a9b5d6f4` has
+> 14 open alerts; see
+> [the September 12 report](2026-09-12-pr63-scan-coverage-and-fusion.md).
 
 The refreshed PR alert inventory still contains 40 open findings. Alert #125's
 PR instance is `fixed` with no dismissal; #117 remains open. These focused

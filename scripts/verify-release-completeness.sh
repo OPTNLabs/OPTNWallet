@@ -19,7 +19,7 @@ CONFIG="packaging/release-assets.json"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-VERSION="1.7.3"
+VERSION="1.7.4"
 export RELEASE_TAG="v$VERSION"
 
 # Whichever interpreter has PyYAML. CI installs it for python3; a developer
@@ -120,6 +120,11 @@ populate() {
     printf 'x' > "release-files/$a"
   done
 }
+
+# The gate reads this to decide whether the signed-update set is expected. The
+# synthetic release contains every required asset, so the strict reading is the
+# one to verify against -- same reasoning as substituting the CLI probe above.
+export UPDATE_SIGNING=true
 
 echo "asset set: ${#ASSETS[@]} files, from $CONFIG"
 echo

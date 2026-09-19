@@ -18,6 +18,15 @@ import {
 } from '../platform/desktop/CoinLabelService';
 import { selectWalletId } from '../state/slices/walletSlice';
 import { FusionBadge } from './FusionBadge';
+import {
+  freezeCoin,
+  holdKey,
+  HOLD_REASON_LABELS,
+  readCoinHolds,
+  unfreezeCoin,
+  type CoinHold,
+} from '../platform/desktop/coinHoldsBridge';
+import { isDesktopPlatform } from '../utils/platform';
 import { useI18n } from '../i18n/useI18n';
 
 interface UTXOCardProps {
@@ -54,6 +63,12 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
   const { t } = useI18n();
   const walletId = useSelector(selectWalletId);
   const [labels, setLabels] = useState<Record<string, string>>({});
+  // Held coins, keyed by outpoint. The record is the runtime's, and it is the
+  // same one a Flipstarter pledge or an in-flight Fusion round holds a coin
+  // with -- which is why the reason is shown and only a user hold offers a
+  // control to lift it.
+  const [holds, setHolds] = useState<Record<string, CoinHold>>({});
+  const [holdError, setHoldError] = useState('');
   const tokenMetadata = useSharedTokenMetadata(
     utxos
       .map((u) => u.token?.category)
@@ -81,6 +96,48 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
       cancelled = true;
     };
   }, [walletId, utxos]);
+
+  const applyHolds = useCallback((rows: CoinHold[]) => {
+    setHolds(
+      Object.fromEntries(
+        rows.map((hold) => [holdKey(hold.txid, hold.vout), hold])
+      )
+    );
+  }, []);
+
+  useEffect(() => {
+    if (walletId <= 0 || !isDesktopPlatform()) return;
+    let cancelled = false;
+    void readCoinHolds(walletId)
+      .then((rows) => {
+        if (!cancelled) applyHolds(rows);
+      })
+      .catch((error) =>
+        console.error('[coins] could not read coin holds:', error)
+      );
+    return () => {
+      cancelled = true;
+    };
+  }, [walletId, applyHolds]);
+
+  const toggleHold = useCallback(
+    async (txHash: string, txPos: number, held: CoinHold | undefined) => {
+      if (walletId <= 0) return;
+      setHoldError('');
+      try {
+        applyHolds(
+          held
+            ? await unfreezeCoin(walletId, txHash, txPos)
+            : await freezeCoin(walletId, txHash, txPos)
+        );
+      } catch (error) {
+        // The runtime refuses a release that is not the user's to make; say so
+        // rather than leaving the button looking broken.
+        setHoldError(error instanceof Error ? error.message : String(error));
+      }
+    },
+    [walletId, applyHolds]
+  );
 
   const editLabel = useCallback(
     async (txHash: string, txPos: number, current: string | undefined) => {
@@ -154,6 +211,7 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
         const okey = outpointKey(utxo.tx_hash, utxo.tx_pos);
         const depth = walletId > 0 ? coinDepth(walletId, okey) : 0;
         const coinLabel = labels[okey];
+        const held = holds[holdKey(utxo.tx_hash, utxo.tx_pos)];
 
         return (
           <div
@@ -198,6 +256,34 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
                     <strong>{t('utxo.height')}:</strong> {utxo.height}
                   </p>
                 </>
+              )}
+              {held && (
+                <p className="flex flex-wrap items-center gap-2">
+                  <span className="rounded border border-[var(--wallet-warning-border)] bg-[var(--wallet-warning-bg)] px-1.5 py-px text-[10px] uppercase tracking-wide text-[var(--wallet-warning-text)]">
+                    {HOLD_REASON_LABELS[held.reason]}
+                  </span>
+                  <span className="text-xs wallet-muted">
+                    {held.user_reversible
+                      ? 'Not spendable until you unfreeze it'
+                      : 'Held by a pledge or fusion round — released by that, not here'}
+                  </span>
+                </p>
+              )}
+              {walletId > 0 && isDesktopPlatform() && (
+                <p className="flex flex-wrap items-center gap-2">
+                  <strong>Coin:</strong>{' '}
+                  <button
+                    type="button"
+                    data-testid={`coin-hold-${okey}`}
+                    disabled={Boolean(held) && !held?.user_reversible}
+                    className="text-xs underline wallet-muted hover:wallet-text-strong disabled:no-underline disabled:opacity-60"
+                    onClick={() =>
+                      void toggleHold(utxo.tx_hash, utxo.tx_pos, held)
+                    }
+                  >
+                    {held ? 'Unfreeze' : 'Freeze'}
+                  </button>
+                </p>
               )}
               {walletId > 0 && (
                 <p className="flex flex-wrap items-center gap-2">
@@ -246,6 +332,8 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
           </div>
         );
       })}
+
+      {holdError && <p className="text-xs text-red-400">{holdError}</p>}
 
       {!utxos.length && <p className="wallet-muted">{t('utxo.none')}</p>}
     </div>

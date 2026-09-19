@@ -142,9 +142,19 @@ impl WrongNetwork {
     /// The wording the send screen has always used.
     pub const fn message(self) -> &'static str {
         match self.wallet_network {
+            // Three test chains share `bchtest:`, so this cannot name one of
+            // them without risking naming the wrong one.
             Network::Mainnet => {
-                "That address is for Chipnet (bchtest:). This wallet is on Mainnet — paste a \
-                 bitcoincash: address."
+                "That address is for a test network (bchtest:). This wallet is on Mainnet — \
+                 paste a bitcoincash: address."
+            }
+            Network::Testnet3 => {
+                "That address is for Mainnet (bitcoincash:). This wallet is on Testnet3 — paste \
+                 a bchtest: address."
+            }
+            Network::Testnet4 => {
+                "That address is for Mainnet (bitcoincash:). This wallet is on Testnet4 — paste \
+                 a bchtest: address."
             }
             Network::Chipnet => {
                 "That address is for Mainnet (bitcoincash:). This wallet is on Chipnet — paste a \
@@ -512,10 +522,13 @@ fn classify_address(scanned: &str, network: Network) -> ScannedPayload {
     // Regtest is local and has no counterpart a user could confuse it with,
     // so it reports an unrecognised address rather than naming a wrong one.
     let opposite = match network {
-        Network::Mainnet => Network::Chipnet,
-        Network::Chipnet | Network::Regtest => Network::Mainnet,
-    }
-    .prefix();
+        // One prefix covers every test chain, so mainnet's counterpart is
+        // that shared prefix rather than any particular test chain.
+        Network::Mainnet => Network::Chipnet.prefix(),
+        Network::Testnet3 | Network::Testnet4 | Network::Chipnet | Network::Regtest => {
+            Network::Mainnet.prefix()
+        }
+    };
 
     // An explicit prefix for the other chain. Refused as the wrong network, not
     // as an unreadable address: the hash160 is the same on both chains, so the

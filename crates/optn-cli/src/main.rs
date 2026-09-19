@@ -33,9 +33,8 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
 use bip39::{Language, Mnemonic};
-use optn_chain_native::{build_native_chain_stack, NativeChainSecrets};
 use optn_multisig_core::{inspect_p2sh20, Network as MultisigNetwork};
-use optn_runtime::chain::{build_selection_plan, ProtocolFamily};
+use optn_runtime::chain::{build_selection_plan, EndpointKind, ProtocolFamily};
 use optn_runtime::chain_service::{ChainOperation, ChainPayload, ChainRequest};
 use optn_runtime::tx_broadcast::{BroadcastCoordinator, BroadcastState};
 
@@ -255,6 +254,9 @@ enum Command {
     /// retain the same checkpoint as the GUI; restored data remains stale
     /// until a complete live refresh succeeds.
     Rescan {
+        /// Inclusive rescan floor; zero requests full history. Persists for saved wallets.
+        #[arg(long)]
+        from_height: Option<u32>,
         /// Consecutive unused addresses required on each HD branch.
         #[arg(long, default_value_t = 20)]
         gap: u32,
@@ -389,6 +391,20 @@ enum Command {
 
 #[derive(Subcommand)]
 enum NetworkCommand {
+    /// Export a non-secret, network-bound backup as JSON on stdout.
+    Export,
+    /// Restore this network from a portable JSON backup.
+    Import { file: std::path::PathBuf },
+    /// Apply a complete primary/fallback/protocol selection from a JSON file.
+    Configure { file: std::path::PathBuf },
+    /// Choose auto, privacy, own-infrastructure, electrum-only, bip37-only or neutrino-only.
+    Policy { preset: String },
+    /// Add one source using an AddSourceRequest JSON file.
+    Add { file: std::path::PathBuf },
+    /// Enable, disable, or ban a source known to this network catalog.
+    Disposition { source: String, disposition: String },
+    /// Delete a user-added source and its machine-local RPC credential, if any.
+    Remove { source: String },
     /// Show sources, policy, and the primary/fallback selection order.
     Status,
     /// Select an existing shared source without a public fallback.
@@ -408,7 +424,8 @@ enum NetworkCommand {
     },
 }
 
-#[derive(Clone, Copy, clap::ValueEnum)]
+#[derive(Clone, Copy, clap::ValueEnum, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 enum ChainProtocol {
     Electrum,
     Bip37,
@@ -699,7 +716,7 @@ async fn main() {
             Err(err) => emit_cli_error(&cli, *stdio, err),
         }
     }
-    match run(&cli).await {
+    match dispatch(&cli).await {
         Ok(value) => {
             if cli.json {
                 println!(
@@ -721,6 +738,20 @@ async fn main() {
 fn command_name(command: &Command) -> &'static str {
     match command {
         Command::Wallet { .. } => "wallet",
+        Command::Network {
+            action: NetworkCommand::Export,
+        } => "network export",
+        Command::Network {
+            action: NetworkCommand::Import { .. },
+        } => "network import",
+        Command::Network {
+            action:
+                NetworkCommand::Configure { .. }
+                | NetworkCommand::Policy { .. }
+                | NetworkCommand::Add { .. }
+                | NetworkCommand::Disposition { .. }
+                | NetworkCommand::Remove { .. },
+        } => "network configure",
         Command::Ping => "ping",
         Command::Network {
             action: NetworkCommand::Select { .. },
@@ -757,6 +788,10 @@ fn command_name(command: &Command) -> &'static str {
 }
 
 fn client_for(cli: &Cli) -> Result<Client> {
+    // Read once, applied to whichever endpoint is chosen below: which proxy
+    // the holder trusts does not depend on which server they are talking to.
+    let trusted =
+        network_settings::trusted_socks_ports(cli.network, cli.network_config_dir.as_deref());
     if cli.host.is_some() || cli.port.is_some() || cli.no_tls {
         return Client::new(
             cli.host
@@ -765,7 +800,8 @@ fn client_for(cli: &Cli) -> Result<Client> {
             cli.port.unwrap_or_else(|| cli.network.default_port()),
             !cli.no_tls,
             timeout_seconds(cli),
-        );
+        )
+        .map(|client| client.trusting_socks_ports(trusted));
     }
 
     let endpoint =
@@ -785,6 +821,7 @@ fn client_for(cli: &Cli) -> Result<Client> {
             timeout_seconds(cli),
         ),
     }
+    .map(|client| client.trusting_socks_ports(trusted))
 }
 
 fn timeout_seconds(cli: &Cli) -> u64 {
@@ -815,6 +852,22 @@ fn append_network_config_dir(base: &mut Vec<String>, directory: Option<&Path>) -
     base.push("--network-config-dir".into());
     base.push(directory.into());
     Ok(())
+}
+
+fn read_network_configuration(path: &std::path::Path) -> Result<Vec<u8>> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .map_err(|_| CliError::Usage("Cannot open network configuration file.".into()))?
+        .take(128 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| CliError::Usage("Cannot read network configuration file.".into()))?;
+    if bytes.len() > 128 * 1024 {
+        return Err(CliError::Usage(
+            "Network configuration file is too large.".into(),
+        ));
+    }
+    Ok(bytes)
 }
 
 fn shared_network_status(cli: &Cli) -> Result<Value> {
@@ -878,15 +931,58 @@ fn shared_network_status(cli: &Cli) -> Result<Value> {
     }))
 }
 
-async fn verify_selected_headers(cli: &Cli, start: Option<u32>, count: u32) -> Result<Value> {
-    if count < 2 {
-        return Err(CliError::Usage(
-            "header verification needs at least 2 consecutive headers".into(),
-        ));
+async fn fetch_headers_window(
+    cli: &Cli,
+    start: Option<u32>,
+    count: u32,
+) -> Result<(Vec<[u8; 80]>, u32, Option<u32>, String)> {
+    if let Some(selection) = configured_chain(cli)? {
+        let plan = build_selection_plan(&selection.catalog, &selection.policy);
+        let p2p = plan.primary.iter().any(|id| {
+            selection.catalog.get(id).is_some_and(|source| {
+                source
+                    .endpoints
+                    .iter()
+                    .any(|endpoint| matches!(endpoint.kind, EndpointKind::BchP2p))
+            })
+        });
+        if p2p {
+            let start_height = start.unwrap_or(1).max(1);
+            let stack = crate::network_settings::build_stack(
+                cli.network,
+                cli.network_config_dir.as_deref(),
+                selection,
+            )
+            .await;
+            let observation = stack
+                .service
+                .lock()
+                .await
+                .execute(&ChainRequest::HeaderSync {
+                    start_height,
+                    count,
+                })
+                .await
+                .map_err(|error| CliError::Network(format!("header sync failed: {error:?}")))?;
+            let ChainPayload::Headers {
+                start_height,
+                headers,
+            } = observation.value
+            else {
+                return Err(CliError::Protocol(
+                    "header route returned an unexpected payload".into(),
+                ));
+            };
+            return Ok((
+                headers,
+                start_height,
+                None,
+                observation.source.as_str().to_owned(),
+            ));
+        }
     }
     let client = client_for(cli)?;
     let (tip_height, _) = client.tip().await?;
-    let count = count.min(2016);
     let start_height = match start {
         Some(height) => height,
         None => tip_height.saturating_sub(count.saturating_sub(1)),
@@ -899,21 +995,72 @@ async fn verify_selected_headers(cli: &Cli, start: Option<u32>, count: u32) -> R
     let available = tip_height.saturating_sub(start_height).saturating_add(1);
     let count = count.min(available);
     let headers = client.block_headers(start_height, count).await?;
+    Ok((headers, start_height, Some(tip_height), client.endpoint()))
+}
+
+async fn verify_selected_headers(cli: &Cli, start: Option<u32>, count: u32) -> Result<Value> {
+    if count < 2 {
+        return Err(CliError::Usage(
+            "header verification needs at least 2 consecutive headers".into(),
+        ));
+    }
+    let count = count.min(2016);
+    let (headers, start_height, tip_height, via) = fetch_headers_window(cli, start, count).await?;
     if headers.len() < 2 {
         return Err(CliError::Protocol(
             "server returned fewer than 2 headers".into(),
         ));
     }
     let checked = verify_header_batch(cli.network, start_height, &headers)?;
+    let mut header_verifier = false;
+    let mut mmr = false;
+    let mut header_height = None;
+    let mut header_commitment = None;
+    let mut header_evidence = None;
+    if cli.network == Network::Chipnet {
+        let linked = if start_height == 1 {
+            headers.clone()
+        } else {
+            fetch_headers_window(cli, Some(1), count.max(2)).await?.0
+        };
+        if linked.len() >= 2 {
+            use optn_runtime::chain::{BlockHeaderBytes, HeaderVerifier};
+            let mut verifier = optn_runtime::header_verifier::shipped_chipnet_header_verifier()
+                .map_err(|error| {
+                    CliError::Protocol(format!("Chipnet header verifier: {error:?}"))
+                })?;
+            let batch: Vec<_> = linked.iter().copied().map(BlockHeaderBytes).collect();
+            verifier.extend(&batch).map_err(|error| {
+                CliError::Protocol(format!("Chipnet header extend failed: {error:?}"))
+            })?;
+            let state = verifier
+                .state()
+                .map_err(|error| CliError::Protocol(format!("Chipnet header state: {error:?}")))?;
+            header_verifier = true;
+            mmr = state.height > 0;
+            header_height = Some(state.height);
+            header_commitment = Some(hex(&state.commitment));
+            header_evidence = Some(if mmr {
+                "HeaderMmrProven"
+            } else {
+                "GenesisAttached"
+            });
+        }
+    }
     Ok(json!({
         "ok": true,
         "network": cli.network.to_string(),
-        "endpoint": client.endpoint(),
+        "endpoint": via,
         "tip_height": tip_height,
         "start_height": start_height,
         "count": headers.len(),
         "asert": true,
         "evidence": "HeaderLinked",
+        "header_verifier": header_verifier,
+        "mmr": mmr,
+        "header_height": header_height,
+        "header_commitment": header_commitment,
+        "header_evidence": header_evidence,
         "last_height": start_height + u32::try_from(headers.len().saturating_sub(1))
             .map_err(|_| CliError::Protocol("header count exceeds u32".into()))?,
         "last_hash": hex(&checked),
@@ -984,11 +1131,10 @@ async fn ping_selected_chain(cli: &Cli) -> Result<Value> {
         }));
     };
 
-    let stack = build_native_chain_stack(
-        selection.catalog,
-        selection.policy,
-        &cli.network.to_string(),
-        &NativeChainSecrets::default(),
+    let stack = crate::network_settings::build_stack(
+        cli.network,
+        cli.network_config_dir.as_deref(),
+        selection,
     )
     .await;
     let routes = stack
@@ -1082,11 +1228,10 @@ async fn transaction_selected_chain(cli: &Cli, txid: &str, verbose: bool) -> Res
     tokio::time::timeout(
         std::time::Duration::from_secs(timeout_seconds(cli)),
         async {
-            let stack = build_native_chain_stack(
-                selection.catalog,
-                selection.policy,
-                &cli.network.to_string(),
-                &NativeChainSecrets::default(),
+            let stack = crate::network_settings::build_stack(
+                cli.network,
+                cli.network_config_dir.as_deref(),
+                selection,
             )
             .await;
             let observation = stack
@@ -1133,11 +1278,10 @@ async fn broadcast_selected_chain(cli: &Cli, raw: &str) -> Result<Value> {
     let budget = std::time::Duration::from_secs(timeout_seconds(cli));
     let stack = tokio::time::timeout(
         budget,
-        build_native_chain_stack(
-            selection.catalog,
-            selection.policy,
-            &cli.network.to_string(),
-            &NativeChainSecrets::default(),
+        crate::network_settings::build_stack(
+            cli.network,
+            cli.network_config_dir.as_deref(),
+            selection,
         ),
     )
     .await;
@@ -1197,12 +1341,7 @@ async fn address_selected_chain(cli: &Cli, address: &str, include_outputs: bool)
     };
     tokio::time::timeout(std::time::Duration::from_secs(timeout_seconds(cli)), async {
         let mut worker = hd_sync_worker(cli.network, &selection.policy)?;
-        let stack = build_native_chain_stack(
-            selection.catalog,
-            selection.policy,
-            &cli.network.to_string(),
-            &NativeChainSecrets::default(),
-        )
+        let stack = crate::network_settings::build_stack(cli.network, cli.network_config_dir.as_deref(), selection)
         .await;
         let script = parsed.script_pubkey();
         // A one-address observation session, not the user's stored HD wallet.
@@ -1277,6 +1416,7 @@ async fn rescan_shared_wallet(
     all: bool,
     account_path: Option<&str>,
     xpub: Option<&str>,
+    from_height: Option<u32>,
 ) -> Result<Value> {
     use optn_runtime::chain::{
         ChainSource, ConnectionPolicy, Endpoint, EndpointKind, SourceCatalog, SourceDisposition,
@@ -1370,10 +1510,14 @@ async fn rescan_shared_wallet(
                 multisig_policy: None, account_xpub: Some(xpub.clone()),
             }), ..Default::default()
         }));
-        let mut worker = hd_sync_worker(cli.network, &selection.policy)?;
-        let stack = build_native_chain_stack(selection.catalog, selection.policy, &cli.network.to_string(), &NativeChainSecrets::default()).await;
-        runtime.sync_hd_wallet(&mut *stack.service.lock().await, &mut worker, xpub,
-            optn_runtime::hd_sync::HdSyncLimits { gap_limit: gap, addresses_per_branch: cap })
+        if let Some(height) = from_height {
+            runtime.request_wallet_rescan(height).await.map_err(|error| CliError::Usage(error.to_string()))?;
+        }
+        let worker = hd_sync_worker(cli.network, &selection.policy)?;
+        let stack = crate::network_settings::build_stack(cli.network, cli.network_config_dir.as_deref(), selection).await;
+        let mut worker = seed_header_progress(&runtime, cli.network, worker.with_accepted_headers(stack.headers.clone())).await?;
+        runtime.sync_hd_wallet_from_floor(&mut *stack.service.lock().await, &mut worker, xpub,
+            optn_runtime::hd_sync::HdSyncLimits { gap_limit: gap, addresses_per_branch: cap }, from_height)
             .await.map_err(|error| CliError::Network(format!("HD rescan incomplete: {error}")))?;
         let status = runtime.subscribe_wallet_sync().borrow().clone();
         if !status.sync.history_fresh || !status.sync.utxos_fresh {
@@ -1402,13 +1546,17 @@ async fn rescan_shared_wallet(
         let confirmed_total = state.wallet_sync.confirmed_sats.ok_or_else(|| CliError::Protocol("HD balance is unavailable".into()))?;
         let unconfirmed_total = state.wallet_sync.pending_sats;
         let total = state.wallet_sync.total_sats().ok_or_else(|| CliError::Protocol("HD total balance overflow".into()))?;
-        Ok(json!({"ok":true, "hd":true, "complete":true, "network":cli.network.to_string(),
+        let (header_verifier, mmr, header_height, header_commitment, header_evidence) =
+            header_verifier_report(&worker);
+        Ok(json!({"ok":true, "hd":true, "complete":!state.wallet_sync.scan_coverage.is_some_and(|coverage| coverage.skipped_below.is_some()), "network":cli.network.to_string(),
             "account_path":account.to_string(), "gap":gap, "max_addresses":cap,
             "selection":"shared-native-policy", "source":snapshot.source.as_str(),
             "evidence":format!("{:?}",snapshot.evidence),
-            "header_verifier": worker.header_verifier().is_some(),
-            "mmr": worker.header_verifier().is_some()
-                && !matches!(snapshot.evidence, optn_runtime::chain::Evidence::ServerAssertion),
+            "header_verifier": header_verifier,
+            "mmr": mmr,
+            "header_height": header_height,
+            "header_commitment": header_commitment,
+            "header_evidence": header_evidence,
             "branches":optn_core::watch_only::HD_SCAN_BRANCHES, "last_used":book.last_used,
             "scanned_addresses":snapshot.value.interests.len(), "confirmed":confirmed_total,
             "unconfirmed":unconfirmed_total, "total":total, "utxos":state.coins.len(), "addresses":addresses,
@@ -1416,31 +1564,88 @@ async fn rescan_shared_wallet(
     }).await.map_err(|_| CliError::Network("HD rescan timed out before completing the account".into()))?
 }
 
+fn header_verifier_report(
+    worker: &optn_runtime::sync_worker::ProgressiveSyncWorker,
+) -> (
+    bool,
+    bool,
+    Option<u32>,
+    Option<String>,
+    Option<&'static str>,
+) {
+    match worker.header_verifier() {
+        None => (false, false, None, None, None),
+        Some(verifier) => match verifier.state() {
+            Ok(state) => {
+                let advanced = state.height > 0;
+                (
+                    true,
+                    advanced,
+                    Some(state.height),
+                    Some(hex(&state.commitment)),
+                    Some(if advanced {
+                        "HeaderMmrProven"
+                    } else {
+                        "GenesisAttached"
+                    }),
+                )
+            }
+            Err(_) => (true, false, None, None, Some("GenesisAttached")),
+        },
+    }
+}
+
+/// Seed a worker with the accumulator this wallet last had sealed.
+///
+/// `None` is the ordinary case for a fresh wallet, a record written before
+/// header progress was persisted, or one that has never completed a pass --
+/// all of which start from the shipped genesis anchor, as every run did
+/// before this existed.
+async fn seed_header_progress(
+    runtime: &optn_runtime::AppRuntime,
+    network: Network,
+    worker: optn_runtime::sync_worker::ProgressiveSyncWorker,
+) -> Result<optn_runtime::sync_worker::ProgressiveSyncWorker> {
+    let Some(progress) = runtime
+        .restored_header_progress()
+        .await
+        .map_err(|error| CliError::Network(format!("restored header progress: {error}")))?
+    else {
+        return Ok(worker);
+    };
+    worker
+        .with_stored_header_progress(network, &progress)
+        .map_err(|error| CliError::Usage(format!("stored header progress is unusable: {error:?}")))
+}
+
 fn hd_sync_worker(
     network: Network,
     policy: &optn_runtime::chain::ConnectionPolicy,
 ) -> Result<optn_runtime::sync_worker::ProgressiveSyncWorker> {
     use optn_runtime::chain::ProtocolFamily;
-    let worker = optn_runtime::sync_worker::ProgressiveSyncWorker::new(Default::default());
+    use optn_runtime::sync_worker::ProgressiveSyncConfig;
     let p2p = policy.protocols.contains(ProtocolFamily::Bip37)
         || policy.protocols.contains(ProtocolFamily::Neutrino);
+    let mut config = ProgressiveSyncConfig::default();
     if !p2p {
-        return Ok(worker);
+        // Electrum: one real linked batch so the verifier is used. Wallet
+        // evidence stays ServerAssertion; do not walk every header on the
+        // chain on every balance query.
+        config.max_verified_headers_per_pass = Some(config.header_batch_size.max(1));
     }
-    if network != Network::Chipnet {
-        return Err(CliError::Usage(
-            "BIP37/Neutrino refresh needs a host-authenticated header checkpoint for this network"
-                .into(),
-        ));
-    }
-    let verifier = optn_runtime::header_verifier::shipped_chipnet_header_verifier()
-        .map_err(|e| CliError::Usage(format!("Chipnet header verifier: {e:?}")))?;
+    let worker = optn_runtime::sync_worker::ProgressiveSyncWorker::new(config);
+    // Every network anchors at its own genesis, so there is no longer a
+    // network that has to refuse for want of a checkpoint. The verifier is
+    // attached whatever the protocol; what changes between them is how far it
+    // is carried, and Electrum first-paint stays `ServerAssertion` either way.
+    let verifier = optn_runtime::header_verifier::shipped_header_verifier(network)
+        .map_err(|e| CliError::Usage(format!("{network} header verifier: {e:?}")))?;
     worker
         .with_header_verifier(network, verifier)
         .map_err(|e| CliError::Usage(format!("header verifier: {e:?}")))
 }
 
-async fn run(cli: &Cli) -> Result<Value> {
+fn authorize_command(cli: &Cli) -> Result<()> {
     // Before anything else, including opening a connection. A refusal should
     // cost nothing and reveal nothing about the wallet.
     skills::enforce(skills::Policy::from_env()?, command_name(&cli.command))?;
@@ -1453,14 +1658,113 @@ async fn run(cli: &Cli) -> Result<Value> {
         ));
     }
 
+    if matches!(
+        cli.command,
+        Command::Network {
+            action: NetworkCommand::Configure { .. }
+                | NetworkCommand::Import { .. }
+                | NetworkCommand::Policy { .. }
+                | NetworkCommand::Add { .. }
+                | NetworkCommand::Disposition { .. }
+                | NetworkCommand::Remove { .. }
+        }
+    ) && SERVING.load(std::sync::atomic::Ordering::SeqCst)
+    {
+        return Err(CliError::Usage(
+            "Source configuration requires the local CLI.".into(),
+        ));
+    }
     if let Command::Wallet { .. } = &cli.command {
         unreachable!("wallet console is handled in main before run()");
     }
+    Ok(())
+}
+
+async fn run(cli: &Cli) -> Result<Value> {
+    authorize_command(cli)?;
     match &cli.command {
         Command::Wallet { .. } => unreachable!("handled before network setup"),
         Command::Network {
             action: NetworkCommand::Status,
         } => return shared_network_status(cli),
+        Command::Network {
+            action: NetworkCommand::Policy { preset },
+        } => {
+            network_settings::set_policy_preset(
+                cli.network,
+                cli.network_config_dir.as_deref(),
+                network_settings::parse_policy_preset(preset).map_err(CliError::Usage)?,
+            )
+            .map_err(CliError::Usage)?;
+            return shared_network_status(cli);
+        }
+        Command::Network {
+            action: NetworkCommand::Export,
+        } => {
+            let json =
+                network_settings::export_sources(cli.network, cli.network_config_dir.as_deref())
+                    .map_err(CliError::Usage)?;
+            return serde_json::from_str(&json)
+                .map_err(|_| CliError::Internal("Invalid network configuration export.".into()));
+        }
+        Command::Network {
+            action: NetworkCommand::Import { file },
+        } => {
+            let bytes = read_network_configuration(file)?;
+            let json = std::str::from_utf8(&bytes)
+                .map_err(|_| CliError::Usage("Network configuration must be UTF-8.".into()))?;
+            network_settings::import_sources(cli.network, cli.network_config_dir.as_deref(), json)
+                .map_err(CliError::Usage)?;
+            return shared_network_status(cli);
+        }
+        Command::Network {
+            action: NetworkCommand::Configure { file },
+        } => {
+            let bytes = read_network_configuration(file)?;
+            let selection = serde_json::from_slice(&bytes)
+                .map_err(|_| CliError::Usage("Invalid source selection JSON.".into()))?;
+            network_settings::configure_sources(
+                cli.network,
+                cli.network_config_dir.as_deref(),
+                &selection,
+            )
+            .map_err(CliError::Usage)?;
+            return shared_network_status(cli);
+        }
+        Command::Network {
+            action: NetworkCommand::Add { file },
+        } => {
+            let bytes = read_network_configuration(file)?;
+            let request = serde_json::from_slice(&bytes)
+                .map_err(|_| CliError::Usage("Invalid AddSourceRequest JSON.".into()))?;
+            network_settings::add_source(cli.network, cli.network_config_dir.as_deref(), &request)
+                .map_err(CliError::Usage)?;
+            return shared_network_status(cli);
+        }
+        Command::Network {
+            action:
+                NetworkCommand::Disposition {
+                    source,
+                    disposition,
+                },
+        } => {
+            network_settings::set_source_disposition(
+                cli.network,
+                cli.network_config_dir.as_deref(),
+                source,
+                disposition,
+            )
+            .map_err(CliError::Usage)?;
+            return shared_network_status(cli);
+        }
+        Command::Network {
+            action: NetworkCommand::Remove { source },
+        } => {
+            network_settings::remove_source(cli.network, cli.network_config_dir.as_deref(), source)
+                .await
+                .map_err(CliError::Usage)?;
+            return shared_network_status(cli);
+        }
         Command::Network {
             action: NetworkCommand::Select { source, protocol },
         } => {
@@ -1527,11 +1831,13 @@ async fn run(cli: &Cli) -> Result<Value> {
             } => {
                 let network = match cli.network {
                     Network::Mainnet => MultisigNetwork::Mainnet,
-                    // The multisig core models two chains. Regtest shares
-                    // chipnet's address encoding, which is all this inspection
-                    // depends on, and saying so beats silently widening that
-                    // crate's own network model.
-                    Network::Chipnet | Network::Regtest => MultisigNetwork::Chipnet,
+                    // The multisig core models two chains. Every test chain
+                    // shares chipnet's address encoding, which is all this
+                    // inspection depends on, and saying so beats silently
+                    // widening that crate's own network model.
+                    Network::Testnet3 | Network::Testnet4 | Network::Chipnet | Network::Regtest => {
+                        MultisigNetwork::Chipnet
+                    }
                 };
                 let public_key_refs = public_keys.iter().map(String::as_str).collect::<Vec<_>>();
                 let inspection = inspect_p2sh20(network, *threshold, &public_key_refs)
@@ -2040,6 +2346,7 @@ async fn run(cli: &Cli) -> Result<Value> {
             }))
         }
         Command::Rescan {
+            from_height,
             gap,
             all,
             max_addresses,
@@ -2053,6 +2360,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 *all,
                 account_path.as_deref(),
                 xpub.as_deref(),
+                *from_height,
             )
             .await
         }
@@ -2062,6 +2370,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 *gap,
                 optn_core::discovery::ADDRESS_CAP.max(*gap),
                 false,
+                None,
                 None,
                 None,
             )
@@ -2278,121 +2587,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 }
             }
         }
-        Command::Console { json } => {
-            use std::io::Write;
-
-            let mut base = vec!["--network".to_string(), cli.network.to_string()];
-            if cli.profile != "default" {
-                base.push("--profile".to_string());
-                base.push(cli.profile.clone());
-            }
-            append_network_config_dir(&mut base, cli.network_config_dir.as_deref())?;
-            let policy = skills::Policy::from_env()?;
-
-            eprintln!("optn console — {} ({})", cli.network, policy.ceiling());
-            eprintln!("`help` lists commands, `quit` leaves.");
-
-            let stdin = std::io::stdin();
-            loop {
-                eprint!("optn> ");
-                let _ = std::io::stderr().flush();
-
-                // Release stdin before dispatch so wallet authentication can read it.
-                let mut line = String::new();
-                if stdin
-                    .read_line(&mut line)
-                    .map_err(|e| CliError::Usage(format!("could not read input: {e}")))?
-                    == 0
-                {
-                    break;
-                }
-
-                let parsed = match console::parse(&line) {
-                    Ok(parsed) => parsed,
-                    Err(error) => {
-                        eprintln!("error: {error}");
-                        continue;
-                    }
-                };
-
-                match parsed {
-                    console::Line::Empty => continue,
-                    console::Line::Quit => break,
-                    console::Line::Help => {
-                        // From the manifest, so it cannot list a command the
-                        // gate would refuse or omit one it allows.
-                        for skill in skills::SKILLS {
-                            let mark = if policy.admits(skill.capability) {
-                                ' '
-                            } else {
-                                'x'
-                            };
-                            eprintln!(
-                                "  {mark} {:<12} {:<7} {}",
-                                skill.name,
-                                skill.capability.as_str(),
-                                skill.summary
-                            );
-                        }
-                        eprintln!("  (x = refused by the current policy)");
-                        continue;
-                    }
-                    console::Line::Command(args) => {
-                        let argv = console::argv(&base, &args, *json);
-                        // Clap's nested parser can exceed the Windows main-thread stack
-                        // while this dispatch frame is live. Parse on the blocking pool.
-                        let parsed = tokio::task::spawn_blocking(move || Cli::try_parse_from(argv))
-                            .await
-                            .map_err(|_| {
-                                CliError::Internal("Console argument parsing failed.".into())
-                            })?;
-                        let mut parsed_cli = match parsed {
-                            Ok(parsed) => parsed,
-                            Err(error) => {
-                                // clap already formats this well; printing it
-                                // whole is better than paraphrasing it.
-                                eprintln!("{error}");
-                                continue;
-                            }
-                        };
-
-                        parsed_cli.wallet = parsed_cli.wallet.or_else(|| cli.wallet.clone());
-                        parsed_cli.wallet_directory = parsed_cli
-                            .wallet_directory
-                            .or_else(|| cli.wallet_directory.clone());
-                        parsed_cli.password_stdin |= cli.password_stdin;
-                        // Only reuse authentication for the same resolved wallet selection.
-                        // An explicit override keeps the parser's fresh session.
-                        if parsed_cli.wallet == cli.wallet
-                            && parsed_cli.wallet_directory == cli.wallet_directory
-                            && parsed_cli.network == cli.network
-                        {
-                            parsed_cli.wallet_session = std::sync::Arc::clone(&cli.wallet_session);
-                        }
-
-                        // Boxed for the same reason as serve: the console is
-                        // reached from run, and reaches it back.
-                        match Box::pin(run(&parsed_cli)).await {
-                            Ok(value) => {
-                                if *json {
-                                    println!(
-                                        "{}",
-                                        serde_json::to_string_pretty(&value).unwrap_or_default()
-                                    );
-                                } else {
-                                    print_human(&parsed_cli.command, &value);
-                                }
-                            }
-                            // Printed, not returned: one bad command should not
-                            // end the session.
-                            Err(error) => eprintln!("error: {error}"),
-                        }
-                    }
-                }
-            }
-
-            Ok(json!({ "ok": true, "console": "closed" }))
-        }
+        Command::Console { .. } => unreachable!("console is handled by dispatch"),
         Command::Serve {
             port,
             bind,
@@ -2581,11 +2776,10 @@ async fn run(cli: &Cli) -> Result<Value> {
                 let budget = std::time::Duration::from_secs(timeout_seconds(cli));
                 let stack = tokio::time::timeout(
                     budget,
-                    build_native_chain_stack(
-                        selection.catalog,
-                        selection.policy,
-                        &cli.network.to_string(),
-                        &NativeChainSecrets::default(),
+                    crate::network_settings::build_stack(
+                        cli.network,
+                        cli.network_config_dir.as_deref(),
+                        selection,
                     ),
                 )
                 .await
@@ -2669,11 +2863,10 @@ async fn run(cli: &Cli) -> Result<Value> {
                 let result = tokio::time::timeout(
                     std::time::Duration::from_secs(timeout_seconds(cli)),
                     async {
-                        let stack = build_native_chain_stack(
-                            selection.catalog,
-                            selection.policy,
-                            &cli.network.to_string(),
-                            &NativeChainSecrets::default(),
+                        let stack = crate::network_settings::build_stack(
+                            cli.network,
+                            cli.network_config_dir.as_deref(),
+                            selection,
                         )
                         .await;
                         let mut worker = worker.with_accepted_headers(stack.headers.clone());
@@ -3105,6 +3298,134 @@ async fn run(cli: &Cli) -> Result<Value> {
     }
 }
 
+/// Keep the large command dispatcher off the caller's stack.
+///
+/// `run` also dispatches console and local RPC commands back into itself. The
+/// Windows executable has a smaller main-thread stack than the platforms used
+/// for most development, so every production entry point crosses this heap
+/// boundary before polling that future.
+fn dispatch(cli: &Cli) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + '_>> {
+    match &cli.command {
+        Command::Console { json } => Box::pin(run_console(cli, json)),
+        _ => Box::pin(run(cli)),
+    }
+}
+
+// Keep the prompt outside the large command future: each entered command must
+// not poll underneath another copy of the full command dispatcher on Windows.
+async fn run_console(cli: &Cli, json: &bool) -> Result<Value> {
+    authorize_command(cli)?;
+    use std::io::Write;
+
+    let mut base = vec!["--network".to_string(), cli.network.to_string()];
+    if cli.profile != "default" {
+        base.push("--profile".to_string());
+        base.push(cli.profile.clone());
+    }
+    append_network_config_dir(&mut base, cli.network_config_dir.as_deref())?;
+    let policy = skills::Policy::from_env()?;
+
+    eprintln!("optn console — {} ({})", cli.network, policy.ceiling());
+    eprintln!("`help` lists commands, `quit` leaves.");
+
+    let stdin = std::io::stdin();
+    loop {
+        eprint!("optn> ");
+        let _ = std::io::stderr().flush();
+
+        // Release stdin before dispatch so wallet authentication can read it.
+        let mut line = String::new();
+        if stdin
+            .read_line(&mut line)
+            .map_err(|e| CliError::Usage(format!("could not read input: {e}")))?
+            == 0
+        {
+            break;
+        }
+
+        let parsed = match console::parse(&line) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                eprintln!("error: {error}");
+                continue;
+            }
+        };
+
+        match parsed {
+            console::Line::Empty => continue,
+            console::Line::Quit => break,
+            console::Line::Help => {
+                // From the manifest, so it cannot list a command the
+                // gate would refuse or omit one it allows.
+                for skill in skills::SKILLS {
+                    let mark = if policy.admits(skill.capability) {
+                        ' '
+                    } else {
+                        'x'
+                    };
+                    eprintln!(
+                        "  {mark} {:<12} {:<7} {}",
+                        skill.name,
+                        skill.capability.as_str(),
+                        skill.summary
+                    );
+                }
+                eprintln!("  (x = refused by the current policy)");
+                continue;
+            }
+            console::Line::Command(args) => {
+                let argv = console::argv(&base, &args, *json);
+                // Clap's nested parser can exceed the Windows main-thread stack
+                // while this dispatch frame is live. Parse on the blocking pool.
+                let parsed = tokio::task::spawn_blocking(move || Cli::try_parse_from(argv))
+                    .await
+                    .map_err(|_| CliError::Internal("Console argument parsing failed.".into()))?;
+                let mut parsed_cli = match parsed {
+                    Ok(parsed) => parsed,
+                    Err(error) => {
+                        // clap already formats this well; printing it
+                        // whole is better than paraphrasing it.
+                        eprintln!("{error}");
+                        continue;
+                    }
+                };
+
+                parsed_cli.wallet = parsed_cli.wallet.or_else(|| cli.wallet.clone());
+                parsed_cli.wallet_directory = parsed_cli
+                    .wallet_directory
+                    .or_else(|| cli.wallet_directory.clone());
+                parsed_cli.password_stdin |= cli.password_stdin;
+                // Only reuse authentication for the same resolved wallet selection.
+                // An explicit override keeps the parser's fresh session.
+                if parsed_cli.wallet == cli.wallet
+                    && parsed_cli.wallet_directory == cli.wallet_directory
+                    && parsed_cli.network == cli.network
+                {
+                    parsed_cli.wallet_session = std::sync::Arc::clone(&cli.wallet_session);
+                }
+
+                match dispatch(&parsed_cli).await {
+                    Ok(value) => {
+                        if *json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&value).unwrap_or_default()
+                            );
+                        } else {
+                            print_human(&parsed_cli.command, &value);
+                        }
+                    }
+                    // Printed, not returned: one bad command should not
+                    // end the session.
+                    Err(error) => eprintln!("error: {error}"),
+                }
+            }
+        }
+    }
+
+    Ok(json!({ "ok": true, "console": "closed" }))
+}
+
 /// A payment that has been built and signed, and broadcast unless previewed.
 struct Spend {
     /// Set once broadcast; absent on a preview.
@@ -3224,11 +3545,10 @@ async fn rpa_pay_selected(
     let budget = std::time::Duration::from_secs(cli.timeout.unwrap_or(600));
     let stack = tokio::time::timeout(
         budget,
-        build_native_chain_stack(
-            selection.catalog,
-            selection.policy,
-            &cli.network.to_string(),
-            &NativeChainSecrets::default(),
+        crate::network_settings::build_stack(
+            cli.network,
+            cli.network_config_dir.as_deref(),
+            selection,
         ),
     )
     .await
@@ -3764,9 +4084,7 @@ async fn listen(config: serve::Shared) -> Result<()> {
                         }
                     };
 
-                    // Boxed to break the recursion: `run` reaches `listen`
-                    // reaches `run`, and the future type would be infinite.
-                    match Box::pin(run(&parsed_cli)).await {
+                    match dispatch(&parsed_cli).await {
                         Ok(value) => Ok(reply(StatusCode::OK, serve::rpc_result(id, value))),
                         Err(error) => Ok(reply(
                             StatusCode::OK,
@@ -4062,13 +4380,21 @@ mod header_batch_tests {
     }
 
     #[test]
-    fn electrum_hd_worker_does_not_claim_mmr() {
+    fn electrum_hd_worker_attaches_verifier_without_claiming_mmr() {
         let policy = optn_runtime::chain::ConnectionPolicy::exact(
             optn_runtime::chain::SourceId::new("cli-electrum"),
             optn_runtime::chain::ProtocolFamily::Electrum,
         );
         let worker = super::hd_sync_worker(Network::Chipnet, &policy).unwrap();
-        assert!(worker.header_verifier().is_none());
+        let verifier = worker
+            .header_verifier()
+            .expect("Chipnet Electrum attaches the shipped verifier");
+        assert!(verifier.has_difficulty_context());
+        assert_eq!(verifier.state().unwrap().height, 0);
+        let (_, mmr, header_height, _, header_evidence) = super::header_verifier_report(&worker);
+        assert!(!mmr, "genesis attach is not MMR");
+        assert_eq!(header_height, Some(0));
+        assert_eq!(header_evidence, Some("GenesisAttached"));
     }
 
     #[test]
@@ -4196,6 +4522,19 @@ mod manifest_tests {
         .unwrap();
         let name = command_name(&cli.command);
         assert_eq!(name, "network select");
+        let configure =
+            Cli::try_parse_from(["optn", "network", "configure", "selection.json"]).unwrap();
+        assert_eq!(command_name(&configure.command), "network configure");
+        assert!(skills::enforce(
+            skills::Policy::parse("read").unwrap(),
+            command_name(&configure.command)
+        )
+        .is_err());
+        assert!(skills::enforce(
+            skills::Policy::parse("configure").unwrap(),
+            command_name(&configure.command)
+        )
+        .is_ok());
         assert!(skills::enforce(skills::Policy::parse("read").unwrap(), name).is_err());
         assert!(skills::enforce(skills::Policy::parse("configure").unwrap(), name).is_ok());
         assert!(skills::enforce(skills::Policy::parse("configure").unwrap(), "send").is_err());

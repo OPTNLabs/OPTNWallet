@@ -116,29 +116,13 @@ answer.
 | What #61 settled | Where it is now |
 |---|---|
 | Emit `cashcode:` / `cashcodetest:` | `rpa::encode`, asserted by `emits_cashcode_and_never_paycode` |
-| ~~Still accept `paycode:` / `paycodetest:`, flagged `legacy`~~ **Superseded — legacy PayCode is now rejected** | `rpa::decode` refuses the prefix before the checksum; `rpa::is_legacy_paycode` names it so the refusal can be explained. Asserted by `rejects_a_legacy_paycode_string` and `a_legacy_paycode_is_refused_on_its_prefix_not_its_checksum`. See the note below. |
+| Still accept `paycode:` / `paycodetest:`, flagged `legacy` | `rpa::decode`, `Cashcode::legacy` |
 | Hash the **compressed** CKD_pub child | `rpa::payment_address`, with the Electron Cash bug named in the module docs |
 | Refuse offline-only codes (versions 2 and 6) | `rpa::send_block_reason` |
 | Refuse `prefix_size` 0 | `rpa::send_block_reason` |
 | Refuse multisig versions (3/4/7/8) | Rejected at `decode`, earlier than the TypeScript rejects them |
 | Detect needs `scanPrivkey` + `spendPubkey` only (REQ-5) | `scan_transaction(raw, scan_privkey, spend_pubkey, network)` — the type system enforces what TypeScript had to assert at runtime |
 | Scan `…/3/0`, spend `…/3/1` (PR #6) | `rpa::scan_path` / `rpa::spend_path` |
-
-**Note — legacy PayCode acceptance is superseded.** #61 settled "emit
-`cashcode:`, keep accepting `paycode:`" on the reasoning that renaming a
-prefix should not invalidate codes already handed out. That reasoning does not
-survive contact with what the two prefixes actually mean. Electron Cash's
-PayCode is a *different implementation*, not an older spelling of the same
-one: its keys were derived under legacy rules, `use_uncompressed = True`
-included. Accepting the prefix and then deriving the destination with OPTN's
-compressed Cash Code rules sends funds to a P2PKH address the legacy recipient
-never derived and cannot scan for — a payment that looks successful to the
-sender and is simply gone.
-
-Every other row in this table still holds. The change is narrow: the prefix is
-refused, and nothing about `/3` derivation, compressed hashing, or the
-capability tiers moved. Supporting legacy PayCode would mean implementing its
-semantics, which OPTN does not do.
 | Wire-vs-display outpoint order | `parse_transaction` reverses and says why, pointing at `RpaDetect.ts`, which does not |
 
 `RpaKeys` has no `Debug` implementation because it holds private keys — the same
@@ -179,11 +163,13 @@ plus `menu_bar`, asserted for every command in both states.
 These had no home in the Rust core at all. `crates/optn-core/src/psbt.rs` now
 carries them:
 
-- **Every input must declare `PSBT_IN_SIGHASH_TYPE = 0xc1`.** An absent field is
-  refused exactly as firmly as a wrong one, because SeedCash falls back to
-  `0x41` when it is missing and a signature over the wrong sighash is only
-  rejected at broadcast — long after the device has been put away.
-- **Mainnet is refused by the encoder, not by convention.**
+- **Every input must explicitly declare the same supported sighash.** The current
+  default is `0x41` (ALL|FORKID), confirmed by the captured SeedCash signing fixture.
+  The historical `0xc1` mode adds ANYONECANPAY and is an advanced choice, not the
+  default. The connected single-signature finalizer currently accepts `0x41` only;
+  absent or changed commitments are refused before returning a transaction.
+- **Mainnet is refused by the air-gap workflow and finalizer.** The low-level
+  PSBT serializer has no network parameter; callers must use the checked workflow.
 - **The UR carries a raw PSBT**, because stock SeedCash calls `parse_psbt` on the
   CBOR field directly and never unwraps a byte string; a BCR-2020-006 wrapper
   reaches it as `59019070736274ff…` and raises `invalid PSBT magic`. A wrapped

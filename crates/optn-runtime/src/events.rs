@@ -9,6 +9,15 @@ use std::{future::Future, pin::Pin};
 
 pub type EventFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ChainEventError>> + Send + 'a>>;
 
+/// Every hash here is in **internal** byte order -- what a double-SHA256 of
+/// the serialized bytes produces, and what the wallet stores -- not the
+/// reversed display order an explorer shows.
+///
+/// Stated because a provider can easily get it wrong in a way nothing catches:
+/// BCHN's ZMQ `hash*` topics publish the reversed form, and taking those
+/// frames as they arrive made one transaction arrive under two different
+/// txids depending on which topic reported it. A provider that converts here
+/// is the only place the conversion belongs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChainEventKind {
     TransactionSeen {

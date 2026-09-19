@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [dev, staging, main]
   push:
-    branches: [main]
+    branches: [dev, staging]
   workflow_dispatch:
 
 permissions:
@@ -15,6 +15,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  slint-native-pilot:
+    name: Slint native pilot (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: 1.98.1
+          components: clippy, rustfmt
+      - uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: 'crates/optn-ui-slint -> target'
+      - name: Format native pilot
+        run: cargo fmt --manifest-path crates/optn-ui-slint/Cargo.toml -- --check
+      - name: Check native pilot
+        run: cargo clippy --locked --manifest-path crates/optn-ui-slint/Cargo.toml --all-targets -- -D warnings
+      - name: Build native window
+        run: cargo build --locked --manifest-path crates/optn-ui-slint/Cargo.toml
+
   rust-architecture:
     name: Rust architecture and Leptos WASM
     runs-on: ubuntu-latest
@@ -51,10 +73,10 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy framework-neutral crates
-        run: cargo clippy -p optn-app -p optn-platform -p optn-platform-apple -p optn-transport -p optn-runtime -p optn-transport-tauri -p xtask --all-targets -- -D warnings
+        run: cargo clippy -p optn-app -p optn-platform -p optn-platform-apple -p optn-transport -p optn-runtime -p optn-transport-tauri -p optn-transport-native -p xtask --all-targets -- -D warnings
 
       - name: Test application platform and transport contracts
-        run: cargo test -p optn-app -p optn-platform -p optn-platform-apple -p optn-transport -p optn-runtime -p optn-transport-tauri -p xtask
+        run: cargo test -p optn-app -p optn-platform -p optn-platform-apple -p optn-transport -p optn-runtime -p optn-transport-tauri -p optn-transport-native -p xtask
 
       - name: Compile Leptos UI to WASM
         run: cargo check -p optn-ui --target wasm32-unknown-unknown

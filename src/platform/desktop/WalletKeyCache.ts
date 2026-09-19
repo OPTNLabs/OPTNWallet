@@ -124,16 +124,10 @@ export function getCachedPasswordSnapshot(): CachedPasswordSnapshot | null {
 export function clearCachedPassword(): void {
   _cached = null;
   _watchOnlyWalletId = null;
+  // Spend authorization is pinned to this epoch and expires synchronously.
+  // A deferred clear could instead erase authorization from a later unlock.
   _unlockEpoch += 1;
   console.log('[WalletKeyCache] Password + salt wiped from memory');
-  // Void Never-mode spend window (epoch mismatch also covers this; explicit
-  // clear avoids any race with a mid-flight send).
-  try {
-    // Lazy require avoided circular import at module load in tests.
-    void import('./DeviceIntegrityService').then((m) => m.clearSpendAuthCache());
-  } catch {
-    /* optional */
-  }
 }
 
 // ── Backward-compat wrappers (deprecated — prefer setCachedPassword / deriveCachedKey) ──

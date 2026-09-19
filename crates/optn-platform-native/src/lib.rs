@@ -124,15 +124,15 @@ mod secure_storage {
             }
         }
 
-        fn entry(&self, key: &str) -> PlatformResult<keyring::v1::Entry> {
-            keyring::v1::Entry::new(&self.service, key).map_err(map_keyring_error)
+        fn entry(&self, key: &str) -> PlatformResult<keyring::Entry> {
+            keyring::Entry::new(&self.service, key).map_err(map_keyring_error)
         }
     }
 
-    fn map_keyring_error(error: keyring::v1::Error) -> PlatformError {
+    fn map_keyring_error(error: keyring::Error) -> PlatformError {
         match error {
-            keyring::v1::Error::NoStorageAccess(_) => PlatformError::PermissionDenied,
-            keyring::v1::Error::NoEntry => PlatformError::Unavailable,
+            keyring::Error::NoStorageAccess(_) => PlatformError::PermissionDenied,
+            keyring::Error::NoEntry => PlatformError::Unavailable,
             other => PlatformError::Other(other.to_string()),
         }
     }
@@ -140,7 +140,7 @@ mod secure_storage {
     impl CapabilityProvider for NativeSecureStorage {
         fn descriptor(&self) -> ProviderDescriptor {
             ProviderDescriptor {
-                id: "native-keyring-4",
+                id: "native-keyring-3",
                 kind: ProviderKind::NativeFfi,
                 capabilities: &[Capability::SecureStorage],
             }
@@ -153,7 +153,7 @@ mod secure_storage {
                 let entry = self.entry(key)?;
                 match entry.get_secret() {
                     Ok(secret) => Ok(Some(secret)),
-                    Err(keyring::v1::Error::NoEntry) => Ok(None),
+                    Err(keyring::Error::NoEntry) => Ok(None),
                     Err(error) => Err(map_keyring_error(error)),
                 }
             })
@@ -170,7 +170,7 @@ mod secure_storage {
         fn delete<'a>(&'a self, key: &'a str) -> PlatformFuture<'a, ()> {
             Box::pin(async move {
                 match self.entry(key)?.delete_credential() {
-                    Ok(()) | Err(keyring::v1::Error::NoEntry) => Ok(()),
+                    Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
                     Err(error) => Err(map_keyring_error(error)),
                 }
             })

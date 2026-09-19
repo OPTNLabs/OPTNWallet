@@ -76,7 +76,7 @@ id = "psbt"
 name = "PSBT"
 policy = { windows = "pass", linux = "pass", macos = "pass", android = "pass", ios = "pass", web = "pass", extension = "pass" }
 evidence = { windows = "unit", linux = "unit", macos = "unit", android = "unit", ios = "unit", web = "unit", extension = "unit" }
-evidence_refs = { windows = "crates/optn-core/src/psbt.rs::the_only_accepted_air_gap_sighash_is_c1", linux = "crates/optn-core/src/psbt.rs::the_only_accepted_air_gap_sighash_is_c1", macos = "crates/optn-core/src/psbt.rs::the_only_accepted_air_gap_sighash_is_c1", android = "crates/optn-core/src/psbt.rs::the_only_accepted_air_gap_sighash_is_c1", ios = "crates/optn-core/src/psbt.rs::the_only_accepted_air_gap_sighash_is_c1", web = "crates/optn-core/src/psbt.rs::the_only_accepted_air_gap_sighash_is_c1", extension = "crates/optn-core/src/psbt.rs::the_only_accepted_air_gap_sighash_is_c1" }
+evidence_refs = { windows = "crates/optn-core/src/psbt.rs::explicit_air_gap_sighashes_default_to_all_forkid", linux = "crates/optn-core/src/psbt.rs::explicit_air_gap_sighashes_default_to_all_forkid", macos = "crates/optn-core/src/psbt.rs::explicit_air_gap_sighashes_default_to_all_forkid", android = "crates/optn-core/src/psbt.rs::explicit_air_gap_sighashes_default_to_all_forkid", ios = "crates/optn-core/src/psbt.rs::explicit_air_gap_sighashes_default_to_all_forkid", web = "crates/optn-core/src/psbt.rs::explicit_air_gap_sighashes_default_to_all_forkid", extension = "crates/optn-core/src/psbt.rs::explicit_air_gap_sighashes_default_to_all_forkid" }
 
 [[feature]]
 id = "ur_qr"

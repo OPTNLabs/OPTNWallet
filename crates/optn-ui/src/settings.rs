@@ -56,6 +56,11 @@ fn skin_copy(skin: UiSkin) -> (&'static str, &'static str) {
 fn network_copy(network: Network) -> (&'static str, &'static str) {
     match network {
         Network::Mainnet => ("Mainnet", "Real BCH network"),
+        // Named individually because the screen is the only place the three
+        // test chains differ: they share `bchtest:`, so an address cannot say
+        // which one a wallet is on.
+        Network::Testnet3 => ("Testnet3", "Long-running BCH test network"),
+        Network::Testnet4 => ("Testnet4", "Shorter BCH test network"),
         Network::Chipnet => ("Chipnet", "BCH testing network"),
         // Its own prefix, genesis and no retargeting -- named so a regtest
         // wallet is never mistaken on screen for one on a shared network.
@@ -73,13 +78,20 @@ fn now_ms() -> u64 {
 
 #[component]
 pub fn SettingsPage(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
+    // The app receives a fresh authoritative snapshot every second. A selected
+    // row owns local form state and in-flight IPC, so it must remount only
+    // when the selected row actually changes, not for unrelated balance or
+    // sync-status updates in that snapshot.
+    let focused_row = Memo::new(move |_| state.get().settings_focus);
+
     view! {
         <WalletChrome transport=transport state=state>
             <section class="page">
-                <Show when=move || state.get().settings_focus.is_none()>
+                <Show when=move || focused_row.get().is_none()>
                     <h1>"Settings"</h1>
                     <p class="lede">"Wallet controls. CashFusion is a desktop flag."</p>
                     <AppearanceSection transport=transport state=state />
+                    <TorSection transport=transport />
                     <For
                         each=move || settings_rows_snapshot(state)
                         key=|row| *row as u8
@@ -99,7 +111,7 @@ pub fn SettingsPage(transport: UiTransport, state: RwSignal<AppState>) -> impl I
                         </button>
                     </For>
                 </Show>
-                <Show when=move || state.get().settings_focus.is_some()>
+                <Show when=move || focused_row.get().is_some()>
                     <button
                         class="text-link back"
                         type="button"
@@ -107,7 +119,7 @@ pub fn SettingsPage(transport: UiTransport, state: RwSignal<AppState>) -> impl I
                     >
                         {move || format!("‹ {}", state.get().flow().back_label)}
                     </button>
-                    {move || state.get().settings_focus.map(|row| {
+                    {move || focused_row.get().map(|row| {
                         view! { <SettingsRow transport=transport state=state row=row /> }
                     })}
                 </Show>
@@ -201,6 +213,7 @@ fn SettingsRow(
                     </button>
                 }.into_any(),
                 SettingsRowId::RescanFromHeight => view! {
+                    <BirthdaySection transport=transport state=state />
                     <RescanSection transport=transport state=state />
                 }.into_any(),
                 SettingsRowId::Servers => view! {
@@ -234,6 +247,168 @@ fn SettingsRow(
                 }.into_any(),
             }}
         </article>
+    }
+}
+
+/// What the chain layer found when it went looking for a proxy, and the one
+/// action that fixes it.
+///
+/// This renderer had no Tor awareness at all, which is #75 row 4's remaining
+/// half: a holder here saw every public source refused for want of Tor with
+/// nothing saying so and nothing to press. The React surface has had this for
+/// a while; the point is that both surfaces ask the runtime the same question
+/// rather than each deciding for itself what a listening proxy means.
+///
+/// Nothing is probed here. `tor_status` reports what the chain stack
+/// concluded, so a screen cannot disagree with the routes.
+#[component]
+pub(crate) fn TorSection(transport: UiTransport) -> impl IntoView {
+    let status = RwSignal::new(None::<optn_transport::WireTorStatus>);
+    let busy = RwSignal::new(false);
+    let error = RwSignal::new(None::<String>);
+    let custom_port = RwSignal::new(String::new());
+
+    let refresh = move || {
+        let transport = transport.get_value();
+        leptos::task::spawn_local(async move {
+            match transport.tor_status().await {
+                Ok(value) => status.set(Some(value)),
+                // Unsupported is the honest answer on a shell with no chain
+                // runtime; it is not an error worth showing.
+                Err(optn_transport::TransportError::Unsupported) => status.set(None),
+                Err(failure) => error.set(Some(format!("{failure:?}"))),
+            }
+        });
+    };
+    leptos::prelude::Effect::new(move |_| refresh());
+
+    view! {
+        <Show when=move || {
+            status.get().is_some_and(|value| {
+                !matches!(value.state, optn_transport::WireTorState::NotNeeded)
+            })
+        }>
+            <div class="panel stack">
+                <p class="source-title">"Tor"</p>
+                {move || {
+                    let Some(value) = status.get() else { return ().into_any() };
+                    match value.state {
+                        optn_transport::WireTorState::Verified => view! {
+                            <p class="muted">
+                                {format!(
+                                    "Public sources are reached through the proxy on port {}.",
+                                    value.socks_port.unwrap_or_default(),
+                                )}
+                            </p>
+                        }
+                        .into_any(),
+                        optn_transport::WireTorState::Unverified => {
+                            let port = value.socks_port.unwrap_or_default();
+                            view! {
+                                <p class="muted">
+                                    {format!(
+                                        "A SOCKS proxy is listening on port {port}, but nothing                                          shows it is Tor -- every SOCKS proxy answers the same                                          way. Public sources stay refused until you confirm it.",
+                                    )}
+                                </p>
+                                <button
+                                    class="secondary"
+                                    type="button"
+                                    disabled=move || busy.get()
+                                    on:click=move |_| {
+                                        busy.set(true);
+                                        error.set(None);
+                                        let transport = transport.get_value();
+                                        leptos::task::spawn_local(async move {
+                                            if let Err(failure) =
+                                                transport.trust_socks_port(port, true).await
+                                            {
+                                                error.set(Some(format!("{failure:?}")));
+                                            }
+                                            busy.set(false);
+                                            refresh();
+                                        });
+                                    }
+                                >
+                                    {format!("Yes, {port} is my Tor")}
+                                </button>
+                            }
+                            .into_any()
+                        }
+                        optn_transport::WireTorState::Absent => view! {
+                            <p class="muted">
+                                "Public sources are reached through Tor, and none is running.                                  A source you marked as your own is dialled directly instead."
+                            </p>
+                            <button
+                                class="secondary"
+                                type="button"
+                                disabled=move || busy.get()
+                                on:click=move |_| {
+                                    busy.set(true);
+                                    error.set(None);
+                                    let transport = transport.get_value();
+                                    leptos::task::spawn_local(async move {
+                                        match transport.start_tor().await {
+                                            Ok(value) => status.set(Some(value)),
+                                            Err(failure) => {
+                                                error.set(Some(format!("{failure:?}")))
+                                            }
+                                        }
+                                        busy.set(false);
+                                    });
+                                }
+                            >
+                                {move || {
+                                    if busy.get() {
+                                        let percent = status
+                                            .get()
+                                            .map(|value| value.bootstrap_percent)
+                                            .unwrap_or_default();
+                                        format!("Starting Tor... {percent}%")
+                                    } else {
+                                        "Start Tor for chain routes".to_owned()
+                                    }
+                                }}
+                            </button>
+                        }
+                        .into_any(),
+                        optn_transport::WireTorState::NotNeeded => ().into_any(),
+                    }
+                }}
+                <details>
+                    <summary>"Use Tor on another local port"</summary>
+                    <p class="muted">"Only confirm a Tor proxy you run or trust. A SOCKS listener alone does not prove it is Tor."</p>
+                    <label>
+                        "Local Tor SOCKS port"
+                        <input
+                            type="number" min="1" max="65535" step="1"
+                            prop:value=move || custom_port.get()
+                            on:input=move |event| custom_port.set(event_target_value(&event))
+                        />
+                    </label>
+                    <button
+                        class="secondary" type="button"
+                        disabled=move || busy.get()
+                        on:click=move |_| {
+                            let Ok(port) = custom_port.get().parse::<std::num::NonZeroU16>() else {
+                                error.set(Some("Enter a port from 1 to 65535.".into()));
+                                return;
+                            };
+                            busy.set(true);
+                            error.set(None);
+                            let transport = transport.get_value();
+                            leptos::task::spawn_local(async move {
+                                if let Err(failure) = transport.trust_socks_port(port.get(), true).await {
+                                    error.set(Some(format!("{failure:?}")));
+                                }
+                                busy.set(false);
+                                refresh();
+                            });
+                        }
+                    >"Confirm this is my Tor"</button>
+                </details>
+                {move || error.get().map(|message| view! { <p class="error">{message}</p> })}
+            </div>
+        </Show>
     }
 }
 
@@ -381,43 +556,13 @@ fn selected_server_entry(state: &AppState, kind: ServerKind) -> String {
 #[component]
 fn NodeSection(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
     view! {
-        <p class="muted">
-            "Overrides apply only to the selected network. Leave a field blank to use its default."
-        </p>
-        <dl class="preview-grid">
-            <div>
-                <dt>"Default host"</dt>
-                <dd class="mono">{move || state.get().network.default_host()}</dd>
-            </div>
-            <div>
-                <dt>"Default port"</dt>
-                <dd class="mono">{move || state.get().network.default_port().to_string()}</dd>
-            </div>
-            <div class="preview-wide">
-                <dt>"Address prefix"</dt>
-                <dd class="mono">{move || format!("{}:", state.get().network.prefix())}</dd>
-            </div>
-        </dl>
-        <ServerField transport=transport state=state kind=ServerKind::Electrum />
-        <ServerField transport=transport state=state kind=ServerKind::Peer />
-        <ServerField transport=transport state=state kind=ServerKind::Explorer />
-        <button
-            class="secondary"
-            type="button"
-            data-testid="use-network-default-servers"
-            on:click=move |_| dispatch_action(
-                transport,
-                state,
-                AppAction::UseNetworkDefaultServers,
-            )
-        >
-            "Use network default"
-        </button>
+        <crate::chain_sources::ChainSourcesSection transport=transport state=state />
+
     }
 }
 
 #[component]
-fn ServerField(
+pub(crate) fn ServerField(
     transport: UiTransport,
     state: RwSignal<AppState>,
     kind: ServerKind,
@@ -665,6 +810,117 @@ fn DeviceSection(transport: UiTransport, state: RwSignal<AppState>) -> impl Into
                 </button>
             </Show>
         </div>
+    }
+}
+
+#[component]
+fn BirthdaySection(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
+    use optn_transport::security::{WalletBirthdayInput, WalletBirthdayView};
+    use optn_transport::WalletSecurityRequest as Request;
+    let status = RwSignal::new(None::<optn_transport::WalletSecurityStatus>);
+    let busy = RwSignal::new(false);
+    let error = RwSignal::new(None::<String>);
+    let kind = RwSignal::new(String::from("unknown"));
+    let height = RwSignal::new(String::new());
+    let date = RwSignal::new(None::<u32>);
+    let confirming = RwSignal::new(false);
+    let clearing_rescan = RwSignal::new(false);
+    let restore_revision = Memo::new(move |_| {
+        state.with(|state| (state.lock.unlock_epoch, state.wallet_sync.rescan_requested))
+    });
+    Effect::new(move |_| {
+        restore_revision.get();
+        crate::security::submit(transport, state, Request::Status, status, error, busy);
+    });
+    let selection = move || match kind.get().as_str() {
+        "height" => height
+            .get()
+            .trim()
+            .parse::<u32>()
+            .ok()
+            .map(|height| WalletBirthdayInput::Height { height }),
+        "time" => date
+            .get()
+            .map(|requested_time| WalletBirthdayInput::Time { requested_time }),
+        _ => Some(WalletBirthdayInput::Unknown),
+    };
+    view! {
+        <section class="stack" aria-label="Wallet history start">
+            <h3>"Wallet history start"</h3>
+            <p class="muted">{move || match status.get().and_then(|s| s.restore_birthday) {
+                Some(WalletBirthdayView::ImportedAtHeight { height }) => format!("Saved start: block {height}."),
+                Some(WalletBirthdayView::ImportedAtTime { requested_time }) => {
+                    let iso = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(f64::from(requested_time) * 1000.0))
+                        .to_iso_string().as_string().unwrap_or_default();
+                    format!("Saved start: {} (UTC).", iso.get(..10).unwrap_or("unknown date"))
+                },
+                Some(WalletBirthdayView::CreatedAt { height, .. }) => format!("Recorded creation: block {height}."),
+                Some(WalletBirthdayView::Unknown) => "Saved start: unknown; scan full history.".into(),
+                None => "Open a wallet to save its history start.".into(),
+            }}</p>
+            <label class="field">"Known wallet start"
+                <select prop:value=move || kind.get() on:change=move |event| {
+                    kind.set(event_target_value(&event)); date.set(None); confirming.set(false);
+                }>
+                    <option value="unknown">"Unknown — full history"</option>
+                    <option value="height">"Block height"</option>
+                    <option value="time">"Date (UTC)"</option>
+                </select>
+            </label>
+            <Show when=move || kind.get() == "height">
+                <label class="field">"Earliest block"
+                    <input type="text" inputmode="numeric" prop:value=move || height.get()
+                        on:input=move |event| { height.set(event_target_value(&event)); confirming.set(false); } />
+                </label>
+            </Show>
+            <Show when=move || kind.get() == "time">
+                <label class="field">"Earliest date (UTC)"
+                    <input type="date" on:input=move |event| {
+                        let seconds = event_target::<web_sys::HtmlInputElement>(&event).value_as_number() / 1000.0;
+                        date.set((seconds.is_finite() && seconds >= 0.0 && seconds <= f64::from(u32::MAX))
+                            .then_some(seconds as u32));
+                        confirming.set(false);
+                    } />
+                </label>
+            </Show>
+            <p class="muted">"Saved separately from a manual rescan, which takes precedence. Choose Unknown if you are unsure when this wallet first received funds."</p>
+            {move || status.get().and_then(|s| s.manual_rescan_from).map(|height| view! {
+                <p class="muted">{format!("Manual rescan override: block {height}.")}</p>
+            })}
+            {move || error.get().map(|message| view! { <p class="warning" role="alert">{message}</p> })}
+            <Show when=move || confirming.get() fallback=move || view! {
+                <button class="secondary" type="button"
+                    disabled=move || busy.get() || selection().is_none() || status.get().and_then(|s| s.restore_birthday).is_none()
+                    on:click=move |_| { clearing_rescan.set(false); confirming.set(true); }>"Save history start"</button>
+            }>
+                <p class="warning">{move || if clearing_rescan.get() {
+                    "Remove the manual override and return to the saved wallet history start? A later start can hide earlier funds. Refresh afterward to apply it."
+                } else {
+                    "A start later than your first payment can hide funds and history. Save this choice? Refresh the wallet afterward to apply it."
+                }}</p>
+                <div class="row">
+                    <button class="primary" type="button" disabled=move || busy.get()
+                        on:click=move |_| {
+                            let Some(current) = status.get_untracked() else { return };
+                            let request = if clearing_rescan.get_untracked() {
+                                Request::ClearRescan { epoch: current.epoch }
+                            } else {
+                                let Some(birthday) = selection() else { return };
+                                Request::SetBirthday { epoch: current.epoch, birthday }
+                            };
+                            confirming.set(false);
+                            crate::security::submit(transport, state, request, status, error, busy);
+                        }>"Confirm history start"</button>
+                    <button class="secondary" type="button" on:click=move |_| confirming.set(false)>"Cancel"</button>
+                </div>
+            </Show>
+            <Show when=move || !confirming.get() && status.get().and_then(|s| s.manual_rescan_from).is_some()>
+                <button class="secondary" type="button" disabled=move || busy.get()
+                    on:click=move |_| { clearing_rescan.set(true); confirming.set(true); }>
+                    "Use saved wallet history start"
+                </button>
+            </Show>
+        </section>
     }
 }
 

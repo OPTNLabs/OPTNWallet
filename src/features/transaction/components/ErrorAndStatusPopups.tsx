@@ -1,11 +1,9 @@
 // src/components/transaction/ErrorAndStatusPopups.tsx
 
 import React, { useMemo } from 'react';
-import { useSelector } from 'react-redux';
 import Popup from './Popup';
 import { Network } from '../../../state/slices/networkSlice';
-import { selectExplorerChoice } from '../../../state/slices/preferencesSlice';
-import { buildTxUrl } from '../../../utils/servers/explorers';
+import ExplorerLink from '../../../components/ExplorerLink';
 import {
   binToHex,
   decodeTransactionCommon,
@@ -45,7 +43,6 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
   closePopups,
 }) => {
   const { t } = useI18n();
-  const explorerChoice = useSelector(selectExplorerChoice);
   const prefixLength =
     currentNetwork === Network.MAINNET
       ? PREFIX.mainnet.length
@@ -269,20 +266,16 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
                 📋
               </button>
             </div>
-            <a
-              href={buildTxUrl(
-                explorerChoice,
+            <ExplorerLink
+              network={
                 currentNetwork === Network.CHIPNET
                   ? Network.CHIPNET
-                  : Network.MAINNET,
-                transactionId
-              )}
-              target="_blank"
-              rel="noopener noreferrer"
+                  : Network.MAINNET
+              }
+              txid={transactionId}
               className="wallet-btn-primary py-2 px-4"
-            >
-              {t('builder.viewExplorer')}
-            </a>
+              label={t('builder.viewExplorer')}
+            />
           </div>
         </Popup>
       )}
