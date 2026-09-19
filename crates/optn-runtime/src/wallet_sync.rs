@@ -701,6 +701,7 @@ impl WalletSyncSession {
 
     /// Open/restore callers validate account ownership before installing it.
     pub(super) fn install_checkpoint(&mut self, checkpoint: WalletCheckpoint, app: &mut AppState) {
+        let token_identities = checkpoint.restored_token_identities();
         // Carried into the session so the host can seed its worker with the
         // accumulator this wallet last verified, instead of starting over at
         // genesis. Kept as the session's current progress too: if the next
@@ -719,6 +720,9 @@ impl WalletSyncSession {
         app.wallet_sync.scan_coverage = checkpoint.scan_coverage;
         app.wallet_sync.rescan_requested = checkpoint.rescan_requested;
         app.coins = checkpoint.coins;
+        // The cache is useful presentation, never live authchain evidence.
+        // `WalletCheckpoint` downgrades it before this actor publishes it.
+        app.token_identities = token_identities;
         app.hd_addresses = checkpoint.allocation;
         if app.hd_addresses.is_some() {
             let wallet = app
@@ -1313,7 +1317,7 @@ mod tests {
     use std::{
         collections::BTreeMap,
         sync::{
-            atomic::{AtomicBool, AtomicUsize, Ordering},
+            atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
             Arc,
         },
     };
@@ -1350,6 +1354,38 @@ mod tests {
 
     async fn runtime() -> AppRuntime {
         AppRuntime::spawn(observation_app())
+    }
+
+    fn hd_identity_app() -> (AppState, String, optn_core::wallet_pack::PackKey) {
+        let account = AccountPath::new(1, 1).expect("fixture account");
+        let wallet =
+            Wallet::from_mnemonic(BIP39_TEST_VECTOR_MNEMONIC, "TREZOR").expect("fixture wallet");
+        let xpub = wallet
+            .account_xpub_at(account)
+            .expect("fixture account xpub");
+        let receive = address_under_account(Network::Chipnet, &xpub, 0, 0)
+            .expect("fixture receive address")
+            .address;
+        let key = wallet
+            .checkpoint_key(Network::Chipnet, account)
+            .expect("fixture checkpoint key");
+        (
+            AppState {
+                network: Network::Chipnet,
+                wallet: Some(OpenedWallet {
+                    kind: WalletKind::WatchOnly,
+                    name: "HD metadata checkpoint fixture".into(),
+                    receive_address: receive,
+                    master_fingerprint: None,
+                    account_path: account.to_string(),
+                    multisig_policy: None,
+                    account_xpub: Some(xpub.clone()),
+                }),
+                ..Default::default()
+            },
+            xpub,
+            key,
+        )
     }
 
     fn candidate(evidence: Evidence) -> WalletReconciliation {
@@ -1962,6 +1998,113 @@ mod tests {
         assert!(status.borrow().authoritative.is_none());
     }
 
+    #[tokio::test]
+    async fn actor_checkpoint_reopen_downgrades_unpublished_and_drops_oversized_cache() {
+        let (mut app, xpub, key) = hd_identity_app();
+        let receive = app.wallet.as_ref().unwrap().receive_address.clone();
+        let script = Address::decode(&receive).unwrap().script_pubkey();
+        let (mut candidate, category, body) =
+            identity_candidate_for_script(script, true, true, false, |category| {
+                registry_body("Bitcats", category)
+            });
+        let (mut session, _) = WalletSyncSession::new();
+        session.record_registry_fetches(vec![(
+            optn_core::bcmr::RegistryPublication::resolve_uri("example.com"),
+            Ok(body),
+        )]);
+        let (lease, mut scan) = session
+            .begin_hd(
+                &app,
+                xpub,
+                crate::hd_sync::HdSyncLimits {
+                    gap_limit: 1,
+                    addresses_per_branch: 2,
+                },
+                None,
+                0,
+            )
+            .unwrap();
+        let snapshot = &mut candidate.authoritative.as_mut().unwrap().value;
+        snapshot.interests = scan.interests();
+        scan.advance(snapshot).unwrap();
+        snapshot.hd = Some(scan.address_book());
+        snapshot.tip = Some(ChainTip {
+            height: 0,
+            hash: [0; 32],
+        });
+        candidate.authoritative.as_mut().unwrap().chain_tip = Some((0, [0; 32]));
+        assert_eq!(
+            session.finish(&mut app, lease, candidate, |_, _, _| Ok(()), |_| true),
+            Ok(ReconciliationDecision::Accepted)
+        );
+        let category_hex: String = category.iter().map(|byte| format!("{byte:02x}")).collect();
+        assert_eq!(
+            app.token_identities.get(&category_hex).unwrap().status,
+            IdentityStatus::Unresolved
+        );
+        // `Unpublished` is a live authhead conclusion. It must not survive a
+        // restart as a current conclusion either.
+        app.token_identities.insert(
+            "bb".repeat(32),
+            optn_app::TokenIdentity {
+                name: "previously unpublished".into(),
+                ticker: None,
+                decimals: 0,
+                status: IdentityStatus::Unpublished,
+            },
+        );
+        // A registry can legitimately return a label beyond the restart-cache
+        // budget. It remains usable for this run, but cannot block sealing the
+        // wallet's reconciled coins and valid cached presentation.
+        app.token_identities.insert(
+            "cc".repeat(32),
+            optn_app::TokenIdentity {
+                name: "x".repeat(513),
+                ticker: None,
+                decimals: 0,
+                status: IdentityStatus::Verified,
+            },
+        );
+        let (app_tx, _) = watch::channel(app.clone());
+        let (events, _) = broadcast::channel(4);
+        let revocation = AtomicU64::new(0);
+        let (reply, received) = oneshot::channel();
+        session.handle(
+            WalletSyncRequest::Checkpoint(reply),
+            &mut app,
+            &app_tx,
+            &events,
+            None,
+            crate::PublicationGuard {
+                generation: 0,
+                revocation: &revocation,
+                now_ms: &|| 1,
+            },
+        );
+        let checkpoint = received.await.unwrap().unwrap();
+        let bytes = checkpoint
+            .seal(&key, &[7; optn_core::wallet_pack::NONCE_LEN])
+            .unwrap();
+        let reopened = WalletCheckpoint::open(&key, &bytes).unwrap();
+
+        let (restored_app, _, _) = hd_identity_app();
+        let restored = AppRuntime::spawn(restored_app);
+        restored.restore_wallet_checkpoint(reopened).await.unwrap();
+        let state = restored.state();
+        assert_eq!(
+            state.token_identities.get(&category_hex).unwrap().status,
+            IdentityStatus::Unresolved
+        );
+        assert_eq!(
+            state.token_identities.get(&"bb".repeat(32)).unwrap().status,
+            IdentityStatus::Unresolved
+        );
+        assert!(!state.token_identities.contains_key(&"cc".repeat(32)));
+        assert!(!state.wallet_sync.history_fresh);
+        assert!(!state.wallet_sync.utxos_fresh);
+        assert!(state.spend.is_none());
+    }
+
     fn registry_body(name: &str, category: [u8; 32]) -> Vec<u8> {
         let hex: String = category.iter().map(|byte| format!("{byte:02x}")).collect();
         format!(
@@ -2369,6 +2512,7 @@ mod tests {
             ),
         ] {
             let (runtime, xpub, script) = identity_hd_runtime();
+            let initial = runtime.state();
             let (candidate, _category, body) =
                 identity_candidate_for_script(script, true, true, false, |category| {
                     registry_body("Bitcats", category)
@@ -2432,6 +2576,62 @@ mod tests {
             assert_eq!(calls.load(Ordering::SeqCst), fetch_calls, "{name}");
             if expected == IdentityStatus::Verified {
                 assert_eq!(identity.name, "Bitcats");
+                // This is the actual selected-route resolver result that
+                // `Finish` published. Capture through the actor before any
+                // invalidation, then prove a restart preserves presentation
+                // without preserving current-authchain authority.
+                let checkpoint = runtime.wallet_checkpoint().await.unwrap();
+                let account = AccountPath::new(145, 1).unwrap();
+                let key = Wallet::from_mnemonic(BIP39_TEST_VECTOR_MNEMONIC, "")
+                    .unwrap()
+                    .checkpoint_key(Network::Chipnet, account)
+                    .unwrap();
+                let bytes = checkpoint
+                    .seal(&key, &[23; optn_core::wallet_pack::NONCE_LEN])
+                    .unwrap();
+                let reopened = WalletCheckpoint::open(&key, &bytes).unwrap();
+                let restored = AppRuntime::spawn(initial);
+                restored.restore_wallet_checkpoint(reopened).await.unwrap();
+                let restored_state = restored.state();
+                let restored_identity = optn_app::assets_view_model(&restored_state).categories[0]
+                    .identity
+                    .clone()
+                    .expect("cached identity remains visible after reopen");
+                assert_eq!(restored_identity.name, "Bitcats");
+                assert_eq!(restored_identity.status, IdentityStatus::Stale);
+                assert_eq!(restored_state.coins, runtime.state().coins);
+                assert!(!restored_state.wallet_sync.history_fresh);
+                assert!(!restored_state.wallet_sync.utxos_fresh);
+                assert!(restored_state.spend.is_none());
+                let account_xpub = restored_state
+                    .wallet
+                    .as_ref()
+                    .unwrap()
+                    .account_xpub
+                    .clone()
+                    .unwrap();
+                assert_eq!(
+                    restored
+                        .sync_hd_wallet(
+                            &mut service,
+                            &mut ProgressiveSyncWorker::new(Default::default()),
+                            account_xpub,
+                            limits,
+                        )
+                        .await,
+                    Ok(ReconciliationDecision::Accepted)
+                );
+                let refreshed = restored.state();
+                assert_eq!(
+                    optn_app::assets_view_model(&refreshed).categories[0]
+                        .identity
+                        .as_ref()
+                        .unwrap()
+                        .status,
+                    IdentityStatus::Verified
+                );
+                assert!(refreshed.wallet_sync.history_fresh && refreshed.wallet_sync.utxos_fresh);
+                assert_eq!(refreshed.coins, runtime.state().coins);
                 runtime
                     .invalidate_wallet_sync("fixture source changed".into())
                     .await

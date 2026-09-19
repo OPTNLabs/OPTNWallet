@@ -295,3 +295,27 @@ credentials; previously that unsupported operation prevented even P2P/Electrum
 source deletion. Native source tests (3) and strict native Clippy pass. The local
 Android check stopped at a missing NDK clang executable, before application
 compilation; the Android CI build remains the cross-target verification gate.
+
+## Cached token identity restart and refresh (2026-09-19)
+
+The authenticated HD checkpoint now retains bounded token presentation metadata.
+Restore keeps previously verified names as `Stale`; an old unpublished conclusion
+becomes `Unresolved`. Neither restores chain freshness or spend authority. Legacy
+checkpoints remain readable. Oversized optional labels are omitted from the cache
+rather than preventing balance/history persistence; malformed cached records are
+rejected on decode. A failed metadata refresh preserves a known name only as stale;
+a current unpublished observation clears it.
+
+The connected selected-route resolver test now runs successful HD sync, actor
+checkpoint capture, authenticated seal/open, new actor restore and successful
+refresh. It verifies equal coins, stale names and no freshness/spend state after
+restore, then verified identity and fresh state only after another accepted sync.
+The runtime suite passed 288 tests; the extended refresh regression and strict
+all-target runtime Clippy also passed. This is connected synthetic-provider
+integration evidence, not a live funded token-node or packaged-device claim.
+
+The built Windows GUI also passed actual source selection, deletion, process
+restart and export checks: the deleted single-source pool stays explicitly empty,
+with no public fallback. Original isolated test settings were restored and the
+owned test process stopped. Build: base `28e02ea0` plus the checkpoint diff;
+SHA-256 `0dfc85545176a4301a8ecdda85b96e697dd80af1c0131033286e7cb1a9f3fef7`.

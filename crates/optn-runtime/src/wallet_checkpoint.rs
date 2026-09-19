@@ -10,7 +10,7 @@ use crate::{
     wallet_birthday::{WalletBirthday, WalletRestoreState},
     wallet_sync::WalletReconciliation,
 };
-use optn_app::AppState;
+use optn_app::{AppState, IdentityStatus, TokenIdentity};
 use optn_core::{
     cashaddr::Address,
     coins::{CoinSet, FreezeReason, Outpoint},
@@ -21,7 +21,7 @@ use optn_core::{
     watch_only::HdAddressAllocation,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 /// Bounded before both decryption and JSON decoding. No secrets are stored, but
 /// the public account and history are identifying and must remain encrypted.
@@ -29,6 +29,13 @@ pub const MAX_CHECKPOINT_BYTES: usize = 64 * 1024 * 1024;
 const FORMAT: &str = "optn-hd-restart-v3";
 const ALLOCATION_FORMAT: &str = "optn-hd-restart-v2";
 const LEGACY_FORMAT: &str = "optn-hd-restart-v1";
+/// A checkpoint is wallet-private, but it is still decoded before its content
+/// is projected. Keep cached presentation metadata bounded independently of
+/// the much larger transaction-history budget.
+const MAX_CACHED_TOKEN_IDENTITIES: usize = 4_096;
+const MAX_TOKEN_IDENTITY_NAME_BYTES: usize = 512;
+const MAX_TOKEN_IDENTITY_TICKER_BYTES: usize = 64;
+const TOKEN_CATEGORY_HEX_BYTES: usize = 64;
 
 /// Native persistence port. The runtime supplies a private-session key and an
 /// opaque account identifier; adapters supply atomic ciphertext storage only.
@@ -63,6 +70,9 @@ pub struct WalletCheckpoint {
     pub(crate) restore_state: WalletRestoreState,
     pub(crate) state: WalletReconciliation,
     pub(crate) coins: CoinSet,
+    /// Cached chain-authenticated presentation only. It is deliberately
+    /// downgraded before a restored checkpoint reaches application state.
+    token_identities: BTreeMap<String, TokenIdentity>,
     pub(crate) header_progress: Option<StoredHeaderProgress>,
 }
 
@@ -148,6 +158,49 @@ struct StoredCheckpoint {
     /// simply resume from the shipped genesis anchor as they always did.
     #[serde(default)]
     header_view: Option<StoredHeaderView>,
+    /// Older authenticated checkpoints did not carry token presentation.
+    #[serde(default)]
+    token_identities: BTreeMap<String, StoredTokenIdentity>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredTokenIdentity {
+    name: String,
+    ticker: Option<String>,
+    decimals: u8,
+    status: StoredIdentityStatus,
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum StoredIdentityStatus {
+    Verified,
+    Stale,
+    Unpublished,
+    Unresolved,
+}
+
+impl From<IdentityStatus> for StoredIdentityStatus {
+    fn from(status: IdentityStatus) -> Self {
+        match status {
+            IdentityStatus::Verified => Self::Verified,
+            IdentityStatus::Stale => Self::Stale,
+            IdentityStatus::Unpublished => Self::Unpublished,
+            IdentityStatus::Unresolved => Self::Unresolved,
+        }
+    }
+}
+
+impl From<StoredIdentityStatus> for IdentityStatus {
+    fn from(status: StoredIdentityStatus) -> Self {
+        match status {
+            StoredIdentityStatus::Verified => Self::Verified,
+            StoredIdentityStatus::Stale => Self::Stale,
+            StoredIdentityStatus::Unpublished => Self::Unpublished,
+            StoredIdentityStatus::Unresolved => Self::Unresolved,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -183,6 +236,69 @@ fn validate_scan_coverage(
         return Err("invalid stored wallet scan coverage".into());
     }
     Ok(())
+}
+
+fn category_key_is_valid(category: &str) -> bool {
+    category.len() == TOKEN_CATEGORY_HEX_BYTES
+        && category
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+fn identity_is_cacheable(category: &str, identity: &TokenIdentity) -> bool {
+    category_key_is_valid(category)
+        && !identity.name.is_empty()
+        && identity.name.len() <= MAX_TOKEN_IDENTITY_NAME_BYTES
+        && identity
+            .ticker
+            .as_ref()
+            .is_none_or(|ticker| ticker.len() <= MAX_TOKEN_IDENTITY_TICKER_BYTES)
+}
+
+fn stored_identity_is_cacheable(category: &str, identity: &StoredTokenIdentity) -> bool {
+    category_key_is_valid(category)
+        && !identity.name.is_empty()
+        && identity.name.len() <= MAX_TOKEN_IDENTITY_NAME_BYTES
+        && identity
+            .ticker
+            .as_ref()
+            .is_none_or(|ticker| ticker.len() <= MAX_TOKEN_IDENTITY_TICKER_BYTES)
+}
+
+fn cacheable_token_identities(
+    identities: &BTreeMap<String, TokenIdentity>,
+) -> BTreeMap<String, TokenIdentity> {
+    identities
+        .iter()
+        .filter(|(category, identity)| identity_is_cacheable(category, identity))
+        .take(MAX_CACHED_TOKEN_IDENTITIES)
+        .map(|(category, identity)| (category.clone(), identity.clone()))
+        .collect()
+}
+
+fn decode_token_identities(
+    stored: &BTreeMap<String, StoredTokenIdentity>,
+) -> Result<BTreeMap<String, TokenIdentity>, String> {
+    if stored.len() > MAX_CACHED_TOKEN_IDENTITIES {
+        return Err("too many cached token identities in wallet checkpoint".into());
+    }
+    stored
+        .iter()
+        .map(|(category, identity)| {
+            if !stored_identity_is_cacheable(category, identity) {
+                return Err("invalid cached token identity in wallet checkpoint".into());
+            }
+            Ok((
+                category.clone(),
+                TokenIdentity {
+                    name: identity.name.clone(),
+                    ticker: identity.ticker.clone(),
+                    decimals: identity.decimals,
+                    status: identity.status.into(),
+                },
+            ))
+        })
+        .collect()
 }
 
 fn validate_restore_state(
@@ -281,6 +397,7 @@ impl WalletCheckpoint {
             restore_state: restore_state.clone(),
             state: state.clone(),
             coins: app.coins.clone(),
+            token_identities: cacheable_token_identities(&app.token_identities),
             // The view lives on the sync worker, which the host owns; it is
             // attached with `with_header_progress` rather than read from
             // application state, which never holds it.
@@ -337,6 +454,25 @@ impl WalletCheckpoint {
     /// The encrypted wallet-origin state restored with this checkpoint.
     pub fn restore_state(&self) -> &WalletRestoreState {
         &self.restore_state
+    }
+
+    /// Cached registry presentation cannot establish the current authchain on
+    /// a later run. Keep a previously verified name visible as last-known;
+    /// any absence/unpublished claim must be resolved again from live sources.
+    pub(crate) fn restored_token_identities(&self) -> BTreeMap<String, TokenIdentity> {
+        self.token_identities
+            .iter()
+            .map(|(category, identity)| {
+                let mut identity = identity.clone();
+                identity.status = match identity.status {
+                    IdentityStatus::Verified | IdentityStatus::Stale => IdentityStatus::Stale,
+                    IdentityStatus::Unpublished | IdentityStatus::Unresolved => {
+                        IdentityStatus::Unresolved
+                    }
+                };
+                (category.clone(), identity)
+            })
+            .collect()
     }
 
     pub(crate) fn validate_wallet(&self, app: &AppState) -> Result<(), String> {
@@ -480,6 +616,21 @@ impl WalletCheckpoint {
             }),
             rescan_requested: self.rescan_requested,
             restore_state: self.restore_state.clone(),
+            token_identities: self
+                .token_identities
+                .iter()
+                .map(|(category, identity)| {
+                    (
+                        category.clone(),
+                        StoredTokenIdentity {
+                            name: identity.name.clone(),
+                            ticker: identity.ticker.clone(),
+                            decimals: identity.decimals,
+                            status: identity.status.into(),
+                        },
+                    )
+                })
+                .collect(),
         };
         let plaintext =
             serde_json::to_vec(&stored).map_err(|_| "cannot encode wallet checkpoint")?;
@@ -551,6 +702,7 @@ impl WalletCheckpoint {
             }
         }
         validate_restore_state(&restore_state, stored.tip)?;
+        let token_identities = decode_token_identities(&stored.token_identities)?;
         let branch_lengths: [u32; 4] =
             match (stored.format.as_str(), stored.branch_lengths.as_slice()) {
                 (LEGACY_FORMAT, [receive, change, old_defi]) if stored.allocation.is_none() => {
@@ -602,6 +754,7 @@ impl WalletCheckpoint {
                     restore_state,
                     state: WalletReconciliation::default(),
                     coins: CoinSet::new(),
+                    token_identities: BTreeMap::new(),
                     header_progress,
                 });
             }
@@ -679,6 +832,7 @@ impl WalletCheckpoint {
             restore_state,
             state,
             coins,
+            token_identities,
             header_progress,
         })
     }
@@ -721,6 +875,7 @@ mod tests {
                 rescan_requested: None,
                 restore_state: WalletRestoreState::default(),
                 allocation: Some(HdAddressAllocation::default()),
+                token_identities: BTreeMap::new(),
             },
         )
     }
@@ -808,6 +963,27 @@ mod tests {
             WalletCheckpoint::open(&key, &encoded_value(&key, &value, 44)).expect("opens");
         assert_eq!(reopened.restore_state().birthday, WalletBirthday::Unknown);
         assert_eq!(reopened.restore_state().scanned_through, None);
+        assert!(reopened.restored_token_identities().is_empty());
+    }
+
+    #[test]
+    fn cached_identity_decode_rejects_invalid_category_and_unbounded_labels() {
+        for (category, name) in [
+            ("AA".repeat(32), "Bitcats".into()),
+            ("aa".repeat(32), "x".repeat(513)),
+        ] {
+            let (key, mut stored) = fixture();
+            stored.token_identities.insert(
+                category,
+                StoredTokenIdentity {
+                    name,
+                    ticker: Some("BCAT".into()),
+                    decimals: 2,
+                    status: StoredIdentityStatus::Verified,
+                },
+            );
+            assert!(WalletCheckpoint::open(&key, &encoded(&key, &stored, 91)).is_err());
+        }
     }
 
     #[test]

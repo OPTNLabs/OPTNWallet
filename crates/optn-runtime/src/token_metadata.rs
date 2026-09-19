@@ -662,7 +662,7 @@ pub fn apply_owned_token_identities(
     observations: &BTreeMap<[u8; 32], OwnedCategoryIdentity>,
 ) {
     for category in owned_token_categories(app) {
-        let action = match observations.get(&category) {
+        let mut action = match observations.get(&category) {
             Some(OwnedCategoryIdentity::Observed {
                 publication,
                 attempts,
@@ -677,6 +677,25 @@ pub fn apply_owned_token_identities(
                 },
             ),
         };
+        if let AppAction::SetTokenIdentity {
+            category_hex,
+            identity,
+        } = &mut action
+        {
+            if identity.status == IdentityStatus::Unresolved {
+                if let Some(cached) = app.token_identities.get(category_hex).filter(|cached| {
+                    matches!(
+                        cached.status,
+                        IdentityStatus::Verified | IdentityStatus::Stale
+                    )
+                }) {
+                    // A failed refresh cannot authenticate a new name or erase
+                    // an old one. Preserve it only with the last-known caveat.
+                    *identity = cached.clone();
+                    identity.status = IdentityStatus::Stale;
+                }
+            }
+        }
         app.reduce(action);
     }
 }
@@ -1167,6 +1186,50 @@ mod tests {
                 .map(|identity| identity.status),
             Some(IdentityStatus::Stale)
         );
+    }
+
+    #[test]
+    fn failed_identity_refresh_keeps_last_known_but_unpublication_clears_it() {
+        let mut state = wallet_with(vec![coin(
+            1,
+            1_000,
+            Some(optn_core::token::TokenData::fungible(ALPHA, 10)),
+        )]);
+        let body = registry_body("Bitcats", ALPHA);
+        let published = OwnedCategoryIdentity::Observed {
+            publication: publication(&body, &["example.com"]),
+            attempts: vec![("https://example.com".into(), Ok(body))],
+        };
+        apply_owned_token_identities(&mut state, &BTreeMap::from([(ALPHA, published)]));
+        let key = category_hex(&ALPHA);
+        assert_eq!(
+            state.token_identities[&key].status,
+            IdentityStatus::Verified
+        );
+        for observation in [
+            BTreeMap::new(),
+            BTreeMap::from([(ALPHA, OwnedCategoryIdentity::Unresolved)]),
+        ] {
+            apply_owned_token_identities(&mut state, &observation);
+            let identity = &state.token_identities[&key];
+            assert_eq!(identity.name, "Bitcats");
+            assert_eq!(identity.status, IdentityStatus::Stale);
+        }
+        apply_owned_token_identities(
+            &mut state,
+            &BTreeMap::from([(ALPHA, OwnedCategoryIdentity::Unpublished)]),
+        );
+        assert_eq!(
+            state.token_identities[&key].status,
+            IdentityStatus::Unpublished
+        );
+        assert_ne!(state.token_identities[&key].name, "Bitcats");
+        apply_owned_token_identities(&mut state, &BTreeMap::new());
+        assert_eq!(
+            state.token_identities[&key].status,
+            IdentityStatus::Unresolved
+        );
+        assert_eq!(state.coins.len(), 1);
     }
 
     fn p2pkh() -> Vec<u8> {
