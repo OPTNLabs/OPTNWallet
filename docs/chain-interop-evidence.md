@@ -483,3 +483,17 @@ library/test check and rustfmt pass. This is connected integration evidence,
 not a new live Chipnet or packaged-device run. An unavailable verifier, missing
 route, failed pass, or still-unresolved historical date remains fail-closed;
 one bounded pass does not claim exhaustive historical recovery.
+## CLI named source policies (2026-09-19)
+
+`optn network policy <preset>` and the interactive wallet command
+`network policy <preset>` apply the existing shared Rust policy presets:
+`auto`, `privacy`, `own-infrastructure`, `electrum-only`, `bip37-only`, and
+`neutrino-only`. Private wallet stdio accepts
+`{"network":{"op":"policy","preset":"auto"}}`.
+
+The executable integration test
+`named_policy_selection_is_shared_by_prompt_stdio_and_reopened_cli` exercises
+all six presets, reads the saved policy from a separate process, and rejects
+invalid presets without changing the configuration. Wallet-session edits
+invalidate sync freshness before persistence. This is interface/persistence
+evidence, not a live sync result for every protocol or a GUI verification claim.

@@ -975,3 +975,58 @@ fn wallet_prompt_and_private_stdio_share_source_settings() {
     assert!(!String::from_utf8_lossy(&output.stdout).contains("must-not-echo"));
     assert_eq!(std::fs::read(&config).unwrap(), before);
 }
+
+#[test]
+fn named_policy_selection_is_shared_by_prompt_stdio_and_reopened_cli() {
+    let directory = test_directory();
+    for preset in [
+        "own-infrastructure",
+        "privacy",
+        "electrum-only",
+        "bip37-only",
+        "neutrino-only",
+        "auto",
+    ] {
+        let input = format!("network policy {preset}\nquit\n");
+        let selected = run_cli(directory.path(), &["wallet"], &input);
+        assert!(selected.status.success());
+        let selected = responses(&selected);
+        assert_eq!(selected[0]["ok"], true, "{preset}: {selected:?}");
+        let reopened = run_cli(directory.path(), &["network", "status"], "");
+        assert!(reopened.status.success());
+        let reopened: Value = serde_json::from_slice(&reopened.stdout).unwrap();
+        assert_eq!(reopened["policy"], selected[0]["policy"]);
+        assert!(reopened["policy"]["fallback_scope"].is_null());
+        if preset == "own-infrastructure" {
+            assert_eq!(reopened["policy"]["primary_scope"], "UserInfrastructure");
+        } else {
+            assert_eq!(reopened["policy"]["primary_scope"], "AllEnabled");
+        }
+    }
+    let one_shot = run_cli(
+        directory.path(),
+        &["network", "policy", "own-infrastructure"],
+        "",
+    );
+    assert!(one_shot.status.success());
+    let stdio = run_cli(
+        directory.path(),
+        &["wallet", "--stdio"],
+        "{\"network\":{\"op\":\"policy\",\"preset\":\"auto\"}}\n",
+    );
+    assert!(stdio.status.success());
+    assert_eq!(
+        responses(&stdio)[0]["policy"]["primary_scope"],
+        "AllEnabled"
+    );
+    let config = directory.path().join("network-config/network-chipnet.json");
+    let before = std::fs::read(&config).unwrap();
+    for invalid in ["custom", "unknown"] {
+        assert!(
+            !run_cli(directory.path(), &["network", "policy", invalid], "")
+                .status
+                .success()
+        );
+        assert_eq!(std::fs::read(&config).unwrap(), before);
+    }
+}

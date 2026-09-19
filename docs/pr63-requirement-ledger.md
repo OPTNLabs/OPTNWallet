@@ -18,6 +18,11 @@ Read the status column strictly:
 "Implemented" never means a type exists. Every row names an entry point a
 reader can open and, where there is one, the test that holds it up.
 
+For user-facing requirements, completion requires the actual GUI control and CLI
+command to reach the shared backend, display its result or failure, and preserve
+the intended state across reopening. Visual polish may be deferred; reachable
+controls, cancellation, authorization and correct result handling may not.
+
 Record evidence as component, application integration, live workflow or packaged
 platform, with revision/environment where available. Existing rows need that
 distinction checked before being used as release evidence. Historical statements

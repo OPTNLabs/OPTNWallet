@@ -113,6 +113,36 @@ pub fn select_source(
         .map(|_| ())
 }
 
+pub fn parse_policy_preset(
+    value: &str,
+) -> Result<optn_runtime::network_config::ChainPolicyPreset, String> {
+    serde_json::from_value(serde_json::Value::String(value.replace('-', "_"))).map_err(|_| {
+        "Use auto, privacy, own-infrastructure, electrum-only, bip37-only or neutrino-only.".into()
+    })
+}
+
+pub fn set_policy_preset(
+    network: Network,
+    directory: Option<&Path>,
+    preset: optn_runtime::network_config::ChainPolicyPreset,
+) -> Result<(), String> {
+    let directory =
+        config_directory(directory).ok_or("network configuration directory is unavailable")?;
+    NetworkConfigFile::new(directory.join(file_name(network)))
+        .update(|existing| {
+            let mut envelope = existing.unwrap_or_else(|| {
+                NetworkConfigEnvelope::current(
+                    optn_runtime::network_config::SHIPPED_CATALOG_VERSION,
+                    Default::default(),
+                )
+            });
+            optn_runtime::network_config::promote_legacy_policy(&mut envelope);
+            optn_runtime::network_config::set_policy_preset(&mut envelope.overlay, preset)?;
+            Ok(envelope)
+        })
+        .map(|_| ())
+}
+
 /// The durable source catalog and policy shared by native wallet surfaces.
 ///
 /// The CLI has no private network-settings shape: it either uses this exact
