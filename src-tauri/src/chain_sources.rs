@@ -577,6 +577,13 @@ pub async fn optn_chain_remove_source(
     if !selected.can_remove() {
         return Err("Bootstrap sources cannot be removed.".into());
     }
+    runtime
+        .invalidate_wallet_sync("Source removed; sync the wallet again.".into())
+        .await
+        .map_err(|error| error.to_string())?;
+    // Mobile cannot save RPC credentials. Its source editor must not depend on
+    // the unavailable desktop keyring just to remove a P2P/Electrum source.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     native
         .rpc_credentials(
             network,
@@ -586,6 +593,8 @@ pub async fn optn_chain_remove_source(
             false,
         )
         .await?;
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    let _ = &native;
     let id = SourceId::new(source);
     edit_overlay(&network_settings, network, move |overlay| {
         remove_user_source(overlay, &id)
